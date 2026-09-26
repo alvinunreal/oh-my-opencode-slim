@@ -515,6 +515,46 @@ describe('plugin reload generation cleanup', () => {
     }
   });
 
+  test('messages transform leaves advertised skill text byte-identical', async () => {
+    const hooks = await createHooks();
+    const fixture = {
+      messages: [
+        {
+          info: {
+            id: 'skills-user-message',
+            role: 'user',
+            agent: 'explorer',
+            sessionID: 'skills-advertisement-session',
+          },
+          parts: [
+            {
+              type: 'text',
+              text: [
+                'Please inspect these available skills.',
+                '<available_skills>',
+                '<skill><name>review-tools</name></skill>',
+                '<skill><name>private-skill</name></skill>',
+                '</available_skills>',
+              ].join('\n'),
+            },
+          ],
+        },
+      ],
+    };
+
+    try {
+      const before = JSON.stringify(fixture);
+      const output = structuredClone(fixture);
+      await hooks['experimental.chat.messages.transform']?.(
+        { agent: 'explorer' } as never,
+        output as never,
+      );
+      expect(JSON.stringify(output)).toBe(before);
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
   test('v1 compaction strips only phase reminders, preserving the job board and other content', async () => {
     const hooks = await createHooks();
     const sessionID = 'compact-board-session';
@@ -1777,9 +1817,13 @@ describe('plugin config model inheritance', () => {
     }
   });
 
-  async function loadConfiguredPlugin(config: Record<string, unknown>) {
-    const configDir = await mkdtemp('/tmp/oh-my-opencode-inheritance-');
-    configDirs.push(configDir);
+  async function loadConfiguredPlugin(
+    config: Record<string, unknown>,
+    existingDirectory?: string,
+  ) {
+    const configDir =
+      existingDirectory ?? (await mkdtemp('/tmp/oh-my-opencode-inheritance-'));
+    if (!existingDirectory) configDirs.push(configDir);
     lastConfigDir = configDir;
     await Bun.write(
       `${configDir}/oh-my-opencode-slim.json`,
@@ -2164,6 +2208,111 @@ describe('plugin config model inheritance', () => {
       expect(agents.council?.hidden).toBe(true);
     } finally {
       await hooks.dispose?.();
+    }
+  });
+
+  test('repeated config hooks reproject the first owned registry snapshot', async () => {
+    const hooks = await loadConfiguredPlugin({
+      agents: { explorer: { model: ['plugin/first', 'plugin/next'] } },
+    });
+    const hostConfig: Record<string, unknown> = {
+      agent: {
+        explorer: {
+          model: 'host/selected',
+          prompt: 'host prompt',
+          options: { nested: { stable: true } },
+        },
+      },
+      mcp: { host_remote: { type: 'remote' } },
+    };
+
+    try {
+      await hooks.config?.(hostConfig);
+      const firstProjection = structuredClone(hostConfig);
+      const changedAgents = hostConfig.agent as Record<string, unknown>;
+      changedAgents.foreign_agent = { model: 'foreign/current' };
+      const changedMcps = hostConfig.mcp as Record<string, unknown>;
+      changedMcps.foreign_current = { type: 'remote' };
+      await hooks.config?.(hostConfig);
+      const agents = hostConfig.agent as Record<
+        string,
+        Record<string, unknown>
+      >;
+      expect(agents.foreign_agent).toEqual({ model: 'foreign/current' });
+      expect(agents.explorer).toMatchObject({
+        model: 'host/selected',
+        prompt: 'host prompt',
+        options: { nested: { stable: true } },
+        permission: { 'host_remote_*': 'deny' },
+      });
+      expect(agents.explorer).toEqual(
+        (firstProjection.agent as Record<string, unknown>).explorer,
+      );
+      expect(hostConfig.mcp).toMatchObject({
+        host_remote: { type: 'remote' },
+        foreign_current: { type: 'remote' },
+      });
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test('sticky model-switch fallback survives a fresh plugin generation', async () => {
+    const config = {
+      agents: { explorer: { model: ['provider/first', 'provider/next'] } },
+    };
+    const disableChain = spyOn(
+      wakeHooks.ForegroundFallbackManager.prototype,
+      'disableChain',
+    );
+    let hooks = await loadConfiguredPlugin(config);
+    const directory = lastConfigDir as string;
+    try {
+      await hooks.config?.({
+        agent: { explorer: { model: 'provider/selected' } },
+      });
+      expect(RuntimeConfig.get(directory).hasModelSwitched('explorer')).toBe(
+        true,
+      );
+      await hooks.dispose?.();
+
+      hooks = await loadConfiguredPlugin(config, directory);
+      await hooks.config?.({
+        agent: { explorer: { model: 'provider/first' } },
+      });
+      expect(
+        disableChain.mock.calls.filter(([agent]) => agent === 'explorer'),
+      ).toHaveLength(2);
+    } finally {
+      await hooks.dispose?.();
+      disableChain.mockRestore();
+    }
+  });
+
+  test('combined inheritance never disables its fallback chain for a model pick', async () => {
+    const hooks = await loadConfiguredPlugin({
+      agents: {
+        explorer: {
+          model: ['provider/first', 'provider/next'],
+          inheritModelFrom: 'session',
+        },
+      },
+    });
+    const disableChain = spyOn(
+      wakeHooks.ForegroundFallbackManager.prototype,
+      'disableChain',
+    );
+    try {
+      await hooks.config?.({
+        agent: { explorer: { model: 'provider/selected' } },
+      });
+      expect(disableChain).not.toHaveBeenCalledWith('explorer');
+      expect(
+        RuntimeConfig.get(lastConfigDir as string).hasModelSwitched('explorer'),
+      ).toBe(false);
+    } finally {
+      await hooks.dispose?.();
+      disableChain.mockRestore();
     }
   });
 

@@ -37,7 +37,6 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 | `src/hooks/absolute-path-rescue/` | Rewrites misguessed absolute tool paths (read/list/glob/grep) by re-anchoring the longest workspace-suffix match; ENOENT-only, unambiguous existing candidates, never invents paths. | [View Map](src/hooks/absolute-path-rescue/codemap.md) |
 | `src/hooks/apply-patch/` | Structured `apply_patch` parsing, matching, recovery, and rewrite pipeline. | [View Map](src/hooks/apply-patch/codemap.md) |
 | `src/hooks/auto-update-checker/` | Startup update detection, cache handling, and optional install prompt flow. | [View Map](src/hooks/auto-update-checker/codemap.md) |
-| `src/hooks/filter-available-skills/` | Skill-visibility filtering based on agent permission policy. | [View Map](src/hooks/filter-available-skills/codemap.md) |
 | `src/hooks/foreground-fallback/` | Interactive-session fallback control path for rate-limit or degraded foreground execution with event-driven agent mapping. | [View Map](src/hooks/foreground-fallback/codemap.md) |
 | `src/hooks/json-error-recovery/` | JSON/tool-output recovery helpers for malformed model responses. | [View Map](src/hooks/json-error-recovery/codemap.md) |
 | `src/hooks/phase-reminder/` | Message-transform reminder enforcing orchestrator workflow phases. | [View Map](src/hooks/phase-reminder/codemap.md) |
@@ -112,7 +111,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
   the task-session-manager's `hasInputWait` and continuation-model seams, and
   shares one-flight/no-progress state via a process-global wake gate.
 - `src/v2/` wraps the v1 factory for the v2 host: `setup(ctx)` shims a v1 `PluginInput`, runs the v1 `config()` hook, and adapts agent/tool/command/hook registrations into v2 domains.
-- `src/hooks/filter-available-skills/` and agent permission logic rely on shared skill names from the CLI/config layer.
+- Skill permissions are projected into agent/session configuration; native v1/v2 hosts discover and filter skills from those finalized permissions, denying hidden skills and asking for discoverable ones. The plugin does not rewrite `<available_skills>` in conversation text.
 - `src/interview/` hooks into plugin command/event surfaces exposed by `src/index.ts`.
 
 ## Root Assets

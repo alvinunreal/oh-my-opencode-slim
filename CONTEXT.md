@@ -51,7 +51,7 @@ A glossary of the terms used in this project's domain. Definitions describe what
 
 ## Hooks
 
-- **Hook** — A plugin extension point that reacts to OpenCode lifecycle events (e.g., apply-patch, filter-available-skills, loop-command, session-lifecycle).
+- **Hook** — A plugin extension point that reacts to OpenCode lifecycle events (e.g., apply-patch, loop-command, session-lifecycle).
 
 ## Loop
 

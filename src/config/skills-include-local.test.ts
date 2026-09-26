@@ -2,9 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { PluginInput } from '@opencode-ai/plugin';
 import { createAgents } from '../agents';
-import { createFilterAvailableSkillsHook } from '../hooks/filter-available-skills';
 import { discoverProjectLocalSkillNames } from './project-skills';
 import { RuntimeConfig } from './runtime';
 import { PluginConfigSchema } from './schema';
@@ -30,15 +28,6 @@ function writeSkill(
     path.join(skillDir, 'SKILL.md'),
     `---\nname: ${name}\ndescription: ${name} project skill\n---\n\n# ${name}\n`,
   );
-}
-
-function availableSkillsBlock(...names: string[]): string {
-  return `<available_skills>\n${names
-    .map(
-      (name) =>
-        `<skill>\n  <name>${name}</name>\n  <description>${name}</description>\n  <location>file:///tmp/${name}</location>\n</skill>`,
-    )
-    .join('\n')}\n</available_skills>`;
 }
 
 afterEach(() => {
@@ -172,50 +161,5 @@ describe('skills_include_local', () => {
 
     expect(effective).toContain('codemap');
     expect(effective).toContain('project-testing');
-  });
-
-  test('available-skills filtering keeps automatically included local skills', async () => {
-    const projectDir = makeProject();
-    writeSkill(projectDir, 'project-testing', 'project-testing');
-
-    const config = PluginConfigSchema.parse({
-      agents: {
-        oracle: {
-          skills: ['codemap'],
-          skills_include_local: true,
-        },
-      },
-    });
-    RuntimeConfig.init(projectDir, config);
-    const runtime = RuntimeConfig.get(projectDir);
-    const hook = createFilterAvailableSkillsHook({} as PluginInput, runtime);
-    const output = {
-      messages: [
-        {
-          info: { role: 'system' },
-          parts: [
-            {
-              type: 'text',
-              text: availableSkillsBlock(
-                'codemap',
-                'project-testing',
-                'unrelated-global-skill',
-              ),
-            },
-          ],
-        },
-        {
-          info: { role: 'user', agent: 'oracle' },
-          parts: [{ type: 'text', text: 'check skills' }],
-        },
-      ],
-    };
-
-    await hook['experimental.chat.messages.transform']({}, output);
-
-    const result = output.messages[0].parts[0].text;
-    expect(result).toContain('<name>codemap</name>');
-    expect(result).toContain('<name>project-testing</name>');
-    expect(result).not.toContain('<name>unrelated-global-skill</name>');
   });
 });

@@ -32,5 +32,5 @@
 
 - Installed under OpenCode through `src/cli/custom-skills.ts` as `name: 'codemap'`, `sourcePath: 'src/skills/codemap'`.
 - `src/cli/install.ts` copies this directory into the user skill directory; OpenCode executes `scripts/codemap.mjs` from that context.
-- `src/hooks/filter-available-skills/index.ts` applies agent-level skill gating via names from `getSkillPermissionsForAgent()`.
+- Skill visibility is handled by native v1/v2 host discovery from finalized agent/session permissions; hidden skills are denied and discoverable skills require permission approval. The plugin does not rewrite `<available_skills>` in conversation text.
 - `scripts/verify-release-artifact.ts` includes codemap skill metadata and runtime checks as required packaged files.

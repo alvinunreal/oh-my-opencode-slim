@@ -253,11 +253,13 @@ function applyModelInheritance(
 export function applyModelInheritanceToConfig(
   configAgent: Record<string, unknown>,
   runtime: RuntimeConfig,
+  resolvedOrchestratorModel?: string | null,
 ): void {
   const mergedAgents = runtime.agents();
-  const orchestratorModel = getPrimaryModelFromOverride(
-    runtime.agent('orchestrator'),
-  );
+  const orchestratorModel =
+    resolvedOrchestratorModel !== undefined
+      ? (resolvedOrchestratorModel ?? undefined)
+      : getPrimaryModelFromOverride(runtime.agent('orchestrator'));
 
   for (const agentName of Object.keys(configAgent)) {
     const override = getOverrideFromAgents(mergedAgents, agentName);
@@ -845,6 +847,14 @@ export function getAgentConfigs(
 ): Record<string, SDKAgentConfig> {
   const agents = createAgents(runtime, options);
 
+  return getAgentConfigsFromDefinitions(runtime, agents);
+}
+
+/** Project a previously constructed agent set without rebuilding definitions. */
+export function getAgentConfigsFromDefinitions(
+  runtime: RuntimeConfig,
+  agents: readonly AgentDefinition[],
+): Record<string, SDKAgentConfig> {
   const applyClassification = (
     name: string,
     sdkConfig: SDKAgentConfig & {

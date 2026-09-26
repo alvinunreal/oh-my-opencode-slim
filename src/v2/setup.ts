@@ -14,6 +14,7 @@
  * (agent/tool/mcp/command) stay independently try/catch-guarded.
  */
 
+import type { RegistryFactoryBridge } from '../agents/registry-bridge';
 import { loadPluginConfig } from '../config/loader';
 import { InterviewConfigSchema } from '../config/schema';
 import { getBuildInfo } from '../generated/build-info';
@@ -42,7 +43,7 @@ import { OperationTimeoutError, withTimeout } from '../utils/session';
 import {
   adaptTool,
   applyAgentToDraft,
-  compileAgentPermissions,
+  snapshotNativeAgentForRegistry,
   v1PermKeyToV2,
 } from './adapters';
 import {
@@ -1732,6 +1733,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
     let stopPermissionPromptAdmission: (() => Promise<void>) | undefined;
     let stopPermissionEventIntake: (() => Promise<void>) | undefined;
     let v1Hooks: Record<string, unknown> | undefined;
+    let registryBridge: RegistryFactoryBridge | undefined;
 
     const boundedPermissionStop = (
       stop: () => Promise<void> | void,
@@ -1813,6 +1815,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       v1Hooks = (await OhMyOpenCodeLite(
         pluginInput as never,
       )) as unknown as Record<string, unknown>;
+      registryBridge = v1Hooks.registryBridge as RegistryFactoryBridge;
       log('[v2] v1 factory initialized', {
         agents: Object.keys((v1Hooks as { agent?: object }).agent ?? {}).length,
         tools: Object.keys((v1Hooks as { tool?: object }).tool ?? {}).length,
@@ -1842,8 +1845,11 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       const interviewBridge = createV2InterviewBridge(ctx, interviewConfig);
       disposers.push(() => interviewBridge.dispose());
 
-      // Resolve agents/commands via the v1 config() hook (model resolution etc.).
+      // Commands do not depend on agent finalization or host state.
       let resolvedAgents: Record<string, Record<string, unknown>> | undefined;
+      let finalizedRegistry:
+        | ReturnType<RegistryFactoryBridge['requireRegistry']>
+        | undefined;
       let nativePermissionRulesByAgent:
         | Record<string, V2PermissionRule[]>
         | undefined;
@@ -1855,86 +1861,112 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       let synthCommands:
         | Record<string, { template?: string; description?: string }>
         | undefined;
+      if (!registryBridge)
+        throw new Error('v1 factory registry bridge is unavailable');
+      const configCommands: Record<string, unknown> = {};
+      registryBridge.prepareCommands(configCommands);
+      const command = configCommands.command as
+        | Record<string, { template?: string; description?: string }>
+        | undefined;
+      if (command) synthCommands = command;
+
+      // Read configured namespaces from the MCP transform draft, before
+      // finalizing agent permissions. `mcp.list()` would describe live
+      // connections, not the configured namespace inventory.
+      const mcps = (v1Hooks.mcp ?? {}) as Record<string, McpConfig>;
+      let hostMcpSnapshot: Record<string, unknown> | undefined;
       try {
-        const synth: Record<string, unknown> = {};
-        const configFn = v1Hooks.config as
-          | ((c: Record<string, unknown>) => Promise<void>)
-          | undefined;
-        if (configFn) {
-          await configFn(synth);
-          if (synth.agent && typeof synth.agent === 'object') {
-            resolvedAgents = synth.agent as Record<
-              string,
-              Record<string, unknown>
-            >;
+        if (typeof ctx.mcp?.transform !== 'function') {
+          throw new Error('MCP configuration draft is unavailable');
+        }
+        const reg = await ctx.mcp.transform((draft) => {
+          const configured = draft.list();
+          if (!Array.isArray(configured)) {
+            throw new Error('MCP configuration draft returned no inventory');
           }
-          const cmd = synth.command as
-            | Record<string, { template?: string; description?: string }>
-            | undefined;
-          if (cmd) synthCommands = cmd;
+          hostMcpSnapshot = Object.fromEntries(configured);
+          for (const [name, config] of Object.entries(mcps)) {
+            draft.set(name, adaptMcpServer(config));
+          }
+        });
+        disposers.push(() => reg.dispose());
+        if (hostMcpSnapshot === undefined) {
+          throw new Error(
+            'MCP transform did not produce a configuration snapshot',
+          );
         }
       } catch (err) {
-        log(
-          '[v2] config() hook failed (continuing with raw agents)',
-          String(err),
-        );
-      }
-      if (!resolvedAgents) {
-        resolvedAgents =
-          (v1Hooks.agent as Record<string, Record<string, unknown>>) ?? {};
+        throw new Error('Unable to snapshot configured MCP namespaces', {
+          cause: err,
+        });
       }
 
       // ── Agents ──
+      let transformError: unknown;
+      let transformFailed = false;
+      let nativeSnapshotCaptured = false;
       try {
         const reg = await ctx.agent.transform((draft) => {
-          // Capture the host's original ordered rules before updating plugin
-          // agents. No bridge may use this snapshot until this callback has
-          // run; an empty pre-read snapshot would erase inherited policy.
-          nativePermissionRulesByAgent = Object.fromEntries(
-            draft.list().flatMap((listed) => {
-              const name = typeof listed.id === 'string' ? listed.id : '';
-              if (!name) return [];
-              const native = draft.get(name) ?? listed;
-              if (!Array.isArray(native.permissions)) return [];
-              const rules = native.permissions.filter(
-                (rule): rule is V2PermissionRule =>
-                  isRecord(rule) &&
-                  typeof rule.action === 'string' &&
-                  typeof rule.resource === 'string' &&
-                  (rule.effect === 'allow' ||
-                    rule.effect === 'ask' ||
-                    rule.effect === 'deny'),
+          try {
+            if (!nativeSnapshotCaptured) {
+              const nativeByAgent: Record<string, V2PermissionRule[]> = {};
+              const hostAgents: Record<string, Record<string, unknown>> = {};
+              const listedAgents = draft.list();
+              if (!Array.isArray(listedAgents)) {
+                throw new Error('agent transform did not expose a native list');
+              }
+              for (const listed of listedAgents) {
+                const name = typeof listed.id === 'string' ? listed.id : '';
+                if (!name) continue;
+                const native = draft.get(name) ?? listed;
+                const snapshot = snapshotNativeAgentForRegistry(native);
+                hostAgents[name] = snapshot.config;
+                nativeByAgent[name] = snapshot.permissions;
+              }
+              const registry = registryBridge.finalize(
+                { agent: hostAgents, mcp: hostMcpSnapshot },
+                nativeByAgent,
               );
-              return [[name, rules]];
-            }),
-          );
-          permissionSnapshotReady = true;
-          for (const [name, cfg] of Object.entries(resolvedAgents ?? {})) {
-            try {
+              finalizedRegistry = registry;
+              nativePermissionRulesByAgent = nativeByAgent;
+              permissionSnapshotReady = true;
+              nativeSnapshotCaptured = true;
+            }
+            const registry = registryBridge.requireRegistry();
+            finalizedRegistry = registry;
+            resolvedAgents = registry.getSdkAgentProjection() as Record<
+              string,
+              Record<string, unknown>
+            >;
+            for (const [name, cfg] of Object.entries(resolvedAgents)) {
+              // This transform may replay after the first materialization.
+              // Only our canonical agents and aliases are managed; host-owned
+              // registrations must remain byte-for-byte untouched.
+              if (
+                !registry.agentNames.includes(name) &&
+                !Object.hasOwn(registry.identities, name)
+              ) {
+                continue;
+              }
               applyAgentToDraft(
                 draft,
                 name,
                 cfg,
-                compileAgentPermissions(cfg.permission, {
-                  tools: Array.isArray(cfg.tools)
-                    ? cfg.tools.filter(
-                        (tool): tool is string => typeof tool === 'string',
-                      )
-                    : [],
-                  hostRules: nativePermissionRulesByAgent?.[name] ?? [],
-                }),
+                registry.nativePolicies[name]?.rules,
               );
-            } catch (err) {
-              log('[v2] agent adapt failed', { name, err: String(err) });
             }
-          }
-          // Make orchestrator the default primary agent.
-          if (resolvedAgents?.orchestrator) {
-            try {
-              draft.default('orchestrator');
-            } catch {
-              /* default() optional */
+            // Make orchestrator the default primary agent.
+            if (resolvedAgents.orchestrator) {
+              try {
+                draft.default('orchestrator');
+              } catch {
+                /* default() optional */
+              }
             }
+          } catch (err) {
+            transformFailed = true;
+            transformError = err;
+            throw err;
           }
         });
         disposers.push(() => reg.dispose());
@@ -1950,16 +1982,19 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             PERMISSION_RULES_OPERATION_TIMEOUT_MS,
             'Native permission snapshot materialization timed out',
           );
-          if (nativePermissionRulesByAgent === undefined) {
+          if (transformFailed) throw transformError;
+          if (
+            nativePermissionRulesByAgent === undefined ||
+            !nativeSnapshotCaptured
+          ) {
             throw new Error('agent transform did not produce a snapshot');
           }
         } catch (err) {
-          nativePermissionRulesByAgent = undefined;
-          permissionSnapshotReady = false;
-          log('[v2] native permission snapshot unavailable', String(err));
+          throw transformFailed ? (transformError ?? err) : err;
         }
       } catch (err) {
-        log('[v2] agent.transform failed', String(err));
+        registryBridge.retire();
+        throw err;
       }
 
       permissionRulesBridgeEnabled =
@@ -2016,28 +2051,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         log('[v2] tool.transform failed', String(err));
       }
 
-      // ── Built-in MCPs (ctx.mcp.transform, v2 ≥ #45408) ──
-      try {
-        const mcps = (v1Hooks.mcp ?? {}) as Record<string, McpConfig>;
-        const entries = Object.entries(mcps);
-        if (entries.length > 0 && typeof ctx.mcp?.transform === 'function') {
-          const reg = await ctx.mcp.transform((draft) => {
-            for (const [name, cfg] of entries) {
-              try {
-                draft.set(name, adaptMcpServer(cfg));
-              } catch (err) {
-                log('[v2] mcp adapt failed', { name, err: String(err) });
-              }
-            }
-          });
-          disposers.push(() => reg.dispose());
-          log('[v2] mcp servers registered', { count: entries.length });
-        } else if (entries.length > 0) {
-          log('[v2] ctx.mcp.transform unavailable; MCPs stay config-only');
-        }
-      } catch (err) {
-        log('[v2] mcp.transform failed', String(err));
-      }
+      log('[v2] mcp servers registered', { count: Object.keys(mcps).length });
 
       // ── Commands (deepwork / reflect / loop slash commands) ──
       try {
@@ -2267,16 +2281,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           if (permissionRulesBridgeEnabled) {
             permissionRulesBridge = createPermissionRulesBridge(ctx.session, {
               permissionForAgent: (agent) => {
-                const config = resolvedAgents?.[agent];
-                if (!config) return undefined;
-                return compileAgentPermissions(config.permission, {
-                  tools: Array.isArray(config.tools)
-                    ? config.tools.filter(
-                        (tool): tool is string => typeof tool === 'string',
-                      )
-                    : [],
-                  hostRules: nativePermissionRulesByAgent?.[agent] ?? [],
-                });
+                return finalizedRegistry?.nativePolicies[agent]?.rules;
               },
               pluginAgents: new Set(Object.keys(resolvedAgents ?? {})),
             });
@@ -2352,6 +2357,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
 
       return async () => {
         log('[v2] dispose invoked');
+        registryBridge?.retire();
         // Mark disposed immediately, then stop new admissions and event
         // intake before awaiting the bounded drain. The OpenCode plugin
         // adapter does not forward AbortSignal; a timed-out host update may
@@ -2396,6 +2402,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         }
       };
     } catch (err) {
+      registryBridge?.retire();
       // Best-effort abort-path cleanup: LIFO over the saved disposers,
       // each isolated so a failing disposer cannot mask the original
       // error, then the v1 dispose hook, then rethrow unchanged.

@@ -88,6 +88,9 @@ describe('v2 generation warning latches', () => {
   });
 
   test('resetV2GenerationWarnings rearms the setup-side latches', async () => {
+    // Other focused setup suites share these module-level latches in the same
+    // Bun process; establish this test's initial generation explicitly.
+    resetV2GenerationWarnings();
     const drift = mock(() => {});
     const headersBridge = createChatHeadersBridge(new Map(), drift);
     const unavailable = mock(() => {});

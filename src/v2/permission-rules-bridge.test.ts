@@ -1060,7 +1060,11 @@ describe('createV2Setup permission rules wiring', () => {
         agent: {
           transform: async (cb: (draft: unknown) => void) => {
             transformAgents = cb;
-            return { dispose: () => {} };
+            return {
+              dispose: () => {
+                registrationDisposals += 1;
+              },
+            };
           },
           reload: async () => ({}),
           list: async () => {
@@ -1077,6 +1081,19 @@ describe('createV2Setup permission rules wiring', () => {
             if (!snapshotAvailable) throw new Error('agent listing failed');
             return nativeAgents;
           },
+        },
+        mcp: {
+          transform: async (callback: (draft: unknown) => void) => {
+            callback({
+              list: () => [],
+              get: () => undefined,
+              set: () => {},
+              update: () => {},
+              remove: () => {},
+            });
+            return { dispose: () => {} };
+          },
+          reload: async () => {},
         },
         session: {
           hook: async (name: string, callback: unknown) => {
@@ -1183,6 +1200,20 @@ describe('createV2Setup permission rules wiring', () => {
         const startedAt = Date.now();
         await expect(setupPromise).rejects.toBe(requiredRegistrationError);
         expect(Date.now() - startedAt).toBeLessThan(6_000);
+        return;
+      }
+      if (!snapshotAvailable) {
+        await expect(setupPromise).rejects.toThrow('agent listing failed');
+        expect(registrationDisposals).toBeGreaterThan(0);
+        expect(() =>
+          transformAgents({
+            list: () => nativeAgents,
+            get: () => undefined,
+            default: () => {},
+            update: () => {},
+            remove: () => {},
+          }),
+        ).toThrow('retired');
         return;
       }
       const cleanup = await setupPromise;

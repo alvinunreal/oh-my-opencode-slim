@@ -6,6 +6,7 @@ import {
   compileAgentPermissions,
   parseModelRef,
   rewritePromptForV2,
+  snapshotNativeAgentForRegistry,
 } from './adapters';
 import type { V2AgentDraft } from './types';
 
@@ -287,7 +288,10 @@ describe('applyAgentToDraft', () => {
 
     const request = calls[0].agent.request as Record<string, unknown>;
     expect(
-      Object.hasOwn(request.settings as Record<string, unknown>, 'temperature'),
+      Object.hasOwn(
+        (request.settings as Record<string, unknown> | undefined) ?? {},
+        'temperature',
+      ),
     ).toBe(false);
   });
 
@@ -297,6 +301,111 @@ describe('applyAgentToDraft', () => {
 
     const request = calls[0].agent.request as Record<string, unknown>;
     expect((request.settings as Record<string, unknown>).temperature).toBe(0);
+  });
+
+  test('clears an existing model when the finalized config inherits it', () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const draft: V2AgentDraft = {
+      list: () => [],
+      get: () => undefined,
+      default: () => {},
+      remove: () => {},
+      update: (_id, update) => {
+        const agent: Record<string, unknown> = {
+          model: { providerID: 'old-provider', id: 'old-model' },
+        };
+        update(agent);
+        calls.push(agent);
+      },
+    };
+    applyAgentToDraft(draft, 'a', {});
+
+    expect(calls[0]).not.toHaveProperty('model');
+  });
+
+  test('merges request fields without discarding native sibling values', () => {
+    const existing = {
+      settings: { topP: 0.8, temperature: 0.4 },
+      headers: { authorization: 'host-token', existing: 'yes' },
+      body: { hostValue: true },
+    };
+    const draft: V2AgentDraft = {
+      list: () => [],
+      get: () => undefined,
+      default: () => {},
+      remove: () => {},
+      update: (_id, update) => {
+        const agent: Record<string, unknown> = { request: existing };
+        update(agent);
+        expect(agent.request).toEqual({
+          settings: { topP: 0.8, temperature: 0.2, frequencyPenalty: 0.1 },
+          headers: {
+            authorization: 'host-token',
+            existing: 'yes',
+            extra: 'v1',
+          },
+          body: { hostValue: true, extra: 'v1' },
+        });
+      },
+    };
+    applyAgentToDraft(draft, 'a', {
+      temperature: 0.2,
+      request: {
+        settings: { frequencyPenalty: 0.1 },
+        headers: { extra: 'v1' },
+        body: { extra: 'v1' },
+      },
+    });
+  });
+
+  test('snapshots and reapplies a native agent without flattening permissions', () => {
+    const native = {
+      id: 'native',
+      name: 'Native',
+      description: 'host description',
+      system: 'host system',
+      mode: 'primary',
+      hidden: true,
+      model: { providerID: 'anthropic', id: 'claude', variant: 'thinking' },
+      request: {
+        settings: { temperature: 0.3, topP: 0.9 },
+        headers: { 'x-host': 'kept' },
+        body: { hostOption: true },
+      },
+      permissions: [
+        { action: 'read', resource: 'private/**', effect: 'deny' },
+        { action: 'read', resource: 'public/**', effect: 'allow' },
+      ],
+    };
+    const snapshot = snapshotNativeAgentForRegistry(native);
+    const { draft, calls } = recorder();
+    applyAgentToDraft(draft, 'native', snapshot.config, snapshot.permissions);
+
+    expect(snapshot.config).toMatchObject({
+      model: 'anthropic/claude',
+      variant: 'thinking',
+      prompt: 'host system',
+      mode: 'primary',
+      hidden: true,
+      description: 'host description',
+    });
+    expect(snapshot.config).not.toHaveProperty('permission');
+    expect(snapshot.permissions).toEqual(native.permissions);
+    expect(calls[0].agent).toMatchObject({
+      model: { providerID: 'anthropic', id: 'claude', variant: 'thinking' },
+      system: 'host system',
+      request: {
+        settings: { temperature: 0.3, topP: 0.9 },
+        headers: { 'x-host': 'kept' },
+        body: { hostOption: true },
+      },
+      permissions: native.permissions,
+    });
+  });
+
+  test('model-less native agents do not override configured models', () => {
+    const snapshot = snapshotNativeAgentForRegistry({ id: 'explorer' });
+    expect(snapshot.config).not.toHaveProperty('model');
   });
 
   test('permission deny beats tools-list allow (tools first, last-wins)', () => {

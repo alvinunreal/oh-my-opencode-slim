@@ -6,13 +6,7 @@ import {
   createChatHeadersHook,
 } from './chat-headers';
 
-// Mock getClient so internal calls use our mock
-let mockV2Client: Record<string, unknown>;
 let mockSession: { message: ReturnType<typeof mock> };
-
-mock.module('../utils/opencode-client', () => ({
-  getClient: () => mockV2Client,
-}));
 
 function createMockContext(parts: unknown[] = []) {
   mockSession = {
@@ -23,10 +17,6 @@ function createMockContext(parts: unknown[] = []) {
       },
     })),
   };
-  mockV2Client = {
-    session: mockSession,
-  } as unknown as Record<string, unknown>;
-
   return {
     client: {
       session: {
@@ -228,9 +218,6 @@ describe('createChatHeadersHook', () => {
     mockSession = {
       message: messageMock,
     };
-    mockV2Client = {
-      session: mockSession,
-    } as unknown as Record<string, unknown>;
     const ctx = {
       client: {
         session: {

@@ -343,6 +343,256 @@ describe('createV2Setup e2e', () => {
     await cleanup(); // passes when neither call throws
   }, 20_000);
 
+  test('deferred agent snapshot failures fail startup and unwind registrations', async () => {
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    let deferred: ((draft: unknown) => void) | undefined;
+    const agent = ctx.agent as unknown as {
+      transform: (callback: (draft: unknown) => void) => Promise<{
+        dispose: () => void;
+      }>;
+      list: () => Promise<unknown[]>;
+    };
+    agent.transform = async (callback) => {
+      deferred = callback;
+      return {
+        dispose: () => calls.disposed.push('deferred-agent-transform'),
+      };
+    };
+    agent.list = async () => {
+      try {
+        deferred?.({
+          list: () => {
+            throw new Error('snapshot failed');
+          },
+        });
+      } catch {
+        // The host may swallow a deferred transform error and still resolve list.
+      }
+      return [];
+    };
+
+    await expect(createV2Setup()(ctx)).rejects.toThrow('snapshot failed');
+    expect(calls.disposed).toContain('deferred-agent-transform');
+  }, 20_000);
+
+  test('a resolved agent list with a dropped transform fails and unwinds', async () => {
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    const agent = ctx.agent as unknown as {
+      transform: (callback: (draft: unknown) => void) => Promise<{
+        dispose: () => void;
+      }>;
+      list: () => Promise<unknown[]>;
+    };
+    agent.transform = async () => ({
+      dispose: () => calls.disposed.push('dropped-agent-transform'),
+    });
+    agent.list = async () => [];
+
+    await expect(createV2Setup()(ctx)).rejects.toThrow(
+      'agent transform did not produce a snapshot',
+    );
+    expect(calls.disposed).toContain('dropped-agent-transform');
+  }, 20_000);
+
+  test('retired generations reject late agent transform callbacks', async () => {
+    const { ctx } = makeMockV2Context(projectDir);
+    let deferred: ((draft: unknown) => void) | undefined;
+    const agent = ctx.agent as unknown as {
+      transform: (callback: (draft: unknown) => void) => Promise<{
+        dispose: () => void;
+      }>;
+      list: () => Promise<unknown[]>;
+    };
+    agent.transform = async (callback) => {
+      deferred = callback;
+      return { dispose: () => {} };
+    };
+    agent.list = async () => {
+      deferred?.({ list: () => [], update: () => {} });
+      return [];
+    };
+
+    const cleanup = await createV2Setup()(ctx);
+    await cleanup();
+    expect(() => deferred?.({ list: () => [] })).toThrow('retired');
+  }, 20_000);
+
+  test('agent transform replay reuses the first finalized host snapshot', async () => {
+    const { ctx } = makeMockV2Context(projectDir);
+    const projectedModels: Array<Record<string, unknown> | undefined> = [];
+    const projectedRequests: Array<Record<string, unknown> | undefined> = [];
+    const updatedAgents: string[] = [];
+    const agent = ctx.agent as unknown as {
+      transform: (callback: (draft: unknown) => void) => Promise<{
+        dispose: () => void;
+      }>;
+    };
+    agent.transform = async (callback) => {
+      for (const providerID of ['host-first', 'host-replay']) {
+        const native = {
+          id: 'orchestrator',
+          mode: 'primary',
+          model: { providerID, id: 'model' },
+          request: {
+            settings: { temperature: 0.25, topP: 0.8 },
+            headers: { 'x-native': 'preserve' },
+            body: { hostSetting: true },
+          },
+          permissions: [{ action: 'read', resource: '*', effect: 'allow' }],
+          untouchedByPlugin: 'foreign',
+        };
+        const foreign = { id: 'foreign-agent', mode: 'primary' };
+        callback({
+          list: () => [{ id: 'orchestrator' }, foreign],
+          get: (id: string) => (id === 'orchestrator' ? native : foreign),
+          default: () => {},
+          update: (
+            id: string,
+            project: (draft: Record<string, unknown>) => void,
+          ) => {
+            const draft: Record<string, unknown> = { ...native };
+            project(draft);
+            updatedAgents.push(id);
+            if (id === 'orchestrator') {
+              projectedModels.push(
+                draft.model as Record<string, unknown> | undefined,
+              );
+              projectedRequests.push(
+                draft.request as Record<string, unknown> | undefined,
+              );
+            }
+          },
+          remove: () => {},
+        });
+      }
+      return { dispose: () => {} };
+    };
+
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(projectedModels.length).toBeGreaterThan(1);
+      expect(
+        projectedModels.every((model) => model?.providerID === 'host-first'),
+      ).toBe(true);
+      expect(projectedRequests).toHaveLength(projectedModels.length);
+      for (const request of projectedRequests) {
+        expect(request).toMatchObject({
+          settings: { temperature: 0.25, topP: 0.8 },
+          headers: { 'x-native': 'preserve' },
+          body: { hostSetting: true },
+        });
+      }
+      expect(updatedAgents).not.toContain('foreign-agent');
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('host-only MCP namespaces are denied in both agent and child policies', async () => {
+    const { ctx, events, calls } = makeMockV2Context(projectDir);
+    const setupCtx = ctx as unknown as {
+      mcp: {
+        transform: (callback: (draft: unknown) => void) => Promise<{
+          dispose: () => void;
+        }>;
+      };
+      agent: {
+        transform: (callback: (draft: unknown) => void) => Promise<{
+          dispose: () => void;
+        }>;
+      };
+      session: {
+        update: (input: {
+          sessionID: string;
+          permissions: Array<Record<string, unknown>>;
+        }) => Promise<void>;
+      };
+    };
+    let registeredRules: Array<Record<string, unknown>> = [];
+    const childUpdates: Array<{
+      sessionID: string;
+      permissions: Array<Record<string, unknown>>;
+    }> = [];
+    setupCtx.mcp.transform = async (callback) => {
+      callback({
+        list: () => [['host-only', { type: 'local' }]],
+        get: (name: string) =>
+          name === 'host-only' ? { type: 'local' } : undefined,
+        set: (name: string, config: Record<string, unknown>) => {
+          calls.mcpSets.push({ name, config });
+        },
+        update: () => {},
+        remove: () => {},
+      });
+      return { dispose: () => {} };
+    };
+    setupCtx.agent.transform = async (callback) => {
+      callback({
+        list: () => [],
+        get: () => undefined,
+        default: () => {},
+        update: (
+          name: string,
+          project: (agent: Record<string, unknown>) => void,
+        ) => {
+          const agent: Record<string, unknown> = {};
+          project(agent);
+          if (name === 'explorer') {
+            registeredRules = agent.permissions as Array<
+              Record<string, unknown>
+            >;
+          }
+        },
+        remove: () => {},
+      });
+      return { dispose: () => {} };
+    };
+    setupCtx.session.update = async (input) => {
+      childUpdates.push(input);
+    };
+
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      events.push({
+        type: 'session.created',
+        data: {
+          sessionID: 'ses_host_mcp_child',
+          parentID: 'ses_parent',
+          agent: 'explorer',
+        },
+      });
+      const deadline = Date.now() + 2_000;
+      while (childUpdates.length === 0 && Date.now() < deadline) {
+        await Bun.sleep(10);
+      }
+
+      expect(registeredRules).toContainEqual(
+        expect.objectContaining({ action: 'host-only_*', effect: 'deny' }),
+      );
+      expect(childUpdates).toHaveLength(1);
+      expect(childUpdates[0]?.permissions).toEqual(registeredRules);
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('missing MCP draft callback cannot become an invented empty snapshot', async () => {
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    const mcp = ctx.mcp as unknown as {
+      transform: (callback: (draft: unknown) => void) => Promise<{
+        dispose: () => void;
+      }>;
+    };
+    mcp.transform = async () => ({
+      dispose: () => calls.disposed.push('mcp.transform'),
+    });
+
+    await expect(createV2Setup()(ctx)).rejects.toThrow(
+      'Unable to snapshot configured MCP namespaces',
+    );
+    expect(calls.disposed).toContain('mcp.transform');
+  }, 20_000);
+
   test('subagent launch flows into the job board through the tool bridges', async () => {
     const { ctx, calls } = makeMockV2Context(projectDir);
     const cleanup = await createV2Setup()(ctx);
@@ -430,6 +680,88 @@ describe('createV2Setup e2e', () => {
       // (subagent_type derived from the v2 `agent` field).
       expect(status.content).toContain('agent: fixer');
       expect(status.content).toContain('ses_kid_1');
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('admission uses the finalized v2 child model instead of its parent', async () => {
+    await Bun.write(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        backgroundJobs: { sameProviderPolicy: { openai: 'foreground' } },
+      }),
+    );
+    const { ctx, calls, events } = makeMockV2Context(projectDir);
+    const agent = ctx.agent as unknown as {
+      transform: (callback: (draft: unknown) => void) => Promise<{
+        dispose: () => void;
+      }>;
+    };
+    const hostAgents = {
+      orchestrator: {
+        id: 'orchestrator',
+        mode: 'primary',
+        model: { providerID: 'openai', id: 'parent-model' },
+      },
+      fixer: {
+        id: 'fixer',
+        mode: 'subagent',
+        model: { providerID: 'anthropic', id: 'child-model' },
+      },
+    };
+    agent.transform = async (callback) => {
+      callback({
+        list: () => Object.values(hostAgents),
+        get: (id: string) => hostAgents[id as keyof typeof hostAgents],
+        default: () => {},
+        update: (
+          _id: string,
+          project: (draft: Record<string, unknown>) => void,
+        ) => {
+          project({});
+        },
+        remove: () => {},
+      });
+      return { dispose: () => {} };
+    };
+
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      events.push({
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg_parent_model',
+            sessionID: 'ses_admission_parent',
+            providerID: 'openai',
+            modelID: 'parent-model',
+          },
+        },
+      });
+      await Bun.sleep(20);
+
+      const beforeHook = calls.toolBeforeCb;
+      if (!beforeHook) throw new Error('tool:execute.before not captured');
+      const childLaunch = {
+        tool: 'subagent',
+        sessionID: 'ses_admission_parent',
+        agent: 'orchestrator',
+        messageID: 'msg_admission',
+        id: 'call_admission',
+        input: {
+          agent: 'fixer',
+          description: 'verify finalized child model',
+          prompt: 'Do the work',
+          background: true,
+        },
+      };
+      await beforeHook(childLaunch);
+
+      // The policy applies to the parent's provider. If admission incorrectly
+      // falls back to the parent model, this is converted to foreground.
+      expect(childLaunch.input.background).toBe(true);
     } finally {
       await cleanup();
     }

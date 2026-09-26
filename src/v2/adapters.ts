@@ -272,16 +272,25 @@ export function applyAgentToDraft(
         providerID: model.providerID,
         ...(v1.variant ? { variant: v1.variant } : {}),
       };
+    } else {
+      // Absence is meaningful: finalized registrations with no model inherit
+      // the session model instead of retaining an earlier draft's model.
+      delete agent.model;
     }
-    const request: Record<string, unknown> = {
-      settings: {},
-      headers: {},
-      body: {},
-    };
+    const request = asRecord(agent.request) ?? {};
+    const settings = asRecord(request.settings) ?? {};
+    const requestConfig = asRecord(v1.request);
+    for (const field of ['settings', 'headers', 'body']) {
+      const incoming = asRecord(requestConfig?.[field]);
+      if (incoming) {
+        request[field] = { ...(asRecord(request[field]) ?? {}), ...incoming };
+      }
+    }
+    Object.assign(settings, asRecord(request.settings));
     if (typeof v1.temperature === 'number') {
-      (request.settings as Record<string, unknown>).temperature =
-        v1.temperature;
+      settings.temperature = v1.temperature;
     }
+    if (Object.keys(settings).length > 0) request.settings = settings;
     agent.request = request;
     // v2 permission evaluation is last-match-wins (findLast). v1 `tools` lists
     // which tools an agent MAY use (implicit allow); the `permission` map holds
@@ -299,4 +308,81 @@ export function applyAgentToDraft(
       ? compiledPermissions.map((rule) => ({ ...rule }))
       : [...toolsAllow, ...adaptPermissions(v1.permission)];
   });
+}
+
+/** Capture native Agent.Info values as the host-config projection used by the
+ * registry. Ordered native permissions are kept outside that v1-shaped config
+ * because v1 permission maps cannot represent their order or resources. */
+export function snapshotNativeAgentForRegistry(
+  agent: Record<string, unknown>,
+): {
+  config: Record<string, unknown>;
+  permissions: V2PermissionRule[];
+} {
+  const model = asRecord(agent.model);
+  const request = asRecord(agent.request);
+  const settings = asRecord(request?.settings);
+  const config: Record<string, unknown> = {};
+
+  if (typeof agent.description === 'string')
+    config.description = agent.description;
+  if (typeof agent.system === 'string') config.prompt = agent.system;
+  if (typeof agent.mode === 'string') config.mode = agent.mode;
+  if (typeof agent.hidden === 'boolean') config.hidden = agent.hidden;
+  if (typeof model?.providerID === 'string' && typeof model.id === 'string') {
+    config.model = `${model.providerID}/${model.id}`;
+  }
+  if (typeof model?.variant === 'string') config.variant = model.variant;
+  if (settings) {
+    if (typeof settings.temperature === 'number') {
+      config.temperature = settings.temperature;
+    }
+  }
+
+  // Native request headers/body are intentionally captured as host request
+  // values too; applyAgentToDraft merges these into the existing request.
+  if (request) {
+    config.request = {
+      ...(asRecord(request.settings)
+        ? { settings: { ...asRecord(request.settings) } }
+        : {}),
+      ...(asRecord(request.headers)
+        ? { headers: { ...asRecord(request.headers) } }
+        : {}),
+      ...(asRecord(request.body)
+        ? { body: { ...asRecord(request.body) } }
+        : {}),
+    };
+  }
+
+  const permissions = Array.isArray(agent.permissions)
+    ? agent.permissions.flatMap((rule): V2PermissionRule[] => {
+        const value = asRecord(rule);
+        if (
+          !value ||
+          typeof value.action !== 'string' ||
+          typeof value.resource !== 'string' ||
+          (value.effect !== 'allow' &&
+            value.effect !== 'ask' &&
+            value.effect !== 'deny')
+        ) {
+          return [];
+        }
+        return [
+          {
+            action: value.action,
+            resource: value.resource,
+            effect: value.effect,
+          },
+        ];
+      })
+    : [];
+
+  return { config, permissions };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }

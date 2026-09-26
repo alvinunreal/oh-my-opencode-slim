@@ -15,7 +15,6 @@ import { RuntimeConfig } from '../config/runtime';
 import { BackgroundJobBoard, createInternalAgentTextPart } from '../utils';
 import { createDisplayNameMentionRewriter } from '../utils/agent-variant';
 import { isTaggedPart } from './cache-safe-injection';
-import { createFilterAvailableSkillsHook } from './filter-available-skills';
 import { processImageAttachments } from './image-hook';
 import { createPhaseReminderHook } from './phase-reminder';
 import { SessionLifecycle } from './session-lifecycle';
@@ -89,11 +88,6 @@ export function createPipeline(options: PipelineOptions = {}): Pipeline {
     shouldInject: shouldInjectOrchestratorReminder,
   });
 
-  const filterAvailableSkills = createFilterAvailableSkillsHook(
-    {} as never,
-    RuntimeConfig.get('/tmp/cache-safety-fixture'),
-  );
-
   const run = async (output: TransformOutput): Promise<void> => {
     for (const message of output.messages as MessageWithParts[]) {
       if (message.info.role !== 'user') continue;
@@ -116,10 +110,6 @@ export function createPipeline(options: PipelineOptions = {}): Pipeline {
       output as never,
     );
     await phaseReminder['experimental.chat.messages.transform'](
-      {} as never,
-      output as never,
-    );
-    await filterAvailableSkills['experimental.chat.messages.transform'](
       {} as never,
       output as never,
     );
@@ -181,7 +171,7 @@ export function internalInitiatorTurn(id: string, text: string) {
 /**
  * Conversation fixture covering the paths that produced past cache bugs:
  * plain orchestrator turns, assistant tool loops, a specialist message, an
- * internal-initiator continuation, and a message carrying a rewritable
+ * internal-initiator continuation, and a message carrying a
  * <available_skills> block.
  */
 export function buildHistory(): unknown[] {

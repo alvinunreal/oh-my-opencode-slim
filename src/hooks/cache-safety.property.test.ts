@@ -34,6 +34,7 @@ import {
   stableFingerprints,
   type TransformOutput,
   turnEndIndices,
+  userTurn,
 } from './cache-safety-harness.test';
 import { BACKGROUND_JOB_BOARD_METADATA_KEY } from './task-session-manager';
 import type { MessageWithParts } from './types';
@@ -183,6 +184,24 @@ describe.each(BOARD_STRATEGIES)(
   },
 );
 
+describe('cache-safety: skill-list conversation text', () => {
+  test('remaining transforms leave available_skills text untouched', async () => {
+    const text =
+      'quoted context\n<available_skills>\nkeep this text\n</available_skills>';
+    const pipeline = createPipeline();
+    const output: TransformOutput = {
+      messages: [userTurn('skill-text', text)],
+    };
+
+    await pipeline.run(output);
+
+    expect((output.messages[0] as MessageWithParts).parts[0]).toMatchObject({
+      type: 'text',
+      text,
+    });
+  });
+});
+
 describe('cache-safety: volatile content isolation', () => {
   test('background-job state only ever changes the tagged trailing message', async () => {
     const history = buildHistory();
@@ -327,20 +346,16 @@ describe('cache-safety: pipeline drift guard', () => {
     // step. Update createPipeline() in this file to match, then update this
     // expectation — the property tests are only meaningful while the two
     // stay in lockstep.
-    expect(orderedCalls).toEqual([
-      'taskSessionManagerHook',
-      'phaseReminder',
-      'filterAvailableSkills',
-    ]);
+    expect(orderedCalls).toEqual(['taskSessionManagerHook', 'phaseReminder']);
     expect(source).toContain(
       'await taskSessionManagerHook.injectBackgroundJobBoard(',
     );
 
-    // One handler definition plus the three dispatch calls above.
+    // One handler definition plus the two remaining dispatch calls above.
     const literalCount = source.split(
       "'experimental.chat.messages.transform'",
     ).length;
-    expect(literalCount - 1).toBe(4);
+    expect(literalCount - 1).toBe(3);
   });
 
   test('every hook module defining a message transform is covered here', async () => {
@@ -360,7 +375,6 @@ describe('cache-safety: pipeline drift guard', () => {
     // above (in the same order as src/index.ts) so the cache-safety
     // properties cover it, then add it to this list.
     expect(hookFilesWithTransforms.sort()).toEqual([
-      'filter-available-skills/index.ts',
       'phase-reminder/index.ts',
       'task-session-manager/index.ts',
     ]);

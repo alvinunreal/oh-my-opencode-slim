@@ -31,6 +31,6 @@
 ## Integration
 
 - Installed by plugin installer (`installCustomSkills`) using `src/cli/install.ts` via `installCustomSkill()`.
-- Permission surface is enforced by hook layer in `src/hooks/filter-available-skills/index.ts` (`permissionRules`).
+- Skill visibility is handled by native v1/v2 host discovery from finalized agent/session permissions; hidden skills are denied and discoverable skills require permission approval. The plugin does not rewrite `<available_skills>` in conversation text.
 - Release integrity: `scripts/verify-release-artifact.ts` checks for `src/skills/simplify/SKILL.md` in package tarballs.
 - Operationally paired with codemap/fixer flows in `src/index.ts` orchestrations for post-feature readability hardening.

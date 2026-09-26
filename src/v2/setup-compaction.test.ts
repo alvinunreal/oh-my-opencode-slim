@@ -310,6 +310,17 @@ describe('createV2Setup compaction hook', () => {
           canonical: projectDir,
         },
       },
+      mcp: {
+        transform: async (
+          cb: (draft: {
+            list: () => [];
+            set: (...args: unknown[]) => void;
+          }) => void,
+        ) => {
+          cb({ list: () => [], set: () => {} });
+          return { dispose: () => {} };
+        },
+      },
       agent: {
         transform: async (cb: (draft: unknown) => void) => {
           cb({

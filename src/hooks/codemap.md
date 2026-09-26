@@ -43,7 +43,6 @@ from `index.ts`) that returns the hook points OpenCode invokes.
 | Error recovery | `createJsonErrorRecoveryHook`, `createAutoUpdateCheckerHook` | message transform, tool-execute after |
 | Lifecycle/event | task-session-manager, `createCacheMonitorHook`, `createOrchestratorWakeScheduler` | `event` |
 | Runtime commands | `createDeepworkCommandHook`, `createReflectCommandHook`, `createLoopCommandHook` | `command.execute.before` |
-| Skill visibility | `createFilterAvailableSkillsHook` | message transform |
 | Model fallback | `ForegroundFallbackManager` | event-driven (message.updated/session.error/session.status) |
 
 ## Flow
@@ -53,8 +52,8 @@ from `index.ts`) that returns the hook points OpenCode invokes.
 ```
 1. OpenCode receives chat messages
 2. Plugin's experimental.chat.messages.transform hook is invoked (src/index.ts
-   composes: apply-patch → phase-reminder → filter-available-skills →
-   task-session-manager board injection, in that order)
+   composes: apply-patch → phase-reminder → task-session-manager board
+   injection, in that order)
 3. Task-session-manager first stabilizes still-running task tool parts, then
    rehydrates historical running tasks, then injects the Background Job Board
    via cache-safe helpers
@@ -65,6 +64,11 @@ from `index.ts`) that returns the hook points OpenCode invokes.
 6. Model responses/events are observed by the cache monitor (telemetry) and
    orchestrator-wake scheduler (idle nudge timing)
 ```
+
+Skill discovery and visibility are handled by native v1/v2 host behavior from
+the finalized agent/session permissions: hidden skills are denied and
+discoverable skills require permission approval. The plugin does not rewrite
+`<available_skills>` in conversation text.
 
 ### Hook Registration
 
@@ -110,7 +114,6 @@ from `index.ts`) that returns the hook points OpenCode invokes.
 | `auto-update-checker/` | Startup update detection, cache handling, optional install prompt |
 | `cache-monitor/` | Observation-only prompt-cache telemetry watchdog |
 | `deepwork/` | `/deepwork` runtime command |
-| `filter-available-skills/` | Skill-visibility filtering by agent permission policy |
 | `foreground-fallback/` | Interactive-session model fallback on rate-limit/errors |
 | `json-error-recovery/` | Malformed JSON/tool-output recovery helpers |
 | `loop-command/` | `/loop` iterative retry command |
