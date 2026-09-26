@@ -123,6 +123,84 @@ describe('TUI multiplexer directory scope', () => {
   });
 });
 
+for (const host of ['v1', 'v2'] as const) {
+  test(`sidebar refresh never renders after disposal (${host})`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-dispose-'));
+    const projectDir = path.join(root, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const oldHome = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = path.join(root, 'data');
+    let beginFetch!: () => void;
+    const started = new Promise<void>((resolve) => {
+      beginFetch = resolve;
+    });
+    let finishFetch!: (value: unknown) => void;
+    const slowFetch = new Promise<unknown>((resolve) => {
+      finishFetch = resolve;
+    });
+    let disposed = false;
+    let rendersAfterDispose = 0;
+    const renderer = {
+      requestRender: () => {
+        if (disposed) rendersAfterDispose++;
+      },
+    };
+    const list = () => {
+      beginFetch();
+      return slowFetch;
+    };
+    const disposers: Array<() => void> = [];
+    try {
+      if (host === 'v1') {
+        await tuiPlugin.tui(
+          {
+            state: { path: { directory: projectDir } },
+            client: { app: { agents: list } },
+            route: { current: { name: 'home' }, navigate: () => {} },
+            lifecycle: {
+              onDispose: (callback: () => void) => {
+                disposers.push(callback);
+                return () => {};
+              },
+            },
+            renderer,
+            slots: { register: () => 'slot' },
+            theme: { current: {} },
+          } as never,
+          {},
+          { version: 'test' } as never,
+        );
+      } else {
+        const dispose = await tuiPlugin.setup({
+          location: { directory: projectDir },
+          client: { agent: { list } },
+          renderer,
+          theme: {} as never,
+          ui: {
+            slot: () => () => {},
+            router: { current: () => ({ type: 'home' }) },
+          },
+        });
+        if (dispose) disposers.push(dispose);
+      }
+      await started;
+      for (const dispose of disposers) dispose();
+      disposed = true;
+      finishFetch([
+        { name: 'oracle', model: { providerID: 'p', modelID: 'm' } },
+      ]);
+      await Bun.sleep(20);
+      expect(rendersAfterDispose).toBe(0);
+    } finally {
+      finishFetch([]);
+      for (const dispose of disposers) dispose();
+      if (oldHome === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = oldHome;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 function createSnapshot(overrides: Partial<TuiSnapshot> = {}): TuiSnapshot {
   return {
     version: 1,

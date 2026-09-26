@@ -1489,15 +1489,20 @@ function v2ThemeView(theme: V2TuiThemeTokens): {
   };
 }
 
-/**
- * V2 entry point: sidebar slot + refresh loop; returns cleanup.
- * `/preset` stays v1-only (`api.command` is absent on v2).
- */
-async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
-  if (isPluginDisabledByEnv()) return;
+interface SidebarRuntimeAdapter {
+  version: string;
+  getDirectory: () => string;
+  getVisibleSession: () => string | undefined;
+  client?: unknown;
+  renderer: { requestRender: () => void; getSelection?: () => unknown };
+  theme: () => Parameters<typeof renderSidebar>[2];
+  navigate?: (sessionID: string) => void;
+  registerSlot: (render: () => JSX.Element) => undefined | (() => void);
+}
 
-  const version = (await readPackageVersion()) ?? 'dev';
-  let configDirectory = ctx.location?.directory ?? process.cwd();
+/** One refresh/animation/interaction lifecycle for both host slot contracts. */
+function createSidebarRuntime(adapter: SidebarRuntimeAdapter) {
+  let configDirectory = adapter.getDirectory();
   let { configInvalid, compactSidebar } = readConfigState(configDirectory);
   const [snapshot, setSnapshot] = createSignal(
     readTuiSnapshot(configDirectory),
@@ -1507,7 +1512,7 @@ async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
   const remoteCache: RemoteModelCache = {};
   const refreshSidebar = async () => {
     if (disposed) return;
-    const currentDirectory = ctx.location?.directory ?? process.cwd();
+    const currentDirectory = adapter.getDirectory();
     let nextSnapshot = await readTuiSnapshotAsync(currentDirectory);
     if (disposed) return;
     const directoryChanged = currentDirectory !== configDirectory;
@@ -1517,77 +1522,89 @@ async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
     }
     nextSnapshot = await hydrateRemoteModels(
       nextSnapshot,
-      ctx.client,
+      adapter.client,
       currentDirectory,
       remoteCache,
     );
     if (disposed) return;
-    if (
-      !isRefreshCurrent(
-        currentDirectory,
-        ctx.location?.directory ?? process.cwd(),
-      )
-    ) {
+    if (!isRefreshCurrent(currentDirectory, adapter.getDirectory())) {
       return;
     }
     if (!directoryChanged && snapshotSectionsEqual(nextSnapshot, snapshot())) {
       return;
     }
     setSnapshot(nextSnapshot);
-    ctx.renderer.requestRender();
+    if (!disposed) adapter.renderer.requestRender();
   };
+  const interaction = createSidebarInteraction(
+    adapter.navigate,
+    selectionGuard(adapter.renderer),
+  );
   const scheduleRefresh = createSerializedRefresh(refreshSidebar);
   scheduleRefresh();
   const renderTimer = setInterval(scheduleRefresh, 1000);
   const animationTimer = setInterval(() => {
     if (
       !disposed &&
-      getActiveSidebarAgentNames(snapshot(), visibleSession()).size > 0
+      getActiveSidebarAgentNames(snapshot(), adapter.getVisibleSession()).size >
+        0
     ) {
       setAnimationNow(Date.now());
     }
   }, ACTIVITY_FRAME_MS);
 
-  const visibleSession = () => resolveRouteSessionId(ctx.ui.router.current());
-
-  // Clickable sidebar: navigation is optional on v2 hosts (feature-detected
-  // at startup); without it the sidebar renders informatively.
-  const interaction = createSidebarInteraction(
-    makeRouteNavigator(ctx.ui.router, 'navigate', true),
-    selectionGuard(ctx.renderer),
+  const disposeSlot = adapter.registerSlot(() =>
+    reactiveElement(() => {
+      const visible = adapter.getVisibleSession();
+      const currentSnapshot = snapshot();
+      interaction.syncScope(
+        configDirectory,
+        visible === undefined
+          ? undefined
+          : resolveTuiSnapshotRoot(currentSnapshot, visible),
+      );
+      return renderSidebar(
+        currentSnapshot,
+        adapter.version,
+        adapter.theme(),
+        configInvalid,
+        compactSidebar,
+        animationNow,
+        visible,
+        interaction,
+      );
+    }),
   );
 
-  const disposeSlot = ctx.ui.slot({
-    append: 'sidebar.content',
-    render: () =>
-      reactiveElement(() => {
-        const visible = visibleSession();
-        const currentSnapshot = snapshot();
-        interaction.syncScope(
-          configDirectory,
-          visible === undefined
-            ? undefined
-            : resolveTuiSnapshotRoot(currentSnapshot, visible),
-        );
-        return renderSidebar(
-          currentSnapshot,
-          version,
-          v2ThemeView(ctx.theme),
-          configInvalid,
-          compactSidebar,
-          animationNow,
-          visible,
-          interaction,
-        );
-      }),
-  });
-
-  return () => {
-    disposed = true;
-    disposeSlot();
-    clearInterval(renderTimer);
-    clearInterval(animationTimer);
+  return {
+    getDirectory: () => configDirectory,
+    getSnapshot: snapshot,
+    setSnapshot,
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      disposeSlot?.();
+      clearInterval(renderTimer);
+      clearInterval(animationTimer);
+    },
   };
+}
+
+/** V2 slot adapter; `/preset` remains registered by src/v2/tui.ts. */
+async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
+  if (isPluginDisabledByEnv()) return;
+  const runtime = createSidebarRuntime({
+    version: (await readPackageVersion()) ?? 'dev',
+    getDirectory: () => ctx.location?.directory ?? process.cwd(),
+    getVisibleSession: () => resolveRouteSessionId(ctx.ui.router.current()),
+    client: ctx.client,
+    renderer: ctx.renderer,
+    theme: () => v2ThemeView(ctx.theme),
+    navigate: makeRouteNavigator(ctx.ui.router, 'navigate', true),
+    registerSlot: (render) =>
+      ctx.ui.slot({ append: 'sidebar.content', render }),
+  });
+  return runtime.dispose;
 }
 
 /**
@@ -1671,90 +1688,23 @@ const plugin: TuiDualContractModule = {
   tui: async (api, _options, meta) => {
     if (isPluginDisabledByEnv()) return;
 
-    const version = meta.version ?? (await readPackageVersion()) ?? 'dev';
-    let configDirectory = getTuiDirectory(api);
-    let { configInvalid, compactSidebar } = readConfigState(configDirectory);
-    const [snapshot, setSnapshot] = createSignal(
-      readTuiSnapshot(configDirectory),
-    );
-    const [animationNow, setAnimationNow] = createSignal(Date.now());
-    const remoteCache: RemoteModelCache = {};
-    const refreshSidebar = async () => {
-      const currentDirectory = getTuiDirectory(api);
-      let nextSnapshot = await readTuiSnapshotAsync(currentDirectory);
-      const directoryChanged = currentDirectory !== configDirectory;
-      if (directoryChanged) {
-        configDirectory = currentDirectory;
-        ({ configInvalid, compactSidebar } = readConfigState(configDirectory));
-      }
-      nextSnapshot = await hydrateRemoteModels(
-        nextSnapshot,
-        (api as { client?: unknown }).client,
-        currentDirectory,
-        remoteCache,
-      );
-      if (!isRefreshCurrent(currentDirectory, getTuiDirectory(api))) return;
-      if (
-        !directoryChanged &&
-        snapshotSectionsEqual(nextSnapshot, snapshot())
-      ) {
-        return;
-      }
-      setSnapshot(nextSnapshot);
-      api.renderer.requestRender();
-    };
-    const scheduleRefresh = createSerializedRefresh(refreshSidebar);
-    scheduleRefresh();
-    const renderTimer = setInterval(scheduleRefresh, 1000);
-    const animationTimer = setInterval(() => {
-      if (
-        getActiveSidebarAgentNames(
-          snapshot(),
-          resolveRouteSessionId(api.route.current),
-        ).size > 0
-      ) {
-        setAnimationNow(Date.now());
-      }
-    }, ACTIVITY_FRAME_MS);
-
-    api.lifecycle.onDispose(() => {
-      clearInterval(renderTimer);
-      clearInterval(animationTimer);
-    });
-
-    // Clickable sidebar: v1 hosts always expose api.route.navigate.
-    const interaction = createSidebarInteraction(
-      makeRouteNavigator(api.route, 'navigate', false),
-      selectionGuard(api.renderer),
-    );
-
-    api.slots.register({
-      order: resolveSidebarSlotOrder(api.tuiConfig?.plugin, PLUGIN_NAME),
-      slots: {
-        sidebar_content() {
-          return reactiveElement(() => {
-            const visible = resolveRouteSessionId(api.route.current);
-            const currentSnapshot = snapshot();
-            interaction.syncScope(
-              configDirectory,
-              visible === undefined
-                ? undefined
-                : resolveTuiSnapshotRoot(currentSnapshot, visible),
-            );
-            return renderSidebar(
-              currentSnapshot,
-              version,
-              api.theme.current,
-              configInvalid,
-              compactSidebar,
-              animationNow,
-              visible,
-              interaction,
-            );
-          });
-        },
+    const runtime = createSidebarRuntime({
+      version: meta.version ?? (await readPackageVersion()) ?? 'dev',
+      getDirectory: () => getTuiDirectory(api),
+      getVisibleSession: () => resolveRouteSessionId(api.route.current),
+      client: (api as { client?: unknown }).client,
+      renderer: api.renderer,
+      theme: () => api.theme.current,
+      navigate: makeRouteNavigator(api.route, 'navigate', false),
+      registerSlot: (render) => {
+        api.slots.register({
+          order: resolveSidebarSlotOrder(api.tuiConfig?.plugin, PLUGIN_NAME),
+          slots: { sidebar_content: render },
+        });
+        return undefined;
       },
     });
+    api.lifecycle.onDispose(runtime.dispose);
 
     // `/preset` is a pure TUI slash command (like the built-in `/models`):
     // it opens a picker, switches the preset via on-disk state, and never
@@ -1767,19 +1717,15 @@ const plugin: TuiDualContractModule = {
     if (api.command) {
       const snapshotRef: { snapshot: TuiSnapshot } = {
         get snapshot() {
-          return snapshot();
+          return runtime.getSnapshot();
         },
         set snapshot(value: TuiSnapshot) {
-          setSnapshot(value);
+          runtime.setSnapshot(value);
         },
       };
       const disposeCommands = api.command.register(() => [
-        buildPresetCommand(api, () => configDirectory, snapshotRef),
-        buildKillAllCommand(
-          api,
-          () => configDirectory,
-          () => snapshot(),
-        ),
+        buildPresetCommand(api, runtime.getDirectory, snapshotRef),
+        buildKillAllCommand(api, runtime.getDirectory, runtime.getSnapshot),
       ]);
       api.lifecycle.onDispose(disposeCommands);
     }
