@@ -979,6 +979,95 @@ describe('revived run tracker', () => {
     return { promise, resolve, reject };
   }
 
+  test.each(['after retry sends', 'during retry selection'] as const)(
+    'G2 %s: late acceptance retains the original transport attempt',
+    async (phase) => {
+      const clock = installCapturedTimers();
+      const capture = captureTransportLogs();
+      try {
+        const first = deferred();
+        const second = deferred();
+        const selection = deferred();
+        let selections = 0;
+        const prompt = mock(() =>
+          prompt.mock.calls.length === 1 ? first.promise : second.promise,
+        );
+        const harness = createHarness(() => ({ data: [] }), prompt, false, {
+          resolveSelection: async () => {
+            if (++selections === 2 && phase === 'during retry selection') {
+              await selection.promise;
+            }
+            return { provenance: 'host-persisted' };
+          },
+        });
+        publish(harness);
+        await clock.settle();
+        clock.fire(10_000);
+        await clock.settle();
+        clock.fire(0);
+        await clock.settle();
+        expect(harness.prompt).toHaveBeenCalledTimes(
+          phase === 'after retry sends' ? 2 : 1,
+        );
+        first.resolve({});
+        await clock.settle();
+        if (phase === 'during retry selection') {
+          selection.resolve(undefined);
+        } else {
+          second.reject(new Error('host unavailable'));
+        }
+        await clock.settle();
+        expect(
+          capture.entries
+            .filter((entry) =>
+              ['notification failed', 'notification accepted'].some(
+                (kind) => entry.message === `[revived-run-tracker] ${kind}`,
+              ),
+            )
+            .map((entry) => ({
+              message: entry.message,
+              attempt: (entry.data as { attempt: number }).attempt,
+              timedOut: (entry.data as { timedOut?: boolean }).timedOut,
+            })),
+        ).toEqual(
+          phase === 'after retry sends'
+            ? [
+                {
+                  message: '[revived-run-tracker] notification failed',
+                  attempt: 1,
+                  timedOut: true,
+                },
+                {
+                  message: '[revived-run-tracker] notification accepted',
+                  attempt: 1,
+                  timedOut: undefined,
+                },
+                {
+                  message: '[revived-run-tracker] notification failed',
+                  attempt: 2,
+                  timedOut: false,
+                },
+              ]
+            : [
+                {
+                  message: '[revived-run-tracker] notification failed',
+                  attempt: 1,
+                  timedOut: true,
+                },
+                {
+                  message: '[revived-run-tracker] notification accepted',
+                  attempt: 1,
+                  timedOut: undefined,
+                },
+              ],
+        );
+        harness.tracker.dispose();
+      } finally {
+        capture.restore();
+      }
+    },
+  );
+
   test.each(['success', 'sync throw', 'async rejection', 'error envelope'])(
     '%s releases the lease; only success accepts the publication',
     async (outcome) => {

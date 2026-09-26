@@ -316,6 +316,7 @@ export function createRevivedRunTracker(options: {
       return;
     notification.pending = true;
     notification.attempts += 1;
+    const attempt = notification.attempts;
     let lease: BackgroundJobLease | undefined;
     try {
       const session = getClient(options.input).session;
@@ -424,7 +425,7 @@ export function createRevivedRunTracker(options: {
               taskID: run.taskID,
               generation: run.generation,
               parentSessionID: run.parentSessionID,
-              attempt: notification.attempts,
+              attempt,
             });
           }
           notification.sent = true;
@@ -439,7 +440,7 @@ export function createRevivedRunTracker(options: {
         taskID: run.taskID,
         generation: run.generation,
         parentSessionID: run.parentSessionID,
-        attempt: notification.attempts,
+        attempt,
         timedOut: error instanceof NotificationTransportTimeoutError,
         error: stringifyError(error),
       });

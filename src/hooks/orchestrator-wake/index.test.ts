@@ -216,6 +216,108 @@ beforeEach(() => {
   globalThis.clearTimeout = clock.clearTimeout;
 });
 
+describe('forced wake blocker diagnostics', () => {
+  function captureBlockers() {
+    const entries: Array<{ message: string; data: unknown }> = [];
+    const spy = spyOn(loggerModule, 'log').mockImplementation(
+      (message: string, data?: unknown) => entries.push({ message, data }),
+    );
+    return {
+      entries,
+      restore: () => spy.mockRestore(),
+      blockers: () =>
+        entries.filter(
+          (entry) =>
+            entry.message === '[orchestrator-wake] backstop not armed' ||
+            entry.message === '[orchestrator-wake] forced wake blocked',
+        ),
+    };
+  }
+
+  test.each(['stopped-job-recovery', 'child-input'] as const)(
+    'G3b %s queued while busy logs exactly once when blocked at idle twice',
+    async (trigger) => {
+      const capture = captureBlockers();
+      try {
+        let inputWait = false;
+        const promptAsync = mock(async () => ({}));
+        const { scheduler } = createScheduler({
+          hostFlavor: 'v2',
+          sessionClient: makeV2Client({ promptAsync }),
+          hasInputWait: () => inputWait,
+        });
+        await scheduler.event({
+          event: {
+            type: 'session.status',
+            properties: { sessionID: 'p1', status: { type: 'busy' } },
+          },
+        });
+        if (trigger === 'stopped-job-recovery') {
+          scheduler.triggerStoppedJobRecovery(
+            'p1',
+            'stop: child-1',
+            'child-1:1',
+          );
+        } else {
+          scheduler.triggerChildInputWaitWake(
+            'p1',
+            'ask: child-1',
+            'child-1:q1',
+          );
+        }
+        await clock.advance(0);
+        inputWait = true;
+        await scheduler.event({
+          event: {
+            type: 'session.status',
+            properties: { sessionID: 'p1', status: { type: 'idle' } },
+          },
+        });
+        await scheduler.event({
+          event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+        });
+        expect(promptAsync).not.toHaveBeenCalled();
+        expect(capture.blockers()).toEqual([
+          {
+            message: '[orchestrator-wake] forced wake blocked',
+            data: { sessionID: 'p1', trigger, reason: 'input-wait' },
+          },
+        ]);
+      } finally {
+        capture.restore();
+      }
+    },
+  );
+
+  test('G3c periodic and forced blockers of the same reason both log once', async () => {
+    const capture = captureBlockers();
+    try {
+      const { scheduler } = createScheduler({ hasInputWait: () => true });
+      await scheduler.event({
+        event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+      });
+      scheduler.triggerStoppedJobRecovery('p1', 'stop: child-1', 'child-1:1');
+      scheduler.triggerStoppedJobRecovery('p1', 'stop: child-2', 'child-2:1');
+      expect(capture.blockers()).toEqual([
+        {
+          message: '[orchestrator-wake] backstop not armed',
+          data: { sessionID: 'p1', reason: 'input-wait' },
+        },
+        {
+          message: '[orchestrator-wake] forced wake blocked',
+          data: {
+            sessionID: 'p1',
+            trigger: 'stopped-job-recovery',
+            reason: 'input-wait',
+          },
+        },
+      ]);
+    } finally {
+      capture.restore();
+    }
+  });
+});
+
 afterEach(() => {
   globalThis.setTimeout = originalSetTimeout;
   globalThis.clearTimeout = originalClearTimeout;

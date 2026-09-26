@@ -1053,7 +1053,11 @@ export function createOrchestratorWakeScheduler(
     return undefined;
   }
 
-  function reportScheduleBlocker(sessionID: string, reason: string): void {
+  function reportScheduleBlocker(
+    sessionID: string,
+    reason: string,
+    trigger?: 'stopped-job-recovery' | 'child-input',
+  ): void {
     let reasons = reportedScheduleBlockers.get(sessionID);
     if (!reasons) {
       reasons = new Set();
@@ -1063,9 +1067,18 @@ export function createOrchestratorWakeScheduler(
         if (oldest !== undefined) reportedScheduleBlockers.delete(oldest);
       }
     }
-    if (reasons.has(reason)) return;
-    reasons.add(reason);
-    log('[orchestrator-wake] backstop not armed', { sessionID, reason });
+    const key = trigger ? `${trigger}:${reason}` : reason;
+    if (reasons.has(key)) return;
+    reasons.add(key);
+    if (trigger) {
+      log('[orchestrator-wake] forced wake blocked', {
+        sessionID,
+        trigger,
+        reason,
+      });
+    } else {
+      log('[orchestrator-wake] backstop not armed', { sessionID, reason });
+    }
   }
 
   function schedule(sessionID: string): void {
@@ -2059,7 +2072,11 @@ export function createOrchestratorWakeScheduler(
       return;
     }
     rearmWakeProgress(sessionID);
-    if (scheduleBlocker(sessionID)) return;
+    const blocker = scheduleBlocker(sessionID);
+    if (blocker) {
+      reportScheduleBlocker(sessionID, blocker, 'stopped-job-recovery');
+      return;
+    }
     const state = touchLocal(sessionID);
     clearTimer(state);
     bumpGeneration(state);
@@ -2146,14 +2163,22 @@ export function createOrchestratorWakeScheduler(
     if (localSessions.get(sessionID)?.archived) {
       return;
     }
-    if (
-      scheduleBlocker(sessionID, {
-        // The fingerprint comparison inside evaluate is the authoritative
-        // no-progress test for this path (see the docstring above).
-        ignoreProgressCap: true,
-      })
-    )
+    const blocker = scheduleBlocker(sessionID, {
+      // The fingerprint comparison inside evaluate is the authoritative
+      // no-progress test for this path (see the docstring above).
+      ignoreProgressCap: true,
+    });
+    if (blocker) {
+      log('[orchestrator-wake] terminal publication wake skipped', {
+        sessionID,
+        taskID,
+        generation,
+        trigger: 'terminal-publication',
+        verdict: 'skipped',
+        reason: blocker,
+      });
       return;
+    }
     // evaluate consumes the throttle on every publication delivery. A
     // suppressed or failed attempt burns nothing; the one-flight gate
     // deduplicates concurrent evaluations. Only this direct trigger logs
@@ -2215,7 +2240,11 @@ export function createOrchestratorWakeScheduler(
       return;
     }
     rearmWakeProgress(sessionID);
-    if (scheduleBlocker(sessionID)) return;
+    const blocker = scheduleBlocker(sessionID);
+    if (blocker) {
+      reportScheduleBlocker(sessionID, blocker, 'child-input');
+      return;
+    }
     const state = touchLocal(sessionID);
     clearTimer(state);
     bumpGeneration(state);

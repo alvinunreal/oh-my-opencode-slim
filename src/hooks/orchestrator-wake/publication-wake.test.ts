@@ -150,6 +150,7 @@ function createPublicationScheduler(options: {
   sessionClient: SessionClient;
   shouldManageSession?: (id: string) => boolean;
   hasInputWait?: (id: string) => boolean;
+  isFallbackInProgress?: (id: string) => boolean;
 }) {
   const ctx = {
     directory: '/project',
@@ -173,6 +174,7 @@ function createPublicationScheduler(options: {
     intervalMs: options.intervalMs ?? 60_000,
     shouldManageSession: options.shouldManageSession ?? (() => true),
     hasInputWait: options.hasInputWait ?? (() => false),
+    isFallbackInProgress: options.isFallbackInProgress,
   });
 
   return { scheduler };
@@ -232,6 +234,39 @@ afterEach(() => {
 });
 
 describe('terminal-publication wake', () => {
+  test.each(['input-wait', 'fallback-in-progress'] as const)(
+    'G3a publication blocked by %s reports its task identity',
+    async (reason) => {
+      const capture = captureWakeLogs();
+      try {
+        const promptAsync = mock(async () => ({}));
+        const { scheduler } = createPublicationScheduler({
+          hostFlavor: 'v2',
+          hasInputWait: () => reason === 'input-wait',
+          isFallbackInProgress: () => reason === 'fallback-in-progress',
+          sessionClient: makeV2Client({ promptAsync }),
+        });
+        await scheduler.triggerTerminalPublicationWake('p1', 'child-1', 2);
+        expect(promptAsync).not.toHaveBeenCalled();
+        expect(capture.matching('terminal publication wake skipped')).toEqual([
+          {
+            message: '[orchestrator-wake] terminal publication wake skipped',
+            data: {
+              sessionID: 'p1',
+              taskID: 'child-1',
+              generation: 2,
+              trigger: 'terminal-publication',
+              verdict: 'skipped',
+              reason,
+            },
+          },
+        ]);
+      } finally {
+        capture.restore();
+      }
+    },
+  );
+
   test.each(['v1', 'v2'] as const)(
     'G1a %s: a timer-delivered publication retry consumes the throttle',
     async (flavor) => {
