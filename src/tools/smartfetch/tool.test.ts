@@ -277,6 +277,72 @@ describe('smartfetch/tool', () => {
     expect(seen).toEqual([null, '"old"', '"new"']);
   });
 
+  test('failed revalidation keeps stale validators for the next attempt (R1)', async () => {
+    const seen: Array<string | null> = [];
+    const fetchMock = mock(
+      async (_url: string | URL | Request, init?: RequestInit) => {
+        seen.push(new Headers(init?.headers).get('If-None-Match'));
+        if (seen.length === 1) {
+          return new Response('original body', {
+            headers: { 'content-type': 'text/plain', etag: '"original"' },
+          });
+        }
+        if (seen.length === 2) throw new Error('offline during revalidation');
+        return new Response(null, { status: 304 });
+      },
+    );
+    globalThis.fetch = fetchMock as typeof fetch;
+    const webfetch = createWebfetchTool({ client: {} } as any);
+    const args = {
+      url: 'https://example.com/retry-revalidation',
+      prefer_llms_txt: 'never' as const,
+    };
+    await webfetch.execute(args, createExecutionContext());
+    const key = buildCacheKey(args.url, {
+      format: 'markdown',
+      extract_main: true,
+      prefer_llms_txt: 'never',
+      save_binary: false,
+    });
+    await expireCached(key);
+    await expect(
+      webfetch.execute(args, createExecutionContext()),
+    ).rejects.toThrow('offline during revalidation');
+    const retried = await webfetch.execute(args, createExecutionContext());
+    expect(seen).toEqual([null, '"original"', '"original"']);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(retried).toContain('original body');
+    expect(retried).toContain('revalidated: true');
+  });
+
+  test('stale entry without validators rejects an unsolicited 304 (R2)', async () => {
+    const fetchMock = mock(async () =>
+      fetchMock.mock.calls.length === 1
+        ? new Response('original body', {
+            headers: { 'content-type': 'text/plain' },
+          })
+        : new Response(null, { status: 304 }),
+    );
+    globalThis.fetch = fetchMock as typeof fetch;
+    const webfetch = createWebfetchTool({ client: {} } as any);
+    const args = {
+      url: 'https://example.com/no-validators-304',
+      prefer_llms_txt: 'never' as const,
+    };
+    await webfetch.execute(args, createExecutionContext());
+    const key = buildCacheKey(args.url, {
+      format: 'markdown',
+      extract_main: true,
+      prefer_llms_txt: 'never',
+      save_binary: false,
+    });
+    await expireCached(key);
+    await expect(
+      webfetch.execute(args, createExecutionContext()),
+    ).rejects.toThrow('Request failed with status code: 304');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   test('304 after a changed redirect target triggers a fresh unconditional request', async () => {
     const seen: Array<[string, string | null]> = [];
     globalThis.fetch = mock(
@@ -389,6 +455,52 @@ describe('smartfetch/tool', () => {
     expect(calls).toEqual([
       ['https://docs.example.com/llms-full.txt', null],
       ['https://docs.example.com/llms-full.txt', null],
+    ]);
+  });
+
+  test('a failed stale llms.txt probe falls back to the page without its ETag (R3)', async () => {
+    const calls: Array<[string, string | null]> = [];
+    let probeAvailable = true;
+    globalThis.fetch = mock(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        calls.push([url, new Headers(init?.headers).get('If-None-Match')]);
+        if (url.endsWith('/llms-full.txt')) {
+          return probeAvailable
+            ? new Response('# Old llms docs', {
+                headers: { 'content-type': 'text/plain', etag: '"llms-only"' },
+              })
+            : new Response('not found', { status: 404 });
+        }
+        if (url.endsWith('/llms.txt')) {
+          return new Response('not found', { status: 404 });
+        }
+        return new Response('fresh page body', {
+          headers: { 'content-type': 'text/plain' },
+        });
+      },
+    ) as typeof fetch;
+    const webfetch = createWebfetchTool({ client: {} } as any);
+    const args = { url: 'https://docs.example.com/reprobe' };
+    expect(await webfetch.execute(args, createExecutionContext())).toContain(
+      'used_llms_txt: true',
+    );
+    const key = buildCacheKey(args.url, {
+      format: 'markdown',
+      extract_main: true,
+      prefer_llms_txt: 'auto',
+      save_binary: false,
+    });
+    await expireCached(key);
+    probeAvailable = false;
+    const fallback = await webfetch.execute(args, createExecutionContext());
+    expect(fallback).toContain('fresh page body');
+    expect(fallback).toContain('used_llms_txt: false');
+    expect(calls).toEqual([
+      ['https://docs.example.com/llms-full.txt', null],
+      ['https://docs.example.com/llms-full.txt', null],
+      ['https://docs.example.com/llms.txt', null],
+      ['https://docs.example.com/reprobe', null],
     ]);
   });
 
