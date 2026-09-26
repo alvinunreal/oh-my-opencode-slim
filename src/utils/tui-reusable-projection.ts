@@ -11,9 +11,10 @@ import type { BackgroundJobBoard } from './background-job-board';
  * and attributed, certain running jobs (running entries contain only stable
  * taskID/alias plus a marker). The TUI is a pure reader of this section.
  *
- * Each parent section carries the publishing PID. Startup sweeps only dead
- * owners and legacy ownerless entries; mutations replace/remove only this
- * process's parents, preserving sections written by other live processes.
+ * Each parent section carries the publishing PID. Startup sweeps dead,
+ * ownerless, and same-PID inherited sections (SIGKILL residue lasts until
+ * that sweep). Other live processes survive for different parents;
+ * concurrent writers to the same parent are last-writer-wins.
  *
  * Cost: O(all jobs) per mutation. `updateSnapshot` early-outs when stable
  * projection fields do not change, so heartbeats do not write the file.
@@ -32,12 +33,16 @@ export function createTuiReusableProjection(input: {
   let disposed = false;
   let ownedParents = new Set<string>();
 
-  // The board is process-local. A startup may discard only dead or legacy
-  // ownerless sections; another live server's parents must survive.
+  // A new board supersedes sections left by an earlier run in this PID.
+  // Sections belonging to other live processes survive startup.
   updateSnapshot(projectDir, (snapshot) => {
     for (const parent of Object.keys(snapshot.reusableByAgent)) {
       const owner = snapshot.reusableOwners[parent];
-      if (owner === undefined || !isProcessRunning(owner)) {
+      if (
+        owner === undefined ||
+        owner === process.pid ||
+        !isProcessRunning(owner)
+      ) {
         delete snapshot.reusableByAgent[parent];
         delete snapshot.reusableOwners[parent];
       }

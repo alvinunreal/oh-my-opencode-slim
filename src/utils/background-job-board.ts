@@ -338,7 +338,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
           // terminal evidence stay untouched.
           if (!existing.provisional) return existing;
           const promoted = { ...existing, provisional: false };
-          this.jobs.set(input.taskID, promoted);
+          this.setJob(promoted);
           // The stop-time notification skipped this record while it was
           // still provisional; the attributed record owes the wake.
           this.notifyTerminalStateListeners(input.taskID);
@@ -1253,7 +1253,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
           background: record.background || metadata.background === true,
         }
       : { ...record, provisional: false };
-    this.jobs.set(taskID, promoted);
+    this.setJob(promoted);
     if (promoted.state !== 'running') {
       // The stop-time notification skipped this record while it was
       // still provisional; the attributed record owes the wake.

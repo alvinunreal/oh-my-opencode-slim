@@ -116,6 +116,66 @@ describe('tui-reusable-projection', () => {
     }
   });
 
+  test('placeholder promotions publish running and finished jobs immediately', async () => {
+    const board = new BackgroundJobBoard();
+    const projection = createTuiReusableProjection({ board, projectDir });
+    const fsModule = await import('node:fs');
+    let writes = 0;
+    let notifications = 0;
+    board.addMutationListener(() => notifications++);
+    const statePath = getTuiStatePath(projectDir);
+    const originalRename = fsModule.renameSync;
+    const renameSpy = spyOn(fsModule, 'renameSync').mockImplementation(
+      (...args: Parameters<typeof fs.renameSync>) => {
+        if (String(args[1]) === statePath) writes++;
+        return originalRename(...args);
+      },
+    );
+    try {
+      board.registerLaunch({
+        taskID: 'ses_run',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        provisional: true,
+      });
+      const beforeRunning = notifications;
+      board.promoteProvisional('ses_run', 'parent-1', { agent: 'fixer' });
+      expect(notifications - beforeRunning).toBe(1);
+      expect(writes).toBe(1);
+      expect(
+        readTuiSnapshot(projectDir).reusableByAgent['parent-1']?.fixer?.[0],
+      ).toMatchObject({ taskID: 'ses_run', running: true });
+
+      board.registerLaunch({
+        taskID: 'ses_done',
+        parentSessionID: 'parent-2',
+        agent: 'oracle',
+        provisional: true,
+      });
+      board.updateStatus({
+        taskID: 'ses_done',
+        state: 'completed' as never,
+        resultSummary: 'done',
+      });
+      writes = 0;
+      const beforeFinished = notifications;
+      board.registerLaunch({
+        taskID: 'ses_done',
+        parentSessionID: 'parent-2',
+        agent: 'oracle',
+        preserveRun: true,
+      });
+      expect(notifications - beforeFinished).toBe(1);
+      expect(writes).toBe(1);
+      expect(
+        readTuiSnapshot(projectDir).reusableByAgent['parent-2']?.oracle?.[0],
+      ).toMatchObject({ taskID: 'ses_done', terminalState: 'completed' });
+    } finally {
+      renameSpy.mockRestore();
+      projection.dispose();
+    }
+  });
+
   test('unattributed and uncertain running jobs are not advertised', () => {
     const board = new BackgroundJobBoard();
     const projection = createTuiReusableProjection({ board, projectDir });
@@ -227,6 +287,26 @@ describe('tui-reusable-projection', () => {
     });
     try {
       expect(readTuiSnapshot(projectDir).reusableByAgent).toEqual({});
+    } finally {
+      projection.dispose();
+    }
+  });
+
+  test('startup drops same-PID sections orphaned by failed disposal', () => {
+    updateSnapshot(projectDir, (snapshot) => {
+      snapshot.reusableByAgent['parent-old'] = {
+        fixer: [{ taskID: 'ses_old', alias: 'fix-1', running: true }],
+      };
+      snapshot.reusableOwners['parent-old'] = process.pid;
+    });
+    const projection = createTuiReusableProjection({
+      board: new BackgroundJobBoard(),
+      projectDir,
+    });
+    try {
+      expect(
+        readTuiSnapshot(projectDir).reusableByAgent['parent-old'],
+      ).toBeUndefined();
     } finally {
       projection.dispose();
     }
