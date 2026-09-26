@@ -61,6 +61,7 @@ async function readBoundedBody(
   response: Response,
   maxBytes: number,
   url: string,
+  signal: AbortSignal,
 ): Promise<string> {
   const contentLength = response.headers.get('content-length');
   if (contentLength !== null) {
@@ -88,24 +89,49 @@ async function readBoundedBody(
   let size = 0;
   try {
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > maxBytes) {
-        try {
-          const cancellation = reader.cancel();
-          void cancellation.catch(() => {});
-        } catch {
-          // Preserve the oversized-body protocol error.
-        }
-        throw new MarketplaceRegistryProtocolError(
-          `Registry response exceeds the ${maxBytes}-byte limit: ${url}`,
-        );
+      if (signal.aborted) {
+        throw signal.reason ?? new Error('Registry request was cancelled');
       }
-      chunks.push(value);
+
+      let abortRead: (() => void) | undefined;
+      const aborted = new Promise<never>((_resolve, reject) => {
+        abortRead = () => {
+          try {
+            const cancellation = reader.cancel();
+            void cancellation.catch(() => {});
+          } catch {
+            // Cancellation is best-effort; preserve the abort reason.
+          }
+          reject(signal.reason ?? new Error('Registry request was cancelled'));
+        };
+        signal.addEventListener('abort', abortRead, { once: true });
+      });
+      try {
+        const { done, value } = await Promise.race([reader.read(), aborted]);
+        if (done) break;
+        size += value.byteLength;
+        if (size > maxBytes) {
+          try {
+            const cancellation = reader.cancel();
+            void cancellation.catch(() => {});
+          } catch {
+            // Preserve the oversized-body protocol error.
+          }
+          throw new MarketplaceRegistryProtocolError(
+            `Registry response exceeds the ${maxBytes}-byte limit: ${url}`,
+          );
+        }
+        chunks.push(value);
+      } finally {
+        if (abortRead) signal.removeEventListener('abort', abortRead);
+      }
     }
   } finally {
-    reader.releaseLock();
+    try {
+      reader.releaseLock();
+    } catch {
+      // A pending, uncooperative read can prevent releasing its lock.
+    }
   }
 
   const bytes = new Uint8Array(size);
@@ -354,7 +380,12 @@ export class MarketplaceRegistryClient {
         );
       }
 
-      const text = await readBoundedBody(response, maxBytes, url);
+      const text = await readBoundedBody(
+        response,
+        maxBytes,
+        url,
+        controller.signal,
+      );
       if (controller.signal.aborted || externalSignal?.aborted) {
         throw new MarketplaceRegistryUnavailableError(
           `Registry request was cancelled: ${url}`,
@@ -368,6 +399,11 @@ export class MarketplaceRegistryClient {
         );
       }
     } catch (error) {
+      if (externalSignal?.aborted) {
+        throw new MarketplaceRegistryUnavailableError(
+          `Registry request was cancelled: ${url}`,
+        );
+      }
       if (
         error instanceof MarketplaceRegistryProtocolError ||
         error instanceof MarketplaceRegistryNotFoundError ||

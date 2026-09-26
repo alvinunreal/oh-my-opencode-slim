@@ -272,4 +272,57 @@ describe('MarketplaceRegistryClient', () => {
       MarketplaceRegistryUnavailableError,
     );
   });
+
+  test('bounds hanging body reads by timeout and external cancellation', async () => {
+    function hangingResponse(onCancel: () => void): Response {
+      const body = new ReadableStream<Uint8Array>({
+        pull() {
+          return new Promise<void>(() => {});
+        },
+        cancel() {
+          onCancel();
+          return new Promise<void>(() => {});
+        },
+      });
+      return new Response(body);
+    }
+
+    let timeoutCancellationCount = 0;
+    let timeoutResponse: Response | undefined;
+    const timedOut = new MarketplaceRegistryClient({
+      pluginVersion: '3.1.0',
+      timeoutMs: 20,
+      fetch: async () => {
+        timeoutResponse = hangingResponse(() => timeoutCancellationCount++);
+        return timeoutResponse;
+      },
+    });
+    const timeoutStarted = performance.now();
+    await expect(timedOut.fetchIndex()).rejects.toBeInstanceOf(
+      MarketplaceRegistryUnavailableError,
+    );
+    expect(performance.now() - timeoutStarted).toBeLessThan(500);
+    expect(timeoutCancellationCount).toBe(1);
+    expect(timeoutResponse?.body?.locked).toBe(false);
+
+    let externalCancellationCount = 0;
+    let externalResponse: Response | undefined;
+    const controller = new AbortController();
+    const cancelled = new MarketplaceRegistryClient({
+      pluginVersion: '3.1.0',
+      timeoutMs: 1_000,
+      fetch: async () => {
+        externalResponse = hangingResponse(() => externalCancellationCount++);
+        return externalResponse;
+      },
+    });
+    const request = cancelled.fetchIndex(controller.signal);
+    await Promise.resolve();
+    controller.abort();
+    await expect(request).rejects.toBeInstanceOf(
+      MarketplaceRegistryUnavailableError,
+    );
+    expect(externalCancellationCount).toBe(1);
+    expect(externalResponse?.body?.locked).toBe(false);
+  });
 });
