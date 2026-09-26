@@ -371,8 +371,14 @@ export function createWebfetchTool(
               const looksHtmlPayload = provisionalDecoded
                 ? looksLikeHtmlText(provisionalDecoded.text)
                 : false;
+              const sniffedImage =
+                !declaredType || genericBinaryMime
+                  ? detectInlineImageMime(body.data)
+                  : undefined;
               let contentType = declaredType;
-              if (!contentType) {
+              if (sniffedImage) {
+                contentType = sniffedImage;
+              } else if (!contentType) {
                 contentType = looksLikeTextBody(body.data)
                   ? looksHtmlPayload
                     ? 'text/html'

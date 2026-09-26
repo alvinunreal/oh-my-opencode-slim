@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { buildCacheKey, CACHE } from './cache';
@@ -562,6 +562,144 @@ describe('smartfetch/tool', () => {
     expect(text).toContain('inline_image_skipped: "model_not_multimodal"');
     expect(text).toContain('cache_hit: true');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('mislabeled PNG with octet-stream attaches inline with sniffed source type', async () => {
+    const png = Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10, 42);
+    globalThis.fetch = mock(
+      async () =>
+        new Response(png, {
+          headers: { 'content-type': 'application/octet-stream' },
+        }),
+    ) as typeof fetch;
+    const ctx = createExecutionContext();
+    ctx.extra = { model: { capabilities: { input: { image: true } } } };
+    const result = await createWebfetchTool({ client: {} } as any, {
+      imageRouting: () => 'direct',
+    }).execute(
+      { url: 'https://example.com/mislabeled-png', prefer_llms_txt: 'never' },
+      ctx,
+    );
+    expect(typeof result).toBe('object');
+    if (typeof result === 'string') throw new Error('expected inline PNG');
+    expect(result.output).toContain('binary_kind: "image"');
+    expect(result.output).toContain('source_content_type: "image/png"');
+    expect(result.attachments?.[0]?.url).toBe(
+      `data:image/png;base64,${Buffer.from(png).toString('base64')}`,
+    );
+  });
+
+  test('undeclared image PNG attaches inline with sniffed source type', async () => {
+    const png = Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10, 42);
+    globalThis.fetch = mock(async () => new Response(png)) as typeof fetch;
+    const ctx = createExecutionContext();
+    ctx.extra = { model: { capabilities: { input: { image: true } } } };
+    const result = await createWebfetchTool({ client: {} } as any, {
+      imageRouting: () => 'direct',
+    }).execute(
+      { url: 'https://example.com/undeclared-png', prefer_llms_txt: 'never' },
+      ctx,
+    );
+    expect(typeof result).toBe('object');
+    if (typeof result === 'string') throw new Error('expected inline PNG');
+    expect(result.output).toContain('binary_kind: "image"');
+    expect(result.output).toContain('source_content_type: "image/png"');
+    expect(result.attachments?.[0]?.mime).toBe('image/png');
+  });
+
+  test('short JPEG magic bytes beat octet-stream text heuristic', async () => {
+    const jpeg = Uint8Array.of(255, 216, 255, 224, 9);
+    globalThis.fetch = mock(
+      async () =>
+        new Response(jpeg, {
+          headers: { 'content-type': 'application/octet-stream' },
+        }),
+    ) as typeof fetch;
+    const ctx = createExecutionContext();
+    ctx.extra = { model: { capabilities: { input: { image: true } } } };
+    const result = await createWebfetchTool({ client: {} } as any, {
+      imageRouting: () => 'direct',
+    }).execute(
+      { url: 'https://example.com/mislabeled-jpeg', prefer_llms_txt: 'never' },
+      ctx,
+    );
+    expect(typeof result).toBe('object');
+    if (typeof result === 'string') throw new Error('expected inline JPEG');
+    expect(result.output).toContain('source_content_type: "image/jpeg"');
+    expect(result.attachments?.[0]?.url).toStartWith('data:image/jpeg;base64,');
+  });
+
+  test('mislabeled PNG saved to disk uses the sniffed .png extension', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'smartfetch-sniff-'));
+    const png = Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10, 42);
+    try {
+      globalThis.fetch = mock(
+        async () =>
+          new Response(png, {
+            headers: { 'content-type': 'application/octet-stream' },
+          }),
+      ) as typeof fetch;
+      const result = await createWebfetchTool({ client: {} } as any, {
+        binaryDir: directory,
+      }).execute(
+        {
+          url: 'https://example.com/download',
+          prefer_llms_txt: 'never',
+          save_binary: true,
+        },
+        createExecutionContext(),
+      );
+      expect(typeof result).toBe('string');
+      expect(result).toContain('source_content_type: "image/png"');
+      expect(result).toMatch(/saved_path: .*\.png/);
+      const files = await readdir(directory);
+      expect(files).toHaveLength(1);
+      const filename = files[0];
+      if (!filename) throw new Error('missing saved image');
+      expect(filename).toEndWith('.png');
+      expect(await readFile(path.join(directory, filename))).toEqual(
+        Buffer.from(png),
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('mislabeled PNG without model capabilities remains an image with unknown capability', async () => {
+    globalThis.fetch = mock(
+      async () =>
+        new Response(Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10, 42), {
+          headers: { 'content-type': 'application/octet-stream' },
+        }),
+    ) as typeof fetch;
+    const result = await createWebfetchTool({ client: {} } as any, {
+      imageRouting: () => 'direct',
+    }).execute(
+      { url: 'https://example.com/v2-mislabeled', prefer_llms_txt: 'never' },
+      createExecutionContext(),
+    );
+    expect(result).toContain('binary_kind: "image"');
+    expect(result).toContain('source_content_type: "image/png"');
+    expect(result).toContain(
+      'inline_image_skipped: "model_capability_unknown"',
+    );
+  });
+
+  test('octet-stream control bytes without image magic remain generic binary', async () => {
+    globalThis.fetch = mock(
+      async () =>
+        new Response(Uint8Array.of(0, 1, 2, 3), {
+          headers: { 'content-type': 'application/octet-stream' },
+        }),
+    ) as typeof fetch;
+    const result = await createWebfetchTool({ client: {} } as any, {
+      imageRouting: () => 'direct',
+    }).execute(
+      { url: 'https://example.com/not-an-image', prefer_llms_txt: 'never' },
+      createExecutionContext(),
+    );
+    expect(result).toContain('binary_kind: "binary"');
+    expect(result).not.toContain('inline_image_skipped');
   });
 
   test('the inclusive base64 limit permits 786432 raw bytes but refuses 786433', async () => {

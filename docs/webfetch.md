@@ -75,9 +75,11 @@ Three modes:
    filesystem path.
 3. **Inline image** — when `save_binary=false`, image routing is `direct`, and
    the current model explicitly supports image input, PNG/JPEG/GIF/WebP bytes
-   can be attached as a data URL. The actual image type is determined from the
-   file signature, not the server's MIME claim. The base64 payload (excluding
-   the data URL prefix) must fit in 1 MiB (at most 786,432 raw bytes).
+   can be attached as a data URL. When the server sends no type or a generic
+   `application/octet-stream`, image signatures also determine the binary type
+   before text heuristics (including the extension used when saving to disk).
+   The base64 payload (excluding the data URL prefix) must fit in 1 MiB
+   (at most 786,432 raw bytes).
    The decision is made per call, even for cached bytes. If any condition fails,
    no image is attached or saved automatically; frontmatter reports
    `inline_image_skipped` (e.g. `model_capability_unknown` for older/v2-shaped
@@ -172,9 +174,9 @@ Content type detection follows this flow:
 1. Explicit binary MIME types (`image/*`, `audio/*`, `video/*`,
    `application/pdf`, `application/zip`, `application/octet-stream`) are
    treated as binary.
-2. `application/octet-stream` and known text types are re-examined — the
-   first 2 KiB is scanned for null bytes and non-printable characters to
-   distinguish text from binary.
+2. Missing or generic (`application/octet-stream`) MIME types are checked for
+   PNG/JPEG/GIF/WebP magic bytes before text heuristics. Otherwise generic
+   binary and known text types use the first 2 KiB to distinguish text from binary.
 3. Content declared as text/plain that looks like HTML is upgraded to
    `text/html` for better content extraction.
 
