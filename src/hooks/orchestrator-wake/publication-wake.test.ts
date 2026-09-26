@@ -189,6 +189,31 @@ function terminalChild(id: string): Record<string, unknown> {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((yes) => {
+    resolve = yes;
+  });
+  return { promise, resolve };
+}
+
+function captureWakeLogs() {
+  const entries: Array<{ message: string; data: Record<string, unknown> }> = [];
+  const spy = spyOn(loggerModule, 'log').mockImplementation(
+    (message: string, data?: unknown) => {
+      entries.push({ message, data: (data ?? {}) as Record<string, unknown> });
+    },
+  );
+  return {
+    entries,
+    restore: () => spy.mockRestore(),
+    matching: (message: string) =>
+      entries.filter(
+        (entry) => entry.message === `[orchestrator-wake] ${message}`,
+      ),
+  };
+}
+
 const originalSetTimeout = globalThis.setTimeout;
 const originalClearTimeout = globalThis.clearTimeout;
 let clock = createClock();
@@ -207,6 +232,142 @@ afterEach(() => {
 });
 
 describe('terminal-publication wake', () => {
+  test.each(['v1', 'v2'] as const)(
+    'G1a %s: a timer-delivered publication retry consumes the throttle',
+    async (flavor) => {
+      const capture = captureWakeLogs();
+      try {
+        let fail = true;
+        const promptAsync = mock(async () => {
+          if (fail) throw new Error('transport unavailable');
+          return {};
+        });
+        const { scheduler } = createPublicationScheduler({
+          hostFlavor: flavor,
+          publicationWakeMinIntervalMs: 3_600_000,
+          sessionClient:
+            flavor === 'v2'
+              ? makeV2Client({
+                  promptAsync,
+                  listChildren: [
+                    terminalChild('child-1'),
+                    terminalChild('child-2'),
+                  ],
+                })
+              : makeV1Client({
+                  promptAsync,
+                  todos: [{ id: 't1', status: 'completed' }],
+                }),
+        });
+        await scheduler.triggerTerminalPublicationWake('p1', 'child-1', 1);
+        expect(promptAsync).toHaveBeenCalledTimes(1);
+        fail = false;
+        await clock.advance(60_000);
+        expect(promptAsync).toHaveBeenCalledTimes(2);
+
+        await scheduler.triggerTerminalPublicationWake('p1', 'child-2', 1);
+        expect(promptAsync).toHaveBeenCalledTimes(2);
+        expect(
+          capture.matching('terminal publication wake skipped'),
+        ).toContainEqual({
+          message: '[orchestrator-wake] terminal publication wake skipped',
+          data: expect.objectContaining({
+            taskID: 'child-2',
+            generation: 1,
+            reason: 'throttled',
+          }),
+        });
+      } finally {
+        capture.restore();
+      }
+    },
+  );
+
+  test.each(['v1', 'v2'] as const)(
+    'G1b %s: a publication delivered by a one-flight waiter consumes the throttle',
+    async (flavor) => {
+      const capture = captureWakeLogs();
+      try {
+        const firstRead = deferred<{ data: Array<Record<string, unknown>> }>();
+        const promptAsync = mock(async () => ({}));
+        const client =
+          flavor === 'v2'
+            ? makeV2Client({ promptAsync })
+            : makeV1Client({ promptAsync });
+        let reads = 0;
+        if (flavor === 'v2') {
+          client.list = mock(async () => {
+            if (++reads === 1) return firstRead.promise;
+            return {
+              data: [terminalChild('child-1'), terminalChild('child-2')],
+            };
+          });
+        } else {
+          client.todo = mock(async () => {
+            if (++reads === 1) return firstRead.promise;
+            return { data: [{ id: 't1', status: 'pending' }] };
+          });
+        }
+        const { scheduler } = createPublicationScheduler({
+          hostFlavor: flavor,
+          publicationWakeMinIntervalMs: 3_600_000,
+          sessionClient: client,
+        });
+        await scheduler.event({
+          event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+        });
+        await clock.advance(60_000);
+        expect(reads).toBe(1);
+        await scheduler.triggerTerminalPublicationWake('p1', 'child-1', 2);
+        expect(promptAsync).not.toHaveBeenCalled();
+        firstRead.resolve({ data: [] });
+        await clock.advance(0);
+        expect(promptAsync).toHaveBeenCalledTimes(1);
+
+        await scheduler.triggerTerminalPublicationWake('p1', 'child-2', 2);
+        expect(promptAsync).toHaveBeenCalledTimes(1);
+        expect(
+          capture.matching('terminal publication wake skipped'),
+        ).toContainEqual({
+          message: '[orchestrator-wake] terminal publication wake skipped',
+          data: expect.objectContaining({
+            taskID: 'child-2',
+            reason: 'throttled',
+          }),
+        });
+      } finally {
+        capture.restore();
+      }
+    },
+  );
+
+  test('G1c guard: a delivered periodic wake does not throttle a publication', async () => {
+    const promptAsync = mock(async () => ({}));
+    const { scheduler } = createPublicationScheduler({
+      hostFlavor: 'v2',
+      publicationWakeMinIntervalMs: 3_600_000,
+      sessionClient: makeV2Client({
+        promptAsync,
+        listChildren: [
+          terminalChild('child-1'),
+          {
+            id: 'child-2',
+            parentID: 'p1',
+            directory: '/project',
+            time: { updated: Date.now() },
+          },
+        ],
+      }),
+    });
+    await scheduler.event({
+      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+    });
+    await clock.advance(60_000);
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    await scheduler.triggerTerminalPublicationWake('p1', 'child-1', 1);
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+  });
+
   test('idle parent + completed publication → exactly ONE queue wake with inherit selection (v2)', async () => {
     const promptAsync = mock(async () => ({}));
     const { scheduler } = createPublicationScheduler({

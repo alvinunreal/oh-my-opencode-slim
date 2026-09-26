@@ -58,6 +58,10 @@ fallback), the wake condition is children without a terminal `outcome`
     Retries follow the interval timer; failed publication/recovery retains its
     reason until delivery or a generation change. v2 children mode passes
     `delivery: 'queue'` (v1 call shape unchanged).
+  - A delivered publication consumes the per-parent throttle inside
+    `evaluate`, whether delivered directly, by timer or by one-flight
+    waiter. Failed/vetoed attempts and periodic deliveries do not consume
+    it; `waking` with task identity is logged only by the direct trigger.
   - `triggerStoppedJobRecovery`: immediate recovery wake for jobs that stopped
     without a native terminal result (separate from the periodic TODO wake;
     bypasses the wake condition, as on v1). Queued facts are revalidated by
