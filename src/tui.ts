@@ -430,7 +430,6 @@ export interface SidebarSessionTarget {
   sessionID: string;
   agentName: string;
   alias?: string;
-  model?: string;
   status?: 'busy' | 'retry' | 'reusable';
 }
 
@@ -470,7 +469,6 @@ export function getSidebarAgentTargets(
       sessionID,
       agentName,
       alias: details?.alias,
-      model: details?.model,
       status: details?.status,
     });
     byAgent.set(agentName, list);
@@ -1234,7 +1232,6 @@ function renderSidebar(
                   sessionID: target.taskID,
                   agentName,
                   alias: target.alias,
-                  model,
                   status: target.running === true ? 'busy' : 'reusable',
                 }),
               );

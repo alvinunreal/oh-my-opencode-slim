@@ -1472,15 +1472,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           if (!internalAdmission) {
             sessionMetadata.setModel(info.sessionID, model);
           }
-          // Per-session sidebar detail: the model actually observed for
-          // this session (two same-agent sessions may differ). Published
-          // regardless of admission origin: the executing model is a
-          // runtime fact, not selection tracking.
-          updateTuiSessionDetails(
-            info.sessionID,
-            { model },
-            tuiActivityDirectory(info.sessionID),
-          );
           // Managed background-task sessions are identified by their session
           // ID. If the model serving one changed (fallback re-prompt, runtime
           // switch), migrate the admission accounting so provider/model caps
@@ -1841,14 +1832,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         if (!internalAdmission) {
           sessionMetadata.setModel(input.sessionID, model);
         }
-        // v2 synthesizes message.updated without provider/model; publish
-        // the observed model here so sessionDetails is not empty for the
-        // entire run. Only-if-active: idle sessions are not resurrected.
-        updateTuiSessionDetails(
-          input.sessionID,
-          { model },
-          tuiActivityDirectory(input.sessionID),
-        );
         backgroundTaskConcurrency.migrateTask(input.sessionID, model);
       }
       taskSessionManagerHook.observeChatMessage(input, output);

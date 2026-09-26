@@ -6,22 +6,17 @@ import {
 import type { BackgroundJobBoard } from './background-job-board';
 
 /**
- * Board → tui-state projection for the sidebar's reusable dot (#1197
- * follow-up). On every board mutation (set/delete/trim/drop — the
- * listener is intentionally payload-less), re-derive the latest
- * reconciled session per agent for every parent the board knows and
- * persist it into the snapshot's `reusableByAgent` section. The TUI is a
- * pure reader of this section; it never writes it.
+ * Board → tui-state projection for sidebar session destinations and live
+ * spinners. On every board mutation, publish all canonical terminal sessions
+ * and attributed, certain running jobs (running entries contain only stable
+ * taskID/alias plus a marker). The TUI is a pure reader of this section.
  *
- * The board is the parent index (each record carries parentSessionID);
- * parents whose records are all gone drop out of the derivation. The
- * board is process-local, so this section must never be restored from a
- * stale file — the creation sweep clears it and the projection
- * repopulates from the live board.
+ * Each parent section carries the publishing PID. Startup sweeps only dead
+ * owners and legacy ownerless entries; mutations replace/remove only this
+ * process's parents, preserving sections written by other live processes.
  *
- * Cost: O(all jobs) per mutation. `updateSnapshot` early-outs when the
- * derived section is unchanged, so no-op mutations (e.g. heartbeat
- * status updates) never touch the filesystem.
+ * Cost: O(all jobs) per mutation. `updateSnapshot` early-outs when stable
+ * projection fields do not change, so heartbeats do not write the file.
  */
 
 interface ProjectorHandle {

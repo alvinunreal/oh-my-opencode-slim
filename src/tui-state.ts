@@ -5,15 +5,13 @@ import * as path from 'node:path';
 import type { ReusableSessionSelection } from './utils/background-job-board';
 
 /**
- * Per-session metadata projection for the clickable sidebar. Entries only
+ * Per-session alias/status projection for the clickable sidebar. Entries only
  * exist for sessions present in `activeSessions`; they never activate a
  * session by themselves. The key is always the full sessionID — never an
  * alias — and the parent link lives exclusively in `sessionParents`.
  */
 export interface TuiSessionDetails {
   alias?: string;
-  /** providerID/modelID observed for this specific session. */
-  model?: string;
   status?: 'busy' | 'retry';
 }
 
@@ -50,7 +48,7 @@ export interface TuiSnapshot {
    * cannot scope the sidebar; the session tree can.
    */
   sessionParents: Record<string, string>;
-  /** Per-active-session details (alias/model/status) for the sidebar. */
+  /** Per-active-session details (alias/status) for the sidebar. */
   sessionDetails: Record<string, TuiSessionDetails>;
   /**
    * Accessible terminal and running sessions per agent, keyed by parent
@@ -138,10 +136,9 @@ function parseSessionDetails(
   const out: Record<string, TuiSessionDetails> = {};
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
     if (entry === null || typeof entry !== 'object') continue;
-    const rec = entry as { alias?: unknown; model?: unknown; status?: unknown };
+    const rec = entry as { alias?: unknown; status?: unknown };
     const details: TuiSessionDetails = {};
     if (typeof rec.alias === 'string') details.alias = rec.alias;
-    if (typeof rec.model === 'string') details.model = rec.model;
     if (rec.status === 'busy' || rec.status === 'retry') {
       details.status = rec.status;
     }
@@ -622,7 +619,7 @@ export function recordTuiAgentActivity(
 }
 
 /**
- * Update per-session sidebar details (alias/model/status) for an ACTIVE
+ * Update per-session sidebar details (alias/status) for an ACTIVE
  * session only. A late detail update after idle must never resurrect an
  * activity entry — the whole update is dropped when the session is gone
  * from `activeSessions` at commit time (under the same lock).
@@ -641,7 +638,7 @@ export function updateTuiSessionDetails(
 
 /**
  * Retract only the alias of an active session (e.g. its board record was
- * dropped). Model/status survive; the session stays visible in the
+ * dropped). Status survives; the session stays visible in the
  * sidebar under its abbreviated sessionID until it goes idle.
  */
 export function clearTuiSessionAlias(

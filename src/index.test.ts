@@ -22,7 +22,11 @@ import { PHASE_REMINDER_METADATA_KEY } from './hooks/phase-reminder';
 import { BACKGROUND_JOB_BOARD_METADATA_KEY } from './hooks/task-session-manager';
 import type { MessageWithParts } from './hooks/types';
 import pluginModuleDefault, { OhMyOpenCodeLite as plugin } from './index';
-import { readTuiSnapshot, snapshotSectionsEqual } from './tui-state';
+import {
+  getTuiStatePath,
+  readTuiSnapshot,
+  snapshotSectionsEqual,
+} from './tui-state';
 import { BackgroundJobCoordinator } from './utils/background-job-coordinator';
 import { BackgroundJobBoard } from './utils/background-job-fixture';
 import { createInternalAgentTextPart } from './utils/internal-initiator';
@@ -1195,7 +1199,7 @@ describe('plugin TUI agent activity', () => {
     });
   });
 
-  test('message.part.delta does not write TUI activity or session model', async () => {
+  test('message.part.delta does not write TUI activity or agent model', async () => {
     await hooks?.['chat.message']?.(
       {
         sessionID: 'stream-1',
@@ -1225,64 +1229,38 @@ describe('plugin TUI agent activity', () => {
     expect(snapshotSectionsEqual(after, before)).toBe(true);
   });
 
-  test('chat.message model is published to sessionDetails when the session is already busy', async () => {
+  test('chat.message model tracking does not rewrite per-session TUI details', async () => {
+    await hooks?.['chat.message']?.(
+      { sessionID: 'ora-child', agent: 'oracle' } as never,
+      {} as never,
+    );
     await busy('ora-child');
-    await hooks?.['chat.message']?.(
-      {
-        sessionID: 'ora-child',
-        agent: 'oracle',
-        model: { providerID: 'openai', modelID: 'gpt-6' },
-      } as never,
-      {} as never,
+
+    const fsModule = await import('node:fs');
+    const originalWrite = fsModule.writeFileSync;
+    let writes = 0;
+    const spy = spyOn(fsModule, 'writeFileSync').mockImplementation(
+      (...args: Parameters<typeof originalWrite>) => {
+        if (String(args[0]).startsWith(getTuiStatePath(projectDir))) writes++;
+        return originalWrite(...args);
+      },
     );
-
-    expect(readTuiSnapshot(projectDir).sessionDetails['ora-child']).toEqual({
-      model: 'openai/gpt-6',
-      status: 'busy',
-    });
-  });
-
-  test('model observed before busy is recovered on activation (v2 order)', async () => {
-    await hooks?.['chat.message']?.(
-      {
-        sessionID: 'ora-early',
-        agent: 'oracle',
-        model: { providerID: 'openai', modelID: 'gpt-6' },
-      } as never,
-      {} as never,
-    );
-    expect(readTuiSnapshot(projectDir).sessionDetails).toEqual({});
-
-    await busy('ora-early');
-    expect(readTuiSnapshot(projectDir).sessionDetails['ora-early']).toEqual({
-      model: 'openai/gpt-6',
-      status: 'busy',
-    });
-  });
-
-  test('two same-agent sessions keep distinct models in sessionDetails', async () => {
-    await hooks?.['chat.message']?.(
-      {
-        sessionID: 'ora-a',
-        agent: 'oracle',
-        model: { providerID: 'openai', modelID: 'gpt-6' },
-      } as never,
-      {} as never,
-    );
-    await hooks?.['chat.message']?.(
-      {
-        sessionID: 'ora-b',
-        agent: 'oracle',
-        model: { providerID: 'anthropic', modelID: 'claude-opus' },
-      } as never,
-      {} as never,
-    );
-    await busy('ora-a');
-    await busy('ora-b');
-
-    const details = readTuiSnapshot(projectDir).sessionDetails;
-    expect(details['ora-a']?.model).toBe('openai/gpt-6');
-    expect(details['ora-b']?.model).toBe('anthropic/claude-opus');
+    try {
+      await hooks?.['chat.message']?.(
+        {
+          sessionID: 'ora-child',
+          agent: 'oracle',
+          model: { providerID: 'openai', modelID: 'gpt-6' },
+        } as never,
+        {} as never,
+      );
+      expect(writes).toBe(0);
+      expect(readTuiSnapshot(projectDir).sessionDetails['ora-child']).toEqual({
+        status: 'busy',
+      });
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   test('chat.message model after idle does not resurrect sessionDetails', async () => {

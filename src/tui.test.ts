@@ -1017,7 +1017,7 @@ describe('dual-contract plugin module', () => {
 });
 
 describe('clickable sidebar sessions', () => {
-  test('getSidebarAgentTargets groups active subagents by agent with alias/model/status', () => {
+  test('getSidebarAgentTargets groups active subagents by agent with alias/status', () => {
     const snapshot = createSnapshot({
       activeSessions: {
         'ora-1-ses': 'oracle',
@@ -1035,7 +1035,6 @@ describe('clickable sidebar sessions', () => {
       sessionDetails: {
         'ora-1-ses': {
           alias: 'ora-1',
-          model: 'openai/gpt-6',
           status: 'busy',
         },
         'ora-2-ses': { alias: 'ora-2', status: 'retry' },
@@ -1050,7 +1049,7 @@ describe('clickable sidebar sessions', () => {
       'ora-2-ses',
     ]);
     expect(oracle?.sessions[0].alias).toBe('ora-1');
-    expect(oracle?.sessions[0].model).toBe('openai/gpt-6');
+    expect(oracle?.sessions[0]).not.toHaveProperty('model');
     expect(oracle?.sessions[1].status).toBe('retry');
 
     // Other conversation: no targets even though sessions are active.
@@ -1982,7 +1981,6 @@ describe('clickable sidebar sessions', () => {
             active: true,
             details: {
               alias: 'ora-1',
-              model: 'openai/gpt-6-astra-xhigh',
               status: 'busy',
             },
           },
@@ -1995,7 +1993,6 @@ describe('clickable sidebar sessions', () => {
             active: true,
             details: {
               alias: 'ora-2',
-              model: 'anthropic/claude-opus-long-context',
               status: 'retry',
             },
           },
@@ -2043,9 +2040,7 @@ describe('clickable sidebar sessions', () => {
         expect(secondChildLine.indexOf(secondIndicator ?? '')).toBeLessThan(
           secondChildLine.indexOf('ora-2'),
         );
-        expect(firstChildLine).not.toContain('gpt-6-astra-xhigh');
         expect(firstChildLine).not.toContain('active');
-        expect(secondChildLine).not.toContain('claude-opus-long-context');
         expect(secondChildLine).not.toContain('retrying');
 
         const beforeHover = setup
