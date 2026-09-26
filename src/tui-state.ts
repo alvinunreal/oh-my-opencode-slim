@@ -57,6 +57,8 @@ export interface TuiSnapshot {
    * sessionID. The board owns this process-local projection.
    */
   reusableByAgent: Record<string, Record<string, TuiReusableSession[]>>;
+  /** Host PID owning each parent projection, independent of activityPids. */
+  reusableOwners: Record<string, number>;
 }
 
 const STATE_DIR = 'oh-my-opencode-slim';
@@ -107,6 +109,7 @@ function emptySnapshot(): TuiSnapshot {
     sessionParents: {},
     sessionDetails: {},
     reusableByAgent: {},
+    reusableOwners: {},
   };
 }
 
@@ -225,6 +228,7 @@ function parseSnapshot(value: string): TuiSnapshot {
     // The host-board projection is absent until its first write. Present
     // values parse as arrays for the TUI's reusable-session navigation.
     reusableByAgent: parseReusableByAgent(parsed.reusableByAgent),
+    reusableOwners: parsePidRecord(parsed.reusableOwners),
   };
 }
 
@@ -330,7 +334,7 @@ function writeTuiSnapshot(snapshot: TuiSnapshot, projectDir: string): boolean {
   }
 }
 
-function isProcessRunning(pid: number): boolean {
+export function isProcessRunning(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -465,6 +469,7 @@ function cloneSnapshot(snapshot: TuiSnapshot): TuiSnapshot {
         { ...agents },
       ]),
     ),
+    reusableOwners: { ...snapshot.reusableOwners },
   };
 }
 
@@ -476,7 +481,8 @@ export function snapshotSectionsEqual(a: TuiSnapshot, b: TuiSnapshot): boolean {
     JSON.stringify(a.activityPids) === JSON.stringify(b.activityPids) &&
     JSON.stringify(a.sessionParents) === JSON.stringify(b.sessionParents) &&
     JSON.stringify(a.sessionDetails) === JSON.stringify(b.sessionDetails) &&
-    JSON.stringify(a.reusableByAgent) === JSON.stringify(b.reusableByAgent)
+    JSON.stringify(a.reusableByAgent) === JSON.stringify(b.reusableByAgent) &&
+    JSON.stringify(a.reusableOwners) === JSON.stringify(b.reusableOwners)
   );
 }
 

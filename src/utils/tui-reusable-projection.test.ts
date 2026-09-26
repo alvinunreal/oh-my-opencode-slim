@@ -6,6 +6,7 @@ import {
   getTuiStatePath,
   readTuiSnapshot,
   recordTuiSessionParent,
+  updateSnapshot,
 } from '../tui-state';
 import { BackgroundJobBoard } from './background-job-fixture';
 import { createTuiReusableProjection } from './tui-reusable-projection';
@@ -191,6 +192,10 @@ describe('tui-reusable-projection', () => {
     } finally {
       first.dispose();
     }
+    // This test runs both boards in one PID: mark the former owner as dead.
+    updateSnapshot(projectDir, (snapshot) => {
+      snapshot.reusableOwners['parent-1'] = 2_147_483_647;
+    });
 
     // Second host process starts over an empty board: the creation
     // sweep must wipe the dead dots without waiting for any mutation
@@ -206,6 +211,97 @@ describe('tui-reusable-projection', () => {
       second.dispose();
     }
   });
+
+  test('startup also drops ownerless inherited sections', () => {
+    updateSnapshot(projectDir, (snapshot) => {
+      snapshot.reusableByAgent['parent-old'] = {
+        oracle: [
+          {
+            taskID: 'ses_old',
+            alias: 'ora-1',
+            terminalState: 'completed',
+            lastUsedAt: 100,
+          },
+        ],
+      };
+    });
+    const projection = createTuiReusableProjection({
+      board: new BackgroundJobBoard(),
+      projectDir,
+    });
+    try {
+      expect(readTuiSnapshot(projectDir).reusableByAgent).toEqual({});
+    } finally {
+      projection.dispose();
+    }
+  });
+
+  test('two live processes keep their own parent sections across startup and mutations', async () => {
+    const board = new BackgroundJobBoard();
+    const projection = createTuiReusableProjection({ board, projectDir });
+    board.registerLaunch({
+      taskID: 'ses_parent',
+      parentSessionID: 'parent-main',
+      agent: 'oracle',
+    });
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        path.join(import.meta.dir, 'tui-reusable-projection.child.ts'),
+        projectDir,
+      ],
+      {
+        env: { ...process.env, XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? '' },
+        stdin: 'pipe',
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
+    );
+    const reader = child.stdout.getReader();
+    try {
+      const ready = await Promise.race([
+        reader.read(),
+        Bun.sleep(3_000).then(() => {
+          throw new Error('child startup timed out');
+        }),
+      ]);
+      expect(new TextDecoder().decode(ready.value)).toContain('ready');
+      let sections = readTuiSnapshot(projectDir).reusableByAgent;
+      expect(sections['parent-main']?.oracle?.[0]?.taskID).toBe('ses_parent');
+      expect(sections['parent-child']?.fixer?.[0]?.taskID).toBe('ses_child');
+
+      board.registerLaunch({
+        taskID: 'ses_parent_2',
+        parentSessionID: 'parent-main',
+        agent: 'oracle',
+      });
+      expect(
+        readTuiSnapshot(projectDir).reusableByAgent['parent-child'],
+      ).toBeDefined();
+      child.stdin.write('mutate\n');
+      const mutated = await Promise.race([
+        reader.read(),
+        Bun.sleep(3_000).then(() => {
+          throw new Error('child mutation timed out');
+        }),
+      ]);
+      expect(new TextDecoder().decode(mutated.value)).toContain('mutated');
+      sections = readTuiSnapshot(projectDir).reusableByAgent;
+      expect(sections['parent-main']?.oracle).toHaveLength(2);
+      expect(sections['parent-child']?.fixer).toHaveLength(2);
+
+      board.drop('ses_parent');
+      board.drop('ses_parent_2');
+      sections = readTuiSnapshot(projectDir).reusableByAgent;
+      expect(sections['parent-main']).toBeUndefined();
+      expect(sections['parent-child']?.fixer).toHaveLength(2);
+    } finally {
+      child.stdin.end();
+      child.kill();
+      await child.exited;
+      projection.dispose();
+    }
+  }, 10_000);
 
   test('a mutation that changes nothing does not rewrite the state file', async () => {
     const fsModule = await import('node:fs');

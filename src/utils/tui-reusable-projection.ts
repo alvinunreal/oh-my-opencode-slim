@@ -1,4 +1,8 @@
-import { type TuiReusableSession, updateSnapshot } from '../tui-state';
+import {
+  isProcessRunning,
+  type TuiReusableSession,
+  updateSnapshot,
+} from '../tui-state';
 import type { BackgroundJobBoard } from './background-job-board';
 
 /**
@@ -31,30 +35,56 @@ export function createTuiReusableProjection(input: {
 }): ProjectorHandle {
   const { board, projectDir } = input;
   let disposed = false;
+  let ownedParents = new Set<string>();
+
+  // The board is process-local. A startup may discard only dead or legacy
+  // ownerless sections; another live server's parents must survive.
+  updateSnapshot(projectDir, (snapshot) => {
+    for (const parent of Object.keys(snapshot.reusableByAgent)) {
+      const owner = snapshot.reusableOwners[parent];
+      if (owner === undefined || !isProcessRunning(owner)) {
+        delete snapshot.reusableByAgent[parent];
+        delete snapshot.reusableOwners[parent];
+      }
+    }
+  });
 
   const project = (): void => {
     if (disposed) return;
+    const next: Record<string, Record<string, TuiReusableSession[]>> = {};
+    for (const [parent, byAgent] of board.sidebarHistoryByParentAgent()) {
+      next[parent] = Object.fromEntries(byAgent);
+    }
+    for (const job of board.list()) {
+      if (job.state !== 'running' || job.provisional || job.statusUncertain) {
+        continue;
+      }
+      const byAgent = next[job.parentSessionID] ?? {};
+      const sessions = byAgent[job.agent] ?? [];
+      sessions.unshift({
+        taskID: job.taskID,
+        alias: job.alias,
+        running: true,
+      });
+      byAgent[job.agent] = sessions;
+      next[job.parentSessionID] = byAgent;
+    }
     updateSnapshot(projectDir, (snapshot) => {
-      const next: Record<string, Record<string, TuiReusableSession[]>> = {};
-      for (const [parent, byAgent] of board.sidebarHistoryByParentAgent()) {
-        next[parent] = Object.fromEntries(byAgent);
-      }
-      for (const job of board.list()) {
-        if (job.state !== 'running' || job.provisional || job.statusUncertain) {
-          continue;
+      for (const parent of ownedParents) {
+        if (
+          next[parent] === undefined &&
+          snapshot.reusableOwners[parent] === process.pid
+        ) {
+          delete snapshot.reusableByAgent[parent];
+          delete snapshot.reusableOwners[parent];
         }
-        const byAgent = next[job.parentSessionID] ?? {};
-        const sessions = byAgent[job.agent] ?? [];
-        sessions.unshift({
-          taskID: job.taskID,
-          alias: job.alias,
-          running: true,
-        });
-        byAgent[job.agent] = sessions;
-        next[job.parentSessionID] = byAgent;
       }
-      snapshot.reusableByAgent = next;
+      for (const [parent, byAgent] of Object.entries(next)) {
+        snapshot.reusableByAgent[parent] = byAgent;
+        snapshot.reusableOwners[parent] = process.pid;
+      }
     });
+    ownedParents = new Set(Object.keys(next));
   };
 
   const listener = (): void => {
@@ -67,10 +97,7 @@ export function createTuiReusableProjection(input: {
 
   board.addMutationListener(listener);
 
-  // The board is process-local (board = store): any section persisted
-  // by a previous host process is stale by construction. Clear it once
-  // at creation so dead dots can never survive a host restart, even if
-  // no board mutation ever follows.
+  // Publish this board's parents without replacing other live owners.
   listener();
 
   return {

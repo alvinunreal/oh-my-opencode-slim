@@ -134,6 +134,7 @@ function createSnapshot(overrides: Partial<TuiSnapshot> = {}): TuiSnapshot {
     sessionParents: {},
     sessionDetails: {},
     reusableByAgent: {},
+    reusableOwners: {},
     ...overrides,
   };
 }
