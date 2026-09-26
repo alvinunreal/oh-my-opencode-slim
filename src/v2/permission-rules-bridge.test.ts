@@ -122,7 +122,11 @@ function makeBridge(options?: {
 }): ReturnType<typeof createPermissionRulesBridge> {
   return createPermissionRulesBridge(options?.session, {
     permissionForAgent: (agent) =>
-      agent === 'probe' ? (options?.policy ?? TASK_POLICY) : undefined,
+      agent === 'probe'
+        ? options && Object.hasOwn(options, 'policy')
+          ? options.policy
+          : TASK_POLICY
+        : undefined,
     pluginAgents: options?.pluginAgents ?? new Set(['probe']),
     ...(options?.onUnavailable ? { onUnavailable: options.onUnavailable } : {}),
   });
@@ -743,6 +747,25 @@ describe('createPermissionRulesBridge', () => {
     expect(calls).toHaveLength(0);
   });
 
+  test('an unavailable policy fails without latching the child as applied', async () => {
+    const calls: RulesCall[] = [];
+    const bridge = makeBridge({
+      session: makeSession(async (input) => {
+        calls.push(input as RulesCall);
+        return {};
+      }),
+      policy: undefined,
+    });
+
+    await expect(
+      bridge.applyChildSession('ses_child_missing_policy', 'probe'),
+    ).rejects.toThrow('permission policy unavailable');
+    await bridge.observeSessionCreated(
+      makeChildCreatedEvent({ sessionID: 'ses_child_missing_policy' }),
+    );
+    expect(calls).toHaveLength(0);
+  });
+
   test('dispose awaits held update and rejects an admission crossing cleanup', async () => {
     let finishUpdate!: () => void;
     const calls: RulesCall[] = [];
@@ -776,7 +799,7 @@ describe('createPermissionRulesBridge', () => {
     expect(admissionSucceeded).toBe(false);
 
     finishUpdate();
-    await expect(admission).rejects.toThrow('disposed during application');
+    await expect(admission).rejects.toThrow('barrier expired');
     await Promise.all([observedAdmission, disposal]);
     expect(disposalFinished).toBe(true);
     expect(admissionSucceeded).toBe(false);
@@ -829,9 +852,25 @@ describe('createV2Setup permission rules wiring', () => {
     await rm(fixtureRoot, { recursive: true, force: true });
   });
 
-  test.each([true, false])(
-    'setup prompt barrier with snapshot availability %s',
-    async (snapshotAvailable) => {
+  test.each([
+    { snapshotAvailable: true, getAvailable: true, updateAvailable: true },
+    { snapshotAvailable: false, getAvailable: true, updateAvailable: true },
+    { snapshotAvailable: true, getAvailable: false, updateAvailable: true },
+    { snapshotAvailable: true, getAvailable: true, updateAvailable: false },
+    {
+      snapshotAvailable: true,
+      getAvailable: true,
+      updateAvailable: true,
+      neverSettleUpdate: true,
+    },
+  ])(
+    'setup prompt barrier capability probe %#',
+    async ({
+      snapshotAvailable,
+      getAvailable,
+      updateAvailable,
+      neverSettleUpdate = false,
+    }) => {
       const calls: RulesCall[] = [];
       const projectDir = path.join(fixtureRoot, 'project');
       let transformAgents!: (draft: unknown) => void;
@@ -852,6 +891,8 @@ describe('createV2Setup permission rules wiring', () => {
       let holdRulesUpdate = false;
       let finishRulesUpdate!: () => void;
       let failNextRulesUpdate = false;
+      let registrationDisposals = 0;
+      let cleanedUp = false;
       const eventQueue: Record<string, unknown>[] = [];
       let wakeEvent: (() => void) | undefined;
       let eventStreamStopped = false;
@@ -892,29 +933,46 @@ describe('createV2Setup permission rules wiring', () => {
             if (name === 'prompt') {
               promptHandler = callback as typeof promptHandler;
             }
-            return { dispose: () => {} };
+            return {
+              dispose: () => {
+                registrationDisposals += 1;
+              },
+            };
           },
-          get: async ({ sessionID }: { sessionID: string }) => ({
-            data:
-              sessionID === 'ses_probe_root'
-                ? { agent: 'orchestrator' }
-                : sessionID === 'ses_probe_foreign'
-                  ? { parentID: 'ses_parent', agent: 'host-agent' }
-                  : { parentID: 'ses_parent', agent: 'explorer' },
-          }),
-          update: async (input: RulesCall) => {
-            calls.push(input);
-            if (failNextRulesUpdate) {
-              failNextRulesUpdate = false;
-              throw new Error('held permission update failed');
-            }
-            if (holdRulesUpdate) {
-              await new Promise<void>((resolve) => {
-                finishRulesUpdate = resolve;
-              });
-            }
-            return {};
-          },
+          ...(getAvailable
+            ? {
+                get: async ({ sessionID }: { sessionID: string }) => ({
+                  data:
+                    sessionID === 'ses_probe_root'
+                      ? { agent: 'orchestrator' }
+                      : sessionID === 'ses_probe_foreign'
+                        ? { parentID: 'ses_parent', agent: 'host-agent' }
+                        : { parentID: 'ses_parent', agent: 'explorer' },
+                }),
+              }
+            : {}),
+          ...(updateAvailable
+            ? {
+                update: async (input: RulesCall) => {
+                  calls.push(input);
+                  if (failNextRulesUpdate) {
+                    failNextRulesUpdate = false;
+                    throw new Error('held permission update failed');
+                  }
+                  if (neverSettleUpdate) {
+                    await new Promise<void>((resolve) => {
+                      finishRulesUpdate = resolve;
+                    });
+                  }
+                  if (holdRulesUpdate) {
+                    await new Promise<void>((resolve) => {
+                      finishRulesUpdate = resolve;
+                    });
+                  }
+                  return {};
+                },
+              }
+            : {}),
         },
         event: {
           subscribe: () => ({
@@ -955,7 +1013,9 @@ describe('createV2Setup permission rules wiring', () => {
         // agent.list() during setup forced the host's deferred transform.
         expect(transformsApplied).toBe(true);
         expect(promptHandler).toBeDefined();
-        holdRulesUpdate = snapshotAvailable;
+        const bridgeEnabled =
+          snapshotAvailable && getAvailable && updateAvailable;
+        holdRulesUpdate = bridgeEnabled && !neverSettleUpdate;
         publishEvent({
           type: 'session.created',
           data: {
@@ -967,18 +1027,47 @@ describe('createV2Setup permission rules wiring', () => {
         // The pump dispatches asynchronously; poll briefly for the apply.
         const deadline = Date.now() + 10_000;
         while (calls.length === 0 && Date.now() < deadline) {
-          if (!snapshotAvailable) break;
+          if (!bridgeEnabled) break;
           await Bun.sleep(25);
         }
-        if (!snapshotAvailable) {
-          expect(calls).toHaveLength(0);
+        if (neverSettleUpdate) {
+          expect(calls).toHaveLength(1);
+          const admission = (
+            promptHandler as NonNullable<typeof promptHandler>
+          )({
+            sessionID: 'ses_probe_child',
+            messageID: 'msg_hanging',
+            prompt: { text: 'must time out' },
+          });
+          const rejectedAdmission =
+            expect(admission).rejects.toThrow('timed out');
+          await cleanup();
+          cleanedUp = true;
+          await rejectedAdmission;
+          expect(registrationDisposals).toBeGreaterThan(0);
+          finishRulesUpdate();
+          await Bun.sleep(0);
+          expect(calls).toHaveLength(1);
           await expect(
             (promptHandler as NonNullable<typeof promptHandler>)({
-              sessionID: 'ses_probe_managed',
-              messageID: 'msg_managed',
-              prompt: { text: 'managed child input' },
+              sessionID: 'ses_probe_late',
+              messageID: 'msg_late',
+              prompt: { text: 'late prompt' },
             }),
-          ).rejects.toThrow('child permission snapshot unavailable');
+          ).rejects.toThrow('disposed');
+          expect(calls).toHaveLength(1);
+          return;
+        }
+        if (!bridgeEnabled) {
+          expect(calls).toHaveLength(0);
+          const managedPrompt = (
+            promptHandler as NonNullable<typeof promptHandler>
+          )({
+            sessionID: 'ses_probe_managed',
+            messageID: 'msg_managed',
+            prompt: { text: 'managed child input' },
+          });
+          await managedPrompt;
           await (promptHandler as NonNullable<typeof promptHandler>)({
             sessionID: 'ses_probe_foreign',
             messageID: 'msg_foreign',
@@ -1044,7 +1133,7 @@ describe('createV2Setup permission rules wiring', () => {
         ).toBe(true);
       } finally {
         if (holdRulesUpdate) finishRulesUpdate();
-        await cleanup();
+        if (!cleanedUp) await cleanup();
       }
     },
     20_000,

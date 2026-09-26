@@ -25,6 +25,9 @@ import {
 import type { V2Context, V2SessionModelRequestEvent } from './types';
 
 const LIST_WARNING = '[v2][shim] session.list unavailable on this host build';
+const PERMISSION_BRIDGE_DISABLED_WARNING =
+  '[v2][permission-rules] child permission bridge disabled: native agent ' +
+  'snapshot and ctx.session.get/update are required';
 
 function makePrimaryRequest(): V2SessionModelRequestEvent {
   return {
@@ -162,7 +165,14 @@ describe('v2 generation warning latches', () => {
       await rulesBridge.observeSessionCreated(makeChildCreatedEvent());
       await listShim({});
       expect(drift).toHaveBeenCalledTimes(2);
-      expect(unavailable).toHaveBeenCalledTimes(2);
+      // The setup fixture intentionally lacks session.get/update. Setup's
+      // optional bridge probe emits the generation warning through the
+      // logger, not the injected sink used by the separately-created unit
+      // bridge above. The generation reset must rearm that setup-side notice.
+      expect(unavailable).toHaveBeenCalledTimes(1);
+      expect(await countLoggedLines(PERMISSION_BRIDGE_DISABLED_WARNING)).toBe(
+        1,
+      );
       expect(await countLoggedLines(LIST_WARNING)).toBe(2);
     } finally {
       await cleanup();
