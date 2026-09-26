@@ -561,6 +561,85 @@ describe('finalized existing-agent registry', () => {
     expect(registry.tuiAgentModels.explorer).toBe('provider/scalar');
   });
 
+  test('session inheritance clears canonical and visible host models and variants', () => {
+    const runtime = runtimeFor({
+      agents: {
+        explorer: { displayName: 'Scout', inheritModelFrom: 'session' },
+        fixer: {
+          displayName: 'FixerVisible',
+          model: ['fallback/first', 'fallback/second'],
+          inheritModelFrom: 'session',
+        },
+      },
+    });
+    const registry = build(runtime, {
+      agent: {
+        explorer: { model: 'host/canonical', variant: 'canonical-v' },
+        Scout: { model: 'host/visible', variant: 'visible-v' },
+        fixer: { model: 'host/fixer', variant: 'fixer-v' },
+        FixerVisible: {
+          model: 'host/fixer-visible',
+          variant: 'visible-fixer-v',
+        },
+      },
+    });
+    const projection = registry.getSdkAgentProjection() as Record<
+      string,
+      Record<string, unknown>
+    >;
+
+    for (const name of ['explorer', 'Scout', 'fixer', 'FixerVisible']) {
+      expect(registry.finalAgentConfig[name]).not.toHaveProperty('model');
+      expect(registry.finalAgentConfig[name]).not.toHaveProperty('variant');
+      expect(projection[name]).not.toHaveProperty('model');
+      expect(projection[name]).not.toHaveProperty('variant');
+    }
+  });
+
+  test('stripped orchestrator keeps tracked TUI model and variant for visible alias', () => {
+    const runtime = runtimeFor({
+      stripOrchestratorModel: true,
+      agents: {
+        orchestrator: {
+          model: 'provider/orchestrator',
+          variant: 'high',
+          displayName: 'Lead',
+        },
+      },
+    });
+    const registry = build(runtime, {});
+    const projection = registry.getSdkAgentProjection() as Record<
+      string,
+      Record<string, unknown>
+    >;
+
+    expect(projection.orchestrator).not.toHaveProperty('model');
+    expect(projection.Lead).not.toHaveProperty('model');
+    expect(registry.tuiAgentModels.Lead).toBe('provider/orchestrator');
+    expect(registry.tuiAgentVariants.Lead).toBe('high');
+  });
+
+  test('stripped orchestrator keeps a visible alias effective model for the TUI', () => {
+    const runtime = runtimeFor({
+      stripOrchestratorModel: true,
+      agents: {
+        orchestrator: { model: 'provider/orchestrator', displayName: 'Lead' },
+      },
+    });
+    const registry = build(runtime, {
+      agent: { Lead: { model: 'provider/visible', variant: 'visible-v' } },
+    });
+    const projection = registry.getSdkAgentProjection() as Record<
+      string,
+      Record<string, unknown>
+    >;
+
+    expect(projection.orchestrator).not.toHaveProperty('model');
+    expect(projection.Lead?.model).toBe('provider/visible');
+    expect(registry.tuiAgentModels.Lead).toBe('provider/visible');
+    expect(registry.tuiAgentVariants.Lead).toBe('visible-v');
+  });
+
   test('does not publish a partial registry after construction failure', () => {
     const runtime = runtimeFor({
       agents: { 'bad name': { model: 'provider/model' } },

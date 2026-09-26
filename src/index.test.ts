@@ -1960,6 +1960,35 @@ describe('plugin config model inheritance', () => {
     }
   });
 
+  test('session inheritance removes stale visible alias models and variants', async () => {
+    const hooks = await loadConfiguredPlugin({
+      agents: {
+        explorer: { displayName: 'Scout', inheritModelFrom: 'session' },
+      },
+    });
+    const hostConfig: Record<string, unknown> = {
+      agent: {
+        explorer: { model: 'host/canonical', variant: 'canonical-v' },
+        Scout: { model: 'host/visible', variant: 'visible-v' },
+      },
+    };
+
+    try {
+      await hooks.config?.(hostConfig);
+
+      const agents = hostConfig.agent as Record<
+        string,
+        Record<string, unknown>
+      >;
+      for (const name of ['explorer', 'Scout']) {
+        expect(agents[name]).not.toHaveProperty('model');
+        expect(agents[name]).not.toHaveProperty('variant');
+      }
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
   test('orchestrator inheritance uses the host orchestrator model in the final config', async () => {
     const hooks = await loadConfiguredPlugin({
       agents: {

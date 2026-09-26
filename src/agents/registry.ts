@@ -249,6 +249,13 @@ export function buildResolvedAgentRegistry(
       ? normalizeAgentName(definition.displayName)
       : name;
     const entry = finalAgentConfig[name] as Record<string, unknown>;
+    const modelOverride = overrideFor(name);
+    const followsSessionWithoutScalar =
+      modelOverride?.inheritModelFrom === 'session' &&
+      (modelOverride.model === undefined || Array.isArray(modelOverride.model));
+    if (followsSessionWithoutScalar) {
+      if (modelOverride.variant === undefined) delete entry.variant;
+    }
     if (typeof entry.prompt === 'string') {
       // Host council prompt replaces the generated content; retain the required exception.
       if (name === 'council')
@@ -262,7 +269,6 @@ export function buildResolvedAgentRegistry(
       ...(effectiveModel ? { model: effectiveModel } : {}),
       ...(effectiveVariant ? { variant: effectiveVariant } : {}),
     };
-    const modelOverride = overrideFor(name);
     const followsSession =
       modelOverride?.inheritModelFrom === 'session' &&
       (modelOverride.model === undefined || Array.isArray(modelOverride.model));
@@ -366,6 +372,15 @@ export function buildResolvedAgentRegistry(
           ...((aliasHost?.permission ?? {}) as Record<string, unknown>),
         },
       };
+      const modelOverride = overrideFor(definition.name);
+      const visibleFollowsSessionWithoutScalar =
+        modelOverride?.inheritModelFrom === 'session' &&
+        (modelOverride.model === undefined ||
+          Array.isArray(modelOverride.model));
+      if (visibleFollowsSessionWithoutScalar) {
+        delete visibleConfig.model;
+        if (modelOverride.variant === undefined) delete visibleConfig.variant;
+      }
       if (!aliasHost || !('hidden' in aliasHost)) delete visibleConfig.hidden;
       if (
         definition.name === 'council' &&
@@ -426,8 +441,11 @@ export function buildResolvedAgentRegistry(
         hostRules: visibleRules,
       });
       if (definition.name === 'orchestrator') {
-        tuiModels[display] = visibleModel ?? 'default';
-        if (visibleVariant) tuiVariants[display] = visibleVariant;
+        const trackedModel = effective[definition.name]?.model;
+        const trackedVariant = effective[definition.name]?.variant;
+        tuiModels[display] = visibleModel ?? trackedModel ?? 'default';
+        const tuiVariant = visibleVariant ?? trackedVariant;
+        if (tuiVariant) tuiVariants[display] = tuiVariant;
         else delete tuiVariants[display];
       }
     }

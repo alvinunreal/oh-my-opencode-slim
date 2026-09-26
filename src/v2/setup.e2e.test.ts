@@ -632,6 +632,71 @@ describe('createV2Setup e2e', () => {
     }
   }, 20_000);
 
+  test('v2 clears inherited session models and variants from visible agent drafts', async () => {
+    await mkdir(path.join(projectDir, '.opencode'), { recursive: true });
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        agents: {
+          explorer: { displayName: 'Scout', inheritModelFrom: 'session' },
+        },
+      }),
+    );
+    const { ctx } = makeMockV2Context(projectDir);
+    const registered = new Map<string, Record<string, unknown>>();
+    const nativeAgents: Record<string, Record<string, unknown>> = {
+      explorer: {
+        id: 'explorer',
+        mode: 'subagent',
+        model: {
+          providerID: 'host',
+          id: 'canonical',
+          variant: 'canonical-v',
+        },
+        permissions: [],
+      },
+      Scout: {
+        id: 'Scout',
+        mode: 'subagent',
+        model: { providerID: 'host', id: 'visible', variant: 'visible-v' },
+        permissions: [],
+      },
+    };
+    const agent = ctx.agent as unknown as {
+      transform: (callback: (draft: unknown) => void) => Promise<{
+        dispose: () => void;
+      }>;
+    };
+    agent.transform = async (callback) => {
+      callback({
+        list: () => Object.keys(nativeAgents).map((id) => ({ id })),
+        get: (id: string) => nativeAgents[id],
+        default: () => {},
+        update: (
+          id: string,
+          project: (draft: Record<string, unknown>) => void,
+        ) => {
+          const draft = { ...nativeAgents[id] };
+          project(draft);
+          registered.set(id, draft);
+        },
+        remove: () => {},
+      });
+      return { dispose: () => {} };
+    };
+
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      for (const name of ['explorer', 'Scout']) {
+        expect(registered.get(name)).not.toHaveProperty('model');
+        expect(registered.get(name)).not.toHaveProperty('variant');
+      }
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
   test('v2 defaults to the visible orchestrator and keeps canonical hidden', async () => {
     await mkdir(path.join(projectDir, '.opencode'), { recursive: true });
     await Bun.write(
