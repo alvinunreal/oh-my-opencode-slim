@@ -124,6 +124,7 @@ import {
   type BackgroundJobTerminalGate,
   createBackgroundJobTerminalGate,
 } from './utils/background-job-terminal-gate';
+import { pluginBuildIdentity } from './utils/build-identity';
 import { isPluginDisabledByEnv } from './utils/env';
 import { isInternalInitiatorPart } from './utils/internal-initiator';
 import { probeJSDOM } from './utils/jsdom';
@@ -208,7 +209,7 @@ function loadMarketplaceSelectionSnapshot(
 export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   const sessionId = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
   initLogger(sessionId);
-  log('[plugin] build info', getBuildInfo());
+  log('[plugin] build info', pluginBuildIdentity());
 
   if (isPluginDisabledByEnv()) {
     log('[plugin] disabled by OH_MY_OPENCODE_SLIM_DISABLE');

@@ -22,7 +22,6 @@ import {
 } from '../cli/custom-skills';
 import { loadPluginConfig } from '../config/loader';
 import { InterviewConfigSchema } from '../config/schema';
-import { getBuildInfo } from '../generated/build-info';
 import { getCurrentRuntimePackageJsonPath } from '../hooks/auto-update-checker/checker';
 import {
   isTaggedPart,
@@ -43,6 +42,7 @@ import {
   configureBackgroundJobPersistence,
   loadInitialBackgroundJobPersistence,
 } from '../utils/background-job-persistence';
+import { pluginBuildIdentity } from '../utils/build-identity';
 import { INTERNAL_INITIATOR_METADATA_KEY } from '../utils/internal-initiator';
 import { initLogger, log } from '../utils/logger';
 import { OperationTimeoutError, withTimeout } from '../utils/session';
@@ -1837,7 +1837,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
     initLogger(sessionId);
     // First logged line: identify the build that produced every following
     // log entry (logging-only — build info never enters prompt payloads).
-    log('[v2] build info', getBuildInfo());
+    // The entry URL answers "which copy of the plugin actually loaded" —
+    // hosts resolve bare plugin names through their own package cache,
+    // so the running copy can differ from every other install on disk.
+    log('[v2] build info', pluginBuildIdentity());
     // Capability guard: some hosts load this same `setup` with a reduced or
     // TUI-side context where agent/tool/session/event domains are missing.
     // Skip registration instead of crashing the host (and retry-storming).

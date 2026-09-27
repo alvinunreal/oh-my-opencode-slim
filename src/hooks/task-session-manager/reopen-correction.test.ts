@@ -14,7 +14,15 @@
  * the reported run is retired. Bookkeeping is pruned when the parent ends.
  */
 import { describe, expect, test } from 'bun:test';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { BackgroundJobBoard } from '../../utils/background-job-fixture';
+import {
+  flushLoggerForTesting,
+  initLogger,
+  resetLogger,
+} from '../../utils/logger';
 import { isVolatileTaggedMessage } from '../cache-safe-injection';
 import {
   BACKGROUND_JOB_BOARD_METADATA_KEY,
@@ -399,5 +407,71 @@ describe('backgroundJobs.boardInjection switch (#1314 thread)', () => {
         JSON.stringify(message).includes('Background Job Board'),
       ),
     ).toBe(false);
+  });
+});
+
+describe('injected terminal job diagnostics', () => {
+  test('the injection log carries each execution live record state and summary', async () => {
+    // Incident 2026-09-27: eight recovered background children were
+    // reported to the parent as batch error terminals, and the plugin log
+    // could not answer the first diagnostic question — WHAT was actually
+    // injected (error vs completed). The injection log line must carry the
+    // live board record behind each execution so the payload the parent
+    // consumed is readable from the log alone.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-log-'));
+    const previousLogDir = process.env.OPENCODE_LOG_DIR;
+    process.env.OPENCODE_LOG_DIR = tmpDir;
+    resetLogger();
+    try {
+      initLogger('injection-diagnostics');
+      const board = new BackgroundJobBoard();
+      const state = createInjectionState(board);
+      const run = board.registerLaunch({
+        taskID: 'child-1',
+        parentSessionID: SESSION,
+        agent: 'explorer',
+        description: 'map hooks',
+      });
+      board.updateStatus({
+        taskID: 'child-1',
+        state: 'error',
+        resultSummary: 'rate limit exceeded',
+      });
+
+      rememberInjectedTerminalJobs(
+        state,
+        SESSION,
+        [
+          {
+            taskID: 'child-1',
+            generation: run.generation,
+            terminalRevision: 1,
+          },
+        ],
+        'shape-1',
+      );
+      await flushLoggerForTesting();
+
+      const logFile = fs
+        .readdirSync(tmpDir)
+        .find((name) => name.startsWith('oh-my-opencode-slim.'));
+      expect(logFile).toBeDefined();
+      const content = fs.readFileSync(path.join(tmpDir, logFile ?? ''), 'utf8');
+      const line = content
+        .split('\n')
+        .find((entry) => entry.includes('terminal jobs injected'));
+      expect(line).toBeDefined();
+      expect(line).toContain('"recordState":"error"');
+      expect(line).toContain('"recordSummary":"rate limit exceeded"');
+    } finally {
+      await flushLoggerForTesting();
+      if (previousLogDir === undefined) {
+        delete process.env.OPENCODE_LOG_DIR;
+      } else {
+        process.env.OPENCODE_LOG_DIR = previousLogDir;
+      }
+      resetLogger();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

@@ -1244,7 +1244,20 @@ export function rememberInjectedTerminalJobs(
 
   log('[task-session-manager] terminal jobs injected for reconciliation', {
     parentSessionID,
-    executions: [...uniqueExecutions.values()],
+    // The live board record behind each execution, so the payload the
+    // parent consumed is readable from the log alone (error vs completed).
+    // Incident 2026-09-27: eight recovered background children were
+    // reported as batch error terminals and the first diagnostic question
+    // — WHAT was injected — could not be answered from the plugin log.
+    executions: [...uniqueExecutions.values()].map((execution) => {
+      const record = state.backgroundJobBoard.get(execution.taskID);
+      return {
+        ...execution,
+        recordState: record?.state,
+        recordTerminalState: record?.terminalState,
+        recordSummary: record?.resultSummary,
+      };
+    }),
     promptShapeKey,
   });
 }
