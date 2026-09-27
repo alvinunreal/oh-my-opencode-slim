@@ -332,7 +332,7 @@ function showSkippedUpdateToast(
   isInstallerManaged: boolean,
 ): void {
   const command = isInstallerManaged
-    ? 'bunx oh-my-opencode-slim@latest install'
+    ? `bunx oh-my-opencode-slim@${extractChannel(currentVersion) || 'latest'} install`
     : 'opencode plugin update';
   showToast(
     ctx,

@@ -456,6 +456,83 @@ describe('auto-update-checker/index', () => {
     );
   });
 
+  test('suggests the prerelease channel for an installer-managed skip without a v1 install context', async () => {
+    checkerMocks.findPluginEntry.mockImplementation(() => ({
+      pinnedVersion: null,
+      isPinned: false,
+      isInstallerManaged: true,
+    }));
+    checkerMocks.getCachedVersion.mockImplementation(() => '3.0.0-beta.13');
+    checkerMocks.extractChannel.mockImplementation(() => 'beta');
+    checkerMocks.getLatestCompatibleVersion.mockImplementation(async () => ({
+      latestVersion: '3.0.0-beta.14',
+      latestMajorVersion: null,
+      blockedByMajor: false,
+    }));
+    cacheMocks.resolveInstallContext.mockImplementation(() => null);
+
+    const { createAutoUpdateCheckerHook } = await import(
+      `./index?test=${importCounter++}`
+    );
+    const { ctx, showToast } = createCtx();
+
+    const hook = createAutoUpdateCheckerHook(ctx as never);
+    hook.event({ event: { type: 'session.created', properties: {} } });
+    await waitForCalls(showToast);
+
+    expect(showToast).toHaveBeenCalledTimes(1);
+    expect(showToast).toHaveBeenCalledWith({
+      body: {
+        title: 'OMO-Slim 3.0.0-beta.14',
+        message:
+          'v3.0.0-beta.13 → v3.0.0-beta.14 available. Run `bunx oh-my-opencode-slim@beta install` to apply.',
+        variant: 'info',
+        duration: 8000,
+      },
+    });
+    expect(checkerMocks.extractChannel).toHaveBeenCalledWith('3.0.0-beta.13');
+    expect(cacheMocks.preparePackageUpdate).not.toHaveBeenCalled();
+    expect(crossSpawnMock).not.toHaveBeenCalled();
+  });
+
+  test('suggests the latest channel for an installer-managed skip without a v1 install context', async () => {
+    checkerMocks.findPluginEntry.mockImplementation(() => ({
+      pinnedVersion: null,
+      isPinned: false,
+      isInstallerManaged: true,
+    }));
+    checkerMocks.getCachedVersion.mockImplementation(() => '2.2.22');
+    checkerMocks.getLatestCompatibleVersion.mockImplementation(async () => ({
+      latestVersion: '2.2.23',
+      latestMajorVersion: null,
+      blockedByMajor: false,
+    }));
+    cacheMocks.resolveInstallContext.mockImplementation(() => null);
+
+    const { createAutoUpdateCheckerHook } = await import(
+      `./index?test=${importCounter++}`
+    );
+    const { ctx, showToast } = createCtx();
+
+    const hook = createAutoUpdateCheckerHook(ctx as never);
+    hook.event({ event: { type: 'session.created', properties: {} } });
+    await waitForCalls(showToast);
+
+    expect(showToast).toHaveBeenCalledTimes(1);
+    expect(showToast).toHaveBeenCalledWith({
+      body: {
+        title: 'OMO-Slim 2.2.23',
+        message:
+          'v2.2.22 → v2.2.23 available. Run `bunx oh-my-opencode-slim@latest install` to apply.',
+        variant: 'info',
+        duration: 8000,
+      },
+    });
+    expect(checkerMocks.extractChannel).toHaveBeenCalledWith('2.2.22');
+    expect(cacheMocks.preparePackageUpdate).not.toHaveBeenCalled();
+    expect(crossSpawnMock).not.toHaveBeenCalled();
+  });
+
   test('shows install failure toast without telling users to restart', async () => {
     checkerMocks.findPluginEntry.mockImplementation(() => ({
       pinnedVersion: null,
