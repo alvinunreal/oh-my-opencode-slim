@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { log } from '../../utils/logger';
 import { getCurrentRuntimePackageJsonPath } from './checker';
-import { CACHE_DIR, PACKAGE_NAME } from './constants';
+import { PACKAGE_NAME } from './constants';
 
 interface AutoUpdateInstallContext {
   installDir: string;
@@ -14,46 +14,41 @@ interface PreparedPackageUpdate {
   targetDir: string;
 }
 
-function getTargetInstallContext(
+export function getTargetInstallContext(
   installContext: AutoUpdateInstallContext,
   version: string,
-): AutoUpdateInstallContext {
+): AutoUpdateInstallContext | null {
   const installParent = path.dirname(installContext.installDir);
-  const parentDir =
-    path.basename(installParent) === 'packages'
-      ? installParent
-      : path.join(CACHE_DIR, 'packages');
-  const installDir = path.join(parentDir, `${PACKAGE_NAME}@${version}`);
+  if (path.basename(installParent) !== 'packages') return null;
+  const installDir = path.join(installParent, `${PACKAGE_NAME}@${version}`);
   return { installDir, packageJsonPath: path.join(installDir, 'package.json') };
 }
 
 export function resolveInstallContext(
   runtimePackageJsonPath: string | null = getCurrentRuntimePackageJsonPath(),
 ): AutoUpdateInstallContext | null {
-  if (runtimePackageJsonPath) {
-    const packageDir = path.dirname(runtimePackageJsonPath);
-    const nodeModulesDir = path.dirname(packageDir);
+  if (!runtimePackageJsonPath) return null;
 
-    if (
-      path.basename(packageDir) === PACKAGE_NAME &&
-      path.basename(nodeModulesDir) === 'node_modules'
-    ) {
-      const installDir = path.dirname(nodeModulesDir);
-      const packageJsonPath = path.join(installDir, 'package.json');
-      if (fs.existsSync(packageJsonPath)) {
-        return { installDir, packageJsonPath };
-      }
-    }
+  const packageDir = path.dirname(runtimePackageJsonPath);
+  const nodeModulesDir = path.dirname(packageDir);
+  const installDir = path.dirname(nodeModulesDir);
+  const installParent = path.dirname(installDir);
 
-    return null;
-  }
+  // Only the OpenCode v1 wrapper layout
+  // (<cache>/packages/oh-my-opencode-slim@<spec>/node_modules/oh-my-opencode-slim)
+  // is a supported install root. The v2 layout (<cache>/npm/<sanitize(spec)>/<int>/...)
+  // is deliberately rejected, as is the legacy <cache>/package.json root.
+  const isV1Wrapper =
+    path.basename(packageDir) === PACKAGE_NAME &&
+    path.basename(nodeModulesDir) === 'node_modules' &&
+    path.basename(installParent) === 'packages' &&
+    path.basename(installDir).startsWith(`${PACKAGE_NAME}@`);
+  if (!isV1Wrapper) return null;
 
-  const legacyPackageJsonPath = path.join(CACHE_DIR, 'package.json');
-  if (fs.existsSync(legacyPackageJsonPath)) {
-    return { installDir: CACHE_DIR, packageJsonPath: legacyPackageJsonPath };
-  }
+  const packageJsonPath = path.join(installDir, 'package.json');
+  if (!fs.existsSync(packageJsonPath)) return null;
 
-  return null;
+  return { installDir, packageJsonPath };
 }
 
 /**
@@ -78,6 +73,10 @@ export function preparePackageUpdate(
       installContext,
       cacheIdentity,
     );
+    if (!targetContext) {
+      log('[auto-update-checker] No v1 packages wrapper for auto-update');
+      return null;
+    }
     const targetParent = path.dirname(targetContext.installDir);
     fs.mkdirSync(targetParent, { recursive: true });
     stagingDir = fs.mkdtempSync(

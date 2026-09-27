@@ -9,6 +9,7 @@ import { crossSpawn } from '../../utils/compat';
 import { log } from '../../utils/logger';
 import {
   discardPreparedPackageUpdate,
+  getTargetInstallContext,
   preparePackageUpdate,
   publishPackageUpdate,
   resolveInstallContext,
@@ -161,9 +162,49 @@ async function runBackgroundUpdateCheck(
     return;
   }
 
+  const installContext = resolveInstallContext();
+  if (!installContext) {
+    showSkippedUpdateToast(
+      ctx,
+      currentVersion,
+      latestVersion,
+      pluginInfo.isInstallerManaged,
+    );
+    log(
+      '[auto-update-checker] Active install is not a v1 packages wrapper; skipping auto-update',
+    );
+    return;
+  }
+
   const cacheIdentity = pluginInfo.isInstallerManaged
     ? latestVersion
     : 'latest';
+
+  // Only publish when we either refresh the live dir in place or can redirect an
+  // installer-managed config entry to the newly installed version. A v2 cache
+  // layout cannot be updated by this mechanism, so skip rather than report a
+  // false success (and never stage an install we would not publish).
+  const targetContext = getTargetInstallContext(installContext, cacheIdentity);
+  const isInPlaceRefresh =
+    targetContext !== null &&
+    targetContext.installDir === installContext.installDir;
+  // Skip only when we cannot publish at all: a non-installer-managed config
+  // whose wrapper we cannot refresh in place (for example a v2 cache layout)
+  // has no publish target. Installer-managed configs are redirected to the
+  // newly published version only AFTER the install is verified and published.
+  if (!isInPlaceRefresh && !pluginInfo.isInstallerManaged) {
+    showSkippedUpdateToast(
+      ctx,
+      currentVersion,
+      latestVersion,
+      pluginInfo.isInstallerManaged,
+    );
+    log(
+      '[auto-update-checker] Skipped self-install; the active install root is not updatable in place',
+    );
+    return;
+  }
+
   const prepared = preparePackageUpdate(
     latestVersion,
     PACKAGE_NAME,
@@ -276,6 +317,29 @@ function showMajorUpgradeToast(ctx: PluginInput, version: string): void {
     'It requires OpenCode background subagents.\nRun: bunx oh-my-opencode-slim@latest install',
     'info',
     12_000,
+  );
+}
+
+/**
+ * Honest notification for updates this plugin cannot self-install (for example,
+ * an OpenCode v2 cache layout, or an install this runtime cannot update in
+ * place). Points at the command the user must run instead of claiming success.
+ */
+function showSkippedUpdateToast(
+  ctx: PluginInput,
+  currentVersion: string,
+  latestVersion: string,
+  isInstallerManaged: boolean,
+): void {
+  const command = isInstallerManaged
+    ? 'bunx oh-my-opencode-slim@latest install'
+    : 'opencode plugin update';
+  showToast(
+    ctx,
+    `OMO-Slim ${latestVersion}`,
+    `v${currentVersion} → v${latestVersion} available. Run \`${command}\` to apply.`,
+    'info',
+    8000,
   );
 }
 

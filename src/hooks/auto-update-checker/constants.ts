@@ -9,11 +9,16 @@ export const NPM_REGISTRY_URL = `https://registry.npmjs.org/-/package/${PACKAGE_
 export const NPM_PACKAGE_URL = `https://registry.npmjs.org/${PACKAGE_NAME}`;
 export const NPM_FETCH_TIMEOUT = 5000;
 
+/**
+ * Resolves OpenCode's plugin cache root. OpenCode uses `XDG_CACHE_HOME` when
+ * set, otherwise `~/.cache`, followed by `opencode` on every platform.
+ * Keep this in sync with `getOpenCodePluginCacheDir()` in
+ * `src/cli/config-io.ts`.
+ */
 function getCacheDir(): string {
-  if (process.platform === 'win32') {
-    return path.join(process.env.LOCALAPPDATA ?? os.homedir(), 'opencode');
-  }
-  return path.join(os.homedir(), '.cache', 'opencode');
+  const cacheHome =
+    process.env.XDG_CACHE_HOME?.trim() || path.join(os.homedir(), '.cache');
+  return path.join(cacheHome, 'opencode');
 }
 
 /** The directory used by OpenCode to cache node_modules for plugins. */

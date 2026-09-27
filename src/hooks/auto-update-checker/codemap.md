@@ -137,7 +137,7 @@ Notify: Success/failure via OpenCode TUI toast
 | `@opencode-ai/plugin` | OpenCode plugin SDK types |
 | `@opencode-ai/sdk` | OpenCode AI SDK |
 | `node:fs`, `node:path` | File system operations |
-| `node:os` | Platform detection for cache paths |
+| `node:os` | Home-directory fallback for the cache path |
 | External: NPM registry | Version lookup and compatibility checking |
 
 ### Configuration Integration
@@ -156,7 +156,7 @@ The system reads from OpenCode configuration files:
 ### Cache Integration
 
 Uses OpenCode's plugin cache directory:
-- Platform-specific: `~/.cache/opencode/` (Linux/macOS) or `%LOCALAPPDATA%\opencode` (Windows)
+- `XDG_CACHE_HOME` (when set) or `~/.cache`, then `opencode`, on every platform
 - Plugin cache: `node_modules/oh-my-opencode-slim/`
 - Package updates are installed to isolated cache directories
 
