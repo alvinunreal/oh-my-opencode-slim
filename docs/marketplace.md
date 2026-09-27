@@ -40,6 +40,14 @@ so they may retain dangling references. The command reports this limitation.
 Validation, service, and config failures return a nonzero exit status. A failed
 verification also returns nonzero.
 
+When a package exists but requires a newer plugin version, install/update report
+the package ID, required plugin version range, and current plugin version rather
+than presenting it as missing. The client still falls back from the V3 registry
+to V2 when V3 has no compatible release; if V2 also has no installable package,
+the V3 incompatibility diagnostic is preserved, including when V2 has entries
+but none are compatible. Incompatible installs and updates do not modify the
+local package store.
+
 `status` compares installed desired packages with the live registry only when
 called inside a running plugin generation. Standalone CLI status reports
 `liveAvailable: false`, `livePackages: null`, and `reloadRequired: null`, since

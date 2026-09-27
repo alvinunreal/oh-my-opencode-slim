@@ -494,6 +494,98 @@ describe('MarketplaceService', () => {
     }
   });
 
+  test('preserves v3 incompatibility when v2 fallback is not found for install and update', async () => {
+    const installRoot = tempRoot();
+    const updateRoot = tempRoot();
+    const requiredRange = '>=3.0.0-beta.11';
+    const pluginVersion = '2.2.25';
+    const incompatibility = new MarketplaceCompatibilityError(
+      `Marketplace package alvin/janitor@1.0.0 is incompatible: requires plugin version ${requiredRange}; current plugin version is ${pluginVersion}`,
+    );
+    const registryClient = {
+      downloadV3: async () => {
+        throw incompatibility;
+      },
+      download: async () => {
+        throw new MarketplaceRegistryNotFoundError(
+          'Marketplace package alvin/janitor was not found in the registry',
+        );
+      },
+    };
+
+    try {
+      const installService = new MarketplaceService({
+        rootDir: installRoot,
+        pluginVersion,
+        registryClient,
+      });
+      await expect(
+        installService.installRemote('alvin/janitor@1.0.0'),
+      ).rejects.toBe(incompatibility);
+      expect(installService.list()).toEqual([]);
+
+      const updateService = new MarketplaceService({
+        rootDir: updateRoot,
+        pluginVersion,
+        registryClient,
+      });
+      updateService.install(
+        bundle(
+          '1.0.0',
+          'alvin/janitor',
+          'Existing installed package.',
+          '>=2.0.0',
+        ),
+      );
+      await expect(updateService.updateRemote('alvin/janitor')).rejects.toBe(
+        incompatibility,
+      );
+      expect(updateService.show('alvin/janitor').manifest.prompt).toBe(
+        'Existing installed package.',
+      );
+      expect(updateService.show('alvin/janitor').manifest.version).toBe(
+        '1.0.0',
+      );
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+      rmSync(updateRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('preserves v3 incompatibility when v2 also has only incompatible releases', async () => {
+    const root = tempRoot();
+    const calls: string[] = [];
+    const v3Error = new MarketplaceCompatibilityError(
+      'Marketplace package alvin/janitor is incompatible: requires plugin version >=3.0.0-beta.11; current plugin version is 2.2.25',
+    );
+    try {
+      const service = new MarketplaceService({
+        rootDir: root,
+        pluginVersion: '2.2.25',
+        registryClient: {
+          downloadV3: async () => {
+            calls.push('v3 incompatible index');
+            throw v3Error;
+          },
+          download: async () => {
+            calls.push('v2 incompatible index');
+            throw new MarketplaceCompatibilityError(
+              'Marketplace package alvin/janitor is incompatible with v2 range >=3.0.0',
+            );
+          },
+        },
+      });
+
+      await expect(service.installRemote('alvin/janitor')).rejects.toBe(
+        v3Error,
+      );
+      expect(calls).toEqual(['v3 incompatible index', 'v2 incompatible index']);
+      expect(service.list()).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('restores config and package when lockfile publication fails', () => {
     const root = tempRoot();
     const previousConfigHome = process.env.XDG_CONFIG_HOME;

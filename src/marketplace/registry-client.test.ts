@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   createMarketplaceRegistryEntry,
   createMarketplaceRegistryEntryV3,
@@ -19,6 +22,7 @@ import {
   MARKETPLACE_REGISTRY_V3_INDEX_URL,
   MarketplaceRegistryClient,
 } from './registry-client.js';
+import { MarketplaceStore } from './store.js';
 
 function bundle(
   version = '1.0.0',
@@ -108,6 +112,90 @@ describe('MarketplaceRegistryClient', () => {
     expect(v3.bundle.manifest.schemaVersion).toBe(3);
     expect(v3.indexUrl).toBe(MARKETPLACE_REGISTRY_V3_INDEX_URL);
     expect(v3.registry).toBe('https://registry.ohmyopencodeslim.com/v3/');
+  });
+
+  test('downloads and installs a v3 index with published-length routing lines', async () => {
+    const liveBundle = bundle('1.0.0', 'alvin/paladin', 3);
+    if (liveBundle.manifest.schemaVersion !== 3) {
+      throw new Error('Expected a v3 test bundle');
+    }
+    const v3Bundle = {
+      manifest: {
+        ...liveBundle.manifest,
+        routing: {
+          ...liveBundle.manifest.routing,
+          delegateWhen: ['x'.repeat(164), 'y'.repeat(170)],
+        },
+      },
+    };
+    const index = createMarketplaceRegistryIndexV3([
+      createMarketplaceRegistryEntryV3(v3Bundle),
+    ]);
+    const client = new MarketplaceRegistryClient({
+      pluginVersion: '3.1.0',
+      fetch: async (input) =>
+        String(input) === MARKETPLACE_REGISTRY_V3_INDEX_URL
+          ? response(index)
+          : response(v3Bundle),
+    });
+    const rootDir = mkdtempSync(join(tmpdir(), 'marketplace-live-routing-'));
+
+    try {
+      const downloaded = await client.downloadV3('alvin/paladin');
+      const installed = new MarketplaceStore({
+        pluginVersion: '3.1.0',
+        rootDir,
+      }).install(downloaded.bundle, {
+        kind: 'registry',
+        registry:
+          downloaded.registry ?? 'https://registry.ohmyopencodeslim.com/v3/',
+        indexUrl: downloaded.indexUrl,
+        packageUrl: downloaded.packageUrl,
+      });
+
+      expect(installed.manifest.schemaVersion).toBe(3);
+      if (installed.manifest.schemaVersion !== 3) {
+        throw new Error('Expected the installed manifest to be v3');
+      }
+      expect(
+        installed.manifest.routing.delegateWhen.map((line) => line.length),
+      ).toEqual([164, 170]);
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  test('reports an exact v3 selector incompatibility before fetching its artifact', async () => {
+    const baseBundle = bundle('1.0.0', 'alvin/janitor', 3);
+    if (baseBundle.manifest.schemaVersion !== 3) {
+      throw new Error('Expected a v3 test bundle');
+    }
+    const requiredRange = '>=3.0.0-beta.11';
+    const incompatibleBundle = {
+      manifest: {
+        ...baseBundle.manifest,
+        compatibility: { plugin: requiredRange },
+      },
+    };
+    const index = createMarketplaceRegistryIndexV3([
+      createMarketplaceRegistryEntryV3(incompatibleBundle),
+    ]);
+    let artifactRequested = false;
+    const client = new MarketplaceRegistryClient({
+      pluginVersion: '2.2.25',
+      fetch: async (input) => {
+        if (String(input) === MARKETPLACE_REGISTRY_V3_INDEX_URL) {
+          return response(index);
+        }
+        artifactRequested = true;
+        return response(incompatibleBundle);
+      },
+    });
+
+    await expect(client.downloadV3('alvin/janitor@1.0.0')).rejects.toThrow(
+      'Marketplace package alvin/janitor@1.0.0 is incompatible: requires plugin version >=3.0.0-beta.11; current plugin version is 2.2.25',
+    );
+    expect(artifactRequested).toBe(false);
   });
 
   test('validates selectors, not-found results, compatibility, and digests', async () => {

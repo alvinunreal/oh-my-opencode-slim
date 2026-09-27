@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  MARKETPLACE_ROUTING_LINE_MAX_LENGTH,
   MarketplaceAgentManifestSchema,
   MarketplaceAgentManifestSummaryV2Schema,
   MarketplaceAgentManifestSummaryV3Schema,
@@ -231,10 +232,37 @@ describe('agents-only marketplace manifest schemas', () => {
     ).toBe(true);
   });
 
+  test('allows live routing text up to the exported 256-character limit', () => {
+    expect(MARKETPLACE_ROUTING_LINE_MAX_LENGTH).toBe(256);
+    expect(
+      MarketplacePackageManifestV3Schema.safeParse({
+        ...commonV3,
+        routing: {
+          ...commonV3.routing,
+          delegateWhen: ['x'.repeat(170)],
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      MarketplacePackageManifestV3Schema.safeParse({
+        ...commonV3,
+        routing: {
+          ...commonV3.routing,
+          delegateWhen: ['x'.repeat(MARKETPLACE_ROUTING_LINE_MAX_LENGTH + 1)],
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   test('rejects invalid v3 routing values and publisher-authored policy fields', () => {
     const invalidCases = [
       { routing: { ...commonV3.routing, lane: 'line\nwrapped' } },
-      { routing: { ...commonV3.routing, lane: 'x'.repeat(161) } },
+      {
+        routing: {
+          ...commonV3.routing,
+          lane: 'x'.repeat(MARKETPLACE_ROUTING_LINE_MAX_LENGTH + 1),
+        },
+      },
       {
         routing: { ...commonV3.routing, stats: ['duplicate', 'duplicate'] },
       },

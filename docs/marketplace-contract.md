@@ -22,6 +22,10 @@ their wire formats differ. The registry contract validates package identity,
 version compatibility, deterministic artifact paths, digests, and ordered
 registry entries.
 
+V3 routing text lines, including `delegateWhen`, allow up to 256 characters.
+This provides headroom over the published 164- and 170-character routing lines
+while keeping individual rendered routing values bounded.
+
 ## Canonical bundle digest
 
 Parse an input with the matching V2 or V3 package-bundle schema before

@@ -7,6 +7,7 @@ import {
   createMarketplaceRegistryIndex,
   createMarketplaceRegistryIndexV3,
   MARKETPLACE_REGISTRY_SCHEMA_VERSION,
+  MARKETPLACE_ROUTING_LINE_MAX_LENGTH,
   type MarketplaceRegistryEntry,
   MarketplaceRegistryEntrySchema,
   type MarketplaceRegistryEntryV3,
@@ -48,6 +49,10 @@ const manifest: MarketplacePackageManifest = {
 };
 
 describe('marketplace contract routing export', () => {
+  test('exports the shared routing line limit', () => {
+    expect(MARKETPLACE_ROUTING_LINE_MAX_LENGTH).toBe(256);
+  });
+
   test('exports the same authoritative default extension block', () => {
     const expected = `${ROLE_ROUTING_BLOCKS.explorer.replaceAll(
       '@explorer',
@@ -200,6 +205,51 @@ describe('marketplace contract routing export', () => {
         '1.2.0-beta.10',
       ),
     ).toThrow();
+  });
+
+  test('explains registry incompatibility with the required range and current version', () => {
+    const requiredRange = '>=3.0.0-beta.11';
+    const v2Entry = createMarketplaceRegistryEntry({
+      manifest: {
+        ...manifest,
+        id: 'alvin/janitor',
+        compatibility: { plugin: requiredRange },
+      },
+    });
+    const v3Entry = createMarketplaceRegistryEntryV3({
+      manifest: {
+        ...manifest,
+        schemaVersion: 3,
+        id: 'alvin/janitor',
+        compatibility: { plugin: requiredRange },
+        routing: {
+          lane: 'Contract lane.',
+          stats: ['Fast'],
+          delegateWhen: ['The contract task matches.'],
+          avoid: ['Unbounded work.'],
+        },
+      },
+    });
+    const pluginVersion = '2.2.25';
+
+    for (const resolveEntry of [
+      () =>
+        resolveMarketplaceRegistryEntry(
+          createMarketplaceRegistryIndex([v2Entry]),
+          { id: 'alvin/janitor', version: '1.0.0' },
+          { pluginVersion },
+        ),
+      () =>
+        resolveMarketplaceRegistryEntryV3(
+          createMarketplaceRegistryIndexV3([v3Entry]),
+          { id: 'alvin/janitor', version: '1.0.0' },
+          { pluginVersion },
+        ),
+    ]) {
+      expect(resolveEntry).toThrow(
+        `Marketplace package alvin/janitor@1.0.0 is incompatible: requires plugin version ${requiredRange}; current plugin version is ${pluginVersion}`,
+      );
+    }
   });
 
   test('projects prompt-free summaries and validates artifact identity/digest', () => {

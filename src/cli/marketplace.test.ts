@@ -102,6 +102,33 @@ describe('marketplace CLI', () => {
     });
   });
 
+  test('shows incompatibility diagnostics for exact install selectors and updates', async () => {
+    const diagnostic =
+      'Marketplace package alvin/janitor@1.0.0 is incompatible: requires plugin version >=3.0.0-beta.11; current plugin version is 2.2.25';
+    const errors: string[] = [];
+    const service = {
+      ...fakeService().service,
+      installRemote: async () => {
+        throw new Error(diagnostic);
+      },
+      updateRemote: async () => {
+        throw new Error(diagnostic);
+      },
+    } as never;
+    const io = { service, stderr: (message: string) => errors.push(message) };
+
+    expect(
+      await runMarketplaceCommand(['install', 'alvin/janitor@1.0.0'], io),
+    ).toBe(1);
+    expect(await runMarketplaceCommand(['update', 'alvin/janitor'], io)).toBe(
+      1,
+    );
+    expect(errors).toEqual([diagnostic, diagnostic]);
+    expect(errors.every((message) => !message.includes('not found'))).toBe(
+      true,
+    );
+  });
+
   test('requires the exact global uninstall flag and has no remove command', async () => {
     const { calls, service } = fakeService();
     const errors: string[] = [];

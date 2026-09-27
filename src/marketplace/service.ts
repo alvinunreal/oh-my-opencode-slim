@@ -352,6 +352,7 @@ export class MarketplaceService {
     minimumVersion?: string,
     signal?: AbortSignal,
   ): Promise<MarketplaceRegistryDownload> {
+    let v3CompatibilityError: MarketplaceCompatibilityError | undefined;
     if (this.registryClient.downloadV3) {
       try {
         return await this.registryClient.downloadV3(
@@ -368,8 +369,26 @@ export class MarketplaceService {
           throw error;
         }
         if (signal?.aborted) throw error;
+        if (error instanceof MarketplaceCompatibilityError) {
+          v3CompatibilityError = error;
+        }
       }
     }
-    return this.registryClient.download(selector, minimumVersion, signal);
+    try {
+      return await this.registryClient.download(
+        selector,
+        minimumVersion,
+        signal,
+      );
+    } catch (error) {
+      if (
+        v3CompatibilityError &&
+        (error instanceof MarketplaceRegistryNotFoundError ||
+          error instanceof MarketplaceCompatibilityError)
+      ) {
+        throw v3CompatibilityError;
+      }
+      throw error;
+    }
   }
 }

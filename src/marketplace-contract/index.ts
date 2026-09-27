@@ -14,6 +14,7 @@ import {
   MARKETPLACE_DIGEST_DOMAIN_V3,
   MARKETPLACE_MANIFEST_SCHEMA_VERSION,
   MARKETPLACE_MANIFEST_SCHEMA_VERSION_V3,
+  MARKETPLACE_ROUTING_LINE_MAX_LENGTH,
   MarketplaceAgentManifestSchema,
   MarketplaceAgentManifestSummarySchema,
   MarketplaceAgentManifestSummaryV2Schema,
@@ -59,6 +60,7 @@ export {
   MARKETPLACE_DIGEST_DOMAIN_V3,
   MARKETPLACE_MANIFEST_SCHEMA_VERSION,
   MARKETPLACE_MANIFEST_SCHEMA_VERSION_V3,
+  MARKETPLACE_ROUTING_LINE_MAX_LENGTH,
   MarketplaceAgentManifestSchema,
   MarketplaceAgentManifestSummarySchema,
   MarketplaceAgentManifestSummaryV2Schema,
@@ -508,6 +510,43 @@ export interface MarketplaceRegistrySelector {
   version?: string;
 }
 
+function incompatibleRegistryPackageError(
+  selector: MarketplaceRegistrySelector,
+  entries: readonly {
+    id: string;
+    version: string;
+    summary: { compatibility: { plugin: string } };
+  }[],
+  compatibility: { pluginVersion: string },
+  minimumVersion?: string,
+): Error | undefined {
+  const matching = entries
+    .filter(
+      (entry) =>
+        entry.id === selector.id &&
+        (selector.version === undefined ||
+          entry.version === selector.version) &&
+        (minimumVersion === undefined || gt(entry.version, minimumVersion)),
+    )
+    .sort(
+      (a, b) =>
+        compare(b.version, a.version) ||
+        compareMarketplaceCodeUnits(b.version, a.version),
+    );
+  const incompatible = matching.find(
+    (entry) =>
+      !satisfiesPluginCompatibility(
+        compatibility.pluginVersion,
+        entry.summary.compatibility.plugin,
+      ),
+  );
+  if (!incompatible) return undefined;
+
+  return new Error(
+    `Marketplace package ${selector.id}${selector.version ? `@${selector.version}` : ''} is incompatible: requires plugin version ${incompatible.summary.compatibility.plugin}; current plugin version is ${compatibility.pluginVersion}`,
+  );
+}
+
 export function parseMarketplaceRegistrySelector(
   selector: string,
 ): MarketplaceRegistrySelector {
@@ -554,6 +593,13 @@ export function resolveMarketplaceRegistryEntry(
       compareMarketplaceCodeUnits(b.version, a.version),
   )[0];
   if (!selected) {
+    const incompatible = incompatibleRegistryPackageError(
+      selector,
+      index.entries,
+      compatibility,
+      minimumVersion,
+    );
+    if (incompatible) throw incompatible;
     throw new Error(
       `No compatible marketplace package found for ${selector.id}${selector.version ? `@${selector.version}` : ''}`,
     );
@@ -583,6 +629,13 @@ export function resolveMarketplaceRegistryEntryV3(
       compareMarketplaceCodeUnits(b.version, a.version),
   )[0];
   if (!selected) {
+    const incompatible = incompatibleRegistryPackageError(
+      selector,
+      index.entries,
+      compatibility,
+      minimumVersion,
+    );
+    if (incompatible) throw incompatible;
     throw new Error(
       `No compatible marketplace v3 package found for ${selector.id}${selector.version ? `@${selector.version}` : ''}`,
     );
