@@ -72,8 +72,7 @@ The v2 runtime surface and plugin contracts are adapted through the following da
 
 ## Integration Points
 
-- `src/index.ts`: imports `createV2Setup` for the dual `default` export (`{ id, server, setup }` — no `tui` key; hosts validate that a server module's `tui` field is a function and never coexists with `server`) and exports `OhMyOpenCodeLite` (named) for the adapter to wrap. The `hostFlavor: 'v2'` marker from the shim gates the multiplexer off (`shouldEnableMultiplexer` /
-  `sessionManagerMultiplexerConfig`).
+- `src/index.ts`: imports `createV2Setup` for the dual `default` export (`{ id, server, setup }` — no `tui` key; hosts validate that a server module's `tui` field is a function and never coexists with `server`) and exports `OhMyOpenCodeLite` (named) for the adapter to wrap.
 - `src/tools/smartfetch/secondary-model.ts`: consumes the `experimental_v2.generateText` channel threaded by `setup` for one-shot summaries; absent channel → secondary-model summaries are unavailable (logged) — the v2 shim has no `session.create`/`tool.ids`, so the v1 session pipeline cannot substitute.
 - Build: `build:v2` bundles `src/index.ts` (which pulls in `src/v2/`) into `dist/server/index.js` (self-contained except `jsdom`) — the directory entrypoint 2.x hosts require, also served via the
   `./server` package subpath (the exports map resolves it directly);
@@ -81,8 +80,10 @@ The v2 runtime surface and plugin contracts are adapted through the following da
 
 ## Limitations (see `docs/opencode-v2-compatibility.md`)
 
-Multiplexer is v1-only by design (v2 renders subagents natively). The
-orchestrator-wake scheduler runs on v2 in children-driven degraded mode
+Multiplexer pane creation is v1-TUI-only by design (the v2 `setup()` is not
+wired, NFR-6; a configured `multiplexer.type` on a v2 host is ignored with one
+diagnostic per process). The orchestrator-wake scheduler runs on v2 in
+children-driven degraded mode
 (list+promptAsync gate, `session.list({parentID})` enumeration with the
 event-tracked fallback, outcome-based condition with a 3×-interval staleness
 bound, `queue` delivery — see `src/hooks/orchestrator-wake/codemap.md`).

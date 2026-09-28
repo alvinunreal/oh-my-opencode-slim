@@ -7,6 +7,7 @@
  * Once-per-process semantics belong to the caller (`createOnceGate`).
  */
 
+import type { MultiplexerType } from '../../config/schema';
 import { log } from '../../utils/logger';
 import type { AdapterType, NoPaneReason, PaneIdentity } from './types';
 
@@ -22,6 +23,7 @@ export const PLUGIN_LOG_SINK: DiagnosticLogger = {
 
 export const DIAGNOSTIC_EVENT_NO_PANE = 'multiplexer.no-pane';
 export const DIAGNOSTIC_EVENT_PANE_CREATED = 'multiplexer.pane-created';
+export const DIAGNOSTIC_EVENT_HOST_UNSUPPORTED = 'multiplexer.host-unsupported';
 
 /** Optional context attached to a diagnostic record. */
 export interface DiagnosticContext {
@@ -56,6 +58,28 @@ export function logPaneCreated(
     event: DIAGNOSTIC_EVENT_PANE_CREATED,
     ...pane,
   });
+}
+
+/**
+ * Records the v2-host diagnostic: pane creation is wired only in the v1 TUI
+ * entry (NFR-6), so a multiplexer configured on a v2 host is ignored. Logs
+ * nothing when no multiplexer is configured; the caller owns the
+ * once-per-process gate, like every other diagnostic here.
+ */
+export function logHostUnsupported(
+  logger: DiagnosticLogger,
+  configuredType: MultiplexerType,
+): boolean {
+  if (configuredType === 'none') return false;
+  logger.log(
+    "[multiplexer] unavailable on v2 hosts (by design): configured multiplexer.type is ignored; panes are a v1-TUI feature and v2's native subagent UX replaces them",
+    {
+      event: DIAGNOSTIC_EVENT_HOST_UNSUPPORTED,
+      host: 'v2',
+      configuredType,
+    },
+  );
+  return true;
 }
 
 /** Idempotency gate: true only the first time a key is seen. */

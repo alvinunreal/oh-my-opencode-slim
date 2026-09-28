@@ -375,7 +375,7 @@ side cannot be observed.
 | `/preset` (interactive switcher) | ✅ | ✅ TUI plugin entry (`./tui` → `dist/tui2.js`): sidebar + `/preset` dialog or `/preset <name>` fast path | The layer registers from an `append: "app"` slot render because the host's `keymap.layer` is provider-scoped (calling it from plugin `setup` throws `Keymap.Provider is missing`); the command carries an `id` and `slash.arguments`; host needs `ui.slot` + `keymap.layer`; the interactive picker needs `ui.dialog.select` while `/preset <name>` works without it; feedback uses `ui.toast.show`; config-file `preset` still applies at load |
 | Default primary agent | ✅ finalized visible orchestrator identity | ✅ `draft.default(<visible orchestrator identity>)`; the canonical `orchestrator` entry remains a hidden alias when `displayName` is configured | v1 `default_agent` and v2 draft default target the same visible entry |
 | TUI default agent | ✅ orchestrator | ✅ host follows the default primary agent and hoists it to the head of the agent list | — |
-| Multiplexer (tmux/zellij/herdr/cmux-tui panes) | ✅ | ❌ host-gated off (`hostFlavor: 'v2'` → `shouldEnableMultiplexer` returns false and the session manager is forced to `type: "none"`) | by design — v2 renders subagents natively |
+| Multiplexer (tmux/zellij/herdr/cmux-tui panes) | ✅ | ❌ not available on v2 hosts (by design): the pane lifecycle is wired only in the v1 TUI entry, and a configured `multiplexer.type` is ignored with one diagnostic per process | by design — v2's native subagent UX (subagent picker, completion notices) replaces panes |
 | Orchestrator-wake scheduler | ✅ todo-gated (host `todo`/`children`/`status` APIs) | ✅ children-driven degraded mode (`backgroundJobs.orchestratorWake.mode`) | v2 wake enumerates children via `session.list({parentID})` with an event-tracked fallback, gates on children without a terminal `outcome` (staleness-bounded), and delivers with `queue`; v2's native subagent completion nudges still cover the happy path — the port adds a periodic watchdog for stuck children and unreconciled jobs |
 | `chat.headers` (Copilot `x-initiator` routing) | ✅ | ✅ via `session.hook("model.request")` | transport-level only; auxiliary kinds are covered by v2's built-in Copilot provider hook |
 | Companion app | ✅ | ⚠️ unverified | independent desktop app; test separately against v2 |
@@ -787,10 +787,11 @@ Q&A history.
 
 ### v1-only, by design
 
-- **Multiplexer panes.** tmux/zellij/herdr integration is a v1-TUI feature;
-  v2 renders subagents natively, so the multiplexer is host-gated off on v2
-  (`shouldEnableMultiplexer` / `sessionManagerMultiplexerConfig` in
-  `src/index.ts`).
+- **Multiplexer panes.** Pane creation is wired only in the v1 TUI entry
+  (`src/tui.ts`'s `tui()`); the v2 TUI entry (`setup()`) deliberately does not
+  start it (NFR-6). A `multiplexer.type` configured on a v2 host is ignored and
+  one diagnostic per process is logged; v2's native subagent UX (subagent
+  picker, completion notices) replaces panes.
 
 ### Not exposed to plugins: `session.list` / `session.remove`
 
@@ -897,7 +898,7 @@ periodic watchdog: an idle parent with a stuck or unreconciled child (or a
 job that stopped without a terminal result) gets woken to assess, cancel, or
 respawn, bounded by the same no-progress cap as v1.
 
-### Terminal-publication wake（终态后唤醒）
+### Terminal-publication wake
 
 The native notifier fires on the FIRST terminal publication of every
 generation — on v2 every plugin task launch AND relaunch is a host

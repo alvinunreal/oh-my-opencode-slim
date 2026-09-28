@@ -9,6 +9,12 @@ that displays their parent session.
 > client manages only its own panes. See
 > [Per-client view semantics](#per-client-view-semantics).
 
+> **OpenCode v2 hosts:** pane creation is unavailable by design — the pane
+> lifecycle is wired only in the v1 TUI entry. A configured `multiplexer.type`
+> is ignored on v2 hosts (one diagnostic per process); v2's native subagent UX
+> replaces panes. See [Deployment Modes](#deployment-modes) and
+> [Known Limitations](#known-limitations).
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -19,7 +25,7 @@ that displays their parent session.
 - [Per-client view semantics](#per-client-view-semantics)
 - [Diagnostics and Logs](#diagnostics-and-logs)
 - [Known Limitations](#known-limitations)
-- [Behavior Changes and Removals](#behavior-changes-and-removals-行为变更与移除清单)
+- [Behavior Changes and Removals](#behavior-changes-and-removals)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -80,12 +86,18 @@ Pane behavior is fixed per host mode:
 | `opencode serve` + N × `opencode attach <url>` | multiple processes | real | Supported (target deployment) |
 | `opencode run` | no TUI host | — | No pane (child runs in the host's native background mode) |
 | `opencode --mini` | TUI host does not load plugins | — | No pane |
-| v2 host | — | — | Feature off (v2 `setup()` is not wired) |
+| v2 host | — | — | Feature off (v2 `setup()` is not wired); `multiplexer.type` is ignored, one diagnostic per process |
 
-**Why embedded mode is not supported yet** (verbatim from the requirements,
-§2.2):
+**Why embedded mode is not supported yet** (translated from the internal
+requirements, §2.2):
 
-> 裸 `opencode` 以单进程双线程运行（TUI 主线程 + 内嵌 server），不建立 TCP 监听，子 pane 中的 `opencode attach` 无 URL 可连；插件也不能替宿主创建监听。因此 pane 功能要求 server 可经 URL 访问——请使用 `opencode --port <端口>` 或 `opencode serve` + `opencode attach <url>`。检测到此模式时，功能关闭并记录一条诊断。
+> Bare `opencode` runs as a single process with two threads (TUI main thread +
+> embedded server) and opens no TCP listener, so `opencode attach` in a child
+> pane has no URL to connect to, and the plugin cannot create a listener on the
+> host's behalf either. Pane creation therefore requires the server to be
+> reachable over a URL — use `opencode --port <port>` or `opencode serve` +
+> `opencode attach <url>`. When this mode is detected, the feature is turned off
+> and exactly one diagnostic is recorded.
 
 The diagnostic for this case is the `host-unreachable` reason (see
 [Diagnostics and Logs](#diagnostics-and-logs)); it is emitted **exactly once per
@@ -253,7 +265,7 @@ Zellij panes always open in the tab containing the parent pane.
 
 Remove the key from your config to silence the warning. There is no replacement
 key: same-tab placement is the only Zellij behavior (see
-[Behavior Changes and Removals](#behavior-changes-and-removals-行为变更与移除清单)).
+[Behavior Changes and Removals](#behavior-changes-and-removals)).
 
 ### Legacy `tmux` config
 
@@ -355,7 +367,8 @@ a structured, distinguishable reason:
 Every successful creation logs the full identity: child session, parent
 session, adapter, view handle (for cmux-tui the terminal id), and the anchored
 target the view was created in. Admission and host diagnostics are emitted at
-most once per cause per process.
+most once per cause per process. On v2 hosts a configured `multiplexer.type`
+produces one `multiplexer.host-unsupported` record per process.
 
 **Log paths:**
 
@@ -423,7 +436,8 @@ most once per cause per process.
   immediately, so this only affects synthetic sessions created through the REST
   API.
 - **v2 hosts and embedded hosts have no pane feature** (see
-  [Deployment Modes](#deployment-modes)).
+  [Deployment Modes](#deployment-modes)); on v2 hosts a configured
+  `multiplexer.type` is ignored and one diagnostic per process is logged.
 - **Nested multiplexer detection priority is unchanged** (for example, kitty
   inside herdr), and a client only opens panes for children of the session it
   currently displays.
@@ -438,7 +452,7 @@ most once per cause per process.
   re-scope until the TUI is restarted. (Follow-up: re-scope the wiring and
   re-run admission when the route directory changes.)
 
-## Behavior Changes and Removals (行为变更与移除清单)
+## Behavior Changes and Removals
 
 This release moves pane execution from the server to the TUI client. Every
 removed or changed behavior, with migration guidance:

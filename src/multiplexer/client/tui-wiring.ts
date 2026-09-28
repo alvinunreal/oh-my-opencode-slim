@@ -454,7 +454,7 @@ export function loadPaneConfig(directory: string): LoadedPaneConfig {
   return { multiplexer, invalid };
 }
 
-function initClientLogging(): void {
+export function initClientLogging(): void {
   try {
     const sessionId = `tui-${new Date()
       .toISOString()

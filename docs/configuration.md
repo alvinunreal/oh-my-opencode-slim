@@ -164,11 +164,11 @@ an MCP tool remains authoritative.
 | `disabled_agents` | string[] | `["observer"]` | Agent names to disable globally. Set to `[]` to enable Observer; this is global, not per-preset See [Custom Agents](#custom-agents). |
 | `image_routing` | `"auto"` \| `"direct"` | omitted (legacy conditional) | Optional. When omitted, resolves to `"auto"` if Observer is enabled, otherwise `"direct"`. Explicit `"auto"` requires Observer enabled and saves image attachments to disk before nudging delegation to @observer. `"direct"`: always pass images to the orchestrator. |
 | `autoUpdate` | boolean | `true` | Automatically install plugin updates in the background; set to `false` for notification-only mode |
-| `multiplexer.type` | string | `"none"` | Multiplexer mode: `auto`, `tmux`, `zellij`, `herdr`, `cmux-tui`, `kitty`, or `none` See [Multiplexer Integration](multiplexer-integration.md). |
+| `multiplexer.type` | string | `"none"` | Multiplexer mode: `auto`, `tmux`, `zellij`, `herdr`, `cmux-tui`, `kitty`, or `none` See [Multiplexer Integration](multiplexer-integration.md). On OpenCode v2 hosts the setting is ignored (no pane feature; one diagnostic per process). |
 | `multiplexer.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Each adapter maps it to its nearest native expression (tmux full layouts; split directions for Zellij/Herdr; built-in layouts for kitty); cmux-tui has no layout expression and ignores it. See [Multiplexer Integration](multiplexer-integration.md#layouts). |
 | `multiplexer.main_pane_size` | number | `60` | Main pane size as percentage (20–80) for tmux main layouts; ignored by Zellij, Herdr, kitty, and cmux-tui See [Multiplexer Integration](multiplexer-integration.md#layouts). |
 | `multiplexer.cmux_tui_binary` | string | omitted | Explicit path to the cmux-tui binary. When omitted, the client resolves `cmux-tui` first, then `cmux`, on `PATH` See [Multiplexer Integration](multiplexer-integration.md). |
-| `multiplexer.zellij_pane_mode` | string | — | **Deprecated and ignored.** Zellij panes always open in the tab containing the parent OpenCode pane; a once-per-process warning is logged and pane management keeps working See [Behavior Changes and Removals](multiplexer-integration.md#behavior-changes-and-removals-行为变更与移除清单). |
+| `multiplexer.zellij_pane_mode` | string | — | **Deprecated and ignored.** Zellij panes always open in the tab containing the parent OpenCode pane; a once-per-process warning is logged and pane management keeps working See [Behavior Changes and Removals](multiplexer-integration.md#behavior-changes-and-removals). |
 | `tmux.enabled` | boolean | — | **Deprecated and ignored** (legacy key); use `multiplexer.type = "tmux"` See [Multiplexer Integration](multiplexer-integration.md#legacy-tmux-config). |
 | `tmux.layout` | string | — | **Deprecated and ignored** (legacy key); use `multiplexer.layout` See [Multiplexer Integration](multiplexer-integration.md#legacy-tmux-config). |
 | `tmux.main_pane_size` | number | — | **Deprecated and ignored** (legacy key); use `multiplexer.main_pane_size` See [Multiplexer Integration](multiplexer-integration.md#legacy-tmux-config). |
@@ -840,7 +840,7 @@ Use the `skills`/`mcps` arrays for skill and MCP gating. Use `permission` for ev
 
 ### Multiplexer
 
-The multiplexer hosts child agent sessions in terminal panes. See [Multiplexer Integration](multiplexer-integration.md) for backend setup, layout configuration, and troubleshooting.
+The multiplexer hosts child agent sessions in terminal panes. See [Multiplexer Integration](multiplexer-integration.md) for backend setup, layout configuration, and troubleshooting. On OpenCode v2 hosts pane creation is unavailable by design: `multiplexer.type` is ignored and one diagnostic per process is logged (v2's native subagent UX replaces panes).
 
 ### Desktop Companion App
 

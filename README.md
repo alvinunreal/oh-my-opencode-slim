@@ -157,7 +157,7 @@ Then:
 > It's **recommended** to understand how background orchestration works. The **[Orchestrator prompt](https://github.com/alvinunreal/oh-my-opencode-slim/blob/master/src/agents/orchestrator.ts#L28)** contains the scheduler rules, specialist routing logic, and thresholds for when work should be assigned to background agents. You can always delegate manually by calling a subagent via: `@agentName <task>`
 
 > [!TIP]
-> Because background agents are now the default workflow, it is **highly recommended** to enable and configure **[Multiplexer Integration](docs/multiplexer-integration.md)**. It automatically opens each agent in a dedicated Tmux, Zellij, Herdr, cmux, or kitty pane, so you can watch specialists work live while the Orchestrator continues coordinating the session.
+> Because background agents are now the default workflow, it is **highly recommended** to enable and configure **[Multiplexer Integration](docs/multiplexer-integration.md)**. It automatically opens each agent in a dedicated Tmux, Zellij, Herdr, cmux, or kitty pane, so you can watch specialists work live while the Orchestrator continues coordinating the session. On OpenCode v2 hosts pane creation is unavailable by design: the setting is ignored there (one diagnostic per process; v2's native subagent UX replaces panes).
 
 The default generated configuration includes both `openai` and `opencode-go` presets.
 

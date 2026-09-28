@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import {
   createOnceGate,
+  DIAGNOSTIC_EVENT_HOST_UNSUPPORTED,
   DIAGNOSTIC_EVENT_NO_PANE,
   DIAGNOSTIC_EVENT_PANE_CREATED,
   type DiagnosticLogger,
+  logHostUnsupported,
   logNoPane,
   logPaneCreated,
   PLUGIN_LOG_SINK,
@@ -109,6 +111,27 @@ describe('pane-created diagnostics', () => {
       paneId: 'pane-42',
       anchoredTarget: 'pane-7',
     });
+  });
+});
+
+describe('host-unsupported diagnostics', () => {
+  test('records the configured multiplexer type for a v2 host', () => {
+    const { entries, logger } = createCapturingLogger();
+    expect(logHostUnsupported(logger, 'tmux')).toBe(true);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.message).toContain('unavailable on v2 hosts');
+    expect(entries[0]?.data).toEqual({
+      event: DIAGNOSTIC_EVENT_HOST_UNSUPPORTED,
+      host: 'v2',
+      configuredType: 'tmux',
+    });
+  });
+
+  test('stays quiet when no multiplexer is configured', () => {
+    const { entries, logger } = createCapturingLogger();
+    expect(logHostUnsupported(logger, 'none')).toBe(false);
+    expect(entries).toHaveLength(0);
   });
 });
 

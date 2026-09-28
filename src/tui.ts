@@ -14,7 +14,16 @@ import {
   SUBAGENT_NAMES,
 } from './config/constants';
 import { loadPluginConfig } from './config/loader';
-import { createTuiPaneWiring } from './multiplexer/client/tui-wiring';
+import { MultiplexerConfigSchema, type MultiplexerType } from './config/schema';
+import {
+  createOnceGate,
+  logHostUnsupported,
+  PLUGIN_LOG_SINK,
+} from './multiplexer/client/diagnostics';
+import {
+  createTuiPaneWiring,
+  initClientLogging,
+} from './multiplexer/client/tui-wiring';
 import {
   KILL_ALL_KEYBIND,
   killAllRunningSubagents,
@@ -53,6 +62,24 @@ const ACTIVITY_FRAMES = [
   '⠇',
   '⠏',
 ] as const;
+
+/** Once-per-process gate for the v2-host multiplexer diagnostic (NFR-6). */
+const v2HostUnsupportedGate = createOnceGate();
+
+/**
+ * Pane creation lives in the v1 TUI entry only (NFR-6): a multiplexer
+ * configured on a v2 host is ignored. Records that at most once per process
+ * so the disabled feature is self-explaining instead of silently dropping
+ * config; callers re-run it whenever the config is (re)read.
+ */
+function warnV2HostUnsupportedMultiplexer(
+  configuredType: MultiplexerType,
+): void {
+  if (configuredType === 'none') return;
+  if (!v2HostUnsupportedGate('v2-host-unsupported')) return;
+  initClientLogging();
+  logHostUnsupported(PLUGIN_LOG_SINK, configuredType);
+}
 
 type Child =
   | JSX.Element
@@ -1327,9 +1354,15 @@ function buildConfigStatusRow(
   );
 }
 
+function resolveMultiplexerType(value: unknown): MultiplexerType {
+  const parsed = MultiplexerConfigSchema.safeParse(value ?? {});
+  return parsed.success ? parsed.data.type : 'none';
+}
+
 function readConfigState(directory: string): {
   configInvalid: boolean;
   compactSidebar: boolean;
+  multiplexerType: MultiplexerType;
 } {
   let configInvalid = false;
   const config = loadPluginConfig(directory, {
@@ -1349,7 +1382,8 @@ function readConfigState(directory: string): {
     },
   });
   const compactSidebar = config.compactSidebar ?? true;
-  return { configInvalid, compactSidebar };
+  const multiplexerType = resolveMultiplexerType(config.multiplexer);
+  return { configInvalid, compactSidebar, multiplexerType };
 }
 
 export function readConfigInvalid(directory: string): boolean {
@@ -1475,7 +1509,14 @@ async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
 
   const version = (await readPackageVersion()) ?? 'dev';
   let configDirectory = ctx.location?.directory ?? process.cwd();
-  let { configInvalid, compactSidebar } = readConfigState(configDirectory);
+  let { configInvalid, compactSidebar, multiplexerType } =
+    readConfigState(configDirectory);
+
+  // Pane creation lives in the v1 TUI entry only (NFR-6): a multiplexer
+  // configured on a v2 host is ignored. Record that once per process so the
+  // disabled feature is self-explaining instead of silently dropping config.
+  warnV2HostUnsupportedMultiplexer(multiplexerType);
+
   const [snapshot, setSnapshot] = createSignal(
     readTuiSnapshot(configDirectory),
   );
@@ -1490,7 +1531,9 @@ async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
     const directoryChanged = currentDirectory !== configDirectory;
     if (directoryChanged) {
       configDirectory = currentDirectory;
-      ({ configInvalid, compactSidebar } = readConfigState(configDirectory));
+      ({ configInvalid, compactSidebar, multiplexerType } =
+        readConfigState(configDirectory));
+      warnV2HostUnsupportedMultiplexer(multiplexerType);
     }
     nextSnapshot = await hydrateRemoteModels(
       nextSnapshot,
