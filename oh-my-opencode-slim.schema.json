@@ -3571,6 +3571,101 @@
         ],
         "additionalProperties": false
       }
+    },
+    "jev": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Master switch for the Jev dispatch regime. The regime is active ONLY when enabled is true AND `model` is set AND an API key resolves; otherwise the original orchestrator role-routing applies (no jev_route tool, no model inject).",
+          "type": "boolean"
+        },
+        "model": {
+          "default": "",
+          "description": "Jev SystemOne model id (e.g. typesafe/jev). ACTIVATION TOKEN: leave empty to keep the original orchestrator dispatch even if the jev section exists. Set a non-empty model to opt in to the Jev regime.",
+          "type": "string"
+        },
+        "baseUrl": {
+          "default": "https://api.commandcode.ai/provider/v1",
+          "description": "SystemOne HTTP base URL (POST {baseUrl}/systemone). CommandCode proxy by default.",
+          "type": "string",
+          "minLength": 1
+        },
+        "apiKey": {
+          "description": "Bearer token for the SystemOne endpoint. Prefer apiKeyEnv in shared configs.",
+          "type": "string",
+          "minLength": 1
+        },
+        "apiKeyEnv": {
+          "default": "TYPESAFE_API_KEY",
+          "description": "Environment variable that holds the API key when apiKey is not set. Falls back to COMMANDCODE_API_KEY.",
+          "type": "string",
+          "minLength": 1
+        },
+        "timeoutMs": {
+          "default": 2000,
+          "description": "Per-request timeout. Fail-open to prompt routing on timeout.",
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 30000
+        },
+        "acceptConfidence": {
+          "default": 0.75,
+          "description": "Specialist confidence at or above this is applied as-is.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "escalateConfidence": {
+          "default": 0.5,
+          "description": "Below acceptConfidence but at/above this: keep specialist, escalate model tier one step. Below this: ignore Jev.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "maxStateChars": {
+          "default": 4000,
+          "description": "Hard cap on the state string sent to Jev.",
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 32000
+        },
+        "modelLadders": {
+          "description": "Per-agent quality ladder [fast, balanced, max]. Never routes a task-type specialist to another agent's model.",
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "variant": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "additionalProperties": false
     }
   },
   "title": "oh-my-opencode-slim",

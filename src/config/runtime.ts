@@ -44,6 +44,7 @@ import {
   type BackgroundJobsConfig,
   type CompanionConfig,
   type FailoverConfig,
+  type JevConfig,
   MULTIPLEXER_MAIN_PANE_SIZE_DEFAULT,
   type MultiplexerConfig,
   type ResolvedPluginConfig,
@@ -349,6 +350,23 @@ export class RuntimeConfig {
 
   get webfetch(): WebfetchConfig {
     return this.pluginConfig?.webfetch ?? { enabled: true };
+  }
+
+  get jev(): JevConfig {
+    return (
+      this.pluginConfig?.jev ??
+      ({
+        enabled: true,
+        baseUrl: 'https://api.commandcode.ai/provider/v1',
+        // Empty model = Jev regime OFF (original orchestrator dispatch).
+        model: '',
+        apiKeyEnv: 'TYPESAFE_API_KEY',
+        timeoutMs: 2000,
+        acceptConfidence: 0.75,
+        escalateConfidence: 0.5,
+        maxStateChars: 4000,
+      } satisfies JevConfig)
+    );
   }
 
   get acpAgents(): AcpAgentsConfig {

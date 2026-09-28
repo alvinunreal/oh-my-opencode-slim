@@ -743,6 +743,106 @@ export const WebfetchConfigSchema = z
 
 export type WebfetchConfig = z.infer<typeof WebfetchConfigSchema>;
 
+/**
+ * Jev (TypeSafe System One) decision-layer config.
+ *
+ * Jev is NOT a chat/coding LLM. It answers typed questions (Choice/Score/Noul)
+ * so the orchestrator can pick a specialist and a model tier before delegating.
+ */
+export const JevConfigSchema = z
+  .object({
+    enabled: z
+      .boolean()
+      .default(true)
+      .describe(
+        'Master switch for the Jev dispatch regime. The regime is active ONLY when enabled is true AND `model` is set AND an API key resolves; otherwise the original orchestrator role-routing applies (no jev_route tool, no model inject).',
+      ),
+    model: z
+      .string()
+      .default('')
+      .describe(
+        'Jev SystemOne model id (e.g. typesafe/jev). ACTIVATION TOKEN: leave empty to keep the original orchestrator dispatch even if the jev section exists. Set a non-empty model to opt in to the Jev regime.',
+      ),
+    baseUrl: z
+      .string()
+      .min(1)
+      .default('https://api.commandcode.ai/provider/v1')
+      .describe(
+        'SystemOne HTTP base URL (POST {baseUrl}/systemone). CommandCode proxy by default.',
+      ),
+    apiKey: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'Bearer token for the SystemOne endpoint. Prefer apiKeyEnv in shared configs.',
+      ),
+    apiKeyEnv: z
+      .string()
+      .min(1)
+      .default('TYPESAFE_API_KEY')
+      .describe(
+        'Environment variable that holds the API key when apiKey is not set. Falls back to COMMANDCODE_API_KEY.',
+      ),
+    timeoutMs: z
+      .number()
+      .int()
+      .min(200)
+      .max(30_000)
+      .default(2000)
+      .describe('Per-request timeout. Fail-open to prompt routing on timeout.'),
+    acceptConfidence: z
+      .number()
+      .min(0)
+      .max(1)
+      .default(0.75)
+      .describe('Specialist confidence at or above this is applied as-is.'),
+    escalateConfidence: z
+      .number()
+      .min(0)
+      .max(1)
+      .default(0.5)
+      .describe(
+        'Below acceptConfidence but at/above this: keep specialist, escalate model tier one step. Below this: ignore Jev.',
+      ),
+    maxStateChars: z
+      .number()
+      .int()
+      .min(200)
+      .max(32_000)
+      .default(4000)
+      .describe('Hard cap on the state string sent to Jev.'),
+    /**
+     * Optional per-agent model strength ladder. Agents are task-type
+     * specialists; complexity only escalates strength WITHIN the same agent.
+     * Each ladder is ordered fast → balanced → max. When omitted, the
+     * agent's own `model` config is used (multi-entry array = ladder;
+     * single model is used as-is — variants are never invented).
+     */
+    modelLadders: z
+      .record(
+        z.string(),
+        z
+          .array(
+            z.union([
+              z.string(),
+              z.object({
+                id: z.string().min(1),
+                variant: z.string().min(1).optional(),
+              }),
+            ]),
+          )
+          .min(1),
+      )
+      .optional()
+      .describe(
+        'Per-agent quality ladder [fast, balanced, max]. Never routes a task-type specialist to another agent\'s model.',
+      ),
+  })
+  .strict();
+
+export type JevConfig = z.infer<typeof JevConfigSchema>;
+
 export const AcpAgentPermissionModeSchema = z.enum(['ask', 'allow', 'reject']);
 
 export const MAX_ACP_TIMEOUT_MS = 2_147_483_647;
@@ -864,6 +964,7 @@ export const RawPluginConfigSchema = z
     companion: CompanionConfigSchema.optional(),
     webfetch: WebfetchConfigSchema.optional(),
     acpAgents: AcpAgentsConfigSchema.optional(),
+    jev: JevConfigSchema.optional(),
   })
   .superRefine((value, ctx) => {
     if (value.agents) {
