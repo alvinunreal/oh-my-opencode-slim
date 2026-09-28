@@ -75,6 +75,7 @@ import {
   ast_grep_search,
   createAcpRunTool,
   createCancelTaskTool,
+  createJevRouteTool,
   createMarketplaceTools,
   createTaskMessageTool,
   createTaskReplyTool,
@@ -85,6 +86,12 @@ import {
   createWebfetchTool,
   resolveFinalizedOrchestratorIdentities,
 } from './tools';
+import { createJevModelInjectHook } from './hooks/jev-model-inject';
+import {
+  isJevRoutingActive,
+  JevRouter,
+  JevRouteStore,
+} from './routing/jev';
 import { pickAgentModelRef } from './tools/smartfetch/secondary-model';
 import {
   applyActivityEvent,
@@ -395,6 +402,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let waitForUserTools: ReturnType<typeof createWaitForUserTool>;
   let acpRunTools: Record<string, ReturnType<typeof createAcpRunTool>>;
   let webfetch: ReturnType<typeof createWebfetchTool>;
+  let jevActive = false;
+  let jevRouteStore: JevRouteStore;
+  let jevModelInject: ReturnType<typeof createJevModelInjectHook> | undefined;
   let tools: Record<string, ToolDefinition>;
   let rewriteDisplayNameMentions: ReturnType<
     typeof createDisplayNameMentionRewriter
@@ -1117,6 +1127,42 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         backgroundJobCoordinator.hasRunning(sessionID),
     });
 
+    // Jev dispatch regime is opt-in: only when enabled AND a Jev model is
+    // configured AND an API key resolves. Otherwise the original orchestrator
+    // role-routing + default agent models apply (no jev_route, no inject).
+    jevActive =
+      isJevRoutingActive(runtime.jev) &&
+      !runtime.disabledTools.includes('jev_route');
+    jevRouteStore = new JevRouteStore();
+    const jevRouteTools = jevActive
+      ? createJevRouteTool({
+          router: new JevRouter({
+            config: runtime.jev,
+            agents: () => runtime.agents(),
+            disabledAgents: () => runtime.disabledAgents,
+            store: jevRouteStore,
+          }),
+          requireOrchestrator: (agent) => {
+            if (!agent) return true;
+            return (
+              resolveRuntimeAgentName(runtime, agent) === 'orchestrator'
+            );
+          },
+        })
+      : {};
+    jevModelInject = jevActive
+      ? createJevModelInjectHook({
+          store: jevRouteStore,
+          hostFlavor: () => hostFlavor,
+          shouldManageSession: (sessionID) =>
+            sessionMetadata.getAgent(sessionID) === 'orchestrator' ||
+            sessionMetadata.isTaskManaged(sessionID),
+          registerSessionAsOrchestrator: (sessionID) => {
+            sessionMetadata.markTaskManaged(sessionID);
+          },
+        })
+      : undefined;
+
     const shouldRegisterWebfetch = runtime.webfetch.enabled !== false;
     tools = {
       ...taskCancelTools,
@@ -1126,6 +1172,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ...taskReviveTools,
       ...taskStatusTools,
       ...waitForUserTools,
+      ...jevRouteTools,
       ...acpRunTools,
       ...(shouldRegisterWebfetch ? { webfetch } : {}),
       ast_grep_search,
@@ -1830,6 +1877,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     },
 
     'tool.execute.before': async (input, output) => {
+      // Apply Jev-selected model to task/subagent before other task hooks.
+      if (jevModelInject) {
+        await jevModelInject['tool.execute.before'](
+          input as never,
+          output as never,
+        );
+      }
       await applyPatch['tool.execute.before'](input as never, output as never);
       // Rewrite guessed non-existing absolute paths BEFORE the search
       // guard: the guard blocks grep/glob on missing paths, so running
