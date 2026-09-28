@@ -655,6 +655,10 @@ export function mergePluginConfigs(
       base.companion as Record<string, unknown> | undefined,
       override.companion as Record<string, unknown> | undefined,
     ) as RawPluginConfig['companion'],
+    jev: deepMerge(
+      base.jev as Record<string, unknown> | undefined,
+      override.jev as Record<string, unknown> | undefined,
+    ) as RawPluginConfig['jev'],
   };
 }
 

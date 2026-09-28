@@ -21,7 +21,24 @@ export interface JevRouteToolOptions {
   requireOrchestrator?: (agent: string | undefined) => boolean;
 }
 
-function formatResult(result: JevRouteResult): string {
+/**
+ * Task key used for per-lane matching, shared with the dispatch hook.
+ * Same normalization must stay in hooks/jev-model-inject.ts.
+ */
+export function taskKeyFromArgs(
+  taskSummary: string,
+  constraints?: string,
+): string {
+  const parts = [taskSummary.trim()];
+  if (constraints?.trim()) parts.push(`Constraints: ${constraints.trim()}`);
+  return parts
+    .join('\n')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 256);
+}
+
+function formatResult(result: JevRouteResult, taskKey: string): string {
   const lines: string[] = [
     `status: ${result.status}`,
     `recommendation: ${result.recommendation}`,
@@ -40,6 +57,7 @@ function formatResult(result: JevRouteResult): string {
   }
   if (result.risk !== undefined) lines.push(`risk: ${result.risk}`);
   if (result.error) lines.push(`error: ${result.error}`);
+  lines.push(`task_key: ${taskKey}`);
   if (result.probabilities && Object.keys(result.probabilities).length > 0) {
     const top = Object.entries(result.probabilities)
       .sort((a, b) => b[1] - a[1])
@@ -50,7 +68,7 @@ function formatResult(result: JevRouteResult): string {
   }
   lines.push(
     '',
-    'If status is ok: prefer this specialist and use model/variant on the delegation when set.',
+    'If status is ok: prefer this specialist, keep this task_key in the delegation prompt, and apply the model (the dispatch hook enforces it).',
     'If status is low_confidence or error: keep the role-routing rules as authoritative.',
   );
   return lines.join('\n');
@@ -102,12 +120,14 @@ export function createJevRouteTool(
         | undefined;
 
       const sessionID = toolContext?.sessionID;
+      const taskKey = taskKeyFromArgs(args.task_summary, args.constraints);
       const result = await options.router.route({
         state,
         ...(sessionID ? { sessionID } : {}),
+        taskKey,
         ...(allowed && allowed.length > 0 ? { allowedSpecialists: allowed } : {}),
       });
-      return formatResult(result);
+      return formatResult(result, taskKey);
     },
   });
 

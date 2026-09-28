@@ -116,9 +116,17 @@ export function createJevModelInjectHook(deps: JevModelInjectDeps) {
         // Skip resume paths: model is already bound to the existing session.
         if (typeof args.task_id === 'string' && args.task_id.trim()) return;
 
-        const result = deps.store.getForSpecialist(sessionID, agent, {
+        const prompt =
+          typeof args.prompt === 'string'
+            ? args.prompt
+            : typeof args.description === 'string'
+              ? args.description
+              : '';
+        if (!prompt.trim()) return;
+        const found = deps.store.findForPrompt(sessionID, agent, prompt, {
           requireOk: true,
         });
+        const result = found?.result;
         if (!result?.model?.id) return;
 
         const modelId = toDelegationModelArg(result.model);
@@ -137,6 +145,9 @@ export function createJevModelInjectHook(deps: JevModelInjectDeps) {
           variant: result.model.variant,
           tier: result.modelTier,
         });
+        // Consume once: parallel lanes keep their own task keys; a consumed
+        // entry cannot leak into later, unrelated dispatches.
+        if (found?.key) deps.store.consumeKey(found.key);
       } catch (err) {
         // Never block dispatch on injection failure.
         log('[jev-model-inject] skipped after error', String(err));

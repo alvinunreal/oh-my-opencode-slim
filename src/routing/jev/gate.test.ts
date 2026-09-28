@@ -49,9 +49,9 @@ describe('isJevRoutingActive', () => {
 });
 
 describe('JevRouteStore', () => {
-  test('records and matches specialist', () => {
+  test('records per-task keys so parallel lanes do not clobber', () => {
     const store = new JevRouteStore();
-    store.record('ses_1', {
+    store.record('ses_1', 'fix bugs', {
       status: 'ok',
       specialist: 'fixer',
       confidence: 0.9,
@@ -59,24 +59,92 @@ describe('JevRouteStore', () => {
       model: { id: 'cmd/strong' },
       recommendation: 'x',
     });
-    expect(store.getForSpecialist('ses_1', 'fixer')?.model?.id).toBe(
-      'cmd/strong',
-    );
-    expect(store.getForSpecialist('ses_1', 'oracle')).toBeUndefined();
+    store.record('ses_1', 'read docs', {
+      status: 'ok',
+      specialist: 'librarian',
+      confidence: 0.9,
+      modelTier: 'fast',
+      model: { id: 'cmd/fast' },
+      recommendation: 'x',
+    });
+    expect(
+      store.getForSpecialist('ses_1', 'fixer', {
+        requireOk: true,
+        taskKey: 'fix bugs',
+      })?.model?.id,
+    ).toBe('cmd/strong');
+    expect(
+      store.getForSpecialist('ses_1', 'librarian', {
+        requireOk: true,
+        taskKey: 'read docs',
+      })?.model?.id,
+    ).toBe('cmd/fast');
   });
 
   test('ignores error status', () => {
     const store = new JevRouteStore();
-    store.record('ses_1', {
+    store.record('ses_1', 'task', {
       status: 'error',
       specialist: 'fixer',
       recommendation: 'x',
     });
-    expect(store.getForSpecialist('ses_1', 'fixer')).toBeUndefined();
+    expect(
+      store.getForSpecialist('ses_1', 'fixer', {
+        requireOk: true,
+        taskKey: 'task',
+      }),
+    ).toBeUndefined();
+  });
+
+  test('clear(sessionID) drops only that session', () => {
+    const store = new JevRouteStore();
+    store.record('ses_1', 'a', {
+      status: 'low_confidence',
+      specialist: 'fixer',
+      recommendation: 'x',
+    });
+    store.record('ses_2', 'b', {
+      status: 'ok',
+      specialist: 'fixer',
+      recommendation: 'x',
+    });
+    store.clear('ses_1');
+    expect(
+      store.getForSpecialist('ses_1', 'fixer', { taskKey: 'a' }),
+    ).toBeUndefined();
   });
 });
 
 describe('JevRouter.session cache', () => {
+  test('failed route clears earlier decisions', async () => {
+    const store = new JevRouteStore();
+    store.record('ses_fail', 'old task', {
+      status: 'ok',
+      specialist: 'fixer',
+      confidence: 0.9,
+      modelTier: 'max',
+      model: { id: 'cmd/stale' },
+      recommendation: 'x',
+    });
+    const router = new JevRouter({
+      config: { ...base, apiKey: undefined, apiKeyEnv: 'NO_SUCH_KEY' },
+      agents: () => ({}),
+      store,
+      env: {},
+    });
+    const result = await router.route({
+      state: 'new task',
+      sessionID: 'ses_fail',
+      taskKey: 'new task',
+    });
+    expect(result.status).toBe('error');
+    expect(
+      store.getForSpecialist('ses_fail', 'fixer', {
+        taskKey: 'old task',
+      }),
+    ).toBeUndefined();
+  });
+
   test('route() records into store', async () => {
     const store = new JevRouteStore();
     const router = new JevRouter({
@@ -114,7 +182,16 @@ describe('JevRouter.session cache', () => {
           { status: 200 },
         )) as typeof fetch,
     });
-    await router.route({ state: 'do the thing', sessionID: 'ses_abc' });
-    expect(store.getForSpecialist('ses_abc', 'fixer')?.status).toBe('ok');
+    await router.route({
+      state: 'do the thing',
+      sessionID: 'ses_abc',
+      taskKey: 'do the thing',
+    });
+    expect(
+      store.getForSpecialist('ses_abc', 'fixer', {
+        requireOk: true,
+        taskKey: 'do the thing',
+      })?.status,
+    ).toBe('ok');
   });
 });

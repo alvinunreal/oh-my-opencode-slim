@@ -40,6 +40,8 @@ export type JevRouterOptions = {
   env?: NodeJS.ProcessEnv;
   /** Shared cache so the dispatch hook can apply the selected model. */
   store?: JevRouteStore;
+  /** Test seam: override time provider for TTL. */
+  now?: () => number;
 };
 
 const ALL_SPECIALISTS: JevSpecialist[] = [
@@ -73,7 +75,7 @@ export class JevRouter {
     this.disabledAgents = options.disabledAgents;
     this.fetchImpl = options.fetchImpl;
     this.env = options.env;
-    this.store = options.store ?? new JevRouteStore();
+    this.store = options.store ?? new JevRouteStore(options.now ? { now: options.now } : undefined);
   }
 
   private allowedSpecialists(): JevSpecialist[] {
@@ -85,18 +87,29 @@ export class JevRouter {
   }
 
   async route(input: JevRouteInput): Promise<JevRouteResult> {
+    const sessionID = input.sessionID ?? '';
+    const failed = (reason: string, error: string): JevRouteResult => {
+      const result: JevRouteResult = {
+        status: 'error',
+        recommendation: reason,
+        error,
+      };
+      // Invalidate any earlier decision: the orchestrator was told to fall
+      // back to default models, so a stale entry must not inject the old one.
+      this.store.clear(sessionID);
+      return result;
+    };
+
     const apiKey = resolveJevApiKey({
       apiKey: this.config.apiKey,
       apiKeyEnv: this.config.apiKeyEnv,
       env: this.env,
     });
     if (!apiKey) {
-      return {
-        status: 'error',
-        recommendation:
-          'Jev API key missing (set jev.apiKey or TYPESAFE_API_KEY). Use prompt-based role routing.',
-        error: 'missing_api_key',
-      };
+      return failed(
+        'Jev API key missing (set jev.apiKey or TYPESAFE_API_KEY). Use prompt-based role routing.',
+        'missing_api_key',
+      );
     }
 
     const allowed =
@@ -105,6 +118,8 @@ export class JevRouter {
       ) ?? this.allowedSpecialists();
 
     const state = input.state.slice(0, this.config.maxStateChars);
+    const taskKey =
+      input.taskKey ?? state.slice(0, 256);
     const questions = buildRouteQuestions({ allowedSpecialists: allowed });
 
     try {
@@ -129,20 +144,16 @@ export class JevRouter {
         { state, allowedSpecialists: allowed },
         policyOptions,
       );
-      // Cache so the dispatch hook can force the selected model.
-      this.store.record(
-        (input as JevRouteInput & { sessionID?: string }).sessionID ?? '',
-        result,
-      );
+      // Cache per task so parallel lanes keep their own decision and a
+      // later failure clears rather than preserves a stale model.
+      this.store.record(sessionID, taskKey, result);
       return result;
     } catch (err) {
-      return {
-        status: 'error',
-        recommendation:
-          'Jev call failed; use prompt-based role routing. ' +
+      return failed(
+        'Jev call failed; use prompt-based role routing. ' +
           (err instanceof Error ? err.message : String(err)),
-        error: err instanceof Error ? err.message : String(err),
-      };
+        err instanceof Error ? err.message : String(err),
+      );
     }
   }
 }

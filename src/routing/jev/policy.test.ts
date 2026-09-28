@@ -12,11 +12,12 @@ import type { JevSystemOneResponse } from './types';
 const agents = {
   explorer: { model: 'cmd/fast-model' },
   librarian: { model: [{ id: 'cmd/fast-model' }] },
+  // Multi-entry model arrays are failover chains (preferred head first),
+  // not strength ladders — they resolve to the head at every tier.
   fixer: {
     model: [
-      { id: 'cmd/fixer-light', variant: 'low' },
-      { id: 'cmd/fixer-mid' },
-      { id: 'cmd/fixer-strong', variant: 'max' },
+      { id: 'cmd/fixer-preferred' },
+      { id: 'cmd/fixer-fallback', variant: 'low' },
     ],
   },
   designer: { model: { id: 'cmd/ui-model', variant: 'high' } },
@@ -75,13 +76,9 @@ describe('toModelEntries', () => {
 });
 
 describe('resolveAgentModelLadder', () => {
-  test('uses the specialist own model array as a strength ladder', () => {
+  test('failover chains keep only the preferred head', () => {
     const ladder = resolveAgentModelLadder('fixer', agents);
-    expect(ladder.map((m) => m.id)).toEqual([
-      'cmd/fixer-light',
-      'cmd/fixer-mid',
-      'cmd/fixer-strong',
-    ]);
+    expect(ladder.map((m) => m.id)).toEqual(['cmd/fixer-preferred']);
   });
 
   test('never pulls another agent model into the ladder', () => {
@@ -98,14 +95,29 @@ describe('resolveAgentModelLadder', () => {
 });
 
 describe('resolveModelForRoute', () => {
-  test('same specialist, stronger model at higher tier', () => {
-    expect(resolveModelForRoute('fixer', 'fast', agents)?.id).toBe(
+  test('failover chain keeps the preferred head at every tier', () => {
+    for (const tier of ['fast', 'balanced', 'max'] as const) {
+      expect(resolveModelForRoute('fixer', tier, agents)?.id).toBe(
+        'cmd/fixer-preferred',
+      );
+    }
+  });
+
+  test('explicit ladders step strength fast→max on the same agent', () => {
+    const ladders = {
+      fixer: [
+        { id: 'cmd/fixer-light' },
+        { id: 'cmd/fixer-mid' },
+        { id: 'cmd/fixer-strong' },
+      ],
+    };
+    expect(resolveModelForRoute('fixer', 'fast', agents, ladders)?.id).toBe(
       'cmd/fixer-light',
     );
-    expect(resolveModelForRoute('fixer', 'balanced', agents)?.id).toBe(
-      'cmd/fixer-mid',
-    );
-    expect(resolveModelForRoute('fixer', 'max', agents)?.id).toBe(
+    expect(
+      resolveModelForRoute('fixer', 'balanced', agents, ladders)?.id,
+    ).toBe('cmd/fixer-mid');
+    expect(resolveModelForRoute('fixer', 'max', agents, ladders)?.id).toBe(
       'cmd/fixer-strong',
     );
   });
@@ -137,7 +149,7 @@ describe('escalateTier', () => {
 });
 
 describe('applyRoutePolicy', () => {
-  test('high complexity keeps specialist and raises model strength', () => {
+  test('high complexity keeps specialist and preferred failover head', () => {
     const result = applyRoutePolicy(
       {
         model: 'j',
@@ -168,12 +180,19 @@ describe('applyRoutePolicy', () => {
       policyOpts,
     );
     expect(result.status).toBe('ok');
-    expect(result.specialist).toBe('fixer'); // NOT oracle
+    expect(result.specialist).toBe('fixer'); // NOT oracle, NOT fallback
     expect(result.modelTier).toBe('max');
-    expect(result.model?.id).toBe('cmd/fixer-strong'); // stronger fixer model
+    expect(result.model?.id).toBe('cmd/fixer-preferred');
   });
 
-  test('low complexity uses head of the same ladder', () => {
+  test('explicit ladder escalates strength on the same agent', () => {
+    const ladders = {
+      fixer: [
+        { id: 'cmd/fixer-light' },
+        { id: 'cmd/fixer-mid' },
+        { id: 'cmd/fixer-strong' },
+      ],
+    };
     const result = applyRoutePolicy(
       {
         model: 'j',
@@ -186,14 +205,14 @@ describe('applyRoutePolicy', () => {
           },
           complexity: {
             type: 'score',
-            score: 0.1,
+            score: 1.9,
             legend: {},
             probabilities: {},
             confidence: 0.9,
           },
           risk: {
             type: 'score',
-            score: 0.1,
+            score: 1.9,
             legend: {},
             probabilities: {},
             confidence: 0.9,
@@ -201,11 +220,11 @@ describe('applyRoutePolicy', () => {
         },
       },
       { state: 'x' },
-      policyOpts,
+      { ...policyOpts, modelLadders: ladders },
     );
     expect(result.specialist).toBe('fixer');
-    expect(result.modelTier).toBe('fast');
-    expect(result.model?.id).toBe('cmd/fixer-light');
+    expect(result.modelTier).toBe('max');
+    expect(result.model?.id).toBe('cmd/fixer-strong');
   });
 
   test('medium confidence escalates strength only', () => {
@@ -285,7 +304,7 @@ describe('applyRoutePolicy', () => {
     expect(result.model?.id).toBe('cmd/ui-model');
   });
 
-  test('low_confidence still resolves model for the same specialist', () => {
+  test('low_confidence resolves the preferred head for the same specialist', () => {
     const result = applyRoutePolicy(
       {
         model: 'j',
@@ -317,7 +336,7 @@ describe('applyRoutePolicy', () => {
     );
     expect(result.status).toBe('low_confidence');
     expect(result.specialist).toBe('fixer');
-    expect(result.model?.id).toBe('cmd/fixer-strong');
+    expect(result.model?.id).toBe('cmd/fixer-preferred');
     expect(result.modelTier).toBe('max');
   });
 

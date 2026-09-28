@@ -53,11 +53,13 @@ export function agentNameForSpecialist(specialist: JevSpecialist): string {
  *
  * Priority:
  * 1. `jev.modelLadders[agent]` — explicit [fast, balanced, max] list
- * 2. The agent's own `model` array — treated as a strength ladder
- * 3. The agent's single model — same id across tiers, variant escalates
+ * 2. The agent's own single model — SAME model at every tier
  *
- * Never mixes in another agent's model: complexity escalates strength
- * within the same specialist, it does not re-route the task.
+ * A `model: [...]` array is an ordered FAILOVER chain (preferred head,
+ * fallbacks after), never a quality ladder; it is NOT stepped through by
+ * complexity. Selecting max must never promote a fallback above the
+ * preferred head — the agent keeps its primary model at every tier unless
+ * an explicit strength ladder names another entry.
  */
 export function resolveAgentModelLadder(
   specialist: JevSpecialist,
@@ -68,17 +70,19 @@ export function resolveAgentModelLadder(
   const fromLadders = modelLadders?.[agentName];
   if (fromLadders && fromLadders.length > 0) return fromLadders;
 
+  // Failover chains stay intact: only the head (preferred model) is used.
   const own = toModelEntries(agents[agentName]?.model);
-  return own;
+  return own.slice(0, 1);
 }
 
 /**
  * Pick the model for a specialist at a given strength tier.
- * Always stays on that specialist's own ladder — never another agent's model.
+ * Always stays on that specialist's own ladder — never another agent's model,
+ * and never a failover entry from its own chain.
  *
- * Single-model agents return that model unchanged (no invented variants).
- * Strength only varies when the agent has a multi-entry ladder
- * (`model: [...]` or `jev.modelLadders`).
+ * Without an explicit `jev.modelLadders[agent]` ladder, the agent uses its
+ * primary (failover head) model at every tier. Multi-entry ladders index
+ * fast → head, max → tail, balanced → middle.
  */
 export function resolveModelForRoute(
   specialist: JevSpecialist,
@@ -88,12 +92,8 @@ export function resolveModelForRoute(
 ): ModelEntry | undefined {
   const ladder = resolveAgentModelLadder(specialist, agents, modelLadders);
   if (ladder.length === 0) return undefined;
-
-  // Single entry: keep as configured. Do not invent variant names the
-  // provider may not expose (e.g. low/max on a model with no variants).
   if (ladder.length === 1) return ladder[0];
 
-  // Multi-entry ladder: fast → head, max → tail, balanced → middle.
   const idx =
     tier === 'fast'
       ? 0
@@ -190,11 +190,12 @@ export function applyRoutePolicy(
     ? rawSpecialist
     : undefined;
 
-  const isUnassigned =
-    !specialist || specialist === 'direct';
-  const isSoftChoice = confidence < options.acceptConfidence;
+  // Visual/external signals only fill an unassigned lane. Any confident
+  // choice — including a soft but real specialist pick — stands: a fixer
+  // task with a screenshot stays on fixer.
+  const isUnassigned = !specialist || specialist === 'direct';
 
-  if (isUnassigned || isSoftChoice) {
+  if (isUnassigned) {
     if (needsVisual && needsVisual.noul >= 0.7) {
       const visualTarget = (
         !allowed || allowed.includes('designer')
@@ -207,8 +208,7 @@ export function applyRoutePolicy(
     } else if (
       needsExternal &&
       needsExternal.noul >= 0.7 &&
-      (!allowed || allowed.includes('librarian')) &&
-      isUnassigned
+      (!allowed || allowed.includes('librarian'))
     ) {
       specialist = 'librarian';
     }

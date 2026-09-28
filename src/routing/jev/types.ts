@@ -80,6 +80,8 @@ export type JevRouteInput = {
   allowedSpecialists?: readonly JevSpecialist[];
   /** Optional session id — used to cache the decision for dispatch inject. */
   sessionID?: string;
+  /** Optional per-task key so parallel lanes keep independent decisions. */
+  taskKey?: string;
 };
 
 export type JevRouteStatus = 'ok' | 'low_confidence' | 'error';
