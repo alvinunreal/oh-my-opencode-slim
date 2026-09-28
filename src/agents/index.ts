@@ -11,6 +11,7 @@ import {
 } from '../config';
 import { getAgentMcpList } from '../config/agent-mcps';
 import type { RuntimeConfig } from '../config/runtime';
+import { isJevRoutingActive } from '../routing/jev';
 import { escapeRegExp, normalizeAgentName } from '../utils/agent-variant';
 import { delegationVocabulary } from '../v2/adapters';
 
@@ -713,6 +714,9 @@ export function createAgents(
     !runtime.disabledTools.includes('wait_for_user'),
     runtime.backgroundJobs.orchestratorWake.enabled,
     options?.hostFlavor,
+    // Jev regime only when the gate passes (enabled + model + key).
+    isJevRoutingActive(runtime.jev) &&
+      !runtime.disabledTools.includes('jev_route'),
   );
 
   const inlineOrchestratorPrompt = orchestratorOverride?.prompt;

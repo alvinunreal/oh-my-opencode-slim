@@ -52,6 +52,7 @@ const PARALLEL_DELEGATION_EXAMPLES = [
  * @param waitForUserEnabled - Whether explicit text-only HITL waiting is available
  * @param wakeSchedulerEnabled - Whether the orchestrator wake scheduler can resume the session after idle
  * @param hostFlavor - Host flavor marker ('v2' on OpenCode v2 hosts); selects the native delegation vocabulary
+ * @param jevRoutingEnabled - Whether the jev_route decision tool is registered
  * @returns The complete orchestrator prompt string
  */
 export function buildOrchestratorPrompt(
@@ -60,6 +61,7 @@ export function buildOrchestratorPrompt(
   waitForUserEnabled = true,
   wakeSchedulerEnabled = true,
   hostFlavor?: string,
+  jevRoutingEnabled = false,
 ): string {
   // Native delegation vocabulary: `subagent(...)` with `agent` on v2 hosts,
   // `task(...)` with `subagent_type` on v1. Construction-time constant per
@@ -84,6 +86,10 @@ export function buildOrchestratorPrompt(
   const externalManualWaitInstruction = waitForUserEnabled
     ? '- When work must pause while the user completes an external manual operation, first give the user concrete manual steps, then call `wait_for_user` as your final tool action and end the turn. Do not rely on ordinary text alone to mark this waiting state, and do not call more tools after `wait_for_user`. Background tasks are not external manual work — never use `wait_for_user` to await them; the system resumes automatically via the Background Job Board and orchestrator wake scheduler.'
     : '- When work must pause while the user completes an external manual operation, first give the user concrete manual steps, then use the `question` tool as the blocking boundary and ask them to respond when finished. `wait_for_user` is disabled, so do not reference or call it.';
+
+  const jevRoutingInstruction = jevRoutingEnabled
+    ? `\n**Jev model routing (\`jev_route\`):**\n- Before non-trivial delegation, call \`jev_route\` once with a compact task summary (intent + constraints + paths). Do not paste whole files.\n- On \`status: ok\`, prefer its \`specialist\` and pass its \`model\`/\`variant\` on the delegation when set.\n- On \`status: low_confidence\`, treat role-routing rules as authoritative; you may still use the suggested specialist as a hint.\n- On \`status: error\`, ignore Jev and use the role-routing rules and each agent's default model.\n- Do not invent model IDs. Use a jev_route model or look models up first.\n`
+    : '';
 
   return `<Role>
 You are a workflow manager for coding work. Your job is to plan, schedule, delegate, monitor, reconcile, and verify specialist-agent work. You are not the default implementation worker.
@@ -120,7 +126,7 @@ Review available agents and lane rules. Before beginning non-trivial work, ident
 - For multi-step implementation, broad discovery, external research, or complex debugging, delegate to the suitable specialist.
 - If two or more parts can proceed independently, dispatch them in parallel before starting dependent work.
 - Do not delegate merely because an agent exists. Do not keep substantive work entirely in the orchestrator merely because each individual step seems easy.
-
+${jevRoutingInstruction}
 **Dispatch efficiency:**
 - Reference paths/lines, don't paste files (\`src/app.ts:42\` not full contents)
 - Brief user on delegation goal before each call
@@ -159,7 +165,7 @@ Balance: respect dependencies, avoid parallelizing what must be sequential, and 
 - Use \`task_revive\` for the cancel-and-resume operation when the same retained child session should continue with a new prompt, including \`stopped\` sessions that ended without a native terminal result. It may cancel the current generation and then start a new generation in that existing session; do not use it as a status check or claim that the new prompt was seen until the child produces a result.
 - Prefer \`${vocab.tool}(..., background: true)\` for delegated work that can run independently.${
     vocab.modelParam
-      ? ` The ${vocab.tool} tool also accepts an optional \`${vocab.modelParam}\` argument ("providerID/modelID"). Only set it when the user explicitly asks for a specific model or variant; never guess the ID — look it up with the models tool first, filtering to your own provider.`
+      ? ` The ${vocab.tool} tool also accepts an optional \`${vocab.modelParam}\` argument ("providerID/modelID"). Set it when the user explicitly asks for a specific model/variant, or when \`jev_route\` returns a concrete \`model\` for this lane${jevRoutingEnabled ? '' : ' (jev_route currently disabled)'}. Never invent an ID — use a jev_route recommendation or look it up with the models tool first, filtering to your own provider.`
       : ''
   }
 - For work already chosen for delegation, launch independent specialist lanes in the background so the orchestrator stays unblocked and can reconcile results when they return.
@@ -258,6 +264,7 @@ export function createOrchestratorAgent(
   waitForUserEnabled = true,
   wakeSchedulerEnabled = true,
   hostFlavor?: string,
+  jevRoutingEnabled = false,
 ): AgentDefinition {
   const basePrompt = buildOrchestratorPrompt(
     disabledAgents,
@@ -265,6 +272,7 @@ export function createOrchestratorAgent(
     waitForUserEnabled,
     wakeSchedulerEnabled,
     hostFlavor,
+    jevRoutingEnabled,
   );
   const prompt = resolvePrompt(
     'orchestrator',
