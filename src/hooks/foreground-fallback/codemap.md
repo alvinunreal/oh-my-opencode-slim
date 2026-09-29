@@ -22,9 +22,9 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
   - `inProgress`: Process-global Set of sessions with active fallback in flight, shared via `globalThis` + `Symbol.for`
   - `lastTrigger` + turn/model/incident identity: coalesces repeated
     observations of the same failure while allowing distinct failures on the
-    same turn and model to advance the chain; a one-shot exact error-payload,
-    model, and turn match correlates an unkeyed `session.error` to its
-    subsequent errored `message.updated`
+    same turn and model to advance the chain; a bounded one-shot exact
+    error-payload, model, and turn match correlates an id-less `session.error`
+    with its adjacent errored `message.updated` in either event order
   - `turnEpoch`: fences fallback work suspended across promotion, abort,
     backoff, transcript reads, and busy-session retry from acting on a newer
     external user turn; each replay reserves and registers its host-valid
@@ -80,8 +80,8 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 - `freshTurnResetHandler` runs on a confirmed new `user` turn (the SDK `UserMessage` nests the model under `info.model`; assistant messages keep it top-level): it cancels a pending initial-delay trigger and clears the budget, retry episode, `sessionTried`, dedup anchors and `lastFallbackTime`, retains `pendingReplay` (so a late replay notification is still recognised), and bumps `turnEpoch`. Identity is decided BEFORE any state write: `handleUserTurn` treats a message as internal when its id is retained (`replayMessageIds`), matches the pending baseline, or — after ALWAYS probing the transcript via `probeReplayMessageIdentity` — shows the internal-initiator marker; a message present in the transcript WITHOUT the marker is a real turn even while a replay is in flight, and an unpersisted (`unknown`) message is treated as internal while a replay is in flight OR a usable `pendingReplay` record is retained (never shortcut to external merely because nothing is in flight). An in-flight replay whose `turnEpoch` advanced skips its model/switch claim and its switched-log/toast, so a superseded replay cannot write back into the newer turn. Turn handling is versioned (`userTurnSeq`/`userTurnLatest`): the newest confirmed-external handler wins, so a probe resolving out of order is dropped rather than rolling back a newer turn. Un-sealing the stage-2 terminal guard additionally requires the turn to return to `chain[0]`.
 
 ### Deduplication (identity-based)
-- No error-text + time-window heuristic: identical text can be the next real failure.
-- `message.updated` dedupes by message id; `session.status` dedupes by `retryEpisode` (model + episode id + `seen` attempts, so repeated/out-of-order attempts dedupe but an incremented attempt is processed); terminal events with **no** correlatable id are never deduped.
+- No error-text-only time-window heuristic: identical text can be the next real failure. The one-shot cross-event bridge requires an exact payload, current model, current turn, and short time-window match.
+- `message.updated` dedupes by message id; `session.status` dedupes by `retryEpisode` (model + episode id + `seen` attempts, so repeated/out-of-order attempts dedupe but an incremented attempt is processed). An id-less terminal event is otherwise unique; only an exact one-shot match to its paired error event reuses that incident.
 - Dedup and the `inProgress` guard run **before** budget consumption, so a duplicate or concurrently-dropped event cannot burn a budget slot.
 
 ## Flow

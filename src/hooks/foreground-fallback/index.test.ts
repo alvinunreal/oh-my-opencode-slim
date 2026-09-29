@@ -3132,6 +3132,12 @@ describe('ForegroundFallbackManager message.updated', () => {
     } as any);
     const sessionID = 'sess-content-filter-finish';
     const messageID = 'assistant-content-filter';
+    const contentFilterError = {
+      name: 'ContentFilterError',
+      data: {
+        message: "The response was blocked by the provider's content filter",
+      },
+    };
 
     await mgr.handleEvent({
       type: 'message.updated',
@@ -3144,7 +3150,21 @@ describe('ForegroundFallbackManager message.updated', () => {
           modelID: 'claude-opus-4-5',
           role: 'assistant',
           finish: 'content-filter',
-          error: { message: 'filtered output' },
+          time: { created: 1, completed: 2 },
+        },
+      },
+    });
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: messageID,
+          sessionID,
+          agent: 'orchestrator',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+          role: 'assistant',
+          error: contentFilterError,
           time: { created: 1, completed: 2 },
         },
       },
@@ -3153,18 +3173,12 @@ describe('ForegroundFallbackManager message.updated', () => {
       type: 'session.error',
       properties: {
         sessionID,
-        info: { id: messageID },
-        error: {
-          name: 'ContentFilterError',
-          data: {
-            message:
-              "The response was blocked by the provider's content filter",
-          },
-        },
+        error: contentFilterError,
       },
     });
 
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect((mgr as any).sessionModel.get(sessionID)).toBe('openai/gpt-4o');
   });
 });
 

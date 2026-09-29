@@ -671,9 +671,19 @@ export class ForegroundFallbackManager {
     ) {
       return pending.incidentID;
     }
-    return messageID
+    const incidentID = messageID
       ? `message:${messageID}`
       : `message-error:${++this.incidentSequence}`;
+    if (messageID) {
+      this.pendingErrorCorrelation.set(sessionID, {
+        incidentID,
+        turn: this.turnEpoch.get(sessionID) ?? 0,
+        model: this.sessionModel.get(sessionID),
+        fingerprint: stringifyError(error),
+        time: Date.now(),
+      });
+    }
+    return incidentID;
   }
 
   private incidentForSessionError(
@@ -682,6 +692,17 @@ export class ForegroundFallbackManager {
     error: unknown,
   ): string {
     if (messageID) return `message:${messageID}`;
+    const pending = this.pendingErrorCorrelation.get(sessionID);
+    this.pendingErrorCorrelation.delete(sessionID);
+    if (
+      pending &&
+      pending.turn === (this.turnEpoch.get(sessionID) ?? 0) &&
+      pending.model === this.sessionModel.get(sessionID) &&
+      pending.fingerprint === stringifyError(error) &&
+      Date.now() - pending.time < DEDUP_WINDOW_MS
+    ) {
+      return pending.incidentID;
+    }
     const incidentID = `session-error:${++this.incidentSequence}`;
     this.pendingErrorCorrelation.set(sessionID, {
       incidentID,
@@ -951,8 +972,16 @@ export class ForegroundFallbackManager {
           this.registerSessionAgent(sessionID, info.agent);
         }
         // Track the model currently serving this session
+        const messageID = typeof info.id === 'string' ? info.id : undefined;
+        const priorMessageIncident = messageID
+          ? this.triggerIncidents.get(sessionID)?.get(`message:${messageID}`)
+          : undefined;
+        const recentlyHandledMessage =
+          priorMessageIncident?.turn === (this.turnEpoch.get(sessionID) ?? 0) &&
+          Date.now() - priorMessageIncident.time < DEDUP_WINDOW_MS;
         if (
           info.role !== 'user' &&
+          !recentlyHandledMessage &&
           typeof info.providerID === 'string' &&
           typeof info.modelID === 'string'
         ) {
@@ -986,7 +1015,7 @@ export class ForegroundFallbackManager {
         if (messageError && isFailoverError(messageError)) {
           const incidentID = this.incidentForMessageError(
             sessionID,
-            typeof info.id === 'string' ? info.id : undefined,
+            messageID,
             messageError,
           );
           if (this.bypassInitialFallbackDelay(sessionID, messageError)) {
