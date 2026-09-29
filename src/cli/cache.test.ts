@@ -222,18 +222,23 @@ describe('warmOpenCodePluginCache', () => {
     const { warmOpenCodePluginCache } = await importFreshConfigIo();
     const result = await warmOpenCodePluginCache();
 
+    const expectedCacheDir = join(
+      cacheHome,
+      'opencode',
+      'packages',
+      'oh-my-opencode-slim@latest',
+    );
+
     expect(result).toEqual({
       success: false,
-      configPath: join(
-        cacheHome,
-        'opencode',
-        'packages',
-        'oh-my-opencode-slim@latest',
-      ),
+      configPath: expectedCacheDir,
       error:
         'No bun or npm found on PATH; install either to enable OpenCode plugin cache warm-up.',
     });
     expect(crossSpawnMock).not.toHaveBeenCalled();
+    // The live cached plugin must survive when no manager exists: neither the
+    // cache dir nor the manifest may be created/rewritten.
+    expect(existsSync(expectedCacheDir)).toBe(false);
 
     rmSync(tmpDir, { recursive: true, force: true });
   });

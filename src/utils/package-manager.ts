@@ -1,4 +1,4 @@
-import { existsSync, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import * as path from 'node:path';
 import { resolveWindowsCommand } from './compat';
 
@@ -30,30 +30,53 @@ export function resolveRuntimeBun(execPath: string): ResolvedPackageManager {
   return null;
 }
 
-function isRegularFile(candidate: string): boolean {
+/**
+ * True for a regular file the current user may execute. `statSync` follows
+ * symlinks, matching how the shell resolves PATH entries (e.g. a symlink to
+ * a real binary counts, while a bare non-executable shim does not).
+ */
+function isExecutableFile(candidate: string): boolean {
   try {
-    return existsSync(candidate) && statSync(candidate).isFile();
+    const stat = statSync(candidate);
+    return stat.isFile() && (stat.mode & 0o100) !== 0;
   } catch {
     return false;
   }
 }
 
 /**
+ * Windows half of the PATH probe, extracted so the cmd.exe/PATHEXT
+ * semantics can be exercised on any OS. Delegates to the cmd.exe-aware
+ * resolver from `./compat`; a command is "on PATH" when any PATHEXT
+ * candidate exists in a PATH directory.
+ */
+export function isOnPathWindows(
+  command: string,
+  pathEnv: string,
+  pathExtEnv?: string,
+): boolean {
+  return resolveWindowsCommand(command, pathEnv, pathExtEnv) !== undefined;
+}
+
+/**
  * Probes PATH for a bare command. On Windows this reuses the cmd.exe-aware
  * resolver from `./compat`; elsewhere it walks PATH and looks for a regular
- * file. Only a boolean is reported — callers spawn the bare name and let the
- * platform resolve it through PATH.
+ * file with the user-execute bit set (matching execvp, which rejects
+ * non-executable PATH entries). Only a boolean is reported — callers spawn
+ * the bare name and let the platform resolve it through PATH.
  */
-function isOnPath(command: string): boolean {
-  const pathEnv = process.env.PATH ?? '';
+function isOnPath(
+  command: string,
+  pathEnv: string = process.env.PATH ?? '',
+): boolean {
   if (process.platform === 'win32') {
-    return resolveWindowsCommand(command, pathEnv) !== undefined;
+    return isOnPathWindows(command, pathEnv);
   }
   if (!pathEnv) return false;
 
   for (const dir of pathEnv.split(path.delimiter)) {
     if (!dir) continue;
-    if (isRegularFile(path.join(dir, command))) return true;
+    if (isExecutableFile(path.join(dir, command))) return true;
   }
   return false;
 }
@@ -70,7 +93,9 @@ export function resolvePackageManager(
   const runtimeBun = resolveRuntimeBun(execPath);
   if (runtimeBun) return runtimeBun;
 
-  if (isOnPath('bun')) return { packageManager: 'bun', command: 'bun' };
-  if (isOnPath('npm')) return { packageManager: 'npm', command: 'npm' };
+  if (isOnPath('bun', process.env.PATH ?? ''))
+    return { packageManager: 'bun', command: 'bun' };
+  if (isOnPath('npm', process.env.PATH ?? ''))
+    return { packageManager: 'npm', command: 'npm' };
   return null;
 }

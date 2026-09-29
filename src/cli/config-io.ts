@@ -343,6 +343,19 @@ export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | nul
   const cacheVersion = getConfiguredExactVersion() ?? 'latest';
   const cacheDir = getOpenCodePluginCacheDir(cacheVersion);
 
+  // Resolve the package manager before touching the cache: without one we
+  // cannot reinstall, and wiping the live cached plugin would leave
+  // OpenCode with no usable plugin until the host self-heals.
+  const pm = resolvePackageManager();
+  if (!pm) {
+    return {
+      success: false,
+      configPath: cacheDir,
+      error:
+        'No bun or npm found on PATH; install either to enable OpenCode plugin cache warm-up.',
+    };
+  }
+
   try {
     mkdirSync(cacheDir, { recursive: true });
   } catch (err) {
@@ -360,16 +373,6 @@ export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | nul
   if (manifestError) return manifestError;
 
   removeOpenCodePluginCacheArtifacts(cacheDir);
-
-  const pm = resolvePackageManager();
-  if (!pm) {
-    return {
-      success: false,
-      configPath: cacheDir,
-      error:
-        'No bun or npm found on PATH; install either to enable OpenCode plugin cache warm-up.',
-    };
-  }
 
   const installCommand =
     pm.packageManager === 'bun'
