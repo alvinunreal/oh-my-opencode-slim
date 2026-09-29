@@ -7,6 +7,7 @@ import {
 import { TOAST_DURATION_MS } from '../../config/constants';
 import { crossSpawn } from '../../utils/compat';
 import { log } from '../../utils/logger';
+import { resolvePackageManager } from '../../utils/package-manager';
 import {
   discardPreparedPackageUpdate,
   getTargetInstallContext,
@@ -348,7 +349,8 @@ export function getAutoUpdateInstallDir(): string {
 }
 
 /**
- * Spawns a background process to run 'bun install'.
+ * Spawns a background install via the resolved package manager (bun, then
+ * npm fallback).
  * Includes a timeout to prevent stalling OpenCode. The install runs in
  * the background and does not block startup, so the limit is generous:
  * a cold bun cache on a slow registry link can exceed a minute.
@@ -357,7 +359,26 @@ export function getAutoUpdateInstallDir(): string {
  */
 async function runBunInstallSafe(installDir: string): Promise<boolean> {
   try {
-    const proc = crossSpawn(['bun', 'install'], {
+    const pm = resolvePackageManager();
+    if (!pm) {
+      log(
+        '[auto-update-checker] No bun or npm found on PATH; cannot auto-update. Install bun or npm and restart OpenCode.',
+      );
+      return false;
+    }
+
+    const installCommand =
+      pm.packageManager === 'bun'
+        ? [pm.command, 'install', '--ignore-scripts']
+        : [
+            pm.command,
+            'install',
+            '--ignore-scripts',
+            '--no-audit',
+            '--no-fund',
+          ];
+
+    const proc = crossSpawn(installCommand, {
       cwd: installDir,
       stdout: 'pipe',
       stderr: 'pipe',

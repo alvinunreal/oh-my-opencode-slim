@@ -18,6 +18,7 @@ import {
   type PluginEntry,
 } from '../plugin-entry';
 import { crossSpawn } from '../utils/compat';
+import { resolvePackageManager } from '../utils/package-manager';
 import {
   ensureConfigDir,
   ensureOpenCodeConfigDir,
@@ -283,6 +284,8 @@ function removeOpenCodePluginCacheArtifacts(cacheDir: string): void {
   });
   rmSync(join(cacheDir, 'bun.lock'), { force: true });
   rmSync(join(cacheDir, 'bun.lockb'), { force: true });
+  rmSync(join(cacheDir, 'package-lock.json'), { force: true });
+  rmSync(join(cacheDir, 'node_modules', '.package-lock.json'), { force: true });
 }
 
 function verifyOpenCodePluginCache(cacheDir: string): ConfigMergeResult | null {
@@ -337,10 +340,7 @@ export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | nul
     return null;
   }
 
-  const configuredVersion = getConfiguredExactVersion();
-  const runningVersion = getVersionFromPackageRoot(packageRoot);
-  const requestedTag = getRequestedPackageTag(packageRoot);
-  const cacheVersion = configuredVersion ?? requestedTag ?? runningVersion;
+  const cacheVersion = getConfiguredExactVersion() ?? 'latest';
   const cacheDir = getOpenCodePluginCacheDir(cacheVersion);
 
   try {
@@ -361,8 +361,23 @@ export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | nul
 
   removeOpenCodePluginCacheArtifacts(cacheDir);
 
+  const pm = resolvePackageManager();
+  if (!pm) {
+    return {
+      success: false,
+      configPath: cacheDir,
+      error:
+        'No bun or npm found on PATH; install either to enable OpenCode plugin cache warm-up.',
+    };
+  }
+
+  const installCommand =
+    pm.packageManager === 'bun'
+      ? [pm.command, 'install', '--ignore-scripts']
+      : [pm.command, 'install', '--ignore-scripts', '--no-audit', '--no-fund'];
+
   try {
-    const proc = crossSpawn(['bun', 'install', '--ignore-scripts'], {
+    const proc = crossSpawn(installCommand, {
       cwd: cacheDir,
       stdout: 'pipe',
       stderr: 'pipe',
@@ -374,7 +389,8 @@ export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | nul
       return {
         success: false,
         configPath: cacheDir,
-        error: stderr || `bun install exited with code ${proc.exitCode}`,
+        error:
+          stderr || `${pm.command} install exited with code ${proc.exitCode}`,
       };
     }
 

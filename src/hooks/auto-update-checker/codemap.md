@@ -36,7 +36,7 @@ The system implements multiple safety checks:
 2. **Channel Extraction**: Parses version strings to determine channel (latest, alpha, beta, rc, canary, next)
 3. **Major Version Blocking**: Prevents auto-updates that cross major versions; surfaces as manual migration notice
 4. **Pinned Version Detection**: Respects pinned versions in user configuration
-5. **Timeout Protection**: Uses 60-second timeout for `bun install` to prevent stalling OpenCode
+5. **Timeout Protection**: Uses a 300-second timeout for the package-manager install (bun, or npm fallback) to prevent stalling OpenCode
 6. **Atomic Skill Sync**: Uses staging directories with rename for atomic skill synchronization
 
 ### Data Flow
@@ -64,7 +64,7 @@ Decision: Auto-update enabled? → No: Notify user
     ↓
 Action: Prepare package update (download + extract)
     ↓
-Action: Run bun install in isolated directory
+Action: Run package-manager install (bun, or npm fallback) in isolated directory
     ↓
 Sync: Bundled skills to OpenCode config/skills/
     ↓
@@ -98,7 +98,7 @@ Notify: Success/failure via OpenCode TUI toast
 9. If pinned: Show pinned version notification
 10. If auto-update disabled: Show notification only
 11. Prepare package update in cache directory
-12. Run bun install with 60s timeout
+12. Run package-manager install (bun, or npm fallback) with 300s timeout
 13. If install succeeds:
     - Sync bundled skills from package
     - Update companion if enabled
@@ -165,7 +165,7 @@ Uses OpenCode's plugin cache directory:
 ### Failure Modes
 
 1. **Network Timeout**: Uses 5s timeout for NPM registry requests
-2. **Install Timeout**: Uses 60s timeout for `bun install` to prevent stalling
+2. **Install Timeout**: Uses 300s timeout for the package-manager install to prevent stalling
 3. **Version Parsing**: Handles unparseable versions gracefully (shows notification)
 4. **File Operations**: Atomic operations with staging directories prevent partial updates
 5. **Concurrent Access**: Uses memoization (`cachedPackageVersion`) to avoid repeated file reads

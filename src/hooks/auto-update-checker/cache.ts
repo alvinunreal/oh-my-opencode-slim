@@ -36,8 +36,9 @@ export function resolveInstallContext(
 
   // Only the OpenCode v1 wrapper layout
   // (<cache>/packages/oh-my-opencode-slim@<spec>/node_modules/oh-my-opencode-slim)
-  // is a supported install root. The v2 layout (<cache>/npm/<sanitize(spec)>/<int>/...)
-  // is deliberately rejected, as is the legacy <cache>/package.json root.
+  // is a supported install root. The v2 layout is deliberately rejected as is
+  // the legacy <cache>/package.json root; v2 hosts auto-refresh unpinned
+  // plugins themselves (see docs/opencode-v2-compatibility.md).
   const isV1Wrapper =
     path.basename(packageDir) === PACKAGE_NAME &&
     path.basename(nodeModulesDir) === 'node_modules' &&

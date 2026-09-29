@@ -38,8 +38,19 @@ const crossSpawnMock = mock((_command: string[], _options?: SpawnOptions) =>
   createSpawnResult(),
 );
 
+type ResolvedPm =
+  | { packageManager: 'bun'; command: string }
+  | { packageManager: 'npm'; command: 'npm' }
+  | null;
+
+let resolvedPm: ResolvedPm = { packageManager: 'bun', command: 'bun' };
+
 mock.module('../utils/compat', () => ({
   crossSpawn: crossSpawnMock,
+}));
+
+mock.module('../utils/package-manager', () => ({
+  resolvePackageManager: () => resolvedPm,
 }));
 
 const nonexistentPath = '/nonexistent/opencode.json';
@@ -74,6 +85,7 @@ describe('warmOpenCodePluginCache', () => {
         return createSpawnResult();
       },
     );
+    resolvedPm = { packageManager: 'bun', command: 'bun' };
     delete process.env.XDG_CACHE_HOME;
     getExistingConfigPathSpy = spyOn(
       pathsMod,
@@ -139,6 +151,89 @@ describe('warmOpenCodePluginCache', () => {
         'oh-my-opencode-slim': 'latest',
       },
     });
+
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('uses npm with audit/fund disabled when the resolver returns npm', async () => {
+    const tmpDir = mkdirTemp();
+    const cacheHome = join(tmpDir, 'cache');
+    process.env.XDG_CACHE_HOME = cacheHome;
+    resolvedPm = { packageManager: 'npm', command: 'npm' };
+
+    const packageRoot = join(
+      tmpDir,
+      'bunx-1000-oh-my-opencode-slim@latest',
+      'node_modules',
+      'oh-my-opencode-slim',
+    );
+    mkdirSync(join(packageRoot, 'dist', 'cli'), { recursive: true });
+    writeFileSync(
+      join(packageRoot, 'package.json'),
+      JSON.stringify({ name: 'oh-my-opencode-slim', version: '2.0.0' }),
+    );
+    process.argv[1] = join(packageRoot, 'dist', 'cli', 'index.js');
+
+    const { warmOpenCodePluginCache } = await importFreshConfigIo();
+    const result = await warmOpenCodePluginCache();
+
+    const expectedCacheDir = join(
+      cacheHome,
+      'opencode',
+      'packages',
+      'oh-my-opencode-slim@latest',
+    );
+
+    expect(result?.success).toBe(true);
+    expect(crossSpawnMock).toHaveBeenCalledTimes(1);
+    expect(crossSpawnMock.mock.calls[0][0]).toEqual([
+      'npm',
+      'install',
+      '--ignore-scripts',
+      '--no-audit',
+      '--no-fund',
+    ]);
+    expect(crossSpawnMock.mock.calls[0][1]).toEqual(
+      expect.objectContaining({ cwd: expectedCacheDir }),
+    );
+
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test('returns a failed result without spawning when no package manager is found', async () => {
+    const tmpDir = mkdirTemp();
+    const cacheHome = join(tmpDir, 'cache');
+    process.env.XDG_CACHE_HOME = cacheHome;
+    resolvedPm = null;
+
+    const packageRoot = join(
+      tmpDir,
+      'bunx-1000-oh-my-opencode-slim@latest',
+      'node_modules',
+      'oh-my-opencode-slim',
+    );
+    mkdirSync(join(packageRoot, 'dist', 'cli'), { recursive: true });
+    writeFileSync(
+      join(packageRoot, 'package.json'),
+      JSON.stringify({ name: 'oh-my-opencode-slim' }),
+    );
+    process.argv[1] = join(packageRoot, 'dist', 'cli', 'index.js');
+
+    const { warmOpenCodePluginCache } = await importFreshConfigIo();
+    const result = await warmOpenCodePluginCache();
+
+    expect(result).toEqual({
+      success: false,
+      configPath: join(
+        cacheHome,
+        'opencode',
+        'packages',
+        'oh-my-opencode-slim@latest',
+      ),
+      error:
+        'No bun or npm found on PATH; install either to enable OpenCode plugin cache warm-up.',
+    });
+    expect(crossSpawnMock).not.toHaveBeenCalled();
 
     rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -229,12 +324,29 @@ describe('warmOpenCodePluginCache', () => {
       JSON.stringify({ name: 'oh-my-opencode-slim', version: '1.1.2' }),
     );
     writeFileSync(join(expectedCacheDir, 'bun.lock'), 'stale lockfile');
+    writeFileSync(
+      join(expectedCacheDir, 'package-lock.json'),
+      'stale npm lock',
+    );
+    mkdirSync(join(expectedCacheDir, 'node_modules'), { recursive: true });
+    writeFileSync(
+      join(expectedCacheDir, 'node_modules', '.package-lock.json'),
+      'stale npm hidden lock',
+    );
 
     crossSpawnMock.mockImplementation(
       (_command: string[], options?: SpawnOptions) => {
         expect(options?.cwd).toBe(expectedCacheDir);
         expect(existsSync(stalePluginDir)).toBe(false);
         expect(existsSync(join(expectedCacheDir, 'bun.lock'))).toBe(false);
+        expect(existsSync(join(expectedCacheDir, 'package-lock.json'))).toBe(
+          false,
+        );
+        expect(
+          existsSync(
+            join(expectedCacheDir, 'node_modules', '.package-lock.json'),
+          ),
+        ).toBe(false);
         writeCachedPluginPackage(options?.cwd);
         return createSpawnResult();
       },
@@ -465,12 +577,14 @@ describe('warmOpenCodePluginCache', () => {
     }
   });
 
-  test('uses requested dist-tag when config is unpinned (bunx @beta scenario)', async () => {
+  test('uses @latest warm dir for unpinned config regardless of running dist-tag', async () => {
     const tmpDir = mkdirTemp();
     const cacheHome = join(tmpDir, 'cache');
     process.env.XDG_CACHE_HOME = cacheHome;
 
-    // Simulate bunx @beta: package.json has a beta version, config has no pinned version
+    // Simulate a bunx @beta runtime: package.json has a beta version, config
+    // has no pinned version. The warm dir must be @latest because that is the
+    // directory OpenCode reads for a bare config entry.
     const packageRoot = join(
       tmpDir,
       'bunx-1000-oh-my-opencode-slim@beta',
@@ -484,7 +598,6 @@ describe('warmOpenCodePluginCache', () => {
     );
     process.argv[1] = join(packageRoot, 'dist', 'cli', 'index.js');
 
-    // Config mock returns no pinned version (nonexistent config path)
     const { warmOpenCodePluginCache } = await importFreshConfigIo();
     const result = await warmOpenCodePluginCache();
 
@@ -492,7 +605,7 @@ describe('warmOpenCodePluginCache', () => {
       cacheHome,
       'opencode',
       'packages',
-      'oh-my-opencode-slim@beta',
+      'oh-my-opencode-slim@latest',
     );
 
     expect(result?.success).toBe(true);
@@ -503,7 +616,7 @@ describe('warmOpenCodePluginCache', () => {
       name: 'oh-my-opencode-slim-cache',
       private: true,
       dependencies: {
-        'oh-my-opencode-slim': 'beta',
+        'oh-my-opencode-slim': 'latest',
       },
     });
 
