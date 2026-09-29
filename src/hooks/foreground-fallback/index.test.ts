@@ -1537,6 +1537,19 @@ describe('isFailoverError', () => {
     ).toBe(true);
   });
 
+  test('returns true for the host content-filter finish error', () => {
+    // OpenCode v1 surfaces a `content-filter` finish reason (Anthropic
+    // refusal, OpenAI content_filter, ...) as a status-less ContentFilterError.
+    expect(
+      isFailoverError({
+        name: 'ContentFilterError',
+        data: {
+          message: "The response was blocked by the provider's content filter",
+        },
+      }),
+    ).toBe(true);
+  });
+
   test('returns true for billing/quota rejections (xAI spending-limit)', () => {
     // xAI billing surfaces as HTTP 400/402 with the structured billing code;
     // deterministic for the same account, so the next model in the chain
@@ -1635,8 +1648,8 @@ describe('isFailoverError', () => {
 
   test('returns false for generic flagged/policy wording without the moderation signature', () => {
     // Only the structured code or the exact provider wording match; ordinary
-    // errors mentioning "flagged", "cybersecurity", or "policy" stay hard
-    // errors.
+    // errors mentioning "flagged", "cybersecurity", "policy" or "content
+    // filter" stay hard errors.
     expect(
       isFailoverError({ message: 'request flagged for review by the proxy' }),
     ).toBe(false);
@@ -1645,6 +1658,9 @@ describe('isFailoverError', () => {
     ).toBe(false);
     expect(
       isFailoverError({ message: 'policy update required for this model' }),
+    ).toBe(false);
+    expect(
+      isFailoverError({ message: 'content filter settings updated' }),
     ).toBe(false);
   });
 
@@ -1883,7 +1899,7 @@ describe('ForegroundFallbackManager session.error', () => {
 
   test('triggers fallback on rate-limit session.error', async () => {
     // First teach the manager which model is in use for this session
-    await mgr.handleEvent({
+    const finishEvent = {
       type: 'message.updated',
       properties: {
         info: {
@@ -1893,7 +1909,9 @@ describe('ForegroundFallbackManager session.error', () => {
           role: 'assistant',
         },
       },
-    });
+    };
+    await mgr.handleEvent(finishEvent);
+    await mgr.handleEvent(finishEvent);
 
     await mgr.handleEvent({
       type: 'session.error',
@@ -3043,8 +3061,6 @@ describe('ForegroundFallbackManager session.error', () => {
     });
   });
 });
-
-// ---------------------------------------------------------------------------
 // ForegroundFallbackManager - message.updated
 // ---------------------------------------------------------------------------
 
@@ -3107,6 +3123,48 @@ describe('ForegroundFallbackManager message.updated', () => {
     // current=gpt-4o-mini is tried → next = claude-haiku
     expect(call[0].body.model.providerID).toBe('anthropic');
     expect(call[0].body.model.modelID).toBe('claude-haiku');
+  });
+
+  test('content-filter finish triggers fallback and dedupes its later error', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    const sessionID = 'sess-content-filter-finish';
+    const messageID = 'assistant-content-filter';
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: messageID,
+          sessionID,
+          agent: 'orchestrator',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+          role: 'assistant',
+          finish: 'content-filter',
+          error: { message: 'filtered output' },
+          time: { created: 1, completed: 2 },
+        },
+      },
+    });
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID,
+        info: { id: messageID },
+        error: {
+          name: 'ContentFilterError',
+          data: {
+            message:
+              "The response was blocked by the provider's content filter",
+          },
+        },
+      },
+    });
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -6067,3 +6125,5 @@ describe('ForegroundFallbackManager dispose', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------

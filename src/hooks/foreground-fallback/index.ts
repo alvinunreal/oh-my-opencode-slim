@@ -89,6 +89,11 @@ const RETRYABLE_ERROR_PATTERNS = [
   /\bcontent_policy_violation\b/,
   /flagged for possible cybersecurity risk/i,
   /rejected as a result of our safety system/i,
+  // OpenCode v1's ContentFilterError, raised when a turn ends with a
+  // `content-filter` finish reason (no HTTP status, no response body). The
+  // block can be intermittent, so it uses the normal retry budget before the
+  // chain advances.
+  /response was blocked by the provider's content filter/i,
   // Billing/quota exhaustion (e.g. xAI "personal-team-blocked:spending-limit")
   // arrives as HTTP 400/402 with a provider-specific billing code. It is
   // deterministic for the same account — retrying the same model will fail
@@ -960,29 +965,42 @@ export class ForegroundFallbackManager {
         const isCompletedSuccessfulAssistant =
           info.role === 'assistant' &&
           !info.error &&
+          // OpenCode v1 publishes a content-filter turn as completed before it
+          // attaches the ContentFilterError: a failure, not a recovery.
+          info.finish !== 'content-filter' &&
           typeof messageTime === 'object' &&
           messageTime !== null &&
           'completed' in messageTime &&
           typeof messageTime.completed === 'number';
-        // Failover-worthy error on an individual message
-        if (info.error && isFailoverError(info.error)) {
+        // OpenCode v1 can publish `finish: 'content-filter'` before attaching
+        // its ContentFilterError. Treat that terminal finish as the error
+        // event itself; the later message/session error is deduped by ID.
+        const contentFilterError = {
+          name: 'ContentFilterError',
+          message: "The response was blocked by the provider's content filter",
+        };
+        const messageError =
+          info.finish === 'content-filter' && !isFailoverError(info.error)
+            ? contentFilterError
+            : info.error;
+        if (messageError && isFailoverError(messageError)) {
           const incidentID = this.incidentForMessageError(
             sessionID,
             typeof info.id === 'string' ? info.id : undefined,
-            info.error,
+            messageError,
           );
-          if (this.bypassInitialFallbackDelay(sessionID, info.error)) {
-            await this.tryFallback(sessionID, info.error, incidentID);
+          if (this.bypassInitialFallbackDelay(sessionID, messageError)) {
+            await this.tryFallback(sessionID, messageError, incidentID);
           } else if (
             !this.delayInitialFallback(
               sessionID,
               false,
               undefined,
-              info.error,
+              messageError,
               incidentID,
             )
           ) {
-            await this.tryFallback(sessionID, info.error, incidentID);
+            await this.tryFallback(sessionID, messageError, incidentID);
           }
         } else if (isCompletedSuccessfulAssistant) {
           // Only a completed, successful assistant response proves recovery.
