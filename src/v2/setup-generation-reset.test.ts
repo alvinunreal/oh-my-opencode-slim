@@ -79,7 +79,7 @@ describe('v2 generation warning latches', () => {
       OPENCODE_LOG_DIR: logDir,
     };
     delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
-    initLogger('gen-reset-test');
+    initLogger();
   });
 
   afterEach(async () => {

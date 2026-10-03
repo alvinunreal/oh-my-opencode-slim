@@ -173,7 +173,9 @@ Log files are named with timestamps (e.g., 2025-01-09T123456.log) and the most r
 You can set the log level with the --log-level command-line option to get more detailed debug information. For example, opencode --log-level DEBUG.
 
 ### Plugin
-~/.local/share/opencode/log/oh-my-opencode-slim.<timestamp>.log
+~/.local/share/opencode/log/oh-my-opencode-slim.<timestamp>-<pid>.log
+One file per process (the pid suffix disambiguates processes that start in the
+same second); TUI client processes use the `tui-` prefix.
 
 ## Cloned Dependency Source
 

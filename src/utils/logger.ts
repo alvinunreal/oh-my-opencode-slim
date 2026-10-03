@@ -8,6 +8,18 @@ const LOG_PREFIX = 'oh-my-opencode-slim.';
 const LOG_SUFFIX = '.log';
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+/**
+ * Process identity for the log file name. `opencode` loads this plugin once
+ * per location inside a single server process, and the sink below is
+ * process-global, so one file per process is the correct unit. The pid
+ * suffix keeps two processes that start within the same second from
+ * colliding on the file name.
+ */
+const PROCESS_LOG_STAMP = new Date()
+  .toISOString()
+  .replace(/[-:]/g, '')
+  .slice(0, 15);
+
 type LogSink =
   | { kind: 'uninitialized' }
   | { kind: 'file'; filePath: string }
@@ -91,16 +103,35 @@ function handleAppendFailure(failedGeneration: number, logEntry: string): void {
   safeStderr(logEntry.trimEnd());
 }
 
-export function initLogger(sessionId: string): void {
+export function initLogger(tag?: 'tui'): void {
+  // The sink is a process-global singleton shared by every plugin instance in
+  // this process. Re-initializing with the same log directory is a no-op:
+  // later instances (one per location) reuse the file instead of re-pointing
+  // the sink and re-scanning the directory on every load. A changed log
+  // directory (test isolation, explicit reconfiguration) re-initializes. The
+  // first init also owns the tag: server and client run in separate
+  // processes, so a mixed tag in one directory is not reachable in practice.
+  const dir = getLogDir();
+  if (
+    currentSink.kind === 'file' &&
+    path.dirname(currentSink.filePath) === dir
+  ) {
+    // Reuse the file, but still run retention: a long-lived process reloads
+    // instances without changing the directory, and old logs/background-task
+    // files should not wait for a restart. The scan is cheap now that the file
+    // count is O(processes), not O(loads).
+    cleanupOldLogs(dir);
+    return;
+  }
+
   const attemptGeneration = ++loggerGeneration;
 
   try {
-    const dir = getLogDir();
     fs.mkdirSync(dir, { recursive: true });
 
     const nextLogFile = path.join(
       dir,
-      `${LOG_PREFIX}${sessionId}${LOG_SUFFIX}`,
+      `${LOG_PREFIX}${tag ? `${tag}-` : ''}${PROCESS_LOG_STAMP}-${process.pid}${LOG_SUFFIX}`,
     );
     fs.closeSync(fs.openSync(nextLogFile, 'a'));
 

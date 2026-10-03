@@ -487,11 +487,7 @@ export function loadPaneConfig(directory: string): LoadedPaneConfig {
 
 export function initClientLogging(): void {
   try {
-    const sessionId = `tui-${new Date()
-      .toISOString()
-      .replace(/[-:]/g, '')
-      .slice(0, 15)}`;
-    initLogger(sessionId);
+    initLogger('tui');
   } catch {
     // Logging is best-effort; diagnostics fall back to the default sink.
   }

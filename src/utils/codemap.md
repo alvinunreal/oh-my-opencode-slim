@@ -41,9 +41,10 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 
 ### Infrastructure & Security Utilities
 
-- **Logger** (`logger.ts`): File-based logging with 7-day retention, automatic directory creation, and write queuing
+- **Logger** (`logger.ts`): Process-wide file logging (one pid-suffixed file per process) with 7-day retention, directory creation, and write queuing
 - **Environment** (`env.ts`): Environment variable parsing and plugin disable flag checking
 - **Global Store** (`global-store.ts`): Process-local lazy singleton on globalThis with Symbol.for keyed registry
+- **Event Directory Scope** (`event-directory-scope.ts`): Per-location event scope for multi-instance hosts — process-local live-directory registry plus a session→directory map, fail-open on unresolved events
 - **Internal Initiator** (`internal-initiator.ts`): Marker and strict native-background-notification recognition for internally-initiated agent messages
 - **System Collapse** (`system-collapse.ts`): System message collapsing by joining with double-newlines
 - **Compat** (`compat.ts`): Cross-platform spawn with output collection and Windows command resolution
@@ -81,9 +82,11 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 3. verdictFromEvidence() produces terminal evidence verdict
 
 ### Logging Flow
-1. Plugin initializes logger with session ID via initLogger(sessionId)
-2. Logs appended to ~/.local/share/opencode/log/oh-my-opencode-slim.<sessionId>.log
-3. Old logs (>7 days) cleaned up on initialization
+1. The first plugin instance in a process calls initLogger() — the sink is
+   process-global, and re-initializing in the same log directory is a no-op
+2. Logs appended to ~/.local/share/opencode/log/oh-my-opencode-slim.<stamp>-<pid>.log
+   (client processes use the `tui-` tag)
+3. Old logs (>7 days) cleaned up once per process initialization
 4. Write queuing prevents blocking; fallback to stderr on failure
 
 ### Redaction Flow
@@ -164,7 +167,8 @@ Session metadata, the opencode client accessor, and the type-only call-shape con
 | `child-transcript.ts` | Child session transcript evidence extraction |
 | `jsdom.ts` | JSDOM runtime detection without prerequisite |
 | `redact.ts` | Shape-based secret redaction for logging |
-| `logger.ts` | File-based logging with rotation |
+| `logger.ts` | Process-wide file logging (pid-suffixed) |
+| `event-directory-scope.ts` | Per-location event scope for multi-instance hosts |
 | `env.ts` | Environment variable parsing and plugin disable checking |
 | `global-store.ts` | Process-local lazy singleton store on globalThis |
 | `internal-initiator.ts` | Internal agent message marker system |

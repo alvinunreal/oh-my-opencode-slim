@@ -111,6 +111,15 @@ lifecycle lives in the TUI entry's dependency graph (`multiplexer/client/`).
 4. **Error Handling**: All operations are best-effort; failures don't crash plugin
 5. **Instance Cleanup**: On shutdown, each plugin instance removes only sessions
    it marked active, preserving activity owned by other running instances
+6. **Instance Scope**: opencode loads the plugin once per location inside one
+   server process and broadcasts every event to every instance. Both the v1
+   event hook and the v2 setup event pump process only events whose directory
+   resolves to this instance's location (fail-open when the directory is
+   unresolved or no live instance owns it), so per-instance state never
+   absorbs another location's sessions. Every exit path of an instance —
+   normal dispose, v1 init failure, v2 factory failure — releases its
+   live-directory claim, and the process-global wake gate is cleared only
+   when the last instance is gone
 
 ### Event Handling Flow (index.ts)
 

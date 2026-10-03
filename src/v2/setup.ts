@@ -44,6 +44,7 @@ import {
   configureBackgroundJobPersistence,
   loadInitialBackgroundJobPersistence,
 } from '../utils/background-job-persistence';
+import { createEventDirectoryScope } from '../utils/event-directory-scope';
 import { INTERNAL_INITIATOR_METADATA_KEY } from '../utils/internal-initiator';
 import { initLogger, log } from '../utils/logger';
 import { OperationTimeoutError, withTimeout } from '../utils/session';
@@ -1903,11 +1904,7 @@ export function adaptMcpServer(v1: McpConfig): Record<string, unknown> {
 
 export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
   return async (ctx: V2Context): Promise<V2Cleanup> => {
-    const sessionId = new Date()
-      .toISOString()
-      .replace(/[-:]/g, '')
-      .slice(0, 15);
-    initLogger(sessionId);
+    initLogger();
     // First logged line: identify the build that produced every following
     // log entry (logging-only — build info never enters prompt payloads).
     log('[v2] build info', getBuildInfo());
@@ -1920,16 +1917,24 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       );
       return async () => {};
     }
-    log('[v2] setup invoked', { app: ctx.app, cwd: process.cwd() });
+    // Directory/location resolution lives in the shim now (single source);
+    // setup still needs the directory for config loading and tool adapters.
+    const directory = resolveV2Directory(ctx);
+    log('[v2] setup invoked', {
+      app: ctx.app,
+      cwd: process.cwd(),
+      directory,
+    });
 
     // Reload generations: rearm the one-time degradation warning latches
     // BEFORE any bridge of this generation can fire them — module-level
     // state survives instance disposal inside one process.
     resetV2GenerationWarnings();
 
-    // Directory/location resolution lives in the shim now (single source);
-    // setup still needs the directory for config loading and tool adapters.
-    const directory = resolveV2Directory(ctx);
+    // Directory scope (multi-instance): the host loads this plugin once per
+    // location and broadcasts every event to every instance in the process.
+    // Process only this location's events; unresolved events fall through.
+    const eventDirectoryScope = createEventDirectoryScope(directory);
     const disposers: Array<() => Promise<void> | void> = [];
     let generationDisposed = false;
     let stopPermissionPromptAdmission: (() => Promise<void>) | undefined;
@@ -2026,10 +2031,15 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       log('[v2] FATAL: v1 factory init failed', String(err));
       console.error('[oh-my-opencode-slim][v2] factory init failed:', err);
       // Don't hard-fail the whole plugin; register nothing and stay loaded.
+      // The scope claim must not outlive the failed generation.
+      eventDirectoryScope.release();
       return async () => {};
     }
 
-    if (!v1Hooks) return async () => {};
+    if (!v1Hooks) {
+      eventDirectoryScope.release();
+      return async () => {};
+    }
 
     // Fail-loud unwinding: session hooks register
     // unconditionally, so any throw from here through the return below
@@ -2842,19 +2852,24 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                 while (!eventStopped) {
                   const next = await eventIterator.next();
                   if (next.done) break;
+                  // Token-stream deltas: the interview bridge already gates to
+                  // managed sessions. Skip permission rules and v1 synthesis;
+                  // still deliver the raw event so the multiplexer heartbeat in
+                  // the v1 event hook can run. Deltas are not location-scoped
+                  // and fire per token, so they skip the directory scope too.
+                  const rawType =
+                    typeof next.value?.type === 'string' ? next.value.type : '';
+                  const isStreamDelta =
+                    rawType === 'session.next.text.delta' ||
+                    rawType === 'session.next.reasoning.delta' ||
+                    rawType === 'message.part.delta';
+                  if (!isStreamDelta) {
+                    // Directory scope (multi-instance): skip events that belong
+                    // to another live location before any bridge sees them.
+                    eventDirectoryScope.note(next.value);
+                    if (eventDirectoryScope.isForeign(next.value)) continue;
+                  }
                   try {
-                    // Token-stream deltas: the interview bridge already
-                    // gates to managed sessions. Skip permission rules and
-                    // v1 synthesis; still deliver the raw event so the
-                    // multiplexer heartbeat in the v1 event hook can run.
-                    const rawType =
-                      typeof next.value?.type === 'string'
-                        ? next.value.type
-                        : '';
-                    const isStreamDelta =
-                      rawType === 'session.next.text.delta' ||
-                      rawType === 'session.next.reasoning.delta' ||
-                      rawType === 'message.part.delta';
                     await interviewBridge.handleEvent(next.value);
                     if (isStreamDelta) {
                       if (eventHook) await eventHook({ event: next.value });
@@ -2915,6 +2930,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       return async () => {
         log('[v2] dispose invoked');
         generationDisposed = true;
+        eventDirectoryScope.release();
         registryBridge?.retire();
         // Mark disposed immediately, then stop new admissions and event
         // intake before awaiting the bounded drain. The OpenCode plugin

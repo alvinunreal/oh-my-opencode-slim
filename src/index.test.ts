@@ -32,6 +32,7 @@ import {
 } from './tui-state';
 import { BackgroundJobCoordinator } from './utils/background-job-coordinator';
 import { BackgroundJobBoard } from './utils/background-job-fixture';
+import { resetLiveDirectoriesForTests } from './utils/event-directory-scope';
 import { createInternalAgentTextPart } from './utils/internal-initiator';
 import * as loggerModule from './utils/logger';
 
@@ -1415,6 +1416,7 @@ describe('plugin reload generation cleanup', () => {
 
   test('v1 dispose clears the process-global wake gate progress', async () => {
     resetOrchestratorWakeGateForTests();
+    resetLiveDirectoriesForTests();
     try {
       const hooks = await createHooks();
 

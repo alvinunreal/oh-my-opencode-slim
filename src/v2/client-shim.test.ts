@@ -1665,8 +1665,8 @@ describe('v2 client shim degradation notices (one-time per process)', () => {
       const { initLogger, flushLoggerForTesting } = await import(
         process.env.LOGGER_MODULE_URL
       );
-      const { readFileSync } = await import('node:fs');
-      initLogger('client-shim-degradation');
+      const { readdirSync, readFileSync } = await import('node:fs');
+      initLogger();
       // Stock v2 plugin session domain: no list, no remove.
       const input = buildPluginInput({ session: {} });
       const session = input.client.session;
@@ -1675,7 +1675,16 @@ describe('v2 client shim degradation notices (one-time per process)', () => {
         await session.delete({ path: { id: 'ses_tmp' } });
       }
       await flushLoggerForTesting();
-      const contents = readFileSync(process.env.LOG_FILE_PATH, 'utf8');
+      const contents = readFileSync(
+        process.env.OPENCODE_LOG_DIR +
+          '/' +
+          readdirSync(process.env.OPENCODE_LOG_DIR).find(
+            (entry) =>
+              entry.startsWith('oh-my-opencode-slim.') &&
+              entry.endsWith('-' + process.pid + '.log'),
+          ),
+        'utf8',
+      );
       const lines = contents.split('\\n');
       console.log(
         JSON.stringify({

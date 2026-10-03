@@ -515,8 +515,8 @@ describe('parallel same-agent pairing (incident 2026-09-12)', () => {
       const { initLogger, flushLoggerForTesting } = await import(
         process.env.LOGGER_MODULE_URL
       );
-      const { readFileSync } = await import('node:fs');
-      initLogger('drain-fallback-b1');
+      const { readdirSync, readFileSync } = await import('node:fs');
+      initLogger();
       const board = new BackgroundJobBoard();
       const concurrency = new BackgroundTaskConcurrency({
         defaultConcurrency: 2,
@@ -578,9 +578,16 @@ describe('parallel same-agent pairing (incident 2026-09-12)', () => {
         { output: completed('ses_bbbb2222') },
       );
       await flushLoggerForTesting();
-      const lines = readFileSync(process.env.LOG_FILE_PATH, 'utf8').split(
-        '\\n',
-      );
+      const lines = readFileSync(
+        process.env.OPENCODE_LOG_DIR +
+          '/' +
+          readdirSync(process.env.OPENCODE_LOG_DIR).find(
+            (entry) =>
+              entry.startsWith('oh-my-opencode-slim.') &&
+              entry.endsWith('-' + process.pid + '.log'),
+          ),
+        'utf8',
+      ).split('\\n');
       console.log(
         JSON.stringify({
           drainWarnings: lines.filter((line) =>
