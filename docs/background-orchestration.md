@@ -87,9 +87,22 @@ Aliases and reusable-session history are process-local and do not survive proces
 restarts as a reusable board. Post-restart recovery is partial and best-effort;
 it does not guarantee restoration of those aliases or the complete history. One
 recovery channel is explicit: `task_revive` on a raw session ID verifies the
-session against the host (existence and parent ownership, plus a live-state
-gate) and re-adopts an untracked child owned by the calling parent, then
+session against the host (existence and parent ownership) and re-adopts an
+untracked child owned by the calling parent, then
 continues it with the new prompt.
+
+On v2 hosts with `session.prompt` and `session.context`, adoption queues the new
+instruction in the same session. The host wakes an idle session or runs the input
+after the current execution; revival does not wait for idle or interrupt it.
+The plugin assigns a message ID before admission and only delivers the terminal
+answer after that exact input. An older execution's result, error, or idle event
+cannot complete the continuation. Missing input/answer evidence remains pending.
+Only one continuation is admitted locally at a time. An uncertain admission must
+not be retried: its lease stays held until acknowledgement or an attributable
+answer proves completion. Queued adoption does not arm a session-wide timeout
+abort, because that could kill the preceding execution. Deletion suppresses late
+delivery without a compensating interrupt. V1 adoption retains its live-status
+gate; existing tracked revival retains its previous idle-verification behavior.
 
 ---
 

@@ -44,6 +44,7 @@ export type ObservationToken = Readonly<
     attemptRevision: number | undefined;
     attemptStartedAt: number | undefined;
     baselineMessageID: string | undefined;
+    promptMessageID: string | undefined;
     episode: number;
     readStartedAt: number;
   }
@@ -337,6 +338,10 @@ export function createBackgroundJobTerminalGate(options: {
   readRuntime?: (run: RunRef, startedAt: number) => Promise<RuntimeObservation>;
   readTerminalEvidence?: (taskID: string) => Promise<unknown>;
   baselineFor?: (taskID: string, generation: number) => string | undefined;
+  promptMessageIDFor?: (
+    taskID: string,
+    generation: number,
+  ) => string | undefined;
   attemptStartedAtFor?: (
     taskID: string,
     generation: number,
@@ -412,6 +417,7 @@ export function createBackgroundJobTerminalGate(options: {
         run.generation,
       ),
       baselineMessageID: options.baselineFor?.(run.taskID, run.generation),
+      promptMessageID: options.promptMessageIDFor?.(run.taskID, run.generation),
       attemptStartedAt: options.attemptStartedAtFor?.(
         run.taskID,
         run.generation,
@@ -435,6 +441,8 @@ export function createBackgroundJobTerminalGate(options: {
         token.attemptStartedAt &&
       options.baselineFor?.(token.taskID, token.generation) ===
         token.baselineMessageID &&
+      options.promptMessageIDFor?.(token.taskID, token.generation) ===
+        token.promptMessageID &&
       options.observationRevisionFor?.(token.taskID, token.generation) ===
         token.attemptRevision
     );
@@ -527,6 +535,8 @@ export function createBackgroundJobTerminalGate(options: {
           !options.isObservationPending?.(token.taskID, token.generation)) &&
         (value.runtime?.kind === 'quiescent' ||
           value.runtime?.kind === 'deleted' ||
+          (token.promptMessageID !== undefined &&
+            attribution === 'transcript') ||
           foregroundNativeEvidence),
     });
     const record = board.commitTerminal(input, authorization);
@@ -562,6 +572,10 @@ export function createBackgroundJobTerminalGate(options: {
     if (!value) return { kind: 'stale' };
     const before = board.get(token.taskID);
     if (!before) return { kind: 'stale' };
+    // Session activity after this input's answer belongs to another turn.
+    // It must not reopen this completed input and publish its answer twice.
+    if (token.promptMessageID && before.state !== 'running')
+      return deferred(token);
     if (
       runtime.observedAt !== undefined &&
       runtime.observedAt < (before.lastLiveBusyAt ?? before.runStartedAt)
@@ -782,12 +796,55 @@ export function createBackgroundJobTerminalGate(options: {
     return attribution;
   }
 
+  // Queued input can coexist with the old execution's idle/error events and
+  // outcome. A completed answer after this exact input proves its completion
+  // even on hosts without activity APIs; it does not claim session-wide idle.
+  async function inspectQueuedAnswer(
+    token: ObservationToken,
+  ): Promise<GateResult> {
+    const transcriptRead = await read(
+      `transcript:${token.taskID}`,
+      token,
+      () =>
+        options.readTerminalEvidence
+          ? options.readTerminalEvidence(token.taskID)
+          : options.input
+            ? fetchChildTranscript(
+                getClient(options.input),
+                token.taskID,
+                options.input.directory,
+              )
+            : Promise.resolve(undefined),
+    );
+    if (!current(token)) return { kind: 'stale' };
+    if (transcriptRead.kind === 'blocked')
+      return requestRuntimeContrastAfterRead(token, transcriptRead.retryAfter);
+    const evidence = classifyTerminalEvidence(transcriptRead.value, {
+      promptMessageID: token.promptMessageID,
+    });
+    if (evidence.verdict !== 'completed' && evidence.verdict !== 'error')
+      return retry(
+        token,
+        'Queued continuation has no attributable terminal answer yet.',
+      );
+    return commit(
+      token,
+      evidence.verdict,
+      evidence.text,
+      undefined,
+      'transcript',
+    );
+  }
+
   async function inspect(run: RunRef): Promise<GateResult> {
     let token = capture(run);
     if (!token) return { kind: 'stale' };
     const value = observation(run);
     if (!value) return { kind: 'stale' };
     const cancellation = value.candidate?.signal.kind === 'cancel';
+    if (token.promptMessageID && !cancellation) {
+      return inspectQueuedAnswer(token);
+    }
     // A sealed cancellation verification is consumed as-is. Polling adapters
     // likewise pass their fresh batched observation without a second lookup.
     const suppliedRuntime = value.pendingRuntime;

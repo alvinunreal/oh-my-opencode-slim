@@ -110,7 +110,7 @@ its message lease after timeout; this change does not alter that quarantine.
 errored, or stopped retained session may be revived immediately once its
 retained state has been verified safe. Acknowledgement controls parent and
 job-board consumption and reusable-pool display, not same-session revival.
-Baseline capture has a 5-second deadline: expiry fails without sending a prompt
+For existing tracked sessions, baseline capture has a 5-second deadline: expiry fails without sending a prompt
 and releases the relaunch lease. The local admission wait has a 10-second deadline;
 expiry returns `status: admission_unknown`, not a launch failure. The reported
 generation/state is the pre-admission snapshot, even if acceptance settles before
@@ -124,9 +124,19 @@ while the first caller awaits its probe, the first call rejects with
 `revive became stale`. This supersession rejection does not invalidate the newer
 launch; use `task_status` to inspect the current generation.
 
+V2 untracked adoption uses a different result boundary: it queues a caller-ID
+input after verifying parent ownership, without requiring status/idle APIs.
+The new generation is registered before the write and is not replaced by late
+acknowledgement. Only that input's completed answer is delivered to the parent;
+old execution outcomes are ignored. Transport uncertainty retains exclusion and
+returns `admission_unknown`; an attributable answer can retire the lease even
+when acknowledgement was lost. Automatic session-wide timeout aborts are not
+armed for queued adoption. If the queued input disappears from context (for
+example through compaction) before it is observed, the result stays unconfirmed.
+
 Deletion wins over pending admission: deleting the child or its parent never
 recreates either record when acceptance arrives. If the original relaunch lease
-still owns the missing child, a separate compensation owner sends exactly one
+still owns the missing child, existing tracked revival uses a separate compensation owner to send exactly one
 abort for that child, without registering a generation, clearing its tombstone,
 notifying the deleted parent, or aborting siblings. A revoked/replaced lease or
 changed generation remains fenced and never triggers an abort of its successor.

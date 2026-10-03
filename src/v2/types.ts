@@ -295,6 +295,7 @@ export interface V2Context {
     /** v2 session.prompt subset used here; resume:false admits without waking. */
     prompt?(input: {
       sessionID: string;
+      id?: string;
       text: string;
       files?: Array<{ uri: string; name?: string }>;
       metadata?: Record<string, unknown>;

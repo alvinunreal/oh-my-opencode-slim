@@ -131,6 +131,8 @@ export function classifyTerminalEvidence(
   response: unknown,
   options: {
     baselineMessageID?: string;
+    /** An admitted queued user input, not a pre-send history watermark. */
+    promptMessageID?: string;
     runStartedAt?: number;
     terminalOutcomeConfirmed?: boolean;
   } = {},
@@ -160,6 +162,26 @@ export function classifyTerminalEvidence(
         ))
     )
       return { verdict: 'retry', reason: 'malformed transcript parts' };
+  }
+  if (options.promptMessageID) {
+    const prompt = all.findIndex(
+      (message) =>
+        message.info?.id === options.promptMessageID &&
+        message.info?.role === 'user',
+    );
+    if (prompt < 0)
+      return { verdict: 'retry', reason: 'queued prompt not delivered' };
+    const nextPrompt = all.findIndex(
+      (message, index) => index > prompt && message.info?.role === 'user',
+    );
+    const turn = all.slice(prompt, nextPrompt < 0 ? undefined : nextPrompt);
+    let target = turn.length - 1;
+    while (target > 0 && turn[target].info?.role !== 'assistant') target--;
+    if (target === 0)
+      return { verdict: 'retry', reason: 'queued prompt has no answer yet' };
+    return verdictFromEvidence(
+      classifyAssistantTurnEvidence(turn, target, 0, true),
+    );
   }
   if (options.baselineMessageID) {
     const baseline = all.findIndex(

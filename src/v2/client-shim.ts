@@ -43,6 +43,8 @@ export interface V2GenerateModelRef {
 /** Optional v2 capabilities threaded into the v1 PluginInput. Absent
  * capabilities must leave the input object unchanged (v1 parity). */
 export interface ExperimentalV2 {
+  /** Queued prompts preserve caller-chosen message IDs in session.context. */
+  queuedPromptIdentity?: true;
   /** Real host wait; not a snapshot, and not abortable by the 2.0.5 adapter. */
   waitForSessionIdle?: (sessionID: string) => Promise<void>;
   /** One-shot generation (`ctx.generate.text`); no session involved. */
@@ -456,7 +458,10 @@ export function buildPluginInput(
         const delivery = args?.delivery === 'queue' ? 'queue' : 'steer';
         const body = (args?.body ?? {}) as Parameters<
           typeof modelRefFromBody
-        >[0] & { parts?: Array<{ type?: string; text?: string }> };
+        >[0] & {
+          messageID?: string;
+          parts?: Array<{ type?: string; text?: string }>;
+        };
         const metadata = internalInitiatorMetadataFromBody(args);
         // Internal-initiator injections (orchestrator-wake nudges, interview
         // continuation) must not be persisted as user input on v2: the flat
@@ -599,6 +604,7 @@ export function buildPluginInput(
         // otherwise and internalViaSynthetic returned early).
         const result = await s.prompt?.({
           sessionID: sessionIDOf(args),
+          ...(body.messageID ? { id: body.messageID } : {}),
           text: textFromBody(args),
           delivery,
           ...(files.length > 0 ? { files } : {}),
@@ -694,9 +700,10 @@ export function buildPluginInput(
     worktree: directory,
     experimental_workspace: { register() {} },
     $: typeof Bun !== 'undefined' ? Bun.$ : undefined,
-    ...(extras?.generateText || wait
+    ...(extras?.generateText || wait || (s.prompt && s.context)
       ? {
           experimental_v2: {
+            ...(s.prompt && s.context ? { queuedPromptIdentity: true } : {}),
             ...(extras?.generateText
               ? { generateText: extras.generateText }
               : {}),

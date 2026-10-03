@@ -877,6 +877,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       graceMs: runtime.backgroundJobs.stopConfirmationMs,
       baselineFor: (taskID, generation) =>
         revivedRunTracker?.baselineFor(taskID, generation),
+      promptMessageIDFor: (taskID, generation) =>
+        revivedRunTracker?.promptMessageIDFor(taskID, generation),
       // Local in-process integration: host and plugin timestamps share Unix ms.
       hostOutcomeClock: 'shared-unix-ms',
       attemptStartedAtFor: (taskID, generation) =>
@@ -893,7 +895,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
               resolvePrimaryModelFromFinalHostConfig(record.agent) ??
               sessionMetadata.getModel(record.parentSessionID),
           );
-        backgroundJobSupervisor?.onLaunch(record);
+        if (
+          !revivedRunTracker?.promptMessageIDFor(
+            record.taskID,
+            record.generation,
+          )
+        )
+          backgroundJobSupervisor?.onLaunch(record);
       },
     });
     backgroundJobSupervisor = new BackgroundJobSupervisor({
