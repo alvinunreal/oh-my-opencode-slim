@@ -1,15 +1,26 @@
+import { randomUUID } from 'node:crypto';
 import {
-  copyFileSync,
+  closeSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { applyEdits, modify, parse as parseJsonc } from 'jsonc-parser';
+import {
+  applyEdits,
+  createScanner,
+  modify,
+  parse as parseJsonc,
+  parseTree,
+  SyntaxKind,
+} from 'jsonc-parser';
 import { MarketplaceLockOwnershipError } from '../marketplace/errors';
 import { acquireMarketplaceLease, writeAtomic } from '../marketplace/lease';
 import { getMarketplacePaths } from '../marketplace/paths';
@@ -584,13 +595,35 @@ function hasSameJsonValue(left: unknown, right: unknown): boolean {
   );
 }
 
+function writeBackupAtomic(backupPath: string, content: string): void {
+  const parent = dirname(backupPath);
+  mkdirSync(parent, { recursive: true });
+  const temporaryPath = `${backupPath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    const fd = openSync(temporaryPath, 'wx');
+    try {
+      writeFileSync(fd, content, 'utf8');
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(temporaryPath, backupPath);
+  } finally {
+    try {
+      if (existsSync(temporaryPath)) rmSync(temporaryPath, { force: true });
+    } catch {
+      // Failed backup-temp cleanup must not mask the original write error.
+    }
+  }
+}
+
 function publishConfig(
   configPath: string,
   config: OpenCodeConfig,
   currentText?: string,
 ): void {
   const bakPath = `${configPath}.bak`;
-  if (currentText !== undefined) copyFileSync(configPath, bakPath);
+  if (currentText !== undefined) writeBackupAtomic(bakPath, currentText);
 
   const bom = currentText?.startsWith('\uFEFF') ? '\uFEFF' : '';
   const content =
@@ -654,7 +687,7 @@ export function publishPreparedJsonConfig(
   if (!prepared.changed) return;
 
   if (prepared.originalText !== undefined) {
-    writeFileSync(`${prepared.configPath}.bak`, prepared.originalText);
+    writeBackupAtomic(`${prepared.configPath}.bak`, prepared.originalText);
   }
   writeAtomic(prepared.configPath, prepared.content);
 }
@@ -748,6 +781,110 @@ export function writeJsonAtomic(filePath: string, value: unknown): void {
 }
 
 /** Read, mutate, and atomically publish a JSON/JSONC config under one lease. */
+function findCommaToken(
+  source: string,
+  start: number,
+  end: number,
+  preferLast = false,
+): { offset: number; length: number } | undefined {
+  const scanner = createScanner(source, false);
+  scanner.setPosition(start);
+  let match: { offset: number; length: number } | undefined;
+  while (scanner.getPosition() <= end) {
+    const token = scanner.scan();
+    if (token === SyntaxKind.EOF) break;
+    const offset = scanner.getTokenOffset();
+    if (offset >= end) break;
+    if (token === SyntaxKind.CommaToken) {
+      match = { offset, length: scanner.getTokenLength() };
+      if (!preferLast) return match;
+    }
+  }
+  return match;
+}
+
+/**
+ * Remove one top-level JSON/JSONC property while preserving comments belonging
+ * to neighboring properties. Token scanning distinguishes real separators from
+ * commas inside comments/strings.
+ */
+export function removeTopLevelJsonProperty(
+  configPath: string,
+  propertyName: string,
+): void {
+  withConfigWriteLease(configPath, () => {
+    if (!existsSync(configPath)) return;
+
+    const currentText = readFileSync(configPath, 'utf-8');
+    const hasBom = currentText.startsWith('\uFEFF');
+    const source = hasBom ? currentText.slice(1) : currentText;
+    const errors: Parameters<typeof parseTree>[1] = [];
+    const root = parseTree(source, errors, { allowTrailingComma: true });
+    if (errors.length > 0 || root?.type !== 'object') {
+      throw new Error('Invalid JSONC config');
+    }
+
+    const properties = (root.children ?? []).filter(
+      (node) => node.type === 'property',
+    );
+    const index = properties.findIndex(
+      (property) => property.children?.[0]?.value === propertyName,
+    );
+    if (index < 0) return;
+
+    const property = properties[index];
+    const propertyEnd = property.offset + property.length;
+    const removals: Array<{ start: number; end: number }> = [
+      { start: property.offset, end: propertyEnd },
+    ];
+
+    if (index < properties.length - 1) {
+      const next = properties[index + 1];
+      const comma = findCommaToken(source, propertyEnd, next.offset);
+      if (!comma) throw new Error('Could not locate JSONC property separator');
+      removals.push({
+        start: comma.offset,
+        end: comma.offset + comma.length,
+      });
+    } else {
+      if (properties.length > 1) {
+        const previous = properties[index - 1];
+        const comma = findCommaToken(
+          source,
+          previous.offset + previous.length,
+          property.offset,
+          true,
+        );
+        if (!comma)
+          throw new Error('Could not locate JSONC property separator');
+        removals.push({
+          start: comma.offset,
+          end: comma.offset + comma.length,
+        });
+      }
+
+      // JSONC permits a trailing comma after the last property. Remove that
+      // token too, but preserve all whitespace/comments around it.
+      const rootEnd = root.offset + root.length;
+      const trailingComma = findCommaToken(source, propertyEnd, rootEnd);
+      if (trailingComma) {
+        removals.push({
+          start: trailingComma.offset,
+          end: trailingComma.offset + trailingComma.length,
+        });
+      }
+    }
+
+    let updated = source;
+    for (const removal of removals.sort((a, b) => b.start - a.start)) {
+      updated = updated.slice(0, removal.start) + updated.slice(removal.end);
+    }
+    parseJsonConfigText(updated);
+    writeBackupAtomic(`${configPath}.bak`, currentText);
+    writeAtomic(configPath, `${hasBom ? '\uFEFF' : ''}${updated}`);
+  });
+}
+
 export function mutateJsonFile(
   configPath: string,
   mutate: (current: JsonConfig) => JsonConfig,

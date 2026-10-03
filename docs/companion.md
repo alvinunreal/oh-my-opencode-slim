@@ -2,6 +2,25 @@
 
 The desktop companion app provides a floating status overlay showing running and active agents.
 
+Right-click the Companion to open its compact control menu. In addition to the
+existing size controls, the menu exposes scoped preset navigation. The center
+preset button shows the active edit scope: `P:` for **Project** or `G:` for
+**Global**; clicking it toggles scope.
+
+Project scope is the safe default for desktop use with multiple projects open.
+It always writes the current project's `.opencode` layer, creating the
+canonical `oh-my-opencode-slim.jsonc` file when necessary. Project navigation
+also includes **Inherit**, which removes only the local `preset` key so the
+project follows the global selection again.
+
+Global scope writes only the user/global config and offers only presets defined
+in that global layer. Projects with local overrides remain unchanged, while
+other open projects pick up the new global selection through the existing
+Companion refresh path.
+
+Preset changes are sent back to the plugin over the Companion state channel; the
+native binary never parses or edits OMO configuration files directly.
+
 ## How to Enable in Configuration
 
 You can enable the companion by adding a `companion` section to your setting configuration file (`~/.config/opencode/oh-my-opencode-slim.json` or `.opencode/oh-my-opencode-slim.json`):

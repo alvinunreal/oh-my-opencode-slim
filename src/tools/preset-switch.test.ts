@@ -6,9 +6,11 @@ import { parse } from 'jsonc-parser';
 import type { PluginConfig } from '../config';
 import {
   buildPresetSummary,
+  clearProjectPresetOnDisk,
   deletePreset,
   findPresetDependents,
   getEditablePreset,
+  getPresetSelectionState,
   getPresetSource,
   removeAgentFromPreset,
   setAgentOverride,
@@ -167,6 +169,279 @@ describe('switchPresetOnDisk', () => {
     expect(persisted.preset).toBe('cheap');
     expect(persisted.agents).toEqual({
       orchestrator: { model: 'old-model' },
+    });
+  });
+
+  test('effective scope updates an existing project-local preset override', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    const projectConfigPath = path.join(
+      projectConfigDir,
+      'oh-my-opencode-slim.jsonc',
+    );
+    fs.writeFileSync(
+      projectConfigPath,
+      `{
+        // Companion should preserve this project-local layer.
+        "preset": "old",
+      }`,
+    );
+
+    const userConfigPath = path.join(
+      tempDir,
+      'xdg-config',
+      'opencode',
+      'oh-my-opencode-slim.json',
+    );
+    fs.writeFileSync(
+      userConfigPath,
+      JSON.stringify({ preset: 'user-default' }),
+    );
+
+    const config: PluginConfig = {
+      presets: {
+        old: { orchestrator: { model: 'old-model' } },
+        cheap: { orchestrator: { model: 'cheap-model' } },
+      },
+    };
+
+    const result = switchPresetOnDisk(projectDir, 'cheap', config, {
+      scope: 'effective',
+    });
+
+    expect(result.ok).toBe(true);
+    const projectText = fs.readFileSync(projectConfigPath, 'utf-8');
+    expect(projectText).toContain('// Companion should preserve');
+    expect((parse(projectText) as { preset?: string }).preset).toBe('cheap');
+    expect(JSON.parse(fs.readFileSync(userConfigPath, 'utf-8')).preset).toBe(
+      'user-default',
+    );
+  });
+
+  test('project scope creates a local override without changing global preset', () => {
+    const projectDir = path.join(tempDir, 'project-create');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const userConfigPath = path.join(
+      tempDir,
+      'xdg-config',
+      'opencode',
+      'oh-my-opencode-slim.json',
+    );
+    fs.writeFileSync(
+      userConfigPath,
+      JSON.stringify({
+        preset: 'global',
+        presets: {
+          global: { orchestrator: { model: 'global-model' } },
+          cheap: { orchestrator: { model: 'cheap-model' } },
+        },
+      }),
+    );
+
+    const config: PluginConfig = {
+      presets: {
+        global: { orchestrator: { model: 'global-model' } },
+        cheap: { orchestrator: { model: 'cheap-model' } },
+      },
+    };
+    const result = switchPresetOnDisk(projectDir, 'cheap', config, {
+      scope: 'project',
+    });
+
+    expect(result.ok).toBe(true);
+    const projectConfigPath = path.join(
+      projectDir,
+      '.opencode',
+      'oh-my-opencode-slim.jsonc',
+    );
+    expect(fs.existsSync(projectConfigPath)).toBe(true);
+    expect(
+      (parse(fs.readFileSync(projectConfigPath, 'utf8')) as { preset?: string })
+        .preset,
+    ).toBe('cheap');
+    expect(JSON.parse(fs.readFileSync(userConfigPath, 'utf8')).preset).toBe(
+      'global',
+    );
+  });
+
+  test('global scope updates user preset even when project override exists', () => {
+    const projectDir = path.join(tempDir, 'project-global');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    const projectConfigPath = path.join(
+      projectConfigDir,
+      'oh-my-opencode-slim.jsonc',
+    );
+    fs.writeFileSync(projectConfigPath, JSON.stringify({ preset: 'local' }));
+
+    const userConfigPath = path.join(
+      tempDir,
+      'xdg-config',
+      'opencode',
+      'oh-my-opencode-slim.json',
+    );
+    fs.writeFileSync(
+      userConfigPath,
+      JSON.stringify({
+        preset: 'global-old',
+        presets: {
+          'global-old': { orchestrator: { model: 'old-global-model' } },
+          'global-new': { orchestrator: { model: 'new-global-model' } },
+        },
+      }),
+    );
+
+    const result = switchPresetOnDisk(
+      projectDir,
+      'global-new',
+      {
+        presets: {
+          local: { orchestrator: { model: 'local-model' } },
+          'global-old': { orchestrator: { model: 'old-global-model' } },
+          'global-new': { orchestrator: { model: 'new-global-model' } },
+        },
+      },
+      { scope: 'global' },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(JSON.parse(fs.readFileSync(userConfigPath, 'utf8')).preset).toBe(
+      'global-new',
+    );
+    expect(
+      (parse(fs.readFileSync(projectConfigPath, 'utf8')) as { preset?: string })
+        .preset,
+    ).toBe('local');
+  });
+
+  test('global scope rejects presets defined only in the project layer', () => {
+    const projectDir = path.join(tempDir, 'project-global-catalog');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.jsonc'),
+      JSON.stringify({
+        presets: {
+          localOnly: { orchestrator: { model: 'local-model' } },
+        },
+      }),
+    );
+
+    const result = switchPresetOnDisk(
+      projectDir,
+      'localOnly',
+      {
+        presets: {
+          localOnly: { orchestrator: { model: 'local-model' } },
+        },
+      },
+      { scope: 'global' },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('not found');
+  });
+
+  test('clearing project override preserves other project settings and restores inheritance', () => {
+    const projectDir = path.join(tempDir, 'project-inherit');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    const projectConfigPath = path.join(
+      projectConfigDir,
+      'oh-my-opencode-slim.jsonc',
+    );
+    fs.writeFileSync(
+      projectConfigPath,
+      `{
+        "preset": "local" /* removed-field comment, with comma */,
+        "companion": {
+          // preserve unrelated project setting comment
+          "enabled": true
+        },
+      }`,
+    );
+
+    const result = clearProjectPresetOnDisk(projectDir);
+
+    expect(result.ok).toBe(true);
+    const text = fs.readFileSync(projectConfigPath, 'utf8');
+    expect(text).toContain('// preserve unrelated project setting comment');
+    const parsed = parse(text) as {
+      preset?: string;
+      companion?: { enabled?: boolean };
+    };
+    expect(parsed.preset).toBeUndefined();
+    expect(parsed.companion?.enabled).toBe(true);
+  });
+
+  test('selection state interpolates global preset placeholders like the runtime loader', () => {
+    const projectDir = path.join(tempDir, 'project-env-selection');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const userConfigPath = path.join(
+      tempDir,
+      'xdg-config',
+      'opencode',
+      'oh-my-opencode-slim.json',
+    );
+    fs.writeFileSync(
+      userConfigPath,
+      JSON.stringify({
+        preset: '{env:OMO_TEST_GLOBAL_PRESET}',
+        presets: {
+          global: { orchestrator: { model: 'global-model' } },
+        },
+      }),
+    );
+
+    process.env.OMO_TEST_GLOBAL_PRESET = 'global';
+    try {
+      expect(getPresetSelectionState(projectDir)).toMatchObject({
+        effective: 'global',
+        global: 'global',
+        project: undefined,
+      });
+    } finally {
+      delete process.env.OMO_TEST_GLOBAL_PRESET;
+    }
+  });
+
+  test('selection state separates effective, project, and global catalogs', () => {
+    const projectDir = path.join(tempDir, 'project-selection-state');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.jsonc'),
+      JSON.stringify({
+        preset: 'local',
+        presets: {
+          local: { orchestrator: { model: 'local-model' } },
+        },
+      }),
+    );
+    const userConfigPath = path.join(
+      tempDir,
+      'xdg-config',
+      'opencode',
+      'oh-my-opencode-slim.json',
+    );
+    fs.writeFileSync(
+      userConfigPath,
+      JSON.stringify({
+        preset: 'global',
+        presets: {
+          global: { orchestrator: { model: 'global-model' } },
+        },
+      }),
+    );
+
+    const state = getPresetSelectionState(projectDir);
+    expect(state).toEqual({
+      effective: 'local',
+      project: 'local',
+      global: 'global',
+      projectAvailable: ['global', 'local'],
+      globalAvailable: ['global'],
     });
   });
 

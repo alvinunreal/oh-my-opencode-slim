@@ -10,6 +10,7 @@ The companion communicates with OpenCode host runtime via file-based state shari
 
 - Displays animated GIFs for `idle`, `question`, `unknown`, and agent-specific animations (`council`, `designer`, `explorer`, `fixer`, `librarian`, `observer`, `oracle`, `orchestrator`).
 - Animated windows can be resized (S/M/L/XL presets), repositioned via drag-and-drop, and anchored to screen edges.
+- The right-click menu exposes explicit Project/Global OMO preset scopes. Project scope is the default and can create/remove a local override via Inherit; Global scope changes only the user layer. The native UI writes typed scoped requests into shared state while TypeScript remains the sole owner of config validation and persistence.
 - Session state tracks window positions, sizes, and config per project directory using a hidden state file.
 - Animations are pre-generated as 72-frame JPEG sprite sheets (12x6 grid, 200x200 each frame) from companion/VIDEOS/*.mp4 source videos.
 

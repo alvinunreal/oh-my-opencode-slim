@@ -1,6 +1,10 @@
 import * as fs from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
-import { mutateJsonFile, stripJsonComments } from '../cli/config-io';
+import {
+  mutateJsonFile,
+  removeTopLevelJsonProperty,
+  stripJsonComments,
+} from '../cli/config-io';
 import type {
   AgentOverrideConfig,
   PluginConfig,
@@ -10,7 +14,10 @@ import type {
 } from '../config';
 import { deepMerge, normalizePreset, PresetResolutionError } from '../config';
 import { AGENT_ALIASES } from '../config/constants';
-import { findPluginConfigPaths } from '../config/loader';
+import {
+  findPluginConfigPaths,
+  getPluginConfigCandidates,
+} from '../config/loader';
 import { resolvePresetDefinition } from '../config/presets';
 import {
   isPrototypeSensitiveName,
@@ -52,6 +59,33 @@ export interface PresetSwitchResult {
   message: string;
   /** Per-agent summary lines, e.g. "orchestrator → model: x, variant: y". */
   summary: string[];
+}
+
+export type PresetSwitchScope = 'user' | 'effective' | 'project' | 'global';
+
+export interface PresetSwitchOptions {
+  /**
+   * "user" preserves historical /preset behavior: write the user config and
+   * refuse when a project-local override would mask the result.
+   *
+   * "effective" preserves the original Companion behavior: update an existing
+   * project override, otherwise fall back to the user config.
+   *
+   * "project" always writes the project layer, creating the canonical
+   * .opencode config when necessary.
+   *
+   * "global" explicitly writes the user/global layer even when this project
+   * has a local override. Callers should make that scope visible to the user.
+   */
+  scope?: PresetSwitchScope;
+}
+
+export interface PresetSelectionState {
+  effective?: string;
+  project?: string;
+  global?: string;
+  projectAvailable: string[];
+  globalAvailable: string[];
 }
 
 type PersistPresetResult = { ok: true } | { ok: false; message: string };
@@ -110,12 +144,20 @@ export function switchPresetOnDisk(
   directory: string,
   presetName: string,
   config: PluginConfig,
+  options: PresetSwitchOptions = {},
 ): PresetSwitchResult {
-  const configuredPresets = getAllConfiguredPresets(directory);
-  const presets: PresetMap = {
-    ...configuredPresets,
-    ...((config.presets ?? {}) as PresetMap),
-  };
+  const scope = options.scope ?? 'user';
+  const configuredPresets =
+    scope === 'global'
+      ? readUserPresets(directory)
+      : getAllConfiguredPresets(directory);
+  const presets: PresetMap =
+    scope === 'global'
+      ? { ...configuredPresets }
+      : {
+          ...configuredPresets,
+          ...((config.presets ?? {}) as PresetMap),
+        };
   const rawPreset = ownPresetValue(presets, presetName);
 
   if (!rawPreset) {
@@ -165,7 +207,7 @@ export function switchPresetOnDisk(
       ? projectConfig.preset.trim()
       : undefined;
 
-  if (projectPreset && projectPreset !== presetName) {
+  if (scope === 'user' && projectPreset && projectPreset !== presetName) {
     return {
       ok: false,
       presetName,
@@ -185,7 +227,14 @@ export function switchPresetOnDisk(
   }
 
   const agentUpdates = buildAgentUpdates(effectivePreset);
-  const persistence = persistPresetName(directory, presetName);
+  const persistence =
+    scope === 'project'
+      ? persistProjectPresetName(directory, presetName)
+      : scope === 'global'
+        ? persistPresetName(directory, presetName)
+        : scope === 'effective' && projectPreset
+          ? persistProjectPresetName(directory, presetName)
+          : persistPresetName(directory, presetName);
   if (!persistence.ok) {
     return {
       ok: false,
@@ -198,8 +247,81 @@ export function switchPresetOnDisk(
   return {
     ok: true,
     presetName,
-    message: `Saved preset "${presetName}". Reload OpenCode for it to take effect. The current session keeps its existing agent models to avoid truncating context, drifting prior turns, or destabilizing running subagents.`,
+    message: `Saved${scope === 'project' ? ' project' : scope === 'global' ? ' global' : ''} preset "${presetName}". Reload OpenCode for it to take effect. The current session keeps its existing agent models to avoid truncating context, drifting prior turns, or destabilizing running subagents.`,
     summary: buildPresetSummary(agentUpdates),
+  };
+}
+
+export function getPresetSelectionState(
+  directory: string,
+): PresetSelectionState {
+  const userConfig = readUserConfig(directory);
+  const projectConfig = readProjectConfig(directory);
+  const globalPreset =
+    typeof userConfig?.preset === 'string' &&
+    interpolateConfigEnvironment(userConfig.preset).trim()
+      ? interpolateConfigEnvironment(userConfig.preset).trim()
+      : undefined;
+  const projectPreset =
+    typeof projectConfig?.preset === 'string' && projectConfig.preset.trim()
+      ? projectConfig.preset.trim()
+      : undefined;
+  const envPreset = process.env.OH_MY_OPENCODE_SLIM_PRESET?.trim() || undefined;
+
+  return {
+    effective: envPreset ?? projectPreset ?? globalPreset,
+    project: projectPreset,
+    global: globalPreset,
+    projectAvailable: Object.keys(getAllConfiguredPresets(directory)).sort(
+      (a, b) => a.localeCompare(b),
+    ),
+    globalAvailable: Object.keys(readUserPresets(directory)).sort((a, b) =>
+      a.localeCompare(b),
+    ),
+  };
+}
+
+export function clearProjectPresetOnDisk(
+  directory: string,
+): PresetSwitchResult {
+  let projectConfigPath: string | null;
+  try {
+    projectConfigPath = findPluginConfigPaths(directory).projectConfigPath;
+  } catch (error) {
+    return {
+      ok: false,
+      presetName: '',
+      message: `Could not locate the project config file: ${describeError(error)}.`,
+      summary: [],
+    };
+  }
+
+  if (!projectConfigPath) {
+    return {
+      ok: true,
+      presetName: '',
+      message: 'Project already inherits the global preset.',
+      summary: [],
+    };
+  }
+
+  try {
+    removeTopLevelJsonProperty(projectConfigPath, 'preset');
+  } catch (error) {
+    return {
+      ok: false,
+      presetName: '',
+      message: `Could not clear the project preset override: ${describeError(error)}.`,
+      summary: [],
+    };
+  }
+
+  return {
+    ok: true,
+    presetName: '',
+    message:
+      'Project preset override removed. This project now inherits the global preset.',
+    summary: [],
   };
 }
 
@@ -400,6 +522,44 @@ function persistPresetName(
       message: isReadError
         ? `Could not read or parse the user config file: ${message}.`
         : `Could not write the user config file: ${message}.`,
+    };
+  }
+
+  return { ok: true };
+}
+
+function persistProjectPresetName(
+  directory: string,
+  presetName: string,
+): PersistPresetResult {
+  let projectConfigPath: string;
+  try {
+    const existing = findPluginConfigPaths(directory).projectConfigPath;
+    projectConfigPath =
+      existing ?? getPluginConfigCandidates(directory).project[0];
+  } catch (error) {
+    return {
+      ok: false,
+      message: `Could not locate the project config file: ${describeError(error)}.`,
+    };
+  }
+
+  try {
+    mutateJsonFile(projectConfigPath, (current) => ({
+      ...current,
+      preset: presetName,
+    }));
+  } catch (error) {
+    const message = describeError(error);
+    const isReadError =
+      message.includes('Config file must contain') ||
+      message.toLowerCase().includes('parse') ||
+      message.toLowerCase().includes('json');
+    return {
+      ok: false,
+      message: isReadError
+        ? `Could not read or parse the project config file: ${message}.`
+        : `Could not write the project config file: ${message}.`,
     };
   }
 

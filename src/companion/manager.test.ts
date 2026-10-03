@@ -25,10 +25,19 @@ function readState() {
 }
 
 const previousXdg = process.env.XDG_DATA_HOME;
+const previousXdgConfig = process.env.XDG_CONFIG_HOME;
+const previousOpenCodeConfigDir = process.env.OPENCODE_CONFIG_DIR;
+const previousPresetEnv = process.env.OH_MY_OPENCODE_SLIM_PRESET;
 
 beforeEach(() => {
   mkdirSync(TEST_DIR, { recursive: true });
   process.env.XDG_DATA_HOME = XDG_DIR;
+  process.env.XDG_CONFIG_HOME = path.join(TEST_DIR, 'config');
+  delete process.env.OPENCODE_CONFIG_DIR;
+  delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
+  const configDir = path.join(process.env.XDG_CONFIG_HOME, 'opencode');
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(path.join(configDir, 'oh-my-opencode-slim.json'), '{}');
 });
 
 afterEach(() => {
@@ -38,6 +47,18 @@ afterEach(() => {
   rmSync(TEST_DIR, { recursive: true, force: true });
   if (previousXdg === undefined) delete process.env.XDG_DATA_HOME;
   else process.env.XDG_DATA_HOME = previousXdg;
+  if (previousXdgConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = previousXdgConfig;
+  if (previousOpenCodeConfigDir === undefined) {
+    delete process.env.OPENCODE_CONFIG_DIR;
+  } else {
+    process.env.OPENCODE_CONFIG_DIR = previousOpenCodeConfigDir;
+  }
+  if (previousPresetEnv === undefined) {
+    delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
+  } else {
+    process.env.OH_MY_OPENCODE_SLIM_PRESET = previousPresetEnv;
+  }
 });
 
 function make(
@@ -92,6 +113,388 @@ describe('CompanionManager', () => {
     expect(state.sessions[0].active_agents).toEqual(['intro']);
     expect(state.sessions[0].status).toBe('idle');
     expect(state.sessions[0].pid).toBe(process.pid);
+  });
+
+  it('publishes presets and applies a project-local preset request', () => {
+    const projectDir = path.join(TEST_DIR, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    mkdirSync(projectConfigDir, { recursive: true });
+    const projectConfigPath = path.join(
+      projectConfigDir,
+      'oh-my-opencode-slim.jsonc',
+    );
+    writeFileSync(
+      projectConfigPath,
+      `{
+        // Project-local preset should remain the controlling layer.
+        "preset": "old",
+      }`,
+    );
+
+    const userConfigPath = path.join(
+      path.join(TEST_DIR, 'config'),
+      'opencode',
+      'oh-my-opencode-slim.json',
+    );
+    writeFileSync(
+      userConfigPath,
+      JSON.stringify({
+        preset: 'cheap',
+        presets: {
+          old: { orchestrator: { model: 'old-model' } },
+          cheap: { orchestrator: { model: 'cheap-model' } },
+        },
+      }),
+    );
+
+    const m = make('preset-session', projectDir);
+    m.onLoad();
+    let state = readState();
+    expect(state.sessions[0].preset.current).toBe('old');
+    expect(state.sessions[0].preset.available).toEqual(['cheap', 'old']);
+
+    state.preset_requests = [
+      {
+        request_id: 'req-1',
+        session_id: 'preset-session',
+        preset: 'cheap',
+      },
+      {
+        request_id: 'req-other',
+        session_id: 'other-session',
+        preset: 'old',
+      },
+    ];
+    writeFileSync(stateFilePath(), JSON.stringify(state));
+    (
+      m as unknown as {
+        consumePresetRequest: () => boolean;
+      }
+    ).consumePresetRequest();
+
+    state = readState();
+    expect(state.preset_requests).toEqual([
+      {
+        request_id: 'req-other',
+        session_id: 'other-session',
+        preset: 'old',
+      },
+    ]);
+    expect(state.sessions[0].preset).toMatchObject({
+      current: 'cheap',
+      last_request_id: 'req-1',
+      result_ok: true,
+    });
+    expect(readFileSync(projectConfigPath, 'utf8')).toContain(
+      '// Project-local preset should remain',
+    );
+    expect(readFileSync(projectConfigPath, 'utf8')).toContain(
+      '"preset": "cheap"',
+    );
+  });
+
+  it('keeps per-project overrides isolated while global preset refreshes inheriting projects', () => {
+    const projectLocal = path.join(TEST_DIR, 'project-local');
+    const projectInherited = path.join(TEST_DIR, 'project-inherited');
+    mkdirSync(path.join(projectLocal, '.opencode'), { recursive: true });
+    mkdirSync(projectInherited, { recursive: true });
+    writeFileSync(
+      path.join(projectLocal, '.opencode', 'oh-my-opencode-slim.jsonc'),
+      JSON.stringify({ preset: 'local' }),
+    );
+
+    const userConfigPath = path.join(
+      TEST_DIR,
+      'config',
+      'opencode',
+      'oh-my-opencode-slim.json',
+    );
+    writeFileSync(
+      userConfigPath,
+      JSON.stringify({
+        preset: 'global-a',
+        presets: {
+          local: { orchestrator: { model: 'local-model' } },
+          'global-a': { orchestrator: { model: 'global-a-model' } },
+          'global-b': { orchestrator: { model: 'global-b-model' } },
+        },
+      }),
+    );
+
+    const local = make('local-session', projectLocal);
+    const inherited = make('inherited-session', projectInherited);
+    local.onLoad();
+    inherited.onLoad();
+
+    let state = readState();
+    const localEntry = state.sessions.find(
+      (session: { session_id: string }) =>
+        session.session_id === 'local-session',
+    );
+    const inheritedEntry = state.sessions.find(
+      (session: { session_id: string }) =>
+        session.session_id === 'inherited-session',
+    );
+    expect(localEntry.preset).toMatchObject({
+      effective: 'local',
+      project: 'local',
+      global: 'global-a',
+      global_available: ['global-a', 'global-b', 'local'],
+    });
+    expect(inheritedEntry.preset).toMatchObject({
+      effective: 'global-a',
+      global: 'global-a',
+    });
+    expect(inheritedEntry.preset.project).toBeUndefined();
+
+    state.preset_requests = [
+      {
+        request_id: 'req-global',
+        session_id: 'inherited-session',
+        scope: 'global',
+        preset: 'global-b',
+        inherit: false,
+      },
+    ];
+    writeFileSync(stateFilePath(), JSON.stringify(state));
+    (
+      inherited as unknown as {
+        consumePresetRequest: () => boolean;
+      }
+    ).consumePresetRequest();
+
+    for (let i = 0; i < 4; i++) {
+      (
+        local as unknown as {
+          pollPresetState: () => void;
+        }
+      ).pollPresetState();
+    }
+
+    state = readState();
+    const localAfter = state.sessions.find(
+      (session: { session_id: string }) =>
+        session.session_id === 'local-session',
+    );
+    const inheritedAfter = state.sessions.find(
+      (session: { session_id: string }) =>
+        session.session_id === 'inherited-session',
+    );
+    expect(localAfter.preset).toMatchObject({
+      effective: 'local',
+      project: 'local',
+      global: 'global-b',
+    });
+    expect(inheritedAfter.preset).toMatchObject({
+      effective: 'global-b',
+      global: 'global-b',
+      last_scope: 'global',
+      result_ok: true,
+    });
+  });
+
+  it('keeps legacy unscoped Companion requests on effective semantics', () => {
+    const projectDir = path.join(TEST_DIR, 'legacy-effective-project');
+    mkdirSync(projectDir, { recursive: true });
+    const userConfigPath = path.join(
+      TEST_DIR,
+      'config',
+      'opencode',
+      'oh-my-opencode-slim.json',
+    );
+    writeFileSync(
+      userConfigPath,
+      JSON.stringify({
+        preset: 'global-a',
+        presets: {
+          'global-a': { orchestrator: { model: 'global-a-model' } },
+          'global-b': { orchestrator: { model: 'global-b-model' } },
+        },
+      }),
+    );
+
+    const m = make('legacy-effective-session', projectDir);
+    m.onLoad();
+
+    const state = readState();
+    state.preset_requests = [
+      {
+        request_id: 'legacy-unscoped',
+        session_id: 'legacy-effective-session',
+        preset: 'global-b',
+      },
+    ];
+    writeFileSync(stateFilePath(), JSON.stringify(state));
+
+    (
+      m as unknown as {
+        consumePresetRequest: () => boolean;
+      }
+    ).consumePresetRequest();
+
+    expect(JSON.parse(readFileSync(userConfigPath, 'utf8')).preset).toBe(
+      'global-b',
+    );
+    expect(
+      existsSync(
+        path.join(projectDir, '.opencode', 'oh-my-opencode-slim.jsonc'),
+      ),
+    ).toBe(false);
+  });
+
+  it('refreshes published preset state after an external config edit', () => {
+    const projectDir = path.join(TEST_DIR, 'refresh-project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    mkdirSync(projectConfigDir, { recursive: true });
+    const projectConfigPath = path.join(
+      projectConfigDir,
+      'oh-my-opencode-slim.jsonc',
+    );
+    writeFileSync(projectConfigPath, JSON.stringify({ preset: 'old' }));
+
+    const userConfigPath = path.join(
+      TEST_DIR,
+      'config',
+      'opencode',
+      'oh-my-opencode-slim.json',
+    );
+    writeFileSync(
+      userConfigPath,
+      JSON.stringify({
+        presets: {
+          old: { orchestrator: { model: 'old-model' } },
+          cheap: { orchestrator: { model: 'cheap-model' } },
+        },
+      }),
+    );
+
+    const m = make('refresh-session', projectDir);
+    m.onLoad();
+    expect(readState().sessions[0].preset.current).toBe('old');
+
+    writeFileSync(projectConfigPath, JSON.stringify({ preset: 'cheap' }));
+    for (let i = 0; i < 4; i++) {
+      (
+        m as unknown as {
+          pollPresetState: () => void;
+        }
+      ).pollPresetState();
+    }
+
+    expect(readState().sessions[0].preset).toMatchObject({
+      current: 'cheap',
+      available: ['cheap', 'old'],
+    });
+  });
+
+  it('preserves request acknowledgement across a racing external refresh', () => {
+    const projectDir = path.join(TEST_DIR, 'ack-refresh-project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    mkdirSync(projectConfigDir, { recursive: true });
+    const projectConfigPath = path.join(
+      projectConfigDir,
+      'oh-my-opencode-slim.jsonc',
+    );
+    writeFileSync(projectConfigPath, JSON.stringify({ preset: 'old' }));
+
+    const userConfigPath = path.join(
+      TEST_DIR,
+      'config',
+      'opencode',
+      'oh-my-opencode-slim.json',
+    );
+    writeFileSync(
+      userConfigPath,
+      JSON.stringify({
+        presets: {
+          old: { orchestrator: { model: 'old-model' } },
+          cheap: { orchestrator: { model: 'cheap-model' } },
+        },
+      }),
+    );
+
+    const m = make('ack-refresh-session', projectDir);
+    m.onLoad();
+
+    let state = readState();
+    state.preset_requests = [
+      {
+        request_id: 'req-ack',
+        session_id: 'ack-refresh-session',
+        preset: 'cheap',
+      },
+    ];
+    writeFileSync(stateFilePath(), JSON.stringify(state));
+    (
+      m as unknown as {
+        consumePresetRequest: () => boolean;
+      }
+    ).consumePresetRequest();
+
+    state = readState();
+    expect(state.sessions[0].preset).toMatchObject({
+      current: 'cheap',
+      last_request_id: 'req-ack',
+      result_ok: true,
+    });
+
+    // External edit lands before the native Companion has observed req-ack.
+    writeFileSync(projectConfigPath, JSON.stringify({ preset: 'old' }));
+    for (let i = 0; i < 4; i++) {
+      (
+        m as unknown as {
+          pollPresetState: () => void;
+        }
+      ).pollPresetState();
+    }
+
+    state = readState();
+    expect(state.sessions[0].preset).toMatchObject({
+      current: 'old',
+      last_request_id: 'req-ack',
+    });
+    expect(state.sessions[0].preset.result_ok).toBeUndefined();
+  });
+
+  it('keeps the last-known preset state when an external edit is malformed', () => {
+    const projectDir = path.join(TEST_DIR, 'malformed-project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    mkdirSync(projectConfigDir, { recursive: true });
+    const projectConfigPath = path.join(
+      projectConfigDir,
+      'oh-my-opencode-slim.jsonc',
+    );
+    writeFileSync(projectConfigPath, JSON.stringify({ preset: 'old' }));
+
+    const userConfigPath = path.join(
+      TEST_DIR,
+      'config',
+      'opencode',
+      'oh-my-opencode-slim.json',
+    );
+    writeFileSync(
+      userConfigPath,
+      JSON.stringify({
+        presets: {
+          old: { orchestrator: { model: 'old-model' } },
+        },
+      }),
+    );
+
+    const m = make('malformed-session', projectDir);
+    m.onLoad();
+    expect(readState().sessions[0].preset.current).toBe('old');
+
+    writeFileSync(projectConfigPath, '{ invalid json');
+    for (let i = 0; i < 4; i++) {
+      (
+        m as unknown as {
+          pollPresetState: () => void;
+        }
+      ).pollPresetState();
+    }
+
+    expect(readState().sessions[0].preset.current).toBe('old');
   });
 
   it('shows orchestrator while orchestrator is busy with no specialists', () => {
