@@ -53,6 +53,14 @@ struct ConfigKey {
     speed_bits: u32,
 }
 
+fn should_apply_geometry(
+    dragging: bool,
+    applied: Option<&WindowGeometryKey>,
+    next: &WindowGeometryKey,
+) -> bool {
+    !dragging && applied != Some(next)
+}
+
 fn grid_cols(n: usize) -> usize {
     match n {
         0 | 1 => 1,
@@ -545,7 +553,15 @@ impl eframe::App for CompanionApp {
             screen_w: self.screen[0].round() as u32,
             screen_h: self.screen[1].round() as u32,
         };
-        if self.applied_geometry.as_ref() != Some(&geometry) {
+        // Never re-apply native window geometry while the user is dragging.
+        // Crossing onto a monitor with a different logical size changes
+        // viewport().monitor_size; treating that as a geometry change during
+        // StartDrag can emit OuterPosition and snap the window back.
+        if should_apply_geometry(
+            self.drag_project_key.is_some(),
+            self.applied_geometry.as_ref(),
+            &geometry,
+        ) {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(win_w, win_h)));
             let pos = saved_position
                 .map(|pos| restore_window_position([pos.x, pos.y], self.screen, [win_w, win_h]))
@@ -867,8 +883,8 @@ fn is_pid_alive(_pid: u32) -> bool {
 mod tests {
     use super::{
         apply_config, choose_owned_session, choose_session, config_key, grid_dims,
-        handle_drag_start, place_window, restore_window_position, size_from_config, window_size,
-        ConfigKey, SessionInfo, WindowGeometryKey, GAP,
+        handle_drag_start, place_window, restore_window_position, should_apply_geometry,
+        size_from_config, window_size, ConfigKey, SessionInfo, WindowGeometryKey, GAP,
     };
     use crate::state::CompanionConfigState;
 
@@ -1017,6 +1033,43 @@ mod tests {
             restore_window_position([2200.0, 80.0], [1440.0, 900.0], [120.0, 120.0]),
             [2200.0, 80.0]
         );
+    }
+
+    #[test]
+    fn geometry_reapply_is_suppressed_during_drag_and_resumes_after_release() {
+        let applied = WindowGeometryKey {
+            session_id: "owner".into(),
+            project_key: "/project".into(),
+            position: "bottom-right".into(),
+            custom_x: None,
+            custom_y: None,
+            size_px: 120,
+            cols: 1,
+            rows: 1,
+            screen_w: 1440,
+            screen_h: 900,
+        };
+        let crossed_monitor = WindowGeometryKey {
+            screen_w: 2560,
+            screen_h: 1440,
+            ..applied.clone()
+        };
+
+        assert!(!should_apply_geometry(
+            true,
+            Some(&applied),
+            &crossed_monitor
+        ));
+        assert!(should_apply_geometry(
+            false,
+            Some(&applied),
+            &crossed_monitor
+        ));
+        assert!(!should_apply_geometry(
+            false,
+            Some(&crossed_monitor),
+            &crossed_monitor
+        ));
     }
 
     #[test]
