@@ -27,6 +27,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import type { BundledSkillInfo } from '../cli/custom-skills';
+import { stateFilePath } from '../companion/manager';
 import { MarketplaceStore } from '../marketplace/store';
 import { flushLoggerForTesting } from '../utils/logger';
 import { compilePermissionPolicy } from './permissions';
@@ -501,6 +502,65 @@ describe('createV2Setup e2e', () => {
       await Bun.file(path.join(legacyDir, 'skills-manifest.json')).exists(),
     ).toBe(true);
     await cleanup();
+  }, 20_000);
+
+  test('v2 context bridge preserves live model variant into Companion state', async () => {
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: {
+          enabled: true,
+          binaryPath: path.join(fixtureRoot, 'missing-companion-bin'),
+        },
+      }),
+    );
+
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+
+    try {
+      expect(calls.contextHookCb).toBeFunction();
+      await calls.contextHookCb?.({
+        sessionID: 'ses_companion_variant',
+        agent: 'fixer',
+        model: {
+          providerID: 'openai',
+          id: 'gpt-live',
+          variant: 'reasoning-high',
+        },
+        system: [],
+        tools: {},
+        messages: [
+          {
+            info: { id: 'user-live-variant', role: 'user' },
+            parts: [{ type: 'text', text: 'hello' }],
+          },
+        ],
+      });
+
+      const state = JSON.parse(readFileSync(stateFilePath(), 'utf8')) as {
+        sessions: Array<{
+          active_agent_details?: Array<{
+            session_id: string;
+            agent: string;
+            model?: string;
+            variant?: string;
+          }>;
+        }>;
+      };
+      const details = state.sessions.flatMap(
+        (session) => session.active_agent_details ?? [],
+      );
+
+      expect(details).toContainEqual({
+        session_id: 'ses_companion_variant',
+        agent: 'fixer',
+        model: 'openai/gpt-live',
+        variant: 'reasoning-high',
+      });
+    } finally {
+      await cleanup();
+    }
   }, 20_000);
 
   test('disabled_commands interview gates both registration and execution', async () => {

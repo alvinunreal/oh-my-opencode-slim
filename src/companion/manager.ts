@@ -23,10 +23,18 @@ import { log } from '../utils/logger';
 let activeExitListener: (() => void) | null = null;
 const activeManagers = new Set<CompanionManager>();
 
+interface CompanionAgentDetail {
+  session_id: string;
+  agent: string;
+  model?: string;
+  variant?: string;
+}
+
 interface CompanionSession {
   session_id: string;
   cwd: string;
   active_agents: string[];
+  active_agent_details?: CompanionAgentDetail[];
   status: string;
   pid: number;
   config?: CompanionState['config'];
@@ -240,6 +248,12 @@ export class CompanionManager {
   private status = 'idle';
   /** sessionId → agent name, for sessions currently busy. */
   private readonly busyAgentSessions = new Map<string, string>();
+  private readonly sessionDetails = new Map<
+    string,
+    { model?: string; variant?: string }
+  >();
+  private orchestratorSessionId: string | undefined;
+  private orchestratorBusy = false;
   private readonly config?: CompanionConfig;
   private companionProcess: ChildProcess | null = null;
   private wasSpawner = false;
@@ -312,10 +326,13 @@ export class CompanionManager {
     if (!sessionId || (status !== 'busy' && status !== 'idle')) return;
 
     if (agent === 'orchestrator') {
-      // Orchestrator going idle does NOT clear specialists: with background
-      // orchestration it idles while dispatched agents are still running.
-      // Specialists are removed only by their own idle/deleted events.
-      this.status = status;
+      this.orchestratorSessionId = sessionId;
+      this.orchestratorBusy = status === 'busy';
+      // A pending input request is cleared only by its explicit reply/reject
+      // event, not by ordinary lifecycle noise from the same session.
+      if (this.status !== 'waiting-input') {
+        this.status = status;
+      }
       this.flush();
       return;
     }
@@ -329,27 +346,77 @@ export class CompanionManager {
       // Remove by session even when the agent name is unknown, so a
       // finished specialist can never get stuck on screen.
       this.busyAgentSessions.delete(sessionId);
+      this.sessionDetails.delete(sessionId);
     }
     this.flush();
+  }
+
+  onSessionModelChanged(input: {
+    sessionId?: string;
+    model?: string;
+    variant?: string;
+    variantObserved?: boolean;
+  }): void {
+    if (this.config?.enabled !== true) return;
+    const { sessionId, model, variant, variantObserved = false } = input;
+    if (!sessionId || (!model && !variant)) return;
+
+    const previous = this.sessionDetails.get(sessionId);
+    const nextModel = model ?? previous?.model;
+    // A model change without an observed live variant must clear the previous
+    // variant. For the same model, a model-only telemetry update preserves the
+    // exact variant captured earlier from chat.message.
+    const nextVariant = variantObserved
+      ? variant
+      : (variant ??
+        (model && previous?.model && model !== previous.model
+          ? undefined
+          : previous?.variant));
+    if (previous?.model === nextModel && previous?.variant === nextVariant) {
+      return;
+    }
+
+    this.sessionDetails.set(sessionId, {
+      ...(nextModel ? { model: nextModel } : {}),
+      ...(nextVariant ? { variant: nextVariant } : {}),
+    });
+    if (
+      this.busyAgentSessions.has(sessionId) ||
+      this.orchestratorSessionId === sessionId
+    ) {
+      this.flush();
+    }
   }
 
   onSessionDeleted(sessionId: string | undefined): void {
     if (this.config?.enabled !== true) return;
     if (!sessionId) return;
-    if (this.busyAgentSessions.delete(sessionId)) {
+    const removed = this.busyAgentSessions.delete(sessionId);
+    this.sessionDetails.delete(sessionId);
+    const wasOrchestrator = this.orchestratorSessionId === sessionId;
+    if (wasOrchestrator) {
+      this.orchestratorSessionId = undefined;
+      this.orchestratorBusy = false;
+    }
+    if (removed || wasOrchestrator) {
       this.flush();
     }
   }
 
   onWaitingInput(): void {
     if (this.config?.enabled !== true) return;
+    // Waiting input is project-level UI state, not proof that the requesting
+    // session is the orchestrator. Keep orchestrator identity untouched.
     this.status = 'waiting-input';
     this.flush();
   }
 
   onInputResolved(): void {
     if (this.config?.enabled !== true) return;
-    this.status = this.busyAgentSessions.size > 0 ? 'busy' : 'idle';
+    this.status =
+      this.busyAgentSessions.size > 0 || this.orchestratorBusy
+        ? 'busy'
+        : 'idle';
     this.flush();
   }
 
@@ -402,6 +469,29 @@ export class CompanionManager {
     }
   }
 
+  private detailFor(sessionId: string, agent: string): CompanionAgentDetail {
+    const detail = this.sessionDetails.get(sessionId);
+    return {
+      session_id: sessionId,
+      agent,
+      ...(detail?.model ? { model: detail.model } : {}),
+      ...(detail?.variant ? { variant: detail.variant } : {}),
+    };
+  }
+
+  private activeAgentDetails(): CompanionAgentDetail[] {
+    const details = [...this.busyAgentSessions.entries()]
+      .slice(0, 9)
+      .map(([sessionId, agent]) => this.detailFor(sessionId, agent));
+    if (details.length > 0) return details;
+
+    if (this.status === 'busy' && this.orchestratorSessionId) {
+      return [this.detailFor(this.orchestratorSessionId, 'orchestrator')];
+    }
+
+    return [];
+  }
+
   /** One entry per running agent instance (two fixers → two cells). */
   private activeAgents(): string[] {
     const agents = Array.from(this.busyAgentSessions.values());
@@ -418,6 +508,7 @@ export class CompanionManager {
         session_id: this.id,
         cwd: this.cwd,
         active_agents: this.activeAgents(),
+        active_agent_details: this.activeAgentDetails(),
         status: this.status,
         pid: process.pid,
         config: this.config

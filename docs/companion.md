@@ -2,6 +2,19 @@
 
 The desktop companion app provides a floating status overlay showing running and active agents.
 
+Hover an active agent tile to inspect the live provider/model recorded for that
+session. A variant is shown only when it was observed on the live
+`chat.message` selection; model-only telemetry never guesses a variant from
+the agent configuration. The Companion therefore avoids presenting a configured
+default as if it were the user's current runtime choice.
+
+Attention in this PR is intentionally limited to waiting-for-input. A pending
+question or permission receives an outline that stays visible until the explicit
+reply/reject path resolves it. Error attention is deliberately deferred: raw
+`session.error` is not reliable terminal evidence because foreground/model
+fallback can still recover the turn, and the Companion should not duplicate the
+fallback subsystem's terminalization state machine.
+
 ## How to Enable in Configuration
 
 You can enable the companion by adding a `companion` section to your setting configuration file (`~/.config/opencode/oh-my-opencode-slim.json` or `.opencode/oh-my-opencode-slim.json`):

@@ -49,11 +49,23 @@ pub struct WindowPositionState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompanionAgentDetail {
+    pub session_id: String,
+    pub agent: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub variant: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub session_id: String,
     pub cwd: String,
     #[serde(default)]
     pub active_agents: Vec<String>,
+    #[serde(default)]
+    pub active_agent_details: Vec<CompanionAgentDetail>,
     #[serde(default)]
     pub active_agent: Option<String>,
     #[serde(default)]
