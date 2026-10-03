@@ -545,7 +545,11 @@ impl eframe::App for CompanionApp {
             screen_w: self.screen[0].round() as u32,
             screen_h: self.screen[1].round() as u32,
         };
-        if self.applied_geometry.as_ref() != Some(&geometry) {
+        // Never re-apply native window geometry while the user is dragging.
+        // Crossing onto a monitor with a different logical size changes
+        // viewport().monitor_size; treating that as a geometry change during
+        // StartDrag can emit OuterPosition and snap the window back.
+        if self.drag_project_key.is_none() && self.applied_geometry.as_ref() != Some(&geometry) {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(win_w, win_h)));
             let pos = saved_position
                 .map(|pos| restore_window_position([pos.x, pos.y], self.screen, [win_w, win_h]))
