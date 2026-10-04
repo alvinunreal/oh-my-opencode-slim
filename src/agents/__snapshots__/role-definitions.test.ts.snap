@@ -5,32 +5,32 @@ exports[`specialist role definitions matches golden factory prompts and descript
   {
     "description": "Fast codebase search and pattern matching. Use for finding files, locating code patterns, and answering 'where is X?' questions.",
     "name": "explorer",
-    "promptSha256": "8706550b93a221d1d11021999d35c33ff13faa474f69a4a4cc9704adcc495fcc",
+    "promptSha256": "96ce08020716ff43eb61fe5dd0cb5d296a3455e63d71e76a5800d3ed4b2ab975",
   },
   {
     "description": "External documentation and library research. Use for official docs lookup, GitHub examples, and understanding library internals.",
     "name": "librarian",
-    "promptSha256": "cfaefa3ded1afff72f82d3a57f460efb56505886e20cd14419a0293c3f310d74",
+    "promptSha256": "4f9a9437d3a25a4793eed803b94abf040f0735c4f5fb605b8a58f63deb877597",
   },
   {
     "description": "Strategic technical advisor. Use for architecture decisions, complex debugging, code review, simplification, and engineering guidance.",
     "name": "oracle",
-    "promptSha256": "67e05d2a1f8aa54fbb0d66acc1779f6f21d93efa63b726bf5b5718dd0dfcaaf9",
+    "promptSha256": "bd1522a845428be9e6d0ed25738adc15f21d1ef6fba92b993c06193b75431f85",
   },
   {
     "description": "UI/UX design, review, and implementation. Use for styling, responsive design, component architecture and visual polish.",
     "name": "designer",
-    "promptSha256": "e2667d9f6771ece1ff74ae697179e7824169baaf4065b43a9c065b8269309aa3",
+    "promptSha256": "2e15a01498fb39df7212b78e9164a4650defc7415a9825da7ac37bda316d5b02",
   },
   {
     "description": "Fast implementation specialist. Receives complete context and task spec, executes code changes efficiently.",
     "name": "fixer",
-    "promptSha256": "03beea3b18b70d4ca86601b9850dd35a69fbe359d772d2baafe5c81851c10c22",
+    "promptSha256": "982e1ee6a2e944dfb78dd5b60af8d49a23f53327eccbfd35b556e64d16d5ba26",
   },
   {
     "description": "Visual analysis. Use for interpreting images, screenshots, PDFs, and diagrams - extracts structured observations without loading raw files into main context. Requires a vision-capable model.",
     "name": "observer",
-    "promptSha256": "156c328a202557dd3132d2a4257f39192280afc2298c07e7166c07c0b5bf03db",
+    "promptSha256": "e139c92282ecbefa02cbe3526367c8608e54babc7811c9e9f04063abe4a20903",
   },
 ]
 `;
