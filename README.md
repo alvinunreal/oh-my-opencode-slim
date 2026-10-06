@@ -640,6 +640,33 @@ install details.
 
 ---
 
+## ACP model following (opt-in)
+
+External ACP agents keep their own default model unless you configure
+`modelMap`. For example:
+
+```jsonc
+{
+  "acpAgents": {
+    "claude-code": {
+      "command": "claude-agent-acp",
+      "modelMap": { "anthropic/claude-fable-5-1": "fable" }
+    }
+  }
+}
+```
+
+With `subagent(agent: 'claude-code', model: 'anthropic/claude-fable-5-1')`,
+`acp_run` reads the child session's current model once at startup, then selects
+and confirms ACP value `fable` before sending the task. This requires V2
+`session.get` to expose `data.model: { providerID, id }` and the ACP server to
+support model config options and `session/set_config_option`. It is a startup
+snapshot, not a historical assistant-turn model; subsequent calls read again.
+If the child inherits an OpenAI default or any other unmapped model, startup
+is refused rather than falling back to Opus. No wrapper/global default is
+changed. See [ACP Agents](docs/acp-agents.md#following-the-child-session-model)
+for the complete contract.
+
 ## 📚 Documentation
 
 Use this section as a map: start with installation, then jump to features, configuration, or example presets depending on what you need.

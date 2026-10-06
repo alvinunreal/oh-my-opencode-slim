@@ -197,6 +197,7 @@ All config files support **JSONC** (JSON with Comments):
 | `acpAgents.<name>.prompt` | string | generated wrapper prompt | Optional full prompt for the lightweight wrapper subagent See [ACP-connected agents](#acp-connected-agents). |
 | `acpAgents.<name>.orchestratorPrompt` | string | generated routing block | Optional exact routing block injected into the orchestrator prompt See [ACP-connected agents](#acp-connected-agents). |
 | `acpAgents.<name>.wrapperModel` | string | orchestrator default | Cheap OpenCode model used by the wrapper subagent that calls `acp_run` See [ACP-connected agents](#acp-connected-agents). |
+| `acpAgents.<name>.modelMap` | record of strings | unset (disabled) | Opt in to following the child session model at ACP startup. Maps full OpenCode model references to ACP config option values; nonempty keys/values, no unmapped fallback. See [Model following](acp-agents.md#following-the-child-session-model). |
 | `acpAgents.<name>.permissionMode` | string | `ask` | How ACP permission requests are handled: `ask`, `allow`, or `reject` See [ACP-connected agents](#acp-connected-agents). |
 | `acpAgents.<name>.timeoutMs` | integer | `0` | Timeout for a single ACP run in milliseconds. `0` disables the timeout so external agents can run indefinitely. Finite values can be up to `2147483647`ms (~24.8 days) See [ACP-connected agents](#acp-connected-agents). |
 | `disabled_agents` | string[] | `["observer"]` | Agent names to disable globally. Set to `[]` to enable Observer; this is global, not per-preset See [Custom Agents](#custom-agents). |
@@ -379,6 +380,30 @@ After restart, the orchestrator can delegate to `@claude-research` or
 conflict with built-in or custom agents. `permissionMode` controls ACP
 permission requests, but the plugin still asks before launching the configured
 subprocess.
+
+To follow a child's explicit OpenCode model selection, configure a map instead
+of relying on the external agent's default:
+
+```jsonc
+{
+  "acpAgents": {
+    "claude-code": {
+      "command": "claude-agent-acp",
+      "modelMap": { "anthropic/claude-fable-5-1": "fable" }
+    }
+  }
+}
+```
+
+Following is disabled when `modelMap` is omitted. When present, it requires
+V2 host `session.get` data with `model: { providerID, id }`, read once after
+permission at ACP startup. This is the child's current model snapshot, not a
+historical turn; the next call reads again. The ACP server must advertise the
+mapped config option and confirm `session/set_config_option` before any prompt.
+An inherited OpenAI default or any unmapped model (including with an empty map)
+refuses to start Claude instead of keeping Opus. No wrapper or global defaults
+are changed. See [Model following](acp-agents.md#following-the-child-session-model)
+for protocol requirements and failure behavior.
 
 ### Council configuration note
 

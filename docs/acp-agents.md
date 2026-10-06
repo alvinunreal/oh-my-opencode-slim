@@ -11,12 +11,13 @@ such as Claude Code ACP, Gemini ACP, or another ACP-compatible coding agent.
 Each `acpAgents` entry creates a lightweight wrapper subagent. The wrapper can
 only call `acp_run`, which:
 
-1. Starts the configured ACP subprocess over stdio.
-2. Sends `initialize`.
-3. Creates a session with `session/new`.
-4. Sends the task with `session/prompt`.
-5. Collects `session/update` `agent_message_chunk` text.
-6. Returns the external agent's final output to OpenCode.
+1. Checks the calling agent and requests launch permission.
+2. If `modelMap` is configured, reads and maps the child session's current model.
+3. Starts the configured ACP subprocess over stdio and sends `initialize`.
+4. Creates a session with `session/new`; when following models, selects and
+   confirms the mapped model with `session/set_config_option`.
+5. Sends the task with `session/prompt`.
+6. Collects `session/update` `agent_message_chunk` text and returns the output.
 
 The wrapper is sandboxed from normal local tools such as `bash`, `edit`,
 `task`, `webfetch`, `grep`, and `glob`.
@@ -66,12 +67,74 @@ Or let the orchestrator delegate to it when its routing prompt matches the task.
 | `prompt` | string | generated | Full prompt for the wrapper subagent. Usually unnecessary. |
 | `orchestratorPrompt` | string | generated | Exact routing block injected into the orchestrator prompt. |
 | `wrapperModel` | string | fixer default | Cheap OpenCode model used by the wrapper. |
+| `modelMap` | record of strings | unset (following disabled) | Full OpenCode `provider/model` references mapped to ACP model config option values. Keys and values must be nonempty; unmatched models fail closed. |
 | `permissionMode` | `ask` \| `allow` \| `reject` | `ask` | How ACP permission requests are answered. |
 | `timeoutMs` | integer | `300000` | Timeout for one ACP run. |
 
 > **`permission` vs `permissionMode`:** These are separate concepts.
 > - **`permission`** (on normal custom, built-in, and preset agents) provides SDK-enforced, expressive per-tool rules with pattern support, accepting `ask`/`allow`/`deny`. See [Agent Permissions](configuration.md#agent-permissions).
 > - **`permissionMode`** (ACP agents only) controls how the plugin answers the external ACP subprocess's permission requests, with simpler `ask`/`allow`/`reject` options.
+
+## Following the child session model
+
+Model following is **off by default**. Without `modelMap`, the bridge does not
+read the OpenCode session model or send a model setter; the external agent
+keeps its existing default behavior. Providing `modelMap` explicitly enables
+following, including an empty map (which cannot match any model).
+
+Example for an ACP server advertising model value `fable`, named `Fable 5.1`:
+
+```jsonc
+{
+  "acpAgents": {
+    "claude-code": {
+      "command": "claude-agent-acp",
+      "modelMap": {
+        "anthropic/claude-fable-5-1": "fable"
+      }
+    }
+  }
+}
+```
+
+Then delegate with
+`subagent(agent: 'claude-code', model: 'anthropic/claude-fable-5-1')`.
+No `model` argument is added to `acp_run`; the bridge uses the tool context's
+child `sessionID`, not an LLM-supplied model name.
+
+After launch permission, the host client's
+`session.get({ path: { id: sessionID } })` must return
+`data.model: { providerID: "anthropic", id: "claude-fable-5-1" }` (the V2 shape).
+Missing/invalid fields or a failed lookup stop execution before spawning ACP.
+No agent defaults, message history, or alternate model fields are guessed.
+
+This is the **child session's current selection at ACP startup**, not a
+historical assistant-turn snapshot. It is read exactly once per call. A model
+change during that call does not affect it; the next call reads the selection
+again. Concurrent sessions keep independent snapshots without shared model
+state or environment changes. This option does not change `wrapperModel`,
+agent defaults, or global defaults.
+
+The map uses exact, own keys: there are no built-in model aliases or version
+guesses. If the child inherits an OpenAI default, or selects any model not in
+the map, the bridge **refuses to start Claude**, rather than using its global
+Opus default. Add other mappings only for values explicitly supported by your
+server.
+
+The ACP `session/new` response must advertise exactly one model select config
+option (ID or category `model`), containing the mapped value in its flat or
+grouped options. Before prompting, `session/set_config_option` must return that
+option with exactly the requested `currentValue`. Missing/ambiguous options,
+unsupported values, setter errors, or mismatched confirmations stop the run
+without sending a prompt. Older protocols are not emulated with
+`session/set_model`, and there is no silent default fallback.
+
+On success, the bridge makes a best-effort call to the provided metadata sink
+with `requestedModel` (OpenCode reference) and `acpModel` (confirmed ACP value).
+The current V2 adapter only writes these fields to plugin logs; their presence
+in the UI or returned result is not guaranteed. This observes protocol selection,
+not proof of the provider's final routing; the backend output and prompt are
+unchanged, even if the metadata callback throws.
 
 ## Authentication
 

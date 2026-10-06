@@ -906,6 +906,12 @@ export const AcpAgentConfigSchema = z
     prompt: z.string().min(1).optional(),
     orchestratorPrompt: z.string().min(1).optional(),
     wrapperModel: ProviderModelIdSchema.optional(),
+    modelMap: z
+      .record(ProviderModelIdSchema, z.string().min(1))
+      .optional()
+      .describe(
+        'Opt in to following the current OpenCode session model at ACP startup. Maps full provider/model references to ACP model config option values; unmapped models fail closed.',
+      ),
     timeoutMs: z
       .number()
       .int()

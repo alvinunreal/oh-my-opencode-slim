@@ -122,7 +122,10 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 ```
 1. Agent invokes acp_run tool
    ├─> Validates calling agent matches configured agent name
+   ├─> Requests launch permission via ctx.ask()
+   ├─> With modelMap: reads one V2 host session model snapshot and maps it (fail closed)
    ├─> Spawns ACP client process with config
+   ├─> Initializes/creates session; with modelMap, selects and confirms ACP model config before prompt
    ├─> Sends prompt via JSON-RPC over stdin/stdout
    ├─> Handles permission requests via ctx.ask()
    ├─> Collects streaming output chunks

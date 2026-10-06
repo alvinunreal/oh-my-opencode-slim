@@ -6,6 +6,7 @@ import {
   type AcpAgentConfig,
   type AcpAgentsConfig,
   MAX_ACP_TIMEOUT_MS,
+  ProviderModelIdSchema,
 } from '../config';
 
 const z = tool.schema;
@@ -128,12 +129,27 @@ class AcpClient {
     });
   }
 
-  async run(prompt: string): Promise<string> {
+  async run(prompt: string, model?: string): Promise<string> {
     const init = await this.request('initialize', createAcpInitializeParams());
     this.authMethods = readAuthMethods(init);
     const created = await this.newSession();
     const sessionId = readSessionId(created);
     this.sessionId = sessionId;
+    if (model !== undefined) {
+      const option = readModelConfigOption(created);
+      if (!supportsModelValue(option.options, model)) {
+        throw new Error(`ACP model config option does not support '${model}'`);
+      }
+      const updated = await this.request('session/set_config_option', {
+        sessionId,
+        configId: option.id,
+        value: model,
+      });
+      const confirmed = readModelConfigOption(updated);
+      if (confirmed.id !== option.id || confirmed.currentValue !== model) {
+        throw new Error(`ACP model selection was not confirmed as '${model}'`);
+      }
+    }
     this.active = true;
     await this.request('session/prompt', {
       sessionId,
@@ -396,7 +412,36 @@ class AcpClient {
   }
 }
 
-export function createAcpRunTool(agents: AcpAgentsConfig = {}): ToolDefinition {
+/** Read only the V2 session.get response shape, not message/agent defaults. */
+export function readAcpSessionModel(response: unknown): string {
+  if (isRecord(response) && response.error != null) {
+    throw new Error('ACP model following session.get failed');
+  }
+  const data = isRecord(response) ? response.data : undefined;
+  const model = isRecord(data) ? data.model : undefined;
+  if (
+    !isRecord(model) ||
+    typeof model.providerID !== 'string' ||
+    !/^[^/\s]+$/.test(model.providerID) ||
+    typeof model.id !== 'string'
+  ) {
+    throw new Error(
+      'ACP model following requires session.get data.model with V2 {providerID, id}',
+    );
+  }
+  const parsed = ProviderModelIdSchema.safeParse(
+    `${model.providerID}/${model.id}`,
+  );
+  if (!parsed.success) {
+    throw new Error('ACP model following received an invalid session model');
+  }
+  return parsed.data;
+}
+
+export function createAcpRunTool(
+  agents: AcpAgentsConfig = {},
+  resolveSessionModel?: (sessionID: string) => Promise<string>,
+): ToolDefinition {
   return tool({
     description:
       'Run a configured external ACP-compatible coding agent and return its streamed result. Use for configured ACP agents such as Claude Code ACP, Gemini ACP, or custom ACP servers.',
@@ -444,51 +489,145 @@ export function createAcpRunTool(agents: AcpAgentsConfig = {}): ToolDefinition {
         },
       });
 
-      const client = new AcpClient(
-        args.agent,
-        config,
-        cwd,
-        async (title, metadata) => {
-          if (config.permissionMode === 'reject') return;
-          await ctx.ask({
-            permission: 'acp_run',
-            patterns: [`acp:${args.agent}:${title}`],
-            always: [],
-            metadata,
-          });
-        },
-        (title, metadata) => ctx.metadata({ title, metadata }),
-      );
+      let client: AcpClient | undefined;
+      let requestedModel: string | undefined;
+      let acpModel: string | undefined;
       const timeoutMs = args.timeout_ms ?? config.timeoutMs;
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const timeout =
-        timeoutMs > 0
-          ? new Promise<string>(
-              (_, reject) =>
-                (timer = setTimeout(
-                  () =>
-                    reject(
-                      new Error(
-                        `ACP agent '${args.agent}' timed out after ${timeoutMs}ms`,
-                      ),
-                    ),
-                  timeoutMs,
-                )),
-            )
-          : undefined;
+      let stopped: Error | undefined;
+      let stop!: (error: Error) => void;
+      const interruption = new Promise<never>((_, reject) => {
+        stop = (error) => {
+          stopped ??= error;
+          reject(stopped);
+        };
+      });
+      const aborted = () => new Error(`ACP agent '${args.agent}' aborted`);
       const abort = () => {
-        void client.close();
+        // Preserve legacy close-only aborts when model following is disabled.
+        if (config.modelMap !== undefined) stop(aborted());
+        void client?.close();
       };
-      ctx.abort.addEventListener('abort', abort, { once: true });
       try {
-        const run = client.run(args.prompt);
-        return timeout ? await Promise.race([run, timeout]) : await run;
+        // One budget covers the model lookup and ACP run, after permission.
+        if (timeoutMs > 0) {
+          timer = setTimeout(
+            () =>
+              stop(
+                new Error(
+                  `ACP agent '${args.agent}' timed out after ${timeoutMs}ms`,
+                ),
+              ),
+            timeoutMs,
+          );
+        }
+        ctx.abort.addEventListener('abort', abort, { once: true });
+        const run = async () => {
+          if (ctx.abort.aborted) throw aborted();
+          // One invocation-local snapshot, before spawn.
+          if (config.modelMap !== undefined) {
+            if (!resolveSessionModel) {
+              throw new Error(
+                'ACP model following requires resolveSessionModel',
+              );
+            }
+            if (!ctx.sessionID) {
+              throw new Error('ACP model following requires sessionID');
+            }
+            try {
+              requestedModel = await resolveSessionModel(ctx.sessionID);
+            } catch (error) {
+              throw new Error(
+                `ACP model following could not read session '${ctx.sessionID}': ${String(error)}`,
+              );
+            }
+            // The lookup cannot be cancelled; a late result must not spawn ACP.
+            if (stopped) throw stopped;
+            if (!ProviderModelIdSchema.safeParse(requestedModel).success) {
+              throw new Error(
+                'ACP model following received an invalid model reference',
+              );
+            }
+            if (!Object.hasOwn(config.modelMap, requestedModel)) {
+              throw new Error(
+                `ACP agent '${args.agent}' modelMap has no mapping for '${requestedModel}'; refusing to start the default model`,
+              );
+            }
+            acpModel = config.modelMap[requestedModel];
+            if (typeof acpModel !== 'string' || acpModel.length === 0) {
+              throw new Error(
+                `ACP modelMap has an invalid value for '${requestedModel}'`,
+              );
+            }
+          }
+          client = new AcpClient(
+            args.agent,
+            config,
+            cwd,
+            async (title, metadata) => {
+              if (config.permissionMode === 'reject') return;
+              await ctx.ask({
+                permission: 'acp_run',
+                patterns: [`acp:${args.agent}:${title}`],
+                always: [],
+                metadata,
+              });
+            },
+            (title, metadata) => ctx.metadata({ title, metadata }),
+          );
+          return await client.run(args.prompt, acpModel);
+        };
+        const output = await Promise.race([run(), interruption]);
+        if (requestedModel !== undefined) {
+          try {
+            ctx.metadata?.({ metadata: { requestedModel, acpModel } });
+          } catch {
+            // A host-side metadata failure must not discard successful output.
+          }
+        }
+        return output;
       } finally {
         if (timer) clearTimeout(timer);
         ctx.abort.removeEventListener('abort', abort);
-        await client.close();
+        await client?.close();
       }
     },
+  });
+}
+
+function readModelConfigOption(value: unknown): Record<string, unknown> {
+  const options = isRecord(value) ? value.configOptions : undefined;
+  const models = Array.isArray(options)
+    ? options
+        .filter(isRecord)
+        .filter(
+          (option) => option.id === 'model' || option.category === 'model',
+        )
+    : [];
+  const model = models[0];
+  if (
+    models.length !== 1 ||
+    typeof model.id !== 'string' ||
+    !model.id ||
+    model.type !== 'select'
+  ) {
+    throw new Error(
+      'ACP response must contain exactly one model config option',
+    );
+  }
+  return model;
+}
+
+function supportsModelValue(options: unknown, value: string): boolean {
+  if (!Array.isArray(options)) return false;
+  return options.filter(isRecord).some((option) => {
+    // ACP select options may be flat values or groups of values.
+    if (Array.isArray(option.options)) {
+      return option.options
+        .filter(isRecord)
+        .some((item) => item.value === value);
+    }
+    return option.value === value;
   });
 }
 

@@ -100,6 +100,7 @@ import {
   createWebfetchTool,
   resolveFinalizedOrchestratorIdentities,
 } from './tools';
+import { readAcpSessionModel } from './tools/acp-run';
 import { pickAgentModelRef } from './tools/smartfetch/secondary-model';
 import {
   applyActivityEvent,
@@ -793,7 +794,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     mcps = createBuiltinMcps(runtime.disabledMcps);
     acpRunTools =
       Object.keys(runtime.acpAgents ?? {}).length > 0
-        ? { acp_run: createAcpRunTool(runtime.acpAgents) }
+        ? {
+            acp_run: createAcpRunTool(runtime.acpAgents, async (sessionID) =>
+              readAcpSessionModel(
+                await ctx.client.session.get({ path: { id: sessionID } }),
+              ),
+            ),
+          }
         : {};
     const webfetchModel = runtime.webfetch?.model;
     const webfetchModels = (() => {
