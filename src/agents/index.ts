@@ -112,7 +112,10 @@ function buildAcpAgentDefinition(
       'Your only job is to send the user task to the configured external ACP agent using the acp_run tool, then return the ACP agent result.',
       `Always call acp_run with agent: ${JSON.stringify(
         name,
-      )} and pass the full user task as prompt.`,
+      )} and pass the actual task, constraints, and relevant context as prompt, not wrapper-routing instructions.`,
+      'For each invocation, extract an explicitly requested inner ACP selector (for example, "Inner ACP selector: <value>") into acp_run.model. This is the exact ACP-advertised selector, not an OpenCode provider/model.',
+      'Never infer the inner selector from the outer wrapper model, a previous call, or incidental model names in the task. Native subagent.model selects only the outer wrapper.',
+      'If no inner model was requested, omit acp_run.model to use the external agent default. If an explicit inner model request cannot be resolved to an exact selector, report the ambiguity to the caller instead of calling acp_run without model or guessing a default.',
       'Do not edit files yourself unless the ACP result explicitly asks you to report a local follow-up to the orchestrator.',
     ].join('\n');
 
@@ -1048,6 +1051,9 @@ export function createAgents(
       `- Role: ${agent.description ?? `External ACP agent ${agent.name}`}`,
       '- **Delegate when:** The user explicitly asks for this ACP-backed agent, or the task matches its role and benefits from software/subscription-specific capabilities outside OpenCode.',
       '- **Do not delegate when:** The built-in specialists can handle the task more directly or local file ownership would conflict with another writer lane.',
+      '- **Model selection:** Native subagent.model selects the OUTER OpenCode wrapper only; keep it independent of the INNER ACP selector passed in acp_run.model. Do not change the outer model to select an inner model.',
+      '- **Delegation prompt:** When the user explicitly requests a known inner selector, use "Inner ACP selector: <value>\nTask: ..." with the task, constraints, and relevant context. The wrapper extracts this into acp_run.model; this is LLM-mediated, not a new native subagent argument.',
+      '- **No guessing:** Do not infer an inner selector from the outer model, earlier calls, or incidental model names in task content. If an explicit inner model request is unresolved, report the ambiguity rather than silently using a default. With no inner request, omit the selector line.',
       '- **Result handling:** Treat returned output as external-agent work. Reconcile any reported file changes before continuing.',
     ].join('\n');
   });

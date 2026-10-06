@@ -1776,18 +1776,6 @@
             "type": "string",
             "pattern": "^[^/\\s]+\\/.+$"
           },
-          "modelMap": {
-            "description": "Opt in to following the current OpenCode session model at ACP startup. Maps full provider/model references to ACP model config option values; unmapped models fail closed.",
-            "type": "object",
-            "propertyNames": {
-              "type": "string",
-              "pattern": "^[^/\\s]+\\/.+$"
-            },
-            "additionalProperties": {
-              "type": "string",
-              "minLength": 1
-            }
-          },
           "timeoutMs": {
             "default": 0,
             "description": "Timeout for a single ACP run in milliseconds. Set to 0 to disable the timeout.",

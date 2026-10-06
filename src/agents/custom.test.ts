@@ -157,7 +157,58 @@ describe('custom-agent creation', () => {
     expect(wrapper?.description).toBe('Claude Code research via ACP');
     expect(wrapper?.config.model).toBe('openai/gpt-6-luna');
     expect(wrapper?.config.prompt).toContain('acp_run');
+    expect(wrapper?.config.prompt).toContain('acp_run.model');
+    expect(wrapper?.config.prompt).toContain(
+      'actual task, constraints, and relevant context',
+    );
+    expect(wrapper?.config.prompt).toContain(
+      'not wrapper-routing instructions',
+    );
+    expect(wrapper?.config.prompt).toContain('Never infer the inner selector');
+    expect(wrapper?.config.prompt).toContain(
+      'a previous call, or incidental model names',
+    );
+    expect(wrapper?.config.prompt).toContain('report the ambiguity');
+    expect(wrapper?.config.prompt).toContain('omit acp_run.model');
     expect(orchestrator?.config.prompt).toContain('@claude-research');
+    expect(orchestrator?.config.prompt).toContain(
+      'OUTER OpenCode wrapper only',
+    );
+    expect(orchestrator?.config.prompt).toContain(
+      'Inner ACP selector: <value>\nTask: ...',
+    );
+    expect(orchestrator?.config.prompt).toContain(
+      'LLM-mediated, not a new native subagent argument',
+    );
+    expect(orchestrator?.config.prompt).toContain(
+      'report the ambiguity rather than silently using a default',
+    );
+  });
+
+  test('custom ACP prompts replace generated selector guidance', () => {
+    const agents = createAgents(
+      runtimeFor({
+        acpAgents: {
+          bridge: {
+            command: 'fixture-acp',
+            args: [],
+            env: {},
+            timeoutMs: 0,
+            permissionMode: 'ask',
+            prompt: 'Custom wrapper contract.',
+            orchestratorPrompt: 'Custom ACP routing contract.',
+          },
+        },
+      }),
+    );
+    const wrapper = agents.find((agent) => agent.name === 'bridge');
+    const orchestrator = agents.find((agent) => agent.name === 'orchestrator');
+    expect(wrapper?.config.prompt).toContain('Custom wrapper contract.');
+    expect(wrapper?.config.prompt).not.toContain('acp_run.model');
+    expect(orchestrator?.config.prompt).toContain(
+      'Custom ACP routing contract.',
+    );
+    expect(orchestrator?.config.prompt).not.toContain('Inner ACP selector:');
   });
 
   test('falls back to active preset primary model for ACP wrappers', () => {

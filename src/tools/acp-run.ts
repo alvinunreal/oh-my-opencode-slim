@@ -6,7 +6,6 @@ import {
   type AcpAgentConfig,
   type AcpAgentsConfig,
   MAX_ACP_TIMEOUT_MS,
-  ProviderModelIdSchema,
 } from '../config';
 
 const z = tool.schema;
@@ -240,6 +239,9 @@ class AcpClient {
     method: string,
     params: Record<string, unknown>,
   ): Promise<Json | undefined> {
+    if (this.closing.signal.aborted) {
+      return Promise.reject(new Error(`ACP agent '${this.name}' closed`));
+    }
     const id = this.next++;
     const payload = { jsonrpc: '2.0', id, method, params };
     return new Promise((resolve, reject) => {
@@ -412,42 +414,20 @@ class AcpClient {
   }
 }
 
-/** Read only the V2 session.get response shape, not message/agent defaults. */
-export function readAcpSessionModel(response: unknown): string {
-  if (isRecord(response) && response.error != null) {
-    throw new Error('ACP model following session.get failed');
-  }
-  const data = isRecord(response) ? response.data : undefined;
-  const model = isRecord(data) ? data.model : undefined;
-  if (
-    !isRecord(model) ||
-    typeof model.providerID !== 'string' ||
-    !/^[^/\s]+$/.test(model.providerID) ||
-    typeof model.id !== 'string'
-  ) {
-    throw new Error(
-      'ACP model following requires session.get data.model with V2 {providerID, id}',
-    );
-  }
-  const parsed = ProviderModelIdSchema.safeParse(
-    `${model.providerID}/${model.id}`,
-  );
-  if (!parsed.success) {
-    throw new Error('ACP model following received an invalid session model');
-  }
-  return parsed.data;
-}
-
-export function createAcpRunTool(
-  agents: AcpAgentsConfig = {},
-  resolveSessionModel?: (sessionID: string) => Promise<string>,
-): ToolDefinition {
+export function createAcpRunTool(agents: AcpAgentsConfig = {}): ToolDefinition {
   return tool({
     description:
       'Run a configured external ACP-compatible coding agent and return its streamed result. Use for configured ACP agents such as Claude Code ACP, Gemini ACP, or custom ACP servers.',
     args: {
       agent: z.string().describe('Configured ACP agent name'),
       prompt: z.string().describe('Task or question to send to the ACP agent'),
+      model: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          'Optional exact ACP-advertised inner model selector for this invocation only, not an OpenCode provider/model or the outer wrapper model. Omit only when no inner model was requested; omission uses the external agent default.',
+        ),
       cwd: z
         .string()
         .optional()
@@ -476,6 +456,12 @@ export function createAcpRunTool(
       }
       const cwd = args.cwd ?? config.cwd ?? ctx.directory;
       if (!cwd) throw new Error('acp_run requires a working directory');
+      if (
+        args.model !== undefined &&
+        (typeof args.model !== 'string' || args.model.length === 0)
+      ) {
+        throw new Error('acp_run model must be a nonempty ACP selector');
+      }
 
       await ctx.ask({
         permission: 'acp_run',
@@ -490,26 +476,20 @@ export function createAcpRunTool(
       });
 
       let client: AcpClient | undefined;
-      let requestedModel: string | undefined;
-      let acpModel: string | undefined;
+      const requestedModel = args.model;
       const timeoutMs = args.timeout_ms ?? config.timeoutMs;
       let timer: ReturnType<typeof setTimeout> | undefined;
-      let stopped: Error | undefined;
       let stop!: (error: Error) => void;
       const interruption = new Promise<never>((_, reject) => {
-        stop = (error) => {
-          stopped ??= error;
-          reject(stopped);
-        };
+        stop = reject;
       });
       const aborted = () => new Error(`ACP agent '${args.agent}' aborted`);
       const abort = () => {
-        // Preserve legacy close-only aborts when model following is disabled.
-        if (config.modelMap !== undefined) stop(aborted());
+        stop(aborted());
         void client?.close();
       };
       try {
-        // One budget covers the model lookup and ACP run, after permission.
+        // One budget covers ACP startup, selection, and prompt, after permission.
         if (timeoutMs > 0) {
           timer = setTimeout(
             () =>
@@ -524,42 +504,6 @@ export function createAcpRunTool(
         ctx.abort.addEventListener('abort', abort, { once: true });
         const run = async () => {
           if (ctx.abort.aborted) throw aborted();
-          // One invocation-local snapshot, before spawn.
-          if (config.modelMap !== undefined) {
-            if (!resolveSessionModel) {
-              throw new Error(
-                'ACP model following requires resolveSessionModel',
-              );
-            }
-            if (!ctx.sessionID) {
-              throw new Error('ACP model following requires sessionID');
-            }
-            try {
-              requestedModel = await resolveSessionModel(ctx.sessionID);
-            } catch (error) {
-              throw new Error(
-                `ACP model following could not read session '${ctx.sessionID}': ${String(error)}`,
-              );
-            }
-            // The lookup cannot be cancelled; a late result must not spawn ACP.
-            if (stopped) throw stopped;
-            if (!ProviderModelIdSchema.safeParse(requestedModel).success) {
-              throw new Error(
-                'ACP model following received an invalid model reference',
-              );
-            }
-            if (!Object.hasOwn(config.modelMap, requestedModel)) {
-              throw new Error(
-                `ACP agent '${args.agent}' modelMap has no mapping for '${requestedModel}'; refusing to start the default model`,
-              );
-            }
-            acpModel = config.modelMap[requestedModel];
-            if (typeof acpModel !== 'string' || acpModel.length === 0) {
-              throw new Error(
-                `ACP modelMap has an invalid value for '${requestedModel}'`,
-              );
-            }
-          }
           client = new AcpClient(
             args.agent,
             config,
@@ -575,12 +519,14 @@ export function createAcpRunTool(
             },
             (title, metadata) => ctx.metadata({ title, metadata }),
           );
-          return await client.run(args.prompt, acpModel);
+          return await client.run(args.prompt, requestedModel);
         };
         const output = await Promise.race([run(), interruption]);
         if (requestedModel !== undefined) {
           try {
-            ctx.metadata?.({ metadata: { requestedModel, acpModel } });
+            ctx.metadata?.({
+              metadata: { requestedModel, acpModel: requestedModel },
+            });
           } catch {
             // A host-side metadata failure must not discard successful output.
           }

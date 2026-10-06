@@ -640,32 +640,31 @@ install details.
 
 ---
 
-## ACP model following (opt-in)
+## Choose an inner ACP model per invocation
 
-External ACP agents keep their own default model unless you configure
-`modelMap`. For example:
+Keep the outer OpenCode wrapper model fixed while choosing an independent
+inner model for each task. The wrapper calls, for a server advertising `fable`:
 
-```jsonc
-{
-  "acpAgents": {
-    "claude-code": {
-      "command": "claude-agent-acp",
-      "modelMap": { "anthropic/claude-fable-5-1": "fable" }
-    }
-  }
-}
+```text
+acp_run(agent: "claude-code", model: "fable", prompt: "Investigate this bug")
 ```
 
-With `subagent(agent: 'claude-code', model: 'anthropic/claude-fable-5-1')`,
-`acp_run` reads the child session's current model once at startup, then selects
-and confirms ACP value `fable` before sending the task. This requires V2
-`session.get` to expose `data.model: { providerID, id }` and the ACP server to
-support model config options and `session/set_config_option`. It is a startup
-snapshot, not a historical assistant-turn model; subsequent calls read again.
-If the child inherits an OpenAI default or any other unmapped model, startup
-is refused rather than falling back to Opus. No wrapper/global default is
-changed. See [ACP Agents](docs/acp-agents.md#following-the-child-session-model)
-for the complete contract.
+To delegate through the generated wrapper, put the choice in the task text:
+
+```text
+@claude-code
+Inner ACP selector: fable
+Task: Investigate this bug and summarize the likely cause.
+```
+
+`acp_run.model` is an exact ACP-advertised selector, not an OpenCode
+`provider/model`. Native `subagent.model` selects only the **outer** wrapper.
+The wrapper's extraction is LLM-mediated, not a new native delegation argument.
+An explicit selector must be advertised and confirmed before prompting; errors
+never silently fall back. Omission uses the external agent default, not the
+previous call's selection. Custom wrapper/routing prompts replace this generated
+guidance and must implement it themselves. See
+[ACP Agents](docs/acp-agents.md#choosing-the-inner-model-per-invocation).
 
 ## 📚 Documentation
 
