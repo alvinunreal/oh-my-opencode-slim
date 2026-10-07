@@ -280,11 +280,13 @@ export function createInterviewService(
       failedHunk: string;
       contextWindow: string;
     };
-    pendingAnswerHistory?: {
+    pendingAnswerHistory?: Array<{
       questions: InterviewState['questions'];
       answers: InterviewAnswer[];
       activeQuestionIds: Set<string>;
-    };
+    }>;
+    answerHistoryRetry?: Promise<void>;
+    answerHistoryError?: string;
     lastPatchError?: string;
     reportedPatchFailureHash?: string;
   };
@@ -666,6 +668,48 @@ export function createInterviewService(
     delete turn.patchError;
   }
 
+  async function retryPendingAnswerHistory(
+    interview: InterviewRecord,
+  ): Promise<void> {
+    const memory = memoryFor(interview.id);
+    if (memory.answerHistoryRetry) {
+      await memory.answerHistoryRetry;
+      return;
+    }
+    const pending = memory.pendingAnswerHistory;
+    if (!pending?.length) return;
+
+    const retry = (async () => {
+      while (pending.length > 0) {
+        const batch = pending[0];
+        try {
+          await withInterviewDocumentLock(interview.markdownPath, () =>
+            appendInterviewAnswers(interview, batch.questions, batch.answers),
+          );
+          pending.shift();
+        } catch (error) {
+          memory.answerHistoryError =
+            'Answers were sent, but saving their history failed. The history will be retried automatically.';
+          log('[interview] failed to retry interview answers', {
+            error: String(error),
+          });
+          return;
+        }
+      }
+
+      delete memory.pendingAnswerHistory;
+      delete memory.answerHistoryError;
+    })();
+    memory.answerHistoryRetry = retry;
+    try {
+      await retry;
+    } finally {
+      if (memory.answerHistoryRetry === retry) {
+        delete memory.answerHistoryRetry;
+      }
+    }
+  }
+
   function closeTurn(sessionID: string): void {
     const turn = turnFor(sessionID);
     turn.turnOpen = false;
@@ -907,7 +951,7 @@ export function createInterviewService(
       }),
       lastParseError: effectivePatchError
         ? 'The spec patch did not apply.'
-        : latestAssistantError,
+        : (latestAssistantError ?? memory.answerHistoryError),
       isBusy: sessionBusy.get(interview.sessionID) === true,
       summary: state.summary,
       questions: state.questions,
@@ -973,6 +1017,7 @@ export function createInterviewService(
         turnFor(sessionID).toolMessageID = messageID;
       }
       markStateApplied(interview, normalized, outcome.hash, messageID);
+      await retryPendingAnswerHistory(interview);
       const hunks = countPatchHunks(normalized.patch);
       const count = normalized.questions.length;
       const questionLabel = count === 1 ? 'question' : 'questions';
@@ -1323,24 +1368,7 @@ export function createInterviewService(
     }
     sessionBusy.set(sessionID, true);
     const memory = memoryFor(interview.id);
-    if (memory.pendingAnswerHistory) {
-      const pendingHistory = memory.pendingAnswerHistory;
-      try {
-        await withInterviewDocumentLock(interview.markdownPath, () =>
-          appendInterviewAnswers(
-            interview,
-            pendingHistory.questions,
-            pendingHistory.answers,
-          ),
-        );
-        delete memory.pendingAnswerHistory;
-      } catch {
-        sessionBusy.set(sessionID, false);
-        throw new Error(
-          'Answers are still waiting to be saved to the interview document. Try again to retry the save.',
-        );
-      }
-    }
+    await retryPendingAnswerHistory(interview);
     memory.patchRepairSent = false;
     delete memory.pendingPatchRepair;
     let promptSent = false;
@@ -1488,35 +1516,19 @@ export function createInterviewService(
         activeQuestionIds: Set<string>;
         questions: InterviewState['questions'];
       };
-      try {
-        await withInterviewDocumentLock(interview.markdownPath, () =>
-          appendInterviewAnswers(interview, answerContext.questions, answers),
-        );
-        delete memoryFor(interview.id).pendingAnswerHistory;
-      } catch (error) {
-        log('[interview] failed to append interview answers', {
-          error: String(error),
-        });
-        const memory = memoryFor(interview.id);
-        memory.pendingAnswerHistory = {
-          questions: answerContext.questions,
-          answers,
-          activeQuestionIds: answerContext.activeQuestionIds,
-        };
-        memory.pendingAnswers = true;
-        memory.answeredQuestions = answerContext.activeQuestionIds;
-        throw new Error(
-          'Answers were sent, but saving them to the interview document failed. Try again to retry the save.',
-        );
-      }
+      const memory = memoryFor(interview.id);
+      const pending = memory.pendingAnswerHistory ?? [];
+      pending.push({
+        questions: answerContext.questions,
+        answers,
+        activeQuestionIds: answerContext.activeQuestionIds,
+      });
+      memory.pendingAnswerHistory = pending;
+      await retryPendingAnswerHistory(interview);
     } catch (error) {
       if (answersMarked) {
         const memory = memoryFor(interview.id);
-        if (memory.pendingAnswerHistory) {
-          memory.pendingAnswers = true;
-          memory.answeredQuestions =
-            memory.pendingAnswerHistory.activeQuestionIds;
-        } else if (previousPendingAnswers === undefined) {
+        if (previousPendingAnswers === undefined) {
           delete memory.pendingAnswers;
         } else {
           memory.pendingAnswers = previousPendingAnswers;

@@ -1054,17 +1054,36 @@ describe('completed interview service turns', () => {
       .interview.markdownPath;
     await fs.chmod(documentPath, 0o444);
     try {
-      await expect(
-        harness.service.submitAnswers(interviewId, [
-          { questionId: 'q-1', answer: 'Web' },
-        ]),
-      ).rejects.toThrow('saving them to the interview document failed');
+      await harness.service.submitAnswers(interviewId, [
+        { questionId: 'q-1', answer: 'Web' },
+      ]);
     } finally {
       await fs.chmod(documentPath, 0o644);
     }
 
     const state = await harness.service.getInterviewState(interviewId);
     expect(state.mode).toBe('awaiting-agent');
+    expect(state.lastParseError).toContain('saving their history failed');
+
+    await Promise.all([
+      harness.service.submitState('ses-submit', {
+        summary: 'Append failure spec updated',
+        patch:
+          '@@ -1,1 +1,1 @@\n-Append failure spec\n+Append failure spec updated',
+        questions: [],
+      }),
+      harness.service.submitState('ses-submit', {
+        summary: 'Append failure spec updated',
+        patch:
+          '@@ -1,1 +1,1 @@\n-Append failure spec\n+Append failure spec updated',
+        questions: [],
+      }),
+    ]);
+    const saved = await fs.readFile(documentPath, 'utf8');
+    expect(saved.match(/A: Web/g)).toHaveLength(1);
+    expect(
+      (await harness.service.getInterviewState(interviewId)).lastParseError,
+    ).toBeUndefined();
   });
 
   test('busy rejection preserves completion and implementation access', async () => {
