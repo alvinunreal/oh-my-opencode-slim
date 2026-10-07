@@ -280,6 +280,11 @@ export function createInterviewService(
       failedHunk: string;
       contextWindow: string;
     };
+    pendingAnswerHistory?: {
+      questions: InterviewState['questions'];
+      answers: InterviewAnswer[];
+      activeQuestionIds: Set<string>;
+    };
     lastPatchError?: string;
     reportedPatchFailureHash?: string;
   };
@@ -952,7 +957,7 @@ export function createInterviewService(
           memory.reportedPatchFailureHash = outcome.hash;
         }
         memory.lastPatchError = outcome.patchError.message;
-        if (!alreadyReported && memory.patchRepairSent !== true) {
+        if (memory.patchRepairSent !== true) {
           memory.pendingPatchRepair = {
             failedHunk: outcome.patchError.failedHunk,
             contextWindow: outcome.patchError.contextWindow,
@@ -1221,6 +1226,7 @@ export function createInterviewService(
     try {
       const outcome = await applyStateToDocument(interview, parsed.state);
       if (outcome.patchError) {
+        turnFor(sessionID).patchError = true;
         markTurnError(sessionID, outcome.patchError.message);
         memoryFor(interview.id).lastPatchError = outcome.patchError.message;
         return text;
@@ -1317,6 +1323,24 @@ export function createInterviewService(
     }
     sessionBusy.set(sessionID, true);
     const memory = memoryFor(interview.id);
+    if (memory.pendingAnswerHistory) {
+      const pendingHistory = memory.pendingAnswerHistory;
+      try {
+        await withInterviewDocumentLock(interview.markdownPath, () =>
+          appendInterviewAnswers(
+            interview,
+            pendingHistory.questions,
+            pendingHistory.answers,
+          ),
+        );
+        delete memory.pendingAnswerHistory;
+      } catch {
+        sessionBusy.set(sessionID, false);
+        throw new Error(
+          'Answers are still waiting to be saved to the interview document. Try again to retry the save.',
+        );
+      }
+    }
     memory.patchRepairSent = false;
     delete memory.pendingPatchRepair;
     let promptSent = false;
@@ -1360,14 +1384,16 @@ export function createInterviewService(
         }
         if (reopenedCompletion) {
           try {
-            const current = await readInterviewDocument(interview);
-            const consumedState = parseFrontmatter(current)?.consumedState;
-            if (consumedState === reopenedConsumedState) {
-              await withInterviewDocumentLock(interview.markdownPath, () =>
-                markInterviewDocumentComplete(interview),
-              );
-              interview.completed = true;
-            }
+            await withInterviewDocumentLock(
+              interview.markdownPath,
+              async () => {
+                const current = await readInterviewDocument(interview);
+                const consumedState = parseFrontmatter(current)?.consumedState;
+                if (consumedState !== reopenedConsumedState) return;
+                await markInterviewDocumentComplete(interview);
+                interview.completed = true;
+              },
+            );
           } catch (error) {
             log('[interview] failed to restore completed document', {
               error: String(error),
@@ -1462,22 +1488,35 @@ export function createInterviewService(
         activeQuestionIds: Set<string>;
         questions: InterviewState['questions'];
       };
-      await withInterviewDocumentLock(interview.markdownPath, () =>
-        appendInterviewAnswers(interview, answerContext.questions, answers),
-      ).catch((error) => {
+      try {
+        await withInterviewDocumentLock(interview.markdownPath, () =>
+          appendInterviewAnswers(interview, answerContext.questions, answers),
+        );
+        delete memoryFor(interview.id).pendingAnswerHistory;
+      } catch (error) {
         log('[interview] failed to append interview answers', {
           error: String(error),
         });
         const memory = memoryFor(interview.id);
-        if (memory.pendingAnswers !== true) {
-          memory.pendingAnswers = true;
-          memory.answeredQuestions = answerContext.activeQuestionIds;
-        }
-      });
+        memory.pendingAnswerHistory = {
+          questions: answerContext.questions,
+          answers,
+          activeQuestionIds: answerContext.activeQuestionIds,
+        };
+        memory.pendingAnswers = true;
+        memory.answeredQuestions = answerContext.activeQuestionIds;
+        throw new Error(
+          'Answers were sent, but saving them to the interview document failed. Try again to retry the save.',
+        );
+      }
     } catch (error) {
       if (answersMarked) {
         const memory = memoryFor(interview.id);
-        if (previousPendingAnswers === undefined) {
+        if (memory.pendingAnswerHistory) {
+          memory.pendingAnswers = true;
+          memory.answeredQuestions =
+            memory.pendingAnswerHistory.activeQuestionIds;
+        } else if (previousPendingAnswers === undefined) {
           delete memory.pendingAnswers;
         } else {
           memory.pendingAnswers = previousPendingAnswers;
@@ -2008,12 +2047,11 @@ export function createInterviewService(
         );
         return;
       }
-      const fileComplete =
-        parseFrontmatter(state.document)?.status === 'complete';
       const body = extractSummarySection(state.document);
       if (
-        !fileComplete &&
-        (!body || body === 'Waiting for interview answers.')
+        state.mode !== 'completed' ||
+        !body ||
+        body === 'Waiting for interview answers.'
       ) {
         output.parts.push(
           createInternalAgentTextPart(buildImplementMissingPrompt()),

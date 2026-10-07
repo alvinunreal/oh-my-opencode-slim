@@ -120,6 +120,11 @@ function isFullSpec(json: string): boolean {
   );
 }
 
+function hasPatch(json: string): boolean {
+  const parsed = parseInterviewStateJson(json);
+  return parsed !== null && 'patch' in parsed;
+}
+
 function isFullTool(part: HistoryPart): boolean {
   const args = toolArgs(part);
   return (
@@ -128,6 +133,11 @@ function isFullTool(part: HistoryPart): boolean {
     args.summary !== INTERVIEW_SUMMARY_STUB &&
     isFullSpecificationSummary(args.summary)
   );
+}
+
+function toolHasPatch(part: HistoryPart): boolean {
+  const args = toolArgs(part);
+  return args !== null && 'patch' in args;
 }
 
 /**
@@ -157,6 +167,7 @@ export function collapseInterviewHistory(messages: HistoryMessage[]): void {
 
   const textToStub = new Map<TextPart, Set<string>>();
   const toolsToStub = new Set<HistoryPart>();
+  let fullStateSeen = false;
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index];
     const later = events
@@ -167,10 +178,16 @@ export function collapseInterviewHistory(messages: HistoryMessage[]): void {
     if (!later) continue;
     if ('part' in event) {
       if (!isFullSpec(event.json)) continue;
+      const kickoff = !hasPatch(event.json) || (!fullStateSeen && index === 0);
+      fullStateSeen = true;
+      if (!kickoff) continue;
       const keys = textToStub.get(event.part) ?? new Set<string>();
       keys.add(`${event.start}:${event.end}`);
       textToStub.set(event.part, keys);
     } else if (isFullTool(event)) {
+      const kickoff = !toolHasPatch(event) || (!fullStateSeen && index === 0);
+      fullStateSeen = true;
+      if (!kickoff) continue;
       toolsToStub.add(event);
     }
   }

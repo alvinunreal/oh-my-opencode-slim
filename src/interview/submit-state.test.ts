@@ -1054,9 +1054,11 @@ describe('completed interview service turns', () => {
       .interview.markdownPath;
     await fs.chmod(documentPath, 0o444);
     try {
-      await harness.service.submitAnswers(interviewId, [
-        { questionId: 'q-1', answer: 'Web' },
-      ]);
+      await expect(
+        harness.service.submitAnswers(interviewId, [
+          { questionId: 'q-1', answer: 'Web' },
+        ]),
+      ).rejects.toThrow('saving them to the interview document failed');
     } finally {
       await fs.chmod(documentPath, 0o644);
     }

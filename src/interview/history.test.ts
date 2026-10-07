@@ -149,6 +149,24 @@ describe('collapseInterviewHistory', () => {
       'No changes',
     );
   });
+
+  test('does not collapse a later full summary with an empty patch', () => {
+    const kickoff = toolTurn('kickoff', '# FIRST\n\nFull specification.');
+    const unchanged = toolTurn(
+      'unchanged',
+      '# STILL FULL\n\nSame specification.',
+      '',
+    );
+    const later = toolTurn('later', 'Later status', 'patch');
+
+    collapseInterviewHistory([kickoff, unchanged, later]);
+
+    const parts = submitParts([kickoff, unchanged, later]);
+    expect(parts[0].state.input.state.summary).toBe(INTERVIEW_SUMMARY_STUB);
+    expect(parts[1].state.input.state.summary).toBe(
+      '# STILL FULL\n\nSame specification.',
+    );
+  });
   test('stubs older assistant specs and leaves the latest plus user prompts', () => {
     const kickoff = {
       info: { role: 'user' },
