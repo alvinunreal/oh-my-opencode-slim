@@ -763,6 +763,56 @@ describe('orchestrator agent', () => {
     ).toBe('allow');
   });
 
+  test('interview_submit_state is allowed for the primary agent only', () => {
+    const agents = createAgents(
+      runtimeFor({
+        disabled_agents: [],
+        council: councilConfig(),
+        agents: { reviewer: { model: 'test/reviewer' } },
+        acpAgents: {
+          bridge: {
+            command: 'bridge-acp',
+            args: [],
+            env: {},
+            timeoutMs: 0,
+            permissionMode: 'ask',
+          },
+        },
+      }),
+    );
+
+    const permission = (name: string) => {
+      const agent = agents.find((candidate) => candidate.name === name);
+      return (
+        agent as { config: { permission: Record<string, unknown> } } | undefined
+      )?.config.permission.interview_submit_state;
+    };
+
+    expect(permission('orchestrator')).toBe('allow');
+    for (const name of SUBAGENT_NAMES) {
+      if (name === 'council' || name === 'councillor') continue;
+      expect(permission(name)).toBe('deny');
+    }
+    // Custom and ACP agents are subagents: denied unless explicitly allowed.
+    expect(permission('reviewer')).toBe('deny');
+    expect(permission('bridge')).toBe('deny');
+  });
+
+  test('interview_submit_state honors an explicit agent permission', () => {
+    const agents = createAgents(
+      runtimeFor({
+        agents: {
+          explorer: { permission: { interview_submit_state: 'allow' } },
+        },
+      }),
+    );
+    const explorer = agents.find((a) => a.name === 'explorer');
+    expect(
+      (explorer as { config: { permission: Record<string, unknown> } }).config
+        .permission.interview_submit_state,
+    ).toBe('allow');
+  });
+
   test('orchestrator accepts overrides', () => {
     const config: PluginConfig = {
       agents: {

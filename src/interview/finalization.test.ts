@@ -9,10 +9,14 @@ describe('interview finalization', () => {
   test('persists clean completion markdown without using stale interview state', async () => {
     const directory = await fs.mkdtemp('/tmp/interview-finalization-');
     const messages: InterviewMessage[] = [];
+    const continued: string[] = [];
     const runtime: InterviewSessionRuntime = {
       messages: async () => messages,
+      create: async () => 'side-final',
       notify: async () => {},
-      continue: async () => {},
+      continue: async (_sessionID, text) => {
+        continued.push(text);
+      },
       rename: async () => {},
     };
     const service = createInterviewService({ directory } as never, undefined, {
@@ -41,6 +45,17 @@ describe('interview finalization', () => {
     await service.submitAnswers(interviewID as string, [
       { questionId: 'q-1', answer: 'Web' },
     ]);
+    await service.submitState('ses_final', {
+      summary: 'Draft',
+      patch: '',
+      questions: [],
+    });
+    await service.handleEvent({
+      event: {
+        type: 'session.status',
+        properties: { sessionID: 'ses_final', status: { type: 'idle' } },
+      },
+    });
     await service.handleEvent({
       event: {
         type: 'session.status',
@@ -49,38 +64,25 @@ describe('interview finalization', () => {
     });
     await service.handleNudgeAction(interviewID as string, 'confirm-complete');
 
-    messages.push({
-      info: { role: 'assistant' },
-      parts: [
-        {
-          type: 'text',
-          text: '# Introduction\n\nA polished final specification.',
-        },
-      ],
-    });
-    const beforeCompletion = await service.getInterviewState(
-      interviewID as string,
-    );
-    expect(beforeCompletion.document).not.toContain(
-      'A polished final specification.',
-    );
-    await service.handleEvent({
-      event: {
-        type: 'session.status',
-        properties: { sessionID: 'ses_final', status: { type: 'idle' } },
-      },
-    });
     const state = await service.getInterviewState(interviewID as string);
     const document = await fs.readFile(
       path.join(directory, state.markdownPath),
       'utf8',
     );
 
-    expect(state.document).toContain('A polished final specification.');
+    expect(document).toContain('Draft');
+    expect(document).toContain('status: complete');
     expect(document).toContain('sessionID: ses_final');
     expect(document).toContain('Q: Platform?');
     expect(document).toContain('A: Web');
+    expect(document).not.toContain('A polished final specification.');
     expect(document).not.toContain('<interview_state>');
+    expect(continued.some((text) => text.includes('Produce a final'))).toBe(
+      false,
+    );
+    expect(
+      continued.some((text) => text.includes('finishing the interview')),
+    ).toBe(false);
 
     await fs.rm(directory, { recursive: true, force: true });
   });
@@ -92,6 +94,7 @@ describe('interview finalization', () => {
         const messages: InterviewMessage[] = [];
         const runtime: InterviewSessionRuntime = {
           messages: async () => messages,
+          create: async () => `side-${label}`,
           notify: async () => {},
           continue: async () => {},
           rename: async () => {},
@@ -142,6 +145,20 @@ describe('interview finalization', () => {
         await service.submitAnswers(interviewID, [
           { questionId: 'q-1', answer: `${label} answer` },
         ]);
+        await service.submitState(`ses_${label}`, {
+          summary: `${label} draft`,
+          patch: '',
+          questions: [],
+        });
+        await service.handleEvent({
+          event: {
+            type: 'session.status',
+            properties: {
+              sessionID: `ses_${label}`,
+              status: { type: 'idle' },
+            },
+          },
+        });
         await service.handleEvent({
           event: {
             type: 'session.status',
@@ -152,24 +169,6 @@ describe('interview finalization', () => {
           },
         });
         await service.handleNudgeAction(interviewID, 'confirm-complete');
-        messages.push({
-          info: { role: 'assistant' },
-          parts: [
-            {
-              type: 'text',
-              text: `# ${label} final\n\n${label} final specification.`,
-            },
-          ],
-        });
-        await service.handleEvent({
-          event: {
-            type: 'session.status',
-            properties: {
-              sessionID: `ses_${label}`,
-              status: { type: 'idle' },
-            },
-          },
-        });
       }),
     );
 
@@ -193,15 +192,54 @@ describe('interview finalization', () => {
     const documents = await Promise.all(
       paths.map((documentPath) => fs.readFile(documentPath, 'utf8')),
     );
-    expect(documents[0]).toContain('alpha final specification.');
+    expect(documents[0]).toContain('alpha draft');
+    expect(documents[0]).toContain('status: complete');
     expect(documents[0]).toContain('A: alpha answer');
-    expect(documents[0]).not.toContain('beta final specification.');
-    expect(documents[0]).not.toContain('A: beta answer');
-    expect(documents[1]).toContain('beta final specification.');
+    expect(documents[0]).not.toContain('alpha final specification.');
+    expect(documents[0]).not.toContain('beta');
+    expect(documents[1]).toContain('beta draft');
+    expect(documents[1]).toContain('status: complete');
     expect(documents[1]).toContain('A: beta answer');
-    expect(documents[1]).not.toContain('alpha final specification.');
-    expect(documents[1]).not.toContain('A: alpha answer');
+    expect(documents[1]).not.toContain('beta final specification.');
+    expect(documents[1]).not.toContain('alpha');
 
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  test('concurrent confirm-complete clicks publish one completion notice', async () => {
+    const directory = await fs.mkdtemp('/tmp/interview-finalization-race-');
+    const messages: InterviewMessage[] = [
+      { info: { role: 'assistant' }, parts: [{ type: 'text', text: 'Draft' }] },
+    ];
+    const notices: string[] = [];
+    const service = createInterviewService({ directory } as never, undefined, {
+      runtime: {
+        messages: async () => messages,
+        create: async () => 'side-race',
+        notify: async (_sessionID, text) => notices.push(text),
+        continue: async () => {},
+        rename: async () => {},
+      },
+      openBrowser: () => {},
+    });
+    service.setBaseUrlResolver(async () => 'http://127.0.0.1:43211');
+    await service.handleCommandExecuteBefore(
+      { command: 'interview', sessionID: 'ses-race', arguments: 'Race app' },
+      { parts: [] },
+    );
+    const interviewID = service.getActiveInterviewId('ses-race');
+    expect(interviewID).not.toBeNull();
+
+    await Promise.all([
+      service.handleNudgeAction(interviewID as string, 'confirm-complete'),
+      service.handleNudgeAction(interviewID as string, 'confirm-complete'),
+    ]);
+
+    expect(
+      notices.filter((notice) => notice.includes('spec is complete')),
+    ).toHaveLength(1);
+    const state = await service.getInterviewState(interviewID as string);
+    expect(state.document.match(/status: complete/g)).toHaveLength(1);
     await fs.rm(directory, { recursive: true, force: true });
   });
 
@@ -222,6 +260,7 @@ describe('interview finalization', () => {
       {
         runtime: {
           messages: async () => firstMessages,
+          create: async () => 'side-one',
           notify: async () => {},
           continue: async () => {},
           rename: async () => {},
@@ -258,6 +297,7 @@ describe('interview finalization', () => {
       {
         runtime: {
           messages: async () => [],
+          create: async () => 'side-two',
           notify: async () => {},
           continue: async () => {},
           rename: async () => {},
@@ -296,6 +336,7 @@ describe('interview finalization', () => {
       createInterviewService({ directory } as never, undefined, {
         runtime: {
           messages: async () => [],
+          create: async () => 'side-owner',
           notify: async () => {},
           continue: async () => {},
           rename: async () => {},

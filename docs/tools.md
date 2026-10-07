@@ -8,6 +8,13 @@ Slim only intercepts `apply_patch` before the native tool runs. It rewrites reco
 
 ---
 
+## interview_submit_state
+
+`interview_submit_state` stores the current interview state without printing the
+specification or patch in assistant text. Use it once per interview turn: the
+kickoff carries the full spec, and later turns carry a one-line status, an
+optional unified diff against the current spec body, and questions.
+
 ## Web Fetch
 
 Enhanced version of OpenCode's built-in `webfetch`. Overrides the default when

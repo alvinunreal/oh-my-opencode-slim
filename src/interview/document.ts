@@ -1,9 +1,10 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as fsSync from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { parseFrontmatter as sharedParseFrontmatter } from '../utils/frontmatter';
+import { applyUnifiedDiff, InterviewPatchApplyError } from './patch';
 import type {
   InterviewAnswer,
   InterviewQuestion,
@@ -26,6 +27,8 @@ type DocumentLock = {
   token: string;
 };
 
+export { InterviewPatchApplyError } from './patch';
+
 export class InterviewDocumentOwnershipError extends Error {
   constructor(
     readonly markdownPath: string,
@@ -33,6 +36,14 @@ export class InterviewDocumentOwnershipError extends Error {
   ) {
     super(`Interview document is owned by another session: ${ownerSessionID}`);
     this.name = 'InterviewDocumentOwnershipError';
+  }
+}
+
+export class InterviewPatchRequiredError extends InterviewPatchApplyError {
+  constructor() {
+    super('', '');
+    this.message = 'Interview spec patch required';
+    this.name = 'InterviewPatchRequiredError';
   }
 }
 
@@ -153,6 +164,8 @@ function buildInterviewFrontmatter(
   baseMessageCount: number,
   owner = 'agent',
   tags = ['spec', 'diagnostic'],
+  consumedState?: string,
+  status?: string,
 ): string {
   const now = new Date();
   const dateStr = now.toISOString().split('T')[0];
@@ -165,9 +178,34 @@ function buildInterviewFrontmatter(
     `date_created: ${dateStr}`,
     `owner: ${owner}`,
     `tags: [${tags.join(', ')}]`,
+    ...(consumedState ? [`consumedState: ${consumedState}`] : []),
+    ...(status ? [`status: ${status}`] : []),
     '---',
     '',
   ].join('\n');
+}
+
+export function interviewOwnerSessionID(record: InterviewRecord): string {
+  return record.sessionID;
+}
+
+/** Hash of one assistant interview_state turn. Empty patches stay distinct. */
+export function hashInterviewState(state: {
+  summary: string;
+  title?: string;
+  patch?: string;
+  questions: Array<{ id: string; question: string }>;
+}): string {
+  const canonical = JSON.stringify({
+    summary: state.summary,
+    title: state.title ?? '',
+    patch: state.patch ?? '',
+    questions: state.questions.map((question) => ({
+      id: question.id,
+      question: question.question,
+    })),
+  });
+  return createHash('sha256').update(canonical).digest('hex');
 }
 
 export async function claimInterviewDocument(
@@ -328,6 +366,15 @@ export function extractSummarySection(document: string): string {
   return document.slice(summaryStart, summaryEnd).trim();
 }
 
+/** Heading lines from a spec body, used instead of pasting the body into a prompt. */
+export function extractSpecOutline(spec: string): string {
+  const headings = spec
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter((line) => /^#{1,6}\s+\S/.test(line));
+  return headings.length > 0 ? headings.join('\n') : '(no headings yet)';
+}
+
 export function extractTitle(document: string): string {
   const match = document.match(/^#\s+(.+)$/m);
   return match?.[1]?.trim() ?? '';
@@ -342,6 +389,8 @@ export function buildInterviewDocument(
     baseMessageCount?: number;
     owner?: string;
     tags?: string[];
+    consumedState?: string;
+    status?: string;
   },
 ): string {
   const normalizedSummary = summary.trim() || 'Waiting for interview answers.';
@@ -356,6 +405,8 @@ export function buildInterviewDocument(
         meta.baseMessageCount ?? 0,
         owner,
         tags,
+        meta.consumedState,
+        meta.status,
       )
     : '';
 
@@ -385,7 +436,7 @@ export async function ensureInterviewFile(
     await fs.writeFile(
       record.markdownPath,
       buildInterviewDocument(record.idea, '', '', {
-        sessionID: record.sessionID,
+        sessionID: interviewOwnerSessionID(record),
         baseMessageCount: record.baseMessageCount,
       }),
       { encoding: 'utf8', flag: 'wx' },
@@ -413,20 +464,86 @@ export async function rewriteInterviewDocument(
   record: InterviewRecord,
   summary: string,
   title?: string,
+  patch?: string,
+  consumedState?: string,
 ): Promise<string> {
   const existing = await readInterviewDocument(record);
   const history = extractHistorySection(existing);
+  const current = extractSummarySection(existing);
+  let nextSummary = summary;
+  if (
+    patch === undefined &&
+    current &&
+    current !== 'Waiting for interview answers.'
+  ) {
+    throw new InterviewPatchRequiredError();
+  }
+  if (patch !== undefined) {
+    if (patch.trim()) {
+      const applied = applyUnifiedDiff(current, patch);
+      if (!applied.ok) {
+        throw new InterviewPatchApplyError(
+          applied.failedHunk,
+          applied.contextWindow,
+        );
+      }
+      nextSummary = applied.text.trim();
+    } else {
+      nextSummary =
+        current && current !== 'Waiting for interview answers.'
+          ? current
+          : summary;
+    }
+  }
   const next = buildInterviewDocument(
     title || extractTitle(existing) || record.idea,
-    summary,
+    nextSummary,
     history,
     {
-      sessionID: record.sessionID,
+      sessionID: interviewOwnerSessionID(record),
       baseMessageCount: record.baseMessageCount,
+      consumedState: consumedState ?? parseFrontmatter(existing)?.consumedState,
+      status: parseFrontmatter(existing)?.status,
     },
   );
   await fs.writeFile(record.markdownPath, next, 'utf8');
   return next;
+}
+
+/** Mark the file finished without rewriting the spec body. */
+export async function markInterviewDocumentComplete(
+  record: InterviewRecord,
+): Promise<string> {
+  const existing = await readInterviewDocument(record);
+  const next = updateInterviewStatus(existing, 'complete');
+  await fs.writeFile(record.markdownPath, next, 'utf8');
+  return next;
+}
+
+export async function markInterviewDocumentIncomplete(
+  record: InterviewRecord,
+): Promise<string> {
+  const existing = await readInterviewDocument(record);
+  const next = updateInterviewStatus(existing, null);
+  await fs.writeFile(record.markdownPath, next, 'utf8');
+  return next;
+}
+
+function updateInterviewStatus(
+  document: string,
+  status: string | null,
+): string {
+  const frontmatterMatch = document.match(/^---[\s\S]*?---/);
+  if (!frontmatterMatch || frontmatterMatch.index === undefined)
+    return document;
+  const frontmatter = frontmatterMatch[0];
+  const statusLine = /^status:[^\n]*(?:\n|$)/m;
+  const updatedFrontmatter = status
+    ? statusLine.test(frontmatter)
+      ? frontmatter.replace(statusLine, `status: ${status}\n`)
+      : frontmatter.replace(/\n---$/, `\nstatus: ${status}\n---`)
+    : frontmatter.replace(statusLine, '');
+  return `${updatedFrontmatter}${document.slice(frontmatter.length)}`;
 }
 
 /**
@@ -495,8 +612,10 @@ export async function appendInterviewAnswers(
       summary,
       nextHistory,
       {
-        sessionID: record.sessionID,
+        sessionID: interviewOwnerSessionID(record),
         baseMessageCount: record.baseMessageCount,
+        consumedState: parseFrontmatter(existing)?.consumedState,
+        status: parseFrontmatter(existing)?.status,
       },
     ),
     'utf8',

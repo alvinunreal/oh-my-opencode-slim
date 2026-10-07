@@ -190,18 +190,18 @@ export function createCommandRegistration(
   draft.add(definition);
 }
 
-/** Register the v1 synth commands on a v2 command draft. `interview` is
- * owned by the interview bridge's own registration (whose context hook owns
- * the interview marker), so it is skipped here — a duplicate `draft.add`
- * would break `/interview` on host builds that are first-wins or throw on
- * duplicates. */
+/** Register the v1 synth commands on a v2 command draft. `interview` and
+ * `implement` are owned by the interview bridge's own registration (whose
+ * context hook owns their markers), so they are skipped here — a duplicate
+ * `draft.add` would break those commands on host builds that are first-wins
+ * or throw on duplicates. */
 export function registerSynthCommands(
   draft: V2CommandDraft,
   entries: Array<[string, { description?: string }]>,
   submit: V2CommandSubmit,
 ): void {
   for (const [name, cmd] of entries) {
-    if (name === 'interview') continue; // owned by the interview bridge registration below
+    if (name === 'interview' || name === 'implement') continue;
     try {
       createCommandRegistration(draft, name, cmd, submit);
     } catch (err) {
@@ -432,7 +432,15 @@ export function createSessionContextHandler(
       try {
         const v1messages = event.messages.map((m) => ({
           info: m,
-          parts: m.content,
+          parts: m.content.map((part) =>
+            ((part.type === 'tool-call' || part.type === 'tool-result') &&
+              part.toolName === 'interview_submit_state') ||
+            (part.type === 'text' &&
+              typeof part.text === 'string' &&
+              part.text.includes('<interview_state'))
+              ? { ...part }
+              : part,
+          ),
         }));
         await deps.messagesTransform({}, { messages: v1messages });
         event.messages = v1messages.map((m) => {
@@ -2057,13 +2065,26 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       const interviewConfig = InterviewConfigSchema.parse(
         pluginConfig.interview ?? {},
       );
+      const disabledCommands = new Set(pluginConfig.disabled_commands ?? []);
       const interviewCommandEnabled = isCommandEnabled('interview', {
-        disabledCommands: new Set(pluginConfig.disabled_commands ?? []),
+        disabledCommands,
+      });
+      const implementCommandEnabled = isCommandEnabled('implement', {
+        disabledCommands,
       });
       const interviewBridge = createV2InterviewBridge(ctx, interviewConfig, {
         commandEnabled: interviewCommandEnabled,
+        implementEnabled: implementCommandEnabled,
       });
       disposers.push(() => interviewBridge.dispose());
+      // The submit tool and text-complete fallback are built inside the v1
+      // factory against the v1 interview manager. On v2 the bridge owns the
+      // live transcript and active interviews, so point them at its service.
+      (
+        v1Hooks as {
+          'v2.setInterviewService'?: (service: unknown) => void;
+        }
+      )['v2.setInterviewService']?.(interviewBridge.service);
 
       // Commands do not depend on agent finalization or host state.
       let finalizedRegistry:
@@ -2436,7 +2457,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       try {
         const reg = await ctx.command.transform((draft) => {
           try {
-            if (interviewCommandEnabled) {
+            if (interviewCommandEnabled || implementCommandEnabled) {
               interviewBridge.registerCommand(draft);
             }
           } catch (err) {

@@ -275,7 +275,13 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
   it('accepts the whitelisted hook and command names', () => {
     const result = PluginConfigSchema.safeParse({
       disabled_hooks: ['phase-reminder', 'foreground-fallback'],
-      disabled_commands: ['interview', 'deepwork', 'reflect', 'loop'],
+      disabled_commands: [
+        'interview',
+        'implement',
+        'deepwork',
+        'reflect',
+        'loop',
+      ],
     });
 
     expect(result.success).toBe(true);
@@ -286,6 +292,7 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
       ]);
       expect(result.data.disabled_commands).toEqual([
         'interview',
+        'implement',
         'deepwork',
         'reflect',
         'loop',
@@ -318,6 +325,7 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
       'council-inject',
     ]);
     expect(DISABLED_COMMANDS_VALUES).toEqual([
+      'implement',
       'interview',
       'deepwork',
       'reflect',
@@ -654,6 +662,32 @@ describe('InterviewConfigSchema outputFolder', () => {
       expect(pluginResult.data.interview?.outputFolder).toBe(
         'interviews/specs',
       );
+    }
+  });
+});
+
+describe('InterviewConfigSchema printState', () => {
+  it('defaults to false', () => {
+    const interviewResult = InterviewConfigSchema.safeParse({});
+    const pluginResult = PluginConfigSchema.safeParse({ interview: {} });
+
+    expect(interviewResult.success).toBe(true);
+    expect(pluginResult.success).toBe(true);
+    if (interviewResult.success) {
+      expect(interviewResult.data.printState).toBe(false);
+    }
+    if (pluginResult.success) {
+      expect(pluginResult.data.interview?.printState).toBe(false);
+    }
+  });
+
+  it('accepts an explicit true', () => {
+    const interviewResult = InterviewConfigSchema.safeParse({
+      printState: true,
+    });
+    expect(interviewResult.success).toBe(true);
+    if (interviewResult.success) {
+      expect(interviewResult.data.printState).toBe(true);
     }
   });
 });

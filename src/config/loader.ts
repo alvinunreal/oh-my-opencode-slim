@@ -93,6 +93,7 @@ const INTERVIEW_CONFIG_KEYS = [
   'autoOpenBrowser',
   'port',
   'dashboard',
+  'printState',
 ] as const;
 const LEGACY_BACKGROUND_JOBS_KEYS = ['continueOnIdle'] as const;
 

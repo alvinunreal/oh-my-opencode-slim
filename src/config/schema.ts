@@ -476,6 +476,12 @@ export const InterviewConfigSchema = z.object({
     ),
   port: z.number().int().min(0).max(65535).default(0),
   dashboard: z.boolean().default(false),
+  printState: z
+    .boolean()
+    .default(false)
+    .describe(
+      'When true, the interview model prints the full <interview_state> block in the TUI instead of submitting state through the interview_submit_state tool.',
+    ),
 });
 
 export type InterviewConfig = z.infer<typeof InterviewConfigSchema>;
@@ -958,6 +964,7 @@ export const DISABLED_HOOKS_VALUES = [
 
 /** Valid `disabled_commands` entries; single source for the enum and the loader. */
 export const DISABLED_COMMANDS_VALUES = [
+  'implement',
   'interview',
   'deepwork',
   'reflect',

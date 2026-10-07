@@ -18,6 +18,7 @@ function createContext(overrides?: {
       synthetic: overrides?.synthetic,
       update: overrides?.update,
       prompt: overrides?.prompt,
+      create: mock(async () => ({ id: 'side-session' })),
     },
   };
 }
@@ -48,6 +49,31 @@ describe('markerText', () => {
 });
 
 describe('v2 interview bridge', () => {
+  test('propagates v2 prompt failures through interview continuation', async () => {
+    const prompt = mock(async () => {
+      throw new Error('prompt rejected');
+    });
+    const bridge = createV2InterviewBridge(createContext({ prompt }), {
+      outputFolder: `.tmp-v2-prompt-error-${Date.now()}`,
+    } as never);
+
+    await expect(
+      bridge.runtime.continue('ses_prompt_error', 'Continue.'),
+    ).rejects.toThrow('prompt rejected');
+    bridge.dispose();
+  });
+
+  test('rejects continuation when v2 prompt is unavailable', async () => {
+    const bridge = createV2InterviewBridge(createContext(), {
+      outputFolder: `.tmp-v2-prompt-missing-${Date.now()}`,
+    } as never);
+
+    await expect(
+      bridge.runtime.continue('ses_prompt_missing', 'Continue.'),
+    ).rejects.toThrow('session.prompt is unavailable');
+    bridge.dispose();
+  });
+
   test('registers an add-only marker command and rewrites only the tail', async () => {
     const directory = `.tmp-v2-interview-${Date.now()}`;
     const synthetic = mock(async () => ({}));
@@ -68,6 +94,10 @@ describe('v2 interview bridge', () => {
       {
         name: 'interview',
         description: 'Open a localhost interview UI for a feature idea',
+      },
+      {
+        name: 'implement',
+        description: 'Read the completed interview markdown and implement it',
       },
     ]);
 
@@ -353,6 +383,66 @@ describe('v2 interview bridge', () => {
         (part) => part.text === 'injected by downstream transform',
       ),
     ).toBe(false);
+    bridge.dispose();
+    await fs.rm(`${process.cwd()}/${directory}`, {
+      recursive: true,
+      force: true,
+    });
+  });
+
+  test('maps v2 session.execution lifecycle into a turn notice', async () => {
+    const directory = `.tmp-v2-interview-exec-${Date.now()}`;
+    const synthetic = mock(async () => ({}));
+    const bridge = createV2InterviewBridge(createContext({ synthetic }), {
+      outputFolder: directory,
+    } as never);
+    await bridge.handleContext({
+      sessionID: 'ses_exec',
+      agent: 'orchestrator',
+      model: {},
+      system: [],
+      tools: {},
+      messages: [
+        {
+          id: 'u',
+          role: 'user',
+          content: [{ type: 'text', text: markerText('exec idea') }],
+        },
+      ],
+    });
+    expect(bridge.service.getActiveInterviewId('ses_exec')).not.toBeNull();
+
+    await bridge.handleEvent({
+      type: 'session.next.text.started',
+      properties: { sessionID: 'ses_exec', messageID: 'msg-1' },
+    });
+    await bridge.handleEvent({
+      type: 'session.next.text.ended',
+      properties: { sessionID: 'ses_exec', messageID: 'msg-1', text: 'Done.' },
+    });
+
+    // Live v2 emits execution.started (busy) before the turn's tool submit.
+    await bridge.handleEvent({
+      type: 'session.execution.started',
+      properties: { sessionID: 'ses_exec' },
+    });
+    const applied = await bridge.service.submitState(
+      'ses_exec',
+      {
+        summary: 'Exec spec',
+        questions: [{ id: 'q-1', question: 'Q?' }],
+      },
+      'msg-1',
+    );
+    expect(applied.ok).toBe(true);
+    await bridge.handleEvent({
+      type: 'session.execution.succeeded',
+      properties: { sessionID: 'ses_exec' },
+    });
+
+    const calls = synthetic.mock.calls as unknown as Array<[{ text?: string }]>;
+    const notices = calls.map((call) => String(call[0]?.text ?? ''));
+    expect(notices.some((text) => text.includes('⎔ Spec updated'))).toBe(true);
     bridge.dispose();
     await fs.rm(`${process.cwd()}/${directory}`, {
       recursive: true,

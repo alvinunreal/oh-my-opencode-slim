@@ -51,6 +51,11 @@ mistakes that have not been made before:
 All hook injections must go through `src/hooks/cache-safe-injection.ts`; see
 the Prompt Cache Safety section in `AGENTS.md` for the authoring rules.
 
+Interview history collapse is a deliberate, gated rewrite: it runs only for a
+session with an active interview and collapses the kickoff spec once, causing
+one intentional cache miss per interview. The cache-safety harness covers the
+composition and the property suite's drift guard pins the gating call.
+
 ## Live cache smoke (`bun run cache:smoke`)
 
 Answers "is provider prompt caching working in my setup right now?" at the

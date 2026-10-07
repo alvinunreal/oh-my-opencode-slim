@@ -1258,11 +1258,12 @@
       }
     },
     "disabled_commands": {
-      "description": "Slash-command names to disable completely. Valid values: interview, deepwork, reflect, loop. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. The /reflect command is also disabled when \"reflect\" is listed in disabled_skills. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer's list still applies.",
+      "description": "Slash-command names to disable completely. Valid values: implement, interview, deepwork, reflect, loop. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. The /reflect command is also disabled when \"reflect\" is listed in disabled_skills. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer's list still applies.",
       "type": "array",
       "items": {
         "type": "string",
         "enum": [
+          "implement",
           "interview",
           "deepwork",
           "reflect",
@@ -1346,6 +1347,11 @@
         },
         "dashboard": {
           "default": false,
+          "type": "boolean"
+        },
+        "printState": {
+          "default": false,
+          "description": "When true, the interview model prints the full <interview_state> block in the TUI instead of submitting state through the interview_submit_state tool.",
           "type": "boolean"
         }
       }

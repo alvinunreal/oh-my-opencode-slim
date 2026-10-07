@@ -365,6 +365,7 @@ describe('loadPluginConfig', () => {
           autoOpenBrowser: false,
           port: 1234,
           dashboard: true,
+          printState: true,
         },
       }),
     );
@@ -381,7 +382,28 @@ describe('loadPluginConfig', () => {
       autoOpenBrowser: false,
       port: 1234,
       dashboard: true,
+      printState: true,
     });
+  });
+
+  test('lets a project layer override the user printState interview flag', () => {
+    const userConfigPath = path.join(userConfigDir, 'opencode');
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(userConfigPath, { recursive: true });
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userConfigPath, 'oh-my-opencode-slim.json'),
+      JSON.stringify({ interview: { printState: true } }),
+    );
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({ interview: { printState: false } }),
+    );
+
+    const config = loadPluginConfig(projectDir, { silent: true });
+
+    expect(config.interview?.printState).toBe(false);
   });
 
   test('does not let a defaulted project webfetch enabled override user false', () => {

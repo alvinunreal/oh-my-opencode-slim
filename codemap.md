@@ -113,6 +113,10 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 - `src/v2/` wraps the v1 factory for the v2 host: `setup(ctx)` shims a v1 `PluginInput`, runs the v1 `config()` hook, and adapts agent/tool/command/hook registrations into v2 domains.
 - Skill permissions are projected into agent/session configuration; native v1/v2 hosts discover and filter skills from those finalized permissions, denying hidden skills and asking for discoverable ones. The plugin does not rewrite `<available_skills>` in conversation text.
 - `src/interview/` hooks into plugin command/event surfaces exposed by `src/index.ts`.
+  `patch.ts` applies body-relative unified diffs, `history.ts` performs the
+  active-interview kickoff collapse, and `service.ts` handles quiet state turns
+  plus `/implement` (including newest completed-spec fallback). The
+  `interview_submit_state` tool is registered statically and bridged for v1/v2.
 
 ## Root Assets
 

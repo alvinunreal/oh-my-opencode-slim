@@ -9,6 +9,8 @@ Centralized tool factory and registry for the OpenCode plugin system. This direc
 - **Web capabilities**: Smart web fetching with caching and secondary model processing
 - **ACP integration**: External agent protocol execution
 - **Preset switching**: On-disk preset persistence helpers used by the TUI `/preset` managers (v1 and v2); the pure editor domain lives in `src/preset-editor-domain.ts`
+- **Interview state**: `interview-submit-state.ts` persists quiet interview
+  kickoff/status/patch updates for primary agents.
 
 These tools enable agents to perform file operations, manage background tasks, and interact with external systems while maintaining security boundaries through the OpenCode tool schema. Multi-LLM council orchestration is agent-level (dynamic `councillor-<name>` subagents in `src/agents/`), not a tool.
 
