@@ -728,6 +728,107 @@ describe('interview manager - edge cases', () => {
     }
   });
 
+  test('acknowledges delivered answers when history save fails', async () => {
+    const tempDir = await fs.mkdtemp('/tmp/manager-test-');
+    const ctx = createMockContext({ directory: tempDir });
+    const { port: freePort, server } = await bindFreePort();
+    heldServers.add(server);
+    const config = createTestConfig({ port: freePort, dashboard: true });
+    const messages: Array<{
+      info?: { role: string };
+      parts?: Array<{ type: string; text?: string }>;
+    }> = [];
+    let answerSends = 0;
+    const runtime = {
+      messages: async () => messages,
+      notify: async () => {},
+      continue: async (_sessionID: string, text: string) => {
+        if (text.includes('The user answered:')) answerSends++;
+      },
+      create: async () => 'side-history-failure',
+      rename: async () => {},
+    };
+    const manager = createDashboardManager(ctx, config, freePort, 'interview', {
+      runtime,
+      server,
+    });
+
+    try {
+      await manager.handleCommandExecuteBefore(
+        {
+          command: 'interview',
+          sessionID: 'session-history-failure',
+          arguments: 'History Failure Test',
+        },
+        { parts: [] },
+      );
+      const interviewId = manager.service.getActiveInterviewId(
+        'session-history-failure',
+      );
+      expect(interviewId).not.toBeNull();
+      if (!interviewId) throw new Error('Interview was not created');
+      messages.push({
+        info: { role: 'assistant' },
+        parts: [
+          {
+            type: 'text',
+            text: '<interview_state>{"summary":"Draft","questions":[{"id":"q-1","question":"What?","options":["A"]}]}</interview_state>',
+          },
+        ],
+      });
+
+      const state = await manager.service.getInterviewState(interviewId);
+      await fs.chmod(state.interview.markdownPath, 0o444);
+      try {
+        const auth = await readDashboardAuthFile(freePort);
+        expect(auth).not.toBeNull();
+        const response = await fetch(
+          `http://127.0.0.1:${freePort}/api/interviews/${interviewId}/answers?token=${auth?.token}`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              answers: [{ questionId: 'q-1', answer: 'A' }],
+            }),
+          },
+        );
+        expect(response.status).toBe(202);
+
+        const idleEvent = {
+          event: {
+            type: 'session.status',
+            properties: {
+              sessionID: 'session-history-failure',
+              status: { type: 'idle' },
+            },
+          },
+        };
+        await manager.handleEvent(idleEvent);
+        expect(answerSends).toBe(1);
+      } finally {
+        await fs.chmod(state.interview.markdownPath, 0o644);
+      }
+
+      const failedState = await manager.service.getInterviewState(interviewId);
+      expect(failedState.lastParseError).toContain(
+        'saving their history failed',
+      );
+      await manager.handleEvent({
+        event: {
+          type: 'session.status',
+          properties: {
+            sessionID: 'session-history-failure',
+            status: { type: 'idle' },
+          },
+        },
+      });
+      expect(answerSends).toBe(1);
+    } finally {
+      await manager.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test('waits for accepted delivery before disposal and replacement polling', async () => {
     const tempDir = await fs.mkdtemp('/tmp/manager-test-');
     const ctx = createMockContext({ directory: tempDir });
