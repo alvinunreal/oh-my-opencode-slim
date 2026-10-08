@@ -20,6 +20,9 @@ winit = "0.30"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
 [profile.release]
 opt-level = 3
 lto = true

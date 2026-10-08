@@ -29,6 +29,7 @@ import * as path from 'node:path';
 import type { BundledSkillInfo } from '../cli/custom-skills';
 import { stateFilePath } from '../companion/manager';
 import { MarketplaceStore } from '../marketplace/store';
+import { createEventDirectoryScope } from '../utils/event-directory-scope';
 import { flushLoggerForTesting } from '../utils/logger';
 import { compilePermissionPolicy } from './permissions';
 import { createV2Setup } from './setup';
@@ -550,11 +551,16 @@ describe('createV2Setup e2e', () => {
       }),
     );
 
-    const { ctx, calls } = makeMockV2Context(projectDir);
+    const { ctx, calls, events } = makeMockV2Context(projectDir);
     const cleanup = await createV2Setup()(ctx);
 
     try {
       expect(calls.contextHookCb).toBeFunction();
+      events.push({
+        type: 'session.execution.started',
+        data: { sessionID: 'ses_companion_variant' },
+      });
+      await settlePump();
       await calls.contextHookCb?.({
         sessionID: 'ses_companion_variant',
         agent: 'fixer',
@@ -2215,6 +2221,108 @@ describe('createV2Setup e2e', () => {
       expect(status.content).toContain('ses_kid_1');
     } finally {
       await cleanup();
+    }
+  }, 20_000);
+
+  test('moved child completion reaches its owning task board without foreign permission updates', async () => {
+    const { ctx, calls, events } = makeMockV2Context(projectDir);
+    const worktreeDir = path.join(projectDir, '.slim', 'worktrees', 'child');
+    const worktreeScope = createEventDirectoryScope(worktreeDir);
+    const childID = 'ses_moved_child';
+    const permissionUpdates: unknown[] = [];
+    let completedAt: number | undefined;
+    const session = ctx.session as unknown as Record<string, unknown>;
+    session.update = async (input: unknown) => {
+      permissionUpdates.push(input);
+    };
+    session.get = async ({ sessionID }: { sessionID: string }) => ({
+      id: sessionID,
+      agent: sessionID === childID ? 'fixer' : 'orchestrator',
+      ...(sessionID === childID ? { parentID: 'ses_parent' } : {}),
+      ...(completedAt ? { outcome: 'succeeded' } : {}),
+      time: { created: 1, ...(completedAt ? { idle: completedAt } : {}) },
+    });
+    session.context = async () =>
+      completedAt
+        ? [
+            {
+              id: 'msg_moved_result',
+              type: 'assistant',
+              time: { created: completedAt, completed: completedAt },
+              finish: 'stop',
+              content: [{ type: 'text', text: 'Moved child result' }],
+            },
+            {
+              id: 'msg_moved_idle',
+              type: 'idle',
+              time: { created: completedAt },
+              outcome: 'succeeded',
+            },
+          ]
+        : [];
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      const launch = {
+        tool: 'subagent',
+        sessionID: 'ses_parent',
+        agent: 'orchestrator',
+        messageID: 'msg_launch',
+        id: 'call_moved_child',
+        input: {
+          agent: 'fixer',
+          description: 'moved child',
+          prompt: 'Work in a worktree',
+          background: true,
+        },
+      };
+      await calls.toolBeforeCb?.(launch);
+      await calls.toolAfterCb?.({
+        ...launch,
+        status: 'completed',
+        result: {
+          content: `The subagent is working in the background (sessionID: ${childID}).`,
+        },
+      });
+
+      // The child now runs in another live location. Its task record still
+      // belongs to this parent, not to the worktree's plugin instance.
+      const foreignEvent = (type: string, sessionID = childID) => ({
+        type,
+        created: Date.now(),
+        location: { directory: worktreeDir },
+        data: { sessionID },
+      });
+      const updatesBeforeCompletion = permissionUpdates.length;
+      events.push(foreignEvent('session.execution.started'));
+      events.push({
+        ...foreignEvent('session.created', 'ses_unrelated'),
+        data: {
+          sessionID: 'ses_unrelated',
+          parentID: 'ses_foreign_parent',
+          agent: 'fixer',
+        },
+      });
+      await settlePump();
+      completedAt = Date.now();
+      events.push(foreignEvent('session.execution.succeeded'));
+      events.push(foreignEvent('session.execution.succeeded', 'ses_unrelated'));
+      await settlePump(100);
+
+      const taskStatus = calls.toolAdds.find((t) => t.name === 'task_status');
+      if (!taskStatus) throw new Error('task_status not registered');
+      const status = (await taskStatus.execute(
+        { task_id: childID },
+        { sessionID: 'ses_parent' },
+      )) as { content: string };
+      expect(status.content).toContain('state: completed');
+      expect(permissionUpdates).toHaveLength(updatesBeforeCompletion);
+      const logText = readPluginLog();
+      expect(logText).toContain('"taskID":"ses_moved_child"');
+      expect(logText).toContain('[terminal-gate] terminal published');
+      expect(logText).not.toContain('ses_unrelated');
+    } finally {
+      await cleanup();
+      worktreeScope.release();
     }
   }, 20_000);
 

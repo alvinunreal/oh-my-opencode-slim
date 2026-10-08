@@ -19,7 +19,11 @@
 
 import { randomUUID } from 'node:crypto';
 import type { PluginInput } from '@opencode-ai/plugin';
-import { responseError, stringifyError } from '../../utils/child-transcript';
+import {
+  responseError,
+  stringifyError,
+  structuredErrorMessage,
+} from '../../utils/child-transcript';
 import { isRecord } from '../../utils/guards';
 import {
   createInternalAgentTextPart,
@@ -35,7 +39,12 @@ import {
   withTimeout,
 } from '../../utils/session';
 import type { SessionLifecycle } from '../session-lifecycle';
+import type { createBackgroundFallbackHandoff } from '../task-session-manager/fallback-observation-transfer';
 import { isReplayableUserMessage, partsFromReplayMessage } from '../types';
+
+type BackgroundFallbackHandoff = ReturnType<
+  typeof createBackgroundFallbackHandoff
+>;
 
 // ---------------------------------------------------------------------------
 // Retryable error detection
@@ -296,6 +305,8 @@ const PERMANENT_QUOTA_BILLING_PATTERNS = [
   /\b(?:ran|run) out of credits\b/i,
   /\bcoding plan package has expired\b/i,
   /\b(?:weekly|monthly) limit exhausted\b/i,
+  /\bfree usage exceeded\b/i,
+  /\bsubscribe to go\b/i,
   /\b(?:1113|1308|1309|1310)\b/,
 ];
 
@@ -375,6 +386,9 @@ const DEDUP_WINDOW_MS = 5_000;
 const REPROMPT_DELAY_MS = 500;
 /** Ceiling on host calls: a hung transport must not stall fallback. */
 const HOST_CALL_TIMEOUT_MS = 2_000;
+/** The replay send's ack can lag after the host admitted it: wait as long as
+ *  the tracker's own `promptAsync`, so a slow ack is not read as a refusal. */
+const REPLAY_SEND_TIMEOUT_MS = 10_000;
 /** Transcript tail size for the fallback replay read: the replay only needs
  *  the last replayable user message plus the trailing message id (handoff
  *  baseline), never the full history. */
@@ -520,19 +534,7 @@ export class ForegroundFallbackManager {
    *  is already persisted (false-stop incident). The pre-await generation
    *  fences relaunches: a generation change during the admission must not
    *  enroll the new run under the stale attempt's baseline. */
-  private readonly backgroundFallbackHandoff?: {
-    prepare: (
-      sessionID: string,
-      preparedGeneration: number | undefined,
-      baselineMessageID: string | undefined,
-    ) => boolean;
-    admit: (sessionID: string, preparedGeneration: number | undefined) => void;
-    reject: (sessionID: string, preparedGeneration: number | undefined) => void;
-    settleUnresolved: (
-      sessionID: string,
-      preparedGeneration: number | undefined,
-    ) => void;
-  };
+  private readonly backgroundFallbackHandoff?: BackgroundFallbackHandoff;
   /** Synchronous board read returning the tracked generation for a
    *  confirmed BACKGROUND child only — undefined for foreground or
    *  unmanaged sessions (that undefined means "handoff not
@@ -566,6 +568,17 @@ export class ForegroundFallbackManager {
       this.hasFallbackChain(sessionID) &&
       (this.chainExhaustion.get(sessionID) ?? 0) < 2
     );
+  }
+
+  fallbackFailureReason(sessionID: string): string {
+    if (!this.enabled && !this.v2RetryEnabled)
+      return 'Model fallback is disabled.';
+    if (!this.hasFallbackChain(sessionID))
+      return `No model fallback chain for ${this.sessionAgent.get(sessionID) ?? 'this agent'}.`;
+    if (this.chainExhaustion.get(sessionID) === 2)
+      return `Model fallback chain exhausted; tried: ${[...(this.sessionTried.get(sessionID) ?? [])].join(', ') || 'none'}.`;
+    const model = this.sessionModel.get(sessionID);
+    return `Model fallback did not recover${model ? ` from ${model}` : ''}.`;
   }
 
   /**
@@ -838,25 +851,7 @@ export class ForegroundFallbackManager {
      *  baseline from the same transcript read that produced the replay);
      *  admit() converts it into a tracked run once the host accepts the
      *  re-prompt; reject() withdraws it on any non-admitted outcome. */
-    backgroundFallbackHandoff?: {
-      prepare: (
-        sessionID: string,
-        preparedGeneration: number | undefined,
-        baselineMessageID: string | undefined,
-      ) => boolean;
-      admit: (
-        sessionID: string,
-        preparedGeneration: number | undefined,
-      ) => void;
-      reject: (
-        sessionID: string,
-        preparedGeneration: number | undefined,
-      ) => void;
-      settleUnresolved: (
-        sessionID: string,
-        preparedGeneration: number | undefined,
-      ) => void;
-    },
+    backgroundFallbackHandoff?: BackgroundFallbackHandoff,
     /** Synchronous board read returning the tracked generation for a
      *  confirmed BACKGROUND child only (undefined = foreground or
      *  unmanaged — the handoff is not applicable, never a wildcard).
@@ -1190,17 +1185,22 @@ export class ForegroundFallbackManager {
           if (this.inProgress.has(sessionID)) break;
           this.rearmIfFreshDescent(sessionID);
           if (this.retryAlreadyObserved(sessionID, attempt)) break;
-          // Otherwise (attempt === 1, or model didn't change, or outside
-          // dedup window): process as genuine retry for current model.
-          if (this.absorbHostRetry(sessionID)) {
-            this.recordRetryAttempt(sessionID, attempt);
-            this.cancelInitialDelay(sessionID);
-            break;
-          }
           const incidentID = `retry:${curModel ?? 'unknown'}:${attempt}`;
           const retryError = props.error ?? {
             message: props.status?.message ?? '',
           };
+          // Permanent quota/billing exhaustion never recovers by waiting on
+          // this model — skip the host-retry budget and fall back at once.
+          // Otherwise (attempt === 1, or model didn't change, or outside
+          // dedup window): process as genuine retry for current model.
+          if (
+            !isPermanentQuotaBillingError(retryError) &&
+            this.absorbHostRetry(sessionID)
+          ) {
+            this.recordRetryAttempt(sessionID, attempt);
+            this.cancelInitialDelay(sessionID);
+            break;
+          }
           if (this.bypassInitialFallbackDelay(sessionID, retryError)) {
             await this.tryFallbackWithAbort(
               sessionID,
@@ -1360,7 +1360,13 @@ export class ForegroundFallbackManager {
       this.sessionModel.set(sessionID, from);
       if (event.decision?.retry === true) {
         this.rearmIfFreshDescent(sessionID);
-        if (this.absorbHostRetry(sessionID)) return;
+        // Permanent quota/billing exhaustion never recovers by waiting on
+        // this model — skip the host-retry budget and steer at once.
+        if (
+          !isPermanentQuotaBillingError(event.error) &&
+          this.absorbHostRetry(sessionID)
+        )
+          return;
       }
       const selected = this.selectFallbackModel(sessionID);
       if (!selected || selected === 'exhausted') return;
@@ -1572,7 +1578,7 @@ export class ForegroundFallbackManager {
       }
 
       if (!this.isCurrentTurn(sessionID, epoch)) return;
-      await this.execFallback(sessionID, error, epoch);
+      await this.execFallback(sessionID, error, epoch, true);
       if (this.isCurrentTurn(sessionID, epoch)) {
         this.lastFallbackTime.set(sessionID, Date.now());
       }
@@ -1855,6 +1861,7 @@ export class ForegroundFallbackManager {
     sessionID: string,
     error?: unknown,
     expectedEpoch = this.turnEpoch.get(sessionID) ?? 0,
+    announce = false,
   ): Promise<void> {
     // Reload fence at entry: execFallback is reached after suspension
     // points in the tryFallback* callers; a disposed generation must not
@@ -1891,10 +1898,14 @@ export class ForegroundFallbackManager {
       // ~20 s. The `limit` query keeps the hot path O(tail). A tail without a
       // user message is one long turn: read only the user message its last
       // entry answers (v1 `parentID`); shapes without that id read it all.
-      const tailResult = await session.messages({
-        path: { id: sessionID },
-        query: { limit: FALLBACK_REPLAY_TAIL_MESSAGES },
-      });
+      const tailResult = await withTimeout(
+        session.messages({
+          path: { id: sessionID },
+          query: { limit: FALLBACK_REPLAY_TAIL_MESSAGES },
+        }),
+        HOST_CALL_TIMEOUT_MS,
+        'fallback replay transcript read timed out',
+      );
       // Transcript read suspended across a dispose(): everything from
       // here on — handoff arming, replay prompt, switch claim — would
       // run through the destroyed generation's client. Abandon before
@@ -1910,9 +1921,16 @@ export class ForegroundFallbackManager {
       if (!lastUser) {
         const parentID = (messages.at(-1) as { info?: { parentID?: unknown } })
           ?.info?.parentID;
-        const deepResult = await (typeof parentID === 'string'
-          ? session.message({ path: { id: sessionID, messageID: parentID } })
-          : session.messages({ path: { id: sessionID } }));
+        const deepResult = await withTimeout<{
+          data?: unknown;
+          error?: unknown;
+        }>(
+          typeof parentID === 'string'
+            ? session.message({ path: { id: sessionID, messageID: parentID } })
+            : session.messages({ path: { id: sessionID } }),
+          HOST_CALL_TIMEOUT_MS,
+          'fallback replay user message read timed out',
+        );
         if (!this.isCurrentTurn(sessionID, expectedEpoch)) return;
         lastUser = [deepResult.data ?? []]
           .flat()
@@ -2030,11 +2048,20 @@ export class ForegroundFallbackManager {
       };
       const sendReplayPrompt = (): Promise<unknown> => {
         this.rememberReplayMessage(sessionID, promptBody.body.messageID);
-        return promptAsync(promptBody);
+        return withTimeout(
+          promptAsync(promptBody),
+          REPLAY_SEND_TIMEOUT_MS,
+          'fallback replay prompt timed out',
+        );
       };
       try {
         promptResult = await sendReplayPrompt();
       } catch (promptErr) {
+        if (promptErr instanceof OperationTimeoutError) {
+          // A timeout cannot prove refusal; never abort or duplicate the replay.
+          settleUnresolvedHandoff();
+          throw promptErr;
+        }
         if (!this.isCurrentTurn(sessionID, expectedEpoch)) {
           withdrawHandoff();
           return;
@@ -2088,12 +2115,16 @@ export class ForegroundFallbackManager {
           return;
         }
         await new Promise((r) => setTimeout(r, REPROMPT_DELAY_MS));
-        // The abort/re-prompt-delay suspended across a dispose(): the
-        // second replay must not go through the old client. The first
-        // prompt's transport failed with an unknown outcome, so convert
-        // (never drop) the armed handoff exactly like the retry-failure
-        // path below.
-        if (!this.isCurrentTurn(sessionID, expectedEpoch)) {
+        // Recheck after the abort/backoff: a cancelled or superseded child
+        // admits no second replay, so withdraw its prepared handoff.
+        if (
+          !this.isCurrentTurn(sessionID, expectedEpoch) ||
+          (handoffArmed &&
+            !this.backgroundFallbackHandoff?.isEligible(
+              sessionID,
+              preparedGeneration,
+            ))
+        ) {
           withdrawHandoff();
           return;
         }
@@ -2158,7 +2189,17 @@ export class ForegroundFallbackManager {
       // probe) so the substituted run's result is observed and
       // delivered to the parent.
       if (handoffArmed) {
-        this.backgroundFallbackHandoff?.admit(sessionID, preparedGeneration);
+        this.backgroundFallbackHandoff?.admit(
+          sessionID,
+          preparedGeneration,
+          announce
+            ? {
+                from: currentModel,
+                to: deliveredWithoutSwitch ? currentModel : nextModel,
+                error: structuredErrorMessage(error) ?? 'Session error',
+              }
+            : undefined,
+        );
       }
       if (deliveredWithoutSwitch) return;
       log('[foreground-fallback] switched to fallback model', {

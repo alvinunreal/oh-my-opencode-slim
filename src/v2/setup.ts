@@ -2873,10 +2873,27 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                     rawType === 'session.next.reasoning.delta' ||
                     rawType === 'message.part.delta';
                   if (!isStreamDelta) {
-                    // Directory scope (multi-instance): skip events that belong
-                    // to another live location before any bridge sees them.
+                    // Keep directory-local bridges scoped, while allowing the
+                    // task owner to observe children moved to live locations.
                     eventDirectoryScope.note(next.value);
-                    if (eventDirectoryScope.isForeign(next.value)) continue;
+                    if (eventDirectoryScope.isForeign(next.value)) {
+                      // Moved children retain their task owner in the parent's
+                      // location. Forward observation only, not permission or
+                      // profile handling from this foreign location.
+                      const foreignTaskEvent = v1Hooks['v2.foreignTaskEvent'] as
+                        | ((input: { event: unknown }) => Promise<void>)
+                        | undefined;
+                      if (foreignTaskEvent) {
+                        try {
+                          for (const ev of mapV2EventToV1(next.value)) {
+                            await foreignTaskEvent({ event: ev });
+                          }
+                        } catch (err) {
+                          log('[v2] foreign task event failed', String(err));
+                        }
+                      }
+                      continue;
+                    }
                   }
                   try {
                     await interviewBridge.handleEvent(next.value);

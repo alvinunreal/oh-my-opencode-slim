@@ -39,6 +39,7 @@ export interface TaskReviveToolOptions extends TaskControlToolOptions {
   admissionTimeoutMs?: number;
   waitForIdleTimeoutMs?: number;
   isDisposed?: () => boolean;
+  isFallbackPending?: (taskID: string) => boolean;
   registerIntent?: (parentID: string, childID: string, agent: string) => void;
 }
 
@@ -141,6 +142,18 @@ export function createTaskReviveTool(
       // Adoption does not grant ownership of the pre-existing execution.
       // V2 queues behind it; V1 retains the live-state verification below.
       if (current.state === 'running' && !adopted && !queueContinuation) {
+        if (
+          options.isFallbackPending?.(current.taskID) ||
+          revivedRunTracker.isObservationPending(
+            current.taskID,
+            current.generation,
+          ) ||
+          revivedRunTracker.isFallbackRun(current.taskID, current.generation)
+        ) {
+          throw new Error(
+            `Task ${requested} is recovering on a fallback model; wait for its result. Use task_cancel if it is obsolete.`,
+          );
+        }
         await cancelTrackedExecution(options, captured, 'revived');
         cancelledForRevive = true;
         current = getCurrentReviveJob(

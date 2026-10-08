@@ -173,10 +173,14 @@ function removeLockDirIfMatches(
  * bytes it just read, so a holder that lost the lock to a takeover
  * restores (never deletes) its successor's lock.
  */
+export type PidFileLockRelease = (() => void) & {
+  isOwned: () => boolean;
+};
+
 export function acquirePidFileLock(
   file: string,
   maxAgeMs?: number,
-): (() => void) | null {
+): PidFileLockRelease | null {
   const lock = `${file}.lock`;
   mkdirSync(path.dirname(lock), { recursive: true });
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -189,7 +193,21 @@ export function acquirePidFileLock(
         .toString(36)
         .slice(2)}`;
       writeFileSync(path.join(lock, 'owner'), `${process.pid}\n${token}`);
-      return () => {
+
+      const isOwned = (): boolean => {
+        let raw: string;
+        try {
+          raw = readFileSync(path.join(lock, 'owner'), 'utf8');
+        } catch {
+          return false;
+        }
+        const seen = raw.split('\n')[1]?.trim();
+        return (
+          parsePidFile(raw) === process.pid && (seen ? seen : null) === token
+        );
+      };
+
+      const release = (() => {
         // Single raw read: the token check and the snapshot below must see
         // the same bytes, otherwise a successor slipping between two reads
         // could be deleted.
@@ -201,7 +219,10 @@ export function acquirePidFileLock(
           return;
         }
         const seen = raw.split('\n')[1]?.trim();
-        if (parsePidFile(raw) === null || (seen ? seen : null) !== token) {
+        if (
+          parsePidFile(raw) !== process.pid ||
+          (seen ? seen : null) !== token
+        ) {
           log('[pid-file-lock] lock owner changed; skipping release');
           return;
         }
@@ -217,7 +238,9 @@ export function acquirePidFileLock(
         }
         // 'removed' means our lock is gone; 'gone' means someone else
         // removed it first — both need no further action.
-      };
+      }) as PidFileLockRelease;
+      release.isOwned = isOwned;
+      return release;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== 'EEXIST') throw err;
@@ -249,7 +272,7 @@ export function acquirePidFileLockWithRetry(
   file: string,
   attempts: number,
   maxAgeMs?: number,
-): (() => void) | null {
+): PidFileLockRelease | null {
   for (let attempt = 0; attempt < attempts; attempt++) {
     const release = acquirePidFileLock(file, maxAgeMs);
     if (release) return release;
@@ -273,7 +296,7 @@ export async function acquirePidFileLockWithRetryAsync(
   file: string,
   timeoutMs: number,
   maxAgeMs?: number,
-): Promise<(() => void) | null> {
+): Promise<PidFileLockRelease | null> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const release = acquirePidFileLock(file, maxAgeMs);

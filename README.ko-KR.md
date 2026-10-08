@@ -15,6 +15,11 @@
   </p>
 
   <p>
+    <a href="https://svgdiagram.ai"><img src="img/svgdiagram-logo.svg" alt="svgdiagram.ai" width="40" height="28" align="absmiddle"></a>&nbsp;
+    <a href="https://svgdiagram.ai"><b>svgdiagram.ai</b></a> <sub>· 메모를 깔끔하고 편집 가능한 SVG 다이어그램으로</sub>
+  </p>
+
+  <p>
     <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a> | <a href="README.ja-JP.md">日本語</a> | <b>한국어</b> | <a href="README.fa-IR.md">فارسی</a>
   </p>
 

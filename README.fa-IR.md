@@ -15,6 +15,11 @@
   </p>
 
   <p>
+    <a href="https://svgdiagram.ai"><img src="img/svgdiagram-logo.svg" alt="svgdiagram.ai" width="40" height="28" align="absmiddle"></a>&nbsp;
+    <a href="https://svgdiagram.ai"><b>svgdiagram.ai</b></a> <sub>· یادداشت‌هایتان را به نمودارهای SVG تمیز و قابل‌ویرایش تبدیل کنید</sub>
+  </p>
+
+  <p>
     <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a> | <a href="README.ja-JP.md">日本語</a> | <a href="README.ko-KR.md">한국어</a> | <b>فارسی</b>
   </p>
 

@@ -29,10 +29,17 @@ Dock attention); unsupported environments may safely ignore it. Error/failure
 notifications are intentionally not emitted because the parent status PR does
 not claim canonical settled terminal evidence.
 
-Right-click the Companion to open its compact control menu. In addition to the
-existing size controls, the menu exposes scoped preset navigation. The center
-preset button shows the active edit scope: `P:` for **Project** or `G:` for
-**Global**; clicking it toggles scope.
+Right-click the Companion to open its compact control menu. When the menu is
+closed, the displayed project continues to follow live agent activity. Opening
+the menu pins the currently displayed project so background activity in another
+repository cannot change the target while you are editing it. The first menu row
+cycles across every live project, even when that project is currently idle.
+
+The preset row always applies to that explicitly selected project. Its center
+button shows a readable scoped value such as `Prj:Inherit` or `Gbl:openai`;
+clicking it toggles between **Project** and **Global** scope. If a project has
+not published preset state yet, the menu shows a disabled diagnostic row instead
+of silently hiding the controls.
 
 Project scope is the safe default for desktop use with multiple projects open.
 It always writes the current project's `.opencode` layer, creating the
@@ -137,7 +144,9 @@ opens. If no custom position is saved for a project, the configured
 `companion.position` corner is used.
 
 Saved positions are clamped to the current screen so the companion stays visible
-after monitor or resolution changes.
+after monitor or resolution changes. Position persistence runs off the native UI
+thread; a busy shared-state lock therefore cannot freeze animation or dragging.
+The in-memory position remains authoritative while a delayed write is retried.
 
 ---
 
@@ -222,6 +231,13 @@ download fails, the plugin update still succeeds and Companion update is retried
 on the next OpenCode restart. The updater uses a lock to prevent concurrent
 OpenCode processes from replacing the same binary, and stale locks from crashed
 updates are cleaned up automatically.
+
+Companion runtime state uses the same fail-closed principle. Each live project
+gets a distinct manager identity within the OpenCode process, dead process
+entries are pruned on writes, abandoned state locks are recovered, and the
+native window is not spawned until its owner state has been published. A
+temporarily busy state lock schedules a retry instead of blocking the plugin
+thread.
 
 Automatic native updates only use release archives listed in the packaged
 companion manifest, and every archive must have a matching SHA256 checksum.

@@ -207,6 +207,9 @@ export const CHILD_INPUT_QUEUE_CAP = 32;
 /** Max child-input deltas appended to one wake. */
 export const CHILD_INPUT_WAKE_CHUNK = 4;
 
+/** Give host/UI auto-repliers time to settle an ask before waking the parent. */
+export const CHILD_INPUT_WAKE_SETTLE_MS = 250;
+
 /** Asks that overflow the bounded child-input queue still produce a
  * durable, actionable signal. The parent runs task_status for the remaining
  * open requests whose inline details were coalesced. Same overflow-marker
@@ -958,6 +961,14 @@ export function createOrchestratorWakeScheduler(
       : undefined,
   });
   const pendingChildInputWakes = childInputQueue.batches;
+  const childInputTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  function clearChildInputTimer(sessionID: string): void {
+    const timer = childInputTimers.get(sessionID);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    childInputTimers.delete(sessionID);
+  }
 
   /** Event-tracked session statuses (busy-set + parent race guard). */
   const lastStatusBySession = new Map<string, TrackedSessionStatus>();
@@ -1058,6 +1069,7 @@ export function createOrchestratorWakeScheduler(
   }
 
   function clearSession(sessionID: string): void {
+    clearChildInputTimer(sessionID);
     releaseLocalWakeOwner(sessionID);
     clearLocalSession(sessionID);
     clearWakeSession(sessionID);
@@ -1068,6 +1080,7 @@ export function createOrchestratorWakeScheduler(
   }
 
   function suppressArchivedSession(sessionID: string): void {
+    clearChildInputTimer(sessionID);
     const state = touchLocal(sessionID);
     clearTimer(state);
     bumpGeneration(state);
@@ -1092,6 +1105,7 @@ export function createOrchestratorWakeScheduler(
    * Used for input waits and temporary blocks.
    */
   function suppress(sessionID: string): void {
+    clearChildInputTimer(sessionID);
     const state = localSessions.get(sessionID);
     if (!state) return;
     clearTimer(state);
@@ -1681,6 +1695,15 @@ export function createOrchestratorWakeScheduler(
     reason: WakeReason = 'periodic',
   ): Promise<boolean> {
     const recoveryWake = reason === 'recovery';
+    // Idle/retry paths must not bypass the settling window. Stopped-job
+    // recoveries still run immediately, without carrying unsettled asks.
+    if (
+      recoveryWake &&
+      childInputTimers.has(sessionID) &&
+      !pendingStoppedRecoveries.has(sessionID)
+    ) {
+      return false;
+    }
     const scheduleOptions = {
       ignoreProgressCap: reason === 'publication',
     };
@@ -1923,6 +1946,18 @@ export function createOrchestratorWakeScheduler(
         ? selection.variant
         : modelSelection?.variant;
 
+      // A new ask or duplicate can start another settling timer during
+      // either host read or selection resolution without changing generation.
+      // A subsequent reply can also remove that timer and the entire batch.
+      // Defer child-only recovery before reserving or choosing a stop notice.
+      if (
+        recoveryWake &&
+        !recoveryBatch &&
+        (childInputTimers.has(sessionID) || !liveChildInputDeltas)
+      ) {
+        return false;
+      }
+
       // Reserve before promptAsync so a failed call cannot storm retries and
       // concurrent hook instances cannot double-wake.
       if (!commitWakeReservation(sessionID, owner, latestFingerprint)) {
@@ -1933,7 +1968,9 @@ export function createOrchestratorWakeScheduler(
       // batch), the wake names the parked child instead of a stopped job.
       // The live map is re-read (not the pre-await snapshot): an ask
       // answered during selection resolve must not select the ask text.
-      const sendInputDeltas = pendingChildInputWakes.get(sessionID);
+      const sendInputDeltas = childInputTimers.has(sessionID)
+        ? undefined
+        : pendingChildInputWakes.get(sessionID);
       const sendInputKeys = sendInputDeltas
         ? [...sendInputDeltas.deltas.keys()].slice(0, CHILD_INPUT_WAKE_CHUNK)
         : [];
@@ -2268,6 +2305,7 @@ export function createOrchestratorWakeScheduler(
     sessionID: string,
     delta?: string,
     dedupeKey?: string,
+    settleDelayMs = 0,
   ): void {
     if (
       disposed ||
@@ -2294,6 +2332,24 @@ export function createOrchestratorWakeScheduler(
     const blocker = scheduleBlocker(sessionID);
     if (blocker) {
       reportScheduleBlocker(sessionID, blocker, queue.blockerTrigger);
+      return;
+    }
+    if (settleDelayMs > 0) {
+      // Keep the first deadline: duplicates enrich the queued delta, and
+      // bursts cannot postpone a genuinely blocked child indefinitely.
+      if (childInputTimers.has(sessionID)) return;
+      const timer = setTimeout(() => {
+        childInputTimers.delete(sessionID);
+        const batch = queue.batches.get(sessionID);
+        if (!batch) return;
+        if (prunedToEmpty(queue, batch)) {
+          queue.batches.delete(sessionID);
+          return;
+        }
+        triggerDeltaWake(queue, sessionID);
+      }, settleDelayMs);
+      childInputTimers.set(sessionID, timer);
+      timer.unref?.();
       return;
     }
     const state = touchLocal(sessionID);
@@ -2430,11 +2486,12 @@ export function createOrchestratorWakeScheduler(
   }
 
   /**
-   * Immediately evaluate an idle orchestrator after a background child asks
+   * Evaluate an idle orchestrator after a background child asks
    * a question or permission request. Separate from the periodic TODO wake
    * for the same reason as the stopped-job recovery: a parked child needs
    * an answer even when its parent has no todo. The wake carries the ask
-   * inline and answers ride the task_reply tool. Delivered with
+   * inline and answers ride the task_reply tool. A short settling window
+   * drops asks already answered by host/UI auto-repliers. Delivered with
    * delivery:'queue' when the parent is busy, like every other wake.
    *
    * Ported onto the post-2.2.22 wake: the ask wake enters evaluation with
@@ -2447,7 +2504,13 @@ export function createOrchestratorWakeScheduler(
     delta?: string,
     dedupeKey?: string,
   ): void {
-    triggerDeltaWake(childInputQueue, sessionID, delta, dedupeKey);
+    triggerDeltaWake(
+      childInputQueue,
+      sessionID,
+      delta,
+      dedupeKey,
+      CHILD_INPUT_WAKE_SETTLE_MS,
+    );
   }
 
   async function event(input: {
@@ -2473,6 +2536,9 @@ export function createOrchestratorWakeScheduler(
 
     if (type === 'server.instance.disposed') {
       disposed = true;
+      for (const parentID of childInputTimers.keys()) {
+        clearChildInputTimer(parentID);
+      }
       pendingStoppedRecoveries.clear();
       lastPublicationWakeAt.clear();
       pendingChildInputWakes.clear();
@@ -2498,6 +2564,25 @@ export function createOrchestratorWakeScheduler(
     const sessionID = extractSessionID(input.event);
     if (!sessionID) return;
     noteGateSession(sessionID);
+
+    if (
+      type === 'permission.replied' ||
+      type === 'question.replied' ||
+      type === 'question.v2.replied' ||
+      type === 'question.rejected' ||
+      type === 'question.v2.rejected' ||
+      type === 'session.deleted'
+    ) {
+      // The task-session-manager clears resolved waits before this hook runs.
+      // Cancel a settling batch, but keep other pending asks and overflow.
+      // Once evaluation starts, leave pruning to its post-await checks.
+      for (const [parentID, batch] of pendingChildInputWakes) {
+        if (!childInputTimers.has(parentID)) continue;
+        if (!prunedToEmpty(childInputQueue, batch)) continue;
+        pendingChildInputWakes.delete(parentID);
+        clearChildInputTimer(parentID);
+      }
+    }
 
     if (type === 'session.updated') {
       if (canObserveSelection(sessionID)) {

@@ -21,8 +21,8 @@ const GAP: f32 = 10.0;
 
 const SIZE_PRESETS: &[(&str, f32)] = &[("S", 80.0), ("M", 120.0), ("L", 160.0), ("XL", 200.0)];
 
-const MENU_W: f32 = 76.0;
-const MENU_H: f32 = 78.0;
+const MENU_W: f32 = 96.0;
+const MENU_H: f32 = 98.0;
 const MENU_PAD: f32 = 2.0;
 const SURFACE_INSET: f32 = 1.0;
 
@@ -170,6 +170,37 @@ fn handle_drag_start(
         *drag_project_key = Some(project_key.to_owned());
         ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
     }
+}
+
+fn persist_window_position_async(
+    state_path: std::path::PathBuf,
+    project_key: String,
+    position: WindowPositionState,
+    generation: Arc<AtomicU64>,
+    write_generation: u64,
+) {
+    std::thread::spawn(move || {
+        for _ in 0..6 {
+            if generation.load(Ordering::Acquire) != write_generation {
+                return;
+            }
+            match write_project_window_position(&state_path, &project_key, position) {
+                Ok(()) => return,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+                Err(err) => {
+                    crate::log::debug(format!(
+                        "window position write failed project={project_key:?}: {err}"
+                    ));
+                    return;
+                }
+            }
+        }
+        crate::log::debug(format!(
+            "window position write timed out project={project_key:?}"
+        ));
+    });
 }
 
 pub(crate) fn place_window(position: &str, screen: [f32; 2], win: [f32; 2]) -> [f32; 2] {
@@ -325,10 +356,10 @@ fn choose_session(sessions: &[SessionInfo]) -> Option<usize> {
 
 fn compact_preset_label(value: &str) -> String {
     let chars: Vec<char> = value.chars().collect();
-    if chars.len() <= 6 {
+    if chars.len() <= 8 {
         return value.to_string();
     }
-    format!("{}…", chars[..5].iter().collect::<String>())
+    format!("{}…", chars[..7].iter().collect::<String>())
 }
 
 fn compact_scoped_label(prefix: &str, value: &str) -> String {
@@ -368,6 +399,12 @@ struct PresetMenuAction {
     scope: PresetScope,
     preset: Option<String>,
     inherit: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum CompanionMenuAction {
+    SelectProject(isize),
+    SelectPreset(PresetMenuAction),
 }
 
 fn has_scoped_preset_state(state: &CompanionPresetState) -> bool {
@@ -458,13 +495,13 @@ fn adjacent_preset(
 fn scope_label(state: &CompanionPresetState, scope: PresetScope) -> String {
     match scope {
         PresetScope::Project => project_current(state)
-            .map(|current| compact_scoped_label("P", current))
-            .unwrap_or_else(|| "P:inh".to_string()),
+            .map(|current| compact_scoped_label("Prj", current))
+            .unwrap_or_else(|| "Prj:Inherit".to_string()),
         PresetScope::Global => state
             .global
             .as_deref()
-            .map(|current| compact_scoped_label("G", current))
-            .unwrap_or_else(|| "G:none".to_string()),
+            .map(|current| compact_scoped_label("Gbl", current))
+            .unwrap_or_else(|| "Gbl:None".to_string()),
     }
 }
 
@@ -513,17 +550,58 @@ fn pending_preset_request_should_clear(
             .any(|session| session.session_id == pending.session_id)
 }
 
-fn choose_owned_session(sessions: &[SessionInfo], owner_session_id: Option<&str>) -> Option<usize> {
-    if let Some(owner_session_id) = owner_session_id {
-        if let Some(index) = sessions
-            .iter()
-            .position(|session| session.session_id == owner_session_id)
+fn selected_session_index(
+    sessions: &[SessionInfo],
+    pinned_session_id: Option<&str>,
+) -> Option<usize> {
+    pinned_session_id
+        .and_then(|session_id| {
+            sessions
+                .iter()
+                .position(|session| session.session_id == session_id)
+        })
+        .or_else(|| choose_session(sessions))
+}
+
+fn project_session_indices(sessions: &[SessionInfo]) -> Vec<usize> {
+    let mut indices: Vec<usize> = Vec::new();
+    for (index, session) in sessions.iter().enumerate() {
+        if let Some(existing) = indices
+            .iter_mut()
+            .find(|existing| sessions[**existing].cwd == session.cwd)
         {
-            return Some(index);
+            *existing = index;
+        } else {
+            indices.push(index);
         }
     }
+    indices
+}
 
-    choose_session(sessions)
+fn adjacent_project_session_index(
+    sessions: &[SessionInfo],
+    current_session_id: &str,
+    direction: isize,
+) -> Option<usize> {
+    let projects = project_session_indices(sessions);
+    if projects.len() <= 1 {
+        return None;
+    }
+    let current = projects
+        .iter()
+        .position(|index| sessions[*index].session_id == current_session_id)
+        .unwrap_or(0);
+    let next = (current as isize + direction).rem_euclid(projects.len() as isize) as usize;
+    projects.get(next).copied()
+}
+
+fn project_display_name(cwd: &str) -> String {
+    std::path::Path::new(cwd)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(cwd)
+        .to_string()
 }
 
 pub struct CompanionApp {
@@ -546,8 +624,11 @@ pub struct CompanionApp {
     window_positions: std::collections::BTreeMap<String, WindowPositionState>,
     project_keys: std::collections::BTreeMap<String, String>,
     drag_project_key: Option<String>,
+    menu_target_session_id: Option<String>,
     last_attention_key: Option<(String, u64)>,
     preset_request_seq: u64,
+    position_write_generation: Arc<AtomicU64>,
+    pending_window_positions: std::collections::BTreeMap<String, (WindowPositionState, u64)>,
     pending_preset_request: Option<PendingPresetRequest>,
     niri_generation: Arc<AtomicU64>,
 }
@@ -609,8 +690,11 @@ impl CompanionApp {
             window_positions,
             project_keys: std::collections::BTreeMap::new(),
             drag_project_key: None,
+            menu_target_session_id: None,
             last_attention_key: None,
             preset_request_seq: 0,
+            position_write_generation: Arc::new(AtomicU64::new(0)),
+            pending_window_positions: std::collections::BTreeMap::new(),
             pending_preset_request: None,
             niri_generation: Arc::new(AtomicU64::new(0)),
         }
@@ -641,7 +725,17 @@ impl CompanionApp {
                 state.config,
                 owned_config
             ));
-            self.window_positions = state.window_positions;
+            let mut next_window_positions = state.window_positions;
+            self.pending_window_positions
+                .retain(|project, (pending_position, _generation)| {
+                    if next_window_positions.get(project) == Some(pending_position) {
+                        false
+                    } else {
+                        next_window_positions.insert(project.clone(), *pending_position);
+                        true
+                    }
+                });
+            self.window_positions = next_window_positions;
             self.project_keys
                 .retain(|cwd, _| self.sessions.iter().any(|session| &session.cwd == cwd));
             self.has_modern_config = state.config.is_some();
@@ -718,18 +812,20 @@ impl eframe::App for CompanionApp {
 
         self.size = ctx.data(|d| d.get_temp(egui::Id::new(SIZE_KEY)).unwrap_or(self.size));
 
-        let Some(selected_idx) =
-            choose_owned_session(&self.sessions, self.owner_session_id.as_deref())
-        else {
-            if self.owner_session_id.is_some() {
-                crate::log::debug(format!(
-                    "close owner session missing owner={:?} sessions={}",
-                    self.owner_session_id,
-                    self.sessions.len()
-                ));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                return;
-            }
+        let menu_open = ctx.data(|d| {
+            d.get_temp::<bool>(egui::Id::new(MENU_OPEN_KEY))
+                .unwrap_or(false)
+        });
+        if !menu_open {
+            self.menu_target_session_id = None;
+        }
+        let pinned_session = if menu_open {
+            self.menu_target_session_id.as_deref()
+        } else {
+            None
+        };
+
+        let Some(selected_idx) = selected_session_index(&self.sessions, pinned_session) else {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none().fill(egui::Color32::BLACK))
                 .show(ctx, |ui| {
@@ -809,11 +905,6 @@ impl eframe::App for CompanionApp {
         let n = agent_frames.len().max(1);
         let (cols, rows) = grid_dims(n);
         let [win_w, win_h] = window_size(self.size, cols, rows);
-        let menu_open = ctx.data(|d| {
-            d.get_temp::<bool>(egui::Id::new(MENU_OPEN_KEY))
-                .unwrap_or(false)
-        });
-
         let geometry = WindowGeometryKey {
             session_id: session.session_id.clone(),
             project_key: project_key.clone(),
@@ -873,18 +964,28 @@ impl eframe::App for CompanionApp {
                         x: rect.min.x,
                         y: rect.min.y,
                     };
-                    if write_project_window_position(&self.state_path, &project_key, position)
-                        .is_ok()
-                    {
-                        self.window_positions.insert(project_key, position);
-                        self.applied_geometry = None;
-                    }
+                    let write_generation = self
+                        .position_write_generation
+                        .fetch_add(1, Ordering::AcqRel)
+                        + 1;
+                    self.window_positions.insert(project_key.clone(), position);
+                    self.pending_window_positions
+                        .insert(project_key.clone(), (position, write_generation));
+                    self.applied_geometry = None;
+                    persist_window_position_async(
+                        self.state_path.clone(),
+                        project_key,
+                        position,
+                        Arc::clone(&self.position_write_generation),
+                        write_generation,
+                    );
                 }
             }
         }
 
         if ctx.input(|i| i.pointer.secondary_released()) {
             let cursor = ctx.input(|i| i.pointer.interact_pos()).unwrap_or_default();
+            self.menu_target_session_id = Some(session.session_id.clone());
             ctx.data_mut(|d| {
                 d.insert_temp(egui::Id::new(MENU_POS_KEY), [cursor.x, cursor.y]);
                 d.insert_temp(egui::Id::new(MENU_OPEN_KEY), true);
@@ -907,29 +1008,42 @@ impl eframe::App for CompanionApp {
             ctx,
             win_w,
             win_h,
-            session.preset.as_ref(),
+            &self.sessions,
+            &session,
             self.pending_preset_request.is_some(),
-            &session.session_id,
-            &session.cwd,
         ) {
-            self.preset_request_seq = self.preset_request_seq.wrapping_add(1);
-            let request_id = format!("{}-{}", std::process::id(), self.preset_request_seq);
-            let request = CompanionPresetRequest {
-                request_id: request_id.clone(),
-                session_id: session.session_id.clone(),
-                scope: action.scope.as_str().to_string(),
-                preset: action.preset,
-                inherit: action.inherit,
-            };
-            match write_preset_request(&self.state_path, request) {
-                Ok(()) => {
-                    self.pending_preset_request = Some(PendingPresetRequest {
-                        request_id,
-                        session_id: session.session_id.clone(),
-                    });
+            match action {
+                CompanionMenuAction::SelectProject(direction) => {
+                    if let Some(next_index) = adjacent_project_session_index(
+                        &self.sessions,
+                        &session.session_id,
+                        direction,
+                    ) {
+                        self.menu_target_session_id =
+                            Some(self.sessions[next_index].session_id.clone());
+                    }
                 }
-                Err(err) => {
-                    crate::log::debug(format!("preset request write failed: {err}"));
+                CompanionMenuAction::SelectPreset(action) => {
+                    self.preset_request_seq = self.preset_request_seq.wrapping_add(1);
+                    let request_id = format!("{}-{}", std::process::id(), self.preset_request_seq);
+                    let request = CompanionPresetRequest {
+                        request_id: request_id.clone(),
+                        session_id: session.session_id.clone(),
+                        scope: action.scope.as_str().to_string(),
+                        preset: action.preset,
+                        inherit: action.inherit,
+                    };
+                    match write_preset_request(&self.state_path, request) {
+                        Ok(()) => {
+                            self.pending_preset_request = Some(PendingPresetRequest {
+                                request_id,
+                                session_id: session.session_id.clone(),
+                            });
+                        }
+                        Err(err) => {
+                            crate::log::debug(format!("preset request write failed: {err}"));
+                        }
+                    }
                 }
             }
         }
@@ -1141,11 +1255,10 @@ fn render_companion_menu(
     ctx: &egui::Context,
     win_w: f32,
     win_h: f32,
-    preset_state: Option<&CompanionPresetState>,
+    sessions: &[SessionInfo],
+    target: &SessionInfo,
     preset_pending: bool,
-    session_id: &str,
-    project_dir: &str,
-) -> Option<PresetMenuAction> {
+) -> Option<CompanionMenuAction> {
     let open: bool = ctx.data(|d| d.get_temp(egui::Id::new(MENU_OPEN_KEY)).unwrap_or(false));
     if !open {
         return None;
@@ -1170,8 +1283,8 @@ fn render_companion_menu(
             .unwrap_or([20.0, 20.0])
     });
     let size: f32 = ctx.data(|d| d.get_temp(egui::Id::new(SIZE_KEY)).unwrap_or(DEFAULT_SIZE));
-    let pending_id = project_open_pending_id(session_id);
-    let error_id = project_open_error_id(session_id);
+    let pending_id = project_open_pending_id(&target.session_id);
+    let error_id = project_open_error_id(&target.session_id);
     let project_open_pending = ctx.data(|d| d.get_temp::<bool>(pending_id).unwrap_or(false));
     let project_open_error = ctx
         .data(|d| d.get_temp::<String>(error_id).unwrap_or_default())
@@ -1179,7 +1292,9 @@ fn render_companion_menu(
         .to_string();
     let x = pos[0].clamp(MENU_PAD, (win_w - MENU_W - MENU_PAD).max(MENU_PAD));
     let y = pos[1].clamp(MENU_PAD, (win_h - MENU_H - MENU_PAD).max(MENU_PAD));
-    let mut selected: Option<PresetMenuAction> = None;
+    let mut selected: Option<CompanionMenuAction> = None;
+    let multiple_projects = project_session_indices(sessions).len() > 1;
+    let project_label = compact_preset_label(&project_display_name(&target.cwd));
 
     let response =
         egui::Area::new(egui::Id::new("companion_menu"))
@@ -1194,7 +1309,41 @@ fn render_companion_menu(
                         ui.set_min_width(MENU_W - MENU_PAD * 2.0);
                         ui.spacing_mut().item_spacing = egui::vec2(1.0, 2.0);
 
-                        if let Some(preset_state) = preset_state {
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(
+                                    multiple_projects,
+                                    egui::Button::new("‹").min_size(egui::vec2(16.0, 18.0)),
+                                )
+                                .on_hover_text("Previous project")
+                                .clicked()
+                            {
+                                selected = Some(CompanionMenuAction::SelectProject(-1));
+                            }
+
+                            ui.add_sized(
+                                [54.0, 18.0],
+                                egui::Button::new(
+                                    egui::RichText::new(&project_label).size(9.0).strong(),
+                                )
+                                .fill(egui::Color32::from_rgb(30, 30, 32))
+                                .stroke(egui::Stroke::NONE),
+                            )
+                            .on_hover_text(format!("Preset target project:\n{}", target.cwd));
+
+                            if ui
+                                .add_enabled(
+                                    multiple_projects,
+                                    egui::Button::new("›").min_size(egui::vec2(16.0, 18.0)),
+                                )
+                                .on_hover_text("Next project")
+                                .clicked()
+                            {
+                                selected = Some(CompanionMenuAction::SelectProject(1));
+                            }
+                        });
+
+                        if let Some(preset_state) = target.preset.as_ref() {
                             let previous = adjacent_preset(preset_state, scope, -1);
                             let next = adjacent_preset(preset_state, scope, 1);
                             ui.horizontal(|ui| {
@@ -1203,9 +1352,10 @@ fn render_companion_menu(
                                         !preset_pending && previous.is_some(),
                                         egui::Button::new("‹").min_size(egui::vec2(16.0, 18.0)),
                                     )
+                                    .on_hover_text("Previous preset")
                                     .clicked()
                                 {
-                                    selected = previous;
+                                    selected = previous.map(CompanionMenuAction::SelectPreset);
                                 }
 
                                 let feedback_matches_scope =
@@ -1245,19 +1395,21 @@ fn render_companion_menu(
                                         !preset_pending,
                                         egui::Button::new(
                                             egui::RichText::new(if preset_pending {
-                                                "…".to_string()
+                                                "Applying…".to_string()
                                             } else {
                                                 label
                                             })
-                                            .size(9.0)
+                                            .size(8.5)
                                             .strong()
                                             .color(color),
                                         )
-                                        .min_size(egui::vec2(34.0, 18.0))
+                                        .min_size(egui::vec2(54.0, 18.0))
                                         .fill(egui::Color32::from_rgb(30, 30, 32))
                                         .stroke(egui::Stroke::NONE),
                                     )
-                                    .on_hover_text(hover)
+                                    .on_hover_text(format!(
+                                        "{hover}\nClick to switch Project / Global scope."
+                                    ))
                                     .clicked()
                                 {
                                     let next_scope = scope.toggled();
@@ -1274,18 +1426,25 @@ fn render_companion_menu(
                                         !preset_pending && next.is_some(),
                                         egui::Button::new("›").min_size(egui::vec2(16.0, 18.0)),
                                     )
+                                    .on_hover_text("Next preset")
                                     .clicked()
                                 {
-                                    selected = next;
+                                    selected = next.map(CompanionMenuAction::SelectPreset);
                                 }
                             });
+                        } else {
+                            ui.add_sized(
+                                [88.0, 18.0],
+                                egui::Button::new(
+                                    egui::RichText::new("Preset unavailable")
+                                        .size(8.5)
+                                        .color(egui::Color32::from_rgb(165, 165, 170)),
+                                )
+                                .fill(egui::Color32::from_rgb(30, 30, 32))
+                                .stroke(egui::Stroke::NONE),
+                            )
+                            .on_hover_text("This project has not published preset state yet.");
                         }
-
-                        ui.label(
-                            egui::RichText::new("Size")
-                                .size(9.0)
-                                .color(egui::Color32::from_rgb(165, 165, 170)),
-                        );
 
                         ui.horizontal(|ui| {
                             for (label, preset) in SIZE_PRESETS {
@@ -1304,11 +1463,12 @@ fn render_companion_menu(
                                 );
                                 if ui
                                     .add_sized(
-                                        [17.0, 18.0],
+                                        [20.0, 18.0],
                                         egui::Button::new(text)
                                             .fill(fill)
                                             .stroke(egui::Stroke::NONE),
                                     )
+                                    .on_hover_text(format!("Companion size {label}"))
                                     .clicked()
                                 {
                                     ctx.data_mut(|d| {
@@ -1318,8 +1478,6 @@ fn render_companion_menu(
                                 }
                             }
                         });
-
-                        ui.add_space(1.0);
 
                         ui.horizontal(|ui| {
                             let open_label = if project_open_pending {
@@ -1335,11 +1493,11 @@ fn render_companion_menu(
                                 egui::Color32::from_rgb(240, 110, 110)
                             };
                             let open_hover = if project_open_pending {
-                                "Opening the project folder…".to_string()
+                                "Opening the selected project folder…".to_string()
                             } else if project_open_error.is_empty() {
-                                "Open the project folder".to_string()
+                                "Open the selected project folder".to_string()
                             } else {
-                                format!("Open the project folder\n{project_open_error}")
+                                format!("Open the selected project folder\n{project_open_error}")
                             };
                             if ui
                                 .add_enabled(
@@ -1347,27 +1505,27 @@ fn render_companion_menu(
                                     egui::Button::new(
                                         egui::RichText::new(open_label).size(9.0).color(open_color),
                                     )
-                                    .min_size(egui::vec2(23.0, 17.0))
+                                    .min_size(egui::vec2(30.0, 17.0))
                                     .fill(egui::Color32::from_rgb(30, 30, 32))
                                     .stroke(egui::Stroke::NONE),
                                 )
                                 .on_hover_text(open_hover)
                                 .clicked()
                             {
-                                start_project_directory_open(ctx, session_id, project_dir);
+                                start_project_directory_open(ctx, &target.session_id, &target.cwd);
                             }
 
                             if ui
                                 .add_sized(
-                                    [23.0, 17.0],
+                                    [30.0, 17.0],
                                     egui::Button::new(egui::RichText::new("Copy").size(9.0))
                                         .fill(egui::Color32::from_rgb(30, 30, 32))
                                         .stroke(egui::Stroke::NONE),
                                 )
-                                .on_hover_text("Copy the project path")
+                                .on_hover_text("Copy the selected project path")
                                 .clicked()
                             {
-                                ctx.copy_text(project_dir.to_string());
+                                ctx.copy_text(target.cwd.clone());
                                 ctx.data_mut(|d| {
                                     d.insert_temp(egui::Id::new(MENU_OPEN_KEY), false);
                                 });
@@ -1462,12 +1620,12 @@ fn is_pid_alive(_pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        adjacent_preset, agent_detail_tooltip, apply_config, attention_key, attention_stroke,
-        attention_type_for_status, choose_owned_session, choose_session, config_key, grid_dims,
-        handle_drag_start, pending_preset_request_should_clear, place_window,
-        preset_request_completed, restore_window_position, should_apply_geometry, size_from_config,
-        window_size, ConfigKey, PendingPresetRequest, PresetMenuAction, PresetScope, SessionInfo,
-        WindowGeometryKey, GAP,
+        adjacent_preset, adjacent_project_session_index, agent_detail_tooltip, apply_config,
+        attention_key, attention_stroke, attention_type_for_status, choose_session, config_key,
+        grid_dims, handle_drag_start, pending_preset_request_should_clear, place_window,
+        preset_request_completed, project_session_indices, restore_window_position,
+        selected_session_index, should_apply_geometry, size_from_config, window_size, ConfigKey,
+        PendingPresetRequest, PresetMenuAction, PresetScope, SessionInfo, WindowGeometryKey, GAP,
     };
     use crate::state::{CompanionAgentDetail, CompanionConfigState, CompanionPresetState};
 
@@ -1578,21 +1736,42 @@ mod tests {
     }
 
     #[test]
-    fn owned_session_wins_when_present() {
+    fn pinned_menu_target_wins_over_automatic_activity_selection() {
         let sessions = vec![
-            session("first", "waiting-input", &["input"]),
-            session("owner", "idle", &["intro"]),
+            session("active", "waiting-input", &["input"]),
+            session("target", "idle", &["intro"]),
         ];
-        assert_eq!(choose_owned_session(&sessions, Some("owner")), Some(1));
+        assert_eq!(selected_session_index(&sessions, Some("target")), Some(1));
     }
 
     #[test]
-    fn missing_owner_falls_back_to_active_session() {
+    fn missing_menu_target_falls_back_to_active_session() {
         let sessions = vec![
             session("idle", "idle", &["intro"]),
             session("active", "busy", &["fixer"]),
         ];
-        assert_eq!(choose_owned_session(&sessions, Some("gone")), Some(1));
+        assert_eq!(selected_session_index(&sessions, Some("gone")), Some(1));
+    }
+
+    #[test]
+    fn project_selector_deduplicates_projects_and_cycles_independently_of_activity() {
+        let mut alpha_old = session("alpha-old", "busy", &["fixer"]);
+        alpha_old.cwd = "/projects/alpha".into();
+        let mut alpha_new = session("alpha-new", "idle", &["intro"]);
+        alpha_new.cwd = "/projects/alpha".into();
+        let mut beta = session("beta", "waiting-input", &["input"]);
+        beta.cwd = "/projects/beta".into();
+        let sessions = vec![alpha_old, alpha_new, beta];
+
+        assert_eq!(project_session_indices(&sessions), vec![1, 2]);
+        assert_eq!(
+            adjacent_project_session_index(&sessions, "alpha-new", 1),
+            Some(2)
+        );
+        assert_eq!(
+            adjacent_project_session_index(&sessions, "beta", 1),
+            Some(1)
+        );
     }
 
     #[test]

@@ -21,8 +21,9 @@ function writeSkill(
   projectDir: string,
   relativeDir: string,
   name: string,
+  root: '.opencode' | '.agents' = '.opencode',
 ): void {
-  const skillDir = path.join(projectDir, '.opencode', 'skills', relativeDir);
+  const skillDir = path.join(projectDir, root, 'skills', relativeDir);
   fs.mkdirSync(skillDir, { recursive: true });
   fs.writeFileSync(
     path.join(skillDir, 'SKILL.md'),
@@ -56,6 +57,76 @@ describe('discoverProjectLocalSkillNames', () => {
       'repository',
       'shared',
     ]);
+  });
+
+  test('discovers both skill roots across ancestors without sibling leakage', () => {
+    const workspace = makeProject();
+    const repository = path.join(workspace, 'repository');
+    const worktree = path.join(repository, 'nested');
+    fs.mkdirSync(path.join(repository, '.git'), { recursive: true });
+    fs.mkdirSync(worktree, { recursive: true });
+    writeSkill(workspace, 'outside', 'outside', '.agents');
+    writeSkill(repository, 'portable', 'portable', '.agents');
+    writeSkill(repository, 'legacy', 'shared');
+    writeSkill(worktree, 'nested', 'nested', '.agents');
+    writeSkill(worktree, 'duplicate', 'shared', '.agents');
+    writeSkill(
+      path.join(workspace, 'sibling'),
+      'sibling',
+      'sibling',
+      '.agents',
+    );
+
+    expect(discoverProjectLocalSkillNames(worktree)).toEqual([
+      'nested',
+      'portable',
+      'shared',
+    ]);
+    expect(discoverProjectLocalSkillNames(worktree, 'v2')).toEqual([
+      'nested',
+      'outside',
+      'portable',
+      'shared',
+    ]);
+  });
+
+  test('finds .agents skills without an .opencode skills directory', () => {
+    const projectDir = makeProject();
+    writeSkill(projectDir, 'portable', 'portable', '.agents');
+    const invalid = path.join(projectDir, '.agents', 'skills', 'invalid');
+    fs.mkdirSync(invalid, { recursive: true });
+    fs.writeFileSync(path.join(invalid, 'SKILL.md'), 'no frontmatter name');
+
+    expect(discoverProjectLocalSkillNames(projectDir)).toEqual(['portable']);
+  });
+
+  test('ignores external .agents symlink roots while retaining local skills', () => {
+    const projectDir = makeProject();
+    const externalDir = makeProject();
+    writeSkill(externalDir, 'external', 'external', '.agents');
+    writeSkill(projectDir, 'allowed', 'allowed');
+    fs.mkdirSync(path.join(projectDir, '.agents'), { recursive: true });
+    fs.symlinkSync(
+      path.join(externalDir, '.agents', 'skills'),
+      path.join(projectDir, '.agents', 'skills'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+
+    expect(discoverProjectLocalSkillNames(projectDir)).toEqual(['allowed']);
+  });
+
+  test('does not follow symlinked .agents skill entries', () => {
+    const projectDir = makeProject();
+    const externalDir = makeProject();
+    writeSkill(projectDir, 'allowed', 'allowed', '.agents');
+    writeSkill(externalDir, 'external', 'external', '.agents');
+    fs.symlinkSync(
+      path.join(externalDir, '.agents', 'skills', 'external'),
+      path.join(projectDir, '.agents', 'skills', 'linked'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+
+    expect(discoverProjectLocalSkillNames(projectDir)).toEqual(['allowed']);
   });
 
   test('skips symlinked ancestor roots without discarding valid local skills', () => {
@@ -165,10 +236,11 @@ describe('skills_include_local', () => {
     expect(permissions?.excluded).not.toBe('allow');
   });
 
-  test('adds all project .opencode/skills entries to an agent effective skills', () => {
+  test('adds skills from both project roots to an agent effective skills', () => {
     const projectDir = makeProject();
     writeSkill(projectDir, 'project-architecture', 'project-architecture');
     writeSkill(projectDir, 'nested/project-testing', 'project-testing');
+    writeSkill(projectDir, 'portable', 'portable', '.agents');
 
     const config = PluginConfigSchema.parse({
       agents: {
@@ -191,12 +263,13 @@ describe('skills_include_local', () => {
     expect(skillPermissions?.codemap).toBe('allow');
     expect(skillPermissions?.['project-architecture']).toBe('allow');
     expect(skillPermissions?.['project-testing']).toBe('allow');
+    expect(skillPermissions?.portable).toBe('allow');
   });
 
   test('skills_remove still wins over an automatically included local skill', () => {
     const projectDir = makeProject();
     writeSkill(projectDir, 'project-architecture', 'project-architecture');
-    writeSkill(projectDir, 'project-testing', 'project-testing');
+    writeSkill(projectDir, 'project-testing', 'project-testing', '.agents');
 
     const config = PluginConfigSchema.parse({
       agents: {
@@ -214,9 +287,35 @@ describe('skills_include_local', () => {
     expect(effective).not.toContain('project-testing');
   });
 
+  test('combines .agents discovery with skills_add and skills_remove', () => {
+    const projectDir = makeProject();
+    writeSkill(projectDir, 'legacy', 'legacy');
+    writeSkill(projectDir, 'portable', 'portable', '.agents');
+    writeSkill(projectDir, 'excluded', 'excluded', '.agents');
+
+    const config = PluginConfigSchema.parse({
+      agents: {
+        oracle: {
+          skills: ['codemap'],
+          skills_add: ['extra'],
+          skills_include_local: true,
+          skills_remove: ['excluded'],
+        },
+      },
+    });
+    const runtime = RuntimeConfig.createDetached(projectDir, config);
+    const effective = runtime.agents().oracle?.skills;
+
+    expect(effective).toContain('codemap');
+    expect(effective).toContain('extra');
+    expect(effective).toContain('legacy');
+    expect(effective).toContain('portable');
+    expect(effective).not.toContain('excluded');
+  });
+
   test('preserves local-skill grants from a legacy alias across canonical config layers', () => {
     const projectDir = makeProject();
-    writeSkill(projectDir, 'project-testing', 'project-testing');
+    writeSkill(projectDir, 'project-testing', 'project-testing', '.agents');
 
     const config = PluginConfigSchema.parse({
       preset: 'local-project',

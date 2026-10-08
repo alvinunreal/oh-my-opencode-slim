@@ -228,6 +228,7 @@ export function createTaskSessionManagerHook(
      *  router defer terminal bookkeeping for persistent 401/410 errors
      *  until recovery is impossible. */
     willAttemptFallback?: (sessionID: string) => boolean;
+    fallbackFailureReason?: (sessionID: string) => string;
     coordinator?: SessionLifecycle;
     /** Surface a background child's newly opened input wait to the parent
      * (question/permission that would otherwise park the child forever with
@@ -259,8 +260,9 @@ export function createTaskSessionManagerHook(
       observationRevisionFor: (taskID, generation) =>
         options.revivedRunTracker?.revisionFor(taskID, generation),
       isObservationPending: (taskID, generation) =>
-        options.revivedRunTracker?.isObservationPending(taskID, generation) ??
-        false,
+        deferredInlineErrors.has(taskID) ||
+        (options.revivedRunTracker?.isObservationPending(taskID, generation) ??
+          false),
     });
   const rehydrateState = backgroundJobs.ledger;
   const rehydrateTombstones = rehydrateState.tombstones;
@@ -471,6 +473,10 @@ export function createTaskSessionManagerHook(
    *  failover-worthy error with an armed fallback chain), mapped to the
    *  summary the idle backstop publishes when no recovery happens. */
   const deferredInlineErrors = new Map<string, string>();
+  const withFallbackReason = (sessionID: string, text: string): string =>
+    [text, options.fallbackFailureReason?.(sessionID)]
+      .filter(Boolean)
+      .join('\n');
 
   // Forward refs for circular deps — set after corresponding managers exist.
   // These are captured by closure in createIdleReconciler and only called
@@ -499,8 +505,9 @@ export function createTaskSessionManagerHook(
     // entries to poison a later reuse of the session.
     consumeDeferredError: (sessionID) => {
       const message = deferredInlineErrors.get(sessionID);
-      if (message !== undefined) deferredInlineErrors.delete(sessionID);
-      return message;
+      if (message === undefined) return;
+      deferredInlineErrors.delete(sessionID);
+      return withFallbackReason(sessionID, message);
     },
   });
   const runtimeStatusReconciler = createRuntimeStatusReconciler({
@@ -510,7 +517,12 @@ export function createTaskSessionManagerHook(
   });
 
   const idleSessionTokens = createIdleSessionTokens({
-    onInvalidate: idleReconciler.onInvalidateIdle,
+    // Parent lifecycle invalidation must not strand a deferred child error.
+    // Live busy explicitly cancels its backstop and clears the deferral.
+    onInvalidate: (sessionID) => {
+      if (!deferredInlineErrors.has(sessionID))
+        idleReconciler.onInvalidateIdle(sessionID);
+    },
   });
   getIdleSessionToken = (s) => idleSessionTokens.getSessionToken(s);
   isCurrentIdleSessionToken = (s, t) =>
@@ -537,13 +549,14 @@ export function createTaskSessionManagerHook(
         idleSessionTokens.clearSession(sessionId);
       }
       inputWaits.clearInputWaits(sessionId);
-      idleReconciler.clearIdleTimers(sessionId);
       // During a foreground fallback abort/re-prompt cycle, the session
       // is being torn down and immediately recreated with a fallback model.
       // Dropping the job from the board here would make the orchestrator
       // lose track of the task and report it as cancelled even though the
       // oracle actually completed.
       if (!options.isFallbackInProgress?.(sessionId)) {
+        idleReconciler.clearIdleTimers(sessionId);
+        deferredInlineErrors.delete(sessionId);
         options.backgroundTaskConcurrency?.releaseTask(sessionId);
         // The parent's child tasks are about to be dropped from the board.
         // Normally each child's own session.deleted releases its admission
@@ -608,6 +621,8 @@ export function createTaskSessionManagerHook(
   pendingCallTracker.adoptEarlyRegistrations(backgroundJobs);
 
   return {
+    hasDeferredError: (sessionID: string): boolean =>
+      deferredInlineErrors.has(sessionID),
     markRevivedRunPending: (taskID: string): void => {
       taskContextTracker.pendingManagedTaskIds.add(taskID);
     },
@@ -854,6 +869,7 @@ export function createTaskSessionManagerHook(
         idleSessionTokens,
         options,
         idleReconciler,
+        withFallbackReason,
         deferredInlineErrors,
         backgroundJobs,
         pendingCallTracker,

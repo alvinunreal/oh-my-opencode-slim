@@ -7,7 +7,7 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 - Retrieves the last user message from the session history
 - Re-prompts the session with the next available model from the agent's configured fallback chain
 - Operates reactively through the event system (cannot wrap `prompt()` directly for interactive sessions)
-- Defers terminal job-board bookkeeping for inline 401/410 errors while recovery is still possible (cooperates with task-session-manager's `willAttemptFallback`)
+- Defers terminal job-board bookkeeping for recoverable child failover errors (cooperates with task-session-manager's `willAttemptFallback`). The deferral fences every terminal gate path before replay preparation starts; idle always uses the bounded backstop.
 
 ## Design
 
@@ -76,6 +76,7 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
   clears.
 - **Session cleanup**: `session.deleted` event handler removes all per-session state to prevent memory leaks
 - **In-progress tracking**: Prevents concurrent fallback attempts on the same session across plugin-manager recreation
+- Host calls within `inProgress` have bounded timeouts because the terminal gate's fallback fence depends on that window ending; a replay send timeout retains unresolved ownership without aborting or resending.
 
 ### Retry Budget and Exhaustion
 - The v2 in-place retry hook (`handleV2Retry`) is gated by the separate `v2RetryEnabled` constructor flag — the replay path's `enabled` stays false on v2 hosts, so only steering runs there. It shares the chain-global budget and quota policy. Absorbed retries, recoverable failures, missing chains and unsuccessful model switches leave the host decision unchanged. Once `selectFallbackModel` returns `exhausted` the hook returns without touching the decision: the host's own retry verdict stands, so a spent chain never forces a retry. A first ordinary exhaustion still takes the sticky re-fallback (only the second lands here).
@@ -124,7 +125,9 @@ Log fallback event
 2. **Message retrieval**: Queries session messages via `client.session.messages()` and finds last user message
 3. **Model switching**: Uses `parseModelReference()` to extract providerID/modelID from chain entry
 4. **Re-prompting**: Calls `promptAsync()` which queues prompt and returns immediately (non-blocking); appends trusted internal-initiator provenance so the replay is not mistaken for new external user input
-5. **Failover deferral**: 401/410 errors (`isFailoverError`) leave terminal job-board bookkeeping to the task-session-manager event router, which defers it while `willAttemptFallback` holds
+5. **Failover deferral**: Recoverable child errors (`isFailoverError`) leave terminal bookkeeping to the task-session-manager. Its backstop waits for replay preparation, renewing at most five times, and clears the deferral before publishing an unrecovered error. `fallbackFailureReason()` adds the disabled, missing-chain, exhausted-chain (with tried models), or failed-model explanation. Non-failover errors retain their original text.
+6. **Fallback ownership**: Admitted and unresolved-promoted replays retain a tracker flag until external registration replaces the run. Plugin wiring makes v1 `task_revive` refuse pending or running fallback work; `task_cancel` remains available. v2 steering creates no replay flag or refusal.
+7. **Continuation notice**: A confirmed replay after a terminal failover error queues one internal `state="running"` notice with the failed model, provider error and model now running. The tracker uses the same parent transport as terminal delivery and waits for the notice attempt to settle before sending the result. Retry-path replays, superseded or unresolved admissions, promoted owners and v2 steering send no notice.
 
 ## Integration
 

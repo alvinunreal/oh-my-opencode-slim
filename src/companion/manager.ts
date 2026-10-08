@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -18,6 +19,7 @@ import {
 } from '../tools/preset-switch';
 import { log } from '../utils/logger';
 import {
+  acquirePidFileLock,
   acquirePidFileLockWithRetry,
   isProcessAlive,
   parsePidFile,
@@ -34,6 +36,7 @@ let activeExitListener: (() => void) | null = null;
 const activeManagers = new Set<CompanionManager>();
 const MAX_PRESET_REQUESTS = 64;
 const PRESET_REFRESH_EVERY_TICKS = 4;
+const STATE_PUBLISH_RETRY_MS = 250;
 const HARD_PRESET_REFRESH_WARNING_KINDS: ReadonlySet<ConfigLoadWarningKind> =
   new Set(['invalid-json', 'invalid-schema', 'read-error']);
 
@@ -169,16 +172,44 @@ function readState(): CompanionState {
   return { version: 1, sessions: [] };
 }
 
+function pruneDeadSessions(state: CompanionState): void {
+  state.sessions = state.sessions.filter(
+    (session) =>
+      !Number.isInteger(session.pid) ||
+      session.pid === process.pid ||
+      isProcessAlive(session.pid),
+  );
+  if (!state.preset_requests?.length) return;
+
+  const liveSessionIds = new Set(
+    state.sessions.map((session) => session.session_id),
+  );
+  state.preset_requests = state.preset_requests.filter((request) =>
+    liveSessionIds.has(request.session_id),
+  );
+  if (state.preset_requests.length === 0) delete state.preset_requests;
+}
+
 function writeState(mutator: (state: CompanionState) => void): boolean {
   const file = stateFilePath();
   try {
     mkdirSync(path.dirname(file), { recursive: true });
-    const release = acquireStateLock(file);
+    // Never age-steal a state lock from a live writer. Recovery is based on
+    // the PID/token owner record; this prevents a paused writer from losing
+    // ownership and committing over a successor.
+    const release = acquirePidFileLock(file);
+    if (!release) return false;
     try {
       const state = readState();
+      pruneDeadSessions(state);
       mutator(state);
       const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
       writeFileSync(tmp, JSON.stringify(state));
+      if (!release.isOwned()) {
+        rmSync(tmp, { force: true });
+        log('[companion] state lock ownership changed before commit');
+        return false;
+      }
       renameSync(tmp, file);
       return true;
     } finally {
@@ -190,25 +221,36 @@ function writeState(mutator: (state: CompanionState) => void): boolean {
   }
 }
 
-function acquireStateLock(file: string): () => void {
-  const lock = `${file}.lock`;
-  for (let attempt = 0; attempt < 40; attempt++) {
-    try {
-      mkdirSync(lock);
-      return () => {
-        try {
-          rmSync(lock, { recursive: true, force: true });
-        } catch (err) {
-          log('[companion] lock release failed', String(err));
-        }
-      };
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== 'EEXIST') throw err;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
-    }
+export function companionSessionIdForDirectory(directory: string): string {
+  const normalized = path.resolve(directory).replace(/[\\/]+$/, '');
+  const identity =
+    process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  const digest = createHash('sha256')
+    .update(identity)
+    .digest('hex')
+    .slice(0, 12);
+  return `proc_${process.pid}_${digest}`;
+}
+
+export function normalizeCompanionSessionStatus(
+  eventType: string,
+  status?: string,
+): 'busy' | 'idle' | undefined {
+  if (eventType === 'session.idle' || eventType === 'session.error') {
+    return 'idle';
   }
-  throw new Error('timed out waiting for companion state lock');
+  if (eventType !== 'session.status') return undefined;
+  if (status === 'busy' || status === 'retry') return 'busy';
+  if (
+    status === 'idle' ||
+    status === 'completed' ||
+    status === 'stopped' ||
+    status === 'error' ||
+    status === 'failed'
+  ) {
+    return 'idle';
+  }
+  return undefined;
 }
 
 /**
@@ -235,9 +277,11 @@ export class CompanionManager {
   private lastAttentionRequestId: string | undefined;
   private readonly config?: CompanionConfig;
   private companionProcess: ChildProcess | null = null;
+  private spawnChecked = false;
   private wasSpawner = false;
   private spawnedCompanionPid: number | null = null;
   private presetPoller: NodeJS.Timeout | null = null;
+  private publishRetryTimer: NodeJS.Timeout | null = null;
   private presetRefreshTick = 0;
   private effectivePreset: string | undefined;
   private projectPreset: string | undefined;
@@ -344,6 +388,29 @@ export class CompanionManager {
     if (this.presetPoller) return;
     this.presetPoller = setInterval(() => this.pollPresetState(), 250);
     this.presetPoller.unref();
+  }
+
+  private schedulePublishRetry(): void {
+    if (this.publishRetryTimer || this.config?.enabled !== true) return;
+    log('[companion] state publish deferred; retrying', {
+      sessionId: this.id,
+    });
+    this.publishRetryTimer = setTimeout(() => {
+      this.publishRetryTimer = null;
+      if (!activeManagers.has(this)) return;
+      this.publishAndSpawn();
+    }, STATE_PUBLISH_RETRY_MS);
+    this.publishRetryTimer.unref();
+  }
+
+  private publishAndSpawn(): void {
+    if (!this.flush()) {
+      this.schedulePublishRetry();
+      return;
+    }
+    if (this.spawnChecked) return;
+    this.spawnChecked = true;
+    this.spawnIfAvailable();
   }
 
   private acknowledgePresetRequest(requestId: string): boolean {
@@ -457,9 +524,8 @@ export class CompanionManager {
     this.restoreAttentionState();
     this.registerActiveManager();
     this.refreshPresetState();
-    this.flush();
     this.startPresetPoller();
-    this.spawnIfAvailable();
+    this.publishAndSpawn();
   }
 
   /**
@@ -469,9 +535,18 @@ export class CompanionManager {
    */
   private registerActiveManager(): void {
     for (const manager of [...activeManagers]) {
-      if (manager !== this && manager.id === this.id) {
-        manager.onExit();
+      if (manager === this || manager.id !== this.id) continue;
+
+      if (manager.wasSpawner && !this.wasSpawner) {
+        this.companionProcess = manager.companionProcess;
+        this.spawnChecked = true;
+        this.wasSpawner = true;
+        this.spawnedCompanionPid = manager.spawnedCompanionPid;
+        manager.companionProcess = null;
+        manager.wasSpawner = false;
+        manager.spawnedCompanionPid = null;
       }
+      manager.disposeForReplacement();
     }
 
     activeManagers.add(this);
@@ -479,6 +554,18 @@ export class CompanionManager {
       activeExitListener = () => CompanionManager.disposeActiveManagers();
       process.on('exit', activeExitListener);
     }
+  }
+
+  private disposeForReplacement(): void {
+    if (this.presetPoller) {
+      clearInterval(this.presetPoller);
+      this.presetPoller = null;
+    }
+    if (this.publishRetryTimer) {
+      clearTimeout(this.publishRetryTimer);
+      this.publishRetryTimer = null;
+    }
+    activeManagers.delete(this);
   }
 
   private static disposeActiveManagers(sessionId?: string): void {
@@ -622,6 +709,10 @@ export class CompanionManager {
       clearInterval(this.presetPoller);
       this.presetPoller = null;
     }
+    if (this.publishRetryTimer) {
+      clearTimeout(this.publishRetryTimer);
+      this.publishRetryTimer = null;
+    }
     activeManagers.delete(this);
     if (activeManagers.size === 0 && activeExitListener) {
       try {
@@ -706,8 +797,8 @@ export class CompanionManager {
     return ['intro'];
   }
 
-  private flush(): void {
-    if (this.config?.enabled !== true) return;
+  private flush(): boolean {
+    if (this.config?.enabled !== true) return false;
     try {
       const entry: CompanionSession = {
         session_id: this.id,
@@ -743,7 +834,7 @@ export class CompanionManager {
           last_scope: this.presetLastScope,
         },
       };
-      writeState((state) => {
+      const written = writeState((state) => {
         const idx = state.sessions.findIndex((s) => s.session_id === this.id);
         if (idx >= 0) {
           state.sessions[idx] = entry;
@@ -762,8 +853,12 @@ export class CompanionManager {
           };
         }
       });
+      if (!written) this.schedulePublishRetry();
+      return written;
     } catch (err) {
       log('[companion] flush failed', String(err));
+      this.schedulePublishRetry();
+      return false;
     }
   }
 

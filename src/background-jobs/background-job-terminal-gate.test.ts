@@ -977,7 +977,10 @@ describe('terminal gate', () => {
     const h = harness({ isObservationPending: () => blocked });
     h.observe('quiescent');
     await h.gate.reconcile(h.run);
-    expect(h.board.get(h.run.taskID)?.state).toBe('running');
+    expect(h.board.get(h.run.taskID)).toMatchObject({
+      state: 'running',
+      statusUncertain: false,
+    });
     blocked = false;
     await h.gate.reconcile(h.run);
     expect(h.board.get(h.run.taskID)?.state).toBe('completed');

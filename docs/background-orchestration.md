@@ -73,6 +73,14 @@ Its job is to:
 
 Specialists do the work. The orchestrator manages the work.
 
+### Children moved to worktrees
+
+Moving a child session to another directory does not move its task ownership.
+The delegating parent's plugin instance still observes that tracked child's
+lifecycle, so completion and revived-run notifications do not require polling
+`task_result`. The destination directory handles its own permissions and runtime
+profiles; unrelated sessions remain excluded from the parent's event handling.
+
 ### Unattributed sessions and restart scope
 
 A child observed before it can be attributed to a task launch is retained as a
@@ -579,6 +587,15 @@ on v2, set the keys explicitly:
   }
 }
 ```
+
+Child-input wakes wait 250 ms before notifying the parent, on both host
+versions. Requests answered during that window by the host, a UI auto-replier,
+or another caller are discarded. Requests still open are checked again before
+delivery. Duplicate events enrich the queued notice without restarting the
+deadline. Stopped-job recovery and terminal-publication wakes are not delayed.
+An ask arriving during a host read or model-selection lookup defers a
+child-input-only wake until settling completes, without sending a stopped-job
+notice in its place.
 
 With the board off, the plugin still retires natively delivered results: on
 the parent's next real user turn they are registered, and once the prompt
