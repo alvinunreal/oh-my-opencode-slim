@@ -8,18 +8,17 @@
  * ../cache-safe-injection.ts to ensure prompt cache safety.
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { formatSystemReminder } from '../../config/constants';
 import type {
   BackgroundJobExecution,
   BackgroundJobInjectedCompletionFence,
+  BackgroundJobLifecycle,
   BackgroundJobLifecycleLedger,
   BackgroundJobRecord,
-  BackgroundJobStore,
   BackgroundJobSyntheticTerminalOccurrence,
   BackgroundJobSyntheticTerminalOccurrencePhase,
   ContextFile,
-  TaskStatusOutput,
-} from '../../utils';
+} from '../../background-jobs';
+import { formatSystemReminder } from '../../config/constants';
 import {
   isInternalInitiatorPart,
   parseTaskIdFromTaskOutput,
@@ -27,9 +26,9 @@ import {
   parseTaskStatusOutput,
   renderRunningTaskPlaceholder,
 } from '../../utils';
-import type { BackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
 import { isRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
+import type { TaskStatusOutput } from '../../utils/task';
 import {
   appendTaggedSyntheticPart,
   appendTrailingVolatileMessage,
@@ -213,7 +212,7 @@ function deliverReopenCorrections(
   const reported = state.reportedTerminalRunsByParent?.get(parentSessionID);
   if (!reported || reported.size === 0) return;
   for (const [key, run] of reported) {
-    const record = state.backgroundJobBoard.get(run.taskID);
+    const record = state.backgroundJobs.get(run.taskID);
     if (record?.generation === run.generation && record.state !== 'running') {
       continue;
     }
@@ -267,8 +266,7 @@ export function pruneReopenCorrectionState(
 const HOST_MESSAGE_OCCURRENCE_PREFIX = 'host-message:';
 
 export interface InjectionState {
-  backgroundJobBoard: BackgroundJobStore;
-  terminalGate: BackgroundJobTerminalGate;
+  backgroundJobs: BackgroundJobLifecycle;
   lifecycleLedger: BackgroundJobLifecycleLedger;
   maxRetainedSnapshots: number;
   strategy: 'latest' | 'checkpoint-compatible';
@@ -683,11 +681,7 @@ function markSyntheticTerminalUncertain(
   existing: BackgroundJobRecord,
   reason: string,
 ): void {
-  state.backgroundJobBoard.markStatusUncertain(
-    taskID,
-    reason,
-    existing.generation,
-  );
+  state.backgroundJobs.markStatusUncertain(taskID, reason, existing.generation);
 }
 
 /**
@@ -709,7 +703,7 @@ export function observeSyntheticTerminalPart(
 
   const { occurrenceID, reliable } = observationOccurrenceID(part, status);
   const provenanceKind = provenanceKindForPart(part);
-  const existing = state.backgroundJobBoard.get(status.taskID);
+  const existing = state.backgroundJobs.get(status.taskID);
   const lifecycleEpoch = state.getLifecycleEpoch?.() ?? 0;
   const deletionEpoch = state.getDeletionEpoch?.(status.taskID);
   const occurrenceKey = injectedCompletionKey(
@@ -889,7 +883,7 @@ export async function updateFromInjectedCompletion(
   const provenanceKind = provenanceKindForPart(part, message);
   const hasExplicitOccurrenceID = provenanceKind === 'explicit';
 
-  const existing = state.backgroundJobBoard.get(status.taskID);
+  const existing = state.backgroundJobs.get(status.taskID);
   const deletionEpoch = state.getDeletionEpoch?.(status.taskID);
   const occurrenceLookup = findSyntheticTerminalOccurrence(
     state,
@@ -1076,7 +1070,7 @@ export async function updateFromInjectedCompletion(
       lifecycleEpoch: state.getLifecycleEpoch?.() ?? 0,
     },
   );
-  const result = await state.terminalGate.reconcile(
+  const result = await state.backgroundJobs.reconcile(
     existing,
     origin?.generationAtObservation === existing.generation
       ? {
@@ -1188,7 +1182,7 @@ function reconcileExecutionBatch(
   executions: Iterable<BackgroundJobExecution>,
 ): void {
   for (const execution of executions) {
-    const current = state.backgroundJobBoard.get(execution.taskID);
+    const current = state.backgroundJobs.get(execution.taskID);
     if (
       !current ||
       current.generation !== execution.generation ||
@@ -1201,7 +1195,7 @@ function reconcileExecutionBatch(
       });
       continue;
     }
-    const reconciled = state.backgroundJobBoard.markReconciled(
+    const reconciled = state.backgroundJobs.markReconciled(
       execution.taskID,
       undefined,
       execution.generation,
@@ -1426,10 +1420,10 @@ function injectLatestBoard(state: InjectionState, messages: unknown[]): void {
     // ack (or the recovery it performs) clears the flag, keeping the
     // same-objective dispatch safeguard active until actual recovery.
     const nativeExecutions = (
-      state.backgroundJobBoard.formatForPromptWithMetadata(sessionID)
+      state.backgroundJobs.formatForPromptWithMetadata(sessionID)
         ?.terminalUnreconciledTaskIDs ?? []
     ).filter((execution) => {
-      const record = state.backgroundJobBoard.get(execution.taskID);
+      const record = state.backgroundJobs.get(execution.taskID);
       return (
         record !== undefined &&
         record.generation === execution.generation &&
@@ -1447,8 +1441,7 @@ function injectLatestBoard(state: InjectionState, messages: unknown[]): void {
     return;
   }
 
-  const boardMeta =
-    state.backgroundJobBoard.formatForPromptWithMetadata(sessionID);
+  const boardMeta = state.backgroundJobs.formatForPromptWithMetadata(sessionID);
   const reminder = boardMeta?.text;
   if (!reminder) return;
 
@@ -1819,7 +1812,7 @@ function injectCheckpointBoard(
   const boardMeta =
     state.boardInjection === false
       ? undefined
-      : state.backgroundJobBoard.formatForPromptWithMetadata(sessionID);
+      : state.backgroundJobs.formatForPromptWithMetadata(sessionID);
   const reminder = boardMeta?.text;
   const canCreateSnapshot =
     canSurface &&
@@ -1839,10 +1832,10 @@ function injectCheckpointBoard(
     // retires it (#1314 keeps board-flavored notices off in this mode).
     if (canSurface) {
       const nativeExecutions = (
-        state.backgroundJobBoard.formatForPromptWithMetadata(sessionID)
+        state.backgroundJobs.formatForPromptWithMetadata(sessionID)
           ?.terminalUnreconciledTaskIDs ?? []
       ).filter((execution) => {
-        const record = state.backgroundJobBoard.get(execution.taskID);
+        const record = state.backgroundJobs.get(execution.taskID);
         return (
           record !== undefined &&
           record.generation === execution.generation &&

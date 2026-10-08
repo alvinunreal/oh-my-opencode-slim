@@ -3,13 +3,13 @@ import {
   type ToolDefinition,
   tool,
 } from '@opencode-ai/plugin';
+import type { BackgroundJobBoardApi } from '../background-jobs';
 import {
   clearChildInputWait,
   getChildInputWait,
   listChildInputWaits,
 } from '../hooks/task-session-manager/child-input-wait';
 import { pluginDisposedMessage } from '../hooks/task-session-manager/session-recovery';
-import type { BackgroundJobStore } from '../utils/background-job-store';
 import { getClient } from '../utils/opencode-client';
 import { OperationTimeoutError, withTimeout } from '../utils/session';
 import {
@@ -80,7 +80,7 @@ function assertHostReplyResult(result: unknown, operation: string): void {
  */
 export function createTaskReplyTool(options: {
   input: PluginInput;
-  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobs: BackgroundJobBoardApi;
   replyTimeoutMs?: number;
   resolveCanonicalTaskRef?: CanonicalTaskResolver;
   isDisposed?: () => boolean;
@@ -122,8 +122,8 @@ export function createTaskReplyTool(options: {
       if (canonical?.kind === 'refused') throw new Error(canonical.reason);
       const identity = canonical?.taskID ?? requested;
       const job = canonical
-        ? options.backgroundJobBoard.get(identity)
-        : options.backgroundJobBoard.resolve(parentSessionID, requested);
+        ? options.backgroundJobs.get(identity)
+        : options.backgroundJobs.resolve(parentSessionID, requested);
       if (!job || job.parentSessionID !== parentSessionID) {
         throw new Error(`Unknown task ID or alias: ${identity}`);
       }
@@ -142,7 +142,7 @@ export function createTaskReplyTool(options: {
             entry.parentSessionID === parentSessionID,
         );
         if (other) {
-          const record = options.backgroundJobBoard.get(other.taskID);
+          const record = options.backgroundJobs.get(other.taskID);
           const otherLabel = record
             ? `${record.alias} (${other.taskID})`
             : other.taskID;

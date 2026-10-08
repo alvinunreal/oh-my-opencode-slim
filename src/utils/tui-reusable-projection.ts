@@ -1,9 +1,9 @@
+import type { BackgroundJobBoard } from '../background-jobs';
 import {
   isProcessRunning,
   type TuiReusableSession,
   updateSnapshot,
 } from '../tui-state';
-import type { BackgroundJobBoard } from './background-job-board';
 
 /**
  * Board → tui-state projection for sidebar session destinations and live
@@ -29,7 +29,13 @@ interface ProjectorHandle {
 }
 
 export function createTuiReusableProjection(input: {
-  board: BackgroundJobBoard;
+  board: Pick<
+    BackgroundJobBoard,
+    | 'list'
+    | 'sidebarHistoryByParentAgent'
+    | 'addMutationListener'
+    | 'removeMutationListener'
+  >;
   projectDir: string;
 }): ProjectorHandle {
   const { board, projectDir } = input;

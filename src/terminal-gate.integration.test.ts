@@ -2,6 +2,13 @@ import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import * as path from 'node:path';
+import type { BackgroundJobRecord } from './background-jobs';
+import * as backgroundJobsModule from './background-jobs';
+import {
+  type BackgroundJobLifecycle,
+  type BackgroundJobTerminalGate,
+  createBackgroundJobTerminalGate,
+} from './background-jobs';
 import * as hookFactories from './hooks';
 import { isVolatileTaggedMessage } from './hooks/cache-safe-injection';
 import { resetOrchestratorWakeGateForTests } from './hooks/orchestrator-wake/wake-gate';
@@ -9,9 +16,6 @@ import { BACKGROUND_JOB_BOARD_METADATA_KEY } from './hooks/task-session-manager/
 import type { RevivedRunTracker } from './hooks/task-session-manager/revived-run-tracker';
 import * as runtimeFactories from './hooks/task-session-manager/runtime-status-reconciliation';
 import { OhMyOpenCodeLite as plugin } from './index';
-import type { BackgroundJobRecord } from './utils/background-job-board';
-import type { BackgroundJobCoordinator } from './utils/background-job-coordinator';
-import * as gateFactories from './utils/background-job-terminal-gate';
 import { BackgroundTaskConcurrency } from './utils/background-task-concurrency';
 import * as loggerModule from './utils/logger';
 import { buildPluginInput } from './v2/client-shim';
@@ -48,8 +52,8 @@ const transcript = () => ({
 
 async function assembly(
   onHookCreated?: (
-    board: BackgroundJobCoordinator,
-    gate: gateFactories.BackgroundJobTerminalGate,
+    board: BackgroundJobLifecycle,
+    gate: BackgroundJobTerminalGate,
   ) => void,
   setup: {
     statusTimeoutMs?: number;
@@ -88,8 +92,8 @@ async function assembly(
       },
     }),
   );
-  let board!: BackgroundJobCoordinator;
-  let gate!: gateFactories.BackgroundJobTerminalGate;
+  let board!: BackgroundJobLifecycle;
+  let gate!: BackgroundJobTerminalGate;
   let taskHook!: ReturnType<typeof hookFactories.createTaskSessionManagerHook>;
   // The production tracker instance, captured from the hook factory's
   // options (index.ts threads `revivedRunTracker` into
@@ -110,12 +114,12 @@ async function assembly(
     });
     return runtime;
   });
-  const originalGate = gateFactories.createBackgroundJobTerminalGate;
+  const originalGate = createBackgroundJobTerminalGate;
   const gateSpy = spyOn(
-    gateFactories,
+    backgroundJobsModule,
     'createBackgroundJobTerminalGate',
   ).mockImplementation((options) => {
-    board = options.backgroundJobBoard as BackgroundJobCoordinator;
+    board = options.backgroundJobBoard as BackgroundJobLifecycle;
     gate = originalGate({
       ...options,
       graceMs: setup.graceMs ?? options.graceMs,
@@ -746,7 +750,7 @@ async function driveV2Lifecycle(
   probe: V2HostProbe,
   events: V2RawEventSpec[],
   setup: { withoutHostOutcomeClock?: boolean } = {},
-): Promise<BackgroundJobCoordinator> {
+): Promise<BackgroundJobLifecycle> {
   const childID = String(
     events.find((event) => event.type === 'session.created')?.data.sessionID ??
       events[0]?.data.sessionID ??
@@ -3341,7 +3345,7 @@ driftTest(
     expect(hostLiterals).toEqual(['failed', 'interrupted', 'succeeded']);
     // Contract: host literals ⊆ gate accepted. The gate's extra
     // 'cancelled' is the documented stop-family fail-safe superset.
-    const gateAccepted = gateFactories.ACCEPTED_HOST_OUTCOMES;
+    const gateAccepted = backgroundJobsModule.ACCEPTED_HOST_OUTCOMES;
     for (const literal of hostLiterals) {
       expect(gateAccepted).toContain(literal);
     }

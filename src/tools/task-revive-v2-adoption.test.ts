@@ -1,6 +1,11 @@
 import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import type { PluginInput } from '@opencode-ai/plugin';
 import {
+  FixtureBoard as BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+  createBackgroundJobTerminalGate,
+} from '../background-jobs';
+import {
   createRevivedRunTracker,
   type RevivedRunTracker,
 } from '../hooks/task-session-manager/revived-run-tracker';
@@ -9,8 +14,6 @@ import {
   createAliasAuthority,
   createSessionRecovery,
 } from '../hooks/task-session-manager/session-recovery';
-import { BackgroundJobBoard } from '../utils/background-job-fixture';
-import { createBackgroundJobTerminalGate } from '../utils/background-job-terminal-gate';
 import * as opencodeClient from '../utils/opencode-client';
 import { buildPluginInput } from '../v2/client-shim';
 import type { V2Context } from '../v2/types';
@@ -86,35 +89,41 @@ function harness(
     location: { directory: '/test/project' },
   } as unknown as V2Context) as unknown as PluginInput;
   const board = new BackgroundJobBoard();
-  const recover = createSessionRecovery({
-    input,
-    backgroundJobBoard: board,
-    hostFlavor: 'v2',
-  });
-  const authority = createAliasAuthority({ input, board, hostFlavor: 'v2' });
   let tracker: RevivedRunTracker;
   const gate = createBackgroundJobTerminalGate({
     input,
     backgroundJobBoard: board,
-    baselineFor: (id, generation) => tracker.baselineFor(id, generation),
-    promptMessageIDFor: (id, generation) =>
+    baselineFor: (id: string, generation: number) =>
+      tracker.baselineFor(id, generation),
+    promptMessageIDFor: (id: string, generation: number) =>
       tracker.promptMessageIDFor(id, generation),
-    observationRevisionFor: (id, generation) =>
+    observationRevisionFor: (id: string, generation: number) =>
       tracker.revisionFor(id, generation),
-    attemptStartedAtFor: (id, generation) =>
+    attemptStartedAtFor: (id: string, generation: number) =>
       tracker.attemptStartedAtFor(id, generation),
-    isObservationPending: (id, generation) =>
+    isObservationPending: (id: string, generation: number) =>
       tracker.isObservationPending(id, generation),
     graceMs: 60_000,
   });
+  // One facade per board: every consumer shares it so the gate binding
+  // (last bind wins) stays on this factory's gate.
+  const backgroundJobs = createBackgroundJobLifecycle({
+    backgroundJobBoard: board,
+    gate,
+  });
+  const recover = createSessionRecovery({
+    input,
+    backgroundJobs,
+    hostFlavor: 'v2',
+  });
+  const authority = createAliasAuthority({ input, board, hostFlavor: 'v2' });
   tracker = createRevivedRunTracker({
     input,
-    backgroundJobBoard: board,
-    terminalGate: gate,
+    backgroundJobs,
   });
   const { task_revive } = createTaskReviveTool({
     input,
-    backgroundJobBoard: board,
+    backgroundJobs,
     shouldManageSession: () => true,
     revivedRunTracker: tracker,
     recoverRetainedSession: recover,
@@ -155,7 +164,9 @@ function harness(
     message: (delivery: 'queue' | 'steer') =>
       createTaskMessageTool({
         input,
-        backgroundJobBoard: board,
+        backgroundJobs: createBackgroundJobLifecycle({
+          backgroundJobBoard: board,
+        }),
         promptMessageIDFor: tracker.promptMessageIDFor,
       }).task_message.execute(
         { sessionID: childID, message: 'Correction', delivery },
@@ -224,7 +235,9 @@ test.each(['missing', 'malformed', 'error', 'timeout', 'generation'])(
       });
     const tool = createTaskMessageTool({
       input: h.input,
-      backgroundJobBoard: h.board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: h.board,
+      }),
       promptMessageIDFor: h.tracker.promptMessageIDFor,
       messageTimeoutMs: 5,
     }).task_message;

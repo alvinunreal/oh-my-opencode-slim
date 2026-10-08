@@ -1,4 +1,8 @@
 import { describe, expect, mock, test } from 'bun:test';
+import {
+  BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+} from '../background-jobs';
 import { createTaskSessionManagerHook } from '../hooks/task-session-manager';
 import {
   clearChildInputWait,
@@ -8,12 +12,14 @@ import {
   resetChildInputWaitForTests,
 } from '../hooks/task-session-manager/child-input-wait';
 import { resetUserWaitGateForTests } from '../hooks/task-session-manager/user-wait-gate';
-import { BackgroundJobBoard } from '../utils/background-job-board';
 import { buildPluginInput } from '../v2/client-shim';
 import { mapV2EventToV1 } from '../v2/event-adapter';
 import type { V2Context } from '../v2/types';
 import { createTaskReplyTool } from './task-reply';
 import { createTaskStatusTool } from './task-status';
+
+const asJobs = (board: BackgroundJobBoard) =>
+  createBackgroundJobLifecycle({ backgroundJobBoard: board });
 
 mock.module('../utils/opencode-client', () => ({
   getClient: (input: { client: unknown }) => input.client as never,
@@ -72,7 +78,9 @@ function createInputWaitHook(board: BackgroundJobBoard) {
     {
       maxSessionsPerAgent: 2,
       maxRetainedSnapshots: 20,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       shouldManageSession: (sessionID: string) => sessionID === 'parent-1',
       idleReconcileDelayMs: 0,
       runtimeStatusReconcileDelayMs: 0,
@@ -189,7 +197,7 @@ describe('task_status with a waiting child', () => {
     });
     const { task_status } = createTaskStatusTool({
       input: { directory: '/test', client: statusClient() } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
       now: () => 120_000,
     });
 
@@ -226,7 +234,7 @@ describe('task_status with a waiting child', () => {
         hostFlavor: 'v2',
         client: statusClient(),
       } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
       now: () => 120_000,
     });
 
@@ -257,7 +265,7 @@ describe('task_status with a waiting child', () => {
     });
     const { task_status } = createTaskStatusTool({
       input: { directory: '/test', client: statusClient() } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
       now: () => 120_000,
     });
 
@@ -276,7 +284,7 @@ describe('task_status with a waiting child', () => {
     registerBackgroundChild(board);
     const { task_status } = createTaskStatusTool({
       input: { directory: '/test', client: statusClient() } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
       now: () => 120_000,
     });
 
@@ -304,7 +312,7 @@ describe('task_reply', () => {
     const client = { question: { reply, reject: mock(async () => ({})) } };
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
     });
 
     const output = await task_reply.execute(
@@ -346,7 +354,7 @@ describe('task_reply', () => {
     const client = { question: { reply, reject: mock(async () => ({})) } };
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client, hostFlavor: 'v2' } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
     });
 
     expect(Object.keys(task_reply.args)).toContain('sessionID');
@@ -378,7 +386,7 @@ describe('task_reply', () => {
     const client = { question: { reply: mock(async () => ({})), reject } };
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
     });
 
     const output = await task_reply.execute(
@@ -403,7 +411,7 @@ describe('task_reply', () => {
     });
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client: {} } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
     });
 
     await expect(
@@ -432,7 +440,7 @@ describe('task_reply', () => {
     const client = { permission: { reply } };
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
     });
 
     const output = await task_reply.execute(
@@ -478,7 +486,7 @@ describe('task_reply', () => {
     };
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
     });
 
     const caught = await task_reply
@@ -518,7 +526,7 @@ describe('task_reply', () => {
     };
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
     });
 
     const output = await task_reply.execute(
@@ -536,7 +544,7 @@ describe('task_reply', () => {
     registerBackgroundChild(board);
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client: {} } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
     });
 
     await expect(
@@ -562,7 +570,7 @@ describe('task_reply', () => {
     const client = { permission: { reply } };
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
     });
 
     const output = await task_reply.execute(
@@ -598,7 +606,7 @@ describe('task_reply', () => {
     };
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
     });
 
     await task_reply.execute(
@@ -633,7 +641,7 @@ describe('task_reply', () => {
     };
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
     });
 
     await expect(
@@ -663,7 +671,7 @@ describe('task_reply', () => {
     };
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
       replyTimeoutMs: 5,
     });
 
@@ -700,7 +708,7 @@ describe('task_reply', () => {
     };
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
     });
 
     const output = await task_reply.execute(
@@ -733,7 +741,7 @@ describe('task_reply', () => {
     };
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
       replyTimeoutMs: 5,
     });
 
@@ -768,7 +776,7 @@ describe('task_reply on a v1-shaped host client', () => {
     const client = { _client: { post } };
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
     });
 
     const output = await task_reply.execute(
@@ -792,7 +800,7 @@ describe('task_reply on a v1-shaped host client', () => {
     const client = { _client: { post } };
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
     });
 
     const output = await task_reply.execute(
@@ -827,7 +835,7 @@ describe('task_reply on a v1-shaped host client', () => {
     const client = { postSessionIdPermissionsPermissionId: postPermission };
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
     });
 
     const output = await task_reply.execute(
@@ -853,7 +861,7 @@ describe('task_reply on a v1-shaped host client', () => {
     const client = { _client: { post } };
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
     });
 
     await expect(
@@ -870,7 +878,7 @@ describe('task_reply on a v1-shaped host client', () => {
     const board = registerOpenQuestion();
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client: {} } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
     });
 
     await expect(
@@ -885,7 +893,7 @@ describe('task_reply on a v1-shaped host client', () => {
     const board = registerOpenQuestion();
     const { task_reply } = createTaskReplyTool({
       input: { directory: '/test', client: { permission: {} } } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
     });
 
     await expect(
@@ -910,7 +918,7 @@ describe('task_reply v2 event transport integration', () => {
       const input = buildPluginInput(makeV2Ctx(reply as never));
       const { task_reply } = createTaskReplyTool({
         input: input as never,
-        backgroundJobBoard: board,
+        backgroundJobs: asJobs(board),
       });
 
       await routeMappedV2Event(hook, {
@@ -958,7 +966,7 @@ describe('task_reply v2 event transport integration', () => {
       const input = buildPluginInput(makeV2Ctx());
       const { task_reply } = createTaskReplyTool({
         input: input as never,
-        backgroundJobBoard: board,
+        backgroundJobs: asJobs(board),
       });
 
       await routeMappedV2Event(hook, {

@@ -6,19 +6,13 @@
  * scan at startup, send a prompt, or keep a recovery claim.
  */
 import type { PluginInput } from '@opencode-ai/plugin';
+import type { BackgroundJobLifecycle } from '../../background-jobs';
 import {
-  type BackgroundJobBoard,
   deriveFullObjective,
   deriveTaskSessionLabel,
   type RestoreRetainedSessionInput,
-} from '../../utils/background-job-board';
-import { getSuppressionTombstone } from '../../utils/background-job-persistence';
-import type { BackgroundJobStore } from '../../utils/background-job-store';
-import {
-  clearBackgroundJobSuppression,
-  getBackgroundJobLifecycleLedger,
-} from '../../utils/background-job-store';
-import { STOP_CONFIRMATION_GRACE_MS } from '../../utils/background-job-terminal-gate';
+  STOP_CONFIRMATION_GRACE_MS,
+} from '../../background-jobs';
 import {
   classifyCurrentDeliveredRound,
   classifyV2HistoricalRound,
@@ -91,7 +85,7 @@ export interface RetainedRecoveryRequest {
 
 export interface SessionRecoveryOptions {
   input: PluginInput;
-  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobs: BackgroundJobLifecycle;
   isDisposed?: () => boolean;
   hostFlavor?: string;
   stableStoppedMs?: number;
@@ -119,7 +113,7 @@ async function recoverRetainedSession(
 ): Promise<RetainedRecoveryResult> {
   const parentSessionID = request.parentSessionID;
   const sessionID = request.requested.trim();
-  const board = options.backgroundJobBoard;
+  const backgroundJobs = options.backgroundJobs;
   if (options.isDisposed?.()) return refuse('Session recovery was disposed');
   const prefix = `Unknown or unowned background task: ${sessionID}`;
   // Callers resolve aliases first; recovery reads exact host sessions only.
@@ -131,7 +125,7 @@ async function recoverRetainedSession(
 
   const client = getClient(options.input);
   const directory = options.input.directory;
-  const ledger = getBackgroundJobLifecycleLedger(board);
+  const { ledger } = backgroundJobs;
   const deletionEpoch = ledger.deletionEpochs.get(sessionID);
   const fenced = (): RetainedRecoveryResult | undefined => {
     if (options.isDisposed?.()) return refuse('Session recovery was disposed');
@@ -141,7 +135,7 @@ async function recoverRetainedSession(
     );
   };
   const appeared = (): RetainedRecoveryResult | undefined => {
-    const row = board.get(sessionID);
+    const row = backgroundJobs.get(sessionID);
     if (!row) return;
     if (row.parentSessionID === parentSessionID) {
       return { kind: 'existing', taskID: row.taskID };
@@ -186,7 +180,7 @@ async function recoverRetainedSession(
     // at this session's transcript (#1387 P2).
     const stop = fenced();
     if (stop) return stop;
-    const tombstone = getSuppressionTombstone(sessionID);
+    const tombstone = backgroundJobs.suppressionTombstone(sessionID);
     if (tombstone) {
       let transcript: unknown;
       try {
@@ -211,7 +205,7 @@ async function recoverRetainedSession(
           sessionID,
         ) !== undefined;
       if (!owned) return refuse(generic);
-      clearBackgroundJobSuppression(board, sessionID);
+      backgroundJobs.clearSuppression(sessionID);
       if (tombstone.terminalState !== undefined) {
         const ending =
           tombstone.terminalState === 'completed'
@@ -259,9 +253,9 @@ async function recoverRetainedSession(
     }
     const stop = fenced();
     if (stop) return stop;
-    const tombstone = getSuppressionTombstone(sessionID);
+    const tombstone = backgroundJobs.suppressionTombstone(sessionID);
     if (tombstone?.terminalState !== undefined && tombstone.resultSummary) {
-      clearBackgroundJobSuppression(board, sessionID);
+      backgroundJobs.clearSuppression(sessionID);
       const ending =
         tombstone.terminalState === 'completed'
           ? 'completed'
@@ -442,7 +436,7 @@ async function recoverRetainedSession(
     prompt: promptSource,
   });
   const launchedAt = round.startedAt ?? hosted.createdAt;
-  const restored = board.restoreRetainedSession({
+  const restored = backgroundJobs.restoreRetainedSession({
     taskID: sessionID,
     parentSessionID,
     agent: agent.agent,
@@ -470,7 +464,7 @@ async function recoverRetainedSession(
       : {}),
   });
   if (!restored) {
-    const existing = board.resolve(parentSessionID, sessionID);
+    const existing = backgroundJobs.resolve(parentSessionID, sessionID);
     if (existing) return { kind: 'existing', taskID: existing.taskID };
     return refuse(
       `Task ${sessionID} could not be imported without overwriting a newer row or lease; no prompt was sent`,
@@ -1048,7 +1042,7 @@ export function pluginDisposedMessage(): string {
 
 export function createAliasAuthority(options: {
   input: PluginInput;
-  board: BackgroundJobBoard;
+  board: BackgroundJobLifecycle;
   isDisposed?: () => boolean;
 }): AliasAuthority {
   /** Exact IDs and board aliases resolve locally; otherwise one bounded

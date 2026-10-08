@@ -1,5 +1,8 @@
 import { describe, expect, mock, test } from 'bun:test';
-import { BackgroundJobBoard } from '../../utils/background-job-board';
+import {
+  BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+} from '../../background-jobs';
 import { handleEvent } from './event-router';
 import { createPendingCallTracker } from './pending-call-tracker';
 
@@ -31,7 +34,9 @@ function createDeps(board: BackgroundJobBoard) {
       clearAllTimers: mock(() => []),
     },
     deferredInlineErrors: new Map<string, string>(),
-    backgroundJobBoard: board,
+    backgroundJobs: createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+    }),
     pendingCallTracker: createPendingCallTracker(),
     taskContextTracker: {
       pendingManagedTaskIds: new Set<string>(),

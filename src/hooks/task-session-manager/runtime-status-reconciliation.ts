@@ -1,9 +1,8 @@
 import type { PluginInput } from '@opencode-ai/plugin';
-import type { BackgroundJobStore } from '../../utils/background-job-store';
 import {
-  type BackgroundJobTerminalGate,
+  type BackgroundJobLifecycle,
   runtimeObservationFromSnapshot,
-} from '../../utils/background-job-terminal-gate';
+} from '../../background-jobs';
 import { log } from '../../utils/logger';
 import { getRuntimeSessionStatusSnapshot } from '../../utils/session-runtime-status';
 
@@ -12,8 +11,7 @@ export const RUNTIME_STATUS_RECONCILE_DELAY_MS = 5_000;
 /** Batching, cadence and capability detection only; no terminal policy. */
 export function createRuntimeStatusReconciler(options: {
   input: PluginInput;
-  backgroundJobBoard: BackgroundJobStore;
-  terminalGate: BackgroundJobTerminalGate;
+  backgroundJobs: BackgroundJobLifecycle;
   delayMs?: number;
   statusTimeoutMs?: number;
 }) {
@@ -39,7 +37,7 @@ export function createRuntimeStatusReconciler(options: {
       !supported() ||
       activeReconcile ||
       timer ||
-      !options.backgroundJobBoard.hasRunningJobs()
+      !options.backgroundJobs.hasRunningJobs()
     )
       return;
     timer = setTimeout(() => {
@@ -59,8 +57,8 @@ export function createRuntimeStatusReconciler(options: {
     if (disposed || !supported()) return;
     // Requested/rehydration passes include retained terminals. Routine
     // scheduling stops when no jobs run, so inactive history is not polled.
-    const tokens = options.backgroundJobBoard.list().flatMap((run) => {
-      const token = options.terminalGate.capture(run);
+    const tokens = options.backgroundJobs.list().flatMap((run) => {
+      const token = options.backgroundJobs.capture(run);
       return token ? [token] : [];
     });
     if (!tokens.length) return;
@@ -71,12 +69,12 @@ export function createRuntimeStatusReconciler(options: {
     if (disposed) return;
     const pending: Promise<unknown>[] = [];
     for (const token of tokens) {
-      const result = options.terminalGate.observe(
+      const result = options.backgroundJobs.observe(
         token,
         runtimeObservationFromSnapshot(snapshot, token.taskID, startedAt),
       );
       if (result.kind !== 'stale')
-        pending.push(options.terminalGate.reconcile(token));
+        pending.push(options.backgroundJobs.reconcile(token));
     }
     await Promise.all(pending);
   }

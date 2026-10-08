@@ -3,12 +3,12 @@ import {
   type ToolDefinition,
   tool,
 } from '@opencode-ai/plugin';
+import type { BackgroundJobBoardApi } from '../background-jobs';
 import {
   type ContinuationModelSelection,
   parseContinuationModelSelection,
 } from '../hooks/task-session-manager/continuation-model-selection';
 import { pluginDisposedMessage } from '../hooks/task-session-manager/session-recovery';
-import type { BackgroundJobStore } from '../utils/background-job-store';
 import { fetchChildTranscript } from '../utils/child-transcript';
 import { isRecord } from '../utils/guards';
 import { getClient } from '../utils/opencode-client';
@@ -38,7 +38,7 @@ class MessageLeaseOperationTimeoutError extends Error {
 
 export function createTaskMessageTool(options: {
   input: PluginInput;
-  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobs: BackgroundJobBoardApi;
   messageTimeoutMs?: number;
   promptMessageIDFor?: (
     taskID: string,
@@ -91,21 +91,21 @@ export function createTaskMessageTool(options: {
       if (canonical?.kind === 'refused') throw new Error(canonical.reason);
       const identity = canonical?.taskID ?? requested;
       const job = canonical
-        ? options.backgroundJobBoard.get(identity)
-        : options.backgroundJobBoard.resolve(parentSessionID, requested);
+        ? options.backgroundJobs.get(identity)
+        : options.backgroundJobs.resolve(parentSessionID, requested);
       if (!job || job.parentSessionID !== parentSessionID) {
         throw new Error(`Unknown task ID or alias: ${identity}`);
       }
 
       const currentJob = getCurrentTaskMessageJob(
-        options.backgroundJobBoard,
+        options.backgroundJobs,
         parentSessionID,
         job.taskID,
         job.generation,
         delegation,
       );
 
-      const lease = options.backgroundJobBoard.acquireMessageLease(
+      const lease = options.backgroundJobs.acquireMessageLease(
         currentJob.taskID,
         currentJob.generation,
       );
@@ -117,9 +117,9 @@ export function createTaskMessageTool(options: {
 
       let keepLeaseUntilSettled = false;
       try {
-        assertMessageLease(options.backgroundJobBoard, lease, requested);
+        assertMessageLease(options.backgroundJobs, lease, requested);
         getCurrentTaskMessageJob(
-          options.backgroundJobBoard,
+          options.backgroundJobs,
           parentSessionID,
           lease.taskID,
           lease.generation,
@@ -209,14 +209,14 @@ export function createTaskMessageTool(options: {
         }
 
         const response = await awaitMessageTransport(
-          options.backgroundJobBoard,
+          options.backgroundJobs,
           lease,
           () => {
-            assertMessageLease(options.backgroundJobBoard, lease, requested);
+            assertMessageLease(options.backgroundJobs, lease, requested);
             if (options.isDisposed?.())
               throw new Error(pluginDisposedMessage());
             const currentJob = getCurrentTaskMessageJob(
-              options.backgroundJobBoard,
+              options.backgroundJobs,
               parentSessionID,
               lease.taskID,
               lease.generation,
@@ -245,11 +245,11 @@ export function createTaskMessageTool(options: {
           },
           remainingTimeoutMs,
         );
-        assertMessageLease(options.backgroundJobBoard, lease, requested);
+        assertMessageLease(options.backgroundJobs, lease, requested);
         assertSuccessfulMessageResponse(response);
 
         const latestJob = getCurrentTaskMessageJob(
-          options.backgroundJobBoard,
+          options.backgroundJobs,
           parentSessionID,
           lease.taskID,
           lease.generation,
@@ -273,7 +273,7 @@ export function createTaskMessageTool(options: {
         throw error;
       } finally {
         if (!keepLeaseUntilSettled) {
-          options.backgroundJobBoard.releaseLease(lease);
+          options.backgroundJobs.releaseLease(lease);
         }
       }
     },
@@ -283,11 +283,11 @@ export function createTaskMessageTool(options: {
 }
 
 function assertMessageLease(
-  backgroundJobBoard: BackgroundJobStore,
-  lease: NonNullable<ReturnType<BackgroundJobStore['acquireMessageLease']>>,
+  backgroundJobs: BackgroundJobBoardApi,
+  lease: NonNullable<ReturnType<BackgroundJobBoardApi['acquireMessageLease']>>,
   requested: string,
 ): void {
-  if (lease.kind !== 'message' || !backgroundJobBoard.validateLease(lease)) {
+  if (lease.kind !== 'message' || !backgroundJobs.validateLease(lease)) {
     throw new Error(
       `Task ${requested} message lease is no longer valid; refusing stale message`,
     );
@@ -295,8 +295,8 @@ function assertMessageLease(
 }
 
 async function awaitMessageTransport<T>(
-  backgroundJobBoard: BackgroundJobStore,
-  lease: NonNullable<ReturnType<BackgroundJobStore['acquireMessageLease']>>,
+  backgroundJobs: BackgroundJobBoardApi,
+  lease: NonNullable<ReturnType<BackgroundJobBoardApi['acquireMessageLease']>>,
   operation: () => Promise<T>,
   timeoutMs: number,
 ): Promise<T> {
@@ -306,12 +306,12 @@ async function awaitMessageTransport<T>(
   const tracked = underlying.then(
     (value) => {
       settled = true;
-      if (timedOut) backgroundJobBoard.releaseLease(lease);
+      if (timedOut) backgroundJobs.releaseLease(lease);
       return value;
     },
     (error: unknown) => {
       settled = true;
-      if (timedOut) backgroundJobBoard.releaseLease(lease);
+      if (timedOut) backgroundJobs.releaseLease(lease);
       throw error;
     },
   );
@@ -326,7 +326,7 @@ async function awaitMessageTransport<T>(
     if (!(error instanceof OperationTimeoutError)) throw error;
     timedOut = true;
     const pending = !settled;
-    if (!pending) backgroundJobBoard.releaseLease(lease);
+    if (!pending) backgroundJobs.releaseLease(lease);
     throw new MessageLeaseOperationTimeoutError(error.message, pending);
   }
 }
@@ -403,13 +403,13 @@ async function readCurrentChildModel(
 }
 
 function getCurrentTaskMessageJob(
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobs: BackgroundJobBoardApi,
   parentSessionID: string,
   expectedTaskID: string,
   expectedGeneration: number,
   delegation: DelegationWording,
-): NonNullable<ReturnType<BackgroundJobStore['get']>> {
-  const current = backgroundJobBoard.get(expectedTaskID);
+): NonNullable<ReturnType<BackgroundJobBoardApi['get']>> {
+  const current = backgroundJobs.get(expectedTaskID);
   if (!current || current.parentSessionID !== parentSessionID) {
     throw new Error(
       `Task ${expectedTaskID} is no longer tracked; refusing stale message`,

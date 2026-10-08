@@ -1,11 +1,15 @@
 // Launched by tui-reusable-projection.test.ts as a second, live host process.
-import { BackgroundJobBoard } from './background-job-fixture';
+import { BackgroundJobBoard } from '../background-jobs';
 import { createTuiReusableProjection } from './tui-reusable-projection';
 
 const projectDir = process.argv[2];
 if (!projectDir) throw new Error('project directory required');
-const board = new BackgroundJobBoard();
-const projection = createTuiReusableProjection({ board, projectDir });
+const backgroundJobs = new BackgroundJobBoard();
+const projection = createTuiReusableProjection({
+  board: backgroundJobs,
+  projectDir,
+});
+const board = backgroundJobs;
 board.registerLaunch({
   taskID: 'ses_child',
   parentSessionID: 'parent-child',

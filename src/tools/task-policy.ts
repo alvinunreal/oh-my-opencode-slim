@@ -1,4 +1,4 @@
-import type { BackgroundJobRecord } from '../utils/background-job-board';
+import type { BackgroundJobRecord } from '../background-jobs';
 import {
   type RuntimeSessionStatus,
   type RuntimeSessionStatusSnapshot,

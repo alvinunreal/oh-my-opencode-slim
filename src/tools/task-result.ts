@@ -3,13 +3,11 @@ import {
   type ToolDefinition,
   tool,
 } from '@opencode-ai/plugin';
-import { pluginDisposedMessage } from '../hooks/task-session-manager/session-recovery';
-import type { BackgroundJobStore } from '../utils/background-job-store';
 import {
-  type BackgroundJobTerminalGate,
-  createBackgroundJobTerminalGate,
+  type BackgroundJobLifecycle,
   runtimeObservationFromSnapshot,
-} from '../utils/background-job-terminal-gate';
+} from '../background-jobs';
+import { pluginDisposedMessage } from '../hooks/task-session-manager/session-recovery';
 import {
   classifyTerminalEvidence,
   classifyV2HistoricalRound,
@@ -31,8 +29,7 @@ import {
 
 interface TaskResultToolOptions {
   input: PluginInput;
-  backgroundJobBoard: BackgroundJobStore;
-  terminalGate?: BackgroundJobTerminalGate;
+  backgroundJobs: BackgroundJobLifecycle;
   resolveCanonicalTaskRef?: CanonicalTaskResolver;
   isDisposed?: () => boolean;
 }
@@ -85,12 +82,7 @@ function pending(
 export function createTaskResultTool(
   options: TaskResultToolOptions,
 ): Record<string, ToolDefinition> {
-  const gate =
-    options.terminalGate ??
-    createBackgroundJobTerminalGate({
-      backgroundJobBoard: options.backgroundJobBoard,
-      input: options.input,
-    });
+  const gate = options.backgroundJobs;
   const idParam = idParamFor(options.input);
   return {
     task_result: tool({
@@ -109,7 +101,7 @@ export function createTaskResultTool(
         if (options.isDisposed?.()) throw new Error(pluginDisposedMessage());
         if (canonical?.kind === 'refused') throw new Error(canonical.reason);
         const identity = canonical?.taskID ?? requested;
-        const board = options.backgroundJobBoard;
+        const board = options.backgroundJobs;
         const tracked = canonical
           ? board.get(identity)
           : board.resolve(parentSessionID, requested);

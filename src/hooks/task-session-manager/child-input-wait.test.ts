@@ -1,5 +1,8 @@
 import { describe, expect, mock, test } from 'bun:test';
-import { BackgroundJobBoard } from '../../utils/background-job-board';
+import {
+  BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+} from '../../background-jobs';
 import {
   getChildInputWait,
   noteChildInputWait,
@@ -36,7 +39,11 @@ function createHook(options?: {
     {
       maxSessionsPerAgent: 2,
       maxRetainedSnapshots: 20,
-      backgroundJobBoard: options?.backgroundJobBoard,
+      backgroundJobs: options?.backgroundJobBoard
+        ? createBackgroundJobLifecycle({
+            backgroundJobBoard: options.backgroundJobBoard,
+          })
+        : undefined,
       shouldManageSession:
         options?.shouldManageSession ??
         ((sessionID: string) => sessionID === 'parent-1'),

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { BackgroundJobBoard } from '../utils/background-job-board';
+import { BackgroundJobBoard } from '../background-jobs';
 import {
   applyActivityEvent,
   resolveEventSessionID,

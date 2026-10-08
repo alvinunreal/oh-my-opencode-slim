@@ -5,309 +5,49 @@ import {
   DEFAULT_READ_CONTEXT_MIN_LINES,
   formatSystemReminder,
 } from '../config/constants';
-import { escapeRegExp } from './agent-variant';
-import type { BackgroundJobStore } from './background-job-store';
+import { escapeRegExp } from '../utils/agent-variant';
+import { log } from '../utils/logger';
+import type { TaskOutputState } from '../utils/task';
 import {
-  clearBackgroundJobSuppression,
-  recordBackgroundJobSuppression,
-} from './background-job-store';
+  clearSuppression,
+  createLifecycleLedger,
+  recordSuppression,
+} from './ledger';
 import {
   type BackgroundJobTerminalGate,
   consumeTerminalCommitToken,
   type TerminalCommitToken,
-} from './background-job-terminal-gate';
-import { log } from './logger';
-import type { TaskOutputState } from './task';
-
-export interface ContextFile {
-  path: string;
-  lineCount: number;
-  lineNumbers?: number[];
-  lastReadAt: number;
-}
-
-export interface BackgroundJobExecution {
-  taskID: string;
-  generation: number;
-  terminalRevision?: number;
-}
-
-export type BackgroundJobLeaseKind =
-  | 'cancellation'
-  | 'relaunch'
-  | 'message'
-  | 'terminal-notification';
-
-/** Process-local ownership of a remote operation or same-ID relaunch. */
-export interface BackgroundJobLease {
-  taskID: string;
-  generation: number;
-  token: string;
-  kind: BackgroundJobLeaseKind;
-  terminalRevision?: number;
-}
-
-export interface BackgroundJobPromptMetadata {
-  text: string | undefined;
-  terminalUnreconciledTaskIDs: BackgroundJobExecution[];
-}
-
-/** Metadata for an accessible reusable session selected from the sidebar. */
-export interface ReusableSessionSelection {
-  taskID: string;
-  alias: string;
-  terminalState: TaskOutputState | 'stopped';
-  completedAt?: number;
-  lastUsedAt: number;
-}
-
-export type BackgroundJobState = TaskOutputState | 'stopped' | 'reconciled';
-
-export interface BackgroundJobRecord {
-  taskID: string;
-  parentSessionID: string;
-  agent: string;
-  description: string;
-  objective?: string;
-  state: BackgroundJobState;
-  /** Unattributed lifecycle placeholder, not yet delegated work. */
-  provisional?: boolean;
-  /** True only when the native task call explicitly supplied background:true. */
-  background: boolean;
-  timedOut: boolean;
-  recoverableAfterLiveBusy: boolean;
-  statusUncertain: boolean;
-  /** When status became unconfirmable; drives stale-uncertain removal from the board render. */
-  statusUncertainSince?: number;
-  cancellationRequested: boolean;
-  terminalUnreconciled: boolean;
-  launchedAt: number;
-  lastLaunchedAt: number;
-  /** Monotonic run identity. Explicit relaunch/reuse increments it. */
-  generation: number;
-  /** Publication identity within a run, including withdrawn publications. */
-  terminalRevision: number;
-  activityRevision: number;
-  /** Task-local run identity; unlike generation, unrelated tasks do not affect it. */
-  taskGeneration: number;
-  /** First launch observation for the current generation. */
-  runStartedAt: number;
-  /** Persistent hard wall-clock marker; distinct from external task wait timeout. */
-  deadlineExceededAt?: number;
-  updatedAt: number;
-  lastLiveBusyAt?: number;
-  /** First non-busy runtime observation for the current stop-confirmation grace. */
-  stopConfirmationStartedAt?: number;
-  completedAt?: number;
-  resultSummary?: string;
-  lastStatusError?: string;
-  alias: string;
-  lastUsedAt: number;
-  terminalState?: TaskOutputState;
-  contextFiles: ContextFile[];
-  totalErrors?: number;
-  timeoutCount?: number;
-  lastErrorAt?: number;
-  /** In-memory only: this row is a verified old host round, not a live run. */
-  verifiedRetainedRound?: true;
-  /** Recovery has not sent a prompt; importing a row does not own host work. */
-  recoveredWithoutPrompt?: true;
-  /**
-   * In-memory provenance: this plugin's own tracked native task call launched
-   * this record as a fresh background child. Never set for adopted, restored,
-   * provisional, or once-provisional records. Gates terminal-session GC.
-   */
-  pluginLaunched?: true;
-  /**
-   * Sticky provenance: the host session was adopted, restored, rehydrated,
-   * or first seen as an unattributed placeholder, so this plugin cannot
-   * prove it created it. Never cleared; blocks pluginLaunched.
-   */
-  externalOrigin?: true;
-}
-
-export interface BackgroundJobBoardOptions {
-  maxReusablePerAgent?: number;
-  maxContextLines?: number;
-  readContextMinLines?: number;
-  readContextMaxFiles?: number;
-  /** Delegation tool name for model-visible recovery guidance: `subagent` on
-   * v2 hosts, `task` on v1/default. Only the two retained/recovery wording
-   * lines vary; the board stays v1 by default. */
-  delegationTool?: string;
-  /**
-   * Production boards number only parents created while they run (see
-   * noteSessionCreated); other parents' new records use the task ID as
-   * their alias and creation still succeeds. Default false keeps direct
-   * fixtures on the historical immediate counter.
-   */
-  deferNumberedAliases?: boolean;
-  /**
-   * Fired after a retention trim (trimReusable/trimRetained) evicts a
-   * terminal or retained-stopped record. Never fires for clearParent/drop,
-   * which can evict running or unreconciled records. Listener throws are
-   * contained.
-   */
-  onEvictedSession?: (evicted: BackgroundJobEvictedSession) => void;
-}
-
-/** Snapshot of a record evicted by a retention trim, captured before the
- * delete. Terminal-session GC removes the underlying host child session. */
-export interface BackgroundJobEvictedSession {
-  taskID: string;
-  parentSessionID: string;
-  agent: string;
-  description: string;
-  state: BackgroundJobState;
-  /** Record was a background launch (foreground task children are false). */
-  background: boolean;
-  /** Record was still an unattributed session.created placeholder. */
-  provisional: boolean;
-  /** This plugin's own tracked native task call launched the session. */
-  pluginLaunched: boolean;
-  /** Session was adopted, restored, rehydrated, or once provisional. */
-  externalOrigin: boolean;
-  terminalState?: TaskOutputState;
-  resultSummary?: string;
-  alias: string;
-  lastUsedAt: number;
-}
-
-/**
- * Terminal-session GC eligibility: only a background, non-provisional record
- * that this plugin's own native task call launched, with no adopted,
- * restored, rehydrated, or placeholder provenance. Everything else keeps its
- * host session.
- */
-export function isPrunableEvictedSession(
-  evicted: BackgroundJobEvictedSession,
-): boolean {
-  return (
-    evicted.background &&
-    !evicted.provisional &&
-    evicted.pluginLaunched &&
-    !evicted.externalOrigin
-  );
-}
-
-/** Verified host session placed directly into a terminal retained state.
- * This is a cache observation, not a new model run. */
-export interface RestoreRetainedSessionInput {
-  taskID: string;
-  parentSessionID: string;
-  agent: string;
-  description: string;
-  objective?: string;
-  state: 'completed' | 'error' | 'cancelled' | 'stopped';
-  background: boolean;
-  resultSummary?: string;
-  /** Trusted historical alias. Omit to display the exact session id. */
-  alias?: string;
-  /** Evidence timestamp. Omitted values stay 0; never the recovery clock. */
-  launchedAt?: number;
-  completedAt?: number;
-}
-
-export interface BackgroundJobLaunchInput {
-  taskID: string;
-  parentSessionID: string;
-  agent: string;
-  description?: string;
-  objective?: string;
-  background?: boolean;
-  /** Only unattributed session.created placeholders opt in. */
-  provisional?: true;
-  /** An existing host child keeps its task ID; numbers are for new children. */
-  adopted?: true;
-  /** Preserve the current run when this is a duplicate lifecycle observation. */
-  preserveRun?: boolean;
-  /**
-   * This plugin's own tracked native task call launched a fresh background
-   * child (not a resume). Ignored for adopted/provisional input and for
-   * records with external provenance.
-   */
-  pluginLaunched?: true;
-  /** Lease proving that this is an authorized same-ID relaunch observation. */
-  relaunchLease?: BackgroundJobLease;
-  /** Backwards-compatible generic spelling for the relaunch lease. */
-  lease?: BackgroundJobLease;
-  now?: number;
-}
-
-export interface BackgroundJobStatusInput {
-  taskID: string;
-  state: TaskOutputState;
-  /** Ignore native output from an older run of the same task ID. */
-  expectedGeneration?: number;
-  timedOut?: boolean;
-  statusUncertain?: boolean;
-  resultSummary?: string;
-  lastStatusError?: string;
-  now?: number;
-}
-
-export interface BackgroundJobAdoptionInput {
-  taskID: string;
-  parentSessionID: string;
-  agent: string;
-  description: string;
-  terminalState: 'completed' | 'error';
-  resultSummary?: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface WallClockTimeoutClaimInput {
-  taskID: string;
-  generation: number;
-  now?: number;
-  resultSummary?: string;
-}
-
-export interface BackgroundJobTerminalInput {
-  taskID: string;
-  state: 'completed' | 'error' | 'cancelled' | 'stopped';
-  resultSummary: string;
-  cancellationLease?: BackgroundJobLease;
-  now?: number;
-}
-
-export interface WallClockTimeoutFinalizeInput {
-  taskID: string;
-  generation: number;
-  now?: number;
-  statusUncertain: boolean;
-  resultSummary: string;
-}
+} from './terminal-gate';
+import {
+  AGED_ENTRY_RENDER_TTL_MS,
+  type BackgroundJobAdoptionInput,
+  type BackgroundJobBoardOptions,
+  type BackgroundJobEvictedSession,
+  BackgroundJobLaunchConflictError,
+  type BackgroundJobLaunchInput,
+  type BackgroundJobLease,
+  type BackgroundJobLeaseKind,
+  type BackgroundJobPromptMetadata,
+  type BackgroundJobRecord,
+  type BackgroundJobState,
+  type BackgroundJobStatusInput,
+  type BackgroundJobTerminalInput,
+  type ContextFile,
+  type RestoreRetainedSessionInput,
+  type ReusableSessionSelection,
+  STATUS_UNCERTAIN_DEMOTE_AFTER_MS,
+  type WallClockTimeoutClaimInput,
+  type WallClockTimeoutFinalizeInput,
+} from './types';
 
 type TerminalStateListener = (taskID: string) => void;
 type MutationListener = () => void;
-
-export class BackgroundJobLaunchConflictError extends Error {
-  constructor(taskID: string, message: string) {
-    super(`Cannot register launch for ${taskID}: ${message}`);
-    this.name = 'BackgroundJobLaunchConflictError';
-  }
-}
 
 const CANONICAL_TERMINAL_STATES = new Set<TaskOutputState>([
   'completed',
   'error',
   'cancelled',
 ]);
-
-/**
- * Unconfirmable-runtime age after which a running job leaves the board
- * render (#1314). No existing stale/TTL constant family fits this scale.
- */
-export const STATUS_UNCERTAIN_DEMOTE_AFTER_MS = 30 * 60_000;
-
-/**
- * Render-only discoverability window (store survives for reconciler/revive;
- * only real retrieval via markUsed refreshes it, rendering never does).
- * Different layer than STATUS_UNCERTAIN_DEMOTE_AFTER_MS (lifecycle grace).
- */
-export const AGED_ENTRY_RENDER_TTL_MS = 6 * 60 * 60_000;
 
 const AGENT_PREFIX: Record<string, string> = {
   council: 'cou',
@@ -324,9 +64,167 @@ function aliasPrefixForAgent(agent: string): string {
   return AGENT_PREFIX[agent] ?? (agent.slice(0, 3) || 'job');
 }
 
-export class BackgroundJobBoard implements BackgroundJobStore {
+/**
+ * Structural surface of the board's state machine. The lifecycle facade
+ * (BackgroundJobLifecycle) extends it; the terminal gate and supervisor
+ * consume it structurally, so tests may pass raw boards.
+ */
+export interface BackgroundJobBoardApi {
+  // ── Mutation methods ──────────────────────────────────────────────
+  registerLaunch(input: BackgroundJobLaunchInput): BackgroundJobRecord;
+  /** Restore the record a launch replaced after the host explicitly refused
+   * it. False once that launch's generation no longer owns the row. */
+  abandonLaunch(
+    launched: BackgroundJobRecord,
+    replaced: BackgroundJobRecord,
+  ): boolean;
+  /** Cache-only import of an absent verified host session. */
+  restoreRetainedSession(
+    input: RestoreRetainedSessionInput,
+  ): BackgroundJobRecord | undefined;
+  /**
+   * Insert an already-terminal (`reconciled`) record for a child session the
+   * store does not hold; returns undefined when it does. Unlike
+   * `commitTerminal`, no terminal-gate token is consumed, so the caller must
+   * supply host evidence itself: an idle child whose transcript classifies as
+   * completed/error via `classifyTerminalEvidence`. Fires no terminal-state
+   * listener. Not a way to settle runs the terminal gate tracks.
+   */
+  adoptTerminal(
+    input: BackgroundJobAdoptionInput,
+  ): BackgroundJobRecord | undefined;
+  acquireCancellationLease(
+    taskID: string,
+    generation: number,
+  ): BackgroundJobLease | undefined;
+  acquireRelaunchLease(
+    taskID: string,
+    generation: number,
+  ): BackgroundJobLease | undefined;
+  acquireMessageLease(
+    taskID: string,
+    generation: number,
+  ): BackgroundJobLease | undefined;
+  acquireTerminalNotificationLease(
+    taskID: string,
+    generation: number,
+    terminalRevision?: number,
+  ): BackgroundJobLease | undefined;
+  validateLease(lease: BackgroundJobLease): boolean;
+  releaseLease(lease: BackgroundJobLease): boolean;
+  updateStatus(
+    input: BackgroundJobStatusInput & { state: 'running' },
+  ): BackgroundJobRecord | undefined;
+  commitTerminal(
+    input: BackgroundJobTerminalInput,
+    token: TerminalCommitToken,
+  ): BackgroundJobRecord | undefined;
+  bindTerminalGate(gate: BackgroundJobTerminalGate): void;
+  claimWallClockDeadline(
+    input: WallClockTimeoutClaimInput,
+  ): BackgroundJobRecord | undefined;
+  markRunningFromLiveSession(
+    taskID: string,
+    now?: number,
+    expectedGeneration?: number,
+    observedTerminalRevision?: number,
+  ): BackgroundJobRecord | undefined;
+  noteStopConfirmation(
+    taskID: string,
+    startedAt: number,
+    expectedGeneration?: number,
+  ): BackgroundJobRecord | undefined;
+  markStatusUncertain(
+    taskID: string,
+    lastStatusError: string,
+    expectedGeneration?: number,
+    now?: number,
+  ): BackgroundJobRecord | undefined;
+  /**
+   * Acknowledge the terminal notification delivered to the parent session.
+   * This is a prompt-lifecycle acknowledgement, not filesystem reconciliation.
+   */
+  markReconciled(
+    taskID: string,
+    now?: number,
+    expectedGeneration?: number,
+    expectedRevision?: number,
+  ): BackgroundJobRecord | undefined;
+  clearParent(parentSessionID: string): void;
+  drop(taskID: string): void;
+  addContext(taskID: string, files: ContextFile[]): void;
+  markUsed(parentSessionID: string, key: string, now?: number): void;
+
+  // ── Query methods ─────────────────────────────────────────────────
+  get(taskID: string): BackgroundJobRecord | undefined;
+  field<K extends keyof BackgroundJobRecord>(
+    taskID: string,
+    key: K,
+  ): BackgroundJobRecord[K] | undefined;
+  isRunning(taskID: string): boolean;
+  isTerminalUnreconciled(taskID: string): boolean;
+  getResultSummary(taskID: string): string | undefined;
+  getLastLiveBusyAt(taskID: string): number | undefined;
+  getParentSessionID(taskID: string): string | undefined;
+  getState(taskID: string): BackgroundJobRecord['state'] | undefined;
+  resolve(
+    parentSessionID: string,
+    taskIDOrAlias: string,
+  ): BackgroundJobRecord | undefined;
+  resolveReusable(
+    parentSessionID: string,
+    taskIDOrAlias: string,
+    agent?: string,
+  ): BackgroundJobRecord | undefined;
+  resolveRecoverable(
+    parentSessionID: string,
+    taskIDOrAlias: string,
+    agent?: string,
+  ): BackgroundJobRecord | undefined;
+  taskIDs(): Set<string>;
+  list(parentSessionID?: string): BackgroundJobRecord[];
+  /** Cheap global check for any running job: single pass, no copy or sort. */
+  hasRunningJobs(): boolean;
+  hasRunning(parentSessionID: string): boolean;
+  hasTerminalUnreconciled(parentSessionID: string): boolean;
+  /** Attributing evidence promotes a placeholder into a tracked task.
+   *  Terminal promotions re-emit the suppressed recovery wake. */
+  promoteProvisional(
+    taskID: string,
+    expectedParentSessionID?: string,
+    metadata?: {
+      agent?: string;
+      description?: string;
+      objective?: string;
+      background?: boolean;
+    },
+  ): BackgroundJobRecord | undefined;
+  hasConvergenceSignals(taskID: string, threshold?: number): boolean;
+  formatForPrompt(parentSessionID: string, now?: number): string | undefined;
+  formatForPromptWithMetadata(
+    parentSessionID: string,
+    now?: number,
+  ): BackgroundJobPromptMetadata | undefined;
+
+  // ── Lifecycle policy ─────────────────────────────────────────────
+  /** Evaluate close policy. Returns true if session should close now.
+   *  Mutates deferred state: adds to deferred set if running, removes if not. */
+  deferIfRunning(sessionId: string): boolean;
+  /** Retry closing a deferred session. Returns true if session should now close. */
+  retryDeferredClose(sessionId: string): boolean;
+  /** Clear deferred close state for a session being deleted. */
+  clearDeferredClose(sessionId: string): void;
+}
+
+export class BackgroundJobBoard {
   private terminalGate?: BackgroundJobTerminalGate;
   private readonly jobs = new Map<string, BackgroundJobRecord>();
+  /**
+   * Process-local lifecycle memory (tombstones, deletion epochs, injected
+   * completion fences). One ledger per board instance, seeded from
+   * backend-loaded persistence at construction.
+   */
+  readonly ledger = createLifecycleLedger();
   /** One live operation/relaunch owner per native session ID. */
   private readonly liveLeases = new Map<string, BackgroundJobLease>();
   private readonly counters = new Map<string, number>();
@@ -460,7 +358,7 @@ export class BackgroundJobBoard implements BackgroundJobStore {
       }
     }
 
-    clearBackgroundJobSuppression(this, input.taskID);
+    clearSuppression(this.ledger, input.taskID);
     const generation = ++this.executionSequence;
 
     if (existing) {
@@ -1188,6 +1086,21 @@ export class BackgroundJobBoard implements BackgroundJobStore {
     return this.jobs.has(taskID) || this.liveLeases.has(taskID);
   }
 
+  /** Seed/inspect the board-owned lifecycle ledger (tests, lifecycle facade). */
+  recordSuppression(
+    taskID: string,
+    terminal?: {
+      state: 'completed' | 'error' | 'cancelled';
+      resultSummary: string;
+    },
+  ): void {
+    recordSuppression(this.ledger, taskID, terminal);
+  }
+
+  clearSuppression(taskID: string): void {
+    clearSuppression(this.ledger, taskID);
+  }
+
   field<K extends keyof BackgroundJobRecord>(
     taskID: string,
     key: K,
@@ -1625,19 +1538,15 @@ export class BackgroundJobBoard implements BackgroundJobStore {
     // session.created) carries numbers this board never issued.
     this.freshParents.delete(parentSessionID);
     for (const job of this.list(parentSessionID)) {
-      recordBackgroundJobSuppression(
-        this,
-        job.taskID,
-        terminalResultPayloadOf(job),
-      );
+      recordSuppression(this.ledger, job.taskID, terminalResultPayloadOf(job));
       this.deleteJob(job.taskID);
     }
   }
 
   drop(taskID: string): void {
     const record = this.get(taskID);
-    recordBackgroundJobSuppression(
-      this,
+    recordSuppression(
+      this.ledger,
       taskID,
       record ? terminalResultPayloadOf(record) : undefined,
     );
@@ -1663,8 +1572,8 @@ export class BackgroundJobBoard implements BackgroundJobStore {
    * predicates live in the callers; clearParent/drop must not route here
    * (they can evict running/unreconciled records). */
   private evictRecord(entry: BackgroundJobRecord): void {
-    recordBackgroundJobSuppression(
-      this,
+    recordSuppression(
+      this.ledger,
       entry.taskID,
       terminalResultPayloadOf(entry),
     );
@@ -1907,40 +1816,6 @@ export class BackgroundJobBoard implements BackgroundJobStore {
   }
 }
 
-export function deriveTaskSessionLabel(input: {
-  description?: string;
-  prompt?: string;
-  agentType: string;
-}): string {
-  const preferred = normalizeWhitespace(input.description ?? '');
-  if (preferred) return preferred.slice(0, 48);
-  const firstPromptLine = (input.prompt ?? '')
-    .split(/\r?\n/)
-    .map((line) => normalizeWhitespace(line))
-    .find(Boolean);
-  return firstPromptLine
-    ? firstPromptLine.slice(0, 48)
-    : `recent ${input.agentType} task`;
-}
-/**
- * Full objective text before deriveTaskSessionLabel truncates it: the
- * whitespace-normalized description, else the first non-empty prompt line.
- * Board records store this untruncated so the duplicate-spawn guard can
- * match long exact duplicates without colliding on shared 48-char prefixes.
- */
-export function deriveFullObjective(input: {
-  description?: string;
-  prompt?: string;
-}): string | undefined {
-  const preferred = normalizeWhitespace(input.description ?? '');
-  if (preferred) return preferred;
-  const firstPromptLine = (input.prompt ?? '')
-    .split(/\r?\n/)
-    .map((line) => normalizeWhitespace(line))
-    .find(Boolean);
-  return firstPromptLine ?? undefined;
-}
-
 function sumContextLines(record: BackgroundJobRecord): number {
   return record.contextFiles.reduce((sum, f) => sum + (f.lineCount ?? 0), 0);
 }
@@ -2029,10 +1904,6 @@ function formatContextFiles(files: ContextFile[], maxFiles: number): string {
     (file) => `${promptSafe(file.path)} (${file.lineCount} lines)`,
   );
   return `${rendered.join(', ')}${rest > 0 ? ` (+${rest} more)` : ''}`;
-}
-
-function normalizeWhitespace(value: string): string {
-  return value.replace(/\s+/g, ' ').trim();
 }
 
 function timeoutSummary(state: TaskOutputState): string {

@@ -1,5 +1,8 @@
 import { describe, expect, mock, test } from 'bun:test';
-import { BackgroundJobBoard } from '../../utils';
+import {
+  BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+} from '../../background-jobs';
 import { createBackgroundFallbackHandoff } from './fallback-observation-transfer';
 import type { RevivedRunTracker } from './revived-run-tracker';
 
@@ -54,7 +57,9 @@ describe('createBackgroundFallbackHandoff', () => {
     const run = launchBackground(board);
     const { tracker, prepared, admitted, rejected } = fakeTracker();
     const handoff = createBackgroundFallbackHandoff({
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       revivedRunTracker: tracker,
     });
 
@@ -92,7 +97,9 @@ describe('createBackgroundFallbackHandoff', () => {
     });
     const { tracker, prepared } = fakeTracker();
     const handoff = createBackgroundFallbackHandoff({
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       revivedRunTracker: tracker,
     });
 
@@ -116,7 +123,9 @@ describe('createBackgroundFallbackHandoff', () => {
     const run = launchBackground(board);
     const { tracker, unresolved } = fakeTracker();
     const handoff = createBackgroundFallbackHandoff({
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       revivedRunTracker: tracker,
     });
 

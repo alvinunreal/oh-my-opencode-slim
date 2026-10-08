@@ -14,7 +14,10 @@
  * the reported run is retired. Bookkeeping is pruned when the parent ends.
  */
 import { describe, expect, test } from 'bun:test';
-import { BackgroundJobBoard } from '../../utils/background-job-fixture';
+import {
+  FixtureBoard as BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+} from '../../background-jobs';
 import { isVolatileTaggedMessage } from '../cache-safe-injection';
 import {
   BACKGROUND_JOB_BOARD_METADATA_KEY,
@@ -46,8 +49,9 @@ function createInjectionState(
   boardInjection?: boolean,
 ): InjectionState {
   return {
-    backgroundJobBoard: board,
-    terminalGate: {} as never,
+    backgroundJobs: createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+    }),
     lifecycleLedger: {} as never,
     maxRetainedSnapshots: 20,
     strategy: 'latest',

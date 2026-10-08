@@ -15,8 +15,8 @@
  *  (c) never produce duplicate completed results.
  */
 import { describe, expect, mock, test } from 'bun:test';
+import { BackgroundJobBoard } from '../../background-jobs';
 import { DEFAULT_MAX_RETAINED_SNAPSHOTS } from '../../config/constants';
-import { BackgroundJobBoard } from '../../utils';
 import { createTaskSessionManagerHook } from './index';
 
 const SESSION = 'ses_orchestrator_1114';

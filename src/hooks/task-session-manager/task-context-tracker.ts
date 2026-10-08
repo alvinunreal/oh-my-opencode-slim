@@ -1,5 +1,5 @@
 import path from 'node:path';
-import type { ContextFile } from '../../utils';
+import type { ContextFile } from '../../background-jobs';
 
 interface PendingContextFile {
   path: string;

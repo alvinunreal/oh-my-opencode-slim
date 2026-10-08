@@ -2,13 +2,13 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { FixtureBoard as BackgroundJobBoard } from '../background-jobs';
 import {
   getTuiStatePath,
   readTuiSnapshot,
   recordTuiSessionParent,
   updateSnapshot,
 } from '../tui-state';
-import { BackgroundJobBoard } from './background-job-fixture';
 import { createTuiReusableProjection } from './tui-reusable-projection';
 
 describe('tui-reusable-projection', () => {

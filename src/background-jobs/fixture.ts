@@ -2,15 +2,16 @@
  * bypass asynchronous evidence policy; that policy is exercised with the real
  * gate in background-job-terminal-gate.test.ts. No production consumer imports
  * this module. */
+
+import type { BackgroundJobBoardApi } from './board';
+import { BackgroundJobBoard as ProductionBoard } from './board';
 import type {
   BackgroundJobStatusInput,
   BackgroundJobTerminalInput,
-} from './background-job-board';
-import { BackgroundJobBoard as ProductionBoard } from './background-job-board';
-import type { BackgroundJobStore } from './background-job-store';
+} from './types';
 
 function commit(
-  board: BackgroundJobStore,
+  board: BackgroundJobBoardApi,
   input: BackgroundJobTerminalInput,
   generation = board.get(input.taskID)?.generation,
 ) {
@@ -31,7 +32,7 @@ function commit(
 }
 
 export const boardFixture = {
-  updateStatus(board: BackgroundJobStore, input: BackgroundJobStatusInput) {
+  updateStatus(board: BackgroundJobBoardApi, input: BackgroundJobStatusInput) {
     return input.state === 'running'
       ? board.updateStatus({ ...input, state: 'running' })
       : commit(
@@ -45,7 +46,7 @@ export const boardFixture = {
         );
   },
   markStopped(
-    board: BackgroundJobStore,
+    board: BackgroundJobBoardApi,
     taskID: string,
     resultSummary: string,
     observedAt = Date.now(),
@@ -61,7 +62,7 @@ export const boardFixture = {
     );
   },
   markCancelled(
-    board: BackgroundJobStore,
+    board: BackgroundJobBoardApi,
     taskID: string,
     reason?: string,
     now = Date.now(),
@@ -91,14 +92,15 @@ type FixtureBoard = ProductionBoard & {
     input: BackgroundJobStatusInput,
   ): ReturnType<ProductionBoard['updateStatus']>;
 };
-export const BackgroundJobBoard = new Proxy(ProductionBoard, {
+export const FixtureBoardProxy = new Proxy(ProductionBoard, {
   construct(Target, args) {
     const board = new Target(...args);
     return new Proxy(board, {
       get(target, key) {
-        if (key === 'updateStatus')
+        if (key === 'updateStatus') {
           return (input: BackgroundJobStatusInput) =>
             boardFixture.updateStatus(target, input);
+        }
         if (key === 'markStopped')
           return (
             ...args: Parameters<typeof boardFixture.markStopped> extends [
@@ -125,4 +127,4 @@ export const BackgroundJobBoard = new Proxy(ProductionBoard, {
 }) as new (
   ...args: ConstructorParameters<typeof ProductionBoard>
 ) => FixtureBoard;
-export type BackgroundJobBoard = FixtureBoard;
+export type FixtureBoardInstance = FixtureBoard;

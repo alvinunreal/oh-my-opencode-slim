@@ -365,12 +365,16 @@ describe('mapV2EventToV1 session.execution.* lifecycle synthesis', () => {
     const { createTaskSessionManagerHook } = await import(
       '../hooks/task-session-manager'
     );
-    const { BackgroundJobBoard } = await import('../utils');
+    const { BackgroundJobBoard, createBackgroundJobLifecycle } = await import(
+      '../background-jobs'
+    );
     const board = new BackgroundJobBoard();
     const hook = createTaskSessionManagerHook({} as never, {
       maxSessionsPerAgent: 2,
       maxRetainedSnapshots: 2,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       shouldManageSession: (id: string) => id === 'parent-1',
     });
     board.registerLaunch({
@@ -1065,13 +1069,16 @@ describe('mapV2EventToV1 session.deleted synthesis', () => {
     const { createTaskSessionManagerHook } = await import(
       '../hooks/task-session-manager'
     );
-    const { BackgroundJobBoard, getBackgroundJobLifecycleLedger } =
-      await import('../utils');
+    const { BackgroundJobBoard, createBackgroundJobLifecycle } = await import(
+      '../background-jobs'
+    );
     const board = new BackgroundJobBoard();
     const hook = createTaskSessionManagerHook({} as never, {
       maxSessionsPerAgent: 2,
       maxRetainedSnapshots: 2,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       shouldManageSession: (id: string) => id === 'parent-1',
     });
     board.registerLaunch({
@@ -1087,8 +1094,6 @@ describe('mapV2EventToV1 session.deleted synthesis', () => {
     for (const mapped of mapV2EventToV1(liveDeletedEvent('child-del'))) {
       await hook.event({ event: mapped });
     }
-    expect(
-      getBackgroundJobLifecycleLedger(board).tombstones.has('child-del'),
-    ).toBe(true);
+    expect(board.ledger.tombstones.has('child-del')).toBe(true);
   });
 });

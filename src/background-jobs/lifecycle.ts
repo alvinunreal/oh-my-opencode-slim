@@ -1,6 +1,35 @@
+import type { PluginInput } from '@opencode-ai/plugin';
+import { log } from '../utils/logger';
+import type { BackgroundJobBoard, BackgroundJobBoardApi } from './board';
+import { BackgroundJobBoard as BoardClass } from './board';
+import {
+  type BackgroundJobLifecycleLedger,
+  clearSuppression as clearLedgerSuppression,
+  recordSuppression as recordLedgerSuppression,
+} from './ledger';
+import {
+  getSuppressionTombstone,
+  type PersistedTombstoneEntry,
+} from './persistence';
+import {
+  type BackgroundJobSupervisor,
+  type BackgroundJobSupervisorOptions,
+  DefaultBackgroundJobSupervisor,
+} from './supervisor';
+import {
+  type BackgroundJobTerminalGate,
+  createBackgroundJobTerminalGate,
+  type GateResult,
+  type ObservationToken,
+  type RunRef,
+  type RuntimeObservation,
+  type TerminalCommitToken,
+  type TerminalSignal,
+} from './terminal-gate';
 import type {
   BackgroundJobAdoptionInput,
-  BackgroundJobBoard,
+  BackgroundJobBoardOptions,
+  BackgroundJobEvictedSession,
   BackgroundJobLaunchInput,
   BackgroundJobLease,
   BackgroundJobPromptMetadata,
@@ -9,14 +38,9 @@ import type {
   BackgroundJobTerminalInput,
   ContextFile,
   RestoreRetainedSessionInput,
+  ReusableSessionSelection,
   WallClockTimeoutClaimInput,
-} from './background-job-board';
-import type { BackgroundJobStore } from './background-job-store';
-import type {
-  BackgroundJobTerminalGate,
-  TerminalCommitToken,
-} from './background-job-terminal-gate';
-import { log } from './logger';
+} from './types';
 
 type TerminalStateListener = (taskID: string) => void;
 type TerminalOutcomeListener = (record: BackgroundJobRecord) => void;
@@ -36,29 +60,99 @@ export interface BackgroundJobIdentityEvent {
 
 type LaunchIdentityListener = (event: BackgroundJobIdentityEvent) => void;
 
+export interface BackgroundJobLifecycleOptions {
+  // ── Board options (used when no board instance is supplied) ───────
+  maxReusablePerAgent?: number;
+  maxContextLines?: number;
+  readContextMinLines?: number;
+  readContextMaxFiles?: number;
+  delegationTool?: string;
+  deferNumberedAliases?: boolean;
+  onEvictedSession?: (evicted: BackgroundJobEvictedSession) => void;
+  /** Existing board (tests / advanced wiring). Default: constructed from
+   * the board options above. */
+  backgroundJobBoard?: BackgroundJobBoard;
+
+  // ── Terminal gate options ─────────────────────────────────────────
+  input?: PluginInput;
+  graceMs?: number;
+  hostOutcomeClock?: 'shared-unix-ms';
+  baselineFor?: (taskID: string, generation: number) => string | undefined;
+  promptMessageIDFor?: (
+    taskID: string,
+    generation: number,
+  ) => string | undefined;
+  attemptStartedAtFor?: (
+    taskID: string,
+    generation: number,
+  ) => number | undefined;
+  observationRevisionFor?: (
+    taskID: string,
+    generation: number,
+  ) => number | undefined;
+  isObservationPending?: (taskID: string, generation: number) => boolean;
+  onRunning?: (record: BackgroundJobRecord) => void;
+  onTerminal?: (record: BackgroundJobRecord) => void;
+  readRuntime?: (run: RunRef, startedAt: number) => Promise<RuntimeObservation>;
+  readTerminalEvidence?: (taskID: string) => Promise<unknown>;
+  readTimeoutMs?: number;
+  maxEvidenceRetries?: number;
+  /** Clock for the gate's internal timings. */
+  now?: () => number;
+  /** Existing gate (tests). Default: constructed from the gate options
+   * above and bound to the lifecycle. */
+  gate?: BackgroundJobTerminalGate;
+
+  // ── Supervisor options ────────────────────────────────────────────
+  wallClockTimeoutMs?: number;
+  abortGraceMs?: number;
+  abort?: (taskID: string) => Promise<unknown>;
+  setTimeout?: BackgroundJobSupervisorOptions['setTimeout'];
+  clearTimeout?: BackgroundJobSupervisorOptions['clearTimeout'];
+  /** Existing supervisor (tests). Default: constructed from the supervisor
+   * options above (inert when no wallClockTimeoutMs is configured). */
+  supervisor?: BackgroundJobSupervisor;
+}
+
 /**
- * BackgroundJobCoordinator owns the lifecycle policy for background jobs.
- * It sits between the board and its consumers, providing:
- * - Subscription interface for terminal state notifications (replaces fire-and-forget)
- * - Lifecycle policy: determines when jobs are terminal, when closes should be deferred
- * - Single-writer contract: coordinator is the sole writer to the board
+ * BackgroundJobLifecycle is the single seam over the background-jobs module.
+ * It wraps one board (the state machine), the terminal gate, and the wall
+ * clock supervisor, and owns the lifecycle policy:
+ * - Subscription interface for terminal state/outcome notifications
+ * - Deferred-close policy for managed sessions
+ * - Sole-writer delegation to the board
+ * - Identity events on register/restore/adopt/clear/drop
  *
- * The board's guards prevent silent overwrites. The coordinator adds:
+ * The board's guards prevent silent overwrites. The lifecycle adds:
  * - Centralized notification with guaranteed delivery
  * - Re-checks board state before notifying (handles races)
  */
-export class BackgroundJobCoordinator implements BackgroundJobStore {
+export class BackgroundJobLifecycle implements BackgroundJobBoardApi {
   private terminalStateListeners: TerminalStateListener[] = [];
   private terminalOutcomeListeners: TerminalOutcomeListener[] = [];
   private launchIdentityListeners: LaunchIdentityListener[] = [];
   // Stores session IDs (which equal task IDs) awaiting close after background job completes
   private readonly deferredIdleCloses = new Set<string>();
+  private gate?: BackgroundJobTerminalGate;
+  private supervisor?: BackgroundJobSupervisor;
 
   constructor(private readonly board: BackgroundJobBoard) {
     // Subscribe to the board's terminal state notifications
     this.board.addTerminalStateListener((taskID) => {
       this.handleTerminalState(taskID);
     });
+  }
+
+  /** Wire the privately-held terminal gate (factory step 2). Binding the
+   * gate through the lifecycle forwards to board.bindTerminalGate. */
+  attachGate(gate: BackgroundJobTerminalGate): void {
+    this.gate = gate;
+    this.board.bindTerminalGate(gate);
+  }
+
+  /** Wire the privately-held supervisor (factory step 3). */
+  attachSupervisor(supervisor: BackgroundJobSupervisor): void {
+    this.supervisor = supervisor;
   }
 
   // ── Launch identity projection (best-effort, sidebar details) ─────
@@ -72,7 +166,7 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
       try {
         listener(event);
       } catch (error) {
-        log('Coordinator launch identity listener threw', {
+        log('Lifecycle launch identity listener threw', {
           taskID: event.taskID,
           kind: event.kind,
           error: error instanceof Error ? error.message : String(error),
@@ -110,7 +204,7 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
         try {
           listener(taskID);
         } catch (error) {
-          log('Coordinator terminal state listener threw', {
+          log('Lifecycle terminal state listener threw', {
             taskID,
             error: error instanceof Error ? error.message : String(error),
           });
@@ -122,7 +216,7 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
     if (record) {
       // Observation only: every canonical terminal publication that
       // reaches listener dispatch is logged with its record identity.
-      log('[job-coordinator] terminal state dispatch', {
+      log('[job-lifecycle] terminal state dispatch', {
         taskID,
         generation: record.generation,
         state,
@@ -133,7 +227,7 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
         try {
           listener(record);
         } catch (error) {
-          log('Coordinator terminal outcome listener threw', {
+          log('Lifecycle terminal outcome listener threw', {
             taskID,
             error: error instanceof Error ? error.message : String(error),
           });
@@ -182,6 +276,100 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
    */
   clearDeferredClose(sessionId: string): void {
     this.deferredIdleCloses.delete(sessionId);
+  }
+
+  // ── Ledger access ─────────────────────────────────────────────────
+
+  /** Process-local lifecycle memory; one ledger per board instance. */
+  get ledger(): BackgroundJobLifecycleLedger {
+    return this.board.ledger;
+  }
+
+  recordSuppression(
+    taskID: string,
+    terminal?: {
+      state: 'completed' | 'error' | 'cancelled';
+      resultSummary: string;
+    },
+  ): void {
+    recordLedgerSuppression(this.board.ledger, taskID, terminal);
+  }
+
+  clearSuppression(taskID: string): void {
+    clearLedgerSuppression(this.board.ledger, taskID);
+  }
+
+  /** Read the persisted suppression tombstone (hydrated at load, maintained
+   * by record/clear). Terminal-result entries let a post-restart task_revive
+   * surface the recorded result instead of re-prompting the child. */
+  suppressionTombstone(taskID: string): PersistedTombstoneEntry | undefined {
+    return getSuppressionTombstone(taskID);
+  }
+
+  // ── Board extras (outside the old store interface) ────────────────
+
+  /** False for a production parent not created while this board runs. */
+  isNumberedAliasReady(parentSessionID: string): boolean {
+    return this.board.isNumberedAliasReady(parentSessionID);
+  }
+
+  noteSessionCreated(sessionID: string, createdAt: number): void {
+    this.board.noteSessionCreated(sessionID, createdAt);
+  }
+
+  /** True while the board holds a record or a live lease for the task. */
+  isTracked(taskID: string): boolean {
+    return this.board.isTracked(taskID);
+  }
+
+  /** Subscribe to ANY board mutation (set/delete/trim/drop). The listener
+   * receives no payload: re-derive from the lifecycle's read-only queries.
+   * Fires after the mutation. */
+  addMutationListener(listener: () => void): void {
+    this.board.addMutationListener(listener);
+  }
+
+  removeMutationListener(listener: () => void): void {
+    this.board.removeMutationListener(listener);
+  }
+
+  /** Accessible terminal and stopped sessions, grouped for TUI navigation. */
+  sidebarHistoryByParentAgent() {
+    return this.board.sidebarHistoryByParentAgent();
+  }
+
+  // ── Terminal gate seam ────────────────────────────────────────────
+
+  capture(run: RunRef): ObservationToken | undefined {
+    return this.gate?.capture(run);
+  }
+
+  observe(token: ObservationToken, runtime: RuntimeObservation): GateResult {
+    if (!this.gate) throw new Error('Terminal gate is not attached');
+    return this.gate.observe(token, runtime);
+  }
+
+  reconcile(run: RunRef, signal?: TerminalSignal): Promise<GateResult> {
+    if (!this.gate) return Promise.resolve({ kind: 'stale' });
+    return this.gate.reconcile(run, signal);
+  }
+
+  // ── Supervisor seam ───────────────────────────────────────────────
+
+  /** Register the first observation of a launch or an explicit new run.
+   * Delegations tolerate partial supervisors (test seams). */
+  onLaunch(record: BackgroundJobRecord): void {
+    this.supervisor?.onLaunch?.(record);
+  }
+
+  /** Clear one-shot timers after any canonical terminal publication. */
+  onTerminal(record: BackgroundJobRecord): void {
+    this.supervisor?.onTerminal?.(record);
+  }
+
+  /** Deletion fencing before the normal board drop callback. */
+  onSessionDeleted(taskID: string): boolean {
+    return this.supervisor?.onSessionDeleted?.(taskID) ?? false;
   }
 
   // ── Mutation methods (sole writer to board) ──────────────────────
@@ -478,6 +666,10 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
   }
 
   clearParent(parentSessionID: string): void {
+    // The supervisor's timer map is keyed by task and holds no board reads:
+    // clear it first, exactly like the deletion choreography this facade
+    // replaces, then drop the board records.
+    this.supervisor?.clearParent?.(parentSessionID);
     // Capture identities before the board removes them so the projection
     // can retract aliases for every affected record.
     const removed = this.board.list(parentSessionID);
@@ -496,6 +688,8 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
   drop(taskID: string): void {
     const record = this.board.get(taskID);
     this.board.drop(taskID);
+    // Timer cleanup only: the supervisor never touches board state.
+    this.supervisor?.drop?.(taskID);
     if (record) {
       this.notifyLaunchIdentity({
         kind: 'removed',
@@ -506,4 +700,72 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
       });
     }
   }
+
+  /** Idempotent local teardown: the terminal gate's timers/authorizations
+   * and the supervisor's run timers. Never aborts or writes terminal state. */
+  dispose(): void {
+    this.gate?.dispose();
+    this.supervisor?.dispose?.();
+  }
+}
+
+/**
+ * Compose one BackgroundJobLifecycle from options: board → lifecycle →
+ * gate (bound through the lifecycle) → supervisor, replicating the plugin
+ * entry's historical wiring order.
+ */
+export function createBackgroundJobLifecycle(
+  options: BackgroundJobLifecycleOptions = {},
+): BackgroundJobLifecycle {
+  const board =
+    options.backgroundJobBoard ??
+    new BoardClass({
+      maxReusablePerAgent: options.maxReusablePerAgent,
+      maxContextLines: options.maxContextLines,
+      readContextMinLines: options.readContextMinLines,
+      readContextMaxFiles: options.readContextMaxFiles,
+      delegationTool: options.delegationTool,
+      deferNumberedAliases: options.deferNumberedAliases,
+      onEvictedSession: options.onEvictedSession,
+    } satisfies BackgroundJobBoardOptions);
+  const lifecycle = new BackgroundJobLifecycle(board);
+  const gate =
+    options.gate ??
+    createBackgroundJobTerminalGate({
+      backgroundJobBoard: lifecycle,
+      input: options.input,
+      readRuntime: options.readRuntime,
+      readTerminalEvidence: options.readTerminalEvidence,
+      baselineFor: options.baselineFor,
+      promptMessageIDFor: options.promptMessageIDFor,
+      attemptStartedAtFor: options.attemptStartedAtFor,
+      observationRevisionFor: options.observationRevisionFor,
+      isObservationPending: options.isObservationPending,
+      onRunning: options.onRunning,
+      onTerminal: options.onTerminal,
+      hostOutcomeClock: options.hostOutcomeClock,
+      graceMs: options.graceMs,
+      readTimeoutMs: options.readTimeoutMs,
+      maxEvidenceRetries: options.maxEvidenceRetries,
+      now: options.now,
+    });
+  lifecycle.attachGate(gate);
+  const supervisor =
+    options.supervisor ??
+    new DefaultBackgroundJobSupervisor({
+      backgroundJobStore: lifecycle,
+      terminalGate: gate,
+      wallClockTimeoutMs: options.wallClockTimeoutMs ?? 0,
+      abortGraceMs: options.abortGraceMs ?? 0,
+      abort:
+        options.abort ??
+        (async () => {
+          // No abort wired: supervision stays inert (wallClockTimeoutMs 0).
+        }),
+      now: options.now,
+      setTimeout: options.setTimeout,
+      clearTimeout: options.clearTimeout,
+    });
+  lifecycle.attachSupervisor(supervisor);
+  return lifecycle;
 }

@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, jest, test } from 'bun:test';
+import {
+  FixtureBoard as BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+  type FixtureBoardInstance,
+} from '../background-jobs';
 import { createPendingCallTracker } from '../hooks/task-session-manager/pending-call-tracker';
 import {
   aliasUnpairedMessage,
@@ -9,8 +14,6 @@ import {
   readAuthoritativeChildRef,
 } from '../hooks/task-session-manager/session-recovery';
 import { handleToolExecuteBefore } from '../hooks/task-session-manager/tool-execute-hooks';
-import { BackgroundJobBoard } from '../utils/background-job-board';
-import { BackgroundJobBoard as FixtureBoard } from '../utils/background-job-fixture';
 import { classifyV2HistoricalRound } from '../utils/child-transcript';
 import { parseTaskIdFromTaskOutput } from '../utils/task';
 import { buildPluginInput } from './client-shim';
@@ -73,16 +76,20 @@ function host(options?: {
   } as never);
 }
 
-function deps(board: BackgroundJobBoard, input: ReturnType<typeof host>) {
+function deps(board: FixtureBoardInstance, input: ReturnType<typeof host>) {
   return {
     shouldManageSession: () => true,
-    backgroundJobBoard: board,
+    backgroundJobs: createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+    }),
     pendingCallTracker: createPendingCallTracker(),
     taskContextTracker: { pendingManagedTaskIds: new Set<string>() },
     hostFlavor: 'v2',
     recoverRetainedSession: createSessionRecovery({
       input: input as never,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       hostFlavor: 'v2',
       stableStoppedMs: 0,
     }),
@@ -164,7 +171,7 @@ describe('v2 historical context', () => {
 
 describe('v2 native resume through the setup bridge', () => {
   test('an unacknowledged completed session continues without task_result or an early ack', async () => {
-    const board = new FixtureBoard();
+    const board = new BackgroundJobBoard();
     board.registerLaunch({
       taskID: CHILD,
       parentSessionID: PARENT,
@@ -393,7 +400,9 @@ test('real parent context pairs an alias through the shim', async () => {
   expect(canonical).toEqual({ kind: 'exact', taskID: childID });
   const result = await createSessionRecovery({
     input: input as never,
-    backgroundJobBoard: board,
+    backgroundJobs: createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+    }),
     hostFlavor: 'v2',
     stableStoppedMs: 0,
   })({ parentSessionID: PARENT, requested: childID, agent });
@@ -579,7 +588,9 @@ test('a compacted parent context neither resolves nor restores an alias', async 
   expect(
     await createSessionRecovery({
       input: input as never,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       hostFlavor: 'v2',
       stableStoppedMs: 0,
     })({ parentSessionID: PARENT, requested: CHILD }),
@@ -787,7 +798,9 @@ test('a held parent transcript read refuses at its deadline', async () => {
   jest.useFakeTimers();
   const pending = createSessionRecovery({
     input: input as never,
-    backgroundJobBoard: board,
+    backgroundJobs: createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+    }),
     hostFlavor: 'v2',
     stableStoppedMs: 0,
   })({ parentSessionID: PARENT, requested: CHILD });

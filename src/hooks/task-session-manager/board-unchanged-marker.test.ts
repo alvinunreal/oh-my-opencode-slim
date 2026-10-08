@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { BackgroundJobBoard } from '../../utils/background-job-fixture';
+import {
+  FixtureBoard as BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+} from '../../background-jobs';
 import {
   BACKGROUND_JOB_BOARD_METADATA_KEY,
   type InjectionState,
@@ -29,8 +32,9 @@ function stateFor(
   boardInjection?: boolean,
 ): InjectionState {
   return {
-    backgroundJobBoard: board,
-    terminalGate: {} as never,
+    backgroundJobs: createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+    }),
     lifecycleLedger: {} as never,
     maxRetainedSnapshots: 20,
     strategy: 'latest',

@@ -1,14 +1,13 @@
 import { describe, expect, mock, test } from 'bun:test';
-import { BackgroundJobBoard } from '../../utils/background-job-board';
-import { createBackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
+import {
+  BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+  createBackgroundJobTerminalGate,
+} from '../../background-jobs';
 import { handleEvent } from './event-router';
 
 function createDeps(board: BackgroundJobBoard, now: () => number) {
-  const backgroundJobSupervisor = {
-    onSessionDeleted: mock((sessionID: string) => {
-      board.drop(sessionID);
-    }),
-  };
+  const onSessionDeleted = mock((_sessionID: string) => false);
 
   return {
     inputWaits: {
@@ -35,10 +34,13 @@ function createDeps(board: BackgroundJobBoard, now: () => number) {
       clearAllTimers: mock(() => []),
     },
     deferredInlineErrors: new Map<string, string>(),
-    backgroundJobBoard: board,
-    terminalGate: createBackgroundJobTerminalGate({
+    backgroundJobs: createBackgroundJobLifecycle({
       backgroundJobBoard: board,
-      now,
+      gate: createBackgroundJobTerminalGate({
+        backgroundJobBoard: board,
+        now,
+      }),
+      supervisor: { onSessionDeleted },
     }),
     pendingCallTracker: {
       peekByParentAndAgent: mock(() => undefined),
@@ -52,7 +54,7 @@ function createDeps(board: BackgroundJobBoard, now: () => number) {
     terminalJobsInjectedByParent: new Map(),
     pendingInjectedTerminalJobsByParent: new Map(),
     retainedBoardSnapshots: new Map(),
-    backgroundJobSupervisor,
+    supervisorOnSessionDeleted: onSessionDeleted,
   };
 }
 
@@ -216,9 +218,7 @@ describe('task session event generation fences', () => {
 
     await route(deps, 'session.deleted', { sessionID: 'child-1' });
 
-    expect(
-      deps.backgroundJobSupervisor.onSessionDeleted,
-    ).not.toHaveBeenCalled();
+    expect(deps.supervisorOnSessionDeleted).not.toHaveBeenCalled();
     expect(board.get('child-1')).toMatchObject({
       generation: 2,
       state: 'running',

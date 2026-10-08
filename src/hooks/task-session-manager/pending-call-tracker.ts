@@ -1,13 +1,13 @@
-import type { BackgroundJobLease } from '../../utils/background-job-board';
-import type { BackgroundJobStore } from '../../utils/background-job-store';
-import type { BackgroundJobSupervisor } from '../../utils/background-job-supervisor';
+import type {
+  BackgroundJobLease,
+  BackgroundJobLifecycle,
+} from '../../background-jobs';
 import type { BackgroundTaskConcurrencyTicket } from '../../utils/background-task-concurrency';
 
 export interface EarlyTaskRegistration {
   taskID: string;
   generation: number;
-  backgroundJobBoard: BackgroundJobStore;
-  backgroundJobSupervisor?: BackgroundJobSupervisor;
+  backgroundJobs: BackgroundJobLifecycle;
 }
 
 export interface PendingTaskCall {
@@ -42,7 +42,7 @@ export interface PendingCallTracker {
   take(
     callId?: string,
     parentSessionId?: string,
-    ownerBoard?: BackgroundJobStore,
+    ownerBoard?: BackgroundJobLifecycle,
     options?: { recordConsumed?: boolean },
   ): PendingTaskCall | undefined;
   /** Remove and return the pending call whose early registration claimed
@@ -53,7 +53,7 @@ export interface PendingCallTracker {
   takeByTaskID(
     parentSessionId: string,
     taskID: string,
-    ownerBoard?: BackgroundJobStore,
+    ownerBoard?: BackgroundJobLifecycle,
   ): PendingTaskCall | undefined;
   /** Guarded drain fallback for no-tool-call-ID hosts: when neither a
    *  call ID nor an early-registration claim could identify the
@@ -75,7 +75,7 @@ export interface PendingCallTracker {
       /** Agent of the child session that produced that output. */
       agentType?: string;
       /** Board-generation fence, same as take()/takeByTaskID(). */
-      ownerBoard?: BackgroundJobStore;
+      ownerBoard?: BackgroundJobLifecycle;
     },
   ): PendingTaskCall | undefined;
   release(call: PendingTaskCall): void;
@@ -90,10 +90,7 @@ export interface PendingCallTracker {
    * no-title session.created that arrives after such consumption may be
    * a stale child of the consumed call, so claims must be refused. */
   hasConsumedCall(parentSessionId: string, agentType?: string): boolean;
-  adoptEarlyRegistrations(
-    backgroundJobBoard: BackgroundJobStore,
-    backgroundJobSupervisor?: BackgroundJobSupervisor,
-  ): void;
+  adoptEarlyRegistrations(backgroundJobs: BackgroundJobLifecycle): void;
   clearSession(sessionId: string): void;
   clearAll(): void;
   pendingCallId(sessionID?: string, callID?: string): string;
@@ -183,7 +180,7 @@ export function createPendingCallTracker(
     take(
       callId?: string,
       parentSessionId?: string,
-      ownerBoard?: BackgroundJobStore,
+      ownerBoard?: BackgroundJobLifecycle,
       takeOptions?: { recordConsumed?: boolean },
     ) {
       // Set for a no-callId sole-survivor take on a parent whose
@@ -218,7 +215,7 @@ export function createPendingCallTracker(
       if (
         pending?.earlyRegistration &&
         ownerBoard &&
-        pending.earlyRegistration.backgroundJobBoard !== ownerBoard
+        pending.earlyRegistration.backgroundJobs !== ownerBoard
       ) {
         return undefined;
       }
@@ -316,7 +313,7 @@ export function createPendingCallTracker(
     takeByTaskID(
       parentSessionId: string,
       taskID: string,
-      ownerBoard?: BackgroundJobStore,
+      ownerBoard?: BackgroundJobLifecycle,
     ) {
       for (const [callId, call] of pendingCalls.entries()) {
         if (
@@ -328,7 +325,7 @@ export function createPendingCallTracker(
         if (
           call.earlyRegistration &&
           ownerBoard &&
-          call.earlyRegistration.backgroundJobBoard !== ownerBoard
+          call.earlyRegistration.backgroundJobs !== ownerBoard
         ) {
           return undefined;
         }
@@ -344,7 +341,7 @@ export function createPendingCallTracker(
       selection?: {
         identityTaskID?: string;
         agentType?: string;
-        ownerBoard?: BackgroundJobStore;
+        ownerBoard?: BackgroundJobLifecycle;
       },
     ) {
       for (const [callId, call] of pendingCalls.entries()) {
@@ -373,7 +370,7 @@ export function createPendingCallTracker(
         if (
           call.earlyRegistration &&
           selection?.ownerBoard &&
-          call.earlyRegistration.backgroundJobBoard !== selection.ownerBoard
+          call.earlyRegistration.backgroundJobs !== selection.ownerBoard
         ) {
           continue;
         }
@@ -389,20 +386,14 @@ export function createPendingCallTracker(
       return undefined;
     },
 
-    adoptEarlyRegistrations(
-      backgroundJobBoard: BackgroundJobStore,
-      backgroundJobSupervisor?: BackgroundJobSupervisor,
-    ) {
+    adoptEarlyRegistrations(backgroundJobs: BackgroundJobLifecycle) {
       for (const pending of pendingCalls.values()) {
         const registration = pending.earlyRegistration;
-        if (
-          !registration ||
-          registration.backgroundJobBoard === backgroundJobBoard
-        ) {
+        if (!registration || registration.backgroundJobs === backgroundJobs) {
           continue;
         }
 
-        const existing = backgroundJobBoard.get(registration.taskID);
+        const existing = backgroundJobs.get(registration.taskID);
         if (
           existing &&
           (existing.parentSessionID !== pending.parentSessionId ||
@@ -416,11 +407,11 @@ export function createPendingCallTracker(
           // The adopted registration is attributed work: promoting the
           // placeholder it collides with preserves known provenance.
           adopted =
-            backgroundJobBoard.promoteProvisional(adopted.taskID) ?? adopted;
+            backgroundJobs.promoteProvisional(adopted.taskID) ?? adopted;
         }
         if (!adopted) {
           try {
-            adopted = backgroundJobBoard.registerLaunch({
+            adopted = backgroundJobs.registerLaunch({
               taskID: registration.taskID,
               parentSessionID: pending.parentSessionId,
               agent: pending.agentType,
@@ -441,10 +432,8 @@ export function createPendingCallTracker(
           }
         }
 
-        registration.backgroundJobBoard.drop(registration.taskID);
-        registration.backgroundJobSupervisor?.drop(registration.taskID);
-        registration.backgroundJobBoard = backgroundJobBoard;
-        registration.backgroundJobSupervisor = backgroundJobSupervisor;
+        registration.backgroundJobs.drop(registration.taskID);
+        registration.backgroundJobs = backgroundJobs;
         registration.generation = adopted.generation;
       }
     },

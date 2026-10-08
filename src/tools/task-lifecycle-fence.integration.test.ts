@@ -2,9 +2,12 @@ import { expect, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+  createBackgroundJobTerminalGate,
+} from '../background-jobs';
 import { OhMyOpenCodeLite as plugin } from '../index';
-import { BackgroundJobBoard } from '../utils/background-job-board';
-import { createBackgroundJobTerminalGate } from '../utils/background-job-terminal-gate';
 import { createTaskResultTool } from './task-result';
 
 const PARENT = 'ses_parent';
@@ -167,8 +170,10 @@ test('dispose after reconcile does not consume a restored terminal result', asyn
         },
       },
     } as never,
-    backgroundJobBoard: board,
-    terminalGate: gate,
+    backgroundJobs: createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+      gate,
+    }),
     isDisposed: () => disposed,
   });
   const pending = tool.task_result.execute({ task_id: CHILD }, {
@@ -192,13 +197,15 @@ test('dispose after reconcile does not consume a restored terminal result', asyn
         },
       },
     } as never,
-    backgroundJobBoard: board,
-    terminalGate: createBackgroundJobTerminalGate({
-      input: {
-        directory: '/tmp/omo-lifecycle-fence',
-        client: { session: {} },
-      } as never,
+    backgroundJobs: createBackgroundJobLifecycle({
       backgroundJobBoard: board,
+      gate: createBackgroundJobTerminalGate({
+        input: {
+          directory: '/tmp/omo-lifecycle-fence',
+          client: { session: {} },
+        } as never,
+        backgroundJobBoard: board,
+      }),
     }),
   });
   await expect(

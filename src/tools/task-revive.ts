@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { type ToolDefinition, tool } from '@opencode-ai/plugin';
+import type {
+  BackgroundJobLease,
+  BackgroundJobLifecycle,
+} from '../background-jobs';
 import type { RevivedRunTracker } from '../hooks/task-session-manager/revived-run-tracker';
 import { pluginDisposedMessage } from '../hooks/task-session-manager/session-recovery';
-import type { BackgroundJobLease } from '../utils/background-job-board';
-import { getBackgroundJobLifecycleLedger } from '../utils/background-job-store';
-import type { BackgroundJobSupervisor } from '../utils/background-job-supervisor';
 import { responseError } from '../utils/child-transcript';
 import { log } from '../utils/logger';
 import { getClient } from '../utils/opencode-client';
@@ -33,7 +34,6 @@ export interface TaskReviveToolOptions extends TaskControlToolOptions {
   recoverRetainedSession: NonNullable<
     TaskControlToolOptions['recoverRetainedSession']
   >;
-  backgroundJobSupervisor?: BackgroundJobSupervisor;
   revivedRunTracker: RevivedRunTracker;
   baselineTimeoutMs?: number;
   admissionTimeoutMs?: number;
@@ -71,8 +71,8 @@ export function createTaskReviveTool(
       if (canonical?.kind === 'refused') throw new Error(canonical.reason);
       const identity = canonical?.taskID ?? requested;
       let resolved = canonical
-        ? options.backgroundJobBoard.get(identity)
-        : options.backgroundJobBoard.resolve(parentSessionID, requested);
+        ? options.backgroundJobs.get(identity)
+        : options.backgroundJobs.resolve(parentSessionID, requested);
       if (resolved && resolved.parentSessionID !== parentSessionID) {
         throw new Error(`Unknown or unowned background task: ${requested}`);
       }
@@ -88,8 +88,8 @@ export function createTaskReviveTool(
         // undefined ⇒ adopted: the board now owns a fresh record for this
         // session, so the resolution below must be repeated.
         resolved = canonical
-          ? options.backgroundJobBoard.get(identity)
-          : options.backgroundJobBoard.resolve(parentSessionID, requested);
+          ? options.backgroundJobs.get(identity)
+          : options.backgroundJobs.resolve(parentSessionID, requested);
         adopted = true;
       }
       if (!resolved) {
@@ -161,7 +161,7 @@ export function createTaskReviveTool(
         );
       }
 
-      const relaunchLease = options.backgroundJobBoard.acquireRelaunchLease(
+      const relaunchLease = options.backgroundJobs.acquireRelaunchLease(
         current.taskID,
         current.generation,
       );
@@ -173,15 +173,13 @@ export function createTaskReviveTool(
 
       let admissionOwner: { settled: boolean } | undefined;
       let launched:
-        | ReturnType<
-            TaskControlToolOptions['backgroundJobBoard']['registerLaunch']
-          >
+        | ReturnType<TaskControlToolOptions['backgroundJobs']['registerLaunch']>
         | undefined;
       try {
         const observedLiveBusyAt = current.lastLiveBusyAt;
-        const deletionEpoch = getBackgroundJobLifecycleLedger(
-          options.backgroundJobBoard,
-        ).deletionEpochs.get(current.taskID);
+        const deletionEpoch = options.backgroundJobs.ledger.deletionEpochs.get(
+          current.taskID,
+        );
         const baselineMessageID = queueContinuation
           ? undefined
           : await withTimeout(
@@ -254,10 +252,9 @@ export function createTaskReviveTool(
         );
         if (
           options.isDisposed?.() ||
-          getBackgroundJobLifecycleLedger(
-            options.backgroundJobBoard,
-          ).deletionEpochs.get(current.taskID) !== deletionEpoch ||
-          !options.backgroundJobBoard.validateLease(relaunchLease) ||
+          options.backgroundJobs.ledger.deletionEpochs.get(current.taskID) !==
+            deletionEpoch ||
+          !options.backgroundJobs.validateLease(relaunchLease) ||
           // V1 adoption still requires live quiescence. The V2 identity-bound
           // queue path deliberately permits the existing execution to run.
           (!queueContinuation &&
@@ -280,7 +277,7 @@ export function createTaskReviveTool(
         if (promptMessageID) {
           // Own this one input before sending. A late acknowledgement must
           // never reinstall the tracker after it has delivered the answer.
-          launched = options.backgroundJobBoard.registerLaunch({
+          launched = options.backgroundJobs.registerLaunch({
             taskID: current.taskID,
             parentSessionID,
             agent: current.agent,
@@ -335,7 +332,7 @@ export function createTaskReviveTool(
               // identity so the task neither waits for it nor fences retries.
               if (queueContinuation && launched) {
                 revivedRunTracker.discard(launched.taskID, launched.generation);
-                options.backgroundJobBoard.abandonLaunch(launched, replaced);
+                options.backgroundJobs.abandonLaunch(launched, replaced);
                 launched = undefined;
               }
               throw new Error(errorText(apiError));
@@ -344,7 +341,7 @@ export function createTaskReviveTool(
             // and is not compensated with abort. Settle only this lease.
             if (
               options.isDisposed?.() &&
-              options.backgroundJobBoard.get(captured.taskID)
+              options.backgroundJobs.get(captured.taskID)
             ) {
               throw new Error(
                 'the revive write was accepted, but this plugin instance is retired and will not track it',
@@ -353,7 +350,7 @@ export function createTaskReviveTool(
             if (queueContinuation) {
               if (
                 !launched ||
-                options.backgroundJobBoard.get(captured.taskID)?.generation !==
+                options.backgroundJobs.get(captured.taskID)?.generation !==
                   launched.generation
               ) {
                 owner.transferred = true;
@@ -367,8 +364,8 @@ export function createTaskReviveTool(
             // that precise case may compensate; all stale owners/generations
             // still go through registerLaunch's existing rejection fence.
             if (
-              !options.backgroundJobBoard.get(captured.taskID) &&
-              options.backgroundJobBoard.validateLease(relaunchLease)
+              !options.backgroundJobs.get(captured.taskID) &&
+              options.backgroundJobs.validateLease(relaunchLease)
             ) {
               owner.transferred = true;
               // Starts synchronously under the lease, independently of the
@@ -379,7 +376,7 @@ export function createTaskReviveTool(
               );
             }
             if (current.terminalUnreconciled) {
-              const acked = options.backgroundJobBoard.markReconciled(
+              const acked = options.backgroundJobs.markReconciled(
                 current.taskID,
                 admissionStartedAt,
                 current.generation,
@@ -395,7 +392,7 @@ export function createTaskReviveTool(
                 );
               }
             }
-            launched = options.backgroundJobBoard.registerLaunch({
+            launched = options.backgroundJobs.registerLaunch({
               taskID: current.taskID,
               parentSessionID,
               agent: current.agent,
@@ -414,7 +411,7 @@ export function createTaskReviveTool(
               attemptStartedAt: admissionStartedAt,
               description: launched.description,
             });
-            options.backgroundJobSupervisor?.onLaunch(launched);
+            options.backgroundJobs.onLaunch(launched);
           })
           .catch((error: unknown) => {
             if (queueContinuation && !owner.settled) {
@@ -430,7 +427,7 @@ export function createTaskReviveTool(
           .finally(() => {
             owner.settled = true;
             if (!owner.transferred)
-              options.backgroundJobBoard.releaseLease(relaunchLease);
+              options.backgroundJobs.releaseLease(relaunchLease);
           });
         const observation = admission
           .then(async () => {
@@ -449,7 +446,7 @@ export function createTaskReviveTool(
           })
           .catch((error: unknown) => {
             if (launched) {
-              options.backgroundJobBoard.markStatusUncertain(
+              options.backgroundJobs.markStatusUncertain(
                 current.taskID,
                 `task_revive failed: ${errorText(error)}`,
                 launched.generation,
@@ -499,14 +496,13 @@ export function createTaskReviveTool(
         throw new Error(`Task ${requested} revive failed: ${errorText(error)}`);
       } finally {
         // Before a write exists there is no late admission to protect.
-        if (!admissionOwner)
-          options.backgroundJobBoard.releaseLease(relaunchLease);
+        if (!admissionOwner) options.backgroundJobs.releaseLease(relaunchLease);
       }
 
       if (!launched) {
         throw new Error(`Task ${requested} revive did not launch`);
       }
-      const latest = options.backgroundJobBoard.get(current.taskID);
+      const latest = options.backgroundJobs.get(current.taskID);
       if (!latest || latest.generation !== launched.generation) {
         throw new Error(
           `Task ${requested} revive became stale before launch completed`,
@@ -528,7 +524,7 @@ async function ownInvalidatedAdmission(
   options: TaskReviveToolOptions,
   lease: BackgroundJobLease,
 ): Promise<void> {
-  const board = options.backgroundJobBoard;
+  const board = options.backgroundJobs;
   const { taskID, generation } = lease;
   const stillOwns = () => {
     const valid = board.validateLease(lease) && !board.get(taskID);
@@ -588,7 +584,7 @@ async function ownInvalidatedAdmission(
 function renderReviveOutput(
   idParam: string,
   record: NonNullable<
-    ReturnType<TaskReviveToolOptions['backgroundJobBoard']['get']>
+    ReturnType<TaskReviveToolOptions['backgroundJobs']['get']>
   >,
   admissionUnknown = false,
 ): string {
@@ -624,8 +620,8 @@ function getCurrentReviveJob(
   parentSessionID: string,
   taskID: string,
   generation: number,
-): NonNullable<ReturnType<TaskReviveToolOptions['backgroundJobBoard']['get']>> {
-  const current = options.backgroundJobBoard.get(taskID);
+): NonNullable<ReturnType<TaskReviveToolOptions['backgroundJobs']['get']>> {
+  const current = options.backgroundJobs.get(taskID);
   if (!current || current.parentSessionID !== parentSessionID) {
     throw new Error(
       `Task ${taskID} is no longer tracked; refusing stale revive`,
@@ -640,9 +636,7 @@ function getCurrentReviveJob(
 }
 
 function isReviveableRetainedJob(
-  job: NonNullable<
-    ReturnType<TaskReviveToolOptions['backgroundJobBoard']['get']>
-  >,
+  job: NonNullable<ReturnType<TaskReviveToolOptions['backgroundJobs']['get']>>,
 ): boolean {
   if (job.statusUncertain) return false;
   if (job.state === 'stopped') return true;
@@ -674,19 +668,18 @@ async function resolveOrAdoptUntrackedTask(
   if (recovery.kind === 'refused') return recovery.reason;
   if (options.isDisposed?.()) return 'Session recovery was disposed';
   if (recovery.kind !== 'adoptable') return undefined;
-  const raced = options.backgroundJobBoard.get(recovery.taskID);
+  const raced = options.backgroundJobs.get(recovery.taskID);
   if (raced)
     return raced.parentSessionID === parentSessionID
       ? undefined
       : `${prefix}. Tracking does not survive a host restart; verify whether the host restored it before re-dispatching.`;
   if (
-    getBackgroundJobLifecycleLedger(
-      options.backgroundJobBoard,
-    ).deletionEpochs.get(recovery.taskID) !== recovery.deletionEpoch
+    options.backgroundJobs.ledger.deletionEpochs.get(recovery.taskID) !==
+    recovery.deletionEpoch
   ) {
     return `Task ${requested} was deleted during recovery; no prompt was sent`;
   }
-  const adopted = options.backgroundJobBoard.registerLaunch({
+  const adopted = options.backgroundJobs.registerLaunch({
     taskID: recovery.taskID,
     parentSessionID,
     agent: recovery.agent,

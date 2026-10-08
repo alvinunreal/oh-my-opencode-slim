@@ -8,13 +8,16 @@ import {
   test,
 } from 'bun:test';
 import type { PluginInput } from '@opencode-ai/plugin';
+import {
+  BackgroundJobBoard,
+  boardFixture,
+  createBackgroundJobLifecycle,
+  createBackgroundJobTerminalGate,
+} from '../background-jobs';
 import { createRevivedRunTracker } from '../hooks/task-session-manager/revived-run-tracker';
 import { createV1InterviewSessionRuntime } from '../interview/runtime';
 import { createTaskMessageTool } from '../tools/task-message';
 import { createTaskReviveTool } from '../tools/task-revive';
-import { BackgroundJobBoard } from '../utils/background-job-board';
-import { boardFixture } from '../utils/background-job-fixture';
-import { createBackgroundJobTerminalGate } from '../utils/background-job-terminal-gate';
 import * as opencodeClient from '../utils/opencode-client';
 import { buildPluginInput, type ExperimentalV2 } from './client-shim';
 import type { V2Context } from './types';
@@ -92,10 +95,18 @@ function harness(
     onTerminal,
     graceMs: 5,
   });
+  // One facade per board: every consumer shares it so the gate binding
+  // (last bind wins) stays on this factory's gate. The onLaunch mock is
+  // the facade's supervisor; the tracker below reuses the same facade.
+  const onLaunch = mock(() => {});
+  const backgroundJobs = createBackgroundJobLifecycle({
+    backgroundJobBoard: board,
+    gate,
+    supervisor: { onLaunch } as never,
+  });
   tracker = createRevivedRunTracker({
     input,
-    backgroundJobBoard: board,
-    terminalGate: gate,
+    backgroundJobs,
   });
   const baseline = spyOn(tracker, 'captureBaseline');
   const register = spyOn(tracker, 'register');
@@ -103,21 +114,18 @@ function harness(
     tracker.dispose();
     gate.dispose();
   });
-  const onLaunch = mock(() => {});
   const revive = createTaskReviveTool({
     input,
-    backgroundJobBoard: board,
-    terminalGate: gate,
+    backgroundJobs,
     shouldManageSession: () => true,
     revivedRunTracker: tracker,
-    backgroundJobSupervisor: { onLaunch } as never,
     stableStoppedMs: 0,
     abortRetryIntervalMs: 0,
     waitForIdleTimeoutMs: options.waitForIdleTimeoutMs,
   }).task_revive;
   const message = createTaskMessageTool({
     input,
-    backgroundJobBoard: board,
+    backgroundJobs,
     messageTimeoutMs: options.messageTimeoutMs,
   }).task_message;
   return {
@@ -308,7 +316,9 @@ describe('task controls through the real v2 client shim', () => {
       const shimPrompt = spyOn(h.input.client.session, 'prompt');
       const tool = createTaskMessageTool({
         input,
-        backgroundJobBoard: h.board,
+        backgroundJobs: createBackgroundJobLifecycle({
+          backgroundJobBoard: h.board,
+        }),
       }).task_message;
       expect(String(await tool.execute(messageArgs, context))).toContain(
         'queued',

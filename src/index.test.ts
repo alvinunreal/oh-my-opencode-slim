@@ -12,6 +12,12 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { RegistryFactoryBridge } from './agents/registry-bridge';
+import {
+  FixtureBoard as BackgroundJobBoard,
+  type BackgroundJobEvictedSession,
+  BackgroundJobLifecycle,
+  type BackgroundJobBoard as ProductionBoard,
+} from './background-jobs';
 import { stateFilePath } from './companion/manager';
 import { RuntimeConfig } from './config/runtime';
 import * as wakeHooks from './hooks';
@@ -40,12 +46,6 @@ import {
   snapshotSectionsEqual,
   updateSnapshot,
 } from './tui-state';
-import type {
-  BackgroundJobEvictedSession,
-  BackgroundJobBoard as ProductionBoard,
-} from './utils/background-job-board';
-import { BackgroundJobCoordinator } from './utils/background-job-coordinator';
-import { BackgroundJobBoard } from './utils/background-job-fixture';
 import { resetLiveDirectoriesForTests } from './utils/event-directory-scope';
 import { createInternalAgentTextPart } from './utils/internal-initiator';
 import * as loggerModule from './utils/logger';
@@ -1854,7 +1854,7 @@ describe('plugin reload generation cleanup', () => {
         triggerStoppedJobRecovery: wake,
       }));
       const subscriptions = spyOn(
-        BackgroundJobCoordinator.prototype,
+        BackgroundJobLifecycle.prototype,
         'addTerminalOutcomeListener',
       );
       let hooks: Awaited<ReturnType<typeof plugin>> | undefined;
@@ -5174,13 +5174,12 @@ describe('backgroundJobs.pruneEvictedSessions wiring', () => {
   const createHooksWithBoard = async (
     sessionOverrides: Record<string, unknown> = {},
   ) => {
-    let coordinator: BackgroundJobCoordinator | undefined;
-    const original =
-      BackgroundJobCoordinator.prototype.addLaunchIdentityListener;
+    let coordinator: BackgroundJobLifecycle | undefined;
+    const original = BackgroundJobLifecycle.prototype.addLaunchIdentityListener;
     const spy = spyOn(
-      BackgroundJobCoordinator.prototype,
+      BackgroundJobLifecycle.prototype,
       'addLaunchIdentityListener',
-    ).mockImplementation(function (this: BackgroundJobCoordinator, listener) {
+    ).mockImplementation(function (this: BackgroundJobLifecycle, listener) {
       coordinator ??= this;
       return original.call(this, listener);
     });
@@ -5191,13 +5190,13 @@ describe('backgroundJobs.pruneEvictedSessions wiring', () => {
         worktree: projectDir,
         serverUrl: new URL('http://127.0.0.1:4096'),
       } as never);
-      return { hooks, coordinator: coordinator as BackgroundJobCoordinator };
+      return { hooks, coordinator: coordinator as BackgroundJobLifecycle };
     } finally {
       spy.mockRestore();
     }
   };
 
-  const gcCallbackOf = (coordinator: BackgroundJobCoordinator) => {
+  const gcCallbackOf = (coordinator: BackgroundJobLifecycle) => {
     const board = (coordinator as unknown as { board: ProductionBoard }).board;
     return (
       board as unknown as {

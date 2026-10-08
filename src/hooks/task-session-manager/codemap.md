@@ -10,7 +10,7 @@ The directory follows a **Facade + Strategy** pattern where `index.ts` acts as t
 
 - **index.ts**: Main facade that wires hooks into OpenCode's lifecycle and coordinates between the job board, pending calls, task context tracking, and explicit user waits. Implements the plugin hook interface (`tool.execute.before`, `tool.execute.after`, `experimental.chat.messages.transform`, `event`) and exposes `beginUserWait()` to the `wait_for_user` tool.
 - **revived-run-tracker.ts**: Logs terminal notification transport acceptance and failure with the captured transport-attempt number (including late acceptance after a timeout), lease deferral, and once-only ownership release to the fallback publication wake.
-- **../../utils/background-job-terminal-gate.ts**: Shared execution/observation gate for every terminal publication. Runtime quiescence and attributable result evidence authorize one board commit; busy withdraws terminal publications. Grace, bounded retries and single-open reads are shared across adapters.
+- **../../background-jobs/terminal-gate.ts**: Shared execution/observation gate for every terminal publication (inside the `src/background-jobs/` package). Runtime quiescence and attributable result evidence authorize one board commit; busy withdraws terminal publications. Grace, bounded retries and single-open reads are shared across adapters.
 - **input-wait-tracker.ts**: Provides the single `hasInputWait()` seam used by idle reconciliation and continuation evaluation. It combines local question/permission waits with the process-global explicit user-wait latch.
 - **continuation-model-selection.ts**: Normalizes current-session and chat-hook model shapes before forwarding runtime model and variant choices to idle continuation prompts.
 - **pending-call-tracker.ts**: Tracks in-flight task calls using a capped ordered map (`MAX_PENDING_TASK_CALLS`) to correlate launch output safely. Provides call ID generation, storage, retrieval, and cleanup for pending task invocations.
@@ -29,11 +29,11 @@ The directory follows a **Facade + Strategy** pattern where `index.ts` acts as t
   path for shared single-runtime backends; fail-open on unknown model/provider.
 - **task-context-tracker.ts**: Manages read context from child sessions with line-count and file caps. Stores context per task ID and provides pruning to prevent unbounded growth.
 
-All modules depend on `BackgroundJobBoard` from `src/utils/background-job-board.ts` as the single source of truth for active jobs, terminal unreconciled jobs, reusable completed sessions, aliases, read context, and LRU caps.
+All modules depend on the `BackgroundJobLifecycle` facade from `src/background-jobs/` (single seam: `createBackgroundJobLifecycle`) as the single source of truth for active jobs, terminal unreconciled jobs, reusable completed sessions, aliases, read context, and LRU caps.
 
 ### Key Abstractions
 
-- **BackgroundJobBoard**: Central state store for task sessions (active, reusable, terminal unreconciled).
+- **BackgroundJobLifecycle** (`src/background-jobs/`): Central lifecycle seam over the board state store for task sessions (active, reusable, terminal unreconciled).
 - **PendingTaskCall**: Tracks in-flight task invocations with call ID, parent session ID, agent type, label, and optional resumed task ID.
 - **ContextFile**: Represents read context from child sessions with path, line numbers, and last-read timestamp.
 - **User wait**: Explicit text-only HITL latch armed by `wait_for_user` and released by a distinct real external user message.
@@ -90,9 +90,9 @@ All modules depend on `BackgroundJobBoard` from `src/utils/background-job-board.
 
 ```
 User task call → tool.execute.before → PendingTaskCall created → task ID resolved/reused
-→ tool.execute.after → BackgroundJobBoard.registerLaunch() → context extracted/added
-→ Message transform → BackgroundJobBoard.formatForPrompt() injected as a system-reminder message part
-→ session.idle → reconcileInjectedTerminalJobs() → BackgroundJobBoard.markReconciled()
+→ tool.execute.after → jobs.registerLaunch() (lifecycle seam) → context extracted/added
+→ Message transform → jobs.formatForPrompt() injected as a system-reminder message part
+→ session.idle → reconcileInjectedTerminalJobs() → jobs.markReconciled()
 → opt-in continuation evaluator (same idle cycle, existing guards)
 ```
 
@@ -104,7 +104,7 @@ User task call → tool.execute.before → PendingTaskCall created → task ID r
 
 ### Dependencies
 
-- **BackgroundJobBoard** (`src/utils/background-job-board.ts`): Central state store for task sessions and context.
+- **BackgroundJobLifecycle** (`src/background-jobs/index.ts`): Central state/lifecycle seam for task sessions and context (single import surface for all job-board interactions).
 - **Task Output Parsing Utilities** (`src/utils/index.ts`): `parseTaskIdFromTaskOutput`, `parseTaskLaunchOutput`, `parseTaskStatusOutput`, `deriveTaskSessionLabel`.
 - **Guards & Logger**: `isRecord` utility and `log` for diagnostics.
 

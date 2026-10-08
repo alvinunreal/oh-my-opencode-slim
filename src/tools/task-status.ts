@@ -3,8 +3,8 @@ import {
   type ToolDefinition,
   tool,
 } from '@opencode-ai/plugin';
+import type { BackgroundJobBoardApi } from '../background-jobs';
 import { listChildInputWaits } from '../hooks/task-session-manager/child-input-wait';
-import type { BackgroundJobStore } from '../utils/background-job-store';
 import {
   classifyTerminalEvidence,
   classifyV2HistoricalRound,
@@ -33,7 +33,7 @@ const UNTRACKED_READ_TIMEOUT_MS = 5_000;
 
 export function createTaskStatusTool(options: {
   input: PluginInput;
-  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobs: BackgroundJobBoardApi;
   activityTracker?: TaskActivityTracker;
   now?: () => number;
   statusTimeoutMs?: number;
@@ -59,8 +59,8 @@ export function createTaskStatusTool(options: {
       if (canonical?.kind === 'refused') throw new Error(canonical.reason);
       const identity = canonical?.taskID ?? requested;
       const job = canonical
-        ? options.backgroundJobBoard.get(identity)
-        : options.backgroundJobBoard.resolve(parentSessionID, requested);
+        ? options.backgroundJobs.get(identity)
+        : options.backgroundJobs.resolve(parentSessionID, requested);
       if (!job || job.parentSessionID !== parentSessionID) {
         // Read-only fallback for a session the board lost (e.g. a host or
         // plugin restart emptied the in-memory board): verify ownership
@@ -80,7 +80,7 @@ export function createTaskStatusTool(options: {
       const snapshot = await getRuntimeSessionStatusSnapshot(options.input, {
         timeoutMs: options.statusTimeoutMs,
       });
-      const current = options.backgroundJobBoard.get(taskID) ?? job;
+      const current = options.backgroundJobs.get(taskID) ?? job;
       if (
         current.parentSessionID !== parentSessionID ||
         current.taskID !== taskID

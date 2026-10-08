@@ -1,25 +1,19 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import {
-  BackgroundJobBoard,
   type BackgroundJobExecution,
-  type BackgroundJobStore,
-  type BackgroundJobSupervisor,
-  type BackgroundTaskConcurrency,
-  clearBackgroundJobSuppression,
+  type BackgroundJobLifecycle,
+  createBackgroundJobLifecycle,
   deriveFullObjective,
   deriveTaskSessionLabel,
-  getBackgroundJobLifecycleLedger,
+  readSessionInfoForObservation,
+} from '../../background-jobs';
+import {
+  type BackgroundTaskConcurrency,
   isInternalInitiatorPart,
   log,
   parseTaskIdFromTaskOutput,
   parseTaskStateFromOutput,
-  recordBackgroundJobSuppression,
 } from '../../utils';
-import {
-  type BackgroundJobTerminalGate,
-  createBackgroundJobTerminalGate,
-  readSessionInfoForObservation,
-} from '../../utils/background-job-terminal-gate';
 import {
   classifyTerminalEvidence,
   fetchChildTranscript,
@@ -75,7 +69,7 @@ const RECOVERED_TASK_AGENT_FALLBACK = 'unknown';
 
 function rehydrateHistoricalRunningTasks(
   messages: unknown[],
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobs: BackgroundJobLifecycle,
   shouldManageSession: (sessionID: string) => boolean,
   registerSessionAsOrchestrator?: (sessionID: string) => void,
   rehydrateTombstones?: ReadonlySet<string>,
@@ -131,7 +125,7 @@ function rehydrateHistoricalRunningTasks(
         // persisted running tool part into a fresh alias on the next request.
         continue;
       }
-      if (backgroundJobBoard.get(taskID)) continue;
+      if (backgroundJobs.get(taskID)) continue;
 
       const agent =
         typeof state.input.subagent_type === 'string' &&
@@ -150,7 +144,7 @@ function rehydrateHistoricalRunningTasks(
         agentType: agent,
       });
 
-      backgroundJobBoard.registerLaunch({
+      backgroundJobs.registerLaunch({
         taskID,
         parentSessionID,
         agent,
@@ -189,10 +183,8 @@ export function createTaskSessionManagerHook(
     maxRetainedSnapshots: number;
     readContextMinLines?: number;
     readContextMaxFiles?: number;
-    backgroundJobBoard?: BackgroundJobStore;
-    terminalGate?: BackgroundJobTerminalGate;
+    backgroundJobs?: BackgroundJobLifecycle;
     hostOutcomeClock?: 'shared-unix-ms';
-    backgroundJobSupervisor?: BackgroundJobSupervisor;
     backgroundTaskConcurrency?: BackgroundTaskConcurrency;
     /** When false, board reminder injection is fully disabled (#1314 thread). */
     boardInjection?: boolean;
@@ -248,14 +240,29 @@ export function createTaskSessionManagerHook(
     revivedRunTracker?: RevivedRunTracker;
   },
 ) {
-  const backgroundJobBoard =
-    options.backgroundJobBoard ??
-    new BackgroundJobBoard({
+  const backgroundJobs =
+    options.backgroundJobs ??
+    createBackgroundJobLifecycle({
       maxReusablePerAgent: options.maxSessionsPerAgent,
       readContextMinLines: options.readContextMinLines,
       readContextMaxFiles: options.readContextMaxFiles,
+      input: _ctx,
+      hostOutcomeClock: options.hostOutcomeClock,
+      readTerminalEvidence: async (taskID) =>
+        fetchChildTranscript(getClient(_ctx), taskID, _ctx.directory).catch(
+          () => undefined,
+        ),
+      baselineFor: (taskID, generation) =>
+        options.revivedRunTracker?.baselineFor(taskID, generation),
+      attemptStartedAtFor: (taskID, generation) =>
+        options.revivedRunTracker?.attemptStartedAtFor(taskID, generation),
+      observationRevisionFor: (taskID, generation) =>
+        options.revivedRunTracker?.revisionFor(taskID, generation),
+      isObservationPending: (taskID, generation) =>
+        options.revivedRunTracker?.isObservationPending(taskID, generation) ??
+        false,
     });
-  const rehydrateState = getBackgroundJobLifecycleLedger(backgroundJobBoard);
+  const rehydrateState = backgroundJobs.ledger;
   const rehydrateTombstones = rehydrateState.tombstones;
   // Only adoptRequested reads boundaries, and v2 hosts never wire it.
   const adoptionEnabled = options.hostFlavor !== 'v2';
@@ -319,7 +326,7 @@ export function createTaskSessionManagerHook(
         rehydrateTombstones.has(requested)
       )
         return 'rejected';
-      const adopted = backgroundJobBoard.adoptTerminal({
+      const adopted = backgroundJobs.adoptTerminal({
         taskID: requested,
         parentSessionID: parent,
         agent,
@@ -342,36 +349,15 @@ export function createTaskSessionManagerHook(
   // transcript already holds the terminal result. Unknown reads never
   // terminate into stopped; the #1157 guarantee lives on a valid
   // transcript that provably holds no result for this run.
-  const terminalGate =
-    options.terminalGate ??
-    createBackgroundJobTerminalGate({
-      backgroundJobBoard,
-      input: _ctx,
-      hostOutcomeClock: options.hostOutcomeClock,
-      readTerminalEvidence: async (taskID) =>
-        fetchChildTranscript(getClient(_ctx), taskID, _ctx.directory).catch(
-          () => undefined,
-        ),
-      baselineFor: (taskID, generation) =>
-        options.revivedRunTracker?.baselineFor(taskID, generation),
-      attemptStartedAtFor: (taskID, generation) =>
-        options.revivedRunTracker?.attemptStartedAtFor(taskID, generation),
-      observationRevisionFor: (taskID, generation) =>
-        options.revivedRunTracker?.revisionFor(taskID, generation),
-      isObservationPending: (taskID, generation) =>
-        options.revivedRunTracker?.isObservationPending(taskID, generation) ??
-        false,
-    });
-
   const rememberDeletedSession = (sessionID: string): void => {
     const remember = (taskID: string): void => {
-      recordBackgroundJobSuppression(backgroundJobBoard, taskID);
+      backgroundJobs.recordSuppression(taskID);
     };
 
     // The delete event itself is the lifecycle boundary. Keep a tombstone
     // even if an earlier cleanup already removed the board record.
     remember(sessionID);
-    for (const job of backgroundJobBoard.list(sessionID)) {
+    for (const job of backgroundJobs.list(sessionID)) {
       remember(job.taskID);
     }
   };
@@ -410,16 +396,16 @@ export function createTaskSessionManagerHook(
       // legitimate same-ID relaunch while the get is in flight takes a
       // NEW generation and clears the tombstone — a stale NotFound must
       // not tombstone+drop the live relaunched record.
-      const generationAtProbeStart = backgroundJobBoard.get(taskID)?.generation;
+      const generationAtProbeStart = backgroundJobs.get(taskID)?.generation;
       if (generationAtProbeStart === undefined) return;
-      const token = terminalGate.capture({
+      const token = backgroundJobs.capture({
         taskID,
         generation: generationAtProbeStart,
       });
       if (!token) return;
       try {
         await readSessionInfoForObservation(_ctx, token);
-        await terminalGate.reconcile({
+        await backgroundJobs.reconcile({
           taskID,
           generation: generationAtProbeStart,
         });
@@ -429,7 +415,7 @@ export function createTaskSessionManagerHook(
           // Freshness guard: only clean up when the board still holds the
           // generation the probe started against. A record replaced by a
           // same-ID relaunch (or already dropped) is not ours to delete.
-          const current = backgroundJobBoard.get(taskID);
+          const current = backgroundJobs.get(taskID);
           if (current?.generation !== generationAtProbeStart) {
             log(
               '[task-session-manager] skipped stale NotFound cleanup after same-ID relaunch',
@@ -451,9 +437,9 @@ export function createTaskSessionManagerHook(
           // The canonical full cleanup (input waits, idle tokens,
           // pending-call tracker, clearParent, task-context tracker,
           // snapshots) runs via the session.deleted event path.
-          options.backgroundJobSupervisor?.onSessionDeleted(taskID);
-          recordBackgroundJobSuppression(backgroundJobBoard, taskID);
-          backgroundJobBoard.drop(taskID);
+          backgroundJobs.onSessionDeleted(taskID);
+          backgroundJobs.recordSuppression(taskID);
+          backgroundJobs.drop(taskID);
           options.backgroundTaskConcurrency?.releaseTask(taskID);
           log(
             '[task-session-manager] rehydrated task no longer exists on host; tombstoned',
@@ -471,7 +457,7 @@ export function createTaskSessionManagerHook(
   const pendingCallTracker =
     options.pendingCallTracker ??
     createPendingCallTracker({
-      releaseLease: (lease) => backgroundJobBoard.releaseLease(lease),
+      releaseLease: (lease) => backgroundJobs.releaseLease(lease),
     });
   const taskContextTracker = createTaskContextTracker();
 
@@ -499,7 +485,7 @@ export function createTaskSessionManagerHook(
   let hasInputWait: (sessionID: string) => boolean = () => false;
 
   const idleReconciler = createIdleReconciler({
-    terminalGate,
+    backgroundJobs,
     reconcileInjectedTerminalJobs: (parentSessionID: string) =>
       reconcileInjectedTerminalJobs(injectionState, parentSessionID),
     idleReconcileDelayMs:
@@ -519,9 +505,8 @@ export function createTaskSessionManagerHook(
   });
   const runtimeStatusReconciler = createRuntimeStatusReconciler({
     input: _ctx,
-    backgroundJobBoard,
+    backgroundJobs,
     delayMs: options.runtimeStatusReconcileDelayMs,
-    terminalGate,
   });
 
   const idleSessionTokens = createIdleSessionTokens({
@@ -565,20 +550,18 @@ export function createTaskSessionManagerHook(
         // slot, but a recursive delete can arrive parent-first, and a child
         // mid-fallback is skipped entirely — release every child's slot here
         // so none is left holding capacity forever. Idempotent per taskID.
-        for (const child of backgroundJobBoard.list(sessionId)) {
+        for (const child of backgroundJobs.list(sessionId)) {
           options.backgroundTaskConcurrency?.releaseTask(child.taskID);
         }
-        options.backgroundJobSupervisor?.onSessionDeleted(sessionId);
+        backgroundJobs.onSessionDeleted(sessionId);
         const hardTimedOut =
-          backgroundJobBoard.field(sessionId, 'deadlineExceededAt') !==
-          undefined;
+          backgroundJobs.field(sessionId, 'deadlineExceededAt') !== undefined;
         if (!hardTimedOut) {
           rememberDeletedSession(sessionId);
-          backgroundJobBoard.drop(sessionId);
+          // Facade drop clears board state and supervisor timers together.
+          backgroundJobs.drop(sessionId);
         }
-        options.backgroundJobSupervisor?.clearParent(sessionId);
-        backgroundJobBoard.clearParent(sessionId);
-        if (!hardTimedOut) options.backgroundJobSupervisor?.drop(sessionId);
+        backgroundJobs.clearParent(sessionId);
       }
       terminalJobsInjectedByParent.delete(sessionId);
       pendingInjectedTerminalJobsByParent.delete(sessionId);
@@ -589,15 +572,14 @@ export function createTaskSessionManagerHook(
       // session; the board entries they referenced are being dropped too.
       pruneReopenCorrectionState(injectionState, sessionId);
       taskContextTracker.clearSession(sessionId);
-      taskContextTracker.prune(backgroundJobBoard);
+      taskContextTracker.prune(backgroundJobs);
       pendingCallTracker.clearSession(sessionId);
       clearChildInputWaitsForSession(sessionId);
     });
   }
 
   const injectionState: InjectionState = {
-    backgroundJobBoard,
-    terminalGate,
+    backgroundJobs,
     maxRetainedSnapshots: options.maxRetainedSnapshots,
     strategy: options.strategy ?? 'latest',
     boardInjection: options.boardInjection !== false,
@@ -623,10 +605,7 @@ export function createTaskSessionManagerHook(
   // Early session.created registrations belong to the pending native call,
   // not to the factory-local board that first observed them. Move them before
   // this generation can receive the task after-hook.
-  pendingCallTracker.adoptEarlyRegistrations(
-    backgroundJobBoard,
-    options.backgroundJobSupervisor,
-  );
+  pendingCallTracker.adoptEarlyRegistrations(backgroundJobs);
 
   return {
     markRevivedRunPending: (taskID: string): void => {
@@ -638,7 +617,7 @@ export function createTaskSessionManagerHook(
     contextFilesForTask: (taskID: string) =>
       taskContextTracker.contextFilesForPrompt(taskID),
     pruneTaskContext: (): void => {
-      taskContextTracker.prune(backgroundJobBoard);
+      taskContextTracker.prune(backgroundJobs);
     },
     beginUserWait: (sessionID: string): void => {
       inputWaits.beginUserWait(sessionID);
@@ -714,8 +693,7 @@ export function createTaskSessionManagerHook(
       handleToolExecuteBefore(input, output, {
         shouldManageSession: options.shouldManageSession,
         registerSessionAsOrchestrator: options.registerSessionAsOrchestrator,
-        backgroundJobBoard,
-        backgroundJobSupervisor: options.backgroundJobSupervisor,
+        backgroundJobs,
         backgroundTaskConcurrency: options.backgroundTaskConcurrency,
         getModelForAgent: options.getModelForAgent,
         getSessionModel: options.getSessionModel,
@@ -736,19 +714,17 @@ export function createTaskSessionManagerHook(
     ): Promise<void> => {
       await handleToolExecuteAfter(input, output, {
         directory: _ctx.directory,
-        backgroundJobBoard,
-        terminalGate,
-        backgroundJobSupervisor: options.backgroundJobSupervisor,
+        backgroundJobs,
         backgroundTaskConcurrency: options.backgroundTaskConcurrency,
         getModelForAgent: options.getModelForAgent,
         bindConcurrencyTicket: (taskID, pending) =>
           pending.concurrencyTicket?.bind(taskID),
         recordLifecycleSuppression: (taskID) =>
-          recordBackgroundJobSuppression(backgroundJobBoard, taskID),
+          backgroundJobs.recordSuppression(taskID),
         pendingCallTracker,
         taskContextTracker,
         clearRehydrateTombstone: (taskID) => {
-          clearBackgroundJobSuppression(backgroundJobBoard, taskID);
+          backgroundJobs.clearSuppression(taskID);
         },
         isStaleDeletedTaskOutput: (taskID, lifecycleEpoch) => {
           const deletionEpoch = rehydrateState.deletionEpochs.get(taskID);
@@ -786,7 +762,7 @@ export function createTaskSessionManagerHook(
 
       const rehydratedTaskIDs = rehydrateHistoricalRunningTasks(
         messages,
-        backgroundJobBoard,
+        backgroundJobs,
         options.shouldManageSession,
         options.registerSessionAsOrchestrator,
         rehydrateTombstones,
@@ -861,7 +837,7 @@ export function createTaskSessionManagerHook(
           // and strand a mid-fallback record in `running` forever.
           if (!options.isFallbackInProgress?.(sessionID)) {
             const hardTimedOut =
-              backgroundJobBoard.field(sessionID, 'deadlineExceededAt') !==
+              backgroundJobs.field(sessionID, 'deadlineExceededAt') !==
               undefined;
             if (!hardTimedOut) rememberDeletedSession(sessionID);
           }
@@ -870,7 +846,8 @@ export function createTaskSessionManagerHook(
 
       if (input.event.type === 'server.instance.disposed') {
         runtimeStatusReconciler.dispose();
-        if (!options.terminalGate) terminalGate.dispose();
+        // Dispose only a lifecycle this hook assembled itself.
+        if (!options.backgroundJobs) backgroundJobs.dispose();
       }
       return handleEvent(input, {
         inputWaits,
@@ -878,14 +855,12 @@ export function createTaskSessionManagerHook(
         options,
         idleReconciler,
         deferredInlineErrors,
-        backgroundJobBoard,
-        terminalGate,
+        backgroundJobs,
         pendingCallTracker,
         taskContextTracker,
         terminalJobsInjectedByParent,
         pendingInjectedTerminalJobsByParent,
         retainedBoardSnapshots: injectionState.retainedBoardSnapshots,
-        backgroundJobSupervisor: options.backgroundJobSupervisor,
         bindConcurrencyTicket: (taskID, pending) =>
           pending.concurrencyTicket?.bind(taskID),
         observeSyntheticTerminalPart: (part) =>

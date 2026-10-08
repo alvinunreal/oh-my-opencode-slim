@@ -11,7 +11,7 @@ import type { PluginInput } from '@opencode-ai/plugin';
 import {
   type BackgroundJobEvictedSession,
   isPrunableEvictedSession,
-} from './background-job-board';
+} from '../background-jobs';
 import { responseError, stringifyError } from './child-transcript';
 import { log } from './logger';
 import { withTimeout } from './session';

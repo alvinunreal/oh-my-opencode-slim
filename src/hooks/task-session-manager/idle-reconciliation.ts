@@ -1,4 +1,4 @@
-import type { BackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
+import type { BackgroundJobLifecycle } from '../../background-jobs';
 import { log } from '../../utils/logger';
 
 /**
@@ -14,7 +14,7 @@ const MAX_DEFERRED_ERROR_RENEWALS = 5;
  * exception is the deferred-error backstop below, whose whole job is to
  * outlive the fallback window that gate observations cannot see. */
 export function createIdleReconciler(options: {
-  terminalGate: BackgroundJobTerminalGate;
+  backgroundJobs: BackgroundJobLifecycle;
   reconcileInjectedTerminalJobs: (parentSessionID: string) => void;
   idleReconcileDelayMs: number;
   isFallbackInProgress?: (sessionID: string) => boolean;
@@ -52,10 +52,10 @@ export function createIdleReconciler(options: {
     error?: string,
   ): void {
     const run = { taskID: sessionID, generation };
-    const token = options.terminalGate.capture(run);
+    const token = options.backgroundJobs.capture(run);
     if (!token) return;
     // A host event is a candidate, not a substitute for the current runtime.
-    const observation = options.terminalGate.observe(token, {
+    const observation = options.backgroundJobs.observe(token, {
       kind: 'quiescent',
       origin: 'session.idle',
       readStartedAt: token.readStartedAt,
@@ -64,7 +64,7 @@ export function createIdleReconciler(options: {
     if (observation.kind === 'stale') return;
     // Background reconciliation is fail-soft: a failure must be logged
     // and swallowed, never escape as an unhandled rejection.
-    void options.terminalGate
+    void options.backgroundJobs
       .reconcile(
         run,
         error ? { kind: 'session-error', message: error } : { kind: 'inspect' },
@@ -95,7 +95,7 @@ export function createIdleReconciler(options: {
   ): void {
     if (timers.has(sessionID)) return;
     const run = { taskID: sessionID, generation };
-    const token = options.terminalGate.capture(run);
+    const token = options.backgroundJobs.capture(run);
     if (!token) return;
     let renewals = 0;
     const fire = () => {
@@ -113,7 +113,7 @@ export function createIdleReconciler(options: {
       if (error === undefined) return;
       // A host event is a candidate, not a substitute for the current
       // runtime; a stale token (relaunch, live busy) skips the publish.
-      const observation = options.terminalGate.observe(token, {
+      const observation = options.backgroundJobs.observe(token, {
         kind: 'quiescent',
         origin: 'session.idle',
         readStartedAt: token.readStartedAt,
@@ -122,7 +122,7 @@ export function createIdleReconciler(options: {
       if (observation.kind === 'stale') return;
       // Background reconciliation is fail-soft: a failure must be logged
       // and swallowed, never escape as an unhandled rejection.
-      void options.terminalGate
+      void options.backgroundJobs
         .reconcile(run, { kind: 'session-error', message: error })
         .catch((err) => {
           log(

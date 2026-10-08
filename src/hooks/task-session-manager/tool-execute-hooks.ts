@@ -5,22 +5,21 @@
  * reusable/recoverable task_id resolution) and `tool.execute.after`
  * (read context tracking, task launch registration/update from output).
  */
-import type {
-  BackgroundJobStore,
-  BackgroundJobSupervisor,
-  BackgroundTaskConcurrency,
-  ContextFile,
-} from '../../utils';
+
+import type { BackgroundJobRecord } from '../../background-jobs';
 import {
+  type BackgroundJobLifecycle,
+  type ContextFile,
   deriveFullObjective,
   deriveTaskSessionLabel,
+} from '../../background-jobs';
+import type { BackgroundTaskConcurrency } from '../../utils';
+import {
   maskTaskOutputStructure,
   parseTaskIdFromTaskOutput,
   parseTaskLaunchOutput,
   parseTaskStatusOutput,
 } from '../../utils';
-import type { BackgroundJobRecord } from '../../utils/background-job-board';
-import type { BackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
 import { isRecord as isObjectRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
 import { controlParamName } from '../../v2/adapters';
@@ -124,20 +123,19 @@ export async function handleToolExecuteBefore(
   deps: {
     shouldManageSession: (sessionID: string) => boolean;
     registerSessionAsOrchestrator?: (sessionID: string) => void;
-    backgroundJobBoard: BackgroundJobStore;
+    backgroundJobs: BackgroundJobLifecycle;
     pendingCallTracker: {
       add(call: PendingTaskCall): void;
       take(
         callID?: string,
         sessionID?: string,
-        ownerBoard?: BackgroundJobStore,
+        ownerBoard?: BackgroundJobLifecycle,
         options?: { recordConsumed?: boolean },
       ): PendingTaskCall | undefined;
       release?(call: PendingTaskCall): void;
       pendingCallId(sessionID?: string, callID?: string): string;
     };
     taskContextTracker: { pendingManagedTaskIds: Set<string> };
-    backgroundJobSupervisor?: BackgroundJobSupervisor;
     backgroundTaskConcurrency?: BackgroundTaskConcurrency;
     getModelForAgent?: (
       agentType: string,
@@ -265,7 +263,7 @@ export async function handleToolExecuteBefore(
     label,
     background,
     lifecycleEpoch: deps.getLifecycleEpoch?.() ?? 0,
-    releaseLease: (lease) => deps.backgroundJobBoard.releaseLease(lease),
+    releaseLease: (lease) => deps.backgroundJobs.releaseLease(lease),
   };
   pendingCall.fullObjective = deriveFullObjective({
     description:
@@ -275,19 +273,19 @@ export async function handleToolExecuteBefore(
   if (typeof args.task_id === 'string' && args.task_id.trim() !== '') {
     const requested = args.task_id.trim();
     let remembered =
-      deps.backgroundJobBoard.resolveReusable(
+      deps.backgroundJobs.resolveReusable(
         input.sessionID,
         requested,
         agentType,
       ) ??
-      deps.backgroundJobBoard.resolveRecoverable(
+      deps.backgroundJobs.resolveRecoverable(
         input.sessionID,
         requested,
         agentType,
       );
 
     if (!remembered) {
-      const knownManagedTask = deps.backgroundJobBoard.resolve(
+      const knownManagedTask = deps.backgroundJobs.resolve(
         input.sessionID,
         requested,
       );
@@ -328,7 +326,7 @@ export async function handleToolExecuteBefore(
             );
           }
           if (adoption === 'adopted') {
-            remembered = deps.backgroundJobBoard.resolveReusable(
+            remembered = deps.backgroundJobs.resolveReusable(
               input.sessionID,
               requested,
               agentType,
@@ -345,7 +343,7 @@ export async function handleToolExecuteBefore(
               `${pluginDisposedMessage()} No session was created.`,
             );
           }
-          const restored = deps.backgroundJobBoard.resolve(
+          const restored = deps.backgroundJobs.resolve(
             input.sessionID,
             requested,
           );
@@ -382,7 +380,7 @@ export async function handleToolExecuteBefore(
       if (deps.isDisposed?.()) {
         throw new Error(`${pluginDisposedMessage()} No session was created.`);
       }
-      const relaunchLease = deps.backgroundJobBoard.acquireRelaunchLease(
+      const relaunchLease = deps.backgroundJobs.acquireRelaunchLease(
         remembered.taskID,
         remembered.generation,
       );
@@ -392,12 +390,12 @@ export async function handleToolExecuteBefore(
         );
       }
       if (deps.isDisposed?.()) {
-        deps.backgroundJobBoard.releaseLease(relaunchLease);
+        deps.backgroundJobs.releaseLease(relaunchLease);
         throw new Error(`${pluginDisposedMessage()} No session was created.`);
       }
       args.task_id = remembered.taskID;
       deps.taskContextTracker.pendingManagedTaskIds.add(remembered.taskID);
-      deps.backgroundJobBoard.markUsed(input.sessionID, remembered.taskID);
+      deps.backgroundJobs.markUsed(input.sessionID, remembered.taskID);
       pendingCall.resumedTaskId = remembered.taskID;
       pendingCall.relaunchLease = relaunchLease;
     }
@@ -414,7 +412,7 @@ export async function handleToolExecuteBefore(
     const objectiveKey = normalizeObjectiveKey(
       pendingCall.fullObjective ?? label,
     );
-    const duplicate = deps.backgroundJobBoard
+    const duplicate = deps.backgroundJobs
       .list(input.sessionID)
       .find(
         (job) =>
@@ -435,7 +433,7 @@ export async function handleToolExecuteBefore(
 
   if (deps.isDisposed?.()) {
     if (pendingCall.relaunchLease) {
-      deps.backgroundJobBoard.releaseLease(pendingCall.relaunchLease);
+      deps.backgroundJobs.releaseLease(pendingCall.relaunchLease);
       pendingCall.relaunchLease = undefined;
     }
     throw new Error(`${pluginDisposedMessage()} No session was created.`);
@@ -447,9 +445,7 @@ export async function handleToolExecuteBefore(
       // task already holds an admission slot. Waiting for another one while
       // the queue is saturated would deadlock — this session could never
       // finish, so its own slot could never be released.
-      const isManagedTask = deps.backgroundJobBoard
-        .taskIDs()
-        .has(input.sessionID);
+      const isManagedTask = deps.backgroundJobs.taskIDs().has(input.sessionID);
       if (!isManagedTask) {
         const ticket = deps.backgroundTaskConcurrency.acquire({
           model: deps.getModelForAgent?.(
@@ -495,26 +491,25 @@ export async function handleToolExecuteAfter(
   output: { output: unknown; metadata?: unknown },
   deps: {
     directory: string;
-    backgroundJobBoard: BackgroundJobStore;
-    terminalGate: BackgroundJobTerminalGate;
+    backgroundJobs: BackgroundJobLifecycle;
     pendingCallTracker: {
       take(
         callID?: string,
         sessionID?: string,
-        ownerBoard?: BackgroundJobStore,
+        ownerBoard?: BackgroundJobLifecycle,
         options?: { recordConsumed?: boolean },
       ): PendingTaskCall | undefined;
       takeByTaskID(
         sessionID: string,
         taskID: string,
-        ownerBoard?: BackgroundJobStore,
+        ownerBoard?: BackgroundJobLifecycle,
       ): PendingTaskCall | undefined;
       takeUnresolvedFirstMatch(
         sessionID: string,
         selection?: {
           identityTaskID?: string;
           agentType?: string;
-          ownerBoard?: BackgroundJobStore;
+          ownerBoard?: BackgroundJobLifecycle;
         },
       ): PendingTaskCall | undefined;
       release?(call: PendingTaskCall): void;
@@ -525,7 +520,6 @@ export async function handleToolExecuteAfter(
       contextFilesForPrompt(taskId: string): ContextFile[];
       prune(board: { taskIDs(): Set<string> }): void;
     };
-    backgroundJobSupervisor?: BackgroundJobSupervisor;
     bindConcurrencyTicket?: (taskID: string, pending: PendingTaskCall) => void;
     backgroundTaskConcurrency?: BackgroundTaskConcurrency;
     getModelForAgent?: (
@@ -549,7 +543,7 @@ export async function handleToolExecuteAfter(
     if (input.sessionID) {
       const canTrack =
         deps.taskContextTracker.pendingManagedTaskIds.has(input.sessionID) ||
-        deps.backgroundJobBoard.taskIDs().has(input.sessionID);
+        deps.backgroundJobs.taskIDs().has(input.sessionID);
       if (canTrack) {
         deps.taskContextTracker.addContext(
           input.sessionID,
@@ -569,7 +563,7 @@ export async function handleToolExecuteAfter(
   let pending = deps.pendingCallTracker.take(
     exactCallID,
     exactCallID ? undefined : input.sessionID,
-    deps.backgroundJobBoard,
+    deps.backgroundJobs,
   );
   const exactCallConfirmed =
     exactCallID !== undefined && pending?.callId === exactCallID;
@@ -585,7 +579,7 @@ export async function handleToolExecuteAfter(
       pending = deps.pendingCallTracker.takeByTaskID(
         input.sessionID,
         identityTaskID,
-        deps.backgroundJobBoard,
+        deps.backgroundJobs,
       );
       if (pending) {
         childRefAllowed = true;
@@ -605,7 +599,7 @@ export async function handleToolExecuteAfter(
     // own output is authoritative, so drain the oldest eligible
     // pending through the guarded first-match fallback and let the
     // normal try/finally path release the ticket and process output.
-    const childRecord = deps.backgroundJobBoard.get(identityTaskID);
+    const childRecord = deps.backgroundJobs.get(identityTaskID);
     const childAgent =
       childRecord && childRecord.parentSessionID === input.sessionID
         ? childRecord.agent
@@ -615,7 +609,7 @@ export async function handleToolExecuteAfter(
       {
         identityTaskID,
         agentType: childAgent,
-        ownerBoard: deps.backgroundJobBoard,
+        ownerBoard: deps.backgroundJobs,
       },
     );
     if (pending) {
@@ -665,7 +659,7 @@ export async function handleToolExecuteAfter(
       // — the child is already running; registration below binds the
       // ticket and the terminal path releases it.
       if (deps.backgroundTaskConcurrency && !pending.concurrencyTicket) {
-        const isManagedTask = deps.backgroundJobBoard
+        const isManagedTask = deps.backgroundJobs
           .taskIDs()
           .has(pending.parentSessionId);
         if (!isManagedTask) {
@@ -702,7 +696,7 @@ export async function handleToolExecuteAfter(
       if (!record) return;
       deps.bindConcurrencyTicket?.(record.taskID, pending);
       deps.clearRehydrateTombstone?.(launch.taskID);
-      if (exactCallConfirmed) deps.backgroundJobSupervisor?.onLaunch(record);
+      if (exactCallConfirmed) deps.backgroundJobs.onLaunch(record);
       appendRegisteredChildRef(output, record, pending, childRefAllowed);
       log('[task-session-manager] background task launch registered', {
         taskID: record.taskID,
@@ -713,7 +707,7 @@ export async function handleToolExecuteAfter(
         state: record.state,
       });
       deps.taskContextTracker.pendingManagedTaskIds.add(launch.taskID);
-      deps.backgroundJobBoard.addContext(
+      deps.backgroundJobs.addContext(
         launch.taskID,
         deps.taskContextTracker.contextFilesForPrompt(launch.taskID),
       );
@@ -734,12 +728,12 @@ export async function handleToolExecuteAfter(
       deps.clearRehydrateTombstone?.(status.taskID);
       normalizeLateCancelledTaskOutput(
         output,
-        deps.backgroundJobBoard,
+        deps.backgroundJobs,
         controlParamName(deps.hostFlavor),
       );
       appendRegisteredChildRef(output, record, pending, childRefAllowed);
-      if (exactCallConfirmed) deps.backgroundJobSupervisor?.onLaunch(record);
-      await deps.terminalGate.reconcile(record, {
+      if (exactCallConfirmed) deps.backgroundJobs.onLaunch(record);
+      await deps.backgroundJobs.reconcile(record, {
         kind: 'output',
         status,
         origin: {
@@ -751,7 +745,7 @@ export async function handleToolExecuteAfter(
       });
       // The synchronous terminal listener owns release and context settlement.
       // The returned publication may already have been withdrawn while awaiting.
-      const current = deps.backgroundJobBoard.get(status.taskID);
+      const current = deps.backgroundJobs.get(status.taskID);
       const updated =
         current?.generation === record.generation ? current : undefined;
       log('[task-session-manager] foreground task status registered', {
@@ -788,8 +782,7 @@ export async function handleToolExecuteAfter(
         isMissingRememberedSessionError(output.output)
       ) {
         deps.recordLifecycleSuppression?.(pending.resumedTaskId);
-        deps.backgroundJobBoard.drop(pending.resumedTaskId);
-        deps.backgroundJobSupervisor?.drop(pending.resumedTaskId);
+        deps.backgroundJobs.drop(pending.resumedTaskId);
       }
       return;
     }
@@ -811,7 +804,7 @@ export async function handleToolExecuteAfter(
     // (identity-unresolved pendings paint nothing, per the identity rule),
     // and once promoted the child is supervised and context-tracked like
     // any parsed launch.
-    const promoted = deps.backgroundJobBoard.promoteProvisional(
+    const promoted = deps.backgroundJobs.promoteProvisional(
       taskId,
       pending.parentSessionId,
       pending.identityUnresolved
@@ -826,22 +819,22 @@ export async function handleToolExecuteAfter(
     if (promoted && !promoted.provisional) {
       deps.bindConcurrencyTicket?.(promoted.taskID, pending);
       if (exactCallConfirmed) {
-        deps.backgroundJobSupervisor?.onLaunch(promoted);
+        deps.backgroundJobs.onLaunch(promoted);
       }
       appendRegisteredChildRef(output, promoted, pending, childRefAllowed);
       deps.taskContextTracker.pendingManagedTaskIds.add(taskId);
     } else {
       deps.taskContextTracker.pendingManagedTaskIds.delete(taskId);
     }
-    deps.backgroundJobBoard.addContext(
+    deps.backgroundJobs.addContext(
       taskId,
       deps.taskContextTracker.contextFilesForPrompt(taskId),
     );
-    deps.taskContextTracker.prune(deps.backgroundJobBoard);
+    deps.taskContextTracker.prune(deps.backgroundJobs);
   } finally {
     deps.pendingCallTracker.release?.(pending);
     if (pending.relaunchLease) {
-      deps.backgroundJobBoard.releaseLease(pending.relaunchLease);
+      deps.backgroundJobs.releaseLease(pending.relaunchLease);
     }
     pending.concurrencyTicket?.releaseIfUnbound();
   }
@@ -853,14 +846,13 @@ function registerTaskOutputLaunch(
   exactCallConfirmed: boolean,
   hostConfirmedBackground: boolean,
   deps: {
-    backgroundJobBoard: BackgroundJobStore;
-    backgroundJobSupervisor?: BackgroundJobSupervisor;
+    backgroundJobs: BackgroundJobLifecycle;
     isStaleDeletedTaskOutput?: (
       taskID: string,
       lifecycleEpoch: number,
     ) => boolean;
   },
-): ReturnType<BackgroundJobStore['get']> {
+): ReturnType<BackgroundJobLifecycle['get']> {
   if (deps.isStaleDeletedTaskOutput?.(taskID, pending.lifecycleEpoch)) {
     log('[task-session-manager] ignored stale task output after deletion', {
       taskID,
@@ -873,7 +865,7 @@ function registerTaskOutputLaunch(
   const resumed = pending.resumedTaskId !== undefined;
   if (resumed && pending.resumedTaskId !== taskID) return undefined;
 
-  const existing = deps.backgroundJobBoard.get(taskID);
+  const existing = deps.backgroundJobs.get(taskID);
   const earlyRegistrationGeneration = pending.earlyRegistration?.generation;
   if (
     pending.earlyRegisteredTaskID === taskID &&
@@ -928,7 +920,7 @@ function registerTaskOutputLaunch(
   }
 
   try {
-    return deps.backgroundJobBoard.registerLaunch({
+    return deps.backgroundJobs.registerLaunch({
       taskID,
       parentSessionID: pending.parentSessionId,
       agent: pending.agentType,

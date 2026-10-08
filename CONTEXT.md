@@ -38,10 +38,12 @@ A glossary of the terms used in this project's domain. Definitions describe what
 
 ## Background Jobs
 
+All background-job machinery lives in one deep module, `src/background-jobs/`; every consumer goes through its single seam, the `backgroundJobs` object created by `createBackgroundJobLifecycle` (in `src/background-jobs/index.ts`).
+
 - **Background job** — A delegated specialist task that runs asynchronously; tracked until its result is reconciled into the orchestrator's response.
-- **Background Job Board** — The store of background job state and metadata.
-- **Background Job Coordinator** — The layer that owns background-job lifecycle policy and deferred-close state, writing through the board.
-- **Job state** — A background job's status: `running`, `completed`, `error`, `cancelled`, or `reconciled`. `reconciled` is a distinct post-consumption phase marking that a terminal job's result has been folded into the orchestrator's response; it is not a terminal outcome itself.
+- **Background Job Board** — The board state machine inside `src/background-jobs/board.ts`: job state, aliases, leases, generations, retention trims, and sole-writer terminal commits.
+- **Background Job Lifecycle (facade)** — The subscription/policy layer over the board (terminal notifications, deferred-close, identity events); what consumers receive from the seam.
+- **Job state** — A background job's status: `running`, `completed`, `error`, `cancelled`, `stopped`, or `reconciled`. `reconciled` is a distinct post-consumption phase marking that a terminal job's result has been folded into the orchestrator's response; it is not a terminal outcome itself.
 - **Job alias** — A short human-readable identifier for a background job (e.g., `fix-1`, `exp-2`).
 - **Terminal state** — A job state from which no further transition occurs (`completed`, `error`, `cancelled`).
 

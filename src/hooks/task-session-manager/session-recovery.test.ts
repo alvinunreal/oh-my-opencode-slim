@@ -1,17 +1,15 @@
 import { afterEach, describe, expect, jest, mock, spyOn, test } from 'bun:test';
+import {
+  FixtureBoard as BackgroundJobBoard,
+  boardFixture,
+  createBackgroundJobLifecycle,
+  createBackgroundJobTerminalGate,
+  getSuppressionTombstone,
+} from '../../background-jobs';
 import { createCancelTaskTool } from '../../tools/cancel-task';
 import { createTaskResultTool } from '../../tools/task-result';
 import { createTaskReviveTool } from '../../tools/task-revive';
 import { createTaskStatusTool } from '../../tools/task-status';
-import { BackgroundJobBoard } from '../../utils/background-job-board';
-import { BackgroundJobBoard as FixtureBoard } from '../../utils/background-job-fixture';
-import { getSuppressionTombstone } from '../../utils/background-job-persistence';
-import {
-  clearBackgroundJobSuppression,
-  getBackgroundJobLifecycleLedger,
-  recordBackgroundJobSuppression,
-} from '../../utils/background-job-store';
-import { createBackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
 import * as opencodeClient from '../../utils/opencode-client';
 import { registerPendingSessionPrune } from '../../utils/pending-session-prunes';
 import { createRevivedRunTracker } from './revived-run-tracker';
@@ -164,15 +162,20 @@ describe('master adoption and retained-round integration', () => {
     installClient();
     const hosted = host(options);
     const board = new BackgroundJobBoard();
+    // One facade per board: every consumer shares it so the gate binding
+    // (last bind wins) stays on this facade's gate.
+    const backgroundJobs = createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+    });
     const recover = createSessionRecovery({
       input: hosted.input as never,
-      backgroundJobBoard: board,
+      backgroundJobs,
       ...(options?.hostFlavor ? { hostFlavor: options.hostFlavor } : {}),
     });
     const register = mock(() => {});
     const tools = createTaskReviveTool({
       input: hosted.input as never,
-      backgroundJobBoard: board,
+      backgroundJobs,
       shouldManageSession: () => true,
       recoverRetainedSession: recover,
       revivedRunTracker: {
@@ -181,7 +184,14 @@ describe('master adoption and retained-round integration', () => {
         probe: async () => {},
       } as never,
     });
-    return { ...hosted, board, recover, register, revive: tools.task_revive };
+    return {
+      ...hosted,
+      board,
+      backgroundJobs,
+      recover,
+      register,
+      revive: tools.task_revive,
+    };
   }
 
   test('public revive keeps every non-adoptable host probe byte-identical', async () => {
@@ -214,11 +224,11 @@ describe('master adoption and retained-round integration', () => {
 
   test('a persisted terminal result wins before transcript import and retains its epoch', async () => {
     const fixture = reviveHost();
-    recordBackgroundJobSuppression(fixture.board, CHILD, {
+    fixture.backgroundJobs.recordSuppression(CHILD, {
       state: 'completed',
       resultSummary: 'saved old answer',
     });
-    const ledger = getBackgroundJobLifecycleLedger(fixture.board);
+    const ledger = fixture.board.ledger;
     const epoch = ledger.deletionEpochs.get(CHILD);
     await expect(
       fixture.revive.execute(
@@ -250,7 +260,7 @@ describe('master adoption and retained-round integration', () => {
       hostFlavor: 'v2',
       get: () => ({ error: { message: 'Session not found' } }),
     });
-    recordBackgroundJobSuppression(fixture.board, CHILD, {
+    fixture.backgroundJobs.recordSuppression(CHILD, {
       state: 'completed',
       resultSummary: 'saved old answer',
     });
@@ -295,7 +305,7 @@ describe('master adoption and retained-round integration', () => {
       hostFlavor: 'v2',
       get: () => ({ error: { message: 'NotFound' } }),
     });
-    recordBackgroundJobSuppression(fixture.board, CHILD, {
+    fixture.backgroundJobs.recordSuppression(CHILD, {
       state: 'completed',
       resultSummary: 'saved old answer',
     });
@@ -318,7 +328,7 @@ describe('master adoption and retained-round integration', () => {
         throw new Error('socket hang up');
       },
     });
-    recordBackgroundJobSuppression(fixture.board, CHILD, {
+    fixture.backgroundJobs.recordSuppression(CHILD, {
       state: 'completed',
       resultSummary: 'saved old answer',
     });
@@ -332,7 +342,7 @@ describe('master adoption and retained-round integration', () => {
       'saved old answer',
     );
     expect(fixture.promptAsync).not.toHaveBeenCalled();
-    clearBackgroundJobSuppression(fixture.board, CHILD);
+    fixture.backgroundJobs.clearSuppression(CHILD);
   });
 
   // The tombstone carries no parentID; a raw-ID caller whose parent history
@@ -346,7 +356,7 @@ describe('master adoption and retained-round integration', () => {
           ? { error: { message: 'Session not found' } }
           : { data: [] },
     });
-    recordBackgroundJobSuppression(fixture.board, CHILD, {
+    fixture.backgroundJobs.recordSuppression(CHILD, {
       state: 'completed',
       resultSummary: 'saved old answer',
     });
@@ -360,7 +370,7 @@ describe('master adoption and retained-round integration', () => {
       'saved old answer',
     );
     expect(fixture.promptAsync).not.toHaveBeenCalled();
-    clearBackgroundJobSuppression(fixture.board, CHILD);
+    fixture.backgroundJobs.clearSuppression(CHILD);
   });
 
   // A pairing visible in the window is positive proof of delegation even
@@ -376,7 +386,7 @@ describe('master adoption and retained-round integration', () => {
           ? { error: { message: 'Session not found' } }
           : { data: parentMessages(), page: { complete: false } },
     });
-    recordBackgroundJobSuppression(fixture.board, CHILD, {
+    fixture.backgroundJobs.recordSuppression(CHILD, {
       state: 'completed',
       resultSummary: 'saved old answer',
     });
@@ -397,7 +407,7 @@ describe('master adoption and retained-round integration', () => {
       hostFlavor: 'v2',
       get: () => ({ error: { message: 'Session not found' } }),
     });
-    recordBackgroundJobSuppression(fixture.board, CHILD);
+    fixture.backgroundJobs.recordSuppression(CHILD);
     const message = await fixture.revive
       .execute({ task_id: CHILD, prompt: 'continue' }, context as never)
       .catch((error: Error) => error.message);
@@ -427,7 +437,7 @@ describe('master adoption and retained-round integration', () => {
               },
             },
     });
-    recordBackgroundJobSuppression(fixture.board, CHILD, {
+    fixture.backgroundJobs.recordSuppression(CHILD, {
       state: 'completed',
       resultSummary: 'saved old answer',
     });
@@ -613,7 +623,9 @@ describe('session recovery', () => {
     const board = new BackgroundJobBoard();
     const recover = createSessionRecovery({
       input: input as never,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       stableStoppedMs: 0,
       stopConfirmationBudgetMs: 0,
     });
@@ -673,7 +685,9 @@ describe('session recovery', () => {
     expect(
       await createSessionRecovery({
         input: input as never,
-        backgroundJobBoard: board,
+        backgroundJobs: createBackgroundJobLifecycle({
+          backgroundJobBoard: board,
+        }),
         stableStoppedMs: 0,
       })({ parentSessionID: PARENT, requested: CHILD }),
     ).toMatchObject({ kind: 'recovered' });
@@ -710,7 +724,9 @@ describe('session recovery', () => {
     const board = new BackgroundJobBoard();
     await createSessionRecovery({
       input: input as never,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       stableStoppedMs: 0,
       stopConfirmationBudgetMs: 0,
     })({ parentSessionID: PARENT, requested: CHILD });
@@ -734,7 +750,9 @@ describe('session recovery', () => {
       const board = new BackgroundJobBoard();
       const recover = createSessionRecovery({
         input: fixture.input as never,
-        backgroundJobBoard: board,
+        backgroundJobs: createBackgroundJobLifecycle({
+          backgroundJobBoard: board,
+        }),
         stableStoppedMs: 0,
       });
       const result = await recover({
@@ -761,7 +779,9 @@ describe('session recovery', () => {
     const board = new BackgroundJobBoard();
     const result = await createSessionRecovery({
       input: input as never,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       stableStoppedMs: 0,
     })({ parentSessionID: PARENT, requested: CHILD });
     expect(result.kind).toBe('recovered');
@@ -783,7 +803,9 @@ describe('session recovery', () => {
     const board = new BackgroundJobBoard();
     const result = await createSessionRecovery({
       input: input as never,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       stableStoppedMs: 0,
     })({ parentSessionID: PARENT, requested: CHILD });
     expect(result.kind).toBe('refused');
@@ -813,13 +835,16 @@ describe('session recovery', () => {
         };
       },
     });
+    const backgroundJobs = createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+    });
     const pending = createSessionRecovery({
       input: input as never,
-      backgroundJobBoard: board,
+      backgroundJobs,
       stableStoppedMs: 0,
     })({ parentSessionID: PARENT, requested: CHILD });
     await seen;
-    recordBackgroundJobSuppression(board, CHILD);
+    backgroundJobs.recordSuppression(CHILD);
     const result = await pending;
     expect(result.kind).toBe('refused');
     expect(board.get(CHILD)).toBeUndefined();
@@ -848,7 +873,9 @@ describe('session recovery', () => {
     });
     const pending = createSessionRecovery({
       input: input as never,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       stableStoppedMs: 0,
     })({ parentSessionID: PARENT, requested: CHILD });
     await seen;
@@ -868,7 +895,9 @@ describe('session recovery', () => {
     const other = new BackgroundJobBoard();
     const foreign = createSessionRecovery({
       input: input as never,
-      backgroundJobBoard: other,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: other,
+      }),
       stableStoppedMs: 0,
     })({ parentSessionID: PARENT, requested: CHILD });
     other.registerLaunch({
@@ -924,7 +953,9 @@ describe('session recovery', () => {
     });
     const recover = createSessionRecovery({
       input: input as never,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       stableStoppedMs: 0,
     });
     expect(
@@ -993,7 +1024,9 @@ describe('session recovery', () => {
     const board = new BackgroundJobBoard();
     const recover = createSessionRecovery({
       input: input as never,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       stableStoppedMs: 0,
     });
     expect(
@@ -1012,12 +1045,16 @@ describe('session recovery', () => {
     });
     const result = await createTaskResultTool({
       input: input as never,
-      backgroundJobBoard: board,
-      terminalGate: gate,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+        gate,
+      }),
     }).task_result.execute({ task_id: CHILD }, context);
     const status = await createTaskStatusTool({
       input: input as never,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
     }).task_status.execute({ task_id: CHILD }, context);
     expect(result).toBe('LAB-MARKER');
     expect(String(status)).toContain('state: completed');
@@ -1030,13 +1067,17 @@ describe('session recovery', () => {
     });
     const tools = createTaskReviveTool({
       input: input as never,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+        gate,
+      }),
       shouldManageSession: () => true,
-      terminalGate: gate,
       revivedRunTracker: createRevivedRunTracker({
         input: input as never,
-        backgroundJobBoard: board,
-        terminalGate: gate,
+        backgroundJobs: createBackgroundJobLifecycle({
+          backgroundJobBoard: board,
+          gate,
+        }),
       }),
       baselineTimeoutMs: 1000,
     });
@@ -1061,17 +1102,23 @@ describe('session recovery', () => {
     });
     const tools = createTaskReviveTool({
       input: input as never,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+        gate: terminalGate,
+      }),
       shouldManageSession: () => true,
-      terminalGate,
       revivedRunTracker: createRevivedRunTracker({
         input: input as never,
-        backgroundJobBoard: board,
-        terminalGate,
+        backgroundJobs: createBackgroundJobLifecycle({
+          backgroundJobBoard: board,
+          gate: terminalGate,
+        }),
       }),
       recoverRetainedSession: createSessionRecovery({
         input: input as never,
-        backgroundJobBoard: board,
+        backgroundJobs: createBackgroundJobLifecycle({
+          backgroundJobBoard: board,
+        }),
         stableStoppedMs: 0,
       }),
       baselineTimeoutMs: 1000,
@@ -1097,7 +1144,7 @@ describe('session recovery', () => {
   test('task_revive continues a known unreconciled completed session without task_result', async () => {
     installClient();
     const { input, promptAsync } = host();
-    const board = new FixtureBoard();
+    const board = new BackgroundJobBoard();
     board.registerLaunch({
       taskID: CHILD,
       parentSessionID: PARENT,
@@ -1114,15 +1161,19 @@ describe('session recovery', () => {
       backgroundJobBoard: board,
       input: input as never,
     });
+    // One facade per board: every consumer shares it so the gate binding
+    // (last bind wins) stays on this facade's gate.
+    const backgroundJobs = createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+      gate: terminalGate,
+    });
     const tools = createTaskReviveTool({
       input: input as never,
-      backgroundJobBoard: board,
+      backgroundJobs,
       shouldManageSession: () => true,
-      terminalGate,
       revivedRunTracker: createRevivedRunTracker({
         input: input as never,
-        backgroundJobBoard: board,
-        terminalGate,
+        backgroundJobs,
       }),
     });
     await tools.task_revive.execute(
@@ -1140,11 +1191,15 @@ describe('session recovery', () => {
     const board = new BackgroundJobBoard();
     const tools = createCancelTaskTool({
       input: input as never,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       shouldManageSession: () => true,
       recoverRetainedSession: createSessionRecovery({
         input: input as never,
-        backgroundJobBoard: board,
+        backgroundJobs: createBackgroundJobLifecycle({
+          backgroundJobBoard: board,
+        }),
         stableStoppedMs: 0,
       }),
     });
@@ -1163,11 +1218,15 @@ describe('session recovery', () => {
     const board = new BackgroundJobBoard();
     const tools = createCancelTaskTool({
       input: input as never,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       shouldManageSession: () => true,
       recoverRetainedSession: createSessionRecovery({
         input: input as never,
-        backgroundJobBoard: board,
+        backgroundJobs: createBackgroundJobLifecycle({
+          backgroundJobBoard: board,
+        }),
         stableStoppedMs: 0,
       }),
     });
@@ -1193,7 +1252,9 @@ describe('native task refusal and child ref suffix', () => {
         { args },
         {
           shouldManageSession: () => true,
-          backgroundJobBoard: board,
+          backgroundJobs: createBackgroundJobLifecycle({
+            backgroundJobBoard: board,
+          }),
           pendingCallTracker: {
             add() {},
             take: () => undefined,
@@ -1220,7 +1281,7 @@ describe('native task refusal and child ref suffix', () => {
         },
         {
           shouldManageSession: () => true,
-          backgroundJobBoard: new BackgroundJobBoard(),
+          backgroundJobs: createBackgroundJobLifecycle(),
           pendingCallTracker: {
             add() {},
             take: () => undefined,
@@ -1243,8 +1304,9 @@ describe('native task refusal and child ref suffix', () => {
       output,
       {
         directory: '/test/project',
-        backgroundJobBoard: board,
-        terminalGate: {} as never,
+        backgroundJobs: createBackgroundJobLifecycle({
+          backgroundJobBoard: board,
+        }),
         pendingCallTracker: {
           take: () => ({
             callId: 'call_2',

@@ -1,19 +1,21 @@
 import { describe, expect, mock, spyOn, test } from 'bun:test';
+import { BackgroundJobBoard as ProductionBoard } from './board';
+import { FixtureBoardProxy as BackgroundJobBoard } from './fixture';
+import { createBackgroundJobLifecycle } from './lifecycle';
 import {
   AGED_ENTRY_RENDER_TTL_MS,
   type BackgroundJobEvictedSession,
   isPrunableEvictedSession,
-  BackgroundJobBoard as ProductionBoard,
   STATUS_UNCERTAIN_DEMOTE_AFTER_MS,
-} from './background-job-board';
-import { BackgroundJobCoordinator } from './background-job-coordinator';
-import { BackgroundJobBoard } from './background-job-fixture';
+} from './types';
 
 describe('BackgroundJobBoard', () => {
   test('T-B: silent adoption does not outrank known F2 sessions', () => {
     const clock = spyOn(Date, 'now').mockReturnValue(1000);
     const board = new BackgroundJobBoard({ maxReusablePerAgent: 2 });
-    const coordinator = new BackgroundJobCoordinator(board);
+    const coordinator = createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+    });
     const complete = (taskID: string, now: number) => {
       board.registerLaunch({
         taskID,

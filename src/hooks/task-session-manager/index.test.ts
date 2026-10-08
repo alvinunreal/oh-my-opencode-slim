@@ -7,22 +7,22 @@ import {
   spyOn,
   test,
 } from 'bun:test';
+import {
+  FixtureBoard as BackgroundJobBoard,
+  DefaultBackgroundJobSupervisor as BackgroundJobSupervisor,
+  type BackgroundJobTerminalGate,
+  createBackgroundJobLifecycle,
+  createBackgroundJobTerminalGate,
+  BackgroundJobBoard as ProductionBoard,
+} from '../../background-jobs';
 import { DEFAULT_MAX_RETAINED_SNAPSHOTS } from '../../config/constants';
 import { SessionLifecycle } from '../../hooks/session-lifecycle';
 import { createTaskReviveTool } from '../../tools/task-revive';
 import {
-  BackgroundJobSupervisor,
   BackgroundTaskConcurrency,
   createInternalAgentTextPart,
-  getBackgroundJobLifecycleLedger,
-  BackgroundJobBoard as ProductionBoard,
   SLIM_INTERNAL_INITIATOR_MARKER,
 } from '../../utils';
-import { BackgroundJobBoard } from '../../utils/background-job-fixture';
-import {
-  type BackgroundJobTerminalGate,
-  createBackgroundJobTerminalGate,
-} from '../../utils/background-job-terminal-gate';
 import * as logger from '../../utils/logger';
 import { DEFAULT_RUNTIME_SESSION_STATUS_TIMEOUT_MS } from '../../utils/session-runtime-status';
 import {
@@ -168,66 +168,82 @@ function createHook(options?: HookOptions) {
       ],
     });
   }
-  const hook = createTaskSessionManagerHook(
-    {
-      client: {
-        session: {
-          status: mock(async () => ({ data: options?.sessionStatus ?? {} })),
-          messages: async ({ path }: { path: { id: string } }) => {
-            const transcript = transcripts.get(path.id);
-            if (!transcript) return undefined;
-            const generation = options?.backgroundJobBoard?.get(
-              path.id,
-            )?.generation;
-            return {
-              data:
-                transcript.generation !== undefined &&
-                generation !== transcript.generation
-                  ? [
-                      ...transcript.data,
-                      {
-                        info: {
-                          role: 'assistant',
-                          id: `pending-${generation}`,
-                        },
-                        parts: [],
+  const input = {
+    client: {
+      session: {
+        status: mock(async () => ({ data: options?.sessionStatus ?? {} })),
+        messages: async ({ path }: { path: { id: string } }) => {
+          const transcript = transcripts.get(path.id);
+          if (!transcript) return undefined;
+          const generation = options?.backgroundJobBoard?.get(
+            path.id,
+          )?.generation;
+          return {
+            data:
+              transcript.generation !== undefined &&
+              generation !== transcript.generation
+                ? [
+                    ...transcript.data,
+                    {
+                      info: {
+                        role: 'assistant',
+                        id: `pending-${generation}`,
                       },
-                    ]
-                  : transcript.data,
-            };
-          },
-          ...options?.sessionClient,
+                      parts: [],
+                    },
+                  ]
+                : transcript.data,
+          };
         },
+        ...options?.sessionClient,
       },
-      directory: '/tmp',
-      worktree: '/tmp',
-    } as never,
-    {
-      maxSessionsPerAgent: 2,
-      maxRetainedSnapshots:
-        options?.maxRetainedSnapshots ?? DEFAULT_MAX_RETAINED_SNAPSHOTS,
-      strategy: options?.strategy,
-      readContextMinLines: options?.readContextMinLines,
-      readContextMaxFiles: options?.readContextMaxFiles,
-      backgroundJobBoard: options?.backgroundJobBoard,
-      terminalGate: options?.terminalGate,
-      hostOutcomeClock: options?.hostOutcomeClock,
-      backgroundJobSupervisor: options?.backgroundJobSupervisor,
-      backgroundTaskConcurrency: options?.backgroundTaskConcurrency,
-      pendingCallTracker: options?.pendingCallTracker,
-      getModelForAgent: options?.getModelForAgent,
-      shouldManageSession: options?.shouldManageSession ?? (() => true),
-      registerSessionAsOrchestrator: options?.registerSessionAsOrchestrator,
-      isFallbackInProgress: options?.isFallbackInProgress,
-      willAttemptFallback: options?.willAttemptFallback,
-      coordinator: options?.coordinator,
-      idleReconcileDelayMs: options?.idleReconcileDelayMs,
-      runtimeStatusReconcileDelayMs: options?.runtimeStatusReconcileDelayMs,
-      hostFlavor: options?.hostFlavor,
-      isDisposed: options?.isDisposed,
-      boardInjection: options?.boardInjection,
     },
-  );
+    directory: '/tmp',
+    worktree: '/tmp',
+  } as never;
+  // One deep-module facade: combine the test's board/gate/supervisor
+  // pieces so the collapsed hook option sees all three roles.
+  const backgroundJobs =
+    options?.backgroundJobBoard ||
+    options?.terminalGate ||
+    options?.backgroundJobSupervisor
+      ? createBackgroundJobLifecycle({
+          input,
+          ...(options?.hostOutcomeClock
+            ? { hostOutcomeClock: options.hostOutcomeClock }
+            : {}),
+          ...(options?.backgroundJobBoard
+            ? { backgroundJobBoard: options.backgroundJobBoard }
+            : {}),
+          ...(options?.terminalGate ? { gate: options.terminalGate } : {}),
+          ...(options?.backgroundJobSupervisor
+            ? { supervisor: options.backgroundJobSupervisor }
+            : {}),
+        })
+      : undefined;
+  const hook = createTaskSessionManagerHook(input, {
+    maxSessionsPerAgent: 2,
+    maxRetainedSnapshots:
+      options?.maxRetainedSnapshots ?? DEFAULT_MAX_RETAINED_SNAPSHOTS,
+    strategy: options?.strategy,
+    readContextMinLines: options?.readContextMinLines,
+    readContextMaxFiles: options?.readContextMaxFiles,
+    backgroundJobs,
+    hostOutcomeClock: options?.hostOutcomeClock,
+    backgroundTaskConcurrency: options?.backgroundTaskConcurrency,
+    pendingCallTracker: options?.pendingCallTracker,
+    getModelForAgent: options?.getModelForAgent,
+    shouldManageSession: options?.shouldManageSession ?? (() => true),
+    registerSessionAsOrchestrator: options?.registerSessionAsOrchestrator,
+    isFallbackInProgress: options?.isFallbackInProgress,
+    willAttemptFallback: options?.willAttemptFallback,
+    coordinator: options?.coordinator,
+    idleReconcileDelayMs: options?.idleReconcileDelayMs,
+    runtimeStatusReconcileDelayMs: options?.runtimeStatusReconcileDelayMs,
+    hostFlavor: options?.hostFlavor,
+    isDisposed: options?.isDisposed,
+    boardInjection: options?.boardInjection,
+  });
 
   return { hook, complete };
 }
@@ -6861,10 +6877,12 @@ describe('task-session-manager hook', () => {
             },
           },
         } as never,
-        backgroundJobBoard: board,
+        backgroundJobs: createBackgroundJobLifecycle({
+          backgroundJobBoard: board,
+          supervisor: { onLaunch } as never,
+        }),
         shouldManageSession: () => true,
         revivedRunTracker: tracker as never,
-        backgroundJobSupervisor: { onLaunch } as never,
         admissionTimeoutMs: 1_000,
       });
       try {
@@ -6881,7 +6899,7 @@ describe('task-session-manager hook', () => {
         expect(board.get('sibling') === undefined).toBe(
           deletedID === 'parent-1',
         );
-        const tombstones = getBackgroundJobLifecycleLedger(board).tombstones;
+        const tombstones = board.ledger.tombstones;
         expect(tombstones.has('child-1')).toBe(true);
         send.resolve({});
         await abortEntered.promise;
@@ -7976,7 +7994,7 @@ describe('task-session-manager hook', () => {
     // (only the processed-completion FENCE survives): the fence must skip
     // the replay cleanly BEFORE the deletion-epoch fail-closed branch can
     // mark the fresh running generation status-uncertain.
-    getBackgroundJobLifecycleLedger(board).syntheticTerminalOccurrences.clear();
+    board.ledger.syntheticTerminalOccurrences.clear();
 
     await hook['experimental.chat.messages.transform']({}, {
       messages: [
@@ -8225,9 +8243,7 @@ describe('task-session-manager hook', () => {
       },
     });
     const hostOrigin = [
-      ...getBackgroundJobLifecycleLedger(
-        board,
-      ).syntheticTerminalOccurrences.values(),
+      ...board.ledger.syntheticTerminalOccurrences.values(),
     ][0];
     if (!hostOrigin) throw new Error('host origin was not recorded');
 
@@ -8669,7 +8685,7 @@ describe('task-session-manager hook', () => {
     });
 
     board.drop('child-direct-drop');
-    const ledger = getBackgroundJobLifecycleLedger(board);
+    const ledger = board.ledger;
     expect(ledger.tombstones.has('child-direct-drop')).toBe(true);
 
     const historical = {

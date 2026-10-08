@@ -19,7 +19,7 @@ test('child idle preserves event provenance and requests runtime inspection', ()
   const calls: string[] = [];
   const token = { taskID: 'child', generation: 1, readStartedAt: 1 };
   const reconciler = createIdleReconciler({
-    terminalGate: {
+    backgroundJobs: {
       capture: () => token,
       observe: (_token: unknown, runtime: unknown) => {
         calls.push('observe');
@@ -50,7 +50,7 @@ test('child idle preserves event provenance and requests runtime inspection', ()
 test('parent reconciliation retains its independent delay and invalidation', async () => {
   const acknowledge = mock(() => {});
   const reconciler = createIdleReconciler({
-    terminalGate: {} as never,
+    backgroundJobs: {} as never,
     reconcileInjectedTerminalJobs: acknowledge,
     idleReconcileDelayMs: 1,
     hasInputWait: () => false,
@@ -72,7 +72,7 @@ test('deferred-error backstop renews while the fallback is in flight, then consu
   let deferred = 'rate limit exceeded';
   const consumed: string[] = [];
   const reconciler = createIdleReconciler({
-    terminalGate: gate as never,
+    backgroundJobs: gate as never,
     reconcileInjectedTerminalJobs: () => {},
     idleReconcileDelayMs: 5,
     isFallbackInProgress: () => fallbackInFlight,
@@ -112,7 +112,7 @@ test('deferred-error backstop renewal is bounded when the fallback never leaves 
   const { gate, reconciles } = fakeGate();
   const deferred = 'rate limit exceeded';
   const reconciler = createIdleReconciler({
-    terminalGate: gate as never,
+    backgroundJobs: gate as never,
     reconcileInjectedTerminalJobs: () => {},
     idleReconcileDelayMs: 2,
     // Stuck fallback: always claims to be in flight.
@@ -138,7 +138,7 @@ test('deferred-error backstop renewal is bounded when the fallback never leaves 
 test('deferred-error backstop skips the publish when nothing is deferred at fire time', async () => {
   const { gate, reconciles } = fakeGate();
   const reconciler = createIdleReconciler({
-    terminalGate: gate as never,
+    backgroundJobs: gate as never,
     reconcileInjectedTerminalJobs: () => {},
     idleReconcileDelayMs: 2,
     isFallbackInProgress: () => false,
@@ -159,7 +159,7 @@ test('deferred-error backstop skips the publish when nothing is deferred at fire
 test('busy cancels a pending deferred-error backstop', async () => {
   const { gate, reconciles } = fakeGate();
   const reconciler = createIdleReconciler({
-    terminalGate: gate as never,
+    backgroundJobs: gate as never,
     reconcileInjectedTerminalJobs: () => {},
     idleReconcileDelayMs: 10,
     isFallbackInProgress: () => false,

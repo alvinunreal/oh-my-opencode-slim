@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { BackgroundJobBoard } from './board';
 import {
   type BackgroundJobStorageBackend,
   clearSuppression,
@@ -7,13 +8,7 @@ import {
   loadInitialBackgroundJobPersistence,
   MAX_PERSISTED_TOMBSTONES,
   recordSuppression,
-} from './background-job-persistence';
-import {
-  BackgroundJobBoard,
-  clearBackgroundJobSuppression,
-  getBackgroundJobLifecycleLedger,
-  recordBackgroundJobSuppression,
-} from './index';
+} from './persistence';
 
 /** In-memory v2-storage backend double with cursor pagination. */
 function createMemoryBackend() {
@@ -85,11 +80,11 @@ describe('background-job persistence', () => {
     await loadInitialBackgroundJobPersistence();
 
     const freshBoard = new BackgroundJobBoard();
-    const ledger = getBackgroundJobLifecycleLedger(freshBoard);
+    const ledger = freshBoard.ledger;
     expect(ledger.tombstones.has('ses_roundtrip')).toBe(true);
     expect(ledger.deletionEpochs.get('ses_roundtrip')).toBe(1);
     // Next recorded epoch stays monotonic past the restored one.
-    recordBackgroundJobSuppression(freshBoard, 'ses_next');
+    freshBoard.recordSuppression('ses_next');
     expect(ledger.deletionEpochs.get('ses_next')).toBe(2);
   });
 
@@ -158,22 +153,18 @@ describe('background-job persistence', () => {
     await loadInitialBackgroundJobPersistence();
 
     const board = new BackgroundJobBoard();
-    recordBackgroundJobSuppression(board, 'ses_relaunch');
-    expect(
-      getBackgroundJobLifecycleLedger(board).tombstones.has('ses_relaunch'),
-    ).toBe(true);
+    board.recordSuppression('ses_relaunch');
+    expect(board.ledger.tombstones.has('ses_relaunch')).toBe(true);
     await flushWrites();
 
-    clearBackgroundJobSuppression(board, 'ses_relaunch');
+    board.clearSuppression('ses_relaunch');
     await flushWrites();
 
     // Simulated restart: the relaunch must NOT be ghost-skipped, but its
     // deletion epoch survives for generation fencing.
     configureBackgroundJobPersistence(backend);
     await loadInitialBackgroundJobPersistence();
-    const freshLedger = getBackgroundJobLifecycleLedger(
-      new BackgroundJobBoard(),
-    );
+    const freshLedger = new BackgroundJobBoard().ledger;
     expect(freshLedger.tombstones.has('ses_relaunch')).toBe(false);
     expect(freshLedger.deletionEpochs.get('ses_relaunch')).toBe(1);
   });
@@ -234,7 +225,7 @@ describe('background-job persistence', () => {
       description: 'fresh',
     });
     expect(record.alias).toBe('fix-1');
-    expect(getBackgroundJobLifecycleLedger(board).tombstones.size).toBe(0);
+    expect(board.ledger.tombstones.size).toBe(0);
   });
 
   test('tombstone entries self-cap at the recorded-time bound', async () => {

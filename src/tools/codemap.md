@@ -73,21 +73,21 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 ```
 1. Orchestrator invokes task_cancel
    ├─> Validates calling agent is 'orchestrator'
-   ├─> Resolves task_id to BackgroundJobBoard entry
+   ├─> Resolves task_id to BackgroundJobLifecycle entry
    ├─> Calls abortSessionWithTimeout() to signal cancellation
    ├─> Verifies session stopped via status polling
-   ├─> Marks job as cancelled in BackgroundJobBoard
+   ├─> Marks job as cancelled in BackgroundJobLifecycle
    └─> Returns cancellation confirmation while retaining the child session
 
 2. Orchestrator invokes task_message
-   ├─> Resolves task_id to a live BackgroundJobBoard entry
+   ├─> Resolves task_id to a live BackgroundJobLifecycle entry
    ├─> Acquires a generation-scoped message lease
    ├─> For v2 steering, verifies the tracked queued revival's exact user prompt is in the host transcript; absence or unreadable evidence refuses the write
    ├─> Queues a bounded no-reply message without interrupting or resuming the child (v2: optional `delivery` — `queue` waits for an idle boundary, `steer` offers it at the next supported step boundary; acceptance ≠ consumption)
    └─> Returns transport-confirmed queue status (v2 steer: acceptance at the next supported step boundary)
 
 3. Orchestrator invokes task_revive
-   ├─> Resolves the retained BackgroundJobBoard entry
+   ├─> Resolves the retained BackgroundJobLifecycle entry
    ├─> Cancels a running generation when necessary
    ├─> Launches a new prompt in the existing child session
    ├─> Registers the new generation and tracks its completion
@@ -109,7 +109,7 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 
 ```
 1. Agent invokes task_status
-   ├─> Resolves task_id to a BackgroundJobBoard entry
+   ├─> Resolves task_id to a BackgroundJobLifecycle entry
    ├─> Reads the bounded live session-status snapshot (session-runtime-status)
    ├─> summarizeTaskStatus() (task-policy.ts) prefers the live-confirmed host
    │   status; board state is only reported with explicit uncertainty
@@ -176,7 +176,7 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 | Dependency | Purpose |
 |------------|---------|
 | `@opencode-ai/plugin` | Tool schema and execution framework |
-| `BackgroundJobBoard` (`src/utils/`) | Background task tracking and cleanup |
+| `BackgroundJobLifecycle` (`src/background-jobs/`) | Background job lifecycle seam (board, gate, supervisor) for task tracking and cleanup |
 | `Session Runtime Status` (`src/utils/session-runtime-status.ts`) | Bounded live session-status reads for `task_status` |
 | `Config System` (`src/config/`) | ACP agent configurations and presets |
 | `TUI State` (`src/tui-state.ts`) | Preset visualization in terminal UI |
@@ -187,10 +187,10 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 
 ```
 Tools Layer → Background Layer
-├─ task_cancel → BackgroundJobBoard.resolve() → abortSessionWithTimeout()
-├─ task_message → BackgroundJobBoard.resolve() → no-reply prompt transport
-├─ task_revive → BackgroundJobBoard.resolve() → retained-session relaunch
-├─ task_status → BackgroundJobBoard.resolve() → live session-status snapshot
+├─ task_cancel → BackgroundJobLifecycle.resolve() → abortSessionWithTimeout()
+├─ task_message → BackgroundJobLifecycle.resolve() → no-reply prompt transport
+├─ task_revive → BackgroundJobLifecycle.resolve() → retained-session relaunch
+├─ task_status → BackgroundJobLifecycle.resolve() → live session-status snapshot
 └─> Returns lifecycle, transport, or status report
 
 Tools Layer → Config Layer

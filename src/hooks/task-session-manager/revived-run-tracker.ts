@@ -1,12 +1,10 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import type {
   BackgroundJobLease,
+  BackgroundJobLifecycle,
   BackgroundJobRecord,
   ContextFile,
-} from '../../utils/background-job-board';
-import type { BackgroundJobStore } from '../../utils/background-job-store';
-import type { BackgroundJobSupervisor } from '../../utils/background-job-supervisor';
-import type { BackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
+} from '../../background-jobs';
 import {
   fetchChildTranscript,
   responseError,
@@ -132,9 +130,7 @@ export interface RevivedRunTracker {
 
 export function createRevivedRunTracker(options: {
   input: PluginInput;
-  backgroundJobBoard: BackgroundJobStore;
-  terminalGate: BackgroundJobTerminalGate;
-  backgroundJobSupervisor?: BackgroundJobSupervisor;
+  backgroundJobs: BackgroundJobLifecycle;
   maxNotificationRetries?: number;
   notificationRetryDelayMs?: number;
   handoffExpiryMs?: number;
@@ -198,7 +194,7 @@ export function createRevivedRunTracker(options: {
   ): Promise<boolean> => {
     const run = runs.get(taskID);
     if (!run || run.generation !== generation || disposed) return false;
-    const result = await options.terminalGate.reconcile(run, {
+    const result = await options.backgroundJobs.reconcile(run, {
       kind: 'inspect',
     });
     if (disposed || runs.get(taskID) !== run || result.kind === 'stale')
@@ -210,7 +206,7 @@ export function createRevivedRunTracker(options: {
   const onTerminal = (record: BackgroundJobRecord): void => {
     const run = runs.get(record.taskID);
     if (!run || run.generation !== record.generation) return;
-    const current = options.backgroundJobBoard.get(record.taskID);
+    const current = options.backgroundJobs.get(record.taskID);
     if (
       !current ||
       current.generation !== record.generation ||
@@ -220,7 +216,7 @@ export function createRevivedRunTracker(options: {
       return;
     if (record.state === 'cancelled') {
       settleRun(run, record);
-      options.backgroundJobSupervisor?.onTerminal(record);
+      options.backgroundJobs.onTerminal(record);
       return;
     }
     if (record.state !== 'completed' && record.state !== 'error') {
@@ -229,7 +225,7 @@ export function createRevivedRunTracker(options: {
     // An answer attributed to our exact queued input proves admission even
     // if its transport acknowledgement was lost. Retire only our own lease.
     if (run.promptMessageID && run.admissionLease) {
-      options.backgroundJobBoard.releaseLease(run.admissionLease);
+      options.backgroundJobs.releaseLease(run.admissionLease);
       run.admissionLease = undefined;
     }
     finish(run, record);
@@ -256,18 +252,18 @@ export function createRevivedRunTracker(options: {
     }
     run.terminalState = record.state;
     settleRun(run, record);
-    options.backgroundJobSupervisor?.onTerminal(record);
+    options.backgroundJobs.onTerminal(record);
     if (run.notification.sent || run.notification.pending) return true;
     void notifyParent(run, record);
     return true;
   }
 
   function settleRun(run: RevivedRun, record: BackgroundJobRecord): void {
-    options.backgroundJobBoard.addContext(
+    options.backgroundJobs.addContext(
       record.taskID,
       options.contextFilesForPrompt?.(record.taskID) ?? [],
     );
-    options.backgroundJobBoard.addContext(record.taskID, record.contextFiles);
+    options.backgroundJobs.addContext(record.taskID, record.contextFiles);
     options.pruneContext?.();
     options.onSettled?.(run.taskID);
   }
@@ -277,7 +273,7 @@ export function createRevivedRunTracker(options: {
     record: BackgroundJobRecord,
     notification: RevivedRun['notification'],
   ): boolean {
-    const current = options.backgroundJobBoard.get(run.taskID);
+    const current = options.backgroundJobs.get(run.taskID);
     return (
       !disposed &&
       runs.get(run.taskID) === run &&
@@ -364,7 +360,7 @@ export function createRevivedRunTracker(options: {
       ) {
         return;
       }
-      lease = options.backgroundJobBoard.acquireTerminalNotificationLease(
+      lease = options.backgroundJobs.acquireTerminalNotificationLease(
         run.taskID,
         run.generation,
         record.terminalRevision,
@@ -397,7 +393,7 @@ export function createRevivedRunTracker(options: {
             !isCurrentNotification(run, record, notification) ||
             notification.sent ||
             !lease ||
-            !options.backgroundJobBoard.validateLease(lease)
+            !options.backgroundJobs.validateLease(lease)
           ) {
             throw new Error('Terminal notification is no longer current');
           }
@@ -465,7 +461,7 @@ export function createRevivedRunTracker(options: {
       });
       scheduleNotificationRetry(run, record, notification);
     } finally {
-      if (lease) options.backgroundJobBoard.releaseLease(lease);
+      if (lease) options.backgroundJobs.releaseLease(lease);
       notification.pending = false;
     }
   }
@@ -670,7 +666,7 @@ export function createRevivedRunTracker(options: {
     if (pending.expiryTimer) clearTimeout(pending.expiryTimer);
     pending.state = 'promoted';
     pending.expiryTimer = undefined;
-    const record = options.backgroundJobBoard.get(taskID);
+    const record = options.backgroundJobs.get(taskID);
     if (
       record?.state !== 'running' ||
       record.generation !== pending.generation ||
@@ -708,7 +704,7 @@ export function createRevivedRunTracker(options: {
     description: string;
   }): boolean {
     if (disposed) return false;
-    const record = options.backgroundJobBoard.get(input.taskID);
+    const record = options.backgroundJobs.get(input.taskID);
     if (
       record?.state !== 'running' ||
       record.generation !== input.generation ||
@@ -759,7 +755,7 @@ export function createRevivedRunTracker(options: {
       return true;
     }
     deleteHandoff(taskID);
-    const record = options.backgroundJobBoard.get(taskID);
+    const record = options.backgroundJobs.get(taskID);
     if (
       record?.state !== 'running' ||
       record.generation !== generation ||

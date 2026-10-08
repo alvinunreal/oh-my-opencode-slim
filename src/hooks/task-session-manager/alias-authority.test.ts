@@ -2,6 +2,10 @@ import { afterEach, describe, expect, jest, mock, spyOn, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+} from '../../background-jobs';
 import { OhMyOpenCodeLite } from '../../index';
 import { createCancelTaskTool } from '../../tools/cancel-task';
 import { createTaskMessageTool } from '../../tools/task-message';
@@ -9,7 +13,6 @@ import { createTaskReplyTool } from '../../tools/task-reply';
 import { createTaskResultTool } from '../../tools/task-result';
 import { createTaskReviveTool } from '../../tools/task-revive';
 import { createTaskStatusTool } from '../../tools/task-status';
-import { BackgroundJobBoard } from '../../utils/background-job-board';
 import * as opencodeClient from '../../utils/opencode-client';
 import { mapV2EventToV1 } from '../../v2/event-adapter';
 import {
@@ -435,7 +438,9 @@ describe('canonical alias reference', () => {
     expect(
       await createSessionRecovery({
         input: input as never,
-        backgroundJobBoard: board,
+        backgroundJobs: createBackgroundJobLifecycle({
+          backgroundJobBoard: board,
+        }),
         stableStoppedMs: 0,
       })({ parentSessionID: PARENT, requested: HOST }),
     ).toEqual({ kind: 'recovered', taskID: HOST });
@@ -516,7 +521,9 @@ describe('canonical alias reference', () => {
     const board = new BackgroundJobBoard();
     const result = await createSessionRecovery({
       input: input as never,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       stableStoppedMs: 0,
       stopConfirmationBudgetMs: 0,
     })({ parentSessionID: PARENT, requested: HOST });
@@ -547,7 +554,9 @@ describe('canonical alias reference', () => {
     }).resolveCanonical;
     const shared = {
       input: input as never,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       resolveCanonicalTaskRef,
       shouldManageSession: () => true,
     };
@@ -636,7 +645,9 @@ describe('canonical alias reference', () => {
           },
         },
       } as never,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       resolveCanonicalTaskRef,
     });
     const output = await status.task_status.execute(
@@ -715,7 +726,9 @@ describe('recorded host alias interleave', () => {
     });
     const failed = createTaskStatusTool({
       input: input as never,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       resolveCanonicalTaskRef: authority.resolveCanonical,
     }).task_status.execute({ task_id: 'fix-1' }, {
       sessionID: v1Parent,
@@ -806,7 +819,9 @@ describe('native create degrade', () => {
       { args },
       {
         shouldManageSession: () => true,
-        backgroundJobBoard: board,
+        backgroundJobs: createBackgroundJobLifecycle({
+          backgroundJobBoard: board,
+        }),
         pendingCallTracker: {
           add() {},
           take: () => undefined,

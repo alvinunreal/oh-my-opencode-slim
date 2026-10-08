@@ -4,7 +4,7 @@
 
 Centralized utilities and shared abstractions used across the oh-my-opencode-slim plugin. This folder provides:
 
-- **Background Job Lifecycle Management**: Singleton registry, lifecycle management, persistence, and supervision for background tasks spawned by sub-agents
+- **Background Job Lifecycle Management**: Owned by the dedicated `src/background-jobs/` deep module (single seam: `createBackgroundJobLifecycle`); utils retains only adjacent helpers (task concurrency, live status reads, transcript evidence, TUI projection)
 - **Session Management**: Session status tracking, metadata, selection, and timeout/abort utilities
 - **Background Task Concurrency**: Process-local admission scheduler for native background task launches
 - **Evidence & Transcript Handling**: Child session transcript evidence extraction, terminal evidence verification, and session info reads
@@ -17,18 +17,15 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 
 ### Core Abstractions
 
-- **BackgroundJobBoard** (`background-job-board.ts`): Singleton registry and lifecycle manager for background tasks with reusable session pool patterns, automatic cleanup, and reconciliation hooks
-- **BackgroundJobStore** (`background-job-store.ts`): Atomic state-store contract for terminal transitions, leases, and deadline claims implemented by the board
-- **BackgroundJobCoordinator** (`background-job-coordinator.ts`): Lifecycle policy layer between board and consumers with terminal-state subscriptions, deferred-close policy, and metadata shaping
-- **BackgroundJobSupervisor** (`background-job-supervisor.ts`): One-shot wall-clock deadline supervision with timer/generation/abort mechanics
+The background job board, coordinator (lifecycle facade), supervisor, terminal
+gate, persistence, and fixtures moved to `src/background-jobs/` (issue #1479);
+consumers import that package's single seam, not these utils.
+
 - **BackgroundTaskConcurrency** (`background-task-concurrency.ts`): Process-local admission scheduler for native background task launches with model/provider capacity tracking
 - **Runtime Session Status** (`session-runtime-status.ts`): Reads and validates the in-process OpenCode session-status map with absent/unknown distinction
 - **Session Metadata** (`session-metadata.ts`): Bounded session → agent/directory map with LRU eviction and active orchestrator protection
 - **Session Selection** (`session-selection.ts`): Session selection resolution with provenance tracking (host-persisted, observed-external, unknown)
 - **Child Transcript** (`child-transcript.ts`): Child session transcript evidence extraction and terminal evidence classification
-- **BackgroundJobTerminalGate** (`background-job-terminal-gate.ts`): Terminal evidence verification with host outcome attribution, evidence deadlines, and reading leases
-- **BackgroundJobPersistence** (`background-job-persistence.ts`): Persistence layer for lifecycle state with tombstone and epoch tracking across host restarts
-- **BackgroundJobFixture** (`background-job-fixture.ts`): Test-only board fixtures for adapter/state-machine tests (not for production)
 - **TUI Reusable Projection** (`tui-reusable-projection.ts`): Board → tui-state projection for sidebar reusable dot display
 - **JSDOM Probe** (`jsdom.ts`): JSDOM runtime detection without making it a prerequisite
 - **Redact** (`redact.ts`): Shape-based secret redaction for logging and task output structure masking
@@ -56,7 +53,6 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 
 ### Design Patterns
 
-- **Singleton**: BackgroundJobBoard is a singleton registry with global state
 - **Strategy**: Task parsing adapts to multiple output formats (XML tags, plain text headers)
 - **Observer**: Logger uses write queuing to avoid blocking
 - **Projection**: Board changes trigger TUI state projections
@@ -65,12 +61,11 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 ## Flow
 
 ### Background Job Lifecycle
-1. Agent launches a background task via BackgroundJobBoard.registerLaunch() (supervisor arms wall-clock deadline)
-2. Task runs and updates status via BackgroundJobBoard.updateStatus()
-3. On completion/error/cancellation, task is marked terminal and added to reusable pool; supervisor timers cleared
-4. Subsequent tasks reuse completed sessions via aliases
-5. Unused reusable sessions are automatically trimmed based on maxReusablePerAgent
-6. Deadline exceeded during execution → coordinator claims it, supervisor aborts, grace timer finalizes terminal state
+
+Now owned by `src/background-jobs/` (see its codemap). Utils-side participants:
+`background-task-concurrency.ts` gates launches, `session-runtime-status.ts`
+feeds runtime observations, and `child-transcript.ts` supplies transcript
+evidence classification.
 
 ### Session Selection Flow
 1. resolveCurrentSelection() reads session.get() with bounded timeout
@@ -99,20 +94,12 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 
 ### Consumers
 
-- **Council Agents** (`src/agents/council.ts`, `src/agents/council-agents.ts`):
-  - Uses BackgroundJobBoard for background task management
-  - Uses logger for debug and audit logging
-
 - **Multiplexer** (`src/multiplexer/`):
   - Uses session utilities for session operations
   - Uses logger for session lifecycle events
 
-- **Agents** (`src/agents/`):
-  - BackgroundJobBoard for launching and tracking background tasks
-  - Logger for agent-specific logging
-
 - **Main Plugin** (`src/index.ts`):
-  - Exports all utilities via `src/utils/index.ts`
+  - Exports utilities via `src/utils/index.ts`
   - Uses logger for plugin lifecycle events
 
 ### Dependencies
@@ -122,15 +109,11 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 
 ### Export Chain
 
-`src/utils/index.ts` re-exports all utilities, providing a single entry point:
+`src/utils/index.ts` re-exports the retained utilities, providing a single
+entry point:
 
 ```typescript
 export * from './agent-variant';
-export * from './background-job-board';
-export * from './background-job-coordinator';
-export * from './background-job-persistence';
-export * from './background-job-store';
-export * from './background-job-supervisor';
 export * from './background-task-concurrency';
 export * from './internal-initiator';
 export { initLogger, log } from './logger';
@@ -151,14 +134,7 @@ Session metadata, the opencode client accessor, and the type-only call-shape con
 |------|---------|
 | `index.ts` | Public API re-exporting most utilities |
 | `agent-variant.ts` | Agent name normalization and regex escaping |
-| `background-job-board.ts` | Background task registry and lifecycle manager |
-| `background-job-coordinator.ts` | Lifecycle policy and terminal-state subscriptions |
-| `background-job-store.ts` | Atomic store contract and terminal transitions |
-| `background-job-supervisor.ts` | Wall-clock deadline supervision and abort grace |
 | `background-task-concurrency.ts` | Process-local admission scheduler for background tasks |
-| `background-job-persistence.ts` | Persistence for lifecycle state (tombstones, deletion) |
-| `background-job-terminal-gate.ts` | Terminal evidence verification and attribution |
-| `background-job-fixture.ts` | Test-only board fixtures for adapter/state-machine tests |
 | `tui-reusable-projection.ts` | Board → tui-state projection for sidebar reusable dots |
 | `session.ts` | Session timeout, abort, and model-reference utilities |
 | `session-metadata.ts` | Bounded session → agent/directory store |

@@ -1,6 +1,9 @@
 import { afterEach, expect, mock, test } from 'bun:test';
-import { BackgroundJobBoard } from '../../utils/background-job-fixture';
-import { createBackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
+import {
+  FixtureBoard as BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+  createBackgroundJobTerminalGate,
+} from '../../background-jobs';
 import { createRuntimeStatusReconciler } from './runtime-status-reconciliation';
 
 const cleanup: Array<() => void> = [];
@@ -23,8 +26,10 @@ function harness(status?: () => Promise<unknown>) {
   });
   const reconciler = createRuntimeStatusReconciler({
     input,
-    backgroundJobBoard: board,
-    terminalGate: gate,
+    backgroundJobs: createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+      gate,
+    }),
     delayMs: 10,
     statusTimeoutMs: 5,
   });

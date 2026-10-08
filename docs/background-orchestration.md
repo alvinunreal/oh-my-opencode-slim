@@ -454,6 +454,13 @@ rather than "work complete". It tracks running task IDs, exposes recent work in
 the background job board, updates aliases from task results, and keeps
 multiplexer panes attached while the parent orchestrator continues scheduling.
 
+Implementation note: all of this job-board machinery — board state machine,
+terminal-publication gate, wall-clock supervisor, persistence, and lifecycle
+policy — lives in one internal deep module, `src/background-jobs/`. The plugin
+composes it once through `createBackgroundJobLifecycle` and every hook and task
+tool interacts with it through that single seam; there is no second import
+surface.
+
 ### Orchestrator wake scheduler
 
 When an orchestrator parent stays continuously idle, the plugin may send a

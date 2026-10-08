@@ -1,5 +1,8 @@
 import { describe, expect, mock, test } from 'bun:test';
-import { BackgroundJobBoard } from '../../utils/background-job-board';
+import {
+  BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+} from '../../background-jobs';
 import { mapV2EventToV1 } from '../../v2/event-adapter';
 import { createTaskSessionManagerHook } from '../task-session-manager';
 import {
@@ -274,7 +277,9 @@ describe('child input-wait wake', () => {
       {
         maxSessionsPerAgent: 2,
         maxRetainedSnapshots: 20,
-        backgroundJobBoard: board,
+        backgroundJobs: createBackgroundJobLifecycle({
+          backgroundJobBoard: board,
+        }),
         shouldManageSession: (sessionID: string) => sessionID === 'parent-1',
         idleReconcileDelayMs: 0,
         runtimeStatusReconcileDelayMs: 0,

@@ -3,8 +3,11 @@ import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { BackgroundJobBoard } from '../../utils/background-job-board';
-import { createBackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
+import {
+  BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+  createBackgroundJobTerminalGate,
+} from '../../background-jobs';
 import { BackgroundTaskConcurrency } from '../../utils/background-task-concurrency';
 import { createTaskSessionManagerHook } from './index';
 import { createPendingCallTracker } from './pending-call-tracker';
@@ -66,9 +69,11 @@ function createHook(
     } as never,
     {
       maxSessionsPerAgent: 2,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+        gate: terminalGate,
+      }),
       shouldManageSession: () => true,
-      terminalGate,
       ...extra,
     },
   );
@@ -611,7 +616,7 @@ describe('parallel same-agent pairing (incident 2026-09-12)', () => {
         HOOK_MODULE_URL: pathToFileURL(path.join(import.meta.dir, 'index.ts'))
           .href,
         BOARD_MODULE_URL: pathToFileURL(
-          path.join(import.meta.dir, '../../utils/background-job-board.ts'),
+          path.join(import.meta.dir, '../../background-jobs/board.ts'),
         ).href,
         CONCURRENCY_MODULE_URL: pathToFileURL(
           path.join(

@@ -8,11 +8,15 @@
  */
 
 import {
+  BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+} from '../background-jobs';
+import {
   DEFAULT_MAX_RETAINED_SNAPSHOTS,
   resolveImageRouting,
 } from '../config/constants';
 import { RuntimeConfig } from '../config/runtime';
-import { BackgroundJobBoard, createInternalAgentTextPart } from '../utils';
+import { createInternalAgentTextPart } from '../utils';
 import { createDisplayNameMentionRewriter } from '../utils/agent-variant';
 import { isTaggedPart } from './cache-safe-injection';
 import { createCouncilInjectHook } from './council-inject';
@@ -75,7 +79,9 @@ export function createPipeline(options: PipelineOptions = {}): Pipeline {
       maxSessionsPerAgent: 2,
       maxRetainedSnapshots: DEFAULT_MAX_RETAINED_SNAPSHOTS,
       ...(options.strategy ? { strategy: options.strategy } : {}),
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       shouldManageSession: (sessionID) =>
         sessionAgentMap.get(sessionID) === 'orchestrator',
       registerSessionAsOrchestrator: (sessionID) => {

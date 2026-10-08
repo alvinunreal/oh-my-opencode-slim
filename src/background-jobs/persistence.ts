@@ -4,9 +4,8 @@
  * (`ctx.storage`).
  *
  * Design invariants:
- * - **Write-through.** `recordBackgroundJobSuppression` /
- *   `clearBackgroundJobSuppression` (background-job-store.ts) call this
- *   module on every mutation so the persisted state tracks the in-process
+ * - **Write-through.** `recordSuppression` / `clearSuppression`
+ *   (ledger.ts) call this module on every mutation so the persisted state tracks the in-process
  *   ledger. Writes are queued fire-and-forget: a crash between the
  *   in-memory mutation and the queue flush loses that persisted entry —
  *   an accepted degradation to process-local behavior. A task deleted and
@@ -38,7 +37,7 @@
  * marker in the parent's history (see docs/background-orchestration.md).
  */
 
-import { log } from './logger';
+import { log } from '../utils/logger';
 
 /** Subset of the v2 `StorageDomain` this module consumes (see
  * `V2Context['storage']` in src/v2/types.ts). */
@@ -242,7 +241,7 @@ export function persistedBackgroundJobState(): PersistedBackgroundJobState {
 
 /**
  * Record a suppression tombstone (write-through from
- * `recordBackgroundJobSuppression`). The epoch comes from the ledger so
+ * `recordSuppression`). The epoch comes from the ledger so
  * in-memory and persisted epochs stay identical.
  */
 export function recordSuppression(

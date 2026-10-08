@@ -1,4 +1,7 @@
-import type { BackgroundJobRecord, BackgroundJobStore } from '../../utils';
+import type {
+  BackgroundJobLifecycle,
+  BackgroundJobRecord,
+} from '../../background-jobs';
 import { parseTaskStatusOutput } from '../../utils';
 import { isRecord as isObjectRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
@@ -41,13 +44,13 @@ export function formatCancelledTaskStatusOutput(
 
 export function normalizeLateCancelledTaskOutput(
   output: { output: unknown; metadata?: unknown },
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobs: BackgroundJobLifecycle,
   idParam = 'task_id',
 ): void {
   if (typeof output.output !== 'string') return;
   const status = parseTaskStatusOutput(output.output);
   if (!status) return;
-  const existing = backgroundJobBoard.get(status.taskID);
+  const existing = backgroundJobs.get(status.taskID);
   if (!isLateCancelledTaskError(existing, status.state)) return;
   log('[task-session-manager] normalized late cancelled task output', {
     taskID: status.taskID,
@@ -58,7 +61,7 @@ export function normalizeLateCancelledTaskOutput(
   });
   output.output = formatCancelledTaskStatusOutput(
     status.taskID,
-    backgroundJobBoard.getResultSummary(status.taskID),
+    backgroundJobs.getResultSummary(status.taskID),
     idParam,
   );
   if (isObjectRecord(output) && isObjectRecord(output.metadata)) {

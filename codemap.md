@@ -30,6 +30,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 |---|---|---|
 | `src/` | Main application surface that composes plugin bootstrap, runtime model chains, hook orchestration, task-session aliasing, and installer-facing code. | [View Map](src/codemap.md) |
 | `src/agents/` | Agent factory layer for orchestrator and specialists (incl. dynamic `councillor-<name>` agents from council presets), including prompt/model overrides, task-rejection instruction, display-name normalization, MCP assignment, and permission shaping. | [View Map](src/agents/codemap.md) |
+| `src/background-jobs/` | Single deep module for background job lifecycle: board state machine (records, leases, generations, retention trims), terminal evidence gate, host-read capability ladder, wall-clock supervisor, persistence (tombstones/epochs), and the lifecycle facade. One seam for all consumers: `createBackgroundJobLifecycle` via `index.ts`. | [View Map](src/background-jobs/codemap.md) |
 | `src/cli/` | Installer, config editing, provider preset generation, and built-in skill installation. | [View Map](src/cli/codemap.md) |
 | `src/config/` | Configuration schema, layered loaders, the depth-first preset resolver, compatibility migrations, constant tables, provider/model-ID schema, project-local skill discovery, the `RuntimeConfig` runtime-state singleton, and agent/MCP policy helpers. | [View Map](src/config/codemap.md) |
 
@@ -61,7 +62,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 | `src/tools/` | Tool factory surface for AST-grep, smartfetch, ACP, and task lifecycle controls (cancel/message/status/result/revive/wait-for-user), plus shared task-status policy and activity trackers and on-disk preset-switching helpers. | [View Map](src/tools/codemap.md) |
 | `src/tools/ast-grep/` | AST-grep binary management and AST-aware search/replace tool flow. | [View Map](src/tools/ast-grep/codemap.md) |
 | `src/tools/smartfetch/` | Fetch/extract/cache pipeline for web content and secondary-model summarization. | [View Map](src/tools/smartfetch/codemap.md) |
-| `src/utils/` | Cross-cutting helpers: logging, session metadata, background job board/store/coordinator/supervisor, live session-status reads, in-process opencode client access, task parsing, env, compat/zip, and client call-shape contracts. | [View Map](src/utils/codemap.md) |
+| `src/utils/` | Cross-cutting helpers: logging, session metadata, live session-status reads, background-task admission concurrency, in-process opencode client access, task parsing, env, compat/zip, and client call-shape contracts. (Background job lifecycle moved to `src/background-jobs/`.) | [View Map](src/utils/codemap.md) |
 | `src/v2/` | OpenCode v2 (`opencode2`) adapter: bridges the v1 plugin factory into v2's promise-plugin transform/runtime-hook API. Loaded via `default.setup`; v1 uses `default.server` unchanged. | [View Map](src/v2/codemap.md) |
 | `scripts/` | Build/release validation and generated-artifact maintenance scripts. | [View Map](scripts/codemap.md) |
 | `src/generated/` | Generated build metadata (`build-info.ts` via `scripts/gen-build-info.ts`); never edit by hand. | [View Map](src/generated/codemap.md) |
@@ -84,8 +85,8 @@ This codemap covers the plugin repository itself and excludes the nested `openco
    - Prompt content is injected only through the cache-safe helpers in `src/hooks/cache-safe-injection.ts` so provider prompt-cache prefixes stay byte-stable.
 
 3. **Delegated execution**
-   - Native OpenCode background tasks are parsed from `task` output and tracked in the shared background job board (board + store + coordinator + supervisor in `src/utils/`).
-   - `src/hooks/task-session-manager/` updates job-board state, resolves short aliases, and injects background/reusable job context; runtime-status reconciliation and the shared terminal-publication gate (`background-job-terminal-gate.ts`) keep board state honest against live session status.
+   - Native OpenCode background tasks are parsed from `task` output and tracked in the background-jobs deep module (`src/background-jobs/`): one board state machine, terminal gate, supervisor, and lifecycle facade behind the single `createBackgroundJobLifecycle` seam.
+   - `src/hooks/task-session-manager/` updates job state through that seam, resolves short aliases, and injects background/reusable job context; runtime-status reconciliation and the terminal gate keep board state honest against live session status.
    - `src/hooks/orchestrator-wake/` periodically nudges an idle parent orchestrator when incomplete TODOs remain and reacts to jobs that stop without a terminal result.
    - The TUI client (`src/tui.ts` → `src/multiplexer/client/`) optionally mirrors those sessions into tmux, Zellij, Herdr, cmux, or kitty panes/surfaces; each client anchors new panes to its own pane resolved from the client environment at spawn time (never a shared registry).
    - Results flow back into the parent session through notifications/output polling.
@@ -104,7 +105,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 - `src/multiplexer/cmux/` is a plain adapter: readiness polling, retry/mutation queues, orphan cooldowns, close budgets, and global pane registries no longer exist in the module.
 - Council mode is implemented in `src/agents/`; `council-agents.ts` builds dynamic `councillor-<name>` subagents from council presets, the orchestrator dispatches them, and the council agent synthesizes responses.
 - `src/tools/preset-switch.ts` + `src/tui-preset.ts` + `src/preset-editor-domain.ts` implement `/preset` switching: the preset name (or preset edits) is persisted to the user config file. Agent definitions are never hot-swapped mid-session; on v2 hosts the write requests the live refresh and only the inference fields (`model`, `variant`, `temperature`, `options`) apply to NEW child sessions (frozen for each child before its first request via the awaited `session.prompt` hook) plus the sidebar, while prompts/tools/permissions/skills/MCPs stay frozen for existing sessions; a malformed config is rejected before any swap (last-known-good state kept). v1 hosts apply on the next reload. The `preset-editor-domain` module holds the pure domain helpers (name validation, sentinel-safe choices, descriptions, inheritance, immutable edits, parsing) shared by the v1 JSX editor and the v2 promise-dialog editor.
-- `src/hooks/task-session-manager/` depends on `src/utils/background-job-board.ts`, `background-job-store.ts`, `background-job-coordinator.ts`, `background-job-supervisor.ts`, `session-runtime-status.ts`, and `task.ts`, and injects prompt content only through `src/hooks/cache-safe-injection.ts`.
+- `src/hooks/task-session-manager/` depends on the `src/background-jobs/` package (single seam: `createBackgroundJobLifecycle`), plus `session-runtime-status.ts` and `task.ts`, and injects prompt content only through `src/hooks/cache-safe-injection.ts`.
 - `src/hooks/cache-monitor/` watches `message.updated` cache telemetry across all sessions and logs prompt-cache-bust/plateau warnings; it is observation-only and never mutates messages.
 - `src/hooks/orchestrator-wake/` reads host todo/children/status APIs (v1)
   or `session.list({parentID})` + event tracking (v2 degraded mode), gates on

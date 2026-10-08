@@ -7,9 +7,12 @@ import {
   spyOn,
   test,
 } from 'bun:test';
+import {
+  FixtureBoard as BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+  BackgroundJobBoard as ProductionBoard,
+} from '../background-jobs';
 import { parseTaskStatusOutput } from '../utils';
-import { BackgroundJobBoard as ProductionBoard } from '../utils/background-job-board';
-import { BackgroundJobBoard } from '../utils/background-job-fixture';
 import { createCancelTaskTool } from './cancel-task';
 
 let mockClient: Record<string, unknown>;
@@ -45,7 +48,13 @@ function createTool(overrides?: {
       client: mockClient,
       ...(overrides?.hostFlavor ? { hostFlavor: overrides.hostFlavor } : {}),
     } as any,
-    backgroundJobBoard: board,
+    backgroundJobs: createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+      input: {
+        directory: '/test/project',
+        client: mockClient,
+      } as never,
+    }),
     shouldManageSession: overrides?.shouldManageSession ?? (() => true),
     abortTimeoutMs: overrides?.abortTimeoutMs,
     verifyAbortMs: overrides?.verifyAbortMs ?? 10,
@@ -112,7 +121,10 @@ describe('task_cancel tool', () => {
     };
     const tools = createCancelTaskTool({
       input: { directory: '/test/project', client: mockClient } as any,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+        input: { directory: '/test/project', client: mockClient } as never,
+      }),
       shouldManageSession: () => true,
       verifyAbortMs: 10,
       abortRetryIntervalMs: 0,
@@ -414,7 +426,10 @@ describe('task_cancel tool', () => {
       };
       const tools = createCancelTaskTool({
         input: { directory: '/test/project', client: mockClient } as any,
-        backgroundJobBoard: board,
+        backgroundJobs: createBackgroundJobLifecycle({
+          backgroundJobBoard: board,
+          input: { directory: '/test/project', client: mockClient } as never,
+        }),
         shouldManageSession: () => true,
         verifyAbortMs: 10,
         abortRetryIntervalMs: 0,
@@ -664,7 +679,18 @@ test('a pending idle wait does not publish cancellation until it settles', async
         },
       },
     } as never,
-    backgroundJobBoard: board,
+    backgroundJobs: createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+      input: {
+        directory: '/test/project',
+        client: {
+          session: {
+            abort: async () => ({}),
+            get: async () => ({ data: { outcome: 'interrupted' } }),
+          },
+        },
+      } as never,
+    }),
     shouldManageSession: () => true,
     verifyAbortMs: 5_000,
     abortRetryIntervalMs: 0,
@@ -703,7 +729,18 @@ test('dropping the row during the idle wait does not publish cancellation', asyn
         },
       },
     } as never,
-    backgroundJobBoard: board,
+    backgroundJobs: createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+      input: {
+        directory: '/test/project',
+        client: {
+          session: {
+            abort: async () => ({}),
+            get: async () => ({ data: { outcome: 'interrupted' } }),
+          },
+        },
+      } as never,
+    }),
     shouldManageSession: () => true,
     verifyAbortMs: 200,
     abortRetryIntervalMs: 0,

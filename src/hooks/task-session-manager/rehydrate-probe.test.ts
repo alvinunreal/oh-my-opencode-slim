@@ -1,9 +1,8 @@
 import { describe, expect, mock, test } from 'bun:test';
-import {
-  BackgroundJobBoard,
-  type BackgroundJobSupervisor,
-  type BackgroundTaskConcurrency,
-  getBackgroundJobLifecycleLedger,
+import { BackgroundJobBoard } from '../../background-jobs';
+import type {
+  BackgroundJobSupervisor,
+  BackgroundTaskConcurrency,
 } from '../../utils';
 
 // Route getClient back to _ctx.client so the mock ctx client is what the
@@ -12,6 +11,7 @@ mock.module('../../utils/opencode-client', () => ({
   getClient: (input: { client: unknown }) => input.client as never,
 }));
 
+import { createBackgroundJobLifecycle } from '../../background-jobs';
 import { createTaskSessionManagerHook } from './index';
 
 function taskLaunchOutput(taskID: string): string {
@@ -82,29 +82,31 @@ function createHook(options: {
   supervisor?: BackgroundJobSupervisor;
   concurrency?: BackgroundTaskConcurrency;
 }) {
-  return createTaskSessionManagerHook(
-    {
-      client: {
-        session: {
-          status: mock(async () => ({ data: {} })),
-          ...(options.getSession ? { get: options.getSession } : {}),
-          ...(options.getMessages ? { messages: options.getMessages } : {}),
-        },
+  const input = {
+    client: {
+      session: {
+        status: mock(async () => ({ data: {} })),
+        ...(options.getSession ? { get: options.getSession } : {}),
+        ...(options.getMessages ? { messages: options.getMessages } : {}),
       },
-      directory: '/tmp',
-      worktree: '/tmp',
-    } as never,
-    {
-      maxSessionsPerAgent: 2,
-      maxRetainedSnapshots: 4,
-      backgroundJobBoard: options.board,
-      hostOutcomeClock: 'shared-unix-ms', // The fixture shares Date.now with the gate.
-      backgroundJobSupervisor: options.supervisor,
-      backgroundTaskConcurrency: options.concurrency,
-      shouldManageSession: () => true,
-      runtimeStatusReconcileDelayMs: 60_000,
     },
-  );
+    directory: '/tmp',
+    worktree: '/tmp',
+  } as never;
+  return createTaskSessionManagerHook(input, {
+    maxSessionsPerAgent: 2,
+    maxRetainedSnapshots: 4,
+    backgroundJobs: createBackgroundJobLifecycle({
+      backgroundJobBoard: options.board,
+      input,
+      hostOutcomeClock: 'shared-unix-ms', // The fixture shares Date.now with the gate.
+      ...(options.supervisor ? { supervisor: options.supervisor } : {}),
+    }),
+    hostOutcomeClock: 'shared-unix-ms', // The fixture shares Date.now with the gate.
+    backgroundTaskConcurrency: options.concurrency,
+    shouldManageSession: () => true,
+    runtimeStatusReconcileDelayMs: 60_000,
+  });
 }
 
 async function runTransform(
@@ -146,9 +148,7 @@ describe('rehydrate session.get existence probe', () => {
     expect(board.get('child-gone')).toBeUndefined();
     expect(onSessionDeleted).toHaveBeenCalledWith('child-gone');
     expect(releaseTask).toHaveBeenCalledWith('child-gone');
-    expect(
-      getBackgroundJobLifecycleLedger(board).tombstones.has('child-gone'),
-    ).toBe(true);
+    expect(board.ledger.tombstones.has('child-gone')).toBe(true);
 
     // The tombstone prevents the next transform from resurrecting the run.
     await runTransform(hook, 'child-gone');
@@ -199,11 +199,7 @@ describe('rehydrate session.get existence probe', () => {
       generation: relaunched.generation,
       state: 'running',
     });
-    expect(
-      getBackgroundJobLifecycleLedger(board).tombstones.has(
-        'child-stale-probe',
-      ),
-    ).toBe(false);
+    expect(board.ledger.tombstones.has('child-stale-probe')).toBe(false);
     expect(onSessionDeleted).not.toHaveBeenCalled();
     expect(releaseTask).not.toHaveBeenCalled();
   });
@@ -256,9 +252,7 @@ describe('rehydrate session.get existence probe', () => {
     await flushProbe();
 
     expect(board.get('child-flaky')).toMatchObject({ state: 'running' });
-    expect(
-      getBackgroundJobLifecycleLedger(board).tombstones.has('child-flaky'),
-    ).toBe(false);
+    expect(board.ledger.tombstones.has('child-flaky')).toBe(false);
   });
 
   test('existing session with a succeeded outcome settles via final text', async () => {

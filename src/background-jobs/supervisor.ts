@@ -1,12 +1,26 @@
-import type { BackgroundJobRecord } from './background-job-board';
-import type { BackgroundJobStore } from './background-job-store';
-import type { BackgroundJobTerminalGate } from './background-job-terminal-gate';
-import { log } from './logger';
+import { log } from '../utils/logger';
+import type { BackgroundJobBoardApi } from './board';
+import type { BackgroundJobTerminalGate } from './terminal-gate';
+import type { BackgroundJobRecord } from './types';
 
 type TimerHandle = ReturnType<typeof setTimeout>;
 
+/** Public supervision surface consumed through the lifecycle facade. */
+export interface BackgroundJobSupervisor {
+  /** Register the first observation of a launch or an explicit new run. */
+  onLaunch(record: BackgroundJobRecord): void;
+  /** Clear one-shot timers after any canonical terminal publication. */
+  onTerminal(record: BackgroundJobRecord): void;
+  /** Deletion fencing before the normal board drop callback. */
+  onSessionDeleted(taskID: string): boolean;
+  drop(taskID: string): void;
+  clearParent(parentSessionID: string): void;
+  /** Idempotent local cleanup. It never aborts or writes terminal state. */
+  dispose(): void;
+}
+
 export interface BackgroundJobSupervisorOptions {
-  backgroundJobStore: BackgroundJobStore;
+  backgroundJobStore: BackgroundJobBoardApi;
   terminalGate: BackgroundJobTerminalGate;
   wallClockTimeoutMs: number;
   abortGraceMs: number;
@@ -23,13 +37,14 @@ interface RunTimers {
   graceTimer?: TimerHandle;
 }
 
-/**
- * One-shot wall-clock supervision for native background task sessions.
+/** Default one-shot wall-clock supervision for native background task
+ * sessions. Internal implementation behind the BackgroundJobSupervisor
+ * interface; in-package tests may construct it directly.
  *
- * This class owns only timer/generation/abort mechanics. The board/coordinator
+ * This class owns only timer/generation/abort mechanics. The board/lifecycle
  * remains the atomic state and terminal-publication boundary.
  */
-export class BackgroundJobSupervisor {
+export class DefaultBackgroundJobSupervisor implements BackgroundJobSupervisor {
   private readonly now: () => number;
   private readonly setTimer: (
     callback: () => void,

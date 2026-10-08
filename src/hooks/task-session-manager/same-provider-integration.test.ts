@@ -1,6 +1,10 @@
 import { describe, expect, mock, test } from 'bun:test';
+import {
+  BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+} from '../../background-jobs';
 import { DEFAULT_MAX_RETAINED_SNAPSHOTS } from '../../config/constants';
-import { BackgroundJobBoard, BackgroundTaskConcurrency } from '../../utils';
+import { BackgroundTaskConcurrency } from '../../utils';
 import { createTaskSessionManagerHook } from './index';
 
 const LM_NEXUS_MODEL = 'lm-nexus/Qwen3.8-27B';
@@ -35,7 +39,11 @@ function createHook(options?: IntegrationHookOptions) {
     {
       maxSessionsPerAgent: 2,
       maxRetainedSnapshots: DEFAULT_MAX_RETAINED_SNAPSHOTS,
-      backgroundJobBoard: options?.backgroundJobBoard,
+      backgroundJobs: options?.backgroundJobBoard
+        ? createBackgroundJobLifecycle({
+            backgroundJobBoard: options.backgroundJobBoard,
+          })
+        : undefined,
       backgroundTaskConcurrency: options?.backgroundTaskConcurrency,
       getModelForAgent: options?.getModelForAgent,
       getSessionModel: options?.getSessionModel,

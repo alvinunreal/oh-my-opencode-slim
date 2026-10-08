@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, jest, mock, spyOn, test } from 'bun:test';
-import { BackgroundJobBoard } from '../../utils/background-job-fixture';
 import {
+  FixtureBoard as BackgroundJobBoard,
   type BackgroundJobTerminalGate,
+  createBackgroundJobLifecycle,
   createBackgroundJobTerminalGate,
-} from '../../utils/background-job-terminal-gate';
+} from '../../background-jobs';
 import { SLIM_INTERNAL_INITIATOR_MARKER } from '../../utils/internal-initiator';
 import * as loggerModule from '../../utils/logger';
 import * as opencodeClient from '../../utils/opencode-client';
@@ -90,21 +91,23 @@ function createHarness(
       origin: 'test-host',
       readStartedAt,
     }),
-    baselineFor: (taskID, generation) =>
+    baselineFor: (taskID: string, generation: number) =>
       tracker.baselineFor(taskID, generation),
-    observationRevisionFor: (taskID, generation) =>
+    observationRevisionFor: (taskID: string, generation: number) =>
       tracker.revisionFor(taskID, generation),
-    attemptStartedAtFor: (taskID, generation) =>
+    attemptStartedAtFor: (taskID: string, generation: number) =>
       tracker.attemptStartedAtFor(taskID, generation),
-    isObservationPending: (taskID, generation) =>
+    isObservationPending: (taskID: string, generation: number) =>
       tracker.isObservationPending(taskID, generation),
     graceMs: options.stabilizationProbeDelayMs ?? 150,
   });
   gates.push(gate);
   const tracker = createRevivedRunTracker({
     input,
-    terminalGate: gate,
-    backgroundJobBoard: board,
+    backgroundJobs: createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+      gate,
+    }),
     notificationRetryDelayMs: 0,
     ...options,
     onSettled: settled,

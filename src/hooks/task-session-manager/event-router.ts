@@ -5,9 +5,10 @@
  * session.idle, session.error, session.status, session.deleted) to
  * the appropriate subsystems.
  */
-import type { BackgroundJobExecution } from '../../utils/background-job-board';
-import type { BackgroundJobStore } from '../../utils/background-job-store';
-import type { BackgroundJobSupervisor } from '../../utils/background-job-supervisor';
+import type {
+  BackgroundJobExecution,
+  BackgroundJobLifecycle,
+} from '../../background-jobs';
 import { isRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
 import {
@@ -32,7 +33,9 @@ import type {
 } from './pending-call-tracker';
 import type { RevivedRunTracker } from './revived-run-tracker';
 
-type BackgroundJobRecord = NonNullable<ReturnType<BackgroundJobStore['get']>>;
+type BackgroundJobRecord = NonNullable<
+  ReturnType<BackgroundJobLifecycle['get']>
+>;
 
 /**
  * Extract a human-readable message from a serialized session error.
@@ -90,9 +93,9 @@ const sessionEventFences = new WeakMap<
 >();
 
 function eventFenceMap(
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobs: BackgroundJobLifecycle,
 ): Map<string, SessionEventGenerationFence> {
-  const key = backgroundJobBoard as object;
+  const key = backgroundJobs as object;
   const existing = sessionEventFences.get(key);
   if (existing) return existing;
   const created = new Map<string, SessionEventGenerationFence>();
@@ -134,12 +137,12 @@ function eventActivityAt(
 }
 
 function rememberSessionGeneration(
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobs: BackgroundJobLifecycle,
   sessionID: string,
 ): void {
-  const job = backgroundJobBoard.get(sessionID);
+  const job = backgroundJobs.get(sessionID);
   if (!job) return;
-  const fences = eventFenceMap(backgroundJobBoard);
+  const fences = eventFenceMap(backgroundJobs);
   const previous = fences.get(sessionID);
   if (!previous || previous.generation !== job.generation) {
     fences.set(sessionID, {
@@ -150,15 +153,15 @@ function rememberSessionGeneration(
 }
 
 function observeSessionEvent(
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobs: BackgroundJobLifecycle,
   input: { event: { properties?: Record<string, unknown> } },
   sessionID: string,
   observedAt: number,
   isBusy: boolean,
 ): SessionEventObservation {
-  const job = backgroundJobBoard.get(sessionID);
+  const job = backgroundJobs.get(sessionID);
   if (!job) {
-    eventFenceMap(backgroundJobBoard).delete(sessionID);
+    eventFenceMap(backgroundJobs).delete(sessionID);
     return {
       sessionID,
       observedAt,
@@ -167,7 +170,7 @@ function observeSessionEvent(
     };
   }
 
-  const fences = eventFenceMap(backgroundJobBoard);
+  const fences = eventFenceMap(backgroundJobs);
   const previous = fences.get(sessionID);
   const generationChanged =
     previous !== undefined && previous.generation !== job.generation;
@@ -214,11 +217,11 @@ function observeSessionEvent(
 }
 
 function isCurrentSessionObservation(
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobs: BackgroundJobLifecycle,
   observation: SessionEventObservation,
 ): boolean {
   if (!observation.job || observation.generation === undefined) return true;
-  const current = backgroundJobBoard.get(observation.sessionID);
+  const current = backgroundJobs.get(observation.sessionID);
   if (!current || current.generation !== observation.generation) return false;
   if (current.runStartedAt > observation.observedAt) return false;
   return !(
@@ -308,8 +311,7 @@ export async function handleEvent(
      *  no recovery happens (managed inline 401/410, background children
      *  with an armed fallback chain). */
     deferredInlineErrors: Map<string, string>;
-    backgroundJobBoard: BackgroundJobStore;
-    terminalGate: import('../../utils/background-job-terminal-gate').BackgroundJobTerminalGate;
+    backgroundJobs: BackgroundJobLifecycle;
     pendingCallTracker: {
       peekByParentAndAgent(
         parentSessionID: string,
@@ -330,7 +332,6 @@ export async function handleEvent(
       Map<string, BackgroundJobExecution>
     >;
     retainedBoardSnapshots: Map<string, RetainedBoardSnapshotState>;
-    backgroundJobSupervisor?: BackgroundJobSupervisor;
     bindConcurrencyTicket?: (taskID: string, pending: PendingTaskCall) => void;
     releaseConcurrencyTask?: (taskID: string) => void;
     observeSyntheticTerminalPart?: (part: unknown) => void;
@@ -353,7 +354,7 @@ export async function handleEvent(
     const info = input.event.properties?.info;
     if (info?.id) deps.retainedBoardSnapshots.delete(info.id);
     if (info?.id) {
-      rememberSessionGeneration(deps.backgroundJobBoard, info.id);
+      rememberSessionGeneration(deps.backgroundJobs, info.id);
     }
     log('[task-session-manager] session.created observed', {
       sessionID: info?.id,
@@ -385,7 +386,7 @@ export async function handleEvent(
         typeof info.title === 'string' ? info.title : undefined,
       );
       if (pending && !pending.resumedTaskId && !pending.earlyRegisteredTaskID) {
-        if (deps.backgroundJobBoard.get(info.id)) {
+        if (deps.backgroundJobs.get(info.id)) {
           // The child is already registered — its own tool.execute.after
           // won the race. Fencing the peeked pending here punished an
           // unrelated call and caused its later output to be dropped
@@ -397,7 +398,7 @@ export async function handleEvent(
           );
         } else {
           try {
-            const record = deps.backgroundJobBoard.registerLaunch({
+            const record = deps.backgroundJobs.registerLaunch({
               taskID: info.id,
               parentSessionID: pending.parentSessionId,
               agent: pending.agentType,
@@ -412,8 +413,7 @@ export async function handleEvent(
             pending.earlyRegistration = {
               taskID: record.taskID,
               generation: record.generation,
-              backgroundJobBoard: deps.backgroundJobBoard,
-              backgroundJobSupervisor: deps.backgroundJobSupervisor,
+              backgroundJobs: deps.backgroundJobs,
             } satisfies EarlyTaskRegistration;
             deps.bindConcurrencyTicket?.(record.taskID, pending);
             log(
@@ -439,7 +439,7 @@ export async function handleEvent(
         }
       }
 
-      if (!pending && !deps.backgroundJobBoard.get(info.id)) {
+      if (!pending && !deps.backgroundJobs.get(info.id)) {
         // No pending call can be attributed to this child (ambiguous
         // parallel launches, or the owning pending was consumed).
         // Register a placeholder so task_status/task_result always
@@ -449,7 +449,7 @@ export async function handleEvent(
         const agent =
           typeof info.agent === 'string' && info.agent ? info.agent : 'unknown';
         try {
-          const record = deps.backgroundJobBoard.registerLaunch({
+          const record = deps.backgroundJobs.registerLaunch({
             taskID: info.id,
             parentSessionID: info.parentID,
             agent,
@@ -483,10 +483,10 @@ export async function handleEvent(
   }
 
   if (input.event.type === 'server.instance.disposed') {
-    deps.backgroundJobSupervisor?.dispose();
+    deps.backgroundJobs.dispose();
     deps.revivedRunTracker?.dispose();
     deps.retainedBoardSnapshots.clear();
-    eventFenceMap(deps.backgroundJobBoard).clear();
+    eventFenceMap(deps.backgroundJobs).clear();
     const idleSessionIds = deps.idleReconciler.clearAllTimers();
     // Local-only: drop idle tokens. Process-global wait_for_user stays armed.
     const waitSessionIDs = new Set([
@@ -515,7 +515,7 @@ export async function handleEvent(
     );
     const observation = sessionId
       ? observeSessionEvent(
-          deps.backgroundJobBoard,
+          deps.backgroundJobs,
           input,
           sessionId,
           observedAt,
@@ -613,7 +613,7 @@ export async function handleEvent(
     );
     const observation = sessionId
       ? observeSessionEvent(
-          deps.backgroundJobBoard,
+          deps.backgroundJobs,
           input,
           sessionId,
           observedAt,
@@ -624,7 +624,7 @@ export async function handleEvent(
       observation?.stale ||
       observation?.activityFenceOnly ||
       (observation &&
-        !isCurrentSessionObservation(deps.backgroundJobBoard, observation))
+        !isCurrentSessionObservation(deps.backgroundJobs, observation))
     ) {
       return;
     }
@@ -655,19 +655,19 @@ export async function handleEvent(
         deps.pendingInjectedTerminalJobsByParent.delete(sessionId);
         // Record non-retryable errors on the job board so the
         // orchestrator sees the failure instead of a false completion.
-        const job = observation?.job ?? deps.backgroundJobBoard.get(sessionId);
+        const job = observation?.job ?? deps.backgroundJobs.get(sessionId);
         if (job && job.state === 'running') {
-          // BackgroundJobStore has no expected-generation/CAS form for
+          // The board has no expected-generation/CAS form for
           // updateStatus. The check immediately above is the strongest
           // synchronous boundary available; a remote event cannot be made
           // atomic with a later relaunch through this API.
           if (
             observation &&
-            !isCurrentSessionObservation(deps.backgroundJobBoard, observation)
+            !isCurrentSessionObservation(deps.backgroundJobs, observation)
           ) {
             return;
           }
-          await deps.terminalGate.reconcile(job, {
+          await deps.backgroundJobs.reconcile(job, {
             kind: 'session-error',
             message: structuredErrorMessage(props?.error) ?? 'Session error',
           });
@@ -689,7 +689,7 @@ export async function handleEvent(
       // nothing to retry into, so surface the failure on the board.
       const props = input.event.properties as { error?: unknown } | undefined;
       if (deps.options.isFallbackInProgress?.(sessionId)) return;
-      const job = observation?.job ?? deps.backgroundJobBoard.get(sessionId);
+      const job = observation?.job ?? deps.backgroundJobs.get(sessionId);
       // This router sees session.error BEFORE ForegroundFallbackManager
       // does (event-hook dispatch order in src/index.ts), so the
       // isFallbackInProgress guard above cannot cover the fallback this
@@ -722,11 +722,11 @@ export async function handleEvent(
         // updateStatus is a CAS operation; the store API cannot provide that.
         if (
           observation &&
-          !isCurrentSessionObservation(deps.backgroundJobBoard, observation)
+          !isCurrentSessionObservation(deps.backgroundJobs, observation)
         ) {
           return;
         }
-        await deps.terminalGate.reconcile(job, {
+        await deps.backgroundJobs.reconcile(job, {
           kind: 'session-error',
           message: structuredErrorMessage(props?.error) ?? 'Session error',
         });
@@ -752,7 +752,7 @@ export async function handleEvent(
     );
     const observation = sessionId
       ? observeSessionEvent(
-          deps.backgroundJobBoard,
+          deps.backgroundJobs,
           input,
           sessionId,
           observedAt,
@@ -762,7 +762,7 @@ export async function handleEvent(
     if (observation?.stale || observation?.activityFenceOnly) return;
     if (
       observation &&
-      !isCurrentSessionObservation(deps.backgroundJobBoard, observation)
+      !isCurrentSessionObservation(deps.backgroundJobs, observation)
     ) {
       return;
     }
@@ -779,12 +779,12 @@ export async function handleEvent(
       deps.deferredInlineErrors.delete(sessionId);
     }
     const before = sessionId
-      ? (observation?.job ?? deps.backgroundJobBoard.get(sessionId))
+      ? (observation?.job ?? deps.backgroundJobs.get(sessionId))
       : undefined;
-    const token = before ? deps.terminalGate.capture(before) : undefined;
+    const token = before ? deps.backgroundJobs.capture(before) : undefined;
     const eventAt = eventActivityAt(input, Number.NaN);
     if (before && token) {
-      const result = deps.terminalGate.observe(token, {
+      const result = deps.backgroundJobs.observe(token, {
         kind: statusType,
         origin: 'session.status-event',
         readStartedAt: token.readStartedAt,
@@ -796,11 +796,9 @@ export async function handleEvent(
         result.kind === 'deferred' &&
         result.record.activityRevision === before.activityRevision
       )
-        await deps.terminalGate.reconcile(before);
+        await deps.backgroundJobs.reconcile(before);
     }
-    const updated = sessionId
-      ? deps.backgroundJobBoard.get(sessionId)
-      : undefined;
+    const updated = sessionId ? deps.backgroundJobs.get(sessionId) : undefined;
     if (before?.cancellationRequested) {
       log('[task-session-manager] busy observed after cancel request', {
         sessionID: sessionId,
@@ -833,7 +831,7 @@ export async function handleEvent(
 
   const observedAt = eventActivityAt(input, deps.options.now?.() ?? Date.now());
   const observation = observeSessionEvent(
-    deps.backgroundJobBoard,
+    deps.backgroundJobs,
     input,
     sessionId,
     observedAt,
@@ -851,7 +849,7 @@ export async function handleEvent(
   if (
     observation.stale ||
     observation.activityFenceOnly ||
-    !isCurrentSessionObservation(deps.backgroundJobBoard, observation) ||
+    !isCurrentSessionObservation(deps.backgroundJobs, observation) ||
     ambiguousRelaunchDeletion
   ) {
     log(
@@ -882,9 +880,9 @@ export async function handleEvent(
   clearChildInputWaitsForSession(sessionId);
   const fallbackInProgress =
     deps.options.isFallbackInProgress?.(sessionId) === true;
-  const job = deps.backgroundJobBoard.get(sessionId);
+  const job = deps.backgroundJobs.get(sessionId);
   if (!fallbackInProgress || job?.deadlineExceededAt !== undefined) {
-    deps.backgroundJobSupervisor?.onSessionDeleted(sessionId);
+    deps.backgroundJobs.onSessionDeleted(sessionId);
   }
 
   // A deferred failover error awaiting fallback outcome must not vanish
@@ -913,7 +911,7 @@ export async function handleEvent(
       // session-deleted cleanup runs.
       deps.deferredInlineErrors.delete(sessionId);
       if (job && job.state === 'running') {
-        await deps.terminalGate.reconcile(job, {
+        await deps.backgroundJobs.reconcile(job, {
           kind: 'session-error',
           message: deferredError,
         });
@@ -924,7 +922,7 @@ export async function handleEvent(
   log('[task-session-manager] session.deleted observed', {
     sessionID: sessionId,
   });
-  eventFenceMap(deps.backgroundJobBoard).delete(sessionId);
+  eventFenceMap(deps.backgroundJobs).delete(sessionId);
 }
 
 /**
@@ -953,7 +951,7 @@ function routeChildInputWait(
     };
   },
   deps: {
-    backgroundJobBoard: BackgroundJobStore;
+    backgroundJobs: BackgroundJobLifecycle;
     onChildInputWait?: (notification: ChildInputWaitNotification) => void;
     now?: () => number;
   },
@@ -973,7 +971,7 @@ function routeChildInputWait(
     const requestID =
       typeof properties?.id === 'string' ? properties.id : undefined;
     if (!requestID || requestID.trim() === '') return;
-    const job = deps.backgroundJobBoard.get(sessionID);
+    const job = deps.backgroundJobs.get(sessionID);
     if (
       job?.state !== 'running' ||
       job.background !== true ||
@@ -1043,7 +1041,7 @@ function routeChildInputWait(
     if (!requestID || requestID.trim() === '') return;
     if (
       clearChildInputWait(sessionID, requestID) &&
-      deps.backgroundJobBoard.get(sessionID)
+      deps.backgroundJobs.get(sessionID)
     ) {
       log('[task-session-manager] background child input wait resolved', {
         taskID: sessionID,

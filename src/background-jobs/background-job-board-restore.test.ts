@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { BackgroundJobBoard } from './background-job-board';
-import { BackgroundJobCoordinator } from './background-job-coordinator';
+import { BackgroundJobBoard } from './board';
+import { createBackgroundJobLifecycle } from './lifecycle';
 
 const retained = {
   taskID: 'ses_child',
@@ -97,7 +97,9 @@ describe('restoreRetainedSession', () => {
 
   test('coordinator projects identity and still does not emit a terminal wake', () => {
     const board = new BackgroundJobBoard();
-    const coordinator = new BackgroundJobCoordinator(board);
+    const coordinator = createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+    });
     const identity: string[] = [];
     const terminal: string[] = [];
     coordinator.addLaunchIdentityListener((event) => {

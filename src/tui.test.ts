@@ -5,6 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { RGBA } from '@opentui/core';
 import { testRender } from '@opentui/solid';
+import { FixtureBoard as BackgroundJobBoard } from './background-jobs';
 import sidebarFrameGolden from './sidebar-frame-golden.json';
 import type { ModelNamesCache } from './tui';
 import {
@@ -48,7 +49,6 @@ import {
   type TuiSnapshot,
   updateSnapshot,
 } from './tui-state';
-import { BackgroundJobBoard } from './utils/background-job-fixture';
 import { createTuiReusableProjection } from './utils/tui-reusable-projection';
 
 const ACTIVITY_FRAME_PATTERN = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/;

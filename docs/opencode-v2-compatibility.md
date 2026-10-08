@@ -786,7 +786,7 @@ kind.
 
 When the v2 host exposes the optional `storage` domain, the plugin
 persists background-job lifecycle state through
-`src/utils/background-job-persistence.ts` (configured in `setup` before
+`src/background-jobs/persistence.ts` (configured in `setup` before
 the v1 factory runs):
 
 - **Tombstones and deletion epochs** are write-through: every in-memory

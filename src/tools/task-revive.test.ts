@@ -9,21 +9,18 @@ import {
 } from 'bun:test';
 import { createOpencodeClient } from '@opencode-ai/sdk';
 import {
+  FixtureBoard as BackgroundJobBoard,
+  type BackgroundJobTerminalGate,
+  createBackgroundJobLifecycle,
+  createBackgroundJobTerminalGate,
+  getSuppressionTombstone,
+  BackgroundJobBoard as ProductionBoard,
+} from '../background-jobs';
+import {
   createRevivedRunTracker,
   type RevivedRunTracker,
 } from '../hooks/task-session-manager/revived-run-tracker';
 import { createSessionRecovery } from '../hooks/task-session-manager/session-recovery';
-import { BackgroundJobBoard as ProductionBoard } from '../utils/background-job-board';
-import { BackgroundJobBoard } from '../utils/background-job-fixture';
-import { getSuppressionTombstone } from '../utils/background-job-persistence';
-import {
-  getBackgroundJobLifecycleLedger,
-  recordBackgroundJobSuppression,
-} from '../utils/background-job-store';
-import {
-  type BackgroundJobTerminalGate,
-  createBackgroundJobTerminalGate,
-} from '../utils/background-job-terminal-gate';
 import * as logger from '../utils/logger';
 import * as opencodeClient from '../utils/opencode-client';
 import { OperationTimeoutError } from '../utils/session';
@@ -74,18 +71,24 @@ function createTool(overrides?: {
     input,
   });
   gates.push(terminalGate);
+  // One facade per board: each factory call binds its gate to the shared
+  // board (last bind wins), so every consumer here shares this facade.
+  const onLaunch = mock(overrides?.onLaunch ?? (() => {}));
+  const backgroundJobs = createBackgroundJobLifecycle({
+    backgroundJobBoard: board,
+    gate: terminalGate,
+    supervisor: { onLaunch } as never,
+  });
   const revivedRunTracker = Object.assign(
     createRevivedRunTracker({
       input,
-      backgroundJobBoard: board,
-      terminalGate,
+      backgroundJobs,
     }),
     overrides?.revivedRunTracker,
   );
-  const onLaunch = mock(overrides?.onLaunch ?? (() => {}));
   const tools = createTaskReviveTool({
     input,
-    backgroundJobBoard: board,
+    backgroundJobs,
     shouldManageSession: () => true,
     verifyAbortMs: 10,
     abortRetryIntervalMs: 0,
@@ -93,18 +96,16 @@ function createTool(overrides?: {
     revivedRunTracker,
     recoverRetainedSession: createSessionRecovery({
       input,
-      backgroundJobBoard: board,
+      backgroundJobs,
       hostFlavor: overrides?.hostFlavor,
       liveStatusTimeoutMs: 10,
     }),
-    backgroundJobSupervisor: { onLaunch } as never,
     baselineTimeoutMs: overrides?.baselineTimeoutMs,
     admissionTimeoutMs: overrides?.admissionTimeoutMs,
   });
   const cancelTools = createCancelTaskTool({
     input,
-    backgroundJobBoard: board,
-    terminalGate,
+    backgroundJobs,
     shouldManageSession: () => true,
     verifyAbortMs: 10,
     abortRetryIntervalMs: 0,
@@ -256,7 +257,7 @@ describe('task_revive tool', () => {
       expect(await result).toContain('status: admission_unknown');
     }
     board.drop('ses_1');
-    const tombstones = getBackgroundJobLifecycleLedger(board).tombstones;
+    const tombstones = board.ledger.tombstones;
     expect(tombstones.has('ses_1')).toBe(true);
     status.mockImplementation(() => {
       reading.resolve();
@@ -934,14 +935,14 @@ describe('task_revive tool', () => {
     });
     // Simulate the pre-restart eviction tombstone: adoption's registerLaunch
     // must clear it while the persisted deletion epoch survives for fencing.
-    recordBackgroundJobSuppression(adopted.board, 'ses_1');
+    adopted.board.recordSuppression('ses_1');
     const result = await adopted.taskRevive.execute(
       { task_id: 'ses_1', prompt: 'continue the recovered work' },
       context,
     );
     expect(result).toContain('state: running');
     expect(result).toContain('started');
-    const ledger = getBackgroundJobLifecycleLedger(adopted.board);
+    const ledger = adopted.board.ledger;
     expect(ledger.tombstones.has('ses_1')).toBe(false);
     expect(ledger.deletionEpochs.has('ses_1')).toBe(true);
     expect(adopted.board.get('ses_1')).toMatchObject({
@@ -963,7 +964,7 @@ describe('task_revive tool', () => {
         },
       }),
     });
-    recordBackgroundJobSuppression(tool.board, 'ses_1', {
+    tool.board.recordSuppression('ses_1', {
       state: 'completed',
       resultSummary: 'the answer is 42',
     });
@@ -1070,6 +1071,12 @@ describe('task_revive tool', () => {
         },
       );
       const log = spyOn(logger, 'log').mockImplementation(() => {});
+      const lifecycleLogs = () =>
+        (log.mock.calls as Array<[string]>).filter(
+          ([message]) =>
+            !message.startsWith('[terminal-gate]') &&
+            !message.startsWith('[job-lifecycle]'),
+        );
       const observed = Promise.withResolvers<void>();
       const { board, taskRevive, revivedRunTracker, onLaunch } = createTool({
         admissionTimeoutMs,
@@ -1113,7 +1120,7 @@ describe('task_revive tool', () => {
       const lease = board.acquireRelaunchLease('ses_1', 2);
       expect(lease).toBeDefined();
       if (lease) board.releaseLease(lease);
-      expect(log).not.toHaveBeenCalled();
+      expect(lifecycleLogs()).toEqual([]);
     },
   );
 
@@ -1131,9 +1138,6 @@ describe('task_revive tool', () => {
     const deadline = controlledAdmissionDeadline();
     const send = Promise.withResolvers<unknown>();
     const settled = Promise.withResolvers<void>();
-    const log = spyOn(logger, 'log').mockImplementation(() =>
-      settled.resolve(),
-    );
     const { board, taskRevive, revivedRunTracker, onLaunch, abort } =
       createTool({
         admissionTimeoutMs: 1_000,
@@ -1154,6 +1158,13 @@ describe('task_revive tool', () => {
         },
       });
     acknowledgedCompleted(board);
+    // Settles on revive-path logs only: armed after board setup so the
+    // lifecycle's terminal-dispatch observability line for the acknowledged
+    // record does not settle early, and scoped to '[task-revive]' so gate
+    // publications and coordinator dispatch lines never settle it either.
+    const log = spyOn(logger, 'log').mockImplementation((message) => {
+      if (String(message).startsWith('[task-revive]')) settled.resolve();
+    });
     const acquire = spyOn(ProductionBoard.prototype, 'acquireRelaunchLease');
     const launch = spyOn(ProductionBoard.prototype, 'registerLaunch');
     const register = spyOn(revivedRunTracker, 'register');
@@ -1227,7 +1238,13 @@ describe('task_revive tool', () => {
           baselineMessageID: 'baseline',
         }),
       );
-      expect(log).not.toHaveBeenCalled();
+      expect(
+        (log.mock.calls as Array<[string]>).filter(
+          ([message]) =>
+            !message.startsWith('[terminal-gate]') &&
+            !message.startsWith('[job-lifecycle]'),
+        ),
+      ).toEqual([]);
     } else
       expect(log).toHaveBeenCalledWith(
         '[task-revive] admission failed',
@@ -1240,9 +1257,7 @@ describe('task_revive tool', () => {
     }
     if (outcome === 'dropped revoked') {
       expect(board.get('ses_1')).toBeUndefined();
-      expect(
-        getBackgroundJobLifecycleLedger(board).tombstones.has('ses_1'),
-      ).toBe(true);
+      expect(board.ledger.tombstones.has('ses_1')).toBe(true);
       return;
     }
     const available = board.acquireRelaunchLease(
@@ -1260,9 +1275,14 @@ describe('task_revive tool', () => {
       const probing = Promise.withResolvers<void>();
       const observation = Promise.withResolvers<boolean>();
       const observed = Promise.withResolvers<void>();
-      const log = spyOn(logger, 'log').mockImplementation(() =>
-        observed.resolve(),
-      );
+      const log = spyOn(logger, 'log').mockImplementation(() => {
+        const message = String((log.mock.calls.at(-1) ?? [])[0] ?? '');
+        if (
+          !message.startsWith('[terminal-gate]') &&
+          !message.startsWith('[job-lifecycle]')
+        )
+          observed.resolve();
+      });
       const { board, taskRevive, promptAsync, abort } = createTool({
         admissionTimeoutMs: 5,
         promptAsync: () =>
@@ -1312,7 +1332,11 @@ describe('task_revive tool', () => {
         // particular no error-path log — may fire.
         const logged = (log.mock.calls as Array<[string]>)
           .map(([message]) => message)
-          .filter((message) => !message.startsWith('[terminal-gate]'));
+          .filter(
+            (message) =>
+              !message.startsWith('[terminal-gate]') &&
+              !message.startsWith('[job-lifecycle]'),
+          );
         expect(logged).toEqual([]);
         return;
       }
@@ -1326,7 +1350,9 @@ describe('task_revive tool', () => {
         statusUncertain: false,
       });
       const logged = (log.mock.calls as Array<[string]>).filter(
-        ([message]) => !message.startsWith('[terminal-gate]'),
+        ([message]) =>
+          !message.startsWith('[terminal-gate]') &&
+          !message.startsWith('[job-lifecycle]'),
       );
       expect(logged).toHaveLength(1);
       expect(logged[0]?.[0]).toBe('[task-revive] observation failed');

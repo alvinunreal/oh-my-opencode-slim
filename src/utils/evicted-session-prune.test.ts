@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test';
-import type { BackgroundJobEvictedSession } from './background-job-board';
+import type { BackgroundJobEvictedSession } from '../background-jobs';
 import { pruneEvictedHostSession } from './evicted-session-prune';
 import {
   pendingSessionPrune,

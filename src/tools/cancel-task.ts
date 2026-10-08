@@ -4,20 +4,15 @@ import {
   tool,
 } from '@opencode-ai/plugin';
 import type {
+  BackgroundJobLease,
+  BackgroundJobLifecycle,
+  ObservationToken,
+} from '../background-jobs';
+import type {
   RetainedRecoveryRequest,
   RetainedRecoveryResult,
 } from '../hooks/task-session-manager/session-recovery';
 import { pluginDisposedMessage } from '../hooks/task-session-manager/session-recovery';
-import type { BackgroundJobLease } from '../utils/background-job-board';
-import {
-  type BackgroundJobStore,
-  getBackgroundJobLifecycleLedger,
-} from '../utils/background-job-store';
-import {
-  type BackgroundJobTerminalGate,
-  createBackgroundJobTerminalGate,
-  type ObservationToken,
-} from '../utils/background-job-terminal-gate';
 import { responseError, stringifyError } from '../utils/child-transcript';
 import { isRecord } from '../utils/guards';
 import { getClient } from '../utils/opencode-client';
@@ -42,8 +37,7 @@ const z = tool.schema;
 
 export interface TaskControlToolOptions {
   input: PluginInput;
-  backgroundJobBoard: BackgroundJobStore;
-  terminalGate?: BackgroundJobTerminalGate;
+  backgroundJobs: BackgroundJobLifecycle;
   shouldManageSession: (sessionID: string) => boolean;
   abortTimeoutMs?: number;
   verifyAbortMs?: number;
@@ -108,8 +102,8 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. The r
       }
       const identity = canonical?.taskID ?? requested;
       const job = canonical
-        ? options.backgroundJobBoard.get(identity)
-        : options.backgroundJobBoard.resolve(parentSessionID, requested);
+        ? options.backgroundJobs.get(identity)
+        : options.backgroundJobs.resolve(parentSessionID, requested);
       if (job && job.parentSessionID !== parentSessionID) {
         return unknownTaskOutput(
           idParam,
@@ -124,8 +118,8 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. The r
             requested: identity,
           });
           const restored = canonical
-            ? options.backgroundJobBoard.get(identity)
-            : options.backgroundJobBoard.resolve(parentSessionID, requested);
+            ? options.backgroundJobs.get(identity)
+            : options.backgroundJobs.resolve(parentSessionID, requested);
           if (restored) {
             if (restored.state === 'running' || restored.statusUncertain) {
               return unknownTaskOutput(
@@ -174,7 +168,7 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. The r
       try {
         await cancelTrackedExecution(options, execution, args.reason);
       } catch (error) {
-        const current = options.backgroundJobBoard.get(execution.taskID);
+        const current = options.backgroundJobs.get(execution.taskID);
         const message = error instanceof Error ? error.message : String(error);
         return [
           `${idParam}: ${execution.taskID}`,
@@ -186,13 +180,13 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. The r
         ].join('\n');
       }
 
-      const state = options.backgroundJobBoard.getState(execution.taskID);
+      const state = options.backgroundJobs.getState(execution.taskID);
       return [
         `${idParam}: ${execution.taskID}`,
         `state: ${state ?? 'cancelled'}`,
         '',
         '<task_error>',
-        options.backgroundJobBoard.getResultSummary(execution.taskID) ??
+        options.backgroundJobs.getResultSummary(execution.taskID) ??
           'cancelled',
         '</task_error>',
       ].join('\n');
@@ -215,7 +209,7 @@ export async function cancelTrackedExecution(
   if (options.isDisposed?.()) {
     throw new Error(pluginDisposedMessage());
   }
-  const lease = options.backgroundJobBoard.acquireCancellationLease(
+  const lease = options.backgroundJobs.acquireCancellationLease(
     execution.taskID,
     execution.generation,
   );
@@ -227,19 +221,9 @@ export async function cancelTrackedExecution(
 
   let keepLeaseUntilSettled = false;
   try {
-    const gate =
-      options.terminalGate ??
-      createBackgroundJobTerminalGate({
-        backgroundJobBoard: options.backgroundJobBoard,
-        input: options.input,
-      });
-    const token = await abortAndVerifySession(
-      { ...options, terminalGate: gate },
-      execution,
-      lease,
-    );
-    assertCapturedExecution(options.backgroundJobBoard, execution);
-    const observed = gate.observe(token, {
+    const token = await abortAndVerifySession(options, execution, lease);
+    assertCapturedExecution(options.backgroundJobs, execution);
+    const observed = options.backgroundJobs.observe(token, {
       kind: 'quiescent',
       origin: 'cancel-verifier',
       readStartedAt: token.readStartedAt,
@@ -249,7 +233,7 @@ export async function cancelTrackedExecution(
       throw new SessionStillRunningError(
         'Activity changed during cancellation verification',
       );
-    const result = await gate.reconcile(execution, {
+    const result = await options.backgroundJobs.reconcile(execution, {
       kind: 'cancel',
       lease,
       reason,
@@ -264,7 +248,7 @@ export async function cancelTrackedExecution(
     keepLeaseUntilSettled =
       error instanceof LeaseOperationTimeoutError && error.pending;
     const message = error instanceof Error ? error.message : String(error);
-    options.backgroundJobBoard.markStatusUncertain(
+    options.backgroundJobs.markStatusUncertain(
       execution.taskID,
       message,
       execution.generation,
@@ -272,7 +256,7 @@ export async function cancelTrackedExecution(
     throw error;
   } finally {
     if (!keepLeaseUntilSettled) {
-      options.backgroundJobBoard.releaseLease(lease);
+      options.backgroundJobs.releaseLease(lease);
     }
   }
 }
@@ -282,23 +266,23 @@ async function abortAndVerifySession(
   execution: CapturedExecution,
   lease: BackgroundJobLease,
 ): Promise<ObservationToken> {
-  assertLease(options.backgroundJobBoard, lease, execution);
+  assertLease(options.backgroundJobs, lease, execution);
   const taskID = execution.taskID;
   const abortStartedAt = Date.now();
   let response: unknown;
   try {
     response = await awaitLeaseOperation(
-      options.backgroundJobBoard,
+      options.backgroundJobs,
       lease,
       () => {
         // awaitLeaseOperation defers this callback to a microtask. Ownership
         // may have changed since the check above; never send a stale abort.
-        assertLease(options.backgroundJobBoard, lease, execution);
-        assertCapturedExecution(options.backgroundJobBoard, execution);
+        assertLease(options.backgroundJobs, lease, execution);
+        assertCapturedExecution(options.backgroundJobs, execution);
         if (options.isDisposed?.()) {
           throw new LeaseOwnershipLostError(pluginDisposedMessage());
         }
-        if (options.backgroundJobBoard.getState(taskID) !== 'running') {
+        if (options.backgroundJobs.getState(taskID) !== 'running') {
           throw new LeaseOwnershipLostError(
             `stale/uncertain cancellation: ${taskID} is no longer running`,
           );
@@ -309,10 +293,10 @@ async function abortAndVerifySession(
       `Session abort timed out after ${options.abortTimeoutMs ?? 10_000}ms`,
     );
   } catch (error) {
-    assertLease(options.backgroundJobBoard, lease, execution);
+    assertLease(options.backgroundJobs, lease, execution);
     throw error;
   }
-  assertLease(options.backgroundJobBoard, lease, execution);
+  assertLease(options.backgroundJobs, lease, execution);
   const error = responseError(response);
   if (error !== undefined) throw new Error(stringifyError(error));
   if (operationBoolean(response) === false) {
@@ -329,8 +313,7 @@ async function verifyQuiescentSession(
   abortStartedAt: number,
 ): Promise<ObservationToken> {
   const deadline = Date.now() + (options.verifyAbortMs ?? 1_500);
-  const gate = options.terminalGate;
-  if (!gate) throw new Error('Cancellation terminal gate is required');
+  const gate = options.backgroundJobs;
   const stableStoppedMs = options.stableStoppedMs ?? 300;
   const retryIntervalMs = options.abortRetryIntervalMs ?? 150;
   let stableStoppedSince: number | undefined;
@@ -339,7 +322,7 @@ async function verifyQuiescentSession(
   let statusUnavailable = false;
 
   while (Date.now() <= deadline) {
-    assertLease(options.backgroundJobBoard, lease, execution);
+    assertLease(options.backgroundJobs, lease, execution);
     const token = gate.capture(execution);
     if (!token)
       throw new LeaseOwnershipLostError('Cancellation execution changed');
@@ -350,9 +333,9 @@ async function verifyQuiescentSession(
       execution.taskID,
       Math.max(1, deadline - Date.now()),
       lease,
-      options.backgroundJobBoard,
+      options.backgroundJobs,
     );
-    assertLease(options.backgroundJobBoard, lease, execution);
+    assertLease(options.backgroundJobs, lease, execution);
     if (status.source === 'status-unavailable') {
       // v2 hosts expose no session.status map; polling it can never answer
       // 'idle'. Fall back to host session info (terminal outcome or a
@@ -546,7 +529,7 @@ function freshCancellationToken(
   options: TaskControlToolOptions,
   execution: CapturedExecution,
 ): ObservationToken {
-  const token = options.terminalGate?.capture(execution);
+  const token = options.backgroundJobs.capture(execution);
   if (!token)
     throw new LeaseOwnershipLostError('Cancellation execution changed');
   return token;
@@ -557,8 +540,8 @@ function assertStopFences(
   execution: CapturedExecution,
   lease: BackgroundJobLease,
 ): void {
-  assertLease(options.backgroundJobBoard, lease, execution);
-  assertCapturedExecution(options.backgroundJobBoard, execution);
+  assertLease(options.backgroundJobs, lease, execution);
+  assertCapturedExecution(options.backgroundJobs, execution);
   const current = deletionEpoch(options, execution.taskID);
   if (stopEpochs.get(lease) !== current) {
     throw new Error(
@@ -581,9 +564,7 @@ function deletionEpoch(
   options: TaskControlToolOptions,
   taskID: string,
 ): number | undefined {
-  return getBackgroundJobLifecycleLedger(
-    options.backgroundJobBoard,
-  ).deletionEpochs.get(taskID);
+  return options.backgroundJobs.ledger.deletionEpochs.get(taskID);
 }
 
 async function getSessionStatus(
@@ -591,9 +572,9 @@ async function getSessionStatus(
   taskID: string,
   timeoutMs: number,
   lease: BackgroundJobLease,
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobs: BackgroundJobLifecycle,
 ): Promise<{ status: 'busy' | 'retry' | 'idle' | undefined; source: string }> {
-  assertLease(backgroundJobBoard, lease, {
+  assertLease(backgroundJobs, lease, {
     taskID: lease.taskID,
     generation: lease.generation,
   });
@@ -609,7 +590,7 @@ async function getSessionStatus(
       return { status: undefined, source: 'status-unavailable' };
     }
     const snapshot = await awaitLeaseOperation(
-      backgroundJobBoard,
+      backgroundJobs,
       lease,
       () =>
         getRuntimeSessionStatusSnapshot(input, {
@@ -635,7 +616,7 @@ async function getSessionStatus(
 }
 
 async function awaitLeaseOperation<T>(
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobs: BackgroundJobLifecycle,
   lease: BackgroundJobLease,
   operation: () => Promise<T>,
   timeoutMs: number,
@@ -647,12 +628,12 @@ async function awaitLeaseOperation<T>(
   const tracked = underlying.then(
     (value) => {
       settled = true;
-      if (timedOut) backgroundJobBoard.releaseLease(lease);
+      if (timedOut) backgroundJobs.releaseLease(lease);
       return value;
     },
     (error: unknown) => {
       settled = true;
-      if (timedOut) backgroundJobBoard.releaseLease(lease);
+      if (timedOut) backgroundJobs.releaseLease(lease);
       throw error;
     },
   );
@@ -663,13 +644,13 @@ async function awaitLeaseOperation<T>(
     if (!(error instanceof OperationTimeoutError)) throw error;
     timedOut = true;
     const pending = !settled;
-    if (!pending) backgroundJobBoard.releaseLease(lease);
+    if (!pending) backgroundJobs.releaseLease(lease);
     throw new LeaseOperationTimeoutError(error.message, pending);
   }
 }
 
 function assertLease(
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobs: BackgroundJobLifecycle,
   lease: BackgroundJobLease,
   execution: CapturedExecution,
 ): void {
@@ -677,7 +658,7 @@ function assertLease(
     lease.taskID !== execution.taskID ||
     lease.generation !== execution.generation ||
     lease.kind !== 'cancellation' ||
-    !backgroundJobBoard.validateLease(lease)
+    !backgroundJobs.validateLease(lease)
   ) {
     throw new LeaseOwnershipLostError(
       `Cancellation lease is no longer valid for ${execution.taskID} generation ${execution.generation}`,
@@ -712,10 +693,10 @@ async function untrackedTaskReason(
   if (!SESSION_ID_PATTERN.test(requested))
     return 'unknown or unowned background task';
   if (requested === parentSessionID) return 'cannot cancel parent session';
-  const knownJob = options.backgroundJobBoard.get(requested);
+  const knownJob = options.backgroundJobs.get(requested);
   if (
     knownJob &&
-    options.backgroundJobBoard.getParentSessionID(requested) !== parentSessionID
+    options.backgroundJobs.getParentSessionID(requested) !== parentSessionID
   ) {
     return 'unknown or unowned background task';
   }
@@ -761,7 +742,7 @@ function unknownTaskOutput(
 }
 
 function isCapturedExecution(
-  record: ReturnType<BackgroundJobStore['get']>,
+  record: ReturnType<BackgroundJobLifecycle['get']>,
   capturedExecution: CapturedExecution,
 ): boolean {
   return (
@@ -771,12 +752,10 @@ function isCapturedExecution(
 }
 
 function assertCapturedExecution(
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobs: BackgroundJobLifecycle,
   execution: CapturedExecution,
 ): void {
-  if (
-    !isCapturedExecution(backgroundJobBoard.get(execution.taskID), execution)
-  ) {
+  if (!isCapturedExecution(backgroundJobs.get(execution.taskID), execution)) {
     throw new Error(
       `stale/uncertain cancellation: ${execution.taskID} generation changed`,
     );
@@ -789,7 +768,7 @@ function staleCancellationOutput(
   execution: CapturedExecution,
   detail: string,
 ): string {
-  const current = options.backgroundJobBoard.get(execution.taskID);
+  const current = options.backgroundJobs.get(execution.taskID);
   return [
     `${idParam}: ${execution.taskID}`,
     `state: ${current?.state ?? 'unknown'}`,

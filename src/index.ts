@@ -20,6 +20,14 @@ import {
   type ResolvedAgentRegistry,
 } from './agents/registry';
 import type { RegistryFactoryBridge } from './agents/registry-bridge';
+import {
+  type BackgroundJobEvictedSession,
+  type BackgroundJobLifecycle,
+  type BackgroundJobRecord,
+  type ContextFile,
+  createBackgroundJobLifecycle,
+  isPrunableEvictedSession,
+} from './background-jobs';
 import { CompanionManager } from './companion/manager';
 import { ensureCompanionVersion } from './companion/updater';
 import { deepMerge, loadPluginConfig, type Preset } from './config';
@@ -118,24 +126,11 @@ import {
   updateTuiSessionDetails,
 } from './tui-state';
 import {
-  BackgroundJobBoard,
-  BackgroundJobCoordinator,
-  BackgroundJobSupervisor,
   type BackgroundTaskConcurrency,
   createDisplayNameMentionRewriter,
   normalizeAgentName,
   resolveRuntimeAgentName,
 } from './utils';
-import type {
-  BackgroundJobEvictedSession,
-  BackgroundJobRecord,
-  ContextFile,
-} from './utils/background-job-board';
-import { isPrunableEvictedSession } from './utils/background-job-board';
-import {
-  type BackgroundJobTerminalGate,
-  createBackgroundJobTerminalGate,
-} from './utils/background-job-terminal-gate';
 import { isPluginDisabledByEnv } from './utils/env';
 import {
   createEventDirectoryScope,
@@ -451,7 +446,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // Alias from an already-registered board record (launch may have
     // arrived before or after busy; both orders converge here or via the
     // coordinator's identity listener).
-    const alias = backgroundJobBoard?.get(sessionID)?.alias;
+    const alias = backgroundJobs?.get(sessionID)?.alias;
     const details: TuiSessionDetails = {
       ...(alias ? { alias } : {}),
       ...(status ? { status } : {}),
@@ -573,11 +568,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let deepworkGuardAfter: (i: unknown, o: unknown) => Promise<void>;
   let jsonErrorRecoveryAfter: (i: unknown, o: unknown) => Promise<void>;
   let taskSessionManagerAfter: (i: unknown, o: unknown) => Promise<void>;
-  let backgroundJobBoard: BackgroundJobBoard;
+  let backgroundJobs: BackgroundJobLifecycle;
+  /** Set together with backgroundJobs; lets the init-failure path dispose
+   * the assembled lifecycle even when a later init step throws. */
+  let assembledLifecycle: BackgroundJobLifecycle | undefined;
   let tuiReusableProjection:
     | ReturnType<typeof createTuiReusableProjection>
     | undefined;
-  let backgroundJobSupervisor: BackgroundJobSupervisor;
   let backgroundTaskConcurrency: BackgroundTaskConcurrency;
   let admissionRuntimeLease: AdmissionRuntimeLease | undefined;
   let finalHostAgentConfig: Record<string, unknown> | undefined;
@@ -589,7 +586,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let taskResultTools: ReturnType<typeof createTaskResultTool>;
   let taskReviveTools: ReturnType<typeof createTaskReviveTool>;
   let revivedRunTracker: ReturnType<typeof createRevivedRunTracker>;
-  let terminalGate: BackgroundJobTerminalGate | undefined;
   let markRevivedRunPending: (taskID: string) => void = () => {};
   let markRevivedRunSettled: (taskID: string) => void = () => {};
   let getRevivedContextFiles = (_taskID: string): ContextFile[] => [];
@@ -828,7 +824,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       librarianModel: pickAgentModelRef(runtime.agent('librarian')?.model),
       smallModelRef: () => runtime.smallModel(),
     });
-    backgroundJobBoard = new BackgroundJobBoard({
+    // One deep module: board (state machine) + terminal gate + wall-clock
+    // supervisor + lifecycle policy, composed in one place. Deferred-closure
+    // references below (backgroundJobs inside onEvictedSession/onRunning)
+    // only run after init completes, mirroring the previous wiring order.
+    backgroundJobs = createBackgroundJobLifecycle({
       maxReusablePerAgent: runtime.backgroundJobs.maxSessionsPerAgent,
       maxContextLines: runtime.backgroundJobs.maxContextLines,
       readContextMinLines: runtime.backgroundJobs.readContextMinLines,
@@ -863,55 +863,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
                   evicted,
                   readTimeoutMs: DEFAULT_RUNTIME_SESSION_STATUS_TIMEOUT_MS,
                   deleteTimeoutMs: DEFAULT_RUNTIME_SESSION_STATUS_TIMEOUT_MS,
-                  isTracked: (taskID) => backgroundJobBoard.isTracked(taskID),
+                  isTracked: (taskID) => backgroundJobs.isTracked(taskID),
                 }),
               );
             },
           }
         : {}),
-    });
-    admissionRuntimeLease = acquireAdmissionRuntime(
-      ctx.directory,
-      runtime.backgroundJobs.concurrency,
-    );
-    backgroundTaskConcurrency = admissionRuntimeLease.backgroundTaskConcurrency;
-
-    // Initialize coordinator as the sole writer to the board
-    const backgroundJobCoordinator = new BackgroundJobCoordinator(
-      backgroundJobBoard,
-    );
-    // Project launch identity (alias↔session) into TUI state so the
-    // clickable sidebar can label active subagent sessions. Best-effort:
-    // a failed tui-state write must never fail a launch.
-    //
-    // Each generation must retract its own projected sections on dispose:
-    // a reload reuses this PID, so the startup dead-owner sweep retains
-    // the previous generation's entries until explicitly removed.
-    tuiReusableProjection = createTuiReusableProjection({
-      board: backgroundJobBoard,
-      projectDir: ctx.directory,
-    });
-    backgroundJobCoordinator.addLaunchIdentityListener((event) => {
-      const directory = tuiActivityDirectory(event.taskID);
-      if (event.kind === 'registered') {
-        if (event.parentSessionID && event.parentSessionID !== event.taskID) {
-          recordTuiSessionParent(
-            event.taskID,
-            event.parentSessionID,
-            directory,
-          );
-        }
-        updateTuiSessionDetails(
-          event.taskID,
-          { alias: event.alias },
-          directory,
-        );
-      } else {
-        clearTuiSessionAlias(event.taskID, directory);
-      }
-    });
-    terminalGate = createBackgroundJobTerminalGate({
-      backgroundJobBoard: backgroundJobCoordinator,
       input: ctx,
       // Configurable stop-confirmation grace (backgroundJobs.
       // stopConfirmationMs); the default equals
@@ -943,12 +900,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             record.generation,
           )
         )
-          backgroundJobSupervisor?.onLaunch(record);
+          backgroundJobs.onLaunch(record);
       },
-    });
-    backgroundJobSupervisor = new BackgroundJobSupervisor({
-      backgroundJobStore: backgroundJobCoordinator,
-      terminalGate,
       wallClockTimeoutMs: runtime.backgroundJobs.wallClockTimeoutMs,
       abortGraceMs: runtime.backgroundJobs.abortGraceMs,
       abort: (taskID) =>
@@ -956,28 +909,63 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           path: { id: taskID },
         }),
     });
-    backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
-      const current = backgroundJobCoordinator.get(record.taskID);
+    assembledLifecycle = backgroundJobs;
+    admissionRuntimeLease = acquireAdmissionRuntime(
+      ctx.directory,
+      runtime.backgroundJobs.concurrency,
+    );
+    backgroundTaskConcurrency = admissionRuntimeLease.backgroundTaskConcurrency;
+
+    // Project launch identity (alias↔session) into TUI state so the
+    // clickable sidebar can label active subagent sessions. Best-effort:
+    // a failed tui-state write must never fail a launch.
+    //
+    // Each generation must retract its own projected sections on dispose:
+    // a reload reuses this PID, so the startup dead-owner sweep retains
+    // the previous generation's entries until explicitly removed.
+    tuiReusableProjection = createTuiReusableProjection({
+      board: backgroundJobs,
+      projectDir: ctx.directory,
+    });
+    backgroundJobs.addLaunchIdentityListener((event) => {
+      const directory = tuiActivityDirectory(event.taskID);
+      if (event.kind === 'registered') {
+        if (event.parentSessionID && event.parentSessionID !== event.taskID) {
+          recordTuiSessionParent(
+            event.taskID,
+            event.parentSessionID,
+            directory,
+          );
+        }
+        updateTuiSessionDetails(
+          event.taskID,
+          { alias: event.alias },
+          directory,
+        );
+      } else {
+        clearTuiSessionAlias(event.taskID, directory);
+      }
+    });
+    backgroundJobs.addTerminalOutcomeListener((record) => {
+      const current = backgroundJobs.get(record.taskID);
       if (
         current?.generation !== record.generation ||
         current.terminalRevision !== record.terminalRevision ||
         current.state === 'running'
       )
         return;
-      backgroundJobCoordinator.addContext(
+      backgroundJobs.addContext(
         record.taskID,
         getRevivedContextFiles(record.taskID),
       );
       markRevivedRunSettled(record.taskID);
       pruneRevivedContext();
-      backgroundJobSupervisor.onTerminal(record);
+      backgroundJobs.onTerminal(record);
       backgroundTaskConcurrency.releaseTask(record.taskID);
     });
     revivedRunTracker = createRevivedRunTracker({
       input: ctx,
-      backgroundJobBoard: backgroundJobCoordinator,
-      terminalGate,
-      backgroundJobSupervisor,
+      backgroundJobs,
       resolveSelection: lifecycleSelectionResolver,
       onRegister: (taskID) => markRevivedRunPending(taskID),
       onSettled: (taskID) => markRevivedRunSettled(taskID),
@@ -999,13 +987,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           ?.catch(() => undefined);
       },
     });
-    backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
+    backgroundJobs.addTerminalOutcomeListener((record) => {
       revivedRunTracker.onTerminal(record);
       markTuiAgentInactive(record.taskID);
     });
     // Pane lifecycle runs in the client (TUI) process, never here: the server
     // entry only keeps its own sidebar activity bookkeeping.
-    backgroundJobCoordinator.addTerminalStateListener((taskID) => {
+    backgroundJobs.addTerminalStateListener((taskID) => {
       markTuiAgentInactive(taskID);
     });
 
@@ -1036,7 +1024,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // acceptance, reject() withdraws on failure; see
     // fallback-observation-transfer.ts.
     const backgroundFallbackHandoff = createBackgroundFallbackHandoff({
-      backgroundJobBoard: backgroundJobCoordinator,
+      backgroundJobs,
       revivedRunTracker,
     });
     // The current v2 host interface has no per-turn/atomic conditional
@@ -1082,12 +1070,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // generation rejection can be distinguished from a legitimate
       // foreground fallback.
       (sessionID) => {
-        const record = backgroundJobCoordinator.get(sessionID);
+        const record = backgroundJobs.get(sessionID);
         return record?.state === 'running' && record.background === true
           ? record.generation
           : undefined;
       },
-      (sessionID) => backgroundJobCoordinator.hasRunning(sessionID),
+      (sessionID) => backgroundJobs.hasRunning(sessionID),
       v2RetryEnabled,
     );
 
@@ -1096,25 +1084,23 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     loopCommandHook = createLoopCommandHook();
     const recoverRetainedSession = createSessionRecovery({
       input: ctx,
-      backgroundJobBoard: backgroundJobCoordinator,
+      backgroundJobs,
       isDisposed: () => instanceDisposed,
       hostFlavor,
     });
     const aliasAuthority = createAliasAuthority({
       input: ctx,
-      board: backgroundJobBoard,
+      board: backgroundJobs,
       isDisposed: () => instanceDisposed,
     });
     taskSessionManagerHook = createTaskSessionManagerHook(ctx, {
-      terminalGate,
+      backgroundJobs,
       strategy: runtime.backgroundJobs.strategy,
       maxSessionsPerAgent: runtime.backgroundJobs.maxSessionsPerAgent,
       maxRetainedSnapshots: runtime.backgroundJobs.maxRetainedSnapshots,
       readContextMinLines: runtime.backgroundJobs.readContextMinLines,
       readContextMaxFiles: runtime.backgroundJobs.readContextMaxFiles,
       boardInjection: runtime.backgroundJobs.boardInjection,
-      backgroundJobBoard: backgroundJobCoordinator,
-      backgroundJobSupervisor,
       backgroundTaskConcurrency,
       pendingCallTracker: admissionRuntimeLease.pendingCallTracker,
       getModelForAgent: (agentType: string, parentSessionID?: string) => {
@@ -1157,7 +1143,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       revivedRunTracker,
       onChildInputWait: (notification) => {
         if (runtime.backgroundJobs.childInputWake === false) return;
-        const record = backgroundJobCoordinator.get(notification.taskID);
+        const record = backgroundJobs.get(notification.taskID);
         if (record?.state !== 'running') {
           return;
         }
@@ -1185,7 +1171,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         foregroundFallback.isFallbackInProgress(sessionID),
       resolveSelection: lifecycleSelectionResolver,
       isStoppedJobRecoveryCurrent: (taskID, generation) => {
-        const record = backgroundJobCoordinator.get(taskID);
+        const record = backgroundJobs.get(taskID);
         return (
           record?.generation === generation &&
           record.state === 'stopped' &&
@@ -1193,18 +1179,18 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         );
       },
       isChildInputWaitCurrent: (taskID, requestID) => {
-        const record = backgroundJobCoordinator.get(taskID);
+        const record = backgroundJobs.get(taskID);
         return (
           record?.state === 'running' &&
           getChildInputWait(taskID, requestID) !== undefined
         );
       },
       hasPendingDelegatedWork: (sessionID) =>
-        backgroundJobCoordinator.hasRunning(sessionID) ||
-        backgroundJobCoordinator.hasTerminalUnreconciled(sessionID),
+        backgroundJobs.hasRunning(sessionID) ||
+        backgroundJobs.hasTerminalUnreconciled(sessionID),
       coordinator: sessionLifecycle,
     });
-    backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
+    backgroundJobs.addTerminalOutcomeListener((record) => {
       // A placeholder is not delegated work; its stop is not recoverable
       // by the parent until a task launch has attributed the session.
       if (record.provisional === true) return;
@@ -1256,7 +1242,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // parent is skipped inside the trigger: the native steer already
     // delivered the first completion, so a queued wake would
     // double-notify.
-    backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
+    backgroundJobs.addTerminalOutcomeListener((record) => {
       if (record.state !== 'completed' && record.state !== 'error') return;
       // Revived-run ownership: when the tracker will deliver this run's
       // <task> result itself (notifyParent), a publication wake beside
@@ -1399,8 +1385,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     );
     taskCancelTools = createCancelTaskTool({
       input: ctx,
-      backgroundJobBoard: backgroundJobCoordinator,
-      terminalGate,
+      backgroundJobs,
       shouldManageSession: (sessionID) =>
         sessionMetadata.getAgent(sessionID) === 'orchestrator' ||
         sessionMetadata.isTaskManaged(sessionID),
@@ -1410,7 +1395,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
     taskMessageTools = createTaskMessageTool({
       input: ctx,
-      backgroundJobBoard: backgroundJobCoordinator,
+      backgroundJobs,
       promptMessageIDFor: (taskID, generation) =>
         revivedRunTracker.promptMessageIDFor(taskID, generation),
       resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
@@ -1418,26 +1403,23 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
     taskReplyTools = createTaskReplyTool({
       input: ctx,
-      backgroundJobBoard: backgroundJobCoordinator,
+      backgroundJobs,
       resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
       isDisposed: () => instanceDisposed,
     });
     taskResultTools = createTaskResultTool({
       input: ctx,
-      backgroundJobBoard: backgroundJobCoordinator,
-      terminalGate,
+      backgroundJobs,
       resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
       isDisposed: () => instanceDisposed,
     });
     taskReviveTools = createTaskReviveTool({
       ...(hostFlavor !== 'v2' && { registerIntent: registerV1DelegatedIntent }),
-      terminalGate,
       input: ctx,
-      backgroundJobBoard: backgroundJobCoordinator,
+      backgroundJobs,
       shouldManageSession: (sessionID) =>
         sessionMetadata.getAgent(sessionID) === 'orchestrator' ||
         sessionMetadata.isTaskManaged(sessionID),
-      backgroundJobSupervisor,
       revivedRunTracker,
       recoverRetainedSession,
       isDisposed: () => instanceDisposed,
@@ -1445,7 +1427,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
     taskStatusTools = createTaskStatusTool({
       input: ctx,
-      backgroundJobBoard: backgroundJobCoordinator,
+      backgroundJobs,
       activityTracker: taskActivityTracker,
       resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
       isDisposed: () => instanceDisposed,
@@ -1465,7 +1447,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       waitForUserGuardEnabled: runtime.backgroundJobs.waitForUserGuard,
       hasOutstandingBackgroundTasks: (sessionID) =>
         runtime.backgroundJobs.orchestratorWake.enabled &&
-        backgroundJobCoordinator.hasRunning(sessionID),
+        backgroundJobs.hasRunning(sessionID),
     });
 
     const shouldRegisterWebfetch = runtime.webfetch.enabled !== false;
@@ -1495,7 +1477,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         (name) => !runtime.disabledTools.includes(name),
       ).length;
   } catch (err) {
-    terminalGate?.dispose();
+    assembledLifecycle?.dispose();
     admissionRuntimeLease?.release();
     // The scope claim must not outlive a failed init: a leaked live-directory
     // entry would keep other instances from ever reclaiming this location and
@@ -2059,7 +2041,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     event: async (input) => {
       if (input.event.type === 'server.instance.disposed') {
         instanceDisposed = true;
-        terminalGate?.dispose();
+        backgroundJobs?.dispose();
       }
       // Token-stream deltas fire on every reasoning/text chunk. Slim has no
       // work for them; skip the rest of the fan-out. v2 names:
@@ -2248,7 +2230,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           : (event.data?.sessionID ?? event.properties?.sessionID);
         const createdAt = info ? info.time?.created : event.created;
         if (typeof freshID === 'string' && typeof createdAt === 'number') {
-          backgroundJobBoard.noteSessionCreated(freshID, createdAt);
+          backgroundJobs.noteSessionCreated(freshID, createdAt);
         }
         if (createdSessionId && typeof createdSessionParent === 'string') {
           // Persist the child→parent link so any process can resolve the
@@ -2349,7 +2331,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
                   'string'
               ? (rawCompanionStatus as { type: string }).type
               : undefined;
-        const job = sessionID ? backgroundJobBoard.get(sessionID) : undefined;
+        const job = sessionID ? backgroundJobs.get(sessionID) : undefined;
         companionManager.onSessionStatus({
           sessionId: sessionID,
           agent: sessionID ? sessionMetadata.getAgent(sessionID) : undefined,
@@ -2381,7 +2363,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // public server.instance.disposed event first.
       instanceDisposed = true;
       registryBridge.retire();
-      terminalGate?.dispose();
+      backgroundJobs.dispose();
       // Cancel pending initial-delay fallback timers so a reloaded
       // generation cannot observe one stale fallback call.
       foregroundFallback.dispose();

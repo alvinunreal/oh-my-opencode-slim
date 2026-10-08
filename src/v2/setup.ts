@@ -17,6 +17,10 @@
 import path from 'node:path';
 import type { RegistryFactoryBridge } from '../agents/registry-bridge';
 import {
+  configureBackgroundJobPersistence,
+  loadInitialBackgroundJobPersistence,
+} from '../background-jobs';
+import {
   buildBundledSkillInfos,
   removeLegacySkillSyncState,
 } from '../cli/custom-skills';
@@ -41,10 +45,6 @@ import { PHASE_REMINDER_METADATA_KEY } from '../hooks/phase-reminder';
 import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/task-session-manager/board-injection';
 import { OhMyOpenCodeLite } from '../index';
 import type { McpConfig } from '../mcp/types';
-import {
-  configureBackgroundJobPersistence,
-  loadInitialBackgroundJobPersistence,
-} from '../utils/background-job-persistence';
 import { createEventDirectoryScope } from '../utils/event-directory-scope';
 import { isRecord } from '../utils/guards';
 import { INTERNAL_INITIATOR_METADATA_KEY } from '../utils/internal-initiator';

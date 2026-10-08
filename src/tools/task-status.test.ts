@@ -1,7 +1,13 @@
 import { describe, expect, mock, test } from 'bun:test';
+import {
+  BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+} from '../background-jobs';
 import { createAliasAuthority } from '../hooks/task-session-manager/session-recovery';
-import { BackgroundJobBoard } from '../utils/background-job-board';
 import { createTaskStatusTool } from './task-status';
+
+const asJobs = (board: BackgroundJobBoard) =>
+  createBackgroundJobLifecycle({ backgroundJobBoard: board });
 
 let client: Record<string, any>;
 
@@ -24,7 +30,7 @@ function makeTool(options: {
       client,
       ...(options.hostFlavor ? { hostFlavor: options.hostFlavor } : {}),
     } as any,
-    backgroundJobBoard: options.board,
+    backgroundJobs: asJobs(options.board),
     now: options.now,
     statusTimeoutMs: options.statusTimeoutMs,
     readTimeoutMs: options.readTimeoutMs,

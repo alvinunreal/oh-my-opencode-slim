@@ -2418,7 +2418,7 @@ describe('createV2Setup e2e', () => {
       expect(logText).toContain(
         '[v2] background-job persistence enabled via ctx.storage',
       );
-      const persistence = await import('../utils/background-job-persistence');
+      const persistence = await import('../background-jobs');
       expect(
         persistence
           .persistedBackgroundJobState()
@@ -2435,7 +2435,7 @@ describe('createV2Setup e2e', () => {
       // Reset the persistence singleton so later test files in this
       // process see the pure memory fallback.
       const { configureBackgroundJobPersistence } = await import(
-        '../utils/background-job-persistence'
+        '../background-jobs'
       );
       configureBackgroundJobPersistence(undefined);
       await cleanup();

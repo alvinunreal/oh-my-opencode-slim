@@ -52,8 +52,11 @@
  */
 import { describe, expect, mock, test } from 'bun:test';
 import { z } from 'zod';
+import {
+  FixtureBoard as BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+} from '../../background-jobs';
 import { DEFAULT_MAX_RETAINED_SNAPSHOTS } from '../../config/constants';
-import { BackgroundJobBoard } from '../../utils/background-job-fixture';
 import {
   BACKGROUND_JOB_BOARD_METADATA_KEY,
   createTaskSessionManagerHook,
@@ -317,7 +320,9 @@ function createHook(board: BackgroundJobBoard) {
     {
       maxSessionsPerAgent: 4,
       maxRetainedSnapshots: DEFAULT_MAX_RETAINED_SNAPSHOTS,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       shouldManageSession: () => true,
     },
   );

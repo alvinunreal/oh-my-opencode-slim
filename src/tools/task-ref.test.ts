@@ -1,10 +1,16 @@
 import { describe, expect, test } from 'bun:test';
 import { z } from 'zod';
-import { BackgroundJobBoard } from '../utils/background-job-board';
+import {
+  BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+} from '../background-jobs';
 import { createTaskMessageTool } from './task-message';
 import { idParamFor, readTaskRef, taskRefArgs } from './task-ref';
 import { createTaskResultTool } from './task-result';
 import { createTaskStatusTool } from './task-status';
+
+const asJobs = (board: BackgroundJobBoard) =>
+  createBackgroundJobLifecycle({ backgroundJobBoard: board });
 
 /**
  * Mirror `src/v2/setup.ts`'s `schemaFor` (`z.object(def.args)` →
@@ -21,19 +27,19 @@ function v2ControlTools() {
   return [
     {
       name: 'task_result',
-      def: createTaskResultTool({ input, backgroundJobBoard: board })
+      def: createTaskResultTool({ input, backgroundJobs: asJobs(board) })
         .task_result,
       base: {},
     },
     {
       name: 'task_status',
-      def: createTaskStatusTool({ input, backgroundJobBoard: board })
+      def: createTaskStatusTool({ input, backgroundJobs: asJobs(board) })
         .task_status,
       base: {},
     },
     {
       name: 'task_message',
-      def: createTaskMessageTool({ input, backgroundJobBoard: board })
+      def: createTaskMessageTool({ input, backgroundJobs: asJobs(board) })
         .task_message,
       base: { message: 'hi' },
     },
@@ -110,7 +116,7 @@ describe('task-ref', () => {
       const input = { directory: '/test', client: {}, ...extra } as never;
       const def = createTaskStatusTool({
         input,
-        backgroundJobBoard: board,
+        backgroundJobs: asJobs(board),
       }).task_status;
       const schema = hostShape(def);
       expect(schema.safeParse({ task_id: 'ses_1' }).success).toBe(true);
@@ -130,7 +136,7 @@ describe('task-ref', () => {
     const input = { directory: '/test', client: {}, hostFlavor: 'v2' } as never;
     const { task_message } = createTaskMessageTool({
       input,
-      backgroundJobBoard: board,
+      backgroundJobs: asJobs(board),
     });
     await expect(
       task_message.execute(

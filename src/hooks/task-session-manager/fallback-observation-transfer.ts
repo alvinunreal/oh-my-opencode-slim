@@ -1,4 +1,4 @@
-import type { BackgroundJobStore } from '../../utils/background-job-store';
+import type { BackgroundJobLifecycle } from '../../background-jobs';
 import type { RevivedRunTracker } from './revived-run-tracker';
 
 /**
@@ -38,7 +38,7 @@ import type { RevivedRunTracker } from './revived-run-tracker';
  * owning run, so a late admission finds delivery already owned.
  */
 export function createBackgroundFallbackHandoff(options: {
-  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobs: BackgroundJobLifecycle;
   revivedRunTracker: RevivedRunTracker;
 }): {
   prepare: (
@@ -63,7 +63,7 @@ export function createBackgroundFallbackHandoff(options: {
     preparedGeneration: number | undefined,
   ) => {
     if (preparedGeneration === undefined) return undefined;
-    const record = options.backgroundJobBoard.get(sessionID);
+    const record = options.backgroundJobs.get(sessionID);
     if (
       record?.state !== 'running' ||
       record.background !== true ||

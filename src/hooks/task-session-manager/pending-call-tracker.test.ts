@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { BackgroundJobBoard } from '../../utils/background-job-board';
+import { BackgroundJobBoard } from '../../background-jobs';
 import {
   createPendingCallTracker,
   type PendingTaskCall,
@@ -182,7 +182,7 @@ describe('take', () => {
         earlyRegistration: {
           taskID: 'ses_x',
           generation: 1,
-          backgroundJobBoard: ownerBoard,
+          backgroundJobs: ownerBoard,
         },
       }),
     );
@@ -235,7 +235,7 @@ describe('takeByTaskID', () => {
         earlyRegistration: {
           taskID: 'ses_x',
           generation: 1,
-          backgroundJobBoard: otherBoard,
+          backgroundJobs: otherBoard,
         },
       }),
     );
@@ -418,7 +418,7 @@ describe('adoptEarlyRegistrations', () => {
         earlyRegistration: {
           taskID: 'ses_flagged',
           generation: 1,
-          backgroundJobBoard: oldBoard,
+          backgroundJobs: oldBoard,
         },
       }),
     );
@@ -430,7 +430,7 @@ describe('adoptEarlyRegistrations', () => {
         earlyRegistration: {
           taskID: 'ses_clean',
           generation: 1,
-          backgroundJobBoard: oldBoard,
+          backgroundJobs: oldBoard,
         },
       }),
     );
@@ -473,7 +473,7 @@ describe('adoptEarlyRegistrations', () => {
         earlyRegistration: {
           taskID: 'ses_adopt',
           generation: oldBoard.get('ses_adopt')?.generation ?? 1,
-          backgroundJobBoard: oldBoard,
+          backgroundJobs: oldBoard,
         },
       }),
     );

@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test';
-import { BackgroundJobBoard as ProductionBoard } from '../utils/background-job-board';
-import { BackgroundJobBoard } from '../utils/background-job-fixture';
+import {
+  FixtureBoard as BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+  BackgroundJobBoard as ProductionBoard,
+} from '../background-jobs';
 import { createTaskMessageTool } from './task-message';
+
+const asJobs = (board: BackgroundJobBoard) =>
+  createBackgroundJobLifecycle({ backgroundJobBoard: board });
 
 let client: Record<string, any>;
 afterEach(() => mock.restore());
@@ -47,14 +53,14 @@ function createTool(board: BackgroundJobBoard, hostFlavor?: string) {
       client,
       ...(hostFlavor ? { hostFlavor } : {}),
     } as any,
-    backgroundJobBoard: board,
+    backgroundJobs: asJobs(board),
   }).task_message;
 }
 
 function createToolWithTimeout(board: BackgroundJobBoard, timeoutMs: number) {
   return createTaskMessageTool({
     input: { directory: '/test', client } as any,
-    backgroundJobBoard: board,
+    backgroundJobs: asJobs(board),
     messageTimeoutMs: timeoutMs,
   }).task_message;
 }

@@ -1,9 +1,10 @@
 import { afterEach, expect, mock, test } from 'bun:test';
-import { BackgroundJobBoard } from '../utils/background-job-board';
 import {
+  BackgroundJobBoard,
   type BackgroundJobTerminalGate,
+  createBackgroundJobLifecycle,
   createBackgroundJobTerminalGate,
-} from '../utils/background-job-terminal-gate';
+} from '../background-jobs';
 import { buildPluginInput } from '../v2/client-shim';
 import { createTaskResultTool } from './task-result';
 
@@ -44,8 +45,10 @@ function harness(tracked = true, hostFlavor?: string) {
   gates.push(gate);
   const tool = createTaskResultTool({
     input,
-    backgroundJobBoard: board,
-    terminalGate: gate,
+    backgroundJobs: createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+      gate,
+    }),
   }).task_result;
   const execute = (task_id = tracked ? 'exp-1' : 'ses_child1') =>
     tool.execute({ task_id }, {
@@ -330,7 +333,9 @@ test.each([
     } as never) as never;
     const output = await createTaskResultTool({
       input,
-      backgroundJobBoard: new BackgroundJobBoard(),
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: new BackgroundJobBoard(),
+      }),
     }).task_result.execute({ task_id: 'ses_child1' }, {
       sessionID: 'parent-1',
       agent: 'orchestrator',

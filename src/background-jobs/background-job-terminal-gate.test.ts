@@ -2,25 +2,25 @@ import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { createTaskSessionManagerHook } from '../hooks/task-session-manager';
 import { createRevivedRunTracker } from '../hooks/task-session-manager/revived-run-tracker';
 import { createTaskResultTool } from '../tools/task-result';
+import { BackgroundTaskConcurrency } from '../utils/background-task-concurrency';
+import { classifyTerminalEvidence } from '../utils/child-transcript';
+import * as loggerModule from '../utils/logger';
+import { COMPLETED_WITHOUT_TEXT_DIAGNOSTIC } from '../utils/task';
 import { buildPluginInput } from '../v2/client-shim';
-import { BackgroundJobBoard } from './background-job-board';
-import { BackgroundJobCoordinator } from './background-job-coordinator';
+import { BackgroundJobBoard } from './board';
+import { runtimeObservationFromSnapshot } from './host-reads';
+import { createBackgroundJobLifecycle } from './lifecycle';
 import {
   type BackgroundJobTerminalGate,
   createBackgroundJobTerminalGate,
   EVIDENCE_UNAVAILABLE_DIAGNOSTIC,
   type RuntimeObservation,
-  runtimeObservationFromSnapshot,
-} from './background-job-terminal-gate';
-import { BackgroundTaskConcurrency } from './background-task-concurrency';
-import { classifyTerminalEvidence } from './child-transcript';
-import * as loggerModule from './logger';
-import { COMPLETED_WITHOUT_TEXT_DIAGNOSTIC } from './task';
+} from './terminal-gate';
 
 // Other test files mock the shared opencode-client module process-globally
 // (Bun mock.module is never auto-restored). Re-pin it to a passthrough so
 // this file always exercises the client each test provides via input.
-mock.module('./opencode-client', () => ({
+mock.module('../utils/opencode-client', () => ({
   getClient: (input: { client: unknown }) => input.client as never,
 }));
 
@@ -565,8 +565,10 @@ describe('terminal gate', () => {
     } as never;
     const result = createTaskResultTool({
       input,
-      backgroundJobBoard: h.board,
-      terminalGate: h.gate,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: h.board,
+        gate: h.gate,
+      }),
     }).task_result;
     expect(
       await result.execute({ task_id: h.run.taskID }, {
@@ -1010,7 +1012,9 @@ describe('terminal gate', () => {
 
 test('integration: historical replay + rehydration + busy host publishes nothing and retains capacity', async () => {
   const board = new BackgroundJobBoard();
-  const coordinator = new BackgroundJobCoordinator(board);
+  const coordinator = createBackgroundJobLifecycle({
+    backgroundJobBoard: board,
+  });
   const capacity = new BackgroundTaskConcurrency({
     defaultConcurrency: 1,
     providerConcurrency: {},
@@ -1036,8 +1040,10 @@ test('integration: historical replay + rehydration + busy host publishes nothing
   });
   gates.push(gate);
   const hook = createTaskSessionManagerHook(input, {
-    backgroundJobBoard: coordinator,
-    terminalGate: gate,
+    backgroundJobs: createBackgroundJobLifecycle({
+      backgroundJobBoard: coordinator,
+      gate,
+    }),
     backgroundTaskConcurrency: capacity,
     shouldManageSession: () => true,
     maxSessionsPerAgent: 10,
@@ -1167,15 +1173,19 @@ test('integration: late acknowledgement and transport success for A cannot consu
   gates.push(gate);
   tracker = createRevivedRunTracker({
     input,
-    backgroundJobBoard: board,
-    terminalGate: gate,
+    backgroundJobs: createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+      gate,
+    }),
     maxNotificationRetries: 2,
     notificationRetryDelayMs: 1,
   });
   tracker.register({ ...run, baselineMessageID: 'baseline' });
   const hook = createTaskSessionManagerHook(input, {
-    backgroundJobBoard: board,
-    terminalGate: gate,
+    backgroundJobs: createBackgroundJobLifecycle({
+      backgroundJobBoard: board,
+      gate,
+    }),
     shouldManageSession: () => true,
     maxSessionsPerAgent: 10,
     maxRetainedSnapshots: 10,
@@ -1347,8 +1357,10 @@ test.each(['transcript', 'outcome'])(
     });
     gates.push(gate);
     const hook = createTaskSessionManagerHook(input, {
-      terminalGate: gate,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+        gate,
+      }),
       shouldManageSession: () => true,
       maxSessionsPerAgent: 10,
       maxRetainedSnapshots: 10,
@@ -1410,8 +1422,10 @@ test.each(['transcript', 'outcome'])(
       });
       const result = createTaskResultTool({
         input,
-        backgroundJobBoard: board,
-        terminalGate: gate,
+        backgroundJobs: createBackgroundJobLifecycle({
+          backgroundJobBoard: board,
+          gate,
+        }),
       }).task_result;
       expect(
         await result.execute({ task_id: run.taskID }, {

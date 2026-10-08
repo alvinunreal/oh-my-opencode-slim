@@ -1,10 +1,13 @@
 import { describe, expect, mock, test } from 'bun:test';
 import { buildPluginInput } from '../v2/client-shim';
-import { BackgroundJobBoard } from './background-job-board';
-import { BackgroundJobCoordinator } from './background-job-coordinator';
-import { boardFixture } from './background-job-fixture';
-import { BackgroundJobSupervisor } from './background-job-supervisor';
-import { createBackgroundJobTerminalGate } from './background-job-terminal-gate';
+import { BackgroundJobBoard } from './board';
+import { boardFixture } from './fixture';
+import { BackgroundJobLifecycle } from './lifecycle';
+import {
+  DefaultBackgroundJobSupervisor as BackgroundJobSupervisor,
+  type BackgroundJobSupervisor as SupervisorApi,
+} from './supervisor';
+import { createBackgroundJobTerminalGate } from './terminal-gate';
 
 type TimerCallback = () => void;
 
@@ -51,17 +54,19 @@ function createSupervisor(
   } = {},
 ) {
   const board = new BackgroundJobBoard();
-  const coordinator = new BackgroundJobCoordinator(board);
+  const coordinator = new BackgroundJobLifecycle(board);
   const timers = createTimerHarness();
   const abort = mock(overrides.abort ?? (async () => undefined)) as unknown as (
     taskID: string,
   ) => Promise<unknown>;
+  const gate = createBackgroundJobTerminalGate({
+    backgroundJobBoard: coordinator,
+    now: timers.now,
+  });
+  coordinator.attachGate(gate);
   const supervisor = new BackgroundJobSupervisor({
     backgroundJobStore: coordinator,
-    terminalGate: createBackgroundJobTerminalGate({
-      backgroundJobBoard: coordinator,
-      now: timers.now,
-    }),
+    terminalGate: gate,
     wallClockTimeoutMs: overrides.timeoutMs ?? 100,
     abortGraceMs: overrides.graceMs ?? 20,
     abort,
@@ -69,6 +74,7 @@ function createSupervisor(
     setTimeout: timers.setTimeout,
     clearTimeout: timers.clearTimeout,
   });
+  coordinator.attachSupervisor(supervisor);
   coordinator.addTerminalOutcomeListener((record) =>
     supervisor.onTerminal(record),
   );

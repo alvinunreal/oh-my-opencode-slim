@@ -1,5 +1,8 @@
 import { describe, expect, mock, test } from 'bun:test';
-import { BackgroundJobBoard } from '../../utils/background-job-fixture';
+import {
+  FixtureBoard as BackgroundJobBoard,
+  createBackgroundJobLifecycle,
+} from '../../background-jobs';
 import { createTaskSessionManagerHook } from './index';
 
 const PARENT_SESSION_ID = 'parent-generation-fence';
@@ -16,7 +19,9 @@ function createHook(board: BackgroundJobBoard) {
     {
       maxSessionsPerAgent: 2,
       maxRetainedSnapshots: 4,
-      backgroundJobBoard: board,
+      backgroundJobs: createBackgroundJobLifecycle({
+        backgroundJobBoard: board,
+      }),
       shouldManageSession: () => true,
       runtimeStatusReconcileDelayMs: 60_000,
     },
