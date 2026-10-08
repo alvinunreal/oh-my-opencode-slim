@@ -972,7 +972,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       );
       markRevivedRunSettled(record.taskID);
       pruneRevivedContext();
-      backgroundJobs.onTerminal(record);
       backgroundTaskConcurrency.releaseTask(record.taskID);
     });
     revivedRunTracker = createRevivedRunTracker({

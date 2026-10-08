@@ -214,6 +214,11 @@ export class BackgroundJobLifecycle implements BackgroundJobBoardApi {
 
     const record = this.board.get?.(taskID);
     if (record) {
+      // The lifecycle owns supervisor timer cleanup: clear deadline and
+      // abort-grace one-shots at the canonical terminal publication itself,
+      // before any listener runs, so consumers cannot leak them by skipping
+      // a manual onTerminal listener. Idempotent (generation-gated).
+      this.onTerminal(record);
       // Observation only: every canonical terminal publication that
       // reaches listener dispatch is logged with its record identity.
       log('[job-lifecycle] terminal state dispatch', {
@@ -362,7 +367,9 @@ export class BackgroundJobLifecycle implements BackgroundJobBoardApi {
     this.supervisor?.onLaunch?.(record);
   }
 
-  /** Clear one-shot timers after any canonical terminal publication. */
+  /** Clear one-shot timers after any canonical terminal publication.
+   * Invoked automatically from handleTerminalState; public for tests and
+   * out-of-band cleanup. */
   onTerminal(record: BackgroundJobRecord): void {
     this.supervisor?.onTerminal?.(record);
   }
