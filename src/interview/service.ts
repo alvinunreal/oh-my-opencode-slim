@@ -287,6 +287,7 @@ export function createInterviewService(
     }>;
     answerHistoryRetry?: Promise<void>;
     answerHistoryError?: string;
+    answerHistoryNoticeSent?: boolean;
     lastPatchError?: string;
     reportedPatchFailureHash?: string;
   };
@@ -688,8 +689,7 @@ export function createInterviewService(
           );
           pending.shift();
         } catch (error) {
-          memory.answerHistoryError =
-            'Answers were sent, but saving their history failed. The history will be retried automatically.';
+          noteAnswerHistoryFailure(interview);
           log('[interview] failed to retry interview answers', {
             error: String(error),
           });
@@ -699,6 +699,7 @@ export function createInterviewService(
 
       delete memory.pendingAnswerHistory;
       delete memory.answerHistoryError;
+      delete memory.answerHistoryNoticeSent;
     })();
     memory.answerHistoryRetry = retry;
     try {
@@ -710,10 +711,40 @@ export function createInterviewService(
     }
   }
 
+  function noteAnswerHistoryFailure(interview: InterviewRecord): void {
+    const memory = memoryFor(interview.id);
+    memory.answerHistoryError =
+      'Answers were sent, but saving their history failed. The history will be retried automatically.';
+  }
+
   function closeTurn(sessionID: string): void {
     const turn = turnFor(sessionID);
     turn.turnOpen = false;
     turn.serviceInitiated = false;
+  }
+
+  async function notifyAnswerHistoryFailure(
+    interview: InterviewRecord,
+    sessionID: string,
+  ): Promise<void> {
+    const memory = memoryFor(interview.id);
+    if (!memory.answerHistoryError || memory.answerHistoryNoticeSent) return;
+    memory.answerHistoryNoticeSent = true;
+    const docPath = relativeInterviewPath(
+      ctx.directory,
+      interview.markdownPath,
+    );
+    try {
+      await sessionRuntime.notify(
+        sessionID,
+        `⎔ Answers sent, but saving them to the Q&A history failed. Retrying automatically · Doc: ${docPath} [system status: continue without acknowledging this notification]`,
+      );
+    } catch (error) {
+      log('[interview] failed to notify answer history failure', {
+        interviewId: interview.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async function performSyncInterview(
@@ -1087,11 +1118,10 @@ export function createInterviewService(
       }
     }
 
-    if (memoryFor(interview.id).pendingAnswers && !turn.pendingNotice) {
+    const memory = memoryFor(interview.id);
+    if (memory.pendingAnswers && !turn.pendingNotice) {
       markTurnError(sessionID, 'answers were not applied to the spec');
     }
-
-    const memory = memoryFor(interview.id);
     if (memory.patchRepairSent === true && !turn.repairTurnStarted) {
       return;
     }
@@ -1189,6 +1219,7 @@ export function createInterviewService(
       turn.noticeHandled = true;
       delete turn.toolApplied;
       closeTurn(sessionID);
+      await notifyAnswerHistoryFailure(interview, sessionID);
       if (memoryFor(interview.id).lastNotifiedHash === pending.hash) {
         return;
       }
@@ -1210,6 +1241,7 @@ export function createInterviewService(
     turn.noticeHandled = true;
     delete turn.toolApplied;
     closeTurn(sessionID);
+    await notifyAnswerHistoryFailure(interview, sessionID);
     // Only a turn the interview service itself started (kickoff, answers,
     // block comment, chat, nudge, patch repair) may post the missing/failed
     // update notice. A plain user turn in an interview session stays silent.
@@ -1905,6 +1937,7 @@ export function createInterviewService(
       );
     }
     if (action === 'confirm-complete') {
+      await retryPendingAnswerHistory(interview);
       const didComplete = await withInterviewDocumentLock(
         interview.markdownPath,
         async () => {
@@ -1980,6 +2013,9 @@ export function createInterviewService(
     const requested = argument.trim();
     const activeId = activeInterviewIds.get(visibleSessionID);
     const activeInterview = activeId ? interviewsById.get(activeId) : undefined;
+    if (activeInterview) {
+      await retryPendingAnswerHistory(activeInterview);
+    }
     const requestedPath = requested
       ? resolveExistingInterviewPath(ctx.directory, outputFolder, requested)
       : null;

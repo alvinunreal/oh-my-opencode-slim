@@ -1050,6 +1050,8 @@ describe('completed interview service turns', () => {
       summary: 'Append failure spec',
       questions: [{ id: 'q-1', question: 'Platform?' }],
     });
+    await harness.service.notifyTurnStatus('ses-submit');
+    harness.notifyCalls.length = 0;
     const documentPath = (await harness.service.getInterviewState(interviewId))
       .interview.markdownPath;
     await fs.chmod(documentPath, 0o444);
@@ -1057,13 +1059,47 @@ describe('completed interview service turns', () => {
       await harness.service.submitAnswers(interviewId, [
         { questionId: 'q-1', answer: 'Web' },
       ]);
+      const pendingState = await harness.service.getInterviewState(interviewId);
+      expect(pendingState.mode).toBe('awaiting-agent');
+      expect(pendingState.lastParseError).toContain(
+        'saving their history failed',
+      );
+      await harness.service.handleEvent({
+        event: {
+          type: 'session.status',
+          properties: { sessionID: 'ses-submit', status: { type: 'busy' } },
+        },
+      });
+      await harness.service.handleEvent({
+        event: {
+          type: 'session.status',
+          properties: { sessionID: 'ses-submit', status: { type: 'idle' } },
+        },
+      });
+      await harness.service.handleEvent({
+        event: {
+          type: 'session.status',
+          properties: { sessionID: 'ses-submit', status: { type: 'idle' } },
+        },
+      });
+      expect(
+        harness.notifyCalls.filter((text) =>
+          text.includes('Q&A history failed'),
+        ),
+      ).toHaveLength(1);
+      const output = { parts: [] as Array<{ type: string; text?: string }> };
+      await harness.service.handleCommandExecuteBefore(
+        { command: 'implement', sessionID: 'ses-submit', arguments: '' },
+        output,
+      );
+      expect(
+        harness.notifyCalls.filter((text) =>
+          text.includes('Q&A history failed'),
+        ),
+      ).toHaveLength(1);
     } finally {
       await fs.chmod(documentPath, 0o644);
     }
-
-    const state = await harness.service.getInterviewState(interviewId);
-    expect(state.mode).toBe('awaiting-agent');
-    expect(state.lastParseError).toContain('saving their history failed');
 
     await Promise.all([
       harness.service.submitState('ses-submit', {
@@ -1079,6 +1115,15 @@ describe('completed interview service turns', () => {
         questions: [],
       }),
     ]);
+    await harness.service.handleEvent({
+      event: {
+        type: 'session.status',
+        properties: { sessionID: 'ses-submit', status: { type: 'idle' } },
+      },
+    });
+    expect(
+      harness.notifyCalls.some((text) => text.includes('Spec updated')),
+    ).toBe(true);
     const saved = await fs.readFile(documentPath, 'utf8');
     expect(saved.match(/A: Web/g)).toHaveLength(1);
     expect(
