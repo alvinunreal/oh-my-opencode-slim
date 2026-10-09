@@ -1806,3 +1806,27 @@ describe('v2 client shim prompt noReply delivery', () => {
     expect(call).not.toHaveProperty('resume');
   });
 });
+
+describe('experimental_v2 model domain threading', () => {
+  test('extras.modelDomain lands in experimental_v2', () => {
+    const list = async () => ({ data: [] });
+    const input = buildPluginInput(
+      { app: { name: 't', version: '0' } } as never,
+      { modelDomain: { list } },
+    );
+    expect(
+      (input as { experimental_v2?: { modelDomain?: unknown } }).experimental_v2
+        ?.modelDomain,
+    ).toBeInstanceOf(Object);
+  });
+
+  test('absent extras leave no modelDomain key', () => {
+    const input = buildPluginInput({
+      app: { name: 't', version: '0' },
+    } as never);
+    expect(
+      (input as { experimental_v2?: { modelDomain?: unknown } }).experimental_v2
+        ?.modelDomain,
+    ).toBeUndefined();
+  });
+});

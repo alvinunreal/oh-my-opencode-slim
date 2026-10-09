@@ -66,7 +66,7 @@ OpenCode Core → Plugin Initialization (index.ts)
 4. **Tool Registration**: Tools are created conditionally based on config (task_cancel, task_message, task_revive, task_status, task_result, wait_for_user, webfetch, AST-grep, acp_run)
 5. **MCP Registration**: Built-in MCPs are created (context7, gh_grep)
 6. **Hook Initialization**: Auto-update checker, phase reminders, skill filters, task-session manager, cache monitor, orchestrator-wake scheduler, etc.
-7. **Runtime Model Resolution**: Resolves model arrays to startup primaries; v1 `task` and `task_revive` share prompt-claimed live fallback intentions, `task_message` pins transcript execution selection excluding compaction summaries, and v2 uses per-call `model#variant` overrides; internal v1 completions still follow the continuation policy
+7. **Runtime Model Resolution**: Resolves model arrays to startup primaries; independent children leave their primary provider only when the parent's confirmed fallback records it in `downProviders`, choosing the first healthy entry in their own chain. Inherited children follow the live parent for either error scope. v1 `task` and `task_revive` share prompt-claimed intentions, `task_message` pins transcript execution selection excluding compaction summaries, and v2 uses per-call `model#variant` overrides; internal v1 completions still follow the continuation policy
 8. **TUI State Sync**: `recordTuiAgentModels()` captures resolved models/variants for TUI display
 9. **Health Check**: Validates agent/tool/MCP counts against `HEALTH_CHECK` thresholds, adjusted for disabled baseline tools via `minimumExpectedToolCount`
 10. **Companion Management**: Ensures companion version compatibility

@@ -2,8 +2,9 @@
  * v2 compaction hook bridge (`ctx.session.hook("compaction")`).
  *
  * Coverage:
- * - phase reminders are stripped, but job boards and untagged content
- *   survive to bridge running-job state into the summary
+ * - phase reminders and deepwork goal pointers are stripped, but job
+ *   boards and untagged content survive to bridge running-job state into
+ *   the summary
  * - read-only guarantees: `system` is never modified and `result` is
  *   never set (host-owned; open host bug — the compaction system prompt
  *   may be absent, so the bridge must not add or rewrite one)
@@ -17,6 +18,7 @@ import { readdirSync as readDirSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import * as path from 'node:path';
 import { createTaggedSyntheticPart } from '../hooks/cache-safe-injection';
+import { GOAL_POINTER_METADATA_KEY } from '../hooks/deepwork-goal';
 import { PHASE_REMINDER_METADATA_KEY } from '../hooks/phase-reminder';
 import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/task-session-manager/board-injection';
 import { flushLoggerForTesting } from '../utils/logger';
@@ -57,6 +59,10 @@ describe('createSessionCompactionBridge', () => {
         createTaggedSyntheticPart({
           text: 'PHASE REMINDER',
           metadataKey: PHASE_REMINDER_METADATA_KEY,
+        }),
+        createTaggedSyntheticPart({
+          text: 'GOAL POINTER',
+          metadataKey: GOAL_POINTER_METADATA_KEY,
         }),
         board,
         commandPart,

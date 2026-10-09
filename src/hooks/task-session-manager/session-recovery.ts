@@ -33,10 +33,7 @@ import { getClient } from '../../utils/opencode-client';
 import { pendingSessionPrune } from '../../utils/pending-session-prunes';
 import { delay } from '../../utils/polling';
 import { SESSION_ID_PATTERN, withTimeout } from '../../utils/session';
-import {
-  getRuntimeSessionStatusSnapshot,
-  runtimeSessionStatus,
-} from '../../utils/session-runtime-status';
+import { readLiveSession } from '../../utils/session-runtime-status';
 import {
   isNativeBackgroundLaunchOutput,
   parseTaskIdFromTaskOutput,
@@ -240,21 +237,17 @@ async function recoverRetainedSession(
 
   // #1388's live gate and persisted-result behavior precede any import.
   if (request.purpose === 'revive' && options.hostFlavor !== 'v2') {
-    const snapshot = await getRuntimeSessionStatusSnapshot(options.input, {
+    const live = await readLiveSession(options.input, sessionID, {
       timeoutMs: options.liveStatusTimeoutMs ?? 1_500,
     });
-    const liveStatus = snapshot.statuses.get(sessionID);
-    if (liveStatus === 'busy' || liveStatus === 'retry') {
+    if (live.kind === 'busy' || live.kind === 'retry') {
       return refuse(
         `${prefix}. The host is executing that session (it may have been restored after a restart); its result is still delivered on completion — do not re-dispatch.`,
       );
     }
-    if (
-      snapshot.error !== undefined ||
-      snapshot.malformedSessionIDs.has(sessionID)
-    ) {
+    if (live.kind === 'unknown') {
       return refuse(
-        `${prefix}. The host could not confirm the session state (${snapshot.error ?? 'malformed entry'}); retry task_revive.`,
+        `${prefix}. The host could not confirm the session state (${live.reason}); retry task_revive.`,
       );
     }
     const stop = fenced();
@@ -525,25 +518,18 @@ async function readLiveStatus(
   input: PluginInput,
   sessionID: string,
 ): Promise<{ kind: 'quiescent' } | RetainedRecoveryResult> {
-  const snapshot = await getRuntimeSessionStatusSnapshot(input);
-  if (
-    snapshot.error !== undefined ||
-    snapshot.malformedSessionIDs.has(sessionID)
-  ) {
+  const live = await readLiveSession(input, sessionID);
+  if (live.kind === 'unknown') {
     return refuse(
-      `Task ${sessionID} could not be verified against the live session map (${snapshot.error ?? 'malformed entry'}); no prompt was sent`,
+      `Task ${sessionID} could not be verified against the live session map (${live.reason}); no prompt was sent`,
     );
   }
-  const status = runtimeSessionStatus(snapshot, sessionID);
-  if (status === 'busy' || status === 'retry') {
+  if (live.kind === 'busy' || live.kind === 'retry') {
     return refuse(
-      `Task ${sessionID} is executing at the host (live status: ${status}); it was not imported and no prompt was sent`,
+      `Task ${sessionID} is executing at the host (live status: ${live.kind}); it was not imported and no prompt was sent`,
     );
   }
-  if (status === 'idle' || status === undefined) return { kind: 'quiescent' };
-  return refuse(
-    `Task ${sessionID} could not be verified against the live session map (unrecognized status); no prompt was sent`,
-  );
+  return { kind: 'quiescent' };
 }
 
 interface HostSession {

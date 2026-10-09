@@ -146,9 +146,11 @@ its message lease after timeout; this change does not alter that quarantine.
 errored, or stopped retained session may be revived immediately once its
 retained state has been verified safe. Acknowledgement controls parent and
 job-board consumption and reusable-pool display, not same-session revival.
-On v1 a real parent fallback routes that child's next prompt, like a `task_id`
-resume, also with explicit model inheritance. V2 retains the session model. A
-failed send may leave the v1 intention pending until claimed or evicted by the
+On v1 a confirmed parent fallback routes that child's next prompt, like a
+`task_id` resume; with explicit model inheritance it follows the parent's live
+model, whether selected by fallback or a manual change. V2 retains the session
+model. A failed send may leave the v1
+intention pending until claimed or evicted by the
 bounded FIFO.
 For existing tracked sessions, baseline capture has a 5-second deadline: expiry fails without sending a prompt
 and releases the relaunch lease. The local admission wait has a 10-second deadline;

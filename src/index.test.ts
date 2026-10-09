@@ -12,7 +12,10 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { RegistryFactoryBridge } from './agents/registry-bridge';
-import { stateFilePath } from './companion/manager';
+import {
+  companionSessionIdForDirectory,
+  stateFilePath,
+} from './companion/manager';
 import { RuntimeConfig } from './config/runtime';
 import * as wakeHooks from './hooks';
 import { isTaggedPart, stripTaggedContent } from './hooks/cache-safe-injection';
@@ -1921,14 +1924,16 @@ describe('plugin reload generation cleanup', () => {
       return state.sessions.map((s) => s.session_id);
     };
 
-    // onLoad registered this generation's manager in the state file.
-    expect(readSessionIds()).toContain(`proc_${process.pid}`);
+    const companionSessionId = companionSessionIdForDirectory(projectDir);
+
+    // onLoad registered this generation's project-scoped manager in the state file.
+    expect(readSessionIds()).toContain(companionSessionId);
 
     await hooks.dispose?.();
 
     // dispose must call companionManager.onExit(): the session entry is
     // withdrawn even if the next generation fails before its own onLoad.
-    expect(readSessionIds()).not.toContain(`proc_${process.pid}`);
+    expect(readSessionIds()).not.toContain(companionSessionId);
   });
 });
 
@@ -3070,6 +3075,7 @@ describe('plugin config model inheritance', () => {
     string,
     { parentID: string; prompted: boolean }
   >();
+  const transcripts = new Map<string, unknown[]>();
   const primary = { providerID: 'openrouter', modelID: 'openrouter/auto' };
   const fallback = { providerID: 'openai', modelID: 'gpt-6-luna' };
   const delegatedChain = ['openrouter/openrouter/auto', 'openai/gpt-6-luna'];
@@ -3084,6 +3090,7 @@ describe('plugin config model inheritance', () => {
     originalEnv = { ...process.env };
     delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
     hostChildren.clear();
+    transcripts.clear();
   });
 
   afterEach(async () => {
@@ -3098,15 +3105,9 @@ describe('plugin config model inheritance', () => {
 
   async function loadConfiguredPlugin(
     config: Record<string, unknown>,
-    existingDirectoryOrFallbackMessages?: string | unknown[],
+    existingDirectory?: string,
+    hostFlavor?: 'v2',
   ) {
-    const existingDirectory =
-      typeof existingDirectoryOrFallbackMessages === 'string'
-        ? existingDirectoryOrFallbackMessages
-        : undefined;
-    const fallbackMessages = Array.isArray(existingDirectoryOrFallbackMessages)
-      ? existingDirectoryOrFallbackMessages
-      : undefined;
     const configDir =
       existingDirectory ?? (await mkdtemp('/tmp/oh-my-opencode-inheritance-'));
     if (!existingDirectory) configDirs.push(configDir);
@@ -3133,7 +3134,7 @@ describe('plugin config model inheritance', () => {
       data:
         hostChildren.get(path.id)?.prompted === false
           ? []
-          : (fallbackMessages ?? [
+          : (transcripts.get(path.id) ?? [
               {
                 info: {
                   role: 'assistant',
@@ -3149,6 +3150,7 @@ describe('plugin config model inheritance', () => {
       directory: configDir,
       worktree: configDir,
       serverUrl: new URL('http://127.0.0.1:4096'),
+      hostFlavor,
     } as never);
   }
 
@@ -3167,31 +3169,56 @@ describe('plugin config model inheritance', () => {
   async function fallbackParent(
     hooks: Awaited<ReturnType<typeof loadConfiguredPlugin>>,
     sessionID: string,
+    failure: 'provider' | 'content-filter' = 'provider',
   ) {
+    transcripts.set(sessionID, [
+      {
+        info: { id: `msg-original-${sessionID}`, role: 'user', sessionID },
+        parts: [{ type: 'text', text: 'delegate this work' }],
+      },
+    ]);
     await selectParent(hooks, primary, sessionID);
-    await hooks.event?.({
-      event: {
-        type: 'message.updated',
-        properties: {
-          info: {
-            id: 'msg-primary-error',
-            sessionID,
-            role: 'assistant',
-            agent: 'orchestrator',
-            ...primary,
+    const promptAsync = client.session.promptAsync as (
+      input: unknown,
+    ) => Promise<unknown>;
+    const replay = mock(promptAsync);
+    client.session.promptAsync = replay;
+    try {
+      await hooks.event?.({
+        event: {
+          type: 'message.updated',
+          properties: {
+            info: {
+              id: `msg-primary-error-${sessionID}`,
+              sessionID,
+              role: 'assistant',
+              agent: 'orchestrator',
+              ...primary,
+              ...(failure === 'content-filter'
+                ? { finish: 'content-filter', time: { completed: Date.now() } }
+                : {}),
+            },
           },
         },
-      },
-    } as never);
-    await hooks.event?.({
-      event: {
-        type: 'session.error',
-        properties: {
-          sessionID,
-          error: { statusCode: 403, message: 'Key limit exceeded' },
-        },
-      },
-    } as never);
+      } as never);
+      if (failure === 'provider') {
+        await hooks.event?.({
+          event: {
+            type: 'session.error',
+            properties: {
+              sessionID,
+              error: { statusCode: 403, message: 'Key limit exceeded' },
+            },
+          },
+        } as never);
+      }
+      expect(replay.mock.calls.at(-1)?.[0]).toMatchObject({
+        path: { id: sessionID },
+        body: { model: fallback },
+      });
+    } finally {
+      client.session.promptAsync = promptAsync;
+    }
   }
 
   async function assertAdmissionUsesFinalModel(
@@ -3273,14 +3300,15 @@ describe('plugin config model inheritance', () => {
     parentSessionID: string,
     callID: string,
     primary: { providerID: string; modelID: string },
-    options: { background?: boolean; task_id?: string } = {},
+    options: { background?: boolean; task_id?: string; agent?: string } = {},
   ) {
+    const { agent = 'operator', ...taskOptions } = options;
     const output = {
       args: {
-        subagent_type: 'operator',
+        subagent_type: agent,
         description: 'verify fallback routing',
         prompt: 'return ok',
-        ...options,
+        ...taskOptions,
       },
     };
     const task = { tool: 'task', sessionID: parentSessionID, callID };
@@ -3301,13 +3329,13 @@ describe('plugin config model inheritance', () => {
         id: `msg-${childID}`,
         role: 'user',
         sessionID: childID,
-        agent: 'operator',
+        agent,
         model: { ...primary },
       },
       parts: [{ type: 'text', text: 'return ok' }],
     };
     await hooks['chat.message']?.(
-      { sessionID: childID, agent: 'operator', model: primary } as never,
+      { sessionID: childID, agent, model: primary } as never,
       childOutput as never,
     );
     hostChildren.set(childID, { parentID: parentSessionID, prompted: true });
@@ -3318,15 +3346,20 @@ describe('plugin config model inheritance', () => {
     };
   }
 
-  test('only a real parent fallback routes, keeping the entry variant', async () => {
-    const hooks = await loadConfiguredPlugin({
-      agents: {
-        orchestrator: { model: ['provider/primary', 'backup/parent'] },
-        operator: {
-          model: [{ id: 'backup/child', variant: 'max' }, 'provider/primary'],
+  test('v2 provider fallback routes to the first healthy child entry with its variant', async () => {
+    const hooks = await loadConfiguredPlugin(
+      {
+        fallback: { maxRetries: 0 },
+        agents: {
+          orchestrator: { model: ['provider/primary', 'backup/parent'] },
+          operator: {
+            model: ['provider/child', { id: 'backup/child', variant: 'max' }],
+          },
         },
       },
-    });
+      undefined,
+      'v2',
+    );
     try {
       await selectParent(hooks, { providerID: 'provider', modelID: 'primary' });
       expect(
@@ -3335,7 +3368,21 @@ describe('plugin config model inheritance', () => {
           parentSessionID: 'parent',
         }),
       ).toBeUndefined();
-      await selectParent(hooks, { providerID: 'backup', modelID: 'parent' });
+      const switchModel = mock(async () => ({}));
+      await hooks['v2.session.retry']?.(
+        {
+          sessionID: 'parent',
+          agent: 'orchestrator',
+          model: { providerID: 'provider', id: 'primary' },
+          error: { type: 'provider.rate-limit', message: 'rate limit' },
+          decision: { retry: true },
+        } as never,
+        switchModel as never,
+      );
+      expect(switchModel).toHaveBeenCalledWith('parent', {
+        providerID: 'backup',
+        id: 'parent',
+      });
       expect(
         (hooks as any)['v2.resolveDelegatedModel']({
           agentType: 'operator',
@@ -3430,61 +3477,49 @@ describe('plugin config model inheritance', () => {
     }
   });
 
-  test.each([
-    ['exact child fallback', delegatedChain, fallback],
-    [
-      'working parent provider',
-      ['openrouter/anthropic/claude-opus', 'openai/gpt-6-astra'],
-      { providerID: 'openai', modelID: 'gpt-6-astra' },
-    ],
-  ])(
-    'v1 delegation starts on the %s instead of a provider the parent exhausted',
-    async (label, childModels, expectedModel) => {
-      const hooks = await loadConfiguredPlugin({
-        agents: {
-          orchestrator: { model: delegatedChain },
-          operator: { model: childModels },
+  test('v1 content-filter fallback leaves an independent child on its primary', async () => {
+    const hooks = await loadConfiguredPlugin(delegatedFallbackConfig);
+    try {
+      await fallbackParent(hooks, 'parent', 'content-filter');
+      const routed = await delegateV1Child(hooks, 'parent', 'policy', primary);
+      expect(routed.childModel).toEqual(primary);
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test('v1 provider fallback moves only children whose primary provider is down', async () => {
+    const google = { providerID: 'google', modelID: 'gemini-2.5-pro' };
+    const hooks = await loadConfiguredPlugin({
+      agents: {
+        ...delegatedFallbackConfig.agents,
+        explorer: { model: ['google/gemini-2.5-pro', 'openai/gpt-6-luna'] },
+      },
+    });
+    try {
+      await fallbackParent(hooks, 'parent');
+      const operator = await delegateV1Child(hooks, 'parent', 'down', primary);
+      const explorer = await delegateV1Child(
+        hooks,
+        'parent',
+        'healthy',
+        google,
+        {
+          agent: 'explorer',
         },
-      });
-      const hostConfig: Record<string, unknown> = { agent: {} };
-
-      try {
-        await hooks.config?.(hostConfig);
-        await hooks['chat.message']?.(
-          {
-            sessionID: 'orchestrator-fallback',
-            agent: 'orchestrator',
-            model: fallback,
-          } as never,
-          {} as never,
-        );
-        const routed = await delegateV1Child(
-          hooks,
-          'orchestrator-fallback',
-          `call-${label}`,
-          primary,
-        );
-
-        // No hidden agent aliases: the host task permission and agent
-        // lookup keep seeing the canonical specialist.
-        expect(routed.subagentType).toBe('operator');
-        const agents = hostConfig.agent as Record<string, unknown>;
-        expect(
-          Object.keys(agents).some((name) =>
-            name.startsWith('slim-internal-fallback'),
-          ),
-        ).toBe(false);
-        expect(routed.childModel).toEqual(expectedModel);
-      } finally {
-        await hooks.dispose?.();
-      }
-    },
-  );
+      );
+      expect(operator.subagentType).toBe('operator');
+      expect(operator.childModel).toEqual(fallback);
+      expect(explorer.childModel).toEqual(google);
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
 
   test('v1 background child claims only its new prompt, not other parents or later prompts; failed lookups abort both reads', async () => {
     let hooks = await loadConfiguredPlugin(delegatedFallbackConfig);
     try {
-      await selectParent(hooks, fallback);
+      await fallbackParent(hooks, 'parent');
       const { childOutput, childModel } = await delegateV1Child(
         hooks,
         'parent',
@@ -3500,7 +3535,7 @@ describe('plugin config model inheritance', () => {
         delegatedFallbackConfig,
         lastConfigDir,
       );
-      await selectParent(hooks, fallback);
+      await fallbackParent(hooks, 'parent');
       await hooks['tool.execute.before']?.(
         { tool: 'task', sessionID: 'parent', callID: 'leaked' } as never,
         { args: { subagent_type: 'operator', background: true } } as never,
@@ -3532,8 +3567,7 @@ describe('plugin config model inheritance', () => {
 
   async function assertInheritedRevive(
     operator: Record<string, unknown>,
-    parentModel = fallback,
-    childModel = primary,
+    parentFallsBack = true,
   ) {
     const hooks = await loadConfiguredPlugin({
       agents: { orchestrator: { model: delegatedChain }, operator },
@@ -3544,7 +3578,7 @@ describe('plugin config model inheritance', () => {
         hooks,
         'parent',
         'inherited',
-        childModel,
+        primary,
       );
       const sessionID = childOutput.message.sessionID;
       await hooks['tool.execute.after']?.(
@@ -3553,7 +3587,8 @@ describe('plugin config model inheritance', () => {
           output: `task_id: ${sessionID}\nstate: completed\nresult: done`,
         } as never,
       );
-      await selectParent(hooks, parentModel);
+      if (parentFallsBack) await fallbackParent(hooks, 'parent');
+      else await selectParent(hooks, fallback);
       client.session.promptAsync = async () => {
         await hooks['chat.message']?.(
           { sessionID, agent: 'operator' } as never,
@@ -3565,9 +3600,7 @@ describe('plugin config model inheritance', () => {
         { task_id: sessionID, prompt: 'continue' },
         { sessionID: 'parent', agent: 'orchestrator' } as never,
       );
-      expect(childOutput.message.model).toEqual(
-        parentModel === fallback ? fallback : childModel,
-      );
+      expect(childOutput.message.model).toEqual(fallback);
     } finally {
       await hooks.dispose?.();
     }
@@ -3577,14 +3610,13 @@ describe('plugin config model inheritance', () => {
     await assertInheritedRevive({ inheritModelFrom: 'orchestrator' });
   });
 
-  test('v1 inherited revive does not route a parent primary', async () => {
+  test('v1 inherited revive follows a manual parent selection', async () => {
     await assertInheritedRevive(
       {
         inheritModelFrom: 'session',
         model: ['other/primary', 'openrouter/openrouter/auto'],
       },
-      primary,
-      fallback,
+      false,
     );
   });
 
@@ -3605,7 +3637,7 @@ describe('plugin config model inheritance', () => {
           output: `task_id: ${sessionID}\nstate: completed\nresult: done`,
         } as never,
       );
-      await selectParent(hooks, fallback);
+      await fallbackParent(hooks, 'parent');
       const models: unknown[] = [];
       const prompt = async () => {
         childOutput.message.model = { ...primary };
@@ -3643,7 +3675,7 @@ describe('plugin config model inheritance', () => {
       },
     });
     try {
-      await selectParent(hooks, fallback);
+      await fallbackParent(hooks, 'parent');
       const get = mock(client.session.get as any);
       client.session.get = get;
       const routed = await delegateV1Child(hooks, 'parent', 'new', fallback);
@@ -3657,7 +3689,7 @@ describe('plugin config model inheritance', () => {
   test('v1 task_id routes the next prompt of a resumed child', async () => {
     const hooks = await loadConfiguredPlugin(delegatedFallbackConfig);
     try {
-      await selectParent(hooks, fallback);
+      await fallbackParent(hooks, 'parent');
       await delegateV1Child(hooks, 'parent', 'initial', primary);
       await hooks['tool.execute.after']?.(
         { tool: 'task', sessionID: 'parent', callID: 'initial' } as never,
@@ -3695,12 +3727,7 @@ describe('plugin config model inheritance', () => {
   });
 
   test('v1 delegation uses the fallback replay model instead of the last external selection', async () => {
-    const hooks = await loadConfiguredPlugin(delegatedFallbackConfig, [
-      {
-        info: { id: 'msg-original', role: 'user' },
-        parts: [{ type: 'text', text: 'delegate this work' }],
-      },
-    ]);
+    const hooks = await loadConfiguredPlugin(delegatedFallbackConfig);
     const sessionID = 'orchestrator-live-fallback';
     const fallbackMessageID = 'msg-fallback-replay';
 
@@ -3753,18 +3780,10 @@ describe('plugin config model inheritance', () => {
   ] as const)(
     'v1 %s policy selects the completion model after a confirmed fallback',
     async (continuationPolicy, expectedProvider, expectedModel) => {
-      const hooks = await loadConfiguredPlugin(
-        {
-          ...delegatedFallbackConfig,
-          fallback: { maxRetries: 0, continuationPolicy },
-        },
-        [
-          {
-            info: { id: 'msg-original', role: 'user' },
-            parts: [{ type: 'text', text: 'continue after fallback' }],
-          },
-        ],
-      );
+      const hooks = await loadConfiguredPlugin({
+        ...delegatedFallbackConfig,
+        fallback: { maxRetries: 0, continuationPolicy },
+      });
       const sessionID = `continuation-${continuationPolicy}`;
 
       try {

@@ -1,6 +1,7 @@
 import { afterEach, expect, mock, test } from 'bun:test';
 import { BackgroundJobBoard } from '../../utils/background-job-fixture';
 import { createBackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
+import { getRuntimeSessionStatusSnapshot } from '../../utils/session-runtime-status';
 import { createRuntimeStatusReconciler } from './runtime-status-reconciliation';
 
 const cleanup: Array<() => void> = [];
@@ -8,7 +9,7 @@ afterEach(() => {
   for (const dispose of cleanup.splice(0)) dispose();
 });
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
-function harness(status?: () => Promise<unknown>) {
+function harness(status?: () => Promise<unknown>, delayMs = 10) {
   const board = new BackgroundJobBoard();
   const run = board.registerLaunch({
     taskID: 'child',
@@ -25,14 +26,14 @@ function harness(status?: () => Promise<unknown>) {
     input,
     backgroundJobBoard: board,
     terminalGate: gate,
-    delayMs: 10,
+    delayMs,
     statusTimeoutMs: 5,
   });
   cleanup.push(() => {
     reconciler.dispose();
     gate.dispose();
   });
-  return { board, run, gate, reconciler };
+  return { board, run, gate, reconciler, input };
 }
 
 test('batches all retained records, including consumed terminals, in one lookup', async () => {
@@ -144,6 +145,34 @@ test('direct requests serialize and include jobs registered during a read', asyn
   expect(status).toHaveBeenCalledTimes(1);
   resolve({ data: {} });
   await Promise.all([first, second]);
+  expect(status).toHaveBeenCalledTimes(2);
+});
+test('a pass that collides with an open read reruns once instead of one read per task', async () => {
+  let release!: () => void;
+  const ids = Array.from({ length: 15 }, (_, i) => `t${i}`);
+  const status = mock(() =>
+    status.mock.calls.length === 1
+      ? new Promise((done) => {
+          release = () => done({ data: {} });
+        })
+      : Promise.resolve({
+          data: Object.fromEntries(ids.map((id) => [id, { type: 'busy' }])),
+        }),
+  );
+  const h = harness(status, 60_000);
+  for (const taskID of ids)
+    h.board.registerLaunch({
+      taskID,
+      parentSessionID: 'parent',
+      agent: 'fixer',
+    });
+  const foreign = getRuntimeSessionStatusSnapshot(h.input);
+  await h.reconciler.reconcile();
+  await h.reconciler.reconcile();
+  expect(h.board.list().some((run) => run.statusUncertain)).toBe(false);
+  release();
+  await foreign;
+  for (let i = 0; i < 5; i++) await tick();
   expect(status).toHaveBeenCalledTimes(2);
 });
 test('missing session.status disables both direct and scheduled polling', async () => {

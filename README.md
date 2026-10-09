@@ -15,6 +15,11 @@
   </p>
 
   <p>
+    <a href="https://svgdiagram.ai"><img src="img/svgdiagram-logo.svg" alt="svgdiagram.ai" width="40" height="28" align="absmiddle"></a>&nbsp;
+    <a href="https://svgdiagram.ai"><b>svgdiagram.ai</b></a> <sub>· Turn your notes into clean, editable SVG diagrams</sub>
+  </p>
+
+  <p>
     <b>English</b> | <a href="README.zh-CN.md">简体中文</a> | <a href="README.ja-JP.md">日本語</a> | <a href="README.ko-KR.md">한국어</a> | <a href="README.fa-IR.md">فارسی</a>
   </p>
 
@@ -539,7 +544,10 @@ If any agent fails to respond, check your provider authentication and config fil
 ### Observer: The Silent Witness
 
 > [!NOTE]
-> **Why a separate agent?** If your Orchestrator model is not multimodal, enable Observer to handle images, screenshots, and other visual files. Observer is disabled by default and gives the Orchestrator a dedicated multimodal reader without forcing you to change your main reasoning model. Set `disabled_agents: []` and an `observer` model in your configuration. The bundled `opencode-go` install preset does this automatically because its GLM Orchestrator is not multimodal. Omitting `image_routing` preserves existing conditional Observer behavior. `"auto"` saves attachments under `.opencode/images/<session>/` and delegates by path; `"direct"` keeps image parts inline for native vision. Saved workspace images are not automatically deleted. Remove the whole `.opencode/images/` directory or a single session subdirectory manually when no longer needed (references in old conversations then stop resolving); images from session-less messages are saved at the top level.
+> **Why a separate agent?** If your Orchestrator model is not multimodal, enable Observer to handle images, screenshots, and other visual files. Observer is disabled by default and gives the Orchestrator a dedicated multimodal reader without forcing you to change your main reasoning model. Set `disabled_agents: []` and an `observer` model in your configuration. The bundled `opencode-go` install preset does this automatically because its GLM Orchestrator is not multimodal. Omitting `image_routing` preserves existing conditional Observer behavior. `"auto"` is capability-aware: models that accept image input keep attachments inline for native vision; non-vision chains get attachments saved under `.opencode/images/<session>/` with a delegation nudge by path. `"direct"` always keeps image parts inline. Saved workspace images are not automatically deleted. Remove the whole `.opencode/images/` directory or a single session subdirectory manually when no longer needed (references in old conversations then stop resolving); images from session-less messages are saved at the top level.
+
+> [!TIP]
+> **Subagents reading images.** Advisory subagents (explorer, librarian, oracle, designer, councillors) can dispatch `@observer` themselves for image files on disk. On OpenCode v2 hosts this needs one extra hop of nesting, which the host denies by default — set `"experimental": { "subagent_depth": 2 }` in your opencode config to enable it. Fixer, observer itself, and the council synthesizer stay non-spawning by design.
 
 <table>
   <tr>
@@ -553,7 +561,7 @@ If any agent fails to respond, check your provider authentication and config fil
 
 - Images, screenshots, diagrams → `read` tool (native image support)
 - PDFs and binary documents → `read` tool (text + structure extraction)
-- **Disabled by default** - enable with `"disabled_agents": []` and configure a vision-capable model; installing with `--preset=opencode-go` enables it with `opencode-go/mimo-v2.5`. In `"auto"`, attachments are saved as workspace assets and routed to Observer by path; set `"image_routing": "direct"` to keep them inline for the Orchestrator.
+- **Disabled by default** - enable with `"disabled_agents": []` and configure a vision-capable model; installing with `--preset=opencode-go` enables it with `opencode-go/mimo-v2.5`. In `"auto"`, attachments ride the turn model's capabilities: vision-capable models read them inline, non-vision chains get them saved as workspace assets and routed to Observer by path; set `"image_routing": "direct"` to always keep them inline.
 
     </td>
   </tr>

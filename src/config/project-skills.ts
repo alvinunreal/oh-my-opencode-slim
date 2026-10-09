@@ -6,10 +6,9 @@ import { getProjectConfigDirectories } from './loader';
 /**
  * Discover valid skills in the current and ancestor project directories.
  *
- * This intentionally mirrors only the ancestor-local `.opencode/skills`
- * portion of OpenCode's broader skill discovery. Global skills, external
- * compatibility directories, configured extra paths, and URL sources are
- * outside this helper's scope.
+ * This intentionally mirrors the ancestor-local `.opencode/skills` and
+ * `.agents/skills` portions of OpenCode's broader skill discovery. Global
+ * skills, external configured paths, and URL sources are outside this scope.
  */
 export function discoverProjectLocalSkillNames(
   projectDirectory: string,
@@ -20,24 +19,30 @@ export function discoverProjectLocalSkillNames(
     projectDirectory,
     hostFlavor,
   )) {
-    for (const name of discoverLocalSkills(path.dirname(configDirectory))) {
-      names.add(name);
+    const projectRoot = path.dirname(configDirectory);
+    for (const skillDirectory of ['.opencode', '.agents'] as const) {
+      for (const name of discoverLocalSkills(projectRoot, skillDirectory)) {
+        names.add(name);
+      }
     }
   }
   return [...names].sort((left, right) => left.localeCompare(right));
 }
 
-function discoverLocalSkills(projectDirectory: string): string[] {
-  const configuredRoot = path.join(projectDirectory, '.opencode', 'skills');
+function discoverLocalSkills(
+  projectDirectory: string,
+  skillDirectory: '.opencode' | '.agents',
+): string[] {
+  const configuredRoot = path.join(projectDirectory, skillDirectory, 'skills');
   let root: string;
 
   try {
     const canonicalProject = fs.realpathSync(projectDirectory);
     root = fs.realpathSync(configuredRoot);
-    const expectedRoot = path.join(canonicalProject, '.opencode', 'skills');
+    const expectedRoot = path.join(canonicalProject, skillDirectory, 'skills');
 
     // Keep the opt-in strictly project-local. In particular, do not let a
-    // symlinked `.opencode` or `skills` directory turn this into discovery of
+    // symlinked skill root turn this into discovery of
     // an external/global skill tree.
     if (root !== expectedRoot) {
       return [];

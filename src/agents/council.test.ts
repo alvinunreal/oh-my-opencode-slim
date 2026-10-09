@@ -24,6 +24,12 @@ function reinforced(prompt: string): string {
 }
 
 describe('createCouncilAgent', () => {
+  test('synthesis permission denies nested dispatch', () => {
+    const permission = createCouncilAgent('provider/model').config
+      .permission as Record<string, unknown>;
+    expect(permission.task).toBe('deny');
+  });
+
   test('factory emits the base prompt without inline reinforcement', () => {
     const prompt = councilPrompt('test/model');
     expect(prompt).toContain('## Council Response');

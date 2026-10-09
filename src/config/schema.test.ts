@@ -315,6 +315,7 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
       'phase-reminder',
       'foreground-fallback',
       'deepwork-guard',
+      'deepwork-goal',
       'chat-headers',
       'cache-monitor',
       'json-error-recovery',

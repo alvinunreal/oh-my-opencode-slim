@@ -94,6 +94,46 @@ describe('processImageAttachments routing', () => {
     expect(existsSync(path.join(workDir, '.opencode'))).toBe(false);
   });
 
+  it('keeps image parts inline in auto mode when the model accepts image input', () => {
+    const workDir = path.join(TEST_DIR, 'auto-native-vision');
+    const message = makeUserMsg([IMG]);
+
+    const result = processImageAttachments({
+      messages: [message],
+      workDir,
+      imageRouting: 'auto',
+      disabledAgents: new Set(),
+      modelAcceptsImages: true,
+      log: () => {},
+    });
+
+    expect(result).toBe(false);
+    expect(imagePartCount(message)).toBe(1);
+    expect(existsSync(path.join(workDir, '.opencode'))).toBe(false);
+  });
+
+  it('intercepts in auto mode when the model is known to lack image input', () => {
+    const workDir = path.join(TEST_DIR, 'auto-no-vision');
+    const message = makeUserMsg([IMG]);
+
+    const result = processImageAttachments({
+      messages: [message],
+      workDir,
+      imageRouting: 'auto',
+      disabledAgents: new Set(),
+      modelAcceptsImages: false,
+      log: () => {},
+    });
+
+    expect(result).toBe(false);
+    expect(imagePartCount(message)).toBe(0);
+    expect(
+      message.parts.some((part: unknown) =>
+        JSON.stringify(part).includes('[Image attachment detected.'),
+      ),
+    ).toBe(true);
+  });
+
   it('does no filesystem work on text-only auto transforms', () => {
     const workDir = path.join(TEST_DIR, 'text-only');
     const message = makeUserMsg([{ type: 'text', text: 'hello' }]);

@@ -122,6 +122,22 @@ describe('pid-file-lock', () => {
     });
   });
 
+  test('ownership fence detects a replaced owner token', () => {
+    const root = fs.mkdtempSync(join(tmpdir(), 'omo-pidlock-'));
+    roots.push(root);
+    const lockFile = join(root, 'resource');
+    const lockDir = `${lockFile}.lock`;
+
+    const release = acquirePidFileLock(lockFile);
+    expect(release?.isOwned()).toBe(true);
+
+    fs.writeFileSync(join(lockDir, 'owner'), `${process.pid}\nother-token`);
+    expect(release?.isOwned()).toBe(false);
+
+    release?.();
+    expect(fs.existsSync(lockDir)).toBe(true);
+  });
+
   test('release removes the lock when the owner token still matches', () => {
     const root = fs.mkdtempSync(join(tmpdir(), 'omo-pidlock-'));
     roots.push(root);

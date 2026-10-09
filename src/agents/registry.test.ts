@@ -22,7 +22,10 @@ function build(
   hostSnapshot: Record<string, unknown>,
   options: Record<string, unknown> = {},
 ) {
-  const definitions = createAgents(runtime);
+  const definitions = createAgents(
+    runtime,
+    options as Parameters<typeof createAgents>[1],
+  );
   return buildResolvedAgentRegistry(runtime, {
     hostSnapshot,
     definitions,
@@ -1919,5 +1922,68 @@ describe('finalized existing-agent registry', () => {
     expect(registry.finalAgentConfig['orchestrator-agent']).toMatchObject({
       model: 'provider/orchestrator-fallback',
     });
+  });
+});
+
+describe('nested-dispatch permission stance', () => {
+  test('user permission override without a task key keeps the role stance', () => {
+    const runtime = runtimeFor({ disabled_agents: [] });
+    const registry = build(
+      runtime,
+      { agent: { oracle: { permission: { read: 'allow' } } } },
+      { hostFlavor: 'v2' },
+    );
+    const permission = (
+      registry.finalAgentConfig.oracle as {
+        permission: Record<string, unknown>;
+      }
+    ).permission;
+    expect(permission.read).toBe('allow');
+    expect(permission.task).toEqual({ '*': 'deny', observer: 'allow' });
+  });
+
+  test('user task override wins over the role default', () => {
+    const runtime = runtimeFor({ disabled_agents: [] });
+    const registry = build(
+      runtime,
+      { agent: { oracle: { permission: { task: 'deny' } } } },
+      { hostFlavor: 'v2' },
+    );
+    const permission = (
+      registry.finalAgentConfig.oracle as {
+        permission: Record<string, unknown>;
+      }
+    ).permission;
+    expect(permission.task).toBe('deny');
+  });
+
+  test('advisory roles keep observer-only dispatch end to end', () => {
+    const runtime = runtimeFor({ disabled_agents: [] });
+    const registry = build(runtime, {}, { hostFlavor: 'v2' });
+    for (const name of ['explorer', 'librarian', 'oracle', 'designer']) {
+      const permission = (
+        registry.finalAgentConfig[name] as {
+          permission: Record<string, Record<string, string>>;
+        }
+      ).permission;
+      expect(Object.keys(permission.task)).toEqual(['*', 'observer']);
+    }
+    // Observer is disabled by default and absent from the registry; its
+    // leaf deny is pinned by the role-definitions unit test.
+    for (const name of ['fixer']) {
+      const permission = (
+        registry.finalAgentConfig[name] as {
+          permission: Record<string, Record<string, string>>;
+        }
+      ).permission;
+      expect(permission.task).toEqual({ '*': 'deny' });
+    }
+    // The orchestrator stays unrestricted.
+    const orchestrator = (
+      registry.finalAgentConfig.orchestrator as {
+        permission: Record<string, unknown>;
+      }
+    ).permission;
+    expect(orchestrator.task).toBeUndefined();
   });
 });

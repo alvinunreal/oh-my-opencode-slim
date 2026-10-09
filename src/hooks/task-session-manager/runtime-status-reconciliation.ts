@@ -22,6 +22,7 @@ export function createRuntimeStatusReconciler(options: {
   let disposed = false;
   let activeReconcile: Promise<void> | undefined;
   let rerunRequested = false;
+  let pendingRetryAfter: Promise<void> | undefined;
   let capability: boolean | undefined;
   function supported(): boolean {
     if (capability === undefined) {
@@ -69,6 +70,21 @@ export function createRuntimeStatusReconciler(options: {
       timeoutMs: options.statusTimeoutMs,
     });
     if (disposed) return;
+    if (snapshot.retryAfter) {
+      // A collision is not an observation: rerun the whole pass once the open
+      // read settles, instead of one full-map read per task through the gate.
+      if (snapshot.retryAfter === pendingRetryAfter) return;
+      pendingRetryAfter = snapshot.retryAfter;
+      void snapshot.retryAfter
+        .then(() => {
+          pendingRetryAfter = undefined;
+          return reconcile();
+        })
+        .catch((err) => {
+          log('[runtime-status-reconciliation] rerun failed', String(err));
+        });
+      return;
+    }
     const pending: Promise<unknown>[] = [];
     for (const token of tokens) {
       const result = options.terminalGate.observe(

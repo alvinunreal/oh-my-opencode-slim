@@ -29,7 +29,7 @@ import { getClient } from '../../utils/opencode-client';
 import { withTimeout } from '../../utils/session';
 import {
   DEFAULT_RUNTIME_SESSION_STATUS_TIMEOUT_MS,
-  getRuntimeSessionStatusSnapshot,
+  readLiveSession,
 } from '../../utils/session-runtime-status';
 import { isGenuineOperatorMessage } from '../orchestrator-wake/index';
 import type { SessionLifecycle } from '../session-lifecycle';
@@ -236,6 +236,7 @@ export function createTaskSessionManagerHook(
      *  router defer terminal bookkeeping for persistent 401/410 errors
      *  until recovery is impossible. */
     willAttemptFallback?: (sessionID: string) => boolean;
+    fallbackFailureReason?: (sessionID: string) => string;
     coordinator?: SessionLifecycle;
     /** Surface a background child's newly opened input wait to the parent
      * (question/permission that would otherwise park the child forever with
@@ -284,7 +285,7 @@ export function createTaskSessionManagerHook(
             query: { ...query, limit: 1 },
             throwOnError: true,
           }),
-          getRuntimeSessionStatusSnapshot(_ctx),
+          readLiveSession(_ctx, requested),
         ]),
         DEFAULT_RUNTIME_SESSION_STATUS_TIMEOUT_MS,
         'Host child adoption timed out',
@@ -299,20 +300,16 @@ export function createTaskSessionManagerHook(
       //  3. its title suffix names the requested agent;
       //  4. its last message is a terminal result (completed or error) per
       //     classifyTerminalEvidence, the terminal gate's own classifier;
-      //  5. the runtime status read succeeded;
-      //  6. the child's status entry is well-formed;
-      //  7. the child is idle (no entry counts as idle);
-      //  8. no foreground fallback is pending for the child;
-      //  9. the parent's boundary did not change during the reads;
-      // 10. no deletion tombstone suppresses the child.
+      //  5. fresh live status confirms quiescence (idle or valid absence);
+      //  6. no foreground fallback is pending for the child;
+      //  7. the parent's boundary did not change during the reads;
+      //  8. no deletion tombstone suppresses the child.
       if (
         info.parentID !== parent ||
         !(info.time.created < boundary) ||
         suffix?.[1] !== agent ||
         (evidence.verdict !== 'completed' && evidence.verdict !== 'error') ||
-        live.error !== undefined ||
-        live.malformedSessionIDs.has(requested) ||
-        (live.statuses.get(requested) ?? 'idle') !== 'idle' ||
+        (live.kind !== 'idle' && live.kind !== 'absent') ||
         options.isFallbackInProgress?.(requested) ||
         historyBoundaries.get(parent) !== boundary ||
         options.isDisposed?.() ||
@@ -359,8 +356,9 @@ export function createTaskSessionManagerHook(
       observationRevisionFor: (taskID, generation) =>
         options.revivedRunTracker?.revisionFor(taskID, generation),
       isObservationPending: (taskID, generation) =>
-        options.revivedRunTracker?.isObservationPending(taskID, generation) ??
-        false,
+        deferredInlineErrors.has(taskID) ||
+        (options.revivedRunTracker?.isObservationPending(taskID, generation) ??
+          false),
     });
 
   const rememberDeletedSession = (sessionID: string): void => {
@@ -485,6 +483,10 @@ export function createTaskSessionManagerHook(
    *  failover-worthy error with an armed fallback chain), mapped to the
    *  summary the idle backstop publishes when no recovery happens. */
   const deferredInlineErrors = new Map<string, string>();
+  const withFallbackReason = (sessionID: string, text: string): string =>
+    [text, options.fallbackFailureReason?.(sessionID)]
+      .filter(Boolean)
+      .join('\n');
 
   // Forward refs for circular deps — set after corresponding managers exist.
   // These are captured by closure in createIdleReconciler and only called
@@ -513,8 +515,9 @@ export function createTaskSessionManagerHook(
     // entries to poison a later reuse of the session.
     consumeDeferredError: (sessionID) => {
       const message = deferredInlineErrors.get(sessionID);
-      if (message !== undefined) deferredInlineErrors.delete(sessionID);
-      return message;
+      if (message === undefined) return;
+      deferredInlineErrors.delete(sessionID);
+      return withFallbackReason(sessionID, message);
     },
   });
   const runtimeStatusReconciler = createRuntimeStatusReconciler({
@@ -525,7 +528,12 @@ export function createTaskSessionManagerHook(
   });
 
   const idleSessionTokens = createIdleSessionTokens({
-    onInvalidate: idleReconciler.onInvalidateIdle,
+    // Parent lifecycle invalidation must not strand a deferred child error.
+    // Live busy explicitly cancels its backstop and clears the deferral.
+    onInvalidate: (sessionID) => {
+      if (!deferredInlineErrors.has(sessionID))
+        idleReconciler.onInvalidateIdle(sessionID);
+    },
   });
   getIdleSessionToken = (s) => idleSessionTokens.getSessionToken(s);
   isCurrentIdleSessionToken = (s, t) =>
@@ -552,13 +560,14 @@ export function createTaskSessionManagerHook(
         idleSessionTokens.clearSession(sessionId);
       }
       inputWaits.clearInputWaits(sessionId);
-      idleReconciler.clearIdleTimers(sessionId);
       // During a foreground fallback abort/re-prompt cycle, the session
       // is being torn down and immediately recreated with a fallback model.
       // Dropping the job from the board here would make the orchestrator
       // lose track of the task and report it as cancelled even though the
       // oracle actually completed.
       if (!options.isFallbackInProgress?.(sessionId)) {
+        idleReconciler.clearIdleTimers(sessionId);
+        deferredInlineErrors.delete(sessionId);
         options.backgroundTaskConcurrency?.releaseTask(sessionId);
         // The parent's child tasks are about to be dropped from the board.
         // Normally each child's own session.deleted releases its admission
@@ -629,6 +638,8 @@ export function createTaskSessionManagerHook(
   );
 
   return {
+    hasDeferredError: (sessionID: string): boolean =>
+      deferredInlineErrors.has(sessionID),
     markRevivedRunPending: (taskID: string): void => {
       taskContextTracker.pendingManagedTaskIds.add(taskID);
     },
@@ -877,6 +888,7 @@ export function createTaskSessionManagerHook(
         idleSessionTokens,
         options,
         idleReconciler,
+        withFallbackReason,
         deferredInlineErrors,
         backgroundJobBoard,
         terminalGate,

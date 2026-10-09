@@ -8,6 +8,11 @@ export {
   createCouncilInjectHook,
 } from './council-inject';
 export { createDeepworkCommandHook } from './deepwork';
+export {
+  createDeepworkGoalHook,
+  createDeepworkHeadGate,
+  GOAL_POINTER_METADATA_KEY,
+} from './deepwork-goal';
 export { createDeepworkGuardHook } from './deepwork-guard';
 export {
   ForegroundFallbackManager,

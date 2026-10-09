@@ -525,5 +525,28 @@ Continue an existing session with task_revive even when it is not listed here. t
       },
     ],
   },
+  {
+    "info": {
+      "agent": "orchestrator",
+      "id": "deepwork-goal-ses_cache_safety_fixture",
+      "role": "user",
+      "sessionID": "ses_cache_safety_fixture",
+    },
+    "parts": [
+      {
+        "metadata": {
+          "oh-my-opencode-slim.backgroundJobBoard": true,
+          "oh-my-opencode-slim.deepworkGoal": true,
+        },
+        "synthetic": true,
+        "text": 
+"<system-reminder>
+Deepwork: this session's router head is \`.slim/deepwork/ses_cache_safety_fixture.md\` — read it before acting; the file is authoritative.
+</system-reminder>"
+,
+        "type": "text",
+      },
+    ],
+  },
 ]
 `;

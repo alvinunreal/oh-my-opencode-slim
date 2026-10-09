@@ -15,6 +15,11 @@
   </p>
 
   <p>
+    <a href="https://svgdiagram.ai"><img src="img/svgdiagram-logo.svg" alt="svgdiagram.ai" width="40" height="28" align="absmiddle"></a>&nbsp;
+    <a href="https://svgdiagram.ai"><b>svgdiagram.ai</b></a> <sub>· 将你的笔记变成清晰、可编辑的 SVG 图表</sub>
+  </p>
+
+  <p>
     <a href="README.md">English</a> | <b>简体中文</b> | <a href="README.ja-JP.md">日本語</a> | <a href="README.ko-KR.md">한국어</a> | <a href="README.fa-IR.md">فارسی</a>
   </p>
 
@@ -504,7 +509,10 @@ ping all agents
 ### Observer：静默的见证者
 
 > [!NOTE]
-> **为什么要独立出一个智能体？** 如果您的 Orchestrator 模型不是多模态模型，可以启用 Observer 来处理图像、屏幕截图和其他视觉文件。Observer 默认是禁用的，它在无需您更改核心推理模型的情况下，为 Orchestrator 赋予了专用的多模态读取能力。只需在您的配置中设置 `disabled_agents: []` 并指定一个 `observer` 模型即可。自带的 `opencode-go` 安装预设会自动执行此操作，因为其 GLM Orchestrator 不是多模态模型。省略 `image_routing` 会保留现有的条件式 Observer 行为。仅在启用 Observer 时设置 `image_routing: "auto"`，或设为 `"direct"` 以始终将图片附件直接传给 Orchestrator。
+> **为什么要独立出一个智能体？** 如果您的 Orchestrator 模型不是多模态模型，可以启用 Observer 来处理图像、屏幕截图和其他视觉文件。Observer 默认是禁用的，它在无需您更改核心推理模型的情况下，为 Orchestrator 赋予了专用的多模态读取能力。只需在您的配置中设置 `disabled_agents: []` 并指定一个 `observer` 模型即可。自带的 `opencode-go` 安装预设会自动执行此操作，因为其 GLM Orchestrator 不是多模态模型。省略 `image_routing` 会保留现有的条件式 Observer 行为。`image_routing: "auto"` 具备能力感知：接受图片输入的模型将附件内联保留（原生视觉直读）；非视觉链路则将附件存入 `.opencode/images/<session>/` 并按路径委派 Observer。`"direct"` 则始终将图片附件内联直达。
+
+> [!TIP]
+> **子代理读取图片。** 顾问型子代理（explorer、librarian、oracle、designer、councillor）可自行调度 `@observer` 读取磁盘上的图片文件。在 OpenCode v2 宿主上这需要放开一层嵌套，而宿主默认是关闭的——请在 opencode 配置中设置 `"experimental": { "subagent_depth": 2 }` 以启用。fixer、observer 自身与 council 合成代理按设计不可派生。
 
 <table>
   <tr>
@@ -518,7 +526,7 @@ ping all agents
 
 - 图像、屏幕截图、图表 → `read` 工具（原生图像支持）
 - PDF 和二进制文档 → `read` 工具（文本 + 结构提取）
-- **默认禁用** -- 通过设置 `"disabled_agents": []` 和配置具有视觉能力的模型来启用；若使用 `--preset=opencode-go` 预设安装，将自动使用 `opencode-go/mimo-v2.5` 启用它。启用时，图片附件默认会路由至 Observer；设置 `"image_routing": "direct"` 可将其保留给 Orchestrator。
+- **默认禁用** -- 通过设置 `"disabled_agents": []` 和配置具有视觉能力的模型来启用；若使用 `--preset=opencode-go` 预设安装，将自动使用 `opencode-go/mimo-v2.5` 启用它。启用时，`"auto"` 按模型能力分流：视觉模型内联直读，非视觉链路存盘并路由至 Observer；设置 `"image_routing": "direct"` 可始终保留给 Orchestrator。
 
     </td>
   </tr>

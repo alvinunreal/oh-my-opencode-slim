@@ -457,7 +457,7 @@ export function createBackgroundJobTerminalGate(options: {
       : { kind: 'stale' };
   }
 
-  function retry(run: RunRef, diagnostic: string): GateResult {
+  function retry(run: RunRef, diagnostic?: string): GateResult {
     const value = observation(run);
     if (!value) return { kind: 'stale' };
     if (
@@ -531,7 +531,8 @@ export function createBackgroundJobTerminalGate(options: {
       record: before,
       validate: () =>
         current(token) &&
-        (value.runtime?.kind === 'deleted' ||
+        (state === 'cancelled' ||
+          value.runtime?.kind === 'deleted' ||
           !options.isObservationPending?.(token.taskID, token.generation)) &&
         (value.runtime?.kind === 'quiescent' ||
           value.runtime?.kind === 'deleted' ||
@@ -842,6 +843,9 @@ export function createBackgroundJobTerminalGate(options: {
     const value = observation(run);
     if (!value) return { kind: 'stale' };
     const cancellation = value.candidate?.signal.kind === 'cancel';
+    const fenced = () =>
+      !cancellation &&
+      options.isObservationPending?.(run.taskID, run.generation);
     if (token.promptMessageID && !cancellation) {
       return inspectQueuedAnswer(token);
     }
@@ -984,11 +988,7 @@ export function createBackgroundJobTerminalGate(options: {
               'Runtime observation unavailable; task termination is unconfirmed.'),
       );
     }
-    if (options.isObservationPending?.(run.taskID, run.generation))
-      return retry(
-        run,
-        'Fallback handoff pending; task termination is unconfirmed.',
-      );
+    if (fenced()) return retry(run);
     if (
       job.state !== 'running' &&
       (job.state === 'reconciled' ? job.terminalState : job.state) !==
@@ -1039,11 +1039,7 @@ export function createBackgroundJobTerminalGate(options: {
     if (transcriptRead.kind === 'blocked')
       return requestRuntimeContrastAfterRead(token, transcriptRead.retryAfter);
     const response = transcriptRead.value;
-    if (options.isObservationPending?.(run.taskID, run.generation))
-      return retry(
-        run,
-        'Fallback handoff pending; task termination is unconfirmed.',
-      );
+    if (fenced()) return retry(run);
     let terminalOutcome = runtime?.terminalOutcome;
     let outcomeDiagnostic: string | undefined;
     let evidence = classifyTerminalEvidence(response, {
@@ -1082,11 +1078,7 @@ export function createBackgroundJobTerminalGate(options: {
             token,
             outcomeResponse.retryAfter,
           );
-        if (options.isObservationPending?.(run.taskID, run.generation))
-          return retry(
-            run,
-            'Fallback handoff pending; task termination is unconfirmed.',
-          );
+        if (fenced()) return retry(run);
         terminalOutcome = outcomeFromRead(
           outcomeResponse.value,
           token,
@@ -1142,7 +1134,10 @@ export function createBackgroundJobTerminalGate(options: {
           `Foreground task ended with state ${guarded.state}.`,
       );
     }
-    const stable = now() - (value.quiescentSince ?? now()) >= graceMs;
+    const stable =
+      now() -
+        Math.max(value.quiescentSince ?? now(), token.attemptStartedAt ?? 0) >=
+      graceMs;
     // Stop-family host outcomes are not failures: the host stopped the
     // run (user interrupt/abort) without a plugin-verified cancel
     // lease — the same stop policy as the absent-evidence branch below.

@@ -7,7 +7,7 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 - Retrieves the last user message from the session history
 - Re-prompts the session with the next available model from the agent's configured fallback chain
 - Operates reactively through the event system (cannot wrap `prompt()` directly for interactive sessions)
-- Defers terminal job-board bookkeeping for inline 401/410 errors while recovery is still possible (cooperates with task-session-manager's `willAttemptFallback`)
+- Defers terminal job-board bookkeeping for recoverable child failover errors (cooperates with task-session-manager's `willAttemptFallback`). The deferral fences every terminal gate path before replay preparation starts; idle always uses the bounded backstop.
 
 ## Design
 
@@ -15,14 +15,16 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 - **ForegroundFallbackManager**: Class instantiated at plugin initialization; process-local fallback progress is shared across replacement instances
 - Maintains per-session state tracking:
   - `sessionModel`: Maps sessionID → current model string ("providerID/modelID")
-  - `activeFallbackModel`: Maps sessionID → the model selected by a
-    confirmed fallback for the current external turn. Synthetic admissions
-    cannot overwrite it implicitly; a genuine new external turn clears it,
-    and an explicit `retry-primary` continuation reconciles it to the primary
-    before subsequent delegation.
+  - `activeFallback`: Maps sessionID → `{ model, downProviders }` from a
+    confirmed switch. `commitSwitch` copies the previous set, adds the failed
+    source provider only for provider-scoped failures and removes the target
+    provider, including same-provider and sticky switches. Synthetic admissions
+    cannot overwrite it implicitly. Continuations and external turns retain it
+    when their model is unknown or matches: v1 normally returns to the primary, while
+    v2's persistent switch keeps the record live across turns.
     OpenCode v1 internal continuation and lifecycle selection consults
     `fallback.continuationPolicy`: retry the primary by default or retain this
-    confirmed fallback until that external turn boundary.
+    confirmed fallback for an internal continuation.
   - `sessionAgent`: Maps sessionID → agent name
   - `sessionTried`: Maps sessionID → Set of models already attempted
   - `sessionRetries`: Maps sessionID → absorbed host retry count for the entire descent (not per model)
@@ -54,10 +56,10 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 - **No cross-agent bleed**: When agent is identified, only that agent's chain is used (prevents re-prompting with wrong agent's models)
 
 ### Retryable Error Detection
-- **Pattern matching**: rate-limit/quota/outage/401/403/410 wording, content-policy moderation and OpenCode v1's content-filter finish error, transport codes (`ECONNRESET`, …) and transport messages
-- **Status-code probe** (`probeStatusCode`): priority order `statusCode` → `data.statusCode` → `cause.statusCode` → `status` → `response.status` → `response.statusCode` → `data.status` → `data.response.status` → `cause.status` → `cause.response.status`. `asHttpStatus` accepts only finite `100–599` codes (number or 3-digit numeric string), so arbitrary numeric fields are never mistaken for a status.
-- **Diagnostics**: when a status code is found, `isFailoverError` emits one compact `failover status diagnosis` log (direct code, candidate `path=value` list, selected code, verdict). Response bodies, tokens and prompts are never logged.
-- **Event coverage**: `message.updated` (message metadata error, or `finish: 'content-filter'` before its error is attached), `session.error` (session-level error), `session.status` (`retry` status). The content-filter finish and its later error share message-ID deduplication.
+- **Pattern matching**: rate-limit/quota/outage/401/403/410/421/451 wording, content-policy moderation and OpenCode v1's content-filter finish error, transport codes (`ECONNRESET`, …) and transport messages
+- **Scope** (`failoverScope`): provider availability, transport, auth and quota failures have provider scope; policy/content-filter rejections and missing/retired models have request scope. Request wording takes precedence over HTTP status, including a policy rejection wrapped in 403. `isFailoverError` accepts either scope.
+- **Status-code probe** (`extractStatusCode`): priority order `statusCode` → `data.statusCode` → `cause.statusCode` → `status` → `response.status` → `response.statusCode` → `data.status` → `data.response.status` → `cause.status` → `cause.response.status`. `asHttpStatus` accepts only finite `100–599` codes (number or 3-digit numeric string), so arbitrary numeric fields are never mistaken for a status.
+- **Event coverage**: `message.updated` (message metadata error, or `finish: 'content-filter'` before its error is attached), `session.error` (session-level error), `session.status` (`retry` status). The content-filter finish and its later error share message-ID deduplication. On v1, completed error-free `finish: 'unknown'` messages with confirmed tool-free parts preserve retries and chain state while a per-session streak counts distinct IDs, triggering request-scoped abort and replay at three; unreadable parts neither count nor break the streak. A reply read across a confirmed fallback switch belongs to the previous model and does not count against the backup.
 - **Retry budget**: Only a failover-worthy host `session.status` retry (or a v2 retry hook with `decision.retry === true`) charges `fallback.maxRetries`. Each genuine external user turn resets the host retry count, including before any model switch. Terminal `session.error` and errored `message.updated` advance immediately. Exhausting the retry budget keeps it charged across the model chain; successful assistant completion, observed fresh descent from the configured primary, or deletion re-arms it. Stage-2 exhaustion blocks abort on subsequent retry statuses until a fresh descent.
 - A retry arriving while a fallback is in progress is not admitted and does not
   consume retry budget; delayed fallback retains the triggering error for
@@ -76,6 +78,7 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
   clears.
 - **Session cleanup**: `session.deleted` event handler removes all per-session state to prevent memory leaks
 - **In-progress tracking**: Prevents concurrent fallback attempts on the same session across plugin-manager recreation
+- Host calls within `inProgress` have bounded timeouts because the terminal gate's fallback fence depends on that window ending; a replay send timeout retains unresolved ownership without aborting or resending.
 
 ### Retry Budget and Exhaustion
 - The v2 in-place retry hook (`handleV2Retry`) is gated by the separate `v2RetryEnabled` constructor flag — the replay path's `enabled` stays false on v2 hosts, so only steering runs there. It shares the chain-global budget and quota policy. Absorbed retries, recoverable failures, missing chains and unsuccessful model switches leave the host decision unchanged. Once `selectFallbackModel` returns `exhausted` the hook returns without touching the decision: the host's own retry verdict stands, so a spent chain never forces a retry. A first ordinary exhaustion still takes the sticky re-fallback (only the second lands here).
@@ -85,9 +88,9 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 - `maxRetries = N` absorbs failures `1..N` on the current model; failure `N+1` (and every later failure) advances the chain. `maxRetries = 0` switches immediately.
 - The budget is **chain-global** and is not cleared on a model switch.
 - Cleared only on: a completed successful assistant response, `session.deleted`, or a confirmed new user turn. A completed assistant `message.updated` with `finish: 'content-filter'` is not a successful response: OpenCode v1 publishes it before attaching the `ContentFilterError`, so it never clears the budget.
-- **Permanent usage/quota failures** (`isPermanentUsageQuotaError`: 402, explicit spending / personal-team-blocked limits, "coding plan package has expired", fixed-window limit reached/exhausted, explicit quota exhausted, provider billing codes) skip the budget entirely — no same-model replay — and never take the sticky re-fallback; `execFallback` aborts at stage 2 when the chain is spent. Ordinary 429 / rate-limit / short-term "quota threshold" wording keeps using the configured budget.
-- `isExhausted` (stage 2) short-circuits every failover event and both `tryFallback`/`tryFallbackWithAbort`, so a spent chain aborts at most once.
-- `freshTurnResetHandler` runs on a confirmed new `user` turn (the SDK `UserMessage` nests the model under `info.model`; assistant messages keep it top-level): it cancels a pending initial-delay trigger and clears the budget, retry episode, `sessionTried`, dedup anchors and `lastFallbackTime`, retains `pendingReplay` (so a late replay notification is still recognised), and bumps `turnEpoch`. Identity is decided BEFORE any state write: `handleUserTurn` treats a message as internal when its id is retained (`replayMessageIds`), matches the pending baseline, or — after ALWAYS probing the transcript via `probeReplayMessageIdentity` — shows the internal-initiator marker; a message present in the transcript WITHOUT the marker is a real turn even while a replay is in flight, and an unpersisted (`unknown`) message is treated as internal while a replay is in flight OR a usable `pendingReplay` record is retained (never shortcut to external merely because nothing is in flight). An in-flight replay whose `turnEpoch` advanced skips its model/switch claim and its switched-log/toast, so a superseded replay cannot write back into the newer turn. Turn handling is versioned (`userTurnSeq`/`userTurnLatest`): the newest confirmed-external handler wins, so a probe resolving out of order is dropped rather than rolling back a newer turn. Un-sealing the stage-2 terminal guard additionally requires the turn to return to `chain[0]`.
+- **Permanent quota/billing failures** (`isPermanentQuotaBillingError`: 402, explicit spending / personal-team-blocked limits, credits exhausted, expired coding plans, weekly/monthly exhaustion, Zhipu billing codes) bypass the initial replay delay through `bypassInitialFallbackDelay` and skip the host retry budget, switching immediately regardless of `maxRetries`. The sticky re-fallback still applies.
+- `chainExhaustion` stage 2 stops `tryFallbackWithAbort` and `selectFallbackModel`, so a spent chain does not keep aborting host retries.
+- `noteExternalTurn` cancels the initial-delay trigger, clears retry/dedup/backoff state and increments `turnEpoch`, retaining `replayMessageIds`. `isKnownInternalReplayUserMessage` checks retained IDs and event parts; `isInternalReplayUserMessage` probes the transcript when parts are missing. Duplicate user-message updates are inert. `userEventSequence` fences out-of-order probes, and `isCurrentTurn` prevents superseded replay work from claiming a switch. `rearmIfFreshDescent` clears tried/exhaustion state only after an observed return to the configured primary.
 
 ### Deduplication (identity-based)
 - No error-text-only time-window heuristic: identical text can be the next real failure. The one-shot cross-event bridge requires an exact payload, current model, current turn, and short time-window match.
@@ -124,14 +127,19 @@ Log fallback event
 2. **Message retrieval**: Queries session messages via `client.session.messages()` and finds last user message
 3. **Model switching**: Uses `parseModelReference()` to extract providerID/modelID from chain entry
 4. **Re-prompting**: Calls `promptAsync()` which queues prompt and returns immediately (non-blocking); appends trusted internal-initiator provenance so the replay is not mistaken for new external user input
-5. **Failover deferral**: 401/410 errors (`isFailoverError`) leave terminal job-board bookkeeping to the task-session-manager event router, which defers it while `willAttemptFallback` holds
+5. **Failover deferral**: Recoverable child errors (`isFailoverError`) leave terminal bookkeeping to the task-session-manager. Its backstop waits for replay preparation, renewing at most five times, and clears the deferral before publishing an unrecovered error. `fallbackFailureReason()` adds the disabled, missing-chain, exhausted-chain (with tried models), or failed-model explanation. Non-failover errors retain their original text.
+6. **Fallback ownership**: Admitted and unresolved-promoted replays retain a tracker flag until external registration replaces the run. Plugin wiring makes v1 `task_revive` refuse pending or running fallback work; `task_cancel` remains available. v2 steering creates no replay flag or refusal.
+7. **Continuation notice**: A confirmed replay after a terminal failover error queues one internal `state="running"` notice with the failed model, provider error and model now running. The tracker uses the same parent transport as terminal delivery and waits for the notice attempt to settle before sending the result. Retry-path replays, superseded or unresolved admissions, promoted owners and v2 steering send no notice.
 
 ## Integration
 
 ### Consumers
 - **Primary**: Main plugin initialization (`src/index.ts`) creates ForegroundFallbackManager instance
-- **Delegation routing**: Main plugin reads the confirmed active fallback so
-  newly delegated children avoid a provider the parent already escaped
+- **Delegation routing**: Main plugin reads `getActiveFallback`. Independent
+  children move only if their primary provider is in `downProviders`, taking
+  their first chain entry outside that set. Inherited children follow the
+  record's live model even after request-scoped failures. Manual model choices
+  do not create a fallback record.
 - **Event source**: OpenCode plugin event system provides `message.updated`, `session.error`, `session.status`, `session.deleted` events
 
 ### Dependencies

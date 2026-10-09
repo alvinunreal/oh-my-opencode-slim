@@ -3,6 +3,7 @@ import {
   beforeEach,
   describe,
   expect,
+  jest,
   mock,
   spyOn,
   test,
@@ -135,6 +136,7 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const gate of gates.splice(0)) gate.dispose();
+  jest.useRealTimers();
   mock.restore();
 });
 
@@ -192,6 +194,27 @@ function controlledAdmissionDeadline() {
 }
 
 describe('task_revive tool', () => {
+  test('refuses a running fallback after admission before aborting or prompting', async () => {
+    jest.useFakeTimers();
+    const h = createTool({
+      status: async () => ({ data: { ses_1: { type: 'busy' } } }),
+    });
+    const run = h.board.registerLaunch({
+      taskID: 'ses_1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      background: true,
+    });
+    h.revivedRunTracker.prepareObservation({ ...run });
+    h.revivedRunTracker.admitObservation(run.taskID, run.generation);
+    await expect(
+      h.taskRevive.execute({ task_id: 'ses_1', prompt: 'continue' }, context),
+    ).rejects.toThrow(/recovering on a fallback model/i);
+    expect(h.abort).not.toHaveBeenCalled();
+    expect(h.promptAsync).not.toHaveBeenCalled();
+    h.revivedRunTracker.dispose();
+  });
+
   test.each([
     ['early', 'idle'],
     ['early', 'rejected'],

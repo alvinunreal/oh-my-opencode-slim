@@ -52,6 +52,12 @@ export interface ExperimentalV2 {
     prompt: string,
     model?: V2GenerateModelRef,
   ) => Promise<{ text: string }>;
+  /** Live host model registry (`ctx.model`): `list()` resolves the full
+   * catalog ⊕ config view with per-model capabilities. Absent on hosts
+   * without the domain. */
+  readonly modelDomain?: {
+    readonly list?: (input?: unknown) => Promise<unknown>;
+  };
 }
 
 /** Directory from the host-reported location; cwd on hosts without
@@ -762,13 +768,17 @@ export function buildPluginInput(
     worktree: directory,
     experimental_workspace: { register() {} },
     $: typeof Bun !== 'undefined' ? Bun.$ : undefined,
-    ...(extras?.generateText || wait || (s.prompt && s.context)
+    ...(extras?.generateText ||
+    extras?.modelDomain ||
+    wait ||
+    (s.prompt && s.context)
       ? {
           experimental_v2: {
             ...(s.prompt && s.context ? { queuedPromptIdentity: true } : {}),
             ...(extras?.generateText
               ? { generateText: extras.generateText }
               : {}),
+            ...(extras?.modelDomain ? { modelDomain: extras.modelDomain } : {}),
             ...(wait
               ? {
                   waitForSessionIdle: (sessionID: string) =>

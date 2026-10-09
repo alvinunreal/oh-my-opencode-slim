@@ -6,6 +6,7 @@ import {
   hasTaggedPart,
   isTaggedPart,
   isVolatileTaggedMessage,
+  omittedOrFull,
   stripTaggedContent,
 } from './cache-safe-injection';
 import type { MessageWithParts } from './types';
@@ -162,5 +163,31 @@ describe('appendTrailingVolatileMessage / isVolatileTaggedMessage', () => {
     expect(messages).toHaveLength(2);
     const trailing = messages[1] as MessageWithParts;
     expect(trailing.parts[0].text).toBe('board v2');
+  });
+});
+
+describe('omittedOrFull', () => {
+  test('returns the full text at or below the cap', () => {
+    expect(omittedOrFull('hello', 5)).toBe('hello');
+    expect(omittedOrFull('hello', 6)).toBe('hello');
+  });
+
+  test('omits above the cap instead of truncating', () => {
+    expect(omittedOrFull('hello world', 5)).toBeUndefined();
+  });
+
+  test('property: every cap yields either the whole input or nothing', () => {
+    // A truncated restriction reads as an authorization ("only read
+    // directory A" cut short becomes "read directory A"), so no cap may
+    // ever return a strict prefix of the input.
+    const input = 'only read directory A; never touch directory B';
+    for (let cap = 0; cap <= input.length + 2; cap += 1) {
+      const result = omittedOrFull(input, cap);
+      if (cap >= input.length) {
+        expect(result).toBe(input);
+      } else {
+        expect(result).toBeUndefined();
+      }
+    }
   });
 });

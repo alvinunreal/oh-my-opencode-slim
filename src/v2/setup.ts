@@ -36,6 +36,7 @@ import {
 } from '../hooks/chat-headers';
 import { isCommandEnabled } from '../hooks/command-hook-utils';
 import { COUNCIL_INJECT_METADATA_KEY } from '../hooks/council-inject';
+import { GOAL_POINTER_METADATA_KEY } from '../hooks/deepwork-goal';
 import type { ForegroundFallbackManager } from '../hooks/foreground-fallback';
 import { PHASE_REMINDER_METADATA_KEY } from '../hooks/phase-reminder';
 import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/task-session-manager/board-injection';
@@ -679,16 +680,17 @@ export function createChatHeadersBridge(
 
 /**
  * Metadata keys whose tagged synthetic parts the compaction bridge
- * strips: phase reminders and the keyword-triggered Council Mode block
- * are regenerated on the next turn (pure-function re-derivation over the
- * surviving message history). Background job boards must survive to tell
- * the summary which jobs are running; internal wakes do not receive fresh
- * boards. Untagged synthetic parts (e.g. command-marker expansions) are
- * also conversation content.
+ * strips: phase reminders, the keyword-triggered Council Mode block, and
+ * the deepwork goal pointer are regenerated on the next turn
+ * (pure-function re-derivation over the surviving message history).
+ * Background job boards must survive to tell the summary which jobs are
+ * running; internal wakes do not receive fresh boards. Untagged synthetic
+ * parts (e.g. command-marker expansions) are also conversation content.
  */
 const COMPACTION_STRIP_METADATA_KEYS: readonly string[] = [
   PHASE_REMINDER_METADATA_KEY,
   COUNCIL_INJECT_METADATA_KEY,
+  GOAL_POINTER_METADATA_KEY,
 ];
 
 /**
@@ -2027,7 +2029,18 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       log('[v2] ctx.generate.text', {
         available: typeof generateText === 'function',
       });
-      const pluginInput = buildPluginInput(ctx, generateChannel);
+      // Capability probe: the v2 model registry (`ctx.model`) resolves the
+      // catalog ⊕ config view the host itself uses for media gating. Powers
+      // capability-aware image routing; hosts without the domain keep the
+      // conservative default.
+      const modelDomain = (ctx as V2Context).model?.list
+        ? (ctx as V2Context).model
+        : undefined;
+      log('[v2] ctx.model', { available: Boolean(modelDomain) });
+      const pluginInput = buildPluginInput(ctx, {
+        ...(generateChannel ?? {}),
+        ...(modelDomain ? { modelDomain } : {}),
+      });
       log('[v2] calling OhMyOpenCodeLite...');
       v1Hooks = (await OhMyOpenCodeLite(
         pluginInput as never,
@@ -2894,10 +2907,27 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                     rawType === 'session.next.reasoning.delta' ||
                     rawType === 'message.part.delta';
                   if (!isStreamDelta) {
-                    // Directory scope (multi-instance): skip events that belong
-                    // to another live location before any bridge sees them.
+                    // Keep directory-local bridges scoped, while allowing the
+                    // task owner to observe children moved to live locations.
                     eventDirectoryScope.note(next.value);
-                    if (eventDirectoryScope.isForeign(next.value)) continue;
+                    if (eventDirectoryScope.isForeign(next.value)) {
+                      // Moved children retain their task owner in the parent's
+                      // location. Forward observation only, not permission or
+                      // profile handling from this foreign location.
+                      const foreignTaskEvent = v1Hooks['v2.foreignTaskEvent'] as
+                        | ((input: { event: unknown }) => Promise<void>)
+                        | undefined;
+                      if (foreignTaskEvent) {
+                        try {
+                          for (const ev of mapV2EventToV1(next.value)) {
+                            await foreignTaskEvent({ event: ev });
+                          }
+                        } catch (err) {
+                          log('[v2] foreign task event failed', String(err));
+                        }
+                      }
+                      continue;
+                    }
                   }
                   try {
                     await interviewBridge.handleEvent(next.value);

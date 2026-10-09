@@ -34,7 +34,12 @@ import {
   createOrchestratorAgent,
   resolvePrompt,
 } from './orchestrator';
-import { appendTaskRejectionInstruction } from './task-rejection';
+import { mergeTaskStance, TASK_NO_NESTED_DISPATCH } from './permissions';
+import {
+  appendObserverDispatchInstruction,
+  appendTaskRejectionInstruction,
+  OBSERVER_DISPATCH_ROLES,
+} from './task-rejection';
 
 export { ensureCouncilCompactionException } from './council';
 export type { AgentDefinition } from './orchestrator';
@@ -211,7 +216,12 @@ function applyOverrides(
     agent.description = override.description;
   }
   if (override.permission) {
-    agent.config.permission = override.permission;
+    // Keep the factory's nested-dispatch stance when the override doesn't
+    // address `task` (shared with the host-entry and marketplace sites).
+    agent.config.permission = mergeTaskStance(
+      override.permission,
+      agent.config.permission,
+    );
   }
 }
 
@@ -648,6 +658,7 @@ function applyDefaultPermissions(
   agent: AgentDefinition,
   configuredSkills?: readonly string[],
   disabledSkills?: readonly string[],
+  nestedDispatchEnabled = false,
   isPrimaryAgent = false,
 ): void {
   // A shorthand string is a user-level rule for every tool. Keep its original
@@ -701,6 +712,17 @@ function applyDefaultPermissions(
 
   agent.config.permission = {
     ...existing,
+    // Nested-dispatch default: non-orchestrator agents without an explicit
+    // `task` stance (custom, ACP, write-capable marketplace) deny spawning.
+    // The compiled v2 permission base allows every unmatched action, so an
+    // absent entry would let any child spawn once the host depth limit is
+    // raised; the orchestrator keeps unrestricted delegation. Gated on the
+    // same v2 + observer condition as the stances (v1 stays untouched).
+    ...(nestedDispatchEnabled &&
+    existing.task === undefined &&
+    agent.name !== 'orchestrator'
+      ? { task: { ...TASK_NO_NESTED_DISPATCH } }
+      : {}),
     question: questionPerm,
     ...orchestratorDefaultPermissions,
     interview_submit_state: interviewSubmitPermission,
@@ -759,6 +781,13 @@ export function createAgents(
     // The bare councillor is only meaningful as part of configured Council Mode.
     disabled.add('councillor');
   }
+  // Nested dispatch ships only where it is live: v2 hosts (the only flavor
+  // with a depth limit) and an enabled observer. The v1 host enables a
+  // child's task tool whenever its permission carries ANY task rule — with
+  // no depth limit — so emitting stances there would change every advisor's
+  // toolset for nothing.
+  const nestedDispatchEnabled =
+    options?.hostFlavor === 'v2' && !disabled.has('observer');
   // Explicitly disabling the council agent disables the whole chain: the
   // injected procedure dispatches seats and then delegates synthesis to
   // the council agent, so seats/pointer/hook without it would dangle.
@@ -814,6 +843,22 @@ export function createAgents(
     .map(([name, factory]) => {
       // Get base agent definition using the subagent factory with undefined prompts
       const agent = factory(getModelForAgent(name), undefined, undefined);
+      if (!nestedDispatchEnabled) {
+        // Drop only the pattern stances this branch adds (object-shaped
+        // task entries); pre-existing blanket-deny strings stay untouched.
+        const permission = agent.config.permission as
+          | Record<string, unknown>
+          | undefined;
+        if (
+          permission &&
+          typeof permission === 'object' &&
+          typeof permission.task === 'object'
+        ) {
+          const rest = { ...permission };
+          delete rest.task;
+          agent.config.permission = rest as typeof agent.config.permission;
+        }
+      }
 
       const customPrompts = loadAgentPrompt(name, {
         preset: runtime.preset,
@@ -824,7 +869,10 @@ export function createAgents(
       const override = getOverrideFromAgents(mergedAgents, name);
       const inlinePrompt = override?.prompt;
       const defaultPrompt = appendTaskRejectionInstruction(
-        agent.config.prompt ?? '',
+        appendObserverDispatchInstruction(
+          agent.config.prompt ?? '',
+          nestedDispatchEnabled && OBSERVER_DISPATCH_ROLES.has(name),
+        ),
       );
 
       agent.config.prompt = resolvePrompt(
@@ -931,7 +979,12 @@ export function createAgents(
       applyOverrides(agent, override);
     }
     applyModelInheritance(agent, override);
-    applyDefaultPermissions(agent, override?.skills, runtime.disabledSkills);
+    applyDefaultPermissions(
+      agent,
+      override?.skills,
+      runtime.disabledSkills,
+      nestedDispatchEnabled,
+    );
     return agent;
   });
 
@@ -941,12 +994,22 @@ export function createAgents(
       applyOverrides(agent, override);
     }
     applyModelInheritance(agent, override);
-    applyDefaultPermissions(agent, override?.skills, runtime.disabledSkills);
+    applyDefaultPermissions(
+      agent,
+      override?.skills,
+      runtime.disabledSkills,
+      nestedDispatchEnabled,
+    );
     return agent;
   });
 
   const acpSubAgents = protoAcpAgents.map((agent) => {
-    applyDefaultPermissions(agent, undefined, runtime.disabledSkills);
+    applyDefaultPermissions(
+      agent,
+      undefined,
+      runtime.disabledSkills,
+      nestedDispatchEnabled,
+    );
     return agent;
   });
 
@@ -960,13 +1023,20 @@ export function createAgents(
   const councillorColor =
     getOverrideFromAgents(mergedAgents, 'councillor')?.color ??
     getOverrideFromAgents(mergedAgents, 'council')?.color;
-  const councillorAgents = buildCouncillorAgents(runtime, disabled).map(
-    (agent) => {
-      if (councillorColor) agent.config.color ??= councillorColor;
-      applyDefaultPermissions(agent, undefined, runtime.disabledSkills);
-      return agent;
-    },
-  );
+  const councillorAgents = buildCouncillorAgents(
+    runtime,
+    disabled,
+    nestedDispatchEnabled,
+  ).map((agent) => {
+    if (councillorColor) agent.config.color ??= councillorColor;
+    applyDefaultPermissions(
+      agent,
+      undefined,
+      runtime.disabledSkills,
+      nestedDispatchEnabled,
+    );
+    return agent;
+  });
 
   const allSubAgents = [
     ...builtInSubAgents,
@@ -977,7 +1047,10 @@ export function createAgents(
 
   for (const agent of [...acpSubAgents, ...councillorAgents]) {
     agent.config.prompt = appendTaskRejectionInstruction(
-      agent.config.prompt ?? '',
+      appendObserverDispatchInstruction(
+        agent.config.prompt ?? '',
+        nestedDispatchEnabled && agent.name.startsWith('councillor-'),
+      ),
     );
   }
 
@@ -1022,6 +1095,7 @@ export function createAgents(
     orchestrator,
     orchestratorOverride?.skills,
     runtime.disabledSkills,
+    nestedDispatchEnabled,
     true,
   );
 

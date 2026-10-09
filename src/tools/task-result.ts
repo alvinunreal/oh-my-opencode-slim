@@ -20,6 +20,7 @@ import { SESSION_ID_PATTERN } from '../utils/session';
 import {
   getRuntimeSessionStatusSnapshot,
   type RuntimeSessionStatusSnapshot,
+  readLiveSession,
   runtimeSessionStatus,
 } from '../utils/session-runtime-status';
 import {
@@ -233,11 +234,10 @@ export function createTaskResultTool(
         const v2 =
           (options.input as { hostFlavor?: string }).hostFlavor === 'v2';
         if (!v2) {
-          snapshot = await getRuntimeSessionStatusSnapshot(options.input);
-          const status = runtimeSessionStatus(snapshot, taskID);
-          if (status === 'busy' || status === 'retry')
-            return pending(idParam, taskID, false, status, false);
-          if (snapshot.error || snapshot.malformedSessionIDs.has(taskID))
+          const live = await readLiveSession(options.input, taskID);
+          if (live.kind === 'busy' || live.kind === 'retry')
+            return pending(idParam, taskID, false, live.kind, false);
+          if (live.kind === 'unknown')
             return pending(idParam, taskID, true, undefined, false);
         }
         const response = await fetchChildTranscript(

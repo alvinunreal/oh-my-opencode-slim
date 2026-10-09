@@ -125,6 +125,20 @@ describe('adaptPermissions', () => {
     });
   });
 
+  test('compiles observer-only task patterns in last-match order', () => {
+    const rules = adaptPermissions({
+      task: { '*': 'deny', observer: 'allow' },
+    });
+    const subagent = rules
+      .filter((rule) => rule.action === 'subagent')
+      .map((rule) => [rule.resource, rule.effect]);
+    // Evaluators use findLast: '*' deny first, observer allow last.
+    expect(subagent).toEqual([
+      ['*', 'deny'],
+      ['observer', 'allow'],
+    ]);
+  });
+
   test('maps v1 bash -> v2 execute and bash', () => {
     const rules = adaptPermissions({ bash: 'deny' });
     expect(rules).toContainEqual({

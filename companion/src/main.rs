@@ -39,6 +39,10 @@ fn main() -> eframe::Result {
             .with_title("oh-my-opencode-slim-companion")
             .with_app_id("oh-my-opencode-slim-companion")
             .with_decorations(false)
+            // Companion sizing is controlled by its own S/M/L/XL menu. Keeping the
+            // native window non-resizable also prevents Windows Snap Assist from
+            // intercepting edge/cross-monitor drags for a window that cannot use it.
+            .with_resizable(false)
             .with_transparent(true)
             .with_always_on_top()
             .with_active(false)

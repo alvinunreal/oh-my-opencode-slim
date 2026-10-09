@@ -88,3 +88,34 @@ describe('specialist role definitions', () => {
     );
   });
 });
+
+describe('nested-dispatch stance', () => {
+  test('advisory roles scope task to observer-only with deny-first order', () => {
+    for (const role of [
+      'explorer',
+      'librarian',
+      'oracle',
+      'designer',
+    ] as const) {
+      const def = FACTORIES[role]('provider/model');
+      const task = (
+        def.config.permission as Record<string, Record<string, string>>
+      ).task;
+      expect(task).toBeDefined();
+      // Last-match evaluation: the '*' deny must precede the observer allow.
+      expect(Object.keys(task)).toEqual(['*', 'observer']);
+      expect(task['*']).toBe('deny');
+      expect(task.observer).toBe('allow');
+    }
+  });
+
+  test('fixer and observer deny nested dispatch entirely', () => {
+    for (const role of ['fixer', 'observer'] as const) {
+      const def = FACTORIES[role]('provider/model');
+      const task = (
+        def.config.permission as Record<string, Record<string, string>>
+      ).task;
+      expect(task).toEqual({ '*': 'deny' });
+    }
+  });
+});

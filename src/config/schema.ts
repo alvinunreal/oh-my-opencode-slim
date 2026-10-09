@@ -96,7 +96,7 @@ export const AgentOverrideConfigSchema = z
       .boolean()
       .optional()
       .describe(
-        "When true, adds every valid skill under the current project's `.opencode/skills/**/SKILL.md` tree to this agent's effective skills list before `skills_remove` is applied. Global and external skill sources are not included.",
+        "When true, adds valid skills from the current/ancestor project `.opencode/skills/**/SKILL.md` and `.agents/skills/**/SKILL.md` trees to this agent's effective skills before `skills_remove`. Global and external skill sources are excluded.",
       ),
     mcps: z.array(z.string()).optional(), // MCPs this agent can use ("*" = all, "!item" = exclude)
     prompt: z.string().min(1).optional(),
@@ -952,6 +952,7 @@ export const DISABLED_HOOKS_VALUES = [
   'phase-reminder',
   'foreground-fallback',
   'deepwork-guard',
+  'deepwork-goal',
   'chat-headers',
   'cache-monitor',
   'json-error-recovery',

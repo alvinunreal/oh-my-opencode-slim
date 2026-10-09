@@ -20,7 +20,11 @@ import {
   type ResolvedAgentRegistry,
 } from './agents/registry';
 import type { RegistryFactoryBridge } from './agents/registry-bridge';
-import { CompanionManager } from './companion/manager';
+import {
+  CompanionManager,
+  companionSessionIdForDirectory,
+  normalizeCompanionSessionStatus,
+} from './companion/manager';
 import { ensureCompanionVersion } from './companion/updater';
 import { deepMerge, loadPluginConfig, type Preset } from './config';
 import {
@@ -41,7 +45,9 @@ import {
   createChatHeadersHook,
   createCouncilInjectHook,
   createDeepworkCommandHook,
+  createDeepworkGoalHook,
   createDeepworkGuardHook,
+  createDeepworkHeadGate,
   createJsonErrorRecoveryHook,
   createLoopCommandHook,
   createOrchestratorWakeScheduler,
@@ -54,12 +60,13 @@ import {
   type ForegroundFallbackModel,
   formatChildInputWaitDelta,
   formatStoppedJobDelta,
+  GOAL_POINTER_METADATA_KEY,
   SessionLifecycle,
   stoppedJobRecoveryReason,
 } from './hooks';
 import { stripTaggedContent } from './hooks/cache-safe-injection';
 import { isCommandEnabled } from './hooks/command-hook-utils';
-import { processImageAttachments } from './hooks/image-hook';
+import { isImagePart, processImageAttachments } from './hooks/image-hook';
 import { clearAllWakeSessions } from './hooks/orchestrator-wake/wake-gate';
 import { PHASE_REMINDER_METADATA_KEY } from './hooks/phase-reminder';
 import type { ChildInputWaitRecord } from './hooks/task-session-manager/child-input-wait';
@@ -78,6 +85,7 @@ import type { ToolLoopGuardHook } from './hooks/tool-loop-guard/hook';
 import {
   findLatestUserMessage,
   isMessageWithParts,
+  isUserMessageWithParts,
   type MessageWithParts,
 } from './hooks/types';
 import { createInterviewManager } from './interview';
@@ -151,8 +159,13 @@ import {
 } from './utils/internal-initiator';
 import { probeJSDOM } from './utils/jsdom';
 import { initLogger, log } from './utils/logger';
+import {
+  type ModelImageCapabilityCache,
+  type ModelImageCapabilityDeps,
+  modelAcceptsImageInput,
+} from './utils/model-image-capability';
 import { registerPendingSessionPrune } from './utils/pending-session-prunes';
-import { withTimeout } from './utils/session';
+import { parseModelReference, withTimeout } from './utils/session';
 import { SessionMetadataStore } from './utils/session-metadata';
 import { DEFAULT_RUNTIME_SESSION_STATUS_TIMEOUT_MS } from './utils/session-runtime-status';
 import {
@@ -166,6 +179,7 @@ import {
 } from './utils/system-collapse';
 import { createTuiReusableProjection } from './utils/tui-reusable-projection';
 import { createV2Setup } from './v2';
+import { parseModelRef } from './v2/adapters';
 import { delegationWording } from './v2/delegation';
 import {
   isInternalAdmission,
@@ -205,80 +219,43 @@ type ModelChainEntry = { id: string; variant?: string };
 type DelegatedModelSelection = {
   agentName: string;
   entry: ModelChainEntry;
-  /** The parent runs a real fallback that should move this child. */
-  route: boolean;
   /** Inherited children already start on the parent's live model. */
   inherited?: true;
 };
 
-function modelProvider(model: string): string | undefined {
-  const separator = model.indexOf('/');
-  return separator > 0 ? model.slice(0, separator) : undefined;
-}
-
 /**
- * Pick the child-chain entry that best matches a parent's live fallback.
- * Once the parent has moved past its primary, exact model matches win,
- * then the working provider, then the first child entry outside the
- * providers already exhausted by the parent. Explicit inheritance stays live.
+ * Independent children leave only providers confirmed down by the parent.
+ * Explicit inheritance follows the parent's live model for either error scope.
  */
 function selectDelegatedModel(input: {
   agentName: string;
   childChain: ModelChainEntry[] | undefined;
   followsParent: boolean;
   parentModel: string | undefined;
-  parentChain: ModelChainEntry[] | undefined;
+  activeFallback: ReturnType<ForegroundFallbackManager['getActiveFallback']>;
 }): DelegatedModelSelection | undefined {
-  const { agentName, childChain, parentChain, parentModel } = input;
+  const { agentName, childChain, parentModel, activeFallback } = input;
   if (!parentModel) return undefined;
-  const parentIndex =
-    parentChain?.findIndex((entry) => entry.id === parentModel) ?? -1;
-  const exact =
-    childChain?.findIndex((entry) => entry.id === parentModel) ?? -1;
 
   if (input.followsParent) {
     return {
       agentName,
-      entry: childChain?.[exact] ?? { id: parentModel },
-      route: parentIndex > 0,
+      entry: childChain?.find((entry) => entry.id === parentModel) ?? {
+        id: parentModel,
+      },
       inherited: true,
     };
   }
 
-  if (!childChain?.length || !parentChain || parentIndex <= 0) return undefined;
-
-  if (exact >= 0) {
-    return { agentName, entry: childChain[exact], route: exact > 0 };
-  }
-
-  const activeProvider = modelProvider(parentModel);
-  if (activeProvider) {
-    const sameProvider = childChain.findIndex(
-      (entry) => modelProvider(entry.id) === activeProvider,
-    );
-    if (sameProvider >= 0) {
-      return {
-        agentName,
-        entry: childChain[sameProvider],
-        route: sameProvider > 0,
-      };
-    }
-  }
-
-  const exhaustedProviders = new Set(
-    parentChain
-      .slice(0, parentIndex)
-      .map((entry) => modelProvider(entry.id))
-      .filter((provider): provider is string => provider !== undefined),
-  );
-  if (activeProvider) exhaustedProviders.delete(activeProvider);
-  const viable = childChain.findIndex((entry) => {
-    const provider = modelProvider(entry.id);
-    return provider === undefined || !exhaustedProviders.has(provider);
+  if (!childChain?.length || !activeFallback) return undefined;
+  const { downProviders } = activeFallback;
+  const primaryProvider = parseModelReference(childChain[0].id)?.providerID;
+  if (!primaryProvider || !downProviders.has(primaryProvider)) return undefined;
+  const entry = childChain.find((entry) => {
+    const provider = parseModelReference(entry.id)?.providerID;
+    return provider !== undefined && !downProviders.has(provider);
   });
-  return viable >= 0
-    ? { agentName, entry: childChain[viable], route: viable > 0 }
-    : undefined;
+  return entry ? { agentName, entry } : undefined;
 }
 
 // Module-level runtime preset tracking. Survives plugin re-inits triggered
@@ -338,6 +315,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   // closure. These are set inside the try block.
   let config: ReturnType<typeof loadPluginConfig>;
   let runtime: RuntimeConfig;
+  // Per-generation image capability cache; the config hook drops the
+  // cached promise on config changes and each factory run starts fresh.
+  const imageCapabilityCache: ModelImageCapabilityCache = {};
   let agentDefs: ReturnType<typeof createAgents>;
   let agents: ReturnType<typeof getAgentConfigsFromDefinitions>;
   let resolvedAgentRegistry: ResolvedAgentRegistry | undefined;
@@ -566,6 +546,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let loopCommandHook: ReturnType<typeof createLoopCommandHook>;
   let taskSessionManagerHook: ReturnType<typeof createTaskSessionManagerHook>;
   let phaseReminder: ReturnType<typeof createPhaseReminderHook> | undefined;
+  let deepworkGoal: ReturnType<typeof createDeepworkGoalHook> | undefined;
   let councilInject: ReturnType<typeof createCouncilInjectHook> | undefined;
   let applyPatch: ReturnType<typeof createApplyPatchHook>;
   let searchPathGuard: ReturnType<typeof createSearchPathGuardHook>;
@@ -604,6 +585,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   >['service'];
   let acpRunTools: Record<string, ReturnType<typeof createAcpRunTool>>;
   let webfetch: ReturnType<typeof createWebfetchTool>;
+  const isFallbackPending = (taskID: string): boolean =>
+    hostFlavor !== 'v2' &&
+    !!(
+      foregroundFallback?.isFallbackInProgress(taskID) ||
+      taskSessionManagerHook?.hasDeferredError(taskID)
+    );
   let tools: Record<string, ToolDefinition>;
   let rewriteDisplayNameMentions: ReturnType<
     typeof createDisplayNameMentionRewriter
@@ -689,16 +676,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     return readModel(finalAgentConfig?.[resolvedName]);
   };
 
+  const liveSessionModel = (sessionID: string): string | undefined =>
+    foregroundFallback?.getActiveFallback(sessionID)?.model ??
+    sessionMetadata.getModel(sessionID);
+
   const resolveDelegatedModelForParent = (
     agentType: string,
     parentSessionID?: string,
   ): DelegatedModelSelection | undefined => {
     if (!parentSessionID) return undefined;
     const agentName = resolveRuntimeAgentName(runtime, agentType);
-    const parentAgentRaw = sessionMetadata.getAgent(parentSessionID);
-    const parentAgent = parentAgentRaw
-      ? resolveRuntimeAgentName(runtime, parentAgentRaw)
-      : undefined;
     const inheritance = runtime.agent(agentName)?.inheritModelFrom;
     const followsParent =
       inheritance === 'orchestrator' || inheritance === 'session';
@@ -710,10 +697,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // replays (#1079). Delegation needs the opposite view: the model
       // actually executing this parent turn, or children will be launched
       // back onto the provider the parent just escaped.
-      parentModel:
-        foregroundFallback?.getActiveFallbackModel(parentSessionID) ??
-        sessionMetadata.getModel(parentSessionID),
-      parentChain: parentAgent ? runtime.modelArrays[parentAgent] : undefined,
+      parentModel: liveSessionModel(parentSessionID),
+      activeFallback: foregroundFallback?.getActiveFallback(parentSessionID),
     });
   };
 
@@ -723,7 +708,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     agentType: string,
   ) => {
     const selected = resolveDelegatedModelForParent(agentType, parentID);
-    if (selected?.route && (childID || !selected.inherited)) {
+    if (selected && (childID || !selected.inherited)) {
       // A resume retry replaces its own unclaimed intention.
       const stale = v1DelegatedIntents.findIndex(
         (intent) => childID && intent.childID === childID,
@@ -933,7 +918,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       observationRevisionFor: (taskID, generation) =>
         revivedRunTracker?.revisionFor(taskID, generation),
       isObservationPending: (taskID, generation) =>
-        revivedRunTracker?.isObservationPending(taskID, generation) ?? false,
+        (foregroundFallback?.isFallbackInProgress(taskID) ?? false) ||
+        (taskSessionManagerHook?.hasDeferredError(taskID) ?? false) ||
+        (revivedRunTracker?.isObservationPending(taskID, generation) ?? false),
       onRunning: (record) => {
         if (record.background)
           backgroundTaskConcurrency.restoreTask(
@@ -1080,17 +1067,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       runtime.fallback.initialRetryDelayMs,
       runtime.fallback.retryDelayMs,
       backgroundFallbackHandoff,
-      // Generation fence captured BEFORE any await in the fallback
-      // preparation, and ONLY for confirmed BACKGROUND children:
-      // undefined for foreground/unmanaged sessions means "observation
-      // handoff not applicable" — never a wildcard — so a stale-
-      // generation rejection can be distinguished from a legitimate
-      // foreground fallback.
+      // Identify confirmed background children even after cancellation or
+      // termination, so handoff preparation rejects a delayed stale replay.
+      // Undefined remains exclusive to foreground/unmanaged sessions.
       (sessionID) => {
         const record = backgroundJobCoordinator.get(sessionID);
-        return record?.state === 'running' && record.background === true
-          ? record.generation
-          : undefined;
+        return record?.background === true ? record.generation : undefined;
       },
       (sessionID) => backgroundJobCoordinator.hasRunning(sessionID),
       v2RetryEnabled,
@@ -1140,9 +1122,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         );
       },
       sameProviderPolicy: runtime.backgroundJobs.sameProviderPolicy,
-      getSessionModel: (sessionID) =>
-        foregroundFallback.getActiveFallbackModel(sessionID) ??
-        sessionMetadata.getModel(sessionID),
+      getSessionModel: liveSessionModel,
       hostFlavor,
       recoverRetainedSession,
       resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
@@ -1158,6 +1138,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         foregroundFallback.isFallbackInProgress(sessionID),
       willAttemptFallback: (sessionID) =>
         foregroundFallback.willAttemptFallback(sessionID),
+      fallbackFailureReason: (sessionID) =>
+        foregroundFallback.fallbackFailureReason(sessionID),
       coordinator: sessionLifecycle,
       revivedRunTracker,
       onChildInputWait: (notification) => {
@@ -1358,6 +1340,20 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       });
     }
 
+    // Deepwork goal pointer: re-derives one state-neutral pointer from disk
+    // truth every request so the session's router-head path survives
+    // compaction. Gate: orchestrator session with an active head on disk.
+    // Switch: list "deepwork-goal" in disabled_hooks (disabled = never
+    // injected).
+    if (!runtime.disabledHooks.has('deepwork-goal')) {
+      const headGate = createDeepworkHeadGate(ctx.directory);
+      deepworkGoal = createDeepworkGoalHook({
+        isEligible: (sessionID) =>
+          sessionMetadata.getAgent(sessionID) === 'orchestrator' &&
+          headGate(sessionID),
+      });
+    }
+
     // Keyword-triggered Council Mode injection: same gate pattern as the
     // phase reminder, scoped to sessions with configured councillor seats.
     // The seat list comes from the same agentDefs the orchestrator prompt's
@@ -1398,7 +1394,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     interviewManager = createInterviewManager(ctx, config);
     interviewSubmitService = interviewManager.service;
     companionManager = new CompanionManager(
-      `proc_${process.pid}`,
+      companionSessionIdForDirectory(ctx.directory),
       ctx.directory,
       runtime.companion,
       hostFlavor,
@@ -1436,6 +1432,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       isDisposed: () => instanceDisposed,
     });
     taskReviveTools = createTaskReviveTool({
+      isFallbackPending,
       ...(hostFlavor !== 'v2' && { registerIntent: registerV1DelegatedIntent }),
       terminalGate,
       input: ctx,
@@ -1934,6 +1931,37 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     }
   };
 
+  // Only the v2 bridge consumes this native provider/model#variant override.
+  const resolveV2DelegatedModel = ({
+    agentType,
+    parentSessionID,
+  }: {
+    agentType: string;
+    parentSessionID: string;
+  }) => {
+    const entry = resolveDelegatedModelForParent(
+      agentType,
+      parentSessionID,
+    )?.entry;
+    return entry?.variant ? `${entry.id}#${entry.variant}` : entry?.id;
+  };
+
+  // A child can move to another live location while its task board stays
+  // with the delegating parent. Only task observation crosses that boundary;
+  // the destination retains ownership of permissions, profiles and tools.
+  const observeForeignTaskEvent: NonNullable<Hooks['event']> = async (
+    input,
+  ) => {
+    if (instanceDisposed) return;
+    const taskEvent = input as Parameters<
+      typeof taskSessionManagerHook.event
+    >[0];
+    const sessionID = resolveEventSessionID(taskEvent.event);
+    if (sessionID && backgroundJobBoard.isTracked(sessionID)) {
+      await taskSessionManagerHook.event(taskEvent);
+    }
+  };
+
   const hooks = {
     registryBridge,
     name: 'oh-my-opencode-slim',
@@ -1941,22 +1969,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // inference/runtime profiles for new child sessions + the sidebar.
     // Unknown to v1 hosts, consumed by src/v2/setup.ts.
     'v2.refreshProfiles': refreshProfilesFromDisk,
-    // v2's native override accepts provider/model#variant. Follow the parent's
-    // real fallback using the child's chain, including its configured variant.
-    // Explicit inheritance stays live; only the v2 bridge consumes this override.
-    'v2.resolveDelegatedModel': ({
-      agentType,
-      parentSessionID,
-    }: {
-      agentType: string;
-      parentSessionID: string;
-    }) => {
-      const entry = resolveDelegatedModelForParent(
-        agentType,
-        parentSessionID,
-      )?.entry;
-      return entry?.variant ? `${entry.id}#${entry.variant}` : entry?.id;
-    },
+    'v2.foreignTaskEvent': observeForeignTaskEvent,
+    'v2.resolveDelegatedModel': resolveV2DelegatedModel,
     'v2.session.retry':
       foregroundFallback.handleV2Retry.bind(foregroundFallback),
     // v2 owns its own interview bridge/service; point the submit tool and
@@ -1975,6 +1989,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     mcp: mcps,
 
     config: async (opencodeConfig: Record<string, unknown>) => {
+      // Host config may change model capability declarations; drop the
+      // cached capability catalog so the next lookup re-resolves it.
+      imageCapabilityCache.promise = undefined;
       const preMutationHostSnapshot = resolvedAgentRegistry
         ? undefined
         : (structuredClone(opencodeConfig) as RegistryHostSnapshot);
@@ -2102,10 +2119,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         return;
       }
 
-      // Directory scope (multi-instance): process only this location's
-      // events. Unresolved events fall through (fail-open).
+      // Directory-local handling stays scoped; moved children still reach
+      // their task owner. Unresolved events fall through (fail-open).
       eventDirectoryScope?.note(input.event);
-      if (eventDirectoryScope?.isForeign(input.event)) return;
+      if (eventDirectoryScope?.isForeign(input.event)) {
+        await observeForeignTaskEvent(input);
+        return;
+      }
 
       const event = input.event as {
         type: string;
@@ -2361,26 +2381,15 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         companionManager.onInputResolved();
       }
 
-      if (input.event.type === 'session.status') {
-        const props = input.event.properties as
-          | { sessionID?: string; status?: { type?: string } | string }
-          | undefined;
-        const sessionID = props?.sessionID;
-        const rawCompanionStatus = props?.status;
-        const companionStatus =
-          typeof rawCompanionStatus === 'string'
-            ? rawCompanionStatus
-            : typeof rawCompanionStatus === 'object' &&
-                rawCompanionStatus !== null &&
-                'type' in rawCompanionStatus &&
-                typeof (rawCompanionStatus as { type?: unknown }).type ===
-                  'string'
-              ? (rawCompanionStatus as { type: string }).type
-              : undefined;
-        const job = sessionID ? backgroundJobBoard.get(sessionID) : undefined;
+      const companionStatus = normalizeCompanionSessionStatus(
+        event.type,
+        statusType,
+      );
+      if (eventSessionID && companionStatus) {
+        const job = backgroundJobBoard.get(eventSessionID);
         companionManager.onSessionStatus({
-          sessionId: sessionID,
-          agent: sessionID ? sessionMetadata.getAgent(sessionID) : undefined,
+          sessionId: eventSessionID,
+          agent: sessionMetadata.getAgent(eventSessionID),
           status: companionStatus,
           jobFinished: job !== undefined && job.state !== 'running',
         });
@@ -2654,7 +2663,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         (typeof messageID === 'string' &&
           isInternalAdmission(input.sessionID, messageID));
       if (!internalAdmission) {
-        foregroundFallback.observeExternalTurn(input.sessionID);
+        const model = input.model ?? output?.message?.model;
+        foregroundFallback.observeExternalTurn(
+          input.sessionID,
+          model ? `${model.providerID}/${model.modelID}` : undefined,
+        );
       }
 
       // v1 confirms the session before publishing it, but saves this user
@@ -2719,7 +2732,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           childRoute.agentName,
           childRoute.parentID,
         );
-      const routedChildModel = routedChild?.route
+      const routedChildModel = routedChild
         ? modelFromMetadataString(routedChild.entry.id)
         : undefined;
       // A child already on the routed model (inherited from the parent)
@@ -2737,7 +2750,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             ? { variant: routedChild.entry.variant }
             : {}),
         };
-        log('[delegation] routed v1 child to active fallback model', {
+        log('[delegation] routed v1 child model', {
           sessionID: input.sessionID,
           parentSessionID: childRoute?.parentID,
           agent: routedChild.agentName,
@@ -2759,8 +2772,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         : undefined;
       const trackedModelText = unpinnedV1InternalContinuation
         ? runtime.fallback.continuationPolicy === 'stick-to-fallback'
-          ? (foregroundFallback.getActiveFallbackModel(input.sessionID) ??
-            sessionMetadata.getModel(input.sessionID))
+          ? liveSessionModel(input.sessionID)
           : sessionMetadata.getModel(input.sessionID)
         : undefined;
       const trackedModel = modelFromMetadataString(trackedModelText);
@@ -2853,12 +2865,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           const pendingStatus = pendingTuiBusySessions.get(input.sessionID);
           pendingTuiBusySessions.delete(input.sessionID);
           markTuiAgentActive(input.sessionID, agent, pendingStatus);
+          companionManager.onSessionStatus({
+            sessionId: input.sessionID,
+            agent,
+            status: 'busy',
+          });
         }
-        companionManager.onSessionStatus({
-          sessionId: input.sessionID,
-          agent,
-          status: 'busy',
-        });
       }
 
       // chat.message carries the model selected for this message, and it
@@ -3022,11 +3034,41 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // input, the API call fails before the LLM can respond. We replace
       // image bytes with a text nudge so the orchestrator delegates to
       // @observer instead.
+      // auto routing keys on the turn's model: vision-capable models keep
+      // image parts inline (native read); only non-vision chains fall back
+      // to the observer relay. chat.message records the turn's model just
+      // before this handler runs; the fallback chain covers mid-session
+      // model switches.
+      // `input` is an empty shell in this handler; use the sessionID
+      // extracted from the messages above.
+      const turnModelRef = sessionID
+        ? parseModelRef(
+            foregroundFallback.getActiveFallback(sessionID)?.model ??
+              sessionMetadata.getModel(sessionID),
+          )
+        : undefined;
+      const hasImageParts = typedOutput.messages.some(
+        (message) =>
+          isUserMessageWithParts(message) && message.parts.some(isImagePart),
+      );
+      const acceptsImages =
+        turnModelRef && hasImageParts
+          ? await modelAcceptsImageInput(turnModelRef, {
+              client: ctx.client,
+              modelDomain: (
+                ctx as {
+                  experimental_v2?: ModelImageCapabilityDeps;
+                }
+              ).experimental_v2?.modelDomain,
+              cache: imageCapabilityCache,
+            })
+          : undefined;
       const imageResult = processImageAttachments({
         messages: typedOutput.messages,
         workDir: ctx.directory,
         imageRouting: runtime.imageRouting,
         disabledAgents: runtime.disabledAgents,
+        modelAcceptsImages: acceptsImages,
         log,
       });
       if (imageResult) {
@@ -3071,9 +3113,19 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         );
       }
       await taskSessionManagerHook.injectBackgroundJobBoard(input, typedOutput);
+      // Ordering contract: the goal pointer is the trailing-most volatile
+      // message — nothing appends after it, so re-entered transforms and the
+      // board's own trailing-zone strip stay ordered.
+      if (deepworkGoal) {
+        await deepworkGoal['experimental.chat.messages.transform'](
+          input as never,
+          typedOutput as never,
+        );
+      }
       if (compacting) {
         stripTaggedContent(typedOutput.messages, PHASE_REMINDER_METADATA_KEY);
         stripTaggedContent(typedOutput.messages, COUNCIL_INJECT_METADATA_KEY);
+        stripTaggedContent(typedOutput.messages, GOAL_POINTER_METADATA_KEY);
       }
     },
 
@@ -3091,11 +3143,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       await taskSessionManagerAfter(input, output);
     },
   } as Hooks & {
+    'v2.foreignTaskEvent': typeof observeForeignTaskEvent;
     'v2.refreshProfiles': typeof refreshProfilesFromDisk;
-    'v2.resolveDelegatedModel': (input: {
-      agentType: string;
-      parentSessionID: string;
-    }) => string | undefined;
+    'v2.resolveDelegatedModel': typeof resolveV2DelegatedModel;
   };
 
   return hooks;

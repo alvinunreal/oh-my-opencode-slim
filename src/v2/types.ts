@@ -210,6 +210,12 @@ export interface V2Context {
     transform(cb: (draft: V2CommandDraft) => void): Promise<V2Registration>;
     list(): Promise<unknown>;
   };
+  /** v2 model registry domain (`ctx.model`) — runtime-probed; older hosts
+   * expose no domain and callers must degrade. `list()` resolves the full
+   * catalog ⊕ config view with per-model capabilities. */
+  readonly model?: {
+    readonly list?: (input?: unknown) => Promise<unknown>;
+  };
   skill?: {
     transform(
       cb: (draft: {

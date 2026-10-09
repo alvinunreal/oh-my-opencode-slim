@@ -29,6 +29,7 @@ import {
   getAgentConfigsFromDefinitions,
 } from './index';
 import type { AgentDefinition } from './orchestrator';
+import { mergeTaskStance } from './permissions';
 
 export interface ResolvedAgentRegistry {
   readonly hostFlavor: string | undefined;
@@ -155,8 +156,27 @@ function applyMarketplaceOwnerOverride(
       ...clone(override.options),
     };
   }
-  if (override.permission)
-    definition.config.permission = clone(override.permission);
+  if (override.permission) {
+    const merged = clone(override.permission);
+    // A permission override replaces the whole map; keep the agent's
+    // nested-dispatch stance when the override doesn't address `task`,
+    // otherwise the override would silently strip it. String shorthands
+    // stay untouched — they are an explicit take-over of every tool.
+    if (
+      merged !== null &&
+      typeof merged === 'object' &&
+      !Array.isArray(merged) &&
+      (merged as Record<string, unknown>).task === undefined
+    ) {
+      const stance = (
+        definition.config.permission as Record<string, unknown> | undefined
+      )?.task;
+      if (stance !== undefined) {
+        (merged as Record<string, unknown>).task = clone(stance);
+      }
+    }
+    definition.config.permission = merged;
+  }
 }
 
 function narrowCapabilities(
@@ -563,7 +583,18 @@ export function buildResolvedAgentRegistry(
       typeof entry.model === 'string' ? entry.model : undefined;
     const configuredScalarVariant =
       typeof entry.variant === 'string' ? entry.variant : undefined;
-    if (hostEntry) Object.assign(entry, clone(hostEntry));
+    if (hostEntry) {
+      // Capture the factory stance first: Object.assign replaces
+      // `permission` wholesale, and a user map without a `task` key would
+      // otherwise silently drop the agent's nested-dispatch stance.
+      const factoryTask = (
+        entry.permission as Record<string, unknown> | undefined
+      )?.task;
+      Object.assign(entry, clone(hostEntry));
+      entry.permission = mergeTaskStance(entry.permission, {
+        task: factoryTask,
+      });
+    }
 
     const configured =
       runtime.modelArrays[name] ?? definition._modelArray ?? [];

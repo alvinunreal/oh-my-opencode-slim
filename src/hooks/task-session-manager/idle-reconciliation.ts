@@ -49,7 +49,6 @@ export function createIdleReconciler(options: {
     sessionID: string,
     idleObservedAt: number,
     generation: number,
-    error?: string,
   ): void {
     const run = { taskID: sessionID, generation };
     const token = options.terminalGate.capture(run);
@@ -65,10 +64,7 @@ export function createIdleReconciler(options: {
     // Background reconciliation is fail-soft: a failure must be logged
     // and swallowed, never escape as an unhandled rejection.
     void options.terminalGate
-      .reconcile(
-        run,
-        error ? { kind: 'session-error', message: error } : { kind: 'inspect' },
-      )
+      .reconcile(run, { kind: 'inspect' })
       .catch((err) => {
         log('[idle-reconciliation] background reconcile failed', String(err));
       });

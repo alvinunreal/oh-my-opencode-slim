@@ -508,3 +508,102 @@ describe('permission edge cases', () => {
     ).toBeDefined();
   });
 });
+
+describe('nested-dispatch default', () => {
+  test('custom agents deny nested dispatch by default on v2', () => {
+    const agents = createAgents(
+      runtimeFor({
+        disabled_agents: [],
+        agents: {
+          reviewer: {
+            model: 'openai/gpt-6',
+            prompt: 'You are the custom reviewer agent.',
+          },
+        },
+      }),
+      { hostFlavor: 'v2' },
+    );
+    const reviewer = agents.find((agent) => agent.name === 'reviewer');
+    const permission = (reviewer?.config.permission ?? {}) as Record<
+      string,
+      unknown
+    >;
+    expect(permission.task).toEqual({ '*': 'deny' });
+  });
+
+  test('v1 hosts carry no nested-dispatch entries at all', () => {
+    const agents = createAgents(
+      runtimeFor({
+        disabled_agents: [],
+        agents: {
+          reviewer: {
+            model: 'openai/gpt-6',
+            prompt: 'You are the custom reviewer agent.',
+          },
+        },
+      }),
+    );
+    for (const agent of agents) {
+      const permission = (agent.config.permission ?? {}) as Record<
+        string,
+        unknown
+      >;
+      expect(permission.task).toBeUndefined();
+    }
+  });
+
+  test('the orchestrator is exempt from the nested-dispatch default', () => {
+    const agents = createAgents(runtimeFor({}));
+    const orchestrator = agents.find((agent) => agent.name === 'orchestrator');
+    const permission = (orchestrator?.config.permission ?? {}) as Record<
+      string,
+      unknown
+    >;
+    expect(permission.task).toBeUndefined();
+  });
+});
+
+describe('nested-dispatch default', () => {
+  test('plugin-config permission override without task keeps the role stance', () => {
+    const agents = createAgents(
+      runtimeFor({
+        disabled_agents: [],
+        agents: {
+          oracle: {
+            model: 'provider/model',
+            permission: { read: 'allow' },
+          },
+        },
+      }),
+      { hostFlavor: 'v2' },
+    );
+    const oracle = agents.find((agent) => agent.name === 'oracle');
+    const permission = (oracle?.config.permission ?? {}) as Record<
+      string,
+      unknown
+    >;
+    expect(permission.read).toBe('allow');
+    expect(permission.task).toEqual({ '*': 'deny', observer: 'allow' });
+  });
+
+  test('plugin-config task override wins over the role default', () => {
+    const agents = createAgents(
+      runtimeFor({
+        disabled_agents: [],
+        agents: {
+          oracle: {
+            model: 'provider/model',
+            permission: { task: 'deny' },
+          },
+        },
+      }),
+      { hostFlavor: 'v2' },
+    );
+    const oracle = agents.find((agent) => agent.name === 'oracle');
+    const permission = (oracle?.config.permission ?? {}) as Record<
+      string,
+      unknown
+    >;
+    expect(permission.task).toBe('deny');
+  });
+});

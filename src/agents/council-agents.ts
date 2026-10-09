@@ -15,6 +15,7 @@ const COUNCILLOR_AGENT_PREFIX = 'councillor-';
 export function buildCouncillorAgents(
   runtime: RuntimeConfig,
   disabled: Set<string>,
+  observerDispatchEnabled = false,
 ): AgentDefinition[] {
   const council = runtime.council;
   if (!council) return [];
@@ -38,6 +39,7 @@ export function buildCouncillorAgents(
       undefined,
       cfg.prompt,
       cfg.variant,
+      observerDispatchEnabled,
     );
 
     // If a fallback chain is configured, attach _modelArray for runtime

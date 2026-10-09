@@ -101,7 +101,7 @@ function ensureImagesGitignore(
   }
 }
 
-function isImagePart(p: unknown): boolean {
+export function isImagePart(p: unknown): boolean {
   return asImagePart(p) !== null;
 }
 function sanitizeFilename(name: string): string {
@@ -186,6 +186,9 @@ export function processImageAttachments(args: {
   workDir: string;
   imageRouting: 'auto' | 'direct';
   disabledAgents: ReadonlySet<string>;
+  /** Whether the turn's model accepts image input, from the host-resolved
+   * capabilities. Unknown (`undefined`) falls through to interception. */
+  modelAcceptsImages?: boolean;
   log: (msg: string) => void;
 }): boolean {
   const { messages, workDir, imageRouting, disabledAgents, log } = args;
@@ -193,6 +196,10 @@ export function processImageAttachments(args: {
   // direct mode: never intercept attachments; the orchestrator handles them
   // inline. @observer remains available for manual delegation.
   if (imageRouting === 'direct') return false;
+
+  // auto + the turn's model accepts image input: native vision wins — keep
+  // the parts inline and let the model read them directly.
+  if (args.modelAcceptsImages === true) return false;
 
   // Keep original parts when observer is unavailable. The caller displays a
   // debounced warning toast; this hook must never destroy user data.
