@@ -9,9 +9,17 @@
  * the block, so a session that never asks for a council pays zero tokens
  * for it.
  *
+ * First-hit injection: at most ONE block per transcript. The block lands on
+ * the FIRST triggering message and reads as a standing procedure; later
+ * triggering messages reuse the block already in history instead of
+ * re-injecting it (a session with N triggering messages costs one block,
+ * not N). Because the earliest triggering message never moves in an
+ * append-only transcript, the derivation stays a pure function of the
+ * message list, so the cache-safety contract below is preserved.
+ *
  * Cache safety (see ../cache-safe-injection): the block is a
- * construction-time constant (seat list + delegation vocabulary) and the
- * trigger decision is a pure function of the message text — re-running this
+ * construction-time constant (delegation vocabulary) and the trigger
+ * decision is a pure function of the message text — re-running this
  * transform on later turns reproduces the same bytes at the same positions.
  * Do not make this tail-only (PR #790) and never gate it on in-memory
  * session state: a plugin restart would drop the block and rewrite already-
@@ -26,23 +34,26 @@ import { formatSystemReminder } from '../../config/constants';
 import { isInternalInitiatorPart } from '../../utils/internal-initiator';
 import {
   appendTaggedSyntheticPart,
-  isTaggedPart,
+  hasTaggedPart,
 } from '../cache-safe-injection';
 import { findLatestUserMessage, isUserMessageWithParts } from '../types';
 
 export const COUNCIL_INJECT_METADATA_KEY = 'oh-my-opencode-slim.councilInject';
 
 /**
- * Council trigger keywords. Recall-biased by design: a false positive only
- * appends the block once (~190 tokens, harmless — the block itself instructs
- * the orchestrator to run a council only for consensus requests), while a
- * false negative leaves the orchestrator unaware of the Council Mode
- * procedure. ASCII words use \b word boundaries (covers "@council" and
- * "@councillor-<seat>"); CJK words use plain substring matching (JS \b is
- * ASCII-only). Deliberately excluded: bare seat names in prose, vote/投票.
+ * Council trigger keywords across every supported language (English,
+ * 简/繁体中文, 日本語, 한국어, فارسی). Recall-biased by design: a false
+ * positive only injects a ~140-token block once per transcript, and the
+ * block's gate sentence ("When the conversation calls for multi-model
+ * consensus") lets the model decline incidental mentions — while a false
+ * negative leaves the orchestrator unaware of the Council Mode procedure.
+ * ASCII words use \b word boundaries (covers "@council" and
+ * "@councillor-<seat>"); non-ASCII scripts use plain substring matching
+ * (JS \b is ASCII-only). Deliberately excluded: bare seat names in prose,
+ * vote/投票, and single-token hot words (model/モデル/모델/مدل).
  */
 const COUNCIL_TRIGGER_PATTERN =
-  /\b(?:councillors?|councils?|consensus|second opinions?|roundtable|multiple opinions|multiple models|several models|multi-model)\b|议会|顾问团|圆桌|共识|第二意见|多方意见|多模型|多个模型|几个模型|别的模型|其他模型/i;
+  /\b(?:councillors?|councils?|consensus|second opinions?|roundtable|multiple opinions|multiple models|several models|multi-model|multi-?agents?|multiagent|panels?|deliberat\w*|diverse perspectives|sounding board)\b|议会|議會|評議会|協議会|顾问团|顧問團|圆桌|圓桌|円卓|共识|共識|合意|第二意见|第二意見|セカンドオピニオン|多方意见|多模型|多个模型|多個模型|几个模型|幾個模型|别的模型|別的模型|其他模型|多代理|多智能体|マルチエージェント|複数のモデル|평의회|위원회|원탁|합의|세컨드 오피니언|여러 모델|멀티에이전트|شورا|انجمن|میزگرد|اجماع|نظر دوم|چند مدل|چندعامله/i;
 
 const CODE_FENCE_PATTERN = /```[\s\S]*?```/g;
 const INLINE_CODE_PATTERN = /`[^`\n]*`/g;
@@ -72,32 +83,31 @@ export interface CouncilWording {
 }
 
 /**
- * Build the Council Mode dispatch block. Pure function of the seat list and
- * delegation vocabulary — both are construction-time constants, so the
- * rendered bytes are stable for the lifetime of the plugin generation.
+ * Build the Council Mode dispatch block. Pure function of the delegation
+ * vocabulary — a construction-time constant, so the rendered bytes are
+ * stable for the lifetime of the plugin generation.
+ *
+ * Deliberately terse: the orchestrator is a strong model, seat names live
+ * in the orchestrator's static seat pointer, and the tool schemas document
+ * themselves, so the block only carries what the model cannot infer —
+ * the gate condition, the dispatch shape, and the councillors' capability
+ * boundary. The gate sentence is descriptive, not restrictive ("when the
+ * conversation calls for it"), so weaker models still run the procedure
+ * on a genuine ask while stronger models can decline incidental mentions.
  */
-export function buildCouncilModeBlock(
-  seats: readonly string[],
-  wording: CouncilWording,
-): string {
-  const firstSeat = seats[0] ?? 'councillor-a';
-  const seatList = seats.join(', ');
+export function buildCouncilModeBlock(wording: CouncilWording): string {
   return [
     '## Council Mode',
     '',
-    'Run this procedure INSTEAD of delegating straight to @council:',
-    '1. If the question references external resources (PR/URL/docs), fetch them FIRST and embed a concise summary in each councillor prompt — councillors are read-only.',
-    `2. Dispatch the user's question to every seat in PARALLEL via ${wording.tool}() — one call per seat (${seatList}):`,
-    `   - ${wording.tool}(${wording.agentParam}='${firstSeat}', description='Councillor on <brief topic>', prompt=<question + fetched context>)`,
-    '3. Collect ALL responses; retry an empty seat once. If a seat does not respond within 3 minutes, proceed without waiting indefinitely. Mark failed or timed-out seats explicitly, never omit them.',
-    `4. Call ${wording.tool}(${wording.agentParam}='council', description='Synthesize council report', prompt=<question + all seat responses labeled by seat name and model>) and present its report.`,
+    'When the conversation calls for multi-model consensus, run this procedure:',
+    '1. Embed a summary of any external sources into each councillor prompt (councillors cannot fetch).',
+    `2. Dispatch the question to every council seat in parallel via ${wording.tool}() — one call per seat.`,
+    '3. Collect all responses; retry an empty seat once; mark failed seats; do not wait on stragglers.',
+    `4. Call ${wording.tool}(${wording.agentParam}='council', description='Synthesize council report', prompt=<question + every seat response labeled by seat and model>) to synthesize, then present its report.`,
   ].join('\n');
 }
 
 interface CouncilInjectOptions {
-  /** Dispatchable councillor seat names ('councillor-<seat>'), derived from
-   * the same createAgents output the orchestrator prompt's seat list uses. */
-  seats: readonly string[];
   /** Native delegation wording for the host flavor (construction-time). */
   wording: CouncilWording;
 }
@@ -105,13 +115,13 @@ interface CouncilInjectOptions {
 /**
  * Creates the experimental.chat.messages.transform hook for keyword-triggered
  * Council Mode injection. Runs right before sending to API (no UI display).
- * Only injects for the orchestrator agent, and only onto messages whose text
- * matches a council trigger.
+ * Only injects for the orchestrator agent, and only onto the FIRST message
+ * whose text matches a council trigger — later triggering messages reuse
+ * the block already planted in history (first-hit, one block per
+ * transcript).
  */
 export function createCouncilInjectHook(options: CouncilInjectOptions) {
-  const block = formatSystemReminder(
-    buildCouncilModeBlock(options.seats, options.wording),
-  );
+  const block = formatSystemReminder(buildCouncilModeBlock(options.wording));
 
   return {
     'experimental.chat.messages.transform': async (
@@ -130,18 +140,28 @@ export function createCouncilInjectHook(options: CouncilInjectOptions) {
         return;
       }
 
+      // First-hit dedupe: if this payload already carries a block (e.g. the
+      // same output object transformed twice), add nothing anywhere.
+      const alreadyInjected = messages.some(
+        (message) =>
+          isUserMessageWithParts(message) &&
+          message.info.agent === 'orchestrator' &&
+          message.info.sessionID === sessionID &&
+          hasTaggedPart(message, COUNCIL_INJECT_METADATA_KEY),
+      );
+      if (alreadyInjected) {
+        return;
+      }
+
+      let injected = false;
       for (const message of messages) {
+        if (injected) {
+          break;
+        }
         if (
           !isUserMessageWithParts(message) ||
           message.info.agent !== 'orchestrator' ||
           message.info.sessionID !== sessionID
-        ) {
-          continue;
-        }
-        if (
-          message.parts.some((part) =>
-            isTaggedPart(part, COUNCIL_INJECT_METADATA_KEY),
-          )
         ) {
           continue;
         }
@@ -159,13 +179,15 @@ export function createCouncilInjectHook(options: CouncilInjectOptions) {
             eligibleTexts.push(part.text);
           }
         }
+        if (eligibleTexts.length === 0) {
+          continue;
+        }
 
         // Slash commands never trigger (documented behavior): a message
         // whose FIRST eligible text part leads with a slash is a host
         // command, and the whole message is skipped — a later part
         // containing a trigger word must not inject around the command.
         if (
-          eligibleTexts.length > 0 &&
           SLASH_COMMAND_LEAD_PATTERN.test(
             stripCodeForTriggerMatch(eligibleTexts[0]),
           )
@@ -180,6 +202,7 @@ export function createCouncilInjectHook(options: CouncilInjectOptions) {
             text: block,
             metadataKey: COUNCIL_INJECT_METADATA_KEY,
           });
+          injected = true;
         }
       }
     },

@@ -97,15 +97,24 @@ Add a council model and at least one council preset to your plugin config:
 ```
 
 Then ask for it in your message. Council Mode is **keyword-triggered**: the
-`council-inject` hook watches orchestrator user messages and appends the full
-Council Mode procedure to the turn when it sees a trigger. Code blocks and
-inline code are stripped before matching, and slash commands never trigger:
+`council-inject` hook watches orchestrator user messages and injects the
+full Council Mode procedure **once** — on the first message that carries a
+trigger. The block then stays in history as a standing procedure: later
+triggers don't re-inject it, so the token cost is paid once per session,
+not per trigger. Code blocks and inline code are stripped before matching,
+and slash commands never trigger:
 
 - **English**: `council` / `@council`, `councillor`, `consensus`,
   `second opinion`, `roundtable`, `multiple opinions`, `multiple models`,
-  `several models`, `multi-model` (singular or plural)
-- **Chinese**: `议会`, `顾问团`, `圆桌`, `共识`, `第二意见`, `多方意见`,
-  `多模型`, `多个模型`, `几个模型`, `别的模型`, `其他模型`
+  `several models`, `multi-model`, `multi-agent`, `panel`, `deliberate`,
+  `deliberation`, `diverse perspectives`, `sounding board`
+- **简体中文**: `议会`, `顾问团`, `圆桌`, `共识`, `第二意见`, `多方意见`,
+  `多模型`, `多个模型`, `几个模型`, `别的模型`, `其他模型`, `多代理`, `多智能体`
+- **日本語**: `評議会`, `協議会`, `円卓`, `合意`, `セカンドオピニオン`,
+  `複数のモデル`, `マルチエージェント`
+- **한국어**: `평의회`, `위원회`, `원탁`, `합의`, `세컨드 오피니언`,
+  `여러 모델`, `멀티에이전트`
+- **فارسی**: `شورا`, `انجمن`, `میزگرد`, `اجماع`, `نظر دوم`, `چند مدل`, `چندعامله`
 
 ```text
 Run a council: what is the safest migration strategy for this schema change?
@@ -327,17 +336,17 @@ prompt** (not the user prompt):
 ### Invocation
 
 Ask for consensus in your message — see the [trigger list](#quick-setup)
-above; any of those keywords (e.g. `council`, `@council`, `consensus`,
-`共识`) injects the Council Mode procedure into that turn, and the
-orchestrator dispatches every councillor seat in parallel:
+above; the first trigger keyword in a session injects the Council Mode
+procedure (once — later triggers don't re-inject), and the orchestrator
+dispatches every councillor seat in parallel:
 
 ```text
 Should we use a job queue or an outbox pattern here? Get a council's opinion.
 ```
 
 The orchestrator may also run a council on its own for high-stakes or
-ambiguous decisions. The injection is keyword-triggered, so sessions that
-never ask pay zero tokens for the procedure.
+ambiguous decisions. The injection is keyword-triggered and paid once per
+session, so sessions that never ask pay zero tokens for the procedure.
 
 **Disabling injection.** Turn the keyword injection off entirely with
 `disabled_hooks: ["council-inject"]` (see

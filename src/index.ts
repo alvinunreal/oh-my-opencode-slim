@@ -1356,18 +1356,15 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     // Keyword-triggered Council Mode injection: same gate pattern as the
     // phase reminder, scoped to sessions with configured councillor seats.
-    // The seat list comes from the same agentDefs the orchestrator prompt's
-    // seat pointer uses; the councillor- prefix is reserved (custom/ACP
-    // name validation rejects it), so the two can never disagree.
+    // The seat gate uses the same agentDefs the orchestrator prompt's seat
+    // pointer lists; the injected block no longer enumerates seats (the
+    // pointer already does), so the hook only needs the delegation wording.
     if (!runtime.disabledHooks.has('council-inject')) {
       const councilSeats = agentDefs
         .filter((a) => a.name.startsWith('councillor-'))
         .map((a) => a.name);
       if (councilSeats.length > 0) {
-        councilInject = createCouncilInjectHook({
-          seats: councilSeats,
-          wording: delegation,
-        });
+        councilInject = createCouncilInjectHook({ wording: delegation });
       }
     }
 

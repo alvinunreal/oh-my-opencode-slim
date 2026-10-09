@@ -489,12 +489,11 @@ exports[`cache-impact snapshots (update deliberately — see file header) transf
 "<system-reminder>
 ## Council Mode
 
-Run this procedure INSTEAD of delegating straight to @council:
-1. If the question references external resources (PR/URL/docs), fetch them FIRST and embed a concise summary in each councillor prompt — councillors are read-only.
-2. Dispatch the user's question to every seat in PARALLEL via task() — one call per seat (councillor-alpha):
-   - task(subagent_type='councillor-alpha', description='Councillor on <brief topic>', prompt=<question + fetched context>)
-3. Collect ALL responses; retry an empty seat once. If a seat does not respond within 3 minutes, proceed without waiting indefinitely. Mark failed or timed-out seats explicitly, never omit them.
-4. Call task(subagent_type='council', description='Synthesize council report', prompt=<question + all seat responses labeled by seat name and model>) and present its report.
+When the conversation calls for multi-model consensus, run this procedure:
+1. Embed a summary of any external sources into each councillor prompt (councillors cannot fetch).
+2. Dispatch the question to every council seat in parallel via task() — one call per seat.
+3. Collect all responses; retry an empty seat once; mark failed seats; do not wait on stragglers.
+4. Call task(subagent_type='council', description='Synthesize council report', prompt=<question + every seat response labeled by seat and model>) to synthesize, then present its report.
 </system-reminder>"
 ,
         "type": "text",

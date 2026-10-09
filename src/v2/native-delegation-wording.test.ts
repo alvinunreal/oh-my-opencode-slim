@@ -146,8 +146,8 @@ describe('createAgents council seat pointer vocabulary', () => {
     const prompt = orchestratorPromptFor('v2');
 
     // Static pointer: seat IDs + native vocabulary only. The full Council
-    // Mode dispatch procedure is appended per-message by the council-inject
-    // hook when a council trigger is detected — never carried statically.
+    // Mode dispatch procedure is injected once by the council-inject hook
+    // (first-hit, at the first council trigger) — never carried statically.
     expect(prompt).toContain('## Council');
     expect(prompt).toContain('Seats: councillor-alpha');
     expect(prompt).toContain('dispatch via subagent()');

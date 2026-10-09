@@ -1222,8 +1222,8 @@ test('orchestrator prompt carries the council seat pointer when councillors exis
   expect(prompt).toContain('## Council');
   expect(prompt).toContain('Seats: councillor-alpha');
   expect(prompt).toContain('dispatch via task()');
-  // The full dispatch procedure is appended per-message by the
-  // council-inject hook, never carried statically.
+  // The full dispatch procedure is injected once by the council-inject hook
+  // (first-hit), never carried statically.
   expect(prompt).not.toContain('## Council Mode');
   expect(prompt).not.toContain('proceed without it');
 });
@@ -1233,7 +1233,7 @@ test('council pointer wording tracks the council-inject hook state', () => {
   const enabledPrompt = enabled.find((a) => a.name === 'orchestrator')?.config
     .prompt as string;
   expect(enabledPrompt).toContain(
-    'injected per-message by the council-inject hook on council keywords',
+    'injected once by the council-inject hook, at the first council keyword',
   );
 
   const disabled = createAgents(
@@ -1248,7 +1248,7 @@ test('council pointer wording tracks the council-inject hook state', () => {
   expect(disabledPrompt).toContain('Seats: councillor-alpha');
   expect(disabledPrompt).toContain('keyword injection disabled');
   expect(disabledPrompt).not.toContain(
-    'injected per-message by the council-inject hook',
+    'injected once by the council-inject hook',
   );
 });
 
@@ -1260,7 +1260,7 @@ test('orchestrator prompt excludes the council pointer when no councillors', () 
   // phrase, not the generic '## Council' header (user-level prompt files
   // may legitimately contain their own Council sections).
   expect(prompt).not.toContain(
-    'the full procedure is injected per-message by the council-inject hook',
+    'the full procedure is injected once by the council-inject hook',
   );
 });
 

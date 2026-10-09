@@ -1191,8 +1191,9 @@ export function createAgents(
   }
 
   // Static pointer, not the full procedure: the Council Mode dispatch block
-  // is appended per-message by the council-inject hook when a council trigger
-  // is detected. The seat list lives here because hidden councillors appear
+  // is injected by the council-inject hook on the FIRST council keyword and
+  // then stays in history as a standing procedure (later triggers do not
+  // re-inject). The seat list lives here because hidden councillors appear
   // in no host catalog — this line is the orchestrator's only always-present
   // source of seat IDs. Wording tracks the hook state: no auto-inject
   // promise when the hook is disabled.
@@ -1202,7 +1203,7 @@ export function createAgents(
       .join(', ');
     const injectNote = runtime.disabledHooks.has('council-inject')
       ? `dispatch via ${vocab.tool}() when the user asks for consensus (keyword injection disabled; dispatch seats and synthesize manually).`
-      : `dispatch via ${vocab.tool}() when the user asks for consensus; the full procedure is injected per-message by the council-inject hook on council keywords.`;
+      : `dispatch via ${vocab.tool}() when the user asks for consensus; the full procedure is injected once by the council-inject hook, at the first council keyword, and stays in effect.`;
     updatedPrompt = `${updatedPrompt}\n\n## Council\nSeats: ${seatList} — ${injectNote}`;
   }
 

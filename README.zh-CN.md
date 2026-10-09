@@ -335,7 +335,7 @@ ping all agents
 ### 04. Council：思维的合唱团
 
 > [!NOTE]
-> **为什么 Orchestrator 不经常自动调用 Council？** 这是刻意设计的。Council 会同时运行多个模型，由于这通常是系统中成本最高的路径，因此自动委派逻辑非常严格。在实际使用中，在消息中提到 `council`、`@council`、`consensus` 或 `共识` 等触发词会为该轮注入 Council Mode 程序，Orchestrator 随之并行派发每个议员席位，例如：<code>run a council on these two architectures</code>。完整程序从不静态携带：从不请求 council 的会话为此支付零 token，且注入可通过 <code>disabled_hooks: ["council-inject"]</code> 完全关闭。
+> **为什么 Orchestrator 不经常自动调用 Council？** 这是刻意设计的。Council 会同时运行多个模型，由于这通常是系统中成本最高的路径，因此自动委派逻辑非常严格。在实际使用中，在消息中提到 `council`、`@council`、`consensus` 或 `共识` 等触发词会为该会话注入一次 Council Mode 程序（在首个触发词处注入，后续触发词不再重复注入），Orchestrator 随之并行派发每个议员席位，例如：<code>run a council on these two architectures</code>。完整程序从不静态携带：从不请求 council 的会话为此支付零 token，且注入可通过 <code>disabled_hooks: ["council-inject"]</code> 完全关闭。
 
 <table>
   <tr>

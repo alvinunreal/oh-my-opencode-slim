@@ -371,7 +371,7 @@ ping all agents
 > [!NOTE]
 > **Orchestrator가 Council을 자주 자동 호출하지 않는 이유는 무엇인가요?** Council은 여러 모델을 동시에 실행하므로 대개 가장 비용이 많이 드는 방식입니다. 따라서 자동 위임을 제한하도록 설계했습니다.
 >
-> Council을 사용하려면 메시지에 `council`, `@council`, `consensus` 또는 `共识`를 포함하세요. 해당 턴에 Council 모드 절차가 주입되고, Orchestrator가 모든 Council 구성원에게 작업을 병렬로 배정합니다. 예: <code>run a council on these two architectures</code>.
+> Council을 사용하려면 메시지에 `council`, `@council`, `consensus` 또는 `共识`를 포함하세요. 해당 세션의 첫 번째 트리거 시점에 Council 모드 절차가 한 번 주입되고(이후 트리거 시에는 재주입되지 않습니다), Orchestrator가 모든 Council 구성원에게 작업을 병렬로 배정합니다. 예: <code>run a council on these two architectures</code>.
 >
 > 전체 절차를 프롬프트에 상시 포함하지 않으므로 Council을 요청하지 않는 세션에서는 이 절차에 대한 토큰 비용이 발생하지 않습니다. <code>disabled_hooks: ["council-inject"]</code>로 절차 주입을 완전히 비활성화할 수도 있습니다.
 

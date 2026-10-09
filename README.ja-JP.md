@@ -343,7 +343,7 @@ ping all agents
 ### 04. Council: 知性の合唱
 
 > [!NOTE]
-> **なぜ Orchestrator は Council をもっと頻繁に自動呼び出ししないのか？** これは意図的な設計です。Council は複数のモデルを同時に動かすため、システム内で最もコストの高い経路となることが多く、自動委譲は厳しく制限されています。実際の運用では、`council`、`@council`、`consensus`、`共识` などのトリガーワードをメッセージに含めると、そのターンに Council Mode の手順が注入され、Orchestrator がすべての councillor シートを並行してディスパッチします。例: <code>run a council on these two architectures</code>。手順全体が静的に保持されることはなく、Council を要求しないセッションはそのためにトークンを支払いません。注入は <code>disabled_hooks: ["council-inject"]</code> で完全に無効化できます。
+> **なぜ Orchestrator は Council をもっと頻繁に自動呼び出ししないのか？** これは意図的な設計です。Council は複数のモデルを同時に動かすため、システム内で最もコストの高い経路となることが多く、自動委譲は厳しく制限されています。実際の運用では、`council`、`@council`、`consensus`、`共识` などのトリガーワードをメッセージに含めると、そのセッションの最初のトリガーワードで一度だけ Council Mode の手順が注入され（以降のトリガーワードでは再注入されません）、Orchestrator がすべての councillor シートを並行してディスパッチします。例: <code>run a council on these two architectures</code>。手順全体が静的に保持されることはなく、Council を要求しないセッションはそのためにトークンを支払いません。注入は <code>disabled_hooks: ["council-inject"]</code> で完全に無効化できます。
 
 <table>
   <tr>

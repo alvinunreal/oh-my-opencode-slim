@@ -100,7 +100,6 @@ export function createPipeline(options: PipelineOptions = {}): Pipeline {
   });
 
   const councilInject = createCouncilInjectHook({
-    seats: ['councillor-alpha'],
     wording: { tool: 'task', agentParam: 'subagent_type' },
   });
 
