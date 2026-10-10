@@ -26,7 +26,7 @@ import {
 } from './task-ref';
 
 const z = tool.schema;
-const MAX_MESSAGE_LENGTH = 500;
+const MAX_MESSAGE_LENGTH = 2000;
 const DEFAULT_MESSAGE_TIMEOUT_MS = 10_000;
 const MODEL_LOOKUP_HISTORY_LIMIT = 20;
 
@@ -64,7 +64,9 @@ export function createTaskMessageTool(options: {
         .trim()
         .min(1)
         .max(MAX_MESSAGE_LENGTH)
-        .describe('Short message to queue for the child task'),
+        .describe(
+          `Bounded message (max ${MAX_MESSAGE_LENGTH} chars) for the child task; for longer handoffs, continue the session with task_revive once it settles`,
+        ),
       ...(hostFlavorAtCreation === 'v2'
         ? {
             delivery: z

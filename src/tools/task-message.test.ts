@@ -60,6 +60,16 @@ function createToolWithTimeout(board: BackgroundJobBoard, timeoutMs: number) {
 }
 
 describe('task_message', () => {
+  test('the schema-level message cap admits 2000 chars and rejects 2001', async () => {
+    // The bound lives in the zod schema the host enforces before execute()
+    // runs (the plugin cannot reword that rejection), so the pin targets
+    // the schema itself. Literal values: retuning the cap must explicitly
+    // touch this test.
+    const tool = createTool(new BackgroundJobBoard());
+    expect(tool.args.message.safeParse('a'.repeat(2000)).success).toBe(true);
+    expect(tool.args.message.safeParse('a'.repeat(2001)).success).toBe(false);
+  });
+
   test('queues messages for a parent-owned running child', async () => {
     const board = new BackgroundJobBoard();
     registerRunningChild(board);
