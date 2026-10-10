@@ -128,12 +128,27 @@ class AcpClient {
     });
   }
 
-  async run(prompt: string): Promise<string> {
+  async run(prompt: string, model?: string): Promise<string> {
     const init = await this.request('initialize', createAcpInitializeParams());
     this.authMethods = readAuthMethods(init);
     const created = await this.newSession();
     const sessionId = readSessionId(created);
     this.sessionId = sessionId;
+    if (model !== undefined) {
+      const option = readModelConfigOption(created);
+      if (!supportsModelValue(option.options, model)) {
+        throw new Error(`ACP model config option does not support '${model}'`);
+      }
+      const updated = await this.request('session/set_config_option', {
+        sessionId,
+        configId: option.id,
+        value: model,
+      });
+      const confirmed = readModelConfigOption(updated);
+      if (confirmed.id !== option.id || confirmed.currentValue !== model) {
+        throw new Error(`ACP model selection was not confirmed as '${model}'`);
+      }
+    }
     this.active = true;
     await this.request('session/prompt', {
       sessionId,
@@ -224,6 +239,9 @@ class AcpClient {
     method: string,
     params: Record<string, unknown>,
   ): Promise<Json | undefined> {
+    if (this.closing.signal.aborted) {
+      return Promise.reject(new Error(`ACP agent '${this.name}' closed`));
+    }
     const id = this.next++;
     const payload = { jsonrpc: '2.0', id, method, params };
     return new Promise((resolve, reject) => {
@@ -403,6 +421,13 @@ export function createAcpRunTool(agents: AcpAgentsConfig = {}): ToolDefinition {
     args: {
       agent: z.string().describe('Configured ACP agent name'),
       prompt: z.string().describe('Task or question to send to the ACP agent'),
+      model: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          'Optional exact ACP-advertised inner model selector for this invocation only, not an OpenCode provider/model or the outer wrapper model. Omit only when no inner model was requested; omission uses the external agent default.',
+        ),
       cwd: z
         .string()
         .optional()
@@ -431,6 +456,12 @@ export function createAcpRunTool(agents: AcpAgentsConfig = {}): ToolDefinition {
       }
       const cwd = args.cwd ?? config.cwd ?? ctx.directory;
       if (!cwd) throw new Error('acp_run requires a working directory');
+      if (
+        args.model !== undefined &&
+        (typeof args.model !== 'string' || args.model.length === 0)
+      ) {
+        throw new Error('acp_run model must be a nonempty ACP selector');
+      }
 
       await ctx.ask({
         permission: 'acp_run',
@@ -444,51 +475,105 @@ export function createAcpRunTool(agents: AcpAgentsConfig = {}): ToolDefinition {
         },
       });
 
-      const client = new AcpClient(
-        args.agent,
-        config,
-        cwd,
-        async (title, metadata) => {
-          if (config.permissionMode === 'reject') return;
-          await ctx.ask({
-            permission: 'acp_run',
-            patterns: [`acp:${args.agent}:${title}`],
-            always: [],
-            metadata,
-          });
-        },
-        (title, metadata) => ctx.metadata({ title, metadata }),
-      );
+      let client: AcpClient | undefined;
+      const requestedModel = args.model;
       const timeoutMs = args.timeout_ms ?? config.timeoutMs;
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const timeout =
-        timeoutMs > 0
-          ? new Promise<string>(
-              (_, reject) =>
-                (timer = setTimeout(
-                  () =>
-                    reject(
-                      new Error(
-                        `ACP agent '${args.agent}' timed out after ${timeoutMs}ms`,
-                      ),
-                    ),
-                  timeoutMs,
-                )),
-            )
-          : undefined;
+      let stop!: (error: Error) => void;
+      const interruption = new Promise<never>((_, reject) => {
+        stop = reject;
+      });
+      const aborted = () => new Error(`ACP agent '${args.agent}' aborted`);
       const abort = () => {
-        void client.close();
+        stop(aborted());
+        void client?.close();
       };
-      ctx.abort.addEventListener('abort', abort, { once: true });
       try {
-        const run = client.run(args.prompt);
-        return timeout ? await Promise.race([run, timeout]) : await run;
+        // One budget covers ACP startup, selection, and prompt, after permission.
+        if (timeoutMs > 0) {
+          timer = setTimeout(
+            () =>
+              stop(
+                new Error(
+                  `ACP agent '${args.agent}' timed out after ${timeoutMs}ms`,
+                ),
+              ),
+            timeoutMs,
+          );
+        }
+        ctx.abort.addEventListener('abort', abort, { once: true });
+        const run = async () => {
+          if (ctx.abort.aborted) throw aborted();
+          client = new AcpClient(
+            args.agent,
+            config,
+            cwd,
+            async (title, metadata) => {
+              if (config.permissionMode === 'reject') return;
+              await ctx.ask({
+                permission: 'acp_run',
+                patterns: [`acp:${args.agent}:${title}`],
+                always: [],
+                metadata,
+              });
+            },
+            (title, metadata) => ctx.metadata({ title, metadata }),
+          );
+          return await client.run(args.prompt, requestedModel);
+        };
+        const output = await Promise.race([run(), interruption]);
+        if (requestedModel !== undefined) {
+          try {
+            ctx.metadata?.({
+              metadata: { requestedModel, acpModel: requestedModel },
+            });
+          } catch {
+            // A host-side metadata failure must not discard successful output.
+          }
+        }
+        return output;
       } finally {
         if (timer) clearTimeout(timer);
         ctx.abort.removeEventListener('abort', abort);
-        await client.close();
+        await client?.close();
       }
     },
+  });
+}
+
+function readModelConfigOption(value: unknown): Record<string, unknown> {
+  const options = isRecord(value) ? value.configOptions : undefined;
+  const models = Array.isArray(options)
+    ? options
+        .filter(isRecord)
+        .filter(
+          (option) => option.id === 'model' || option.category === 'model',
+        )
+    : [];
+  const model = models[0];
+  if (
+    models.length !== 1 ||
+    typeof model.id !== 'string' ||
+    !model.id ||
+    model.type !== 'select'
+  ) {
+    throw new Error(
+      'ACP response must contain exactly one model config option',
+    );
+  }
+  return model;
+}
+
+function supportsModelValue(options: unknown, value: string): boolean {
+  if (!Array.isArray(options)) return false;
+  return options.filter(isRecord).some((option) => {
+    // ACP select options may be flat values or groups of values.
+    if (Array.isArray(option.options)) {
+      return option.options
+        .filter(isRecord)
+        .some((item) => item.value === value);
+    }
+    return option.value === value;
   });
 }
 

@@ -648,6 +648,32 @@ install details.
 
 ---
 
+## Choose an inner ACP model per invocation
+
+Keep the outer OpenCode wrapper model fixed while choosing an independent
+inner model for each task. The wrapper calls, for a server advertising `fable`:
+
+```text
+acp_run(agent: "claude-code", model: "fable", prompt: "Investigate this bug")
+```
+
+To delegate through the generated wrapper, put the choice in the task text:
+
+```text
+@claude-code
+Inner ACP selector: fable
+Task: Investigate this bug and summarize the likely cause.
+```
+
+`acp_run.model` is an exact ACP-advertised selector, not an OpenCode
+`provider/model`. Native `subagent.model` selects only the **outer** wrapper.
+The wrapper's extraction is LLM-mediated, not a new native delegation argument.
+An explicit selector must be advertised and confirmed before prompting; errors
+never silently fall back. Omission uses the external agent default, not the
+previous call's selection. Custom wrapper/routing prompts replace this generated
+guidance and must implement it themselves. See
+[ACP Agents](docs/acp-agents.md#choosing-the-inner-model-per-invocation).
+
 ## 📚 Documentation
 
 Use this section as a map: start with installation, then jump to features, configuration, or example presets depending on what you need.

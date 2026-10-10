@@ -381,6 +381,32 @@ conflict with built-in or custom agents. `permissionMode` controls ACP
 permission requests, but the plugin still asks before launching the configured
 subprocess.
 
+Inner model selection is a **per-call tool argument**, not static configuration.
+For a server advertising `fable`, the wrapper can call
+`acp_run(agent: "claude-code", model: "fable", prompt: "Investigate this bug")`.
+The optional `model` is an exact ACP selector, not an OpenCode `provider/model`.
+`wrapperModel` and native `subagent.model` select only the outer wrapper; they
+can stay fixed while each ACP invocation selects a different inner model.
+
+The generated routing prompt delegates with task text such as:
+
+```text
+Inner ACP selector: fable
+Task: Investigate this bug and summarize the likely cause.
+```
+
+The wrapper extracts the explicit selector into `acp_run.model` and forwards the
+actual task, constraints, and relevant context without wrapper-routing text.
+This is LLM-mediated extraction, not a new native `subagent` argument. Custom
+`prompt` and `orchestratorPrompt` overrides replace the respective generated
+instructions and must supply this guidance themselves.
+
+Explicit selectors require advertisement and exact acknowledgement before any
+prompt; failures do not fall back. Omission uses the external default, never a
+remembered selection. An unresolved explicit request should be reported as
+ambiguous, not omitted or guessed. See
+[Per-invocation inner models](acp-agents.md#choosing-the-inner-model-per-invocation).
+
 ### Council configuration note
 
 - Councillor `model` and ACP `wrapperModel` values use `provider/model`
