@@ -674,6 +674,51 @@ describe('task_reply', () => {
     expect(error.message).toBe('Unknown task ID or alias: exp-9');
   });
 
+  test('a session tracked by another parent keeps the bare unknown error', async () => {
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    registerBackgroundChild(board);
+    // Canonical resolution maps the ref to the session ID and board.get is
+    // not parent-scoped, so a foreign parent's record is visible here. The
+    // settled-session advice must not fire: task_revive would reject the
+    // same ownership mismatch, so the error stays bare.
+    const { task_reply } = createTaskReplyTool({
+      input: { directory: '/test', client: {} } as never,
+      backgroundJobBoard: board,
+      resolveCanonicalTaskRef: async () =>
+        ({
+          kind: 'exact',
+          taskID: 'ses_child1',
+        }) as never,
+    });
+    const error = (await task_reply
+      .execute({ task_id: 'ses_child1', request_id: 'que_1' }, {
+        sessionID: 'parent-2',
+      } as never)
+      .catch((e: Error) => e)) as Error;
+    expect(error.message).toBe('Unknown task ID or alias: ses_child1');
+  });
+
+  test('a disposal landing after the helper check still stops the send', async () => {
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    registerBackgroundChild(board);
+    // The helper's disposed check passes (call 1); the plugin is torn down
+    // while the resolution await is in flight; execute's post-await
+    // re-check (call 2) must refuse to send.
+    let disposedCalls = 0;
+    const { task_reply } = createTaskReplyTool({
+      input: { directory: '/test', client: {} } as never,
+      backgroundJobBoard: board,
+      isDisposed: () => ++disposedCalls > 1,
+    });
+    await expect(
+      task_reply.execute({ task_id: 'ses_child1', request_id: 'que_1' }, {
+        sessionID: 'parent-1',
+      } as never),
+    ).rejects.toThrow('The plugin instance was disposed');
+  });
+
   test('answers an open permission request through permission.reply', async () => {
     resetChildInputWaitForTests();
     const board = new BackgroundJobBoard();

@@ -11,17 +11,15 @@ import {
 import { pluginDisposedMessage } from '../hooks/task-session-manager/session-recovery';
 import type { BackgroundJobStore } from '../utils/background-job-store';
 import { getClient } from '../utils/opencode-client';
-import {
-  OperationTimeoutError,
-  SESSION_ID_PATTERN,
-  withTimeout,
-} from '../utils/session';
+import { OperationTimeoutError, withTimeout } from '../utils/session';
 import { delegationWording } from '../v2/delegation';
 import {
   type CanonicalTaskResolver,
   idParamFor,
   readTaskRef,
+  resolveTaskRecord,
   taskRefArgs,
+  unknownTaskRefError,
 } from './task-ref';
 
 const z = tool.schema;
@@ -123,23 +121,22 @@ export function createTaskReplyTool(options: {
       if (!requested) throw new Error(`task_reply requires ${idParam}`);
       const requestID = args.request_id.trim();
       if (!requestID) throw new Error('task_reply requires request_id');
-      const canonical = options.resolveCanonicalTaskRef
-        ? await options.resolveCanonicalTaskRef(parentSessionID, requested)
-        : undefined;
+      const ref = await resolveTaskRecord(options, parentSessionID, requested);
+      if (ref.kind === 'disposed') throw new Error(pluginDisposedMessage());
+      if (ref.kind === 'refused') throw new Error(ref.reason);
+      // The await above resumes in a later microtask; a disposal queued in
+      // that gap must still stop the send path (the helper's disposed
+      // check ran before the gap).
       if (options.isDisposed?.()) throw new Error(pluginDisposedMessage());
-      if (canonical?.kind === 'refused') throw new Error(canonical.reason);
-      const identity = canonical?.taskID ?? requested;
-      const job = canonical
-        ? options.backgroundJobBoard.get(identity)
-        : options.backgroundJobBoard.resolve(parentSessionID, requested);
-      if (!job || job.parentSessionID !== parentSessionID) {
-        // Same misdiagnosis guard as task_message: a settled child evicted
-        // from the in-memory board is not a nonexistent session.
-        throw new Error(
-          SESSION_ID_PATTERN.test(identity)
-            ? `Unknown task ID or alias: ${identity} (not tracked: records are evicted by retention limits or lost on a host restart, so a settled session can still exist on the host). If it is a settled session you own, continue that same session with task_revive and ${delegation.resumeParam}: "${identity}"; do not launch a duplicate.`
-            : `Unknown task ID or alias: ${identity}`,
-        );
+      const { identity, job } = ref;
+      if (job && job.parentSessionID !== parentSessionID) {
+        // Another parent's record: not this caller's task, and the
+        // settled-session recovery route would reject the same ownership
+        // mismatch — keep the bare unknown error.
+        throw new Error(`Unknown task ID or alias: ${identity}`);
+      }
+      if (!job) {
+        throw unknownTaskRefError(identity, delegation.resumeParam);
       }
       if (job.state !== 'running') {
         throw new Error(

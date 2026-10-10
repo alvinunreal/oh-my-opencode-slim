@@ -27,6 +27,7 @@ import {
   type CanonicalTaskResolver,
   idParamFor,
   readTaskRef,
+  resolveTaskRecord,
   taskRefArgs,
 } from './task-ref';
 
@@ -104,16 +105,15 @@ export function createTaskResultTool(
         if (!parentSessionID) throw new Error('task_result requires sessionID');
         const requested = readTaskRef(args, idParam);
         if (!requested) throw new Error(`task_result requires ${idParam}`);
-        const canonical = options.resolveCanonicalTaskRef
-          ? await options.resolveCanonicalTaskRef(parentSessionID, requested)
-          : undefined;
-        if (options.isDisposed?.()) throw new Error(pluginDisposedMessage());
-        if (canonical?.kind === 'refused') throw new Error(canonical.reason);
-        const identity = canonical?.taskID ?? requested;
+        const ref = await resolveTaskRecord(
+          options,
+          parentSessionID,
+          requested,
+        );
+        if (ref.kind === 'disposed') throw new Error(pluginDisposedMessage());
+        if (ref.kind === 'refused') throw new Error(ref.reason);
+        const { identity, canonical, job: tracked } = ref;
         const board = options.backgroundJobBoard;
-        const tracked = canonical
-          ? board.get(identity)
-          : board.resolve(parentSessionID, requested);
         if (tracked && tracked.parentSessionID !== parentSessionID) {
           throw new Error(`Task ${identity} does not belong to this session`);
         }

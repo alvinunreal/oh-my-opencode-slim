@@ -661,6 +661,54 @@ describe('task_message', () => {
     expect(prompt).not.toHaveBeenCalled();
   });
 
+  test('a session tracked by another parent keeps the bare unknown error', async () => {
+    const board = new BackgroundJobBoard();
+    registerRunningChild(board);
+    const prompt = makePrompt();
+    client = { session: { prompt } };
+    // Canonical resolution maps the ref to the session ID and board.get is
+    // not parent-scoped, so a foreign parent's record is visible here. The
+    // settled-session advice must not fire: task_revive would reject the
+    // same ownership mismatch, so the error stays bare.
+    const task_message = createTaskMessageTool({
+      input: { directory: '/test', client } as any,
+      backgroundJobBoard: board,
+      resolveCanonicalTaskRef: async () => ({
+        kind: 'exact',
+        taskID: 'ses_child1',
+      }),
+    }).task_message;
+    const error = (await task_message
+      .execute({ task_id: 'ses_child1', message: 'go' }, {
+        sessionID: 'parent-2',
+      } as any)
+      .catch((e: Error) => e)) as Error;
+    expect(error.message).toBe('Unknown task ID or alias: ses_child1');
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
+  test('a disposal landing after the helper check still stops the send', async () => {
+    const board = new BackgroundJobBoard();
+    registerRunningChild(board);
+    const prompt = makePrompt();
+    client = { session: { prompt } };
+    // The helper's disposed check passes (call 1); the plugin is torn down
+    // while the resolution await is in flight; execute's post-await
+    // re-check (call 2) must refuse to send.
+    let disposedCalls = 0;
+    const task_message = createTaskMessageTool({
+      input: { directory: '/test', client } as any,
+      backgroundJobBoard: board,
+      isDisposed: () => ++disposedCalls > 1,
+    }).task_message;
+    await expect(
+      task_message.execute({ task_id: 'ses_child1', message: 'go' }, {
+        sessionID: 'parent-1',
+      } as any),
+    ).rejects.toThrow('The plugin instance was disposed');
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
   test('rejects a relaunch attempt at the transport boundary', async () => {
     const board = new BackgroundJobBoard();
     registerRunningChild(board);

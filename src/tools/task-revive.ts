@@ -20,7 +20,12 @@ import {
   cancelTrackedExecution,
   type TaskControlToolOptions,
 } from './cancel-task';
-import { idParamFor, readTaskRef, taskRefArgs } from './task-ref';
+import {
+  idParamFor,
+  readTaskRef,
+  resolveTaskRecord,
+  taskRefArgs,
+} from './task-ref';
 
 const z = tool.schema;
 const DEFAULT_BASELINE_TIMEOUT_MS = 5_000;
@@ -65,15 +70,11 @@ export function createTaskReviveTool(
       const prompt = args.prompt.trim();
       if (!requested) throw new Error(`task_revive requires ${idParam}`);
       if (!prompt) throw new Error('task_revive requires prompt');
-      const canonical = options.resolveCanonicalTaskRef
-        ? await options.resolveCanonicalTaskRef(parentSessionID, requested)
-        : undefined;
-      if (options.isDisposed?.()) throw new Error(pluginDisposedMessage());
-      if (canonical?.kind === 'refused') throw new Error(canonical.reason);
-      const identity = canonical?.taskID ?? requested;
-      let resolved = canonical
-        ? options.backgroundJobBoard.get(identity)
-        : options.backgroundJobBoard.resolve(parentSessionID, requested);
+      const ref = await resolveTaskRecord(options, parentSessionID, requested);
+      if (ref.kind === 'disposed') throw new Error(pluginDisposedMessage());
+      if (ref.kind === 'refused') throw new Error(ref.reason);
+      const { identity, canonical } = ref;
+      let resolved = ref.job;
       if (resolved && resolved.parentSessionID !== parentSessionID) {
         throw new Error(`Unknown or unowned background task: ${requested}`);
       }
