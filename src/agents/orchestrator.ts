@@ -61,6 +61,7 @@ export function buildOrchestratorPrompt(
   wakeSchedulerEnabled = true,
   hostFlavor?: string,
   boardInjectionEnabled = true,
+  routingBlockEnabled = true,
 ): string {
   // C1 seam: v2 hosts render the slim native template; every other flavor
   // (v1, absent, unknown) continues through the frozen v1 body below
@@ -71,8 +72,13 @@ export function buildOrchestratorPrompt(
       excludeDescriptions,
       waitForUserEnabled,
       wakeSchedulerEnabled,
+      routingBlockEnabled,
     );
   }
+  // routingBlockEnabled is intentionally not consumed on the v1 path: the
+  // v1 body is a frozen byte-parity template (pinned by orchestrator.test),
+  // and v1 hosts reshape routing via an orchestrator.md override instead.
+
   // Native delegation vocabulary: `subagent(...)` with `agent` on v2 hosts,
   // `task(...)` with `subagent_type` on v1. Construction-time constant per
   // host, so the prompt stays byte-stable across a session (cache-safe).
@@ -322,6 +328,7 @@ export function buildOrchestratorPromptV2(
   excludeDescriptions?: string[],
   waitForUserEnabled = true,
   wakeSchedulerEnabled = true,
+  routingBlockEnabled = true,
 ): string {
   // Filter by the same routing keys as the v1 block so disabled agents and
   // description exclusions behave identically; a routing key without a
@@ -344,15 +351,20 @@ export function buildOrchestratorPromptV2(
     ? 'completion notifications and the wake scheduler resume you'
     : 'completion notifications resume you';
 
+  // routingBlock=false removes the whole <Agents> element (tags included).
+  // The host's native subagent roster keeps agent identity in the subagent
+  // tool description, but the block's Delegate/Don't routing criteria have
+  // no roster equivalent — the config describe() and docs carry that
+  // trade-off. Default rendering stays byte-frozen.
+  const agentsSection = routingBlockEnabled
+    ? `<Agents>\n${enabledAgents}\n</Agents>\n\n`
+    : '';
+
   return `<Role>
 You are a workflow manager for coding work: plan, delegate, monitor, reconcile, and verify specialist work. You are not the default implementation worker. Delegate non-trivial work to specialists; act directly only for one isolated, clear, low-risk action where delegation costs more than doing it.
 </Role>
 
-<Agents>
-${enabledAgents}
-</Agents>
-
-<Workflow>
+${agentsSection}<Workflow>
 - Split work into independent lanes and dispatch in parallel (multiple \`subagent\` calls in one message); respect dependencies; parallel writers must not share write scopes.
 - Every delegation names its scope and validation owner. Reference paths/lines instead of pasting file contents; note task IDs; brief the user in one line per dispatch.
 - After dispatching, do non-overlapping work, then end the turn with a brief status — ${resumeChannel}. Never restate background status in visible replies.
@@ -393,7 +405,16 @@ export function createOrchestratorAgent(
   wakeSchedulerEnabled = true,
   hostFlavor?: string,
   boardInjectionEnabled = true,
+  routingBlockEnabled = true,
 ): AgentDefinition {
+  if (!routingBlockEnabled && hostFlavor !== 'v2') {
+    // Construction-time single warn (never inside the pure builder: tests
+    // render it repeatedly). v1 keeps its frozen <Agents> block; the v1
+    // escape hatch is an orchestrator.md prompt override.
+    console.warn(
+      '[oh-my-opencode] routingBlock: false applies only to v2 hosts; the v1 orchestrator prompt is a frozen template that keeps the <Agents> routing block — use an orchestrator.md prompt override to customize routing there.',
+    );
+  }
   const basePrompt = buildOrchestratorPrompt(
     disabledAgents,
     excludeDescriptions,
@@ -401,6 +422,7 @@ export function createOrchestratorAgent(
     wakeSchedulerEnabled,
     hostFlavor,
     boardInjectionEnabled,
+    routingBlockEnabled,
   );
   const prompt = resolvePrompt(
     'orchestrator',

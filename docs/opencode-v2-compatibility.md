@@ -381,6 +381,7 @@ side cannot be observed.
 
 | Capability | v1 (`opencode`) | v2 (`opencode2`) | Notes |
 |---|---|---|---|
+| `routingBlock` (drop `<Agents>` from the built orchestrator prompt) | ➖ ignored with a warning (frozen v1 template; use an orchestrator.md override) | ✅ removes the block | The host's native delegation-tool roster keeps agent identity; the block's Delegate/Don't routing criteria have no roster equivalent — see [Upstream behaviors to know](#upstream-behaviors-to-know) |
 | Orchestrator + specialist agents, prompts & permission mapping | ✅ | ✅ `ctx.agent.transform` | — |
 | Delegation + background job board + `task_*` tools | ✅ `task` tool | ✅ host `subagent` (auto-bridged: name/args normalization in `src/v2/delegation.ts`, output parsing in the execute bridges) | On v2 the model-visible identifier parameter is `sessionID` for both the host `subagent` resume arg and the plugin's `task_*` tools; `task_id` is accepted only as a deprecated alias (never emitted). Prompt text must use the host's vocabulary directly — no v1→v2 delegation-vocabulary rewriting is applied (display-name substitution separately rewrites `@<internalName>` mentions to the agent's `displayName` throughout the final orchestrator prompt — inline, file, and append orchestrator prompts — and in `orchestratorPrompt`/ACP routing snippets) — so an instructed resume continues the child instead of forking a new one |
 | Tools (ast-grep, webfetch, task_message/task_cancel/task_revive, wait_for_user, acp_run) | ✅ | ✅ `ctx.tool.transform` | v2 requires `options: {codemode: false}` on each registration (CodeMode split): without it a tool registers cleanly but is confined to the `execute` tool's JS runtime and session catalogs yield `Unknown tool: <name>`. The plugin stamps it on every adapted tool (`adaptTool` in `src/v2/adapters.ts`; additive field, older hosts ignore it). ast-grep needs its CLI binary (package, system, or lazy download); webfetch needs `jsdom` resolvable |
@@ -405,6 +406,24 @@ side cannot be observed.
 
 Behaviors of v2 itself that plugin authors should know about — none
 currently break this plugin:
+
+- **The `subagent` tool description grows a native roster.** On every
+  context/compaction/generate build the host appends `Available subagents:`
+  with one `- id: description` line per dispatchable agent (filtered by
+  mode, `hidden`, and the current agent's permissions). The append happens
+  after plugin `tool.definition` hooks, so a plugin cannot strip it; v1
+  hosts have the same mechanism in the tool registry (`Available agent
+  types and the tools they have access to:`). This plugin keeps its agent
+  `description` values as non-duplicating one-liners (routing criteria stay
+  in the orchestrator prompt's `<Agents>` block) and offers
+  `routingBlock: false` to drop that block on v2 — the roster keeps
+  identity, the block's Delegate/Don't criteria are the documented cost.
+  One flavor caveat: the `hidden` filter is v2-only — as of opencode
+  1.18.35, v1's `agents.list()` and the task tool's `describeTask` filter
+  by mode and permissions but not `hidden`, so hidden agents (omos
+  councillors included) do surface in the v1 task roster, while the
+  orchestrator's inline seat list remains the only always-present seat
+  source on v2.
 
 - **Event payloads ride under `data`, not `properties`.** The v2
   event stream (SSE and `ctx.event.subscribe()`) frames each event as

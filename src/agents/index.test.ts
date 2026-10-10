@@ -1252,6 +1252,22 @@ test('council pointer wording tracks the council-inject hook state', () => {
   );
 });
 
+test('routingBlock: false strips <Agents> from the v2 orchestrator prompt', () => {
+  const agents = createAgents(runtimeFor({ routingBlock: false }), {
+    hostFlavor: 'v2',
+  });
+  const orchestrator = agents.find((a) => a.name === 'orchestrator');
+  expect(orchestrator?.config.prompt).not.toContain('<Agents>');
+
+  const defaultAgents = createAgents(runtimeFor({}), {
+    hostFlavor: 'v2',
+  });
+  const defaultOrchestrator = defaultAgents.find(
+    (a) => a.name === 'orchestrator',
+  );
+  expect(defaultOrchestrator?.config.prompt).toContain('<Agents>');
+});
+
 test('orchestrator prompt excludes the council pointer when no councillors', () => {
   const agents = createAgents(runtimeFor());
   const orchestrator = agents.find((a) => a.name === 'orchestrator');

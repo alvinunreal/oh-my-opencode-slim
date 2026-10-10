@@ -1074,6 +1074,7 @@ export function createAgents(
     runtime.backgroundJobs.orchestratorWake.enabled,
     options?.hostFlavor,
     runtime.backgroundJobs.boardInjection,
+    runtime.routingBlock,
   );
 
   const inlineOrchestratorPrompt = orchestratorOverride?.prompt;
@@ -1193,10 +1194,14 @@ export function createAgents(
   // Static pointer, not the full procedure: the Council Mode dispatch block
   // is injected by the council-inject hook on the FIRST council keyword and
   // then stays in history as a standing procedure (later triggers do not
-  // re-inject). The seat list lives here because hidden councillors appear
-  // in no host catalog — this line is the orchestrator's only always-present
-  // source of seat IDs. Wording tracks the hook state: no auto-inject
-  // promise when the hook is disabled.
+  // re-inject). The seat list lives here because v2's native subagent
+  // roster filters hidden agents out — on v2 this line is the
+  // orchestrator's only always-present source of seat IDs. v1 applies no
+  // hidden filter (as of opencode 1.18.35, `agents.list()` and the task
+  // tool's describeTask carry no hidden check), so hidden councillors do
+  // surface in the v1 task roster — a host-side gap outside omos's
+  // control. Wording tracks the hook state: no auto-inject promise when
+  // the hook is disabled.
   if (councillorAgents.length > 0) {
     const seatList = councillorAgents
       .map((a: AgentDefinition) => a.name)

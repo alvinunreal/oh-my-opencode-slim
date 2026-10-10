@@ -118,6 +118,23 @@ When a `preset` is active, the plugin checks preset directories before falling b
 
 Both `{agent}.md` and `{agent}_append.md` can coexist - the full replacement takes effect first, then the append. If neither exists, the built-in default prompt is used.
 
+**Agent identity vs. routing in custom orchestrator prompts.** Both host
+flavors append a native roster to the delegation tool's description — v2
+hosts add `Available subagents:`, v1 hosts add `Available agent types and the
+tools they have access to:` — with one `- name: description` line per
+dispatchable agent. The plugin cannot remove these appends (they happen in
+host code after plugin tool hooks). Agent `description` values are one-liners
+by design: routing criteria live in the orchestrator prompt's `<Agents>`
+block, descriptions only identify agents for the native roster (override
+them via `agents.<name>.description`). When writing a custom
+`orchestrator.md`, keep only routing deltas (when to delegate to whom) in
+your agent section — identity lines duplicate the native roster and go stale
+when agents are disabled (`disabled_agents` removes them from the roster
+automatically, but not from your file). `routingBlock: false` applies the
+same trim to the built-in v2 prompt by removing the stock `<Agents>` block
+entirely, which also removes stock routing claims that drift against
+`agents.<name>.prompt` customizations (see the option reference).
+
 > **Prompt text is verbatim for delegation vocabulary.** The plugin never
 > rewrites delegation calls in prompts, so any delegation calls you write must
 > use the running host's vocabulary — v1 `task`/`subagent_type`/`task_id`, v2
@@ -169,6 +186,7 @@ All config files support **JSONC** (JSON with Comments):
 |--------|------|---------|-------------|
 | `preset` | string | - | Active preset name (e.g. `"openai"`, `"best"`) |
 | `stripOrchestratorModel` | boolean | `false` | Preserve a runtime `/model` selection for the orchestrator after subagent dispatch by omitting its configured model from the SDK config. A selected preset's explicit `orchestrator.model` is retained. Without a runtime selection, this opt-in delegates the initial orchestrator choice to OpenCode's session default. |
+| `routingBlock` | boolean | `true` | When false, removes the `<Agents>` routing block from the v2 orchestrator prompt. The host's native delegation-tool roster still lists every enabled agent with its one-line description, but it carries no Delegate/Don't routing criteria — the block's routing guidance (~300 tokens) has no roster equivalent, so `false` trades routing quality for tokens, or drops stock routing claims that drift against custom agent prompts (`agents.<name>.prompt`). v2 hosts only: on v1 the flag is ignored with a warning (the v1 orchestrator prompt is a frozen template — use an orchestrator.md override there). No effect when an orchestrator.md override already replaces the whole prompt. |
 | `presets` | object | - | Named preset configurations. New preset names are limited to letters, digits, `-`, and `_`; `__omo_*` and JavaScript reserved property names (`__proto__`, `constructor`, `prototype`) are rejected for new presets (pre-existing entries with other names stay visible and applicable) |
 | `presets.<name>.extends` | string | - | Optional single parent preset. The parent is resolved before the child; multiple parents are not supported |
 | `presets.<name>.<agent>.model` | string | - | Model ID in `provider/model` format |
@@ -471,6 +489,13 @@ periodic idle evaluation duplicate that channel. Event-driven wakes
 unaffected. Set the keys explicitly (`"boardInjection": true`,
 `"periodicWakeEnabled": true`) to restore the v1-style behavior on v2; v1
 hosts are unchanged.
+
+`routingBlock` deliberately gets **no** v2-derived default. Unlike the board
+injection, the `<Agents>` block is not duplicated by a native channel: the
+roster carries agent identity only (~20 tokens of the block overlap with it),
+while the block's Delegate/Don't routing criteria have no native equivalent.
+A derived `false` would be a silent routing downgrade dressed up as
+deduplication, so the trade-off stays behind an explicit opt-in.
 
 Board-off behavioral notes: the consumption bookkeeping that retires
 completed/error/cancelled jobs registers on orchestrator turns driven by a

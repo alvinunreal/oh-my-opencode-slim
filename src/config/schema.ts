@@ -988,6 +988,12 @@ export const RawPluginConfigSchema = z
       .describe(
         'When true, omit orchestrator.model and orchestrator.variant from the SDK config so OpenCode uses the session model selected with /model after subagent dispatch. An explicitly selected preset that sets orchestrator.model is preserved. Defaults to false.',
       ),
+    routingBlock: z
+      .boolean()
+      .optional()
+      .describe(
+        "When false, removes the <Agents> routing block from the v2 orchestrator prompt. The host's native subagent roster (appended to the subagent tool description) still lists every enabled agent, but it carries no Delegate/Don't routing criteria — set false only to drop stock routing claims that drift against custom agent prompts, or to trim tokens. Ignored with a warning on v1 hosts, where the orchestrator prompt is a frozen template; use an orchestrator.md override there. No effect when an orchestrator.md override already replaces the whole prompt. Defaults to true.",
+      ),
     autoUpdate: z
       .boolean()
       .optional()

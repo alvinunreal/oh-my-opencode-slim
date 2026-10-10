@@ -404,6 +404,10 @@ export class RuntimeConfig {
     return this.pluginConfig?.stripOrchestratorModel === true;
   }
 
+  get routingBlock(): boolean {
+    return this.pluginConfig?.routingBlock !== false;
+  }
+
   get setDefaultAgent(): boolean {
     return this.pluginConfig?.setDefaultAgent !== false;
   }

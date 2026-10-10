@@ -308,6 +308,140 @@ describe('v2 slim prompt (buildOrchestratorPromptV2)', () => {
   });
 });
 
+describe('routingBlock (v2-only <Agents> removal)', () => {
+  test('v2 off removes the whole <Agents> element and nothing else', () => {
+    const on = buildOrchestratorPromptV2();
+    const off = buildOrchestratorPromptV2(
+      undefined,
+      undefined,
+      true,
+      true,
+      false,
+    );
+    expect(off).not.toContain('<Agents>');
+    expect(off).not.toContain('</Agents>');
+    // No slim-line routing content survives; identity stays in the host's
+    // native subagent roster, which the roster appends to the subagent
+    // tool description.
+    expect(off).not.toContain('read-only codebase recon');
+    expect(off).not.toContain('an escalation, not a default verification step');
+    // Byte-exact surgery: splicing the <Agents> element out of the default
+    // render yields exactly the off render.
+    const [head, tail] = on.split('<Agents>');
+    expect(off).toBe(`${head}${tail.split('</Agents>\n\n')[1]}`);
+  });
+
+  test('v2 default and explicit true stay byte-frozen', () => {
+    const on = buildOrchestratorPromptV2(
+      undefined,
+      undefined,
+      true,
+      true,
+      true,
+    );
+    expect(on).toBe(buildOrchestratorPromptV2());
+    expect(on).toContain('<Agents>');
+  });
+
+  test('createOrchestratorAgent v2 honors routingBlock=false (10th positional param pinned)', () => {
+    const v2 = createOrchestratorAgent(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
+      true,
+      'v2',
+      true,
+      false,
+    );
+    expect(v2.config.prompt).not.toContain('<Agents>');
+    expect(v2.config.prompt).toBe(
+      buildOrchestratorPromptV2(undefined, undefined, true, true, false),
+    );
+  });
+
+  test('v1 ignores routingBlock=false and warns once (warn AND ignore)', () => {
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (message: unknown) => {
+      warnings.push(String(message));
+    };
+    try {
+      const v1Off = createOrchestratorAgent(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
+        true,
+        undefined,
+        true,
+        false,
+      );
+      const v1Default = createOrchestratorAgent(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
+        true,
+        undefined,
+      );
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('routingBlock');
+      expect(warnings[0]).toContain('orchestrator.md');
+      // Not a half-application: bytes identical to the default render.
+      expect(v1Off.config.prompt).toBe(v1Default.config.prompt);
+      expect(v1Off.config.prompt).toContain('<Agents>');
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test('v1 builder-level flag is a no-op (frozen bytes)', () => {
+    expect(
+      buildOrchestratorPrompt(
+        undefined,
+        undefined,
+        true,
+        true,
+        undefined,
+        true,
+        false,
+      ),
+    ).toBe(buildOrchestratorPrompt());
+    expect(
+      buildOrchestratorPrompt(
+        undefined,
+        undefined,
+        true,
+        true,
+        'v1',
+        true,
+        false,
+      ),
+    ).toBe(buildOrchestratorPrompt());
+  });
+
+  test('disabledAgents/excludeDescriptions keep their meaning with routingBlock=false', () => {
+    const off = buildOrchestratorPromptV2(
+      new Set(['explorer']),
+      ['council'],
+      true,
+      true,
+      false,
+    );
+    expect(off).not.toContain('<Agents>');
+    const on = buildOrchestratorPromptV2(new Set(['explorer']), ['council']);
+    expect(on).not.toContain('@explorer —');
+    expect(on).not.toContain('@council —');
+  });
+});
+
 describe('background-default flip prompt alignment', () => {
   test('v2 slim drops the Prefer-background line (the flipped subagent description owns the default)', () => {
     const prompt = buildOrchestratorPromptV2();
