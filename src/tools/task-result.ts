@@ -10,17 +10,11 @@ import {
   createBackgroundJobTerminalGate,
   runtimeObservationFromSnapshot,
 } from '../utils/background-job-terminal-gate';
-import {
-  classifyTerminalEvidence,
-  classifyV2HistoricalRound,
-  fetchChildTranscript,
-} from '../utils/child-transcript';
 import { getClient } from '../utils/opencode-client';
 import { SESSION_ID_PATTERN } from '../utils/session';
 import {
   getRuntimeSessionStatusSnapshot,
   type RuntimeSessionStatusSnapshot,
-  readLiveSession,
   runtimeSessionStatus,
 } from '../utils/session-runtime-status';
 import {
@@ -30,6 +24,7 @@ import {
   resolveTaskRecord,
   taskRefArgs,
 } from './task-ref';
+import { readUntrackedEvidence } from './untracked-task-observation';
 
 interface TaskResultToolOptions {
   input: PluginInput;
@@ -37,6 +32,7 @@ interface TaskResultToolOptions {
   terminalGate?: BackgroundJobTerminalGate;
   resolveCanonicalTaskRef?: CanonicalTaskResolver;
   isDisposed?: () => boolean;
+  readTimeoutMs?: number;
 }
 
 function readonlyTerminalResult(
@@ -230,31 +226,31 @@ export function createTaskResultTool(
           return current.resultSummary;
         }
 
-        // v2 data: the context's idle marker ends a round, not a status map.
-        const v2 =
-          (options.input as { hostFlavor?: string }).hostFlavor === 'v2';
-        if (!v2) {
-          const live = await readLiveSession(options.input, taskID);
-          if (live.kind === 'busy' || live.kind === 'retry')
-            return pending(idParam, taskID, false, live.kind, false);
-          if (live.kind === 'unknown')
-            return pending(idParam, taskID, true, undefined, false);
-        }
-        const response = await fetchChildTranscript(
-          client,
+        // Untracked fallback: rendered from the same single read that
+        // task_status uses. Ownership is already verified above (the
+        // session.get parentID gate), so only the live probe and transcript
+        // classification run here.
+        const read = await readUntrackedEvidence(
+          { input: options.input, readTimeoutMs: options.readTimeoutMs },
           taskID,
-          options.input.directory,
         );
-        const evidence = v2
-          ? classifyV2HistoricalRound(response)
-          : classifyTerminalEvidence(response);
-        if (evidence.verdict === 'incomplete')
+        if (read.live.status === 'busy' || read.live.status === 'retry')
+          return pending(idParam, taskID, false, read.live.status, false);
+        if (read.live.status === 'unknown')
           return pending(idParam, taskID, true, undefined, false);
-        if (evidence.verdict !== 'completed' || !evidence.text)
+        if (read.roundError) throw read.roundError;
+        const evidence = read.round;
+        if (!evidence || evidence.verdict === 'incomplete')
+          return pending(idParam, taskID, true, undefined, false);
+        const completedText =
+          evidence.verdict === 'completed' && 'text' in evidence
+            ? evidence.text
+            : undefined;
+        if (!completedText)
           throw new Error(
             `Task ${requested} shows no terminal evidence of completion; refusing to present partial output as its final result`,
           );
-        return evidence.text;
+        return completedText;
       },
     }),
   };

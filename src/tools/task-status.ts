@@ -8,18 +8,7 @@ import {
   listChildInputWaits,
 } from '../hooks/task-session-manager/child-input-wait';
 import type { BackgroundJobStore } from '../utils/background-job-store';
-import {
-  classifyTerminalEvidence,
-  classifyV2HistoricalRound,
-  fetchChildTranscript,
-} from '../utils/child-transcript';
-import { isRecord } from '../utils/guards';
-import { getClient } from '../utils/opencode-client';
-import { SESSION_ID_PATTERN, withTimeout } from '../utils/session';
-import {
-  getRuntimeSessionStatusSnapshot,
-  runtimeSessionStatus,
-} from '../utils/session-runtime-status';
+import { getRuntimeSessionStatusSnapshot } from '../utils/session-runtime-status';
 import type { TaskActivityTracker } from './task-activity';
 import { observationFromSnapshot, summarizeTaskStatus } from './task-policy';
 import {
@@ -28,11 +17,13 @@ import {
   readTaskRef,
   taskRefArgs,
 } from './task-ref';
+import {
+  readUntrackedEvidence,
+  verifyUntrackedOwnership,
+} from './untracked-task-observation';
 
 const ACTIVE_STATES = new Set(['busy', 'running', 'retry']);
 const UNTRACKED_STATE = 'running-or-incomplete';
-/** Each untracked host read (ownership, transcript) refuses after 5 s. */
-const UNTRACKED_READ_TIMEOUT_MS = 5_000;
 
 export function createTaskStatusTool(options: {
   input: PluginInput;
@@ -148,27 +139,11 @@ interface UntrackedStatusOptions {
   readTimeoutMs?: number;
 }
 
-/** Bounds one host read; a held read is aborted at its deadline. */
-async function boundedRead<T>(
-  read: (signal: AbortSignal) => Promise<T>,
-  timeoutMs: number,
-  message: string,
-): Promise<T> {
-  const controller = new AbortController();
-  return withTimeout(read(controller.signal), timeoutMs, message).catch(
-    (error) => {
-      controller.abort();
-      throw error;
-    },
-  );
-}
-
 /**
- * Read-only status for a task the board does not track. Mirrors
- * task_result's untracked path: ownership via `client.session.get`
- * parentID, then v2 `classifyV2HistoricalRound` / v1
- * `classifyTerminalEvidence` over the child transcript. Never registers,
- * prompts, or aborts anything.
+ * Read-only status for a task the board does not track: ownership and
+ * evidence both come from the shared untracked-read module — the same
+ * single implementation task_result's untracked path uses. Never
+ * registers, prompts, or aborts anything.
  */
 async function reportUntrackedTaskStatus(
   options: UntrackedStatusOptions,
@@ -179,125 +154,50 @@ async function reportUntrackedTaskStatus(
   },
 ): Promise<string> {
   const { identity, parentSessionID } = ref;
-  if (!SESSION_ID_PATTERN.test(identity)) {
-    throw new Error(`Unknown task ID or alias: ${identity}`);
+  const unknown = () => new Error(`Unknown task ID or alias: ${identity}`);
+  const ownership = await verifyUntrackedOwnership(
+    options,
+    identity,
+    parentSessionID,
+  );
+  // Disposed: keep task_status's existing unknown-task contract.
+  if (options.isDisposed?.()) throw unknown();
+  if (ownership.kind !== 'verified') {
+    if (ownership.kind === 'foreign-parent') {
+      throw new Error(`Task ${ref.requested} does not belong to this session`);
+    }
+    throw unknown();
   }
-  if (options.isDisposed?.()) {
-    // Disposed: keep task_status's existing unknown-task contract.
-    throw new Error(`Unknown task ID or alias: ${identity}`);
-  }
-  const client = getClient(options.input);
-  if (typeof client.session?.get !== 'function') {
-    throw new Error(`Unknown task ID or alias: ${identity}`);
-  }
-  const readTimeoutMs = options.readTimeoutMs ?? UNTRACKED_READ_TIMEOUT_MS;
-  let response: Awaited<ReturnType<typeof client.session.get>>;
-  try {
-    response = await boundedRead(
-      (signal) =>
-        client.session.get({
-          path: { id: identity },
-          query: { directory: options.input.directory },
-          signal,
-        }),
-      readTimeoutMs,
-      'session ownership read timed out',
-    );
-  } catch {
-    // An unreadable host session cannot be verified or attributed.
-    throw new Error(`Unknown task ID or alias: ${identity}`);
-  }
-  if (options.isDisposed?.()) {
-    // Disposed: keep task_status's existing unknown-task contract.
-    throw new Error(`Unknown task ID or alias: ${identity}`);
-  }
-  // Read untyped fields (agent, time) the generated Session type omits.
-  const data: Record<string, unknown> | undefined = isRecord(response.data)
-    ? response.data
-    : undefined;
-  if (!data) {
-    // A host error payload (e.g. NotFound) verifies nothing.
-    throw new Error(`Unknown task ID or alias: ${identity}`);
-  }
-  if (typeof data.parentID !== 'string' || !data.parentID) {
-    // The host session exists but exposes no parent: ownership cannot be
-    // verified, so the caller gets the existing unknown error rather
-    // than a claim that another parent owns it.
-    throw new Error(`Unknown task ID or alias: ${identity}`);
-  }
-  if (data.parentID !== parentSessionID) {
-    throw new Error(`Task ${ref.requested} does not belong to this session`);
-  }
-  const agentRaw = data.agent;
-  const agent =
-    typeof agentRaw === 'string' && agentRaw.trim()
-      ? agentRaw.trim()
-      : undefined;
-  const time = isRecord(data.time) ? data.time : undefined;
-  const created = time?.created;
-  const createdAt =
-    typeof created === 'number' && Number.isFinite(created)
-      ? created
-      : undefined;
 
-  const v2 = (options.input as { hostFlavor?: string }).hostFlavor === 'v2';
   const details = [
     `Task ${identity} is not tracked by the local background job board (its tracking does not survive a host or plugin restart).`,
     'board: untracked',
   ];
 
+  const evidence = await readUntrackedEvidence(options, identity);
   // v1's live status map is real evidence of execution; v2 has no
   // equivalent (the shim omits `status`), so this probe is v1 only.
-  let liveStatusUnknown: string | undefined;
-  if (!v2) {
-    const snapshot = await getRuntimeSessionStatusSnapshot(options.input, {
-      timeoutMs: options.statusTimeoutMs,
-    });
-    const status = runtimeSessionStatus(snapshot, identity);
-    if (status === 'busy' || status === 'retry') {
-      details.push(`state: ${status} (live)`);
-      details.push(
-        `[guidance]: The task is still running. Work on non-overlapping tasks, or conclude your response now to await the completion event.`,
-      );
-      return details.join('\n');
-    }
-    // Like task_result: an unreadable live status cannot rule out a new
-    // run that history does not show yet, so history proves nothing.
-    if (snapshot.error) liveStatusUnknown = snapshot.error;
-    else if (snapshot.malformedSessionIDs.has(identity))
-      liveStatusUnknown = 'malformed session-status entry';
+  if (evidence.live.status === 'busy' || evidence.live.status === 'retry') {
+    details.push(`state: ${evidence.live.status} (live)`);
+    details.push(
+      '[guidance]: The task is still running. Work on non-overlapping tasks, or conclude your response now to await the completion event.',
+    );
+    return details.join('\n');
   }
 
-  let evidence: string;
-  if (liveStatusUnknown) {
-    evidence = `state: unknown (uncertain; live status could not be read: ${liveStatusUnknown})`;
+  let evidenceLine: string;
+  if (evidence.live.status === 'unknown') {
+    evidenceLine = `state: unknown (uncertain; live status could not be read: ${evidence.live.reason})`;
+  } else if (evidence.round) {
+    evidenceLine = describeUntrackedEvidence(evidence.round);
   } else {
-    try {
-      const transcript = await boundedRead(
-        (signal) =>
-          fetchChildTranscript(
-            client,
-            identity,
-            options.input.directory,
-            undefined,
-            signal,
-          ),
-        readTimeoutMs,
-        'child transcript read timed out',
-      );
-      const round = v2
-        ? classifyV2HistoricalRound(transcript)
-        : classifyTerminalEvidence(transcript);
-      evidence = describeUntrackedEvidence(round);
-    } catch {
-      evidence = `state: ${UNTRACKED_STATE} (uncertain; transcript could not be read)`;
-    }
+    evidenceLine = `state: ${UNTRACKED_STATE} (uncertain; transcript could not be read)`;
   }
-  details.push(evidence);
-  if (agent) details.push(`agent: ${agent}`);
+  details.push(evidenceLine);
+  if (ownership.agent) details.push(`agent: ${ownership.agent}`);
   // The host session's creation time, not its latest activity.
-  if (createdAt !== undefined)
-    details.push(`created_at: ${new Date(createdAt).toISOString()}`);
+  if (ownership.createdAt !== undefined)
+    details.push(`created_at: ${new Date(ownership.createdAt).toISOString()}`);
   details.push("next: use task_result to read a completed task's final text");
   return details.join('\n');
 }
