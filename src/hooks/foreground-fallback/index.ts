@@ -1862,7 +1862,8 @@ export class ForegroundFallbackManager {
     // After the chain has been exhausted twice (sticky retry failed and we
     // aborted), do not intervene again for this session: re-entering would
     // keep aborting in a loop. Surface errors to the user instead.
-    if (this.chainExhaustion.get(sessionID) === 2) return;
+    const exhaustion = this.chainExhaustion.get(sessionID) ?? 0;
+    if (exhaustion === 2) return;
     if (currentModel) tried.add(currentModel);
 
     const downProviders = this.activeFallback.get(sessionID)?.downProviders;
@@ -1870,21 +1871,25 @@ export class ForegroundFallbackManager {
     const parentDownProviders = parentID
       ? this.activeFallback.get(parentID)?.downProviders
       : undefined;
-    let nextModel = chain.find((model) => {
-      const provider = parseModelReference(model)?.providerID ?? '';
-      return (
-        !tried.has(model) &&
-        !downProviders?.has(provider) &&
-        !parentDownProviders?.has(provider)
-      );
-    });
+    // A failure after the sticky retry ends the descent even if switching to
+    // the sticky entry cleared its provider from the exclusions.
+    let nextModel = exhaustion
+      ? undefined
+      : chain.find((model) => {
+          const provider = parseModelReference(model)?.providerID ?? '';
+          return (
+            !tried.has(model) &&
+            !downProviders?.has(provider) &&
+            !parentDownProviders?.has(provider)
+          );
+        });
     if (!nextModel) {
       if (chain.length > 1) {
         // Retry the last chain entry once, ignoring provider exclusions but
         // retaining tried models. If that sticky retry fails, abort once and
         // stop intervening instead of reopening the chain.
         const stickyFallback = chain[chain.length - 1];
-        if ((this.chainExhaustion.get(sessionID) ?? 0) >= 1) {
+        if (exhaustion >= 1) {
           this.chainExhaustion.set(sessionID, 2);
           log('[foreground-fallback] chain exhausted after re-fallback', {
             sessionID,
