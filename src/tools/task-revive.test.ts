@@ -48,6 +48,7 @@ function createTool(overrides?: {
   onLaunch?: () => void;
   revivedRunTracker?: Partial<RevivedRunTracker>;
   hostFlavor?: string;
+  shouldManageSession?: (sessionID: string) => boolean;
 }) {
   const board = new BackgroundJobBoard();
   const abort = mock(overrides?.abort ?? (async () => ({})));
@@ -87,7 +88,7 @@ function createTool(overrides?: {
   const tools = createTaskReviveTool({
     input,
     backgroundJobBoard: board,
-    shouldManageSession: () => true,
+    shouldManageSession: overrides?.shouldManageSession ?? (() => true),
     verifyAbortMs: 10,
     abortRetryIntervalMs: 0,
     stableStoppedMs: 0,
@@ -194,6 +195,58 @@ function controlledAdmissionDeadline() {
 }
 
 describe('task_revive tool', () => {
+  test.each(['build', 'custom-primary'])(
+    'managed %s can revive its unreconciled completed child on v2',
+    async (agent) => {
+      const { board, taskRevive, promptAsync, abort, waitIdle } = createTool({
+        hostFlavor: 'v2',
+        omitStatus: true,
+        waitIdle: async () => {},
+      });
+      board.registerLaunch({
+        taskID: 'ses_1',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+      });
+      board.updateStatus({ taskID: 'ses_1', state: 'completed' });
+      expect(board.get('ses_1')?.terminalUnreconciled).toBe(true);
+
+      const output = await taskRevive.execute(
+        { sessionID: 'ses_1', prompt: 'Review the follow-up change' },
+        { ...context, agent },
+      );
+
+      expect(String(output)).toContain('status: started');
+      expect(waitIdle).toHaveBeenCalledTimes(1);
+      expect(abort).not.toHaveBeenCalled();
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+      expect(board.get('ses_1')).toMatchObject({
+        parentSessionID: 'parent-1',
+        generation: 2,
+        state: 'running',
+      });
+    },
+  );
+
+  test.each([false, true])(
+    'Build cannot revive a foreign child (managed: %s)',
+    async (managed) => {
+      const { board, taskRevive, promptAsync, abort } = createTool({
+        shouldManageSession: () => managed,
+      });
+      acknowledgedCompleted(board);
+      await expect(
+        taskRevive.execute(
+          { task_id: 'ses_1', prompt: 'continue' },
+          { ...context, sessionID: 'foreign-parent', agent: 'build' },
+        ),
+      ).rejects.toThrow(managed ? 'Unknown or unowned' : 'managed sessions');
+      expect(abort).not.toHaveBeenCalled();
+      expect(promptAsync).not.toHaveBeenCalled();
+      expect(board.get('ses_1')?.generation).toBe(1);
+    },
+  );
+
   test('refuses a running fallback after admission before aborting or prompting', async () => {
     jest.useFakeTimers();
     const h = createTool({

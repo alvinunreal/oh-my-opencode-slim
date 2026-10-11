@@ -76,6 +76,13 @@ stops the generation but retains its session; it does not roll back partial edit
 After cancelling a write-capable task, inspect and reconcile file changes before
 launching replacement work.
 
+`task_cancel` and `task_revive` admit managed parent sessions, including Build
+and custom primary agents that have delegated work. Host tool permissions still
+apply, and a parent can only control its own children. Switching primary agents
+does not transfer child ownership. Completed results are surfaced and
+acknowledged for reuse in both board modes regardless of the parent's agent name.
+This does not add the Orchestrator prompt to Build or make it delegate automatically.
+
 If the abort request times out while still pending, `task_cancel` reports
 uncertainty and retains its cancellation lease: a late abort must not affect a
 reused session. There is no lease TTL; an abort that never settles keeps reuse

@@ -16,7 +16,7 @@ import {
 import { readLiveSession } from '../utils/session-runtime-status';
 import type { ExperimentalV2 } from '../v2/client-shim';
 import {
-  assertOrchestrator,
+  assertManagedSession,
   cancelTrackedExecution,
   type TaskControlToolOptions,
 } from './cancel-task';
@@ -61,7 +61,7 @@ export function createTaskReviveTool(
       prompt: z.string().min(1).describe('Prompt for the revived task'),
     },
     async execute(args, toolContext) {
-      const parentSessionID = assertOrchestrator(
+      const parentSessionID = assertManagedSession(
         options,
         toolContext,
         'task_revive',

@@ -85,6 +85,47 @@ function isMarker(text: string | undefined): boolean {
 }
 
 describe('latest board unchanged marker', () => {
+  test.each(['latest', 'checkpoint'] as const)(
+    'managed Build receives and acknowledges its completed child with %s injection',
+    async (strategy) => {
+      const { board, state } = setup();
+      state.strategy = strategy;
+      board.updateStatus({
+        taskID: 'child-1',
+        state: 'completed',
+        resultSummary: 'Build review finished',
+      });
+      const turn = user('build-1');
+      turn.info.agent = 'build';
+      const history = [turn];
+      const output = await inject(state, history);
+      expect(
+        boardParts(output).some((p) =>
+          p.text?.includes('Build review finished'),
+        ),
+      ).toBe(true);
+      const next = user('build-2');
+      next.info.agent = 'build';
+      history.push(next);
+      await inject(state, history);
+      expect(
+        board.resolveReusable(SESSION, 'child-1', 'explorer'),
+      ).toBeDefined();
+    },
+  );
+
+  test.each(['latest', 'checkpoint'] as const)(
+    'unmanaged Build does not receive a board with %s injection',
+    async (strategy) => {
+      const { state } = setup();
+      state.strategy = strategy;
+      state.shouldManageSession = () => false;
+      const turn = user('build-1');
+      turn.info.agent = 'build';
+      expect(boardParts(await inject(state, [turn]))).toHaveLength(0);
+    },
+  );
+
   test('T1: three unchanged user turns freeze one full board and two markers', async () => {
     const { state } = setup();
     const history: unknown[] = [];

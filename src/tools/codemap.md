@@ -73,8 +73,8 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 ### Task Control Flows
 
 ```
-1. Orchestrator invokes task_cancel
-   ├─> Validates calling agent is 'orchestrator'
+1. Managed parent invokes task_cancel (including Build/custom primary agents)
+   ├─> Validates managed-session admission; host tool permissions still apply
    ├─> Resolves task_id to BackgroundJobBoard entry
    ├─> Calls abortSessionWithTimeout() to signal cancellation
    ├─> Verifies session stopped via status polling
@@ -88,7 +88,7 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
    ├─> Queues a bounded no-reply message without interrupting or resuming the child (v2: optional `delivery` — `queue` waits for an idle boundary, `steer` offers it at the next supported step boundary; acceptance ≠ consumption)
    └─> Returns transport-confirmed queue status (v2 steer: acceptance at the next supported step boundary)
 
-3. Orchestrator invokes task_revive
+3. Managed parent invokes task_revive (including Build/custom primary agents)
    ├─> Resolves the retained BackgroundJobBoard entry
    ├─> Cancels a running generation when necessary
    ├─> Launches a new prompt in the existing child session

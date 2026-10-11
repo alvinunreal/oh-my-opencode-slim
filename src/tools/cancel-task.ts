@@ -90,7 +90,7 @@ Use only for obsolete, wrong, conflicting, or user-requested cancellation. The r
       reason: z.string().optional().describe('Short cancellation reason'),
     },
     async execute(args, toolContext) {
-      const parentSessionID = assertOrchestrator(
+      const parentSessionID = assertManagedSession(
         options,
         toolContext,
         'task_cancel',
@@ -685,21 +685,18 @@ function assertLease(
   }
 }
 
-/** Shared orchestrator-only guard for task control tools: requires a
- * sessionID, rejects non-orchestrator agents, and requires the session to
- * be orchestrator-managed. Returns the validated parent session ID. */
-export function assertOrchestrator(
+/** Task hooks also manage Build and other host agents when they delegate.
+ * Validate that admission here; each caller then resolves the requested child
+ * against this parent. Tool permissions remain the host's responsibility. */
+export function assertManagedSession(
   options: TaskControlToolOptions,
   toolContext: { sessionID?: string; agent?: string } | undefined,
   toolName: string,
 ): string {
   const parentSessionID = toolContext?.sessionID;
   if (!parentSessionID) throw new Error(`${toolName} requires sessionID`);
-  if (toolContext.agent && toolContext.agent !== 'orchestrator') {
-    throw new Error(`${toolName} can only be used by orchestrator`);
-  }
   if (!options.shouldManageSession(parentSessionID)) {
-    throw new Error(`${toolName} can only be used in orchestrator sessions`);
+    throw new Error(`${toolName} can only be used in managed sessions`);
   }
   return parentSessionID;
 }

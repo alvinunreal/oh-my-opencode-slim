@@ -1369,8 +1369,8 @@ function injectLatestBoard(state: InjectionState, messages: unknown[]): void {
   // Strip the board from the current tail zone only (byte-safe volatile zone).
   stripCurrentTailBoard(messages, state.metadataKey, anchor?.message);
 
-  // Eligibility is driven by the most recent orchestrator user message (the
-  // triggering turn), which also guards against specialist/internal turns.
+  // Eligibility follows the managed parent session, including host agents
+  // such as Build that entered task management by delegating.
   const trigger = findTriggeringUserMessage(messages, state.metadataKey);
   const sessionID = trigger?.info.sessionID;
 
@@ -1384,7 +1384,6 @@ function injectLatestBoard(state: InjectionState, messages: unknown[]): void {
       : undefined;
 
   if (!trigger) return;
-  if (trigger.info.agent && trigger.info.agent !== 'orchestrator') return;
   if (!sessionID || !state.shouldManageSession(sessionID)) return;
 
   // Corrective notices are appended in the volatile tail zone before board
@@ -1762,7 +1761,7 @@ function replayRetainedTailBoards(
  * The most recent real (non-board) user message that carries a text part —
  * used only to validate injection eligibility and derive session/text context.
  * Tool-result-only user turns (no text part) are skipped so a long tool loop
- * still resolves the triggering orchestrator turn. Board placement targets the
+ * still resolves the triggering managed turn. Board placement targets the
  * tail (see injectBackgroundJobBoard).
  */
 function findTriggeringUserMessage(
@@ -1809,8 +1808,6 @@ function injectCheckpointBoard(
   );
   const canSurface =
     triggeringMessage !== undefined &&
-    (!triggeringMessage.info.agent ||
-      triggeringMessage.info.agent === 'orchestrator') &&
     textPart !== undefined &&
     !isInternalInitiatorPart(textPart);
 
