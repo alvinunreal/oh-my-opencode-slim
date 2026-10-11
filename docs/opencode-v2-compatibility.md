@@ -142,7 +142,10 @@ not an optional-degradation path.
    restore persisted history through paginated `session.messages` when
    available, stopping once the pre-revive baseline or queued prompt is
    found. This preserves child completion identity without reading older
-   history unnecessarily. Bounded tail reads still fetch only the requested page;
+   history unnecessarily. Recovery scans stop after 10 pages of 100 messages
+   or four seconds total; exhausting either budget leaves completion
+   unconfirmed rather than trusting a partial result. Bounded tail reads
+   still fetch only the requested page;
    ordinary context reads and parent-alias recovery remain unchanged.
    Hosts without persisted-message reads retain incomplete context and do
    not bypass missing-baseline checks. `session.prompt` (default `delivery: "steer"`;

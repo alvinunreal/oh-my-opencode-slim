@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -316,6 +316,128 @@ describe('v2 client shim delegation', () => {
     ).toMatchObject({
       page: { source: 'session.context', complete: false },
     });
+  });
+
+  test.each(['missing', 'last-page', 'too-far', 'oversized'])(
+    'compacted history enforces its total page budget for %s boundaries',
+    async (scenario) => {
+      let calls = 0;
+      const input = buildPluginInput(
+        makeCtx({
+          context: async () => [
+            { id: 'compact', type: 'compaction', status: 'completed' },
+          ],
+          messages: async () => {
+            calls++;
+            const found =
+              (scenario === 'last-page' && calls === 10) ||
+              (scenario === 'too-far' && calls === 11);
+            return {
+              data:
+                scenario === 'oversized'
+                  ? Array.from({ length: 101 }, (_, i) => ({ id: `msg_${i}` }))
+                  : [{ id: found ? 'baseline' : `msg_${calls}`, type: 'user' }],
+              cursor: { next: `cursor_${calls}` },
+            };
+          },
+        }),
+      );
+      const pending = (
+        input.client as {
+          session: { messages: (args: unknown) => Promise<unknown> };
+        }
+      ).session.messages({
+        path: { id: 'ses_1' },
+        historyBoundary: 'baseline',
+      });
+      if (scenario === 'last-page') {
+        const result = (await pending) as { data: unknown[] };
+        expect(result.data[0]).toMatchObject({ info: { id: 'baseline' } });
+      } else {
+        await expect(pending).rejects.toThrow();
+      }
+      expect(calls).toBe(scenario === 'oversized' ? 1 : 10);
+    },
+  );
+
+  test('compacted history has one time budget shared across all pages', async () => {
+    let now = 0;
+    let calls = 0;
+    const clock = spyOn(performance, 'now').mockImplementation(() => now);
+    try {
+      const input = buildPluginInput(
+        makeCtx({
+          context: async () => [
+            { id: 'compact', type: 'compaction', status: 'completed' },
+          ],
+          messages: async () => {
+            calls++;
+            now += 2500;
+            return {
+              data: [{ id: calls === 2 ? 'baseline' : 'msg_1', type: 'user' }],
+              cursor: { next: `cursor_${calls}` },
+            };
+          },
+        }),
+      );
+      await expect(
+        (
+          input.client as {
+            session: { messages: (args: unknown) => Promise<unknown> };
+          }
+        ).session.messages({
+          path: { id: 'ses_1' },
+          historyBoundary: 'baseline',
+        }),
+      ).rejects.toThrow('history read budget exceeded');
+      expect(calls).toBe(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test('a held history page times out and cannot resume scanning when it resolves', async () => {
+    let calls = 0;
+    let release!: (page: unknown) => void;
+    try {
+      const input = buildPluginInput(
+        makeCtx({
+          context: async () => [
+            { id: 'compact', type: 'compaction', status: 'completed' },
+          ],
+          messages: async () => {
+            calls++;
+            return new Promise((resolve) => {
+              release = resolve;
+            });
+          },
+        }),
+      );
+      const pending = (
+        input.client as {
+          session: { messages: (args: unknown) => Promise<unknown> };
+        }
+      ).session.messages({
+        path: { id: 'ses_1' },
+        historyBoundary: 'baseline',
+      });
+      const rejected = expect(pending).rejects.toThrow(
+        'history read budget exceeded',
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(calls).toBe(1);
+      await rejected;
+      release({
+        data: [{ id: 'old', type: 'user' }],
+        cursor: { next: 'older' },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(calls).toBe(1);
+    } finally {
+      release?.({ data: [] });
+    }
   });
 
   test('compacted context with its identity boundary does not read history', async () => {

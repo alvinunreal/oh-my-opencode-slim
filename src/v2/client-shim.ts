@@ -27,11 +27,16 @@ import {
   isInternalInitiatorPart,
 } from '../utils/internal-initiator';
 import { log } from '../utils/logger';
+import { withTimeout } from '../utils/session';
 import {
   createInternalSyntheticMessageID,
   recordInternalAdmission,
 } from './internal-admissions';
 import type { V2Context } from './types';
+
+const HISTORY_PAGE_SIZE = 100;
+const MAX_HISTORY_PAGES = 10;
+const HISTORY_READ_TIMEOUT_MS = 4_000;
 
 /** v2 model reference accepted by `ctx.generate.text`. */
 export interface V2GenerateModelRef {
@@ -461,17 +466,34 @@ export function buildPluginInput(
               ) {
                 const history: Record<string, unknown>[] = [];
                 const cursors = new Set<string>();
+                const deadline = performance.now() + HISTORY_READ_TIMEOUT_MS;
+                const budgetError =
+                  '[v2] session.messages history read budget exceeded';
+                let pages = 0;
                 let cursor: string | undefined;
                 do {
-                  const page = await s.messages({
-                    sessionID: sessionIDOf(args),
-                    limit: 100,
-                    order: 'desc',
-                    ...(cursor ? { cursor } : {}),
-                  });
+                  const remainingMs = deadline - performance.now();
+                  if (pages >= MAX_HISTORY_PAGES || remainingMs <= 0) {
+                    throw new Error(budgetError);
+                  }
+                  pages++;
+                  const page = await withTimeout(
+                    s.messages({
+                      sessionID: sessionIDOf(args),
+                      limit: HISTORY_PAGE_SIZE,
+                      order: 'desc',
+                      ...(cursor ? { cursor } : {}),
+                    }),
+                    remainingMs,
+                    budgetError,
+                  );
+                  if (performance.now() >= deadline) {
+                    throw new Error(budgetError);
+                  }
                   if (
                     !isRecord(page) ||
                     !Array.isArray(page.data) ||
+                    page.data.length > HISTORY_PAGE_SIZE ||
                     !page.data.every(isRecord)
                   ) {
                     throw new Error(

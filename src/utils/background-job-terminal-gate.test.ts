@@ -1437,6 +1437,7 @@ test.each([
   'completed',
   'queued-answer',
   'missing-baseline',
+  'budget-exceeded',
   'pending-tool',
   'new-prompt',
 ])(
@@ -1460,8 +1461,16 @@ test.each([
       },
       { id: 'idle', type: 'idle', time: { created: 5 } },
     ];
-    const messages = mock(async ({ cursor }: { cursor?: string }) =>
-      cursor
+    let reads = 0;
+    const messages = mock(async ({ cursor }: { cursor?: string }) => {
+      reads++;
+      if (scenario === 'budget-exceeded') {
+        return {
+          data: [{ id: `old_${reads}`, type: 'user' }],
+          cursor: { next: `cursor_${reads}` },
+        };
+      }
+      return cursor
         ? {
             data:
               scenario === 'missing-baseline'
@@ -1490,8 +1499,8 @@ test.each([
               ...compacted.slice().reverse(),
             ],
             cursor: { next: 'older' },
-          },
-    );
+          };
+    });
     const input = buildPluginInput({
       location: { directory: '/proj' },
       session: {
@@ -1526,7 +1535,9 @@ test.each([
         'compacted child result',
       );
     }
-    expect(messages).toHaveBeenCalledTimes(2);
+    expect(messages).toHaveBeenCalledTimes(
+      scenario === 'budget-exceeded' ? 10 : 2,
+    );
   },
 );
 
