@@ -407,12 +407,12 @@ describe('foreground fallback redo harness', () => {
     expect(
       manager.getActiveFallback('parent-chain-walk')?.downProviders,
     ).toEqual(new Set(['anthropic']));
-    await manager.handleEvent({
+    for (const mapped of mapV2EventToV1({
       type: 'session.created',
-      properties: {
-        info: { id: 'child-chain-walk', parentID: 'parent-chain-walk' },
-      },
-    });
+      data: { sessionID: 'child-chain-walk', parentID: 'parent-chain-walk' },
+    })) {
+      await manager.handleEvent(mapped);
+    }
     await fail('child-chain-walk', 'explorer', 'openai/gpt-6-mini');
     await fail('parent-chain-walk', 'orchestrator', 'openai/gpt-6.1-sol-fast');
 
@@ -429,6 +429,80 @@ describe('foreground fallback redo harness', () => {
     ).toEqual(new Set(['anthropic', 'openai']));
     expect(mocks.abort).not.toHaveBeenCalled();
     expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('F1: mapped v2 usage after content-filter failures preserves the chain walk', async () => {
+    createMockClient();
+    const chain = [
+      'anthropic/claude-opus-5-5',
+      'openai/gpt-6.1-sol-fast',
+      'anthropic/claude-sonnet-5-5',
+      'opencode-go/muse-spark-1.3-contributor',
+    ];
+    const manager = new ForegroundFallbackManager(
+      { orchestrator: chain },
+      false,
+      { directory: '/test', hostFlavor: 'v2' } as never,
+      0,
+      undefined,
+      undefined,
+      0,
+      0,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    const sessionID = 'v2-content-filter-usage';
+    const switchModel = mock(async (_sessionID: string, _model: unknown) => {});
+    const dispatch = async (event: Record<string, unknown>) => {
+      for (const mapped of mapV2EventToV1(event)) {
+        await manager.handleEvent(mapped);
+      }
+    };
+    const error = {
+      name: 'ContentFilterError',
+      data: {
+        message: "The response was blocked by the provider's content filter",
+      },
+    };
+
+    for (const [index, model] of [chain[2], chain[0], chain[1]].entries()) {
+      jest.advanceTimersByTime(6_000);
+      const tokens = {
+        input: (index + 1) * 100,
+        output: (index + 1) * 10,
+        cache: { read: 0, write: 0 },
+      };
+      await dispatch({
+        type: 'session.step.failed',
+        data: { sessionID, finish: 'content-filter', error, tokens },
+      });
+      await dispatch({
+        type: 'session.usage.updated',
+        data: { sessionID, tokens },
+      });
+      const [providerID, id] = model.split('/');
+      await manager.handleV2Retry(
+        {
+          sessionID,
+          agent: 'orchestrator',
+          model: { providerID, id },
+          error,
+          decision: { retry: true },
+        },
+        switchModel,
+      );
+    }
+
+    expect(switchModel.mock.calls).toEqual([
+      [sessionID, { providerID: 'anthropic', id: 'claude-opus-5-5' }],
+      [sessionID, { providerID: 'openai', id: 'gpt-6.1-sol-fast' }],
+      [
+        sessionID,
+        { providerID: 'opencode-go', id: 'muse-spark-1.3-contributor' },
+      ],
+    ]);
   });
 
   test('uncorrelated session.error is correlated with its matching errored message update', async () => {
@@ -1529,23 +1603,14 @@ describe('foreground fallback redo: host retry budget', () => {
       switchModel,
     );
     expect(switchModel).toHaveBeenCalledTimes(1);
-    // A completed successful assistant response resets the descent
+    // A successful host execution resets the descent
     // bookkeeping even with the replay path disabled.
-    await mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          id: 'm-v2-ok',
-          sessionID: 'v2-reset',
-          role: 'assistant',
-          agent: 'orchestrator',
-          providerID: 'test',
-          modelID: 'b',
-          finish: 'stop',
-          time: { completed: Date.now() },
-        },
-      },
-    });
+    for (const mapped of mapV2EventToV1({
+      type: 'session.execution.succeeded',
+      data: { sessionID: 'v2-reset' },
+    })) {
+      await mgr.handleEvent(mapped);
+    }
     // The next failure on the primary starts a fresh descent: b is
     // available again instead of being skipped for c.
     await mgr.handleV2Retry(

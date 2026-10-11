@@ -984,10 +984,25 @@ export class ForegroundFallbackManager {
     // available again. Intervention branches are gated on `enabled`
     // individually.
     if (!this.enabled && !this.v2RetryEnabled) return;
-    const event = rawEvent as { type: string; properties?: unknown };
+    const event = rawEvent as {
+      type: string;
+      properties?: unknown;
+      data?: unknown;
+    };
     if (!event?.type) return;
+    const isV2Host =
+      (this.input as PluginInput & { hostFlavor?: string }).hostFlavor === 'v2';
 
     switch (event.type) {
+      case 'session.execution.succeeded': {
+        if (!isV2Host) break;
+        const props = isRecord(event.data) ? event.data : event.properties;
+        if (isRecord(props) && typeof props.sessionID === 'string') {
+          this.resetRecoveryState(props.sessionID);
+        }
+        break;
+      }
+
       case 'message.updated': {
         const info = (
           event.properties as { info?: Record<string, unknown> } | undefined
@@ -1133,25 +1148,13 @@ export class ForegroundFallbackManager {
               await this.tryFallback(sessionID, messageError, incidentID);
             }
           }
-        } else if (isCompletedSuccessfulAssistant && noTools === false) {
-          // Only a completed, successful assistant response proves recovery.
-          this.sessionRetries.delete(sessionID);
-          this.retryAttempt.delete(sessionID);
-          this.chainExhaustion.delete(sessionID);
-          this.lastFallbackTime.delete(sessionID);
-          this.initialDelayUsed.delete(sessionID);
-          this.v2RetryNotices.delete(sessionID);
-          // A success also ends any failure streak, so the models the
-          // streak marked tried are no longer proven dead. Static-chain
-          // agents already get this from the re-arm reset (a new turn
-          // re-sends the configured primary); combined inherit+chain
-          // agents re-send their live session model, which never equals
-          // the configured head, so without this reset their tried set
-          // only grows across turns and each new descent starts one link
-          // deeper.
-          this.sessionTried.delete(sessionID);
-          // Cancel any pending initial delay on recovery
-          this.cancelInitialDelay(sessionID);
+        } else if (
+          !isV2Host &&
+          isCompletedSuccessfulAssistant &&
+          noTools === false
+        ) {
+          // v2 completed-message synthesis is telemetry, not recovery evidence.
+          this.resetRecoveryState(sessionID);
         }
         break;
       }
@@ -1523,6 +1526,18 @@ export class ForegroundFallbackManager {
     if (!pending) return;
     clearTimeout(pending.timer);
     this.pendingInitialDelay.delete(sessionID);
+  }
+
+  /** A confirmed recovery starts a new descent, including inherit+chain agents. */
+  private resetRecoveryState(sessionID: string): void {
+    this.sessionRetries.delete(sessionID);
+    this.retryAttempt.delete(sessionID);
+    this.chainExhaustion.delete(sessionID);
+    this.lastFallbackTime.delete(sessionID);
+    this.initialDelayUsed.delete(sessionID);
+    this.v2RetryNotices.delete(sessionID);
+    this.sessionTried.delete(sessionID);
+    this.cancelInitialDelay(sessionID);
   }
 
   private bypassInitialFallbackDelay(
@@ -2343,8 +2358,7 @@ export class ForegroundFallbackManager {
         // configured chain (session-inherited or /model-picked), that model
         // leads the descent and the configured entries back it. The head is
         // never re-picked — selectFallbackModel marks the current model
-        // tried before scanning, so the first untried entry is the
-        // configured head.
+        // tried before scanning, so the scan starts at the configured head.
         // Empty chains (disableChain) must stay empty: prepending onto []
         // would resurrect fallback for an agent whose chain was disabled.
         if (currentModel && chain.length > 0 && !chain.includes(currentModel)) {

@@ -257,7 +257,7 @@ All config files support **JSONC** (JSON with Comments):
 | `disabled_hooks` | string[] | `[]` | Hook names to disable globally: `phase-reminder`, `foreground-fallback`, `deepwork-guard`, `deepwork-goal`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`. Unknown values are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies. See [Hooks](#hooks) |
 | `disabled_commands` | string[] | `[]` | Slash commands to disable globally: `interview`, `implement`, `deepwork`, `reflect`, `loop`. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. Listing `reflect` in `disabled_skills` also disables the `/reflect` command. See [Slash Commands](#slash-commands) |
 | `fallback.enabled` | boolean | `true` | Enable Slim's foreground model-chain failover. It does not configure OpenCode provider/AI-SDK retries. On **v2 hosts** the replay path (abort + re-prompt) stays disabled — the v2 `switchModel` has no per-turn/atomic conditional form, so an in-flight replay could commit after a newer user turn has taken over — while the retry-hook steering path runs: host retry events are absorbed up to `fallback.maxRetries`, then the model is switched in place via the host `session.switchModel` and the host retries the current turn on the new model. The same switch disables both paths. |
-| `fallback.maxRetries` | number | `3` | Number of host retry events Slim absorbs before advancing the foreground model chain. The budget stays spent across model switches; a completed successful assistant response, an observed return to the configured primary for a fresh descent, or session deletion re-arms it. Terminal `session.error` and `message.updated` failures advance immediately without charging it. On v1, three distinct consecutive completed, error-free `finish: 'unknown'` messages with verified tool-free parts also trigger request-scoped abort and replay without charging retries. `0` advances on the first retry event. This does not configure OpenCode provider or background subagent retries. |
+| `fallback.maxRetries` | number | `3` | Number of host retry events Slim absorbs before advancing the foreground model chain. The budget stays spent across model switches; a completed successful assistant response on v1, `session.execution.succeeded` on v2, an observed return to the configured primary for a fresh descent, or session deletion re-arms it. Landing on the configured head through a committed fallback does not re-arm this budget, including for inherit+chain agents. Terminal `session.error` and `message.updated` failures advance immediately without charging it. On v1, three distinct consecutive completed, error-free `finish: 'unknown'` messages with verified tool-free parts also trigger request-scoped abort and replay without charging retries. `0` advances on the first retry event. This does not configure OpenCode provider or background subagent retries. |
 | `fallback.initialRetryDelayMs` | number | `0` | Delay in milliseconds before triggering the first fallback on a failover-worthy error. Gives intercepting plugins time to recover the current model before the fallback chain advances. 0 disables. |
 | `fallback.retryDelayMs` | number | `500` | Delay in milliseconds between consecutive fallback attempts after the initial trigger. 0 disables. |
 | `fallback.continuationPolicy` | `"retry-primary"` \| `"stick-to-fallback"` | `"retry-primary"` | OpenCode v1 policy for unpinned internal continuations after a confirmed fallback. `"retry-primary"` lets background-completion and lifecycle turns try the configured primary again; `"stick-to-fallback"` keeps them on the confirmed fallback until the next external user turn. |
@@ -625,7 +625,9 @@ Both fallback paths scan the chain from its head, skipping models already tried
 and providers abandoned by this session or its parent. Starting on a later entry
 does not skip the untried entries before it. A provider is excluded only after a
 provider-level failure switches the session away from it, so other models on the
-current provider remain eligible for the immediate next pick. When no eligible
+current provider remain eligible for the immediate next pick. On v1 the
+exclusion lasts until the next turn or continuation on a different model; on v2
+it lasts while the switched model stays selected. When no eligible
 entry remains, Slim retries the last chain entry once, ignoring provider
 exclusions and retaining the tried set; another failure ends intervention
 (v1 aborts once, while v2 leaves the host's retry decision unchanged).
@@ -640,9 +642,11 @@ decision points, Slim absorbs host retries up to `fallback.maxRetries`, then
 switches the model in place via `session.switchModel` and mutates the retry
 decision so the host retries the current turn on the new model — no
 transcript replay, so the per-turn race cannot occur. Descent bookkeeping
-stays live on v2 (turn detection, agent/model tracking, and the resets on a
-successful response or a new user turn), so a later episode in the same
+stays live on v2 (turn detection, agent/model tracking, and the resets on
+`session.execution.succeeded` or a new user turn), so a later episode in the same
 session starts a fresh descent instead of inheriting the previous one.
+Usage telemetry and its synthesized completed-assistant messages do not prove
+recovery or reset the descent.
 `fallback.initialRetryDelayMs` has no effect on the steering path (there is
 no replay to delay; the host's own retry backoff is the recovery window) —
 a one-time log line notes the divergence. Both paths share the same user
@@ -777,8 +781,8 @@ but still survive that model dying (rate limit, quota, outage):
 At launch the agent inherits the session model instead of the chain head.
 When a failover-worthy error hits, the runtime chain is
 `[<current session model>, ...configured chain]`: the live model is never
-re-picked, the first configured entry takes over, and later entries follow in
-order. Chain exhaustion stays bounded — after the whole chain fails once, one
+re-picked, the first eligible configured entry takes over, and later entries
+follow in order. Chain exhaustion stays bounded — after the whole chain fails once, one
 re-fallback round runs on the last entry, then the session aborts instead of
 looping. A `/model` pick on such an agent is its follow target; it never
 disables the fallback chain.
