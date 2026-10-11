@@ -655,6 +655,13 @@ a one-time log line notes the divergence. Both paths share the same user
 switches: `fallback.enabled` and `disabled_hooks: ["foreground-fallback"]`
 disable steering too.
 
+On v2, `provider.content-filter` is a request-scoped failover error even when
+the host sets `decision.retry` to `false`. Slim advances to the next eligible
+model without adding the rejected request's provider to the abandoned set.
+A model switch that times out but later succeeds is reconciled if the observed
+model is still the failed source or already the switch target; a different
+observed selection is left untouched.
+
 ### Agent Display Names
 
 Use `displayName` to give an agent a user-facing alias while keeping the

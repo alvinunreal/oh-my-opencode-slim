@@ -558,6 +558,35 @@ describe('foreground fallback redo harness', () => {
     expect(switchModel).not.toHaveBeenCalled();
   });
 
+  test('H1: v2 content-filter errors switch models without abandoning the provider', async () => {
+    const { manager } = makeManager({
+      chain: ['test/a', 'other/b'],
+      hostFlavor: 'v2',
+    });
+    const sessionID = 'v2-content-policy';
+    const switchModel = mock(async () => {});
+    const event = {
+      ...retryEvent(sessionID, 'a', { retry: false }),
+      error: {
+        type: 'provider.content-filter',
+        message: 'Provider blocked the response',
+        status: 400,
+      },
+    };
+
+    await manager.handleV2Retry(event, switchModel);
+
+    expect(switchModel).toHaveBeenCalledWith(sessionID, {
+      providerID: 'other',
+      id: 'b',
+    });
+    expect(manager.getActiveFallback(sessionID)).toEqual({
+      model: 'other/b',
+      downProviders: new Set(),
+    });
+    expect(event.decision).toEqual({ retry: true, delay: 0 });
+  });
+
   test('uncorrelated session.error is correlated with its matching errored message update', async () => {
     const { manager, mocks } = makeManager();
     const error = {

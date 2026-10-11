@@ -248,6 +248,7 @@ function failoverScope(error: unknown): 'provider' | 'request' | undefined {
   // reason must win over provider status/type/transport signals. 421 and 451
   // are request rejections (content filter / legal), not provider outages.
   if (
+    nestedField(error, 'type') === 'provider.content-filter' ||
     statusCode === 410 ||
     statusCode === 421 ||
     statusCode === 451 ||
@@ -1479,18 +1480,18 @@ export class ForegroundFallbackManager {
       if (picked) this.sessionTried.get(event.sessionID)?.delete(picked);
       const pendingSwitch = switchRequest;
       if (err instanceof OperationTimeoutError && picked && pendingSwitch) {
-        // Late landing: the timeout cannot cancel the host call. If it
-        // settles after we gave up, reconcile only when nothing advanced
-        // the model since — the check and the write run synchronously, so
-        // a hook that already moved on fails closed instead of being
-        // overwritten. No toast here: the next event's success path
+        // Late landing: the timeout cannot cancel the host call. Reconcile
+        // if the observed model is still the source or already the target;
+        // leave any newer, different selection untouched. The check/write
+        // run synchronously. No toast here: the next event's success path
         // notifies; this only repairs state.
         const target = picked;
         void pendingSwitch.then(
           () => {
+            const observedModel = this.sessionModel.get(event.sessionID);
             if (
               this.disposed ||
-              this.sessionModel.get(event.sessionID) !== from
+              (observedModel !== from && observedModel !== target)
             )
               return;
             this.commitSwitch(event.sessionID, from, target, event.error);
