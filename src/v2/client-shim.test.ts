@@ -203,6 +203,149 @@ describe('v2 client shim delegation', () => {
     expect(res.data).toHaveLength(1);
   });
 
+  test('compacted transcript restores ordered persisted history across pages', async () => {
+    const calls: unknown[] = [];
+    const input = buildPluginInput(
+      makeCtx({
+        context: async () => [
+          { id: 'compact', type: 'compaction', status: 'completed' },
+          { id: 'answer', type: 'assistant' },
+        ],
+        messages: async (args) => {
+          calls.push(args);
+          return args.cursor
+            ? {
+                data: [{ id: 'baseline', type: 'user' }],
+                cursor: { next: 'even-older' },
+              }
+            : {
+                data: [
+                  { id: 'answer', type: 'assistant' },
+                  { id: 'compact', type: 'compaction', status: 'completed' },
+                ],
+                cursor: { next: 'older' },
+              };
+        },
+      }),
+    );
+    const result = await (
+      input.client as {
+        session: { messages: (args: unknown) => Promise<unknown> };
+      }
+    ).session.messages({
+      path: { id: 'ses_1' },
+      historyBoundary: 'baseline',
+    });
+    expect(result).toMatchObject({
+      data: [
+        { info: { id: 'baseline' } },
+        { info: { id: 'compact' } },
+        { info: { id: 'answer' } },
+      ],
+      page: { source: 'session.messages', complete: false },
+    });
+    expect(calls).toEqual([
+      { sessionID: 'ses_1', limit: 100, order: 'desc' },
+      { sessionID: 'ses_1', limit: 100, order: 'desc', cursor: 'older' },
+    ]);
+  });
+
+  test.each(['unavailable', 'malformed', 'repeated-cursor', 'empty'])(
+    'compacted history handles %s pages without trusting partial results',
+    async (scenario) => {
+      let calls = 0;
+      const input = buildPluginInput(
+        makeCtx({
+          context: async () => [
+            { id: 'compact', type: 'compaction', status: 'completed' },
+          ],
+          messages: async () => {
+            calls++;
+            if (calls === 1) {
+              return {
+                data: [{ id: 'answer', type: 'assistant' }],
+                cursor: { next: 'older' },
+              };
+            }
+            if (scenario === 'unavailable') throw new Error('history failed');
+            if (scenario === 'malformed') return { data: [null] };
+            return {
+              data: scenario === 'empty' ? [] : [{ id: 'old', type: 'user' }],
+              cursor: { next: 'older' },
+            };
+          },
+        }),
+      );
+      const pending = (
+        input.client as {
+          session: { messages: (args: unknown) => Promise<unknown> };
+        }
+      ).session.messages({
+        path: { id: 'ses_1' },
+        historyBoundary: 'baseline',
+      });
+      if (scenario === 'empty') {
+        expect(await pending).toMatchObject({
+          data: [{ info: { id: 'answer' } }],
+          page: { source: 'session.messages', complete: true },
+        });
+      } else {
+        await expect(pending).rejects.toThrow();
+      }
+      expect(calls).toBe(2);
+    },
+  );
+
+  test('compacted context remains incomplete on hosts without persisted messages', async () => {
+    const input = buildPluginInput(
+      makeCtx({
+        context: async () => [
+          { id: 'compact', type: 'compaction', status: 'completed' },
+        ],
+      }),
+    );
+    expect(
+      await (
+        input.client as {
+          session: { messages: (args: unknown) => Promise<unknown> };
+        }
+      ).session.messages({
+        path: { id: 'ses_1' },
+        historyBoundary: 'baseline',
+      }),
+    ).toMatchObject({
+      page: { source: 'session.context', complete: false },
+    });
+  });
+
+  test('compacted context with its identity boundary does not read history', async () => {
+    let historyCalls = 0;
+    const input = buildPluginInput(
+      makeCtx({
+        context: async () => [
+          { id: 'compact', type: 'compaction', status: 'completed' },
+          { id: 'baseline', type: 'user' },
+        ],
+        messages: async () => {
+          historyCalls++;
+          return { data: [] };
+        },
+      }),
+    );
+    const result = await (
+      input.client as {
+        session: { messages: (args: unknown) => Promise<unknown> };
+      }
+    ).session.messages({
+      path: { id: 'ses_1' },
+      historyBoundary: 'baseline',
+    });
+    expect(result).toMatchObject({
+      page: { source: 'session.context', complete: false },
+    });
+    expect(historyCalls).toBe(0);
+  });
+
   test('promptAsync switches model then steers when body.model present', async () => {
     const seq: Array<{ m: string; i: unknown }> = [];
     const input = buildPluginInput(

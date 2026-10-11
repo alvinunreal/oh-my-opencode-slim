@@ -348,10 +348,15 @@ export function createTaskSessionManagerHook(
       backgroundJobBoard,
       input: _ctx,
       hostOutcomeClock: options.hostOutcomeClock,
-      readTerminalEvidence: async (taskID) =>
-        fetchChildTranscript(getClient(_ctx), taskID, _ctx.directory).catch(
-          () => undefined,
-        ),
+      readTerminalEvidence: async (taskID, historyBoundary) =>
+        fetchChildTranscript(
+          getClient(_ctx),
+          taskID,
+          _ctx.directory,
+          undefined,
+          undefined,
+          historyBoundary,
+        ).catch(() => undefined),
       baselineFor: (taskID, generation) =>
         options.revivedRunTracker?.baselineFor(taskID, generation),
       attemptStartedAtFor: (taskID, generation) =>

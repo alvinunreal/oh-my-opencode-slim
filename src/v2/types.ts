@@ -292,7 +292,7 @@ export interface V2Context {
       sessionID: string;
       model: { id: string; providerID: string; variant?: string };
     }): Promise<unknown>;
-    /** v2 session.context — full transcript; replaces v1 session.messages. */
+    /** v2 session.context — active context, truncated by completed compaction. */
     context?(input: {
       sessionID: string;
     }): Promise<Array<Record<string, unknown>>>;

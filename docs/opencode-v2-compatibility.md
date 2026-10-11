@@ -138,7 +138,14 @@ not an optional-degradation path.
    (mapped entries preserve the v2 terminal metadata — `time.completed`,
    `finish`, `error` — and the 2.0.8 trailing `idle` lifecycle marker maps
    to the skippable v1 `system` role, so transcript classification works
-   natively on v2), `session.prompt` (default `delivery: "steer"`;
+   natively on v2). After completed compaction, terminal-evidence reads
+   restore persisted history through paginated `session.messages` when
+   available, stopping once the pre-revive baseline or queued prompt is
+   found. This preserves child completion identity without reading older
+   history unnecessarily. Bounded tail reads still fetch only the requested page;
+   ordinary context reads and parent-alias recovery remain unchanged.
+   Hosts without persisted-message reads retain incomplete context and do
+   not bypass missing-baseline checks. `session.prompt` (default `delivery: "steer"`;
    `noReply: true` maps to `delivery: "queue", resume: false` — or `delivery: "steer", resume: false` when the v1-shaped body carries an explicit `delivery: 'steer'` from `task_message`),
    `session.update`→
    `session.update` (`{sessionID, title}`), `session.delete`→`remove` (same

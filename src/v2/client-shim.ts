@@ -449,6 +449,60 @@ export function buildPluginInput(
                   message.type === 'compaction' &&
                   message.status === 'completed',
               );
+              // Compaction removes continuation baselines from context. Keep
+              // the terminal gate's identity fence by reading persisted history
+              // instead of attributing the newest answer without its baseline.
+              if (
+                cut &&
+                typeof args.historyBoundary === 'string' &&
+                args.historyBoundary.length > 0 &&
+                !raw.some((message) => message.id === args.historyBoundary) &&
+                typeof s.messages === 'function'
+              ) {
+                const history: Record<string, unknown>[] = [];
+                const cursors = new Set<string>();
+                let cursor: string | undefined;
+                do {
+                  const page = await s.messages({
+                    sessionID: sessionIDOf(args),
+                    limit: 100,
+                    order: 'desc',
+                    ...(cursor ? { cursor } : {}),
+                  });
+                  if (
+                    !isRecord(page) ||
+                    !Array.isArray(page.data) ||
+                    !page.data.every(isRecord)
+                  ) {
+                    throw new Error(
+                      '[v2] session.messages did not return a valid history page',
+                    );
+                  }
+                  history.push(...page.data);
+                  cursor =
+                    page.data.length > 0 &&
+                    isRecord(page.cursor) &&
+                    typeof page.cursor.next === 'string' &&
+                    page.cursor.next.length > 0
+                      ? page.cursor.next
+                      : undefined;
+                  if (
+                    page.data.some(
+                      (message) => message.id === args.historyBoundary,
+                    )
+                  ) {
+                    break;
+                  }
+                  if (cursor && cursors.has(cursor)) {
+                    throw new Error('[v2] session.messages repeated a cursor');
+                  }
+                  if (cursor) cursors.add(cursor);
+                } while (cursor);
+                return {
+                  data: history.reverse().map(toV1Message),
+                  page: { source: 'session.messages', complete: !cursor },
+                };
+              }
               return {
                 data: raw.map(toV1Message),
                 page: { source: 'session.context', complete: !cut },

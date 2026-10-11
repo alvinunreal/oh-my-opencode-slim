@@ -1433,6 +1433,103 @@ test.each(['transcript', 'outcome'])(
   },
 );
 
+test.each([
+  'completed',
+  'queued-answer',
+  'missing-baseline',
+  'pending-tool',
+  'new-prompt',
+])(
+  'v2 revived child completion survives compaction without bypassing %s evidence',
+  async (scenario) => {
+    const queued = scenario === 'queued-answer';
+    const completed = scenario === 'completed' || queued;
+    const baseline = {
+      id: 'baseline',
+      type: queued ? 'user' : 'idle',
+      time: { created: 1 },
+    };
+    const compacted = [
+      { id: 'compact', type: 'compaction', status: 'completed' },
+      {
+        id: 'result',
+        type: 'assistant',
+        time: { created: 3, completed: 4 },
+        finish: 'stop',
+        content: [{ type: 'text', text: 'compacted child result' }],
+      },
+      { id: 'idle', type: 'idle', time: { created: 5 } },
+    ];
+    const messages = mock(async ({ cursor }: { cursor?: string }) =>
+      cursor
+        ? {
+            data:
+              scenario === 'missing-baseline'
+                ? []
+                : [
+                    ...(scenario === 'pending-tool'
+                      ? [
+                          {
+                            id: 'pending',
+                            type: 'assistant',
+                            finish: 'tool-calls',
+                            content: [
+                              { type: 'tool', state: { status: 'running' } },
+                            ],
+                          },
+                        ]
+                      : []),
+                    baseline,
+                  ],
+          }
+        : {
+            data: [
+              ...(scenario === 'new-prompt'
+                ? [{ id: 'new-prompt', type: 'user', text: 'continue' }]
+                : []),
+              ...compacted.slice().reverse(),
+            ],
+            cursor: { next: 'older' },
+          },
+    );
+    const input = buildPluginInput({
+      location: { directory: '/proj' },
+      session: {
+        context: async () => compacted,
+        messages,
+        get: async () => ({ outcome: 'succeeded', time: { idle: 5 } }),
+      },
+    } as never) as never;
+    const board = new BackgroundJobBoard();
+    const run = board.registerLaunch({
+      taskID: 'ses_compacted',
+      parentSessionID: 'parent',
+      agent: 'oracle',
+      background: true,
+      now: 2,
+    });
+    const gate = createBackgroundJobTerminalGate({
+      input,
+      backgroundJobBoard: board,
+      baselineFor: () => (queued ? undefined : 'baseline'),
+      promptMessageIDFor: () => (queued ? 'baseline' : undefined),
+      hostOutcomeClock: 'shared-unix-ms',
+      now: () => 10,
+    });
+    gates.push(gate);
+    await gate.reconcile(run);
+    expect(board.get(run.taskID)?.state).toBe(
+      completed ? 'completed' : 'running',
+    );
+    if (completed) {
+      expect(board.get(run.taskID)?.resultSummary).toBe(
+        'compacted child result',
+      );
+    }
+    expect(messages).toHaveBeenCalledTimes(2);
+  },
+);
+
 describe('foreground native terminal fast path (r2 hardening)', () => {
   test.each([
     [

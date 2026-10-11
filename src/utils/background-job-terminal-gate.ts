@@ -336,7 +336,10 @@ export function createBackgroundJobTerminalGate(options: {
   backgroundJobBoard: BackgroundJobStore;
   input?: PluginInput;
   readRuntime?: (run: RunRef, startedAt: number) => Promise<RuntimeObservation>;
-  readTerminalEvidence?: (taskID: string) => Promise<unknown>;
+  readTerminalEvidence?: (
+    taskID: string,
+    historyBoundary?: string,
+  ) => Promise<unknown>;
   baselineFor?: (taskID: string, generation: number) => string | undefined;
   promptMessageIDFor?: (
     taskID: string,
@@ -808,12 +811,15 @@ export function createBackgroundJobTerminalGate(options: {
       token,
       () =>
         options.readTerminalEvidence
-          ? options.readTerminalEvidence(token.taskID)
+          ? options.readTerminalEvidence(token.taskID, token.promptMessageID)
           : options.input
             ? fetchChildTranscript(
                 getClient(options.input),
                 token.taskID,
                 options.input.directory,
+                undefined,
+                undefined,
+                token.promptMessageID,
               )
             : Promise.resolve(undefined),
     );
@@ -1026,12 +1032,15 @@ export function createBackgroundJobTerminalGate(options: {
       typeof getClient(options.input)?.session?.messages !== 'function';
     const transcriptRead = await read(`transcript:${run.taskID}`, token, () =>
       options.readTerminalEvidence
-        ? options.readTerminalEvidence(run.taskID)
+        ? options.readTerminalEvidence(run.taskID, token.baselineMessageID)
         : options.input
           ? fetchChildTranscript(
               getClient(options.input),
               run.taskID,
               options.input.directory,
+              undefined,
+              undefined,
+              token.baselineMessageID,
             )
           : Promise.resolve(undefined),
     );
