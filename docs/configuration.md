@@ -621,6 +621,15 @@ OpenCode's provider retry policy. A value of `0` allows no host retry events
 before foreground failover; it does not prevent OpenCode from retrying a
 provider request in a child session.
 
+Both fallback paths scan the chain from its head, skipping models already tried
+and providers abandoned by this session or its parent. Starting on a later entry
+does not skip the untried entries before it. A provider is excluded only after a
+provider-level failure switches the session away from it, so other models on the
+current provider remain eligible for the immediate next pick. When no eligible
+entry remains, Slim retries the last chain entry once, ignoring provider
+exclusions and retaining the tried set; another failure ends intervention
+(v1 aborts once, while v2 leaves the host's retry decision unchanged).
+
 On v2 hosts, the two fallback paths are gated separately. The replay path
 (abort + re-prompt driven by `session.error`, `message.updated` and
 `session.status` retry) stays disabled: the v2 `switchModel` has no
@@ -705,6 +714,8 @@ entry in the child's own chain outside those providers, with no preference for
 the parent's model/provider. Policy/content-filter failures, retired or unknown
 models, and manual selections leave independent children unchanged; so does a
 chain with no healthy provider.
+On later failures, the child's own fallback scans from the head and skips
+providers abandoned by either the child or its parent.
 OpenCode v2 uses the native per-call subagent model override. On v1, the child's
 first prompt claims a delegation intention using the host's parent link and empty
 transcript; a `task_id` resume instead targets that child's next prompt. Slim

@@ -480,8 +480,8 @@ export class ForegroundFallbackManager {
    *  Used to enforce retryDelayMs between consecutive attempts. */
   private readonly lastFallbackTime = new Map<string, number>();
   /** sessionID → chain-exhaustion stage:
-   *   0 = not exhausted; 1 = chain exhausted once, reset to sticky fallback
-   *   (one retry chance); 2 = exhausted again, aborted — stop intervening.
+   *   0 = not exhausted; 1 = chain exhausted once, sticky fallback retry;
+   *   2 = exhausted again, aborted — stop intervening.
    *   Reset to 0 on successful responses or session deletion. */
   private readonly chainExhaustion = new Map<string, number>();
   /** True once dispose() ran. `opencode reload` destroys this instance's
@@ -827,7 +827,8 @@ export class ForegroundFallbackManager {
     /**
      * Ordered fallback chains per agent.
      * e.g. { orchestrator: ['anthropic/claude-opus-4-5', 'openai/gpt-4o'] }
-     * The first model that hasn't been tried yet is selected on each fallback.
+     * Scan from the head, skipping tried models and providers abandoned by
+     * this session or its parent.
      */
     chains: Record<string, ReadonlyArray<ForegroundFallbackModel>>,
     private readonly enabled: boolean,
@@ -1783,10 +1784,12 @@ export class ForegroundFallbackManager {
   }
 
   /** A return to the OBSERVED configured primary starts a new descent. An
-   *  inferred head or a dynamic inherit+chain head does not count. */
+   *  inferred head, dynamic inherit+chain head, or committed fallback does
+   *  not count. */
   private rearmIfFreshDescent(sessionID: string): void {
     const observedModel = this.sessionModel.get(sessionID);
     if (!observedModel) return;
+    if (this.activeFallback.get(sessionID)?.model === observedModel) return;
     const tried = this.sessionTried.get(sessionID);
     if (!tried || tried.size <= 1) return;
     const agentName = this.sessionAgent.get(sessionID);
@@ -1822,52 +1825,39 @@ export class ForegroundFallbackManager {
     if (!this.sessionTried.has(sessionID)) {
       this.sessionTried.set(sessionID, new Set());
     }
-    // A new user turn always re-sends the agent's configured primary:
-    // promptAsync's `model` is a per-message override, so a fallback never
-    // persists past the message it was applied to. Landing here on the
-    // configured primary (rearmHead) with a tried set that already walked
-    // past it therefore means the previous descent has ended and its state
-    // is stale. Without this the next descent resumes one link deeper every
-    // turn (link 2, then 3, then 4...) until the chain is spent and the
-    // session aborts, instead of re-walking from link 2 each turn.
-    //
-    // This does not weaken the backward-fallback guard below: currentModel
-    // is re-added immediately after, so the re-arm head still can never be
-    // picked. Only an OBSERVED configured primary counts. execFallback
-    // infers `currentModel = chain[0]` above when no model was ever
-    // captured for this session, which is the opposite situation —
-    // resetting there would re-pick chain[1] on every error instead of
-    // descending.
-    // size > 1 means a previous descent actually selected a fallback
-    // (tried.add(nextModel) below), so there is stale state to clear. A
-    // single-entry chain never gets there and must stay terminal after its
-    // one abort rather than re-aborting on every error.
+    // A fresh turn or continuation returning to the observed configured head
+    // re-arms a previous descent. An inferred head or our committed fallback
+    // does not: landing on the head mid-descent must retain tried models.
+    // A single-entry chain never has tried.size > 1 and stays terminal after
+    // its one abort.
     this.rearmIfFreshDescent(sessionID);
     // biome-ignore lint/style/noNonNullAssertion: We just set this above
-    let tried = this.sessionTried.get(sessionID)!;
+    const tried = this.sessionTried.get(sessionID)!;
 
-    // After the chain has been exhausted twice (reset retry failed and we
+    // After the chain has been exhausted twice (sticky retry failed and we
     // aborted), do not intervene again for this session: re-entering would
     // keep aborting in a loop. Surface errors to the user instead.
     if (this.chainExhaustion.get(sessionID) === 2) return;
     if (currentModel) tried.add(currentModel);
-    // ponytail: seed chain entries at or before the current model's index
-    // to prevent backward fallback onto models the session already left.
-    if (currentModel) {
-      const idx = chain.indexOf(currentModel);
-      for (let i = 0; i < idx; i++) tried.add(chain[i]);
-    }
 
-    let nextModel = chain.find((m) => !tried.has(m));
+    const downProviders = this.activeFallback.get(sessionID)?.downProviders;
+    const parentID = this.sessionParent.get(sessionID);
+    const parentDownProviders = parentID
+      ? this.activeFallback.get(parentID)?.downProviders
+      : undefined;
+    let nextModel = chain.find((model) => {
+      const provider = parseModelReference(model)?.providerID ?? '';
+      return (
+        !tried.has(model) &&
+        !downProviders?.has(provider) &&
+        !parentDownProviders?.has(provider)
+      );
+    });
     if (!nextModel) {
       if (chain.length > 1) {
-        // Chain exhausted but we have fallbacks: on the first exhaustion
-        // reset the tried set and stick to the deepest fallback model so
-        // we stop re-trying the dead primary model on every subsequent
-        // message. If the sticky fallback itself fails afterwards (second
-        // exhaustion), abort once and stop intervening — otherwise the
-        // reset re-prompt would loop forever on a fully dead chain.
-        const primary = chain[0];
+        // Retry the last chain entry once, ignoring provider exclusions but
+        // retaining tried models. If that sticky retry fails, abort once and
+        // stop intervening instead of reopening the chain.
         const stickyFallback = chain[chain.length - 1];
         if ((this.chainExhaustion.get(sessionID) ?? 0) >= 1) {
           this.chainExhaustion.set(sessionID, 2);
@@ -1880,17 +1870,13 @@ export class ForegroundFallbackManager {
           return 'exhausted' as const;
         }
         this.chainExhaustion.set(sessionID, 1);
-        log('[foreground-fallback] resetting tried set for re-fallback', {
+        log('[foreground-fallback] chain exhausted; retrying sticky fallback', {
           sessionID,
           agentName,
           currentModel,
-          prevTried: [...tried],
+          tried: [...tried],
           nextModel: stickyFallback,
         });
-        tried = new Set();
-        if (primary) tried.add(primary);
-        if (currentModel && currentModel !== primary) tried.add(currentModel);
-        this.sessionTried.set(sessionID, tried);
         nextModel = stickyFallback;
       } else {
         this.chainExhaustion.set(sessionID, 2);

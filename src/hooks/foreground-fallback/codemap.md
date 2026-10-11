@@ -5,7 +5,7 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 - Detects retryable conditions using pattern matching against error messages and status codes (rate limits, 429, 403/Forbidden, 401/410 failover errors)
 - On v1, withholds `session.abort(X)` while the background job board reports running children of X: held retry events do not seal dedup, exhausted chains still stop intervening, and busy replay errors withdraw any armed handoff when the abort is withheld (explicit refusal admits nothing), and settle it only after a failed abort with unknown outcome. v2 and v1 sessions without running children retain their abort behavior. `session.error` and `message.updated` can re-prompt directly without abort.
 - Retrieves the last user message from the session history
-- Re-prompts the session with the next available model from the agent's configured fallback chain
+- Re-prompts with the first eligible entry from the chain head, skipping tried models and providers abandoned by this session or its parent
 - Operates reactively through the event system (cannot wrap `prompt()` directly for interactive sessions)
 - Defers terminal job-board bookkeeping for recoverable child failover errors (cooperates with task-session-manager's `willAttemptFallback`). The deferral fences every terminal gate path before replay preparation starts; idle always uses the bounded backstop.
 
@@ -26,7 +26,7 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
     `fallback.continuationPolicy`: retry the primary by default or retain this
     confirmed fallback for an internal continuation.
   - `sessionAgent`: Maps sessionID → agent name
-  - `sessionTried`: Maps sessionID → Set of models already attempted
+  - `sessionTried`: Maps sessionID → Set of models already attempted in the descent; earlier chain entries are not marked tried implicitly, and the sticky retry retains this set
   - `sessionRetries`: Maps sessionID → absorbed host retry count for the entire descent (not per model)
   - `chainExhaustion`: Maps sessionID → exhaustion stage; stage 2 prevents further aborts without a fresh descent
   - `inProgress`: Process-global Set of sessions with active fallback in flight, shared via `globalThis` + `Symbol.for`
@@ -49,6 +49,9 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 
 ### Fallback Chain Resolution
 - **Agent-specific chains**: Each agent defines an ordered list of fallback models via `modelArrays`, preserving per-entry variants
+- Selection scans from index 0, skipping tried entries and the union of this
+  session's and its parent's `activeFallback.downProviders`. Other models on
+  the failing provider remain eligible until a confirmed switch leaves it.
 - **Chain lookup**: Resolves the correct chain using:
   1. Agent name (primary) → exact match
   2. Current model (fallback) → search all chains for containing model
@@ -90,7 +93,10 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 - Cleared only on: a completed successful assistant response, `session.deleted`, or a confirmed new user turn. A completed assistant `message.updated` with `finish: 'content-filter'` is not a successful response: OpenCode v1 publishes it before attaching the `ContentFilterError`, so it never clears the budget.
 - **Permanent quota/billing failures** (`isPermanentQuotaBillingError`: 402, explicit spending / personal-team-blocked limits, credits exhausted, expired coding plans, weekly/monthly exhaustion, Zhipu billing codes) bypass the initial replay delay through `bypassInitialFallbackDelay` and skip the host retry budget, switching immediately regardless of `maxRetries`. The sticky re-fallback still applies.
 - `chainExhaustion` stage 2 stops `tryFallbackWithAbort` and `selectFallbackModel`, so a spent chain does not keep aborting host retries.
-- `noteExternalTurn` cancels the initial-delay trigger, clears retry/dedup/backoff state and increments `turnEpoch`, retaining `replayMessageIds`. `isKnownInternalReplayUserMessage` checks retained IDs and event parts; `isInternalReplayUserMessage` probes the transcript when parts are missing. Duplicate user-message updates are inert. `userEventSequence` fences out-of-order probes, and `isCurrentTurn` prevents superseded replay work from claiming a switch. `rearmIfFreshDescent` clears tried/exhaustion state only after an observed return to the configured primary.
+- Stage 1 retries `chain[last]` once, ignoring provider exclusions and retaining
+  tried models; a failure of that sticky retry reaches stage 2 without reopening
+  the chain.
+- `noteExternalTurn` cancels the initial-delay trigger, clears retry/dedup/backoff state and increments `turnEpoch`, retaining `replayMessageIds`. `isKnownInternalReplayUserMessage` checks retained IDs and event parts; `isInternalReplayUserMessage` probes the transcript when parts are missing. Duplicate user-message updates are inert. `userEventSequence` fences out-of-order probes, and `isCurrentTurn` prevents superseded replay work from claiming a switch. `rearmIfFreshDescent` clears tried/exhaustion state only after an observed return to the configured primary outside our committed fallback; a fallback onto the head keeps its descent state.
 
 ### Deduplication (identity-based)
 - No error-text-only time-window heuristic: identical text can be the next real failure. The one-shot cross-event bridge requires an exact payload, current model, current turn, and short time-window match.
@@ -139,7 +145,8 @@ Log fallback event
   children move only if their primary provider is in `downProviders`, taking
   their first chain entry outside that set. Inherited children follow the
   record's live model even after request-scoped failures. Manual model choices
-  do not create a fallback record.
+  do not create a fallback record. A child's later fallback picks also skip
+  providers abandoned by its parent, linked through `sessionParent`.
 - **Event source**: OpenCode plugin event system provides `message.updated`, `session.error`, `session.status`, `session.deleted` events
 
 ### Dependencies
@@ -174,7 +181,7 @@ Fallback chains are provided as `Record<string, string[]>` where:
 
 ## Error Handling
 - **Graceful degradation**: Best-effort approach; abort may be slow or incomplete
-- **Unverified v2 host detail**: It is not established whether OpenCode 2.0.18 emits `session.usage.updated` or `session.step.ended` on failed attempts. The existing adapter maps these events to successful completed-assistant messages; if they occur on failure, they can re-arm the budget prematurely. No v2 usage filter is applied without host evidence.
+- **Unverified v2 host detail**: It is not established whether OpenCode 2.0.18 emits `session.usage.updated` or `session.step.ended` on failed attempts. The adapter maps valid token telemetry to successful completed-assistant messages without checking failure fields; if emitted on failure, these messages clear the tried set and retry/exhaustion state prematurely. No v2 usage filter is applied without host evidence.
 - **Validation**: Checks for `promptAsync` availability before attempting re-prompt
 - **Fallback exhaustion**: Logs when entire chain has been attempted without success
 - **Invalid model format**: Skips malformed model references
