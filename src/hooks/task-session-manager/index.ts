@@ -86,29 +86,25 @@ function rehydrateHistoricalRunningTasks(
   ) => string | undefined,
 ): string[] {
   const rehydrated: string[] = [];
-  const managedOrchestratorSessionIDs = new Set<string>();
+  const managedSessionIDs = new Set<string>();
 
   for (const message of messages) {
     if (!isMessageWithParts(message)) continue;
-    if (message.info.agent !== 'orchestrator') continue;
-
     const parentSessionID = message.info.sessionID;
     if (!parentSessionID) continue;
     if (!shouldManageSession(parentSessionID)) {
+      if (message.info.agent !== 'orchestrator') continue;
       registerSessionAsOrchestrator?.(parentSessionID);
       if (!shouldManageSession(parentSessionID)) continue;
     }
-    managedOrchestratorSessionIDs.add(parentSessionID);
+    managedSessionIDs.add(parentSessionID);
   }
 
   for (const message of messages) {
     if (!isMessageWithParts(message)) continue;
 
     const parentSessionID = message.info.sessionID;
-    if (
-      !parentSessionID ||
-      !managedOrchestratorSessionIDs.has(parentSessionID)
-    ) {
+    if (!parentSessionID || !managedSessionIDs.has(parentSessionID)) {
       continue;
     }
 
@@ -823,9 +819,6 @@ export function createTaskSessionManagerHook(
 
       for (const [messageIndex, message] of messages.entries()) {
         if (!isUserMessageWithParts(message)) continue;
-        if (message.info.agent && message.info.agent !== 'orchestrator') {
-          continue;
-        }
         if (
           !message.info.sessionID ||
           !options.shouldManageSession(message.info.sessionID)

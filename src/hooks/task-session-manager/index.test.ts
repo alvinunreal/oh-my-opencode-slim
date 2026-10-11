@@ -1054,53 +1054,59 @@ describe('task-session-manager hook', () => {
     expect(pendingCallTracker.peekByParent('parent-1')).toBeUndefined();
   });
 
-  test('rehydrates historical background tasks and keeps absent children provisional', async () => {
-    const board = new BackgroundJobBoard();
-    const status = mock(async () => ({ data: {} }));
-    const { hook } = createHook({
-      backgroundJobBoard: board,
-      sessionClient: { status },
-      runtimeStatusReconcileDelayMs: 60_000,
-    });
-    const messages = {
-      messages: [
-        {
-          info: {
-            role: 'assistant',
-            sessionID: 'parent-1',
+  test.each(['orchestrator', 'build', 'custom-primary'])(
+    'rehydrates historical background tasks for managed %s and keeps absent children provisional',
+    async (agent) => {
+      const board = new BackgroundJobBoard();
+      const status = mock(async () => ({ data: {} }));
+      const { hook } = createHook({
+        backgroundJobBoard: board,
+        sessionClient: { status },
+        runtimeStatusReconcileDelayMs: 60_000,
+      });
+      const messages = {
+        messages: [
+          {
+            info: {
+              role: 'assistant',
+              sessionID: 'parent-1',
+            },
+            parts: [historicalRunningTaskPart('historical-child')],
           },
-          parts: [historicalRunningTaskPart('historical-child')],
-        },
-        ...createMessages('parent-1', 'continue').messages,
-      ],
-    };
+          ...createMessages('parent-1', 'continue').messages.map((message) => ({
+            ...message,
+            info: { ...message.info, agent },
+          })),
+        ],
+      };
 
-    await transformMessages(hook, messages as never);
+      await transformMessages(hook, messages as never);
 
-    expect(board.get('historical-child')).toMatchObject({
-      alias: 'historical-child',
-      state: 'running',
-      statusUncertain: true,
-      background: true,
-      agent: 'explorer',
-      description: 'recover scheduler task',
-      objective: 'recover scheduler task',
-      // Rehydrated children are never terminal-session GC candidates.
-      externalOrigin: true,
-    });
-    expect(board.get('historical-child')?.pluginLaunched).toBeUndefined();
-    expect(boardText(messages)).toContain(
-      'historical-child / explorer / running, status uncertain',
-    );
-    // An existing child does not consume a number.
-    expect(
-      board.registerLaunch({
-        taskID: 'new-child',
-        parentSessionID: 'parent-1',
+      expect(board.get('historical-child')).toMatchObject({
+        alias: 'historical-child',
+        state: 'running',
+        statusUncertain: true,
+        background: true,
         agent: 'explorer',
-      }).alias,
-    ).toBe('exp-1');
-  });
+        description: 'recover scheduler task',
+        objective: 'recover scheduler task',
+        // Rehydrated children are never terminal-session GC candidates.
+        externalOrigin: true,
+      });
+      expect(board.get('historical-child')?.pluginLaunched).toBeUndefined();
+      expect(boardText(messages)).toContain(
+        'historical-child / explorer / running, status uncertain',
+      );
+      // An existing child does not consume a number.
+      expect(
+        board.registerLaunch({
+          taskID: 'new-child',
+          parentSessionID: 'parent-1',
+          agent: 'explorer',
+        }).alias,
+      ).toBe('exp-1');
+    },
+  );
 
   test('rehydrated long objectives keep the duplicate-spawn guard effective', async () => {
     const board = new BackgroundJobBoard();
@@ -3077,78 +3083,86 @@ describe('task-session-manager hook', () => {
     );
   });
 
-  test('injected completion through message transform (without injectBackgroundJobBoard) remains terminal-unreconciled before parent idle, then reconciles after', async () => {
-    const board = new BackgroundJobBoard();
-    const { hook, complete } = createHook({ backgroundJobBoard: board });
+  test.each(['orchestrator', 'build', 'custom-primary'])(
+    'injected completion for managed %s through message transform remains terminal-unreconciled before parent idle, then reconciles after',
+    async (agent) => {
+      const board = new BackgroundJobBoard();
+      const { hook, complete } = createHook({ backgroundJobBoard: board });
 
-    await hook['tool.execute.before'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
-      {
-        args: {
-          subagent_type: 'explorer',
-          description: 'map hooks',
-        },
-      },
-    );
-    await hook['tool.execute.after'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
-      {
-        output: ['task_id: child-1', 'state: running'].join('\n'),
-      },
-    );
-
-    const messages = {
-      messages: [
+      await hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
         {
-          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
-          parts: [
-            {
-              type: 'text',
-              id: 'part-1',
-              synthetic: true,
-              text: [
-                '<task id="child-1" state="completed">',
-                '<summary>Background task completed: map hooks</summary>',
-                '<task_result>',
-                'found hook flow',
-                '</task_result>',
-                '</task>',
-              ].join('\n'),
-            },
-          ],
+          args: {
+            subagent_type: 'explorer',
+            description: 'map hooks',
+          },
         },
-      ],
-    };
+      );
+      await hook['tool.execute.after'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+        {
+          output: ['task_id: child-1', 'state: running'].join('\n'),
+        },
+      );
 
-    // through transform only, without injectBackgroundJobBoard (avoids broad remember)
-    complete('child-1', 'found hook flow');
-    await hook['experimental.chat.messages.transform']({}, messages as never);
+      const messages = {
+        messages: [
+          {
+            info: {
+              role: 'user',
+              agent: 'orchestrator',
+              sessionID: 'parent-1',
+            },
+            parts: [
+              {
+                type: 'text',
+                id: 'part-1',
+                synthetic: true,
+                text: [
+                  '<task id="child-1" state="completed">',
+                  '<summary>Background task completed: map hooks</summary>',
+                  '<task_result>',
+                  'found hook flow',
+                  '</task_result>',
+                  '</task>',
+                ].join('\n'),
+              },
+            ],
+          },
+        ],
+      };
 
-    expect(board.get('child-1')).toMatchObject({
-      state: 'completed',
-      terminalUnreconciled: true,
-      resultSummary: 'found hook flow',
-    });
-    expect(board.get('child-1')?.terminalUnreconciled).toBe(true);
+      // through transform only, without injectBackgroundJobBoard (avoids broad remember)
+      messages.messages[0].info.agent = agent;
+      complete('child-1', 'found hook flow');
+      await hook['experimental.chat.messages.transform']({}, messages as never);
 
-    // duplicate occurrence is idempotent (no reprocess, no double remember)
-    await hook['experimental.chat.messages.transform']({}, messages as never);
-    expect(board.get('child-1')?.terminalUnreconciled).toBe(true);
+      expect(board.get('child-1')).toMatchObject({
+        state: 'completed',
+        terminalUnreconciled: true,
+        resultSummary: 'found hook flow',
+      });
+      expect(board.get('child-1')?.terminalUnreconciled).toBe(true);
 
-    await hook.event({
-      event: {
-        type: 'session.status',
-        properties: { sessionID: 'parent-1', status: { type: 'idle' } },
-      },
-    });
+      // duplicate occurrence is idempotent (no reprocess, no double remember)
+      await hook['experimental.chat.messages.transform']({}, messages as never);
+      expect(board.get('child-1')?.terminalUnreconciled).toBe(true);
 
-    await flushIdleReconcileDelay();
+      await hook.event({
+        event: {
+          type: 'session.status',
+          properties: { sessionID: 'parent-1', status: { type: 'idle' } },
+        },
+      });
 
-    expect(board.get('child-1')).toMatchObject({
-      state: 'reconciled',
-      terminalUnreconciled: false,
-    });
-  });
+      await flushIdleReconcileDelay();
+
+      expect(board.get('child-1')).toMatchObject({
+        state: 'reconciled',
+        terminalUnreconciled: false,
+      });
+    },
+  );
 
   test('another terminal-unreconciled sibling remains unreconciled when only first child completion was injected', async () => {
     const board = new BackgroundJobBoard();
@@ -9476,6 +9490,27 @@ describe('task-session-manager hook', () => {
       parentSessionID: 'orchestrator-1',
       state: 'running',
     });
+  });
+
+  test('unmanaged Build history neither registers a parent nor adopts its tasks', async () => {
+    const board = new BackgroundJobBoard();
+    const registerSessionAsOrchestrator = mock(() => {});
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: () => false,
+      registerSessionAsOrchestrator,
+    });
+    const messages = {
+      messages: [
+        {
+          info: { role: 'user', sessionID: 'parent-1', agent: 'build' },
+          parts: [historicalRunningTaskPart('historical-child')],
+        },
+      ],
+    };
+    await transformMessages(hook, messages as never);
+    expect(registerSessionAsOrchestrator).not.toHaveBeenCalled();
+    expect(board.get('historical-child')).toBeUndefined();
   });
 
   test('recovers stale orchestrator mapping in messages.transform', async () => {

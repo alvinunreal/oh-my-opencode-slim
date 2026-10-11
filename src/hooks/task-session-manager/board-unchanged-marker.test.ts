@@ -85,7 +85,7 @@ function isMarker(text: string | undefined): boolean {
 }
 
 describe('latest board unchanged marker', () => {
-  test.each(['latest', 'checkpoint'] as const)(
+  test.each(['latest', 'checkpoint-compatible'] as const)(
     'managed Build receives and acknowledges its completed child with %s injection',
     async (strategy) => {
       const { board, state } = setup();
@@ -114,7 +114,7 @@ describe('latest board unchanged marker', () => {
     },
   );
 
-  test.each(['latest', 'checkpoint'] as const)(
+  test.each(['latest', 'checkpoint-compatible'] as const)(
     'unmanaged Build does not receive a board with %s injection',
     async (strategy) => {
       const { state } = setup();
