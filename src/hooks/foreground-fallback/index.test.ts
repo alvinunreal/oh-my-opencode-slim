@@ -505,6 +505,59 @@ describe('foreground fallback redo harness', () => {
     ]);
   });
 
+  test('G1: successful mapped v2 steps re-arm retries within one execution', async () => {
+    createMockClient();
+    const manager = new ForegroundFallbackManager(
+      {
+        orchestrator: ['anthropic/claude-opus-5-5', 'openai/gpt-6.1-sol-fast'],
+      },
+      false,
+      { directory: '/test', hostFlavor: 'v2' } as never,
+      3,
+      undefined,
+      undefined,
+      0,
+      0,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    const sessionID = 'v2-step-recovery';
+    const switchModel = mock(async () => {});
+
+    // One ongoing execution: each transient error is followed by a tool step.
+    for (let step = 1; step <= 4; step++) {
+      jest.advanceTimersByTime(1_000);
+      await manager.handleV2Retry(
+        {
+          sessionID,
+          agent: 'orchestrator',
+          model: { providerID: 'anthropic', id: 'claude-opus-5-5' },
+          error: { type: 'provider.rate-limit', status: 429, message: '429' },
+          decision: { retry: true },
+        },
+        switchModel,
+      );
+      for (const mapped of mapV2EventToV1({
+        type: 'session.step.ended',
+        data: {
+          sessionID,
+          finish: 'tool-calls',
+          tokens: {
+            input: step * 100,
+            output: step * 10,
+            cache: { read: 0, write: 0 },
+          },
+        },
+      })) {
+        await manager.handleEvent(mapped);
+      }
+    }
+
+    expect(switchModel).not.toHaveBeenCalled();
+  });
+
   test('uncorrelated session.error is correlated with its matching errored message update', async () => {
     const { manager, mocks } = makeManager();
     const error = {

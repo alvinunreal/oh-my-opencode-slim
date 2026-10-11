@@ -968,6 +968,7 @@ export class ForegroundFallbackManager {
     if (model === undefined) return;
     if (this.activeFallback.get(sessionID)?.model !== model) {
       this.activeFallback.delete(sessionID);
+      this.sessionModel.set(sessionID, model);
     }
   }
 
@@ -994,10 +995,18 @@ export class ForegroundFallbackManager {
       (this.input as PluginInput & { hostFlavor?: string }).hostFlavor === 'v2';
 
     switch (event.type) {
+      case 'session.step.ended':
       case 'session.execution.succeeded': {
         if (!isV2Host) break;
         const props = isRecord(event.data) ? event.data : event.properties;
-        if (isRecord(props) && typeof props.sessionID === 'string') {
+        if (
+          isRecord(props) &&
+          typeof props.sessionID === 'string' &&
+          (event.type === 'session.execution.succeeded' ||
+            props.finish === 'stop' ||
+            props.finish === 'tool-calls' ||
+            props.finish === 'length')
+        ) {
           this.resetRecoveryState(props.sessionID);
         }
         break;
