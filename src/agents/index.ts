@@ -60,6 +60,29 @@ const ORCHESTRATOR_DEFAULT_TOOL_NAMES = [
   'task_result',
   'acp_run',
 ] as const;
+/** File-mutation tools the orchestrator must not call directly (issue #1012).
+ * Denied by default; an explicit user permission entry re-allows. */
+const ORCHESTRATOR_DENIED_TOOL_NAMES = [
+  'edit',
+  'write',
+  'apply_patch',
+  'ast_grep_replace',
+] as const;
+
+/** True when the orchestrator override explicitly un-denies a mutator, so
+ * the generated prompt must stop claiming the tools are denied (issue
+ * #1012 follow-up: permission overrides and prompt text must agree). */
+export function orchestratorMutatorsExplicitlyAllowed(override?: {
+  permission?: unknown;
+}): boolean {
+  const permission = override?.permission;
+  if (typeof permission === 'string') return permission !== 'deny';
+  if (typeof permission !== 'object' || permission === null) return false;
+  return ORCHESTRATOR_DENIED_TOOL_NAMES.some(
+    (toolName) => (permission as Record<string, unknown>)[toolName] === 'allow',
+  );
+}
+
 const MARKETPLACE_TOOL_NAMES = [
   'marketplace_inspect',
   'marketplace_manage',
@@ -686,6 +709,15 @@ function applyDefaultPermissions(
       existing[toolName] ?? (agent.name === 'orchestrator' ? 'allow' : 'deny'),
     ]),
   );
+  const orchestratorDeniedPermissions =
+    agent.name === 'orchestrator'
+      ? Object.fromEntries(
+          ORCHESTRATOR_DENIED_TOOL_NAMES.map((toolName) => [
+            toolName,
+            existing[toolName] ?? 'deny',
+          ]),
+        )
+      : {};
   // Primary agents get allow because quiet interview prompts forbid printing
   // the state block; subagents never run interviews.
   const interviewSubmitPermission =
@@ -723,6 +755,7 @@ function applyDefaultPermissions(
       : {}),
     question: questionPerm,
     ...orchestratorDefaultPermissions,
+    ...orchestratorDeniedPermissions,
     interview_submit_state: interviewSubmitPermission,
     wait_for_user: waitForUserPerm,
     ...marketplacePermissions,
@@ -1073,6 +1106,7 @@ export function createAgents(
     options?.hostFlavor,
     runtime.backgroundJobs.boardInjection,
     runtime.routingBlock,
+    orchestratorMutatorsExplicitlyAllowed(orchestratorOverride),
   );
 
   const inlineOrchestratorPrompt = orchestratorOverride?.prompt;

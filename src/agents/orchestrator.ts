@@ -1,5 +1,12 @@
 import type { AgentConfig } from '@opencode-ai/sdk/v2';
-import { WRITABLE_FILE_OPERATIONS_RULES } from '../config';
+import {
+  ORCHESTRATOR_DELEGATION_STATEMENT_ALLOWED,
+  ORCHESTRATOR_DELEGATION_STATEMENT_DENIED,
+  ORCHESTRATOR_FILE_OPERATIONS_RULES,
+  ORCHESTRATOR_FILE_OPERATIONS_RULES_MUTATORS_ALLOWED,
+  ORCHESTRATOR_ROUTING_THRESHOLD_ALLOWED,
+  ORCHESTRATOR_ROUTING_THRESHOLD_DENIED,
+} from '../config';
 import { delegationVocabulary } from '../v2/adapters';
 import { ROLE_ROUTING_BLOCKS, ROLE_ROUTING_SLIM_LINES } from './role-routing';
 
@@ -62,6 +69,7 @@ export function buildOrchestratorPrompt(
   hostFlavor?: string,
   boardInjectionEnabled = true,
   routingBlockEnabled = true,
+  mutatorsExplicitlyAllowed = false,
 ): string {
   // C1 seam: v2 hosts render the slim native template; every other flavor
   // (v1, absent, unknown) continues through the frozen v1 body below
@@ -73,8 +81,18 @@ export function buildOrchestratorPrompt(
       waitForUserEnabled,
       wakeSchedulerEnabled,
       routingBlockEnabled,
+      mutatorsExplicitlyAllowed,
     );
   }
+  const delegationStatement = mutatorsExplicitlyAllowed
+    ? ORCHESTRATOR_DELEGATION_STATEMENT_ALLOWED
+    : ORCHESTRATOR_DELEGATION_STATEMENT_DENIED;
+  const routingThreshold = mutatorsExplicitlyAllowed
+    ? ORCHESTRATOR_ROUTING_THRESHOLD_ALLOWED
+    : ORCHESTRATOR_ROUTING_THRESHOLD_DENIED;
+  const fileOpsRules = mutatorsExplicitlyAllowed
+    ? ORCHESTRATOR_FILE_OPERATIONS_RULES_MUTATORS_ALLOWED
+    : ORCHESTRATOR_FILE_OPERATIONS_RULES;
   // `routingBlockEnabled` is intentionally not consumed on the v1 path:
   // `routingBlock` only toggles the v2 slim builder. v1's `<Agents>` content
   // now matches v2's (`ROLE_ROUTING_SLIM_LINES`), but v1 has no switch to
@@ -156,9 +174,9 @@ export function buildOrchestratorPrompt(
   return `<Role>
 You are a workflow manager for coding work. Your job is to plan, schedule, delegate, monitor, reconcile, and verify specialist-agent work. You are not the default implementation worker.
 
-For non-trivial coding work, identify separable lanes first and delegate bounded work to the appropriate specialist. Do not perform multi-step implementation serially when a suitable specialist is available.
+For non-trivial coding work, identify separable lanes first and delegate bounded work to the appropriate specialist. Do not perform implementation serially when a suitable specialist is available.
 
-Handle work directly only when it is one isolated, clear, low-risk action and delegation overhead exceeds doing it yourself.
+${delegationStatement}
 
 Optimize for quality, speed, cost, and reliability by dispatching the right specialist lanes, tracking background task state, and integrating terminal results into one coherent outcome.
 You have perfect understanding of agent's context management, understand well the cost of building content and reusing context of existing agents when it's best or when it's best to spawn a new agent.
@@ -183,11 +201,11 @@ Choose the path that optimizes all four.
 Review available agents and lane rules. Before beginning non-trivial work, identify which parts can proceed independently.
 
 **Routing threshold:**
-- Handle directly only for one isolated, clear, low-risk action where delegation would cost more than execution.
+- ${routingThreshold}
 - Never handle UI/design work directly — layout, styling, visual hierarchy, responsive behavior, animation, and component feel always route to @designer.
-- For multi-step implementation, broad discovery, external research, or complex debugging, delegate to the suitable specialist.
+- For implementation, broad discovery, external research, or complex debugging, delegate to the suitable specialist.
 - If two or more parts can proceed independently, dispatch them in parallel before starting dependent work.
-- Do not delegate merely because an agent exists. Do not keep substantive work entirely in the orchestrator merely because each individual step seems easy.
+- Do not keep substantive work entirely in the orchestrator merely because each individual step seems easy.
 
 **Dispatch efficiency:**
 - Reference paths/lines, don't paste files (\`src/app.ts:42\` not full contents)
@@ -195,7 +213,7 @@ Review available agents and lane rules. Before beginning non-trivial work, ident
 - Record task IDs, state, and advisory ownership/dependency labels
 - Reconcile results, resolve conflicts, and gate dependent lanes
 
-${WRITABLE_FILE_OPERATIONS_RULES}
+${fileOpsRules}
 
 ### Delegation Contract
 - Every delegation names a validation owner and allowed scope.
@@ -248,7 +266,7 @@ ${activeTaskAmendmentInstruction}
 ### Design Handoff Discipline
 - When @designer completes UI/UX work, treat layout, spacing, hierarchy, motion, color, affordances, and component feel as intentional design output.
 - Do not later simplify, normalize, or refactor it in ways that flatten the design.
-- The orchestrator should review and improve user-facing copy after @designer work, because @designer copy may be weak.
+- If @designer copy is weak, route copy fixes via @fixer for mechanical edits or back to @designer when visual judgment is needed, since the orchestrator does not edit files.
 - Copy edits must preserve @designer's visual structure and interaction intent.
 - If follow-up work is purely mechanical and preserves the design exactly, @fixer can handle it. If it requires visual judgment or changes the feel, route it back to @designer.
 
@@ -335,6 +353,7 @@ export function buildOrchestratorPromptV2(
   waitForUserEnabled = true,
   wakeSchedulerEnabled = true,
   routingBlockEnabled = true,
+  mutatorsExplicitlyAllowed = false,
 ): string {
   // Filter by the same routing keys as the v1 block so disabled agents and
   // description exclusions behave identically; a routing key without a
@@ -370,7 +389,7 @@ export function buildOrchestratorPromptV2(
     : '';
 
   return `<Role>
-You are a workflow manager for coding work: plan, delegate, monitor, reconcile, and verify specialist work. You are not the default implementation worker. Delegate non-trivial work to specialists; act directly only for one isolated, clear, low-risk action where delegation costs more than doing it.
+You are a workflow manager for coding work: plan, delegate, monitor, reconcile, and verify specialist work. You are not the default implementation worker. ${mutatorsExplicitlyAllowed ? ORCHESTRATOR_DELEGATION_STATEMENT_ALLOWED : ORCHESTRATOR_DELEGATION_STATEMENT_DENIED}
 </Role>
 
 ${agentsSection}<Workflow>
@@ -379,8 +398,7 @@ ${agentsSection}<Workflow>
 - After dispatching, do non-overlapping work, then end the turn with a brief status — ${resumeChannel}. Never restate background status in visible replies.
 - Set \`model\` only when the user asks; look up IDs with the models tool first.
 
-**File Operations Rules**:
-- Prefer dedicated file tools for code work (glob/grep for discovery, read for contents, edit/write for changes); never use cat/head/tail/sed/awk only to read code into context. Use bash for execution, automation, and bulk/mechanical filesystem changes; before destructive or broad shell operations verify the target set and quote paths (dry-run first when practical).
+${mutatorsExplicitlyAllowed ? ORCHESTRATOR_FILE_OPERATIONS_RULES_MUTATORS_ALLOWED : ORCHESTRATOR_FILE_OPERATIONS_RULES}
 
 ## Child sessions
 - Before dispatching, check \`task_status\` for an existing task covering the objective.
@@ -414,6 +432,7 @@ export function createOrchestratorAgent(
   hostFlavor?: string,
   boardInjectionEnabled = true,
   routingBlockEnabled = true,
+  mutatorsExplicitlyAllowed = false,
 ): AgentDefinition {
   if (!routingBlockEnabled && hostFlavor !== 'v2') {
     // Construction-time single warn (never inside the pure builder: tests
@@ -431,6 +450,7 @@ export function createOrchestratorAgent(
     hostFlavor,
     boardInjectionEnabled,
     routingBlockEnabled,
+    mutatorsExplicitlyAllowed,
   );
   const prompt = resolvePrompt(
     'orchestrator',

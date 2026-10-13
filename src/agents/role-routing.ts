@@ -18,7 +18,7 @@ export const ROLE_ROUTING_BLOCKS: Readonly<Record<string, string>> =
 - Stats: 2x faster codebase search than orchestrator, 1/2 cost of orchestrator
 - Capabilities: Glob, grep, AST queries to locate files, symbols, patterns
 - **Delegate when:** Need to discover what exists before planning • Parallel searches speed discovery • Need summarized map vs full contents • Broad/uncertain scope
-- **Don't delegate when:** Know the path and need actual content • Need full file anyway • Single specific lookup • About to edit the file`,
+- **Don't delegate when:** Know the path and need actual content • Need full file anyway • Single specific lookup`,
 
     librarian: `@librarian
 - Lane: External knowledge and library research, fast web research
@@ -37,7 +37,7 @@ export const ROLE_ROUTING_BLOCKS: Readonly<Record<string, string>> =
 - **Delegate when:** Major architectural decisions with long-term impact • Problems persisting after 2+ fix attempts • High-risk multi-system refactors • Costly trade-offs (performance vs maintainability) • Complex debugging with unclear root cause • Security/scalability/data integrity decisions • Genuinely uncertain and cost of wrong choice is high • Code needs simplification or YAGNI scrutiny
 - **Review use:** @oracle is an escalation, not a default verification step. Request independent @oracle review only when its analysis is expected to materially reduce risk or uncertainty.
 - **Don't delegate when:** Routine decisions you're confident about • First bug fix attempt • Straightforward trade-offs • Tactical "how" vs strategic "should" • Time-sensitive good-enough decisions • Quick research/testing can answer
-- **Rule of thumb:** Architecture, code review, or simplification where independent analysis materially reduces risk or uncertainty? → @oracle. Routine coordination or final synthesis? → handle directly.`,
+- **Rule of thumb:** Architecture, code review, or simplification where independent analysis materially reduces risk or uncertainty? → @oracle. Routine coordination or final synthesis? → handle as orchestration.`,
 
     designer: `@designer
 - Lane: UI/UX design, related edits, design polish and review
@@ -45,10 +45,10 @@ export const ROLE_ROUTING_BLOCKS: Readonly<Record<string, string>> =
 - Stats: 10x better UI/UX than orchestrator
 - Capabilities: Good design taste, visual relevant edits, interactions, responsive layouts, design systems with aesthetic intent, deep UI/UX knowledge.
 - Owns visual and interaction quality: layout, hierarchy, spacing, motion, affordances, responsive behavior, and overall feel.
-- Weakness: copywriting. Ask @designer to use grounded, normal wording, then have orchestrator review/fix copy after design work without changing visual or interaction intent.
+- Weakness: copywriting. Ask @designer to use grounded, normal wording, then route copy fixes via @fixer for mechanical edits or back to @designer when visual judgment is needed, without changing visual or interaction intent.
 - Avoid: "Let me ask @designer how it should look and implement yourself" → instead: "Let me ask @designer to design and implement the UI/UX changes for me"
 - **Delegate when:** User-facing interfaces needing polish • Responsive layouts • UX-critical components (forms, nav, dashboards) • Visual consistency systems • Animations/micro-interactions • Landing/marketing pages • Refining functional→delightful • Reviewing existing UI/UX quality
-- **Don't delegate when:** Backend/logic with no visual • Quick prototypes where design doesn't matter yet.
+- **Don't delegate when:** Backend/logic with no visual.
 - **Rule of thumb:** Users see it and polish matters? → @designer. Headless/functional implementation? → schedule @fixer.`,
 
     fixer: `@fixer
@@ -59,7 +59,7 @@ export const ROLE_ROUTING_BLOCKS: Readonly<Record<string, string>> =
 - Weakness: design, taste
 - Tools/Constraints: Execution-focused-no research, no architectural decisions
 - **Delegate when:** For implementation work, think and triage first. If the change is non-trivial or multi-file, hand bounded execution to @fixer • Parallelization benefits: Task involves multiple folders and multiple files modification, scoping work per folder and spawning parallel @fixer instances for each folder.
-- **Don't delegate when:** Needs discovery/research/decisions • Single small change (<20 lines, one file) • Unclear requirements needing iteration • Explaining to @fixer > doing • Tight integration with your current work • Requires design taste, visual hierarchy, interaction polish, responsive layout decisions, animation/motion, component feel, or UI copy/design trade-offs
+- **Don't delegate when:** Needs discovery/research/decisions • Unclear requirements needing iteration • Requires design taste, visual hierarchy, interaction polish, responsive layout decisions, animation/motion, component feel, or UI copy/design trade-offs
 - **Rule of thumb:** Headless/mechanical implementation → @fixer. User-visible design or polish → @designer. If @designer already set direction, @fixer may only do bounded mechanical follow-up that preserves that design exactly.`,
 
     council: `@council
@@ -111,8 +111,8 @@ export const ROLE_ROUTING_SLIM_LINES: Readonly<Record<string, string>> =
     explorer: `@explorer — read-only codebase recon (glob/grep/AST). Delegate: discovery, parallel searches, summarized maps. Don't: known path / need full contents / about to edit.`,
     librarian: `@librarian — external docs & web research. Delegate: changing APIs, version-specific behavior, official examples, tricky bugs. Don't: stable standard usage or facts already in context.`,
     oracle: `@oracle — architecture, risk, debugging strategy, review; an escalation, not a default verification step. Delegate: major long-term decisions, problems persisting after 2+ fix attempts, high-risk trade-offs, simplification. Don't: routine or time-sensitive calls.`,
-    designer: `@designer — owns all UI/UX: layout, hierarchy, spacing, motion, responsive feel. Never do UI/design work yourself. Weak at copy: review and fix user-facing copy afterward without altering visuals; purely mechanical follow-ups go to @fixer.`,
-    fixer: `@fixer — bounded, well-defined implementation. Delegate: multi-file or mechanical changes, parallel per-area lanes. Don't: discovery/decisions, one small (<20-line) change, anything needing design judgment.`,
+    designer: `@designer — owns all UI/UX: layout, hierarchy, spacing, motion, responsive feel. Never do UI/design work yourself. Weak at copy: route copy fixes via @fixer (mechanical) or @designer (visual judgment) without altering visuals.`,
+    fixer: `@fixer — bounded, well-defined implementation. Delegate: multi-file or mechanical changes, parallel per-area lanes. Don't: discovery/decisions, anything needing design judgment.`,
     council: `@council — multi-model consensus for high-stakes decisions. Send the full question plus context; preserve its structured report. Don't: routine work or single-specialist tasks; @council is never the only lane on a task.`,
     observer: `@observer — analyzes images/PDFs/diagrams, keeping media bytes out of your context. Always pass the full file path. Don't: plain-text files.`,
   });

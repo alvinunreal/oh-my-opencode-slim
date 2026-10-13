@@ -144,6 +144,19 @@ describe('orchestrator prompt', () => {
     );
     expect(prompt).toContain('Choose the path that optimizes all four.');
   });
+
+  test('enforces delegation: no direct-work escape hatch, denial stated', () => {
+    const prompt = buildOrchestratorPrompt();
+
+    expect(prompt).toContain('denied to you by configuration');
+    expect(prompt).toContain('Delegate all implementation work to specialists');
+    expect(prompt).toContain('Do not use bash to modify files');
+    expect(prompt).not.toContain('Handle work directly only when');
+    expect(prompt).not.toContain('delegation overhead exceeds');
+    expect(prompt).not.toContain(
+      'Do not delegate merely because an agent exists',
+    );
+  });
 });
 
 describe('v1 prompt byte parity (frozen template)', () => {
@@ -346,6 +359,45 @@ describe('v2 slim prompt (buildOrchestratorPromptV2)', () => {
     expect(buildOrchestratorPromptV2(undefined, undefined, false)).toBe(
       buildOrchestratorPromptV2(),
     );
+  });
+
+  test('enforces delegation in v2: denial stated, no mutation-tool grant', () => {
+    const prompt = buildOrchestratorPromptV2();
+
+    expect(prompt).toContain('Never implement directly');
+    expect(prompt).toContain('denied to you by configuration');
+    expect(prompt).toContain('Do not use bash to modify files');
+    expect(prompt).not.toContain('edit/write for changes');
+    expect(prompt).not.toContain('act directly only for one isolated');
+    expect(ROLE_ROUTING_SLIM_LINES.fixer).not.toContain('<20-line');
+  });
+
+  test('explicit re-allow switches v1 and v2 off the denial claim', () => {
+    const allowedV1 = buildOrchestratorPrompt(
+      undefined,
+      undefined,
+      true,
+      true,
+      undefined,
+      true,
+      true,
+      true,
+    );
+    expect(allowedV1).toContain('explicitly re-allowed in configuration');
+    expect(allowedV1).not.toContain('denied to you by configuration');
+    expect(allowedV1).not.toContain('Never implement directly');
+
+    const allowedV2 = buildOrchestratorPromptV2(
+      undefined,
+      undefined,
+      true,
+      true,
+      true,
+      true,
+    );
+    expect(allowedV2).toContain('explicitly re-allowed in configuration');
+    expect(allowedV2).not.toContain('denied to you by configuration');
+    expect(allowedV2).not.toContain('Never implement directly');
   });
 });
 

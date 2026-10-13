@@ -73,6 +73,8 @@ Its job is to:
 
 Specialists do the work. The orchestrator manages the work.
 
+By default, the orchestrator's file-mutation tools (`edit`, `write`, `apply_patch`, `ast_grep_replace`) are denied at the tool-call level; shell-mediated edits are discouraged by prompt only. An explicit `permission` entry can re-allow them.
+
 ### Children moved to worktrees
 
 Moving a child session to another directory does not move its task ownership.

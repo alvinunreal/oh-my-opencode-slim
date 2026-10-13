@@ -1213,6 +1213,61 @@ describe('tool permissions', () => {
     // observer-only pattern is pinned by councillor.test with enabled=true.
     expect(permission.task).toBe('deny');
   });
+
+  test('orchestrator is denied file-mutation tools by default', () => {
+    const agents = createAgents(runtimeFor());
+    const orchestrator = agents.find((a) => a.name === 'orchestrator');
+    const permission = (
+      orchestrator as { config: { permission: Record<string, unknown> } }
+    ).config.permission;
+    for (const toolName of [
+      'edit',
+      'write',
+      'apply_patch',
+      'ast_grep_replace',
+    ]) {
+      expect(permission[toolName]).toBe('deny');
+    }
+  });
+
+  test('explicit orchestrator permission re-allows a file-mutation tool', () => {
+    const agents = createAgents(
+      runtimeFor({
+        agents: { orchestrator: { permission: { edit: 'allow' } } },
+      }),
+    );
+    const orchestrator = agents.find((a) => a.name === 'orchestrator');
+    const permission = (
+      orchestrator as { config: { permission: Record<string, unknown> } }
+    ).config.permission;
+    expect(permission.edit).toBe('allow');
+    expect(permission.write).toBe('deny');
+  });
+
+  test('subagents do not deny file-mutation tools', () => {
+    const agents = createAgents(runtimeFor());
+    const fixer = agents.find((a) => a.name === 'fixer');
+    const permission = fixer?.config.permission as Record<string, unknown>;
+    expect(permission.edit).toBeUndefined();
+    expect(permission.write).toBeUndefined();
+  });
+
+  test('generated prompt agrees with an explicit mutator re-allow', () => {
+    const allowed = createAgents(
+      runtimeFor({
+        agents: { orchestrator: { permission: { edit: 'allow' } } },
+      }),
+    );
+    const allowedPrompt =
+      allowed.find((a) => a.name === 'orchestrator')?.config.prompt ?? '';
+    expect(allowedPrompt).toContain('explicitly re-allowed in configuration');
+    expect(allowedPrompt).not.toContain('denied to you by configuration');
+
+    const denied = createAgents(runtimeFor());
+    const deniedPrompt =
+      denied.find((a) => a.name === 'orchestrator')?.config.prompt ?? '';
+    expect(deniedPrompt).toContain('denied to you by configuration');
+  });
 });
 
 test('orchestrator prompt carries the council seat pointer when councillors exist', () => {
