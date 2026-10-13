@@ -1027,7 +1027,7 @@ Notes:
 
 The `permission` field provides deterministic, tool-level permission restrictions on custom agents, built-in agent overrides, and presets. Unlike prompt instructions ("do not edit files"), these rules are enforced by the OpenCode SDK at the tool-call level.
 
-**Built-in defaults.** The orchestrator denies `edit`, `write`, `apply_patch`, and `ast_grep_replace` so it delegates implementation to specialists instead of doing it directly. An explicit `permission` entry on `agents.orchestrator` re-allows any of them. Note: a shorthand string (`permission: "allow"`) replaces all defaults wholesale, including these denies; use the object form to keep the built-in denies while re-allowing specific tools. `'ask'` and pattern-map values are also preserved.
+**Built-in defaults.** The orchestrator denies `edit`, `write`, `apply_patch`, and `ast_grep_replace` so it delegates implementation to specialists instead of doing it directly. An explicit `permission` entry on `agents.orchestrator` re-allows any of them; the generated prompt switches to delegation-preferred wording to match. Note: a shorthand string (`permission: "allow"`) replaces all defaults wholesale, including these denies; use the object form to keep the built-in denies while re-allowing specific tools. `'ask'` and pattern-map values are also preserved.
 
 The field accepts either:
 

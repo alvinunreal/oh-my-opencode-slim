@@ -1,5 +1,12 @@
 import type { AgentConfig } from '@opencode-ai/sdk/v2';
-import { ORCHESTRATOR_FILE_OPERATIONS_RULES } from '../config';
+import {
+  ORCHESTRATOR_DELEGATION_STATEMENT_ALLOWED,
+  ORCHESTRATOR_DELEGATION_STATEMENT_DENIED,
+  ORCHESTRATOR_FILE_OPERATIONS_RULES,
+  ORCHESTRATOR_FILE_OPERATIONS_RULES_MUTATORS_ALLOWED,
+  ORCHESTRATOR_ROUTING_THRESHOLD_ALLOWED,
+  ORCHESTRATOR_ROUTING_THRESHOLD_DENIED,
+} from '../config';
 import { delegationVocabulary } from '../v2/adapters';
 import { ROLE_ROUTING_BLOCKS, ROLE_ROUTING_SLIM_LINES } from './role-routing';
 
@@ -62,6 +69,7 @@ export function buildOrchestratorPrompt(
   hostFlavor?: string,
   boardInjectionEnabled = true,
   routingBlockEnabled = true,
+  mutatorsExplicitlyAllowed = false,
 ): string {
   // C1 seam: v2 hosts render the slim native template; every other flavor
   // (v1, absent, unknown) continues through the frozen v1 body below
@@ -73,8 +81,18 @@ export function buildOrchestratorPrompt(
       waitForUserEnabled,
       wakeSchedulerEnabled,
       routingBlockEnabled,
+      mutatorsExplicitlyAllowed,
     );
   }
+  const delegationStatement = mutatorsExplicitlyAllowed
+    ? ORCHESTRATOR_DELEGATION_STATEMENT_ALLOWED
+    : ORCHESTRATOR_DELEGATION_STATEMENT_DENIED;
+  const routingThreshold = mutatorsExplicitlyAllowed
+    ? ORCHESTRATOR_ROUTING_THRESHOLD_ALLOWED
+    : ORCHESTRATOR_ROUTING_THRESHOLD_DENIED;
+  const fileOpsRules = mutatorsExplicitlyAllowed
+    ? ORCHESTRATOR_FILE_OPERATIONS_RULES_MUTATORS_ALLOWED
+    : ORCHESTRATOR_FILE_OPERATIONS_RULES;
   // `routingBlockEnabled` is intentionally not consumed on the v1 path:
   // `routingBlock` only toggles the v2 slim builder. v1's `<Agents>` content
   // now matches v2's (`ROLE_ROUTING_SLIM_LINES`), but v1 has no switch to
@@ -158,7 +176,7 @@ You are a workflow manager for coding work. Your job is to plan, schedule, deleg
 
 For non-trivial coding work, identify separable lanes first and delegate bounded work to the appropriate specialist. Do not perform implementation serially when a suitable specialist is available.
 
-Never implement directly: the file-mutation tools (edit, write, apply_patch, ast_grep_replace) are denied to you by configuration. Your direct work is orchestration only — planning, dispatch, reconciliation, verification, and integration (git, package managers, tests, builds, diagnostics via bash).
+${delegationStatement}
 
 Optimize for quality, speed, cost, and reliability by dispatching the right specialist lanes, tracking background task state, and integrating terminal results into one coherent outcome.
 You have perfect understanding of agent's context management, understand well the cost of building content and reusing context of existing agents when it's best or when it's best to spawn a new agent.
@@ -183,7 +201,7 @@ Choose the path that optimizes all four.
 Review available agents and lane rules. Before beginning non-trivial work, identify which parts can proceed independently.
 
 **Routing threshold:**
-- Delegate all implementation work to specialists. You do not edit files yourself; file-mutation tools are denied by configuration.
+- ${routingThreshold}
 - Never handle UI/design work directly — layout, styling, visual hierarchy, responsive behavior, animation, and component feel always route to @designer.
 - For implementation, broad discovery, external research, or complex debugging, delegate to the suitable specialist.
 - If two or more parts can proceed independently, dispatch them in parallel before starting dependent work.
@@ -195,7 +213,7 @@ Review available agents and lane rules. Before beginning non-trivial work, ident
 - Record task IDs, state, and advisory ownership/dependency labels
 - Reconcile results, resolve conflicts, and gate dependent lanes
 
-${ORCHESTRATOR_FILE_OPERATIONS_RULES}
+${fileOpsRules}
 
 ### Delegation Contract
 - Every delegation names a validation owner and allowed scope.
@@ -335,6 +353,7 @@ export function buildOrchestratorPromptV2(
   waitForUserEnabled = true,
   wakeSchedulerEnabled = true,
   routingBlockEnabled = true,
+  mutatorsExplicitlyAllowed = false,
 ): string {
   // Filter by the same routing keys as the v1 block so disabled agents and
   // description exclusions behave identically; a routing key without a
@@ -370,7 +389,7 @@ export function buildOrchestratorPromptV2(
     : '';
 
   return `<Role>
-You are a workflow manager for coding work: plan, delegate, monitor, reconcile, and verify specialist work. You are not the default implementation worker. Never implement directly: the file-mutation tools (edit, write, apply_patch, ast_grep_replace) are denied to you by configuration; your direct work is orchestration only — planning, dispatch, reconciliation, verification, and integration.
+You are a workflow manager for coding work: plan, delegate, monitor, reconcile, and verify specialist work. You are not the default implementation worker. ${mutatorsExplicitlyAllowed ? ORCHESTRATOR_DELEGATION_STATEMENT_ALLOWED : ORCHESTRATOR_DELEGATION_STATEMENT_DENIED}
 </Role>
 
 ${agentsSection}<Workflow>
@@ -379,7 +398,7 @@ ${agentsSection}<Workflow>
 - After dispatching, do non-overlapping work, then end the turn with a brief status — ${resumeChannel}. Never restate background status in visible replies.
 - Set \`model\` only when the user asks; look up IDs with the models tool first.
 
-${ORCHESTRATOR_FILE_OPERATIONS_RULES}
+${mutatorsExplicitlyAllowed ? ORCHESTRATOR_FILE_OPERATIONS_RULES_MUTATORS_ALLOWED : ORCHESTRATOR_FILE_OPERATIONS_RULES}
 
 ## Child sessions
 - Before dispatching, check \`task_status\` for an existing task covering the objective.
@@ -413,6 +432,7 @@ export function createOrchestratorAgent(
   hostFlavor?: string,
   boardInjectionEnabled = true,
   routingBlockEnabled = true,
+  mutatorsExplicitlyAllowed = false,
 ): AgentDefinition {
   if (!routingBlockEnabled && hostFlavor !== 'v2') {
     // Construction-time single warn (never inside the pure builder: tests
@@ -430,6 +450,7 @@ export function createOrchestratorAgent(
     hostFlavor,
     boardInjectionEnabled,
     routingBlockEnabled,
+    mutatorsExplicitlyAllowed,
   );
   const prompt = resolvePrompt(
     'orchestrator',

@@ -72,6 +72,20 @@ export const ORCHESTRATOR_FILE_OPERATIONS_RULES = `**File Operations Rules**:
 - Use bash for orchestration and verification only: git, package managers, tests, builds, diagnostics. Do not use bash to modify files (prompt-level rule, not SDK-enforced): no sed -i, no redirection into source files, no shell-native edits.
 - Delegate every file change to @fixer (or @designer for UI work).`;
 
+export const ORCHESTRATOR_FILE_OPERATIONS_RULES_MUTATORS_ALLOWED = `**File Operations Rules**:
+- The file-mutation tools (edit, write, apply_patch, ast_grep_replace) have been explicitly re-allowed in configuration; delegation is still preferred for non-trivial implementation.
+- Prefer dedicated file tools for codebase inspection: glob/grep/ast_grep_search for discovery and read for file contents.
+- Use bash for orchestration and verification only: git, package managers, tests, builds, diagnostics. Do not use bash to modify files (prompt-level preference, not SDK-enforced): no sed -i, no redirection into source files, no shell-native edits.
+- Prefer delegating file changes to @fixer (or @designer for UI work).`;
+
+export const ORCHESTRATOR_DELEGATION_STATEMENT_DENIED = `Never implement directly: the file-mutation tools (edit, write, apply_patch, ast_grep_replace) are denied to you by configuration. Your direct work is orchestration only — planning, dispatch, reconciliation, verification, and integration (git, package managers, tests, builds, diagnostics via bash).`;
+
+export const ORCHESTRATOR_DELEGATION_STATEMENT_ALLOWED = `The file-mutation tools (edit, write, apply_patch, ast_grep_replace) have been explicitly re-allowed in configuration. Prefer delegation for non-trivial implementation; direct edits are for one isolated, clear, low-risk action.`;
+
+export const ORCHESTRATOR_ROUTING_THRESHOLD_DENIED = `Delegate all implementation work to specialists. You do not edit files yourself; file-mutation tools are denied by configuration.`;
+
+export const ORCHESTRATOR_ROUTING_THRESHOLD_ALLOWED = `Prefer delegating implementation work to specialists; keep direct edits to one isolated, clear, low-risk action.`;
+
 export const READONLY_FILE_OPERATIONS_RULES = `**File Operations Rules**:
 - READ-ONLY: inspect and report; do not modify files.
 - Prefer dedicated file tools for codebase inspection: glob/grep/ast_grep_search for discovery and read for file contents.

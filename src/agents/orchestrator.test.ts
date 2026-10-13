@@ -371,6 +371,34 @@ describe('v2 slim prompt (buildOrchestratorPromptV2)', () => {
     expect(prompt).not.toContain('act directly only for one isolated');
     expect(ROLE_ROUTING_SLIM_LINES.fixer).not.toContain('<20-line');
   });
+
+  test('explicit re-allow switches v1 and v2 off the denial claim', () => {
+    const allowedV1 = buildOrchestratorPrompt(
+      undefined,
+      undefined,
+      true,
+      true,
+      undefined,
+      true,
+      true,
+      true,
+    );
+    expect(allowedV1).toContain('explicitly re-allowed in configuration');
+    expect(allowedV1).not.toContain('denied to you by configuration');
+    expect(allowedV1).not.toContain('Never implement directly');
+
+    const allowedV2 = buildOrchestratorPromptV2(
+      undefined,
+      undefined,
+      true,
+      true,
+      true,
+      true,
+    );
+    expect(allowedV2).toContain('explicitly re-allowed in configuration');
+    expect(allowedV2).not.toContain('denied to you by configuration');
+    expect(allowedV2).not.toContain('Never implement directly');
+  });
 });
 
 describe('routingBlock (v2-only <Agents> removal)', () => {
