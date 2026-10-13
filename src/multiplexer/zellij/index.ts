@@ -271,12 +271,19 @@ export class ZellijMultiplexer implements Multiplexer {
 
       const exitCode = await proc.exited;
       const stdout = await proc.stdout();
-      const paneId = stdout.trim();
+      const trimmedStdout = stdout.trim();
+      const paneId = trimmedStdout;
 
       // Accept success if exit code is 0 and we got a valid pane ID
       if (exitCode === 0 && paneId?.startsWith('terminal_')) {
         return { success: true, paneId };
       }
+      log('[zellij] spawnPane: new-pane failed', {
+        command: opencodeCmd,
+        exitCode,
+        stdout: trimmedStdout,
+        stderr: (await proc.stderr()).trim(),
+      });
       return { success: false, error: 'hard' };
     };
 

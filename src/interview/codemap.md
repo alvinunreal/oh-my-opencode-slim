@@ -2,6 +2,13 @@
 
 ## Responsibility
 
+- `patch.ts` applies unified diffs to the current spec body; `history.ts`
+  collapses the older kickoff copy for active interviews.
+- `service.ts` handles quiet state turns, consumed-state dedupe, one patch repair
+  prompt, turn status notices, and `/implement` with newest-complete fallback.
+- `../tools/interview-submit-state.ts` is the static quiet submission tool;
+  primary agents may use it and subagents are denied by permission projection.
+
 - Implement the `/interview` command flow:
   - command registration and pre-exec interception,
   - interactive stateful interview prompts,

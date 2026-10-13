@@ -5,12 +5,8 @@ import {
   type ToolDefinition,
   tool,
 } from '@opencode-ai/plugin';
-import {
-  base64Size,
-  buildBinaryResultMessage,
-  detectInlineImageMime,
-  saveBinary,
-} from './binary';
+import { detectInlineImageMime } from '../../utils/image-signatures';
+import { base64Size, buildBinaryResultMessage, saveBinary } from './binary';
 import { buildCacheKey, CACHE, conditionalHeaders, lookup } from './cache';
 import {
   DEFAULT_TIMEOUT_SECONDS,

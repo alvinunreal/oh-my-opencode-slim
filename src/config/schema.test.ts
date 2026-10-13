@@ -21,7 +21,6 @@ import {
   ProviderModelIdSchema,
   resetBackgroundJobsDiagnostics,
   resetMultiplexerDiagnostics,
-  sanitizeMultiplexerConfig,
 } from './schema';
 
 describe('ProviderModelIdSchema', () => {
@@ -275,7 +274,13 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
   it('accepts the whitelisted hook and command names', () => {
     const result = PluginConfigSchema.safeParse({
       disabled_hooks: ['phase-reminder', 'foreground-fallback'],
-      disabled_commands: ['interview', 'deepwork', 'reflect', 'loop'],
+      disabled_commands: [
+        'interview',
+        'implement',
+        'deepwork',
+        'reflect',
+        'loop',
+      ],
     });
 
     expect(result.success).toBe(true);
@@ -286,6 +291,7 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
       ]);
       expect(result.data.disabled_commands).toEqual([
         'interview',
+        'implement',
         'deepwork',
         'reflect',
         'loop',
@@ -308,6 +314,7 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
       'phase-reminder',
       'foreground-fallback',
       'deepwork-guard',
+      'deepwork-goal',
       'chat-headers',
       'cache-monitor',
       'json-error-recovery',
@@ -316,8 +323,10 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
       'absolute-path-rescue',
       'apply-patch',
       'council-inject',
+      'council-assembly',
     ]);
     expect(DISABLED_COMMANDS_VALUES).toEqual([
+      'implement',
       'interview',
       'deepwork',
       'reflect',
@@ -467,46 +476,6 @@ describe('MultiplexerConfigSchema', () => {
     expect(message).toContain('viewer');
   });
 
-  it('strips the removed zellij_pane_mode key with exactly one deprecation warning', () => {
-    // Two parses stand in for the user + project config layers: the rest of
-    // the config must load and the warning must fire only once per process.
-    const first = PluginConfigSchema.safeParse({
-      multiplexer: {
-        type: 'tmux',
-        layout: 'tiled',
-        main_pane_size: 40,
-        zellij_pane_mode: 'current-tab',
-      },
-      agents: { oracle: { model: 'valid/model' } },
-    });
-    const second = PluginConfigSchema.safeParse({
-      multiplexer: { type: 'zellij', zellij_pane_mode: 'agent-tab' },
-    });
-
-    expect(first.success).toBe(true);
-    expect(second.success).toBe(true);
-    if (first.success) {
-      expect(first.data.multiplexer).toEqual({
-        type: 'tmux',
-        layout: 'tiled',
-        main_pane_size: 40,
-      });
-      expect(first.data.agents?.oracle?.model).toBe('valid/model');
-    }
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    const message = warnSpy.mock.calls[0]?.[0] as string;
-    expect(message).toContain('Deprecated');
-    expect(message).toContain('zellij_pane_mode');
-  });
-
-  it('does not mutate the raw config while stripping the deprecated key', () => {
-    const raw = { type: 'tmux', zellij_pane_mode: 'agent-tab' };
-    const sanitized = sanitizeMultiplexerConfig(raw);
-
-    expect(sanitized).not.toHaveProperty('zellij_pane_mode');
-    expect(raw).toHaveProperty('zellij_pane_mode');
-  });
-
   it('disables pane management for an invalid type and keeps the rest of the config', () => {
     const result = PluginConfigSchema.safeParse({
       multiplexer: { type: 'screen', main_pane_size: 40 },
@@ -654,6 +623,32 @@ describe('InterviewConfigSchema outputFolder', () => {
       expect(pluginResult.data.interview?.outputFolder).toBe(
         'interviews/specs',
       );
+    }
+  });
+});
+
+describe('InterviewConfigSchema printState', () => {
+  it('defaults to false', () => {
+    const interviewResult = InterviewConfigSchema.safeParse({});
+    const pluginResult = PluginConfigSchema.safeParse({ interview: {} });
+
+    expect(interviewResult.success).toBe(true);
+    expect(pluginResult.success).toBe(true);
+    if (interviewResult.success) {
+      expect(interviewResult.data.printState).toBe(false);
+    }
+    if (pluginResult.success) {
+      expect(pluginResult.data.interview?.printState).toBe(false);
+    }
+  });
+
+  it('accepts an explicit true', () => {
+    const interviewResult = InterviewConfigSchema.safeParse({
+      printState: true,
+    });
+    expect(interviewResult.success).toBe(true);
+    if (interviewResult.success) {
+      expect(interviewResult.data.printState).toBe(true);
     }
   });
 });
@@ -1229,6 +1224,42 @@ describe('PluginConfigSchema backgroundJobs', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.backgroundJobs?.childInputWake).toBe(false);
+    }
+  });
+});
+
+describe('PluginConfigSchema removed legacy keys', () => {
+  it('rejects the removed top-level tmux key', () => {
+    expect(
+      PluginConfigSchema.safeParse({ tmux: { enabled: true } }).success,
+    ).toBe(false);
+  });
+
+  it('rejects the removed multiplexer.zellij_pane_mode key', () => {
+    expect(
+      PluginConfigSchema.safeParse({
+        multiplexer: { type: 'zellij', zellij_pane_mode: 'tab' },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects the removed fallback.timeoutMs / retry_on_empty / runtimeOverride keys', () => {
+    for (const key of ['timeoutMs', 'retry_on_empty', 'runtimeOverride']) {
+      expect(
+        PluginConfigSchema.safeParse({ fallback: { [key]: 1 } }).success,
+      ).toBe(false);
+    }
+  });
+
+  it('rejects the removed backgroundJobs.continueOnIdle key', () => {
+    const result = PluginConfigSchema.safeParse({
+      backgroundJobs: { continueOnIdle: false },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(
+        result.error.issues.map((issue) => issue.message).join('\n'),
+      ).toContain('was removed');
     }
   });
 });

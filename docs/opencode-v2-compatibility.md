@@ -138,7 +138,17 @@ not an optional-degradation path.
    (mapped entries preserve the v2 terminal metadata — `time.completed`,
    `finish`, `error` — and the 2.0.8 trailing `idle` lifecycle marker maps
    to the skippable v1 `system` role, so transcript classification works
-   natively on v2), `session.prompt` (default `delivery: "steer"`;
+   natively on v2). After completed compaction, terminal-evidence reads
+   restore persisted history through paginated `session.messages` when
+   available, stopping once the pre-revive baseline or queued prompt is
+   found. This preserves child completion identity without reading older
+   history unnecessarily. Recovery scans stop after 10 pages of 100 messages
+   or four seconds total; exhausting either budget leaves completion
+   unconfirmed rather than trusting a partial result. Bounded tail reads
+   still fetch only the requested page;
+   ordinary context reads and parent-alias recovery remain unchanged.
+   Hosts without persisted-message reads retain incomplete context and do
+   not bypass missing-baseline checks. `session.prompt` (default `delivery: "steer"`;
    `noReply: true` maps to `delivery: "queue", resume: false` — or `delivery: "steer", resume: false` when the v1-shaped body carries an explicit `delivery: 'steer'` from `task_message`),
    `session.update`→
    `session.update` (`{sessionID, title}`), `session.delete`→`remove` (same
@@ -381,9 +391,10 @@ side cannot be observed.
 
 | Capability | v1 (`opencode`) | v2 (`opencode2`) | Notes |
 |---|---|---|---|
+| `routingBlock` (drop `<Agents>` from the built orchestrator prompt) | ➖ ignored with a warning (frozen v1 template; use an orchestrator.md override) | ✅ removes the block | The host's native delegation-tool roster keeps agent identity; the block's Delegate/Don't routing criteria have no roster equivalent — see [Upstream behaviors to know](#upstream-behaviors-to-know) |
 | Orchestrator + specialist agents, prompts & permission mapping | ✅ | ✅ `ctx.agent.transform` | — |
 | Delegation + background job board + `task_*` tools | ✅ `task` tool | ✅ host `subagent` (auto-bridged: name/args normalization in `src/v2/delegation.ts`, output parsing in the execute bridges) | On v2 the model-visible identifier parameter is `sessionID` for both the host `subagent` resume arg and the plugin's `task_*` tools; `task_id` is accepted only as a deprecated alias (never emitted). Prompt text must use the host's vocabulary directly — no v1→v2 delegation-vocabulary rewriting is applied (display-name substitution separately rewrites `@<internalName>` mentions to the agent's `displayName` throughout the final orchestrator prompt — inline, file, and append orchestrator prompts — and in `orchestratorPrompt`/ACP routing snippets) — so an instructed resume continues the child instead of forking a new one |
-| Tools (ast-grep, webfetch, task_message/task_cancel/task_revive, wait_for_user, acp_run) | ✅ | ✅ `ctx.tool.transform` | v2 requires `options: {codemode: false}` on each registration (CodeMode split): without it a tool registers cleanly but is confined to the `execute` tool's JS runtime and session catalogs yield `Unknown tool: <name>`. The plugin stamps it on every adapted tool (`adaptTool` in `src/v2/adapters.ts`; additive field, older hosts ignore it). ast-grep needs its CLI binary (package, system, or lazy download); webfetch needs `jsdom` resolvable |
+| Tools (ast-grep, webfetch, task_message/task_cancel/task_revive, acp_run; `wait_for_user` is v1-only — not registered on v2, where the native `question` tool is the blocking boundary) | ✅ | ✅ `ctx.tool.transform` | v2 requires `options: {codemode: false}` on each registration (CodeMode split): without it a tool registers cleanly but is confined to the `execute` tool's JS runtime and session catalogs yield `Unknown tool: <name>`. The plugin stamps it on every adapted tool (`adaptTool` in `src/v2/adapters.ts`; additive field, older hosts ignore it). ast-grep needs its CLI binary (package, system, or lazy download); webfetch needs `jsdom` resolvable |
 | Slash commands `/deepwork` `/reflect` `/loop` | ✅ | ✅ marker round-trip | — |
 | `/interview` | ✅ | ✅ marker command + trailing-message context bridge | — |
 | Message transforms (phase reminder, skills filter, image routing, display-name rewrite) | ✅ | ✅ via the single context hook | — |
@@ -405,6 +416,24 @@ side cannot be observed.
 
 Behaviors of v2 itself that plugin authors should know about — none
 currently break this plugin:
+
+- **The `subagent` tool description grows a native roster.** On every
+  context/compaction/generate build the host appends `Available subagents:`
+  with one `- id: description` line per dispatchable agent (filtered by
+  mode, `hidden`, and the current agent's permissions). The append happens
+  after plugin `tool.definition` hooks, so a plugin cannot strip it; v1
+  hosts have the same mechanism in the tool registry (`Available agent
+  types and the tools they have access to:`). This plugin keeps its agent
+  `description` values as non-duplicating one-liners (routing criteria stay
+  in the orchestrator prompt's `<Agents>` block) and offers
+  `routingBlock: false` to drop that block on v2 — the roster keeps
+  identity, the block's Delegate/Don't criteria are the documented cost.
+  One flavor caveat: the `hidden` filter is v2-only — as of opencode
+  1.18.35, v1's `agents.list()` and the task tool's `describeTask` filter
+  by mode and permissions but not `hidden`, so hidden agents (omos
+  councillors included) do surface in the v1 task roster, while the
+  orchestrator's inline seat list remains the only always-present seat
+  source on v2.
 
 - **Event payloads ride under `data`, not `properties`.** The v2
   event stream (SSE and `ctx.event.subscribe()`) frames each event as
@@ -600,11 +629,10 @@ currently break this plugin:
   `system[0]` and collapses all parts into one — locked by a regression
   test in `src/index.test.ts`.
 - **Subagent `model` param.** The built-in `subagent` tool takes an
-  optional `model` argument (`"providerID/modelID"`). The delegation
-  vocabulary exposes it (`modelParam`) and the orchestrator/council
-  prompts carry a one-sentence guardrail: only set it when the user
-  explicitly asks for a specific model or variant; never guess the ID —
-  look it up with the models tool first.
+  optional `model` argument (`"providerID/modelID"`). The v2 slim
+  orchestrator prompt carries a one-sentence guardrail: only set it when
+  the user explicitly asks for a specific model or variant; never guess
+  the ID — look it up with the models tool first.
 
 ## Installing on v2
 
@@ -1036,6 +1064,37 @@ Related: when a job whose terminal report the parent already consumed
 (reconciled) reopens to running, the board injection appends exactly one
 corrective trailing notice ("previously reported terminal, now running
 again; the earlier report is superseded") in the cache-safe tail zone.
+
+### Host outcome quirks the terminal gate defends against
+
+Two v2 host behaviors (verified against v2.0.26) shape how the terminal
+gate handles host outcomes:
+
+- **`idle_outcome` is never cleared.** The host writes Session.Info
+  `outcome` once, at the run's terminal transition, and nothing resets
+  it when the same session starts a new run — a later read returns the
+  PREVIOUS run's outcome until the next terminal transition overwrites
+  it. The gate therefore never trusts a session-level outcome alone:
+  `attributableHostOutcome` accepts an outcome only when its `time.idle`
+  falls inside the current run's read window (the
+  `idle-not-after-window-lower` rejection reason is this defense logging
+  itself), and the transcript classifier treats a session-level outcome
+  as corroborating evidence, never as the primary criterion.
+- **Committed-but-stale reads.** A host read can observe a state older
+  than an already-committed write (pinned by the terminal-gate test
+  suite). The gate reads evidence, never invariants such as
+  "outcome present ⇒ terminal", and simply re-reads on the next attempt
+  when a read lags a commit.
+
+The publication path additionally runs a **log-only corroboration**:
+when a window-attributed host outcome is in hand at commit time, the
+published state is compared against the state that outcome would imply
+(`succeeded` → completed, `failed` → error,
+`interrupted`/`cancelled` → stopped; verified-cancel publications are
+stop-family normalized so they never log), and disagreements land in
+`[terminal-gate] outcome corroboration` log lines. The mirror never
+gates behavior — promoting it to a decision signal requires a fresh
+review — and a host without `session.get` produces no entries.
 
 ### Environment caveats
 

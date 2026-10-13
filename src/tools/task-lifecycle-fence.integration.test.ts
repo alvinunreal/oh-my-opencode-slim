@@ -18,9 +18,15 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+interface LoadPluginOptions {
+  hostFlavor?: string;
+  config?: Record<string, unknown>;
+  agent?: string;
+}
+
 async function loadPlugin(
   session: Record<string, unknown>,
-  hostFlavor?: string,
+  options: LoadPluginOptions = {},
 ) {
   const projectDir = await mkdtemp(join(tmpdir(), 'omo-lifecycle-fence-'));
   const previous = { ...process.env };
@@ -34,17 +40,20 @@ async function loadPlugin(
   delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
   await Bun.write(
     `${projectDir}/oh-my-opencode-slim.json`,
-    JSON.stringify({ companion: { enabled: false } }),
+    JSON.stringify({
+      companion: { enabled: false },
+      ...(options.config ?? {}),
+    }),
   );
   const hooks = await plugin({
     client: { app: { log: async () => ({}) }, session },
     directory: projectDir,
     worktree: projectDir,
     serverUrl: new URL('http://127.0.0.1:4098'),
-    ...(hostFlavor ? { hostFlavor } : {}),
+    ...(options.hostFlavor ? { hostFlavor: options.hostFlavor } : {}),
   } as never);
   await hooks['chat.message']?.(
-    { sessionID: PARENT, agent: 'orchestrator' } as never,
+    { sessionID: PARENT, agent: options.agent ?? 'orchestrator' } as never,
     {} as never,
   );
   return {
@@ -252,7 +261,7 @@ test('dispose after retained recovery acquires no relaunch lease', async () => {
         return {};
       },
     },
-    'v2',
+    { hostFlavor: 'v2' },
   );
   try {
     const pending = loaded.hooks['tool.execute.before']?.(
@@ -294,6 +303,96 @@ test('dispose after retained recovery acquires no relaunch lease', async () => {
     await expect(again).rejects.toThrow(/disposed/);
     await expect(again).rejects.not.toThrow(/already owned/);
   } finally {
+    await loaded.cleanup();
+  }
+});
+
+test('task_cancel and task_revive succeed when orchestrator runs under a displayName (#1531)', async () => {
+  const aborted: unknown[] = [];
+  const prompted: unknown[] = [];
+  const loaded = await loadPlugin(
+    {
+      get: async ({ path }: { path: { id: string } }) => ({
+        data: {
+          id: path.id,
+          parentID: PARENT,
+          agent: 'fixer',
+          time: { created: 10, idle: Date.now() },
+        },
+      }),
+      abort: async (args: unknown) => {
+        aborted.push(args);
+        return {};
+      },
+      status: async () => ({
+        data: { [CHILD]: { type: 'idle' } },
+      }),
+      promptAsync: async (args: unknown) => {
+        prompted.push(args);
+        return {};
+      },
+    },
+    {
+      hostFlavor: 'v2',
+      agent: 'mira',
+      config: {
+        presets: {
+          local: {
+            orchestrator: {
+              displayName: 'mira',
+            },
+          },
+        },
+        preset: 'local',
+      },
+    },
+  );
+  try {
+    // Verify that chat.message established managed admission by resolving 'mira' -> 'orchestrator'
+    // before task delegation marks PARENT as task-managed.
+    // If displayName resolution fails, assertManagedSession rejects with 'can only be used in managed sessions'.
+    await expect(
+      loaded.hooks.tool?.task_cancel.execute(
+        { sessionID: 'ses_untracked', reason: 'pre-check' },
+        { sessionID: PARENT, agent: 'mira' } as never,
+      ),
+    ).resolves.toBeDefined();
+
+    await loaded.hooks['tool.execute.before']?.(
+      { tool: 'task', sessionID: PARENT, callID: 'call_init' },
+      {
+        args: {
+          subagent_type: 'fixer',
+          description: 'child work',
+          prompt: 'do work',
+          background: true,
+        },
+      },
+    );
+    await loaded.hooks['tool.execute.after']?.(
+      { tool: 'task', sessionID: PARENT, callID: 'call_init' },
+      {
+        output: `<task id="${CHILD}" state="running">\nworking\n</task>`,
+      },
+    );
+
+    const cancelOutput = await loaded.hooks.tool?.task_cancel.execute(
+      { sessionID: CHILD, reason: 'cancel test' },
+      { sessionID: PARENT, agent: 'mira' } as never,
+    );
+    expect(aborted).toHaveLength(1);
+    expect(aborted[0]).toEqual({ path: { id: CHILD } });
+    expect(String(cancelOutput)).toContain('state: cancelled');
+
+    const reviveOutput = await loaded.hooks.tool?.task_revive.execute(
+      { sessionID: CHILD, prompt: 'revive prompt' },
+      { sessionID: PARENT, agent: 'mira' } as never,
+    );
+    expect(String(reviveOutput)).toContain('status: started');
+    expect(prompted).toHaveLength(1);
+    expect(prompted[0]).toMatchObject({ path: { id: CHILD } });
+  } finally {
+    await loaded.dispose();
     await loaded.cleanup();
   }
 });

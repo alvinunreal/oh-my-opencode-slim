@@ -12,10 +12,12 @@ import {
   resolveImageRouting,
 } from '../config/constants';
 import { RuntimeConfig } from '../config/runtime';
+import { collapseInterviewHistory } from '../interview/history';
 import { BackgroundJobBoard, createInternalAgentTextPart } from '../utils';
 import { createDisplayNameMentionRewriter } from '../utils/agent-variant';
 import { isTaggedPart } from './cache-safe-injection';
 import { createCouncilInjectHook } from './council-inject';
+import { createDeepworkGoalHook } from './deepwork-goal';
 import { processImageAttachments } from './image-hook';
 import { createPhaseReminderHook } from './phase-reminder';
 import { SessionLifecycle } from './session-lifecycle';
@@ -36,6 +38,14 @@ export type BoardStrategy = 'latest' | 'checkpoint-compatible';
 export interface PipelineOptions {
   /** Board injection strategy under test; defaults to the production default. */
   strategy?: BoardStrategy;
+  activeInterview?: boolean;
+  /**
+   * Enable the deepwork goal pointer for the fixture session. Off by
+   * default: the pointer is a trailing volatile message that changes
+   * payload tails, so only the cache-safety suites opt in; other suites
+   * test board/bridge behavior in isolation.
+   */
+  goalPointer?: boolean;
 }
 
 export interface Pipeline {
@@ -90,11 +100,27 @@ export function createPipeline(options: PipelineOptions = {}): Pipeline {
   });
 
   const councilInject = createCouncilInjectHook({
-    seats: ['councillor-alpha'],
-    wording: { tool: 'task', agentParam: 'subagent_type' },
+    wording: {
+      tool: 'task',
+      agentParam: 'subagent_type',
+      resumeParam: 'task_id',
+    },
+    seatAttachment: 'harness',
+  });
+
+  // Goal pointer joins the mirror pipeline in src/index.ts order. Off by
+  // default (see PipelineOptions); the cache-safety suites opt in to
+  // exercise the trailing volatile pointer's byte stability.
+  const deepworkGoal = createDeepworkGoalHook({
+    isEligible: (sessionID) =>
+      options.goalPointer === true &&
+      shouldInjectOrchestratorReminder(sessionID),
   });
 
   const run = async (output: TransformOutput): Promise<void> => {
+    if (options.activeInterview) {
+      collapseInterviewHistory(output.messages as never);
+    }
     for (const message of output.messages as MessageWithParts[]) {
       if (message.info.role !== 'user') continue;
       for (const part of message.parts) {
@@ -124,6 +150,11 @@ export function createPipeline(options: PipelineOptions = {}): Pipeline {
       output as never,
     );
     await taskSessionManagerHook.injectBackgroundJobBoard(
+      {} as never,
+      output as never,
+    );
+    // Trailing-most volatile message, after the board (src/index.ts order).
+    await deepworkGoal['experimental.chat.messages.transform'](
       {} as never,
       output as never,
     );

@@ -13,6 +13,9 @@ The companion system consists of two main components following a **Producer-Cons
   - Tracks agent activity per session (orchestrator, fixers, etc.)
   - Publishes live session model metadata for active agent tiles; variants are retained only from observed live chat selections, never inferred from static defaults
   - Maintains state in a JSON file at `~/.local/share/opencode/storage/oh-my-opencode-slim/companion-state.json`
+  - Uses a stable per-project manager identity within each OpenCode process so multiple project scopes coexist instead of overwriting one `proc_<pid>` row
+  - Publishes owner state before allowing the native binary to spawn; a busy state lock is retried asynchronously
+  - Prunes state rows whose owning OpenCode process is no longer alive
   - Spawns the companion binary process when enabled
   - Publishes the current/available preset catalog for the active project
   - Consumes typed preset requests from the native Companion and applies them through the shared preset-switch domain
@@ -39,7 +42,7 @@ interface CompanionSession {
 
 ### State Management
 
-- Uses a lock file pattern (`companion-state.json.lock`) for concurrent access
+- Uses the shared PID/token lock implementation for `companion-state.json.lock`, including stale-owner recovery instead of an unowned mkdir-only lock
 - State file contains array of active sessions with their current agent activity
 - Binary path determined by:
   - User config (`binaryPath` in companion config)
@@ -62,8 +65,9 @@ OpenCode Session → CompanionManager.onSessionStatus() → Updates state → Sp
 
 1. **Plugin loads** (`CompanionManager.onLoad()`)
    - Reads user configuration (`enabled`, `position`, `size`, `gifPack`, `loopStyle`, `speed`, `debug`)
-   - If enabled, spawns companion binary process with session ID and debug flags
-   - Cleans up stale sessions on load
+   - Publishes a distinct project-scoped session row first, then spawns/joins the singleton companion only after publication succeeds
+   - Retries transient state-lock contention without blocking the plugin thread
+   - Cleans up stale sessions from dead OpenCode processes on state writes
 
 2. **Agent activity events** (`CompanionManager.onSessionStatus()`)
    - Receives `session.status` events from OpenCode

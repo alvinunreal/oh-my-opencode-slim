@@ -31,7 +31,7 @@ TUI host wiring (v1 `tui()` and v2 `setup()`) that:
 - **Initializes plugin log**: `oh-my-opencode-slim.tui-<timestamp>.log`
 - **Loads multiplexer config**: Invalid config → `type:none` + diagnostic
 - **Detects adapter**: From client environment; applies FR-9 admission control
-- **Reflects serverUrl**: v1 default via `api.client.client.getConfig().baseUrl` + `/session/status` probe; v2 passes `baseUrl` and an authenticated `server.info()` probe from `v2-host.ts`
+- **Reflects serverUrl**: v1 default via `api.client.client.getConfig().baseUrl` + `/session/status` probe, authenticated for password-protected hosts with the client's own `Authorization` header (set by `opencode attach` from `-p`/`-u` or the environment), else `OPENCODE_SERVER_PASSWORD` from the client env; v2 passes `baseUrl` and an authenticated `server.info()` probe from `v2-host.ts`
 - **Embeds sentinel**: Fail-closed when host unreachable
 - **Projects raw events**: v1 envelope (`properties.info.directory`, `properties.status.type`); v2 passes already-projected `sessionEvents`
 - **Runs periodic reconcile**: 30-second pass for reconnect compensation

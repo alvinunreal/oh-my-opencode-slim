@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Provides a unified abstraction for tmux, Zellij, Herdr, cmux-tui, and kitty to
+Provides a unified abstraction for tmux, Zellij, Herdr, cmux-tui, kitty, and WezTerm to
 spawn, manage, and close panes for child OpenCode agent sessions — **from the
 TUI client process that displays the parent session**, never from the server.
 
@@ -31,6 +31,9 @@ multiplexer-specific command translation.
   - `KittyMultiplexer`: `kitten @` CLI, parent-window anchoring from
     `KITTY_WINDOW_ID`, `--next-to=id:<parent>`, layout via
     `goto-layout --match=window_id:<id>`
+  - `WeztermMultiplexer`: `wezterm cli split-pane --pane-id <anchor>` from
+    `WEZTERM_PANE`, layout approximated through split order, focus handed
+    back with `activate-pane`, `/proc` password bridge, no FR-8 sweep
   - `CmuxMultiplexer`: new-generation TUI (`cmux.protocol/2`), noun-first CLI
     (`pane <sel> run --name <parent/child>`, `tab <sel> focus`,
     `terminal <sel> close`, `terminal list` / `terminal <sel> process show`),
@@ -83,7 +86,7 @@ multiplexer-specific command translation.
 
 ```typescript
 export interface Multiplexer {
-  readonly type: 'tmux' | 'zellij' | 'herdr' | 'cmux-tui' | 'kitty';
+  readonly type: 'tmux' | 'zellij' | 'herdr' | 'cmux-tui' | 'kitty' | 'wezterm';
   isAvailable(): Promise<boolean>;
   isInsideSession(): boolean;
   spawnPane(sessionId: string, description: string, serverUrl: string, directory: string, options?: PaneSpawnOptions): Promise<PaneResult>;
@@ -183,8 +186,8 @@ The server entry (`src/index.ts`) must not reach `src/multiplexer/client/*` or
 ### Dependencies
 
 - **Config Schema** (`src/config/schema.ts`): `MultiplexerConfig`
-  (type/layout/main_pane_size/cmux_tui_binary/viewer) plus the deprecated-key
-  sanitizer.
+  (type/layout/main_pane_size/cmux_tui_binary/viewer); removed keys are
+  rejected by the schema.
 - **Logger** (`src/utils/logger.ts`): plugin log sink for all diagnostics.
 - **OpenCode host**: TUI event bus (`api.event`), SDK client (`api.client`),
   route (`api.route.current`); on v2 the `ctx.data` feed, `ctx.client`,
@@ -194,29 +197,29 @@ The server entry (`src/index.ts`) must not reach `src/multiplexer/client/*` or
 
 ```typescript
 interface MultiplexerConfig {
-  type: 'tmux' | 'zellij' | 'herdr' | 'cmux-tui' | 'kitty' | 'auto' | 'none';
+  type: 'tmux' | 'zellij' | 'herdr' | 'cmux-tui' | 'kitty' | 'wezterm' | 'auto' | 'none';
   layout: 'main-horizontal' | 'main-vertical' | 'tiled' | 'even-horizontal' | 'even-vertical';
-  main_pane_size?: number; // Percentage for main pane (20-80), tmux main-* only
+  main_pane_size?: number; // Percentage for main pane (20-80), tmux main-* and the first WezTerm main-* split
   cmux_tui_binary?: string; // Explicit cmux-tui binary path
   viewer?: 'tui' | 'mini'; // Host default: v1 'tui', v2 'mini'; explicit wins
 }
 ```
 
-`zellij_pane_mode` is a deprecated key: it is stripped with a
-once-per-process warning and never reaches the adapter layer. Invalid
+`zellij_pane_mode` is removed; the loader strips it with a warning. Invalid
 `type`/`layout`/`main_pane_size`/`cmux_tui_binary`/`viewer` values disable
 pane management with a once-per-process diagnostic.
 
 The host wiring resolves an omitted viewer. v1 mini uses `attach ... --dir
 <dir> --mini` (OpenCode >= 1.17.10), without extra pane-cwd pinning; v2 mini
 uses the `mini` subcommand without a positional directory, so adapters pin
-the cwd. Herdr and kitty always set their native cwd flags.
+the cwd. Herdr, kitty, and WezTerm always set their native cwd flags.
 
 ### Environment Detection
 
 - **Auto / admission order**: cmux-tui (`CMUX_TUI_SOCKET` or legacy
   `CMUX_MUX_SOCKET`) → tmux (`TMUX_PANE`) → Zellij (`ZELLIJ_PANE_ID`) → Herdr
-  (`HERDR_PANE_ID`) → kitty (`KITTY_WINDOW_ID`).
+  (`HERDR_PANE_ID`) → kitty (`KITTY_WINDOW_ID`) → WezTerm (`WEZTERM_PANE`,
+  last so tmux/Zellij nested inside WezTerm win).
 - **Explicit adapter**: only enabled when it matches the detected adapter;
   otherwise `admission-mismatch` and no pane.
 - **Availability checks**: binary probes, Zellij >= 0.44.1 version gate, and
@@ -260,6 +263,31 @@ the cwd. Herdr and kitty always set their native cwd flags.
 - The parent window's tab is the anchor: `--next-to=id:<parent>` for
   placement, `goto-layout --match=window_id:<parent>` for the mapped layout;
   the active tab is never modified.
+
+### WezTerm Implementation
+
+- Detection `WEZTERM_PANE`; the CLI reaches WezTerm through the
+  `WEZTERM_UNIX_SOCKET` it exports to every pane, so no configuration is
+  needed. The binary is the `wezterm` next to `WEZTERM_EXECUTABLE` (falling
+  back to `PATH`), and every call passes `cli --no-auto-start`.
+- Every split names its target with `--pane-id`. `split-pane` focuses the new
+  pane, so the pane focused before the split (`list-clients`) is activated
+  again, falling back to the anchor.
+- No preset layouts: `main-*` split the anchor once at `100 -
+  main_pane_size` percent, then stack later children inside that agent pane
+  (like Herdr); `even-*`/`tiled` always split the anchor. Spawns are
+  serialized. Stacking falls back to the anchor only on `pane_id N invalid`;
+  other failures are hard errors (no second split). No rebalancing.
+- Viewer password: `split-pane` has no env flag and panes inherit WezTerm's
+  environment, so the launch script uses the `/proc` bridge, exporting
+  `OPENCODE_PASSWORD` (v2 remote) or only `OPENCODE_SERVER_PASSWORD` plus any
+  `OPENCODE_SERVER_USERNAME` (v1). Linux and a POSIX shell are required;
+  otherwise no pane, with a once-per-process `viewer-secret` diagnostic.
+- Close: Ctrl+C via `send-text`, then `kill-pane`. A failed `kill-pane` counts
+  as closed only on WezTerm's `no such pane N` error (`isAlreadyClosed`); any
+  other failure keeps the pane tracked, because the CLI also exits 1 on
+  transport/protocol errors while the pane still exists.
+- No FR-8 sweep: the CLI cannot set pane titles and the viewer replaces them.
 
 ### cmux-tui Implementation
 
@@ -326,4 +354,5 @@ the cwd. Herdr and kitty always set their native cwd flags.
 | `zellij/index.ts` | zellij-specific implementation |
 | `herdr/index.ts` | herdr-specific implementation |
 | `kitty/index.ts` | kitty-specific implementation |
+| `wezterm/index.ts` | WezTerm-specific implementation |
 | `cmux/index.ts` | cmux-tui new-generation TUI adapter |

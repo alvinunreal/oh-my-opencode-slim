@@ -30,6 +30,34 @@ describe('parseAssistantState', () => {
     expect(result.state?.title).toBe('my-project');
   });
 
+  test('ignores a preface that mentions the opening tag', () => {
+    const text = [
+      'The full `<interview_state>` block is for the parser.',
+      '<interview_state>',
+      '{"summary":"Spec mentions <interview_state> inside the summary.","questions":[{"id":"q-1","question":"Which?","options":["A","B"]}]}',
+      '</interview_state>',
+    ].join('\n');
+    const result = parseAssistantState(text, 2);
+
+    expect(result.error).toBeUndefined();
+    expect(result.state?.summary).toContain('inside the summary');
+    expect(result.state?.questions).toHaveLength(1);
+    expect(result.state?.questions[0].id).toBe('q-1');
+  });
+
+  test('keeps the real block when the summary quotes a full tag pair', () => {
+    const text = [
+      'The full `<interview_state>` block is for the parser.',
+      '<interview_state>',
+      '{"summary":"the `<interview_state>{json}</interview_state>` block","questions":[{"id":"q-1","question":"Which?","options":["A","B"]}]}',
+      '</interview_state>',
+    ].join('\n');
+    const result = parseAssistantState(text, 2);
+
+    expect(result.error).toBeUndefined();
+    expect(result.state?.questions[0].id).toBe('q-1');
+  });
+
   test('returns null when no interview_state block', () => {
     const result = parseAssistantState('No state block here.');
     expect(result.state).toBeNull();
@@ -104,6 +132,19 @@ describe('parseAssistantState', () => {
     const result = parseAssistantState(text);
 
     expect(result.state?.questions[0].options).toEqual(['A', 'B']);
+  });
+
+  test('keeps a patch string and treats a missing patch as absent', () => {
+    const text =
+      '<interview_state>\n{"summary":"Updated scope","patch":"--- a/spec\\n+++ b/spec\\n@@ -1 +1 @@\\n-old\\n+new","questions":[]}\n</interview_state>';
+    const result = parseAssistantState(text);
+    expect(result.state?.summary).toBe('Updated scope');
+    expect(result.state?.patch).toContain('+++ b/spec');
+
+    const legacy = parseAssistantState(
+      '<interview_state>\n{"summary":"Full spec","questions":[]}\n</interview_state>',
+    );
+    expect(legacy.state?.patch).toBeUndefined();
   });
 
   test('handles non-string summary gracefully', () => {

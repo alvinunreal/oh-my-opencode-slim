@@ -8,6 +8,13 @@ Slim only intercepts `apply_patch` before the native tool runs. It rewrites reco
 
 ---
 
+## interview_submit_state
+
+`interview_submit_state` stores the current interview state without printing the
+specification or patch in assistant text. Use it once per interview turn: the
+kickoff carries the full spec, and later turns carry a one-line status, an
+optional unified diff against the current spec body, and questions.
+
 ## Web Fetch
 
 Enhanced version of OpenCode's built-in `webfetch`. Overrides the default when
@@ -61,13 +68,22 @@ conservatively passes the path through. Disable with
 | `task_message` | Send a non-interrupting message and return `queued` (v2: steering acceptance with `delivery: "steer"`) |
 | `task_cancel` | Stop a generation while retaining its session |
 | `task_revive` | Resume a retained session with a new instruction |
-| `wait_for_user` | Pause automatic orchestrator wake prompts until the next distinct external user message |
+| `wait_for_user` | Pause automatic orchestrator wake prompts until the next distinct external user message (v1 only; not registered on v2 — use the native `question` tool there) |
 
 The task controls use the task ID or Background Job Board alias for the task being
 managed. `task_message` does not interrupt the current generation. `task_cancel`
 stops the generation but retains its session; it does not roll back partial edits.
 After cancelling a write-capable task, inspect and reconcile file changes before
 launching replacement work.
+
+`task_cancel` and `task_revive` admit managed parent sessions, including Build
+and custom primary agents that have delegated work. Host tool permissions still
+apply, and a parent can only control its own children. Switching primary agents
+does not transfer child ownership. Completed results are surfaced and
+acknowledged for reuse in both board modes regardless of the parent's agent name.
+History recovery and injected completion handling use the same managed-session
+admission; an unmanaged Build turn is not promoted to Orchestrator.
+This does not add the Orchestrator prompt to Build or make it delegate automatically.
 
 If the abort request times out while still pending, `task_cancel` reports
 uncertainty and retains its cancellation lease: a late abort must not affect a
@@ -139,9 +155,11 @@ its message lease after timeout; this change does not alter that quarantine.
 errored, or stopped retained session may be revived immediately once its
 retained state has been verified safe. Acknowledgement controls parent and
 job-board consumption and reusable-pool display, not same-session revival.
-On v1 a real parent fallback routes that child's next prompt, like a `task_id`
-resume, also with explicit model inheritance. V2 retains the session model. A
-failed send may leave the v1 intention pending until claimed or evicted by the
+On v1 a confirmed parent fallback routes that child's next prompt, like a
+`task_id` resume; with explicit model inheritance it follows the parent's live
+model, whether selected by fallback or a manual change. V2 retains the session
+model. A failed send may leave the v1
+intention pending until claimed or evicted by the
 bounded FIFO.
 For existing tracked sessions, baseline capture has a 5-second deadline: expiry fails without sending a prompt
 and releases the relaunch lease. The local admission wait has a 10-second deadline;
@@ -241,7 +259,8 @@ the latest live activity. Uncertainty alone never becomes terminal on retry
 exhaustion; existing events/probes and independent valid evidence can resolve it,
 but there is no guaranteed recovery deadline.
 
-`wait_for_user` is also orchestrator-only. The orchestrator uses it as the final
+`wait_for_user` is also orchestrator-only (and v1-only; it is not registered on
+v2). The orchestrator uses it as the final
 tool action after providing concrete instructions for external manual work. Its
 `reason` is diagnostic text only; the plugin does not parse assistant prose to
 decide whether a turn is HITL. A new real user text/file/image message clears the

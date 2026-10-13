@@ -365,6 +365,7 @@ describe('loadPluginConfig', () => {
           autoOpenBrowser: false,
           port: 1234,
           dashboard: true,
+          printState: true,
         },
       }),
     );
@@ -381,7 +382,28 @@ describe('loadPluginConfig', () => {
       autoOpenBrowser: false,
       port: 1234,
       dashboard: true,
+      printState: true,
     });
+  });
+
+  test('lets a project layer override the user printState interview flag', () => {
+    const userConfigPath = path.join(userConfigDir, 'opencode');
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(userConfigPath, { recursive: true });
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userConfigPath, 'oh-my-opencode-slim.json'),
+      JSON.stringify({ interview: { printState: true } }),
+    );
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({ interview: { printState: false } }),
+    );
+
+    const config = loadPluginConfig(projectDir, { silent: true });
+
+    expect(config.interview?.printState).toBe(false);
   });
 
   test('does not let a defaulted project webfetch enabled override user false', () => {
@@ -952,100 +974,6 @@ describe('onWarning callback', () => {
     ]);
   });
 
-  test('deprecated tmux key calls onWarning with deprecated-key and still loads', () => {
-    const projectDir = path.join(tempDir, 'project');
-    const projectConfigDir = path.join(projectDir, '.opencode');
-    fs.mkdirSync(projectConfigDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        tmux: { enabled: true, layout: 'main-vertical' },
-        agents: { oracle: { model: 'valid/model' } },
-      }),
-    );
-
-    const warnings: ConfigLoadWarning[] = [];
-    const config = loadPluginConfig(projectDir, {
-      onWarning: (warning) => warnings.push(warning),
-    });
-
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]?.kind).toBe('deprecated-key');
-    expect(warnings[0]?.message).toContain('Deprecated tmux config key');
-    expect(config.agents?.oracle?.model).toBe('valid/model');
-  });
-
-  test('deprecated council.master key calls onWarning with deprecated-key and still loads', () => {
-    const projectDir = path.join(tempDir, 'project');
-    const projectConfigDir = path.join(projectDir, '.opencode');
-    fs.mkdirSync(projectConfigDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        council: {
-          master: { model: 'openai/gpt-6' },
-          presets: {
-            default: {
-              alpha: { model: 'openai/gpt-6-luna' },
-            },
-          },
-        },
-      }),
-    );
-
-    const warnings: ConfigLoadWarning[] = [];
-    const config = loadPluginConfig(projectDir, {
-      onWarning: (warning) => warnings.push(warning),
-    });
-
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]?.kind).toBe('deprecated-key');
-    expect(warnings[0]?.message).toContain(
-      'Deprecated council.master config key',
-    );
-    expect(config.council?.presets?.default?.alpha?.model).toBe(
-      'openai/gpt-6-luna',
-    );
-  });
-
-  test('migrates deprecated backgroundJobs.continueOnIdle and warns', () => {
-    const projectDir = path.join(tempDir, 'project');
-    const projectConfigDir = path.join(projectDir, '.opencode');
-    fs.mkdirSync(projectConfigDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        autoUpdate: false,
-        backgroundJobs: {
-          continueOnIdle: false,
-          orchestratorWake: { intervalMs: 120_000 },
-        },
-      }),
-    );
-
-    const warnings: ConfigLoadWarning[] = [];
-    const config = loadPluginConfig(projectDir, {
-      silent: true,
-      onWarning: (warning) => warnings.push(warning),
-    });
-
-    expect(config.backgroundJobs?.orchestratorWake).toEqual({
-      enabled: false,
-      intervalMs: 120_000,
-      mode: 'auto',
-      periodicWakeEnabled: true,
-      wakeOnTerminalPublication: true,
-      publicationWakeMinIntervalMs: 30_000,
-    });
-    expect(config.backgroundJobs).not.toHaveProperty('continueOnIdle');
-    expect(config.autoUpdate).toBe(false);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]?.kind).toBe('deprecated-key');
-    expect(warnings[0]?.message).toContain(
-      'Deprecated backgroundJobs.continueOnIdle',
-    );
-  });
-
   test('passes explicit terminal-publication wake and stop-confirmation knobs through', () => {
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
@@ -1093,6 +1021,31 @@ describe('onWarning callback', () => {
       config.backgroundJobs?.orchestratorWake.wakeOnTerminalPublication,
     ).toBe(true);
     expect(config.backgroundJobs?.childInputWake).toBe(true);
+  });
+
+  test('routingBlock never derives a v2 default (no boardInjection-style flip)', () => {
+    const projectDir = path.join(tempDir, 'project');
+    // Unset on v2 stays unset: the native subagent roster carries agent
+    // identity only, and the block's Delegate/Don't routing criteria have
+    // no native equivalent — a derived false would be a silent routing
+    // downgrade dressed up as deduplication.
+    const v2Config = loadPluginConfig(projectDir, {
+      silent: true,
+      hostFlavor: 'v2',
+    });
+    expect(v2Config.routingBlock).toBeUndefined();
+
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({ routingBlock: false }),
+    );
+    const explicitOff = loadPluginConfig(projectDir, {
+      silent: true,
+      hostFlavor: 'v2',
+    });
+    expect(explicitOff.routingBlock).toBe(false);
   });
 
   test('v2 host flavor never overrides explicitly configured board/wake keys', () => {
@@ -1147,92 +1100,6 @@ describe('onWarning callback', () => {
     expect(v1Config.backgroundJobs?.boardInjection).toBe(false);
     expect(v1Config.backgroundJobs?.orchestratorWake.periodicWakeEnabled).toBe(
       false,
-    );
-  });
-
-  test('prefers explicit orchestratorWake.enabled over deprecated continueOnIdle', () => {
-    const projectDir = path.join(tempDir, 'project');
-    const projectConfigDir = path.join(projectDir, '.opencode');
-    fs.mkdirSync(projectConfigDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        backgroundJobs: {
-          continueOnIdle: false,
-          orchestratorWake: { enabled: true },
-        },
-      }),
-    );
-
-    const warnings: ConfigLoadWarning[] = [];
-    const config = loadPluginConfig(projectDir, {
-      silent: true,
-      onWarning: (warning) => warnings.push(warning),
-    });
-
-    expect(config.backgroundJobs?.orchestratorWake.enabled).toBe(true);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]?.kind).toBe('deprecated-key');
-  });
-
-  test('preserves migrated continueOnIdle across a partial project override', () => {
-    const userConfigPath = path.join(tempDir, 'opencode');
-    const projectDir = path.join(tempDir, 'project');
-    const projectConfigDir = path.join(projectDir, '.opencode');
-    fs.mkdirSync(userConfigPath, { recursive: true });
-    fs.mkdirSync(projectConfigDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(userConfigPath, 'oh-my-opencode-slim.json'),
-      JSON.stringify({ backgroundJobs: { continueOnIdle: false } }),
-    );
-    fs.writeFileSync(
-      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        backgroundJobs: { strategy: 'checkpoint-compatible' },
-      }),
-    );
-
-    const warnings: ConfigLoadWarning[] = [];
-    const config = loadPluginConfig(projectDir, {
-      silent: true,
-      onWarning: (warning) => warnings.push(warning),
-    });
-
-    expect(config.backgroundJobs?.orchestratorWake.enabled).toBe(false);
-    expect(config.backgroundJobs?.strategy).toBe('checkpoint-compatible');
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]?.kind).toBe('deprecated-key');
-  });
-
-  test('both deprecated keys fire two warnings', () => {
-    const projectDir = path.join(tempDir, 'project');
-    const projectConfigDir = path.join(projectDir, '.opencode');
-    fs.mkdirSync(projectConfigDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        tmux: { enabled: true },
-        council: {
-          master: { model: 'openai/gpt-6' },
-          presets: {
-            default: {
-              alpha: { model: 'openai/gpt-6-luna' },
-            },
-          },
-        },
-      }),
-    );
-
-    const warnings: ConfigLoadWarning[] = [];
-    loadPluginConfig(projectDir, {
-      onWarning: (warning) => warnings.push(warning),
-    });
-
-    expect(warnings).toHaveLength(2);
-    const messages = warnings.map((w) => w.message);
-    expect(messages.some((m) => m.includes('Deprecated tmux'))).toBe(true);
-    expect(messages.some((m) => m.includes('Deprecated council.master'))).toBe(
-      true,
     );
   });
 
@@ -1898,73 +1765,6 @@ describe('deepMerge behavior', () => {
     const config = loadPluginConfig(projectDir);
     // Fallback deepMerge: project value wins over user value
     expect(config.fallback?.enabled).toBe(false);
-  });
-
-  test('deprecated fallback.* keys warn and still load', () => {
-    const userOpencodeDir = path.join(userConfigDir, 'opencode');
-    fs.mkdirSync(userOpencodeDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(userOpencodeDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        fallback: {
-          enabled: true,
-          timeoutMs: 15000,
-          retry_on_empty: false,
-          runtimeOverride: true,
-        },
-        agents: { oracle: { model: 'valid/model' } },
-      }),
-    );
-
-    const warnings: ConfigLoadWarning[] = [];
-    const config = loadPluginConfig(userConfigDir, {
-      onWarning: (warning) => warnings.push(warning),
-    });
-
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]?.kind).toBe('deprecated-key');
-    expect(warnings[0]?.message).toContain('Deprecated fallback config keys');
-    expect(warnings[0]?.message).toContain('timeoutMs');
-    expect(config.fallback?.enabled).toBe(true);
-    // Removed fields must not survive into the parsed config
-    expect(config.fallback).not.toHaveProperty('timeoutMs');
-    expect(config.fallback).not.toHaveProperty('retry_on_empty');
-    expect(config.fallback).not.toHaveProperty('runtimeOverride');
-    expect(config.agents?.oracle?.model).toBe('valid/model');
-  });
-
-  test('fallback delay keys are live and preserved alongside legacy keys', () => {
-    const userOpencodeDir = path.join(userConfigDir, 'opencode');
-    fs.mkdirSync(userOpencodeDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(userOpencodeDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        fallback: {
-          enabled: true,
-          maxRetries: 5,
-          initialRetryDelayMs: 250,
-          retryDelayMs: 750,
-          timeoutMs: 15000,
-          retry_on_empty: false,
-        },
-      }),
-    );
-
-    const warnings: ConfigLoadWarning[] = [];
-    const config = loadPluginConfig(userConfigDir, {
-      onWarning: (warning) => warnings.push(warning),
-    });
-
-    // Only the legacy keys warn; the live delay keys are untouched.
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]?.message).toContain('timeoutMs');
-    expect(warnings[0]?.message).toContain('retry_on_empty');
-    expect(config.fallback?.enabled).toBe(true);
-    expect(config.fallback?.maxRetries).toBe(5);
-    expect(config.fallback?.initialRetryDelayMs).toBe(250);
-    expect(config.fallback?.retryDelayMs).toBe(750);
-    expect(config.fallback).not.toHaveProperty('timeoutMs');
-    expect(config.fallback).not.toHaveProperty('retry_on_empty');
   });
 
   test('fallback delay keys alone produce no deprecation warning', () => {
@@ -3090,5 +2890,129 @@ describe('env variable interpolation', () => {
 
     const config = loadPluginConfig(projectDir);
     expect(config.agents?.oracle?.model).toBe('foo/bar');
+  });
+});
+
+describe('removed config keys', () => {
+  let tempDir: string;
+  let originalEnv: typeof process.env;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loader-removed-'));
+    originalEnv = { ...process.env };
+    delete process.env.OPENCODE_CONFIG_DIR;
+    process.env.XDG_CONFIG_HOME = path.join(tempDir, 'user-config');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    process.env = originalEnv;
+  });
+
+  function load(extra: Record<string, unknown>) {
+    const projectDir = path.join(tempDir, 'project');
+    const configDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        preset: 'mine',
+        presets: { mine: { oracle: { model: 'test/preset-oracle' } } },
+        ...extra,
+      }),
+    );
+    const warnings: ConfigLoadWarning[] = [];
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const config = loadPluginConfig(projectDir, {
+        onWarning: (warning) => warnings.push(warning),
+      });
+      return { config, warnings };
+    } finally {
+      warn.mockRestore();
+    }
+  }
+
+  const councillor = { model: 'test/councillor' };
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ['tmux', { tmux: { enabled: true } }],
+    [
+      'council.master',
+      { council: { presets: { p: { a: councillor } }, master: {} } },
+    ],
+    [
+      'council.master_timeout',
+      { council: { presets: { p: { a: councillor } }, master_timeout: 1 } },
+    ],
+    [
+      'council.master_fallback',
+      {
+        council: { presets: { p: { a: councillor } }, master_fallback: [] },
+      },
+    ],
+    [
+      'council.presets.p.master',
+      { council: { presets: { p: { a: councillor, master: councillor } } } },
+    ],
+    [
+      'council.presets.p.councillors',
+      {
+        council: {
+          presets: { p: { a: councillor, councillors: { b: councillor } } },
+        },
+      },
+    ],
+    [
+      'backgroundJobs.continueOnIdle',
+      { backgroundJobs: { continueOnIdle: true } },
+    ],
+    ['fallback.timeoutMs', { fallback: { timeoutMs: 15000 } }],
+    ['fallback.retry_on_empty', { fallback: { retry_on_empty: true } }],
+    ['fallback.runtimeOverride', { fallback: { runtimeOverride: true } }],
+    [
+      'multiplexer.zellij_pane_mode',
+      { multiplexer: { type: 'zellij', zellij_pane_mode: 'agent-tab' } },
+    ],
+  ];
+
+  for (const [key, extra] of cases) {
+    test(`"${key}" is dropped with a warning; other settings still load`, () => {
+      const { config, warnings } = load(extra);
+
+      expect(config.agents?.oracle?.model).toBe('test/preset-oracle');
+      expect(warnings.map((w) => w.kind)).toEqual(['removed-key']);
+      expect(warnings[0]?.message).toBe(
+        `Config key "${key}" was removed in this version and is ignored; see docs/configuration.md`,
+      );
+      if (key.startsWith('council.')) {
+        expect(config.council?.presets.p?.a?.model).toBe('test/councillor');
+        expect(Object.keys(config.council?.presets.p ?? {})).toEqual(['a']);
+      }
+      if (key === 'multiplexer.zellij_pane_mode') {
+        expect(config.multiplexer?.type).toBe('zellij');
+      }
+    });
+  }
+
+  test('reports every removed key in one file', () => {
+    const { config, warnings } = load({
+      tmux: {},
+      fallback: { timeoutMs: 1, runtimeOverride: true, maxRetries: 2 },
+    });
+
+    expect(config.agents?.oracle?.model).toBe('test/preset-oracle');
+    expect(config.fallback?.maxRetries).toBe(2);
+    expect(warnings.map((w) => w.message)).toEqual([
+      'Config key "tmux" was removed in this version and is ignored; see docs/configuration.md',
+      'Config key "fallback.timeoutMs" was removed in this version and is ignored; see docs/configuration.md',
+      'Config key "fallback.runtimeOverride" was removed in this version and is ignored; see docs/configuration.md',
+    ]);
+  });
+
+  test('unknown invalid keys still reject the file', () => {
+    const { config, warnings } = load({ fallback: { bogus: true } });
+
+    expect(config.agents?.oracle?.model).toBeUndefined();
+    expect(warnings.map((w) => w.kind)).toEqual(['invalid-schema']);
   });
 });

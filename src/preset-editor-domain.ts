@@ -43,9 +43,6 @@ export const PRESET_ACTION = {
   INHERIT_MODEL: '__omo_inherit_model__',
 } as const;
 
-export type PresetActionValue =
-  (typeof PRESET_ACTION)[keyof typeof PRESET_ACTION];
-
 /** Prefix for inherited-agent display rows (never an editable agent value). */
 export const INHERITED_AGENT_PREFIX = '__omo_inherited__';
 

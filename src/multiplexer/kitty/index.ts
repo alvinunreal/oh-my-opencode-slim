@@ -41,7 +41,6 @@ import {
   gracefulClosePane,
   normalizePathForShell,
   redactViewerSecretArgs,
-  resolveOpencodeExecutable,
 } from '../shared';
 import type { Multiplexer, PaneResult, PaneSpawnOptions } from '../types';
 
@@ -129,18 +128,20 @@ export class KittyMultiplexer implements Multiplexer {
     await this.ensureLayout(kittyLayout, parentWindowId);
 
     try {
-      const opencodeCmd = buildViewCommand(sessionId, serverUrl, directory, {
-        ...options,
-        executable: resolveOpencodeExecutable(),
-      });
+      const opencodeCmd = buildViewCommand(
+        sessionId,
+        serverUrl,
+        directory,
+        options,
+      );
 
       // Normalize for Windows/MSYS2/Git Bash (backslashes would be treated as
       // escape chars). No-op on macOS/Linux. Mirrors the herdr adapter.
       const attachDir = normalizePathForShell(directory);
 
-      // Launch in the user's interactive shell (fish/bash/zsh/sh) so the
-      // command resolves correctly — a hardcoded `sh -c` breaks under fish
-      // and misses login startup files where `opencode` may live on PATH.
+      // Launch in the user's interactive shell (fish/bash/zsh/sh): a hardcoded
+      // `sh -c` breaks under non-POSIX shells. The viewer command is absolute,
+      // so no PATH lookup is needed.
       const shellArgs = buildShellLaunchArgs(opencodeCmd);
 
       // v2 remote hosts: the viewer must authenticate with
@@ -193,6 +194,7 @@ export class KittyMultiplexer implements Multiplexer {
       const windowId = lines.length > 0 ? lines[lines.length - 1] : '';
 
       log('[kitty] spawnPane: result', {
+        command: opencodeCmd,
         exitCode,
         windowId,
         stderr: stderr.trim(),

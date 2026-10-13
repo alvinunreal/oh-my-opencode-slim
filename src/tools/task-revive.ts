@@ -13,14 +13,19 @@ import {
   SESSION_ID_PATTERN,
   withTimeout,
 } from '../utils/session';
-import { getRuntimeSessionStatusSnapshot } from '../utils/session-runtime-status';
+import { readLiveSession } from '../utils/session-runtime-status';
 import type { ExperimentalV2 } from '../v2/client-shim';
 import {
-  assertOrchestrator,
+  assertManagedSession,
   cancelTrackedExecution,
   type TaskControlToolOptions,
 } from './cancel-task';
-import { idParamFor, readTaskRef, taskRefArgs } from './task-ref';
+import {
+  idParamFor,
+  readTaskRef,
+  resolveTaskRecord,
+  taskRefArgs,
+} from './task-ref';
 
 const z = tool.schema;
 const DEFAULT_BASELINE_TIMEOUT_MS = 5_000;
@@ -39,6 +44,7 @@ export interface TaskReviveToolOptions extends TaskControlToolOptions {
   admissionTimeoutMs?: number;
   waitForIdleTimeoutMs?: number;
   isDisposed?: () => boolean;
+  isFallbackPending?: (taskID: string) => boolean;
   registerIntent?: (parentID: string, childID: string, agent: string) => void;
 }
 
@@ -55,7 +61,7 @@ export function createTaskReviveTool(
       prompt: z.string().min(1).describe('Prompt for the revived task'),
     },
     async execute(args, toolContext) {
-      const parentSessionID = assertOrchestrator(
+      const parentSessionID = assertManagedSession(
         options,
         toolContext,
         'task_revive',
@@ -64,15 +70,11 @@ export function createTaskReviveTool(
       const prompt = args.prompt.trim();
       if (!requested) throw new Error(`task_revive requires ${idParam}`);
       if (!prompt) throw new Error('task_revive requires prompt');
-      const canonical = options.resolveCanonicalTaskRef
-        ? await options.resolveCanonicalTaskRef(parentSessionID, requested)
-        : undefined;
-      if (options.isDisposed?.()) throw new Error(pluginDisposedMessage());
-      if (canonical?.kind === 'refused') throw new Error(canonical.reason);
-      const identity = canonical?.taskID ?? requested;
-      let resolved = canonical
-        ? options.backgroundJobBoard.get(identity)
-        : options.backgroundJobBoard.resolve(parentSessionID, requested);
+      const ref = await resolveTaskRecord(options, parentSessionID, requested);
+      if (ref.kind === 'disposed') throw new Error(pluginDisposedMessage());
+      if (ref.kind === 'refused') throw new Error(ref.reason);
+      const { identity, canonical } = ref;
+      let resolved = ref.job;
       if (resolved && resolved.parentSessionID !== parentSessionID) {
         throw new Error(`Unknown or unowned background task: ${requested}`);
       }
@@ -141,6 +143,18 @@ export function createTaskReviveTool(
       // Adoption does not grant ownership of the pre-existing execution.
       // V2 queues behind it; V1 retains the live-state verification below.
       if (current.state === 'running' && !adopted && !queueContinuation) {
+        if (
+          options.isFallbackPending?.(current.taskID) ||
+          revivedRunTracker.isObservationPending(
+            current.taskID,
+            current.generation,
+          ) ||
+          revivedRunTracker.isFallbackRun(current.taskID, current.generation)
+        ) {
+          throw new Error(
+            `Task ${requested} is recovering on a fallback model; wait for its result. Use task_cancel if it is obsolete.`,
+          );
+        }
         await cancelTrackedExecution(options, captured, 'revived');
         cancelledForRevive = true;
         current = getCurrentReviveJob(
@@ -222,21 +236,15 @@ export function createTaskReviveTool(
             );
           }
         } else if (!queueContinuation) {
-          const liveSnapshot = await getRuntimeSessionStatusSnapshot(
-            options.input,
-          );
-          const liveStatus = liveSnapshot.statuses.get(current.taskID);
-          if (liveStatus === 'busy' || liveStatus === 'retry') {
+          const live = await readLiveSession(options.input, current.taskID);
+          if (live.kind === 'busy' || live.kind === 'retry') {
             throw new Error(
-              `Task ${requested} is executing at the host (live status: ${liveStatus}); the revive prompt was NOT sent and no duplicate was launched. Use task_status to inspect it.`,
+              `Task ${requested} is executing at the host (live status: ${live.kind}); the revive prompt was NOT sent and no duplicate was launched. Use task_status to inspect it.`,
             );
           }
-          if (
-            liveSnapshot.error !== undefined ||
-            liveSnapshot.malformedSessionIDs.has(current.taskID)
-          ) {
+          if (live.kind === 'unknown') {
             throw new Error(
-              `Task ${requested} could not be verified against the live session map (${liveSnapshot.error ?? 'malformed entry'}); the revive prompt was NOT sent. Retry task_revive.`,
+              `Task ${requested} could not be verified against the live session map (${live.reason}); the revive prompt was NOT sent. Retry task_revive.`,
             );
           }
         }
@@ -550,19 +558,13 @@ async function ownInvalidatedAdmission(
 
     // Historical session.get outcomes cannot prove the accepted run stopped.
     // Take fresh live evidence after abort settlement, with a bounded budget.
-    const snapshot = await getRuntimeSessionStatusSnapshot(options.input, {
+    const live = await readLiveSession(options.input, taskID, {
       timeoutMs: options.verifyAbortMs ?? 1_500,
     });
     if (!stillOwns()) return;
-    const status = snapshot.statuses.get(taskID);
-    if (
-      snapshot.error !== undefined ||
-      snapshot.malformedSessionIDs.has(taskID) ||
-      status === 'busy' ||
-      status === 'retry'
-    ) {
+    if (live.kind !== 'idle' && live.kind !== 'absent') {
       throw new Error(
-        `live quiescence not verified: ${snapshot.error ?? status ?? 'malformed entry'}`,
+        `live quiescence not verified: ${live.kind === 'unknown' ? live.reason : live.kind}`,
       );
     }
 
@@ -598,7 +600,6 @@ function renderReviveOutput(
       : record.state;
   const lines = [
     `${idParam}: ${record.taskID}`,
-    `generation: ${record.generation}`,
     `state: ${state}`,
     `status: ${admissionUnknown ? 'admission_unknown' : state === 'running' ? 'started' : state}`,
   ];

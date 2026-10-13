@@ -1684,4 +1684,14 @@ describe('createV2Setup permission rules wiring', () => {
     },
     20_000,
   );
+
+  test('derives only the exact observer allow from the task pattern', () => {
+    // The '*' deny is skipped by the wildcard gate; it keeps living in the
+    // static agent registration. Only the exact observer allow survives.
+    expect(
+      deriveExactPermissionRules({
+        task: { '*': 'deny', observer: 'allow' },
+      }),
+    ).toEqual([{ action: 'subagent', resource: 'observer', effect: 'allow' }]);
+  });
 });

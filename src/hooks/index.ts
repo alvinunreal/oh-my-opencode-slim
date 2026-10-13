@@ -8,6 +8,11 @@ export {
   createCouncilInjectHook,
 } from './council-inject';
 export { createDeepworkCommandHook } from './deepwork';
+export {
+  createDeepworkGoalHook,
+  createDeepworkHeadGate,
+  GOAL_POINTER_METADATA_KEY,
+} from './deepwork-goal';
 export { createDeepworkGuardHook } from './deepwork-guard';
 export {
   ForegroundFallbackManager,
@@ -21,6 +26,7 @@ export {
   createOrchestratorWakeScheduler,
   formatChildInputWaitDelta,
   formatStoppedJobDelta,
+  HOST_ATTRIBUTED_STOP_OUTCOME,
   ORCHESTRATOR_CHILD_INPUT_WAKE_TEXT,
   ORCHESTRATOR_CHILDREN_WAKE_TEXT,
   ORCHESTRATOR_STOPPED_JOB_WAKE_TEXT,

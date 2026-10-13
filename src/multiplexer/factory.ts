@@ -9,6 +9,7 @@ import { HerdrMultiplexer } from './herdr';
 import { KittyMultiplexer } from './kitty';
 import { TmuxMultiplexer } from './tmux';
 import type { Multiplexer } from './types';
+import { WeztermMultiplexer } from './wezterm';
 import { ZellijMultiplexer } from './zellij';
 
 /**
@@ -56,6 +57,13 @@ export function getMultiplexer(config: MultiplexerConfig): Multiplexer | null {
       multiplexer = new KittyMultiplexer(config.layout, config.main_pane_size);
       actualType = 'kitty';
       break;
+    case 'wezterm':
+      multiplexer = new WeztermMultiplexer(
+        config.layout,
+        config.main_pane_size,
+      );
+      actualType = 'wezterm';
+      break;
     case 'auto': {
       // Auto-detect from pane-scoped client environment signals only.
       // Note: Does NOT fall back to binary availability checks.
@@ -89,6 +97,14 @@ export function getMultiplexer(config: MultiplexerConfig): Multiplexer | null {
           config.main_pane_size,
         );
         actualType = 'kitty';
+      } else if (process.env.WEZTERM_PANE) {
+        // Last: WezTerm hosts tmux/zellij sessions, which must win when
+        // nested inside it.
+        multiplexer = new WeztermMultiplexer(
+          config.layout,
+          config.main_pane_size,
+        );
+        actualType = 'wezterm';
       } else {
         // Not inside any session, disable multiplexer
         log('[multiplexer] auto: not inside any session, disabling');

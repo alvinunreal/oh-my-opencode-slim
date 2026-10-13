@@ -4,9 +4,9 @@ import { getGlobalStore } from '../../utils/global-store';
  * Pending input waits (question / permission) on background child sessions.
  *
  * The per-session `input-wait-tracker` arms a wait for the *asking* session,
- * but a background child's `question.asked` never reaches its parent: the
- * parent's turn already ended, so nothing wakes it (19.7h hang: child parked
- * on `que_…`, parent idle with finish=stop, no notification anywhere).
+ * but a background child's ask does not wake its parent model. Host UIs may
+ * surface the request independently; headless orchestration still needs the
+ * parent to learn about the parked child.
  *
  * This sidecar closes that hole: it records the open asks of board-tracked
  * RUNNING background children (keyed by taskID + request id, idempotent per
@@ -22,6 +22,14 @@ export type ChildInputWaitKind = 'question' | 'permission';
 export interface ChildInputWaitQuestion {
   question: string;
   header: string;
+  /**
+   * The v2 form field key: the host requires form replies keyed by this
+   * exact value (`answer[field.key]`). `header` is display text (truncated
+   * to 30 chars) and is never a valid key. Absent on v1-native asks.
+   */
+  key?: string;
+  /** v2 multiselect field: the host requires a string[] answer. */
+  multiple?: true;
   options: Array<{ label: string; description: string }>;
 }
 
@@ -101,6 +109,14 @@ function sanitizeQuestions(value: unknown): ChildInputWaitQuestion[] {
     return {
       question: sanitizeText(record.question, 500),
       header: sanitizeText(record.header, 30),
+      // Stored verbatim (never rendered): the host matches reply keys
+      // exactly, so escaping/collapsing/truncating would break the reply.
+      ...(typeof record.key === 'string' &&
+      record.key.length > 0 &&
+      record.key.length <= 200
+        ? { key: record.key }
+        : {}),
+      ...(record.multiple === true ? { multiple: true as const } : {}),
       options,
     };
   });
@@ -184,6 +200,47 @@ export function noteChildInputWait(input: {
   }
   store.waits.set(key, record);
   return record;
+}
+
+/** Request details and only the guidance applicable to this host/request. */
+export function formatChildInputWaitDetail(
+  wait: ChildInputWaitRecord,
+  hostFlavor: unknown,
+): string {
+  const lines: string[] = [];
+  if (wait.kind === 'permission') {
+    lines.push(`permission: ${wait.permission || 'unknown'}`);
+    if (wait.patterns?.length) {
+      lines.push(`patterns: ${wait.patterns.join(', ')}`);
+    }
+  } else if (wait.questions?.length) {
+    for (const entry of wait.questions) {
+      lines.push(
+        `question: ${entry.header && entry.question ? `${entry.header}: ` : ''}${entry.question || entry.header}`,
+      );
+      if (hostFlavor === 'v2') {
+        if (entry.options.length) {
+          lines.push(
+            `options: ${entry.options.map((o) => o.label).join(' / ')}`,
+          );
+        }
+      } else {
+        for (const option of entry.options) {
+          lines.push(
+            `option: ${option.label}${option.description ? ` — ${option.description}` : ''}`,
+          );
+        }
+      }
+    }
+  } else {
+    lines.push('(no question text captured)');
+  }
+  lines.push(
+    wait.kind === 'question' && hostFlavor === 'v2'
+      ? 'next: task_reply cannot answer v2 forms; use host UI, wait, or task_cancel.'
+      : 'next: task_reply',
+  );
+  return lines.join('\n');
 }
 
 /** Clear the wait for an answered/rejected request. Idempotent. */

@@ -4,7 +4,6 @@ import { BUILD_VERSION } from '../generated/build-info.js';
 import {
   DEFAULT_MARKETPLACE_REGISTRY_URL,
   MarketplacePackageBundleSchema,
-  MarketplacePackageManifestSchema,
 } from '../marketplace-contract/index.js';
 import {
   disableMarketplacePackage,
@@ -110,14 +109,6 @@ export function parseBundleFromFile(
     );
   }
   return parseBundle(value);
-}
-
-export function validateMarketplaceManifest(value: unknown) {
-  const parsed = MarketplacePackageManifestSchema.safeParse(value);
-  if (!parsed.success) {
-    throw new MarketplaceValidationError(parsed.error.message);
-  }
-  return parsed.data;
 }
 
 export class MarketplaceService {

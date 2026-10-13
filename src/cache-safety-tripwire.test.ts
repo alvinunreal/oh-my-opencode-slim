@@ -73,7 +73,7 @@ const ALLOWLIST = new Map<string, string>([
   ],
   [
     'hooks/orchestrator-wake/index.ts',
-    'Date.now() timestamps event-tracked child/status bookkeeping for wake decisions (staleness bound, busy-set); the wake prompt text is a static constant and never derives from them.',
+    'Date.now() timestamps event-tracked child/status bookkeeping for wake decisions (staleness bound, busy-set); the wake prompt text — including the v2 anti-forgery and writer-lane suffix constants — is static and never derives from them.',
   ],
   [
     'hooks/task-session-manager/child-input-wait.ts',

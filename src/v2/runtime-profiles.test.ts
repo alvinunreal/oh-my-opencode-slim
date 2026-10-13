@@ -31,6 +31,8 @@ interface BridgeOptions {
   pluginAgents?: string[];
   /** Bound for the request-path switch. */
   switchTimeoutMs?: number;
+  onSessionCaptured?: (sessionID: string) => void;
+  onSessionCaptureFailed?: (sessionID: string) => void;
 }
 
 function makeBridge(options?: BridgeOptions) {
@@ -58,6 +60,12 @@ function makeBridge(options?: BridgeOptions) {
     ...(options?.knownAgent ? { knownAgent: options.knownAgent } : {}),
     ...(options?.switchTimeoutMs
       ? { switchTimeoutMs: options.switchTimeoutMs }
+      : {}),
+    ...(options?.onSessionCaptured
+      ? { onSessionCaptured: options.onSessionCaptured }
+      : {}),
+    ...(options?.onSessionCaptureFailed
+      ? { onSessionCaptureFailed: options.onSessionCaptureFailed }
       : {}),
     log: () => {},
   });
@@ -87,6 +95,61 @@ describe('createSessionProfileBridge', () => {
       providerID: 'openai',
       id: 'gpt-5-mini',
     });
+  });
+
+  test('pins chains before the awaited model switch (refresh-race guard)', async () => {
+    const gate = Promise.withResolvers<void>();
+    const switchEntered = Promise.withResolvers<void>();
+    let switchDone = false;
+    const captured: string[] = [];
+    const { bridge, switchCalls } = makeBridge({
+      onSessionCaptured: (sessionID) => captured.push(sessionID),
+      switchModel: async () => {
+        switchEntered.resolve();
+        await gate.promise;
+        switchDone = true;
+        return {};
+      },
+    });
+
+    const pending = bridge.observeEvent(created('child-1', 'explorer', 'p'));
+    // The switch has started; the capture callback must already have
+    // fired. Pinning happens at capture time, before the awaited switch,
+    // so a refresh completing mid-switch cannot pair the old profile with
+    // a newer chain generation.
+    await switchEntered.promise;
+    expect(captured).toEqual(['child-1']);
+    expect(switchCalls).toEqual([GPT5_SWITCH]);
+    expect(switchDone).toBe(false);
+
+    gate.resolve();
+    await pending;
+    expect(switchDone).toBe(true);
+  });
+
+  test('releases the pin when the model switch fails (retry-race guard)', async () => {
+    const captured: string[] = [];
+    const failed: string[] = [];
+    const { bridge } = makeBridge({
+      onSessionCaptured: (sessionID) => captured.push(sessionID),
+      onSessionCaptureFailed: (sessionID) => failed.push(sessionID),
+      switchModel: async () => {
+        throw new Error('switch failed');
+      },
+    });
+
+    // Fail-closed: the rejection still aborts the admission (the awaited
+    // prompt path propagates; only the event pump swallows).
+    await expect(
+      bridge.ensureSessionProfile('child-1', {
+        parentID: 'p',
+        agent: 'explorer',
+      }),
+    ).rejects.toThrow('switch failed');
+    // The capture-time pin fired, then its release: the retry pins the
+    // generation current at that retry instead of keeping this pin.
+    expect(captured).toEqual(['child-1']);
+    expect(failed).toEqual(['child-1']);
   });
 
   test('accepts the flat early-registration shape', async () => {

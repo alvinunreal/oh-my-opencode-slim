@@ -29,6 +29,7 @@ import * as path from 'node:path';
 import type { BundledSkillInfo } from '../cli/custom-skills';
 import { stateFilePath } from '../companion/manager';
 import { MarketplaceStore } from '../marketplace/store';
+import { createEventDirectoryScope } from '../utils/event-directory-scope';
 import { flushLoggerForTesting } from '../utils/logger';
 import { compilePermissionPolicy } from './permissions';
 import { createV2Setup } from './setup';
@@ -410,6 +411,32 @@ describe('createV2Setup e2e', () => {
     expect(calls.disposed.length).toBeGreaterThan(0);
   }, 20_000);
 
+  test('returns cleanly without registering when disabled by env', async () => {
+    process.env.OH_MY_OPENCODE_SLIM_DISABLE = '1';
+    const { ctx, calls } = makeMockV2Context(projectDir);
+
+    const cleanup = await createV2Setup()(ctx);
+
+    expect(typeof cleanup).toBe('function');
+    expect(calls.agentUpdates).toHaveLength(0);
+    expect(calls.agentDefault).toBeUndefined();
+    expect(calls.agentTransformCount).toBe(0);
+    expect(calls.toolAdds).toHaveLength(0);
+    expect(calls.commandAdds).toHaveLength(0);
+    expect(calls.skillAdds).toHaveLength(0);
+    expect(calls.mcpSets).toHaveLength(0);
+    expect(calls.hooks).toHaveLength(0);
+    expect(calls.contextHookCb).toBeUndefined();
+    expect(calls.promptHookCb).toBeUndefined();
+    expect(calls.toolBeforeCb).toBeUndefined();
+    expect(calls.toolAfterCb).toBeUndefined();
+    await cleanup();
+    await settlePump();
+    expect(readPluginLog()).toContain(
+      'setup skipped: disabled by OH_MY_OPENCODE_SLIM_DISABLE',
+    );
+  });
+
   test('skips built-in MCP injection when the host owns the key', async () => {
     // User/host-configured namespaces own their key (issue #1290): a
     // built-in must never be injected over an existing draft entry.
@@ -443,6 +470,170 @@ describe('createV2Setup e2e', () => {
     } finally {
       await cleanup();
     }
+  }, 20_000);
+
+  test('background-default flip arms on registry replay, not registration', async () => {
+    // The v2 registry replays transforms on the next read after a change,
+    // never at registration (the skills test below relies on the same
+    // contract). The flip must therefore arm inside the replayed callback;
+    // a registration-time probe would always read false and never arm.
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    const setupCtx = ctx as unknown as {
+      tool: {
+        transform: (
+          callback: (draft: unknown) => void,
+        ) => Promise<{ dispose: () => void }>;
+      };
+    };
+    let replay: ((draft: unknown) => void) | undefined;
+    setupCtx.tool.transform = async (callback) => {
+      replay = callback;
+      return { dispose: () => {} };
+    };
+    const nativeTool = { description: 'Foreground (default) native wording' };
+    let toolPresent = true;
+    const draft = () => ({
+      update: (_id: string, fn: (tool: typeof nativeTool) => void) => {
+        if (toolPresent) fn(nativeTool);
+      },
+      get: (id: string) =>
+        id === 'subagent' && toolPresent ? nativeTool : undefined,
+    });
+    let callSeq = 0;
+    const sendLaunch = async (background?: boolean) => {
+      const event = {
+        tool: 'subagent',
+        sessionID: 'ses_flip_parent',
+        agent: 'orchestrator',
+        messageID: 'msg_flip',
+        id: `call_flip_${++callSeq}`,
+        input: {
+          agent: 'fixer',
+          description: 'flip probe',
+          prompt: 'Work',
+          ...(background === undefined ? {} : { background }),
+        },
+      };
+      const hook = calls.toolBeforeCb;
+      if (!hook) throw new Error('tool:execute.before not captured');
+      await hook(event);
+      return event.input;
+    };
+
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      // (1) Setup settled, registry not replayed yet: an omitted
+      // background stays omitted (native foreground default).
+      expect(replay).toBeDefined();
+      expect(await sendLaunch()).not.toHaveProperty('background');
+      await flushLoggerForTesting();
+      expect(readPluginLog()).not.toContain('v2 background default applied');
+
+      // (2) First replay lands the rewrite: the mechanism half arms and
+      // the same omitted call flips to background.
+      replay?.(draft());
+      expect((await sendLaunch()).background).toBe(true);
+      await flushLoggerForTesting();
+      expect(readPluginLog()).toContain('v2 background default applied');
+
+      // (3) Explicit values pass through untouched in both lanes.
+      expect((await sendLaunch(true)).background).toBe(true);
+      expect((await sendLaunch(false)).background).toBe(false);
+      await flushLoggerForTesting();
+      expect(readPluginLog()).toContain(
+        '[task-session-manager] v2 background explicit',
+      );
+
+      // (4) A later replay without the native tool disarms again, and a
+      // subsequent replay with it re-arms (replays are idempotent).
+      toolPresent = false;
+      replay?.(draft());
+      expect(await sendLaunch()).not.toHaveProperty('background');
+      await flushLoggerForTesting();
+      expect(readPluginLog()).toContain(
+        '[v2] subagent description flip missed (tool absent)',
+      );
+      toolPresent = true;
+      replay?.(draft());
+      expect((await sendLaunch()).background).toBe(true);
+
+      // (5) A throwing replay must not leave a stale arm behind.
+      replay?.({
+        update: () => {
+          throw new Error('boom');
+        },
+        get: () => undefined,
+      });
+      expect(await sendLaunch()).not.toHaveProperty('background');
+      await flushLoggerForTesting();
+      expect(readPluginLog()).toContain(
+        '[v2] subagent description flip failed',
+      );
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('background-default flip disarms on setup disposal', async () => {
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    const setupCtx = ctx as unknown as {
+      tool: {
+        transform: (
+          callback: (draft: unknown) => void,
+        ) => Promise<{ dispose: () => void }>;
+      };
+    };
+    let replay: ((draft: unknown) => void) | undefined;
+    setupCtx.tool.transform = async (callback) => {
+      replay = callback;
+      return { dispose: () => {} };
+    };
+    const nativeTool = { description: 'Foreground (default) native wording' };
+    const launch = () => ({
+      tool: 'subagent',
+      sessionID: 'ses_flip_dispose',
+      agent: 'orchestrator',
+      messageID: 'msg_flip_dispose',
+      id: 'call_flip_dispose',
+      input: {
+        agent: 'fixer',
+        description: 'dispose probe',
+        prompt: 'Work',
+      },
+    });
+
+    const cleanup = await createV2Setup()(ctx);
+    // Land the rewrite and prove the flip is armed before disposal: the
+    // omitted background flips and the armed log is on record. Without
+    // this precondition the disarm assertions below would prove nothing.
+    replay?.({
+      update: (_id: string, fn: (tool: typeof nativeTool) => void) => {
+        fn(nativeTool);
+      },
+      get: (id: string) => (id === 'subagent' ? nativeTool : undefined),
+    });
+    const armedLaunch = launch();
+    const hook = calls.toolBeforeCb;
+    if (!hook) throw new Error('tool:execute.before not captured');
+    await hook(armedLaunch);
+    expect(armedLaunch.input.background).toBe(true);
+    await flushLoggerForTesting();
+    expect(readPluginLog()).toContain('[v2] background-default flip armed');
+    expect(readPluginLog()).not.toContain(
+      '[v2] background-default flip disarmed',
+    );
+
+    await cleanup();
+    await flushLoggerForTesting();
+    // Disposal must disarm the flip itself. A disposed instance also
+    // rejects further execute.before calls, but that rejection happens
+    // before any flip consultation, so only the disarmed log proves the
+    // state transition (removing disarm() from the disposer fails here).
+    expect(readPluginLog()).toContain('[v2] background-default flip disarmed');
+
+    const rejected = launch();
+    await expect(hook(rejected)).rejects.toThrow(/disposed/);
+    expect(rejected.input).not.toHaveProperty('background');
   }, 20_000);
 
   test('bundled skills register through a lazily replayed draft', async () => {
@@ -550,11 +741,16 @@ describe('createV2Setup e2e', () => {
       }),
     );
 
-    const { ctx, calls } = makeMockV2Context(projectDir);
+    const { ctx, calls, events } = makeMockV2Context(projectDir);
     const cleanup = await createV2Setup()(ctx);
 
     try {
       expect(calls.contextHookCb).toBeFunction();
+      events.push({
+        type: 'session.execution.started',
+        data: { sessionID: 'ses_companion_variant' },
+      });
+      await settlePump();
       await calls.contextHookCb?.({
         sessionID: 'ses_companion_variant',
         agent: 'fixer',
@@ -712,6 +908,21 @@ describe('createV2Setup e2e', () => {
   test('reduced ctx (no agent.transform) skips gracefully', async () => {
     const cleanup = await createV2Setup()({} as never);
     await cleanup(); // passes when neither call throws
+  }, 20_000);
+
+  test('skips gracefully when OH_MY_OPENCODE_SLIM_DISABLE is set', async () => {
+    process.env.OH_MY_OPENCODE_SLIM_DISABLE = '1';
+    try {
+      const { ctx, calls } = makeMockV2Context(projectDir);
+      const cleanup = await createV2Setup()(ctx);
+      await cleanup();
+      expect(calls.agentTransformCount).toBe(0);
+      expect(calls.toolAdds.length).toBe(0);
+      expect(calls.commandAdds.length).toBe(0);
+      expect(calls.skillAdds.length).toBe(0);
+    } finally {
+      delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
+    }
   }, 20_000);
 
   test('retired generations reject late agent transform callbacks', async () => {
@@ -2215,6 +2426,108 @@ describe('createV2Setup e2e', () => {
       expect(status.content).toContain('ses_kid_1');
     } finally {
       await cleanup();
+    }
+  }, 20_000);
+
+  test('moved child completion reaches its owning task board without foreign permission updates', async () => {
+    const { ctx, calls, events } = makeMockV2Context(projectDir);
+    const worktreeDir = path.join(projectDir, '.slim', 'worktrees', 'child');
+    const worktreeScope = createEventDirectoryScope(worktreeDir);
+    const childID = 'ses_moved_child';
+    const permissionUpdates: unknown[] = [];
+    let completedAt: number | undefined;
+    const session = ctx.session as unknown as Record<string, unknown>;
+    session.update = async (input: unknown) => {
+      permissionUpdates.push(input);
+    };
+    session.get = async ({ sessionID }: { sessionID: string }) => ({
+      id: sessionID,
+      agent: sessionID === childID ? 'fixer' : 'orchestrator',
+      ...(sessionID === childID ? { parentID: 'ses_parent' } : {}),
+      ...(completedAt ? { outcome: 'succeeded' } : {}),
+      time: { created: 1, ...(completedAt ? { idle: completedAt } : {}) },
+    });
+    session.context = async () =>
+      completedAt
+        ? [
+            {
+              id: 'msg_moved_result',
+              type: 'assistant',
+              time: { created: completedAt, completed: completedAt },
+              finish: 'stop',
+              content: [{ type: 'text', text: 'Moved child result' }],
+            },
+            {
+              id: 'msg_moved_idle',
+              type: 'idle',
+              time: { created: completedAt },
+              outcome: 'succeeded',
+            },
+          ]
+        : [];
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      const launch = {
+        tool: 'subagent',
+        sessionID: 'ses_parent',
+        agent: 'orchestrator',
+        messageID: 'msg_launch',
+        id: 'call_moved_child',
+        input: {
+          agent: 'fixer',
+          description: 'moved child',
+          prompt: 'Work in a worktree',
+          background: true,
+        },
+      };
+      await calls.toolBeforeCb?.(launch);
+      await calls.toolAfterCb?.({
+        ...launch,
+        status: 'completed',
+        result: {
+          content: `The subagent is working in the background (sessionID: ${childID}).`,
+        },
+      });
+
+      // The child now runs in another live location. Its task record still
+      // belongs to this parent, not to the worktree's plugin instance.
+      const foreignEvent = (type: string, sessionID = childID) => ({
+        type,
+        created: Date.now(),
+        location: { directory: worktreeDir },
+        data: { sessionID },
+      });
+      const updatesBeforeCompletion = permissionUpdates.length;
+      events.push(foreignEvent('session.execution.started'));
+      events.push({
+        ...foreignEvent('session.created', 'ses_unrelated'),
+        data: {
+          sessionID: 'ses_unrelated',
+          parentID: 'ses_foreign_parent',
+          agent: 'fixer',
+        },
+      });
+      await settlePump();
+      completedAt = Date.now();
+      events.push(foreignEvent('session.execution.succeeded'));
+      events.push(foreignEvent('session.execution.succeeded', 'ses_unrelated'));
+      await settlePump(100);
+
+      const taskStatus = calls.toolAdds.find((t) => t.name === 'task_status');
+      if (!taskStatus) throw new Error('task_status not registered');
+      const status = (await taskStatus.execute(
+        { task_id: childID },
+        { sessionID: 'ses_parent' },
+      )) as { content: string };
+      expect(status.content).toContain('state: completed');
+      expect(permissionUpdates).toHaveLength(updatesBeforeCompletion);
+      const logText = readPluginLog();
+      expect(logText).toContain('"taskID":"ses_moved_child"');
+      expect(logText).toContain('[terminal-gate] terminal published');
+      expect(logText).not.toContain('ses_unrelated');
+    } finally {
+      await cleanup();
+      worktreeScope.release();
     }
   }, 20_000);
 

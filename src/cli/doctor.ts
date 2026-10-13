@@ -5,6 +5,7 @@ import {
   mergePluginConfigs,
   normalizeDisabledArrayKeys,
 } from '../config/loader';
+import { stripRemovedConfigKeys } from '../config/removed-keys';
 import {
   MultiplexerConfigStrictSchema,
   type PluginConfig,
@@ -127,6 +128,11 @@ function checkConfigFile(
     // Normalize disabled_* keys exactly like the loader does before schema
     // validation, so a string value (e.g. "explorer") is not diagnosed as a
     // false invalid-schema error. Report each normalization to the user.
+    // Removed keys are dropped with a warning, exactly like the loader, so a
+    // stale key is not diagnosed as an invalid config.
+    stripRemovedConfigKeys(rawConfig, (message) => {
+      console.warn(`[oh-my-opencode-slim] ${message}`);
+    });
     normalizeDisabledArrayKeys(rawConfig, (message) => {
       console.warn(`[oh-my-opencode-slim] ${message}`);
     });

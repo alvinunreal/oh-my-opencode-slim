@@ -59,6 +59,95 @@ function normalizeObjectiveKey(value: string): string {
   return value.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
+/** Trigger line the orchestrator emits on a council synthesis call: the
+ * session IDs / board aliases the seat dispatches returned, which the
+ * harness resolves host-side from its own Background Job Board, so the
+ * orchestrator never re-emits seat text as output tokens (Mixture-of-Agents
+ * assembly with an independent judge). No /g flag: lastIndex state would
+ * skip matches across the findIndex/exec passes. */
+const COUNCIL_SEATS_LINE_PATTERN = /^Seats:\s*(.+)$/;
+
+/** Seat body per the assembly contract; read-only over the record. Only a
+ * completed terminal with text is a real response — lifecycle diagnostics
+ * (cancelled/error/stopped text) must never be injected as a councillor's
+ * opinion (task_result itself refuses non-completed terminals). */
+function councilSeatBody(record: BackgroundJobRecord | undefined): string {
+  if (!record) return '[no response — unresolved ref]';
+  if (record.state === 'running') return '[no response — still running]';
+  const terminal =
+    record.state === 'reconciled'
+      ? (record.terminalState ?? 'reconciled')
+      : record.state;
+  if (
+    terminal === 'completed' &&
+    record.resultSummary &&
+    record.resultSummary.trim() !== ''
+  ) {
+    // Verbatim: resultSummary holds the child's full terminal text.
+    return record.resultSummary;
+  }
+  return `[no response — no output (${terminal})]`;
+}
+
+/**
+ * Host-side council seat assembly. When a council call's prompt carries a
+ * `Seats: <id, id>` line (the IDs the seat dispatches returned), resolve
+ * each ref against the CALLER's own board
+ * rows (the same parent-scoped invariant the control tools enforce — a ref
+ * owned by another parent never resolves), strip the trigger line, and
+ * append one `## Seat: <name>` section per ref. The FINAL matching line is
+ * used, so a `Seats:` roster quoted in the question cannot shadow the
+ * orchestrator's refs. A trigger line with refs always rewrites: unresolved
+ * refs (restart, eviction, cross-conversation) become per-seat placeholders
+ * so the council sees which seats are missing. Resolution is strictly
+ * read-only: no markUsed, no reconcile, no board mutation, and never a wait
+ * on a running seat (a still-running ref gets a placeholder).
+ */
+function assembleCouncilSeatResponses(
+  args: TaskArgs,
+  parentSessionID: string,
+  board: BackgroundJobStore,
+): void {
+  if (typeof args.prompt !== 'string') return;
+  const lines = args.prompt.split('\n');
+  const triggerIndex = lines.findLastIndex((line) =>
+    COUNCIL_SEATS_LINE_PATTERN.test(line),
+  );
+  if (triggerIndex === -1) return;
+  const refs = (COUNCIL_SEATS_LINE_PATTERN.exec(lines[triggerIndex])?.[1] ?? '')
+    .split(',')
+    .map((ref) => ref.trim())
+    .filter((ref) => ref !== '');
+  // A trigger line always rewrites, so the council never receives a bare ID
+  // line it cannot use: unresolved refs (restart, eviction,
+  // cross-conversation) become per-seat placeholders, and a malformed
+  // empty-refs line reports itself instead of passing through silently.
+  const sections =
+    refs.length === 0
+      ? ['[no seat references were provided]']
+      : refs.map((ref) => {
+          const record = board.resolve(parentSessionID, ref);
+          return `## Seat: ${record?.agent || ref}\n${councilSeatBody(record)}`;
+        });
+  const kept = [
+    ...lines.slice(0, triggerIndex),
+    ...lines.slice(triggerIndex + 1),
+  ]
+    .join('\n')
+    .replace(/\n+$/, '');
+  // Single assignment: the trigger is stripped and the sections appended as
+  // one new string, so nothing can observe (or throw out of) a half-rewritten
+  // prompt — the assembly's sole idempotence guarantee now that the
+  // `## Seat:` sentinel is gone.
+  const assembled = `${kept}\n\n${sections.join('\n\n')}`;
+  args.prompt = assembled;
+  log('[task-session-manager] council seat assembly applied', {
+    parentSessionID,
+    seats: refs.length,
+    promptLength: assembled.length,
+  });
+}
+
 function refuseExplicitTaskId(
   requested: string,
   message: string,
@@ -152,6 +241,13 @@ export async function handleToolExecuteBefore(
      * delegation vocabulary for model-visible refusal guidance. Defaults to
      * v1 wording. */
     hostFlavor?: string;
+    /** When false, council seat assembly is skipped (the orchestrator pastes
+     * seat text into the council prompt as before). Defaults to true. Toggle
+     * via `disabledHooks: ['council-assembly']` in the omos config. */
+    councilAssembly?: boolean;
+    /** Per-instance pairing flag for the background-default flip: true only
+     * after this setup's v2 description rewrite verifiably landed. */
+    isBackgroundDefaultFlipArmed?: () => boolean;
     recoverRetainedSession?: (request: {
       parentSessionID: string;
       requested: string;
@@ -187,6 +283,32 @@ export async function handleToolExecuteBefore(
   if (!isObjectRecord(output.args)) return;
 
   const args = output.args as TaskArgs;
+  // Background-default flip (v2 only): the native `subagent` schema has no
+  // default, so an omitted `background` silently blocks the parent turn —
+  // measured 2:1 foreground habit even in orchestration sessions. Flip the
+  // omitted-parameter default to background for managed sessions; explicit
+  // `false` (dependent work) and explicit `true` pass through untouched.
+  // Gated on the per-instance pairing flag: the flip only runs once this
+  // setup's v2 description rewrite verifiably landed (arm via
+  // 'v2.backgroundDefaultFlip') — otherwise the native foreground default
+  // keeps operating end-to-end with its native wording intact. v1 hosts
+  // keep the full native behavior (no flavor gate entry).
+  if (deps.hostFlavor === 'v2' && deps.isBackgroundDefaultFlipArmed?.()) {
+    if (args.background === undefined) {
+      args.background = true;
+      log('[task-session-manager] v2 background default applied', {
+        sessionID: input.sessionID,
+      });
+    } else {
+      // Observation lamp for the explicit lane: `false` usage is the
+      // dependent-work health metric; `true` distinguishes model-chosen
+      // background from the rewritten default.
+      log('[task-session-manager] v2 background explicit', {
+        sessionID: input.sessionID,
+        background: args.background,
+      });
+    }
+  }
   if (typeof args.task_id === 'string' && args.task_id.trim() === '') {
     refuseExplicitTaskId(
       args.task_id,
@@ -209,6 +331,24 @@ export async function handleToolExecuteBefore(
   }
 
   const agentType = args.subagent_type.trim();
+  // Council Mode host-side assembly (both host flavors arrive here: the v2
+  // execute.before bridge normalizes `subagent` calls into this v1 `task`
+  // shape before the hook runs, so one injection point covers both).
+  // Toggled via deps.councilAssembly (disabledHooks: ['council-assembly']),
+  // resolved once at construction from the same runtime set the injected
+  // block's delivery mode comes from — the two can never disagree within a
+  // plugin generation. Deliberately no refusal on the disabled path: a
+  // shape check that fails closed (rejecting prompts whose quoted content
+  // mentions a Seats line) DoSes legitimate paste-mode calls, while the
+  // stale-harness-block window it guards fails open and visibly at
+  // synthesis time (the council's mandated format reports missing seats).
+  if (agentType === 'council' && deps.councilAssembly !== false) {
+    assembleCouncilSeatResponses(
+      args,
+      input.sessionID,
+      deps.backgroundJobBoard,
+    );
+  }
   if (typeof args.task_id === 'string' && args.task_id.trim() !== '') {
     const canonical = deps.resolveCanonicalTaskRef
       ? await deps.resolveCanonicalTaskRef(input.sessionID, args.task_id.trim())

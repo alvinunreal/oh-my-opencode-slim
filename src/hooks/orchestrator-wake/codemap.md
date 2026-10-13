@@ -83,6 +83,16 @@ run by default). The v1 code path is unchanged.
     bypasses the wake condition, as on v1). Queued facts are revalidated by
     task ID + generation before delivery; the bounded detail queue emits an
     overflow signal instead of silently losing excess recovery state.
+  - `triggerChildInputWaitWake`: coalesces asks for 250 ms before evaluation so
+    host/UI auto-replies can settle first. Resolved asks are pruned; empty
+    batches cancel their timers. Duplicate asks retain the original deadline.
+    Stopped-job wakes stay immediate and do not carry still-settling asks.
+    Settling is rechecked after awaited reads/selection before reserving a
+    child-only wake, so a concurrent ask cannot produce a false stop notice.
+    Retained overflow keys are revalidated along with inline asks, and
+    overflow-only wakes use the input template plus bounded task IDs.
+    Identity-based retirement preserves new overflow added during delivery.
+    Parent deletion, archive/suppression and instance disposal clear timers.
   - `observeChatMessage`: real external user activity rearms the no-progress
     cap and records the observed model for continuation prompts.
 - **Gate** (`wake-gate.ts`): Process-local reservation/progress store shared

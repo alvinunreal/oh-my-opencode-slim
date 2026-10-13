@@ -44,6 +44,9 @@ export type ChildTerminalEvidence =
  * `limit` asks the host for only the newest N messages (still oldest-first);
  * a host that ignores it returns the whole transcript, so callers must
  * tolerate either.
+ * `historyBoundary` is a plugin-local identity hint for terminal evidence:
+ * after compaction, the V2 shim reads persisted history back to that message
+ * without changing ordinary context reads. V1 clients ignore the hint.
  */
 export async function fetchChildTranscript(
   client: PluginInput['client'],
@@ -51,6 +54,7 @@ export async function fetchChildTranscript(
   directory: string,
   limit?: number,
   signal?: AbortSignal,
+  historyBoundary?: string,
 ): Promise<unknown> {
   const session = client.session;
   const messages =
@@ -61,6 +65,7 @@ export async function fetchChildTranscript(
   const response = await messages({
     path: { id: sessionID },
     query: { directory, limit },
+    ...(historyBoundary ? { historyBoundary } : {}),
     ...(signal ? { signal } : {}),
   });
   const error = responseError(response);
@@ -89,6 +94,32 @@ export function stringifyError(error: unknown): string {
   } catch {
     return String(error);
   }
+}
+
+/**
+ * Extract a human-readable message from a serialized session error.
+ *
+ * The core publishes session errors through NamedError.toObject(), whose
+ * wire shape is `{ name: string; data: ... }` — the message lives in
+ * `data.message` (APIError, ProviderAuthError, ...), not at the top
+ * level. Reading only `error.message` yields undefined for every
+ * serialized NamedError and the board fell back to the generic
+ * "Session error" even when the detail existed two levels down (#1200
+ * diagnostics). Plain `{ message }` shapes are still honored for
+ * non-NamedError payloads.
+ */
+export function structuredErrorMessage(error: unknown): string | undefined {
+  if (!isRecord(error)) return undefined;
+  const data = error.data;
+  if (isRecord(data)) {
+    const inner = data.message;
+    // Whitespace-only strings must not bypass the generic fallback
+    // (an empty board summary is worse than "Session error").
+    if (typeof inner === 'string' && inner.trim().length > 0) return inner;
+  }
+  const direct = error.message;
+  if (typeof direct === 'string' && direct.trim().length > 0) return direct;
+  return undefined;
 }
 
 interface LooseMessage {

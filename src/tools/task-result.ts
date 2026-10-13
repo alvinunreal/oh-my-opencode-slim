@@ -10,11 +10,6 @@ import {
   createBackgroundJobTerminalGate,
   runtimeObservationFromSnapshot,
 } from '../utils/background-job-terminal-gate';
-import {
-  classifyTerminalEvidence,
-  classifyV2HistoricalRound,
-  fetchChildTranscript,
-} from '../utils/child-transcript';
 import { getClient } from '../utils/opencode-client';
 import { SESSION_ID_PATTERN } from '../utils/session';
 import {
@@ -26,8 +21,10 @@ import {
   type CanonicalTaskResolver,
   idParamFor,
   readTaskRef,
+  resolveTaskRecord,
   taskRefArgs,
 } from './task-ref';
+import { readUntrackedEvidence } from './untracked-task-observation';
 
 interface TaskResultToolOptions {
   input: PluginInput;
@@ -35,6 +32,7 @@ interface TaskResultToolOptions {
   terminalGate?: BackgroundJobTerminalGate;
   resolveCanonicalTaskRef?: CanonicalTaskResolver;
   isDisposed?: () => boolean;
+  readTimeoutMs?: number;
 }
 
 function readonlyTerminalResult(
@@ -103,16 +101,15 @@ export function createTaskResultTool(
         if (!parentSessionID) throw new Error('task_result requires sessionID');
         const requested = readTaskRef(args, idParam);
         if (!requested) throw new Error(`task_result requires ${idParam}`);
-        const canonical = options.resolveCanonicalTaskRef
-          ? await options.resolveCanonicalTaskRef(parentSessionID, requested)
-          : undefined;
-        if (options.isDisposed?.()) throw new Error(pluginDisposedMessage());
-        if (canonical?.kind === 'refused') throw new Error(canonical.reason);
-        const identity = canonical?.taskID ?? requested;
+        const ref = await resolveTaskRecord(
+          options,
+          parentSessionID,
+          requested,
+        );
+        if (ref.kind === 'disposed') throw new Error(pluginDisposedMessage());
+        if (ref.kind === 'refused') throw new Error(ref.reason);
+        const { identity, canonical, job: tracked } = ref;
         const board = options.backgroundJobBoard;
-        const tracked = canonical
-          ? board.get(identity)
-          : board.resolve(parentSessionID, requested);
         if (tracked && tracked.parentSessionID !== parentSessionID) {
           throw new Error(`Task ${identity} does not belong to this session`);
         }
@@ -229,32 +226,31 @@ export function createTaskResultTool(
           return current.resultSummary;
         }
 
-        // v2 data: the context's idle marker ends a round, not a status map.
-        const v2 =
-          (options.input as { hostFlavor?: string }).hostFlavor === 'v2';
-        if (!v2) {
-          snapshot = await getRuntimeSessionStatusSnapshot(options.input);
-          const status = runtimeSessionStatus(snapshot, taskID);
-          if (status === 'busy' || status === 'retry')
-            return pending(idParam, taskID, false, status, false);
-          if (snapshot.error || snapshot.malformedSessionIDs.has(taskID))
-            return pending(idParam, taskID, true, undefined, false);
-        }
-        const response = await fetchChildTranscript(
-          client,
+        // Untracked fallback: rendered from the same single read that
+        // task_status uses. Ownership is already verified above (the
+        // session.get parentID gate), so only the live probe and transcript
+        // classification run here.
+        const read = await readUntrackedEvidence(
+          { input: options.input, readTimeoutMs: options.readTimeoutMs },
           taskID,
-          options.input.directory,
         );
-        const evidence = v2
-          ? classifyV2HistoricalRound(response)
-          : classifyTerminalEvidence(response);
-        if (evidence.verdict === 'incomplete')
+        if (read.live.status === 'busy' || read.live.status === 'retry')
+          return pending(idParam, taskID, false, read.live.status, false);
+        if (read.live.status === 'unknown')
           return pending(idParam, taskID, true, undefined, false);
-        if (evidence.verdict !== 'completed' || !evidence.text)
+        if (read.roundError) throw read.roundError;
+        const evidence = read.round;
+        if (!evidence || evidence.verdict === 'incomplete')
+          return pending(idParam, taskID, true, undefined, false);
+        const completedText =
+          evidence.verdict === 'completed' && 'text' in evidence
+            ? evidence.text
+            : undefined;
+        if (!completedText)
           throw new Error(
             `Task ${requested} shows no terminal evidence of completion; refusing to present partial output as its final result`,
           );
-        return evidence.text;
+        return completedText;
       },
     }),
   };

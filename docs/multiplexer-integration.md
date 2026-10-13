@@ -1,6 +1,6 @@
 # Multiplexer Integration Guide
 
-Use tmux, Zellij, Herdr, cmux-tui, or kitty to watch subagents work in live
+Use tmux, Zellij, Herdr, cmux-tui, kitty, or WezTerm to watch subagents work in live
 views (split panes, or for cmux-tui sibling tabs) anchored to the TUI client
 that displays their parent session.
 
@@ -53,7 +53,7 @@ How it works:
 2. Every **TUI client** that displays the parent session subscribes to the
    host session events and, for each eligible child session, creates a view in
    **the pane it is itself running in** — a split pane (tmux / Zellij / Herdr /
-   kitty), or a sibling tab appended to that pane (cmux-tui).
+   kitty / WezTerm), or a sibling tab appended to that pane (cmux-tui).
 3. The pane runs a pure view command (v1 default shown; see
    [Deployment Modes](#deployment-modes) for v2):
 
@@ -151,7 +151,7 @@ only enables panes when the configured adapter matches what it detects.
 **Single machine (embedded TUI with a listener):**
 
 ```bash
-tmux            # or zellij / herdr / kitty / cmux-tui
+tmux            # or zellij / herdr / kitty / wezterm / cmux-tui
 opencode --port 4096
 ```
 
@@ -235,6 +235,16 @@ listen_on unix:/tmp/kitty-rc-$(USER)
 invocation. After editing `kitty.conf`, **restart kitty** so the socket is
 created, and verify with `kitten @ ls` from a normal shell.
 
+**WezTerm** — no configuration needed. WezTerm exports `WEZTERM_PANE`,
+`WEZTERM_UNIX_SOCKET`, and `WEZTERM_EXECUTABLE` to every pane, and the plugin
+drives it through the `wezterm` CLI installed next to the running GUI
+(falling back to `PATH`), always with `--no-auto-start` so a stale socket
+fails instead of starting a background mux server. Verify with
+`wezterm cli list` from a normal shell. Auto detection checks WezTerm last,
+so tmux or Zellij running inside WezTerm still wins. Native Windows is
+unsupported and untested: without `SHELL` the adapter reports unavailable,
+and an MSYS-style `SHELL` may not resolve for native `wezterm.exe`.
+
 ### 4. Trigger delegated work
 
 Ask OpenCode to do something that launches subagents. New panes appear next to
@@ -255,43 +265,14 @@ inside that pane).
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `type` | string | `"none"` | `"auto"`, `"tmux"`, `"zellij"`, `"herdr"`, `"cmux-tui"`, `"kitty"`, or `"none"` |
+| `type` | string | `"none"` | `"auto"`, `"tmux"`, `"zellij"`, `"herdr"`, `"cmux-tui"`, `"kitty"`, `"wezterm"`, or `"none"` |
 | `layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Each adapter maps it to its nearest native expression; cmux-tui has no layout expression and ignores it (see [Layouts](#layouts)) |
-| `main_pane_size` | number | `60` | Main pane size percentage (`20`–`80`). Applied by tmux for the `main-*` layouts; ignored by Zellij, Herdr, kitty, and cmux-tui |
+| `main_pane_size` | number | `60` | Main pane size percentage (`20`–`80`). Applied by tmux for the `main-*` layouts and by WezTerm to the first agent split; ignored by Zellij, Herdr, kitty, and cmux-tui |
 | `cmux_tui_binary` | string | omitted | Explicit path to the cmux-tui binary. When omitted, the client resolves `cmux-tui` first, then `cmux`, on `PATH` |
-| `viewer` | string | `"tui"` on v1, `"mini"` on v2 | Subagent pane surface: `"tui"` (full interface) or `"mini"` (lightweight interface). Explicit values override the host default. On v1, `"mini"` requires OpenCode >= 1.17.10 and runs `opencode attach <url> --session <id> --dir <dir> --mini`, without additional pane-cwd pinning. On v2 it runs `opencode mini` without a positional directory, so adapters pin the cwd (herdr/kitty natively, tmux `-c`, Zellij `--cwd`, cmux-tui `cd` for POSIX shells and fish). Changing the value takes effect on the next opencode start |
+| `viewer` | string | `"tui"` on v1, `"mini"` on v2 | Subagent pane surface: `"tui"` (full interface) or `"mini"` (lightweight interface). Explicit values override the host default. On v1, `"mini"` requires OpenCode >= 1.17.10 and runs `opencode attach <url> --session <id> --dir <dir> --mini`, without additional pane-cwd pinning. On v2 it runs `opencode mini` without a positional directory, so adapters pin the cwd (herdr/kitty/WezTerm natively, tmux `-c`, Zellij `--cwd`, cmux-tui `cd` for POSIX shells and fish). Changing the value takes effect on the next opencode start |
 
 All `multiplexer.*` values are read by the client only. An invalid value
 disables pane management (fail-closed) with a once-per-process diagnostic.
-
-### Deprecated key: `zellij_pane_mode`
-
-`multiplexer.zellij_pane_mode` is **no longer supported**. It is ignored, pane
-management keeps working under the remaining configuration, and a one-time
-deprecation warning is logged:
-
-```text
-[oh-my-opencode-slim] Deprecated multiplexer.zellij_pane_mode config key found and ignored.
-Zellij panes always open in the tab containing the parent pane.
-```
-
-Remove the key from your config to silence the warning. There is no replacement
-key: same-tab placement is the only Zellij behavior (see
-[Behavior Changes and Removals](#behavior-changes-and-removals)).
-
-### Legacy `tmux` config
-
-The old top-level `tmux` block (`tmux.enabled` / `tmux.layout` /
-`tmux.main_pane_size`) is deprecated and **ignored** (a warning is logged). It
-is no longer converted automatically. Replace it with `multiplexer.*`:
-
-```jsonc
-// Before (ignored)
-{ "tmux": { "enabled": true, "layout": "main-vertical" } }
-
-// After
-{ "multiplexer": { "type": "tmux", "layout": "main-vertical" } }
-```
 
 ## Layouts
 
@@ -301,13 +282,13 @@ has no exact equivalent, it uses the nearest native expression (marked
 settings entirely (its child views are tabs inside the parent pane, not panes in
 a layout).
 
-| Layout | tmux | Zellij | Herdr | kitty | cmux-tui |
-|--------|------|--------|-------|-------|------|
-| `main-vertical` | `-h` split, then `select-layout main-vertical` (+ `main-pane-width`) | `new-pane --direction right` | `pane split --direction right`; *approximate* agent column (below) | `tall` layout | ignored (no layout expression) |
-| `main-horizontal` | `-v` split, then `select-layout main-horizontal` (+ `main-pane-height`) | `new-pane --direction down` | `pane split --direction down` | `fat` layout | ignored (no layout expression) |
-| `even-horizontal` | `-h` split, then `select-layout even-horizontal` | no direction (Zellij's native placement) | `pane split --direction right` | `horizontal` layout | ignored (no layout expression) |
-| `even-vertical` | `-v` split, then `select-layout even-vertical` | no direction (native placement) | `pane split --direction down` | `vertical` layout | ignored (no layout expression) |
-| `tiled` | `-h` split, then `select-layout tiled` | no direction (native placement) | `pane split --direction right` | `grid` layout | ignored (no layout expression) |
+| Layout | tmux | Zellij | Herdr | kitty | WezTerm | cmux-tui |
+|--------|------|--------|-------|-------|---------|------|
+| `main-vertical` | `-h` split, then `select-layout main-vertical` (+ `main-pane-width`) | `new-pane --direction right` | `pane split --direction right`; *approximate* agent column (below) | `tall` layout | `split-pane --right --percent <100 - main_pane_size>`; *approximate* agent column (below) | ignored (no layout expression) |
+| `main-horizontal` | `-v` split, then `select-layout main-horizontal` (+ `main-pane-height`) | `new-pane --direction down` | `pane split --direction down` | `fat` layout | `split-pane --bottom --percent <100 - main_pane_size>`; *approximate* agent row | ignored (no layout expression) |
+| `even-horizontal` | `-h` split, then `select-layout even-horizontal` | no direction (Zellij's native placement) | `pane split --direction right` | `horizontal` layout | `split-pane --right` from the parent | ignored (no layout expression) |
+| `even-vertical` | `-v` split, then `select-layout even-vertical` | no direction (native placement) | `pane split --direction down` | `vertical` layout | `split-pane --bottom` from the parent | ignored (no layout expression) |
+| `tiled` | `-h` split, then `select-layout tiled` | no direction (native placement) | `pane split --direction right` | `grid` layout | `split-pane --right` from the parent | ignored (no layout expression) |
 
 Adapter notes:
 
@@ -329,6 +310,22 @@ Adapter notes:
   the new window is placed next to the parent with `--next-to=id:<id>` (`id:`
   is the window search field; `window_id:` is tab-level and must not be used
   there). A layout that is already applied is not re-applied.
+- **WezTerm** — no preset layouts, so the layout is built from split order
+  like Herdr: for `main-*` the first child splits the parent at `100 -
+  main_pane_size` percent, and later children stack inside that agent pane
+  (below for `main-vertical`, to the right for `main-horizontal`); if it is
+  closed, the next spawn recreates it from the parent. `even-*` and `tiled`
+  always split the parent. There is no rebalancing. Stacking falls back to
+  the parent only when WezTerm reports the agent pane as gone (`pane_id N
+  invalid`); any other split failure is reported as an error without a
+  second split, because a split that fails to report can still have created
+  a pane. `split-pane` focuses the new pane, so the pane the user had focused
+  before (from `wezterm cli list-clients`) is focused again, or the parent
+  when that cannot be read. As with Herdr, closing the first agent pane
+  while stacked siblings remain starts a new agent column at the next spawn.
+  Closing sends Ctrl+C and then `kill-pane`; a failure counts as closed only
+  on WezTerm's `no such pane N` error, so a transient CLI error keeps the pane
+  tracked instead of forgetting a live viewer.
 - **cmux-tui** — no layout expression: child views are tabs inside the parent
   pane, so `multiplexer.layout` and `multiplexer.main_pane_size` are ignored
   and no layout command is issued.
@@ -393,8 +390,9 @@ produces one `multiplexer.host-unsupported` record per process; shared and
 ## Known Limitations
 
 - **Crash-leftover views are best-effort.** Views carry adapter-specific
-  metadata encoding the owner pid and child session id. tmux / Zellij / Herdr /
-  kitty write it into the pane title (`omosc:<owner pid>:<child session id>`);
+  metadata encoding the owner pid and child session id (except WezTerm, whose
+  CLI cannot set a pane title, so its leftovers are never swept). tmux /
+  Zellij / Herdr / kitty write it into the pane title (`omosc:<owner pid>:<child session id>`);
   cmux-tui embeds a `# omosc:<owner pid>:<child session id>` data marker in the
   spawned process's argv instead (its tab name is the human-readable
   `parent_name/child_name` name). On startup/reconnect the client scans its own
@@ -464,8 +462,8 @@ produces one `multiplexer.host-unsupported` record per process; shared and
   `OPENCODE_PASSWORD`. Where the multiplexer CLI has a spawn-time env flag,
   the secret is injected there and exists only in the new pane's environment:
   tmux `split-window -e OPENCODE_PASSWORD=…`, herdr `pane split --env …`,
-  kitty `kitten @ launch --env …`. Zellij and cmux-tui have no such flag, so
-  the pane launch script reads the value from the plugin process's own
+  kitty `kitten @ launch --env …`. Zellij, WezTerm, and cmux-tui have no
+  such flag, so the pane launch script reads the value from the plugin process's own
   `/proc/<pid>/environ` (readable by the owning user only) and exports it
   before the viewer starts; the secret never enters command text or argv.
   This is the same `OPENCODE_PASSWORD` (falling back to
@@ -489,6 +487,15 @@ produces one `multiplexer.host-unsupported` record per process; shared and
   (`password-bridge-requires-linux`); cmux-tui requires Linux **and** a
   POSIX shell — sh/bash/zsh/dash/ksh
   (`password-bridge-requires-linux` / `password-bridge-requires-posix-shell`).
+  WezTerm requires Linux and a POSIX shell, with the same reason codes. On
+  v1, WezTerm also uses the bridge when the TUI's environment has
+  `OPENCODE_SERVER_PASSWORD`: it exports only that variable (never a v2
+  `OPENCODE_PASSWORD`) for `opencode attach`, plus `OPENCODE_SERVER_USERNAME`
+  when set. A TUI attached with `attach -p` but without the environment
+  variable gets no forwarded password, so its viewer panes cannot
+  authenticate. The client wiring itself must also be able to authenticate
+  against a v1 password-protected server (see `host-unreachable` under
+  Troubleshooting).
 - **Nested multiplexer detection priority is unchanged** (for example, kitty
   inside herdr), and a client only opens panes for children of the session it
   currently displays.
@@ -510,7 +517,7 @@ removed or changed behavior, with migration guidance:
 
 | # | Item | Old behavior | New behavior | Migration |
 |---|------|--------------|--------------|-----------|
-| 1 | `multiplexer.zellij_pane_mode` + agent-tab | Default `agent-tab` opened panes in a dedicated `opencode-agents` tab (with focus save/restore, first-pane reuse, `new-tab` / `go-to-tab-by-id`); `current-tab` opted into the parent tab | Key is unsupported and ignored; Zellij panes **always** open in the tab containing the parent pane (no tab creation, no tab switching, no focus save/restore) | Delete `zellij_pane_mode` from config. Leaving it is harmless: panes keep working and one deprecation warning is logged |
+| 1 | `multiplexer.zellij_pane_mode` + agent-tab | Dedicated `opencode-agents` tab; `current-tab` opted into the parent tab | Removed: ignored with a warning. Zellij panes always open in the parent pane's tab | Delete `zellij_pane_mode` from config |
 | 2 | tmux pane location registry | The TUI wrote `…/opencode/storage/oh-my-opencode-slim/tmux-panes/<hash>.json` (session → `TMUX_PANE`, owner pid, 30 s TTL); the server read it and otherwise fell back to the **server's own** `TMUX_PANE` | No cross-process files at runtime. Each client anchors on its own `TMUX_PANE`, re-resolved at spawn time, and addresses its own tmux server via `-S <socket>` from `TMUX` | None. Stale `tmux-panes/*.json` files can be deleted; nothing reads them |
 | 3 | Deferred close for background jobs | On idle, the server checked the in-memory background job board; if a job was running the close was skipped and retried when the job finished (no debounce) | Client-side **stable-idle debounce** (default 5 s) plus a final idle re-check; busy within the window cancels the close; deletion closes immediately | None. If a child idles between turns, expect a close/rebuild flap (accepted; see [Known Limitations](#known-limitations)) |
 | 4 | cmux-tui adapter | The macOS app — a different product that only shares the name (0.64.x, surface model): `CMUX_SOCKET_PATH` / workspace / surface ids, readiness polling, deferred spawn retries, orphan cooldowns, finite close budgets, hot-reload takeover, and vertical `equalize` rebalancing | Rewritten for **cmux-tui** (`cmux.protocol/2`): `CMUX_TUI_SOCKET` (or legacy `CMUX_MUX_SOCKET`), two-hop anchor (`CMUX_TUI_TERMINAL_ID` → terminal → tab → pane), a sibling tab appended inside the parent pane (`pane run --on-exit keep --name <parent/child> -- <argv>`), `terminal close`; availability by protocol read self-check, never `--version`; no cooldowns, budgets, deferred spawns, registries, `equalize`, or screen-level splits | Install **cmux-tui** (`cmux-tui-v0.13.3+`). The macOS app and the CLI it bundles are out of scope; macOS and Linux use the same cmux-tui binary and interface |
@@ -533,7 +540,13 @@ removed or changed behavior, with migration guidance:
 3. `admission-mismatch` → the configured adapter is not the one the client is
    inside (for example `type: "zellij"` while running in tmux).
 4. `host-unreachable` → on v1 the host has no reachable listener; restart with
-   `--port` or use `serve` + `attach`. On v2 shared or `--server` hosts the
+   `--port` or use `serve` + `attach`. For a v1 server started with
+   `OPENCODE_SERVER_PASSWORD`, the client authenticates its probe and session
+   reads with the same basic auth `opencode attach` uses: the header from
+   `attach -p/--password` (and `-u/--username`), or else
+   `OPENCODE_SERVER_PASSWORD` / `OPENCODE_SERVER_USERNAME` in the TUI's
+   environment. A 401 therefore means neither was provided or they do not
+   match the server. On v2 shared or `--server` hosts the
    authenticated `server.info()` probe failed; check the shared service or the
    `--server` URL.
 5. `readiness-timeout` → the child never became visible in `/session/status`
@@ -543,7 +556,7 @@ removed or changed behavior, with migration guidance:
 **Panes open in the wrong place**
 
 - The view is always created in the pane that displays the parent session at
-  spawn time: a split for tmux / Zellij / Herdr / kitty, or a tab inside that
+  spawn time: a split for tmux / Zellij / Herdr / kitty / WezTerm, or a tab inside that
   pane for cmux-tui. Move the parent session to another pane/multiplexer first;
   a rebuild after the child turns busy follows the new position.
 - Missing anchor (`adapter-not-found`) means no multiplexer command was issued
@@ -559,6 +572,21 @@ removed or changed behavior, with migration guidance:
 
 - `KITTY_LISTEN_ON` missing → add `listen_on` to `kitty.conf` and restart
   kitty; verify with `kitten @ ls`.
+
+**WezTerm**
+
+- `adapter-unavailable` with a server password → the `/proc` password bridge
+  needs Linux and a POSIX shell (sh/bash/zsh/dash/ksh); the client log shows
+  `password-bridge-requires-linux` or `password-bridge-requires-posix-shell`.
+- Focus moves to the parent pane after a spawn → `wezterm cli list-clients`
+  could not be read, so focus fell back to the parent.
+- Errors such as `Error while decoding response pdu` mean the `wezterm` CLI
+  and the running WezTerm GUI are different versions (typically after an
+  upgrade without restarting WezTerm). A command can then act but report
+  failure: the adapter then reports an error instead of splitting again, but
+  the pane WezTerm did create is not tracked and must be closed manually.
+  Idle viewer panes may also stay open, because a failed `kill-pane` keeps
+  them tracked instead of guessing. Restart WezTerm.
 
 **cmux-tui**
 
@@ -580,7 +608,8 @@ removed or changed behavior, with migration guidance:
 
 **Leftover views after a client crash**
 
-- The sweep is best-effort. For tmux / Zellij / Herdr / kitty it often cannot
+- The sweep is best-effort, and WezTerm panes are never swept (close them
+  manually). For tmux / Zellij / Herdr / kitty it often cannot
   match a pane whose title was rewritten by `opencode attach`. For cmux-tui it
   identifies views by the `# omosc:...` argv marker; exited terminals keep that
   argv and `terminal close` still works on them, so a crashed client's leftover

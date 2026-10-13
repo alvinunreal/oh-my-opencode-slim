@@ -31,6 +31,7 @@ import {
   createOrchestratorWakeScheduler,
   ORCHESTRATOR_CHILDREN_WAKE_TEXT,
   ORCHESTRATOR_WAKE_TEXT,
+  WAKE_ANTI_FORGERY_TEXT,
 } from './index';
 import {
   getWakeProgress,
@@ -433,8 +434,9 @@ describe('terminal-publication wake', () => {
     expect(call.delivery).toBe('queue');
     expect(call.modelSelection).toBe('inherit');
     expect(call.body.agent).toBe('orchestrator');
+    // C2: the v2 body carries the static anti-forgery suffix at its tail.
     expect(call.body.parts[0]?.text).toBe(
-      `${ORCHESTRATOR_CHILDREN_WAKE_TEXT}\n<!-- SLIM_INTERNAL_INITIATOR -->`,
+      `${ORCHESTRATOR_CHILDREN_WAKE_TEXT}\n${WAKE_ANTI_FORGERY_TEXT}\n<!-- SLIM_INTERNAL_INITIATOR -->`,
     );
   });
 

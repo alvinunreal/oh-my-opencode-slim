@@ -5,12 +5,24 @@
  * event containing a transient error (rate-limit, 403/Forbidden, etc.), this
  * manager:
  *   1. Looks up the next untried model in the agent's configured chain
- *   2. Aborts the rate-limited prompt via client.session.abort() on the
- *      session.status retry path; session.error and message.updated paths
- *      re-prompt directly without abort.
+ *   2. Aborts host retry or unknown-finish loops via client.session.abort();
+ *      other session.error and message.updated paths re-prompt directly
+ *      without abort.
  *   3. Re-queues the last user message via client.session.promptAsync()
  *      with the new model - promptAsync returns immediately so we never
  *      block the event handler waiting for a full LLM response.
+ *
+ * Spent-allowance errors (issue #966) mark the failing provider exhausted
+ * for the descent: failover skips that provider's remaining chain entries,
+ * and the error surfaces to the user once no other provider remains.
+ *
+ * Sessions with no fallback chain (unknown agents, councillor-style
+ * self-managed sessions) retry the current model instead: transient
+ * upstream errors (streaming 5xx/524, queue-full, worker-limit) often
+ * resolve when the replay lands on a different worker. The same-model
+ * path reuses the shared sessionRetries host budget and, once spent,
+ * sticks in a terminal exhausted state until the next success, user turn,
+ * or session deletion.
  *
  * This mirrors the same fallback loop used for delegated sessions, but operates
  * reactively through the event system instead of wrapping prompt() in a
@@ -19,7 +31,11 @@
 
 import { randomUUID } from 'node:crypto';
 import type { PluginInput } from '@opencode-ai/plugin';
-import { responseError, stringifyError } from '../../utils/child-transcript';
+import {
+  responseError,
+  stringifyError,
+  structuredErrorMessage,
+} from '../../utils/child-transcript';
 import { isRecord } from '../../utils/guards';
 import {
   createInternalAgentTextPart,
@@ -35,16 +51,37 @@ import {
   withTimeout,
 } from '../../utils/session';
 import type { SessionLifecycle } from '../session-lifecycle';
+import type { createBackgroundFallbackHandoff } from '../task-session-manager/fallback-observation-transfer';
 import { isReplayableUserMessage, partsFromReplayMessage } from '../types';
+
+type BackgroundFallbackHandoff = ReturnType<
+  typeof createBackgroundFallbackHandoff
+>;
 
 // ---------------------------------------------------------------------------
 // Retryable error detection
 // ---------------------------------------------------------------------------
 
-const RETRYABLE_ERROR_PATTERNS = [
+// Match quota/billing codes and phrases, not generic credits/billing text.
+const QUOTA_BILLING_PATTERNS = [
+  /\bpersonal-team-blocked\b/i,
+  /\bspending.?limit\b/i,
+  /\b(?:ran|run) out of credits\b/i,
+  // Quoted Zhipu codes also cover non-English JSON error bodies.
+  /"1113"/,
+  /"1308"/,
+  /"1309"/,
+  /"1310"/,
+  /\bcoding plan package has expired\b/i,
+  /\b(?:weekly|monthly) limit exhausted\b/i,
+];
+
+const PROVIDER_ERROR_PATTERNS = [
   /\b429\b/,
   /rate.?limit/i,
   /too many requests/i,
+  // NOTE: spent-allowance wording (isSpentQuotaError, issue #966) still
+  // fails over, but excludes the failing provider for the descent.
   /quota.?exceeded/i,
   /\bquota\b.*\bexhausted/i,
   /quota.?threshold/i,
@@ -77,46 +114,25 @@ const RETRYABLE_ERROR_PATTERNS = [
   // "provider returned error" wording, which wraps any provider 4xx (e.g. a
   // genuine 400 the next model would reproduce) and must stay a hard error.
   /\b401\b/,
-  // Content-policy moderation rejections (e.g. OpenAI "cyber_policy",
-  // "content_policy_violation") arrive as HTTP 400 invalid_request with a
-  // provider-specific policy code in the body. They are deterministic per
-  // provider — retrying the same model will fail again, but a different
-  // provider in the chain does not share the policy, so the next model
-  // should be tried. Match the structured codes and the exact provider
-  // wording; do NOT match generic "flagged"/"policy" words that could
-  // appear in ordinary error text.
-  /\bcyber_policy\b/,
-  /\bcontent_policy_violation\b/,
-  /flagged for possible cybersecurity risk/i,
-  /rejected as a result of our safety system/i,
-  // OpenCode v1's ContentFilterError, raised when a turn ends with a
-  // `content-filter` finish reason (no HTTP status, no response body). The
-  // block can be intermittent, so it uses the normal retry budget before the
-  // chain advances.
-  /response was blocked by the provider's content filter/i,
-  // Billing/quota exhaustion (e.g. xAI "personal-team-blocked:spending-limit")
-  // arrives as HTTP 400/402 with a provider-specific billing code. It is
-  // deterministic for the same account — retrying the same model will fail
-  // again, but a different provider in the chain does not share the balance,
-  // so the next model should be tried. Match the structured code and the
-  // exact provider wording; do NOT match generic "credits"/"billing" words
-  // that can appear in ordinary error text.
-  /\bpersonal-team-blocked\b/,
-  /\bspending.?limit\b/i,
-  /\b(?:ran|run) out of credits\b/i,
-  // Zhipu GLM quota/billing (docs.z.ai error codes 1113/1308/1309/1310):
-  // the English messages already match the quota wording above, so the
-  // quoted JSON codes cover the Chinese wire variants and the Anthropic
-  // -style {"type":"1113"} envelopes where no English text survives.
-  /"1113"/,
-  /"1308"/,
-  /"1309"/,
-  /"1310"/,
-  /\bcoding plan package has expired\b/i,
-  /\b(?:weekly|monthly) limit exhausted\b/i,
+  ...QUOTA_BILLING_PATTERNS,
 ];
 
-const OUTAGE_STATUS_CODES = new Set([500, 502, 503, 504]);
+// Spent allowance (issue #966): waiting on this provider cannot recover, so
+// the provider is skipped for the descent — unless the same carrier carries
+// short-horizon retry phrasing.
+const SPENT_QUOTA_PATTERNS = [
+  /quota.?exceeded/i,
+  /usage.?exceeded/i,
+  /usage.?limit has been reached/i,
+  /usage.?limit reached/i,
+];
+
+// Short-horizon retry phrasing: the quota may reset soon, so the normal
+// failover applies. Excludes bare "Resets in X days/min" (issue #966).
+const SHORT_HORIZON_RETRY_PATTERN =
+  /retry (after|in)|resets? (after|at)|will reset at|try again|per minute|per day|\btpm\b|\brpm\b/i;
+
+const PROVIDER_STATUS_CODES = new Set([401, 402, 403, 429, 500, 502, 503, 504]);
 // v2 host classification ({type, message, status?}); status is omitted when
 // the failure carried no HTTP status (e.g. stream-level provider errors).
 const FAILOVER_ERROR_TYPES = new Set([
@@ -159,13 +175,29 @@ const PROVIDER_OUTAGE_PATTERNS = [
   /\bprovider outage\b/i,
   /\bprovider unavailable\b/i,
   /\bno available channel/i,
+];
+const REQUEST_ERROR_PATTERNS = [
+  // Match policy/filter signatures, not generic flagged/policy error text.
+  /\bcyber_policy\b/,
+  /\bcontent_policy_violation\b/,
+  /flagged for possible cybersecurity risk/i,
+  /rejected as a result of our safety system/i,
+  /response was blocked by the provider's content filter/i,
+  /consecutive unknown assistant finishes without tool calls/i,
+  /"1301"/,
+  /potentially unsafe or sensitive content/i,
+  /rejected because it was considered high risk/i,
+  /\b(?:DataInspectionFailed|data_inspection_failed)\b/,
+  /may contain inappropriate content/i,
+  /Content blocked by guardrail/i,
+  /\bflagged_input\b/,
+  /"error_type"\s*:\s*"refusal"/,
   /\bmodel\b.*\bnot available\b/i,
   /\bmodel is not available\b/i,
   /\bunsupported model\b/i,
   /\bunknown model\b/i,
   // OpenCode's ProviderModelNotFoundError uses "Model not found" wording; the
-  // model may exist on a later entry in the configured chain, so treat it as a
-  // provider outage and advance the fallback chain.
+  // model may exist on a later entry in the configured chain.
   /\bmodel not found\b/i,
   // Model retired/end-of-life (HTTP 410 Gone) — the model no longer exists,
   // so the next model must be tried instead of retrying the dead one.
@@ -178,6 +210,79 @@ const PROVIDER_OUTAGE_PATTERNS = [
   /\bHTTP 410\b/i,
   /\bstatus.?410\b/i,
 ];
+// Streaming/proxy backpressure (issue #947: same-model retry for agents
+// without chains). Gateways shed load with these wordings instead of an
+// HTTP status, so the next model (or a same-model replay on a different
+// worker) should be tried — unless the same failure carries a
+// deterministic 4xx (e.g. "Streaming response failed: [400] invalid
+// request"), which every replay would reproduce.
+const GATEWAY_BACKPRESSURE_PATTERNS = [
+  /\bstreaming response failed\b/i,
+  /\brequest queue is full\b/i,
+  /\bworker local total request limit reached\b/i,
+];
+/** 4xx other than 408 (timeout) and 429 (rate limit). */
+const DETERMINISTIC_4XX_PATTERN = /\b4(?!08\b|29\b)\d\d\b/;
+// "upstream error" alone is ambiguous: proxies wrap deterministic 4xx (a
+// 400-bodied validation failure, a policy rejection) in the same wording.
+// Only treat it as transient when the same message carries a 5xx status,
+// an outage marker, or a timeout/unavailable marker.
+const UPSTREAM_ERROR_PATTERN = /\bupstream error\b/i;
+const UPSTREAM_TRANSIENT_MARKERS = [
+  /\b5\d\d\b/,
+  /time.?out/i,
+  /timed out/i,
+  /\bunavailable\b/i,
+  /\boverload/i,
+  /\btry again\b/i,
+  /\brate.?limit\b/i,
+  /\b429\b/,
+];
+
+/** True when the failure carries a 4xx other than 408/429, in its status
+ *  or its text: every replay of that request would reproduce it. */
+function hasDeterministic4xx(
+  text: string,
+  statusCode: number | undefined,
+): boolean {
+  return (
+    (statusCode !== undefined &&
+      statusCode >= 400 &&
+      statusCode < 500 &&
+      statusCode !== 408 &&
+      statusCode !== 429) ||
+    DETERMINISTIC_4XX_PATTERN.test(text)
+  );
+}
+
+/** True for "upstream error" with transient context, or gateway
+ *  backpressure wording, when no deterministic 4xx is present. */
+function isTransientGatewayError(
+  text: string,
+  statusCode: number | undefined,
+): boolean {
+  if (hasDeterministic4xx(text, statusCode)) return false;
+  return (
+    (UPSTREAM_ERROR_PATTERN.test(text) &&
+      UPSTREAM_TRANSIENT_MARKERS.some((pattern) => pattern.test(text))) ||
+    GATEWAY_BACKPRESSURE_PATTERNS.some((pattern) => pattern.test(text))
+  );
+}
+
+/** True when a promptAsync rejection proves the session is busy (the only
+ *  rejection that justifies aborting and re-sending the replay). */
+function isBusyRefusalError(error: unknown): boolean {
+  return /\bbusy\b/i.test(stringifyError(error));
+}
+
+const CONTENT_FILTER_ERROR = {
+  name: 'ContentFilterError',
+  message: "The response was blocked by the provider's content filter",
+};
+const UNKNOWN_FINISH_LOOP_ERROR = {
+  name: 'UnknownFinishLoopError',
+  message: 'Consecutive unknown assistant finishes without tool calls',
+};
 
 function asHttpStatus(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isInteger(value)) {
@@ -219,87 +324,141 @@ function eventSessionID(props: {
   return props.sessionID ?? props.info?.id;
 }
 
-export function isFailoverError(error: unknown): boolean {
-  if (!error) return false;
+/** Per-carrier wording texts a spent-quota signal can hide in (issue #966). */
+function failoverCarriers(err: Record<string, unknown>): string[] {
+  return [
+    err.code,
+    err.message,
+    nestedField(err.data, 'code'),
+    nestedField(err.data, 'message'),
+    nestedField(err.data, 'responseBody'),
+    nestedField(err.cause, 'code'),
+    nestedField(err.cause, 'message'),
+    err.responseBody,
+  ]
+    .filter(
+      (value): value is string | number =>
+        (typeof value === 'string' && value !== '') ||
+        typeof value === 'number',
+    )
+    .map(String);
+}
+
+/**
+ * Spent allowance (issue #966): spent-quota wording without short-horizon
+ * retry phrasing in the same carrier. The manager excludes the failing
+ * provider for the rest of the descent and surfaces the error once no chain
+ * entry on another provider remains. Free-tier plan exhaustion is exempt:
+ * upstream routes it as permanent billing (immediate failover, budget skip).
+ */
+const FREE_TIER_BILLING_PATTERN = /free usage exceeded|subscribe to go/i;
+
+export function isSpentQuotaError(error: unknown): boolean {
   if (typeof error === 'string') {
     return (
-      RETRYABLE_ERROR_PATTERNS.some((pattern) => pattern.test(error)) ||
-      PROVIDER_OUTAGE_PATTERNS.some((pattern) => pattern.test(error)) ||
-      TRANSPORT_MESSAGE_PATTERNS.some((pattern) => pattern.test(error))
+      SPENT_QUOTA_PATTERNS.some((pattern) => pattern.test(error)) &&
+      !SHORT_HORIZON_RETRY_PATTERN.test(error) &&
+      !FREE_TIER_BILLING_PATTERN.test(error)
     );
   }
-  if (typeof error !== 'object') return false;
-  const err = error as {
-    code?: unknown;
-    cause?: { code?: unknown };
-    message?: string;
-    statusCode?: unknown;
-    type?: unknown;
-    data?: {
-      code?: unknown;
-      statusCode?: unknown;
-      message?: string;
-      responseBody?: string;
-    };
-  };
-  const statusCode = extractStatusCode(err);
+  if (!isRecord(error)) return false;
+  return failoverCarriers(error).some(
+    (carrier) =>
+      SPENT_QUOTA_PATTERNS.some((pattern) => pattern.test(carrier)) &&
+      !SHORT_HORIZON_RETRY_PATTERN.test(carrier) &&
+      !FREE_TIER_BILLING_PATTERN.test(carrier),
+  );
+}
+
+/** Identity of a spent-quota signal across event shapes: the carrier text
+ *  that marks it spent, so a status message and the structured error it
+ *  summarises compare equal. Other errors fall back to their full text. */
+function spentQuotaSignature(error: unknown): string {
+  const carriers =
+    typeof error === 'string'
+      ? [error]
+      : isRecord(error)
+        ? failoverCarriers(error)
+        : [];
+  return (
+    carriers.find((carrier) => isSpentQuotaError(carrier)) ??
+    stringifyError(error)
+  );
+}
+
+function errorMessages(error: unknown): string[] {
+  if (typeof error === 'string') return [error];
+  return [
+    nestedField(error, 'message'),
+    nestedField(nestedField(error, 'data'), 'message'),
+    nestedField(nestedField(error, 'data'), 'responseBody'),
+  ].map((value) => (typeof value === 'string' ? value : ''));
+}
+
+function failoverScope(error: unknown): 'provider' | 'request' | undefined {
+  const messages = errorMessages(error);
+  const text = messages.join(' ');
+  const statusCode = extractStatusCode(error);
+  // Recognizable failover bodies count under HTTP 400; other 400s stay hard.
+  // OpenRouter can wrap policy rejections in HTTP 403. The request-specific
+  // reason must win over provider status/type/transport signals. 421 and 451
+  // are request rejections (content filter / legal), not provider outages.
   if (
-    statusCode === 429 ||
-    statusCode === 401 ||
-    statusCode === 402 ||
-    statusCode === 403 ||
+    nestedField(error, 'type') === 'provider.content-filter' ||
     statusCode === 410 ||
-    (statusCode !== undefined && OUTAGE_STATUS_CODES.has(statusCode)) ||
-    (typeof err.type === 'string' && FAILOVER_ERROR_TYPES.has(err.type))
+    statusCode === 421 ||
+    statusCode === 451 ||
+    REQUEST_ERROR_PATTERNS.some((pattern) => pattern.test(text))
   ) {
-    return true;
+    return 'request';
   }
   if (
-    [err.code, err.cause?.code, err.data?.code].some(
-      (code) => typeof code === 'string' && TRANSPORT_CODES.has(code),
-    )
-  ) {
-    return true;
-  }
-
-  const messages = [
-    err.message ?? '',
-    err.data?.message ?? '',
-    err.data?.responseBody ?? '',
-  ];
-  if (
+    PROVIDER_ERROR_PATTERNS.some((pattern) => pattern.test(text)) ||
+    PROVIDER_OUTAGE_PATTERNS.some((pattern) => pattern.test(text)) ||
     messages.some((message) =>
-      TRANSPORT_MESSAGE_PATTERNS.some((p) => p.test(message)),
+      TRANSPORT_MESSAGE_PATTERNS.some((pattern) => pattern.test(message)),
     )
   ) {
-    return true;
+    return 'provider';
   }
+  // "upstream error" alone is ambiguous: proxies wrap deterministic 4xx
+  // (a 400-bodied validation failure, a policy rejection) in the same
+  // wording. Only treat it as failover with transient context in the
+  // same message.
+  if (isTransientGatewayError(text, statusCode)) return 'provider';
+  if (!isRecord(error)) return undefined;
+  if (
+    (statusCode !== undefined && PROVIDER_STATUS_CODES.has(statusCode)) ||
+    (typeof error.type === 'string' && FAILOVER_ERROR_TYPES.has(error.type)) ||
+    [
+      error.code,
+      nestedField(error.cause, 'code'),
+      nestedField(error.data, 'code'),
+    ].some((code) => typeof code === 'string' && TRANSPORT_CODES.has(code))
+  ) {
+    return 'provider';
+  }
+  return undefined;
+}
 
-  const text = [
-    err.message ?? '',
-    err.data?.message ?? '',
-    err.data?.responseBody ?? '',
-  ].join(' ');
-  const hasFailoverReason =
-    RETRYABLE_ERROR_PATTERNS.some((p) => p.test(text)) ||
-    PROVIDER_OUTAGE_PATTERNS.some((p) => p.test(text));
-  // Providers sometimes return recoverable rate-limit/outage payloads with
-  // an HTTP 400 wrapper. Preserve application-level 400 failures, but let a
-  // recognizable failover body continue through the fallback path.
-  return hasFailoverReason;
+export function isFailoverError(error: unknown): boolean {
+  return failoverScope(error) !== undefined;
 }
 
 const INLINE_STATUS_CODES = new Set([401, 410]);
 const PERMANENT_QUOTA_BILLING_PATTERNS = [
-  /\bpersonal-team-blocked\b/i,
-  /\bspending.?limit\b/i,
-  /\b(?:ran|run) out of credits\b/i,
-  /\bcoding plan package has expired\b/i,
-  /\b(?:weekly|monthly) limit exhausted\b/i,
+  ...QUOTA_BILLING_PATTERNS,
+  /\bfree usage exceeded\b/i,
+  /\bsubscribe to go\b/i,
   /\b(?:1113|1308|1309|1310)\b/,
+  // Spent-allowance wording stays out: it keeps the configured initial
+  // delay (a recovery window for intercepting plugins).
 ];
 
-/** Permanent payment/quota exhaustion cannot recover by waiting on this model. */
+/**
+ * Permanent exhaustion skips the initial delay and fails over immediately.
+ * Spent-allowance wording is excluded and keeps the configured initial delay.
+ */
 export function isPermanentQuotaBillingError(error: unknown): boolean {
   if (extractStatusCode(error) === 402) return true;
   const text =
@@ -333,30 +492,13 @@ export function isPermanentQuotaBillingError(error: unknown): boolean {
  * Other failover errors (429 rate-limit, outage, etc.) get a toast instead.
  */
 export function isInlineFailoverError(error: unknown): boolean {
-  if (!error) return false;
   // The AI SDK surfaces 401/410 as bare strings ("Gone",
   // "AI_APICallError: Gone"); match those directly so they stay inline too.
-  if (typeof error === 'string') {
-    return (
-      /(?:^|\s)Gone(?:$|\s)/i.test(error) ||
-      /\b401\b/i.test(error) ||
-      /\b410\b/i.test(error) ||
-      /\bend of life\b/i.test(error) ||
-      /\bno longer available\b/i.test(error)
-    );
-  }
-  if (typeof error !== 'object') return false;
-  const err = error as Record<string, unknown>;
-  const statusCode = extractStatusCode(err);
+  const statusCode = extractStatusCode(error);
   if (statusCode !== undefined && INLINE_STATUS_CODES.has(statusCode)) {
     return true;
   }
-  const data = isRecord(err.data) ? err.data : {};
-  const text = [
-    typeof err.message === 'string' ? err.message : '',
-    typeof data.message === 'string' ? data.message : '',
-    typeof data.responseBody === 'string' ? data.responseBody : '',
-  ].join(' ');
+  const text = errorMessages(error).join(' ');
   return (
     /(?:^|\s)Gone(?:$|\s)/i.test(text) ||
     /\b401\b/i.test(text) ||
@@ -375,10 +517,19 @@ const DEDUP_WINDOW_MS = 5_000;
 const REPROMPT_DELAY_MS = 500;
 /** Ceiling on host calls: a hung transport must not stall fallback. */
 const HOST_CALL_TIMEOUT_MS = 2_000;
+/** The replay send's ack can lag after the host admitted it: wait as long as
+ *  the tracker's own `promptAsync`, so a slow ack is not read as a refusal. */
+const REPLAY_SEND_TIMEOUT_MS = 10_000;
 /** Transcript tail size for the fallback replay read: the replay only needs
  *  the last replayable user message plus the trailing message id (handoff
  *  baseline), never the full history. */
 const FALLBACK_REPLAY_TAIL_MESSAGES = 50;
+/** Trailer marking a same-model replay; identical at every call site so the
+ *  replay is recognizable as an internal retry, never a user turn. */
+const SAME_MODEL_RETRY_TRAILER = 'Same-model retry after transient error.';
+/** Prompt admissions per same-model replay: the initial send plus a single
+ *  busy-path re-send after abort. */
+const SAME_MODEL_REPLAY_ATTEMPTS = 2;
 const FALLBACK_IN_PROGRESS_KEY = Symbol.for(
   'oh-my-opencode-slim.foreground-fallback.in-progress',
 );
@@ -408,20 +559,42 @@ export class ForegroundFallbackManager {
     string,
     ReadonlyArray<ForegroundFallbackModel>
   >;
-  private readonly chains: Record<string, string[]> = {};
-  private readonly chainEntries: Record<
+  /** sessionID → chain generation pinned when the session registered (the
+   *  same generation as its v2 runtime profile). Shallow copies of the
+   *  published table: entry arrays are shared, so publishers replace arrays
+   *  and never mutate them in place — pinned generations stay stable. */
+  private readonly sessionChains = new Map<
     string,
-    Array<{ id: string; variant?: string }>
-  > = {};
+    Record<string, ReadonlyArray<ForegroundFallbackModel>>
+  >();
   /** sessionID → last observed model string ("providerID/modelID") */
   private readonly sessionModel = new Map<string, string>();
-  /** sessionID → model selected by a confirmed fallback replay.
+  /** sessionID → confirmed fallback and providers abandoned by its failures.
    *  Kept separate from sessionModel because synthetic admissions may emit
    *  message.updated events for another model without changing the model
    *  serving the user's active turn. */
-  private readonly activeFallbackModel = new Map<string, string>();
+  private readonly activeFallback = new Map<
+    string,
+    { model: string; downProviders: ReadonlySet<string> }
+  >();
   /** sessionID → agent name (populated from message.updated info.agent field) */
   private readonly sessionAgent = new Map<string, string>();
+  /** True when a SessionLifecycle coordinator owns deletion cleanup. */
+  private hasCoordinator = false;
+
+  /** True when the agent's chain is explicitly disabled (an empty chain
+   *  in the session's pinned generation: configured empty or disableChain).
+   *  Unknown agents (no entry at all) are NOT disabled — failing open
+   *  preserves recovery where no owner claimed the session. */
+  private isChainExplicitlyDisabled(
+    sessionID: string,
+    agentName: string | undefined,
+  ): boolean {
+    return (
+      agentName !== undefined &&
+      this.pinnedChains(sessionID)[agentName]?.length === 0
+    );
+  }
   /** child sessionID → parent sessionID (from session.created info).
    *  Lets the fallback abort path promote a foreground task() waiter to
    *  background first, so the waiting tool resolves via backgroundResult
@@ -429,6 +602,12 @@ export class ForegroundFallbackManager {
   private readonly sessionParent = new Map<string, string>();
   /** sessionID → set of models already attempted this session */
   private readonly sessionTried = new Map<string, Set<string>>();
+  /** sessionID → providers whose allowance is spent (issue #966). The chain
+   *  walk skips them; once every chain provider is listed the error
+   *  surfaces. Holds at most the providers seen failing, and re-arms with
+   *  the retry budget (external turn, recovery, return to primary). A
+   *  switch still records the provider in activeFallback.downProviders. */
+  private readonly quotaExhaustedProviders = new Map<string, Set<string>>();
   /** Process-local sessions with an active fallback switch in flight. */
   private readonly inProgress = getProcessFallbacksInProgress();
   /** One-shot v2 retry-hook delivery notices, keyed by sessionID and the
@@ -442,10 +621,19 @@ export class ForegroundFallbackManager {
   private readonly lastTriggerModel = new Map<string, string>();
   /** Turn identity associated with the last failure dedup marker. */
   private readonly lastTriggerTurn = new Map<string, number>();
+  /** The last replay trigger: the model it failed on and its error
+   *  signature. Kept only until the replacement emits a message; until then
+   *  an uncorrelated spent-quota session.error or status retry repeating
+   *  this signature is that trigger's echo (issue #966). The v2 retry hook
+   *  names its failing model and never consults this. */
+  private readonly lastSwitchTrigger = new Map<
+    string,
+    { model: string; signature: string; turn: number; time: number }
+  >();
   /** Recent event identities deduplicate only repeated observations of one incident. */
   private readonly triggerIncidents = new Map<
     string,
-    Map<string, { turn: number; time: number }>
+    Map<string, { turn: number; time: number; model?: string }>
   >();
   /** One-shot bridge between uncorrelated session.error and its matching
    *  errored message.updated event. */
@@ -471,9 +659,16 @@ export class ForegroundFallbackManager {
     string,
     { turn: number; model: string | undefined; attempt: number }
   >();
-  /** sessionID -> absorbed host retries in the current fallback descent.
+  /** sessionID -> absorbed host retries plus same-model replay charges in
+   *  the current fallback descent. The counter is shared: host-retry
+   *  absorbs and same-model replays draw from the same maxRetries budget.
    *  Reset on recovery, fresh primary descent, or session deletion. */
   private readonly sessionRetries = new Map<string, number>();
+  /** Completed unknown IDs stay deduped until the next external user turn. */
+  private readonly unknownFinishStreak = new Map<
+    string,
+    { count: number; seen: Set<string> }
+  >();
   /** sessionID -> pending initial delay and latest trigger mode.
    *  Cleared on recovery or session deletion. */
   private readonly pendingInitialDelay = new Map<
@@ -494,10 +689,15 @@ export class ForegroundFallbackManager {
    *  Used to enforce retryDelayMs between consecutive attempts. */
   private readonly lastFallbackTime = new Map<string, number>();
   /** sessionID → chain-exhaustion stage:
-   *   0 = not exhausted; 1 = chain exhausted once, reset to sticky fallback
-   *   (one retry chance); 2 = exhausted again, aborted — stop intervening.
+   *   0 = not exhausted; 1 = chain exhausted once, sticky fallback retry;
+   *   2 = exhausted again, aborted — stop intervening.
    *   Reset to 0 on successful responses or session deletion. */
   private readonly chainExhaustion = new Map<string, number>();
+  /** Sessions blocked by a deterministic same-model failure (inline 401/410,
+   *  permanent billing, unparseable model). Separate from chainExhaustion so
+   *  a later retryable-transient error can lift it; cleared alongside
+   *  chainExhaustion on recovery, fresh turns, and session deletion. */
+  private readonly deterministicTerminal = new Set<string>();
   /** True once dispose() ran. `opencode reload` destroys this instance's
    *  context mid-attempt; in-flight fallback chains check this at every
    *  suspension point so their continuation never touches the old
@@ -520,19 +720,7 @@ export class ForegroundFallbackManager {
    *  is already persisted (false-stop incident). The pre-await generation
    *  fences relaunches: a generation change during the admission must not
    *  enroll the new run under the stale attempt's baseline. */
-  private readonly backgroundFallbackHandoff?: {
-    prepare: (
-      sessionID: string,
-      preparedGeneration: number | undefined,
-      baselineMessageID: string | undefined,
-    ) => boolean;
-    admit: (sessionID: string, preparedGeneration: number | undefined) => void;
-    reject: (sessionID: string, preparedGeneration: number | undefined) => void;
-    settleUnresolved: (
-      sessionID: string,
-      preparedGeneration: number | undefined,
-    ) => void;
-  };
+  private readonly backgroundFallbackHandoff?: BackgroundFallbackHandoff;
   /** Synchronous board read returning the tracked generation for a
    *  confirmed BACKGROUND child only — undefined for foreground or
    *  unmanaged sessions (that undefined means "handoff not
@@ -554,18 +742,47 @@ export class ForegroundFallbackManager {
 
   /**
    * True when this manager could still recover the session via fallback:
-   * a path is enabled (replay, or v2 retry-hook steering), the session has
-   * a chain, and the chain is not exhausted (stage < 2). Consumers
+   * a path is enabled (replay, or v2 retry-hook steering) and the chain
+   * is not exhausted (stage < 2). No-chain sessions report a pending
+   * same-model retry while budget remains, the model is known, and the
+   * chain was not explicitly disabled. Consumers
    * (task-session-manager event router) defer terminal bookkeeping for
    * persistent 401/410 errors until recovery is actually impossible.
    */
   willAttemptFallback(sessionID: string): boolean {
     if (!this.enabled && !this.v2RetryEnabled) return false;
     if (this.inProgress.has(sessionID)) return true;
+    if ((this.chainExhaustion.get(sessionID) ?? 0) >= 2) return false;
+    if (this.deterministicTerminal.has(sessionID)) return false;
+    // Chain check BEFORE the child exclusion: chained background children
+    // still recover via their chain; the exclusion only stops the
+    // foreground-only same-model retry below.
+    if (this.hasFallbackChain(sessionID)) return true;
+    if (
+      this.sessionParent.has(sessionID) ||
+      this.readBackgroundGeneration?.(sessionID) !== undefined
+    ) {
+      return false;
+    }
     return (
-      this.hasFallbackChain(sessionID) &&
-      (this.chainExhaustion.get(sessionID) ?? 0) < 2
+      (this.sessionRetries.get(sessionID) ?? 0) < this.maxRetries &&
+      this.sessionModel.get(sessionID) !== undefined &&
+      !this.isChainExplicitlyDisabled(
+        sessionID,
+        this.sessionAgent.get(sessionID),
+      )
     );
+  }
+
+  fallbackFailureReason(sessionID: string): string {
+    if (!this.enabled && !this.v2RetryEnabled)
+      return 'Model fallback is disabled.';
+    if (!this.hasFallbackChain(sessionID))
+      return `No model fallback chain for ${this.sessionAgent.get(sessionID) ?? 'this agent'}.`;
+    if (this.chainExhaustion.get(sessionID) === 2)
+      return `Model fallback chain exhausted; tried: ${[...(this.sessionTried.get(sessionID) ?? [])].join(', ') || 'none'}.`;
+    const model = this.sessionModel.get(sessionID);
+    return `Model fallback did not recover${model ? ` from ${model}` : ''}.`;
   }
 
   /**
@@ -578,8 +795,33 @@ export class ForegroundFallbackManager {
     // so resolveChain's "known agent without a chain" path applies and the
     // normalized chains retain the agent entry.
     this.chainSource[agentName] = [];
-    this.chains[agentName] = [];
-    this.chainEntries[agentName] = [];
+  }
+
+  private pinnedChains(
+    sessionID: string,
+  ): Record<string, ReadonlyArray<ForegroundFallbackModel>> {
+    let pinned = this.sessionChains.get(sessionID);
+    if (!pinned) {
+      pinned = { ...this.chainSource };
+      this.sessionChains.set(sessionID, pinned);
+    }
+    return pinned;
+  }
+
+  /** Pin the chain generation in effect when a session registers, so an
+   *  in-flight fallback sequence finishes against its own generation even if
+   *  a hot refresh publishes a new chain table mid-descent. First call wins;
+   *  chain resolution pins lazily as a safety net. */
+  pinSessionChains(sessionID: string): void {
+    this.pinnedChains(sessionID);
+  }
+
+  /** Release a session's pinned generation so a retry after a failed
+   *  admission recaptures against the generation current at that retry.
+   *  Only safe when no request has run — the capture failed before
+   *  admission, so no descent can be mid-flight. */
+  releaseSessionChains(sessionID: string): void {
+    this.sessionChains.delete(sessionID);
   }
 
   registerSessionAgent(sessionID: string, agentName: string): void {
@@ -592,6 +834,7 @@ export class ForegroundFallbackManager {
       return;
     }
     this.sessionAgent.set(sessionID, normalizedAgentName);
+    this.pinSessionChains(sessionID);
   }
 
   /** Plugin dispose: cancel scheduled initial-delay timers and fence off
@@ -631,12 +874,17 @@ export class ForegroundFallbackManager {
     this.lastTrigger.delete(sessionID);
     this.lastTriggerModel.delete(sessionID);
     this.lastTriggerTurn.delete(sessionID);
+    this.lastSwitchTrigger.delete(sessionID);
     this.triggerIncidents.delete(sessionID);
     this.pendingErrorCorrelation.delete(sessionID);
     this.lastFallbackTime.delete(sessionID);
     this.initialDelayUsed.delete(sessionID);
     this.sessionRetries.delete(sessionID);
+    this.quotaExhaustedProviders.delete(sessionID);
+    this.unknownFinishStreak.delete(sessionID);
     this.retryAttempt.delete(sessionID);
+    this.chainExhaustion.delete(sessionID);
+    this.deterministicTerminal.delete(sessionID);
     this.v2RetryNotices.delete(sessionID);
     this.cancelInitialDelay(sessionID);
   }
@@ -750,6 +998,34 @@ export class ForegroundFallbackManager {
     });
   }
 
+  /** True when an error incident already charged this turn/model episode. */
+  private hasSameTurnErrorIncident(sessionID: string): boolean {
+    if (
+      this.lastTriggerModel.get(sessionID) !== this.sessionModel.get(sessionID)
+    ) {
+      return false;
+    }
+    const incidents = this.triggerIncidents.get(sessionID);
+    if (!incidents) return false;
+    const turn = this.turnEpoch.get(sessionID) ?? 0;
+    const now = Date.now();
+    let matched = false;
+    for (const [id, previous] of incidents) {
+      if (previous.turn !== turn || now - previous.time >= DEDUP_WINDOW_MS) {
+        incidents.delete(id);
+        continue;
+      }
+      if (
+        id.startsWith('message:') ||
+        id.startsWith('message-error:') ||
+        id.startsWith('session-error:')
+      ) {
+        matched = true;
+      }
+    }
+    return matched;
+  }
+
   private rememberReplayMessage(sessionID: string, messageID: string): void {
     let ids = this.replayMessageIds.get(sessionID);
     if (!ids) {
@@ -757,6 +1033,27 @@ export class ForegroundFallbackManager {
       this.replayMessageIds.set(sessionID, ids);
     }
     ids.add(messageID);
+  }
+
+  private async messageHasNoTools(
+    sessionID: string,
+    messageID: string | undefined,
+  ): Promise<boolean | undefined> {
+    if (!messageID || this.disposed) return;
+    try {
+      const result = await withTimeout(
+        getClient(this.input).session.message({
+          path: { id: sessionID, messageID },
+        }),
+        HOST_CALL_TIMEOUT_MS,
+        'foreground message parts lookup timed out',
+      );
+      const parts = result.data?.parts;
+      if (!Array.isArray(parts)) return;
+      return !parts.some((part) => part.type === 'tool');
+    } catch {
+      return;
+    }
   }
 
   private async isInternalReplayUserMessage(
@@ -820,12 +1117,16 @@ export class ForegroundFallbackManager {
     /**
      * Ordered fallback chains per agent.
      * e.g. { orchestrator: ['anthropic/claude-opus-4-5', 'openai/gpt-4o'] }
-     * The first model that hasn't been tried yet is selected on each fallback.
+     * Scan from the head, skipping tried models and providers abandoned by
+     * this session or its parent.
      */
     chains: Record<string, ReadonlyArray<ForegroundFallbackModel>>,
     private readonly enabled: boolean,
     private readonly input: PluginInput,
-    /** Host retry events tolerated before the first model switch. */
+    /** Host retry events tolerated before the first model switch. No-chain
+     *  sessions reuse the same budget for same-model retries (the shared
+     *  sessionRetries counter bounds host absorbs and replay charges
+     *  together). */
     private readonly maxRetries: number = 3,
     coordinator?: SessionLifecycle,
     onSessionModelChanged?: (sessionID: string, model: string) => void,
@@ -838,25 +1139,7 @@ export class ForegroundFallbackManager {
      *  baseline from the same transcript read that produced the replay);
      *  admit() converts it into a tracked run once the host accepts the
      *  re-prompt; reject() withdraws it on any non-admitted outcome. */
-    backgroundFallbackHandoff?: {
-      prepare: (
-        sessionID: string,
-        preparedGeneration: number | undefined,
-        baselineMessageID: string | undefined,
-      ) => boolean;
-      admit: (
-        sessionID: string,
-        preparedGeneration: number | undefined,
-      ) => void;
-      reject: (
-        sessionID: string,
-        preparedGeneration: number | undefined,
-      ) => void;
-      settleUnresolved: (
-        sessionID: string,
-        preparedGeneration: number | undefined,
-      ) => void;
-    },
+    backgroundFallbackHandoff?: BackgroundFallbackHandoff,
     /** Synchronous board read returning the tracked generation for a
      *  confirmed BACKGROUND child only (undefined = foreground or
      *  unmanaged — the handoff is not applicable, never a wildcard).
@@ -874,52 +1157,90 @@ export class ForegroundFallbackManager {
     private readonly v2RetryEnabled: boolean = enabled,
   ) {
     this.chainSource = chains;
-    for (const [agentName, entries] of Object.entries(chains)) {
-      const normalized = entries.map((entry) =>
-        typeof entry === 'string' ? { id: entry } : entry,
-      );
-      this.chainEntries[agentName] = normalized;
-      this.chains[agentName] = normalized.map((entry) => entry.id);
-    }
     this.onSessionModelChanged = onSessionModelChanged;
     this.backgroundFallbackHandoff = backgroundFallbackHandoff;
     this.readBackgroundGeneration = readBackgroundGeneration;
     if (coordinator) {
-      coordinator.onSessionDeleted((id) => {
-        this.sessionModel.delete(id);
-        this.activeFallbackModel.delete(id);
-        this.sessionAgent.delete(id);
-        this.sessionTried.delete(id);
-        this.v2RetryNotices.delete(id);
-        // NOTE: inProgress is intentionally NOT cleared here —
-        // the finally blocks in tryFallback() and tryFallbackWithAbort()
-        // manage inProgress lifecycle. Clearing it here would make
-        // isFallbackInProgress() return false during the abort/re-prompt
-        // cycle, letting the task-session-manager treat the abort idle
-        // as a real completion and report a background task as cancelled.
-        this.lastTrigger.delete(id);
-        this.lastTriggerModel.delete(id);
-        this.lastTriggerTurn.delete(id);
-        this.triggerIncidents.delete(id);
-        this.pendingErrorCorrelation.delete(id);
-        this.turnEpoch.set(id, (this.turnEpoch.get(id) ?? 0) + 1);
-        this.lastUserMessageID.delete(id);
-        this.userEventSequence.delete(id);
-        this.replayMessageIds.delete(id);
-        this.retryAttempt.delete(id);
-        this.sessionRetries.delete(id);
-        this.chainExhaustion.delete(id);
-        this.lastFallbackTime.delete(id);
-        this.initialDelayUsed.delete(id);
-        // Cancel any pending initial delay
-        this.cancelInitialDelay(id);
-      });
+      this.hasCoordinator = true;
+      coordinator.onSessionDeleted((id) => this.forgetSession(id));
     }
   }
 
-  /** Confirmed fallback model serving this session's active user turn. */
-  getActiveFallbackModel(sessionID: string): string | undefined {
-    return this.activeFallbackModel.get(sessionID);
+  /** Drop all per-session state once the session is deleted. */
+  private forgetSession(id: string): void {
+    this.sessionModel.delete(id);
+    this.activeFallback.delete(id);
+    this.sessionAgent.delete(id);
+    this.sessionTried.delete(id);
+    this.sessionChains.delete(id);
+    this.unknownFinishStreak.delete(id);
+    this.v2RetryNotices.delete(id);
+    // NOTE: inProgress is intentionally NOT cleared here —
+    // the finally blocks in tryFallback() and tryFallbackWithAbort()
+    // manage inProgress lifecycle. Clearing it here would make
+    // isFallbackInProgress() return false during the abort/re-prompt
+    // cycle, letting the task-session-manager treat the abort idle
+    // as a real completion and report a background task as cancelled.
+    this.lastTrigger.delete(id);
+    this.lastTriggerModel.delete(id);
+    this.lastTriggerTurn.delete(id);
+    this.lastSwitchTrigger.delete(id);
+    this.triggerIncidents.delete(id);
+    this.pendingErrorCorrelation.delete(id);
+    this.turnEpoch.set(id, (this.turnEpoch.get(id) ?? 0) + 1);
+    this.lastUserMessageID.delete(id);
+    this.userEventSequence.delete(id);
+    this.replayMessageIds.delete(id);
+    this.retryAttempt.delete(id);
+    this.sessionRetries.delete(id);
+    this.chainExhaustion.delete(id);
+    this.quotaExhaustedProviders.delete(id);
+    this.deterministicTerminal.delete(id);
+    this.lastFallbackTime.delete(id);
+    this.initialDelayUsed.delete(id);
+    // Cancel any pending initial delay
+    this.cancelInitialDelay(id);
+  }
+
+  /** Confirmed fallback serving this session, including provider failures. */
+  getActiveFallback(sessionID: string) {
+    return this.activeFallback.get(sessionID);
+  }
+
+  /** Restart the count with a new record so replies still being read are
+   *  dropped; the seen IDs stay deduped until the next user turn. */
+  private resetUnknownFinishStreak(sessionID: string): void {
+    const streak = this.unknownFinishStreak.get(sessionID);
+    if (streak)
+      this.unknownFinishStreak.set(sessionID, { ...streak, count: 0 });
+  }
+
+  private commitSwitch(
+    sessionID: string,
+    from: string | undefined,
+    model: string,
+    error: unknown,
+  ): void {
+    const downProviders = new Set(
+      this.activeFallback.get(sessionID)?.downProviders,
+    );
+    const fromProvider = from
+      ? parseModelReference(from)?.providerID
+      : undefined;
+    if (fromProvider && failoverScope(error) === 'provider') {
+      downProviders.add(fromProvider);
+    }
+    const toProvider = parseModelReference(model)?.providerID;
+    if (toProvider) downProviders.delete(toProvider);
+    this.activeFallback.set(sessionID, { model, downProviders });
+    this.sessionModel.set(sessionID, model);
+    this.resetUnknownFinishStreak(sessionID);
+    this.onSessionModelChanged?.(sessionID, model);
+    log('[foreground-fallback] active fallback committed', {
+      sessionID,
+      model,
+      downProviders: [...downProviders].sort(),
+    });
   }
 
   /** Reconcile an internal continuation that explicitly selected a model.
@@ -928,18 +1249,21 @@ export class ForegroundFallbackManager {
   observeContinuationModel(sessionID: string, model: string): void {
     const previousModel = this.sessionModel.get(sessionID);
     this.sessionModel.set(sessionID, model);
-    if (this.activeFallbackModel.get(sessionID) !== model) {
-      this.activeFallbackModel.delete(sessionID);
+    if (this.activeFallback.get(sessionID)?.model !== model) {
+      this.activeFallback.delete(sessionID);
     }
     if (previousModel !== model) {
       this.onSessionModelChanged?.(sessionID, model);
     }
   }
 
-  /** A genuine external turn starts from the host-selected model again;
-   *  promptAsync model overrides are per-message and do not persist. */
-  observeExternalTurn(sessionID: string): void {
-    this.activeFallbackModel.delete(sessionID);
+  /** v1 overrides are per-message; v2 switches persist across external turns. */
+  observeExternalTurn(sessionID: string, model: string | undefined): void {
+    if (model === undefined) return;
+    if (this.activeFallback.get(sessionID)?.model !== model) {
+      this.activeFallback.delete(sessionID);
+      this.sessionModel.set(sessionID, model);
+    }
   }
 
   /**
@@ -955,10 +1279,33 @@ export class ForegroundFallbackManager {
     // available again. Intervention branches are gated on `enabled`
     // individually.
     if (!this.enabled && !this.v2RetryEnabled) return;
-    const event = rawEvent as { type: string; properties?: unknown };
+    const event = rawEvent as {
+      type: string;
+      properties?: unknown;
+      data?: unknown;
+    };
     if (!event?.type) return;
+    const isV2Host =
+      (this.input as PluginInput & { hostFlavor?: string }).hostFlavor === 'v2';
 
     switch (event.type) {
+      case 'session.step.ended':
+      case 'session.execution.succeeded': {
+        if (!isV2Host) break;
+        const props = isRecord(event.data) ? event.data : event.properties;
+        if (
+          isRecord(props) &&
+          typeof props.sessionID === 'string' &&
+          (event.type === 'session.execution.succeeded' ||
+            props.finish === 'stop' ||
+            props.finish === 'tool-calls' ||
+            props.finish === 'length')
+        ) {
+          this.resetRecoveryState(props.sessionID);
+        }
+        break;
+      }
+
       case 'message.updated': {
         const info = (
           event.properties as { info?: Record<string, unknown> } | undefined
@@ -1022,71 +1369,109 @@ export class ForegroundFallbackManager {
           typeof info.providerID === 'string' &&
           typeof info.modelID === 'string'
         ) {
-          this.sessionModel.set(
-            sessionID,
-            `${info.providerID}/${info.modelID}`,
-          );
+          const model = `${info.providerID}/${info.modelID}`;
+          this.sessionModel.set(sessionID, model);
+          // The replacement spoke: later errors are its own.
+          if (model !== this.lastSwitchTrigger.get(sessionID)?.model)
+            this.lastSwitchTrigger.delete(sessionID);
         }
         const messageTime = info.time;
-        const isCompletedSuccessfulAssistant =
+        const isCompletedAssistant =
           info.role === 'assistant' &&
+          isRecord(messageTime) &&
+          typeof messageTime.completed === 'number';
+        const isCompletedSuccessfulAssistant =
+          isCompletedAssistant &&
           !info.error &&
           // OpenCode v1 publishes a content-filter turn as completed before it
           // attaches the ContentFilterError: a failure, not a recovery.
-          info.finish !== 'content-filter' &&
-          typeof messageTime === 'object' &&
-          messageTime !== null &&
-          'completed' in messageTime &&
-          typeof messageTime.completed === 'number';
+          info.finish !== 'content-filter';
+        const epoch = this.turnEpoch.get(sessionID) ?? 0;
+        const readsParts =
+          this.enabled &&
+          isCompletedSuccessfulAssistant &&
+          info.finish === 'unknown';
+        // Every reset swaps this record, so a reply whose parts were still
+        // being read when the count was reset is not counted afterwards.
+        let streak = this.unknownFinishStreak.get(sessionID);
+        if (readsParts && !streak) {
+          streak = { count: 0, seen: new Set<string>() };
+          this.unknownFinishStreak.set(sessionID, streak);
+        }
+        const noTools = readsParts
+          ? await this.messageHasNoTools(sessionID, messageID)
+          : false;
+        if (!this.isCurrentTurn(sessionID, epoch)) break;
+        let isUnknownLoop = false;
+        if (
+          noTools &&
+          messageID !== undefined &&
+          streak &&
+          this.unknownFinishStreak.get(sessionID) === streak
+        ) {
+          if (!streak.seen.has(messageID)) {
+            streak.seen.add(messageID);
+            isUnknownLoop = ++streak.count >= 3;
+            if (isUnknownLoop) streak.count = 0;
+          }
+        } else if (isCompletedAssistant && noTools === false) {
+          this.resetUnknownFinishStreak(sessionID);
+        }
         // OpenCode v1 can publish `finish: 'content-filter'` before attaching
         // its ContentFilterError. Treat that terminal finish as the error
         // event itself; the later message/session error is deduped by ID.
-        const contentFilterError = {
-          name: 'ContentFilterError',
-          message: "The response was blocked by the provider's content filter",
-        };
-        const messageError =
-          info.finish === 'content-filter' && !isFailoverError(info.error)
-            ? contentFilterError
+        const messageError = isUnknownLoop
+          ? UNKNOWN_FINISH_LOOP_ERROR
+          : info.finish === 'content-filter' && !isFailoverError(info.error)
+            ? CONTENT_FILTER_ERROR
             : info.error;
-        if (this.enabled && messageError && isFailoverError(messageError)) {
-          const incidentID = this.incidentForMessageError(
+        const incidentID =
+          this.enabled && messageError && isFailoverError(messageError)
+            ? this.incidentForMessageError(sessionID, messageID, messageError)
+            : undefined;
+        if (
+          incidentID !== undefined &&
+          messageError &&
+          // The error belongs to this message's own model, which may differ
+          // from sessionModel once a re-emitted update follows a switch.
+          !this.surfacesSpentQuota(
             sessionID,
-            messageID,
             messageError,
-          );
-          if (this.bypassInitialFallbackDelay(sessionID, messageError)) {
-            await this.tryFallback(sessionID, messageError, incidentID);
-          } else if (
+            typeof info.providerID === 'string' &&
+              typeof info.modelID === 'string'
+              ? `${info.providerID}/${info.modelID}`
+              : undefined,
+            incidentID,
+          )
+        ) {
+          if (
+            this.bypassInitialFallbackDelay(sessionID, messageError) ||
             !this.delayInitialFallback(
               sessionID,
-              false,
+              isUnknownLoop,
               undefined,
               messageError,
               incidentID,
             )
           ) {
-            await this.tryFallback(sessionID, messageError, incidentID);
+            if (isUnknownLoop) {
+              await this.tryFallbackWithAbort(
+                sessionID,
+                messageError,
+                undefined,
+                incidentID,
+              );
+            } else {
+              await this.tryFallback(sessionID, messageError, incidentID);
+            }
           }
-        } else if (isCompletedSuccessfulAssistant) {
-          // Only a completed, successful assistant response proves recovery.
-          this.sessionRetries.delete(sessionID);
-          this.retryAttempt.delete(sessionID);
-          this.chainExhaustion.delete(sessionID);
-          this.lastFallbackTime.delete(sessionID);
-          this.initialDelayUsed.delete(sessionID);
-          this.v2RetryNotices.delete(sessionID);
-          // A success also ends any failure streak, so the models the
-          // streak marked tried are no longer proven dead. Static-chain
-          // agents already get this from the re-arm reset (a new turn
-          // re-sends the configured primary); combined inherit+chain
-          // agents re-send their live session model, which never equals
-          // the configured head, so without this reset their tried set
-          // only grows across turns and each new descent starts one link
-          // deeper.
-          this.sessionTried.delete(sessionID);
-          // Cancel any pending initial delay on recovery
-          this.cancelInitialDelay(sessionID);
+        } else if (
+          !isV2Host &&
+          isCompletedSuccessfulAssistant &&
+          noTools === false
+        ) {
+          // v2 completed-message synthesis is telemetry, not recovery evidence.
+          this.resetRecoveryState(sessionID);
         }
         break;
       }
@@ -1129,6 +1514,11 @@ export class ForegroundFallbackManager {
           typeof props.info?.id === 'string' ? props.info.id : undefined,
           props.error,
         );
+        if (
+          this.surfacesSpentQuota(sessionID, props.error, undefined, incidentID)
+        ) {
+          break;
+        }
         if (this.bypassInitialFallbackDelay(sessionID, props.error)) {
           await this.tryFallback(sessionID, props.error, incidentID);
         } else if (
@@ -1190,9 +1580,13 @@ export class ForegroundFallbackManager {
           if (this.inProgress.has(sessionID)) break;
           this.rearmIfFreshDescent(sessionID);
           if (this.retryAlreadyObserved(sessionID, attempt)) break;
-          // Otherwise (attempt === 1, or model didn't change, or outside
-          // dedup window): process as genuine retry for current model.
-          if (this.absorbHostRetry(sessionID)) {
+          // A no-chain status paired with a same-turn error incident is the
+          // host retrying that already-handled failure (or its replay):
+          // consume it without charging or sending another prompt.
+          if (
+            !this.hasFallbackChain(sessionID) &&
+            this.hasSameTurnErrorIncident(sessionID)
+          ) {
             this.recordRetryAttempt(sessionID, attempt);
             this.cancelInitialDelay(sessionID);
             break;
@@ -1201,6 +1595,21 @@ export class ForegroundFallbackManager {
           const retryError = props.error ?? {
             message: props.status?.message ?? '',
           };
+          if (this.surfacesSpentQuota(sessionID, retryError)) break;
+          // Permanent quota/billing exhaustion and spent allowance never
+          // recover by host retries on this provider — skip the host-retry
+          // budget and fall back at once. Otherwise (attempt === 1, or model
+          // didn't change, or outside dedup window): process as genuine
+          // retry for current model.
+          if (
+            !isPermanentQuotaBillingError(retryError) &&
+            !isSpentQuotaError(retryError) &&
+            this.absorbHostRetry(sessionID)
+          ) {
+            this.recordRetryAttempt(sessionID, attempt);
+            this.cancelInitialDelay(sessionID);
+            break;
+          }
           if (this.bypassInitialFallbackDelay(sessionID, retryError)) {
             await this.tryFallbackWithAbort(
               sessionID,
@@ -1274,6 +1683,9 @@ export class ForegroundFallbackManager {
             sessionID: id,
           });
           this.sessionParent.delete(id);
+          // Without a lifecycle coordinator this event is the only deletion
+          // signal, so it must clear the retry/terminal state too.
+          if (!this.hasCoordinator) this.forgetSession(id);
         }
         break;
       }
@@ -1358,11 +1770,24 @@ export class ForegroundFallbackManager {
         return;
       if (event.agent) this.registerSessionAgent(sessionID, event.agent);
       this.sessionModel.set(sessionID, from);
+      // Spent allowance on every chain provider: leave the host decision.
+      // The host names the model whose attempt failed, so attribution is
+      // direct: no echo heuristic on this path (an old model's late retry
+      // was already dropped by the tried-model check above).
+      if (this.surfacesSpentQuota(sessionID, event.error, from)) return;
       if (event.decision?.retry === true) {
         this.rearmIfFreshDescent(sessionID);
-        if (this.absorbHostRetry(sessionID)) return;
+        // Permanent quota/billing exhaustion and spent allowance never
+        // recover by host retries on this provider — skip the host-retry
+        // budget and steer at once.
+        if (
+          !isPermanentQuotaBillingError(event.error) &&
+          !isSpentQuotaError(event.error) &&
+          this.absorbHostRetry(sessionID)
+        )
+          return;
       }
-      const selected = this.selectFallbackModel(sessionID);
+      const selected = this.selectFallbackModel(sessionID, event.error);
       if (!selected || selected === 'exhausted') return;
       const { agentName, nextModel, ref, variant } = selected;
       picked = nextModel;
@@ -1378,9 +1803,7 @@ export class ForegroundFallbackManager {
       );
       if (this.disposed) return;
       event.decision = { retry: true, delay: this.retryDelayMs };
-      this.sessionModel.set(sessionID, nextModel);
-      this.activeFallbackModel.set(sessionID, nextModel);
-      this.onSessionModelChanged?.(sessionID, nextModel);
+      this.commitSwitch(sessionID, from, nextModel, event.error);
       this.showFallbackToast(agentName, nextModel, event.error);
       log('[foreground-fallback] retry hook switched model in place', {
         sessionID,
@@ -1393,23 +1816,21 @@ export class ForegroundFallbackManager {
       if (picked) this.sessionTried.get(event.sessionID)?.delete(picked);
       const pendingSwitch = switchRequest;
       if (err instanceof OperationTimeoutError && picked && pendingSwitch) {
-        // Late landing: the timeout cannot cancel the host call. If it
-        // settles after we gave up, reconcile only when nothing advanced
-        // the model since — the check and the write run synchronously, so
-        // a hook that already moved on fails closed instead of being
-        // overwritten. No toast here: the next event's success path
+        // Late landing: the timeout cannot cancel the host call. Reconcile
+        // if the observed model is still the source or already the target;
+        // leave any newer, different selection untouched. The check/write
+        // run synchronously. No toast here: the next event's success path
         // notifies; this only repairs state.
         const target = picked;
         void pendingSwitch.then(
           () => {
+            const observedModel = this.sessionModel.get(event.sessionID);
             if (
               this.disposed ||
-              this.sessionModel.get(event.sessionID) !== from
+              (observedModel !== from && observedModel !== target)
             )
               return;
-            this.sessionModel.set(event.sessionID, target);
-            this.activeFallbackModel.set(event.sessionID, target);
-            this.onSessionModelChanged?.(event.sessionID, target);
+            this.commitSwitch(event.sessionID, from, target, event.error);
             log('[foreground-fallback] retry hook reconciled a late switch', {
               sessionID: event.sessionID,
               from,
@@ -1431,8 +1852,19 @@ export class ForegroundFallbackManager {
   // ---------------------------------------------------------------------------
 
   /** Return true while the host still has retries available. Exhaustion
-   *  leaves the counter charged for the remainder of the chain descent. */
+   *  leaves the counter charged for the remainder of the chain descent.
+   *  The counter is shared: host-retry absorbs and same-model replay
+   *  charges draw from the same sessionRetries budget. */
   private absorbHostRetry(sessionID: string): boolean {
+    // No-chain sessions only absorb to fund a same-model replay; once the
+    // session is terminal or this failure episode already charged the
+    // shared budget, the absorb must not charge again.
+    if (
+      !this.hasFallbackChain(sessionID) &&
+      this.skipNoChainAbsorbCharge(sessionID)
+    ) {
+      return false;
+    }
     const tried = this.sessionRetries.get(sessionID) ?? 0;
     if (tried < this.maxRetries) {
       this.sessionRetries.set(sessionID, tried + 1);
@@ -1446,11 +1878,188 @@ export class ForegroundFallbackManager {
     return false;
   }
 
+  /** No-chain host-retry absorbs must not charge once terminal or when
+   *  the same failure's error incident already charged the shared budget. */
+  private skipNoChainAbsorbCharge(sessionID: string): boolean {
+    return (
+      (this.chainExhaustion.get(sessionID) ?? 0) >= 2 ||
+      this.deterministicTerminal.has(sessionID) ||
+      this.hasSameTurnErrorIncident(sessionID)
+    );
+  }
+
+  /** Refund one shared-budget charge when a replay never delivered, but
+   *  only when the turn is still the charged one: a replay resuming after
+   *  a turn advance must not debit the new turn's budget. */
+  private refundSessionRetry(sessionID: string, epoch: number): void {
+    if ((this.turnEpoch.get(sessionID) ?? 0) !== epoch) return;
+    this.sessionRetries.set(
+      sessionID,
+      Math.max(0, (this.sessionRetries.get(sessionID) ?? 0) - 1),
+    );
+  }
+
+  /** Restore a lifted deterministic block when nothing delivered, but
+   *  never across a turn advance (a new turn starts unblocked). */
+  private restoreDeterministicTerminal(
+    sessionID: string,
+    epoch: number,
+    hadTerminal: boolean,
+  ): void {
+    if (hadTerminal && (this.turnEpoch.get(sessionID) ?? 0) === epoch) {
+      this.deterministicTerminal.add(sessionID);
+    }
+  }
+
   private cancelInitialDelay(sessionID: string): void {
     const pending = this.pendingInitialDelay.get(sessionID);
     if (!pending) return;
     clearTimeout(pending.timer);
     this.pendingInitialDelay.delete(sessionID);
+  }
+
+  /** A confirmed recovery starts a new descent, including inherit+chain agents. */
+  private resetRecoveryState(sessionID: string): void {
+    this.sessionRetries.delete(sessionID);
+    this.retryAttempt.delete(sessionID);
+    this.chainExhaustion.delete(sessionID);
+    this.deterministicTerminal.delete(sessionID);
+    this.lastFallbackTime.delete(sessionID);
+    this.initialDelayUsed.delete(sessionID);
+    this.v2RetryNotices.delete(sessionID);
+    this.sessionTried.delete(sessionID);
+    this.quotaExhaustedProviders.delete(sessionID);
+    this.cancelInitialDelay(sessionID);
+  }
+
+  /** Record a spent allowance (issue #966) against the failing model's
+   *  provider. Other errors leave the record untouched. */
+  private markQuotaExhausted(
+    sessionID: string,
+    model: string | undefined,
+    error: unknown,
+  ): ReadonlySet<string> | undefined {
+    const provider = model ? parseModelReference(model)?.providerID : undefined;
+    if (provider && isSpentQuotaError(error)) {
+      let exhausted = this.quotaExhaustedProviders.get(sessionID);
+      if (!exhausted) {
+        exhausted = new Set();
+        this.quotaExhaustedProviders.set(sessionID, exhausted);
+      }
+      exhausted.add(provider);
+    }
+    return this.quotaExhaustedProviders.get(sessionID);
+  }
+
+  /** The model a fallback already handled this incident for (this turn),
+   *  or undefined when no fallback ran for it yet. */
+  private handledIncidentModel(
+    sessionID: string,
+    incidentID: string,
+  ): string | undefined {
+    const previous = this.triggerIncidents.get(sessionID)?.get(incidentID);
+    if (previous?.turn !== (this.turnEpoch.get(sessionID) ?? 0)) return;
+    return previous.model;
+  }
+
+  private noteSwitchTrigger(
+    sessionID: string,
+    model: string | undefined,
+    error: unknown,
+  ): void {
+    if (model === undefined || error === undefined) {
+      this.lastSwitchTrigger.delete(sessionID);
+      return;
+    }
+    this.lastSwitchTrigger.set(sessionID, {
+      model,
+      signature: spentQuotaSignature(error),
+      turn: this.turnEpoch.get(sessionID) ?? 0,
+      time: Date.now(),
+    });
+  }
+
+  /** The model a spent-quota error without its own model belongs to. An
+   *  error tied to a message is that message's incident: surfacesSpentQuota
+   *  attributes a handled one to its recorded model, anything else is the
+   *  current model's. Any other error (uncorrelated session.error, status
+   *  retry) is the last switch trigger's echo only when it
+   *  repeats that trigger's signature in the same turn and dedup window,
+   *  the trigger's provider is exhausted, and the replacement has emitted
+   *  nothing since; otherwise it is the current model's, so a genuine
+   *  failure of the replacement still advances the cascade. */
+  private triggeringModel(
+    sessionID: string,
+    error: unknown,
+    incidentID?: string,
+  ): string | undefined {
+    const current = this.sessionModel.get(sessionID);
+    if (incidentID?.startsWith('message:')) return current;
+    const trigger = this.lastSwitchTrigger.get(sessionID);
+    if (
+      trigger !== undefined &&
+      trigger.model !== current &&
+      this.quotaExhaustedProviders
+        .get(sessionID)
+        ?.has(parseModelReference(trigger.model)?.providerID ?? '') &&
+      trigger.signature === spentQuotaSignature(error) &&
+      trigger.turn === (this.turnEpoch.get(sessionID) ?? 0) &&
+      Date.now() - trigger.time < DEDUP_WINDOW_MS
+    )
+      return trigger.model;
+    return current;
+  }
+
+  /** Spent allowance (issue #966): mark the failing provider and report
+   *  whether the error must surface because no chain entry remains on a
+   *  provider with allowance left. Surfacing performs no failover and no
+   *  abort, and cancels any queued initial fallback. */
+  private surfacesSpentQuota(
+    sessionID: string,
+    error: unknown,
+    failingModel?: string,
+    incidentID?: string,
+  ): boolean {
+    if (!isSpentQuotaError(error)) return false;
+    const model = this.sessionModel.get(sessionID);
+    // Another observation of an incident a fallback already handled belongs
+    // to the model that fallback switched away from, whatever sessionModel
+    // names now. It carries no new evidence: record it there, never act.
+    const handledModel =
+      incidentID === undefined
+        ? undefined
+        : this.handledIncidentModel(sessionID, incidentID);
+    if (handledModel !== undefined) {
+      this.markQuotaExhausted(sessionID, handledModel, error);
+      return true;
+    }
+    const { chain } = this.resolveChain(
+      this.sessionAgent.get(sessionID),
+      model,
+      sessionID,
+    );
+    const failing =
+      failingModel ??
+      this.triggeringModel(sessionID, error, incidentID) ??
+      chain[0];
+    const exhausted = this.markQuotaExhausted(sessionID, failing, error);
+    // A late error from a model we already switched away from records its
+    // provider but must not drive another switch off the replacement.
+    if (model !== undefined && failing !== model) return true;
+    const viable = chain.some(
+      (entry) => !exhausted?.has(parseModelReference(entry)?.providerID ?? ''),
+    );
+    if (viable) return false;
+    this.cancelInitialDelay(sessionID);
+    log(
+      '[foreground-fallback] spent quota on every chain provider; surfacing',
+      {
+        sessionID,
+        model: failing,
+        exhausted: [...(exhausted ?? [])].sort(),
+      },
+    );
+    return true;
   }
 
   private bypassInitialFallbackDelay(
@@ -1495,7 +2104,7 @@ export class ForegroundFallbackManager {
         this.initialDelayUsed.add(sessionID);
         // Background fallback is fail-soft: a failure must be logged
         // and swallowed, never escape as an unhandled rejection.
-        // Call tryFallbackWithAbort for session.status retry path
+        // Abort the host loop when the delayed trigger requires it.
         const trigger = latest.needsAbort
           ? this.tryFallbackWithAbort(
               sessionID,
@@ -1525,6 +2134,238 @@ export class ForegroundFallbackManager {
   }
 
   // ---------------------------------------------------------------------------
+  // Same-model replay (no-chain sessions only; chain replay stays in
+  // execFallback)
+  // ---------------------------------------------------------------------------
+
+  /** A transcript read failed or timed out before anything was sent:
+   *  log, refund the charge, and report the replay as not delivered. */
+  private abandonReplayRead(
+    sessionID: string,
+    opts: { epoch: number; charged: boolean },
+    error: unknown,
+  ): false {
+    log('[foreground-fallback] same-model replay transcript read failed', {
+      sessionID,
+      error: stringifyError(error),
+    });
+    if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
+    return false;
+  }
+
+  private async replayWithModel(
+    sessionID: string,
+    model: { providerID: string; modelID: string },
+    opts: {
+      agentName?: string;
+      variant?: string;
+      trailerText: string;
+      epoch: number;
+      charged: boolean;
+    },
+  ): Promise<boolean> {
+    const session = getClient(this.input).session;
+    // Tail read mirroring execFallback: the replay needs the last
+    // replayable user message plus the trailing message id (handoff
+    // baseline), never the full history. A tail without a user message is
+    // one long turn: read only the user message its last entry answers
+    // (v1 `parentID`); shapes without that id read it all.
+    // Both reads are bounded like execFallback's: a hung host call must
+    // not pin inProgress forever. A failed read sent nothing, so refund.
+    let tailResult: { data?: unknown; error?: unknown };
+    try {
+      tailResult = await withTimeout<{ data?: unknown; error?: unknown }>(
+        session.messages({
+          path: { id: sessionID },
+          query: { limit: FALLBACK_REPLAY_TAIL_MESSAGES },
+        }),
+        HOST_CALL_TIMEOUT_MS,
+        'same-model replay transcript read timed out',
+      );
+    } catch (err) {
+      return this.abandonReplayRead(sessionID, opts, err);
+    }
+    if (!this.isCurrentTurn(sessionID, opts.epoch)) return false;
+    const messages = (tailResult.data ?? []) as unknown[];
+    let requestError: unknown = tailResult.error ?? undefined;
+    let lastUser = messages.findLast(isReplayableUserMessage);
+    if (!lastUser) {
+      const parentID = (messages.at(-1) as { info?: { parentID?: unknown } })
+        ?.info?.parentID;
+      let deepResult: { data?: unknown; error?: unknown };
+      try {
+        deepResult = await withTimeout<{ data?: unknown; error?: unknown }>(
+          typeof parentID === 'string'
+            ? session.message({ path: { id: sessionID, messageID: parentID } })
+            : session.messages({ path: { id: sessionID } }),
+          HOST_CALL_TIMEOUT_MS,
+          'same-model replay transcript read timed out',
+        );
+      } catch (err) {
+        return this.abandonReplayRead(sessionID, opts, err);
+      }
+      if (!this.isCurrentTurn(sessionID, opts.epoch)) return false;
+      lastUser = [deepResult.data ?? []]
+        .flat()
+        .findLast(isReplayableUserMessage);
+      // Preserve BOTH failures: when the tail and the deeper read fail
+      // differently, the diagnostic log must surface the first error
+      // too instead of letting the deeper-read error overwrite it.
+      const deepError = deepResult.error ?? undefined;
+      if (deepError !== undefined) {
+        requestError =
+          requestError === undefined ? deepError : [requestError, deepError];
+      }
+    }
+    if (!lastUser) {
+      log('[foreground-fallback] no user message found', {
+        sessionID,
+        messageCount: messages.length,
+        requestError,
+      });
+      if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
+      return false;
+    }
+    if (typeof session.promptAsync !== 'function') {
+      log('[foreground-fallback] promptAsync unavailable', { sessionID });
+      if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
+      return false;
+    }
+    // Bound: the SDK's promptAsync reads `this._client`, so calling the
+    // extracted function unbound throws on the real client.
+    const promptAsync = session.promptAsync.bind(session) as (
+      args: Record<string, unknown>,
+    ) => Promise<unknown>;
+
+    const replayParts = partsFromReplayMessage(lastUser) as Array<{
+      type: 'text';
+      text: string;
+    }>;
+
+    // No `modelSwitch: 'required'`: the replay targets the session's
+    // CURRENT model, so the v2 shim may skip the switch (preserving the
+    // host-side variant) and hosts without session.switchModel can still
+    // deliver it. v1 call bytes stay untouched.
+    const isV2Host =
+      (this.input as PluginInput & { hostFlavor?: string }).hostFlavor === 'v2';
+    const promptBody = {
+      path: { id: sessionID },
+      body: {
+        messageID: `msg${randomUUID()}`,
+        parts: [...replayParts, createInternalAgentTextPart(opts.trailerText)],
+        model,
+        ...(opts.variant ? { variant: opts.variant } : {}),
+        ...(opts.agentName ? { agent: opts.agentName } : {}),
+      },
+      ...(isV2Host && opts.variant ? { modelVariant: opts.variant } : {}),
+    };
+    const sendReplayPrompt = (): Promise<unknown> => {
+      this.rememberReplayMessage(sessionID, promptBody.body.messageID);
+      return withTimeout(
+        promptAsync(promptBody),
+        REPLAY_SEND_TIMEOUT_MS,
+        'same-model replay prompt timed out',
+      );
+    };
+
+    // Bounded admissions (SAME_MODEL_REPLAY_ATTEMPTS): the initial send
+    // plus a single busy-path re-send after abort.
+    let promptResult: unknown;
+    let delivered = false;
+    for (
+      let sendAttempt = 1;
+      sendAttempt <= SAME_MODEL_REPLAY_ATTEMPTS;
+      sendAttempt++
+    ) {
+      try {
+        promptResult = await sendReplayPrompt();
+        delivered = true;
+        break;
+      } catch (promptErr) {
+        const lastChance = sendAttempt >= SAME_MODEL_REPLAY_ATTEMPTS;
+        if (promptErr instanceof OperationTimeoutError) {
+          // A send timeout cannot prove busyness: never abort or duplicate
+          // the replay (matches the chain replay path).
+          // Delivery is unknown (the host may still admit it), so the
+          // charge stands; only a confirmed rejection refunds.
+          log('[foreground-fallback] same-model replay send timed out', {
+            sessionID,
+            error: stringifyError(promptErr),
+          });
+          return false;
+        }
+        if (lastChance || isV2Host || !isBusyRefusalError(promptErr)) {
+          // Exhausted admissions, an unproven-busy rejection, or a v2
+          // host: a rejected v2 replay is final, and only a proven busy
+          // refusal justifies aborting and re-sending. Log and stop;
+          // never let the re-send escape through try/finally-only
+          // callers.
+          log('[foreground-fallback] same-model re-prompt failed', {
+            sessionID,
+            error: stringifyError(promptErr),
+          });
+          if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
+          return false;
+        }
+        if (!this.isCurrentTurn(sessionID, opts.epoch)) {
+          if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
+          return false;
+        }
+        if (this.withholdsAbortForLiveChildren(sessionID)) {
+          if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
+          return false;
+        }
+        log('[foreground-fallback] promptAsync on busy session, aborting', {
+          sessionID,
+          error: stringifyError(promptErr),
+        });
+        await this.promoteForegroundWaiter(sessionID);
+        if (!this.isCurrentTurn(sessionID, opts.epoch)) {
+          if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
+          return false;
+        }
+        if (this.withholdsAbortForLiveChildren(sessionID)) {
+          if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
+          return false;
+        }
+        try {
+          await abortSessionWithTimeout(getClient(this.input), sessionID);
+        } catch (err) {
+          log('[foreground-fallback] busy re-send abort failed', {
+            sessionID,
+            error: stringifyError(err),
+          });
+          if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
+          return false;
+        }
+        if (!this.isCurrentTurn(sessionID, opts.epoch)) {
+          if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
+          return false;
+        }
+        await new Promise((r) => setTimeout(r, REPROMPT_DELAY_MS));
+        if (!this.isCurrentTurn(sessionID, opts.epoch)) {
+          if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
+          return false;
+        }
+        promptBody.body.messageID = `msg${randomUUID()}`;
+      }
+    }
+    if (!delivered) return false;
+
+    // SDK envelopes can resolve (not reject) with `{ error }` — an
+    // unadmitted replay is a failure, not a silent success.
+    if (isRecord(promptResult) && responseError(promptResult) !== undefined) {
+      log(
+        '[foreground-fallback] same-model re-prompt rejected by host error envelope',
+        { sessionID, model: `${model.providerID}/${model.modelID}` },
+      );
+      if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
+      return false;
+    }
+    return true;
+  }
+
+  // ---------------------------------------------------------------------------
   // Core fallback logic
   // ---------------------------------------------------------------------------
 
@@ -1539,13 +2380,19 @@ export class ForegroundFallbackManager {
     if (this.abandonedByDispose(sessionID)) return;
     const epoch = this.turnEpoch.get(sessionID) ?? 0;
     if (this.inProgress.has(sessionID)) return;
-    // No chain -> no fallback. Skip before dedup so we don't stamp lastTrigger
-    // for sessions we will never re-prompt (e.g. councillor via CouncilManager).
-    if (!this.hasFallbackChain(sessionID)) return;
-
+    // No chain -> same-model retry, owned by trySameModelRetry. Only an
+    // explicitly disabled chain returns before dedup stamping; every other
+    // no-chain session records the incident.
+    if (!this.hasFallbackChain(sessionID)) {
+      return this.trySameModelRetry(sessionID, {
+        error,
+        incidentID,
+        epoch,
+      });
+    }
     // Deduplicate duplicate observations within the same user turn/model
     // episode. A confirmed new turn or model change starts a new incident.
-    if (this.isDeduped(sessionID, incidentID)) return;
+    if (this.isDeduped(sessionID, incidentID, error)) return;
 
     // Set inProgress before delay to prevent concurrent fallback attempts
     this.inProgress.add(sessionID);
@@ -1572,7 +2419,7 @@ export class ForegroundFallbackManager {
       }
 
       if (!this.isCurrentTurn(sessionID, epoch)) return;
-      await this.execFallback(sessionID, error, epoch);
+      await this.execFallback(sessionID, error, epoch, true);
       if (this.isCurrentTurn(sessionID, epoch)) {
         this.lastFallbackTime.set(sessionID, Date.now());
       }
@@ -1588,9 +2435,10 @@ export class ForegroundFallbackManager {
    * task-session-manager sees isFallbackInProgress()=true during the
    * abort idle window and does not cancel the pending task call.
    *
-   * When no chain is available, do nothing (no abort, no log). Aborting
-   * without a replacement model only races owners that manage their own
-   * lifecycle (e.g. CouncilManager for councillor) and produces noise.
+   * When no chain is available, retries the current model (up to maxRetries
+   * shared-budget attempts) — transient upstream errors like streaming
+   * 5xx/524, queue-full, and worker-limit strains often resolve when the
+   * replay lands on a different worker.
    */
   /** Promote a foreground task() waiter through the v1 SDK before abort
    *  settles the child's job as "cancelled". The parent's wait then resolves
@@ -1656,7 +2504,15 @@ export class ForegroundFallbackManager {
     if (this.abandonedByDispose(sessionID)) return;
     const epoch = this.turnEpoch.get(sessionID) ?? 0;
     if (this.inProgress.has(sessionID)) return;
-    if (!this.hasFallbackChain(sessionID)) return;
+    // No chain -> same-model retry (the status path absorbs into the shared
+    // budget, so no abort is needed here).
+    if (!this.hasFallbackChain(sessionID)) {
+      return this.trySameModelRetry(sessionID, {
+        error,
+        incidentID,
+        epoch,
+      });
+    }
     // An exhausted chain has no replacement: never abort another host retry.
     if (this.chainExhaustion.get(sessionID) === 2) return;
     if (this.withholdsAbortForLiveChildren(sessionID)) return;
@@ -1668,12 +2524,20 @@ export class ForegroundFallbackManager {
       // the meantime — never abort through a stale client.
       if (!this.isCurrentTurn(sessionID, epoch)) return;
       if (this.withholdsAbortForLiveChildren(sessionID)) return;
-      if (this.isDeduped(sessionID, incidentID)) return;
+      if (this.isDeduped(sessionID, incidentID, error)) return;
       if (retryAttempt !== undefined) {
         if (this.retryAlreadyObserved(sessionID, retryAttempt)) return;
         this.recordRetryAttempt(sessionID, retryAttempt);
       }
-      await abortSessionWithTimeout(getClient(this.input), sessionID);
+      try {
+        await abortSessionWithTimeout(getClient(this.input), sessionID);
+      } catch (err) {
+        log('[foreground-fallback] abort failed; skipping fallback', {
+          sessionID,
+          error: stringifyError(err),
+        });
+        return;
+      }
       // The abort suspended across a dispose(): its outcome no longer
       // matters to the reloaded generation — do not continue into
       // execFallback (transcript read + replay on the dead client).
@@ -1685,7 +2549,166 @@ export class ForegroundFallbackManager {
     }
   }
 
-  private isDeduped(sessionID: string, incidentID?: string): boolean {
+  /**
+   * Same-model retry for sessions with no fallback chain (unknown agents,
+   * councillor-style self-managed sessions): transient upstream errors
+   *  (streaming 5xx/524, queue-full, worker-limit) often resolve when the
+   *  replay lands on a different worker. Owns the budget, exhaustion,
+   *  disable, dedup, charge, in-progress, parse, log, and replay steps
+   *  (the session.status path absorbs into the shared budget and only
+   *  arrives once spent, so no abort is needed).
+   *
+   * Tracked background children stay out: this path performs no
+   * backgroundFallbackHandoff prepare/admit/reject, so a replay here would
+   * run untracked and its result unobserved. Chain replay (execFallback)
+   * arms the handoff; same-model replay does not.
+   */
+  private async trySameModelRetry(
+    sessionID: string,
+    opts: {
+      error?: unknown;
+      incidentID?: string;
+      epoch: number;
+    },
+  ): Promise<void> {
+    const currentModel = this.sessionModel.get(sessionID);
+    if (!currentModel) return;
+    // Deterministic failures never recover on the same model: no retry and
+    // no budget charge, but block the promise until a retryable-transient
+    // error lifts it. No dedup stamp.
+    // Request-scoped rejections (policy/content filter, retired or unknown
+    // model) reproduce on the same model, so they are terminal here too.
+    if (
+      isInlineFailoverError(opts.error) ||
+      isPermanentQuotaBillingError(opts.error) ||
+      // Spent allowance (issue #966) is not transient either; the trigger
+      // paths already surface it, this keeps the replay path closed too.
+      isSpentQuotaError(opts.error) ||
+      failoverScope(opts.error) === 'request'
+    ) {
+      this.deterministicTerminal.add(sessionID);
+      return;
+    }
+    const agentName = this.sessionAgent.get(sessionID);
+    // Explicitly disabled chains stay silent (as does their abort: with no
+    // replacement model it would only race owners managing their own
+    // lifecycle). Unknown agents fail open.
+    if (this.isChainExplicitlyDisabled(sessionID, agentName)) return;
+    // Never charge the budget for a model reference that cannot replay, but
+    // block the promise until a retryable error with a good model arrives.
+    const ref = parseModelReference(currentModel);
+    if (!ref) {
+      this.deterministicTerminal.add(sessionID);
+      return;
+    }
+    // Tracked background children stay out (no handoff on this path — see
+    // the docstring above).
+    if (
+      this.sessionParent.has(sessionID) ||
+      this.readBackgroundGeneration?.(sessionID) !== undefined
+    ) {
+      log(
+        '[foreground-fallback] same-model retry skipped for background child',
+        { sessionID },
+      );
+      return;
+    }
+    const tried = this.sessionRetries.get(sessionID) ?? 0;
+    // ID-less arrivals still stamp a namespaced incident so a correlated
+    // status does not recharge the same failure.
+    const incidentID =
+      opts.incidentID ??
+      `session-error:anonymous:${opts.epoch}:${++this.incidentSequence}`;
+    if (tried >= this.maxRetries) {
+      // Budget spent: terminal no-chain exhaustion (parity with
+      // chainExhaustion=2). Sticks until a success, a new user turn, or
+      // session deletion; the counter stays charged so willAttemptFallback
+      // reports no pending retry. Dedup first so one episode logs once.
+      if (this.isDeduped(sessionID, incidentID)) return;
+      this.chainExhaustion.set(sessionID, 2);
+      log('[foreground-fallback] same-model retry exhausted', {
+        sessionID,
+        model: currentModel,
+        tried,
+        remaining: 0,
+      });
+      return;
+    }
+    // Deduplicate duplicate observations within the same turn/model episode.
+    if (this.isDeduped(sessionID, incidentID)) return;
+    // Lift a prior deterministic block only for an error that actually
+    // proceeds: exiting duplicates must not flip the promise with nothing
+    // pending.
+    const hadDeterministicTerminal =
+      this.deterministicTerminal.delete(sessionID);
+
+    this.inProgress.add(sessionID);
+    try {
+      // The replay below suspends across awaits: a dispose() or a newer
+      // turn in the meantime must abandon it on the dead generation. The
+      // finally still releases the process-global inProgress slot.
+      if (!this.isCurrentTurn(sessionID, opts.epoch)) {
+        this.restoreDeterministicTerminal(
+          sessionID,
+          opts.epoch,
+          hadDeterministicTerminal,
+        );
+        return;
+      }
+      // No abort here: the session.status path absorbs host retries into
+      // the shared budget and only arrives once spent.
+      // Charge once per failure: a same-turn status absorb already charged
+      // this failure, so replay without charging again; consume the pairing
+      // so later distinct errors charge normally. Only a stale-epoch
+      // abandonment above skips the charge otherwise.
+      // Residual: an unrelated same-turn/same-model error after an absorb
+      // also consumes the pairing — at most one free replay, then re-armed.
+      const prior = this.retryAttempt.get(sessionID);
+      const absorbCharged =
+        prior !== undefined &&
+        prior.turn === (this.turnEpoch.get(sessionID) ?? 0) &&
+        prior.model === currentModel;
+      const charged = !absorbCharged;
+      if (charged) {
+        this.sessionRetries.set(sessionID, tried + 1);
+      } else {
+        this.retryAttempt.delete(sessionID);
+      }
+      const variant = agentName
+        ? this.pinnedChains(sessionID)
+            [agentName]?.map((entry) =>
+              typeof entry === 'string' ? { id: entry } : entry,
+            )
+            .find((entry) => entry.id === currentModel)?.variant
+        : undefined;
+      log('[foreground-fallback] same-model retry', {
+        sessionID,
+        model: currentModel,
+        attempt: tried + 1,
+        remaining: this.maxRetries - tried - 1,
+      });
+      const delivered = await this.replayWithModel(sessionID, ref, {
+        ...(agentName ? { agentName } : {}),
+        ...(variant ? { variant } : {}),
+        trailerText: SAME_MODEL_RETRY_TRAILER,
+        epoch: opts.epoch,
+        charged,
+      });
+      this.restoreDeterministicTerminal(
+        sessionID,
+        opts.epoch,
+        !delivered && hadDeterministicTerminal,
+      );
+    } finally {
+      this.inProgress.delete(sessionID);
+    }
+  }
+
+  private isDeduped(
+    sessionID: string,
+    incidentID?: string,
+    error?: unknown,
+  ): boolean {
     const now = Date.now();
     const curModel = this.sessionModel.get(sessionID);
     const turn = this.turnEpoch.get(sessionID) ?? 0;
@@ -1701,10 +2724,11 @@ export class ForegroundFallbackManager {
         }
       }
       if (incidents.has(incidentID)) return true;
-      incidents.set(incidentID, { turn, time: now });
+      incidents.set(incidentID, { turn, time: now, model: curModel });
     }
     this.lastTrigger.set(sessionID, now);
     this.lastTriggerTurn.set(sessionID, turn);
+    this.noteSwitchTrigger(sessionID, curModel, error);
     if (curModel !== undefined) {
       this.lastTriggerModel.set(sessionID, curModel);
     }
@@ -1712,31 +2736,53 @@ export class ForegroundFallbackManager {
   }
 
   /** A return to the OBSERVED configured primary starts a new descent. An
-   *  inferred head or a dynamic inherit+chain head does not count. */
+   *  inferred head, dynamic inherit+chain head, or committed fallback does
+   *  not count. */
   private rearmIfFreshDescent(sessionID: string): void {
     const observedModel = this.sessionModel.get(sessionID);
     if (!observedModel) return;
+    if (this.activeFallback.get(sessionID)?.model === observedModel) return;
     const tried = this.sessionTried.get(sessionID);
     if (!tried || tried.size <= 1) return;
     const agentName = this.sessionAgent.get(sessionID);
-    const configuredChain =
-      agentName === undefined ? undefined : this.chains[agentName];
+    const configuredHead =
+      agentName === undefined
+        ? undefined
+        : this.pinnedChains(sessionID)[agentName]?.[0];
     const rearmHead =
-      configuredChain?.[0] ??
-      this.resolveChain(agentName, observedModel).chain[0];
+      (configuredHead === undefined
+        ? undefined
+        : typeof configuredHead === 'string'
+          ? configuredHead
+          : configuredHead.id) ??
+      this.resolveChain(agentName, observedModel, sessionID).chain[0];
     if (observedModel !== rearmHead) return;
+    // A head whose allowance is spent (issue #966) is not a recovery: the
+    // descent continues, so replays landing on it cannot reopen the chain.
+    // A new external turn or a successful response re-arms it instead.
+    const headProvider = parseModelReference(observedModel)?.providerID;
+    if (
+      headProvider &&
+      this.quotaExhaustedProviders.get(sessionID)?.has(headProvider)
+    )
+      return;
     this.sessionTried.set(sessionID, new Set());
+    this.quotaExhaustedProviders.delete(sessionID);
     this.sessionRetries.delete(sessionID);
     this.chainExhaustion.delete(sessionID);
     this.retryAttempt.delete(sessionID);
     this.initialDelayUsed.delete(sessionID);
   }
 
-  private selectFallbackModel(sessionID: string) {
+  private selectFallbackModel(sessionID: string, error?: unknown) {
     const observedModel = this.sessionModel.get(sessionID);
     let currentModel = observedModel;
     const agentName = this.sessionAgent.get(sessionID);
-    const { chain, source } = this.resolveChain(agentName, currentModel);
+    const { chain, entries } = this.resolveChain(
+      agentName,
+      currentModel,
+      sessionID,
+    );
     // Callers pre-check via hasFallbackChain; keep as defensive guard only.
     if (!chain.length) return;
     // When the agent is known but no model was captured (common for
@@ -1751,54 +2797,70 @@ export class ForegroundFallbackManager {
     if (!this.sessionTried.has(sessionID)) {
       this.sessionTried.set(sessionID, new Set());
     }
-    // A new user turn always re-sends the agent's configured primary:
-    // promptAsync's `model` is a per-message override, so a fallback never
-    // persists past the message it was applied to. Landing here on the
-    // configured primary (rearmHead) with a tried set that already walked
-    // past it therefore means the previous descent has ended and its state
-    // is stale. Without this the next descent resumes one link deeper every
-    // turn (link 2, then 3, then 4...) until the chain is spent and the
-    // session aborts, instead of re-walking from link 2 each turn.
-    //
-    // This does not weaken the backward-fallback guard below: currentModel
-    // is re-added immediately after, so the re-arm head still can never be
-    // picked. Only an OBSERVED configured primary counts. execFallback
-    // infers `currentModel = chain[0]` above when no model was ever
-    // captured for this session, which is the opposite situation —
-    // resetting there would re-pick chain[1] on every error instead of
-    // descending.
-    // size > 1 means a previous descent actually selected a fallback
-    // (tried.add(nextModel) below), so there is stale state to clear. A
-    // single-entry chain never gets there and must stay terminal after its
-    // one abort rather than re-aborting on every error.
+    // A fresh turn or continuation returning to the observed configured head
+    // re-arms a previous descent. An inferred head or our committed fallback
+    // does not: landing on the head mid-descent must retain tried models.
+    // A single-entry chain never has tried.size > 1 and stays terminal after
+    // its one abort.
     this.rearmIfFreshDescent(sessionID);
     // biome-ignore lint/style/noNonNullAssertion: We just set this above
-    let tried = this.sessionTried.get(sessionID)!;
+    const tried = this.sessionTried.get(sessionID)!;
 
-    // After the chain has been exhausted twice (reset retry failed and we
+    // After the chain has been exhausted twice (sticky retry failed and we
     // aborted), do not intervene again for this session: re-entering would
     // keep aborting in a loop. Surface errors to the user instead.
-    if (this.chainExhaustion.get(sessionID) === 2) return;
+    const exhaustion = this.chainExhaustion.get(sessionID) ?? 0;
+    if (exhaustion === 2) return;
     if (currentModel) tried.add(currentModel);
-    // ponytail: seed chain entries at or before the current model's index
-    // to prevent backward fallback onto models the session already left.
-    if (currentModel) {
-      const idx = chain.indexOf(currentModel);
-      for (let i = 0; i < idx; i++) tried.add(chain[i]);
-    }
+    // Re-mark after a re-arm above: the failing provider stays excluded.
+    const quotaExhausted = this.markQuotaExhausted(
+      sessionID,
+      currentModel,
+      error,
+    );
+    const hasAllowance = (model: string) =>
+      !quotaExhausted?.has(parseModelReference(model)?.providerID ?? '');
 
-    let nextModel = chain.find((m) => !tried.has(m));
+    const downProviders = this.activeFallback.get(sessionID)?.downProviders;
+    const parentID = this.sessionParent.get(sessionID);
+    const parentDownProviders = parentID
+      ? this.activeFallback.get(parentID)?.downProviders
+      : undefined;
+    // A failure after the sticky retry ends the descent even if switching to
+    // the sticky entry cleared its provider from the exclusions.
+    let nextModel = exhaustion
+      ? undefined
+      : chain.find((model) => {
+          const provider = parseModelReference(model)?.providerID ?? '';
+          return (
+            !tried.has(model) &&
+            hasAllowance(model) &&
+            !downProviders?.has(provider) &&
+            !parentDownProviders?.has(provider)
+          );
+        });
     if (!nextModel) {
       if (chain.length > 1) {
-        // Chain exhausted but we have fallbacks: on the first exhaustion
-        // reset the tried set and stick to the deepest fallback model so
-        // we stop re-trying the dead primary model on every subsequent
-        // message. If the sticky fallback itself fails afterwards (second
-        // exhaustion), abort once and stop intervening — otherwise the
-        // reset re-prompt would loop forever on a fully dead chain.
-        const primary = chain[0];
-        const stickyFallback = chain[chain.length - 1];
-        if ((this.chainExhaustion.get(sessionID) ?? 0) >= 1) {
+        // Retry the last chain entry once, ignoring provider exclusions but
+        // retaining tried models. If that sticky retry fails, abort once and
+        // stop intervening instead of reopening the chain. A spent allowance
+        // (issue #966) is never retried: with no entry left on another
+        // provider the error surfaces without an abort.
+        const stickyFallback = chain.findLast(hasAllowance);
+        if (stickyFallback === undefined) {
+          this.cancelInitialDelay(sessionID);
+          log(
+            '[foreground-fallback] spent quota on every chain provider; surfacing',
+            {
+              sessionID,
+              agentName,
+              currentModel,
+              exhausted: [...(quotaExhausted ?? [])].sort(),
+            },
+          );
+          return;
+        }
+        if (exhaustion >= 1) {
           this.chainExhaustion.set(sessionID, 2);
           log('[foreground-fallback] chain exhausted after re-fallback', {
             sessionID,
@@ -1809,17 +2871,13 @@ export class ForegroundFallbackManager {
           return 'exhausted' as const;
         }
         this.chainExhaustion.set(sessionID, 1);
-        log('[foreground-fallback] resetting tried set for re-fallback', {
+        log('[foreground-fallback] chain exhausted; retrying sticky fallback', {
           sessionID,
           agentName,
           currentModel,
-          prevTried: [...tried],
+          tried: [...tried],
           nextModel: stickyFallback,
         });
-        tried = new Set();
-        if (primary) tried.add(primary);
-        if (currentModel && currentModel !== primary) tried.add(currentModel);
-        this.sessionTried.set(sessionID, tried);
         nextModel = stickyFallback;
       } else {
         this.chainExhaustion.set(sessionID, 2);
@@ -1844,10 +2902,7 @@ export class ForegroundFallbackManager {
       });
       return;
     }
-    const variant = source
-      ? this.chainEntries[source]?.find((entry) => entry.id === nextModel)
-          ?.variant
-      : undefined;
+    const variant = entries.find((entry) => entry.id === nextModel)?.variant;
     return { agentName, currentModel, nextModel, ref, variant };
   }
 
@@ -1855,6 +2910,7 @@ export class ForegroundFallbackManager {
     sessionID: string,
     error?: unknown,
     expectedEpoch = this.turnEpoch.get(sessionID) ?? 0,
+    announce = false,
   ): Promise<void> {
     // Reload fence at entry: execFallback is reached after suspension
     // points in the tryFallback* callers; a disposed generation must not
@@ -1862,7 +2918,7 @@ export class ForegroundFallbackManager {
     if (!this.isCurrentTurn(sessionID, expectedEpoch)) return;
     const session = getClient(this.input).session;
     try {
-      const selection = this.selectFallbackModel(sessionID);
+      const selection = this.selectFallbackModel(sessionID, error);
       if (!selection) return;
       if (selection === 'exhausted') {
         // Same withhold as the retry and busy paths: the merged chain
@@ -1891,10 +2947,14 @@ export class ForegroundFallbackManager {
       // ~20 s. The `limit` query keeps the hot path O(tail). A tail without a
       // user message is one long turn: read only the user message its last
       // entry answers (v1 `parentID`); shapes without that id read it all.
-      const tailResult = await session.messages({
-        path: { id: sessionID },
-        query: { limit: FALLBACK_REPLAY_TAIL_MESSAGES },
-      });
+      const tailResult = await withTimeout(
+        session.messages({
+          path: { id: sessionID },
+          query: { limit: FALLBACK_REPLAY_TAIL_MESSAGES },
+        }),
+        HOST_CALL_TIMEOUT_MS,
+        'fallback replay transcript read timed out',
+      );
       // Transcript read suspended across a dispose(): everything from
       // here on — handoff arming, replay prompt, switch claim — would
       // run through the destroyed generation's client. Abandon before
@@ -1910,9 +2970,16 @@ export class ForegroundFallbackManager {
       if (!lastUser) {
         const parentID = (messages.at(-1) as { info?: { parentID?: unknown } })
           ?.info?.parentID;
-        const deepResult = await (typeof parentID === 'string'
-          ? session.message({ path: { id: sessionID, messageID: parentID } })
-          : session.messages({ path: { id: sessionID } }));
+        const deepResult = await withTimeout<{
+          data?: unknown;
+          error?: unknown;
+        }>(
+          typeof parentID === 'string'
+            ? session.message({ path: { id: sessionID, messageID: parentID } })
+            : session.messages({ path: { id: sessionID } }),
+          HOST_CALL_TIMEOUT_MS,
+          'fallback replay user message read timed out',
+        );
         if (!this.isCurrentTurn(sessionID, expectedEpoch)) return;
         lastUser = [deepResult.data ?? []]
           .flat()
@@ -2030,11 +3097,20 @@ export class ForegroundFallbackManager {
       };
       const sendReplayPrompt = (): Promise<unknown> => {
         this.rememberReplayMessage(sessionID, promptBody.body.messageID);
-        return promptAsync(promptBody);
+        return withTimeout(
+          promptAsync(promptBody),
+          REPLAY_SEND_TIMEOUT_MS,
+          'fallback replay prompt timed out',
+        );
       };
       try {
         promptResult = await sendReplayPrompt();
       } catch (promptErr) {
+        if (promptErr instanceof OperationTimeoutError) {
+          // A timeout cannot prove refusal; never abort or duplicate the replay.
+          settleUnresolvedHandoff();
+          throw promptErr;
+        }
         if (!this.isCurrentTurn(sessionID, expectedEpoch)) {
           withdrawHandoff();
           return;
@@ -2088,12 +3164,16 @@ export class ForegroundFallbackManager {
           return;
         }
         await new Promise((r) => setTimeout(r, REPROMPT_DELAY_MS));
-        // The abort/re-prompt-delay suspended across a dispose(): the
-        // second replay must not go through the old client. The first
-        // prompt's transport failed with an unknown outcome, so convert
-        // (never drop) the armed handoff exactly like the retry-failure
-        // path below.
-        if (!this.isCurrentTurn(sessionID, expectedEpoch)) {
+        // Recheck after the abort/backoff: a cancelled or superseded child
+        // admits no second replay, so withdraw its prepared handoff.
+        if (
+          !this.isCurrentTurn(sessionID, expectedEpoch) ||
+          (handoffArmed &&
+            !this.backgroundFallbackHandoff?.isEligible(
+              sessionID,
+              preparedGeneration,
+            ))
+        ) {
           withdrawHandoff();
           return;
         }
@@ -2149,16 +3229,24 @@ export class ForegroundFallbackManager {
           { sessionID, agentName, from: currentModel, intended: nextModel },
         );
       } else {
-        this.sessionModel.set(sessionID, nextModel);
-        this.activeFallbackModel.set(sessionID, nextModel);
-        this.onSessionModelChanged?.(sessionID, nextModel);
+        this.commitSwitch(sessionID, currentModel, nextModel, error);
       }
       // Admission accepted (with or without the switch): convert the
       // prepared handoff into a tracked run (register + immediate
       // probe) so the substituted run's result is observed and
       // delivered to the parent.
       if (handoffArmed) {
-        this.backgroundFallbackHandoff?.admit(sessionID, preparedGeneration);
+        this.backgroundFallbackHandoff?.admit(
+          sessionID,
+          preparedGeneration,
+          announce
+            ? {
+                from: currentModel,
+                to: deliveredWithoutSwitch ? currentModel : nextModel,
+                error: structuredErrorMessage(error) ?? 'Session error',
+              }
+            : undefined,
+        );
       }
       if (deliveredWithoutSwitch) return;
       log('[foreground-fallback] switched to fallback model', {
@@ -2212,6 +3300,7 @@ export class ForegroundFallbackManager {
       this.resolveChain(
         this.sessionAgent.get(sessionID),
         this.sessionModel.get(sessionID),
+        sessionID,
       ).chain.length > 0
     );
   }
@@ -2235,44 +3324,60 @@ export class ForegroundFallbackManager {
   private resolveChain(
     agentName: string | undefined,
     currentModel: string | undefined,
-  ): { chain: string[]; source?: string } {
-    // The finalized registry can replace an agent's chain after manager
-    // construction (for example, with marketplace-provided candidates).
-    // Keep the source object live rather than freezing its startup snapshot.
-    for (const [name, entries] of Object.entries(this.chainSource)) {
+    sessionID: string,
+  ): {
+    chain: string[];
+    entries: Array<{ id: string; variant?: string }>;
+    source?: string;
+  } {
+    // Resolve against the session's pinned generation (lazily pinned on
+    // first use), so an in-flight descent never observes a chain swap
+    // mid-sequence while its tried-set and exhaustion stage stay valid.
+    const generation = this.pinnedChains(sessionID);
+    const chains: Record<string, string[]> = {};
+    const chainEntries: Record<
+      string,
+      Array<{ id: string; variant?: string }>
+    > = {};
+    for (const [name, entries] of Object.entries(generation)) {
       const normalized = entries.map((entry) =>
         typeof entry === 'string' ? { id: entry } : entry,
       );
-      this.chainEntries[name] = normalized;
-      this.chains[name] = normalized.map((entry) => entry.id);
+      chainEntries[name] = normalized;
+      chains[name] = normalized.map((entry) => entry.id);
     }
     if (agentName) {
-      const chain = this.chains[agentName];
+      const chain = chains[agentName];
       if (chain) {
         // Dynamic head: when the session runs a model outside the
         // configured chain (session-inherited or /model-picked), that model
         // leads the descent and the configured entries back it. The head is
         // never re-picked — selectFallbackModel marks the current model
-        // tried before scanning, so the first untried entry is the
-        // configured head.
+        // tried before scanning, so the scan starts at the configured head.
         // Empty chains (disableChain) must stay empty: prepending onto []
         // would resurrect fallback for an agent whose chain was disabled.
         if (currentModel && chain.length > 0 && !chain.includes(currentModel)) {
-          return { chain: [currentModel, ...chain], source: agentName };
+          return {
+            chain: [currentModel, ...chain],
+            entries: chainEntries[agentName],
+            source: agentName,
+          };
         }
-        return { chain, source: agentName };
+        return { chain, entries: chainEntries[agentName], source: agentName };
       }
       // Any known agent without a configured chain: no fallback.
       // Don't bleed into other agents' chains via model-matching —
       // that switches the session to the wrong agent (e.g. Build
       // inherits Orchestrator's chain and becomes Orchestrator).
-      return { chain: [] };
+      return { chain: [], entries: [] };
     }
 
     // Agent unknown: try to infer from the current model.
     if (currentModel) {
-      for (const [name, chain] of Object.entries(this.chains)) {
-        if (chain.includes(currentModel)) return { chain, source: name };
+      for (const [name, chain] of Object.entries(chains)) {
+        if (chain.includes(currentModel)) {
+          return { chain, entries: chainEntries[name], source: name };
+        }
       }
     }
 
@@ -2280,7 +3385,7 @@ export class ForegroundFallbackManager {
     // Only reached when both agent name and current model are unavailable.
     const all: string[] = [];
     const seen = new Set<string>();
-    for (const chain of Object.values(this.chains)) {
+    for (const chain of Object.values(chains)) {
       for (const m of chain) {
         if (!seen.has(m)) {
           seen.add(m);
@@ -2288,6 +3393,6 @@ export class ForegroundFallbackManager {
         }
       }
     }
-    return { chain: all };
+    return { chain: all, entries: [] };
   }
 }

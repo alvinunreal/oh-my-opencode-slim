@@ -1,5 +1,8 @@
 import { tool } from '@opencode-ai/plugin';
 import type { CanonicalTaskReference } from '../hooks/task-session-manager/session-recovery';
+import type { BackgroundJobRecord } from '../utils/background-job-board';
+import type { BackgroundJobStore } from '../utils/background-job-store';
+import { SESSION_ID_PATTERN } from '../utils/session';
 import { controlParamName } from '../v2/adapters';
 
 export type { CanonicalTaskReference };
@@ -61,3 +64,74 @@ export type CanonicalTaskResolver = (
   parentSessionID: string,
   requested: string,
 ) => Promise<CanonicalTaskReference>;
+
+/**
+ * The shared board-miss error. A miss proves only that the in-memory board
+ * does not track the ref — records are evicted by retention limits or lost
+ * on a host restart, so a settled session can still exist on the host — so
+ * session-shaped IDs get the settled-session guidance (continue the same
+ * session via task_revive; never a duplicate) while board-scoped aliases,
+ * which have no host existence, keep the bare unknown error.
+ */
+export function unknownTaskRefError(
+  identity: string,
+  resumeParam: string,
+): Error {
+  return new Error(
+    SESSION_ID_PATTERN.test(identity)
+      ? `Unknown task ID or alias: ${identity} (not tracked: records are evicted by retention limits or lost on a host restart; a settled session can still exist on the host). If it is a settled session you own, continue it with task_revive and ${resumeParam}: "${identity}"; do not launch a duplicate.`
+      : `Unknown task ID or alias: ${identity}`,
+  );
+}
+
+/**
+ * The ref pre-check shared by the control tools: alias authority first,
+ * then plugin disposal, then refusal, then the resolved identity and board
+ * record. Pure — no host or gate I/O; each kind maps to the caller's own
+ * action, and a missing record stays each tool's own concern (guided
+ * error, read-only fallback, or adoption).
+ *
+ * Deliberately NOT used by task_status (it keeps answering read-only
+ * while the plugin disposes, so it has no disposed check) and task_cancel
+ * (its cancellation lease must be acquired synchronously within the
+ * execute call — before any event interleave — so it keeps the inline
+ * preamble; the awaited resolution here would open a microtask gap).
+ */
+export async function resolveTaskRecord(
+  options: {
+    resolveCanonicalTaskRef?: CanonicalTaskResolver;
+    isDisposed?: () => boolean;
+    backgroundJobBoard: BackgroundJobStore;
+  },
+  parentSessionID: string,
+  requested: string,
+): Promise<
+  | { kind: 'refused'; reason: string }
+  | { kind: 'disposed' }
+  | {
+      kind: 'resolved';
+      identity: string;
+      /** Whether the alias authority resolved the ref: callers repeat
+       *  get-by-identity vs resolve-by-alias on their own re-resolution. */
+      canonical: boolean;
+      job: BackgroundJobRecord | undefined;
+    }
+> {
+  const canonical = options.resolveCanonicalTaskRef
+    ? await options.resolveCanonicalTaskRef(parentSessionID, requested)
+    : undefined;
+  if (options.isDisposed?.()) return { kind: 'disposed' };
+  if (canonical?.kind === 'refused') {
+    return { kind: 'refused', reason: canonical.reason };
+  }
+  const identity = canonical?.taskID ?? requested;
+  const job = canonical
+    ? options.backgroundJobBoard.get(identity)
+    : options.backgroundJobBoard.resolve(parentSessionID, requested);
+  return {
+    kind: 'resolved',
+    identity,
+    canonical: canonical !== undefined,
+    job,
+  };
+}

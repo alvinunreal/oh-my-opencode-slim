@@ -12,13 +12,13 @@ import {
   PresetResolutionError,
   resolvePresetDefinition,
 } from './presets';
+import { stripRemovedConfigKeys } from './removed-keys';
 import {
   type BackgroundJobsConfig,
   BackgroundJobsConfigSchema,
   DISABLED_COMMANDS_VALUES,
   DISABLED_HOOKS_VALUES,
   InterviewConfigSchema,
-  LEGACY_FALLBACK_KEYS,
   type MarketplaceActivation,
   MultiplexerConfigSchema,
   PluginConfigSchema,
@@ -47,8 +47,8 @@ export type ConfigLoadWarningKind =
   | 'invalid-schema'
   | 'read-error'
   | 'missing-preset'
-  | 'deprecated-key'
-  | 'normalized';
+  | 'normalized'
+  | 'removed-key';
 
 /**
  * A warning emitted while loading plugin configuration.
@@ -93,8 +93,8 @@ const INTERVIEW_CONFIG_KEYS = [
   'autoOpenBrowser',
   'port',
   'dashboard',
+  'printState',
 ] as const;
-const LEGACY_BACKGROUND_JOBS_KEYS = ['continueOnIdle'] as const;
 
 // Config keys that must be arrays. A string value (e.g. "explorer") is
 // normalized to a single-element array; any other non-array value is
@@ -211,50 +211,6 @@ export function normalizeDisabledArrayKeys(
         `Valid values: ${validValues.join(', ')}.`,
     );
   }
-}
-
-function migrateLegacyBackgroundJobsConfig(rawConfig: unknown): unknown {
-  if (
-    typeof rawConfig !== 'object' ||
-    rawConfig === null ||
-    Array.isArray(rawConfig)
-  ) {
-    return rawConfig;
-  }
-
-  const configRecord = rawConfig as Record<string, unknown>;
-  const backgroundJobs = configRecord.backgroundJobs;
-  if (
-    typeof backgroundJobs !== 'object' ||
-    backgroundJobs === null ||
-    Array.isArray(backgroundJobs) ||
-    !Object.hasOwn(backgroundJobs, 'continueOnIdle')
-  ) {
-    return rawConfig;
-  }
-
-  const migratedBackgroundJobs = {
-    ...(backgroundJobs as Record<string, unknown>),
-  };
-  const legacyContinueOnIdle = migratedBackgroundJobs.continueOnIdle;
-  delete migratedBackgroundJobs.continueOnIdle;
-
-  const wake = migratedBackgroundJobs.orchestratorWake;
-  if (
-    typeof legacyContinueOnIdle === 'boolean' &&
-    (wake === undefined ||
-      (typeof wake === 'object' && wake !== null && !Array.isArray(wake)))
-  ) {
-    const wakeConfig = (wake ?? {}) as Record<string, unknown>;
-    if (!Object.hasOwn(wakeConfig, 'enabled')) {
-      migratedBackgroundJobs.orchestratorWake = {
-        ...wakeConfig,
-        enabled: legacyContinueOnIdle,
-      };
-    }
-  }
-
-  return { ...configRecord, backgroundJobs: migratedBackgroundJobs };
 }
 
 function retainExplicitInterviewFields(
@@ -449,104 +405,19 @@ export function loadRawPluginConfigFromPath(
       }
       return null;
     }
-    // Warn about deprecated tmux key
-    if (
-      typeof rawConfig === 'object' &&
-      rawConfig !== null &&
-      'tmux' in (rawConfig as Record<string, unknown>)
-    ) {
-      const tmuxMsg =
-        'Deprecated tmux config key found and ignored. Use multiplexer config instead.';
+    // Drop keys removed in this version before schema validation: a stale
+    // removed key must not invalidate the whole file (and silently discard
+    // every other user setting). Reported per key, not migrated.
+    stripRemovedConfigKeys(rawConfig, (message) => {
       options?.onWarning?.({
         path: configPath,
-        kind: 'deprecated-key',
-        message: tmuxMsg,
+        kind: 'removed-key',
+        message,
       });
       if (!options?.silent) {
-        console.warn(`[oh-my-opencode-slim] ${tmuxMsg}`);
+        console.warn(`[oh-my-opencode-slim] ${message}`);
       }
-    }
-
-    // Warn about deprecated council.master key
-    if (
-      typeof rawConfig === 'object' &&
-      rawConfig !== null &&
-      typeof (rawConfig as Record<string, unknown>).council === 'object' &&
-      (rawConfig as Record<string, unknown>).council !== null &&
-      'master' in
-        ((rawConfig as Record<string, unknown>).council as Record<
-          string,
-          unknown
-        >)
-    ) {
-      const masterMsg =
-        'Deprecated council.master config key found and ignored. Configure council agents via presets instead.';
-      options?.onWarning?.({
-        path: configPath,
-        kind: 'deprecated-key',
-        message: masterMsg,
-      });
-      if (!options?.silent) {
-        console.warn(`[oh-my-opencode-slim] ${masterMsg}`);
-      }
-    }
-
-    // Preserve the opt-out behavior of the removed continueOnIdle key for
-    // one compatibility window by migrating it before schema validation.
-    if (
-      typeof rawConfig === 'object' &&
-      rawConfig !== null &&
-      typeof (rawConfig as Record<string, unknown>).backgroundJobs ===
-        'object' &&
-      (rawConfig as Record<string, unknown>).backgroundJobs !== null
-    ) {
-      const backgroundJobs = (rawConfig as Record<string, unknown>)
-        .backgroundJobs as Record<string, unknown>;
-      const present = LEGACY_BACKGROUND_JOBS_KEYS.filter(
-        (key) => key in backgroundJobs,
-      );
-      if (present.length > 0) {
-        const backgroundJobsMsg =
-          'Deprecated backgroundJobs.continueOnIdle config key found. ' +
-          'Boolean values are migrated to backgroundJobs.orchestratorWake.enabled ' +
-          'unless that replacement is explicit in the same config file; other values are ignored. ' +
-          'Use backgroundJobs.orchestratorWake.enabled instead.';
-        options?.onWarning?.({
-          path: configPath,
-          kind: 'deprecated-key',
-          message: backgroundJobsMsg,
-        });
-        if (!options?.silent) {
-          console.warn(`[oh-my-opencode-slim] ${backgroundJobsMsg}`);
-        }
-      }
-    }
-    rawConfig = migrateLegacyBackgroundJobsConfig(rawConfig);
-
-    // Warn about deprecated fallback.* keys. The schema strips these before
-    // validation so the rest of the config still loads; without this warning
-    // users would not know their stale keys are ignored.
-    if (
-      typeof rawConfig === 'object' &&
-      rawConfig !== null &&
-      typeof (rawConfig as Record<string, unknown>).fallback === 'object' &&
-      (rawConfig as Record<string, unknown>).fallback !== null
-    ) {
-      const fallback = (rawConfig as Record<string, unknown>)
-        .fallback as Record<string, unknown>;
-      const present = LEGACY_FALLBACK_KEYS.filter((key) => key in fallback);
-      if (present.length > 0) {
-        const fallbackMsg = `Deprecated fallback config key${present.length === 1 ? '' : 's'} ${present.join(', ')} found and ignored. These keys are no longer supported by foreground fallback and have no effect.`;
-        options?.onWarning?.({
-          path: configPath,
-          kind: 'deprecated-key',
-          message: fallbackMsg,
-        });
-        if (!options?.silent) {
-          console.warn(`[oh-my-opencode-slim] ${fallbackMsg}`);
-        }
-      }
-    }
+    });
 
     // Normalize disabled_* config keys before schema validation so a
     // non-array value does not reject the whole config object (which would

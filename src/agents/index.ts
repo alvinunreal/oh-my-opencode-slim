@@ -13,6 +13,7 @@ import {
 import { getAgentMcpList } from '../config/agent-mcps';
 import type { HostAgentConfig, RuntimeConfig } from '../config/runtime';
 import { applyOrchestratorModelConfig } from '../config/strip-orchestrator-model';
+import { legacyAliasFor } from '../config/utils';
 import { escapeRegExp, normalizeAgentName } from '../utils/agent-variant';
 import { delegationVocabulary, parseModelRef } from '../v2/adapters';
 
@@ -34,7 +35,12 @@ import {
   createOrchestratorAgent,
   resolvePrompt,
 } from './orchestrator';
-import { appendTaskRejectionInstruction } from './task-rejection';
+import { mergeTaskStance, TASK_NO_NESTED_DISPATCH } from './permissions';
+import {
+  appendObserverDispatchInstruction,
+  appendTaskRejectionInstruction,
+  OBSERVER_DISPATCH_ROLES,
+} from './task-rejection';
 
 export { ensureCouncilCompactionException } from './council';
 export type { AgentDefinition } from './orchestrator';
@@ -96,13 +102,7 @@ function getOverrideFromAgents(
   agents: Record<string, AgentOverrideConfig>,
   name: string,
 ): AgentOverrideConfig | undefined {
-  return (
-    agents[name] ??
-    agents[
-      Object.keys(AGENT_ALIASES).find((key) => AGENT_ALIASES[key] === name) ??
-        ''
-    ]
-  );
+  return agents[name] ?? agents[legacyAliasFor(name) ?? ''];
 }
 
 function buildAcpAgentDefinition(
@@ -120,7 +120,10 @@ function buildAcpAgentDefinition(
       'Your only job is to send the user task to the configured external ACP agent using the acp_run tool, then return the ACP agent result.',
       `Always call acp_run with agent: ${JSON.stringify(
         name,
-      )} and pass the full user task as prompt.`,
+      )} and pass the actual task, constraints, and relevant context as prompt, not wrapper-routing instructions.`,
+      'For each invocation, extract an explicitly requested inner ACP selector (for example, "Inner ACP selector: <value>") into acp_run.model. This is the exact ACP-advertised selector, not an OpenCode provider/model.',
+      'Never infer the inner selector from the outer wrapper model, a previous call, or incidental model names in the task. Native subagent.model selects only the outer wrapper.',
+      'If no inner model was requested, omit acp_run.model to use the external agent default. If an explicit inner model request cannot be resolved to an exact selector, report the ambiguity to the caller instead of calling acp_run without model or guessing a default.',
       'Do not edit files yourself unless the ACP result explicitly asks you to report a local follow-up to the orchestrator.',
     ].join('\n');
 
@@ -219,7 +222,12 @@ function applyOverrides(
     agent.description = override.description;
   }
   if (override.permission) {
-    agent.config.permission = override.permission;
+    // Keep the factory's nested-dispatch stance when the override doesn't
+    // address `task` (shared with the host-entry and marketplace sites).
+    agent.config.permission = mergeTaskStance(
+      override.permission,
+      agent.config.permission,
+    );
   }
 }
 
@@ -656,6 +664,8 @@ function applyDefaultPermissions(
   agent: AgentDefinition,
   configuredSkills?: readonly string[],
   disabledSkills?: readonly string[],
+  nestedDispatchEnabled = false,
+  isPrimaryAgent = false,
 ): void {
   // A shorthand string is a user-level rule for every tool. Keep its original
   // form; marketplace tools independently fail closed through their caller
@@ -693,6 +703,10 @@ function applyDefaultPermissions(
           ]),
         )
       : {};
+  // Primary agents get allow because quiet interview prompts forbid printing
+  // the state block; subagents never run interviews.
+  const interviewSubmitPermission =
+    existing.interview_submit_state ?? (isPrimaryAgent ? 'allow' : 'deny');
   const waitForUserPerm =
     agent.name === 'orchestrator'
       ? (existing.wait_for_user ?? 'allow')
@@ -713,9 +727,21 @@ function applyDefaultPermissions(
 
   agent.config.permission = {
     ...existing,
+    // Nested-dispatch default: non-orchestrator agents without an explicit
+    // `task` stance (custom, ACP, write-capable marketplace) deny spawning.
+    // The compiled v2 permission base allows every unmatched action, so an
+    // absent entry would let any child spawn once the host depth limit is
+    // raised; the orchestrator keeps unrestricted delegation. Gated on the
+    // same v2 + observer condition as the stances (v1 stays untouched).
+    ...(nestedDispatchEnabled &&
+    existing.task === undefined &&
+    agent.name !== 'orchestrator'
+      ? { task: { ...TASK_NO_NESTED_DISPATCH } }
+      : {}),
     question: questionPerm,
     ...orchestratorDefaultPermissions,
     ...orchestratorDeniedPermissions,
+    interview_submit_state: interviewSubmitPermission,
     wait_for_user: waitForUserPerm,
     ...marketplacePermissions,
     // Apply skill permissions as nested object under 'skill' key
@@ -771,6 +797,13 @@ export function createAgents(
     // The bare councillor is only meaningful as part of configured Council Mode.
     disabled.add('councillor');
   }
+  // Nested dispatch ships only where it is live: v2 hosts (the only flavor
+  // with a depth limit) and an enabled observer. The v1 host enables a
+  // child's task tool whenever its permission carries ANY task rule — with
+  // no depth limit — so emitting stances there would change every advisor's
+  // toolset for nothing.
+  const nestedDispatchEnabled =
+    options?.hostFlavor === 'v2' && !disabled.has('observer');
   // Explicitly disabling the council agent disables the whole chain: the
   // injected procedure dispatches seats and then delegates synthesis to
   // the council agent, so seats/pointer/hook without it would dangle.
@@ -826,6 +859,22 @@ export function createAgents(
     .map(([name, factory]) => {
       // Get base agent definition using the subagent factory with undefined prompts
       const agent = factory(getModelForAgent(name), undefined, undefined);
+      if (!nestedDispatchEnabled) {
+        // Drop only the pattern stances this branch adds (object-shaped
+        // task entries); pre-existing blanket-deny strings stay untouched.
+        const permission = agent.config.permission as
+          | Record<string, unknown>
+          | undefined;
+        if (
+          permission &&
+          typeof permission === 'object' &&
+          typeof permission.task === 'object'
+        ) {
+          const rest = { ...permission };
+          delete rest.task;
+          agent.config.permission = rest as typeof agent.config.permission;
+        }
+      }
 
       const customPrompts = loadAgentPrompt(name, {
         preset: runtime.preset,
@@ -836,7 +885,10 @@ export function createAgents(
       const override = getOverrideFromAgents(mergedAgents, name);
       const inlinePrompt = override?.prompt;
       const defaultPrompt = appendTaskRejectionInstruction(
-        agent.config.prompt ?? '',
+        appendObserverDispatchInstruction(
+          agent.config.prompt ?? '',
+          nestedDispatchEnabled && OBSERVER_DISPATCH_ROLES.has(name),
+        ),
       );
 
       agent.config.prompt = resolvePrompt(
@@ -943,7 +995,12 @@ export function createAgents(
       applyOverrides(agent, override);
     }
     applyModelInheritance(agent, override);
-    applyDefaultPermissions(agent, override?.skills, runtime.disabledSkills);
+    applyDefaultPermissions(
+      agent,
+      override?.skills,
+      runtime.disabledSkills,
+      nestedDispatchEnabled,
+    );
     return agent;
   });
 
@@ -953,12 +1010,22 @@ export function createAgents(
       applyOverrides(agent, override);
     }
     applyModelInheritance(agent, override);
-    applyDefaultPermissions(agent, override?.skills, runtime.disabledSkills);
+    applyDefaultPermissions(
+      agent,
+      override?.skills,
+      runtime.disabledSkills,
+      nestedDispatchEnabled,
+    );
     return agent;
   });
 
   const acpSubAgents = protoAcpAgents.map((agent) => {
-    applyDefaultPermissions(agent, undefined, runtime.disabledSkills);
+    applyDefaultPermissions(
+      agent,
+      undefined,
+      runtime.disabledSkills,
+      nestedDispatchEnabled,
+    );
     return agent;
   });
 
@@ -972,13 +1039,20 @@ export function createAgents(
   const councillorColor =
     getOverrideFromAgents(mergedAgents, 'councillor')?.color ??
     getOverrideFromAgents(mergedAgents, 'council')?.color;
-  const councillorAgents = buildCouncillorAgents(runtime, disabled).map(
-    (agent) => {
-      if (councillorColor) agent.config.color ??= councillorColor;
-      applyDefaultPermissions(agent, undefined, runtime.disabledSkills);
-      return agent;
-    },
-  );
+  const councillorAgents = buildCouncillorAgents(
+    runtime,
+    disabled,
+    nestedDispatchEnabled,
+  ).map((agent) => {
+    if (councillorColor) agent.config.color ??= councillorColor;
+    applyDefaultPermissions(
+      agent,
+      undefined,
+      runtime.disabledSkills,
+      nestedDispatchEnabled,
+    );
+    return agent;
+  });
 
   const allSubAgents = [
     ...builtInSubAgents,
@@ -989,7 +1063,10 @@ export function createAgents(
 
   for (const agent of [...acpSubAgents, ...councillorAgents]) {
     agent.config.prompt = appendTaskRejectionInstruction(
-      agent.config.prompt ?? '',
+      appendObserverDispatchInstruction(
+        agent.config.prompt ?? '',
+        nestedDispatchEnabled && agent.name.startsWith('councillor-'),
+      ),
     );
   }
 
@@ -1013,6 +1090,7 @@ export function createAgents(
     runtime.backgroundJobs.orchestratorWake.enabled,
     options?.hostFlavor,
     runtime.backgroundJobs.boardInjection,
+    runtime.routingBlock,
   );
 
   const inlineOrchestratorPrompt = orchestratorOverride?.prompt;
@@ -1034,6 +1112,8 @@ export function createAgents(
     orchestrator,
     orchestratorOverride?.skills,
     runtime.disabledSkills,
+    nestedDispatchEnabled,
+    true,
   );
 
   // Collect all display names from orchestrator and all subagents
@@ -1066,6 +1146,9 @@ export function createAgents(
       `- Role: ${agent.description ?? `External ACP agent ${agent.name}`}`,
       '- **Delegate when:** The user explicitly asks for this ACP-backed agent, or the task matches its role and benefits from software/subscription-specific capabilities outside OpenCode.',
       '- **Do not delegate when:** The built-in specialists can handle the task more directly or local file ownership would conflict with another writer lane.',
+      '- **Model selection:** Native subagent.model selects the OUTER OpenCode wrapper only; keep it independent of the INNER ACP selector passed in acp_run.model. Do not change the outer model to select an inner model.',
+      '- **Delegation prompt:** When the user explicitly requests a known inner selector, use "Inner ACP selector: <value>\nTask: ..." with the task, constraints, and relevant context. The wrapper extracts this into acp_run.model; this is LLM-mediated, not a new native subagent argument.',
+      '- **No guessing:** Do not infer an inner selector from the outer model, earlier calls, or incidental model names in task content. If an explicit inner model request is unresolved, report the ambiguity rather than silently using a default. With no inner request, omit the selector line.',
       '- **Result handling:** Treat returned output as external-agent work. Reconcile any reported file changes before continuing.',
     ].join('\n');
   });
@@ -1127,20 +1210,23 @@ export function createAgents(
     updatedPrompt = `${updatedPrompt}\n\n${rewrittenAcps.join('\n\n')}`;
   }
 
-  // Static pointer, not the full procedure: the Council Mode dispatch block
-  // is appended per-message by the council-inject hook when a council trigger
-  // is detected. The seat list lives here because hidden councillors appear
-  // in no host catalog — this line is the orchestrator's only always-present
-  // source of seat IDs. Wording tracks the hook state: no auto-inject
-  // promise when the hook is disabled.
+  // Static pointer = roster only. The seat list lives here because v2's
+  // native subagent roster filters hidden agents out — on v2 this line is
+  // the orchestrator's only always-present source of seat IDs. v1 applies no
+  // hidden filter (as of opencode 1.18.35, `agents.list()` and the task
+  // tool's describeTask carry no hidden check), so hidden councillors do
+  // surface in the v1 task roster — a host-side gap outside omos's control.
+  // The dispatch procedure is NOT mirrored here (it reads every turn): the
+  // council-inject hook carries it, injected on the FIRST council keyword
+  // and then standing in history. The disabled variant keeps a one-line
+  // manual hint because with the hook off no block will ever appear.
   if (councillorAgents.length > 0) {
     const seatList = councillorAgents
       .map((a: AgentDefinition) => a.name)
       .join(', ');
-    const injectNote = runtime.disabledHooks.has('council-inject')
-      ? `dispatch via ${vocab.tool}() when the user asks for consensus (keyword injection disabled; dispatch seats and synthesize manually).`
-      : `dispatch via ${vocab.tool}() when the user asks for consensus; the full procedure is injected per-message by the council-inject hook on council keywords.`;
-    updatedPrompt = `${updatedPrompt}\n\n## Council\nSeats: ${seatList} — ${injectNote}`;
+    updatedPrompt = runtime.disabledHooks.has('council-inject')
+      ? `${updatedPrompt}\n\n## Council\nSeats: ${seatList} — dispatch via ${vocab.tool}() when the user asks for consensus.`
+      : `${updatedPrompt}\n\n## Council\nSeats: ${seatList}`;
   }
 
   orchestrator.config.prompt = updatedPrompt;

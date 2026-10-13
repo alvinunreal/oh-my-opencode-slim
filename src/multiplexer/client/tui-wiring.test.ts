@@ -38,8 +38,11 @@ import {
   loadPaneConfig,
   probeServerReachable,
   projectSessionEvent,
+  reflectServerAuthorization,
   reflectServerBaseUrl,
   resolveAnchoredTarget,
+  resolveServerAuthHeaders,
+  serverAuthHeaders,
   type TuiPaneWiring,
 } from './tui-wiring';
 import type { AdapterType, SessionLifecycleEvent } from './types';
@@ -678,12 +681,22 @@ describe('client adapter detection (FR-9)', () => {
     expect(detectClientAdapter({ ZELLIJ_PANE_ID: '3' })).toBe('zellij');
     expect(detectClientAdapter({ HERDR_PANE_ID: 'wP:p4' })).toBe('herdr');
     expect(detectClientAdapter({ KITTY_WINDOW_ID: '4' })).toBe('kitty');
+    expect(detectClientAdapter({ WEZTERM_PANE: '7' })).toBe('wezterm');
     expect(detectClientAdapter({ CMUX_TUI_SOCKET: '/tmp/cmux.sock' })).toBe(
       'cmux-tui',
     );
     expect(detectClientAdapter({ CMUX_MUX_SOCKET: '/tmp/cmux.sock' })).toBe(
       'cmux-tui',
     );
+  });
+
+  test('prefers tmux and zellij nested inside wezterm', () => {
+    expect(detectClientAdapter({ WEZTERM_PANE: '7', TMUX_PANE: '%1' })).toBe(
+      'tmux',
+    );
+    expect(
+      detectClientAdapter({ WEZTERM_PANE: '7', ZELLIJ_PANE_ID: '3' }),
+    ).toBe('zellij');
   });
 
   test('prefers the cmux signal over a nested tmux pane', () => {
@@ -1271,6 +1284,148 @@ describe('serverUrl reflection and probe (D3)', () => {
     );
   });
 
+  describe('v1 basic auth (password-protected host)', () => {
+    const BASIC = `Basic ${btoa('opencode:pw')}`;
+
+    test('serverAuthHeaders mirrors opencode attach defaults', () => {
+      expect(serverAuthHeaders({})).toEqual({});
+      expect(serverAuthHeaders({ OPENCODE_SERVER_PASSWORD: 'pw' })).toEqual({
+        authorization: BASIC,
+      });
+      expect(
+        serverAuthHeaders({
+          OPENCODE_SERVER_PASSWORD: 'pw',
+          OPENCODE_SERVER_USERNAME: 'matt',
+        }),
+      ).toEqual({ authorization: `Basic ${btoa('matt:pw')}` });
+    });
+
+    test('reflects the Authorization header from every SDK header shape', () => {
+      const clientWith = (headers: unknown) => ({
+        client: { getConfig: () => ({ baseUrl: SERVER_URL, headers }) },
+      });
+      expect(
+        reflectServerAuthorization(
+          clientWith(new Headers({ Authorization: 'Basic h' })),
+        ),
+      ).toBe('Basic h');
+      expect(
+        reflectServerAuthorization(clientWith([['authorization', 'Basic a']])),
+      ).toBe('Basic a');
+      expect(
+        reflectServerAuthorization(clientWith({ Authorization: 'Basic r' })),
+      ).toBe('Basic r');
+      expect(reflectServerAuthorization(clientWith(undefined))).toBeUndefined();
+      expect(reflectServerAuthorization({})).toBeUndefined();
+    });
+
+    test('the client header wins over the environment (attach -p)', () => {
+      const client = {
+        client: {
+          getConfig: () => ({
+            baseUrl: SERVER_URL,
+            headers: new Headers({ Authorization: 'Basic from-flag' }),
+          }),
+        },
+      };
+      expect(
+        resolveServerAuthHeaders(client, { OPENCODE_SERVER_PASSWORD: 'pw' }),
+      ).toEqual({ authorization: 'Basic from-flag' });
+      expect(
+        resolveServerAuthHeaders({}, { OPENCODE_SERVER_PASSWORD: 'pw' }),
+      ).toEqual({ authorization: BASIC });
+      expect(resolveServerAuthHeaders({}, {})).toEqual({});
+    });
+
+    test('the reachability probe sends the auth header it is given', async () => {
+      const requests: Array<Record<string, string> | undefined> = [];
+      await probeServerReachable(SERVER_URL, {
+        directory: DIRECTORY,
+        authHeaders: { authorization: BASIC },
+        fetchFn: async (_url, init) => {
+          requests.push(init?.headers);
+          return { ok: true };
+        },
+      });
+      expect(requests).toEqual([
+        { 'x-opencode-directory': '%2Fproject', authorization: BASIC },
+      ]);
+    });
+
+    test('wiring reads authenticate from the injected env, not process.env', async () => {
+      const original = process.env.OPENCODE_SERVER_PASSWORD;
+      process.env.OPENCODE_SERVER_PASSWORD = 'from-process-env';
+      try {
+        const state = createClientState();
+        const h = await createHarness({
+          state,
+          env: { TMUX_PANE: '%1', OPENCODE_SERVER_PASSWORD: 'pw' },
+        });
+        // The startup reachability probe must authenticate too, or a
+        // protected server never gets past `host-unreachable`.
+        expect(state.statusHeaders.length).toBeGreaterThan(0);
+        expect(
+          state.statusHeaders.every((h) => h?.authorization === BASIC),
+        ).toBe(true);
+        state.statusHeaders.length = 0;
+        state.listHeaders.length = 0;
+
+        h.bus.emit('session.created', createdEvent());
+        await flush();
+        h.clock.advance(30_000);
+        await flush();
+
+        expect(state.statusHeaders.at(-1)?.authorization).toBe(BASIC);
+        expect(state.listHeaders.at(-1)?.authorization).toBe(BASIC);
+        await h.wiring.dispose();
+      } finally {
+        if (original === undefined) delete process.env.OPENCODE_SERVER_PASSWORD;
+        else process.env.OPENCODE_SERVER_PASSWORD = original;
+      }
+    });
+
+    test('attach -p: the client header authenticates reads with no env password', async () => {
+      const state = createClientState();
+      const FLAG = `Basic ${btoa('opencode:from-flag')}`;
+      const h = await createHarness({
+        state,
+        env: { TMUX_PANE: '%1' },
+        client: {
+          client: {
+            getConfig: () => ({
+              baseUrl: state.baseUrl,
+              headers: new Headers({ Authorization: FLAG }),
+            }),
+          },
+        },
+      });
+      expect(state.statusHeaders.length).toBeGreaterThan(0);
+      expect(state.statusHeaders.every((h) => h?.authorization === FLAG)).toBe(
+        true,
+      );
+      state.statusHeaders.length = 0;
+      state.listHeaders.length = 0;
+
+      h.bus.emit('session.created', createdEvent());
+      await flush();
+      h.clock.advance(30_000);
+      await flush();
+
+      expect(state.statusHeaders.at(-1)?.authorization).toBe(FLAG);
+      expect(state.listHeaders.at(-1)?.authorization).toBe(FLAG);
+      await h.wiring.dispose();
+    });
+
+    test('no password anywhere sends no auth header', async () => {
+      const state = createClientState();
+      const h = await createHarness({ state });
+      h.bus.emit('session.created', createdEvent());
+      await flush();
+      expect(state.statusHeaders.at(-1)?.authorization).toBeUndefined();
+      await h.wiring.dispose();
+    });
+  });
+
   test('probe failures and non-ok responses are unreachable', async () => {
     expect(
       await probeServerReachable(SERVER_URL, {
@@ -1295,6 +1450,7 @@ describe('serverUrl reflection and probe (D3)', () => {
       'wP:p4',
     );
     expect(resolveAnchoredTarget('kitty', { KITTY_WINDOW_ID: '4' })).toBe('4');
+    expect(resolveAnchoredTarget('wezterm', { WEZTERM_PANE: '7' })).toBe('7');
     expect(
       resolveAnchoredTarget('cmux-tui', { CMUX_TUI_TERMINAL_ID: 'term_1' }),
     ).toBe('term_1');

@@ -11,7 +11,13 @@ const gates: BackgroundJobTerminalGate[] = [];
 afterEach(() => {
   for (const gate of gates.splice(0)) gate.dispose();
 });
-function harness(tracked = true, hostFlavor?: string) {
+function harness(
+  tracked = true,
+  hostFlavor?: string,
+  options?: {
+    readTimeoutMs?: number;
+  },
+) {
   const board = new BackgroundJobBoard();
   const run = tracked
     ? board.registerLaunch({
@@ -46,6 +52,7 @@ function harness(tracked = true, hostFlavor?: string) {
     input,
     backgroundJobBoard: board,
     terminalGate: gate,
+    readTimeoutMs: options?.readTimeoutMs,
   }).task_result;
   const execute = (task_id = tracked ? 'exp-1' : 'ses_child1') =>
     tool.execute({ task_id }, {
@@ -290,6 +297,23 @@ test('untracked quiescent session still requires a terminal assistant segment', 
     ],
   } as never);
   await expect(h.execute()).rejects.toThrow('no terminal evidence');
+});
+test('held untracked transcript reads are aborted at their deadline', async () => {
+  const signals: AbortSignal[] = [];
+  const held = (args: { signal?: AbortSignal }) => {
+    if (args.signal) signals.push(args.signal);
+    return new Promise(() => {});
+  };
+  const h = harness(false, undefined, { readTimeoutMs: 20 });
+  h.messages.mockImplementation(held as never);
+  await expect(h.execute()).rejects.toThrow('child transcript read timed out');
+  expect(signals).toHaveLength(1);
+  expect(signals[0]?.aborted).toBe(true);
+});
+test('a failed untracked transcript read rethrows the original error', async () => {
+  const h = harness(false);
+  h.messages.mockRejectedValue(new Error('host exploded') as never);
+  await expect(h.execute()).rejects.toThrow('host exploded');
 });
 test('an untracked v1 compaction round does not replace the final result', async () => {
   const h = harness(false);

@@ -4,6 +4,7 @@ import {
   ALL_AGENT_NAMES,
 } from '../config';
 import type { RuntimeConfig } from '../config/runtime';
+import { legacyAliasFor } from '../config/utils';
 
 /**
  * Normalizes an agent name by trimming whitespace and removing the optional @ prefix.
@@ -34,13 +35,7 @@ function getPluginOverride(
   name: string,
 ): AgentOverrideConfig | undefined {
   const agents = runtime.agents();
-  return (
-    agents[name] ??
-    agents[
-      Object.keys(AGENT_ALIASES).find((key) => AGENT_ALIASES[key] === name) ??
-        ''
-    ]
-  );
+  return agents[name] ?? agents[legacyAliasFor(name) ?? ''];
 }
 
 /**

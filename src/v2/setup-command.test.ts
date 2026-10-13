@@ -23,6 +23,10 @@ import {
   LOOP_GUARD_WARNING,
 } from '../hooks/tool-loop-guard/hook';
 import {
+  collapseInterviewHistory,
+  INTERVIEW_SUMMARY_STUB,
+} from '../interview/history';
+import {
   INTERNAL_INITIATOR_METADATA_KEY,
   SLIM_INTERNAL_INITIATOR_MARKER,
 } from '../utils/internal-initiator';
@@ -197,6 +201,7 @@ describe('registerSynthCommands (generic loop skips bridge-owned interview)', ()
       draft,
       [
         ['interview', { description: 'Open a localhost interview UI' }],
+        ['implement', { description: 'Read the completed interview markdown' }],
         ['deepwork', { description: 'Start a deep work block' }],
       ],
       async () => {},
@@ -205,7 +210,11 @@ describe('registerSynthCommands (generic loop skips bridge-owned interview)', ()
 
     const bridge = createV2InterviewBridge({ session: {} } as never, undefined);
     bridge.registerCommand(draft);
-    expect(added.map((def) => def.name)).toEqual(['deepwork', 'interview']);
+    expect(added.map((def) => def.name)).toEqual([
+      'deepwork',
+      'interview',
+      'implement',
+    ]);
     bridge.dispose();
   });
 
@@ -273,7 +282,7 @@ describe('interview registerCommand (add-only draft)', () => {
     const added: V2CommandDefinition[] = [];
     bridge.registerCommand({ add: (def) => added.push(def) });
 
-    expect(added).toHaveLength(1);
+    expect(added).toHaveLength(2);
     expect(added[0]?.name).toBe('interview');
     expect(added[0]?.description).toBe(
       'Open a localhost interview UI for a feature idea',
@@ -400,7 +409,13 @@ describe('createSessionContextHandler (merged context hook seam)', () => {
     const synthetic = mock(async () => ({}));
     const rename = mock(async () => ({}));
     const bridge = createV2InterviewBridge(
-      { session: { synthetic, rename } } as never,
+      {
+        session: {
+          synthetic,
+          rename,
+          create: mock(async () => ({ id: 'side-session' })),
+        },
+      } as never,
       { outputFolder: directory } as never,
     );
     const { calls, hook } = recordCommandCalls();
@@ -520,6 +535,41 @@ describe('createSessionContextHandler (merged context hook seam)', () => {
       { type: 'text', text: 'hi' },
       { type: 'text', text: 'APPENDED' },
     ]);
+  });
+
+  test('context bridge collapses v2 tool parts without mutating them', async () => {
+    const kickoff = {
+      type: 'tool-call',
+      toolName: 'interview_submit_state',
+      input: {
+        summary: '# Full specification\n\nDetailed requirements.',
+        title: 'spec',
+        questions: [],
+      },
+    };
+    const status = {
+      type: 'tool-call',
+      toolName: 'interview_submit_state',
+      input: { summary: 'status', patch: 'x', questions: [] },
+    };
+    const originalKickoff = structuredClone(kickoff);
+    const event = makeEvent([
+      { id: 'one', role: 'assistant', content: [kickoff] },
+      { id: 'two', role: 'assistant', content: [status] },
+    ]);
+    const handler = createSessionContextHandler({
+      interviewHandleContext: async () => {},
+      messagesTransform: async (_input, output) =>
+        collapseInterviewHistory(output.messages as never),
+    });
+
+    await handler(event);
+
+    expect(kickoff).toEqual(originalKickoff);
+    expect(
+      (event.messages[0].content[0] as { input: { summary: string } }).input
+        .summary,
+    ).toBe(INTERVIEW_SUMMARY_STUB);
   });
 
   test('(d) embedded markers inside other text never fire either dispatcher', async () => {

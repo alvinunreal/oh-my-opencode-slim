@@ -3,6 +3,7 @@ import type { PluginInput } from '@opencode-ai/plugin';
 import type { InterviewConfig, PluginConfig } from '../config';
 import { DEFAULT_DASHBOARD_PORT } from './dashboard';
 import { createDashboardManager } from './dashboard-manager';
+import type { createInterviewService } from './service';
 import { createPerSessionInterviewServer } from './session-server';
 
 /**
@@ -32,7 +33,11 @@ export function createInterviewManager(
     server?: Server;
   } = {},
 ): {
-  registerCommand: (config: Record<string, unknown>) => void;
+  service: ReturnType<typeof createInterviewService>;
+  registerCommand: (
+    config: Record<string, unknown>,
+    enabled?: { interview?: boolean; implement?: boolean },
+  ) => void;
   handleCommandExecuteBefore: (
     input: { command: string; sessionID: string; arguments: string },
     output: { parts: Array<{ type: string; text?: string }> },

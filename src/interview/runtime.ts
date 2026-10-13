@@ -53,5 +53,3 @@ export function createV1InterviewSessionRuntime(
     },
   };
 }
-
-export const createInterviewSessionRuntime = createV1InterviewSessionRuntime;

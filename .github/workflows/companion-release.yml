@@ -1,6 +1,14 @@
 name: Companion Release
 
 on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      targets:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       version:
@@ -20,20 +28,22 @@ permissions:
 jobs:
   macos-arm64:
     name: macOS arm64
-    if: contains(github.event.inputs.targets, 'macos-arm64')
+    if: contains(inputs.targets, 'macos-arm64')
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Set Companion crate version for this release
+        run: node scripts/prepare-companion-release.mjs --version="${{ inputs.version }}"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
       - name: Build companion
         working-directory: companion
-        run: cargo build --release --target aarch64-apple-darwin
+        run: cargo build --release --locked --target aarch64-apple-darwin
       - name: Package companion
         run: |
           set -euo pipefail
-          version='${{ github.event.inputs.version }}'
+          version='${{ inputs.version }}'
           target='aarch64-apple-darwin'
           name="oh-my-opencode-slim-companion-v${version}-${target}"
           mkdir -p dist
@@ -46,20 +56,22 @@ jobs:
 
   macos-x64:
     name: macOS x64
-    if: contains(github.event.inputs.targets, 'macos-x64')
+    if: contains(inputs.targets, 'macos-x64')
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Set Companion crate version for this release
+        run: node scripts/prepare-companion-release.mjs --version="${{ inputs.version }}"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-apple-darwin
       - name: Build companion
         working-directory: companion
-        run: cargo build --release --target x86_64-apple-darwin
+        run: cargo build --release --locked --target x86_64-apple-darwin
       - name: Package companion
         run: |
           set -euo pipefail
-          version='${{ github.event.inputs.version }}'
+          version='${{ inputs.version }}'
           target='x86_64-apple-darwin'
           name="oh-my-opencode-slim-companion-v${version}-${target}"
           mkdir -p dist
@@ -72,10 +84,12 @@ jobs:
 
   linux-x64:
     name: Linux x64
-    if: contains(github.event.inputs.targets, 'linux-x64')
+    if: contains(inputs.targets, 'linux-x64')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Set Companion crate version for this release
+        run: node scripts/prepare-companion-release.mjs --version="${{ inputs.version }}"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-gnu
@@ -85,11 +99,11 @@ jobs:
           sudo apt-get install -y libgtk-3-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
       - name: Build companion
         working-directory: companion
-        run: cargo build --release --target x86_64-unknown-linux-gnu
+        run: cargo build --release --locked --target x86_64-unknown-linux-gnu
       - name: Package companion
         run: |
           set -euo pipefail
-          version='${{ github.event.inputs.version }}'
+          version='${{ inputs.version }}'
           target='x86_64-unknown-linux-gnu'
           name="oh-my-opencode-slim-companion-v${version}-${target}"
           mkdir -p dist
@@ -102,10 +116,12 @@ jobs:
 
   linux-arm64:
     name: Linux arm64
-    if: contains(github.event.inputs.targets, 'linux-arm64')
+    if: contains(inputs.targets, 'linux-arm64')
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
+      - name: Set Companion crate version for this release
+        run: node scripts/prepare-companion-release.mjs --version="${{ inputs.version }}"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-unknown-linux-gnu
@@ -115,11 +131,11 @@ jobs:
           sudo apt-get install -y libgtk-3-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
       - name: Build companion
         working-directory: companion
-        run: cargo build --release --target aarch64-unknown-linux-gnu
+        run: cargo build --release --locked --target aarch64-unknown-linux-gnu
       - name: Package companion
         run: |
           set -euo pipefail
-          version='${{ github.event.inputs.version }}'
+          version='${{ inputs.version }}'
           target='aarch64-unknown-linux-gnu'
           name="oh-my-opencode-slim-companion-v${version}-${target}"
           mkdir -p dist
@@ -132,20 +148,22 @@ jobs:
 
   windows-x64:
     name: Windows x64
-    if: contains(github.event.inputs.targets, 'windows-x64')
+    if: contains(inputs.targets, 'windows-x64')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Set Companion crate version for this release
+        run: node scripts/prepare-companion-release.mjs --version="${{ inputs.version }}"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
       - name: Build companion
         working-directory: companion
-        run: cargo build --release --target x86_64-pc-windows-msvc
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc
       - name: Package companion
         shell: pwsh
         run: |
-          $version = '${{ github.event.inputs.version }}'
+          $version = '${{ inputs.version }}'
           $target = 'x86_64-pc-windows-msvc'
           $name = "oh-my-opencode-slim-companion-v$version-$target"
           New-Item -ItemType Directory -Force -Path dist | Out-Null
@@ -164,7 +182,15 @@ jobs:
       - linux-x64
       - linux-arm64
       - windows-x64
-    if: always() && !cancelled() && !failure()
+    # A partial manual build produces workflow artifacts only. Never publish an
+    # immutable public release missing supported platforms.
+    if: >-
+      always() && !cancelled() && !failure() &&
+      contains(inputs.targets, 'macos-arm64') &&
+      contains(inputs.targets, 'macos-x64') &&
+      contains(inputs.targets, 'linux-arm64') &&
+      contains(inputs.targets, 'linux-x64') &&
+      contains(inputs.targets, 'windows-x64')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -172,16 +198,31 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-      - name: Create or update GitHub release
+      - name: Tag exact native build source and publish release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ github.event.inputs.version }}
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           tag="companion-v${VERSION}"
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" \
-              --title "Companion v${VERSION}" \
-              --notes "Manual companion binary release for oh-my-opencode-slim."
+          if gh release view "$tag" >/dev/null 2>&1 ||
+             git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "Refusing to replace immutable Companion release/tag: $tag" >&2
+            exit 1
           fi
-          gh release upload "$tag" artifacts/* --clobber
+
+          # The source tag includes the exact Cargo crate/lock version compiled
+          # in every runner, even when main has not yet merged the manifest PR.
+          node scripts/prepare-companion-release.mjs --version="$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add companion/Cargo.toml companion/Cargo.lock
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(companion): stamp native $VERSION source"
+          fi
+          git tag -a "$tag" -m "$tag"
+          git push origin "refs/tags/$tag"
+          gh release create "$tag" --verify-tag \
+            --title "Companion v$VERSION" \
+            --notes "Native companion binary release for oh-my-opencode-slim."
+          gh release upload "$tag" artifacts/*

@@ -47,6 +47,8 @@ type RevivedRun = {
   admissionLease?: BackgroundJobLease;
   readonly attemptStartedAt: number;
   description: string;
+  fallback?: true;
+  fallbackNotice?: Promise<void>;
   /** Monotonic observation identity: incremented on every
    * registration so evidence consumers can fence a snapshot against a
    * same-generation substitution. */
@@ -65,6 +67,12 @@ type RevivedRun = {
   terminalRevision?: number;
 };
 
+export interface FallbackNotice {
+  from?: string;
+  to?: string;
+  error: string;
+}
+
 export interface RevivedRunTracker {
   captureBaseline(taskID: string): Promise<string | undefined>;
   register(input: {
@@ -81,6 +89,7 @@ export interface RevivedRunTracker {
    * it no longer waits for (or fences retries on) its prompt identity. */
   discard(taskID: string, generation: number): boolean;
   isTracked(taskID: string, generation: number): boolean;
+  isFallbackRun(taskID: string, generation: number): boolean;
   /** Baseline anchor for a tracked run, so transcript-evidence consumers
    * (stop gate) can attribute the trailing answer to THIS run instead of
    * a substituted attempt. Undefined for untracked/stale generations. */
@@ -112,7 +121,11 @@ export interface RevivedRunTracker {
     baselineMessageID?: string;
     description: string;
   }): boolean;
-  admitObservation(taskID: string, generation: number): boolean;
+  admitObservation(
+    taskID: string,
+    generation: number,
+    notice?: FallbackNotice,
+  ): boolean;
   /** Explicit host refusal (error envelope / capability rejection):
    * nothing was admitted, ownership is released. */
   rejectObservation(taskID: string, generation: number): void;
@@ -314,6 +327,82 @@ export function createRevivedRunTracker(options: {
     );
   }
 
+  function promptParent(
+    parentSessionID: string,
+    selection: SessionSelection | undefined,
+    text: string,
+  ): Promise<unknown> {
+    const session = getClient(options.input).session;
+    const promptAsync =
+      typeof session.promptAsync === 'function'
+        ? session.promptAsync.bind(session)
+        : undefined;
+    if (typeof promptAsync !== 'function')
+      throw new Error('session.promptAsync unavailable');
+    return (promptAsync as (args: Record<string, unknown>) => Promise<unknown>)(
+      {
+        path: { id: parentSessionID },
+        query: { directory: options.input.directory },
+        // Queue a lifecycle continuation without preempting the parent or
+        // replacing its sticky model selection with the resolve snapshot.
+        delivery: 'queue',
+        modelSelection: 'inherit',
+        ...(selection?.variant ? { modelVariant: selection.variant } : {}),
+        body: {
+          agent: selection?.agent ?? 'orchestrator',
+          ...(selection?.model ? { model: selection.model } : {}),
+          ...(selection?.model && selection.variant
+            ? { variant: selection.variant }
+            : {}),
+          parts: [createInternalAgentTextPart(text)],
+        },
+      },
+    );
+  }
+
+  async function sendFallbackNotice(
+    run: RevivedRun,
+    notice: FallbackNotice,
+  ): Promise<void> {
+    try {
+      const selection = await options
+        .resolveSelection?.(run.parentSessionID)
+        .catch(() => undefined);
+      await awaitNotificationTransport(
+        async () => {
+          const current = options.backgroundJobBoard.get(run.taskID);
+          if (
+            disposed ||
+            runs.get(run.taskID) !== run ||
+            current?.generation !== run.generation ||
+            current.state === 'cancelled'
+          )
+            return;
+          return promptParent(
+            run.parentSessionID,
+            selection,
+            [
+              `<task id="${run.taskID}" state="running">`,
+              `<summary>Background task continues on a fallback model: ${run.description}</summary>`,
+              '<task_fallback>',
+              `${notice.from ?? 'The previous model'} failed: ${notice.error}`,
+              `Continuing on ${notice.to}. Do not revive or cancel; wait for the result.`,
+              '</task_fallback>',
+              '</task>',
+            ].join('\n'),
+          );
+        },
+        () => {},
+      );
+    } catch (error) {
+      log('[revived-run-tracker] fallback notice failed', {
+        taskID: run.taskID,
+        generation: run.generation,
+        error: stringifyError(error),
+      });
+    }
+  }
+
   async function notifyParent(
     run: RevivedRun,
     record: BackgroundJobRecord,
@@ -335,14 +424,7 @@ export function createRevivedRunTracker(options: {
     const attempt = notification.attempts;
     let lease: BackgroundJobLease | undefined;
     try {
-      const session = getClient(options.input).session;
-      const promptAsync =
-        typeof session.promptAsync === 'function'
-          ? session.promptAsync.bind(session)
-          : undefined;
-      if (typeof promptAsync !== 'function') {
-        throw new Error('session.promptAsync unavailable');
-      }
+      if (run.fallbackNotice) await run.fallbackNotice;
       const state = record.state === 'completed' ? 'completed' : 'error';
       const tag = state === 'completed' ? 'task_result' : 'task_error';
       const summary =
@@ -381,7 +463,6 @@ export function createRevivedRunTracker(options: {
         scheduleNotificationRetry(run, record, notification);
         return;
       }
-      const notifyAgent = selection?.agent ?? 'orchestrator';
       const text = [
         `<task id="${run.taskID}" state="${state}">`,
         `<summary>${summary}</summary>`,
@@ -401,39 +482,7 @@ export function createRevivedRunTracker(options: {
           ) {
             throw new Error('Terminal notification is no longer current');
           }
-          return (
-            promptAsync as (args: Record<string, unknown>) => Promise<unknown>
-          )({
-            path: { id: run.parentSessionID },
-            query: { directory: options.input.directory },
-            // v1 prompt_async queues; 'queue' preserves that on v2 hosts
-            // ('steer' — the shim default — would hijack an in-flight
-            // parent run, the same TOCTOU #1192 closed for task-revive).
-            // Extra root fields are dropped by the v1 SDK RequestInit
-            // path (same pattern as task-revive #1192).
-            delivery: 'queue',
-            // Lifecycle continuation (#1079): on v2 the shim inherits the
-            // host's persisted selection instead of re-pinning the resolved
-            // snapshot model. On v1 the flag is dropped by the SDK and the
-            // explicit body model applies.
-            modelSelection: 'inherit',
-            ...(selection?.variant ? { modelVariant: selection.variant } : {}),
-            body: {
-              agent: notifyAgent,
-              ...(selection?.model ? { model: selection.model } : {}),
-              ...(selection?.model && selection.variant
-                ? { variant: selection.variant }
-                : {}),
-              // Internal-initiator part (synthetic flag + metadata + marker):
-              // the v2 client-shim routes these through session.synthetic so
-              // the notification stays machine-context instead of a visible
-              // user message, and the session-prompt bridge classifies the
-              // admission as internal (not external user activity). A bare
-              // `synthetic: true` part loses its flag in the flat v2 prompt
-              // translation (#1157).
-              parts: [createInternalAgentTextPart(text)],
-            },
-          });
+          return promptParent(run.parentSessionID, selection, text);
         },
         // Acceptance belongs to the publication, even if an older attempt
         // settles after its local timeout or while another attempt sends.
@@ -622,16 +671,19 @@ export function createRevivedRunTracker(options: {
     admissionLease?: BackgroundJobLease;
     attemptStartedAt?: number;
     description: string;
-  }): void {
+    fallback?: true;
+  }): RevivedRun {
     const old = runs.get(input.taskID);
     if (old?.notification.retryTimer) clearTimeout(old.notification.retryTimer);
-    runs.set(input.taskID, {
+    const run: RevivedRun = {
       ...input,
       attemptStartedAt: input.attemptStartedAt ?? Date.now(),
       revision: ++revisionSequence,
       notification: { attempts: 0, sent: false, pending: false },
-    });
+    };
+    runs.set(input.taskID, run);
     options.onRegister?.(input.taskID);
+    return run;
   }
 
   /** After promotion the owner is installed but admission is still
@@ -688,6 +740,7 @@ export function createRevivedRunTracker(options: {
       baselineMessageID: pending.baselineMessageID,
       attemptStartedAt: pending.attemptStartedAt,
       description: pending.description,
+      fallback: true,
     });
     // The re-prompt may already be persisted (admission is async): own
     // it now rather than waiting for an idle that already happened.
@@ -740,7 +793,11 @@ export function createRevivedRunTracker(options: {
     return true;
   }
 
-  function admitObservation(taskID: string, generation: number): boolean {
+  function admitObservation(
+    taskID: string,
+    generation: number,
+    notice?: FallbackNotice,
+  ): boolean {
     const pending = pendingHandoffs.get(taskID);
     if (!pending || pending.generation !== generation) return false;
     if (pending.state === 'promoted') {
@@ -767,14 +824,16 @@ export function createRevivedRunTracker(options: {
     ) {
       return false;
     }
-    installRun({
+    const run = installRun({
       taskID,
       generation,
       parentSessionID: pending.parentSessionID,
       baselineMessageID: pending.baselineMessageID,
       attemptStartedAt: pending.attemptStartedAt,
       description: pending.description,
+      fallback: true,
     });
+    if (notice) run.fallbackNotice = sendFallbackNotice(run, notice);
     // Immediate probe: the re-prompt admission is async — if the
     // substituted run already went idle (fast answer + delayed
     // admission accounting), no idle event will fire again.
@@ -816,6 +875,10 @@ export function createRevivedRunTracker(options: {
     register,
     discard,
     isTracked,
+    isFallbackRun: (taskID, generation) => {
+      const run = runs.get(taskID);
+      return run?.generation === generation && run.fallback === true;
+    },
     baselineFor,
     promptMessageIDFor: (taskID, generation) => {
       const run = runs.get(taskID);

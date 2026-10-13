@@ -78,9 +78,14 @@ describe('dependency compatibility contract', () => {
 const SRC_DIR = import.meta.dir;
 const SERVER_ENTRY = path.join(SRC_DIR, 'index.ts');
 const MULTIPLEXER_CLIENT_DIR = `${path.join(SRC_DIR, 'multiplexer', 'client')}${path.sep}`;
-const ADAPTER_DIRS = ['tmux', 'zellij', 'herdr', 'kitty', 'cmux'].map(
-  (dir) => `${path.join(SRC_DIR, 'multiplexer', dir)}${path.sep}`,
-);
+const ADAPTER_DIRS = [
+  'tmux',
+  'zellij',
+  'herdr',
+  'kitty',
+  'cmux',
+  'wezterm',
+].map((dir) => `${path.join(SRC_DIR, 'multiplexer', dir)}${path.sep}`);
 
 /**
  * Import specifiers of one module: static `import ... from`, `export ... from`

@@ -13,8 +13,6 @@
  */
 
 import { log } from '../utils/logger';
-import type { PermissionCeilings, PermissionPolicyInput } from './permissions';
-import { compilePermissionPolicy } from './permissions';
 import type {
   ModelRef,
   V2AgentDraft,
@@ -65,6 +63,10 @@ export function v1PermKeyToV2(
   return [{ action: key, resource: '*' }];
 }
 
+export const TASK_V2_ACTIONS: ReadonlySet<string> = Object.freeze(
+  new Set(v1PermKeyToV2('task').map((t) => t.action)),
+);
+
 /** Convert a v1 permission map (or shorthand string) into v2 permission rules. */
 export function adaptPermissions(
   perm: unknown,
@@ -105,44 +107,6 @@ export function adaptPermissions(
   return rules;
 }
 
-/** Compile the v1 agent permission map as the baseline for native ordered
- * host rules. Native last-match evaluation lets host rules override earlier
- * baseline denials; final denials and configured ceilings remain immutable. */
-export function compileAgentPermissions(
-  permission: unknown,
-  options: {
-    tools?: readonly string[];
-    hostRules?: readonly V2PermissionRule[];
-    ceilings?: PermissionCeilings;
-    finalDenials?: readonly string[];
-  } = {},
-): V2PermissionRule[] {
-  const toolsAllow = (options.tools ?? []).map((action) => ({
-    action,
-    resource: '*',
-    effect: 'allow' as const,
-  }));
-  const baselineRules = [...toolsAllow, ...adaptPermissions(permission)].filter(
-    (rule): rule is V2PermissionRule =>
-      rule.effect === 'allow' ||
-      rule.effect === 'ask' ||
-      rule.effect === 'deny',
-  );
-  const input: PermissionPolicyInput = {
-    baselineRules,
-    hostRules: options.hostRules ?? [],
-    ...(options.ceilings ? { ceilings: options.ceilings } : {}),
-  };
-  return [
-    ...compilePermissionPolicy(input).rules.map((rule) => ({ ...rule })),
-    ...(options.finalDenials ?? []).map((action) => ({
-      action,
-      resource: '*',
-      effect: 'deny' as const,
-    })),
-  ];
-}
-
 /** Model-visible identifier parameter for control tools (`task_result`,
  * `task_status`, `task_reply`, `task_revive`, `task_message`, `task_cancel`) —
  * the same per-host vocabulary as the delegation resume param. v2 hosts use
@@ -165,9 +129,6 @@ export interface DelegationVocabulary {
   /** Name of the tool's agent-selector parameter: `agent` on v2,
    * `subagent_type` on v1. */
   agentParam: string;
-  /** Name of the delegation tool's optional model parameter, when the
-   * host's subagent tool supports one (OpenCode v2.0.5+). */
-  modelParam: string | undefined;
   /** Name of the delegation tool's existing-session argument, shared with
    * the control tools (`controlParamName`): `sessionID` on v2, `task_id` on
    * v1. Resuming a child session requires this exact parameter; the wrong
@@ -182,13 +143,11 @@ export function delegationVocabulary(
     ? {
         tool: 'subagent',
         agentParam: 'agent',
-        modelParam: 'model',
         resumeParam: controlParamName(hostFlavor),
       }
     : {
         tool: 'task',
         agentParam: 'subagent_type',
-        modelParam: undefined,
         resumeParam: controlParamName(hostFlavor),
       };
 }

@@ -15,6 +15,7 @@ const COUNCILLOR_AGENT_PREFIX = 'councillor-';
 export function buildCouncillorAgents(
   runtime: RuntimeConfig,
   disabled: Set<string>,
+  observerDispatchEnabled = false,
 ): AgentDefinition[] {
   const council = runtime.council;
   if (!council) return [];
@@ -29,8 +30,6 @@ export function buildCouncillorAgents(
 
   const agents: AgentDefinition[] = [];
   for (const [name, cfg] of Object.entries(preset)) {
-    if (name === 'master') continue;
-
     const agentName = `${COUNCILLOR_AGENT_PREFIX}${name}`;
     if (disabled.has(agentName)) continue;
     const base = createCouncillorAgent(
@@ -38,6 +37,7 @@ export function buildCouncillorAgents(
       undefined,
       cfg.prompt,
       cfg.variant,
+      observerDispatchEnabled,
     );
 
     // If a fallback chain is configured, attach _modelArray for runtime
@@ -52,14 +52,4 @@ export function buildCouncillorAgents(
   }
 
   return agents;
-}
-
-/**
- * Return the user-facing councillor seat name for a prefixed agent name.
- * Inverse of the prefix applied in `buildCouncillorAgents`.
- */
-export function getCouncillorSeatName(agentName: string): string {
-  return agentName.startsWith(COUNCILLOR_AGENT_PREFIX)
-    ? agentName.slice(COUNCILLOR_AGENT_PREFIX.length)
-    : agentName;
 }

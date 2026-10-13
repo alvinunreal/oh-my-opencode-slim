@@ -22,15 +22,25 @@ export function normalizePathForShell(directory: string): string {
     : directory;
 }
 
+/** Quote an executable for sh -lc: bare fallback stays bare, Windows
+ * backslashes become / so MSYS2/Git Bash single quotes don't preserve them. */
+function formatExecutableForShell(executable: string): string {
+  if (executable === 'opencode') return executable;
+  return quoteShellArg(normalizePathForShell(executable));
+}
+
 export function buildOpencodeAttachCommand(
   sessionId: string,
   serverUrl: string,
   directory: string,
-  executable = 'opencode',
+  // Resolved host binary (falls back to bare 'opencode'): pane shells
+  // (zellij `sh -lc`, tmux server PATH) may not have `opencode` on PATH
+  // (e.g. linuxbrew installs), #514.
+  executable = resolveOpencodeExecutable(),
 ): string {
   const attachDir = normalizePathForShell(directory);
   return [
-    executable === 'opencode' ? executable : quoteShellArg(executable),
+    formatExecutableForShell(executable),
     'attach',
     quoteShellArg(serverUrl),
     '--session',
@@ -52,7 +62,8 @@ export type ViewerCommandOptions = Pick<
   PaneSpawnOptions,
   'viewerFlavor' | 'viewerSurface'
 > & {
-  /** Absolute host binary; defaults to the bare `opencode` name. */
+  /** Absolute host binary; defaults to the resolved host binary (falls
+   back to bare `opencode`). */
   executable?: string;
 };
 
@@ -60,18 +71,19 @@ export type ViewerCommandOptions = Pick<
  * Builds the pane viewer command for one host flavor (FR-2 command matrix).
  * Every adapter routes through here so the matrix lives in exactly one place.
  *
- * - `v1`: `opencode attach <url> --session <id> --dir <dir>` (unchanged)
- * - `v2-shared`: `opencode --session <id> <dir>` — the viewer discovers the
- *   same shared background service by itself; no URL is passed.
- * - `v2-remote`: `opencode --server <url> --session <id> <dir>` — the
+ * - `v1`: `<resolved-binary> attach <url> --session <id> --dir <dir>`
+ *   (was bare `opencode`; now resolveOpencodeExecutable())
+ * - `v2-shared`: `<resolved-binary> --session <id> <dir>` — the viewer
+ *   discovers the same shared background service by itself; no URL is passed.
+ * - `v2-remote`: `<resolved-binary> --server <url> --session <id> <dir>` — the
  *   `OPENCODE_PASSWORD` secret is never part of the command text; adapters
  *   inject it at pane creation through their native spawn-time environment
  *   mechanism, or through `withParentEnvPassword` where none exists.
  *
  * `mini` uses `attach ... --mini` on v1 (OpenCode >= 1.17.10). On v2 it
  * uses the `mini` subcommand, which rejects a positional directory; adapters
- * pin the pane cwd instead (herdr/kitty natively, tmux `-c`, Zellij `--cwd`,
- * cmux-tui `cd`).
+ * pin the pane cwd instead (herdr/kitty/wezterm natively, tmux `-c`,
+ * Zellij `--cwd`, cmux-tui `cd`).
  */
 export function buildViewCommand(
   sessionId: string,
@@ -80,7 +92,7 @@ export function buildViewCommand(
   options: ViewerCommandOptions = {},
 ): string {
   const flavor = options.viewerFlavor ?? 'v1';
-  const executable = options.executable ?? 'opencode';
+  const executable = options.executable ?? resolveOpencodeExecutable();
   const mini = options.viewerSurface === 'mini';
   if (flavor === 'v1') {
     const attach = buildOpencodeAttachCommand(
@@ -93,7 +105,7 @@ export function buildViewCommand(
   }
   const viewDir = normalizePathForShell(directory);
   return [
-    executable === 'opencode' ? executable : quoteShellArg(executable),
+    formatExecutableForShell(executable),
     ...(mini ? ['mini'] : []),
     ...(flavor === 'v2-remote' ? ['--server', quoteShellArg(serverUrl)] : []),
     '--session',
@@ -116,8 +128,8 @@ const POSIX_SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
 
 /**
  * Whether the resolved shell can run a POSIX script. Used to gate the
- * `/proc`-based viewer-secret bridge (cmux-tui): unknown and Windows shells
- * count as non-POSIX, so the caller fails closed instead of feeding a
+ * `/proc`-based viewer-secret bridge (cmux-tui, wezterm): unknown and Windows
+ * shells count as non-POSIX, so the caller fails closed instead of feeding a
  * command-substitution script to a shell that cannot parse it.
  */
 export function isPosixShell(shell: string): boolean {
@@ -138,8 +150,9 @@ export function shellSupportsAndChain(shell = process.env.SHELL): boolean {
 /**
  * Wraps `command` in a POSIX script that recovers the viewer password from
  * this process's own `/proc/<pid>/environ` (readable by the owning user only)
- * and exports it as `OPENCODE_PASSWORD` before running the command. Adapters
- * whose CLI has no spawn-time env mechanism (zellij, cmux-tui) use this so
+ * and exports it (as `OPENCODE_PASSWORD` by default) before running the
+ * command. Adapters whose CLI has no spawn-time env mechanism (zellij,
+ * cmux-tui, wezterm) use this so
  * the secret never appears in command text or argv — it exists only in the
  * pane's environment at viewer start.
  *
@@ -147,15 +160,33 @@ export function shellSupportsAndChain(shell = process.env.SHELL): boolean {
  * `OPENCODE_SERVER_PASSWORD`. `/proc/<pid>/environ` is NUL-separated and is
  * split with `tr`, so the value is read line-wise: a password containing
  * newlines is recovered only up to its first line (documented limitation).
+ *
+ * `exportAs` names the variable the viewer reads: v2 viewers read
+ * `OPENCODE_PASSWORD` (the default, with the precedence above), while a v1
+ * `opencode attach` viewer reads only `OPENCODE_SERVER_PASSWORD`, so that is
+ * the only variable consulted for it.
  */
-export function withParentEnvPassword(command: string): string {
+export function withParentEnvPassword(
+  command: string,
+  exportAs:
+    | 'OPENCODE_PASSWORD'
+    | 'OPENCODE_SERVER_PASSWORD' = 'OPENCODE_PASSWORD',
+): string {
   const environ = `/proc/${process.pid}/environ`;
   const read = (name: string): string =>
     `$(tr '\\0' '\\n' < ${environ} 2>/dev/null | sed -n 's/^${name}=//p' | head -n 1)`;
+  // A v1 viewer authenticates with exactly what `opencode attach` reads, so
+  // a stray v2 `OPENCODE_PASSWORD` must not take precedence there.
+  const lookup =
+    exportAs === 'OPENCODE_SERVER_PASSWORD'
+      ? [`_omo_pw=${read('OPENCODE_SERVER_PASSWORD')}`]
+      : [
+          `_omo_pw=${read('OPENCODE_PASSWORD')}`,
+          `[ -n "$_omo_pw" ] || _omo_pw=${read('OPENCODE_SERVER_PASSWORD')}`,
+        ];
   return [
-    `_omo_pw=${read('OPENCODE_PASSWORD')}`,
-    `[ -n "$_omo_pw" ] || _omo_pw=${read('OPENCODE_SERVER_PASSWORD')}`,
-    'if [ -n "$_omo_pw" ]; then export OPENCODE_PASSWORD="$_omo_pw"; fi',
+    ...lookup,
+    `if [ -n "$_omo_pw" ]; then export ${exportAs}="$_omo_pw"; fi`,
     'unset _omo_pw',
     command,
   ].join('\n');
@@ -191,8 +222,7 @@ export function resolveOpencodeExecutable(): string {
  * Build the `[shell, ...shellArgs, command]` array for launching a command in
  * the user's interactive shell. OpenCode respects the user's shell when running
  * commands; multiplexer panes must do the same, otherwise a hardcoded `sh -c`
- * breaks under non-POSIX shells (fish, nu, powershell, ...) or misses login
- * startup files (where `opencode` may be on PATH).
+ * breaks under non-POSIX shells (fish, nu, powershell, ...).
  *
  * Mirrors OpenCode's own `Shell.args()` resolution:
  * - nu / fish: `<shell> -c <command>` (no login mode)
@@ -372,6 +402,13 @@ export interface GracefulClosePaneOptions {
   acceptExitCode1?: boolean;
   /** Return true for empty/unknown paneId instead of false (zellij/herdr behavior). */
   emptyPaneReturnsTrue?: boolean;
+  /**
+   * Treat a failed close as success only when its stderr proves the pane is
+   * already gone. Stricter than `acceptExitCode1` for backends whose CLI also
+   * exits 1 on transport/protocol errors while the pane still exists (a false
+   * success would make the caller forget a live pane).
+   */
+  isAlreadyClosed?: (stderr: string) => boolean;
   /** Env to pass to the kitten/kitty invocations (e.g. KITTY_LISTEN_ON). */
   env?: Record<string, string | undefined>;
 }
@@ -396,14 +433,18 @@ export async function gracefulClosePane(
 
     await new Promise((r) => setTimeout(r, GRACEFUL_SHUTDOWN_DELAY_MS));
 
+    const inspectStderr = options.isAlreadyClosed !== undefined;
     const proc = crossSpawn([binary, ...options.close], {
       stdout: 'ignore',
-      stderr: 'ignore',
+      stderr: inspectStderr ? 'pipe' : 'ignore',
       env: options.env,
     });
     const exitCode = await proc.exited;
 
     if (exitCode === 0) return true;
+    if (options.isAlreadyClosed) {
+      return options.isAlreadyClosed(await proc.stderr());
+    }
     if (options.acceptExitCode1 && exitCode === 1) return true;
     return false;
   } catch {

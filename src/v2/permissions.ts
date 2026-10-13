@@ -217,7 +217,7 @@ function compileCeilingRules(
         const hasWildcardDeny = ceilingsForResource.some(
           ([resource, effect]) => resource === '*' && effect === 'deny',
         );
-        if (!hasWildcardDeny) {
+        if (!hasWildcardDeny && resourceAction !== action) {
           for (const resource of intersectPattern(source.resource, '*')) {
             block.push({ action, resource, effect: actionEffect });
           }
@@ -387,7 +387,7 @@ function cloneRule(rule: V2PermissionRule): V2PermissionRule {
 /** Mirrors the host matcher: slash normalization, `?`, `*`, and `git *`. */
 function patternMatches(pattern: string, value: string): boolean {
   const normalizedPattern = normalizePattern(pattern);
-  const normalizedValue = value.replaceAll('\\', '/');
+  const normalizedValue = normalizePattern(value);
   return sourceVariants(normalizedPattern).some((variant) => {
     const expression = variant
       .replace(/[.+^${}()|[\]\\]/g, '\\$&')

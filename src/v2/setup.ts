@@ -36,6 +36,7 @@ import {
 } from '../hooks/chat-headers';
 import { isCommandEnabled } from '../hooks/command-hook-utils';
 import { COUNCIL_INJECT_METADATA_KEY } from '../hooks/council-inject';
+import { GOAL_POINTER_METADATA_KEY } from '../hooks/deepwork-goal';
 import type { ForegroundFallbackManager } from '../hooks/foreground-fallback';
 import { PHASE_REMINDER_METADATA_KEY } from '../hooks/phase-reminder';
 import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/task-session-manager/board-injection';
@@ -45,6 +46,7 @@ import {
   configureBackgroundJobPersistence,
   loadInitialBackgroundJobPersistence,
 } from '../utils/background-job-persistence';
+import { isPluginDisabledByEnv } from '../utils/env';
 import { createEventDirectoryScope } from '../utils/event-directory-scope';
 import { isRecord } from '../utils/guards';
 import { INTERNAL_INITIATOR_METADATA_KEY } from '../utils/internal-initiator';
@@ -65,7 +67,14 @@ import {
   createProfileRefreshRunner,
   watchPluginConfigFiles,
 } from './config-watch';
-import { subagentArgsToV1, toolNameToV1, v1ArgsToSubagent } from './delegation';
+import {
+  type BackgroundDefaultFlipState,
+  DELEGATION_TOOL_V2,
+  SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION,
+  subagentArgsToV1,
+  toolNameToV1,
+  v1ArgsToSubagent,
+} from './delegation';
 import { mapV2EventToV1 } from './event-adapter';
 import {
   INTERNAL_SYNTHETIC_MESSAGE_PREFIX,
@@ -190,18 +199,18 @@ export function createCommandRegistration(
   draft.add(definition);
 }
 
-/** Register the v1 synth commands on a v2 command draft. `interview` is
- * owned by the interview bridge's own registration (whose context hook owns
- * the interview marker), so it is skipped here — a duplicate `draft.add`
- * would break `/interview` on host builds that are first-wins or throw on
- * duplicates. */
+/** Register the v1 synth commands on a v2 command draft. `interview` and
+ * `implement` are owned by the interview bridge's own registration (whose
+ * context hook owns their markers), so they are skipped here — a duplicate
+ * `draft.add` would break those commands on host builds that are first-wins
+ * or throw on duplicates. */
 export function registerSynthCommands(
   draft: V2CommandDraft,
   entries: Array<[string, { description?: string }]>,
   submit: V2CommandSubmit,
 ): void {
   for (const [name, cmd] of entries) {
-    if (name === 'interview') continue; // owned by the interview bridge registration below
+    if (name === 'interview' || name === 'implement') continue;
     try {
       createCommandRegistration(draft, name, cmd, submit);
     } catch (err) {
@@ -432,7 +441,15 @@ export function createSessionContextHandler(
       try {
         const v1messages = event.messages.map((m) => ({
           info: m,
-          parts: m.content,
+          parts: m.content.map((part) =>
+            ((part.type === 'tool-call' || part.type === 'tool-result') &&
+              part.toolName === 'interview_submit_state') ||
+            (part.type === 'text' &&
+              typeof part.text === 'string' &&
+              part.text.includes('<interview_state'))
+              ? { ...part }
+              : part,
+          ),
         }));
         await deps.messagesTransform({}, { messages: v1messages });
         event.messages = v1messages.map((m) => {
@@ -671,16 +688,17 @@ export function createChatHeadersBridge(
 
 /**
  * Metadata keys whose tagged synthetic parts the compaction bridge
- * strips: phase reminders and the keyword-triggered Council Mode block
- * are regenerated on the next turn (pure-function re-derivation over the
- * surviving message history). Background job boards must survive to tell
- * the summary which jobs are running; internal wakes do not receive fresh
- * boards. Untagged synthetic parts (e.g. command-marker expansions) are
- * also conversation content.
+ * strips: phase reminders, the keyword-triggered Council Mode block, and
+ * the deepwork goal pointer are regenerated on the next turn
+ * (pure-function re-derivation over the surviving message history).
+ * Background job boards must survive to tell the summary which jobs are
+ * running; internal wakes do not receive fresh boards. Untagged synthetic
+ * parts (e.g. command-marker expansions) are also conversation content.
  */
 const COMPACTION_STRIP_METADATA_KEYS: readonly string[] = [
   PHASE_REMINDER_METADATA_KEY,
   COUNCIL_INJECT_METADATA_KEY,
+  GOAL_POINTER_METADATA_KEY,
 ];
 
 /**
@@ -1910,6 +1928,13 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
     // First logged line: identify the build that produced every following
     // log entry (logging-only — build info never enters prompt payloads).
     log('[v2] build info', getBuildInfo());
+    // The v1 factory returns an empty hook object when disabled. Stop here
+    // instead of continuing through v2 bridge setup, which requires the
+    // registry bridge that only an enabled factory creates.
+    if (isPluginDisabledByEnv()) {
+      log('[v2] setup skipped: disabled by OH_MY_OPENCODE_SLIM_DISABLE');
+      return async () => {};
+    }
     // Capability guard: some hosts load this same `setup` with a reduced or
     // TUI-side context where agent/tool/session/event domains are missing.
     // Skip registration instead of crashing the host (and retry-storming).
@@ -1943,6 +1968,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
     let stopPermissionEventIntake: (() => Promise<void>) | undefined;
     let v1Hooks: Record<string, unknown> | undefined;
     let registryBridge: RegistryFactoryBridge | undefined;
+    let backgroundFlip: BackgroundDefaultFlipState | undefined;
 
     const boundedPermissionStop = (
       stop: () => Promise<void> | void,
@@ -2019,12 +2045,28 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       log('[v2] ctx.generate.text', {
         available: typeof generateText === 'function',
       });
-      const pluginInput = buildPluginInput(ctx, generateChannel);
+      // Capability probe: the v2 model registry (`ctx.model`) resolves the
+      // catalog ⊕ config view the host itself uses for media gating. Powers
+      // capability-aware image routing; hosts without the domain keep the
+      // conservative default.
+      const modelDomain = (ctx as V2Context).model?.list
+        ? (ctx as V2Context).model
+        : undefined;
+      log('[v2] ctx.model', { available: Boolean(modelDomain) });
+      const pluginInput = buildPluginInput(ctx, {
+        ...(generateChannel ?? {}),
+        ...(modelDomain ? { modelDomain } : {}),
+      });
       log('[v2] calling OhMyOpenCodeLite...');
       v1Hooks = (await OhMyOpenCodeLite(
         pluginInput as never,
       )) as unknown as Record<string, unknown>;
       registryBridge = v1Hooks.registryBridge as RegistryFactoryBridge;
+      // Per-instance flip handle (the factory threads its isArmed getter
+      // into the execute.before deps; this side owns arm/disarm).
+      backgroundFlip = v1Hooks['v2.backgroundDefaultFlip'] as
+        | BackgroundDefaultFlipState
+        | undefined;
       log('[v2] v1 factory initialized', {
         agents: Object.keys((v1Hooks as { agent?: object }).agent ?? {}).length,
         tools: Object.keys((v1Hooks as { tool?: object }).tool ?? {}).length,
@@ -2057,13 +2099,26 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       const interviewConfig = InterviewConfigSchema.parse(
         pluginConfig.interview ?? {},
       );
+      const disabledCommands = new Set(pluginConfig.disabled_commands ?? []);
       const interviewCommandEnabled = isCommandEnabled('interview', {
-        disabledCommands: new Set(pluginConfig.disabled_commands ?? []),
+        disabledCommands,
+      });
+      const implementCommandEnabled = isCommandEnabled('implement', {
+        disabledCommands,
       });
       const interviewBridge = createV2InterviewBridge(ctx, interviewConfig, {
         commandEnabled: interviewCommandEnabled,
+        implementEnabled: implementCommandEnabled,
       });
       disposers.push(() => interviewBridge.dispose());
+      // The submit tool and text-complete fallback are built inside the v1
+      // factory against the v1 interview manager. On v2 the bridge owns the
+      // live transcript and active interviews, so point them at its service.
+      (
+        v1Hooks as {
+          'v2.setInterviewService'?: (service: unknown) => void;
+        }
+      )['v2.setInterviewService']?.(interviewBridge.service);
 
       // Commands do not depend on agent finalization or host state.
       let finalizedRegistry:
@@ -2436,7 +2491,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       try {
         const reg = await ctx.command.transform((draft) => {
           try {
-            if (interviewCommandEnabled) {
+            if (interviewCommandEnabled || implementCommandEnabled) {
               interviewBridge.registerCommand(draft);
             }
           } catch (err) {
@@ -2574,12 +2629,28 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       // asynchronous event pump), while `observeEvent` remains a
       // prewarm/cleanup consumer of `session.created`/`session.deleted`.
       let promptBridge: V2SessionPromptBridge | undefined;
+      // Chain-generation parity: pin the fallback chains when the child's
+      // profile freezes, so one registration = one generation for both.
+      // A failed admission releases the pin so the retry pairs a fresh
+      // capture with the generation current at that retry.
+      // `v2.pinSessionChains` / `v2.releaseSessionChains` are factory
+      // extension hooks, not in Hooks.
+      const pinSessionChainsHook = v1Hooks as {
+        'v2.pinSessionChains'?: (sessionID: string) => void;
+        'v2.releaseSessionChains'?: (sessionID: string) => void;
+      };
       const sessionProfileBridge = createSessionProfileBridge({
         profiles: () => currentProfiles,
         registeredProfiles,
         pluginAgents,
         session: ctx.session,
         knownAgent: (sessionID) => promptBridge?.agentForSession(sessionID),
+        onSessionCaptured: (sessionID) => {
+          pinSessionChainsHook['v2.pinSessionChains']?.(sessionID);
+        },
+        onSessionCaptureFailed: (sessionID) => {
+          pinSessionChainsHook['v2.releaseSessionChains']?.(sessionID);
+        },
       });
 
       // Skip session hook registration if ctx.session is unavailable (v1 host
@@ -2765,6 +2836,58 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             });
             disposers.push(() => reg.dispose());
           }
+          // Background-default flip, wording half: rewrite the native
+          // `subagent` description to state the default the execute.before
+          // rewrite applies, so prose and mechanism declare one contract.
+          // Pairing: the per-instance mechanism half (the args rewrite in
+          // tool-execute-hooks) reads this setup's flip handle, armed when a
+          // registry replay verifiably lands the rewrite (draft.get probe).
+          // The v2 registry replays transforms on the next read after a
+          // change, not at registration, so arming happens inside the
+          // callback; a registration-time probe would read as false and the
+          // arm would never happen. Any failure on either path (transform
+          // throws, native tool absent, hook registration failed, handle
+          // missing from the factory) leaves BOTH halves off and the native
+          // foreground default keeps operating end-to-end with its native
+          // wording — no semantic mismatch is possible. Per-instance state:
+          // disposing one location's setup disarms only its own flip.
+          if (before && backgroundFlip) {
+            try {
+              const reg = await ctx.tool.transform((draft) => {
+                try {
+                  draft.update(DELEGATION_TOOL_V2, (tool) => {
+                    tool.description = SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION;
+                  });
+                  const flipped = draft.get(DELEGATION_TOOL_V2);
+                  if (
+                    flipped?.description ===
+                    SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION
+                  ) {
+                    backgroundFlip.arm();
+                  } else {
+                    // A replay that cannot find the native tool must undo
+                    // a previous arm so the two halves never disagree.
+                    backgroundFlip.disarm();
+                    log('[v2] subagent description flip missed (tool absent)');
+                  }
+                } catch (err) {
+                  // A throwing replay must not leave a stale arm behind
+                  // either; disarm is the fail-safe direction on every
+                  // error path, not just registration-time throws.
+                  backgroundFlip.disarm();
+                  log('[v2] subagent description flip failed', String(err));
+                }
+              });
+              disposers.push(() => {
+                // Disarm first: a throwing reg.dispose() must never leave a
+                // stale armed mechanism behind (fail-safe direction).
+                backgroundFlip.disarm();
+                reg.dispose();
+              });
+            } catch (err) {
+              log('[v2] subagent description flip failed', String(err));
+            }
+          }
           log('[v2] tool hooks registered', {
             before: !!before,
             after: !!after,
@@ -2873,10 +2996,27 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                     rawType === 'session.next.reasoning.delta' ||
                     rawType === 'message.part.delta';
                   if (!isStreamDelta) {
-                    // Directory scope (multi-instance): skip events that belong
-                    // to another live location before any bridge sees them.
+                    // Keep directory-local bridges scoped, while allowing the
+                    // task owner to observe children moved to live locations.
                     eventDirectoryScope.note(next.value);
-                    if (eventDirectoryScope.isForeign(next.value)) continue;
+                    if (eventDirectoryScope.isForeign(next.value)) {
+                      // Moved children retain their task owner in the parent's
+                      // location. Forward observation only, not permission or
+                      // profile handling from this foreign location.
+                      const foreignTaskEvent = v1Hooks['v2.foreignTaskEvent'] as
+                        | ((input: { event: unknown }) => Promise<void>)
+                        | undefined;
+                      if (foreignTaskEvent) {
+                        try {
+                          for (const ev of mapV2EventToV1(next.value)) {
+                            await foreignTaskEvent({ event: ev });
+                          }
+                        } catch (err) {
+                          log('[v2] foreign task event failed', String(err));
+                        }
+                      }
+                      continue;
+                    }
                   }
                   try {
                     await interviewBridge.handleEvent(next.value);

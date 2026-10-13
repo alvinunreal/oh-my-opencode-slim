@@ -18,6 +18,14 @@ describe('plugin health thresholds', () => {
     ).toBe(7);
   });
 
+  test('drops the floor by one when wait_for_user is unregistered (v2 default)', () => {
+    expect(minimumExpectedToolCount([], true, false)).toBe(9);
+    // disabled_tools still wins when listed: no double-counting.
+    expect(minimumExpectedToolCount(['wait_for_user'], true, false)).toBe(9);
+    expect(minimumExpectedToolCount(['task_reply'], true, false)).toBe(8);
+    expect(minimumExpectedToolCount([], false, false)).toBe(8);
+  });
+
   test('never throws when disabledTools is not an array', () => {
     // Regression test: a malformed/non-array config.disabled_tools value
     // must degrade to "nothing disabled" instead of crashing plugin init.

@@ -4,6 +4,20 @@ import { mergeAgentOverrides } from './presets';
 import type { AgentOverrideConfig, PluginConfig } from './schema';
 
 /**
+ * Reverse `AGENT_ALIASES` lookup: the first legacy key that maps onto `name`.
+ * Computed per call on purpose — a module-level reverse map would introduce a
+ * module-init ordering dependency on the alias table.
+ */
+export function legacyAliasFor(name: string): string | undefined {
+  for (const [legacy, canonical] of Object.entries(AGENT_ALIASES)) {
+    if (canonical === name) {
+      return legacy;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Get agent override config by name, supporting backward-compatible aliases.
  * Checks both the current name and any legacy alias names.
  *
@@ -16,9 +30,7 @@ export function getAgentOverride(
   name: string,
 ): AgentOverrideConfig | undefined {
   const overrides = config?.agents ?? {};
-  const alias = Object.keys(AGENT_ALIASES).find(
-    (key) => AGENT_ALIASES[key] === name,
-  );
+  const alias = legacyAliasFor(name);
   const canonical = overrides[name];
   const legacy = alias ? overrides[alias] : undefined;
   if (canonical && legacy) {

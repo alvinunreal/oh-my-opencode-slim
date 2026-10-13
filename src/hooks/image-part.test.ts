@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'bun:test';
+import { detectInlineImageMime } from '../utils/image-signatures';
 import { asImagePart, MIME_EXT_BY_TYPE } from './image-part';
 
 const IMG_BYTES = Buffer.from('89504e470d0a1a0a', 'hex');
 const IMG_BASE64 = IMG_BYTES.toString('base64');
 const IMG_DATA_URL = `data:image/png;base64,${IMG_BASE64}`;
+/** Real HEIC container prefix: size box + 'ftypheic' brand + padding. */
+const HEIC_BYTES = Buffer.concat([
+  Buffer.alloc(4),
+  Buffer.from('ftypheic', 'latin1'),
+  Buffer.alloc(4),
+]);
+const BMP_BYTES = Buffer.concat([Buffer.from('BM', 'latin1'), Buffer.alloc(2)]);
 
 /** v2.0.14+ Media.Asset, live-instance form (base64 or bytes source). */
 function assetPart(
@@ -83,6 +91,24 @@ describe('asImagePart host shape matrix', () => {
         asImagePart({ type: 'file', url: 'data:text/plain;base64,aGk=' }),
       ).toBeNull();
     });
+
+    it('keeps a v1 image with a heic data URL inline as remote', () => {
+      expect(
+        asImagePart({
+          type: 'image',
+          url: `data:image/heic;base64,${HEIC_BYTES.toString('base64')}`,
+        }),
+      ).toEqual({ view: 'remote' });
+    });
+
+    it('keeps a v1 image whose bytes contradict its declared mime inline', () => {
+      expect(
+        asImagePart({
+          type: 'image',
+          url: `data:image/png;base64,${BMP_BYTES.toString('base64')}`,
+        }),
+      ).toEqual({ view: 'remote' });
+    });
   });
 
   describe('flat v2 media parts', () => {
@@ -118,6 +144,37 @@ describe('asImagePart host shape matrix', () => {
     it('treats flat media with an empty payload as remote', () => {
       expect(
         asImagePart({ type: 'media', mediaType: 'image/png', data: '' }),
+      ).toEqual({ view: 'remote' });
+    });
+
+    it('keeps a lying image claim with foreign bytes inline as remote', () => {
+      // Declared image mimes are real image evidence, so the part stays a
+      // remote image — but the bytes never reach the save gate.
+      for (const bytes of [
+        HEIC_BYTES,
+        Buffer.from('PK\x03\x04-archive', 'latin1'),
+      ]) {
+        expect(
+          asImagePart({
+            type: 'media',
+            mediaType: 'image/png',
+            data: bytes.toString('base64'),
+            filename: 'photo.png',
+          }),
+        ).toEqual({ view: 'remote' });
+      }
+    });
+
+    it('keeps declared svg media inline and never saves it', () => {
+      expect(
+        asImagePart({ type: 'media', mediaType: 'image/svg+xml' }),
+      ).toEqual({ view: 'remote' });
+      expect(
+        asImagePart({
+          type: 'media',
+          mediaType: 'image/svg+xml',
+          data: Buffer.from('<svg></svg>').toString('base64'),
+        }),
       ).toEqual({ view: 'remote' });
     });
   });
@@ -218,6 +275,31 @@ describe('asImagePart host shape matrix', () => {
         }),
       ).toBeNull();
     });
+
+    it('rescues good bytes behind a lying heic declaration', () => {
+      const view = asImagePart(
+        assetPart(
+          { type: 'base64', data: IMG_BASE64, mediaType: 'image/png' },
+          { mediaType: 'image/heic' },
+        ),
+      );
+      expect(view).toMatchObject({ view: 'bytes', ext: '.png' });
+    });
+
+    it('keeps a genuinely heic Asset inline as remote', () => {
+      expect(
+        asImagePart(
+          assetPart(
+            {
+              type: 'base64',
+              data: HEIC_BYTES.toString('base64'),
+              mediaType: 'image/heic',
+            },
+            { mediaType: 'image/heic' },
+          ),
+        ),
+      ).toEqual({ view: 'remote' });
+    });
   });
 
   describe('non-image and degenerate parts', () => {
@@ -247,21 +329,71 @@ describe('asImagePart host shape matrix', () => {
       expect((view as { bytes: Buffer }).bytes.equals(IMG_BYTES)).toBe(true);
     });
 
-    it('rejects an unclassified Asset whose bytes are not an image', () => {
+    it('rescues an unclassified octet-stream Asset without any filename (#1247)', () => {
+      const view = asImagePart({
+        type: 'media',
+        media: {
+          mediaType: 'application/octet-stream',
+          source: { type: 'base64', data: IMG_BASE64 },
+        },
+      });
+      expect(view).toMatchObject({ view: 'bytes', ext: '.png' });
+    });
+
+    it('rejects unclassified payloads whose bytes never hit the sniff table', () => {
+      // Zero-evidence non-image payloads (an untyped ZIP, stray text, or a
+      // genuinely exotic image format) are not images to this pipeline:
+      // nobody in the stack can view them, so the observer-disabled
+      // warning must not claim otherwise.
+      const foreign = [
+        Buffer.from('PK\x03\x04-archive', 'latin1'), // ZIP
+        Buffer.from('plain text, not an image'),
+        BMP_BYTES,
+        Buffer.from('49492a00', 'hex'), // TIFF little-endian
+        Buffer.from('4d4d002a', 'hex'), // TIFF big-endian
+        HEIC_BYTES,
+        Buffer.concat([
+          Buffer.alloc(4),
+          Buffer.from('ftypavif', 'latin1'),
+          Buffer.alloc(4),
+        ]),
+      ];
+      for (const bytes of foreign) {
+        expect(
+          asImagePart({
+            type: 'media',
+            mediaType: 'application/octet-stream',
+            data: bytes.toString('base64'),
+          }),
+        ).toBeNull();
+        expect(
+          asImagePart({
+            type: 'media',
+            media: {
+              mediaType: 'application/octet-stream',
+              source: {
+                type: 'bytes',
+                data: new Uint8Array(bytes),
+                mediaType: 'application/octet-stream',
+              },
+            },
+            filename: 'clipboard',
+          }),
+        ).toBeNull();
+      }
+    });
+
+    it('keeps an unclassified payload with an image filename but foreign bytes inline', () => {
+      // Hole B: octet-stream + photo.png + HEIC bytes — the extension can
+      // never qualify a payload whose actual bytes are not consumable.
       expect(
         asImagePart({
           type: 'media',
-          media: {
-            mediaType: 'application/octet-stream',
-            source: {
-              type: 'bytes',
-              data: new Uint8Array(Buffer.from('plain text, not an image')),
-              mediaType: 'application/octet-stream',
-            },
-          },
-          filename: 'clipboard',
+          mediaType: 'application/octet-stream',
+          data: HEIC_BYTES.toString('base64'),
+          filename: 'photo.png',
         }),
-      ).toBeNull();
+      ).toEqual({ view: 'remote' });
     });
 
     it('never second-guesses a specific non-image declaration', () => {
@@ -279,13 +411,24 @@ describe('asImagePart host shape matrix', () => {
         }),
       ).toBeNull();
     });
+
+    it('keeps a v1 file with a declared pdf payload and an image filename inline', () => {
+      expect(
+        asImagePart({
+          type: 'file',
+          url: `data:application/pdf;base64,${Buffer.from('%PDF-1.7').toString('base64')}`,
+          filename: 'photo.bmp',
+        }),
+      ).toEqual({ view: 'remote' });
+    });
   });
 
-  describe('extension resolution', () => {
-    it('maps every sniffable signature to its mime', () => {
-      const cases: Array<[Buffer, string]> = [
-        [Buffer.from('89504e470d0a1a0a', 'hex'), 'image/png'],
+  describe('consumable-set byte gate', () => {
+    it('saves only bytes that sniff into the host read tool image set', () => {
+      const consumable: Array<[Buffer, string]> = [
+        [IMG_BYTES, 'image/png'],
         [Buffer.from('ffd8ffe000104a464946', 'hex'), 'image/jpeg'],
+        [Buffer.from('GIF87a', 'latin1'), 'image/gif'],
         [Buffer.from('GIF89a', 'latin1'), 'image/gif'],
         [
           Buffer.concat([
@@ -295,30 +438,8 @@ describe('asImagePart host shape matrix', () => {
           ]),
           'image/webp',
         ],
-        [
-          Buffer.concat([Buffer.from('BM', 'latin1'), Buffer.alloc(2)]),
-          'image/bmp',
-        ],
-        [Buffer.from('49492a00', 'hex'), 'image/tiff'],
-        [Buffer.from('4d4d002a', 'hex'), 'image/tiff'],
-        [
-          Buffer.concat([
-            Buffer.alloc(4),
-            Buffer.from('ftypavif', 'latin1'),
-            Buffer.alloc(4),
-          ]),
-          'image/avif',
-        ],
-        [
-          Buffer.concat([
-            Buffer.alloc(4),
-            Buffer.from('ftypheic', 'latin1'),
-            Buffer.alloc(4),
-          ]),
-          'image/heic',
-        ],
       ];
-      for (const [bytes, mime] of cases) {
+      for (const [bytes, mime] of consumable) {
         expect(
           asImagePart({
             type: 'media',
@@ -329,43 +450,72 @@ describe('asImagePart host shape matrix', () => {
       }
     });
 
-    it('prefers the mime mapping over a conflicting filename extension', () => {
-      const view = asImagePart({
-        type: 'media',
-        mediaType: 'image/png',
-        data: IMG_BASE64,
-        filename: 'photo.jpg',
-      });
-      expect(view).toMatchObject({ ext: '.png' });
+    it('every bytes view satisfies the strip⇔consumable invariant', () => {
+      const parts = [
+        { type: 'image', url: IMG_DATA_URL },
+        {
+          type: 'media',
+          mediaType: 'image/png',
+          data: IMG_BASE64,
+          filename: 'shot.png',
+        },
+        {
+          type: 'media',
+          mediaType: 'application/octet-stream',
+          data: Buffer.from('ffd8ffe000104a464946', 'hex').toString('base64'),
+        },
+        {
+          type: 'file',
+          url: `data:image/gif;base64,${Buffer.from('GIF89a', 'latin1').toString('base64')}`,
+          filename: 'clip.gif',
+        },
+      ];
+      for (const part of parts) {
+        const view = asImagePart(part);
+        expect(view?.view).toBe('bytes');
+        const sniffed = detectInlineImageMime(
+          (view as { bytes: Buffer }).bytes,
+        );
+        expect(sniffed).toBeDefined();
+        expect((view as { ext: string }).ext).toBe(
+          MIME_EXT_BY_TYPE[sniffed as string],
+        );
+      }
+    });
+  });
+
+  describe('extension resolution', () => {
+    it('derives the saved extension only from sniffed bytes, never the filename', () => {
+      for (const filename of ['photo.jpg', 'shot.nef', 'photo.bmp']) {
+        const view = asImagePart({
+          type: 'media',
+          mediaType: 'image/png',
+          data: IMG_BASE64,
+          filename,
+        });
+        expect(view).toMatchObject({ view: 'bytes', ext: '.png' });
+      }
     });
 
-    it('falls back to the filename extension for unmapped mimes', () => {
-      const view = asImagePart({
-        type: 'media',
-        mediaType: 'image/x-nikon-raw',
-        data: IMG_BASE64,
-        filename: 'shot.nef',
-      });
-      expect(view).toMatchObject({ ext: '.nef' });
-    });
-
-    it('maps heic, heif, tiff, and avif mimes', () => {
-      for (const [mime, ext] of [
-        ['image/heic', '.heic'],
-        ['image/heif', '.heic'],
-        ['image/tiff', '.tiff'],
-        ['image/avif', '.avif'],
-      ] as const) {
+    it('rescues good bytes behind unmapped and exotic image declarations', () => {
+      for (const mime of [
+        'image/heic',
+        'image/heif',
+        'image/tiff',
+        'image/avif',
+        'image/x-nikon-raw',
+      ]) {
         const view = asImagePart({
           type: 'media',
           mediaType: mime,
           data: IMG_BASE64,
+          filename: 'shot.nef',
         });
-        expect(view).toMatchObject({ ext });
+        expect(view).toMatchObject({ view: 'bytes', ext: '.png' });
       }
     });
 
-    it('defaults to .png when neither mime nor filename yields an extension', () => {
+    it('sniffs the extension for extensionless filenames', () => {
       const view = asImagePart({
         type: 'media',
         mediaType: 'image/png',

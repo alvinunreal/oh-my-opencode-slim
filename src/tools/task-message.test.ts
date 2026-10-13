@@ -60,6 +60,16 @@ function createToolWithTimeout(board: BackgroundJobBoard, timeoutMs: number) {
 }
 
 describe('task_message', () => {
+  test('the schema-level message cap admits 2000 chars and rejects 2001', async () => {
+    // The bound lives in the zod schema the host enforces before execute()
+    // runs (the plugin cannot reword that rejection), so the pin targets
+    // the schema itself. Literal values: retuning the cap must explicitly
+    // touch this test.
+    const tool = createTool(new BackgroundJobBoard());
+    expect(tool.args.message.safeParse('a'.repeat(2000)).success).toBe(true);
+    expect(tool.args.message.safeParse('a'.repeat(2001)).success).toBe(false);
+  });
+
   test('queues messages for a parent-owned running child', async () => {
     const board = new BackgroundJobBoard();
     registerRunningChild(board);
@@ -602,6 +612,100 @@ describe('task_message', () => {
         { sessionID: 'parent-2' } as any,
       ),
     ).rejects.toThrow('Unknown task ID or alias');
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
+  test('a board-missed settled child gets recovery guidance, not bare unknown', async () => {
+    const board = new BackgroundJobBoard();
+    const prompt = makePrompt();
+    client = { session: { prompt } };
+    // No launch registered: the board lost the child (restart or retention
+    // trim) while the host session still exists and is owned.
+    const error = (await createTool(board)
+      .execute({ task_id: 'ses_child1', message: 'go' }, {
+        sessionID: 'parent-1',
+      } as any)
+      .catch((e: Error) => e)) as Error;
+    expect(error.message).toContain('Unknown task ID or alias: ses_child1');
+    expect(error.message).toContain('not tracked');
+    // v1 routing names the host-flavor resume param and the target ID.
+    expect(error.message).toContain('task_revive and task_id: "ses_child1"');
+    expect(error.message).toContain('do not launch a duplicate');
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
+  test('a board-missed settled child on v2 routes with the sessionID param', async () => {
+    const board = new BackgroundJobBoard();
+    const prompt = makePrompt();
+    client = { session: { prompt } };
+    const error = (await createTool(board, 'v2')
+      .execute({ task_id: 'ses_child1', message: 'go' }, {
+        sessionID: 'parent-1',
+      } as any)
+      .catch((e: Error) => e)) as Error;
+    expect(error.message).toContain('task_revive and sessionID: "ses_child1"');
+  });
+
+  test('a board-missed alias keeps the bare unknown error', async () => {
+    const board = new BackgroundJobBoard();
+    const prompt = makePrompt();
+    client = { session: { prompt } };
+    // An alias is board-scoped: without a board record it has no host
+    // existence, so the error stays bare — no settled-session guidance.
+    const error = (await createTool(board)
+      .execute({ task_id: 'exp-9', message: 'go' }, {
+        sessionID: 'parent-1',
+      } as any)
+      .catch((e: Error) => e)) as Error;
+    expect(error.message).toBe('Unknown task ID or alias: exp-9');
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
+  test('a session tracked by another parent keeps the bare unknown error', async () => {
+    const board = new BackgroundJobBoard();
+    registerRunningChild(board);
+    const prompt = makePrompt();
+    client = { session: { prompt } };
+    // Canonical resolution maps the ref to the session ID and board.get is
+    // not parent-scoped, so a foreign parent's record is visible here. The
+    // settled-session advice must not fire: task_revive would reject the
+    // same ownership mismatch, so the error stays bare.
+    const task_message = createTaskMessageTool({
+      input: { directory: '/test', client } as any,
+      backgroundJobBoard: board,
+      resolveCanonicalTaskRef: async () => ({
+        kind: 'exact',
+        taskID: 'ses_child1',
+      }),
+    }).task_message;
+    const error = (await task_message
+      .execute({ task_id: 'ses_child1', message: 'go' }, {
+        sessionID: 'parent-2',
+      } as any)
+      .catch((e: Error) => e)) as Error;
+    expect(error.message).toBe('Unknown task ID or alias: ses_child1');
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
+  test('a disposal landing after the helper check still stops the send', async () => {
+    const board = new BackgroundJobBoard();
+    registerRunningChild(board);
+    const prompt = makePrompt();
+    client = { session: { prompt } };
+    // The helper's disposed check passes (call 1); the plugin is torn down
+    // while the resolution await is in flight; execute's post-await
+    // re-check (call 2) must refuse to send.
+    let disposedCalls = 0;
+    const task_message = createTaskMessageTool({
+      input: { directory: '/test', client } as any,
+      backgroundJobBoard: board,
+      isDisposed: () => ++disposedCalls > 1,
+    }).task_message;
+    await expect(
+      task_message.execute({ task_id: 'ses_child1', message: 'go' }, {
+        sessionID: 'parent-1',
+      } as any),
+    ).rejects.toThrow('The plugin instance was disposed');
     expect(prompt).not.toHaveBeenCalled();
   });
 

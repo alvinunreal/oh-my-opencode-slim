@@ -87,6 +87,23 @@ function createSupervisorClock() {
   return { now: () => now, setTimeout, clearTimeout, advanceTo };
 }
 
+function mockIdleClock() {
+  const clock = createSupervisorClock();
+  const timerSpy = spyOn(globalThis, 'setTimeout').mockImplementation(
+    clock.setTimeout as never,
+  );
+  const clearSpy = spyOn(globalThis, 'clearTimeout').mockImplementation(
+    clock.clearTimeout as never,
+  );
+  return {
+    ...clock,
+    restore: () => {
+      timerSpy.mockRestore();
+      clearSpy.mockRestore();
+    },
+  };
+}
+
 function taskLaunchOutput(taskID: string): string {
   return [
     `task_id: ${taskID}`,
@@ -134,6 +151,7 @@ type HookOptions = {
   runtimeStatusReconcileDelayMs?: number;
   isFallbackInProgress?: (sessionID: string) => boolean;
   willAttemptFallback?: (sessionID: string) => boolean;
+  fallbackFailureReason?: (sessionID: string) => string;
   coordinator?: SessionLifecycle;
   backgroundJobSupervisor?: BackgroundJobSupervisor;
   backgroundTaskConcurrency?: BackgroundTaskConcurrency;
@@ -220,6 +238,7 @@ function createHook(options?: HookOptions) {
       registerSessionAsOrchestrator: options?.registerSessionAsOrchestrator,
       isFallbackInProgress: options?.isFallbackInProgress,
       willAttemptFallback: options?.willAttemptFallback,
+      fallbackFailureReason: options?.fallbackFailureReason,
       coordinator: options?.coordinator,
       idleReconcileDelayMs: options?.idleReconcileDelayMs,
       runtimeStatusReconcileDelayMs: options?.runtimeStatusReconcileDelayMs,
@@ -1035,53 +1054,59 @@ describe('task-session-manager hook', () => {
     expect(pendingCallTracker.peekByParent('parent-1')).toBeUndefined();
   });
 
-  test('rehydrates historical background tasks and keeps absent children provisional', async () => {
-    const board = new BackgroundJobBoard();
-    const status = mock(async () => ({ data: {} }));
-    const { hook } = createHook({
-      backgroundJobBoard: board,
-      sessionClient: { status },
-      runtimeStatusReconcileDelayMs: 60_000,
-    });
-    const messages = {
-      messages: [
-        {
-          info: {
-            role: 'assistant',
-            sessionID: 'parent-1',
+  test.each(['orchestrator', 'build', 'custom-primary'])(
+    'rehydrates historical background tasks for managed %s and keeps absent children provisional',
+    async (agent) => {
+      const board = new BackgroundJobBoard();
+      const status = mock(async () => ({ data: {} }));
+      const { hook } = createHook({
+        backgroundJobBoard: board,
+        sessionClient: { status },
+        runtimeStatusReconcileDelayMs: 60_000,
+      });
+      const messages = {
+        messages: [
+          {
+            info: {
+              role: 'assistant',
+              sessionID: 'parent-1',
+            },
+            parts: [historicalRunningTaskPart('historical-child')],
           },
-          parts: [historicalRunningTaskPart('historical-child')],
-        },
-        ...createMessages('parent-1', 'continue').messages,
-      ],
-    };
+          ...createMessages('parent-1', 'continue').messages.map((message) => ({
+            ...message,
+            info: { ...message.info, agent },
+          })),
+        ],
+      };
 
-    await transformMessages(hook, messages as never);
+      await transformMessages(hook, messages as never);
 
-    expect(board.get('historical-child')).toMatchObject({
-      alias: 'historical-child',
-      state: 'running',
-      statusUncertain: true,
-      background: true,
-      agent: 'explorer',
-      description: 'recover scheduler task',
-      objective: 'recover scheduler task',
-      // Rehydrated children are never terminal-session GC candidates.
-      externalOrigin: true,
-    });
-    expect(board.get('historical-child')?.pluginLaunched).toBeUndefined();
-    expect(boardText(messages)).toContain(
-      'historical-child / explorer / running, status uncertain',
-    );
-    // An existing child does not consume a number.
-    expect(
-      board.registerLaunch({
-        taskID: 'new-child',
-        parentSessionID: 'parent-1',
+      expect(board.get('historical-child')).toMatchObject({
+        alias: 'historical-child',
+        state: 'running',
+        statusUncertain: true,
+        background: true,
         agent: 'explorer',
-      }).alias,
-    ).toBe('exp-1');
-  });
+        description: 'recover scheduler task',
+        objective: 'recover scheduler task',
+        // Rehydrated children are never terminal-session GC candidates.
+        externalOrigin: true,
+      });
+      expect(board.get('historical-child')?.pluginLaunched).toBeUndefined();
+      expect(boardText(messages)).toContain(
+        'historical-child / explorer / running, status uncertain',
+      );
+      // An existing child does not consume a number.
+      expect(
+        board.registerLaunch({
+          taskID: 'new-child',
+          parentSessionID: 'parent-1',
+          agent: 'explorer',
+        }).alias,
+      ).toBe('exp-1');
+    },
+  );
 
   test('rehydrated long objectives keep the duplicate-spawn guard effective', async () => {
     const board = new BackgroundJobBoard();
@@ -3058,78 +3083,86 @@ describe('task-session-manager hook', () => {
     );
   });
 
-  test('injected completion through message transform (without injectBackgroundJobBoard) remains terminal-unreconciled before parent idle, then reconciles after', async () => {
-    const board = new BackgroundJobBoard();
-    const { hook, complete } = createHook({ backgroundJobBoard: board });
+  test.each(['orchestrator', 'build', 'custom-primary'])(
+    'injected completion for managed %s through message transform remains terminal-unreconciled before parent idle, then reconciles after',
+    async (agent) => {
+      const board = new BackgroundJobBoard();
+      const { hook, complete } = createHook({ backgroundJobBoard: board });
 
-    await hook['tool.execute.before'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
-      {
-        args: {
-          subagent_type: 'explorer',
-          description: 'map hooks',
-        },
-      },
-    );
-    await hook['tool.execute.after'](
-      { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
-      {
-        output: ['task_id: child-1', 'state: running'].join('\n'),
-      },
-    );
-
-    const messages = {
-      messages: [
+      await hook['tool.execute.before'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
         {
-          info: { role: 'user', agent: 'orchestrator', sessionID: 'parent-1' },
-          parts: [
-            {
-              type: 'text',
-              id: 'part-1',
-              synthetic: true,
-              text: [
-                '<task id="child-1" state="completed">',
-                '<summary>Background task completed: map hooks</summary>',
-                '<task_result>',
-                'found hook flow',
-                '</task_result>',
-                '</task>',
-              ].join('\n'),
-            },
-          ],
+          args: {
+            subagent_type: 'explorer',
+            description: 'map hooks',
+          },
         },
-      ],
-    };
+      );
+      await hook['tool.execute.after'](
+        { tool: 'task', sessionID: 'parent-1', callID: 'call-1' },
+        {
+          output: ['task_id: child-1', 'state: running'].join('\n'),
+        },
+      );
 
-    // through transform only, without injectBackgroundJobBoard (avoids broad remember)
-    complete('child-1', 'found hook flow');
-    await hook['experimental.chat.messages.transform']({}, messages as never);
+      const messages = {
+        messages: [
+          {
+            info: {
+              role: 'user',
+              agent: 'orchestrator',
+              sessionID: 'parent-1',
+            },
+            parts: [
+              {
+                type: 'text',
+                id: 'part-1',
+                synthetic: true,
+                text: [
+                  '<task id="child-1" state="completed">',
+                  '<summary>Background task completed: map hooks</summary>',
+                  '<task_result>',
+                  'found hook flow',
+                  '</task_result>',
+                  '</task>',
+                ].join('\n'),
+              },
+            ],
+          },
+        ],
+      };
 
-    expect(board.get('child-1')).toMatchObject({
-      state: 'completed',
-      terminalUnreconciled: true,
-      resultSummary: 'found hook flow',
-    });
-    expect(board.get('child-1')?.terminalUnreconciled).toBe(true);
+      // through transform only, without injectBackgroundJobBoard (avoids broad remember)
+      messages.messages[0].info.agent = agent;
+      complete('child-1', 'found hook flow');
+      await hook['experimental.chat.messages.transform']({}, messages as never);
 
-    // duplicate occurrence is idempotent (no reprocess, no double remember)
-    await hook['experimental.chat.messages.transform']({}, messages as never);
-    expect(board.get('child-1')?.terminalUnreconciled).toBe(true);
+      expect(board.get('child-1')).toMatchObject({
+        state: 'completed',
+        terminalUnreconciled: true,
+        resultSummary: 'found hook flow',
+      });
+      expect(board.get('child-1')?.terminalUnreconciled).toBe(true);
 
-    await hook.event({
-      event: {
-        type: 'session.status',
-        properties: { sessionID: 'parent-1', status: { type: 'idle' } },
-      },
-    });
+      // duplicate occurrence is idempotent (no reprocess, no double remember)
+      await hook['experimental.chat.messages.transform']({}, messages as never);
+      expect(board.get('child-1')?.terminalUnreconciled).toBe(true);
 
-    await flushIdleReconcileDelay();
+      await hook.event({
+        event: {
+          type: 'session.status',
+          properties: { sessionID: 'parent-1', status: { type: 'idle' } },
+        },
+      });
 
-    expect(board.get('child-1')).toMatchObject({
-      state: 'reconciled',
-      terminalUnreconciled: false,
-    });
-  });
+      await flushIdleReconcileDelay();
+
+      expect(board.get('child-1')).toMatchObject({
+        state: 'reconciled',
+        terminalUnreconciled: false,
+      });
+    },
+  );
 
   test('another terminal-unreconciled sibling remains unreconciled when only first child completion was injected', async () => {
     const board = new BackgroundJobBoard();
@@ -5155,10 +5188,11 @@ describe('task-session-manager hook', () => {
     // the deferred error must terminalize as 'error', not the false
     // 'completed' the child-idle path would record.
     const board = new BackgroundJobBoard();
+    const clock = mockIdleClock();
     const { hook } = createHook({
       backgroundJobBoard: board,
       willAttemptFallback: () => true,
-      idleReconcileDelayMs: 0,
+      idleReconcileDelayMs: 10,
     });
 
     board.registerLaunch({
@@ -5186,13 +5220,15 @@ describe('task-session-manager hook', () => {
     await hook.event({
       event: { type: 'session.idle', properties: { sessionID: 'parent-1' } },
     });
-    await flushChildIdleReconcile();
+    await clock.advanceTo(10);
+    for (let i = 0; i < 50; i++) await Promise.resolve();
 
     expect(board.get('parent-1')).toMatchObject({
       state: 'error',
       resultSummary:
         'Session error after failed model fallback (auth/model unavailable)',
     });
+    clock.restore();
   });
 
   test('clears deferred 401 when live busy shows the session recovered', async () => {
@@ -5658,11 +5694,14 @@ describe('task-session-manager hook', () => {
     // without recovery — the idle backstop must publish the deferred error
     // so the parent still sees the failure instead of a false completion.
     const board = new BackgroundJobBoard();
+    const clock = mockIdleClock();
     const { hook } = createHook({
       backgroundJobBoard: board,
       shouldManageSession: () => false,
       willAttemptFallback: () => true,
-      idleReconcileDelayMs: 0,
+      fallbackFailureReason: () =>
+        'Model fallback did not recover from test/primary.',
+      idleReconcileDelayMs: 10,
     });
 
     board.registerLaunch({
@@ -5688,12 +5727,15 @@ describe('task-session-manager hook', () => {
     await hook.event({
       event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
     });
-    await flushChildIdleReconcile();
+    await clock.advanceTo(10);
+    for (let i = 0; i < 50; i++) await Promise.resolve();
 
     expect(board.get('child-1')).toMatchObject({
       state: 'error',
-      resultSummary: 'rate limit exceeded',
+      resultSummary:
+        'rate limit exceeded\nModel fallback did not recover from test/primary.',
     });
+    clock.restore();
   });
 
   test('child failover error without a fallback chain terminalizes immediately', async () => {
@@ -5739,6 +5781,7 @@ describe('task-session-manager hook', () => {
       backgroundJobBoard: board,
       shouldManageSession: () => false,
       willAttemptFallback: () => true,
+      fallbackFailureReason: () => 'R',
     });
 
     board.registerLaunch({
@@ -5768,16 +5811,11 @@ describe('task-session-manager hook', () => {
     });
   });
 
-  test('deferred child failover error survives the idle that races the in-flight fallback', async () => {
-    // Incident interleave (issue #1321): the failed prompt's session.idle
-    // is processed while ForegroundFallbackManager is still preparing the
-    // re-prompt (isFallbackInProgress=true — the host dispatches events
-    // without awaiting the plugin hook). The idle backstop must not
-    // commit the deferred error inside that window: terminalizing the
-    // record before the observation handoff arms orphans the retried
-    // run's result. The backstop must re-check the fallback state and
-    // let the re-prompt's busy cancel it.
+  test('deferred child failover error survives idle before fallback is armed', async () => {
+    // Host hooks are not awaited: idle can precede fallback delay arming.
+    // Publishing now would orphan the replay before its handoff is prepared.
     const board = new BackgroundJobBoard();
+    const clock = mockIdleClock();
     let fallbackInFlight = false;
     const { hook, complete } = createHook({
       backgroundJobBoard: board,
@@ -5807,38 +5845,47 @@ describe('task-session-manager hook', () => {
     });
     expect(board.get('child-1')?.state).toBe('running');
 
-    // The fallback manager picked the error up; the failed prompt's idle
-    // arrives while the re-prompt is still in flight.
-    fallbackInFlight = true;
-    await hook.event({
-      event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
-    });
-    // Let a would-be immediate backstop fire several times.
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    try {
+      // Idle arrives before the fallback manager arms its initial delay.
+      await hook.event({
+        event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
+      });
+      fallbackInFlight = true;
+      await clock.advanceTo(10);
+      await clock.advanceTo(20);
+      for (let i = 0; i < 50; i++) await Promise.resolve();
 
-    // The deferred error must NOT have been committed inside the window.
-    expect(board.get('child-1')?.state).toBe('running');
+      // The deferred error must NOT have been committed inside the window.
+      expect(board.get('child-1')).toMatchObject({
+        state: 'running',
+        terminalRevision: 0,
+        statusUncertain: false,
+      });
 
-    // The re-prompt lands: busy cancels the backstop and clears the
-    // deferral; the retried run finishes and publishes exactly once.
-    fallbackInFlight = false;
-    await hook.event({
-      event: {
-        type: 'session.status',
-        properties: { sessionID: 'child-1', status: { type: 'busy' } },
-      },
-    });
-    complete('child-1', 'retried run result');
-    await hook.event({
-      event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
-    });
-    await flushChildIdleReconcile();
+      // The re-prompt lands: busy cancels the backstop and clears the
+      // deferral; the retried run finishes and publishes exactly once.
+      fallbackInFlight = false;
+      await hook.event({
+        event: {
+          type: 'session.status',
+          properties: { sessionID: 'child-1', status: { type: 'busy' } },
+        },
+      });
+      complete('child-1', 'retried run result');
+      await hook.event({
+        event: { type: 'session.idle', properties: { sessionID: 'child-1' } },
+      });
+      for (let i = 0; i < 50; i++) await Promise.resolve();
 
-    expect(board.get('child-1')).toMatchObject({
-      state: 'completed',
-      resultSummary: 'retried run result',
-      terminalRevision: 1,
-    });
+      expect(board.get('child-1')).toMatchObject({
+        state: 'completed',
+        resultSummary: 'retried run result',
+        terminalRevision: 1,
+      });
+    } finally {
+      await hook.event({ event: { type: 'server.instance.disposed' } });
+      clock.restore();
+    }
   });
 
   test('session.deleted inside the deferral window publishes the deferred error', async () => {
@@ -5853,6 +5900,7 @@ describe('task-session-manager hook', () => {
       backgroundJobBoard: board,
       shouldManageSession: () => false,
       willAttemptFallback: () => true,
+      fallbackFailureReason: () => 'R',
       idleReconcileDelayMs: 0,
     });
 
@@ -5879,11 +5927,10 @@ describe('task-session-manager hook', () => {
     await hook.event({
       event: { type: 'session.deleted', properties: { sessionID: 'child-1' } },
     });
-    await flushChildIdleReconcile();
 
     expect(board.get('child-1')).toMatchObject({
       state: 'error',
-      resultSummary: 'rate limit exceeded',
+      resultSummary: 'rate limit exceeded\nR',
     });
   });
 
@@ -9443,6 +9490,27 @@ describe('task-session-manager hook', () => {
       parentSessionID: 'orchestrator-1',
       state: 'running',
     });
+  });
+
+  test('unmanaged Build history neither registers a parent nor adopts its tasks', async () => {
+    const board = new BackgroundJobBoard();
+    const registerSessionAsOrchestrator = mock(() => {});
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: () => false,
+      registerSessionAsOrchestrator,
+    });
+    const messages = {
+      messages: [
+        {
+          info: { role: 'user', sessionID: 'parent-1', agent: 'build' },
+          parts: [historicalRunningTaskPart('historical-child')],
+        },
+      ],
+    };
+    await transformMessages(hook, messages as never);
+    expect(registerSessionAsOrchestrator).not.toHaveBeenCalled();
+    expect(board.get('historical-child')).toBeUndefined();
   });
 
   test('recovers stale orchestrator mapping in messages.transform', async () => {

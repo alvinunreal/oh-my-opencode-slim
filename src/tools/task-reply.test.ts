@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { createTaskSessionManagerHook } from '../hooks/task-session-manager';
 import {
   clearChildInputWait,
@@ -14,6 +14,13 @@ import { mapV2EventToV1 } from '../v2/event-adapter';
 import type { V2Context } from '../v2/types';
 import { createTaskReplyTool } from './task-reply';
 import { createTaskStatusTool } from './task-status';
+
+// The child-input wait registry and user-wait gate are process-global; a
+// leftover entry leaks into later files (task_status reads it).
+afterEach(() => {
+  resetChildInputWaitForTests();
+  resetUserWaitGateForTests();
+});
 
 mock.module('../utils/opencode-client', () => ({
   getClient: (input: { client: unknown }) => input.client as never,
@@ -234,8 +241,68 @@ describe('task_status with a waiting child', () => {
       sessionID: 'parent-1',
     } as never);
 
-    expect(output).toContain('OpenCode v2 form request');
-    expect(output).toContain('task_reply cannot answer it');
+    // Short cue: task_reply cannot resolve a v2 form; the parent is
+    // redirected to the host UI or the cancel path instead.
+    expect(output).toMatch(/cannot answer/i);
+    expect(output).toMatch(/host UI/i);
+    expect(output).toContain('task_cancel');
+    // Request ID surfaces exactly once (the waiting_input envelope); the
+    // shared detail renderer must not re-render it.
+    expect(output.match(/form_1/g)).toHaveLength(1);
+    // No contradictory "await completion" advice while parked on input.
+    expect(output).not.toContain('await the completion event');
+  });
+
+  test('a live-busy child with an open ask does not suggest awaiting completion', async () => {
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    registerBackgroundChild(board);
+    noteChildInputWait({
+      taskID: 'ses_child1',
+      parentSessionID: 'parent-1',
+      kind: 'question',
+      requestID: 'que_1',
+      questions: [
+        {
+          question: 'Pick environment',
+          header: 'Environment',
+          options: [
+            { label: 'staging', description: 'Use <staging> & shared' },
+          ],
+        },
+      ],
+    });
+    // Live-confirmed busy: the await-completion branch is genuinely
+    // reachable here, so an open ask must be what suppresses it.
+    const { task_status } = createTaskStatusTool({
+      input: {
+        directory: '/test',
+        client: {
+          session: {
+            status: mock(async () => ({
+              data: { ses_child1: { type: 'busy' } },
+            })),
+          },
+        },
+      } as never,
+      backgroundJobBoard: board,
+      now: () => 120_000,
+    });
+
+    const output = await task_status.execute({ task_id: 'ses_child1' }, {
+      sessionID: 'parent-1',
+    } as never);
+
+    expect(output).toContain('state: busy');
+    expect(output).not.toContain('await the completion event');
+    // Request ID once, from the waiting_input envelope; no duplicate
+    // renderer restating it.
+    expect(output.match(/que_1/g)).toHaveLength(1);
+    // The stored option description stays escaped — present, not raw and
+    // not double-escaped.
+    expect(output).toContain('Use &lt;staging&gt; &amp; shared');
+    expect(output).not.toContain('Use <staging> & shared');
+    expect(output).not.toContain('&amp;amp;');
   });
 
   test('task_status renders child-supplied ask text escaped', async () => {
@@ -307,6 +374,8 @@ describe('task_reply', () => {
       backgroundJobBoard: board,
     });
 
+    expect(Object.keys(task_reply.args)).toContain('answers');
+
     const output = await task_reply.execute(
       {
         task_id: 'ses_child1',
@@ -342,6 +411,67 @@ describe('task_reply', () => {
       requestID: 'que_2',
       questions: [],
     });
+    const formReply = mock(async () => undefined);
+    const client = { session: { form: { reply: formReply } } };
+    const { task_reply } = createTaskReplyTool({
+      input: { directory: '/test', client, hostFlavor: 'v2' } as never,
+      backgroundJobBoard: board,
+    });
+
+    expect(Object.keys(task_reply.args)).toContain('sessionID');
+    // Detected v2 (runtime session.form.reply) restores the v1 `answers`
+    // surface: open question waits are answerable through the host's
+    // documented form.reply route.
+    expect(Object.keys(task_reply.args)).toContain('answers');
+    expect(task_reply.description).toBe(
+      'Answer a background child ask (question/permission requests) by task ID/alias and request ID.',
+    );
+
+    // Both identifier forms resolve the task and its open ask on v2, and
+    // the answer passes through session.form.reply with the
+    // SessionFormReplyInput shape (sessionID = child taskID, formID =
+    // open-wait requestID). The asks clear on success.
+    await task_reply.execute(
+      { sessionID: 'ses_child1', request_id: 'que_1', answers: ['yes'] },
+      { sessionID: 'parent-1' } as never,
+    );
+    await task_reply.execute(
+      { task_id: 'ses_child1', request_id: 'que_2', answers: ['no'] },
+      { sessionID: 'parent-1' } as never,
+    );
+    expect(formReply).toHaveBeenCalledTimes(2);
+    expect(formReply.mock.calls[0]?.[0]).toEqual({
+      sessionID: 'ses_child1',
+      formID: 'que_1',
+      answer: { question_0: 'yes' },
+    });
+    expect(formReply.mock.calls[1]?.[0]).toEqual({
+      sessionID: 'ses_child1',
+      formID: 'que_2',
+      answer: { question_0: 'no' },
+    });
+    expect(getChildInputWait('ses_child1', 'que_1')).toBeUndefined();
+    expect(getChildInputWait('ses_child1', 'que_2')).toBeUndefined();
+  });
+
+  test('v2 without a detected form.reply keeps the honest C4 surface', async () => {
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    registerBackgroundChild(board);
+    noteChildInputWait({
+      taskID: 'ses_child1',
+      parentSessionID: 'parent-1',
+      kind: 'question',
+      requestID: 'que_3',
+      questions: [],
+    });
+    noteChildInputWait({
+      taskID: 'ses_child1',
+      parentSessionID: 'parent-1',
+      kind: 'question',
+      requestID: 'que_4',
+      questions: [],
+    });
     const reply = mock(async () => ({ data: true }));
     const client = { question: { reply, reject: mock(async () => ({})) } };
     const { task_reply } = createTaskReplyTool({
@@ -350,17 +480,37 @@ describe('task_reply', () => {
     });
 
     expect(Object.keys(task_reply.args)).toContain('sessionID');
+    // Undetected v2 advertises only what it can do: no runtime
+    // session.form.reply, so the answers arg stays absent (#1510
+    // honest-surface) and the execute gate below refuses questions with
+    // the host-UI/cancel redirect.
+    expect(Object.keys(task_reply.args)).not.toContain('answers');
+    // The description matches the honest surface: on undetected v2 the
+    // tool can only serve permission requests, so it must not advertise
+    // question replies (greptile P2: overpromised question replies).
+    expect(task_reply.description).toBe(
+      'Reply to a tracked child permission request by task ID/alias and request ID.',
+    );
 
-    const viaNative = await task_reply.execute(
-      { sessionID: 'ses_child1', request_id: 'que_1', answers: ['yes'] },
-      { sessionID: 'parent-1' } as never,
-    );
-    expect(viaNative).toContain('Answered pending question que_1');
-    const viaAlias = await task_reply.execute(
-      { task_id: 'ses_child1', request_id: 'que_2', answers: ['yes'] },
-      { sessionID: 'parent-1' } as never,
-    );
-    expect(viaAlias).toContain('Answered pending question que_2');
+    // C4: both identifier forms still resolve the task and its open ask on
+    // v2, but the question path refuses before any transport attempt — the
+    // ask stays open for the host UI to answer.
+    const refusal = 'Question replies are not supported on this host';
+    await expect(
+      task_reply.execute(
+        { sessionID: 'ses_child1', request_id: 'que_3', answers: ['yes'] },
+        { sessionID: 'parent-1' } as never,
+      ),
+    ).rejects.toThrow(refusal);
+    await expect(
+      task_reply.execute(
+        { task_id: 'ses_child1', request_id: 'que_4', answers: ['yes'] },
+        { sessionID: 'parent-1' } as never,
+      ),
+    ).rejects.toThrow(refusal);
+    expect(reply).not.toHaveBeenCalled();
+    expect(getChildInputWait('ses_child1', 'que_3')).toBeDefined();
+    expect(getChildInputWait('ses_child1', 'que_4')).toBeDefined();
   });
 
   test('omitted answers rejects the open question', async () => {
@@ -544,6 +694,104 @@ describe('task_reply', () => {
         sessionID: 'parent-2',
       } as never),
     ).rejects.toThrow('Unknown task ID or alias');
+  });
+
+  test('a board-missed settled child gets recovery guidance, not bare unknown', async () => {
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    const { task_reply } = createTaskReplyTool({
+      input: { directory: '/test', client: {} } as never,
+      backgroundJobBoard: board,
+    });
+    // No launch registered: the board lost the child (restart or retention
+    // trim) while the host session still exists and is owned.
+    const error = (await task_reply
+      .execute({ task_id: 'ses_child1', request_id: 'que_1' }, {
+        sessionID: 'parent-1',
+      } as never)
+      .catch((e: Error) => e)) as Error;
+    expect(error.message).toContain('Unknown task ID or alias: ses_child1');
+    expect(error.message).toContain('not tracked');
+    // v1 routing names the host-flavor resume param and the target ID.
+    expect(error.message).toContain('task_revive and task_id: "ses_child1"');
+    expect(error.message).toContain('do not launch a duplicate');
+  });
+
+  test('a board-missed settled child on v2 routes with the sessionID param', async () => {
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    const { task_reply } = createTaskReplyTool({
+      input: { directory: '/test', client: {}, hostFlavor: 'v2' } as never,
+      backgroundJobBoard: board,
+    });
+    const error = (await task_reply
+      .execute({ task_id: 'ses_child1', request_id: 'que_1' }, {
+        sessionID: 'parent-1',
+      } as never)
+      .catch((e: Error) => e)) as Error;
+    expect(error.message).toContain('task_revive and sessionID: "ses_child1"');
+  });
+
+  test('a board-missed alias keeps the bare unknown error', async () => {
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    const { task_reply } = createTaskReplyTool({
+      input: { directory: '/test', client: {} } as never,
+      backgroundJobBoard: board,
+    });
+    // An alias is board-scoped: without a board record it has no host
+    // existence, so the error stays bare — no settled-session guidance.
+    const error = (await task_reply
+      .execute({ task_id: 'exp-9', request_id: 'que_1' }, {
+        sessionID: 'parent-1',
+      } as never)
+      .catch((e: Error) => e)) as Error;
+    expect(error.message).toBe('Unknown task ID or alias: exp-9');
+  });
+
+  test('a session tracked by another parent keeps the bare unknown error', async () => {
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    registerBackgroundChild(board);
+    // Canonical resolution maps the ref to the session ID and board.get is
+    // not parent-scoped, so a foreign parent's record is visible here. The
+    // settled-session advice must not fire: task_revive would reject the
+    // same ownership mismatch, so the error stays bare.
+    const { task_reply } = createTaskReplyTool({
+      input: { directory: '/test', client: {} } as never,
+      backgroundJobBoard: board,
+      resolveCanonicalTaskRef: async () =>
+        ({
+          kind: 'exact',
+          taskID: 'ses_child1',
+        }) as never,
+    });
+    const error = (await task_reply
+      .execute({ task_id: 'ses_child1', request_id: 'que_1' }, {
+        sessionID: 'parent-2',
+      } as never)
+      .catch((e: Error) => e)) as Error;
+    expect(error.message).toBe('Unknown task ID or alias: ses_child1');
+  });
+
+  test('a disposal landing after the helper check still stops the send', async () => {
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    registerBackgroundChild(board);
+    // The helper's disposed check passes (call 1); the plugin is torn down
+    // while the resolution await is in flight; execute's post-await
+    // re-check (call 2) must refuse to send.
+    let disposedCalls = 0;
+    const { task_reply } = createTaskReplyTool({
+      input: { directory: '/test', client: {} } as never,
+      backgroundJobBoard: board,
+      isDisposed: () => ++disposedCalls > 1,
+    });
+    await expect(
+      task_reply.execute({ task_id: 'ses_child1', request_id: 'que_1' }, {
+        sessionID: 'parent-1',
+      } as never),
+    ).rejects.toThrow('The plugin instance was disposed');
   });
 
   test('answers an open permission request through permission.reply', async () => {
@@ -744,6 +992,85 @@ describe('task_reply', () => {
     ).rejects.toThrow('timed out');
 
     expect(getChildInputWait('ses_child1', 'que_1')).not.toBeUndefined();
+  });
+
+  test('C4: v2 question reply and reject both fail fast before any transport', async () => {
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    registerBackgroundChild(board);
+    noteChildInputWait({
+      taskID: 'ses_child1',
+      parentSessionID: 'parent-1',
+      kind: 'question',
+      requestID: 'que_1',
+      questions: [],
+    });
+    const reply = mock(async () => ({ data: true }));
+    const reject = mock(async () => ({ data: true }));
+    // Undetected v2 (no runtime session.form.reply): the C4 gate refuses
+    // before any transport attempt with the honest alternatives; the wait
+    // stays open for the host UI.
+    const client = { question: { reply, reject } };
+    const { task_reply } = createTaskReplyTool({
+      input: { directory: '/test', client, hostFlavor: 'v2' } as never,
+      backgroundJobBoard: board,
+    });
+    const expected =
+      "Question replies are not supported on this host — answer the child's question in the host UI, or cancel the child with task_cancel instead.";
+    // reply path (answers supplied) AND reject path (answers omitted)
+    await expect(
+      task_reply.execute(
+        {
+          task_id: 'ses_child1',
+          request_id: 'que_1',
+          answers: ['yes'],
+        },
+        { sessionID: 'parent-1' } as never,
+      ),
+    ).rejects.toThrow(expected);
+    await expect(
+      task_reply.execute({ task_id: 'ses_child1', request_id: 'que_1' }, {
+        sessionID: 'parent-1',
+      } as never),
+    ).rejects.toThrow(expected);
+    // Neither transport path ran, and the wait was never cleared: the
+    // host UI can still answer the form.
+    expect(reply).not.toHaveBeenCalled();
+    expect(reject).not.toHaveBeenCalled();
+    expect(getChildInputWait('ses_child1', 'que_1')).toBeDefined();
+    expect(listChildInputWaits('ses_child1')).toHaveLength(1);
+  });
+
+  test('C4: v2 permission replies keep the full transport path', async () => {
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    registerBackgroundChild(board);
+    noteChildInputWait({
+      taskID: 'ses_child1',
+      parentSessionID: 'parent-1',
+      kind: 'permission',
+      requestID: 'per_1',
+      permission: 'bash',
+      patterns: ['docker *'],
+    });
+    const reply = mock(async () => ({ data: true }));
+    const { task_reply } = createTaskReplyTool({
+      input: {
+        directory: '/test',
+        client: { permission: { reply } },
+        hostFlavor: 'v2',
+      } as never,
+      backgroundJobBoard: board,
+    });
+
+    const output = await task_reply.execute(
+      { task_id: 'ses_child1', request_id: 'per_1', reply: 'once' },
+      { sessionID: 'parent-1' } as never,
+    );
+
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(output).toContain('Replied once to pending permission per_1');
+    expect(getChildInputWait('ses_child1', 'per_1')).toBeUndefined();
   });
 });
 
@@ -948,6 +1275,205 @@ describe('task_reply v2 event transport integration', () => {
     }
   });
 
+  test('detected v2 answers a form.created question wait through session.form.reply', async () => {
+    resetUserWaitGateForTests();
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    registerBackgroundChild(board);
+    const hook = createInputWaitHook(board);
+    try {
+      const formReply = mock(async () => undefined);
+      const input = buildPluginInput(makeV2Ctx());
+      // The v2 shim client carries no host session domain; the runtime
+      // form.reply arrives on the host client — wire the documented
+      // runtime shape (session.form.reply) onto it.
+      (
+        input as { client: { session: Record<string, unknown> } }
+      ).client.session = {
+        ...(input as { client: { session: Record<string, unknown> } }).client
+          .session,
+        form: { reply: formReply },
+      } as never;
+      const { task_reply } = createTaskReplyTool({
+        input: input as never,
+        backgroundJobBoard: board,
+      });
+
+      await routeMappedV2Event(hook, {
+        type: 'form.created',
+        data: {
+          form: {
+            id: 'form_1',
+            sessionID: 'ses_child1',
+            fields: [
+              {
+                key: 'environment',
+                title: 'Pick environment',
+                type: 'select',
+                options: [{ label: 'staging', description: 'Use staging' }],
+              },
+            ],
+          },
+        },
+      });
+
+      expect(getChildInputWait('ses_child1', 'form_1')).toMatchObject({
+        kind: 'question',
+        requestID: 'form_1',
+      });
+      // Detection restores the answers surface on v2.
+      expect(Object.keys(task_reply.args)).toContain('answers');
+
+      const output = await task_reply.execute(
+        { task_id: 'ses_child1', request_id: 'form_1', answers: ['staging'] },
+        { sessionID: 'parent-1' } as never,
+      );
+
+      expect(formReply).toHaveBeenCalledTimes(1);
+      expect(formReply.mock.calls[0]?.[0]).toMatchObject({
+        sessionID: 'ses_child1',
+        formID: 'form_1',
+        // Answers key by the form field key (the host requires exact
+        // field keys), not by the display header.
+        answer: { environment: 'staging' },
+      });
+      expect(output).toContain('Answered pending question form_1');
+      expect(getChildInputWait('ses_child1', 'form_1')).toBeUndefined();
+    } finally {
+      await hook.event({
+        event: { type: 'server.instance.disposed' },
+      } as never);
+    }
+  });
+
+  test('detected v2 sends multiselect answers as arrays under verbatim field keys', async () => {
+    resetUserWaitGateForTests();
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    registerBackgroundChild(board);
+    const hook = createInputWaitHook(board);
+    try {
+      const formReply = mock(async () => undefined);
+      const input = buildPluginInput(makeV2Ctx());
+      (
+        input as { client: { session: Record<string, unknown> } }
+      ).client.session = {
+        ...(input as { client: { session: Record<string, unknown> } }).client
+          .session,
+        form: { reply: formReply },
+      } as never;
+      const { task_reply } = createTaskReplyTool({
+        input: input as never,
+        backgroundJobBoard: board,
+      });
+
+      // Native v2 `question` tool shape: key `q<index>`, multiselect for
+      // `multiple: true`. A key with characters the prompt-safe sanitizer
+      // would escape must still reach the host byte-for-byte.
+      await routeMappedV2Event(hook, {
+        type: 'form.created',
+        data: {
+          form: {
+            id: 'form_2',
+            sessionID: 'ses_child1',
+            fields: [
+              {
+                key: 'q0',
+                title: 'Targets',
+                type: 'multiselect',
+                options: [{ value: 'api', label: 'api' }],
+              },
+              {
+                key: 'a&b  <c>',
+                title: 'Mode',
+                type: 'string',
+                options: [{ value: 'fast', label: 'fast' }],
+              },
+            ],
+          },
+        },
+      });
+
+      await task_reply.execute(
+        {
+          task_id: 'ses_child1',
+          request_id: 'form_2',
+          answers: ['api', 'fast'],
+        },
+        { sessionID: 'parent-1' } as never,
+      );
+
+      expect(formReply).toHaveBeenCalledTimes(1);
+      expect(formReply.mock.calls[0]?.[0]).toEqual({
+        sessionID: 'ses_child1',
+        formID: 'form_2',
+        answer: { q0: ['api'], 'a&b  <c>': 'fast' },
+      });
+    } finally {
+      await hook.event({
+        event: { type: 'server.instance.disposed' },
+      } as never);
+    }
+  });
+
+  test('detected v2 redirects a reject (answers omitted) to the host UI instead of the dead v1 route', async () => {
+    resetUserWaitGateForTests();
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    registerBackgroundChild(board);
+    const hook = createInputWaitHook(board);
+    try {
+      const formReply = mock(async () => undefined);
+      const input = buildPluginInput(makeV2Ctx());
+      (
+        input as { client: { session: Record<string, unknown> } }
+      ).client.session = {
+        ...(input as { client: { session: Record<string, unknown> } }).client
+          .session,
+        form: { reply: formReply },
+      } as never;
+      const { task_reply } = createTaskReplyTool({
+        input: input as never,
+        backgroundJobBoard: board,
+      });
+
+      await routeMappedV2Event(hook, {
+        type: 'form.created',
+        data: {
+          form: {
+            id: 'form_1',
+            sessionID: 'ses_child1',
+            fields: [
+              {
+                key: 'environment',
+                title: 'Pick environment',
+                type: 'select',
+                options: [{ label: 'staging', description: 'Use staging' }],
+              },
+            ],
+          },
+        },
+      });
+
+      // Omitted answers on detected v2: no dead-end transport attempt, no
+      // fake dismissal — the ask stays open where the host UI can resolve
+      // it.
+      await expect(
+        task_reply.execute({ task_id: 'ses_child1', request_id: 'form_1' }, {
+          sessionID: 'parent-1',
+        } as never),
+      ).rejects.toThrow(/host UI/);
+      expect(formReply).not.toHaveBeenCalled();
+      expect(getChildInputWait('ses_child1', 'form_1')).toMatchObject({
+        requestID: 'form_1',
+      });
+    } finally {
+      await hook.event({
+        event: { type: 'server.instance.disposed' },
+      } as never);
+    }
+  });
+
   test('v2 form.created maps to a question wait but unsupported task_reply keeps the wait', async () => {
     resetUserWaitGateForTests();
     resetChildInputWaitForTests();
@@ -983,12 +1509,16 @@ describe('task_reply v2 event transport integration', () => {
         kind: 'question',
         requestID: 'form_1',
       });
+      // C4: the v2 gate refuses before any transport attempt with the
+      // honest alternatives; the wait stays open for the host UI.
       await expect(
         task_reply.execute(
           { task_id: 'ses_child1', request_id: 'form_1', answers: ['staging'] },
           { sessionID: 'parent-1' } as never,
         ),
-      ).rejects.toThrow('no question.reply API');
+      ).rejects.toThrow(
+        "Question replies are not supported on this host — answer the child's question in the host UI, or cancel the child with task_cancel instead.",
+      );
       expect(getChildInputWait('ses_child1', 'form_1')).not.toBeUndefined();
     } finally {
       await hook.event({

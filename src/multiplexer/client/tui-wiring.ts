@@ -231,6 +231,8 @@ export function detectClientAdapter(
   if (env.ZELLIJ_PANE_ID) return 'zellij';
   if (env.HERDR_PANE_ID) return 'herdr';
   if (env.KITTY_WINDOW_ID) return 'kitty';
+  // Last: tmux/zellij nested inside WezTerm must win.
+  if (env.WEZTERM_PANE) return 'wezterm';
   return null;
 }
 
@@ -300,6 +302,8 @@ export function resolveAnchoredTarget(
       return env.HERDR_PANE_ID ?? null;
     case 'kitty':
       return env.KITTY_WINDOW_ID ?? null;
+    case 'wezterm':
+      return env.WEZTERM_PANE ?? null;
     case 'cmux-tui':
       return env.CMUX_TUI_TERMINAL_ID ?? env.CMUX_TUI_SOCKET ?? null;
   }
@@ -349,6 +353,8 @@ export async function probeServerReachable(
     directory: string;
     fetchFn?: FetchLike;
     timeoutMs?: number;
+    /** Basic auth for a password-protected v1 host. */
+    authHeaders?: Record<string, string>;
   },
 ): Promise<boolean> {
   const fetchFn =
@@ -365,8 +371,10 @@ export async function probeServerReachable(
     const response = await fetchFn(url.toString(), {
       signal: controller.signal,
       headers: options.directory
-        ? { 'x-opencode-directory': encodeURIComponent(options.directory) }
-        : undefined,
+        ? directoryHeaders(options.directory, options.authHeaders)
+        : options.authHeaders && Object.keys(options.authHeaders).length > 0
+          ? options.authHeaders
+          : undefined,
     });
     return response.ok === true;
   } catch {
@@ -543,6 +551,7 @@ export async function createTuiPaneWiring(
   /** FR-8: a sweep is owed after startup / an `unreachable → reachable` edge. */
   let sweepDue = false;
 
+  const authHeaders = resolveServerAuthHeaders(options.client, env);
   const probeHost =
     options.probeHost ??
     ((directory: string): Promise<boolean> =>
@@ -550,6 +559,7 @@ export async function createTuiPaneWiring(
         directory,
         fetchFn: options.fetchFn,
         timeoutMs: options.probeTimeoutMs,
+        authHeaders,
       }));
   const runProbe = async (): Promise<boolean> => {
     const wasReachable = hostState === 'reachable';
@@ -590,10 +600,20 @@ export async function createTuiPaneWiring(
     clock,
     statusReader:
       options.statusReader ??
-      createSessionStatusReader(baseUrl, readerFetch, options.statusTimeoutMs),
+      createSessionStatusReader(
+        baseUrl,
+        readerFetch,
+        options.statusTimeoutMs,
+        authHeaders,
+      ),
     sessionListReader:
       options.sessionListReader ??
-      createSessionListReader(baseUrl, readerFetch, options.listTimeoutMs),
+      createSessionListReader(
+        baseUrl,
+        readerFetch,
+        options.listTimeoutMs,
+        authHeaders,
+      ),
     adapterFactory,
     resolveServerUrl: () =>
       hostState === 'reachable' ? { url: baseUrl } : { unreachable: true },
@@ -971,14 +991,97 @@ function createTrackedClock(base?: Clock): {
  * decoded twice and corrupts paths containing literal `%XX` sequences (the
  * same reason the reachability probe above uses the header).
  */
-function directoryHeaders(directory: string): Record<string, string> {
-  return { 'x-opencode-directory': encodeURIComponent(directory) };
+function directoryHeaders(
+  directory: string,
+  authHeaders: Record<string, string> = {},
+): Record<string, string> {
+  return {
+    'x-opencode-directory': encodeURIComponent(directory),
+    ...authHeaders,
+  };
+}
+
+/**
+ * Basic-auth header for client-side reads against a v1 host started with
+ * `OPENCODE_SERVER_PASSWORD`. Without it every probe and read gets a 401 and
+ * panes stay off (`host-unreachable`).
+ *
+ * Preferred source is the host SDK client itself: `opencode attach` builds
+ * its client with the same `Authorization` header it uses for its own
+ * requests, from `-p/--password` / `-u/--username` or the environment. The
+ * environment fallback mirrors opencode's own helper (`OPENCODE_SERVER_
+ * PASSWORD`, `OPENCODE_SERVER_USERNAME ?? 'opencode'`) for hosts whose client
+ * carries no header. Returns `{}` when neither yields one.
+ */
+export function resolveServerAuthHeaders(
+  client: unknown,
+  env: Record<string, string | undefined>,
+): Record<string, string> {
+  const reflected = reflectServerAuthorization(client);
+  if (reflected) return { authorization: reflected };
+  return serverAuthHeaders(env);
+}
+
+/** `Authorization` header configured on the host SDK client, if any. */
+export function reflectServerAuthorization(
+  client: unknown,
+): string | undefined {
+  try {
+    const inner = (client as { client?: { getConfig?: unknown } } | null)
+      ?.client;
+    const getConfig = inner?.getConfig;
+    if (typeof getConfig !== 'function') return undefined;
+    const config = (getConfig as () => unknown).call(inner);
+    if (!isRecord(config)) return undefined;
+    return readHeader(config.headers, 'authorization');
+  } catch {
+    return undefined;
+  }
+}
+
+/** Environment fallback, same variables and default as `opencode attach`. */
+export function serverAuthHeaders(
+  env: Record<string, string | undefined>,
+): Record<string, string> {
+  const password = env.OPENCODE_SERVER_PASSWORD;
+  if (!password) return {};
+  const username = env.OPENCODE_SERVER_USERNAME ?? 'opencode';
+  const token = Buffer.from(`${username}:${password}`).toString('base64');
+  return { authorization: `Basic ${token}` };
+}
+
+/**
+ * Case-insensitive header lookup over the shapes `RequestInit['headers']`
+ * allows: a `Headers` instance, `[name, value]` pairs, or a plain record.
+ */
+function readHeader(headers: unknown, name: string): string | undefined {
+  const pick = (value: unknown): string | undefined =>
+    typeof value === 'string' && value.length > 0 ? value : undefined;
+  if (headers instanceof Headers) return pick(headers.get(name));
+  if (Array.isArray(headers)) {
+    for (const entry of headers) {
+      if (
+        Array.isArray(entry) &&
+        typeof entry[0] === 'string' &&
+        entry[0].toLowerCase() === name
+      ) {
+        return pick(entry[1]);
+      }
+    }
+    return undefined;
+  }
+  if (!isRecord(headers)) return undefined;
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === name) return pick(value);
+  }
+  return undefined;
 }
 
 function createSessionStatusReader(
   baseUrl: string,
   fetchFn: FetchLike | undefined,
   timeoutMs = DEFAULT_STATUS_TIMEOUT_MS,
+  authHeaders: Record<string, string> = {},
 ): SessionStatusReader {
   return {
     async readStatus(directory: string): Promise<SessionStatusRead> {
@@ -988,7 +1091,7 @@ function createSessionStatusReader(
       try {
         const response = await withTimeout(
           fetchFn(new URL('/session/status', baseUrl).toString(), {
-            headers: directoryHeaders(directory),
+            headers: directoryHeaders(directory, authHeaders),
           }),
           timeoutMs,
         );
@@ -1027,6 +1130,7 @@ function createSessionListReader(
   baseUrl: string,
   fetchFn: FetchLike | undefined,
   timeoutMs = DEFAULT_LIST_TIMEOUT_MS,
+  authHeaders: Record<string, string> = {},
 ): SessionListReader {
   return {
     async listSessions(directory, parentID) {
@@ -1041,7 +1145,7 @@ function createSessionListReader(
               baseUrl,
             ).toString(),
             {
-              headers: directoryHeaders(directory),
+              headers: directoryHeaders(directory, authHeaders),
             },
           ),
           timeoutMs,

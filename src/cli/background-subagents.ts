@@ -2,7 +2,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-export type BackgroundSubagentsMode = 'ask' | 'yes' | 'no';
 export type ShellKind = 'bash' | 'fish' | 'zsh';
 
 const ENV_NAME = 'OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS';

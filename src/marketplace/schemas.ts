@@ -298,18 +298,10 @@ export const MarketplaceDigestV3Schema = z
   })
   .strict();
 
-export const MarketplaceDigestUnionSchema = z.union([
-  MarketplaceDigestSchema,
-  MarketplaceDigestV3Schema,
-]);
-
 export type MarketplacePackageId = z.infer<typeof MarketplacePackageIdSchema>;
 export type MarketplaceVersion = z.infer<typeof MarketplaceVersionSchema>;
 export type MarketplaceModelPolicy = z.infer<
   typeof MarketplaceModelPolicySchema
->;
-export type MarketplaceAgentManifest = z.infer<
-  typeof MarketplaceAgentManifestSchema
 >;
 export type MarketplaceAgentManifestV2 = z.infer<
   typeof MarketplacePackageManifestV2Schema

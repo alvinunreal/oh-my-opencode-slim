@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { base64Size, detectInlineImageMime } from './binary';
+import { detectInlineImageMime } from '../../utils/image-signatures';
+import { base64Size } from './binary';
 
 describe('smartfetch/inline images', () => {
   test('counts encoded bytes without the data URL prefix', () => {

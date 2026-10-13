@@ -74,14 +74,9 @@ export function renderMarketplaceAutoDelegationBlock(
   standaloneLaneDescription?: string,
 ): string {
   if (manifest.schemaVersion === 2) {
-    const role = manifest.extends
-      ? {
-          id: manifest.extends.builtin,
-          routingBlock: ROLE_ROUTING_BLOCKS[manifest.extends.builtin],
-        }
-      : undefined;
-    const base = role
-      ? renderRoleRoutingBlock(role, runtimeName)
+    const roleId = manifest.extends?.builtin;
+    const base = roleId
+      ? renderRoleRoutingBlock(ROLE_ROUTING_BLOCKS[roleId], roleId, runtimeName)
       : [
           `@${runtimeName}`,
           `- Lane: ${standaloneLaneDescription ?? manifest.description}`,
@@ -90,14 +85,9 @@ export function renderMarketplaceAutoDelegationBlock(
     return `${base}\n\n${renderV2PackageSuffix(manifest)}`;
   }
 
-  const role = manifest.extends
-    ? {
-        id: manifest.extends.builtin,
-        routingBlock: ROLE_ROUTING_BLOCKS[manifest.extends.builtin],
-      }
-    : undefined;
-  const base = role
-    ? renderRoleRoutingBlock(role, runtimeName)
+  const roleId = manifest.extends?.builtin;
+  const base = roleId
+    ? renderRoleRoutingBlock(ROLE_ROUTING_BLOCKS[roleId], roleId, runtimeName)
     : [
         `@${runtimeName}`,
         `- Lane: ${standaloneLaneDescription ?? manifest.routing.lane}`,
@@ -107,7 +97,7 @@ export function renderMarketplaceAutoDelegationBlock(
         .filter(Boolean)
         .join('\n');
 
-  if (!role) {
+  if (!roleId) {
     return `${base}\n${renderV3RoutingDetails(manifest)}`;
   }
   return `${base}\n\n${renderV3ExtensionSuffix(manifest)}`;

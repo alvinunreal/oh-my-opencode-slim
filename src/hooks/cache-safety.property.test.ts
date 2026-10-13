@@ -22,6 +22,7 @@ import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { BackgroundJobsConfigStrictSchema } from '../config';
+import { isRecord } from '../utils/guards';
 import { isTaggedPart, isVolatileTaggedMessage } from './cache-safe-injection';
 import {
   assistantTurn,
@@ -36,6 +37,7 @@ import {
   turnEndIndices,
   userTurn,
 } from './cache-safety-harness.test';
+import { GOAL_POINTER_METADATA_KEY } from './deepwork-goal';
 import { BACKGROUND_JOB_BOARD_METADATA_KEY } from './task-session-manager';
 import type { MessageWithParts } from './types';
 
@@ -66,15 +68,51 @@ const STRATEGY_STABLE_FINGERPRINTS: Record<
   (messages: unknown[]) => string[]
 > = {
   latest: stableFingerprints,
+  // Board snapshots are frozen mid-history and belong to the stable
+  // prefix; the trailing volatile zone (fresh board, goal pointer) does
+  // not — it moves with the tail, so it is excluded from fingerprints.
+  // Snapshots carry a snapshotID; volatile-zone messages do not.
   'checkpoint-compatible': (messages) =>
-    (messages as MessageWithParts[]).map((message) =>
-      JSON.stringify({
-        role: message.info.role,
-        agent: message.info.agent,
-        parts: message.parts,
-      }),
-    ),
+    (messages as MessageWithParts[])
+      .filter(
+        (message) =>
+          !(
+            isVolatileTaggedMessage(
+              message,
+              BACKGROUND_JOB_BOARD_METADATA_KEY,
+            ) && !message.parts.some((part) => isBoardSnapshotPart(part))
+          ),
+      )
+      .map((message) =>
+        JSON.stringify({
+          role: message.info.role,
+          agent: message.info.agent,
+          parts: message.parts,
+        }),
+      ),
 };
+
+function isBoardSnapshotPart(part: unknown): boolean {
+  return (
+    isRecord(part) &&
+    isRecord(part.metadata) &&
+    part.metadata.snapshotID !== undefined
+  );
+}
+
+function isBoardSnapshotMessage(message: unknown): boolean {
+  return (
+    (message as MessageWithParts)?.parts?.some(isBoardSnapshotPart) ?? false
+  );
+}
+
+function goalMessages(messages: unknown[]): MessageWithParts[] {
+  return messages.filter(
+    (message): message is MessageWithParts =>
+      (message as MessageWithParts)?.info?.id?.startsWith('deepwork-goal-') ===
+      true,
+  );
+}
 
 const BOARD_STRATEGIES = Object.keys(
   STRATEGY_STABLE_FINGERPRINTS,
@@ -92,7 +130,7 @@ describe.each(BOARD_STRATEGIES)(
   'cache-safety: turn-over-turn prefix stability (%s)',
   (strategy) => {
     test('re-rendering a growing conversation reproduces byte-identical history', async () => {
-      const pipeline = createPipeline({ strategy });
+      const pipeline = createPipeline({ strategy, goalPointer: true });
       const history = buildHistory();
       const turns = turnEndIndices(history);
       const fingerprintsFor = STRATEGY_STABLE_FINGERPRINTS[strategy];
@@ -145,11 +183,37 @@ describe.each(BOARD_STRATEGIES)(
   },
 );
 
+describe('cache-safety: active interview history', () => {
+  test('re-rendering a new turn preserves the collapsed prefix', async () => {
+    const history = [
+      assistantTurn(
+        'i01',
+        '<interview_state>{"summary":"full","questions":[]}</interview_state>',
+      ),
+      assistantTurn(
+        'i02',
+        '<interview_state>{"summary":"status","patch":"x","questions":[]}</interview_state>',
+      ),
+    ];
+    const pipeline = createPipeline({ activeInterview: true });
+    const oldTurn = await renderTurn(pipeline, history, history.length - 1);
+    const nextTurn = await renderTurn(
+      pipeline,
+      [...history, userTurn('i03', 'continue')],
+      history.length,
+    );
+
+    expect(nextTurn.messages.slice(0, oldTurn.messages.length)).toEqual(
+      oldTurn.messages,
+    );
+  });
+});
+
 describe.each(BOARD_STRATEGIES)(
   'cache-safety: specialist sessions (%s)',
   (strategy) => {
     test('non-orchestrator payloads pass through byte-identical', async () => {
-      const pipeline = createPipeline({ strategy });
+      const pipeline = createPipeline({ strategy, goalPointer: true });
       const specialistSession = 'ses_specialist_fixture';
       const history = [
         {
@@ -188,7 +252,7 @@ describe('cache-safety: skill-list conversation text', () => {
   test('remaining transforms leave available_skills text untouched', async () => {
     const text =
       'quoted context\n<available_skills>\nkeep this text\n</available_skills>';
-    const pipeline = createPipeline();
+    const pipeline = createPipeline({ goalPointer: true });
     const output: TransformOutput = {
       messages: [userTurn('skill-text', text)],
     };
@@ -207,8 +271,8 @@ describe('cache-safety: volatile content isolation', () => {
     const history = buildHistory();
     const lastTurn = history.length - 1;
 
-    const emptyBoard = createPipeline();
-    const busyBoard = createPipeline();
+    const emptyBoard = createPipeline({ goalPointer: true });
+    const busyBoard = createPipeline({ goalPointer: true });
     busyBoard.board.registerLaunch({
       taskID: 'task-beta',
       parentSessionID: SESSION_ID,
@@ -234,23 +298,32 @@ describe('cache-safety: volatile content isolation', () => {
     const allTaggedParts = withJobs.messages.flatMap((message, index) =>
       (message as MessageWithParts).parts
         .map((part, partIndex) => ({ index, partIndex, part }))
-        .filter(({ part }) =>
-          isTaggedPart(part, BACKGROUND_JOB_BOARD_METADATA_KEY),
+        .filter(
+          ({ part }) =>
+            // Board parts only: the goal pointer also carries the board
+            // key to live in the same volatile zone (dual-tag contract).
+            isTaggedPart(part, BACKGROUND_JOB_BOARD_METADATA_KEY) &&
+            !isTaggedPart(part, GOAL_POINTER_METADATA_KEY),
         ),
     );
     expect(allTaggedParts).toHaveLength(1);
 
-    const lastMessage = withJobs.messages.at(-1) as MessageWithParts;
     const boardHit = allTaggedParts[0];
-    // The one board part lives on the last message and is its last part.
-    expect(boardHit.index).toBe(withJobs.messages.length - 1);
-    expect(boardHit.partIndex).toBe(lastMessage.parts.length - 1);
+    // The one board part lives on the last real message and is its last
+    // part; the goal pointer trails it as its own volatile message.
+    expect(boardHit.index).toBe(withJobs.messages.length - 2);
+    expect(boardHit.partIndex).toBe(
+      (withJobs.messages.at(-2) as MessageWithParts).parts.length - 1,
+    );
+    expect(goalMessages(withJobs.messages)).toHaveLength(1);
 
     // The no-board render carries no board part anywhere.
     expect(
       withoutJobs.messages.some((message) =>
-        (message as MessageWithParts).parts.some((part) =>
-          isTaggedPart(part, BACKGROUND_JOB_BOARD_METADATA_KEY),
+        (message as MessageWithParts).parts.some(
+          (part) =>
+            isTaggedPart(part, BACKGROUND_JOB_BOARD_METADATA_KEY) &&
+            !isTaggedPart(part, GOAL_POINTER_METADATA_KEY),
         ),
       ),
     ).toBe(false);
@@ -260,8 +333,14 @@ describe('cache-safety: volatile content isolation', () => {
     const history = buildHistory();
     const lastTurn = history.length - 1;
 
-    const emptyBoard = createPipeline({ strategy: 'checkpoint-compatible' });
-    const busyBoard = createPipeline({ strategy: 'checkpoint-compatible' });
+    const emptyBoard = createPipeline({
+      strategy: 'checkpoint-compatible',
+      goalPointer: true,
+    });
+    const busyBoard = createPipeline({
+      strategy: 'checkpoint-compatible',
+      goalPointer: true,
+    });
     busyBoard.board.registerLaunch({
       taskID: 'task-beta',
       parentSessionID: SESSION_ID,
@@ -275,19 +354,24 @@ describe('cache-safety: volatile content isolation', () => {
 
     // Real message bytes must be identical; board content may only appear
     // as tagged snapshot messages (append-only by design, so they are part
-    // of the stable prefix rather than a volatile tail).
+    // of the stable prefix rather than a volatile tail). The goal pointer
+    // also carries the board key (dual-tag volatile-zone contract), so
+    // snapshot identity is the snapshotID, not the board tag alone.
     expect(stableFingerprints(withJobs.messages)).toEqual(
       stableFingerprints(withoutJobs.messages),
     );
     const snapshots = withJobs.messages.filter((message) =>
       isVolatileTaggedMessage(message, BACKGROUND_JOB_BOARD_METADATA_KEY),
     );
-    expect(snapshots.length).toBeGreaterThan(0);
+    expect(snapshots.length).toBeGreaterThan(1); // snapshot + goal pointer
     expect(
-      withoutJobs.messages.some((message) =>
+      withoutJobs.messages.filter((message) =>
         isVolatileTaggedMessage(message, BACKGROUND_JOB_BOARD_METADATA_KEY),
       ),
-    ).toBe(false);
+    ).toHaveLength(1); // only the goal pointer
+    expect(
+      snapshots.filter((message) => !isBoardSnapshotMessage(message)).length,
+    ).toBe(1); // exactly one non-snapshot: the goal pointer
   });
 });
 
@@ -306,7 +390,7 @@ describe.each(BOARD_STRATEGIES)(
         setSystemTime(new Date(time));
         Math.random = () => random;
         try {
-          const pipeline = createPipeline({ strategy });
+          const pipeline = createPipeline({ strategy, goalPointer: true });
           pipeline.board.registerLaunch({
             taskID: 'task-gamma',
             parentSessionID: SESSION_ID,
@@ -368,7 +452,9 @@ describe('cache-safety: pipeline drift guard', () => {
       'taskSessionManagerHook',
       'phaseReminder',
       'councilInject',
+      'deepworkGoal',
     ]);
+    expect(source).toContain('collapseInterviewHistory(typedOutput.messages);');
     expect(source).toContain(
       'await taskSessionManagerHook.injectBackgroundJobBoard(',
     );
@@ -377,7 +463,7 @@ describe('cache-safety: pipeline drift guard', () => {
     const literalCount = source.split(
       "'experimental.chat.messages.transform'",
     ).length;
-    expect(literalCount - 1).toBe(4);
+    expect(literalCount - 1).toBe(5);
   });
 
   test('every hook module defining a message transform is covered here', async () => {
@@ -398,6 +484,7 @@ describe('cache-safety: pipeline drift guard', () => {
     // properties cover it, then add it to this list.
     expect(hookFilesWithTransforms.sort()).toEqual([
       'council-inject/index.ts',
+      'deepwork-goal/index.ts',
       'phase-reminder/index.ts',
       'task-session-manager/index.ts',
     ]);

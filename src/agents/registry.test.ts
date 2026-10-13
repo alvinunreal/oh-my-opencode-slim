@@ -7,6 +7,7 @@ import {
   adaptPermissions,
   snapshotNativeAgentForRegistry,
 } from '../v2/adapters';
+import type { V2PermissionRule } from '../v2/types';
 import { createAgents } from './index';
 import { buildResolvedAgentRegistry } from './registry';
 
@@ -22,7 +23,10 @@ function build(
   hostSnapshot: Record<string, unknown>,
   options: Record<string, unknown> = {},
 ) {
-  const definitions = createAgents(runtime);
+  const definitions = createAgents(
+    runtime,
+    options as Parameters<typeof createAgents>[1],
+  );
   return buildResolvedAgentRegistry(runtime, {
     hostSnapshot,
     definitions,
@@ -1919,5 +1923,297 @@ describe('finalized existing-agent registry', () => {
     expect(registry.finalAgentConfig['orchestrator-agent']).toMatchObject({
       model: 'provider/orchestrator-fallback',
     });
+  });
+});
+
+describe('nested-dispatch permission stance', () => {
+  test('user permission override without a task key keeps the role stance', () => {
+    const runtime = runtimeFor({ disabled_agents: [] });
+    const registry = build(
+      runtime,
+      { agent: { oracle: { permission: { read: 'allow' } } } },
+      { hostFlavor: 'v2' },
+    );
+    const permission = (
+      registry.finalAgentConfig.oracle as {
+        permission: Record<string, unknown>;
+      }
+    ).permission;
+    expect(permission.read).toBe('allow');
+    expect(permission.task).toEqual({ '*': 'deny', observer: 'allow' });
+  });
+
+  test('user task override wins over the role default', () => {
+    const runtime = runtimeFor({ disabled_agents: [] });
+    const registry = build(
+      runtime,
+      { agent: { oracle: { permission: { task: 'deny' } } } },
+      { hostFlavor: 'v2' },
+    );
+    const permission = (
+      registry.finalAgentConfig.oracle as {
+        permission: Record<string, unknown>;
+      }
+    ).permission;
+    expect(permission.task).toBe('deny');
+  });
+
+  test('advisory roles keep observer-only dispatch end to end', () => {
+    const runtime = runtimeFor({ disabled_agents: [] });
+    const registry = build(runtime, {}, { hostFlavor: 'v2' });
+    for (const name of ['explorer', 'librarian', 'oracle', 'designer']) {
+      const permission = (
+        registry.finalAgentConfig[name] as {
+          permission: Record<string, Record<string, string>>;
+        }
+      ).permission;
+      expect(Object.keys(permission.task)).toEqual(['*', 'observer']);
+    }
+    // Observer is disabled by default and absent from the registry; its
+    // leaf deny is pinned by the role-definitions unit test.
+    for (const name of ['fixer']) {
+      const permission = (
+        registry.finalAgentConfig[name] as {
+          permission: Record<string, Record<string, string>>;
+        }
+      ).permission;
+      expect(permission.task).toEqual({ '*': 'deny' });
+    }
+    // The orchestrator stays unrestricted.
+    const orchestrator = (
+      registry.finalAgentConfig.orchestrator as {
+        permission: Record<string, unknown>;
+      }
+    ).permission;
+    expect(orchestrator.task).toBeUndefined();
+  });
+});
+
+describe('child permission payload stance tail', () => {
+  /** Last-match-wins evaluation in the shape the v2 host applies to an
+   * ordered rule payload (findLast over the array; `*` matches any
+   * action/resource on both axes). */
+  function evaluateLast(
+    rules: readonly V2PermissionRule[],
+    action: string,
+    resource: string,
+  ): 'allow' | 'ask' | 'deny' {
+    const match = rules.findLast(
+      (rule) =>
+        (rule.action === '*' || rule.action === action) &&
+        (rule.resource === '*' || rule.resource === resource),
+    );
+    return match?.effect ?? 'ask';
+  }
+
+  /** The user's global `permissions` baked into the tail of the host's
+   * finalized agent rules after the plugin agent transform — the exact
+   * shape that made the incident's stored stance deny a dead letter. */
+  const USER_GLOBAL_ALLOW: V2PermissionRule = {
+    action: '*',
+    resource: '*',
+    effect: 'allow',
+  };
+
+  test('no-nested stance agent: trailing global */* allow cannot defeat subagent deny', () => {
+    const runtime = runtimeFor({ disabled_agents: [] });
+    const registry = build(runtime, {}, { hostFlavor: 'v2' });
+    // Incident payload shape: the compiled registered policy plus the user's
+    // global permissions appended by the host config transform (#1374).
+    const payload = [
+      ...(registry.nativePolicies.fixer?.rules ?? []),
+      USER_GLOBAL_ALLOW,
+    ];
+    // Before the fix, findLast terminated on the trailing global allow and
+    // the stance deny was a dead letter.
+    expect(evaluateLast(payload, 'subagent', 'explorer')).toBe('allow');
+
+    const compiled = registry.compileChildPermissions('fixer', payload);
+    expect(evaluateLast(compiled, 'subagent', 'explorer')).toBe('deny');
+    expect(evaluateLast(compiled, 'subagent', 'librarian')).toBe('deny');
+    expect(compiled.slice(-1)).toEqual([
+      { action: 'subagent', resource: '*', effect: 'deny' },
+    ]);
+  });
+
+  test('observer-only stance agent: subagent allow ONLY for observer, deny elsewhere', () => {
+    const runtime = runtimeFor({ disabled_agents: [] });
+    const registry = build(runtime, {}, { hostFlavor: 'v2' });
+    const payload = [
+      ...(registry.nativePolicies.explorer?.rules ?? []),
+      USER_GLOBAL_ALLOW,
+    ];
+    // Incident shape: the trailing global allow also granted explorer→explorer.
+    expect(evaluateLast(payload, 'subagent', 'observer')).toBe('allow');
+    expect(evaluateLast(payload, 'subagent', 'explorer')).toBe('allow');
+
+    const compiled = registry.compileChildPermissions('explorer', payload);
+    expect(evaluateLast(compiled, 'subagent', 'observer')).toBe('allow');
+    expect(evaluateLast(compiled, 'subagent', 'explorer')).toBe('deny');
+    expect(evaluateLast(compiled, 'subagent', 'librarian')).toBe('deny');
+    // Deny first, observer allow last — findLast terminates on the allow for
+    // observer targets and on the deny for everything else.
+    expect(compiled.slice(-2)).toEqual([
+      { action: 'subagent', resource: '*', effect: 'deny' },
+      { action: 'subagent', resource: 'observer', effect: 'allow' },
+    ]);
+  });
+
+  test('observer-only stance: explicit host deny for observer drops the grant', () => {
+    const runtime = runtimeFor({ disabled_agents: [] });
+    const registry = build(runtime, {}, { hostFlavor: 'v2' });
+    // The host's finalized rules carry an explicit observer restriction AFTER
+    // the plugin's own stance allow (user config transform appends globals
+    // last). The tail must not resurrect the withheld capability.
+    const payload = [
+      ...(registry.nativePolicies.explorer?.rules ?? []),
+      { action: 'subagent', resource: 'observer', effect: 'deny' },
+    ];
+    const compiled = registry.compileChildPermissions('explorer', payload);
+    // Deny ceiling still appended, but no observer grant follows it.
+    expect(compiled.slice(-1)).toEqual([
+      { action: 'subagent', resource: '*', effect: 'deny' },
+    ]);
+    expect(evaluateLast(compiled, 'subagent', 'observer')).toBe('deny');
+  });
+
+  test('observer-only stance: explicit host ask for observer is preserved (consent gate)', () => {
+    const runtime = runtimeFor({ disabled_agents: [] });
+    const registry = build(runtime, {}, { hostFlavor: 'v2' });
+    const payload = [
+      ...(registry.nativePolicies.explorer?.rules ?? []),
+      { action: 'subagent', resource: 'observer', effect: 'ask' },
+    ];
+    const compiled = registry.compileChildPermissions('explorer', payload);
+    // The grant is downgraded to the host's ask — never escalated to allow.
+    expect(compiled.slice(-1)).toEqual([
+      { action: 'subagent', resource: 'observer', effect: 'ask' },
+    ]);
+    expect(evaluateLast(compiled, 'subagent', 'observer')).toBe('ask');
+  });
+
+  test('observer-only stance: host subagent/*:deny also drops the observer grant', () => {
+    const runtime = runtimeFor({ disabled_agents: [] });
+    const registry = build(runtime, {}, { hostFlavor: 'v2' });
+    const payload = [
+      ...(registry.nativePolicies.explorer?.rules ?? []),
+      { action: 'subagent', resource: '*', effect: 'deny' },
+    ];
+    const compiled = registry.compileChildPermissions('explorer', payload);
+    expect(evaluateLast(compiled, 'subagent', 'observer')).toBe('deny');
+    expect(evaluateLast(compiled, 'subagent', 'explorer')).toBe('deny');
+  });
+
+  test('observer-only stance: deny-then-reallow keeps the full tail (findLast, not positional)', () => {
+    const runtime = runtimeFor({ disabled_agents: [] });
+    const registry = build(runtime, {}, { hostFlavor: 'v2' });
+    // A user deny followed by a user allow for observer: the user's LAST word
+    // is allow, so the stance grant survives.
+    const payload = [
+      ...(registry.nativePolicies.explorer?.rules ?? []),
+      { action: 'subagent', resource: 'observer', effect: 'deny' },
+      { action: 'subagent', resource: 'observer', effect: 'allow' },
+    ];
+    const compiled = registry.compileChildPermissions('explorer', payload);
+    expect(compiled.slice(-1)).toEqual([
+      { action: 'subagent', resource: 'observer', effect: 'allow' },
+    ]);
+    expect(evaluateLast(compiled, 'subagent', 'observer')).toBe('allow');
+  });
+
+  test('observer-only stance: allow-then-deny blocks (last-wins locked)', () => {
+    const runtime = runtimeFor({ disabled_agents: [] });
+    const registry = build(runtime, {}, { hostFlavor: 'v2' });
+    const payload = [
+      ...(registry.nativePolicies.explorer?.rules ?? []),
+      { action: 'subagent', resource: 'observer', effect: 'allow' },
+      { action: 'subagent', resource: 'observer', effect: 'deny' },
+    ];
+    const compiled = registry.compileChildPermissions('explorer', payload);
+    expect(evaluateLast(compiled, 'subagent', 'observer')).toBe('deny');
+  });
+
+  test('observer-only stance: grant trim is idempotent', () => {
+    const runtime = runtimeFor({ disabled_agents: [] });
+    const registry = build(runtime, {}, { hostFlavor: 'v2' });
+    const payload = [
+      ...(registry.nativePolicies.explorer?.rules ?? []),
+      { action: 'subagent', resource: 'observer', effect: 'deny' },
+    ];
+    const once = registry.compileChildPermissions('explorer', payload);
+    const twice = registry.compileChildPermissions('explorer', once);
+    expect(twice).toEqual(once);
+  });
+
+  test('council task:"deny" stance gets the same tail treatment', () => {
+    const runtime = runtimeFor({
+      disabled_agents: [],
+      council: CouncilConfigSchema.parse({
+        presets: { default: { alpha: { model: 'provider/council' } } },
+      }),
+    });
+    const registry = build(runtime, {}, { hostFlavor: 'v2' });
+    const payload = [
+      ...(registry.nativePolicies.council?.rules ?? []),
+      USER_GLOBAL_ALLOW,
+    ];
+    const compiled = registry.compileChildPermissions('council', payload);
+    expect(compiled.slice(-1)).toEqual([
+      { action: 'subagent', resource: '*', effect: 'deny' },
+    ]);
+    expect(evaluateLast(compiled, 'subagent', 'anything')).toBe('deny');
+  });
+
+  test('agents without a task stance get no tail: orchestrator payload passes through unchanged', () => {
+    const runtime = runtimeFor({ disabled_agents: [] });
+    const registry = build(runtime, {}, { hostFlavor: 'v2' });
+    expect(
+      (registry.finalAgentConfig.orchestrator as { permission: unknown })
+        .permission,
+    ).not.toHaveProperty('task');
+    const payload: V2PermissionRule[] = [
+      { action: 'read', resource: '*', effect: 'allow' },
+      USER_GLOBAL_ALLOW,
+    ];
+    const compiled = registry.compileChildPermissions('orchestrator', payload);
+    expect(compiled).toEqual(payload);
+    expect(compiled.some((rule) => rule.action === 'subagent')).toBe(false);
+    expect(evaluateLast(compiled, 'subagent', 'observer')).toBe('allow');
+  });
+
+  test('is idempotent: a payload already ending with the stance tail is not duplicated', () => {
+    const runtime = runtimeFor({ disabled_agents: [] });
+    const registry = build(runtime, {}, { hostFlavor: 'v2' });
+    const payload: V2PermissionRule[] = [
+      { action: 'read', resource: '*', effect: 'allow' },
+      { action: 'subagent', resource: '*', effect: 'deny' },
+    ];
+    const compiled = registry.compileChildPermissions('fixer', payload);
+    expect(compiled).toEqual(payload);
+  });
+
+  test('marketplace child payloads keep subagent deny through ceilings (same path, no tail needed)', () => {
+    const runtime = runtimeFor({ disabled_agents: [] });
+    const registry = build(
+      runtime,
+      { mcp: { 'host-mcp': { type: 'local' } } },
+      {
+        hostFlavor: 'v2',
+        ...marketplaceOptions(
+          ['team/pkg'],
+          marketplaceStore({
+            'team/pkg': marketplacePackage('team/pkg'),
+          }),
+        ),
+      },
+    );
+    const compiled = registry.compileChildPermissions('market-agent', [
+      { action: 'read', resource: '*', effect: 'allow' },
+      USER_GLOBAL_ALLOW,
+    ]);
+    // The marketplace ceilings are immutable: the user's trailing global
+    // allow admits `read` but cannot admit `subagent`.
+    expect(evaluateLast(compiled, 'read', 'src/index.ts')).toBe('allow');
+    expect(evaluateLast(compiled, 'subagent', 'explorer')).toBe('deny');
   });
 });

@@ -12,4 +12,5 @@ export { HerdrMultiplexer } from './herdr';
 export { KittyMultiplexer } from './kitty';
 export { TmuxMultiplexer } from './tmux';
 export type { Multiplexer, PaneResult } from './types';
+export { WeztermMultiplexer } from './wezterm';
 export { ZellijMultiplexer } from './zellij';

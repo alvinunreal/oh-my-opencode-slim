@@ -96,7 +96,7 @@ export const AgentOverrideConfigSchema = z
       .boolean()
       .optional()
       .describe(
-        "When true, adds every valid skill under the current project's `.opencode/skills/**/SKILL.md` tree to this agent's effective skills list before `skills_remove` is applied. Global and external skill sources are not included.",
+        "When true, adds valid skills from the current/ancestor project `.opencode/skills/**/SKILL.md` and `.agents/skills/**/SKILL.md` trees to this agent's effective skills before `skills_remove`. Global and external skill sources are excluded.",
       ),
     mcps: z.array(z.string()).optional(), // MCPs this agent can use ("*" = all, "!item" = exclude)
     prompt: z.string().min(1).optional(),
@@ -118,6 +118,7 @@ export const MultiplexerTypeSchema = z.enum([
   'zellij',
   'herdr',
   'kitty',
+  'wezterm',
   'cmux-tui',
   'none',
 ]);
@@ -160,25 +161,12 @@ export const MultiplexerViewerSchema = z.enum(['tui', 'mini']);
 export type MultiplexerViewer = z.infer<typeof MultiplexerViewerSchema>;
 
 /**
- * Multiplexer keys accepted by versions before 2.4.x but no longer
- * supported. `zellij_pane_mode` selected the removed agent-tab placement;
- * zellij panes now always open in the tab containing the parent pane.
- *
- * The schema strips unknown keys silently, so the raw input must be
- * inspected before validation to warn instead of dropping the key quietly.
- * The same per-key check covers invalid `type`, `layout`, `main_pane_size`,
- * `cmux_tui_binary`, and `viewer` values: any of them disables pane
- * management with one diagnostic.
+ * Invalid `type` / `layout` / `main_pane_size` / `cmux_tui_binary` / `viewer`
+ * values disable pane management with one diagnostic.
  */
-export const DEPRECATED_MULTIPLEXER_KEYS = ['zellij_pane_mode'] as const;
-
-export const MULTIPLEXER_DEPRECATED_KEY_MESSAGE =
-  'Deprecated multiplexer.zellij_pane_mode config key found and ignored. ' +
-  'Zellij panes always open in the tab containing the parent pane.';
-
 export const MULTIPLEXER_INVALID_VALUE_MESSAGE =
   'Invalid multiplexer config value; pane management is disabled. Expected ' +
-  'type (auto|tmux|zellij|herdr|kitty|cmux-tui|none), layout ' +
+  'type (auto|tmux|zellij|herdr|kitty|wezterm|cmux-tui|none), layout ' +
   '(main-horizontal|main-vertical|tiled|even-horizontal|even-vertical), ' +
   'main_pane_size (20-80), cmux_tui_binary (non-empty string), ' +
   'viewer (tui|mini).';
@@ -187,10 +175,7 @@ export const MULTIPLEXER_RENAMED_TYPE_MESSAGE =
   'multiplexer.type "cmux" was renamed to "cmux-tui"; update your config.';
 
 /** Multiplexer diagnostics are emitted at most once per process. */
-export type MultiplexerDiagnosticKind =
-  | 'deprecated-key'
-  | 'invalid-value'
-  | 'renamed-type';
+export type MultiplexerDiagnosticKind = 'invalid-value' | 'renamed-type';
 
 const emittedMultiplexerDiagnostics = new Set<MultiplexerDiagnosticKind>();
 
@@ -257,9 +242,6 @@ function invalidMultiplexerKeys(config: Record<string, unknown>): string[] {
  * Pre-parse normalization for the raw `multiplexer` block.
  *
  * Semantics (spec "配置面"):
- * - a present `zellij_pane_mode` key is dropped with a once-per-process
- *   deprecation warning; the remaining multiplexer config and the rest of the
- *   plugin config keep working;
  * - an invalid `type` / `layout` / `main_pane_size` / `cmux_tui_binary` / `viewer`
  *   value (or a non-object `multiplexer` value) disables pane management
  *   (`type: "none"`) with a once-per-process diagnostic instead of failing
@@ -281,20 +263,6 @@ export function sanitizeMultiplexerConfig(value: unknown): unknown {
   }
 
   let sanitized: Record<string, unknown> = value;
-  const deprecated = DEPRECATED_MULTIPLEXER_KEYS.filter(
-    (key) => key in sanitized,
-  );
-  if (deprecated.length > 0) {
-    emitMultiplexerDiagnostic(
-      'deprecated-key',
-      MULTIPLEXER_DEPRECATED_KEY_MESSAGE,
-    );
-    sanitized = { ...sanitized };
-    for (const key of deprecated) {
-      delete sanitized[key];
-    }
-  }
-
   if (sanitized.type === 'cmux') {
     // Hard rename, no alias: `cmux` stays invalid, but the user gets a
     // specific hint instead of only the generic invalid-value message.
@@ -324,7 +292,7 @@ export function sanitizeMultiplexerConfig(value: unknown): unknown {
  * surfaces (doctor) validate with this schema instead, so invalid
  * `multiplexer.*` values stay visible rather than being silently sanitized
  * away. "Strict" here means "not sanitized" — unknown keys are still
- * stripped, so the deprecated-key path is unaffected.
+ * stripped.
  */
 export const MultiplexerConfigStrictSchema = z.object({
   type: MultiplexerTypeSchema.default('none'),
@@ -342,6 +310,9 @@ export const MultiplexerConfigStrictSchema = z.object({
       '(requires OpenCode >= 1.17.10) and `opencode mini` on v2; "tui" runs ' +
       'the full interface.',
   ),
+  zellij_pane_mode: z
+    .never({ error: 'multiplexer.zellij_pane_mode was removed' })
+    .optional(),
 });
 
 // Multiplexer integration configuration (new unified config)
@@ -476,6 +447,12 @@ export const InterviewConfigSchema = z.object({
     ),
   port: z.number().int().min(0).max(65535).default(0),
   dashboard: z.boolean().default(false),
+  printState: z
+    .boolean()
+    .default(false)
+    .describe(
+      'When true, the interview model prints the full <interview_state> block in the TUI instead of submitting state through the interview_submit_state tool.',
+    ),
 });
 
 export type InterviewConfig = z.infer<typeof InterviewConfigSchema>;
@@ -640,7 +617,7 @@ export const BackgroundJobsConfigStrictSchema = z.object({
     .boolean()
     .default(true)
     .describe(
-      'When true, a background child that asks a question or permission request wakes its parent with the ask content. Permissions can be answered with task_reply when the host exposes permission.reply; OpenCode v2 form questions are observable but not answerable through the pinned plugin context. Default enabled.',
+      'When true, a background child ask wakes its parent with the ask content. Default enabled.',
     ),
   pruneEvictedSessions: z
     .boolean()
@@ -648,6 +625,12 @@ export const BackgroundJobsConfigStrictSchema = z.object({
     .describe(
       'When true, removes the host child session when a retention trim evicts its terminal or retained-stopped record, only for background children this plugin launched itself (never foreground, unattributed placeholder, adopted, or restored sessions) and only after a host read confirms the session still belongs to the record parent. Never fires for parent deletion or explicit drops. v1 hosts only for now (v2 has no live session-status map, so every prune is skipped). Default disabled.',
     ),
+  continueOnIdle: z
+    .never({
+      error:
+        'backgroundJobs.continueOnIdle was removed; use backgroundJobs.orchestratorWake.enabled',
+    })
+    .optional(),
 });
 
 export const BACKGROUND_JOBS_INVALID_VALUE_MESSAGE =
@@ -703,6 +686,17 @@ function sanitizeRecordByShape(
   for (const [key, value] of Object.entries(config)) {
     if (!Object.hasOwn(shape, key)) continue;
     const keySchema = shape[key];
+    // Removed keys declared as `z.never()` must reach the parser so the
+    // config is rejected with a "was removed" error; dropping them here
+    // would silently strip the key instead of rejecting it.
+    let unwrapped: z.ZodTypeAny = keySchema;
+    while (
+      unwrapped instanceof z.ZodOptional ||
+      unwrapped instanceof z.ZodDefault
+    ) {
+      unwrapped = unwrapped.unwrap() as z.ZodTypeAny;
+    }
+    if (unwrapped instanceof z.ZodNever) continue;
     let next = value;
     let nestedDropped: string[] = [];
     if (isPlainConfigObject(value)) {
@@ -755,87 +749,60 @@ export const BackgroundJobsConfigSchema = z.preprocess(
 
 export type BackgroundJobsConfig = z.infer<typeof BackgroundJobsConfigSchema>;
 
-/**
- * Fallback config fields accepted by versions before 2.3.x but no longer
- * meaningful. Kept only so that existing user/project configs containing
- * them still parse: the loader emits a deprecation warning and these keys
- * are stripped before strict validation. Without this, a stale field would
- * make the whole config file fail and drop all the user's settings.
- */
-export const LEGACY_FALLBACK_KEYS = [
-  'timeoutMs',
-  'retry_on_empty',
-  'runtimeOverride',
-] as const;
-
-function stripLegacyFallbackKeys(value: unknown): unknown {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return value;
-  }
-  const record = value as Record<string, unknown>;
-  const hasLegacy = LEGACY_FALLBACK_KEYS.some((key) => key in record);
-  if (!hasLegacy) {
-    return value;
-  }
-  const cleaned: Record<string, unknown> = {};
-  for (const [key, val] of Object.entries(record)) {
-    if (!(LEGACY_FALLBACK_KEYS as readonly string[]).includes(key)) {
-      cleaned[key] = val;
-    }
-  }
-  return cleaned;
-}
-
-export const FailoverConfigSchema = z.preprocess(
-  stripLegacyFallbackKeys,
-  z
-    .object({
-      enabled: z.boolean().default(true),
-      maxRetries: z
-        .number()
-        .int()
-        .min(0)
-        .default(3)
-        .describe(
-          'Number of current-model retries allowed before Slim switches to ' +
-            'the next fallback model (or aborts when no chain is configured). ' +
-            'The budget is shared across the whole fallback chain and is not ' +
-            'reset by a model switch; it resets only on a successful ' +
-            'assistant response, session deletion, or a new user turn. 0 ' +
-            'switches immediately.',
-        ),
-      initialRetryDelayMs: z
-        .number()
-        .int()
-        .min(0)
-        .default(0)
-        .describe(
-          'Delay in milliseconds before triggering the first fallback on a ' +
-            'failover-worthy error. Gives intercepting plugins time to recover ' +
-            'the current model before the fallback chain advances. 0 disables.',
-        ),
-      retryDelayMs: z
-        .number()
-        .int()
-        .min(0)
-        .default(500)
-        .describe(
-          'Delay in milliseconds between consecutive fallback attempts ' +
-            'after the initial trigger. 0 disables.',
-        ),
-      continuationPolicy: z
-        .enum(['retry-primary', 'stick-to-fallback'])
-        .default('retry-primary')
-        .describe(
-          'Model policy for unpinned OpenCode v1 internal continuations ' +
-            '(for example, background completion and lifecycle wakes) after ' +
-            'a confirmed fallback. "retry-primary" lets the host try the ' +
-            'configured primary again; "stick-to-fallback" keeps the ' +
-            'confirmed fallback until a new external user turn.',
-        ),
-    })
-    .strict(),
-);
+export const FailoverConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    maxRetries: z
+      .number()
+      .int()
+      .min(0)
+      .default(3)
+      .describe(
+        'Number of current-model retries allowed before Slim switches to ' +
+          'the next fallback model (or aborts when no chain is configured). ' +
+          'The budget is shared across the whole fallback chain and is not ' +
+          'reset by a model switch; it resets only on a successful ' +
+          'assistant response, session deletion, or a new user turn. 0 ' +
+          'switches immediately.',
+      ),
+    initialRetryDelayMs: z
+      .number()
+      .int()
+      .min(0)
+      .default(0)
+      .describe(
+        'Delay in milliseconds before triggering the first fallback on a ' +
+          'failover-worthy error. Gives intercepting plugins time to recover ' +
+          'the current model before the fallback chain advances. 0 disables.',
+      ),
+    retryDelayMs: z
+      .number()
+      .int()
+      .min(0)
+      .default(500)
+      .describe(
+        'Delay in milliseconds between consecutive fallback attempts ' +
+          'after the initial trigger. 0 disables.',
+      ),
+    continuationPolicy: z
+      .enum(['retry-primary', 'stick-to-fallback'])
+      .default('retry-primary')
+      .describe(
+        'Model policy for unpinned OpenCode v1 internal continuations ' +
+          '(for example, background completion and lifecycle wakes) after ' +
+          'a confirmed fallback. "retry-primary" lets the host try the ' +
+          'configured primary again; "stick-to-fallback" keeps the ' +
+          'confirmed fallback until a new external user turn.',
+      ),
+    timeoutMs: z.never({ error: 'fallback.timeoutMs was removed' }).optional(),
+    retry_on_empty: z
+      .never({ error: 'fallback.retry_on_empty was removed' })
+      .optional(),
+    runtimeOverride: z
+      .never({ error: 'fallback.runtimeOverride was removed' })
+      .optional(),
+  })
+  .strict();
 
 export type FailoverConfig = z.infer<typeof FailoverConfigSchema>;
 
@@ -946,6 +913,7 @@ export const DISABLED_HOOKS_VALUES = [
   'phase-reminder',
   'foreground-fallback',
   'deepwork-guard',
+  'deepwork-goal',
   'chat-headers',
   'cache-monitor',
   'json-error-recovery',
@@ -954,10 +922,12 @@ export const DISABLED_HOOKS_VALUES = [
   'absolute-path-rescue',
   'apply-patch',
   'council-inject',
+  'council-assembly',
 ] as const;
 
 /** Valid `disabled_commands` entries; single source for the enum and the loader. */
 export const DISABLED_COMMANDS_VALUES = [
+  'implement',
   'interview',
   'deepwork',
   'reflect',
@@ -979,6 +949,12 @@ export const RawPluginConfigSchema = z
       .optional()
       .describe(
         'When true, omit orchestrator.model and orchestrator.variant from the SDK config so OpenCode uses the session model selected with /model after subagent dispatch. An explicitly selected preset that sets orchestrator.model is preserved. Defaults to false.',
+      ),
+    routingBlock: z
+      .boolean()
+      .optional()
+      .describe(
+        "When false, removes the <Agents> routing block from the v2 orchestrator prompt. The host's native subagent roster (appended to the subagent tool description) still lists every enabled agent, but it carries no Delegate/Don't routing criteria — set false only to drop stock routing claims that drift against custom agent prompts, or to trim tokens. Ignored with a warning on v1 hosts, where the orchestrator prompt is a frozen template; use an orchestrator.md override there. No effect when an orchestrator.md override already replaces the whole prompt. Defaults to true.",
       ),
     autoUpdate: z
       .boolean()
@@ -1043,7 +1019,7 @@ export const RawPluginConfigSchema = z
       .describe(
         'Hook names to disable completely. Valid values: ' +
           DISABLED_HOOKS_VALUES.join(', ') +
-          '. "phase-reminder" is not registered, so orchestrator phase reminders are never injected; "foreground-fallback" marks the fallback manager inert: it is still constructed but never triggers automatic intervention, same effect as fallback.enabled = false; "chat-headers" is not registered, so the Copilot x-initiator header is never stamped (v1 chat.headers and the v2 model.request bridge); "cache-monitor" stops the prompt-cache bust watchdog, so cache warnings are never logged; the on-demand tool guards ("json-error-recovery", "tool-loop-guard", "search-path-guard", "absolute-path-rescue", "apply-patch") stop intercepting tool calls entirely, so malformed output, repeated identical calls, and invalid or guessed paths surface raw to the model; "council-inject" is not registered, so the keyword-triggered Council Mode injection is never appended to orchestrator messages. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer\'s list still applies.',
+          '. "phase-reminder" is not registered, so orchestrator phase reminders are never injected; "foreground-fallback" marks the fallback manager inert: it is still constructed but never triggers automatic intervention, same effect as fallback.enabled = false; "chat-headers" is not registered, so the Copilot x-initiator header is never stamped (v1 chat.headers and the v2 model.request bridge); "cache-monitor" stops the prompt-cache bust watchdog, so cache warnings are never logged; the on-demand tool guards ("json-error-recovery", "tool-loop-guard", "search-path-guard", "absolute-path-rescue", "apply-patch") stop intercepting tool calls entirely, so malformed output, repeated identical calls, and invalid or guessed paths surface raw to the model; "council-inject" is not registered, so the keyword-triggered Council Mode injection is never appended to orchestrator messages; "council-assembly" switches the injected Council Mode block to paste mode: the block instructs the orchestrator to paste each seat response itself (the pre-assembly behavior) and the harness attaches nothing. The mode is resolved once at plugin start; toggling it mid-session does not rewrite a block already injected into a transcript — a stale harness-mode block with assembly off attaches nothing (the council report names the missing seats; recover by pasting), and a stale paste-mode block with assembly on simply pastes. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer\'s list still applies.',
       ),
     disabled_commands: z
       .array(z.enum(DISABLED_COMMANDS_VALUES))
@@ -1062,6 +1038,9 @@ export const RawPluginConfigSchema = z
     companion: CompanionConfigSchema.optional(),
     webfetch: WebfetchConfigSchema.optional(),
     acpAgents: AcpAgentsConfigSchema.optional(),
+    tmux: z
+      .never({ error: 'tmux config was removed; use multiplexer.*' })
+      .optional(),
   })
   .superRefine((value, ctx) => {
     if (value.agents) {

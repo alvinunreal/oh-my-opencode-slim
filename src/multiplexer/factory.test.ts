@@ -19,6 +19,7 @@ const PANE_ENV_KEYS = [
   'HERDR_PANE_ID',
   'KITTY_PID',
   'KITTY_WINDOW_ID',
+  'WEZTERM_PANE',
   'CMUX_TUI_SOCKET',
   'CMUX_MUX_SOCKET',
   'CMUX_SOCKET_PATH',
@@ -256,6 +257,38 @@ describe('multiplexer factory', () => {
     const { getMultiplexer } = await importFreshFactory('auto-kitty-pid');
 
     expect(getMultiplexer({ ...BASE_CONFIG, type: 'auto' })).toBeNull();
+  });
+
+  test('returns a wezterm instance when type is wezterm', async () => {
+    const { getMultiplexer } = await importFreshFactory('wezterm-explicit');
+    const multiplexer = getMultiplexer({ ...BASE_CONFIG, type: 'wezterm' });
+    expect(multiplexer).not.toBeNull();
+    expect(multiplexer?.type).toBe('wezterm');
+  });
+
+  test('auto-detects wezterm from WEZTERM_PANE', async () => {
+    process.env.WEZTERM_PANE = '7';
+
+    const { getMultiplexer } = await importFreshFactory('auto-wezterm');
+
+    expect(getMultiplexer({ ...BASE_CONFIG, type: 'auto' })?.type).toBe(
+      'wezterm',
+    );
+  });
+
+  test('auto prefers tmux and zellij nested inside wezterm', async () => {
+    process.env.WEZTERM_PANE = '7';
+    process.env.TMUX_PANE = '%1';
+    const { getMultiplexer: tmuxFirst } =
+      await importFreshFactory('auto-wezterm-tmux');
+    expect(tmuxFirst({ ...BASE_CONFIG, type: 'auto' })?.type).toBe('tmux');
+
+    delete process.env.TMUX_PANE;
+    process.env.ZELLIJ_PANE_ID = '3';
+    const { getMultiplexer: zellijFirst } = await importFreshFactory(
+      'auto-wezterm-zellij',
+    );
+    expect(zellijFirst({ ...BASE_CONFIG, type: 'auto' })?.type).toBe('zellij');
   });
 
   test('auto returns null when no pane-level signal is present', async () => {

@@ -15,6 +15,11 @@
   </p>
 
   <p>
+    <a href="https://svgdiagram.ai"><img src="img/svgdiagram-logo.svg" alt="svgdiagram.ai" width="40" height="28" align="absmiddle"></a>&nbsp;
+    <a href="https://svgdiagram.ai"><b>svgdiagram.ai</b></a> <sub>· Turn your notes into clean, editable SVG diagrams</sub>
+  </p>
+
+  <p>
     <b>English</b> | <a href="README.zh-CN.md">简体中文</a> | <a href="README.ja-JP.md">日本語</a> | <a href="README.ko-KR.md">한국어</a> | <a href="README.fa-IR.md">فارسی</a>
   </p>
 
@@ -45,7 +50,7 @@ The main idea is simple: instead of forcing one model to do everything, the plug
 - **[Companion](docs/companion.md)** - an optional floating desktop window
   showing which agents are active, including parallel background specialists.
 - **[Multiplexer integration](docs/multiplexer-integration.md)** - watch agents
-  work live in Tmux, Zellij, Herdr, cmux, or kitty panes.
+  work live in Tmux, Zellij, Herdr, cmux, kitty, or WezTerm panes.
 - **[Preset switching](docs/preset-switching.md)** - swap the whole team's
   models at runtime with `/preset`, with single-parent preset inheritance.
 - **[Code intelligence tools](docs/tools.md)** - LSP tools, AST-aware search
@@ -158,7 +163,7 @@ Then:
 > It's **recommended** to understand how background orchestration works. The **[Orchestrator prompt](https://github.com/alvinunreal/oh-my-opencode-slim/blob/master/src/agents/orchestrator.ts#L28)** contains the scheduler rules, specialist routing logic, and thresholds for when work should be assigned to background agents. You can always delegate manually by calling a subagent via: `@agentName <task>`
 
 > [!TIP]
-> Because background agents are now the default workflow, it is **highly recommended** to enable and configure **[Multiplexer Integration](docs/multiplexer-integration.md)**. It automatically opens each agent in a dedicated Tmux, Zellij, Herdr, cmux, or kitty pane, so you can watch specialists work live while the Orchestrator continues coordinating the session. On OpenCode v2 hosts, panes work with the shared background service or an explicit `--server`; `--standalone` hosts cannot host panes (one diagnostic per process; use v2's native subagent surfaces instead).
+> Because background agents are now the default workflow, it is **highly recommended** to enable and configure **[Multiplexer Integration](docs/multiplexer-integration.md)**. It automatically opens each agent in a dedicated Tmux, Zellij, Herdr, cmux, kitty, or WezTerm pane, so you can watch specialists work live while the Orchestrator continues coordinating the session. On OpenCode v2 hosts, panes work with the shared background service or an explicit `--server`; `--standalone` hosts cannot host panes (one diagnostic per process; use v2's native subagent surfaces instead).
 
 The default generated configuration includes both `openai` and `opencode-go` presets.
 
@@ -365,7 +370,7 @@ If any agent fails to respond, check your provider authentication and config fil
 ### 04. Council: The Chorus of Minds
 
 > [!NOTE]
-> **Why doesn't Orchestrator auto-call Council more often?** This is intentional. Council runs multiple models at once, so automatic delegation is kept strict because it is usually the highest-cost path in the system. In practice, ask for it in your message — mentioning `council`, `@council`, `consensus`, `共识`, or another trigger word injects the Council Mode procedure into that turn and the orchestrator dispatches every councillor seat in parallel, for example: <code>run a council on these two architectures</code>. The full procedure is never carried statically: sessions that never ask for a council pay zero tokens for it, and the injection can be turned off entirely with <code>disabled_hooks: ["council-inject"]</code>.
+> **Why doesn't Orchestrator auto-call Council more often?** This is intentional. Council runs multiple models at once, so automatic delegation is kept strict because it is usually the highest-cost path in the system. In practice, ask for it in your message — mentioning `council`, `@council`, `consensus`, `共识`, or another trigger word injects the Council Mode procedure once per session (at the first trigger; later triggers don't re-inject it) and the orchestrator dispatches every councillor seat in parallel, for example: <code>run a council on these two architectures</code>. The full procedure is never carried statically: sessions that never ask for a council pay zero tokens for it, and the injection can be turned off entirely with <code>disabled_hooks: ["council-inject"]</code>.
 
 <table>
   <tr>
@@ -539,7 +544,10 @@ If any agent fails to respond, check your provider authentication and config fil
 ### Observer: The Silent Witness
 
 > [!NOTE]
-> **Why a separate agent?** If your Orchestrator model is not multimodal, enable Observer to handle images, screenshots, and other visual files. Observer is disabled by default and gives the Orchestrator a dedicated multimodal reader without forcing you to change your main reasoning model. Set `disabled_agents: []` and an `observer` model in your configuration. The bundled `opencode-go` install preset does this automatically because its GLM Orchestrator is not multimodal. Omitting `image_routing` preserves existing conditional Observer behavior. `"auto"` saves attachments under `.opencode/images/<session>/` and delegates by path; `"direct"` keeps image parts inline for native vision. Saved workspace images are not automatically deleted. Remove the whole `.opencode/images/` directory or a single session subdirectory manually when no longer needed (references in old conversations then stop resolving); images from session-less messages are saved at the top level.
+> **Why a separate agent?** If your Orchestrator model is not multimodal, enable Observer to handle images, screenshots, and other visual files. Observer is disabled by default and gives the Orchestrator a dedicated multimodal reader without forcing you to change your main reasoning model. Set `disabled_agents: []` and an `observer` model in your configuration. The bundled `opencode-go` install preset does this automatically because its GLM Orchestrator is not multimodal. Omitting `image_routing` preserves existing conditional Observer behavior. `"auto"` is capability-aware: models that accept image input keep attachments inline for native vision; non-vision chains get attachments saved under `.opencode/images/<session>/` with a delegation nudge by path. `"direct"` always keeps image parts inline. Saved workspace images are not automatically deleted. Remove the whole `.opencode/images/` directory or a single session subdirectory manually when no longer needed (references in old conversations then stop resolving); images from session-less messages are saved at the top level.
+
+> [!TIP]
+> **Subagents reading images.** Advisory subagents (explorer, librarian, oracle, designer, councillors) can dispatch `@observer` themselves for image files on disk. On OpenCode v2 hosts this needs one extra hop of nesting, which the host denies by default — set `"experimental": { "subagent_depth": 2 }` in your opencode config to enable it. Fixer, observer itself, and the council synthesizer stay non-spawning by design.
 
 <table>
   <tr>
@@ -553,7 +561,7 @@ If any agent fails to respond, check your provider authentication and config fil
 
 - Images, screenshots, diagrams → `read` tool (native image support)
 - PDFs and binary documents → `read` tool (text + structure extraction)
-- **Disabled by default** - enable with `"disabled_agents": []` and configure a vision-capable model; installing with `--preset=opencode-go` enables it with `opencode-go/mimo-v2.5`. In `"auto"`, attachments are saved as workspace assets and routed to Observer by path; set `"image_routing": "direct"` to keep them inline for the Orchestrator.
+- **Disabled by default** - enable with `"disabled_agents": []` and configure a vision-capable model; installing with `--preset=opencode-go` enables it with `opencode-go/mimo-v2.5`. In `"auto"`, attachments ride the turn model's capabilities: vision-capable models read them inline, non-vision chains get them saved as workspace assets and routed to Observer by path; set `"image_routing": "direct"` to always keep them inline.
 
     </td>
   </tr>
@@ -640,6 +648,32 @@ install details.
 
 ---
 
+## Choose an inner ACP model per invocation
+
+Keep the outer OpenCode wrapper model fixed while choosing an independent
+inner model for each task. The wrapper calls, for a server advertising `fable`:
+
+```text
+acp_run(agent: "claude-code", model: "fable", prompt: "Investigate this bug")
+```
+
+To delegate through the generated wrapper, put the choice in the task text:
+
+```text
+@claude-code
+Inner ACP selector: fable
+Task: Investigate this bug and summarize the likely cause.
+```
+
+`acp_run.model` is an exact ACP-advertised selector, not an OpenCode
+`provider/model`. Native `subagent.model` selects only the **outer** wrapper.
+The wrapper's extraction is LLM-mediated, not a new native delegation argument.
+An explicit selector must be advertised and confirmed before prompting; errors
+never silently fall back. Omission uses the external agent default, not the
+previous call's selection. Custom wrapper/routing prompts replace this generated
+guidance and must implement it themselves. See
+[ACP Agents](docs/acp-agents.md#choosing-the-inner-model-per-invocation).
+
 ## 📚 Documentation
 
 Use this section as a map: start with installation, then jump to features, configuration, or example presets depending on what you need.
@@ -653,12 +687,12 @@ Use this section as a map: start with installation, then jump to features, confi
 | **[Council](docs/council.md)** | Run multiple models in parallel and synthesize a single answer — keyword-triggered via the orchestrator's Council Mode procedure |
 | **[Custom Agents](docs/configuration.md#custom-agents)** | Define your own specialists with custom prompts, models, MCP access, and Orchestrator delegation rules |
 | **[ACP Agents](docs/acp-agents.md)** | Connect external ACP-compatible agents such as Claude Code ACP or Gemini ACP as delegatable subagents; tool and plan progress streams to the TUI while they work |
-| **[Multiplexer Integration](docs/multiplexer-integration.md)** | Watch agents work live in Tmux, Zellij, Herdr, cmux, or kitty panes |
+| **[Multiplexer Integration](docs/multiplexer-integration.md)** | Watch agents work live in Tmux, Zellij, Herdr, cmux, kitty, or WezTerm panes |
 | **[Codemap](docs/codemap.md)** | Generate hierarchical codemaps to understand large codebases faster |
 | **[Clonedeps](docs/clonedeps.md)** | Clone selected dependency source into an ignored local workspace for inspection |
 | **[Worktrees](docs/worktrees.md)** | Use `.slim/worktrees/` lanes for isolated parallel or risky coding work |
 | **[Preset Switching](docs/preset-switching.md)** | Switch agent model presets at runtime with `/preset` |
-| **[Interview](docs/interview.md)** | Turn rough ideas into a structured markdown spec through a browser-based Q&A flow |
+| **[Interview](docs/interview.md)** | Turn rough ideas into a structured markdown spec through a browser-based Q&A flow, then implement it with `/implement` |
 | **[Companion](docs/companion.md)** | Floating window companion for parsing, help, and types |
 
 ### ⚙️ Config & Reference
@@ -685,7 +719,7 @@ Use this section as a map: start with installation, then jump to features, confi
   <p><sub>Every merged contribution leaves a mark on the realm.</sub></p>
 
   <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
-[![All Contributors](https://img.shields.io/badge/all_contributors-133-orange.svg?style=flat-square)](#contributors-)
+[![All Contributors](https://img.shields.io/badge/all_contributors-136-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 </div>
 
@@ -874,6 +908,9 @@ Use this section as a map: start with installation, then jump to features, confi
     </tr>
     <tr>
       <td align="center" valign="top" width="16.66%"><a href="https://github.com/doublepi123"><img src="https://avatars.githubusercontent.com/u/54027436?v=4?s=100" width="100px;" alt="doublepi123"/><br /><sub><b>doublepi123</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=doublepi123" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://github.com/timothy-cloudopsguy"><img src="https://avatars.githubusercontent.com/u/96697196?v=4?s=100" width="100px;" alt="Timothy"/><br /><sub><b>Timothy</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=timothy-cloudopsguy" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://github.com/mwoodson"><img src="https://avatars.githubusercontent.com/u/236828?v=4?s=100" width="100px;" alt="Matt Woodson"/><br /><sub><b>Matt Woodson</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=mwoodson" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://github.com/caiozizh"><img src="https://avatars.githubusercontent.com/u/244536034?v=4?s=100" width="100px;" alt="caiozizh"/><br /><sub><b>caiozizh</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=caiozizh" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>

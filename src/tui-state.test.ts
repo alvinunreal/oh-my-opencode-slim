@@ -12,9 +12,10 @@ import {
   recordTuiAgentModel,
   recordTuiAgentModels,
   recordTuiSessionParent,
-  resolveTuiSessionRoot,
+  resolveTuiSnapshotRoot,
   snapshotSectionsEqual,
   TUI_SESSION_PARENTS_MAX,
+  updateSnapshot,
   updateTuiSessionDetails,
 } from './tui-state';
 
@@ -339,8 +340,12 @@ describe('tui-state persistence', () => {
 
     // Roots resolve through the persistent index; render compares both
     // sides against it, so conv-2's subagents stay out of conv-1 (#1147).
-    expect(resolveTuiSessionRoot('child-a', tempDir)).toBe('conv-1');
-    expect(resolveTuiSessionRoot('child-b', tempDir)).toBe('conv-2');
+    expect(resolveTuiSnapshotRoot(readTuiSnapshot(tempDir), 'child-a')).toBe(
+      'conv-1',
+    );
+    expect(resolveTuiSnapshotRoot(readTuiSnapshot(tempDir), 'child-b')).toBe(
+      'conv-2',
+    );
     expect(readTuiSnapshot(tempDir).activeSessions).toEqual({
       'child-a': 'oracle',
       'child-b': 'fixer',
@@ -388,16 +393,24 @@ describe('tui-state persistence', () => {
 
     recordTuiSessionParent('ses_new', 'root', tempDir);
 
-    expect(resolveTuiSessionRoot('ses_1', tempDir)).toBe('root');
+    expect(resolveTuiSnapshotRoot(readTuiSnapshot(tempDir), 'ses_1')).toBe(
+      'root',
+    );
   });
 
   test('resolves multi-level ancestry through the index', () => {
     recordTuiSessionParent('grandchild', 'child', tempDir);
     recordTuiSessionParent('child', 'root', tempDir);
 
-    expect(resolveTuiSessionRoot('grandchild', tempDir)).toBe('root');
-    expect(resolveTuiSessionRoot('child', tempDir)).toBe('root');
-    expect(resolveTuiSessionRoot('root', tempDir)).toBe('root');
+    expect(resolveTuiSnapshotRoot(readTuiSnapshot(tempDir), 'grandchild')).toBe(
+      'root',
+    );
+    expect(resolveTuiSnapshotRoot(readTuiSnapshot(tempDir), 'child')).toBe(
+      'root',
+    );
+    expect(resolveTuiSnapshotRoot(readTuiSnapshot(tempDir), 'root')).toBe(
+      'root',
+    );
   });
 
   test('re-roots a live activity when ancestry is discovered late', () => {
@@ -406,12 +419,16 @@ describe('tui-state persistence', () => {
       { sessionID: 'child-a', agentName: 'oracle', active: true },
       tempDir,
     );
-    expect(resolveTuiSessionRoot('child-a', tempDir)).toBe('child-a');
+    expect(resolveTuiSnapshotRoot(readTuiSnapshot(tempDir), 'child-a')).toBe(
+      'child-a',
+    );
 
     recordTuiSessionParent('child-a', 'root-a', tempDir);
 
     expect(readTuiSnapshot(tempDir).sessionParents['child-a']).toBe('root-a');
-    expect(resolveTuiSessionRoot('child-a', tempDir)).toBe('root-a');
+    expect(resolveTuiSnapshotRoot(readTuiSnapshot(tempDir), 'child-a')).toBe(
+      'root-a',
+    );
   });
 
   test('startup sweep keeps live foreign activities and drops dead residue', async () => {
@@ -616,6 +633,38 @@ describe('tui-state persistence', () => {
     // …and identical sections (both empty) stay equal.
     const alsoEmpty = readTuiSnapshot(tempDir);
     expect(snapshotSectionsEqual(base, alsoEmpty)).toBe(true);
+  });
+
+  test('memoized updates deep-clone nested reusableByAgent arrays', () => {
+    const entry = (taskID: string) => ({
+      taskID,
+      alias: taskID,
+      terminalState: 'completed' as const,
+      lastUsedAt: 1,
+    });
+    // First write seeds the in-memory memo with a nested entry array.
+    expect(
+      updateSnapshot(tempDir, (snapshot) => {
+        snapshot.reusableByAgent['parent-1'] = { oracle: [entry('ses_1')] };
+      }),
+    ).toBe(true);
+    // An in-place push on the memo-backed candidate must not leak into the
+    // memo: a shared array would make the update look like a no-op and
+    // silently skip the disk write.
+    expect(
+      updateSnapshot(tempDir, (snapshot) => {
+        snapshot.reusableByAgent['parent-1']?.oracle?.push(entry('ses_2'));
+      }),
+    ).toBe(true);
+
+    const onDisk = JSON.parse(
+      fs.readFileSync(getTuiStatePath(tempDir), 'utf8'),
+    ) as { reusableByAgent: Record<string, Record<string, unknown[]>> };
+    expect(
+      onDisk.reusableByAgent['parent-1']?.oracle?.map(
+        (item) => (item as { taskID: string }).taskID,
+      ),
+    ).toEqual(['ses_1', 'ses_2']);
   });
 
   test('cross-project isolation — different directories write independent state files', () => {

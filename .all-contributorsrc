@@ -1208,6 +1208,33 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "timothy-cloudopsguy",
+      "name": "Timothy",
+      "avatar_url": "https://avatars.githubusercontent.com/u/96697196?v=4",
+      "profile": "https://github.com/timothy-cloudopsguy",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "mwoodson",
+      "name": "Matt Woodson",
+      "avatar_url": "https://avatars.githubusercontent.com/u/236828?v=4",
+      "profile": "https://github.com/mwoodson",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "caiozizh",
+      "name": "caiozizh",
+      "avatar_url": "https://avatars.githubusercontent.com/u/244536034?v=4",
+      "profile": "https://github.com/caiozizh",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"

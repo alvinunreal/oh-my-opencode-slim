@@ -666,6 +666,9 @@ describe('mapV2EventToV1 form → question bridge', () => {
           {
             question: 'Which flavor?',
             header: 'Which flavor?',
+            // The form field key rides along: form replies must key
+            // answers by this exact value.
+            key: 'flavor',
             options: [
               { label: 'Vanilla', description: 'plain' },
               { label: 'Chocolate', description: '' },
@@ -674,6 +677,7 @@ describe('mapV2EventToV1 form → question bridge', () => {
           {
             question: 'Extras',
             header: 'Extras',
+            key: 'extras',
             options: [{ label: 'Sprinkles', description: '' }],
             multiple: true,
           },

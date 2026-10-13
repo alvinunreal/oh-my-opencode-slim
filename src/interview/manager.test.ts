@@ -55,8 +55,13 @@ function createMockContext(overrides?: {
   promptImpl?: (args: any) => Promise<unknown>;
 }) {
   const messagesData = overrides?.messagesData ?? [];
+  let sideCount = 0;
   const sessionMock = {
     messages: mock(async () => ({ data: messagesData })),
+    create: mock(async () => {
+      sideCount += 1;
+      return { data: { id: `side-${sideCount}` } };
+    }),
     prompt: mock(async (args: any) => {
       if (overrides?.promptImpl) {
         return await overrides.promptImpl(args);
@@ -132,7 +137,6 @@ describe('interview manager - per-session mode', () => {
         output,
       );
 
-      // Should inject kickoff prompt into output
       expect(output.parts.length).toBe(1);
       expect(output.parts[0].type).toBe('text');
       expect(output.parts[0].text).toContain('My App Idea');
@@ -635,7 +639,13 @@ describe('interview manager - edge cases', () => {
     const runtime = {
       messages: async () => messages,
       notify: async () => {},
-      continue: async () => {
+      continue: async (_sessionID: string, text: string) => {
+        if (
+          text.includes('You are running an interview q&a session') ||
+          text.includes('Resume the interview')
+        ) {
+          return;
+        }
         submitAttempts++;
         if (submitAttempts === 1) {
           signalFirstDelivery();
@@ -644,6 +654,7 @@ describe('interview manager - edge cases', () => {
           throw new Error('session busy');
         }
       },
+      create: async () => 'side-overlap',
       rename: async () => {},
     };
     const manager = createDashboardManager(ctx, config, freePort, 'interview', {
@@ -717,6 +728,107 @@ describe('interview manager - edge cases', () => {
     }
   });
 
+  test('acknowledges delivered answers when history save fails', async () => {
+    const tempDir = await fs.mkdtemp('/tmp/manager-test-');
+    const ctx = createMockContext({ directory: tempDir });
+    const { port: freePort, server } = await bindFreePort();
+    heldServers.add(server);
+    const config = createTestConfig({ port: freePort, dashboard: true });
+    const messages: Array<{
+      info?: { role: string };
+      parts?: Array<{ type: string; text?: string }>;
+    }> = [];
+    let answerSends = 0;
+    const runtime = {
+      messages: async () => messages,
+      notify: async () => {},
+      continue: async (_sessionID: string, text: string) => {
+        if (text.includes('The user answered:')) answerSends++;
+      },
+      create: async () => 'side-history-failure',
+      rename: async () => {},
+    };
+    const manager = createDashboardManager(ctx, config, freePort, 'interview', {
+      runtime,
+      server,
+    });
+
+    try {
+      await manager.handleCommandExecuteBefore(
+        {
+          command: 'interview',
+          sessionID: 'session-history-failure',
+          arguments: 'History Failure Test',
+        },
+        { parts: [] },
+      );
+      const interviewId = manager.service.getActiveInterviewId(
+        'session-history-failure',
+      );
+      expect(interviewId).not.toBeNull();
+      if (!interviewId) throw new Error('Interview was not created');
+      messages.push({
+        info: { role: 'assistant' },
+        parts: [
+          {
+            type: 'text',
+            text: '<interview_state>{"summary":"Draft","questions":[{"id":"q-1","question":"What?","options":["A"]}]}</interview_state>',
+          },
+        ],
+      });
+
+      const state = await manager.service.getInterviewState(interviewId);
+      await fs.chmod(state.interview.markdownPath, 0o444);
+      try {
+        const auth = await readDashboardAuthFile(freePort);
+        expect(auth).not.toBeNull();
+        const response = await fetch(
+          `http://127.0.0.1:${freePort}/api/interviews/${interviewId}/answers?token=${auth?.token}`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              answers: [{ questionId: 'q-1', answer: 'A' }],
+            }),
+          },
+        );
+        expect(response.status).toBe(202);
+
+        const idleEvent = {
+          event: {
+            type: 'session.status',
+            properties: {
+              sessionID: 'session-history-failure',
+              status: { type: 'idle' },
+            },
+          },
+        };
+        await manager.handleEvent(idleEvent);
+        expect(answerSends).toBe(1);
+      } finally {
+        await fs.chmod(state.interview.markdownPath, 0o644);
+      }
+
+      const failedState = await manager.service.getInterviewState(interviewId);
+      expect(failedState.lastParseError).toContain(
+        'saving their history failed',
+      );
+      await manager.handleEvent({
+        event: {
+          type: 'session.status',
+          properties: {
+            sessionID: 'session-history-failure',
+            status: { type: 'idle' },
+          },
+        },
+      });
+      expect(answerSends).toBe(1);
+    } finally {
+      await manager.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test('waits for accepted delivery before disposal and replacement polling', async () => {
     const tempDir = await fs.mkdtemp('/tmp/manager-test-');
     const ctx = createMockContext({ directory: tempDir });
@@ -738,8 +850,15 @@ describe('interview manager - edge cases', () => {
     let submitAttempts = 0;
     const runtime = {
       messages: async () => messages,
+      create: async () => 'side-wait',
       notify: async () => {},
-      continue: async () => {
+      continue: async (_sessionID: string, text: string) => {
+        if (
+          text.includes('You are running an interview q&a session') ||
+          text.includes('Resume the interview')
+        ) {
+          return;
+        }
         submitAttempts++;
         signalFirstDelivery();
         await firstDeliveryGate;
@@ -1113,6 +1232,8 @@ describe('interview manager - integration with real dashboard', () => {
         },
       );
       expect(nudgeResponse.status).toBe(202);
+      const promptsAfterKickoff =
+        ctx2.client.session.promptAsync.mock.calls.length;
 
       await manager2.handleEvent({
         event: {
@@ -1124,7 +1245,9 @@ describe('interview manager - integration with real dashboard', () => {
         },
       });
       expect(droppedAck).toBe(true);
-      expect(ctx2.client.session.promptAsync).toHaveBeenCalledTimes(1);
+      expect(ctx2.client.session.promptAsync).toHaveBeenCalledTimes(
+        promptsAfterKickoff + 1,
+      );
 
       await manager2.handleEvent({
         event: {
@@ -1135,7 +1258,9 @@ describe('interview manager - integration with real dashboard', () => {
           },
         },
       });
-      expect(ctx2.client.session.promptAsync).toHaveBeenCalledTimes(1);
+      expect(ctx2.client.session.promptAsync).toHaveBeenCalledTimes(
+        promptsAfterKickoff + 1,
+      );
     } finally {
       globalThis.fetch = originalFetch;
       await fs.rm(tempDir1, { recursive: true, force: true });
@@ -1235,6 +1360,8 @@ describe('interview manager - integration with real dashboard', () => {
       expect(firstClaim.answers).toEqual([
         { questionId: 'q-1', answer: 'First answer' },
       ]);
+      const promptsAfterKickoff =
+        ctx2.client.session.promptAsync.mock.calls.length;
 
       await manager2.handleEvent({
         event: {
@@ -1246,7 +1373,9 @@ describe('interview manager - integration with real dashboard', () => {
         },
       });
       expect(failedFirstAck).toBe(true);
-      expect(ctx2.client.session.promptAsync).toHaveBeenCalledTimes(1);
+      expect(ctx2.client.session.promptAsync).toHaveBeenCalledTimes(
+        promptsAfterKickoff + 1,
+      );
 
       const recoveredAck = await originalFetch(
         `${interviewUrl}/pending/ack${authQuery}`,
@@ -1281,7 +1410,9 @@ describe('interview manager - integration with real dashboard', () => {
           },
         },
       });
-      expect(ctx2.client.session.promptAsync).toHaveBeenCalledTimes(2);
+      expect(ctx2.client.session.promptAsync).toHaveBeenCalledTimes(
+        promptsAfterKickoff + 2,
+      );
     } finally {
       globalThis.fetch = originalFetch;
       await fs.rm(tempDir1, { recursive: true, force: true });

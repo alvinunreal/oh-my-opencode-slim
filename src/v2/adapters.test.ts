@@ -5,7 +5,6 @@ import {
   adaptPermissions,
   adaptTool,
   applyAgentToDraft,
-  compileAgentPermissions,
   parseModelRef,
   snapshotNativeAgentForRegistry,
 } from './adapters';
@@ -125,6 +124,20 @@ describe('adaptPermissions', () => {
     });
   });
 
+  test('compiles observer-only task patterns in last-match order', () => {
+    const rules = adaptPermissions({
+      task: { '*': 'deny', observer: 'allow' },
+    });
+    const subagent = rules
+      .filter((rule) => rule.action === 'subagent')
+      .map((rule) => [rule.resource, rule.effect]);
+    // Evaluators use findLast: '*' deny first, observer allow last.
+    expect(subagent).toEqual([
+      ['*', 'deny'],
+      ['observer', 'allow'],
+    ]);
+  });
+
   test('maps v1 bash -> v2 execute and bash', () => {
     const rules = adaptPermissions({ bash: 'deny' });
     expect(rules).toContainEqual({
@@ -218,76 +231,6 @@ describe('adaptPermissions', () => {
       'deny',
     );
     expect(evaluatePermission(rules, 'bash', 'ls')).toBe('deny');
-  });
-});
-
-describe('compileAgentPermissions', () => {
-  test('native host allow overrides an earlier v1 baseline denial', () => {
-    const rules = compileAgentPermissions(
-      { edit: 'deny' },
-      {
-        hostRules: [{ action: 'edit', resource: '*', effect: 'allow' }],
-      },
-    );
-
-    expect(evaluatePermission(rules, 'edit')).toBe('allow');
-  });
-
-  test('final denials remain after host rules', () => {
-    const rules = compileAgentPermissions(
-      { edit: 'deny' },
-      {
-        hostRules: [{ action: 'edit', resource: '*', effect: 'allow' }],
-        finalDenials: ['edit'],
-      },
-    );
-
-    expect(evaluatePermission(rules, 'edit')).toBe('deny');
-  });
-
-  test('action ceilings remain after host rules', () => {
-    const rules = compileAgentPermissions(
-      { edit: 'deny' },
-      {
-        hostRules: [{ action: 'edit', resource: '*', effect: 'allow' }],
-        ceilings: {
-          actions: { edit: 'deny' },
-          namespaces: [],
-        },
-      },
-    );
-
-    expect(evaluatePermission(rules, 'edit')).toBe('deny');
-  });
-
-  test('preserves native ordered exceptions after the v1 baseline', () => {
-    const rules = compileAgentPermissions(undefined, {
-      hostRules: [
-        { action: 'read', resource: 'src/**', effect: 'deny' },
-        { action: 'read', resource: 'src/public.ts', effect: 'allow' },
-      ],
-    });
-    expect(evaluatePermission(rules, 'read', 'src/private.ts')).toBe('deny');
-    expect(evaluatePermission(rules, 'read', 'src/public.ts')).toBe('allow');
-    expect(evaluatePermission(rules, 'subagent')).toBe('allow');
-  });
-
-  test('applies final denials and action, namespace, and resource ceilings', () => {
-    const rules = compileAgentPermissions(undefined, {
-      hostRules: [{ action: '*', resource: '*', effect: 'allow' }],
-      ceilings: {
-        actions: { read: 'ask' },
-        namespaces: ['context7_*'],
-        namespaceEffects: { 'context7_*': 'deny' },
-        resources: { read: { 'private/**': 'deny' } },
-      },
-      finalDenials: ['execute'],
-    });
-    expect(evaluatePermission(rules, 'read', 'public.ts')).toBe('ask');
-    expect(evaluatePermission(rules, 'read', 'private/key.ts')).toBe('deny');
-    expect(evaluatePermission(rules, 'context7_search')).toBe('deny');
-    expect(evaluatePermission(rules, 'execute')).toBe('deny');
-    expect(evaluatePermission(rules, 'unadmitted_action')).toBe('deny');
   });
 });
 

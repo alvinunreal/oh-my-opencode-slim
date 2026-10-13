@@ -106,6 +106,25 @@ export async function getRuntimeSessionStatusSnapshot(
   }
 }
 
+export type LiveSession =
+  | { kind: RuntimeSessionStatus | 'absent' }
+  | { kind: 'unknown'; reason: string };
+
+/** One fresh read, reduced to what a single session's decision needs. */
+export async function readLiveSession(
+  input: PluginInput,
+  sessionID: string,
+  options: { timeoutMs?: number } = {},
+): Promise<LiveSession> {
+  const snapshot = await getRuntimeSessionStatusSnapshot(input, options);
+  if (
+    snapshot.error !== undefined ||
+    snapshot.malformedSessionIDs.has(sessionID)
+  )
+    return { kind: 'unknown', reason: snapshot.error ?? 'malformed entry' };
+  return { kind: snapshot.statuses.get(sessionID) ?? 'absent' };
+}
+
 export function runtimeSessionStatus(
   snapshot: RuntimeSessionStatusSnapshot,
   sessionID: string,

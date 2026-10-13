@@ -29,10 +29,17 @@ Dock attention); unsupported environments may safely ignore it. Error/failure
 notifications are intentionally not emitted because the parent status PR does
 not claim canonical settled terminal evidence.
 
-Right-click the Companion to open its compact control menu. In addition to the
-existing size controls, the menu exposes scoped preset navigation. The center
-preset button shows the active edit scope: `P:` for **Project** or `G:` for
-**Global**; clicking it toggles scope.
+Right-click the Companion to open its compact control menu. When the menu is
+closed, the displayed project continues to follow live agent activity. Opening
+the menu pins the currently displayed project so background activity in another
+repository cannot change the target while you are editing it. The first menu row
+cycles across every live project, even when that project is currently idle.
+
+The preset row always applies to that explicitly selected project. Its center
+button shows a readable scoped value such as `Prj:Inherit` or `Gbl:openai`;
+clicking it toggles between **Project** and **Global** scope. If a project has
+not published preset state yet, the menu shows a disabled diagnostic row instead
+of silently hiding the controls.
 
 Project scope is the safe default for desktop use with multiple projects open.
 It always writes the current project's `.opencode` layer, creating the
@@ -137,7 +144,9 @@ opens. If no custom position is saved for a project, the configured
 `companion.position` corner is used.
 
 Saved positions are clamped to the current screen so the companion stays visible
-after monitor or resolution changes.
+after monitor or resolution changes. Position persistence runs off the native UI
+thread; a busy shared-state lock therefore cannot freeze animation or dragging.
+The in-memory position remains authoritative while a delayed write is retried.
 
 ---
 
@@ -223,9 +232,24 @@ on the next OpenCode restart. The updater uses a lock to prevent concurrent
 OpenCode processes from replacing the same binary, and stale locks from crashed
 updates are cleaned up automatically.
 
+Companion runtime state uses the same fail-closed principle. Each live project
+gets a distinct manager identity within the OpenCode process, dead process
+entries are pruned on writes, abandoned state locks are recovered, and the
+native window is not spawned until its owner state has been published. A
+temporarily busy state lock schedules a retry instead of blocking the plugin
+thread.
+
 Automatic native updates only use release archives listed in the packaged
 companion manifest, and every archive must have a matching SHA256 checksum.
 Custom binaries configured with `companion.binaryPath` are never overwritten.
+
+On merged changes to native Companion sources, the upstream release automation
+builds the five platform archives, publishes a new immutable native release,
+and proposes a generated manifest update. `npm version` and `npm publish` are
+blocked whenever tracked native sources are newer than the manifest's release
+tag. After the generated manifest PR is merged and a new npm plugin release is
+published, managed Companion installs update without any manual `.exe` or
+`.exe.json` manipulation. See [release process](release.md).
 
 ---
 
@@ -317,8 +341,10 @@ linux-arm64
 windows-x64
 ```
 
-The workflow creates or updates the `companion-v<version>` release and uploads
-the selected archives.
+The manual workflow publishes a new immutable `companion-v<version>` release
+only when **all five supported targets** are built. Single-target test runs
+produce workflow artifacts only, never an incomplete public release. Existing
+release versions/tags are not overwritten.
 
 ### 3. Verify release assets
 
@@ -353,7 +379,11 @@ continues without enabling Companion.
 
 ### Cost controls
 
-- The workflow uses `workflow_dispatch` only. It never runs on push, PR, or tag.
-- Build a single target while testing.
-- Reuse one companion release across many plugin betas.
-- Add more targets only when you are ready to support those users.
+- The automatic workflow runs only on `master` after a native runtime source
+  change, or when explicitly dispatched. It checks for actual source drift
+  before building so version-only synchronization commits do not trigger
+  another release.
+- A new public native release builds all five platforms for consistent coverage.
+- Plugin-only releases reuse the most recent native release without rebuilding.
+- The manual workflow still supports selected targets for exceptional debugging;
+  it refuses to overwrite an already published release/tag.

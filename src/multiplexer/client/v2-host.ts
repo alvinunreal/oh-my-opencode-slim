@@ -20,9 +20,6 @@ import type {
 import type { TuiPaneWiringOptions } from './tui-wiring';
 import type { SessionLifecycleEvent, SessionRuntimeStatus } from './types';
 
-/** v2 host access modes (deployment matrix). */
-export type V2HostMode = 'shared' | 'remote' | 'standalone';
-
 /** Classified host access mode; `invalid` fails closed (no panes). */
 export type V2HostModeDetection =
   | { mode: 'shared' }
@@ -101,8 +98,6 @@ export const V2_SESSION_EVENT_TYPES = [
   'session.idle',
   'session.deleted',
 ] as const;
-
-export type V2SessionEventType = (typeof V2_SESSION_EVENT_TYPES)[number];
 
 interface V2EventEnvelope {
   data?: {

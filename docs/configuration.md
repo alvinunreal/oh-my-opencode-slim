@@ -57,8 +57,10 @@ Set `OPENCODE_CONFIG_DIR` to use a custom user config directory instead of
 `~/.config/opencode`; install and runtime config discovery both honor it.
 
 Set `OH_MY_OPENCODE_SLIM_DISABLE` to `1`, `true`, `yes`, or `on` to make
-oh-my-opencode-slim return during startup without registering agents, tools,
-MCPs, hooks, Companion, or the TUI sidebar. This is a temporary escape hatch:
+oh-my-opencode-slim exit setup without registering agents, tools, MCPs, hooks,
+Companion, or the TUI sidebar. OpenCode still loads the package and calls its
+setup entrypoint, but the plugin returns cleanly without activating its
+features. This is a temporary escape hatch:
 
 ```bash
 OH_MY_OPENCODE_SLIM_DISABLE=1 opencode
@@ -118,6 +120,23 @@ When a `preset` is active, the plugin checks preset directories before falling b
 
 Both `{agent}.md` and `{agent}_append.md` can coexist - the full replacement takes effect first, then the append. If neither exists, the built-in default prompt is used.
 
+**Agent identity vs. routing in custom orchestrator prompts.** Both host
+flavors append a native roster to the delegation tool's description — v2
+hosts add `Available subagents:`, v1 hosts add `Available agent types and the
+tools they have access to:` — with one `- name: description` line per
+dispatchable agent. The plugin cannot remove these appends (they happen in
+host code after plugin tool hooks). Agent `description` values are one-liners
+by design: routing criteria live in the orchestrator prompt's `<Agents>`
+block, descriptions only identify agents for the native roster (override
+them via `agents.<name>.description`). When writing a custom
+`orchestrator.md`, keep only routing deltas (when to delegate to whom) in
+your agent section — identity lines duplicate the native roster and go stale
+when agents are disabled (`disabled_agents` removes them from the roster
+automatically, but not from your file). `routingBlock: false` applies the
+same trim to the built-in v2 prompt by removing the stock `<Agents>` block
+entirely, which also removes stock routing claims that drift against
+`agents.<name>.prompt` customizations (see the option reference).
+
 > **Prompt text is verbatim for delegation vocabulary.** The plugin never
 > rewrites delegation calls in prompts, so any delegation calls you write must
 > use the running host's vocabulary — v1 `task`/`subagent_type`/`task_id`, v2
@@ -168,10 +187,13 @@ All config files support **JSONC** (JSON with Comments):
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `preset` | string | - | Active preset name (e.g. `"openai"`, `"best"`) |
+| `setDefaultAgent` | boolean | `true` | When `true`, sets OpenCode's `default_agent` to the orchestrator if unset or pointing at a subagent; `false` leaves it untouched |
 | `stripOrchestratorModel` | boolean | `false` | Preserve a runtime `/model` selection for the orchestrator after subagent dispatch by omitting its configured model from the SDK config. A selected preset's explicit `orchestrator.model` is retained. Without a runtime selection, this opt-in delegates the initial orchestrator choice to OpenCode's session default. |
+| `routingBlock` | boolean | `true` | When false, removes the `<Agents>` routing block from the v2 orchestrator prompt. The host's native delegation-tool roster still lists every enabled agent with its one-line description, but it carries no Delegate/Don't routing criteria — the block's routing guidance (~300 tokens) has no roster equivalent, so `false` trades routing quality for tokens, or drops stock routing claims that drift against custom agent prompts (`agents.<name>.prompt`). v2 hosts only: on v1 the flag is ignored with a warning (the v1 orchestrator prompt renders the same slim routing lines as v2 (frozen wording elsewhere in the template) — use an orchestrator.md override to change routing there). No effect when an orchestrator.md override already replaces the whole prompt. |
 | `presets` | object | - | Named preset configurations. New preset names are limited to letters, digits, `-`, and `_`; `__omo_*` and JavaScript reserved property names (`__proto__`, `constructor`, `prototype`) are rejected for new presets (pre-existing entries with other names stay visible and applicable) |
 | `presets.<name>.extends` | string | - | Optional single parent preset. The parent is resolved before the child; multiple parents are not supported |
-| `presets.<name>.<agent>.model` | string | - | Model ID in `provider/model` format |
+| `presets.<name>.<agent>.model` | string \| array | - | Model ID in `provider/model` format, or a non-empty ordered fallback chain (array of IDs or `{ id, variant }`) |
+| `presets.<name>.marketplace` | object | - | Marketplace activation: `agents`, `agents_add`, `agents_remove` (package IDs). See [Marketplace](marketplace.md) |
 | `presets.<name>.<agent>.temperature` | number | - | Optional temperature (0–2); when omitted, OpenCode chooses its default |
 | `presets.<name>.<agent>.variant` | string | - | Reasoning effort: `"low"`, `"medium"`, `"high"`, or `"max"` (provider-specific) |
 | `presets.<name>.<agent>.displayName` | string | - | Custom user-facing alias for the agent (e.g. `"advisor"` for `oracle`) |
@@ -202,15 +224,13 @@ All config files support **JSONC** (JSON with Comments):
 | `disabled_agents` | string[] | `["observer"]` | Agent names to disable globally. Set to `[]` to enable Observer; this is global, not per-preset See [Custom Agents](#custom-agents). |
 | `image_routing` | `"auto"` \| `"direct"` | omitted (legacy conditional) | Optional. When omitted, resolves to `"auto"` if Observer is enabled, otherwise `"direct"`. Explicit `"auto"` saves image attachments under `.opencode/images/<session>/` and nudges delegation to @observer; saved images remain until you remove them. `"direct"` always passes image parts to the orchestrator. Remove saved images with `rm -rf .opencode/images/` (or a single session subdirectory) when they are no longer needed; session-less messages save images at the top level. |
 | `autoUpdate` | boolean | `true` | Automatically install plugin updates in the background; set to `false` for notification-only mode |
-| `multiplexer.type` | string | `"none"` | Multiplexer mode: `auto`, `tmux`, `zellij`, `herdr`, `cmux-tui`, `kitty`, or `none` See [Multiplexer Integration](multiplexer-integration.md). On OpenCode v2 hosts, panes work with the shared background service or an explicit `--server`; `--standalone` hosts ignore the setting (one diagnostic per process). |
-| `multiplexer.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Each adapter maps it to its nearest native expression (tmux full layouts; split directions for Zellij/Herdr; built-in layouts for kitty); cmux-tui has no layout expression and ignores it. See [Multiplexer Integration](multiplexer-integration.md#layouts). |
-| `multiplexer.main_pane_size` | number | `60` | Main pane size as percentage (20–80) for tmux main layouts; ignored by Zellij, Herdr, kitty, and cmux-tui See [Multiplexer Integration](multiplexer-integration.md#layouts). |
+| `multiplexer.type` | string | `"none"` | Multiplexer mode: `auto`, `tmux`, `zellij`, `herdr`, `cmux-tui`, `kitty`, `wezterm`, or `none` See [Multiplexer Integration](multiplexer-integration.md). On OpenCode v2 hosts, panes work with the shared background service or an explicit `--server`; `--standalone` hosts ignore the setting (one diagnostic per process). |
+| `multiplexer.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Each adapter maps it to its nearest native expression (tmux full layouts; split directions for Zellij/Herdr; built-in layouts for kitty; split order for WezTerm); cmux-tui has no layout expression and ignores it. See [Multiplexer Integration](multiplexer-integration.md#layouts). |
+| `multiplexer.main_pane_size` | number | `60` | Main pane size as percentage (20–80) for tmux main layouts and the first WezTerm split; ignored by Zellij, Herdr, kitty, and cmux-tui See [Multiplexer Integration](multiplexer-integration.md#layouts). |
 | `multiplexer.cmux_tui_binary` | string | omitted | Explicit path to the cmux-tui binary. When omitted, the client resolves `cmux-tui` first, then `cmux`, on `PATH` See [Multiplexer Integration](multiplexer-integration.md). |
 | `multiplexer.viewer` | string | `"tui"` on v1, `"mini"` on v2 | Subagent pane surface: `"tui"` (full interface) or `"mini"` (lightweight interface). Explicit values override the host default. On v1, `"mini"` requires OpenCode >= 1.17.10 and runs `attach ... --dir <dir> --mini`; on v2 it runs `opencode mini` without a positional directory. Changes take effect on the next opencode start. See [Multiplexer Integration](multiplexer-integration.md). |
-| `multiplexer.zellij_pane_mode` | string | — | **Deprecated and ignored.** Zellij panes always open in the tab containing the parent OpenCode pane; a once-per-process warning is logged and pane management keeps working See [Behavior Changes and Removals](multiplexer-integration.md#behavior-changes-and-removals). |
-| `tmux.enabled` | boolean | — | **Deprecated and ignored** (legacy key); use `multiplexer.type = "tmux"` See [Multiplexer Integration](multiplexer-integration.md#legacy-tmux-config). |
-| `tmux.layout` | string | — | **Deprecated and ignored** (legacy key); use `multiplexer.layout` See [Multiplexer Integration](multiplexer-integration.md#legacy-tmux-config). |
-| `tmux.main_pane_size` | number | — | **Deprecated and ignored** (legacy key); use `multiplexer.main_pane_size` See [Multiplexer Integration](multiplexer-integration.md#legacy-tmux-config). |
+| `multiplexer.zellij_pane_mode` | — | — | Removed: ignored with a warning. See [Removed config keys](#removed-config-keys). |
+| `tmux` (top-level) | — | — | Removed: ignored with a warning. Use `multiplexer.*`. See [Removed config keys](#removed-config-keys). |
 | `backgroundJobs.maxSessionsPerAgent` | integer | `2` | Maximum completed/reconciled reusable child sessions per specialist type in the current orchestrator session (1–10) See [Background Job Management](#background-job-management). |
 | `backgroundJobs.maxContextLines` | integer | `50000` | Maximum total context lines (sum of all tracked file line counts) for a session to remain reusable. Sessions exceeding this threshold are evicted from the reusable pool on completion See [Background Job Management](#background-job-management). |
 | `backgroundJobs.readContextMinLines` | integer | `10` | Minimum number of lines read from a file before it appears in reusable background-job context (0–1000) See [Background Job Management](#background-job-management). |
@@ -229,22 +249,26 @@ All config files support **JSONC** (JSON with Comments):
 | `backgroundJobs.concurrency.defaultConcurrency` | integer | `0` | Maximum concurrently running native background tasks. `0` means unlimited; accepted values are `0`–`1000` See [Background Job Management](#background-job-management). |
 | `backgroundJobs.concurrency.providerConcurrency` | object | `{}` | Per-provider caps keyed by provider ID. Each value must be `0`–`1000`, where `0` means unlimited for that provider. The most specific configured cap wins: model > provider > default See [Background Job Management](#background-job-management). |
 | `backgroundJobs.concurrency.modelConcurrency` | object | `{}` | Per-model caps keyed by `provider/model` ID. Each value must be `0`–`1000`, where `0` means unlimited for that model. The most specific configured cap wins: model > provider > default See [Background Job Management](#background-job-management). |
-| `backgroundJobs.sameProviderPolicy` | object | `{}` | Opt-in per-provider policy keyed by provider ID; the only value is `"foreground"`. When the parent session's current model and the child agent's resolved model both resolve to a configured provider, an explicit background call (`task(..., background: true)` on v1, `subagent(..., background: true)` on v2) is converted to the existing foreground execution path. Unconfigured, different, or undeterminable providers keep background behavior. See [Background Job Management](#background-job-management). |
-| `backgroundJobs.waitForUserGuard` | boolean | `true` | When true, intercepts `wait_for_user` calls while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. See [Background Job Management](#background-job-management). |
+| `backgroundJobs.sameProviderPolicy` | object | `{}` | Opt-in per-provider policy keyed by provider ID; the only value is `"foreground"`. When the parent session's current model and the child agent's resolved model both resolve to a configured provider, an explicit background call (`task(..., background: true)` on v1, `subagent(..., background: true)` on v2) is converted to the existing foreground execution path. On v2 hosts, when the background-default flip is active, calls that omit `background` are first defaulted to background, so they are converted too. Unconfigured, different, or undeterminable providers keep background behavior. See [Background Job Management](#background-job-management). |
+| `backgroundJobs.childInputWake` | boolean | `true` | When true, a background child's question or permission request wakes its parent with the ask content. See [Background Job Management](#background-job-management). |
+| `backgroundJobs.waitForUserGuard` | boolean | `true` | v1 only (`wait_for_user` is not registered on v2). When true, intercepts `wait_for_user` calls while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. See [Background Job Management](#background-job-management). |
 | `backgroundJobs.boardInjection` | boolean | `true` | When false, the Background Job Board reminder is never injected into prompts. Background task tracking, wake, and task_status all keep working; the orchestrator simply no longer passively sees the board. On v2 hosts the derived default is `false` when neither config layer sets the key — the native background notifier delivers each run's first terminal publication (with its full result) to the parent, so the board's passive injection duplicates that channel there. Explicit `true` restores it. See [Background Job Management](#background-job-management). |
 | `backgroundJobs.pruneEvictedSessions` | boolean | `false` | When true, removes the host child session when a retention trim (per-agent count cap or context budget, reusable or retained-stopped) evicts its terminal or retained-stopped background job record. Only background children this plugin launched itself through a tracked `task(..., background: true)` call are eligible: foreground task children, unattributed placeholder sessions, and adopted, restored, or rehydrated sessions are never deleted. Bounded host reads must also confirm the session's `parentID` still matches the record's parent and that the session is idle; a session the board tracks again (revived, re-registered, or leased) or with a parked child-input wait is never removed, and the delete itself has a deadline; parent deletion (`session.deleted`) and explicit drops never remove host sessions. v1 hosts only for now: v2 has no live session-status map, so every prune is skipped there. See [Background Job Management](#background-job-management). |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
 | `disabled_tools` | string[] | `[]` | Slim tool names to disable globally. Disabled Slim tools are not registered with OpenCode and cannot be used by agents; OpenCode built-in tools are not affected |
 | `disabled_skills` | string[] | `[]` | Skill names to disable globally. Disabled skills are not granted to agents, and disabled bundled skills are not registered; listing `reflect` here also disables the `/reflect` command |
-| `disabled_hooks` | string[] | `[]` | Hook names to disable globally: `phase-reminder`, `foreground-fallback`, `deepwork-guard`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`. Unknown values are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies. See [Hooks](#hooks) |
-| `disabled_commands` | string[] | `[]` | Slash commands to disable globally: `interview`, `deepwork`, `reflect`, `loop`. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. Listing `reflect` in `disabled_skills` also disables the `/reflect` command. See [Slash Commands](#slash-commands) |
+| `disabled_hooks` | string[] | `[]` | Hook names to disable globally: `phase-reminder`, `foreground-fallback`, `deepwork-guard`, `deepwork-goal`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`, `council-assembly`. Unknown values are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies. See [Hooks](#hooks) |
+| `disabled_commands` | string[] | `[]` | Slash commands to disable globally: `interview`, `implement`, `deepwork`, `reflect`, `loop`. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. Listing `reflect` in `disabled_skills` also disables the `/reflect` command. See [Slash Commands](#slash-commands) |
+| `deepworkGuardMode` | `"shadow"` \| `"enforce"` | `"shadow"` | `shadow` records receipts without blocking; `enforce` blocks completion writes whose tombstone references artifacts with no receipt. Disable the guard via `disabled_hooks` (`deepwork-guard`) |
+| `webfetch.enabled` | boolean | `true` | When `false`, the enhanced `webfetch` is not registered and OpenCode's built-in is used. See [Webfetch](webfetch.md) |
+| `webfetch.model` | string \| array | - | Dedicated summarization model(s), same shape as agent `model`. See [Webfetch](webfetch.md) |
 | `fallback.enabled` | boolean | `true` | Enable Slim's foreground model-chain failover. It does not configure OpenCode provider/AI-SDK retries. On **v2 hosts** the replay path (abort + re-prompt) stays disabled — the v2 `switchModel` has no per-turn/atomic conditional form, so an in-flight replay could commit after a newer user turn has taken over — while the retry-hook steering path runs: host retry events are absorbed up to `fallback.maxRetries`, then the model is switched in place via the host `session.switchModel` and the host retries the current turn on the new model. The same switch disables both paths. |
-| `fallback.maxRetries` | number | `3` | Number of host retry events Slim absorbs before advancing the foreground model chain. The budget stays spent across model switches; a completed successful assistant response, an observed return to the configured primary for a fresh descent, or session deletion re-arms it. Terminal `session.error` and `message.updated` failures advance immediately without charging it. `0` advances on the first retry event. This does not configure OpenCode provider or background subagent retries. |
+| `fallback.maxRetries` | integer | `3` | Number of host retry events Slim absorbs before advancing the foreground model chain. The budget stays spent across model switches. Recovery re-arms it: a completed successful assistant response on v1, or a raw `session.step.ended` with `finish` `stop`, `tool-calls` or `length`, or `session.execution.succeeded` on v2. A confirmed new v1 user turn, an observed return to the configured primary outside our committed fallback for a fresh descent, or session deletion also re-arms it. A new v2 user turn alone does not reset the budget; an explicit model change is recorded so returning to the configured primary can re-arm the descent. Landing on the configured head through a committed fallback does not re-arm this budget, including for inherit+chain agents. Terminal `session.error` and `message.updated` failures advance immediately without charging it. On v1, three distinct consecutive completed, error-free `finish: 'unknown'` messages with verified tool-free parts also trigger request-scoped abort and replay without charging retries. `0` advances on the first retry event. This does not configure OpenCode provider or background subagent retries. |
 | `fallback.initialRetryDelayMs` | number | `0` | Delay in milliseconds before triggering the first fallback on a failover-worthy error. Gives intercepting plugins time to recover the current model before the fallback chain advances. 0 disables. |
 | `fallback.retryDelayMs` | number | `500` | Delay in milliseconds between consecutive fallback attempts after the initial trigger. 0 disables. |
 | `fallback.continuationPolicy` | `"retry-primary"` \| `"stick-to-fallback"` | `"retry-primary"` | OpenCode v1 policy for unpinned internal continuations after a confirmed fallback. `"retry-primary"` lets background-completion and lifecycle turns try the configured primary again; `"stick-to-fallback"` keeps them on the confirmed fallback until the next external user turn. |
 | `council.presets` | object | - | **Required if using council.** Named councillor presets See [Council configuration note](#council-configuration-note). |
-| `council.presets.<name>.<councillor>.model` | string | - | Councillor model See [Council configuration note](#council-configuration-note). |
+| `council.presets.<name>.<councillor>.model` | string \| array | - | Councillor model: `provider/model` string, or a non-empty ordered fallback chain (array of IDs or `{ id, variant }`) See [Council configuration note](#council-configuration-note). |
 | `council.presets.<name>.<councillor>.variant` | string | - | Councillor variant See [Council configuration note](#council-configuration-note). |
 | `council.presets.<name>.<councillor>.prompt` | string | - | Optional role guidance for the councillor See [Council configuration note](#council-configuration-note). |
 | `council.default_preset` | string | `"default"` | Default preset when none is specified See [Council configuration note](#council-configuration-note). |
@@ -254,15 +278,41 @@ All config files support **JSONC** (JSON with Comments):
 | `interview.autoOpenBrowser` | boolean | `true` | Automatically open the interview UI in your default browser during interactive runs; suppressed in tests and CI See [Interview configuration](interview.md). |
 | `interview.port` | integer | `0` | Interview server port (0–65535). `0` = OS-assigned random port (per-session mode). Any value > 0 enables [dashboard mode](interview.md#dashboard-mode) See [Interview configuration](interview.md). |
 | `interview.dashboard` | boolean | `false` | Enable [dashboard mode](interview.md#dashboard-mode) on the default port (43211). Setting `port` > 0 also enables dashboard mode. If both are set, `port` takes precedence See [Interview configuration](interview.md). |
+| `interview.printState` | boolean | `false` | When `true`, the interview model prints the full `<interview_state>` block in the TUI instead of submitting state through the `interview_submit_state` tool. See [Interview configuration](interview.md). |
 | `companion.enabled` | boolean | `false` | Enable/disable the floating window Rust companion See [Desktop Companion App](#desktop-companion-app). |
 | `companion.binaryPath` | string | - | Optional path to a custom companion binary to launch instead of the default install path See [Desktop Companion App](#desktop-companion-app). |
 | `companion.position` | string | `"bottom-right"` | The initial corner position of the companion window: `bottom-right`, `bottom-left`, `top-right`, or `top-left` See [Desktop Companion App](#desktop-companion-app). |
 | `companion.size` | string | `"medium"` | The default size preset of the companion window: `small` (80px), `medium` (120px), or `large` (160px) See [Desktop Companion App](#desktop-companion-app). |
+| `companion.gifPack` | string | `"default"` | Bundled animation pack. See [Desktop Companion App](companion.md). |
+| `companion.loopStyle` | string | `"classic"` | `classic` (forward loop) or `smooth` (ping-pong). See [Desktop Companion App](companion.md). |
+| `companion.speed` | number | `1` | Playback speed multiplier, `0.25`–`4`. See [Desktop Companion App](companion.md). |
+| `companion.debug` | boolean | - | Verbose native companion debug logs. See [Desktop Companion App](companion.md). |
 
 The plugin's `agents.<agent>.mcps` setting controls which configured plugin MCP
 servers its policy allows. It is not a host-native `agent.mcps` property and
 does not replace host permission rules: an explicit host permission denial for
 an MCP tool remains authoritative.
+
+### Removed config keys
+
+These keys were removed. A config file that still contains one keeps loading:
+the key is dropped before validation and a warning names it, for example
+`Config key "fallback.timeoutMs" was removed in this version and is ignored;
+see docs/configuration.md`. Values are **not** migrated, so set the
+replacement yourself where one exists.
+
+| Removed key | Use instead |
+|-------------|-------------|
+| `tmux` (top-level block) | `multiplexer.type: "tmux"` plus `multiplexer.layout` / `multiplexer.main_pane_size` |
+| `council.master`, `council.master_timeout`, `council.master_fallback` | Configure the Council agent like any agent, e.g. `presets.<name>.council.model` |
+| `council.presets.<name>.master` (councillor named `master`) | None; rename the councillor if you still want it |
+| `council.presets.<name>.councillors` (nested wrapper) | Put councillors directly under `council.presets.<name>` (the wrapped entries are dropped) |
+| `backgroundJobs.continueOnIdle` | `backgroundJobs.orchestratorWake.enabled` |
+| `fallback.timeoutMs`, `fallback.retry_on_empty`, `fallback.runtimeOverride` | None; tune `fallback.maxRetries` / `fallback.retryDelayMs` |
+| `multiplexer.zellij_pane_mode` | None; Zellij panes always open in the parent pane's tab |
+
+Other unknown or invalid keys are not covered by this list and still make the
+config file invalid.
 
 ### Runtime Preset Switching
 
@@ -271,10 +321,14 @@ written to the user config file. On v2 hosts the write requests the live
 refresh: after the server-side watcher has re-read the config, the
 saved/applied preset's inference fields (`model`, `variant`, `temperature`,
 `options`) apply to **new child dispatches** (frozen for each child before
-its first request) and the sidebar. Every existing session and every
+its first request) and the sidebar, and the fallback chains (a `model`
+array's full chain) are refreshed in the same generation — a child already
+registered keeps the chain generation it registered with. Every existing
+session and every
 non-inference preset field (`prompt`, `tools`, `permission`, `skills`,
 `mcps`, `displayName`) stays frozen until a full reload. A malformed config
-is rejected before any swap — the last-known-good profiles and sidebar are
+is rejected before any swap — the last-known-good profiles, chains, and
+sidebar are
 kept until the config is fixed. The TUI reports `Saved … Live refresh
 requested` (it cannot observe the server-side watcher); fix the config and
 reload if new dispatches still use the old fields. On v1 hosts, reload
@@ -320,10 +374,12 @@ The `/preset` TUI persists the selected preset name and does not create an
 in-memory agent override. On v2 hosts the write requests the live refresh and
 the re-resolved inference fields apply to new child dispatches (captured
 before their first request) and the sidebar once the server-side watcher has
-refreshed; existing sessions and the prompt/tool/permission/skill/MCP surfaces
+refreshed; the fallback chains are refreshed in the same generation (a child
+already registered keeps the chain generation it registered with); existing
+sessions and the prompt/tool/permission/skill/MCP surfaces
 stay frozen until a full reload. A malformed config keeps the last-known-good
-profiles and sidebar and must be fixed (then reloaded) before the change can
-apply. On v1 hosts, reload OpenCode after changing the active preset.
+profiles, chains, and sidebar and must be fixed (then reloaded) before the
+change can apply. On v1 hosts, reload OpenCode after changing the active preset.
 
 > **niri note:** `companion-v0.1.3` includes the fixed native companion release.
 > To make it open as a bottom-right overlay, add a niri rule matching its stable
@@ -380,6 +436,32 @@ conflict with built-in or custom agents. `permissionMode` controls ACP
 permission requests, but the plugin still asks before launching the configured
 subprocess.
 
+Inner model selection is a **per-call tool argument**, not static configuration.
+For a server advertising `fable`, the wrapper can call
+`acp_run(agent: "claude-code", model: "fable", prompt: "Investigate this bug")`.
+The optional `model` is an exact ACP selector, not an OpenCode `provider/model`.
+`wrapperModel` and native `subagent.model` select only the outer wrapper; they
+can stay fixed while each ACP invocation selects a different inner model.
+
+The generated routing prompt delegates with task text such as:
+
+```text
+Inner ACP selector: fable
+Task: Investigate this bug and summarize the likely cause.
+```
+
+The wrapper extracts the explicit selector into `acp_run.model` and forwards the
+actual task, constraints, and relevant context without wrapper-routing text.
+This is LLM-mediated extraction, not a new native `subagent` argument. Custom
+`prompt` and `orchestratorPrompt` overrides replace the respective generated
+instructions and must supply this guidance themselves.
+
+Explicit selectors require advertisement and exact acknowledgement before any
+prompt; failures do not fall back. Omission uses the external default, never a
+remembered selection. An unresolved explicit request should be reported as
+ambiguous, not omitted or guessed. See
+[Per-invocation inner models](acp-agents.md#choosing-the-inner-model-per-invocation).
+
 ### Council configuration note
 
 - Councillor `model` and ACP `wrapperModel` values use `provider/model`
@@ -390,10 +472,8 @@ subprocess.
   `presets.<name>.council.model`.
 - The **councillor models** are configured separately under
   `council.presets.<name>.<councillor>.model`.
-- `council.master` (exact key) has been removed; a deprecation warning is
-  logged if a config still contains it. Other `council.master_*` variants
-  (e.g., `council.master_timeout`, `council.master_fallback`) are silently
-  dropped without warning — remove them manually.
+- `council.master*` keys were removed: ignored with a warning (see
+  [Removed config keys](#removed-config-keys)).
 
 ```jsonc
 {
@@ -471,6 +551,16 @@ unaffected. Set the keys explicitly (`"boardInjection": true`,
 `"periodicWakeEnabled": true`) to restore the v1-style behavior on v2; v1
 hosts are unchanged.
 
+`routingBlock` deliberately gets **no** v2-derived default. Unlike the board
+injection, the `<Agents>` block is not duplicated by a native channel: the
+roster carries agent identity only (~20 tokens of the block overlap with it),
+while the block's Delegate/Don't routing criteria have no native equivalent.
+A derived `false` would be a silent routing downgrade dressed up as
+deduplication, so the trade-off stays behind an explicit opt-in. As of this
+prompt refresh, v1 and v2 render identical `<Agents>` routing lines; the
+switch itself still only takes effect on v2 — v1's non-`<Agents>` wording
+remains the frozen template.
+
 Board-off behavioral notes: the consumption bookkeeping that retires
 completed/error/cancelled jobs registers on orchestrator turns driven by a
 real user message (pure event-wake turns are internal-initiator and do not
@@ -541,9 +631,10 @@ accelerator/model runtime. When a foreground parent and a same-provider
 background child run concurrently on such a backend, throughput can degrade
 from repeated model/KV context switching between the two large sessions.
 When the parent session's current model and the child agent's resolved model
-both resolve to a provider configured with `"foreground"`, the explicit
-`task(..., background: true)` request is converted to the existing foreground
-execution path:
+both resolve to a provider configured with `"foreground"`, an explicit
+`task(..., background: true)` request or an omitted `background` on v2 (when
+the background-default flip is active) is
+converted to the existing foreground execution path:
 
 ```jsonc
 {
@@ -579,10 +670,8 @@ Two behaviors to know about when concurrency is enabled:
   `concurrency`, pair it with an opt-in `wallClockTimeoutMs` so stalled
   tasks are eventually forced to a terminal state and release their slots.
 
-Configurations that still use the removed `backgroundJobs.continueOnIdle` key
-emit a deprecation warning and migrate its boolean value to
-`orchestratorWake.enabled`. An `orchestratorWake.enabled` value in the same
-config file takes precedence; replace the legacy key with that setting.
+`backgroundJobs.continueOnIdle` was removed: it is ignored with a warning and
+its value is not migrated. Use `orchestratorWake.enabled`.
 
 `wallClockTimeoutMs` is a hard deadline that only supervises explicitly
 background native task calls; foreground calls or calls with `background`
@@ -595,6 +684,32 @@ OpenCode's provider retry policy. A value of `0` allows no host retry events
 before foreground failover; it does not prevent OpenCode from retrying a
 provider request in a child session.
 
+Both fallback paths scan the chain from its head, skipping models already tried
+and providers abandoned by this session or its parent. Starting on a later entry
+does not skip the untried entries before it. A provider is excluded only after a
+provider-level failure switches the session away from it, so other models on the
+current provider remain eligible for the immediate next pick. On v1 the
+exclusion lasts until the next turn or continuation on a different model; on v2
+it lasts while the switched model stays selected. When no eligible
+entry remains, Slim retries the last chain entry once, ignoring provider
+exclusions and retaining the tried set; another failure ends intervention
+(v1 aborts once, while v2 leaves the host's retry decision unchanged).
+
+A spent allowance (for example `The usage limit has been reached`,
+`quota exceeded`, or `Weekly usage limit reached. Resets in 2 days.`) marks
+the failing model's provider exhausted, so the next pick skips every
+remaining entry on that provider, including the current provider's other
+models and the sticky retry. When no chain entry remains on a provider with
+allowance left, the error surfaces to the user: Slim neither switches models
+nor aborts. A spent allowance also skips the `fallback.maxRetries` host-retry
+budget, but keeps `fallback.initialRetryDelayMs`. Short-horizon wording in the
+same error (`retry after 20s`, `try again`, `per minute`, `resets at 15:00`)
+is treated as an ordinary rate limit, and free-tier exhaustion (`Free usage
+exceeded, subscribe to Go`) stays permanent billing. Exhausted providers are
+re-armed with the retry budget: a successful response, a new v1 user turn, a
+fresh descent from the configured primary, or session deletion. Landing back
+on a primary whose allowance is spent does not count as a fresh descent.
+
 On v2 hosts, the two fallback paths are gated separately. The replay path
 (abort + re-prompt driven by `session.error`, `message.updated` and
 `session.status` retry) stays disabled: the v2 `switchModel` has no
@@ -605,14 +720,25 @@ decision points, Slim absorbs host retries up to `fallback.maxRetries`, then
 switches the model in place via `session.switchModel` and mutates the retry
 decision so the host retries the current turn on the new model — no
 transcript replay, so the per-turn race cannot occur. Descent bookkeeping
-stays live on v2 (turn detection, agent/model tracking, and the resets on a
-successful response or a new user turn), so a later episode in the same
-session starts a fresh descent instead of inheriting the previous one.
+stays live on v2: a raw `session.step.ended` with `finish` `stop`, `tool-calls`
+or `length`, or `session.execution.succeeded`, resets tried models, exhaustion
+and the retry budget. Usage telemetry, synthesized completed-assistant messages
+and other step finishes do not prove recovery. A new v2 user turn alone does
+not reset the descent. When its model differs from the confirmed fallback,
+Slim records the selected model and clears that fallback; returning to the
+configured primary lets the existing re-arm start a fresh descent.
 `fallback.initialRetryDelayMs` has no effect on the steering path (there is
 no replay to delay; the host's own retry backoff is the recovery window) —
 a one-time log line notes the divergence. Both paths share the same user
 switches: `fallback.enabled` and `disabled_hooks: ["foreground-fallback"]`
 disable steering too.
+
+On v2, `provider.content-filter` is a request-scoped failover error even when
+the host sets `decision.retry` to `false`. Slim advances to the next eligible
+model without adding the rejected request's provider to the abandoned set.
+A model switch that times out but later succeeds is reconciled if the observed
+model is still the failed source or already the switch target; a different
+observed selection is left untouched.
 
 ### Agent Display Names
 
@@ -673,10 +799,14 @@ starting on a stale primary and waiting for an avoidable provider failure.
 Their own configured model array remains the ordered fallback chain after the
 inherited active model.
 
-Independent specialist chains follow the parent only on its own chain fallbacks.
-A shared primary is not an active fallback. When the parent's active fallback is
-in the child's chain, that exact entry is used. Otherwise Slim prefers the first
-entry on the working parent provider, then the first outside exhausted providers.
+Independent specialists move only when a confirmed parent fallback abandoned
+their primary provider after a provider-level failure. Slim picks the first
+entry in the child's own chain outside those providers, with no preference for
+the parent's model/provider. Policy/content-filter failures, retired or unknown
+models, and manual selections leave independent children unchanged; so does a
+chain with no healthy provider.
+On later failures, the child's own fallback scans from the head and skips
+providers abandoned by either the child or its parent.
 OpenCode v2 uses the native per-call subagent model override. On v1, the child's
 first prompt claims a delegation intention using the host's parent link and empty
 transcript; a `task_id` resume instead targets that child's next prompt. Slim
@@ -738,8 +868,8 @@ but still survive that model dying (rate limit, quota, outage):
 At launch the agent inherits the session model instead of the chain head.
 When a failover-worthy error hits, the runtime chain is
 `[<current session model>, ...configured chain]`: the live model is never
-re-picked, the first configured entry takes over, and later entries follow in
-order. Chain exhaustion stays bounded — after the whole chain fails once, one
+re-picked, the first eligible configured entry takes over, and later entries
+follow in order. Chain exhaustion stays bounded — after the whole chain fails once, one
 re-fallback round runs on the last entry, then the session aborts instead of
 looping. A `/model` pick on such an agent is its follow target; it never
 disables the fallback chain.
@@ -1001,10 +1131,11 @@ Disable built-in hooks via `disabled_hooks`:
 
 Available hooks:
 
-- **Prompt injection**: `phase-reminder` (per-turn scheduler-workflow reminder on orchestrator messages), `council-inject` (keyword-triggered Council Mode procedure).
+- **Prompt injection**: `phase-reminder` (per-turn scheduler-workflow reminder on orchestrator messages), `deepwork-goal` (post-compaction goal pointer), `council-inject` (keyword-triggered Council Mode procedure, injected once per session at the first trigger).
+- **Council**: `council-assembly` — switches the injected Council Mode block to paste mode: the orchestrator pastes each seat response itself (pre-assembly behavior) and the harness attaches nothing. A mid-session toggle does not rewrite blocks already injected; in that window the council may receive bare seat IDs — paste the seat responses (or start a new conversation).
 - **Model failover**: `foreground-fallback` — same effect as `fallback.enabled = false`.
 - **Tool guards**: `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch` — each stops intercepting tool calls entirely, so malformed output, repeated identical calls, and invalid or guessed paths surface raw to the model.
-- **Deepwork**: `deepwork-guard` turns the receipt/claim guard off (see `deepworkGuardMode`).
+- **Deepwork**: `deepwork-goal` turns the post-compaction goal pointer off (the model then relies on the skill's resume discipline alone); `deepwork-guard` turns the receipt/claim guard off (see `deepworkGuardMode`).
 - **Telemetry / headers**: `cache-monitor` (prompt-cache bust watchdog; warnings stop), `chat-headers` (Copilot `x-initiator` header on both the v1 `chat.headers` hook and the v2 `model.request` bridge).
 
 Guards such as `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, and `apply-patch` protect against model-side loops, bad paths, and malformed patches. Disable them only when you want raw upstream behavior.
@@ -1022,7 +1153,7 @@ Disable built-in commands via `disabled_commands`:
 { "disabled_commands": ["interview", "deepwork"] }
 ```
 
-Available commands: `interview`, `deepwork`, `reflect`, `loop`. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. Listing `reflect` in `disabled_skills` also disables the `/reflect` command.
+Available commands: `interview`, `implement`, `deepwork`, `reflect`, `loop`. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. Listing `reflect` in `disabled_skills` also disables the `/reflect` command.
 
 Invalid entries are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies — it is not an explicit empty override.
 

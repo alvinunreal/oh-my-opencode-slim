@@ -15,10 +15,7 @@ import {
 import { responseError, stringifyError } from './child-transcript';
 import { log } from './logger';
 import { withTimeout } from './session';
-import {
-  getRuntimeSessionStatusSnapshot,
-  runtimeSessionStatus,
-} from './session-runtime-status';
+import { readLiveSession } from './session-runtime-status';
 
 interface PruneSessionClient {
   get?: (request: {
@@ -98,14 +95,12 @@ async function isHostSessionIdle(
   timeoutMs: number,
 ): Promise<boolean> {
   if (typeof session.status !== 'function') return false;
-  const snapshot = await getRuntimeSessionStatusSnapshot(
+  const live = await readLiveSession(
     { client: { session }, directory } as unknown as PluginInput,
+    taskID,
     { timeoutMs },
   );
-  if (snapshot.error) return false;
-  if (snapshot.malformedSessionIDs.has(taskID)) return false;
-  const status = runtimeSessionStatus(snapshot, taskID);
-  return status === undefined || status === 'idle';
+  return live.kind === 'absent' || live.kind === 'idle';
 }
 
 /** Never rejects and always settles within the read/delete deadlines: every

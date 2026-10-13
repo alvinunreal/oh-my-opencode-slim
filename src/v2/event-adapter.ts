@@ -161,6 +161,11 @@ function formFieldToQuestion(
     question: title,
     // v1 QuestionV1 caps the header at 30 chars.
     header: title.slice(0, 30),
+    // The form field key travels with the question: the host requires form
+    // replies keyed by this exact value (`answer[field.key]` — "Unknown
+    // form field" otherwise), while header is display text truncated to
+    // 30 chars. task_reply's form answers key off it.
+    key: typeof field.key === 'string' && field.key ? field.key : title,
     options,
   };
   if (field.type === 'multiselect') question.multiple = true;

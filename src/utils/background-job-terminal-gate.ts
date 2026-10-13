@@ -278,6 +278,24 @@ function hostOutcomeRejectionReason(
   return 'idle-after-read-completion';
 }
 
+/** Log-only corroboration helper: maps a window-attributed host outcome to
+ * the terminal state the host-outcome commit policy would publish from it
+ * (interrupted/cancelled → stopped, failed → error, succeeded → completed). */
+function hostOutcomeImpliedState(outcome: string): string {
+  if (outcome === 'succeeded') return 'completed';
+  if (outcome === 'failed') return 'error';
+  return 'stopped';
+}
+
+/** Stop-family normalization for the corroboration compare: a verified
+ * cancel lease publishes 'cancelled' where a host outcome would imply
+ * 'stopped' — same stop family, must not log as a divergence. */
+function terminalStateFamily(state: string): 'completed' | 'error' | 'stopped' {
+  if (state === 'completed') return 'completed';
+  if (state === 'error') return 'error';
+  return 'stopped';
+}
+
 function observationIdentity(token: ObservationToken): string {
   return JSON.stringify([
     token.generation,
@@ -336,7 +354,10 @@ export function createBackgroundJobTerminalGate(options: {
   backgroundJobBoard: BackgroundJobStore;
   input?: PluginInput;
   readRuntime?: (run: RunRef, startedAt: number) => Promise<RuntimeObservation>;
-  readTerminalEvidence?: (taskID: string) => Promise<unknown>;
+  readTerminalEvidence?: (
+    taskID: string,
+    historyBoundary?: string,
+  ) => Promise<unknown>;
   baselineFor?: (taskID: string, generation: number) => string | undefined;
   promptMessageIDFor?: (
     taskID: string,
@@ -457,7 +478,7 @@ export function createBackgroundJobTerminalGate(options: {
       : { kind: 'stale' };
   }
 
-  function retry(run: RunRef, diagnostic: string): GateResult {
+  function retry(run: RunRef, diagnostic?: string): GateResult {
     const value = observation(run);
     if (!value) return { kind: 'stale' };
     if (
@@ -500,6 +521,7 @@ export function createBackgroundJobTerminalGate(options: {
     text: string,
     lease?: BackgroundJobLease,
     attribution: TerminalAttribution = 'event',
+    hostOutcomeRead?: string,
   ): GateResult {
     const value = observation(token);
     const before = board.get(token.taskID);
@@ -531,7 +553,8 @@ export function createBackgroundJobTerminalGate(options: {
       record: before,
       validate: () =>
         current(token) &&
-        (value.runtime?.kind === 'deleted' ||
+        (state === 'cancelled' ||
+          value.runtime?.kind === 'deleted' ||
           !options.isObservationPending?.(token.taskID, token.generation)) &&
         (value.runtime?.kind === 'quiescent' ||
           value.runtime?.kind === 'deleted' ||
@@ -552,6 +575,38 @@ export function createBackgroundJobTerminalGate(options: {
     value.timer = undefined;
     value.candidate = undefined;
     options.onTerminal?.(record);
+    // Log-only corroboration: when a window-attributed host outcome is in
+    // hand for this episode, compare it with the state being published and
+    // log bounded-evidence disagreements. Same contract as
+    // hostOutcomeRejectionReason: never gates behavior — promoting this to
+    // a decision signal requires a fresh multi-agent review. No config, no
+    // state: a publication happens at most once per (taskID, generation),
+    // so the log is naturally bounded. The comparand prefers the caller-
+    // passed read (the episode's freshest window-attributed outcome, for
+    // commits whose runtime observation predates it) over the stale runtime
+    // copy. Known divergence source: host-side outcome staleness across
+    // runs (idle_outcome has no clear point —
+    // docs/opencode-v2-compatibility.md); stop-family normalization keeps
+    // verified-cancel publications out of the log.
+    const hostOutcome =
+      hostOutcomeRead ??
+      (typeof value.runtime?.terminalOutcome === 'string'
+        ? value.runtime.terminalOutcome
+        : undefined);
+    if (
+      hostOutcome !== undefined &&
+      terminalStateFamily(state) !==
+        terminalStateFamily(hostOutcomeImpliedState(hostOutcome))
+    )
+      log('[terminal-gate] outcome corroboration', {
+        taskID: token.taskID,
+        alias: record.alias,
+        generation: token.generation,
+        published: state,
+        attribution,
+        hostOutcome,
+        hostImpliedState: hostOutcomeImpliedState(hostOutcome),
+      });
     log('[terminal-gate] terminal published', {
       taskID: token.taskID,
       generation: token.generation,
@@ -807,12 +862,15 @@ export function createBackgroundJobTerminalGate(options: {
       token,
       () =>
         options.readTerminalEvidence
-          ? options.readTerminalEvidence(token.taskID)
+          ? options.readTerminalEvidence(token.taskID, token.promptMessageID)
           : options.input
             ? fetchChildTranscript(
                 getClient(options.input),
                 token.taskID,
                 options.input.directory,
+                undefined,
+                undefined,
+                token.promptMessageID,
               )
             : Promise.resolve(undefined),
     );
@@ -842,6 +900,9 @@ export function createBackgroundJobTerminalGate(options: {
     const value = observation(run);
     if (!value) return { kind: 'stale' };
     const cancellation = value.candidate?.signal.kind === 'cancel';
+    const fenced = () =>
+      !cancellation &&
+      options.isObservationPending?.(run.taskID, run.generation);
     if (token.promptMessageID && !cancellation) {
       return inspectQueuedAnswer(token);
     }
@@ -984,11 +1045,7 @@ export function createBackgroundJobTerminalGate(options: {
               'Runtime observation unavailable; task termination is unconfirmed.'),
       );
     }
-    if (options.isObservationPending?.(run.taskID, run.generation))
-      return retry(
-        run,
-        'Fallback handoff pending; task termination is unconfirmed.',
-      );
+    if (fenced()) return retry(run);
     if (
       job.state !== 'running' &&
       (job.state === 'reconciled' ? job.terminalState : job.state) !==
@@ -1026,12 +1083,15 @@ export function createBackgroundJobTerminalGate(options: {
       typeof getClient(options.input)?.session?.messages !== 'function';
     const transcriptRead = await read(`transcript:${run.taskID}`, token, () =>
       options.readTerminalEvidence
-        ? options.readTerminalEvidence(run.taskID)
+        ? options.readTerminalEvidence(run.taskID, token.baselineMessageID)
         : options.input
           ? fetchChildTranscript(
               getClient(options.input),
               run.taskID,
               options.input.directory,
+              undefined,
+              undefined,
+              token.baselineMessageID,
             )
           : Promise.resolve(undefined),
     );
@@ -1039,11 +1099,7 @@ export function createBackgroundJobTerminalGate(options: {
     if (transcriptRead.kind === 'blocked')
       return requestRuntimeContrastAfterRead(token, transcriptRead.retryAfter);
     const response = transcriptRead.value;
-    if (options.isObservationPending?.(run.taskID, run.generation))
-      return retry(
-        run,
-        'Fallback handoff pending; task termination is unconfirmed.',
-      );
+    if (fenced()) return retry(run);
     let terminalOutcome = runtime?.terminalOutcome;
     let outcomeDiagnostic: string | undefined;
     let evidence = classifyTerminalEvidence(response, {
@@ -1082,11 +1138,7 @@ export function createBackgroundJobTerminalGate(options: {
             token,
             outcomeResponse.retryAfter,
           );
-        if (options.isObservationPending?.(run.taskID, run.generation))
-          return retry(
-            run,
-            'Fallback handoff pending; task termination is unconfirmed.',
-          );
+        if (fenced()) return retry(run);
         terminalOutcome = outcomeFromRead(
           outcomeResponse.value,
           token,
@@ -1108,6 +1160,7 @@ export function createBackgroundJobTerminalGate(options: {
         evidence.text,
         undefined,
         'transcript',
+        terminalOutcome,
       );
     // Native return is attributable only when no transcript exists. Foreground
     // still publishes when the transcript is pending; empty result uses a
@@ -1119,7 +1172,14 @@ export function createBackgroundJobTerminalGate(options: {
       signal.status.result?.trim() &&
       signal.status.state !== 'running'
     ) {
-      return commit(token, signal.status.state, signal.status.result);
+      return commit(
+        token,
+        signal.status.state,
+        signal.status.result,
+        undefined,
+        'event',
+        terminalOutcome,
+      );
     }
     if (
       foregroundNativeTerminal &&
@@ -1140,9 +1200,15 @@ export function createBackgroundJobTerminalGate(options: {
         guarded.state,
         guarded.resultSummary ??
           `Foreground task ended with state ${guarded.state}.`,
+        undefined,
+        'event',
+        terminalOutcome,
       );
     }
-    const stable = now() - (value.quiescentSince ?? now()) >= graceMs;
+    const stable =
+      now() -
+        Math.max(value.quiescentSince ?? now(), token.attemptStartedAt ?? 0) >=
+      graceMs;
     // Stop-family host outcomes are not failures: the host stopped the
     // run (user interrupt/abort) without a plugin-verified cancel
     // lease — the same stop policy as the absent-evidence branch below.

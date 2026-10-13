@@ -195,8 +195,11 @@ export class HerdrMultiplexer implements Multiplexer {
       const runExitCode = await runProc.exited;
       if (runExitCode !== 0) {
         const runStderr = await runProc.stderr();
+        const runStdout = await runProc.stdout();
         log('[herdr] spawnPane: run failed', {
+          command: opencodeCmd,
           exitCode: runExitCode,
+          stdout: runStdout.trim(),
           stderr: runStderr.trim(),
         });
         // ponytail: split succeeded but attach failed; close the orphaned pane

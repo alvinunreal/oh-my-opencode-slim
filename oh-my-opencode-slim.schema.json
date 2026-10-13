@@ -16,6 +16,10 @@
       "description": "When true, omit orchestrator.model and orchestrator.variant from the SDK config so OpenCode uses the session model selected with /model after subagent dispatch. An explicitly selected preset that sets orchestrator.model is preserved. Defaults to false.",
       "type": "boolean"
     },
+    "routingBlock": {
+      "description": "When false, removes the <Agents> routing block from the v2 orchestrator prompt. The host's native subagent roster (appended to the subagent tool description) still lists every enabled agent, but it carries no Delegate/Don't routing criteria — set false only to drop stock routing claims that drift against custom agent prompts, or to trim tokens. Ignored with a warning on v1 hosts, where the orchestrator prompt is a frozen template; use an orchestrator.md override there. No effect when an orchestrator.md override already replaces the whole prompt. Defaults to true.",
+      "type": "boolean"
+    },
     "autoUpdate": {
       "description": "Disable automatic installation of plugin updates when false. Defaults to true.",
       "type": "boolean"
@@ -110,7 +114,7 @@
                       }
                     },
                     "skills_include_local": {
-                      "description": "When true, adds every valid skill under the current project's `.opencode/skills/**/SKILL.md` tree to this agent's effective skills list before `skills_remove` is applied. Global and external skill sources are not included.",
+                      "description": "When true, adds valid skills from the current/ancestor project `.opencode/skills/**/SKILL.md` and `.agents/skills/**/SKILL.md` trees to this agent's effective skills before `skills_remove`. Global and external skill sources are excluded.",
                       "type": "boolean"
                     },
                     "mcps": {
@@ -355,7 +359,7 @@
                         }
                       },
                       "skills_include_local": {
-                        "description": "When true, adds every valid skill under the current project's `.opencode/skills/**/SKILL.md` tree to this agent's effective skills list before `skills_remove` is applied. Global and external skill sources are not included.",
+                        "description": "When true, adds valid skills from the current/ancestor project `.opencode/skills/**/SKILL.md` and `.agents/skills/**/SKILL.md` trees to this agent's effective skills before `skills_remove`. Global and external skill sources are excluded.",
                         "type": "boolean"
                       },
                       "mcps": {
@@ -532,7 +536,7 @@
                   }
                 },
                 "skills_include_local": {
-                  "description": "When true, adds every valid skill under the current project's `.opencode/skills/**/SKILL.md` tree to this agent's effective skills list before `skills_remove` is applied. Global and external skill sources are not included.",
+                  "description": "When true, adds valid skills from the current/ancestor project `.opencode/skills/**/SKILL.md` and `.agents/skills/**/SKILL.md` trees to this agent's effective skills before `skills_remove`. Global and external skill sources are excluded.",
                   "type": "boolean"
                 },
                 "mcps": {
@@ -738,7 +742,7 @@
                         }
                       },
                       "skills_include_local": {
-                        "description": "When true, adds every valid skill under the current project's `.opencode/skills/**/SKILL.md` tree to this agent's effective skills list before `skills_remove` is applied. Global and external skill sources are not included.",
+                        "description": "When true, adds valid skills from the current/ancestor project `.opencode/skills/**/SKILL.md` and `.agents/skills/**/SKILL.md` trees to this agent's effective skills before `skills_remove`. Global and external skill sources are excluded.",
                         "type": "boolean"
                       },
                       "mcps": {
@@ -912,7 +916,7 @@
                   }
                 },
                 "skills_include_local": {
-                  "description": "When true, adds every valid skill under the current project's `.opencode/skills/**/SKILL.md` tree to this agent's effective skills list before `skills_remove` is applied. Global and external skill sources are not included.",
+                  "description": "When true, adds valid skills from the current/ancestor project `.opencode/skills/**/SKILL.md` and `.agents/skills/**/SKILL.md` trees to this agent's effective skills before `skills_remove`. Global and external skill sources are excluded.",
                   "type": "boolean"
                 },
                 "mcps": {
@@ -1092,7 +1096,7 @@
             }
           },
           "skills_include_local": {
-            "description": "When true, adds every valid skill under the current project's `.opencode/skills/**/SKILL.md` tree to this agent's effective skills list before `skills_remove` is applied. Global and external skill sources are not included.",
+            "description": "When true, adds valid skills from the current/ancestor project `.opencode/skills/**/SKILL.md` and `.agents/skills/**/SKILL.md` trees to this agent's effective skills before `skills_remove`. Global and external skill sources are excluded.",
             "type": "boolean"
           },
           "mcps": {
@@ -1238,7 +1242,7 @@
       }
     },
     "disabled_hooks": {
-      "description": "Hook names to disable completely. Valid values: phase-reminder, foreground-fallback, deepwork-guard, chat-headers, cache-monitor, json-error-recovery, tool-loop-guard, search-path-guard, absolute-path-rescue, apply-patch, council-inject. \"phase-reminder\" is not registered, so orchestrator phase reminders are never injected; \"foreground-fallback\" marks the fallback manager inert: it is still constructed but never triggers automatic intervention, same effect as fallback.enabled = false; \"chat-headers\" is not registered, so the Copilot x-initiator header is never stamped (v1 chat.headers and the v2 model.request bridge); \"cache-monitor\" stops the prompt-cache bust watchdog, so cache warnings are never logged; the on-demand tool guards (\"json-error-recovery\", \"tool-loop-guard\", \"search-path-guard\", \"absolute-path-rescue\", \"apply-patch\") stop intercepting tool calls entirely, so malformed output, repeated identical calls, and invalid or guessed paths surface raw to the model; \"council-inject\" is not registered, so the keyword-triggered Council Mode injection is never appended to orchestrator messages. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer's list still applies.",
+      "description": "Hook names to disable completely. Valid values: phase-reminder, foreground-fallback, deepwork-guard, deepwork-goal, chat-headers, cache-monitor, json-error-recovery, tool-loop-guard, search-path-guard, absolute-path-rescue, apply-patch, council-inject, council-assembly. \"phase-reminder\" is not registered, so orchestrator phase reminders are never injected; \"foreground-fallback\" marks the fallback manager inert: it is still constructed but never triggers automatic intervention, same effect as fallback.enabled = false; \"chat-headers\" is not registered, so the Copilot x-initiator header is never stamped (v1 chat.headers and the v2 model.request bridge); \"cache-monitor\" stops the prompt-cache bust watchdog, so cache warnings are never logged; the on-demand tool guards (\"json-error-recovery\", \"tool-loop-guard\", \"search-path-guard\", \"absolute-path-rescue\", \"apply-patch\") stop intercepting tool calls entirely, so malformed output, repeated identical calls, and invalid or guessed paths surface raw to the model; \"council-inject\" is not registered, so the keyword-triggered Council Mode injection is never appended to orchestrator messages; \"council-assembly\" switches the injected Council Mode block to paste mode: the block instructs the orchestrator to paste each seat response itself (the pre-assembly behavior) and the harness attaches nothing. The mode is resolved once at plugin start; toggling it mid-session does not rewrite a block already injected into a transcript — a stale harness-mode block with assembly off attaches nothing (the council report names the missing seats; recover by pasting), and a stale paste-mode block with assembly on simply pastes. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer's list still applies.",
       "type": "array",
       "items": {
         "type": "string",
@@ -1246,6 +1250,7 @@
           "phase-reminder",
           "foreground-fallback",
           "deepwork-guard",
+          "deepwork-goal",
           "chat-headers",
           "cache-monitor",
           "json-error-recovery",
@@ -1253,16 +1258,18 @@
           "search-path-guard",
           "absolute-path-rescue",
           "apply-patch",
-          "council-inject"
+          "council-inject",
+          "council-assembly"
         ]
       }
     },
     "disabled_commands": {
-      "description": "Slash-command names to disable completely. Valid values: interview, deepwork, reflect, loop. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. The /reflect command is also disabled when \"reflect\" is listed in disabled_skills. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer's list still applies.",
+      "description": "Slash-command names to disable completely. Valid values: implement, interview, deepwork, reflect, loop. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. The /reflect command is also disabled when \"reflect\" is listed in disabled_skills. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer's list still applies.",
       "type": "array",
       "items": {
         "type": "string",
         "enum": [
+          "implement",
           "interview",
           "deepwork",
           "reflect",
@@ -1282,6 +1289,7 @@
             "zellij",
             "herdr",
             "kitty",
+            "wezterm",
             "cmux-tui",
             "none"
           ]
@@ -1315,6 +1323,9 @@
             "tui",
             "mini"
           ]
+        },
+        "zellij_pane_mode": {
+          "not": {}
         }
       }
     },
@@ -1346,6 +1357,11 @@
         },
         "dashboard": {
           "default": false,
+          "type": "boolean"
+        },
+        "printState": {
+          "default": false,
+          "description": "When true, the interview model prints the full <interview_state> block in the TUI instead of submitting state through the interview_submit_state tool.",
           "type": "boolean"
         }
       }
@@ -1546,13 +1562,16 @@
         },
         "childInputWake": {
           "default": true,
-          "description": "When true, a background child that asks a question or permission request wakes its parent with the ask content. Permissions can be answered with task_reply when the host exposes permission.reply; OpenCode v2 form questions are observable but not answerable through the pinned plugin context. Default enabled.",
+          "description": "When true, a background child ask wakes its parent with the ask content. Default enabled.",
           "type": "boolean"
         },
         "pruneEvictedSessions": {
           "default": false,
           "description": "When true, removes the host child session when a retention trim evicts its terminal or retained-stopped record, only for background children this plugin launched itself (never foreground, unattributed placeholder, adopted, or restored sessions) and only after a host read confirms the session still belongs to the record parent. Never fires for parent deletion or explicit drops. v1 hosts only for now (v2 has no live session-status map, so every prune is skipped). Default disabled.",
           "type": "boolean"
+        },
+        "continueOnIdle": {
+          "not": {}
         }
       }
     },
@@ -1592,6 +1611,15 @@
             "retry-primary",
             "stick-to-fallback"
           ]
+        },
+        "timeoutMs": {
+          "not": {}
+        },
+        "retry_on_empty": {
+          "not": {}
+        },
+        "runtimeOverride": {
+          "not": {}
         }
       },
       "additionalProperties": false
@@ -1607,7 +1635,9 @@
           "additionalProperties": {
             "type": "object",
             "propertyNames": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^(?!master$)",
+              "description": "Councillor name; the legacy \"master\" key was removed"
             },
             "additionalProperties": {
               "type": "object",
@@ -1621,6 +1651,15 @@
         "default_preset": {
           "default": "default",
           "type": "string"
+        },
+        "master": {
+          "not": {}
+        },
+        "master_timeout": {
+          "not": {}
+        },
+        "master_fallback": {
+          "not": {}
         }
       },
       "required": [
@@ -1798,6 +1837,9 @@
         ],
         "additionalProperties": false
       }
+    },
+    "tmux": {
+      "not": {}
     }
   },
   "title": "oh-my-opencode-slim",

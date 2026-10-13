@@ -80,11 +80,5 @@ export const MarketplaceLockfileSchema = z
   .strict();
 
 export type MarketplaceSource = z.infer<typeof MarketplaceSourceSchema>;
-export type MarketplaceLockEntryV2 = z.infer<
-  typeof MarketplaceLockEntryV2Schema
->;
-export type MarketplaceLockEntryV3 = z.infer<
-  typeof MarketplaceLockEntryV3Schema
->;
 export type MarketplaceLockEntry = z.infer<typeof MarketplaceLockEntrySchema>;
 export type MarketplaceLockfile = z.infer<typeof MarketplaceLockfileSchema>;

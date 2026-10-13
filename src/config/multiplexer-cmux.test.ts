@@ -14,27 +14,6 @@ describe('cmux multiplexer schema', () => {
     );
   });
 
-  test('keeps the cmux-tui type when the removed zellij_pane_mode key is present', () => {
-    resetMultiplexerDiagnostics();
-    const warn = spyOn(console, 'warn').mockImplementation(() => {});
-    // Spies on console.warn can be shared across test files in one process;
-    // clear call history so the assertion counts only this test's warning.
-    warn.mockClear();
-
-    try {
-      const parsed = MultiplexerConfigSchema.parse({
-        type: 'cmux-tui',
-        zellij_pane_mode: 'current-tab',
-      });
-
-      expect(parsed.type).toBe('cmux-tui');
-      expect(parsed).not.toHaveProperty('zellij_pane_mode');
-      expect(warn).toHaveBeenCalledTimes(1);
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
   test('parses and preserves cmux_tui_binary', () => {
     const parsed = MultiplexerConfigSchema.parse({
       type: 'cmux-tui',

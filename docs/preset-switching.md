@@ -34,8 +34,10 @@ the built-in `/models`, so it triggers no LLM turn.
 3. On v2 hosts a saved/applied preset requests the live refresh: the
    server-side watcher re-reads the config, resolves **only** the inference
    fields (`model`, `variant`, `temperature`, `options`) into per-agent
-   runtime profiles, and freezes the current profile for each **new child
-   session** (dispatched subagents) before its first request. The sidebar's
+   runtime profiles, republishes the fallback chains (a `model` array's full
+   chain, not just its head) in the same generation, and freezes the current
+   profile — and that chain generation — for each **new child session**
+   (dispatched subagents) before its first request. The sidebar's
    model/variant rows are rewritten by the same server-side projection, and
    the TUI sidebar re-reads its config-backed rows. The TUI only persists
    the file and requests this refresh — the refresh itself runs in the
@@ -128,7 +130,7 @@ is rejected, not applied):
 
 | Field | Description |
 |-------|-------------|
-| `model` | Model ID in `provider/model` format. Array form (fallback chains) is resolved to the first entry |
+| `model` | Model ID in `provider/model` format. Array form (fallback chains) is resolved to the first entry, and the full fallback chain is refreshed with it — new child sessions descend the refreshed chain, a child already registered keeps the chain generation it registered with. Removing a marketplace agent's override reverts new children to the package's own chain |
 | `temperature` | Inference temperature (0-2) |
 | `variant` | Model variant (e.g. `"thinking"`) |
 | `options` | Provider-specific options (e.g. thinking budget) |

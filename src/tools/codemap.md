@@ -9,6 +9,8 @@ Centralized tool factory and registry for the OpenCode plugin system. This direc
 - **Web capabilities**: Smart web fetching with caching and secondary model processing
 - **ACP integration**: External agent protocol execution
 - **Preset switching**: On-disk preset persistence helpers used by the TUI `/preset` managers (v1 and v2); the pure editor domain lives in `src/preset-editor-domain.ts`
+- **Interview state**: `interview-submit-state.ts` persists quiet interview
+  kickoff/status/patch updates for primary agents.
 
 These tools enable agents to perform file operations, manage background tasks, and interact with external systems while maintaining security boundaries through the OpenCode tool schema. Multi-LLM council orchestration is agent-level (dynamic `councillor-<name>` subagents in `src/agents/`), not a tool.
 
@@ -71,8 +73,8 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 ### Task Control Flows
 
 ```
-1. Orchestrator invokes task_cancel
-   ├─> Validates calling agent is 'orchestrator'
+1. Managed parent invokes task_cancel (including Build/custom primary agents)
+   ├─> Validates managed-session admission; host tool permissions still apply
    ├─> Resolves task_id to BackgroundJobBoard entry
    ├─> Calls abortSessionWithTimeout() to signal cancellation
    ├─> Verifies session stopped via status polling
@@ -86,7 +88,7 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
    ├─> Queues a bounded no-reply message without interrupting or resuming the child (v2: optional `delivery` — `queue` waits for an idle boundary, `steer` offers it at the next supported step boundary; acceptance ≠ consumption)
    └─> Returns transport-confirmed queue status (v2 steer: acceptance at the next supported step boundary)
 
-3. Orchestrator invokes task_revive
+3. Managed parent invokes task_revive (including Build/custom primary agents)
    ├─> Resolves the retained BackgroundJobBoard entry
    ├─> Cancels a running generation when necessary
    ├─> Launches a new prompt in the existing child session
@@ -122,7 +124,10 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 ```
 1. Agent invokes acp_run tool
    ├─> Validates calling agent matches configured agent name
+   ├─> Requests launch permission via ctx.ask()
+   ├─> Optional acp_run.model is an exact INNER ACP selector for this call, independent of the OUTER wrapper model
    ├─> Spawns ACP client process with config
+   ├─> Initializes/creates session; explicit model validates the advertised select option and confirms exact id/currentValue before prompt (fail closed); omission uses the external default
    ├─> Sends prompt via JSON-RPC over stdin/stdout
    ├─> Handles permission requests via ctx.ask()
    ├─> Collects streaming output chunks

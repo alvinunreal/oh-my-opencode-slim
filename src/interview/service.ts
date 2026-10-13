@@ -17,10 +17,16 @@ import {
   createInterviewFilePath,
   DEFAULT_OUTPUT_FOLDER,
   ensureInterviewFile,
+  extractSpecOutline,
   extractSummarySection,
   extractTitle,
+  hashInterviewState,
   InterviewDocumentOwnershipError,
+  InterviewPatchApplyError,
+  markInterviewDocumentComplete,
+  markInterviewDocumentIncomplete,
   normalizeOutputFolder,
+  parseFrontmatter,
   parseSpecBlocks,
   readInterviewDocument,
   relativeInterviewPath,
@@ -33,11 +39,26 @@ import {
   buildFallbackState,
   findLatestAssistantState,
   flattenMessage,
+  hasInterviewStateBlock,
+  locateInterviewStateBlocks,
+  normalizeAssistantState,
+  parseAssistantState,
+  replaceInterviewStateBlocks,
 } from './parser';
 import {
   buildAnswerPrompt,
+  buildBlockCommentPrompt,
+  buildChatPrompt,
+  buildImplementMissingPrompt,
+  buildImplementPatchFailurePrompt,
+  buildImplementPrompt,
+  buildImplementRefusalPrompt,
   buildKickoffPrompt,
+  buildNudgePrompt,
+  buildPatchMissingRepairPrompt,
+  buildPatchRepairPrompt,
   buildResumePrompt,
+  type SpecPromptContext,
 } from './prompts';
 import {
   createV1InterviewSessionRuntime,
@@ -45,6 +66,7 @@ import {
 } from './runtime';
 import type {
   InterviewAnswer,
+  InterviewAssistantState,
   InterviewFileItem,
   InterviewListItem,
   InterviewMessage,
@@ -53,7 +75,30 @@ import type {
 } from './types';
 
 const COMMAND_NAME = 'interview';
+const IMPLEMENT_COMMAND = 'implement';
 const DEFAULT_MAX_QUESTIONS = 2;
+
+function resolveMode(input: {
+  abandoned: boolean;
+  completed: boolean;
+  stateFromText: boolean;
+  questionCount: number;
+  busy: boolean;
+  parseError?: string;
+  hasMessages: boolean;
+  pendingAnswers: boolean;
+}): InterviewState['mode'] {
+  if (input.abandoned) return 'abandoned';
+  if (input.parseError) return 'error';
+  if (input.pendingAnswers) return 'awaiting-agent';
+  if (input.busy) return 'awaiting-agent';
+  if (input.completed || (input.stateFromText && input.questionCount === 0)) {
+    return 'completed';
+  }
+  if (input.questionCount > 0) return 'awaiting-user';
+  if (!input.stateFromText && input.hasMessages) return 'completed';
+  return 'awaiting-agent';
+}
 
 /**
  * Cap on retained abandoned interview records. Abandoned interviews are kept
@@ -149,7 +194,10 @@ export function createInterviewService(
     callback: (interview: InterviewRecord) => void,
   ) => void;
   getActiveInterviewId: (sessionID: string) => string | null;
-  registerCommand: (config: Record<string, unknown>) => void;
+  registerCommand: (
+    config: Record<string, unknown>,
+    enabled?: { interview?: boolean; implement?: boolean },
+  ) => void;
   handleCommandExecuteBefore: (
     input: { command: string; sessionID: string; arguments: string },
     output: {
@@ -165,6 +213,17 @@ export function createInterviewService(
     event: { type: string; properties?: Record<string, unknown> };
   }) => Promise<void>;
   getInterviewState: (interviewId: string) => Promise<InterviewState>;
+  submitState: (
+    sessionID: string,
+    state: InterviewAssistantState,
+    messageID?: string,
+  ) => Promise<{ ok: boolean; message: string }>;
+  notifyTurnStatus: (sessionID: string) => Promise<void>;
+  completeInterviewText: (
+    sessionID: string,
+    text: string,
+    messageID?: string,
+  ) => Promise<string>;
   listInterviewFiles: () => Promise<InterviewFileItem[]>;
   listInterviews: () => InterviewListItem[];
   submitAnswers: (
@@ -183,6 +242,7 @@ export function createInterviewService(
   ) => Promise<void>;
 } {
   const maxQuestions = config?.maxQuestions ?? DEFAULT_MAX_QUESTIONS;
+  const printState = config?.printState ?? false;
   const outputFolder = normalizeOutputFolder(
     config?.outputFolder ?? DEFAULT_OUTPUT_FOLDER,
   );
@@ -206,6 +266,56 @@ export function createInterviewService(
   let abandonedOrderCounter = 0;
   const finalizationPending = new Set<string>();
   const finalizationReady = new Set<string>();
+  type InterviewMemory = {
+    lastAppliedState?: {
+      state: InterviewAssistantState;
+      hash: string;
+      messageID?: string;
+    };
+    answeredQuestions?: Set<string>;
+    pendingAnswers?: boolean;
+    lastNotifiedHash?: string;
+    patchRepairSent?: boolean;
+    pendingPatchRepair?: {
+      failedHunk: string;
+      contextWindow: string;
+    };
+    pendingAnswerHistory?: Array<{
+      questions: InterviewState['questions'];
+      answers: InterviewAnswer[];
+      activeQuestionIds: Set<string>;
+    }>;
+    answerHistoryRetry?: Promise<void>;
+    answerHistoryError?: string;
+    answerHistoryNoticeSent?: boolean;
+    lastPatchError?: string;
+    reportedPatchFailureHash?: string;
+  };
+  type TurnState = {
+    pendingNotice?: { state: InterviewAssistantState; hash: string };
+    noticeHandled?: boolean;
+    errorNotified?: boolean;
+    errorReason?: string;
+    patchError?: boolean;
+    toolApplied?: boolean;
+    turnOpen?: boolean;
+    toolMessageID?: string;
+    serviceInitiated?: boolean;
+    repairTurnStarted?: boolean;
+    noticeInFlight?: Promise<void>;
+  };
+  const interviewMemory = new Map<string, InterviewMemory>();
+  const turnState = new Map<string, TurnState>();
+  const memoryFor = (id: string): InterviewMemory => {
+    const memory = interviewMemory.get(id) ?? {};
+    interviewMemory.set(id, memory);
+    return memory;
+  };
+  const turnFor = (id: string): TurnState => {
+    const state = turnState.get(id) ?? {};
+    turnState.set(id, state);
+    return state;
+  };
 
   function setBaseUrlResolver(resolver: () => Promise<string>): void {
     resolveBaseUrl = resolver;
@@ -273,6 +383,17 @@ export function createInterviewService(
     return interviewsById.get(interviewId) ?? null;
   }
 
+  function specContext(
+    markdownPath: string,
+    document: string,
+  ): SpecPromptContext {
+    return {
+      relativePath: relativeInterviewPath(ctx.directory, markdownPath),
+      title: extractTitle(document),
+      outline: extractSpecOutline(extractSummarySection(document)),
+    };
+  }
+
   /**
    * Mark an interview abandoned and prune the oldest abandoned records so the
    * in-memory registry (and its browser-open tracking) stays bounded.
@@ -283,7 +404,17 @@ export function createInterviewService(
       interview.abandonedOrder = ++abandonedOrderCounter;
     }
     interview.status = 'abandoned';
+    interviewMemory.delete(interview.id);
     pruneAbandonedInterviews();
+  }
+
+  function bindInterview(record: InterviewRecord): void {
+    activeInterviewIds.set(record.sessionID, record.id);
+    interviewsById.set(record.id, record);
+    fileCache = null;
+    if (onInterviewCreated) {
+      onInterviewCreated(record);
+    }
   }
 
   function pruneAbandonedInterviews(): void {
@@ -303,6 +434,9 @@ export function createInterviewService(
       .slice(0, overflow)
       .forEach((record) => {
         interviewsById.delete(record.id);
+        interviewMemory.delete(record.id);
+        finalizationPending.delete(record.id);
+        finalizationReady.delete(record.id);
         browserOpened.delete(record.id);
       });
   }
@@ -317,6 +451,12 @@ export function createInterviewService(
       const active = interviewsById.get(activeId);
       if (active && active.status === 'active') {
         if (active.idea === normalizedIdea) {
+          if (active.completed) {
+            await withInterviewDocumentLock(active.markdownPath, () =>
+              markInterviewDocumentIncomplete(active),
+            );
+            active.completed = false;
+          }
           return active;
         }
 
@@ -344,13 +484,7 @@ export function createInterviewService(
     await withInterviewDocumentLock(record.markdownPath, () =>
       ensureInterviewFile(record),
     );
-    activeInterviewIds.set(sessionID, record.id);
-    interviewsById.set(record.id, record);
-    fileCache = null;
-
-    if (onInterviewCreated) {
-      onInterviewCreated(record);
-    }
+    bindInterview(record);
     return record;
   }
 
@@ -363,6 +497,12 @@ export function createInterviewService(
       const active = interviewsById.get(activeId);
       if (active && active.status === 'active') {
         if (active.markdownPath === markdownPath) {
+          if (active.completed) {
+            await withInterviewDocumentLock(active.markdownPath, () =>
+              markInterviewDocumentIncomplete(active),
+            );
+            active.completed = false;
+          }
           return active;
         }
 
@@ -376,6 +516,7 @@ export function createInterviewService(
       sessionID,
       messages.length,
     );
+    const frontmatter = parseFrontmatter(document);
     const title = extractTitle(document);
     const record: InterviewRecord = {
       id: randomUUID(),
@@ -384,36 +525,253 @@ export function createInterviewService(
       markdownPath,
       createdAt: nowIso(),
       status: 'active',
+      completed: frontmatter?.status === 'complete',
       baseMessageCount: messages.length,
     };
 
-    activeInterviewIds.set(sessionID, record.id);
-    interviewsById.set(record.id, record);
-    fileCache = null;
-
-    if (onInterviewCreated) {
-      onInterviewCreated(record);
+    if (record.completed) {
+      await withInterviewDocumentLock(record.markdownPath, () =>
+        markInterviewDocumentIncomplete(record),
+      );
+      record.completed = false;
     }
+
+    bindInterview(record);
     return record;
   }
 
-  function syncInterview(interview: InterviewRecord): Promise<InterviewState> {
+  function syncInterview(
+    interview: InterviewRecord,
+    retryMessages = true,
+  ): Promise<InterviewState> {
     const existing = activeSyncs.get(interview.id);
     if (existing) {
       return existing;
     }
 
-    const sync = performSyncInterview(interview).finally(() => {
+    const sync = performSyncInterview(interview, retryMessages).finally(() => {
       activeSyncs.delete(interview.id);
     });
     activeSyncs.set(interview.id, sync);
     return sync;
   }
 
+  /**
+   * Shared apply step: dedupe `state` against the document's
+   * `consumedState` hash and rewrite the document. Used by the tool path,
+   * the v1 `text.complete` fallback, and polling.
+   */
+  async function applyStateToDocument(
+    interview: InterviewRecord,
+    state: InterviewAssistantState,
+  ): Promise<{
+    document: string;
+    patchError: InterviewPatchApplyError | null;
+    applied: boolean;
+    hash: string;
+  }> {
+    return withInterviewDocumentLock(interview.markdownPath, async () => {
+      const existingDocument = await readInterviewDocument(interview);
+      const turnHash = hashInterviewState(state);
+      const consumed = parseFrontmatter(existingDocument)?.consumedState;
+      if (consumed === turnHash) {
+        return {
+          document: existingDocument,
+          patchError: null,
+          applied: false,
+          hash: turnHash,
+        };
+      }
+
+      try {
+        let document = await rewriteInterviewDocument(
+          interview,
+          state.summary,
+          state.title,
+          state.patch,
+          turnHash,
+        );
+        if (
+          state.questions.length > 0 &&
+          parseFrontmatter(document)?.status === 'complete'
+        ) {
+          document = await markInterviewDocumentIncomplete(interview);
+          interview.completed = false;
+        }
+        memoryFor(interview.id).patchRepairSent = false;
+        delete memoryFor(interview.id).lastPatchError;
+        delete memoryFor(interview.id).pendingPatchRepair;
+        delete memoryFor(interview.id).reportedPatchFailureHash;
+        return { document, patchError: null, applied: true, hash: turnHash };
+      } catch (error) {
+        if (!(error instanceof InterviewPatchApplyError)) {
+          throw error;
+        }
+        return {
+          document: existingDocument,
+          patchError: error,
+          applied: false,
+          hash: turnHash,
+        };
+      }
+    });
+  }
+
+  /** Record an accepted state so the turn-end notice and polling reflect it. */
+  function markStateApplied(
+    interview: InterviewRecord,
+    state: InterviewAssistantState,
+    hash: string,
+    messageID?: string,
+  ): void {
+    const memory = memoryFor(interview.id);
+    memory.lastAppliedState = { state, hash, messageID };
+    // A fresh state supersedes any previously answered questions.
+    delete memory.answeredQuestions;
+    delete memory.pendingAnswers;
+    const turn = turnFor(interview.sessionID);
+    turn.pendingNotice = { state, hash };
+    delete turn.noticeHandled;
+    delete turn.errorNotified;
+    delete turn.errorReason;
+    delete turn.patchError;
+  }
+
+  function markTurnError(sessionID: string, reason: string): void {
+    // First reason wins for a turn: a specific tool/parse failure must not be
+    // overwritten by the generic missing-block fallback discovered on a later
+    // turn-end sync.
+    const turn = turnFor(sessionID);
+    if (!turn.errorReason) {
+      turn.errorReason = reason;
+    }
+  }
+
+  function countPatchHunks(patch: string | undefined): number {
+    if (!patch) {
+      return 0;
+    }
+    const matches = patch.match(/^@@ /gm);
+    return matches ? matches.length : 0;
+  }
+
+  function stripInterviewStateBlocks(text: string): string {
+    return replaceInterviewStateBlocks(text, () => '').trim();
+  }
+
+  function resetTurnNoticeState(sessionID: string): void {
+    const turn = turnFor(sessionID);
+    delete turn.noticeHandled;
+    delete turn.errorNotified;
+    delete turn.errorReason;
+    delete turn.toolApplied;
+    delete turn.pendingNotice;
+    delete turn.patchError;
+  }
+
+  async function retryPendingAnswerHistory(
+    interview: InterviewRecord,
+  ): Promise<void> {
+    const memory = memoryFor(interview.id);
+    if (memory.answerHistoryRetry) {
+      await memory.answerHistoryRetry;
+      return;
+    }
+    const pending = memory.pendingAnswerHistory;
+    if (!pending?.length) return;
+
+    const retry = (async () => {
+      while (pending.length > 0) {
+        const batch = pending[0];
+        try {
+          await withInterviewDocumentLock(interview.markdownPath, () =>
+            appendInterviewAnswers(interview, batch.questions, batch.answers),
+          );
+          pending.shift();
+        } catch (error) {
+          noteAnswerHistoryFailure(interview);
+          log('[interview] failed to retry interview answers', {
+            error: String(error),
+          });
+          return;
+        }
+      }
+
+      delete memory.pendingAnswerHistory;
+      delete memory.answerHistoryError;
+      delete memory.answerHistoryNoticeSent;
+    })();
+    memory.answerHistoryRetry = retry;
+    try {
+      await retry;
+    } finally {
+      if (memory.answerHistoryRetry === retry) {
+        delete memory.answerHistoryRetry;
+      }
+    }
+  }
+
+  function noteAnswerHistoryFailure(interview: InterviewRecord): void {
+    const memory = memoryFor(interview.id);
+    memory.answerHistoryError =
+      'Answers were sent, but saving their history failed. The history will be retried automatically.';
+  }
+
+  function closeTurn(sessionID: string): void {
+    const turn = turnFor(sessionID);
+    turn.turnOpen = false;
+    turn.serviceInitiated = false;
+  }
+
+  async function notifyAnswerHistoryFailure(
+    interview: InterviewRecord,
+    sessionID: string,
+  ): Promise<void> {
+    const memory = memoryFor(interview.id);
+    if (!memory.answerHistoryError || memory.answerHistoryNoticeSent) return;
+    memory.answerHistoryNoticeSent = true;
+    const docPath = relativeInterviewPath(
+      ctx.directory,
+      interview.markdownPath,
+    );
+    try {
+      await sessionRuntime.notify(
+        sessionID,
+        `⎔ Answers sent, but saving them to the Q&A history failed. Retrying automatically · Doc: ${docPath} [system status: continue without acknowledging this notification]`,
+      );
+    } catch (error) {
+      log('[interview] failed to notify answer history failure', {
+        interviewId: interview.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   async function performSyncInterview(
     interview: InterviewRecord,
+    retryMessages = true,
   ): Promise<InterviewState> {
-    const allMessages = await loadMessagesWithRetry(interview.sessionID);
+    if (interview.status !== 'active') {
+      const document = await readInterviewDocument(interview);
+      return {
+        interview,
+        url: `${await ensureServer()}/interview/${interview.id}`,
+        markdownPath: relativeInterviewPath(
+          ctx.directory,
+          interview.markdownPath,
+        ),
+        mode: 'abandoned',
+        lastParseError: undefined,
+        isBusy: false,
+        summary: extractSummarySection(document),
+        questions: [],
+        document,
+        blocks: parseSpecBlocks(document),
+      };
+    }
+    const allMessages = retryMessages
+      ? await loadMessagesWithRetry(interview.sessionID)
+      : await loadMessages(interview.sessionID);
     const interviewMessages = allMessages
       .slice(interview.baseMessageCount)
       .filter(isUserVisibleMessage);
@@ -423,46 +781,179 @@ export function createInterviewService(
     const latestAssistantText = latestAssistant
       ? flattenMessage(latestAssistant)
       : '';
+    const latestAssistantId =
+      typeof latestAssistant?.info?.id === 'string'
+        ? latestAssistant.info.id
+        : undefined;
     const isCleanFinalResponse =
       finalizationPending.has(interview.id) &&
       finalizationReady.has(interview.id) &&
-      latestAssistantText.length > 0 &&
-      !/<interview_state>/i.test(latestAssistantText);
-    const parsed = isCleanFinalResponse
-      ? { state: null, latestAssistantError: undefined }
-      : findLatestAssistantState(interviewMessages, maxQuestions);
-    const synced = await withInterviewDocumentLock(
-      interview.markdownPath,
-      async () => {
-        const existingDocument = await readInterviewDocument(interview);
-        const fallbackState = buildFallbackState(interviewMessages);
-        const state = parsed.state ?? {
-          ...fallbackState,
-          summary:
-            extractSummarySection(existingDocument) || fallbackState.summary,
-        };
+      latestAssistantText.length > 0;
+    const remembered = memoryFor(interview.id).lastAppliedState;
+    const toolMessageID = turnFor(interview.sessionID).toolMessageID;
+    // The assistant message the current state was applied for: the tool path
+    // records it on submit, the v1 text fallback records it on apply.
+    const appliedMessageID = remembered?.messageID ?? toolMessageID;
+    const messageIndex = (id: string | undefined): number =>
+      id === undefined
+        ? -1
+        : interviewMessages.findIndex((message) => message.info?.id === id);
+    const appliedMessageIndex = messageIndex(appliedMessageID);
+    const latestAssistantIndex = messageIndex(latestAssistantId);
+    const toolMessageIndex = messageIndex(toolMessageID);
 
-        let document: string;
-        if (isCleanFinalResponse) {
-          document = await rewriteInterviewDocumentWithFinalSpec(
-            interview,
-            latestAssistantText,
-          );
-          finalizationPending.delete(interview.id);
-        } else if (parsed.state) {
-          document = await rewriteInterviewDocument(
-            interview,
-            state.summary,
-            state.title,
-          );
-        } else {
-          document = await readInterviewDocument(interview);
+    // Assistant messages strictly newer than the applied one. When the applied
+    // message cannot be located (v2 transcript retention, or a tool call with
+    // no stored assistant message), every assistant message is a candidate so
+    // a later malformed block still surfaces. A block printed in the applied
+    // message itself or earlier is never re-applied.
+    const newerAssistantMessages = interviewMessages.filter(
+      (message, index) => {
+        if (message.info?.role !== 'assistant') {
+          return false;
         }
-
-        return { document, state };
+        if (appliedMessageID !== undefined && appliedMessageIndex >= 0) {
+          return index > appliedMessageIndex;
+        }
+        return true;
       },
     );
-    const { document, state } = synced;
+    // "State-bearing" means the message carries a complete
+    // <interview_state>...</interview_state> region at all, valid or
+    // malformed (matching the parser's both-tags check). When none of the
+    // newer messages does, the remembered state is still current and must not
+    // read as a missing-block error.
+    const hasNewerStateBearingText = newerAssistantMessages.some((message) => {
+      return hasInterviewStateBlock(flattenMessage(message));
+    });
+
+    const parsed = isCleanFinalResponse
+      ? { state: null, latestAssistantError: undefined }
+      : findLatestAssistantState(newerAssistantMessages, maxQuestions);
+
+    const rememberedForLatest =
+      remembered && !hasNewerStateBearingText ? remembered : undefined;
+
+    // The submit tool is authoritative for its assistant message and every
+    // earlier one; a block printed in that message must never re-apply over
+    // the tool state on a later poll.
+    const latestIsToolMessageOrEarlier =
+      toolMessageID !== undefined &&
+      latestAssistantId !== undefined &&
+      (toolMessageID === latestAssistantId ||
+        (toolMessageIndex >= 0 &&
+          latestAssistantIndex >= 0 &&
+          latestAssistantIndex <= toolMessageIndex));
+    const toolWins =
+      latestIsToolMessageOrEarlier ||
+      (turnFor(interview.sessionID).toolApplied === true &&
+        rememberedForLatest !== undefined);
+    const stateFromText = toolWins ? null : parsed.state;
+    // The remembered state is only a fallback. Questions already answered in
+    // the browser must not be re-offered once a later turn produced no new
+    // state; answeredQuestions is cleared whenever a fresh state is applied.
+    const answeredQuestionIds = memoryFor(interview.id).answeredQuestions;
+    const answeredFilteredState =
+      rememberedForLatest && answeredQuestionIds?.size
+        ? {
+            ...rememberedForLatest.state,
+            questions: rememberedForLatest.state.questions.filter(
+              (question) => !answeredQuestionIds.has(question.id),
+            ),
+          }
+        : rememberedForLatest?.state;
+    const answeredRememberedState =
+      remembered && answeredQuestionIds?.size
+        ? {
+            ...remembered.state,
+            questions: remembered.state.questions.filter(
+              (question) => !answeredQuestionIds.has(question.id),
+            ),
+          }
+        : remembered?.state;
+    let patchError: InterviewPatchApplyError | null = null;
+    let patchErrorHash: string | undefined;
+    let patchFailureAlreadyReported = false;
+    const latestAssistantError =
+      stateFromText || rememberedForLatest || toolWins
+        ? undefined
+        : parsed.latestAssistantError;
+    if (latestAssistantError) {
+      markTurnError(interview.sessionID, latestAssistantError);
+    }
+
+    let document: string;
+
+    if (isCleanFinalResponse) {
+      document = await withInterviewDocumentLock(interview.markdownPath, () =>
+        rewriteInterviewDocumentWithFinalSpec(interview, latestAssistantText),
+      );
+      finalizationPending.delete(interview.id);
+      delete memoryFor(interview.id).lastAppliedState;
+      delete turnFor(interview.sessionID).pendingNotice;
+    } else if (stateFromText) {
+      const outcome = await applyStateToDocument(interview, stateFromText);
+      document = outcome.document;
+      patchError = outcome.patchError;
+      patchErrorHash = outcome.hash;
+      if (patchError) {
+        const memory = memoryFor(interview.id);
+        const alreadyReported =
+          memory.reportedPatchFailureHash === outcome.hash;
+        patchFailureAlreadyReported = alreadyReported;
+        memory.lastPatchError = patchError.message;
+        if (!alreadyReported) {
+          turnFor(interview.sessionID).patchError = true;
+          memory.reportedPatchFailureHash = outcome.hash;
+          markTurnError(interview.sessionID, patchError.message);
+        }
+      } else if (outcome.applied) {
+        markStateApplied(
+          interview,
+          stateFromText,
+          outcome.hash,
+          latestAssistantId,
+        );
+      } else {
+        if (latestAssistantId !== remembered?.messageID) {
+          markStateApplied(
+            interview,
+            stateFromText,
+            outcome.hash,
+            latestAssistantId,
+          );
+        }
+      }
+    } else {
+      document = await withInterviewDocumentLock(interview.markdownPath, () =>
+        readInterviewDocument(interview),
+      );
+    }
+
+    const fallbackState = buildFallbackState(interviewMessages);
+    const effectivePatchError =
+      patchError?.message ?? memoryFor(interview.id).lastPatchError;
+    const effectiveState = effectivePatchError
+      ? (answeredRememberedState ?? null)
+      : (stateFromText ?? answeredFilteredState ?? null);
+    const state = effectiveState ?? {
+      ...fallbackState,
+      summary: extractSummarySection(document) || fallbackState.summary,
+    };
+    const memory = memoryFor(interview.id);
+    const repairExhausted =
+      patchError !== null && memory.patchRepairSent === true;
+    if (
+      patchError &&
+      !repairExhausted &&
+      !patchFailureAlreadyReported &&
+      memory.reportedPatchFailureHash === patchErrorHash
+    ) {
+      memory.pendingPatchRepair = {
+        failedHunk: patchError.failedHunk,
+        contextWindow: patchError.contextWindow,
+      };
+    }
     const blocks = parseSpecBlocks(document);
 
     const interviewState: InterviewState = {
@@ -472,29 +963,26 @@ export function createInterviewService(
         ctx.directory,
         interview.markdownPath,
       ),
-      mode:
-        interview.status === 'abandoned'
-          ? 'abandoned'
-          : parsed.state && state.questions.length === 0
-            ? 'completed'
-            : sessionBusy.get(interview.sessionID) === true
-              ? 'awaiting-agent'
-              : state.questions.length > 0
-                ? 'awaiting-user'
-                : parsed.latestAssistantError
-                  ? 'error'
-                  : // An empty WHOLE-transcript read (impossible on v1
-                    // runtimes; reachable on v2 only via bridge retention
-                    // loss) must not read as 'completed' — the answer form
-                    // would vanish for a live interview. Keyed on
-                    // allMessages, NOT interviewMessages: an empty
-                    // post-base slice legitimately awaits the first answer.
-                    !parsed.state &&
-                      allMessages.length > 0 &&
-                      sessionBusy.get(interview.sessionID) === false
-                    ? 'completed'
-                    : 'awaiting-agent',
-      lastParseError: parsed.latestAssistantError,
+      mode: resolveMode({
+        abandoned: false,
+        completed: interview.completed === true,
+        stateFromText: stateFromText !== null && !effectivePatchError,
+        questionCount: state.questions.length,
+        busy: sessionBusy.get(interview.sessionID) === true,
+        parseError:
+          effectivePatchError ??
+          latestAssistantError ??
+          (memory.pendingAnswers
+            ? turnFor(interview.sessionID).errorReason
+            : undefined),
+        hasMessages:
+          allMessages.length > 0 &&
+          sessionBusy.get(interview.sessionID) === false,
+        pendingAnswers: memory.pendingAnswers === true,
+      }),
+      lastParseError: effectivePatchError
+        ? 'The spec patch did not apply.'
+        : (latestAssistantError ?? memory.answerHistoryError),
       isBusy: sessionBusy.get(interview.sessionID) === true,
       summary: state.summary,
       questions: state.questions,
@@ -510,10 +998,338 @@ export function createInterviewService(
     return interviewState;
   }
 
+  /**
+   * Apply a state submitted through the `interview_submit_state` tool. Runs
+   * the shared apply step without parsing message text.
+   */
+  async function submitState(
+    sessionID: string,
+    state: InterviewAssistantState,
+    messageID?: string,
+  ): Promise<{ ok: boolean; message: string }> {
+    const interviewId = activeInterviewIds.get(sessionID);
+    const interview = interviewId ? interviewsById.get(interviewId) : undefined;
+    if (!interview) {
+      return {
+        ok: false,
+        message: '⎔ Interview state rejected: no active interview',
+      };
+    }
+
+    const normalized = normalizeAssistantState(
+      state as unknown as Record<string, unknown>,
+      maxQuestions,
+    );
+    try {
+      const outcome = await applyStateToDocument(interview, normalized);
+      if (outcome.patchError) {
+        const memory = memoryFor(interview.id);
+        const alreadyReported =
+          memory.reportedPatchFailureHash === outcome.hash;
+        if (!alreadyReported) {
+          turnFor(sessionID).patchError = true;
+          markTurnError(sessionID, outcome.patchError.message);
+          memory.reportedPatchFailureHash = outcome.hash;
+        }
+        memory.lastPatchError = outcome.patchError.message;
+        if (memory.patchRepairSent !== true) {
+          memory.pendingPatchRepair = {
+            failedHunk: outcome.patchError.failedHunk,
+            contextWindow: outcome.patchError.contextWindow,
+          };
+        }
+        return {
+          ok: false,
+          message: `⎔ Interview state rejected: patch failed: ${outcome.patchError.message}. Submit a corrected patch in the next state.`,
+        };
+      }
+      turnFor(sessionID).toolApplied = true;
+      if (messageID) {
+        turnFor(sessionID).toolMessageID = messageID;
+      }
+      markStateApplied(interview, normalized, outcome.hash, messageID);
+      await retryPendingAnswerHistory(interview);
+      const hunks = countPatchHunks(normalized.patch);
+      const count = normalized.questions.length;
+      const questionLabel = count === 1 ? 'question' : 'questions';
+      const message =
+        hunks > 0
+          ? `Interview state applied (patch: ${hunks} hunk${hunks === 1 ? '' : 's'}, ${count} ${questionLabel}).`
+          : `Interview state applied (${count} ${questionLabel}).`;
+      return { ok: true, message };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      markTurnError(sessionID, reason);
+      return {
+        ok: false,
+        message: `⎔ Interview state rejected: ${reason}`,
+      };
+    }
+  }
+
+  /**
+   * Post the one status/error notice for the turn that just ended. Called on
+   * busy→idle only, never on `session.next.text.ended`.
+   * Concurrent calls (v1 fires `session.status idle` and `session.idle` back
+   * to back) share one in-flight decision so exactly one notice is posted.
+   */
+  function notifyTurnStatus(sessionID: string): Promise<void> {
+    const turn = turnFor(sessionID);
+    const existing = turn.noticeInFlight;
+    if (existing) {
+      return existing;
+    }
+    const inFlight = performTurnNotice(sessionID).finally(() => {
+      delete turn.noticeInFlight;
+    });
+    turn.noticeInFlight = inFlight;
+    return inFlight;
+  }
+
+  async function performTurnNotice(sessionID: string): Promise<void> {
+    const interviewId = activeInterviewIds.get(sessionID);
+    if (!interviewId) {
+      closeTurn(sessionID);
+      return;
+    }
+    const interview = interviewsById.get(interviewId);
+    if (!interview) {
+      closeTurn(sessionID);
+      return;
+    }
+
+    if (interview.completed || interview.status !== 'active') {
+      closeTurn(sessionID);
+      return;
+    }
+
+    // Apply any state still present in stored text (printState mode, a missed
+    // text.complete hook, or the v2 fallback) before choosing the notice.
+    // Non-retrying: the turn is over, so a missing assistant message is real.
+    const turn = turnFor(sessionID);
+    if (!turn.noticeHandled) {
+      try {
+        await syncInterview(interview, false);
+      } catch (error) {
+        log('[interview] turn-end sync failed', {
+          interviewId: interview.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const memory = memoryFor(interview.id);
+    if (memory.pendingAnswers && !turn.pendingNotice) {
+      markTurnError(sessionID, 'answers were not applied to the spec');
+    }
+    if (memory.patchRepairSent === true && !turn.repairTurnStarted) {
+      return;
+    }
+    if (
+      memory.patchRepairSent === true &&
+      !turn.pendingNotice &&
+      turn.repairTurnStarted
+    ) {
+      turn.errorReason =
+        'automatic spec patch repair produced no accepted state';
+      turn.serviceInitiated = true;
+      delete turn.noticeHandled;
+      delete memory.patchRepairSent;
+      delete memory.pendingPatchRepair;
+    } else if (memory.patchRepairSent === true && turn.pendingNotice) {
+      delete turn.noticeHandled;
+      delete turn.repairTurnStarted;
+      delete memory.patchRepairSent;
+    }
+
+    if (turn.noticeHandled) {
+      closeTurn(sessionID);
+      return;
+    }
+
+    const pendingRepair = memoryFor(interview.id).pendingPatchRepair;
+    if (pendingRepair && memoryFor(interview.id).patchRepairSent !== true) {
+      const repairServiceInitiated = turn.serviceInitiated === true;
+      delete turn.pendingNotice;
+      delete turn.toolApplied;
+      if (!repairServiceInitiated) {
+        delete memoryFor(interview.id).pendingPatchRepair;
+      } else {
+        resetTurnNoticeState(sessionID);
+        turn.noticeHandled = true;
+        closeTurn(sessionID);
+        const memory = memoryFor(interview.id);
+        memory.patchRepairSent = true;
+        delete memory.pendingPatchRepair;
+        sessionBusy.set(sessionID, true);
+        const repairTurn = turnFor(sessionID);
+        repairTurn.serviceInitiated = true;
+        repairTurn.turnOpen = false;
+        repairTurn.repairTurnStarted = false;
+        const model = sessionModel.get(sessionID);
+        try {
+          await sessionRuntime.continue(
+            sessionID,
+            pendingRepair.failedHunk || pendingRepair.contextWindow
+              ? buildPatchRepairPrompt(
+                  pendingRepair.failedHunk,
+                  pendingRepair.contextWindow,
+                  maxQuestions,
+                  printState,
+                )
+              : buildPatchMissingRepairPrompt(maxQuestions, printState),
+            model ? (parseModelReference(model) ?? undefined) : undefined,
+          );
+        } catch (error) {
+          sessionBusy.set(sessionID, false);
+          closeTurn(sessionID);
+          delete turn.patchError;
+          delete memory.patchRepairSent;
+          const reason = error instanceof Error ? error.message : String(error);
+          turn.errorReason = `spec patch repair failed to send: ${reason}`;
+          try {
+            const url = `${await ensureServer()}/interview/${interview.id}`;
+            await sessionRuntime.notify(
+              sessionID,
+              `⎔ Interview update failed: ${turn.errorReason} · UI: ${url} [system status: continue without acknowledging this notification]`,
+            );
+          } catch {
+            // The original send failure is already logged and is the useful error.
+          }
+          log('[interview] spec patch repair failed to send', {
+            interviewId: interview.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return;
+      }
+    }
+
+    let baseUrl: string;
+    try {
+      baseUrl = await ensureServer();
+    } catch {
+      return;
+    }
+    const url = `${baseUrl}/interview/${interview.id}`;
+
+    const pending = turn.pendingNotice;
+    if (pending) {
+      delete turn.pendingNotice;
+      turn.noticeHandled = true;
+      delete turn.toolApplied;
+      closeTurn(sessionID);
+      await notifyAnswerHistoryFailure(interview, sessionID);
+      if (memoryFor(interview.id).lastNotifiedHash === pending.hash) {
+        return;
+      }
+      memoryFor(interview.id).lastNotifiedHash = pending.hash;
+      const count = pending.state.questions.length;
+      const questionLabel = count === 1 ? 'question' : 'questions';
+      const docPath = relativeInterviewPath(
+        ctx.directory,
+        interview.markdownPath,
+      );
+      await sessionRuntime.notify(
+        sessionID,
+        `⎔ Spec updated · ${count} ${questionLabel} · UI: ${url} · Doc: ${docPath} [system status: continue without acknowledging this notification]`,
+      );
+      return;
+    }
+
+    const serviceInitiated = turn.serviceInitiated === true;
+    turn.noticeHandled = true;
+    delete turn.toolApplied;
+    closeTurn(sessionID);
+    await notifyAnswerHistoryFailure(interview, sessionID);
+    // Only a turn the interview service itself started (kickoff, answers,
+    // block comment, chat, nudge, patch repair) may post the missing/failed
+    // update notice. A plain user turn in an interview session stays silent.
+    if (!serviceInitiated && !turn.patchError) {
+      return;
+    }
+    if (turn.errorNotified) {
+      return;
+    }
+    turn.errorNotified = true;
+    const reason = turn.errorReason ?? 'missing <interview_state> block';
+    await sessionRuntime.notify(
+      sessionID,
+      `⎔ Interview update failed: ${reason} · UI: ${url} [system status: continue without acknowledging this notification]`,
+    );
+  }
+
+  /**
+   * v1 `experimental.text.complete` fallback: capture a printed
+   * `<interview_state>` block through the shared apply step, then strip it.
+   * Malformed or failed states leave the text unchanged so the existing
+   * error/retry path still runs. printState mode keeps the block.
+   */
+  async function completeInterviewText(
+    sessionID: string,
+    text: string,
+    messageID?: string,
+  ): Promise<string> {
+    if (printState) {
+      return text;
+    }
+    const interviewId = activeInterviewIds.get(sessionID);
+    if (!interviewId) {
+      return text;
+    }
+    const interview = interviewsById.get(interviewId);
+    if (!interview) {
+      return text;
+    }
+    if (locateInterviewStateBlocks(text).length === 0) {
+      return text;
+    }
+    // The submit tool is authoritative for its assistant message: a block
+    // printed in the same message (or re-polled later) must not overwrite the
+    // tool state. The per-turn flag covers hosts without a message id.
+    const turn = turnFor(sessionID);
+    const toolMessageID = turn.toolMessageID;
+    if (
+      turn.toolApplied ||
+      (toolMessageID !== undefined && messageID === toolMessageID)
+    ) {
+      return stripInterviewStateBlocks(text);
+    }
+
+    const parsed = parseAssistantState(text, maxQuestions);
+    if (!parsed.state) {
+      return text;
+    }
+    try {
+      const outcome = await applyStateToDocument(interview, parsed.state);
+      if (outcome.patchError) {
+        turnFor(sessionID).patchError = true;
+        markTurnError(sessionID, outcome.patchError.message);
+        memoryFor(interview.id).lastPatchError = outcome.patchError.message;
+        return text;
+      }
+      if (outcome.applied) {
+        markStateApplied(interview, parsed.state, outcome.hash, messageID);
+      } else {
+        const remembered = memoryFor(interview.id).lastAppliedState;
+        if (messageID !== remembered?.messageID) {
+          markStateApplied(interview, parsed.state, outcome.hash, messageID);
+        }
+      }
+      return stripInterviewStateBlocks(text);
+    } catch (error) {
+      markTurnError(
+        sessionID,
+        error instanceof Error ? error.message : String(error),
+      );
+      return text;
+    }
+  }
+
   async function notifyInterviewUrl(
     sessionID: string,
     interview: InterviewRecord,
-  ): Promise<void> {
+  ): Promise<string> {
     const baseUrl = await ensureServer();
     const url = `${baseUrl}/interview/${interview.id}`;
 
@@ -531,20 +1347,33 @@ export function createInterviewService(
         '[system status: continue without acknowledging this notification]',
       ].join('\n'),
     );
+    return url;
   }
 
-  function registerCommand(opencodeConfig: Record<string, unknown>): void {
+  function registerCommand(
+    opencodeConfig: Record<string, unknown>,
+    enabled?: { interview?: boolean; implement?: boolean },
+  ): void {
+    const interviewOn = enabled?.interview !== false;
+    const implementOn = enabled?.implement !== false;
     const configCommand = opencodeConfig.command as
       | Record<string, unknown>
       | undefined;
-    if (!configCommand?.[COMMAND_NAME]) {
-      if (!opencodeConfig.command) {
-        opencodeConfig.command = {};
-      }
-      (opencodeConfig.command as Record<string, unknown>)[COMMAND_NAME] = {
+    if (!opencodeConfig.command) {
+      opencodeConfig.command = {};
+    }
+    const commands = opencodeConfig.command as Record<string, unknown>;
+    if (interviewOn && !configCommand?.[COMMAND_NAME]) {
+      commands[COMMAND_NAME] = {
         template: 'Start an interview and write a live markdown spec',
         description:
           'Open a localhost interview UI linked to the current OpenCode session',
+      };
+    }
+    if (implementOn && !configCommand?.[IMPLEMENT_COMMAND]) {
+      commands[IMPLEMENT_COMMAND] = {
+        template: 'Implement the completed interview spec',
+        description: 'Read the completed interview markdown and implement it',
       };
     }
   }
@@ -557,6 +1386,82 @@ export function createInterviewService(
       throw new Error('Interview not found');
     }
     return syncInterview(interview);
+  }
+
+  async function runServiceTurn(
+    interview: InterviewRecord,
+    buildPrompt: (state: InterviewState) => Promise<string> | string,
+  ): Promise<void> {
+    const sessionID = interview.sessionID;
+    if (sessionBusy.get(sessionID) === true) {
+      throw new Error(
+        'Interview session is busy. Wait for the current response.',
+      );
+    }
+    sessionBusy.set(sessionID, true);
+    const memory = memoryFor(interview.id);
+    await retryPendingAnswerHistory(interview);
+    memory.patchRepairSent = false;
+    delete memory.pendingPatchRepair;
+    let promptSent = false;
+    let serviceInitiated = false;
+    let reopenedCompletion = false;
+    let reopenedConsumedState: string | undefined;
+    try {
+      const state = await getInterviewState(interview.id);
+      if (state.mode === 'error') {
+        if (!memory.lastPatchError && !memory.pendingAnswers) {
+          throw new Error('Interview is waiting for a valid agent update.');
+        }
+      }
+      const prompt = await buildPrompt(state);
+      const promptWithPatchNote = memory.lastPatchError
+        ? `${prompt}\n\nThe last spec patch failed: ${memory.lastPatchError}. Re-base the patch on the current spec before submitting the next state.`
+        : prompt;
+      const model = sessionModel.get(sessionID);
+      turnFor(sessionID).serviceInitiated = true;
+      serviceInitiated = true;
+      if (interview.completed) {
+        const beforeReopen = await readInterviewDocument(interview);
+        reopenedConsumedState = parseFrontmatter(beforeReopen)?.consumedState;
+        await withInterviewDocumentLock(interview.markdownPath, () =>
+          markInterviewDocumentIncomplete(interview),
+        );
+        interview.completed = false;
+        reopenedCompletion = true;
+      }
+      await sessionRuntime.continue(
+        sessionID,
+        promptWithPatchNote,
+        model ? (parseModelReference(model) ?? undefined) : undefined,
+      );
+      promptSent = true;
+    } finally {
+      if (!promptSent) {
+        sessionBusy.set(sessionID, false);
+        if (serviceInitiated) {
+          turnFor(sessionID).serviceInitiated = false;
+        }
+        if (reopenedCompletion) {
+          try {
+            await withInterviewDocumentLock(
+              interview.markdownPath,
+              async () => {
+                const current = await readInterviewDocument(interview);
+                const consumedState = parseFrontmatter(current)?.consumedState;
+                if (consumedState !== reopenedConsumedState) return;
+                await markInterviewDocumentComplete(interview);
+                interview.completed = true;
+              },
+            );
+          } catch (error) {
+            log('[interview] failed to restore completed document', {
+              error: String(error),
+            });
+          }
+        }
+      }
+    }
   }
 
   function listInterviews(): InterviewListItem[] {
@@ -587,59 +1492,86 @@ export function createInterviewService(
     if (interview.status === 'abandoned') {
       throw new Error('Interview session is no longer active.');
     }
-    if (sessionBusy.get(interview.sessionID) === true) {
-      throw new Error(
-        'Interview session is busy. Wait for the current response.',
-      );
-    }
-
-    // Acquire busy lock immediately before any async operations to prevent race
-    sessionBusy.set(interview.sessionID, true);
-    let promptSent = false;
-
+    let pendingAnswerContext:
+      | {
+          activeQuestionIds: Set<string>;
+          questions: InterviewState['questions'];
+        }
+      | undefined;
+    let answersMarked = false;
+    let previousPendingAnswers: boolean | undefined;
+    let previousAnsweredQuestions: Set<string> | undefined;
     try {
-      const state = await getInterviewState(interviewId);
-      if (state.mode === 'error') {
-        throw new Error('Interview is waiting for a valid agent update.');
-      }
-
-      const activeQuestionIds = new Set(
-        state.questions.map((question) => question.id),
-      );
-      if (activeQuestionIds.size === 0) {
-        throw new Error('There are no active interview questions to answer.');
-      }
-      if (answers.length !== activeQuestionIds.size) {
-        throw new Error(
-          'Answer every active interview question before submitting.',
+      await runServiceTurn(interview, async (state) => {
+        const activeQuestionIds = new Set(
+          state.questions.map((question) => question.id),
         );
-      }
-      const invalidAnswer = answers.find(
-        (answer) =>
-          !activeQuestionIds.has(answer.questionId) || !answer.answer.trim(),
-      );
-      if (invalidAnswer) {
-        throw new Error(
-          'Answers do not match the current interview questions.',
+        if (activeQuestionIds.size === 0) {
+          throw new Error('There are no active interview questions to answer.');
+        }
+        if (answers.length !== activeQuestionIds.size) {
+          throw new Error(
+            'Answer every active interview question before submitting.',
+          );
+        }
+        const invalidAnswer = answers.find(
+          (answer) =>
+            !activeQuestionIds.has(answer.questionId) || !answer.answer.trim(),
         );
-      }
+        if (invalidAnswer) {
+          throw new Error(
+            'Answers do not match the current interview questions.',
+          );
+        }
 
-      await withInterviewDocumentLock(interview.markdownPath, () =>
-        appendInterviewAnswers(interview, state.questions, answers),
-      );
-      const prompt = buildAnswerPrompt(answers, state.questions, maxQuestions);
+        pendingAnswerContext = {
+          activeQuestionIds,
+          questions: state.questions,
+        };
+        const memory = memoryFor(interview.id);
+        previousPendingAnswers = memory.pendingAnswers;
+        previousAnsweredQuestions = memory.answeredQuestions;
+        memory.answeredQuestions = activeQuestionIds;
+        memory.pendingAnswers = true;
+        answersMarked = true;
+        const prompt = buildAnswerPrompt(
+          answers,
+          state.questions,
+          maxQuestions,
+          specContext(interview.markdownPath, state.document),
+          printState,
+        );
 
-      const model = sessionModel.get(interview.sessionID);
-      await sessionRuntime.continue(
-        interview.sessionID,
-        prompt,
-        model ? (parseModelReference(model) ?? undefined) : undefined,
-      );
-      promptSent = true;
-    } finally {
-      if (!promptSent) {
-        sessionBusy.set(interview.sessionID, false);
+        return prompt;
+      });
+      const answerContext = pendingAnswerContext as {
+        activeQuestionIds: Set<string>;
+        questions: InterviewState['questions'];
+      };
+      const memory = memoryFor(interview.id);
+      const pending = memory.pendingAnswerHistory ?? [];
+      pending.push({
+        questions: answerContext.questions,
+        answers,
+        activeQuestionIds: answerContext.activeQuestionIds,
+      });
+      memory.pendingAnswerHistory = pending;
+      await retryPendingAnswerHistory(interview);
+    } catch (error) {
+      if (answersMarked) {
+        const memory = memoryFor(interview.id);
+        if (previousPendingAnswers === undefined) {
+          delete memory.pendingAnswers;
+        } else {
+          memory.pendingAnswers = previousPendingAnswers;
+        }
+        if (previousAnsweredQuestions === undefined) {
+          delete memory.answeredQuestions;
+        } else {
+          memory.answeredQuestions = previousAnsweredQuestions;
+        }
       }
+      throw error;
     }
   }
 
@@ -647,6 +1579,10 @@ export function createInterviewService(
     input: { command: string; sessionID: string; arguments: string },
     output: { parts: Array<{ type: string; text?: string }> },
   ): Promise<void> {
+    if (input.command === IMPLEMENT_COMMAND) {
+      await handleImplement(input.sessionID, input.arguments, output);
+      return;
+    }
     if (input.command !== COMMAND_NAME) {
       return;
     }
@@ -666,10 +1602,24 @@ export function createInterviewService(
         return;
       }
 
+      if (interview.completed) {
+        await withInterviewDocumentLock(interview.markdownPath, () =>
+          markInterviewDocumentIncomplete(interview),
+        );
+        interview.completed = false;
+      }
       await notifyInterviewUrl(input.sessionID, interview);
+      turnFor(input.sessionID).serviceInitiated = true;
+      const document = await readInterviewDocument(interview);
+      const preface =
+        'The interview UI was reopened for the current session. If your latest interview turn already contains unanswered questions, do not repeat them.';
       output.parts.push(
         createInternalAgentTextPart(
-          `The interview UI was reopened for the current session. If your latest interview turn already contains unanswered questions, do not repeat them. Otherwise continue the interview with up to ${maxQuestions} clarifying questions and include the structured <interview_state> block.`,
+          `${preface}\n\n${buildResumePrompt(
+            specContext(interview.markdownPath, document),
+            maxQuestions,
+            printState,
+          )}`,
         ),
       );
       return;
@@ -697,20 +1647,39 @@ export function createInterviewService(
       }
       const document = await fs.readFile(interview.markdownPath, 'utf8');
       await notifyInterviewUrl(input.sessionID, interview);
+      turnFor(input.sessionID).serviceInitiated = true;
       output.parts.push(
-        createInternalAgentTextPart(buildResumePrompt(document, maxQuestions)),
+        createInternalAgentTextPart(
+          buildResumePrompt(
+            specContext(interview.markdownPath, document),
+            maxQuestions,
+            printState,
+          ),
+        ),
       );
       return;
     }
 
     const interview = await createInterview(input.sessionID, idea);
+    const document = await fs.readFile(interview.markdownPath, 'utf8');
+    const existingSummary = extractSummarySection(document).trim();
+    const hasExistingSpec =
+      existingSummary !== '' &&
+      existingSummary !== 'Waiting for interview answers.';
     await notifyInterviewUrl(input.sessionID, interview);
+    turnFor(input.sessionID).serviceInitiated = true;
     output.parts.push(
-      createInternalAgentTextPart(buildKickoffPrompt(idea, maxQuestions)),
+      createInternalAgentTextPart(
+        hasExistingSpec
+          ? buildResumePrompt(
+              specContext(interview.markdownPath, document),
+              maxQuestions,
+              printState,
+            )
+          : buildKickoffPrompt(idea, maxQuestions, printState),
+      ),
     );
 
-    // best-effort: rename the session so it's identifiable in the session list.
-    // never block interview creation if the rename fails.
     let sessionTitle = `Interview: ${idea}`;
     if (sessionTitle.length > 50) {
       sessionTitle = `${sessionTitle.slice(0, 49)}…`;
@@ -728,27 +1697,67 @@ export function createInterviewService(
       const sessionID = properties.sessionID as string | undefined;
       const status = properties.status as { type?: string } | undefined;
       if (sessionID) {
-        sessionBusy.set(sessionID, status?.type === 'busy');
+        const isBusy = status?.type === 'busy';
+        if (isBusy && activeInterviewIds.has(sessionID)) {
+          // Open the turn only on the first busy after a handled idle. v1 can
+          // emit busy once per loop step; resetting on every busy would wipe a
+          // mid-turn tool submit. `sessionBusy` is deliberately not used as
+          // the gate (submitAnswers sets it before the host emits busy).
+          if (turnFor(sessionID).turnOpen !== true) {
+            resetTurnNoticeState(sessionID);
+            const interviewID = activeInterviewIds.get(sessionID);
+            if (
+              interviewID &&
+              memoryFor(interviewID).patchRepairSent === true
+            ) {
+              turnFor(sessionID).repairTurnStarted = true;
+            }
+            turnFor(sessionID).turnOpen = true;
+          }
+        }
+        sessionBusy.set(sessionID, isBusy);
+        const interviewId = activeInterviewIds.get(sessionID);
         if (status?.type === 'idle') {
-          const interviewId = activeInterviewIds.get(sessionID);
-          if (interviewId && finalizationPending.has(interviewId)) {
-            finalizationReady.add(interviewId);
+          const state = turnState.get(sessionID);
+          if (state) state.turnOpen = false;
+          if (interviewId) {
+            if (finalizationPending.has(interviewId)) {
+              finalizationReady.add(interviewId);
+            }
+            await notifyTurnStatus(sessionID);
           }
         }
       }
       return;
     }
 
-    if (
-      event.type === 'session.next.text.ended' ||
-      event.type === 'session.idle'
-    ) {
+    if (event.type === 'session.idle') {
       const sessionID =
         (properties.sessionID as string | undefined) ??
         (properties.info as { id?: string } | undefined)?.id ??
         undefined;
       if (sessionID) {
         sessionBusy.set(sessionID, false);
+        const state = turnState.get(sessionID);
+        if (state) state.turnOpen = false;
+        const interviewId = activeInterviewIds.get(sessionID);
+        if (interviewId && finalizationPending.has(interviewId)) {
+          finalizationReady.add(interviewId);
+        }
+        if (interviewId) {
+          await notifyTurnStatus(sessionID);
+        }
+      }
+      return;
+    }
+
+    if (event.type === 'session.next.text.ended') {
+      // Not a turn-end boundary: never post the notice here.
+      const sessionID =
+        (properties.sessionID as string | undefined) ??
+        (properties.info as { id?: string } | undefined)?.id ??
+        undefined;
+      if (sessionID) {
         const interviewId = activeInterviewIds.get(sessionID);
         if (interviewId && finalizationPending.has(interviewId)) {
           finalizationReady.add(interviewId);
@@ -787,11 +1796,13 @@ export function createInterviewService(
 
       sessionBusy.delete(deletedSessionId);
       sessionModel.delete(deletedSessionId);
+      turnState.delete(deletedSessionId);
       const interviewId = activeInterviewIds.get(deletedSessionId);
       if (!interviewId) {
         return;
       }
       finalizationReady.delete(interviewId);
+      finalizationPending.delete(interviewId);
 
       const interview = interviewsById.get(interviewId);
       if (!interview) {
@@ -873,54 +1884,17 @@ export function createInterviewService(
     if (interview.status === 'abandoned') {
       throw new Error('Interview session is no longer active.');
     }
-    if (sessionBusy.get(interview.sessionID) === true) {
-      throw new Error(
-        'Interview session is busy. Wait for the current response.',
-      );
-    }
-
-    sessionBusy.set(interview.sessionID, true);
-    let promptSent = false;
-
-    try {
-      const state = await getInterviewState(interviewId);
-      if (state.mode === 'error') {
-        throw new Error('Interview is waiting for a valid agent update.');
-      }
-
-      const relativePath = relativeInterviewPath(
-        ctx.directory,
-        interview.markdownPath,
+    await runServiceTurn(interview, async (state) => {
+      const prompt = buildBlockCommentPrompt(
+        sectionTitle,
+        comment,
+        maxQuestions,
+        specContext(interview.markdownPath, state.document),
+        printState,
       );
 
-      const prompt = [
-        `You are updating the active interview specification document at "${relativePath}".`,
-        `The current document content on disk is:`,
-        `\`\`\`markdown`,
-        state.document,
-        `\`\`\``,
-        ``,
-        `The user submitted specific feedback/comments for the section "${sectionTitle}".`,
-        `Feedback: ${comment}`,
-        ``,
-        `Update the specification summary (focusing heavily on making changes to the "${sectionTitle}" section) to address this feedback.`,
-        `If this feedback implies other parts of the spec should change, update them too.`,
-        `Include the updated 11-section specification and ask the next highest-value clarifying questions as questions (up to ${maxQuestions} questions) if needed.`,
-        `Return the same <interview_state> JSON block format as before.`,
-      ].join('\n');
-
-      const model = sessionModel.get(interview.sessionID);
-      await sessionRuntime.continue(
-        interview.sessionID,
-        prompt,
-        model ? (parseModelReference(model) ?? undefined) : undefined,
-      );
-      promptSent = true;
-    } finally {
-      if (!promptSent) {
-        sessionBusy.set(interview.sessionID, false);
-      }
-    }
+      return prompt;
+    });
   }
 
   async function submitChat(
@@ -934,53 +1908,16 @@ export function createInterviewService(
     if (interview.status === 'abandoned') {
       throw new Error('Interview session is no longer active.');
     }
-    if (sessionBusy.get(interview.sessionID) === true) {
-      throw new Error(
-        'Interview session is busy. Wait for the current response.',
-      );
-    }
-
-    sessionBusy.set(interview.sessionID, true);
-    let promptSent = false;
-
-    try {
-      const state = await getInterviewState(interviewId);
-      if (state.mode === 'error') {
-        throw new Error('Interview is waiting for a valid agent update.');
-      }
-
-      const relativePath = relativeInterviewPath(
-        ctx.directory,
-        interview.markdownPath,
+    await runServiceTurn(interview, async (state) => {
+      const prompt = buildChatPrompt(
+        message,
+        maxQuestions,
+        specContext(interview.markdownPath, state.document),
+        printState,
       );
 
-      const prompt = [
-        `You are continuing the interview for the specification document at "${relativePath}".`,
-        `The current document content on disk is:`,
-        `\`\`\`markdown`,
-        state.document,
-        `\`\`\``,
-        ``,
-        `The user sent a freeform message via the dashboard chat panel:`,
-        `${message}`,
-        ``,
-        `Process this request - it may be a request to add a new section, revise existing content, ask clarifying questions, or make structural changes.`,
-        `Update the specification document accordingly and include the updated 11-section specification.`,
-        `Ask up to ${maxQuestions} clarifying questions if needed using the same <interview_state> JSON block format as before.`,
-      ].join('\n');
-
-      const model = sessionModel.get(interview.sessionID);
-      await sessionRuntime.continue(
-        interview.sessionID,
-        prompt,
-        model ? (parseModelReference(model) ?? undefined) : undefined,
-      );
-      promptSent = true;
-    } finally {
-      if (!promptSent) {
-        sessionBusy.set(interview.sessionID, false);
-      }
-    }
+      return prompt;
+    });
   }
 
   async function handleNudgeAction(
@@ -999,68 +1936,185 @@ export function createInterviewService(
         'Interview session is busy. Wait for the current response.',
       );
     }
-
-    sessionBusy.set(interview.sessionID, true);
-    let promptSent = false;
-
-    try {
-      const state = await getInterviewState(interviewId);
-
+    if (action === 'confirm-complete') {
+      await retryPendingAnswerHistory(interview);
+      const didComplete = await withInterviewDocumentLock(
+        interview.markdownPath,
+        async () => {
+          const current = await readInterviewDocument(interview);
+          if (parseFrontmatter(current)?.status === 'complete') return false;
+          if (memoryFor(interview.id).pendingAnswers === true) {
+            throw new Error(
+              'Cannot complete while answers are awaiting incorporation.',
+            );
+          }
+          await markInterviewDocumentComplete(interview);
+          return true;
+        },
+      );
+      interview.completed = true;
+      if (!didComplete) return;
       const relativePath = relativeInterviewPath(
         ctx.directory,
         interview.markdownPath,
       );
-
-      let prompt: string;
-      if (action === 'more-questions') {
-        prompt = [
-          `You are continuing the interview for the specification document at "${relativePath}".`,
-          `The current document content on disk is:`,
-          `\`\`\`markdown`,
-          state.document,
-          `\`\`\``,
-          ``,
-          `The user reviewed the completed interview spec and wants you to continue.`,
-          ``,
-          `Ask up to ${maxQuestions} new clarifying questions about aspects that are still unclear or underspecified.`,
-          `Include the structured <interview_state> block with new questions.`,
-        ].join('\n');
-      } else {
-        prompt = [
-          `You are finishing the interview for the specification document at "${relativePath}".`,
-          `The current document content on disk is:`,
-          `\`\`\`markdown`,
-          state.document,
-          `\`\`\``,
-          ``,
-          `The user confirmed the interview spec is complete.`,
-          ``,
-          `Produce a final, polished version of the full spec document.`,
-          `Do NOT include any <interview_state> block - just output the final spec as clean markdown.`,
-          `The spec should be comprehensive, well-structured, and ready for implementation.`,
-        ].join('\n');
-      }
-
-      const model = sessionModel.get(interview.sessionID);
-      if (action === 'confirm-complete') {
-        finalizationPending.add(interview.id);
-        finalizationReady.delete(interview.id);
-      }
-      await sessionRuntime.continue(
+      await sessionRuntime.notify(
         interview.sessionID,
-        prompt,
-        model ? (parseModelReference(model) ?? undefined) : undefined,
+        `The spec is complete. Follow ${relativePath}.`,
       );
-      promptSent = true;
-    } finally {
-      if (!promptSent) {
-        if (action === 'confirm-complete') {
-          finalizationPending.delete(interview.id);
-          finalizationReady.delete(interview.id);
+      await getInterviewState(interviewId);
+      return;
+    }
+
+    await runServiceTurn(interview, async (state) => {
+      const prompt = buildNudgePrompt(
+        action,
+        maxQuestions,
+        specContext(interview.markdownPath, state.document),
+        printState,
+      );
+
+      return prompt;
+    });
+  }
+
+  async function newestCompleteSpec(): Promise<string | null> {
+    const outputDir = createInterviewDirectoryPath(ctx.directory, outputFolder);
+    let entries: string[];
+    try {
+      entries = await fs.readdir(outputDir);
+    } catch {
+      return null;
+    }
+    let best: { filePath: string; mtime: number } | null = null;
+    for (const entry of entries) {
+      if (!entry.endsWith('.md')) continue;
+      const filePath = path.join(outputDir, entry);
+      try {
+        const [content, stat] = await Promise.all([
+          fs.readFile(filePath, 'utf8'),
+          fs.stat(filePath),
+        ]);
+        if (parseFrontmatter(content)?.status !== 'complete') continue;
+        if (!best || stat.mtimeMs > best.mtime) {
+          best = { filePath, mtime: stat.mtimeMs };
         }
-        sessionBusy.set(interview.sessionID, false);
+      } catch {}
+    }
+    return best?.filePath ?? null;
+  }
+
+  async function handleImplement(
+    visibleSessionID: string,
+    argument: string,
+    output: { parts: Array<{ type: string; text?: string }> },
+  ): Promise<void> {
+    output.parts.length = 0;
+    const requested = argument.trim();
+    const activeId = activeInterviewIds.get(visibleSessionID);
+    const activeInterview = activeId ? interviewsById.get(activeId) : undefined;
+    if (activeInterview) {
+      await retryPendingAnswerHistory(activeInterview);
+    }
+    const requestedPath = requested
+      ? resolveExistingInterviewPath(ctx.directory, outputFolder, requested)
+      : null;
+    if (
+      activeInterview &&
+      memoryFor(activeInterview.id).pendingAnswers === true &&
+      (!requested ||
+        (requestedPath !== null &&
+          path.resolve(requestedPath) ===
+            path.resolve(activeInterview.markdownPath)))
+    ) {
+      output.parts.push(
+        createInternalAgentTextPart(
+          'The interview answers are still awaiting incorporation into the spec. Wait for the next interview state before implementing.',
+        ),
+      );
+      return;
+    }
+    let markdownPath: string | null = null;
+    if (requested) {
+      markdownPath = resolveExistingInterviewPath(
+        ctx.directory,
+        outputFolder,
+        requested,
+      );
+    } else {
+      const activeId = activeInterviewIds.get(visibleSessionID);
+      const active = activeId ? interviewsById.get(activeId) : undefined;
+      markdownPath =
+        active && active.status === 'active'
+          ? active.markdownPath
+          : await newestCompleteSpec();
+    }
+    if (!markdownPath) {
+      output.parts.push(
+        createInternalAgentTextPart(buildImplementMissingPrompt()),
+      );
+      return;
+    }
+
+    const selectedDocument = await fs.readFile(markdownPath, 'utf8');
+    const active = [...interviewsById.values()].find(
+      (record) =>
+        record.status === 'active' &&
+        path.resolve(record.markdownPath) === path.resolve(markdownPath),
+    );
+    if (active) {
+      const state = await getInterviewState(active.id);
+      const memory = memoryFor(active.id);
+      if (
+        state.mode === 'error' ||
+        memory.lastPatchError ||
+        memory.pendingPatchRepair ||
+        memory.pendingAnswers
+      ) {
+        output.parts.push(
+          createInternalAgentTextPart(buildImplementPatchFailurePrompt()),
+        );
+        return;
       }
     }
+    if (
+      requested &&
+      parseFrontmatter(selectedDocument)?.status !== 'complete'
+    ) {
+      output.parts.push(
+        createInternalAgentTextPart(buildImplementRefusalPrompt()),
+      );
+      return;
+    }
+
+    if (active && !active.completed) {
+      const state = await getInterviewState(active.id);
+      if (state.questions.length > 0) {
+        output.parts.push(
+          createInternalAgentTextPart(buildImplementRefusalPrompt()),
+        );
+        return;
+      }
+      const body = extractSummarySection(state.document);
+      if (
+        state.mode !== 'completed' ||
+        !body ||
+        body === 'Waiting for interview answers.'
+      ) {
+        output.parts.push(
+          createInternalAgentTextPart(buildImplementMissingPrompt()),
+        );
+        return;
+      }
+    }
+
+    output.parts.push(
+      createInternalAgentTextPart(
+        buildImplementPrompt(
+          relativeInterviewPath(ctx.directory, markdownPath),
+        ),
+      ),
+    );
   }
 
   return {
@@ -1072,6 +2126,9 @@ export function createInterviewService(
     handleCommandExecuteBefore,
     handleEvent,
     getInterviewState,
+    submitState,
+    notifyTurnStatus,
+    completeInterviewText,
     listInterviewFiles,
     listInterviews,
     submitAnswers,

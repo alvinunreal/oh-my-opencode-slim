@@ -70,32 +70,35 @@ afterEach(() => {
 });
 
 describe('task_cancel tool', () => {
-  test('aborts and verifies quiescence without deleting the retained session', async () => {
-    const { board, abort, status, deleteSession, taskCancel } = createTool();
-    board.registerLaunch({
-      taskID: 'ses_1',
-      parentSessionID: 'parent-1',
-      agent: 'explorer',
-    });
+  test.each(['orchestrator', 'build', 'custom-primary'])(
+    'managed %s aborts and verifies quiescence without deleting the retained session',
+    async (agent) => {
+      const { board, abort, status, deleteSession, taskCancel } = createTool();
+      board.registerLaunch({
+        taskID: 'ses_1',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+      });
 
-    const output = await taskCancel.execute(
-      { task_id: 'ses_1', reason: 'obsolete' },
-      context,
-    );
+      const output = await taskCancel.execute(
+        { task_id: 'ses_1', reason: 'obsolete' },
+        { ...context, agent },
+      );
 
-    expect(abort).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
-    expect(status).toHaveBeenCalled();
-    expect(deleteSession).not.toHaveBeenCalled();
-    expect(parseTaskStatusOutput(String(output))).toMatchObject({
-      taskID: 'ses_1',
-      state: 'cancelled',
-      result: 'cancelled: obsolete',
-    });
-    expect(board.get('ses_1')).toMatchObject({
-      state: 'cancelled',
-      terminalUnreconciled: true,
-    });
-  });
+      expect(abort).toHaveBeenCalledWith({ path: { id: 'ses_1' } });
+      expect(status).toHaveBeenCalled();
+      expect(deleteSession).not.toHaveBeenCalled();
+      expect(parseTaskStatusOutput(String(output))).toMatchObject({
+        taskID: 'ses_1',
+        state: 'cancelled',
+        result: 'cancelled: obsolete',
+      });
+      expect(board.get('ses_1')).toMatchObject({
+        state: 'cancelled',
+        terminalUnreconciled: true,
+      });
+    },
+  );
 
   test('verifies quiescence via host session info when the status map is unavailable (v2)', async () => {
     // v2 hosts expose no session.status map; the old verify loop polled a
@@ -548,37 +551,43 @@ describe('task_cancel tool', () => {
     });
   });
 
-  test('rejects foreign, stale, and unsafe cancellation requests', async () => {
-    const { board, abort, taskCancel } = createTool();
-    board.registerLaunch({
-      taskID: 'ses_foreign',
-      parentSessionID: 'parent-2',
-      agent: 'explorer',
-    });
-    board.registerLaunch({
-      taskID: 'ses_done',
-      parentSessionID: 'parent-1',
-      agent: 'explorer',
-    });
-    board.updateStatus({ taskID: 'ses_done', state: 'completed' });
+  test.each(['orchestrator', 'build'])(
+    'rejects foreign, stale, and unsafe cancellation requests from %s',
+    async (agent) => {
+      const { board, abort, taskCancel } = createTool();
+      board.registerLaunch({
+        taskID: 'ses_foreign',
+        parentSessionID: 'parent-2',
+        agent: 'explorer',
+      });
+      board.registerLaunch({
+        taskID: 'ses_done',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+      });
+      board.updateStatus({ taskID: 'ses_done', state: 'completed' });
 
-    const foreign = await taskCancel.execute(
-      { task_id: 'ses_foreign' },
-      context,
-    );
-    const stale = await taskCancel.execute({ task_id: 'ses_done' }, context);
-    const parent = await taskCancel.execute(
-      { task_id: 'ses_parent' },
-      { ...context, sessionID: 'ses_parent' },
-    );
+      const foreign = await taskCancel.execute(
+        { task_id: 'ses_foreign' },
+        { ...context, agent },
+      );
+      const stale = await taskCancel.execute(
+        { task_id: 'ses_done' },
+        { ...context, agent },
+      );
+      const parent = await taskCancel.execute(
+        { task_id: 'ses_parent' },
+        { ...context, agent, sessionID: 'ses_parent' },
+      );
 
-    expect(abort).not.toHaveBeenCalled();
-    expect(String(foreign)).toContain('state: unknown');
-    expect(String(stale)).toContain('stale/uncertain cancellation');
-    expect(String(parent)).toContain('cannot cancel parent session');
-  });
+      expect(abort).not.toHaveBeenCalled();
+      expect(String(foreign)).toContain('state: unknown');
+      expect(String(stale)).toContain('stale/uncertain cancellation');
+      expect(String(parent)).toContain('cannot cancel parent session');
+    },
+  );
 
-  test('enforces orchestrator ownership', async () => {
+  test('rejects unmanaged sessions regardless of agent name', async () => {
     const { taskCancel } = createTool({ shouldManageSession: () => false });
 
     await expect(
@@ -586,13 +595,13 @@ describe('task_cancel tool', () => {
         sessionID: 'parent-1',
         agent: 'orchestrator',
       } as any),
-    ).rejects.toThrow('orchestrator sessions');
+    ).rejects.toThrow('managed sessions');
     await expect(
       taskCancel.execute({ task_id: 'ses_1' }, {
         sessionID: 'parent-1',
         agent: 'fixer',
       } as any),
-    ).rejects.toThrow('orchestrator');
+    ).rejects.toThrow('managed sessions');
   });
 
   test('v2 exposes sessionID and emits sessionID labels', async () => {

@@ -17,10 +17,25 @@ import { processImageAttachments } from './image-hook';
 import type { MessageWithParts } from './types';
 
 const TEST_DIR = path.join(os.tmpdir(), `image-hook-test-${process.pid}`);
-const IMG = { type: 'image', url: 'data:image/png;base64,AAAA' };
-const IMG_BYTES = Buffer.from('AAAA', 'base64');
+const IMG_BYTES = Buffer.from('89504e470d0a1a0a', 'hex');
+const IMG = {
+  type: 'image',
+  url: `data:image/png;base64,${IMG_BYTES.toString('base64')}`,
+};
 const IMG_HASH = createHash('sha1').update(IMG_BYTES).digest('hex').slice(0, 8);
 const IMG_CONTENT_NAME = `image-${IMG_HASH}.png`;
+const HEIC_BYTES = Buffer.concat([
+  Buffer.alloc(4),
+  Buffer.from('ftypheic', 'latin1'),
+  Buffer.alloc(4),
+]);
+/** Oversized payloads must still sniff as PNG or the byte gate keeps them inline. */
+function oversizedBytes(): Buffer {
+  return Buffer.concat([
+    IMG_BYTES,
+    Buffer.alloc(MAX_MEDIA_INGEST_BYTES + 1 - IMG_BYTES.length, 7),
+  ]);
+}
 const IMAGES_GITIGNORE = 'images/\n';
 const MAX_MEDIA_INGEST_BYTES = 20 * 1024 * 1024;
 
@@ -94,6 +109,46 @@ describe('processImageAttachments routing', () => {
     expect(existsSync(path.join(workDir, '.opencode'))).toBe(false);
   });
 
+  it('keeps image parts inline in auto mode when the model accepts image input', () => {
+    const workDir = path.join(TEST_DIR, 'auto-native-vision');
+    const message = makeUserMsg([IMG]);
+
+    const result = processImageAttachments({
+      messages: [message],
+      workDir,
+      imageRouting: 'auto',
+      disabledAgents: new Set(),
+      modelAcceptsImages: true,
+      log: () => {},
+    });
+
+    expect(result).toBe(false);
+    expect(imagePartCount(message)).toBe(1);
+    expect(existsSync(path.join(workDir, '.opencode'))).toBe(false);
+  });
+
+  it('intercepts in auto mode when the model is known to lack image input', () => {
+    const workDir = path.join(TEST_DIR, 'auto-no-vision');
+    const message = makeUserMsg([IMG]);
+
+    const result = processImageAttachments({
+      messages: [message],
+      workDir,
+      imageRouting: 'auto',
+      disabledAgents: new Set(),
+      modelAcceptsImages: false,
+      log: () => {},
+    });
+
+    expect(result).toBe(false);
+    expect(imagePartCount(message)).toBe(0);
+    expect(
+      message.parts.some((part: unknown) =>
+        JSON.stringify(part).includes('[Image saved to:'),
+      ),
+    ).toBe(true);
+  });
+
   it('does no filesystem work on text-only auto transforms', () => {
     const workDir = path.join(TEST_DIR, 'text-only');
     const message = makeUserMsg([{ type: 'text', text: 'hello' }]);
@@ -129,6 +184,7 @@ describe('processImageAttachments routing', () => {
 
     expect(processAuto([message], workDir)).toBe(false);
     expect(imagePartCount(message)).toBe(0);
+    expect(nudgeText(message)).toContain('Image saved to:');
     expect(nudgeText(message)).toContain('@observer');
     expect(nudgeText(message)).toContain(path.join('.opencode', 'images'));
     expect(readFileSync(gitignorePath(workDir), 'utf8')).toBe(IMAGES_GITIGNORE);
@@ -404,7 +460,7 @@ describe('processImageAttachments routing', () => {
   });
 
   it('archives oversized images and excludes them from the delegation nudge', () => {
-    const bytes = Buffer.alloc(MAX_MEDIA_INGEST_BYTES + 1, 7);
+    const bytes = oversizedBytes();
     const message = makeUserMsg([
       {
         type: 'media',
@@ -418,7 +474,7 @@ describe('processImageAttachments routing', () => {
 
     const text = nudgeText(message);
     expect(imagePartCount(message)).toBe(0);
-    expect(text).toContain('Too large to analyze');
+    expect(text).toContain('Too large for the read tool');
     expect(text).toContain('compress or crop');
     expect(text).not.toContain('@observer');
     expect(
@@ -427,7 +483,7 @@ describe('processImageAttachments routing', () => {
   }, 30_000);
 
   it('separates readable and oversized paths in one nudge', () => {
-    const oversized = Buffer.alloc(MAX_MEDIA_INGEST_BYTES + 1, 7);
+    const oversized = oversizedBytes();
     const message = makeUserMsg([
       IMG,
       {
@@ -443,7 +499,7 @@ describe('processImageAttachments routing', () => {
     const text = nudgeText(message);
     expect(imagePartCount(message)).toBe(0);
     expect(text).toContain('Delegate to @observer');
-    expect(text).toContain('Too large to analyze');
+    expect(text).toContain('Too large for the read tool');
     expect(text).toContain('huge-');
   }, 30_000);
 
@@ -478,7 +534,7 @@ describe('processImageAttachments routing', () => {
   });
 
   it('handles v2 media, v1 file, and non-image media parts', () => {
-    const bytes = Buffer.from('media-bytes');
+    const bytes = IMG_BYTES;
     const v2 = makeUserMsg([
       {
         type: 'media',
@@ -632,7 +688,7 @@ describe('v2.0.14+ Media.Asset parts (#1247)', () => {
   });
 
   it('archives oversized Asset images without the delegation nudge', () => {
-    const huge = new Uint8Array(MAX_MEDIA_INGEST_BYTES + 1);
+    const huge = new Uint8Array(oversizedBytes());
     const message = makeUserMsg([
       assetPart(
         { type: 'bytes', data: huge, mediaType: 'image/png' },
@@ -645,7 +701,7 @@ describe('v2.0.14+ Media.Asset parts (#1247)', () => {
 
     const text = nudgeText(message);
     expect(message.parts.some((part) => part.type === 'media')).toBe(false);
-    expect(text).toContain('Too large to analyze');
+    expect(text).toContain('Too large for the read tool');
     expect(text).not.toContain('@observer');
     expect(
       savedFiles(
@@ -671,6 +727,80 @@ describe('v2.0.14+ Media.Asset parts (#1247)', () => {
     expect(
       savedFiles(path.join(saveDir, 's1')).map((file) => path.basename(file)),
     ).toEqual([`shot-${IMG_HASH}.png`]);
+  });
+
+  it('keeps a lying heic image inline end-to-end (no strip, no save, no nudge)', () => {
+    // The hole this revision closes: declared image/heic + photo.png
+    // filename + real HEIC bytes used to be saved as a .png the observer
+    // could never read (the host read tool re-sniffs actual bytes and
+    // rejects anything outside its four-mime set).
+    const workDir = path.join(TEST_DIR, 'heic-hole');
+    const message = makeUserMsg([
+      {
+        type: 'media',
+        mediaType: 'image/heic',
+        data: HEIC_BYTES.toString('base64'),
+        filename: 'photo.png',
+      },
+    ]);
+
+    expect(processAuto([message], workDir)).toBe(false);
+    expect(message.parts).toHaveLength(1);
+    expect(message.parts[0]?.type).toBe('media');
+    expect(nudgeText(message)).toBe('');
+    expect(existsSync(path.join(workDir, '.opencode'))).toBe(false);
+  });
+
+  it('still warns when observer is disabled and only unconsumable images remain', () => {
+    const message = makeUserMsg([
+      {
+        type: 'media',
+        mediaType: 'image/heic',
+        data: HEIC_BYTES.toString('base64'),
+        filename: 'photo.png',
+      },
+    ]);
+    const logMessages: string[] = [];
+
+    const result = processImageAttachments({
+      messages: [message],
+      workDir: path.join(TEST_DIR, 'heic-disabled'),
+      imageRouting: 'auto',
+      disabledAgents: new Set(['observer']),
+      log: (entry) => logMessages.push(entry),
+    });
+
+    expect(result).toBe(true);
+    expect(message.parts).toHaveLength(1);
+    expect(logMessages.at(-1)).toContain('retained inline');
+  });
+
+  it('does not treat untyped non-image payloads as images', () => {
+    // Greptile P2: an untyped ZIP must not trigger the image warning —
+    // enabling the observer could not make it viewable anyway.
+    const workDir = path.join(TEST_DIR, 'untyped-zip');
+    const message = makeUserMsg([
+      {
+        type: 'media',
+        mediaType: 'application/octet-stream',
+        data: Buffer.from('PK\x03\x04-archive').toString('base64'),
+        filename: 'archive',
+      },
+    ]);
+    const logMessages: string[] = [];
+
+    const result = processImageAttachments({
+      messages: [message],
+      workDir,
+      imageRouting: 'auto',
+      disabledAgents: new Set(['observer']),
+      log: (entry) => logMessages.push(entry),
+    });
+
+    expect(result).toBe(false);
+    expect(message.parts).toHaveLength(1);
+    expect(logMessages).toEqual([]);
+    expect(existsSync(path.join(workDir, '.opencode'))).toBe(false);
   });
 });
 

@@ -5,12 +5,15 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   CompanionManager,
+  companionSessionIdForDirectory,
+  normalizeCompanionSessionStatus,
   resolveCompanionBinaryPath,
   stateFilePath,
 } from './manager';
@@ -101,6 +104,10 @@ function companionPidFile(): string {
   return path.join(path.dirname(stateFilePath()), 'companion.pid');
 }
 
+function companionStateLock(): string {
+  return `${stateFilePath()}.lock`;
+}
+
 describe('CompanionManager', () => {
   it('writes an intro entry on load', () => {
     const m = make();
@@ -114,6 +121,99 @@ describe('CompanionManager', () => {
     expect(state.sessions[0].active_agent_details).toEqual([]);
     expect(state.sessions[0].status).toBe('idle');
     expect(state.sessions[0].pid).toBe(process.pid);
+  });
+
+  it('normalizes all terminal lifecycle forms to idle', () => {
+    expect(normalizeCompanionSessionStatus('session.idle')).toBe('idle');
+    expect(normalizeCompanionSessionStatus('session.error')).toBe('idle');
+    for (const status of ['idle', 'completed', 'stopped', 'error', 'failed']) {
+      expect(normalizeCompanionSessionStatus('session.status', status)).toBe(
+        'idle',
+      );
+    }
+  });
+
+  it('normalizes retry as active and ignores unrelated lifecycle events', () => {
+    expect(normalizeCompanionSessionStatus('session.status', 'busy')).toBe(
+      'busy',
+    );
+    expect(normalizeCompanionSessionStatus('session.status', 'retry')).toBe(
+      'busy',
+    );
+    expect(normalizeCompanionSessionStatus('session.status', 'unknown')).toBe(
+      undefined,
+    );
+    expect(normalizeCompanionSessionStatus('message.updated', 'busy')).toBe(
+      undefined,
+    );
+  });
+
+  it('derives stable distinct manager ids per project directory', () => {
+    const alpha = companionSessionIdForDirectory('/projects/alpha');
+    const alphaNormalized = companionSessionIdForDirectory(
+      path.join('/projects', 'alpha', '..', 'alpha'),
+    );
+    const beta = companionSessionIdForDirectory('/projects/beta');
+
+    expect(alpha).toBe(alphaNormalized);
+    expect(alpha).not.toBe(beta);
+    expect(alpha).toStartWith(`proc_${process.pid}_`);
+  });
+
+  it('recovers an abandoned state lock before publishing the owner session', () => {
+    const lock = companionStateLock();
+    mkdirSync(lock, { recursive: true });
+    const stale = new Date(Date.now() - 10_000);
+    utimesSync(lock, stale, stale);
+
+    const m = make('stale-state-lock');
+    m.onLoad();
+
+    expect(existsSync(lock)).toBe(false);
+    expect(readState().sessions).toContainEqual(
+      expect.objectContaining({ session_id: 'stale-state-lock' }),
+    );
+  });
+
+  it('does not age-steal a state lock from a live owner', () => {
+    const lock = companionStateLock();
+    mkdirSync(lock, { recursive: true });
+    writeFileSync(path.join(lock, 'owner'), `${process.pid}\nlive-owner`);
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+
+    const m = make('live-state-lock');
+    m.onLoad();
+
+    expect(existsSync(lock)).toBe(true);
+    expect(existsSync(stateFilePath())).toBe(false);
+  });
+
+  it('does not spawn native companion until owner state publication succeeds', () => {
+    const lock = companionStateLock();
+    mkdirSync(lock, { recursive: true });
+
+    const m = make('blocked-owner');
+    const internal = m as unknown as {
+      spawnIfAvailable: () => void;
+      publishAndSpawn: () => void;
+    };
+    let spawnAttempts = 0;
+    internal.spawnIfAvailable = () => {
+      spawnAttempts += 1;
+    };
+
+    m.onLoad();
+    expect(spawnAttempts).toBe(0);
+    expect(existsSync(stateFilePath())).toBe(false);
+
+    rmSync(lock, { recursive: true, force: true });
+    internal.publishAndSpawn();
+
+    expect(spawnAttempts).toBe(1);
+    expect(readState().sessions).toContainEqual(
+      expect.objectContaining({ session_id: 'blocked-owner' }),
+    );
   });
 
   it('publishes presets and applies a project-local preset request', () => {
@@ -154,6 +254,13 @@ describe('CompanionManager', () => {
     expect(state.sessions[0].preset.current).toBe('old');
     expect(state.sessions[0].preset.available).toEqual(['cheap', 'old']);
 
+    state.sessions.push({
+      session_id: 'other-session',
+      cwd: path.join(TEST_DIR, 'other-project'),
+      active_agents: ['intro'],
+      status: 'idle',
+      pid: process.pid,
+    });
     state.preset_requests = [
       {
         request_id: 'req-1',
@@ -733,6 +840,25 @@ describe('CompanionManager', () => {
     expect(readState().sessions[0].active_agents).toEqual(['oracle']);
   });
 
+  it('ignores a trailing busy for a child whose job already finished', () => {
+    const m = make();
+    m.onLoad();
+    m.onSessionStatus({
+      sessionId: 'ses_orch',
+      agent: 'orchestrator',
+      status: 'busy',
+    });
+    m.onSessionStatus({ sessionId: 'ses_a', agent: 'oracle', status: 'busy' });
+    m.onSessionStatus({ sessionId: 'ses_a', agent: 'oracle', status: 'idle' });
+    m.onSessionStatus({
+      sessionId: 'ses_a',
+      agent: 'oracle',
+      status: 'busy',
+      jobFinished: true,
+    });
+    expect(readState().sessions[0].active_agents).toEqual(['orchestrator']);
+  });
+
   it('publishes live model details without changing the active agent', () => {
     const m = make();
     m.onLoad();
@@ -1175,7 +1301,7 @@ describe('CompanionManager', () => {
     expect(process.listenerCount('exit')).toBeLessThanOrEqual(baseline);
   });
 
-  it('cleans up a superseded manager for the same session on reload', () => {
+  it('hands native companion ownership to a superseding manager without restart', () => {
     const first = make('reload-session');
     first.onLoad();
     const firstChild = attachFakeChild(first);
@@ -1187,11 +1313,15 @@ describe('CompanionManager', () => {
     const second = make('reload-session');
     second.onLoad();
 
-    expect(firstChild.killed()).toBe(true);
+    expect(firstChild.killed()).toBe(false);
+    expect((second as unknown as { wasSpawner: boolean }).wasSpawner).toBe(
+      true,
+    );
     expect(readState().sessions).toHaveLength(1);
     expect(readState().sessions[0].session_id).toBe('reload-session');
 
     second.onExit();
+    expect(firstChild.killed()).toBe(true);
   });
 
   it('cleans up active managers when companion is disabled on reload', () => {
@@ -1251,6 +1381,51 @@ describe('CompanionManager', () => {
     );
     expect(sa.active_agents).toEqual(['designer']);
     expect(sb.active_agents).toEqual(['librarian']);
+  });
+
+  it('prunes dead process sessions while preserving live project sessions', () => {
+    mkdirSync(path.dirname(stateFilePath()), { recursive: true });
+    writeFileSync(
+      stateFilePath(),
+      JSON.stringify({
+        version: 1,
+        sessions: [
+          {
+            session_id: 'dead-project',
+            cwd: '/dead',
+            active_agents: ['intro'],
+            status: 'idle',
+            pid: 999999999,
+          },
+          {
+            session_id: 'live-peer',
+            cwd: '/live-peer',
+            active_agents: ['intro'],
+            status: 'idle',
+            pid: process.pid,
+          },
+        ],
+        preset_requests: [
+          {
+            request_id: 'dead-request',
+            session_id: 'dead-project',
+            scope: 'project',
+            preset: 'one',
+          },
+        ],
+      }),
+    );
+
+    const current = make('current-project', '/current');
+    current.onLoad();
+
+    const state = readState();
+    expect(
+      state.sessions.map(
+        (session: { session_id: string }) => session.session_id,
+      ),
+    ).toEqual(['live-peer', 'current-project']);
+    expect(state.preset_requests).toBeUndefined();
   });
 
   it('is disabled by default and does not write state', () => {

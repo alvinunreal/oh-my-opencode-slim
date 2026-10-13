@@ -56,9 +56,9 @@ from `index.ts`) that returns the hook points OpenCode invokes.
    task-session-manager board injection, in that order)
 3. Task-session-manager first repairs session mappings; phase-reminder then
    injects the per-turn scheduler reminder (gated); council-inject then
-   appends the Council Mode block on keyword-triggered orchestrator turns
-   (gated); finally task-session-manager injects the Background Job Board
-   via cache-safe helpers
+   injects the Council Mode block once per transcript, on the first
+   keyword-triggered orchestrator turn (gated); finally task-session-manager
+   injects the Background Job Board via cache-safe helpers
 4. Transformed messages are sent to the model
 5. chat.headers is forwarded to OpenCode's header slot (v1 hosts; on v2
    hosts the adapter bridges the same decision to

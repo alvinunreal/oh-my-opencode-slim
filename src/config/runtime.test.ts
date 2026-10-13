@@ -180,6 +180,7 @@ describe('RuntimeConfig', () => {
     expect(runtime.council).toBeUndefined();
     expect(runtime.autoUpdate).toBe(true);
     expect(runtime.stripOrchestratorModel).toBe(false);
+    expect(runtime.routingBlock).toBe(true);
     expect(runtime.setDefaultAgent).toBe(true);
     expect(runtime.compactSidebar).toBe(true);
     expect(runtime.runtimeChains).toEqual({});
@@ -199,6 +200,7 @@ describe('RuntimeConfig', () => {
     const runtime = RuntimeConfig.init(DIRECTORY, {
       autoUpdate: false,
       stripOrchestratorModel: true,
+      routingBlock: false,
       setDefaultAgent: false,
       compactSidebar: false,
       image_routing: 'auto',
@@ -216,6 +218,7 @@ describe('RuntimeConfig', () => {
     });
     expect(runtime.autoUpdate).toBe(false);
     expect(runtime.stripOrchestratorModel).toBe(true);
+    expect(runtime.routingBlock).toBe(false);
     expect(runtime.setDefaultAgent).toBe(false);
     expect(runtime.compactSidebar).toBe(false);
     expect(runtime.imageRouting).toBe('auto');

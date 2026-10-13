@@ -18,11 +18,13 @@ import {
   type CanonicalTaskResolver,
   idParamFor,
   readTaskRef,
+  resolveTaskRecord,
   taskRefArgs,
+  unknownTaskRefError,
 } from './task-ref';
 
 const z = tool.schema;
-const MAX_MESSAGE_LENGTH = 500;
+const MAX_MESSAGE_LENGTH = 2000;
 const DEFAULT_MESSAGE_TIMEOUT_MS = 10_000;
 const MODEL_LOOKUP_HISTORY_LIMIT = 20;
 
@@ -60,7 +62,9 @@ export function createTaskMessageTool(options: {
         .trim()
         .min(1)
         .max(MAX_MESSAGE_LENGTH)
-        .describe('Short message to queue for the child task'),
+        .describe(
+          `Bounded message (max ${MAX_MESSAGE_LENGTH} chars) for the child task; for longer handoffs, continue the session with task_revive once it settles`,
+        ),
       ...(hostFlavorAtCreation === 'v2'
         ? {
             delivery: z
@@ -84,17 +88,22 @@ export function createTaskMessageTool(options: {
 
       const requested = readTaskRef(args, idParam);
       if (!requested) throw new Error(`task_message requires ${idParam}`);
-      const canonical = options.resolveCanonicalTaskRef
-        ? await options.resolveCanonicalTaskRef(parentSessionID, requested)
-        : undefined;
+      const ref = await resolveTaskRecord(options, parentSessionID, requested);
+      if (ref.kind === 'disposed') throw new Error(pluginDisposedMessage());
+      if (ref.kind === 'refused') throw new Error(ref.reason);
+      // The await above resumes in a later microtask; a disposal queued in
+      // that gap must still stop the send path (the helper's disposed
+      // check ran before the gap).
       if (options.isDisposed?.()) throw new Error(pluginDisposedMessage());
-      if (canonical?.kind === 'refused') throw new Error(canonical.reason);
-      const identity = canonical?.taskID ?? requested;
-      const job = canonical
-        ? options.backgroundJobBoard.get(identity)
-        : options.backgroundJobBoard.resolve(parentSessionID, requested);
-      if (!job || job.parentSessionID !== parentSessionID) {
+      const { identity, job } = ref;
+      if (job && job.parentSessionID !== parentSessionID) {
+        // Another parent's record: not this caller's task, and the
+        // settled-session recovery route would reject the same ownership
+        // mismatch — keep the bare unknown error.
         throw new Error(`Unknown task ID or alias: ${identity}`);
+      }
+      if (!job) {
+        throw unknownTaskRefError(identity, delegation.resumeParam);
       }
 
       const currentJob = getCurrentTaskMessageJob(

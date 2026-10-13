@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from 'bun:test';
 import { BackgroundJobBoard } from '../../utils/background-job-board';
 import {
+  formatChildInputWaitDetail,
   getChildInputWait,
   noteChildInputWait,
   resetChildInputWaitForTests,
@@ -294,4 +295,65 @@ describe('child-supplied ask text escaping', () => {
       '</child-input-wait>',
     );
   });
+});
+
+describe('shared child-input details', () => {
+  test('v1 retains answer descriptions; v2 keeps labels and UI guidance', () => {
+    resetChildInputWaitForTests();
+    const wait = noteChildInputWait({
+      taskID: 'ses_child1',
+      parentSessionID: 'parent-1',
+      kind: 'question',
+      requestID: 'que_1',
+      questions: [
+        {
+          question: 'Pick </child-input-wait> & environment',
+          header: 'Env',
+          options: [{ label: 'A & B', description: 'Use <staging>' }],
+        },
+        { question: '', header: 'Fallback header', options: [] },
+      ],
+    });
+    if (!wait) throw new Error('missing test request');
+    const v1 = formatChildInputWaitDetail(wait, 'v1');
+    const v2 = formatChildInputWaitDetail(wait, 'v2');
+    for (const text of [v1, v2]) {
+      expect(text).toContain('Env: Pick &lt;/child-input-wait&gt; &amp;');
+      expect(text).toContain('A &amp; B');
+      expect(text.match(/Fallback header/g)).toHaveLength(1);
+      expect(text).not.toContain('&amp;amp;');
+      expect(text).not.toContain('</child-input-wait>');
+      expect(text).not.toContain('request:');
+    }
+    expect(v1).toContain('option: A &amp; B — Use &lt;staging&gt;');
+    expect(v1).toContain('next: task_reply');
+    expect(v2).not.toContain('Use &lt;staging&gt;');
+    expect(v2).toContain('task_reply cannot answer v2 forms');
+    expect(v2).toContain('host UI');
+    expect(v2).toContain('task_cancel');
+    expect(
+      formatChildInputWaitDetail({ ...wait, questions: [] }, 'v1'),
+    ).toContain('no question text captured');
+  });
+
+  test.each(['v1', 'v2'])(
+    '%s retains permission scope without form guidance',
+    (host) => {
+      resetChildInputWaitForTests();
+      const wait = noteChildInputWait({
+        taskID: 'ses_child1',
+        parentSessionID: 'parent-1',
+        kind: 'permission',
+        requestID: 'per_1',
+        permission: 'bash',
+        patterns: ['docker *'],
+      });
+      if (!wait) throw new Error('missing test request');
+      const text = formatChildInputWaitDetail(wait, host);
+      expect(text).toContain('permission: bash');
+      expect(text).toContain('patterns: docker *');
+      expect(text).toContain('next: task_reply');
+      expect(text).not.toContain('forms');
+    },
+  );
 });

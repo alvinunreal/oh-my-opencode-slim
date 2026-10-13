@@ -41,7 +41,7 @@ describe('cache-impact snapshots (update deliberately — see file header)', () 
   });
 
   test('transformed payload for the canonical conversation fixture', async () => {
-    const pipeline = createPipeline();
+    const pipeline = createPipeline({ goalPointer: true });
     pipeline.board.registerLaunch({
       taskID: 'task-snapshot',
       parentSessionID: SESSION_ID,

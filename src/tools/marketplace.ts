@@ -146,10 +146,10 @@ export function createMarketplaceTools(options: MarketplaceToolOptions): {
       action: z.enum(MANAGE_ACTIONS).describe('Management action'),
       target: targetSchema(),
       acknowledge_other_projects: z
-        .literal(true)
+        .boolean()
         .optional()
         .describe(
-          'Required for global uninstall; confirms other projects are not inspected',
+          'Must be true for global uninstall; confirms other projects are not inspected',
         ),
       scope: z
         .enum(['project', 'user'])

@@ -14,11 +14,21 @@ const COMMAND_NAME = 'deepwork';
 // resident listing without losing the command (#1332).
 const instructions = stripFrontmatter(skillMarkdown).trim();
 
+/**
+ * The activation message's head announcement. Single contract source: the
+ * deepwork-goal hook skips injection while this exact sentence (or any
+ * intact quote of it) is visible in a genuine part, because it already
+ * names the head path.
+ */
+export function routerHeadAnnouncement(sessionID: string): string {
+  return `Your deepwork router head is \`.slim/deepwork/${sessionID}.md\`; the skill covers setup, planning, gates, and state rules.`;
+}
+
 function activationPrompt(task: string, sessionID: string): string {
   return [
     instructions,
     '',
-    `Your deepwork router head is \`.slim/deepwork/${sessionID}.md\`; the skill covers setup, planning, gates, and state rules.`,
+    routerHeadAnnouncement(sessionID),
     '',
     'Task:',
     task,

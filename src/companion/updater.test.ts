@@ -66,8 +66,8 @@ describe('companion updater', () => {
     writeFileSync(
       `${bin}.json`,
       JSON.stringify({
-        version: '0.1.3',
-        tag: 'companion-v0.1.3',
+        version: COMPANION_MANIFEST.version,
+        tag: COMPANION_MANIFEST.tag,
         target: getCompanionTarget(),
         installedAt: new Date().toISOString(),
         archiveName: 'archive.tar.gz',
@@ -81,7 +81,35 @@ describe('companion updater', () => {
     expect(result).toMatchObject({
       status: 'current',
       binaryPath: bin,
-      version: '0.1.3',
+      version: COMPANION_MANIFEST.version,
+    });
+  });
+
+  test('treats older metadata as stale against the bundled manifest', async () => {
+    const bin = getCompanionBinaryPath();
+    mkdirSync(path.dirname(bin), { recursive: true });
+    writeFileSync(bin, 'binary');
+    writeFileSync(
+      `${bin}.json`,
+      JSON.stringify({
+        version: '0.1.3',
+        tag: 'companion-v0.1.3',
+        target: getCompanionTarget(),
+        installedAt: new Date().toISOString(),
+        archiveName:
+          'oh-my-opencode-slim-companion-v0.1.3-x86_64-pc-windows-msvc.zip',
+      }),
+    );
+
+    const result = await ensureCompanionVersion({
+      config: { enabled: true },
+      dryRun: true,
+    });
+
+    expect(result).toMatchObject({
+      status: 'installed',
+      binaryPath: bin,
+      version: COMPANION_MANIFEST.version,
     });
   });
 
@@ -94,7 +122,7 @@ describe('companion updater', () => {
     expect(result).toMatchObject({
       status: 'installed',
       binaryPath: getCompanionBinaryPath(),
-      version: '0.1.3',
+      version: COMPANION_MANIFEST.version,
     });
   });
 
@@ -264,6 +292,22 @@ describe('companion updater', () => {
     const packageRoot = path.resolve(import.meta.dir, '..', '..');
     expect(loadCompanionManifestFromPackageRoot(packageRoot)).toEqual(
       COMPANION_MANIFEST,
+    );
+  });
+
+  test('bundled companion manifest matches the Rust crate version', () => {
+    const packageRoot = path.resolve(import.meta.dir, '..', '..');
+    const cargoToml = readFileSync(
+      path.join(packageRoot, 'companion', 'Cargo.toml'),
+      'utf8',
+    );
+    const cargoVersion = cargoToml.match(
+      /\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m,
+    )?.[1];
+
+    expect(cargoVersion).toBe(COMPANION_MANIFEST.version);
+    expect(COMPANION_MANIFEST.tag).toBe(
+      `companion-v${COMPANION_MANIFEST.version}`,
     );
   });
 

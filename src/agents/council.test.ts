@@ -24,6 +24,31 @@ function reinforced(prompt: string): string {
 }
 
 describe('createCouncilAgent', () => {
+  test('synthesis permission denies nested dispatch', () => {
+    const permission = createCouncilAgent('provider/model').config
+      .permission as Record<string, unknown>;
+    expect(permission.task).toBe('deny');
+  });
+
+  test('harness assembly keeps the agent tool-less and its prompt untouched', () => {
+    // Seat text now arrives by host-side attachment (tool.execute.before
+    // resolver), not orchestrator paste — the synthesizer itself is unchanged:
+    // still no tools, still fed from its context.
+    const agent = createCouncilAgent('provider/model');
+    const permission = agent.config.permission as Record<string, unknown>;
+    expect(permission['*']).toBe('deny');
+    expect((agent.config as { tools?: unknown }).tools).toBeUndefined();
+    const prompt = councilPrompt('provider/model');
+    expect(prompt).toContain('You have NO tools');
+    expect(prompt).toContain(
+      'synthesize them into a structured council report',
+    );
+    // Seat names, not model labels — the assembly headers use record.agent.
+    expect(prompt).toContain(
+      'the seat name, e.g. "alpha", not the model label',
+    );
+  });
+
   test('factory emits the base prompt without inline reinforcement', () => {
     const prompt = councilPrompt('test/model');
     expect(prompt).toContain('## Council Response');

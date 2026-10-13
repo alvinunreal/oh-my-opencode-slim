@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { z } from 'zod';
 import {
   CouncilConfigSchema,
   type CouncillorConfig,
@@ -46,48 +47,9 @@ describe('CouncillorConfigSchema', () => {
       ]);
     }
   });
-
-  test('accepts deprecated master fields and reports them', () => {
-    const config = {
-      master: { model: 'anthropic/claude-opus-4-6' },
-      master_timeout: 300000,
-      master_fallback: ['openai/gpt-6'],
-      presets: {
-        default: {
-          alpha: { model: 'openai/gpt-6-luna' },
-        },
-      },
-    };
-
-    const result = CouncilConfigSchema.safeParse(config);
-    expect(result.success).toBe(true);
-
-    if (result.success) {
-      // Deprecated fields are stripped but reported via _deprecated
-      expect(result.data._deprecated).toEqual(['master']);
-      expect(Object.keys(result.data.presets.default)).toEqual(['alpha']);
-    }
-  });
-
-  test('no _deprecated when config has no deprecated fields', () => {
-    const config = {
-      presets: {
-        default: {
-          alpha: { model: 'openai/gpt-6-luna' },
-        },
-      },
-    };
-
-    const result = CouncilConfigSchema.safeParse(config);
-    expect(result.success).toBe(true);
-
-    if (result.success) {
-      expect(result.data._deprecated).toBeUndefined();
-    }
-  });
 });
 
-test('preset with only legacy "master" key results in empty councillors', () => {
+test('preset with legacy "master" key is rejected', () => {
   const config = {
     presets: {
       'master-only': {
@@ -97,76 +59,16 @@ test('preset with only legacy "master" key results in empty councillors', () => 
   };
 
   const result = CouncilConfigSchema.safeParse(config);
-  expect(result.success).toBe(true);
-
-  if (result.success) {
-    const preset = result.data.presets['master-only'];
-    expect(Object.keys(preset)).toEqual([]);
-  }
+  expect(result.success).toBe(false);
 });
 
-test('unwraps legacy nested "councillors" key with spaced model IDs', () => {
-  const config = {
-    presets: {
-      default: {
-        councillors: {
-          alpha: { model: 'of/MiniMax M3' },
-          beta: { model: 'openai/gpt-5.3-codex' },
-        },
-      },
-    },
+test('published schema rejects the legacy "master" preset key (propertyNames)', () => {
+  // Greptile P2: the rejection must be visible to editors, not just the
+  // loader — the key-level regex renders as propertyNames.pattern.
+  const generated = z.toJSONSchema(CouncilPresetSchema, { io: 'input' }) as {
+    propertyNames: { pattern?: string };
   };
-
-  const result = CouncilConfigSchema.safeParse(config);
-  expect(result.success).toBe(true);
-
-  if (result.success) {
-    const preset = result.data.presets.default;
-    expect(Object.keys(preset)).toEqual(['alpha', 'beta']);
-    expect(preset.alpha.model).toBe('of/MiniMax M3');
-    expect(preset.beta.model).toBe('openai/gpt-5.3-codex');
-  }
-});
-
-test('mixed legacy "councillors" and flat keys in same preset', () => {
-  const config = {
-    presets: {
-      mixed: {
-        councillors: {
-          alpha: { model: 'openai/gpt-6-luna' },
-        },
-        beta: { model: 'google/gemini-3-pro' },
-      },
-    },
-  };
-
-  const result = CouncilConfigSchema.safeParse(config);
-  expect(result.success).toBe(true);
-
-  if (result.success) {
-    const preset = result.data.presets.mixed;
-    expect(Object.keys(preset).sort()).toEqual(['alpha', 'beta']);
-  }
-});
-
-test('deprecated master with non-standard model ID still parses', () => {
-  const config = {
-    master: { model: 'claude-opus-4-6' }, // no provider/ prefix
-    master_timeout: 'fast', // not a number
-    master_fallback: 'all', // not an array
-    presets: {
-      default: {
-        alpha: { model: 'openai/gpt-6-luna' },
-      },
-    },
-  };
-
-  const result = CouncilConfigSchema.safeParse(config);
-  expect(result.success).toBe(true);
-
-  if (result.success) {
-    expect(result.data._deprecated).toEqual(['master']);
-  }
+  expect(generated.propertyNames.pattern).toBe('^(?!master$)');
 });
 
 test('rejects empty model string', () => {
@@ -341,4 +243,14 @@ describe('CouncilConfigSchema', () => {
       expect(thoroughPreset.detailed2.prompt).toBeUndefined();
     }
   });
+});
+
+test('rejects removed council.master* keys', () => {
+  for (const key of ['master', 'master_timeout', 'master_fallback']) {
+    const result = CouncilConfigSchema.safeParse({
+      presets: {},
+      [key]: {},
+    });
+    expect(result.success).toBe(false);
+  }
 });

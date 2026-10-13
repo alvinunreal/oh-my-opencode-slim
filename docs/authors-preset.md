@@ -117,8 +117,8 @@ This is the exact configuration the author runs day-to-day.
       "timeoutMs": 0
     }
   },
-  "tmux": {
-    "enabled": true,
+  "multiplexer": {
+    "type": "tmux",
     "layout": "main-vertical",
     "main_pane_size": 60
   }

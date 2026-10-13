@@ -113,6 +113,7 @@ export class TmuxMultiplexer implements Multiplexer {
       const paneId = result.stdout.trim();
 
       log('[tmux] spawnPane: result', {
+        command: opencodeCmd,
         exitCode: result.exitCode,
         paneId,
         stderr: result.stderr.trim(),

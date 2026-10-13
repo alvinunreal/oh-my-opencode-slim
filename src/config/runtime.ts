@@ -16,7 +16,6 @@
  * prompt-injecting consumer must go through src/hooks/cache-safe-injection.ts.
  */
 import {
-  AGENT_ALIASES,
   ALL_AGENT_NAMES,
   DEFAULT_DISABLED_AGENTS,
   DEFAULT_MAX_CONTEXT_LINES,
@@ -49,7 +48,7 @@ import {
   type ResolvedPluginConfig,
   type WebfetchConfig,
 } from './schema';
-import { getCustomAgentNames } from './utils';
+import { getCustomAgentNames, legacyAliasFor } from './utils';
 
 /** A single agent entry from the host opencode.json config. */
 export interface HostAgentConfig {
@@ -404,6 +403,10 @@ export class RuntimeConfig {
     return this.pluginConfig?.stripOrchestratorModel === true;
   }
 
+  get routingBlock(): boolean {
+    return this.pluginConfig?.routingBlock !== false;
+  }
+
   get setDefaultAgent(): boolean {
     return this.pluginConfig?.setDefaultAgent !== false;
   }
@@ -447,9 +450,6 @@ export class RuntimeConfig {
     const preset = this.council?.presets?.[presetName];
     if (preset) {
       for (const [seat, cfg] of Object.entries(preset)) {
-        if (seat === 'master') {
-          continue;
-        }
         const agentName = `councillor-${seat}`;
         if (disabled.has(agentName) || cfg.models.length <= 1) {
           continue;
@@ -645,12 +645,6 @@ export class RuntimeConfig {
     agents: Record<string, AgentOverrideConfig>,
     name: string,
   ): AgentOverrideConfig | undefined {
-    return (
-      agents[name] ??
-      agents[
-        Object.keys(AGENT_ALIASES).find((key) => AGENT_ALIASES[key] === name) ??
-          ''
-      ]
-    );
+    return agents[name] ?? agents[legacyAliasFor(name) ?? ''];
   }
 }

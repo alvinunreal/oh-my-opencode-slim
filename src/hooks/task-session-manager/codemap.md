@@ -9,9 +9,13 @@ Manages V2 background job-board state for task execution and injected completion
 The directory follows a **Facade + Strategy** pattern where `index.ts` acts as the facade that composes and orchestrates behavior across specialized strategy modules:
 
 - **index.ts**: Main facade that wires hooks into OpenCode's lifecycle and coordinates between the job board, pending calls, task context tracking, and explicit user waits. Implements the plugin hook interface (`tool.execute.before`, `tool.execute.after`, `experimental.chat.messages.transform`, `event`) and exposes `beginUserWait()` to the `wait_for_user` tool.
+  Historical-task recovery and injected completions admit already-managed parents
+  regardless of agent name; stale Orchestrator mapping repair stays specific to
+  Orchestrator turns and does not promote unmanaged Build/custom parents.
 - **revived-run-tracker.ts**: Logs terminal notification transport acceptance and failure with the captured transport-attempt number (including late acceptance after a timeout), lease deferral, and once-only ownership release to the fallback publication wake.
 - **../../utils/background-job-terminal-gate.ts**: Shared execution/observation gate for every terminal publication. Runtime quiescence and attributable result evidence authorize one board commit; busy withdraws terminal publications. Grace, bounded retries and single-open reads are shared across adapters.
 - **input-wait-tracker.ts**: Provides the single `hasInputWait()` seam used by idle reconciliation and continuation evaluation. It combines local question/permission waits with the process-global explicit user-wait latch.
+- **child-input-wait.ts**: Tracks pending child requests and formats their details/guidance for both wakes and `task_status`. V2 forms carry summaries and host-UI/wait/cancel guidance; v1 questions retain answer options.
 - **continuation-model-selection.ts**: Normalizes current-session and chat-hook model shapes before forwarding runtime model and variant choices to idle continuation prompts.
 - **pending-call-tracker.ts**: Tracks in-flight task calls using a capped ordered map (`MAX_PENDING_TASK_CALLS`) to correlate launch output safely. Provides call ID generation, storage, retrieval, and cleanup for pending task invocations.
 - **admission-runtime.ts**: Re-exports the per-directory admission runtime
@@ -25,7 +29,8 @@ The directory follows a **Facade + Strategy** pattern where `index.ts` acts as t
   preparation into the owning run.
 - **same-provider-policy.ts**: Opt-in per-provider rewrite
   (`backgroundJobs.sameProviderPolicy: { <provider>: "foreground" }`)
-  converting same-provider `background: true` task requests to the foreground
+  converting same-provider `background: true` task requests (including v2
+  omitted-`background` calls, defaulted to true before this check) to the foreground
   path for shared single-runtime backends; fail-open on unknown model/provider.
 - **task-context-tracker.ts**: Manages read context from child sessions with line-count and file caps. Stores context per task ID and provides pruning to prevent unbounded growth.
 
@@ -67,7 +72,7 @@ All modules depend on `BackgroundJobBoard` from `src/utils/background-job-board.
    - Prunes stale context during lifecycle events and status transitions
 
 4. **Message Injection (`experimental.chat.messages.transform`)**
-    - Injects a `<system-reminder>` part containing the `### Background Job Board` section into user messages for managed sessions
+    - Injects a `<system-reminder>` part containing the `### Background Job Board` section into user messages for managed sessions, including Build/custom primary parents; latest and checkpoint modes gate by managed-session ownership rather than the parent agent name
     - Lists active, unreconciled, and reusable sessions
     - Remembers injected terminal jobs to reconcile them on the next request after the completion was surfaced to the model (via `reconcileConsumedTerminalJobs`)
     - The idle timer remains a backstop for when the model ends its turn without further requests; after reconciling injected terminal results, the opt-in continuation evaluator can run in the same idle cycle under its existing guards
@@ -85,6 +90,14 @@ All modules depend on `BackgroundJobBoard` from `src/utils/background-job-board.
    - The shared latch cancels pending continuation timers/reservations
    - Foreground-fallback replay provenance and shared fallback teardown state preserve the latch across plugin-manager recreation
    - Idle continuation remains suppressed until a distinct real user message arrives
+
+### Fallback deferral
+
+- A recoverable child `session.error` records a deferral before foreground fallback arms its delay. Both terminal-gate wiring sites include `hasDeferredError()` alongside pending handoffs; the production gate also checks the fallback manager's pending delay and in-flight work, so runtime polling, result retrieval, and board injection cannot publish the failed attempt while fallback remains pending.
+- Child idle always schedules the deferred-error backstop, including for managed children; parent idle reconciliation cannot occupy that timer. It waits `idleReconcileDelayMs`, renews at most five times while fallback is in progress, then consumes the deferral before reconciliation. Pending fallback retries keep their timer without marking status uncertain.
+- Live busy clears the deferral and timer. A final error or genuine deletion clears it before publication. Fallback deletion cleanup preserves or re-arms the backstop; parent invalidation cannot cancel it. Genuine session/parent cleanup and plugin disposal remove deferrals with their timers.
+- The tracker flags admitted and unresolved-promoted fallback runs; external `register()` clears the flag. Plugin wiring uses pending/running fallback activity for v1 revive refusal. Verified cancellation remains allowed. v2 has no replay refusal and publishes unrecovered errors through the same backstop.
+- Normal confirmed admission after a terminal failover error sends one queued internal `state="running"` notice per hop. It shares the terminal parent transport but takes no terminal lease and has no retry ladder. The result waits for its notice attempt to settle. `chat.message` treats the part as internal, and board injection ignores its non-terminal state.
 
 ### Data & Control Flow
 

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { z } from 'zod';
 import {
   createMarketplaceTools,
   resolveFinalizedOrchestratorIdentities,
@@ -233,6 +234,16 @@ describe('marketplace tools', () => {
         { agent: 'orchestrator' } as never,
       ),
     ).rejects.toThrow('acknowledge_other_projects: true');
+    await expect(
+      manage.execute(
+        {
+          action: 'uninstall',
+          target: 'author/package',
+          acknowledge_other_projects: false,
+        } as never,
+        { agent: 'orchestrator' } as never,
+      ),
+    ).rejects.toThrow('acknowledge_other_projects: true');
     expect(calls).toEqual([]);
 
     await manage.execute(
@@ -244,6 +255,23 @@ describe('marketplace tools', () => {
       { agent: 'orchestrator' } as never,
     );
     expect(calls).toEqual([['uninstall', 'author/package', true]]);
+  });
+
+  test('declares acknowledgement as a plain optional boolean', () => {
+    const tools = createMarketplaceTools({ service: fixture().service });
+    const ack = tools.marketplace_manage.args.acknowledge_other_projects;
+    // Locks the #1471 fix: z.literal(true) rejects false here and emits
+    // const:true, which Gemini rejects with HTTP 400.
+    expect(ack.safeParse(false).success).toBe(true);
+    expect(ack.safeParse(undefined).success).toBe(true);
+    const toJSONSchema = (
+      z as unknown as { toJSONSchema?: (schema: unknown) => unknown }
+    ).toJSONSchema;
+    if (typeof toJSONSchema === 'function') {
+      const json = toJSONSchema(ack) as { const?: unknown; enum?: unknown };
+      expect(json).not.toHaveProperty('const');
+      expect(json).not.toHaveProperty('enum');
+    }
   });
 
   test('routes activation scope and rejects scope for unrelated actions', async () => {

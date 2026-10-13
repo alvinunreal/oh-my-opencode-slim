@@ -2,6 +2,13 @@ import { describe, expect, test } from 'bun:test';
 import { createCouncillorAgent } from './councillor';
 
 describe('createCouncillorAgent', () => {
+  test('prompt keeps the plain delegation ban', () => {
+    const agent = createCouncillorAgent('test-model');
+    expect(agent.config.prompt as string).toContain(
+      'You CANNOT edit files, write files, run shell commands, or delegate to other agents. You are an advisor, not an implementer.',
+    );
+  });
+
   test('creates agent with correct name', () => {
     const agent = createCouncillorAgent('test-model');
     expect(agent.name).toBe('councillor');
@@ -102,6 +109,29 @@ describe('councillor permissions', () => {
     expect(permission.lsp).toBe('allow');
   });
 
+  test('scopes task to observer-only only when nested dispatch is enabled', () => {
+    const enabled = createCouncillorAgent(
+      'test-model',
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    const task = (
+      enabled.config.permission as Record<string, Record<string, string>>
+    ).task;
+    // Last-match evaluation: '*' deny first, observer allow last.
+    expect(Object.keys(task)).toEqual(['*', 'observer']);
+    expect(task['*']).toBe('deny');
+    expect(task.observer).toBe('allow');
+
+    // Disabled keeps the pre-PR blanket deny.
+    const disabledAgent = createCouncillorAgent('test-model');
+    expect(
+      (disabledAgent.config.permission as Record<string, unknown>).task,
+    ).toBe('deny');
+  });
+
   test('allows list and code search tools', () => {
     const agent = createCouncillorAgent('test-model');
     const permission = agent.config.permission as Record<string, string>;
@@ -118,6 +148,8 @@ describe('councillor permissions', () => {
     expect(permission.write).toBe('deny');
     expect(permission.apply_patch).toBe('deny');
     expect(permission.ast_grep_replace).toBe('deny');
+    // Default keeps the pre-PR blanket deny; the observer-only pattern is
+    // pinned by the enabled case in the nested-dispatch test above.
     expect(permission.task).toBe('deny');
   });
 

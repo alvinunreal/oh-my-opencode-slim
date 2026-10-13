@@ -1,5 +1,6 @@
-import { AGENT_ALIASES, type AgentName } from './constants';
+import type { AgentName } from './constants';
 import type { RuntimeConfig } from './runtime';
+import { legacyAliasFor } from './utils';
 
 /** Default MCPs per agent - "*" means all MCPs, "!item" excludes specific MCPs */
 
@@ -49,12 +50,7 @@ export function getAgentMcpList(
 ): string[] {
   const agents = runtime.agents();
   const agentConfig =
-    agents[agentName] ??
-    agents[
-      Object.keys(AGENT_ALIASES).find(
-        (key) => AGENT_ALIASES[key] === agentName,
-      ) ?? ''
-    ];
+    agents[agentName] ?? agents[legacyAliasFor(agentName) ?? ''];
   if (agentConfig?.mcps !== undefined) {
     return agentConfig.mcps;
   }

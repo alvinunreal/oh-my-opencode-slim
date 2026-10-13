@@ -29,8 +29,8 @@ A glossary of the terms used in this project's domain. Definitions describe what
 
 ## Multiplexer & Sessions
 
-- **Multiplexer** — A terminal backend (tmux, zellij, herdr, kitty, or cmux) that hosts child agent panes. Set via \`multiplexer.type\`, which also accepts \`auto\` (auto-detect) and \`none\` (disabled).
-- **Multiplexer type** — The selected backend: `auto`, `tmux`, `zellij`, `herdr`, `kitty`, `cmux`, or `none`.
+- **Multiplexer** — A terminal backend (tmux, zellij, herdr, kitty, wezterm, or cmux) that hosts child agent panes. Set via \`multiplexer.type\`, which also accepts \`auto\` (auto-detect) and \`none\` (disabled).
+- **Multiplexer type** — The selected backend: `auto`, `tmux`, `zellij`, `herdr`, `kitty`, `wezterm`, `cmux`, or `none`.
 - **Pane** — A terminal region spawned by the multiplexer to run a child agent session.
 - **Child session** — A background agent session hosted in a multiplexer pane and tracked by the background job board.
 - **Client pane lifecycle** — The TUI client's in-process pane tracking: admits child sessions of the displayed parent, spawns and closes multiplexer panes anchored to the client's own pane, and reacts to session lifecycle events. There is no server-side or cross-process pane state.

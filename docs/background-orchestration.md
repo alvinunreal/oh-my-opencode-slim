@@ -41,7 +41,7 @@ The task API and background-control tools are:
 | `task_message` | Send a non-interrupting message and return `queued` (v2: steering acceptance with `delivery: "steer"`) |
 | `task_cancel` | Stop a generation while retaining its session |
 | `task_revive` | Resume a retained session with a new instruction |
-| `wait_for_user` | Plugin-provided orchestrator tool that pauses automatic orchestrator wakes while the user performs external manual work |
+| `wait_for_user` | Plugin-provided orchestrator tool (v1 only) that pauses automatic orchestrator wakes while the user performs external manual work; not registered on v2, where the native `question` tool is the blocking boundary |
 
 The delegation tool named `task()` here is `subagent()` on v2, with
 `task_id`/`sessionID` as the matching resume id; bare `task()` mentions on this
@@ -74,6 +74,14 @@ Its job is to:
 Specialists do the work. The orchestrator manages the work.
 
 By default, the orchestrator's file-mutation tools (`edit`, `write`, `apply_patch`, `ast_grep_replace`) are denied at the tool-call level; shell-mediated edits are discouraged by prompt only. An explicit `permission` entry can re-allow them.
+
+### Children moved to worktrees
+
+Moving a child session to another directory does not move its task ownership.
+The delegating parent's plugin instance still observes that tracked child's
+lifecycle, so completion and revived-run notifications do not require polling
+`task_result`. The destination directory handles its own permissions and runtime
+profiles; unrelated sessions remain excluded from the parent's event handling.
 
 ### Unattributed sessions and restart scope
 
@@ -575,6 +583,26 @@ on v2, set the keys explicitly:
 }
 ```
 
+Child-input wakes wait 250 ms before notifying the parent, on both host
+versions. Requests answered during that window by the host, a UI auto-replier,
+or another caller are discarded. Requests still open are checked again before
+delivery. Duplicate events enrich the queued notice without restarting the
+deadline. Stopped-job recovery and terminal-publication wakes are not delayed.
+An ask arriving during a host read or model-selection lookup defers a
+child-input-only wake until settling completes, without sending a stopped-job
+notice in its place. Overflowed request IDs are also revalidated: resolved
+requests cannot keep an overflow-only wake alive. Remaining overflow notices
+carry task IDs for `task_status`, and delivery retires only the overflow IDs
+actually sent, preserving requests added while a send is in flight. Entries
+beyond the retained-ID cap stay counted because their state cannot be checked.
+
+Wake and `task_status` share compact request details and reply guidance.
+V1 questions and permission requests use `task_reply`; v2 forms require the
+host UI, waiting, or `task_cancel`. V2 notices keep question summaries and option
+labels; full option descriptions stay in the host UI. A pending request
+suppresses the generic “await completion” status guidance. Shorter notices do not skip the host's
+normal model step after a tool result or guarantee that a model emits no filler.
+
 With the board off, the plugin still retires natively delivered results: on
 the parent's next real user turn they are registered, and once the prompt
 advances they are reconciled. Stopped jobs are **not** retired that way,
@@ -596,7 +624,9 @@ messages (including foreground-fallback replays), fallback teardown, session
 errors, and idle/busy events do not clear it. Immediate choices, clarifications,
 and pasted command output continue to use the `question` tool. If
 `wait_for_user` is intentionally listed in `disabled_tools`, the orchestrator
-uses the `question` tool as the blocking boundary instead.
+uses the `question` tool as the blocking boundary instead. On v2 hosts
+`wait_for_user` is never registered; the orchestrator always uses the native
+`question` tool, whose open form also suppresses automatic wakes.
 
 ### Background Job Board Injection
 
@@ -800,8 +830,10 @@ path unchanged: it skips background concurrency admission (no semaphore
 slot), is not wall-clock supervised, executes synchronously on the host, and
 its status is registered through the existing foreground bookkeeping.
 Unconfigured providers, different providers, and undeterminable providers
-leave `background: true` untouched (fail-open); the default (omitted)
-behavior is unchanged.
+leave `background: true` untouched (fail-open). On v2 hosts, when the
+background-default flip is active, an omitted
+`background` is first defaulted to `true` (the flip runs before this check), so
+it is converted for configured same-provider pairs too.
 
 ### Opt-in Wall-clock Supervisor
 

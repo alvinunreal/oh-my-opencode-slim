@@ -32,6 +32,7 @@ import {
   STATUS_STOPPED_GLYPH,
   selectionGuard,
   shortSessionID,
+  sidebarSiblingAnnotation,
   splitSidebarModelId,
   default as tuiPlugin,
 } from './tui';
@@ -738,7 +739,7 @@ describe('readConfigState', () => {
     }
   });
 
-  test('returns false for config with deprecated fallback keys (loads fine)', () => {
+  test('does not flag config with removed fallback keys as invalid', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-tui-'));
     try {
       const projectDir = path.join(tempDir, 'project');
@@ -756,8 +757,9 @@ describe('readConfigState', () => {
         }),
       );
 
-      // Deprecated fallback keys are stripped with a warning; the config
-      // loads successfully so the sidebar must NOT show "Config invalid".
+      // Removed fallback keys are dropped with a 'removed-key' warning (not
+      // invalid-schema), so the rest of the config loads and the sidebar must
+      // NOT show "Config invalid".
       expect(readConfigState(projectDir).configInvalid).toBe(false);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -1043,6 +1045,406 @@ describe('clickable sidebar sessions', () => {
     expect(getSidebarAgentTargets(snapshot, 'conv-2')).toEqual([]);
     // Home route: no scoping possible, no navigation offered.
     expect(getSidebarAgentTargets(snapshot, undefined)).toEqual([]);
+  });
+
+  test('parallel same-agent sessions get sibling ordinals within the same parent scope', () => {
+    const snapshot = createSnapshot({
+      activeSessions: {
+        exp_a: 'explorer',
+        exp_b: 'explorer',
+        fix_a: 'fixer',
+        fix_b: 'fixer',
+      },
+      sessionParents: {
+        exp_a: 'conv-1',
+        exp_b: 'conv-1',
+        fix_a: 'conv-1',
+        fix_b: 'conv-1',
+      },
+      sessionDetails: {
+        exp_a: { alias: 'exp-1', status: 'busy' },
+        exp_b: { alias: 'exp-2', status: 'busy' },
+        fix_a: { alias: 'fix-1', status: 'busy' },
+        fix_b: { alias: 'fix-2', status: 'busy' },
+      },
+    });
+
+    const targets = getSidebarAgentTargets(snapshot, 'conv-1');
+    const explorer = targets.find((t) => t.agentName === 'explorer');
+    expect(
+      explorer?.sessions.map((s) => [s.siblingOrdinal, s.siblingTotal]),
+    ).toEqual([
+      [1, 2],
+      [2, 2],
+    ]);
+    const fixer = targets.find((t) => t.agentName === 'fixer');
+    expect(
+      fixer?.sessions.map((s) => [s.siblingOrdinal, s.siblingTotal]),
+    ).toEqual([
+      [1, 2],
+      [2, 2],
+    ]);
+    // Ordinals count per agent: each pair totals 2, not 4.
+    expect(sidebarSiblingAnnotation(explorer?.sessions[0] ?? {})).toBe('1/2');
+    expect(sidebarSiblingAnnotation(fixer?.sessions[1] ?? {})).toBe('2/2');
+  });
+
+  test('same agent under different parents are not siblings (no ordinals)', () => {
+    // Two specialists each dispatched one explorer: same agent, same
+    // conversation root, but no sibling dispatch — the nesting marker
+    // distinguishes them instead.
+    const snapshot = createSnapshot({
+      activeSessions: {
+        exp_a: 'explorer',
+        exp_b: 'explorer',
+      },
+      sessionParents: {
+        exp_a: 'fix_a',
+        exp_b: 'fix_b',
+        fix_a: 'conv-1',
+        fix_b: 'conv-1',
+      },
+      sessionDetails: {
+        exp_a: { alias: 'exp-1', status: 'busy' },
+        exp_b: { alias: 'exp-2', status: 'busy' },
+        fix_a: { alias: 'fix-1', status: 'busy' },
+        fix_b: { alias: 'fix-2', status: 'busy' },
+      },
+    });
+
+    const [group] = getSidebarAgentTargets(snapshot, 'conv-1');
+    expect(group.agentName).toBe('explorer');
+    for (const session of group.sessions) {
+      expect(session.siblingOrdinal).toBeUndefined();
+      expect(session.siblingTotal).toBeUndefined();
+      expect(sidebarSiblingAnnotation(session)).toMatch(/^via fix-/);
+    }
+  });
+
+  test('single session per agent gets no sibling attribution', () => {
+    const snapshot = createSnapshot({
+      activeSessions: { ora: 'oracle' },
+      sessionParents: { ora: 'conv-1' },
+      sessionDetails: { ora: { alias: 'ora-1', status: 'busy' } },
+    });
+    const [group] = getSidebarAgentTargets(snapshot, 'conv-1');
+    expect(group.sessions[0].siblingOrdinal).toBeUndefined();
+    expect(group.sessions[0].siblingTotal).toBeUndefined();
+    expect(group.sessions[0].viaParent).toBeUndefined();
+    expect(sidebarSiblingAnnotation(group.sessions[0])).toBeUndefined();
+  });
+
+  test('depth-2 nesting marks rows via the intermediate parent', () => {
+    const snapshot = createSnapshot({
+      activeSessions: {
+        exp_a: 'explorer',
+        exp_b: 'explorer',
+        exp_root: 'explorer',
+      },
+      sessionParents: {
+        exp_a: 'fix_ses',
+        exp_b: 'fix_ses',
+        exp_root: 'conv-1',
+        // The fixer specialist is itself a managed child of conv-1.
+        fix_ses: 'conv-1',
+      },
+      sessionDetails: {
+        exp_a: { alias: 'exp-1', status: 'busy' },
+        exp_b: { alias: 'exp-2', status: 'busy' },
+        exp_root: { alias: 'exp-3', status: 'busy' },
+        fix_ses: { alias: 'fix-1', status: 'busy' },
+      },
+    });
+
+    const [group] = getSidebarAgentTargets(snapshot, 'conv-1');
+    const byID = new Map(group.sessions.map((s) => [s.sessionID, s]));
+    // Depth-2 siblings: ordinals within their specialist parent scope plus
+    // the "via" marker naming the intermediate parent.
+    expect(sidebarSiblingAnnotation(byID.get('exp_a'))).toBe('1/2 via fix-1');
+    expect(sidebarSiblingAnnotation(byID.get('exp_b'))).toBe('2/2 via fix-1');
+    // Orchestrator-dispatched: sibling of nobody, parent is the root.
+    expect(byID.get('exp_root')?.viaParent).toBeUndefined();
+  });
+
+  test('depth-2 via marker falls back to the parent id suffix without an alias', () => {
+    const snapshot = createSnapshot({
+      activeSessions: { exp_a: 'explorer' },
+      sessionParents: { exp_a: 'fix_ses', fix_ses: 'conv-1' },
+      sessionDetails: { exp_a: { alias: 'exp-1', status: 'busy' } },
+    });
+
+    const [group] = getSidebarAgentTargets(snapshot, 'conv-1');
+    // The suffix (tail), never the shared prefix.
+    expect(group.sessions[0].viaParent).toBe(shortSessionID('fix_ses'));
+    expect(sidebarSiblingAnnotation(group.sessions[0])).toBe('via fix_ses');
+  });
+
+  test('depth-2 via marker recovers the board alias when the parent goes idle', () => {
+    const snapshot = createSnapshot({
+      activeSessions: { exp_a: 'explorer' },
+      sessionParents: { exp_a: 'fix_ses', fix_ses: 'conv-1' },
+      // The fixer parent is idle: no sessionDetails entry. Its board alias
+      // survives in the grandparent's reusable list.
+      sessionDetails: { exp_a: { alias: 'exp-1', status: 'busy' } },
+      reusableByAgent: {
+        'conv-1': {
+          fixer: [{ taskID: 'fix_ses', alias: 'fix-1', running: true }],
+        },
+      },
+    });
+
+    const [group] = getSidebarAgentTargets(snapshot, 'conv-1');
+    expect(group.sessions[0].viaParent).toBe('fix-1');
+    expect(sidebarSiblingAnnotation(group.sessions[0])).toBe('via fix-1');
+  });
+
+  test('self-referencing parent entries do not read as depth-2 nesting', () => {
+    const snapshot = createSnapshot({
+      activeSessions: { ora: 'oracle' },
+      sessionParents: { ora: 'conv-1', 'conv-1': 'conv-1' },
+      sessionDetails: { ora: { alias: 'ora-1', status: 'busy' } },
+    });
+    const [group] = getSidebarAgentTargets(snapshot, 'conv-1');
+    expect(group.sessions[0].viaParent).toBeUndefined();
+  });
+
+  const attributionTheme = {
+    accent: '#22c55e',
+    background: '#111111',
+    borderActive: '#555555',
+    text: '#ffffff',
+    textMuted: '#aaaaaa',
+    success: '#22c55e',
+    warning: '#f59e0b',
+  };
+
+  async function renderAttributionFrame(
+    render: () => unknown,
+  ): Promise<string> {
+    const setup = await testRender(() => render() as never, {
+      width: 60,
+      height: 24,
+    });
+    try {
+      await setup.renderOnce();
+      return setup.captureCharFrame();
+    } finally {
+      setup.renderer.destroy();
+    }
+  }
+
+  function expandedInteraction(): Parameters<typeof renderSidebar>[7] {
+    return {
+      navigate: () => {},
+      isOpen: () => true,
+      toggleOpen: () => {},
+      expandedAgents: () => new Set(['explorer']),
+      toggleAgent: () => {},
+      syncScope: () => {},
+    };
+  }
+
+  test('sidebar frame shows sibling ordinals for parallel same-agent rows', async () => {
+    const snapshot = createSnapshot({
+      agentModels: { explorer: 'openai/gpt-6' },
+      activeSessions: { exp_a: 'explorer', exp_b: 'explorer' },
+      sessionParents: { exp_a: 'conv-1', exp_b: 'conv-1' },
+      sessionDetails: {
+        exp_a: { alias: 'exp-1', status: 'busy' },
+        exp_b: { alias: 'exp-2', status: 'busy' },
+      },
+    });
+    const frame = await renderAttributionFrame(() =>
+      renderSidebar(
+        snapshot,
+        'test',
+        attributionTheme,
+        false,
+        false,
+        () => 0,
+        'conv-1',
+        expandedInteraction(),
+      ),
+    );
+    expect(frame).toContain('exp-1 1/2');
+    expect(frame).toContain('exp-2 2/2');
+    expect(frame).not.toContain('via');
+  });
+
+  test('sidebar frame marks depth-2 rows with their intermediate parent', async () => {
+    const snapshot = createSnapshot({
+      agentModels: { explorer: 'openai/gpt-6' },
+      activeSessions: { exp_a: 'explorer', exp_b: 'explorer' },
+      sessionParents: {
+        exp_a: 'fix_ses',
+        exp_b: 'fix_ses',
+        fix_ses: 'conv-1',
+      },
+      sessionDetails: {
+        exp_a: { alias: 'exp-1', status: 'busy' },
+        exp_b: { alias: 'exp-2', status: 'busy' },
+        fix_ses: { alias: 'fix-1', status: 'busy' },
+      },
+    });
+    const frame = await renderAttributionFrame(() =>
+      renderSidebar(
+        snapshot,
+        'test',
+        attributionTheme,
+        false,
+        false,
+        () => 0,
+        'conv-1',
+        expandedInteraction(),
+      ),
+    );
+    expect(frame).toContain('exp-1 1/2 via fix-1');
+    expect(frame).toContain('exp-2 2/2 via fix-1');
+  });
+
+  test('collapsed single depth-2 target marks via parent on the agent row', async () => {
+    const snapshot = createSnapshot({
+      agentModels: { explorer: 'openai/gpt-6' },
+      activeSessions: { exp_a: 'explorer' },
+      sessionParents: { exp_a: 'fix_ses', fix_ses: 'conv-1' },
+      sessionDetails: {
+        exp_a: { alias: 'exp-1' },
+        fix_ses: { alias: 'fix-1' },
+      },
+    });
+    const navigated: string[] = [];
+    const collapsedInteraction = (): Parameters<typeof renderSidebar>[7] => ({
+      navigate: (id: string) => navigated.push(id),
+      isOpen: () => true,
+      toggleOpen: () => {},
+      expandedAgents: () => new Set<string>(),
+      toggleAgent: () => {},
+      syncScope: () => {},
+    });
+    const frame = await renderAttributionFrame(() =>
+      renderSidebar(
+        snapshot,
+        'test',
+        attributionTheme,
+        false,
+        false,
+        () => 0,
+        'conv-1',
+        collapsedInteraction(),
+      ),
+    );
+    const explorerLine =
+      frame.split('\n').find((l) => l.includes('explorer')) ?? '';
+    expect(explorerLine).toContain('via fix-1');
+    // Collapsed: the child session row itself is absent.
+    expect(frame).not.toContain('exp-1');
+
+    // Clicking the collapsed agent row navigates straight to its session.
+    const setup = await testRender(
+      () =>
+        renderSidebar(
+          snapshot,
+          'test',
+          attributionTheme,
+          false,
+          false,
+          () => 0,
+          'conv-1',
+          collapsedInteraction(),
+        ) as never,
+      { width: 60, height: 24 },
+    );
+    try {
+      await setup.renderOnce();
+      const lines = setup.captureCharFrame().split('\n');
+      const row = lines.findIndex((l) => l.includes('explorer'));
+      expect(row).toBeGreaterThan(-1);
+      const col = Math.max(lines[row].indexOf('explorer'), 0);
+      await setup.mockMouse.click(col + 2, row);
+      expect(navigated).toEqual(['exp_a']);
+    } finally {
+      setup.renderer.destroy();
+    }
+
+    // Compact mode keeps the marker on the agent row.
+    const compactSetup = await testRender(
+      () =>
+        renderSidebar(
+          snapshot,
+          'test',
+          attributionTheme,
+          false,
+          true,
+          () => 0,
+          'conv-1',
+          collapsedInteraction(),
+        ) as never,
+      { width: 36, height: 24 },
+    );
+    try {
+      await compactSetup.renderOnce();
+      const compactLine =
+        compactSetup
+          .captureCharFrame()
+          .split('\n')
+          .find((l) => l.includes('explorer')) ?? '';
+      expect(compactLine).toContain('via fix-1');
+    } finally {
+      compactSetup.renderer.destroy();
+    }
+
+    // Control: parented directly to the root, so no via marker.
+    const control = createSnapshot({
+      agentModels: { explorer: 'openai/gpt-6' },
+      activeSessions: { exp_a: 'explorer' },
+      sessionParents: { exp_a: 'conv-1' },
+      sessionDetails: { exp_a: { alias: 'exp-1' } },
+    });
+    const controlFrame = await renderAttributionFrame(() =>
+      renderSidebar(
+        control,
+        'test',
+        attributionTheme,
+        false,
+        false,
+        () => 0,
+        'conv-1',
+        collapsedInteraction(),
+      ),
+    );
+    expect(controlFrame).not.toContain('via');
+  });
+
+  test('board-projected running rows join the same sibling counting', async () => {
+    // Two running background explorers known only through the board
+    // projection (no active-activity entry): the shared parent scope still
+    // yields ordinals on the rendered rows.
+    const snapshot = createSnapshot({
+      agentModels: { explorer: 'openai/gpt-6' },
+      sessionParents: { 'exp-task-a': 'conv-1', 'exp-task-b': 'conv-1' },
+      reusableByAgent: {
+        'conv-1': {
+          explorer: [
+            { taskID: 'exp-task-a', alias: 'exp-1', running: true },
+            { taskID: 'exp-task-b', alias: 'exp-2', running: true },
+          ],
+        },
+      },
+    });
+    const frame = await renderAttributionFrame(() =>
+      renderSidebar(
+        snapshot,
+        'test',
+        attributionTheme,
+        false,
+        false,
+        () => 0,
+        'conv-1',
+        expandedInteraction(),
+      ),
+    );
+    expect(frame).toContain('exp-1 1/2');
+    expect(frame).toContain('exp-2 2/2');
   });
 
   test('alias ordering is numeric (ora-2 before ora-10), unaliased last', () => {

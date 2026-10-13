@@ -12,10 +12,13 @@ import { isInternalInitiatorPart } from '../../utils';
 import * as logger from '../../utils/logger';
 import { mapV2EventToV1 } from '../../v2/event-adapter';
 import { SessionLifecycle } from '../session-lifecycle';
+import type { FallbackNotice } from '../task-session-manager/revived-run-tracker';
 import {
   ForegroundFallbackManager,
   isFailoverError,
   isInlineFailoverError,
+  isPermanentQuotaBillingError,
+  isSpentQuotaError,
 } from './index';
 
 // ACCEPTANCE GAP: config() hook behaviour is not covered by CI — verify live.
@@ -274,7 +277,315 @@ describe('foreground fallback redo harness', () => {
     expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
       body: { model: { providerID: 'test', modelID: 'b' } },
     });
+    expect(manager.getActiveFallback('harness')?.downProviders.size).toBe(0);
     expect(mocks.abort).not.toHaveBeenCalled();
+  });
+
+  test('T1: content-filter chain walk starts at the head and stays exhausted after the sticky retry', async () => {
+    const chain = [
+      'anthropic/claude-opus-5-5',
+      'openai/gpt-6.1-sol-fast',
+      'anthropic/claude-sonnet-5-5',
+      'opencode-go/muse-spark-1.3-contributor',
+    ];
+    const { manager, mocks } = makeManager({ chain });
+    const sessionID = 'content-filter-chain-walk';
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'user-message',
+          sessionID,
+          role: 'user',
+          agent: 'orchestrator',
+          model: { providerID: 'anthropic', modelID: 'claude-sonnet-5-5' },
+        },
+        parts: [{ type: 'text', text: 'hello' }],
+      },
+    });
+    const error = {
+      name: 'ContentFilterError',
+      data: {
+        message: "The response was blocked by the provider's content filter",
+      },
+    };
+    // Sonnet was user-selected; every later failure belongs to a replay.
+    // The last two failures exhaust the sticky retry, then stay terminal.
+    for (const [index, model] of [
+      chain[2],
+      chain[0],
+      chain[1],
+      chain[3],
+      chain[3],
+      chain[3],
+    ].entries()) {
+      jest.advanceTimersByTime(6_000);
+      const [providerID, modelID] = model.split('/');
+      const info = {
+        id: `filtered-${index}`,
+        sessionID,
+        role: 'assistant',
+        agent: 'orchestrator',
+        providerID,
+        modelID,
+        time: { created: Date.now() - 1, completed: Date.now() },
+      };
+      await manager.handleEvent({
+        type: 'message.updated',
+        properties: { info: { ...info, finish: 'content-filter' } },
+      });
+      await manager.handleEvent({
+        type: 'message.updated',
+        properties: { info: { ...info, error } },
+      });
+      await manager.handleEvent({
+        type: 'session.error',
+        properties: { sessionID, error },
+      });
+      expect(manager.getActiveFallback(sessionID)?.downProviders).toEqual(
+        new Set(),
+      );
+    }
+
+    expect(
+      mocks.promptAsync.mock.calls.map(([args]) => {
+        const { providerID, modelID } = (args as any).body.model;
+        return `${providerID}/${modelID}`;
+      }),
+    ).toEqual([chain[0], chain[1], chain[3], chain[3]]);
+    expect(mocks.abort).toHaveBeenCalledTimes(1);
+    expect(manager.willAttemptFallback(sessionID)).toBe(false);
+  });
+
+  test('T2: v2 chain walk skips providers abandoned by the session or its parent', async () => {
+    const { mocks } = createMockClient();
+    const manager = new ForegroundFallbackManager(
+      {
+        orchestrator: [
+          'anthropic/claude-opus-5-5',
+          'openai/gpt-6.1-sol-fast',
+          'anthropic/claude-sonnet-5-5',
+          'opencode-go/muse-spark-1.3-contributor',
+        ],
+        explorer: [
+          'openai/gpt-6-mini',
+          'anthropic/claude-haiku-5',
+          'google/gemini-3-flash',
+        ],
+      },
+      false,
+      { directory: '/test', hostFlavor: 'v2' } as never,
+      0,
+      undefined,
+      undefined,
+      0,
+      0,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    const switchModel = mock(async (_sessionID: string, _model: unknown) => {});
+    const fail = (sessionID: string, agent: string, model: string) => {
+      const [providerID, id] = model.split('/');
+      return manager.handleV2Retry(
+        {
+          sessionID,
+          agent,
+          model: { providerID, id },
+          error: { type: 'provider.rate-limit', status: 429, message: '429' },
+          decision: { retry: true },
+        },
+        switchModel,
+      );
+    };
+
+    await fail(
+      'parent-chain-walk',
+      'orchestrator',
+      'anthropic/claude-opus-5-5',
+    );
+    expect(
+      manager.getActiveFallback('parent-chain-walk')?.downProviders,
+    ).toEqual(new Set(['anthropic']));
+    for (const mapped of mapV2EventToV1({
+      type: 'session.created',
+      data: { sessionID: 'child-chain-walk', parentID: 'parent-chain-walk' },
+    })) {
+      await manager.handleEvent(mapped);
+    }
+    await fail('child-chain-walk', 'explorer', 'openai/gpt-6-mini');
+    await fail('parent-chain-walk', 'orchestrator', 'openai/gpt-6.1-sol-fast');
+
+    expect(switchModel.mock.calls).toEqual([
+      ['parent-chain-walk', { providerID: 'openai', id: 'gpt-6.1-sol-fast' }],
+      ['child-chain-walk', { providerID: 'google', id: 'gemini-3-flash' }],
+      [
+        'parent-chain-walk',
+        { providerID: 'opencode-go', id: 'muse-spark-1.3-contributor' },
+      ],
+    ]);
+    expect(
+      manager.getActiveFallback('parent-chain-walk')?.downProviders,
+    ).toEqual(new Set(['anthropic', 'openai']));
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('F1: mapped v2 usage after content-filter failures preserves the chain walk', async () => {
+    createMockClient();
+    const chain = [
+      'anthropic/claude-opus-5-5',
+      'openai/gpt-6.1-sol-fast',
+      'anthropic/claude-sonnet-5-5',
+      'opencode-go/muse-spark-1.3-contributor',
+    ];
+    const manager = new ForegroundFallbackManager(
+      { orchestrator: chain },
+      false,
+      { directory: '/test', hostFlavor: 'v2' } as never,
+      0,
+      undefined,
+      undefined,
+      0,
+      0,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    const sessionID = 'v2-content-filter-usage';
+    const switchModel = mock(async (_sessionID: string, _model: unknown) => {});
+    const dispatch = async (event: Record<string, unknown>) => {
+      for (const mapped of mapV2EventToV1(event)) {
+        await manager.handleEvent(mapped);
+      }
+    };
+    const error = {
+      name: 'ContentFilterError',
+      data: {
+        message: "The response was blocked by the provider's content filter",
+      },
+    };
+
+    for (const [index, model] of [chain[2], chain[0], chain[1]].entries()) {
+      jest.advanceTimersByTime(6_000);
+      const tokens = {
+        input: (index + 1) * 100,
+        output: (index + 1) * 10,
+        cache: { read: 0, write: 0 },
+      };
+      await dispatch({
+        type: 'session.step.failed',
+        data: { sessionID, finish: 'content-filter', error, tokens },
+      });
+      await dispatch({
+        type: 'session.usage.updated',
+        data: { sessionID, tokens },
+      });
+      const [providerID, id] = model.split('/');
+      await manager.handleV2Retry(
+        {
+          sessionID,
+          agent: 'orchestrator',
+          model: { providerID, id },
+          error,
+          decision: { retry: true },
+        },
+        switchModel,
+      );
+    }
+
+    expect(switchModel.mock.calls).toEqual([
+      [sessionID, { providerID: 'anthropic', id: 'claude-opus-5-5' }],
+      [sessionID, { providerID: 'openai', id: 'gpt-6.1-sol-fast' }],
+      [
+        sessionID,
+        { providerID: 'opencode-go', id: 'muse-spark-1.3-contributor' },
+      ],
+    ]);
+  });
+
+  test('G1: successful mapped v2 steps re-arm retries within one execution', async () => {
+    createMockClient();
+    const manager = new ForegroundFallbackManager(
+      {
+        orchestrator: ['anthropic/claude-opus-5-5', 'openai/gpt-6.1-sol-fast'],
+      },
+      false,
+      { directory: '/test', hostFlavor: 'v2' } as never,
+      3,
+      undefined,
+      undefined,
+      0,
+      0,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    const sessionID = 'v2-step-recovery';
+    const switchModel = mock(async () => {});
+
+    // One ongoing execution: each transient error is followed by a tool step.
+    for (let step = 1; step <= 4; step++) {
+      jest.advanceTimersByTime(1_000);
+      await manager.handleV2Retry(
+        {
+          sessionID,
+          agent: 'orchestrator',
+          model: { providerID: 'anthropic', id: 'claude-opus-5-5' },
+          error: { type: 'provider.rate-limit', status: 429, message: '429' },
+          decision: { retry: true },
+        },
+        switchModel,
+      );
+      for (const mapped of mapV2EventToV1({
+        type: 'session.step.ended',
+        data: {
+          sessionID,
+          finish: 'tool-calls',
+          tokens: {
+            input: step * 100,
+            output: step * 10,
+            cache: { read: 0, write: 0 },
+          },
+        },
+      })) {
+        await manager.handleEvent(mapped);
+      }
+    }
+
+    expect(switchModel).not.toHaveBeenCalled();
+  });
+
+  test('H1: v2 content-filter errors switch models without abandoning the provider', async () => {
+    const { manager } = makeManager({
+      chain: ['test/a', 'other/b'],
+      hostFlavor: 'v2',
+    });
+    const sessionID = 'v2-content-policy';
+    const switchModel = mock(async () => {});
+    const event = {
+      ...retryEvent(sessionID, 'a', { retry: false }),
+      error: {
+        type: 'provider.content-filter',
+        message: 'Provider blocked the response',
+        status: 400,
+      },
+    };
+
+    await manager.handleV2Retry(event, switchModel);
+
+    expect(switchModel).toHaveBeenCalledWith(sessionID, {
+      providerID: 'other',
+      id: 'b',
+    });
+    expect(manager.getActiveFallback(sessionID)).toEqual({
+      model: 'other/b',
+      downProviders: new Set(),
+    });
+    expect(event.decision).toEqual({ retry: true, delay: 0 });
   });
 
   test('uncorrelated session.error is correlated with its matching errored message update', async () => {
@@ -565,9 +876,9 @@ describe('foreground fallback redo harness', () => {
     await manager.handleEvent(redoEvents.error('turn-probe-order'));
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
     expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
-      body: { model: { providerID: 'test', modelID: 'c' } },
+      body: { model: { providerID: 'test', modelID: 'a' } },
     });
-    expect(onChanged).toHaveBeenCalledWith('turn-probe-order', 'test/c');
+    expect(onChanged).toHaveBeenCalledWith('turn-probe-order', 'test/a');
   });
 
   test('an internal replay notification does not invalidate an external turn probe', async () => {
@@ -1148,7 +1459,7 @@ describe('foreground fallback redo: host retry budget', () => {
     await manager.handleEvent(redoEvents.retry(sid, 3));
     expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
     expect(mocks.promptAsync.mock.calls[1]?.[0]).toMatchObject({
-      body: { model: { providerID: 'test', modelID: 'c' } },
+      body: { model: { providerID: 'test', modelID: 'a' } },
     });
     expect(mocks.abort).toHaveBeenCalledTimes(2);
   });
@@ -1168,6 +1479,9 @@ describe('foreground fallback redo: host retry budget', () => {
     await manager.handleEvent(redoEvents.error(sid));
     expect(mocks.abort).toHaveBeenCalledTimes(1);
     expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+    expect(manager.fallbackFailureReason(sid)).toContain(
+      'chain exhausted; tried: test/a, test/b.',
+    );
 
     jest.setSystemTime(1_018_000);
     await manager.handleEvent(redoEvents.assistant(sid, 'b'));
@@ -1372,23 +1686,14 @@ describe('foreground fallback redo: host retry budget', () => {
       switchModel,
     );
     expect(switchModel).toHaveBeenCalledTimes(1);
-    // A completed successful assistant response resets the descent
+    // A successful host execution resets the descent
     // bookkeeping even with the replay path disabled.
-    await mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          id: 'm-v2-ok',
-          sessionID: 'v2-reset',
-          role: 'assistant',
-          agent: 'orchestrator',
-          providerID: 'test',
-          modelID: 'b',
-          finish: 'stop',
-          time: { completed: Date.now() },
-        },
-      },
-    });
+    for (const mapped of mapV2EventToV1({
+      type: 'session.execution.succeeded',
+      data: { sessionID: 'v2-reset' },
+    })) {
+      await mgr.handleEvent(mapped);
+    }
     // The next failure on the primary starts a fresh descent: b is
     // available again instead of being skipped for c.
     await mgr.handleV2Retry(
@@ -1600,6 +1905,23 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
     },
   );
 
+  test('permanent quota error skips the host retry budget', async () => {
+    const { manager } = makeManager({ maxRetries: 3 });
+    const switchModel = mock(async () => {});
+    const event = {
+      sessionID: 'v2-permanent',
+      agent: 'orchestrator',
+      model: { providerID: 'test', id: 'a' },
+      error: { message: 'Free usage exceeded, subscribe to Go' },
+      decision: { retry: true, delay: 77 },
+    };
+    await manager.handleV2Retry(event, switchModel);
+    expect(switchModel).toHaveBeenCalledWith('v2-permanent', {
+      providerID: 'test',
+      id: 'b',
+    });
+  });
+
   test.each([
     ['B', 'C'],
     ['C', 'D'],
@@ -1607,7 +1929,7 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
     'failed switch keeps its target retryable (next failure on %s switches to %s)',
     async (hostModel, target) => {
       const { mocks } = createMockClient();
-      const mgr = retryMgr(['A', 'B', 'C', 'D']);
+      const mgr = retryMgr(['B', 'C', 'D']);
       const sessionID = 'retry-unconsumed';
       const decision = { retry: false };
       const failed = retryEvent(sessionID, 'B', decision);
@@ -2024,6 +2346,56 @@ describe('isFailoverError', () => {
     ).toBe(true);
   });
 
+  test('returns true for streaming/proxy backpressure without an HTTP status', () => {
+    // Issue #947: gateways shed load with these wordings; the failure
+    // carries no 4xx determinism, so the chain (or a same-model replay)
+    // should be tried.
+    for (const message of [
+      'streaming response failed: connection reset',
+      'request queue is full, try again later',
+      'worker local total request limit reached',
+    ]) {
+      expect(isFailoverError(message)).toBe(true);
+      expect(isFailoverError({ message })).toBe(true);
+    }
+  });
+
+  test('returns true for "upstream error" only with transient context', () => {
+    // A 5xx status, outage marker, or timeout/unavailable marker in the
+    // same message proves the upstream failure is transient.
+    for (const message of [
+      'upstream error (status 500)',
+      'upstream error: 503 Service Unavailable',
+      'upstream error: request timeout after 30s',
+      'upstream error: upstream unavailable, try again',
+    ]) {
+      expect(isFailoverError(message)).toBe(true);
+      expect(isFailoverError({ message })).toBe(true);
+    }
+  });
+
+  test('returns false for bare or 400-bodied "upstream error"', () => {
+    // Proxies wrap deterministic 4xx in the same wording; without
+    // transient context these stay hard errors.
+    expect(isFailoverError('upstream error')).toBe(false);
+    expect(isFailoverError({ message: 'upstream error' })).toBe(false);
+    expect(
+      isFailoverError({
+        message: 'upstream error: request failed with status code 400',
+      }),
+    ).toBe(false);
+  });
+
+  test('returns false for policy-flavored "upstream error" without transient context', () => {
+    // A policy rejection retried on the same model fails again; without a
+    // transient marker it stays a hard error even under proxy wording.
+    expect(
+      isFailoverError({
+        message: 'upstream error: content policy violation, request denied',
+      }),
+    ).toBe(false);
+  });
+
   test('returns true for "Forbidden" in message', () => {
     expect(isFailoverError({ message: '403 Forbidden' })).toBe(true);
   });
@@ -2122,6 +2494,624 @@ describe('isFailoverError', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Spent allowance (issue #966): provider exhaustion, not a failover veto
+// ---------------------------------------------------------------------------
+
+describe('isSpentQuotaError (issue #966)', () => {
+  test.each([
+    'quota exceeded',
+    'usage exceeded',
+    'usage limit reached',
+    'Monthly usage limit reached. Resets in X days.',
+    '5-hour usage limit reached. Resets in 36min.',
+    'Weekly usage limit reached. Resets in 2 days.',
+    'AI_APICallError: The usage limit has been reached',
+    'Usage exceeded for this billing period',
+  ])('classifies "%s" as spent allowance that still fails over', (signal) => {
+    expect(isSpentQuotaError({ message: signal })).toBe(true);
+    expect(isSpentQuotaError(signal)).toBe(true);
+    expect(
+      isSpentQuotaError({ data: { statusCode: 429, responseBody: signal } }),
+    ).toBe(true);
+    expect(isFailoverError({ message: signal })).toBe(true);
+    // Spent wording is not permanent billing: it keeps the initial delay.
+    expect(isPermanentQuotaBillingError({ message: signal })).toBe(false);
+  });
+
+  test.each([
+    'quota exceeded, retry after 20s',
+    'Quota exceeded for quota metric, try again in 30s',
+    'quota exceeded, retry in 20s',
+    'quota exceeded, will reset at midnight',
+    'quota exceeded; resets at 15:00 UTC',
+    'quota exceeded per minute',
+  ])('short-horizon "%s" is not spent allowance', (signal) => {
+    expect(isSpentQuotaError({ message: signal })).toBe(false);
+    expect(isFailoverError({ message: signal })).toBe(true);
+  });
+
+  test('free-tier exhaustion is exempt and stays permanent billing', () => {
+    const error = { message: 'Free usage exceeded, subscribe to Go' };
+    expect(isSpentQuotaError(error)).toBe(false);
+    expect(isPermanentQuotaBillingError(error)).toBe(true);
+    expect(isFailoverError(error)).toBe(true);
+  });
+
+  test('reads nested carriers without cross-carrier escapes', () => {
+    expect(isSpentQuotaError({ cause: { message: 'quota exceeded' } })).toBe(
+      true,
+    );
+    expect(isSpentQuotaError({ data: { code: 'usage exceeded' } })).toBe(true);
+    expect(isSpentQuotaError({ message: 'Monthly usage limit exceeded' })).toBe(
+      false,
+    );
+    // Short-horizon phrasing in an unrelated carrier does not lift the mark.
+    expect(
+      isSpentQuotaError({
+        message: 'quota exceeded',
+        data: { responseBody: 'try again later for other errors' },
+      }),
+    ).toBe(true);
+  });
+});
+
+describe('ForegroundFallbackManager spent allowance (issue #966)', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(1_000_000);
+  });
+  afterEach(() => jest.useRealTimers());
+
+  const SPENT = {
+    message: 'AI_APICallError: The usage limit has been reached',
+  };
+
+  const failed = (
+    sessionID: string,
+    model: string,
+    error: unknown,
+    id = `assistant-${sessionID}-${model}`,
+  ) => {
+    const [providerID, modelID] = model.split('/');
+    return {
+      type: 'message.updated',
+      properties: {
+        info: {
+          id,
+          sessionID,
+          role: 'assistant',
+          agent: 'orchestrator',
+          providerID,
+          modelID,
+          error,
+        },
+      },
+    };
+  };
+
+  const prompted = (mocks: { promptAsync: { mock: { calls: unknown[][] } } }) =>
+    mocks.promptAsync.mock.calls.map(([args]) => {
+      const { providerID, modelID } = (args as any).body.model;
+      return `${providerID}/${modelID}`;
+    });
+
+  test('a cross-provider chain fails over on spent quota', async () => {
+    const { manager, mocks } = makeManager({
+      chain: ['openai/luna', 'ollama/glm'],
+    });
+    const sid = 'spent-cross-provider';
+    await manager.handleEvent(failed(sid, 'openai/luna', SPENT));
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID: sid, error: SPENT },
+    });
+    expect(prompted(mocks)).toEqual(['ollama/glm']);
+    expect(manager.getActiveFallback(sid)?.downProviders).toEqual(
+      new Set(['openai']),
+    );
+  });
+
+  test('a paired error and repeated updates mark only the failing provider', async () => {
+    const { manager, mocks } = makeManager({
+      chain: ['openai/luna', 'ollama/glm', 'anthropic/opus'],
+    });
+    const sid = 'spent-attribution';
+    const exhausted = () =>
+      (manager as any).quotaExhaustedProviders.get(sid) as Set<string>;
+    await manager.handleEvent(failed(sid, 'openai/luna', SPENT, 'luna-msg'));
+    expect(prompted(mocks)).toEqual(['ollama/glm']);
+    expect(exhausted()).toEqual(new Set(['openai']));
+    // The paired session.error arrives after the switch: it belongs to
+    // luna, not to the replacement now held in sessionModel.
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID: sid, error: SPENT },
+    });
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID: sid, info: { id: 'luna-msg' }, error: SPENT },
+    });
+    // A late observation of the handled incident, past the dedup window.
+    jest.advanceTimersByTime(6_000);
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID: sid, info: { id: 'luna-msg' }, error: SPENT },
+    });
+    // Re-emitted updates of the same assistant message keep its own model.
+    for (let i = 0; i < 3; i++) {
+      await manager.handleEvent(failed(sid, 'openai/luna', SPENT, 'luna-msg'));
+    }
+    expect(exhausted()).toEqual(new Set(['openai']));
+    expect(prompted(mocks)).toEqual(['ollama/glm']);
+    expect(mocks.abort).not.toHaveBeenCalled();
+  });
+
+  test('a cascade of spent quotas via session.error reaches the third provider', async () => {
+    const { manager, mocks } = makeManager({
+      chain: ['p1/a', 'p2/b', 'p3/c'],
+    });
+    const exhausted = (sid: string) =>
+      (manager as any).quotaExhaustedProviders.get(sid) as Set<string>;
+    // Message-tied errors: distinct message IDs are distinct incidents.
+    const tied = 'spent-cascade-tied';
+    await manager.handleEvent(redoEvents.assistant(tied, 'a'));
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'm0',
+          sessionID: tied,
+          role: 'assistant',
+          agent: 'orchestrator',
+          providerID: 'p1',
+          modelID: 'a',
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID: tied, info: { id: 'm1' }, error: SPENT },
+    });
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID: tied, info: { id: 'm2' }, error: SPENT },
+    });
+    expect(prompted(mocks)).toEqual(['p2/b', 'p3/c']);
+    expect(exhausted(tied)).toEqual(new Set(['p1', 'p2']));
+
+    // Uncorrelated errors: once p2 has emitted a message, a repeated
+    // signature is p2's own failure, not p1's echo.
+    mocks.promptAsync.mockClear();
+    jest.advanceTimersByTime(6_000);
+    const seeded = 'spent-cascade-uncorrelated';
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'u0',
+          sessionID: seeded,
+          role: 'assistant',
+          agent: 'orchestrator',
+          providerID: 'p1',
+          modelID: 'a',
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID: seeded, error: SPENT },
+    });
+    // The echo before p2 speaks changes nothing.
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID: seeded, error: SPENT },
+    });
+    expect(prompted(mocks)).toEqual(['p2/b']);
+    expect(exhausted(seeded)).toEqual(new Set(['p1']));
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'u1',
+          sessionID: seeded,
+          role: 'assistant',
+          agent: 'orchestrator',
+          providerID: 'p2',
+          modelID: 'b',
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID: seeded, error: SPENT },
+    });
+    expect(prompted(mocks)).toEqual(['p2/b', 'p3/c']);
+    expect(exhausted(seeded)).toEqual(new Set(['p1', 'p2']));
+  });
+
+  test('a no-chain session never replays the same model on spent quota', async () => {
+    const { mocks } = createMockClient();
+    const manager = new ForegroundFallbackManager(
+      {},
+      true,
+      { directory: '/test' } as never,
+      3,
+    );
+    const update = (sid: string, error: unknown) => ({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: `${sid}-msg`,
+          sessionID: sid,
+          role: 'assistant',
+          agent: 'councillor',
+          providerID: 'p1',
+          modelID: 'a',
+          error,
+        },
+      },
+    });
+    // Control: a transient error does take the same-model replay.
+    await manager.handleEvent(
+      update('nochain-transient', { message: 'rate limit' }),
+    );
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    mocks.promptAsync.mockClear();
+    const sid = 'nochain-spent';
+    await manager.handleEvent(update(sid, SPENT));
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID: sid, error: SPENT },
+    });
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: sid,
+        status: { type: 'retry', attempt: 1, message: SPENT.message },
+      },
+    });
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    expect(mocks.abort).not.toHaveBeenCalled();
+    // The replay path itself refuses spent quota as well.
+    await (manager as any).trySameModelRetry(sid, { error: SPENT, epoch: 0 });
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('a status retry echoing the switch trigger leaves the replacement healthy', async () => {
+    const { manager, mocks } = makeManager({
+      chain: ['p1/a', 'p2/b', 'p3/c'],
+    });
+    const sid = 'spent-status-echo';
+    const exhausted = () =>
+      (manager as any).quotaExhaustedProviders.get(sid) as Set<string>;
+    const status = (attempt: number, error: unknown = SPENT) => ({
+      type: 'session.status',
+      properties: {
+        sessionID: sid,
+        status: { type: 'retry', attempt, message: 'retrying...' },
+        error,
+      },
+    });
+    const rich = {
+      name: 'AI_APICallError',
+      message: SPENT.message,
+      data: { statusCode: 429 },
+    };
+    await manager.handleEvent(failed(sid, 'p1/a', rich, 'p1-msg'));
+    expect(prompted(mocks)).toEqual(['p2/b']);
+    // attempt 1 passes the stale-retry guard; the signature marks it p1's.
+    await manager.handleEvent(status(1));
+    // A status carrying only the spent text is the same signal.
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: sid,
+        status: { type: 'retry', attempt: 1, message: SPENT.message },
+      },
+    });
+    expect(exhausted()).toEqual(new Set(['p1']));
+    expect(prompted(mocks)).toEqual(['p2/b']);
+    expect(mocks.abort).not.toHaveBeenCalled();
+    // Once p2 has emitted a message, its own spent quota moves on to p3.
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'p2-msg',
+          sessionID: sid,
+          role: 'assistant',
+          agent: 'orchestrator',
+          providerID: 'p2',
+          modelID: 'b',
+        },
+      },
+    });
+    await manager.handleEvent(status(1));
+    expect(exhausted()).toEqual(new Set(['p1', 'p2']));
+    expect(prompted(mocks)).toEqual(['p2/b', 'p3/c']);
+  });
+
+  test("a different spent signal right after a switch is the replacement's own", async () => {
+    const { manager, mocks } = makeManager({
+      chain: ['p1/a', 'p2/b', 'p3/c'],
+    });
+    const sid = 'spent-status-new-signal';
+    await manager.handleEvent(failed(sid, 'p1/a', SPENT, 'p1-msg'));
+    expect(prompted(mocks)).toEqual(['p2/b']);
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: sid,
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'Weekly usage limit reached. Resets in 2 days.',
+        },
+      },
+    });
+    expect((manager as any).quotaExhaustedProviders.get(sid)).toEqual(
+      new Set(['p1', 'p2']),
+    );
+    expect(prompted(mocks)).toEqual(['p2/b', 'p3/c']);
+  });
+
+  test('v2 retry hook attributes spent quota to the model it names', async () => {
+    const { manager } = makeManager({
+      chain: ['p1/a', 'p2/b', 'p3/c'],
+      hostFlavor: 'v2',
+    });
+    const sid = 'spent-v2-cascade';
+    const exhausted = () =>
+      (manager as any).quotaExhaustedProviders.get(sid) as Set<string>;
+    const switchModel = mock(async () => {});
+    // Host retry-hook input as the v2 bridge delivers it (src/v2/setup.ts):
+    // the failing attempt's model, the host error and its retry decision.
+    const retry = (providerID: string, id: string) => ({
+      sessionID: sid,
+      agent: 'orchestrator',
+      model: { providerID, id },
+      error: { message: SPENT.message, statusCode: 429, isRetryable: true },
+      decision: { retry: true } as { retry: boolean; delay?: number },
+    });
+    await manager.handleV2Retry(retry('p1', 'a'), switchModel);
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    // True echo: the host's late retry for p1 after the switch.
+    const echo = retry('p1', 'a');
+    await manager.handleV2Retry(echo, switchModel);
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(echo.decision).toEqual({ retry: true });
+    expect(exhausted()).toEqual(new Set(['p1']));
+    // p2 rejects at once with the same text and no message in between:
+    // the hook names p2, so p2 is exhausted and p3 takes over.
+    await manager.handleV2Retry(retry('p2', 'b'), switchModel);
+    expect(switchModel).toHaveBeenCalledTimes(2);
+    expect((switchModel.mock.calls[1] as unknown[])[1]).toMatchObject({
+      providerID: 'p3',
+      id: 'c',
+    });
+    expect(exhausted()).toEqual(new Set(['p1', 'p2']));
+    // p3 spent too: every provider is exhausted, the decision stands.
+    const last = retry('p3', 'c');
+    await manager.handleV2Retry(last, switchModel);
+    expect(switchModel).toHaveBeenCalledTimes(2);
+    expect(last.decision).toEqual({ retry: true });
+  });
+
+  test('a same-provider-only chain surfaces the error', async () => {
+    const { manager, mocks } = makeManager({
+      chain: ['openai/luna', 'openai/sol'],
+    });
+    const sid = 'spent-same-provider';
+    await manager.handleEvent(failed(sid, 'openai/luna', SPENT));
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID: sid, error: SPENT },
+    });
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: sid,
+        status: { type: 'retry', attempt: 1, message: SPENT.message },
+      },
+    });
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    expect(mocks.abort).not.toHaveBeenCalled();
+  });
+
+  test('a mixed chain skips the exhausted provider and surfaces at the end', async () => {
+    const chain = ['p1/a', 'p1/b', 'p2/c', 'p1/d', 'p3/e'];
+    const { manager, mocks } = makeManager({ chain });
+    const sid = 'spent-mixed';
+    await manager.handleEvent(failed(sid, 'p1/a', SPENT));
+    expect(prompted(mocks)).toEqual(['p2/c']);
+    // A non-quota failure on p2 still skips p1's remaining entry p1/d.
+    await manager.handleEvent(failed(sid, 'p2/c', { message: 'rate limit' }));
+    expect(prompted(mocks)).toEqual(['p2/c', 'p3/e']);
+    // p3 spends its allowance as well: p2 is down but not exhausted, so the
+    // bounded sticky retry lands on p2/c rather than an exhausted provider.
+    await manager.handleEvent(failed(sid, 'p3/e', SPENT));
+    expect(prompted(mocks)).toEqual(['p2/c', 'p3/e', 'p2/c']);
+    // p2 spent too: every chain provider is exhausted, so it surfaces.
+    await manager.handleEvent(failed(sid, 'p2/c', SPENT, 'second-c'));
+    expect(prompted(mocks)).toEqual(['p2/c', 'p3/e', 'p2/c']);
+    expect(mocks.abort).not.toHaveBeenCalled();
+  });
+
+  test('short-horizon quota wording still fails over on the same provider', async () => {
+    const { manager, mocks } = makeManager({
+      chain: ['openai/luna', 'openai/sol'],
+    });
+    const sid = 'spent-short-horizon';
+    await manager.handleEvent(
+      failed(sid, 'openai/luna', {
+        message: 'quota exceeded, retry after 20s',
+      }),
+    );
+    expect(prompted(mocks)).toEqual(['openai/sol']);
+  });
+
+  test('repeated spent-quota errors never loop', async () => {
+    const { manager, mocks } = makeManager({
+      chain: ['openai/luna', 'ollama/glm'],
+    });
+    const sid = 'spent-no-loop';
+    for (let i = 0; i < 10; i++) {
+      jest.advanceTimersByTime(6_000);
+      for (const model of ['openai/luna', 'ollama/glm']) {
+        await manager.handleEvent(failed(sid, model, SPENT, `${model}-${i}`));
+        await manager.handleEvent({
+          type: 'session.error',
+          properties: { sessionID: sid, error: SPENT },
+        });
+        await manager.handleEvent({
+          type: 'session.status',
+          properties: {
+            sessionID: sid,
+            status: { type: 'retry', attempt: i + 1, message: SPENT.message },
+          },
+        });
+      }
+    }
+    expect(prompted(mocks)).toEqual(['ollama/glm']);
+    expect(mocks.abort).not.toHaveBeenCalled();
+  });
+
+  test('a successful response re-arms the exhausted providers', async () => {
+    const { manager, mocks } = makeManager({
+      chain: ['p1/a', 'p1/b', 'p2/c'],
+    });
+    const sid = 'spent-rearm';
+    await manager.handleEvent(failed(sid, 'p1/a', SPENT));
+    expect(prompted(mocks)).toEqual(['p2/c']);
+    await manager.handleEvent(redoEvents.success(sid, 'c'));
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: sid,
+          role: 'assistant',
+          agent: 'orchestrator',
+          providerID: 'p2',
+          modelID: 'c',
+          time: { completed: 2 },
+        },
+      },
+    });
+    jest.advanceTimersByTime(6_000);
+    await manager.handleEvent(failed(sid, 'p2/c', SPENT, 'after-recovery'));
+    // p1 is no longer exhausted, only down (activeFallback keeps abandoned
+    // providers), so the bounded sticky retry may use p1 again instead of
+    // surfacing as it would without the recovery.
+    expect(prompted(mocks)).toEqual(['p2/c', 'p1/b']);
+  });
+
+  test('session delete clears the exhausted providers', () => {
+    const coordinator = new SessionLifecycle(() => {});
+    createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      { orchestrator: ['p1/a', 'p2/b'] },
+      true,
+      { directory: '/test' } as any,
+      3,
+      coordinator,
+    );
+    (mgr as any).quotaExhaustedProviders.set('gone', new Set(['p1']));
+    coordinator.dispatchSessionDeleted('gone');
+    expect((mgr as any).quotaExhaustedProviders.has('gone')).toBe(false);
+  });
+
+  test('v2 retry hook steers a spent quota to another provider', async () => {
+    const { manager } = makeManager({ chain: ['p1/a', 'p1/b', 'p2/c'] });
+    const switchModel = mock(async () => {});
+    const event = {
+      sessionID: 'spent-v2',
+      agent: 'orchestrator',
+      model: { providerID: 'p1', id: 'a' },
+      error: SPENT,
+      decision: { retry: true },
+    };
+    await manager.handleV2Retry(event, switchModel);
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect((switchModel.mock.calls[0] as unknown[])[1]).toMatchObject({
+      providerID: 'p2',
+      id: 'c',
+    });
+  });
+
+  test('v2 retry hook leaves the host decision on a same-provider chain', async () => {
+    const { manager } = makeManager({ maxRetries: 0 });
+    const switchModel = mock(async () => {});
+    const event = {
+      sessionID: 'spent-v2-same',
+      agent: 'orchestrator',
+      model: { providerID: 'test', id: 'a' },
+      error: SPENT,
+      decision: { retry: false },
+    };
+    await manager.handleV2Retry(event, switchModel);
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(event.decision).toEqual({ retry: false });
+  });
+
+  test('spent quota cancels a queued initial fallback when it surfaces', async () => {
+    const { manager, mocks } = makeManager({ initialRetryDelayMs: 1_000 });
+    const sid = 'spent-cancels-queued-delay';
+    await manager.handleEvent(redoEvents.assistant(sid));
+    await manager.handleEvent(
+      redoEvents.assistant(sid, 'a', {
+        message: 'rate limit, try again in 20s',
+      }),
+    );
+    expect(jest.getTimerCount()).toBe(1);
+    await manager.handleEvent(
+      redoEvents.assistant(sid, 'b', {
+        message: 'Monthly usage limit reached. Resets in X days.',
+      }),
+    );
+    expect(jest.getTimerCount()).toBe(0);
+    jest.advanceTimersByTime(1_000);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('short-horizon quota keeps the configured initial delay', async () => {
+    const { manager, mocks } = makeManager({ initialRetryDelayMs: 1_000 });
+    const sid = 'short-horizon-keeps-delay';
+    await manager.handleEvent(redoEvents.assistant(sid));
+    await manager.handleEvent(
+      redoEvents.assistant(sid, 'a', {
+        message: 'quota exceeded, retry after 20s',
+      }),
+    );
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    expect(jest.getTimerCount()).toBe(1);
+    jest.advanceTimersByTime(1_000);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('isPermanentQuotaBillingError', () => {
+  test('returns true for free-tier usage exhaustion', () => {
+    expect(
+      isPermanentQuotaBillingError('Free usage exceeded, subscribe to Go'),
+    ).toBe(true);
+    expect(
+      isPermanentQuotaBillingError({
+        message: 'Free usage exceeded, subscribe to Go',
+      }),
+    ).toBe(true);
+  });
+
+  test('returns false for transient rate limits', () => {
+    expect(isPermanentQuotaBillingError('rate limit, retrying...')).toBe(false);
+    expect(
+      isPermanentQuotaBillingError({ message: '429 Too Many Requests' }),
+    ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // ForegroundFallbackManager - disabled
 // ---------------------------------------------------------------------------
 
@@ -2197,16 +3187,26 @@ describe('ForegroundFallbackManager session.error', () => {
     // Should have picked the next model after anthropic/claude-opus-4-5
     expect(call[0].body.model.providerID).toBe('openai');
     expect(call[0].body.model.modelID).toBe('gpt-4o');
-    expect(mgr.getActiveFallbackModel('sess-1')).toBe('openai/gpt-4o');
+    const activeFallback = {
+      model: 'openai/gpt-4o',
+      downProviders: new Set(['anthropic']),
+    };
+    expect(mgr.getActiveFallback('sess-1')).toEqual(activeFallback);
 
-    mgr.observeExternalTurn('sess-1');
-    expect(mgr.getActiveFallbackModel('sess-1')).toBeUndefined();
+    mgr.observeExternalTurn('sess-1', undefined);
+    expect(mgr.getActiveFallback('sess-1')).toEqual(activeFallback);
+    mgr.observeExternalTurn('sess-1', 'openai/gpt-4o');
+    expect(mgr.getActiveFallback('sess-1')).toEqual(activeFallback);
+    mgr.observeExternalTurn('sess-1', 'anthropic/claude-opus-4-5');
+    expect(mgr.getActiveFallback('sess-1')).toBeUndefined();
   });
 
-  test('triggers fallback on content-policy moderation session.error', async () => {
-    // End-to-end regression: a cyber_policy rejection (HTTP 400
-    // invalid_request in production) must advance the fallback chain to the
-    // next model instead of failing the session outright.
+  async function expectErrorFallback(
+    statusCode: number,
+    message: string,
+    responseBody: string,
+    downProviders: string[] = [],
+  ) {
     await mgr.handleEvent({
       type: 'message.updated',
       properties: {
@@ -2224,8 +3224,8 @@ describe('ForegroundFallbackManager session.error', () => {
       properties: {
         sessionID: 'sess-1',
         error: {
-          message:
-            'This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber',
+          name: 'APIError',
+          data: { statusCode, message, responseBody },
         },
       },
     });
@@ -2242,7 +3242,94 @@ describe('ForegroundFallbackManager session.error', () => {
     expect(call[0].path.id).toBe('sess-1');
     expect(call[0].body.model.providerID).toBe('openai');
     expect(call[0].body.model.modelID).toBe('gpt-4o');
-  });
+    expect(mgr.getActiveFallback('sess-1')?.downProviders).toEqual(
+      new Set(downProviders),
+    );
+  }
+
+  test('triggers fallback on content-policy moderation session.error', () =>
+    expectErrorFallback(
+      403,
+      'Forbidden',
+      '{"error":{"code":403,"message":"This content was flagged for possible cybersecurity risk."}}',
+    ));
+
+  test('routes the documented Z.ai quoted 1301 code as a request rejection', () =>
+    expectErrorFallback(400, 'Bad Request', '{"error":{"code":"1301"}}'));
+
+  test('routes the documented Z.ai rejection wording as a request rejection', () =>
+    expectErrorFallback(
+      400,
+      'Bad Request',
+      '{"error":{"message":"System detected potentially unsafe or sensitive content in input or generation. Please avoid using prompts that may generate sensitive content. Thank you for your cooperation."}}',
+    ));
+
+  test('routes the documented Kimi content filter as a request rejection', () =>
+    expectErrorFallback(
+      400,
+      'Bad Request',
+      '{"error":{"type":"content_filter","message":"The request was rejected because it was considered high risk"}}',
+    ));
+
+  test('routes the documented Qwen DataInspectionFailed code as a request rejection', () =>
+    expectErrorFallback(400, 'Bad Request', '{"code":"DataInspectionFailed"}'));
+
+  test('routes the documented Qwen data_inspection_failed code as a request rejection', () =>
+    expectErrorFallback(
+      400,
+      'Bad Request',
+      '{"code":"data_inspection_failed"}',
+    ));
+
+  test('routes the documented Qwen rejection wording as a request rejection', () =>
+    expectErrorFallback(
+      400,
+      'Bad Request',
+      '{"message":"Input or output data may contain inappropriate content."}',
+    ));
+
+  test('routes the documented Mistral guardrail block as a request rejection', () =>
+    expectErrorFallback(
+      403,
+      'Forbidden',
+      '{"error":{"message":"Content blocked by guardrail","status":403}}',
+    ));
+
+  test('routes the documented OpenRouter flagged_input as a request rejection', () =>
+    expectErrorFallback(
+      403,
+      'Forbidden',
+      '{"error":{"code":403,"message":"Forbidden","metadata":{"flagged_input":"input"}}}',
+    ));
+
+  test('routes the documented OpenRouter error_type refusal as a request rejection', () =>
+    expectErrorFallback(
+      403,
+      'Forbidden',
+      '{"error":{"code":403,"message":"The provider refused to respond","metadata":{"error_type": "refusal"}}}',
+    ));
+
+  test('routes the documented Xiaomi HTTP 421 as a request rejection', () =>
+    expectErrorFallback(
+      421,
+      'Misdirected Request',
+      '{"error":{"message":"Content moderation and blocking"}}',
+    ));
+
+  test('routes the documented StepFun HTTP 451 as a request rejection', () =>
+    expectErrorFallback(
+      451,
+      'Unavailable For Legal Reasons',
+      '{"error":{"message":"请求内容或者响应内容未审核通过"}}',
+    ));
+
+  test('keeps the documented Qwen moderation service failure provider-scoped', () =>
+    expectErrorFallback(
+      500,
+      'Internal Server Error',
+      '{"code":"InternalError.DataInspection","message":"Content moderation service unavailable."}',
+      ['anthropic'],
+    ));
 
   test('triggers fallback on unavailable provider channel session.error', async () => {
     await mgr.handleEvent({
@@ -2606,6 +3693,7 @@ describe('ForegroundFallbackManager session.error', () => {
     return {
       calls,
       handoff: {
+        isEligible: () => true,
         prepare: (
           sessionID: string,
           generation: number | undefined,
@@ -2614,7 +3702,11 @@ describe('ForegroundFallbackManager session.error', () => {
           calls.prepare.push([sessionID, generation, baseline]);
           return true;
         },
-        admit: (sessionID: string, generation: number | undefined) => {
+        admit: (
+          sessionID: string,
+          generation: number | undefined,
+          _notice?: FallbackNotice,
+        ) => {
           calls.admit.push([sessionID, generation]);
         },
         reject: (sessionID: string, generation: number | undefined) => {
@@ -2689,6 +3781,36 @@ describe('ForegroundFallbackManager session.error', () => {
       parts: [{ type: 'text', text: 'task prompt' }],
     },
   ];
+
+  test('retry-path fallback admits without a notice', async () => {
+    jest.useFakeTimers();
+    const { handoff } = handoffMock();
+    const admit = spyOn(handoff, 'admit');
+    ({ mocks } = createMockClient({ messagesData: taskPrompt }));
+    mgr = new ForegroundFallbackManager(
+      { orchestrator: ['test/a', 'test/b', 'test/c'] },
+      true,
+      { directory: '/test' } as never,
+      0,
+      undefined,
+      undefined,
+      0,
+      0,
+      handoff,
+      () => 1,
+    );
+    try {
+      await mgr.handleEvent(redoEvents.assistant('retry-notice'));
+      await mgr.handleEvent(redoEvents.retry('retry-notice'));
+      expect(mocks.abort).toHaveBeenCalledTimes(1);
+      expect(admit).toHaveBeenCalledTimes(1);
+      expect(admit.mock.calls[0]?.[2]).toBeUndefined();
+    } finally {
+      mgr.dispose();
+      admit.mockRestore();
+      jest.useRealTimers();
+    }
+  });
 
   test('arms the handoff before the admission await and admits after acceptance', async () => {
     // False-stop incident: for a background child the fallback PREPARES
@@ -2803,6 +3925,7 @@ describe('ForegroundFallbackManager session.error', () => {
     const mocks = await runFallbackScenario({
       messagesData: taskPrompt,
       handoff: {
+        isEligible: () => false,
         prepare: (
           sessionID: string,
           generation: number | undefined,
@@ -3469,6 +4592,335 @@ describe('ForegroundFallbackManager message.updated', () => {
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
     expect((mgr as any).sessionModel.get(sessionID)).toBe('openai/gpt-4o');
   });
+
+  describe('unknown finish streak', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+      jest.setSystemTime(1_015_000);
+    });
+    afterEach(() => jest.useRealTimers());
+
+    const info = {
+      id: 'msgUnknownFinish',
+      sessionID: 'sess-unknown-finish',
+      parentID: 'msgUser',
+      role: 'assistant',
+      agent: 'orchestrator',
+      providerID: 'anthropic',
+      modelID: 'claude-opus-4-5',
+      finish: 'unknown',
+      tokens: {
+        input: 30_000,
+        output: 0,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      },
+      time: { created: 1_000_000, completed: 1_015_000 },
+    };
+    const message = {
+      info,
+      parts: [
+        { type: 'step-start' },
+        {
+          type: 'reasoning',
+          text: '',
+          time: { start: info.time.created, end: info.time.completed },
+        },
+        { type: 'text', text: 'Gateway notice.' },
+        {
+          type: 'step-finish',
+          reason: 'unknown',
+          cost: 0,
+          tokens: info.tokens,
+        },
+      ].map((part, index) => ({
+        ...part,
+        id: `prtUnknown${index}`,
+        sessionID: info.sessionID,
+        messageID: info.id,
+      })),
+    };
+
+    async function update(
+      mgr: ForegroundFallbackManager,
+      mocks: ReturnType<typeof createMockClient>['mocks'],
+      id: string,
+      finish: 'unknown' | 'stop' = 'unknown',
+      parts: Array<{ type: string } & Record<string, unknown>> = message.parts,
+    ) {
+      const updatedInfo = { ...info, id, finish };
+      mocks.message.mockImplementation(async () => ({
+        data: {
+          info: updatedInfo,
+          parts: parts.map((part, index) => ({
+            ...part,
+            id: `prt${id}${index}`,
+            sessionID: info.sessionID,
+            messageID: id,
+            ...(part.type === 'step-finish' ? { reason: finish } : {}),
+          })),
+        },
+      }));
+      await mgr.handleEvent({
+        type: 'message.updated',
+        properties: { info: updatedInfo },
+      });
+    }
+
+    function updateBackup(
+      mgr: ForegroundFallbackManager,
+      mocks: ReturnType<typeof createMockClient>['mocks'],
+      id: string,
+    ) {
+      const updatedInfo = {
+        ...info,
+        id,
+        providerID: 'openai',
+        modelID: 'gpt-4o',
+      };
+      mocks.message.mockImplementation(async () => ({
+        data: { ...message, info: updatedInfo },
+      }));
+      return mgr.handleEvent({
+        type: 'message.updated',
+        properties: { info: updatedInfo },
+      });
+    }
+
+    test('three distinct tool-free messages abort once and preserve retries', async () => {
+      const calls: string[] = [];
+      const { mocks } = createMockClient({
+        abortImpl: async () => {
+          calls.push('abort');
+          return { data: true };
+        },
+        promptAsyncImpl: async () => {
+          calls.push('replay');
+          return {};
+        },
+      });
+      const mgr = new ForegroundFallbackManager(makeChains(), true, {
+        directory: '/test',
+      } as never);
+      await mgr.handleEvent(redoEvents.retry(info.sessionID));
+      expect((mgr as any).sessionRetries.get(info.sessionID)).toBe(1);
+
+      await update(mgr, mocks, 'msgUnknown1');
+      await update(mgr, mocks, 'msgUnknown1');
+      expect(mocks.abort).not.toHaveBeenCalled();
+      expect(mocks.promptAsync).not.toHaveBeenCalled();
+      expect((mgr as any).sessionRetries.get(info.sessionID)).toBe(1);
+
+      jest.setSystemTime(1_030_000);
+      await update(mgr, mocks, 'msgUnknown2');
+      mocks.message.mockImplementation(async () => ({
+        error: { name: 'NotFoundError' },
+      }));
+      await mgr.handleEvent({
+        type: 'message.updated',
+        properties: { info: { ...info, id: 'msgUnreadable' } },
+      });
+      expect(mocks.abort).not.toHaveBeenCalled();
+      expect(mocks.promptAsync).not.toHaveBeenCalled();
+
+      jest.setSystemTime(1_045_000);
+      await update(mgr, mocks, 'msgUnknown3');
+      jest.setSystemTime(1_060_000);
+      await mgr.handleEvent({
+        type: 'message.updated',
+        properties: {
+          info: {
+            ...info,
+            id: 'msgUnknown4',
+            providerID: 'openai',
+            modelID: 'gpt-4o',
+          },
+        },
+      });
+
+      expect((mgr as any).sessionRetries.get(info.sessionID)).toBe(1);
+      expect(calls).toEqual(['abort', 'replay']);
+      expect(mocks.abort).toHaveBeenCalledTimes(1);
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+      expect(mocks.message).toHaveBeenCalledWith({
+        path: { id: info.sessionID, messageID: 'msgUnknown3' },
+      });
+      expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
+        body: { model: { providerID: 'openai', modelID: 'gpt-4o' } },
+      });
+      expect(mgr.getActiveFallback(info.sessionID)).toEqual({
+        model: 'openai/gpt-4o',
+        downProviders: new Set(),
+      });
+      expect((mgr as any).sessionTried.get(info.sessionID)).toEqual(
+        new Set(['anthropic/claude-opus-4-5', 'openai/gpt-4o']),
+      );
+      expect((mgr as any).sessionModel.get(info.sessionID)).toBe(
+        'openai/gpt-4o',
+      );
+    });
+
+    test('a tool-bearing message breaks the streak', async () => {
+      const { mocks } = createMockClient();
+      const mgr = new ForegroundFallbackManager(makeChains(), true, {
+        directory: '/test',
+      } as never);
+
+      await update(mgr, mocks, 'msgUnknown0');
+      const partsRead = deferred<{ data: typeof message }>();
+      mocks.message.mockImplementationOnce(() => partsRead.promise);
+      const pending = mgr.handleEvent({
+        type: 'message.updated',
+        properties: { info: { ...info, id: 'msgUnknown1' } },
+      });
+      await update(mgr, mocks, 'msgUnknown2', 'unknown', [
+        ...message.parts.slice(0, -1),
+        {
+          type: 'tool',
+          callID: 'callUnknown',
+          tool: 'read',
+          state: {
+            status: 'completed',
+            input: { filePath: 'README.md' },
+            output: 'README',
+            title: 'README.md',
+            metadata: {},
+            time: { start: 1_002_000, end: 1_005_000 },
+          },
+        },
+        ...message.parts.slice(-1),
+      ]);
+      partsRead.resolve({
+        data: { ...message, info: { ...info, id: 'msgUnknown1' } },
+      });
+      await pending;
+      await update(mgr, mocks, 'msgUnknown3');
+      await update(mgr, mocks, 'msgUnknown4');
+
+      expect(mocks.abort).not.toHaveBeenCalled();
+      expect(mocks.promptAsync).not.toHaveBeenCalled();
+      expect(mgr.getActiveFallback(info.sessionID)).toBeUndefined();
+    });
+
+    test('completed or errored messages and new turns break the streak', async () => {
+      const { mocks } = createMockClient();
+      const mgr = new ForegroundFallbackManager(makeChains(), true, {
+        directory: '/test',
+      } as never);
+
+      await update(mgr, mocks, 'msgUnknown1');
+      await update(mgr, mocks, 'msgUnknown2');
+      await mgr.handleEvent({
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msgErrored',
+            sessionID: info.sessionID,
+            role: 'assistant',
+            error: {
+              name: 'APIError',
+              data: { statusCode: 400, message: 'Bad Request' },
+            },
+            time: { created: 1_015_000, completed: 1_016_000 },
+          },
+        },
+      });
+      await update(mgr, mocks, 'msgUnknownAfterError');
+      expect(mocks.abort).not.toHaveBeenCalled();
+      expect(mocks.promptAsync).not.toHaveBeenCalled();
+
+      await update(mgr, mocks, 'msgStop', 'stop');
+      await update(mgr, mocks, 'msgUnknown3');
+      await update(mgr, mocks, 'msgUnknown4');
+      await mgr.handleEvent(redoEvents.user(info.sessionID, 'msgUser2'));
+      await update(mgr, mocks, 'msgUnknown5');
+
+      expect(mocks.abort).not.toHaveBeenCalled();
+      expect(mocks.promptAsync).not.toHaveBeenCalled();
+      expect(mgr.getActiveFallback(info.sessionID)).toBeUndefined();
+    });
+
+    test('a failover without an errored message starts a fresh streak on the backup', async () => {
+      const { manager: mgr, mocks } = makeManager({
+        chain: makeChains().orchestrator,
+      });
+      await update(mgr, mocks, 'msgUnknown1');
+      await update(mgr, mocks, 'msgUnknown2');
+      await mgr.handleEvent({
+        type: 'session.error',
+        properties: {
+          sessionID: info.sessionID,
+          error: {
+            name: 'UnknownError',
+            data: { message: 'Model not found: anthropic/claude-opus-4-5.' },
+          },
+        },
+      });
+      expect(mgr.getActiveFallback(info.sessionID)?.model).toBe(
+        'openai/gpt-4o',
+      );
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+      expect(mocks.abort).not.toHaveBeenCalled();
+
+      await updateBackup(mgr, mocks, 'msgBackup1');
+      expect(mocks.abort).not.toHaveBeenCalled();
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+      await updateBackup(mgr, mocks, 'msgBackup2');
+      expect(mocks.abort).not.toHaveBeenCalled();
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+      await updateBackup(mgr, mocks, 'msgBackup3');
+      expect(mocks.abort).toHaveBeenCalledTimes(1);
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+      expect(mocks.promptAsync.mock.calls[1]?.[0]).toMatchObject({
+        body: { model: { providerID: 'google', modelID: 'gemini-2.5-pro' } },
+      });
+    });
+
+    test('a reply read across a failover does not count against the backup', async () => {
+      const { manager: mgr, mocks } = makeManager({
+        chain: makeChains().orchestrator,
+      });
+      await update(mgr, mocks, 'msgUnknown1');
+      await update(mgr, mocks, 'msgUnknown2');
+      const partsRead = deferred<{ data: typeof message }>();
+      mocks.message.mockImplementationOnce(() => partsRead.promise);
+      const pending = mgr.handleEvent({
+        type: 'message.updated',
+        properties: { info: { ...info, id: 'msgUnknown3' } },
+      });
+      await update(mgr, mocks, 'msgUnknown4');
+      expect(mocks.abort).toHaveBeenCalledTimes(1);
+      expect(mgr.getActiveFallback(info.sessionID)?.model).toBe(
+        'openai/gpt-4o',
+      );
+
+      await mgr.handleEvent({
+        type: 'message.updated',
+        properties: {
+          info: {
+            ...info,
+            id: 'msgUnknown5',
+            finish: undefined,
+            error: {
+              name: 'MessageAbortedError',
+              data: { message: 'aborted' },
+            },
+          },
+        },
+      });
+      partsRead.resolve({
+        data: { ...message, info: { ...info, id: 'msgUnknown3' } },
+      });
+      await pending;
+
+      await updateBackup(mgr, mocks, 'msgBackup1');
+      await updateBackup(mgr, mocks, 'msgBackup2');
+      expect(mocks.abort).toHaveBeenCalledTimes(1);
+      await updateBackup(mgr, mocks, 'msgBackup3');
+      expect(mocks.abort).toHaveBeenCalledTimes(2);
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+    });
+  });
 });
 
 describe('ForegroundFallbackManager v1 abort protection for live children', () => {
@@ -3492,16 +4944,7 @@ describe('ForegroundFallbackManager v1 abort protection for live children', () =
   const manager = (
     hostFlavor?: string,
     chain = makeChains(),
-    handoff?: {
-      prepare: (
-        id: string,
-        generation: number | undefined,
-        baseline: string | undefined,
-      ) => boolean;
-      admit: (id: string, generation: number | undefined) => void;
-      reject: (id: string, generation: number | undefined) => void;
-      settleUnresolved: (id: string, generation: number | undefined) => void;
-    },
+    handoff?: ConstructorParameters<typeof ForegroundFallbackManager>[8],
     readGeneration?: (id: string) => number | undefined,
   ) =>
     new ForegroundFallbackManager(
@@ -3657,6 +5100,7 @@ describe('ForegroundFallbackManager v1 abort protection for live children', () =
       undefined,
       makeChains(),
       {
+        isEligible: () => true,
         prepare,
         admit: mock(() => {}),
         reject,
@@ -3741,6 +5185,7 @@ describe('ForegroundFallbackManager v1 abort protection for live children', () =
       undefined,
       makeChains(),
       {
+        isEligible: () => true,
         prepare: mock(() => true),
         admit: mock(() => {}),
         reject,
@@ -4355,6 +5800,40 @@ describe('ForegroundFallbackManager session.status', () => {
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
 
+  test('permanent quota error skips the host retry budget', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      3,
+    );
+
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'sess-retry-permanent',
+          providerID: 'anthropic',
+          modelID: 'claude-opus-4-5',
+        },
+      },
+    });
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'sess-retry-permanent',
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'Free usage exceeded, subscribe to Go',
+        },
+      },
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
   test('switches to fallback model on first failover retry', async () => {
     const { mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(
@@ -4856,43 +6335,6 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
     }
   });
 
-  test('does not fall back onto an earlier chain entry', async () => {
-    const { mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, {
-      directory: '/test',
-    } as any);
-    const sessionID = 'sess-mid-chain';
-
-    await mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID,
-          agent: 'orchestrator',
-          providerID: 'openai',
-          modelID: 'gpt-4o',
-          role: 'assistant',
-        },
-      },
-    });
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: { sessionID, error: { message: 'rate limit exceeded' } },
-    });
-
-    expect(mocks.promptAsync.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        body: expect.objectContaining({
-          model: { providerID: 'google', modelID: 'gemini-2.5-pro' },
-        }),
-      }),
-    );
-    expect(mocks.promptAsync.mock.calls[0]?.[0].body.model).not.toEqual({
-      providerID: 'anthropic',
-      modelID: 'claude-opus-4-5',
-    });
-  });
-
   test('does not fall back onto the primary when the current model is off-chain', async () => {
     const { mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(makeChains(), true, {
@@ -5129,7 +6571,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
       expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
       expect(mocks.abort).toHaveBeenCalledTimes(0);
 
-      // Fail 2: gpt-c fails → first chain exhaustion → reset, re-prompt gpt-c once.
+      // Fail 2: gpt-c fails → first chain exhaustion → re-prompt gpt-c once.
       await fail();
       expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
       expect(mocks.abort).toHaveBeenCalledTimes(0);
@@ -5182,7 +6624,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
         });
       };
 
-      // Walk the chain to the first exhaustion reset (stage 1).
+      // Walk the chain to the sticky retry (stage 1).
       await fail();
       await fail();
       await fail();
@@ -5202,7 +6644,7 @@ describe('ForegroundFallbackManager chain exhaustion', () => {
         },
       });
 
-      // Next failure gets a fresh reset chance instead of aborting immediately.
+      // Recovery permits a fresh descent instead of aborting immediately.
       await fail();
       expect(mocks.promptAsync).toHaveBeenCalledTimes(4);
       expect(mocks.abort).toHaveBeenCalledTimes(0);
@@ -6001,6 +7443,148 @@ describe('ForegroundFallbackManager willAttemptFallback', () => {
 });
 
 // ---------------------------------------------------------------------------
+// ForegroundFallbackManager - chain generation pins (#1527)
+// ---------------------------------------------------------------------------
+
+describe('ForegroundFallbackManager chain generation pins', () => {
+  const makeGenerationManager = (
+    chains: Record<
+      string,
+      ReadonlyArray<string | { id: string; variant?: string }>
+    >,
+  ) =>
+    new ForegroundFallbackManager(
+      chains,
+      true,
+      { directory: '/test', hostFlavor: 'v2' } as never,
+      0,
+      undefined,
+      undefined,
+      0,
+      0,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+
+  test('registered child finishes its descent on its original chain across a swap', async () => {
+    createMockClient();
+    const chains: Record<
+      string,
+      ReadonlyArray<string | { id: string; variant?: string }>
+    > = { orchestrator: ['test/a', 'test/b', 'test/c'] };
+    const manager = makeGenerationManager(chains);
+    const switchModel = mock(async () => {});
+    const fail = (sessionID: string, model: string) => {
+      const [providerID, id] = model.split('/');
+      return manager.handleV2Retry(
+        {
+          sessionID,
+          agent: 'orchestrator',
+          model: { providerID, id },
+          error: { message: 'Rate limit exceeded' },
+          decision: { retry: true },
+        },
+        switchModel,
+      );
+    };
+
+    // Registration pins the startup generation — the same moment the v2
+    // profile bridge freezes the child's profile.
+    manager.registerSessionAgent('child', 'orchestrator');
+
+    // Hot refresh publishes a new chain generation before the first failure.
+    chains.orchestrator = ['test/x', 'test/y'];
+
+    // The pinned child keeps descending its original chain: a -> b -> c.
+    await fail('child', 'test/a');
+    expect(switchModel).toHaveBeenLastCalledWith('child', {
+      providerID: 'test',
+      id: 'b',
+    });
+    // Mid-descent swap (refresh while retrying) must not corrupt the
+    // sequence: the next target still comes from the original chain.
+    await fail('child', 'test/b');
+    expect(switchModel).toHaveBeenLastCalledWith('child', {
+      providerID: 'test',
+      id: 'c',
+    });
+
+    // A child registered after the swap gets the new generation.
+    manager.registerSessionAgent('child-new', 'orchestrator');
+    await fail('child-new', 'test/x');
+    expect(switchModel).toHaveBeenLastCalledWith('child-new', {
+      providerID: 'test',
+      id: 'y',
+    });
+  });
+
+  test('lazy pin at first descent uses the generation current at that descent', async () => {
+    createMockClient();
+    const chains: Record<
+      string,
+      ReadonlyArray<string | { id: string; variant?: string }>
+    > = { orchestrator: ['test/a', 'test/b'] };
+    const manager = makeGenerationManager(chains);
+    const switchModel = mock(async () => {});
+    // Session never registered: the first descent pins whatever generation is
+    // current (safety net for v1 hosts and roots).
+    chains.orchestrator = ['test/x', 'test/y'];
+    await manager.handleV2Retry(
+      {
+        sessionID: 'child-unseen',
+        agent: 'orchestrator',
+        model: { providerID: 'test', id: 'x' },
+        error: { message: 'Rate limit exceeded' },
+        decision: { retry: true },
+      },
+      switchModel,
+    );
+    expect(switchModel).toHaveBeenCalledWith('child-unseen', {
+      providerID: 'test',
+      id: 'y',
+    });
+  });
+
+  test('releaseSessionChains lets a retry pin the current generation', async () => {
+    createMockClient();
+    const chains: Record<
+      string,
+      ReadonlyArray<string | { id: string; variant?: string }>
+    > = { orchestrator: ['test/a', 'test/b'] };
+    const manager = makeGenerationManager(chains);
+    const switchModel = mock(async () => {});
+    const fail = (sessionID: string, id: string) =>
+      manager.handleV2Retry(
+        {
+          sessionID,
+          agent: 'orchestrator',
+          model: { providerID: 'test', id },
+          error: { message: 'Rate limit exceeded' },
+          decision: { retry: true },
+        },
+        switchModel,
+      );
+
+    // Failed admission: the capture-time pin existed (same call the bridge
+    // makes), then was released before the retry.
+    manager.pinSessionChains('release-child');
+    manager.releaseSessionChains('release-child');
+    // Refresh publishes gen B before the retry.
+    chains.orchestrator = ['test/x', 'test/y'];
+
+    // The retry lazily pins the current generation: descent follows x -> y.
+    // A stale gen-A pin would descend a -> b instead.
+    await fail('release-child', 'x');
+    expect(switchModel).toHaveBeenLastCalledWith('release-child', {
+      providerID: 'test',
+      id: 'y',
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // ForegroundFallbackManager - resolveChain correctness
 // ---------------------------------------------------------------------------
 
@@ -6032,8 +7616,14 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
       },
     });
 
-    // oracle has no chain → should not fall back at all
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    // oracle has no chain → retries with its own model, never
+    // cross-bleeds into orchestrator's chain.
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    const call = mocks.promptAsync.mock.calls[0] as [
+      { body: { model: { providerID: string; modelID: string } } },
+    ];
+    expect(call[0].body.model.providerID).toBe('anthropic');
+    expect(call[0].body.model.modelID).toBe('claude-opus-4-5');
   });
 
   test('uses cross-agent last-resort only when agent name is unknown', async () => {
@@ -6088,8 +7678,14 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
       },
     });
 
-    // build has no configured chain and must not inherit orchestrator's
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    // build has no configured chain → retries with its own model, never
+    // inherits orchestrator's chain.
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    const call = mocks.promptAsync.mock.calls[0] as [
+      { body: { model: { providerID: string; modelID: string } } },
+    ];
+    expect(call[0].body.model.providerID).toBe('openai');
+    expect(call[0].body.model.modelID).toBe('gpt-6');
   });
 });
 
@@ -6098,10 +7694,11 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager no-chain sessions', () => {
-  test('councillor session.status retry: no abort and no re-prompt', async () => {
+  test('councillor session.status retry: host retry absorbed, no abort and no re-prompt', async () => {
     // Councillor is owned by CouncilManager (own model chain + timeout).
-    // FG must not abort or re-prompt — that races the council lifecycle and
-    // previously produced "[foreground-fallback] no chain configured" noise.
+    // The host's own retry is absorbed into the shared sessionRetries
+    // budget instead of racing the council lifecycle with a per-attempt
+    // abort + re-prompt.
     const { mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(
       makeChains(),
@@ -6134,11 +7731,13 @@ describe('ForegroundFallbackManager no-chain sessions', () => {
       },
     });
 
+    // Councillor has no chain → the host retry absorbs into the shared
+    // budget: no abort, no same-model re-prompt on this path.
     expect(mocks.abort).not.toHaveBeenCalled();
     expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
 
-  test('councillor session.error: no abort and no re-prompt', async () => {
+  test('councillor session.error: same-model retry without abort', async () => {
     const { mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(makeChains(), true, {
       directory: '/test',
@@ -6164,8 +7763,9 @@ describe('ForegroundFallbackManager no-chain sessions', () => {
       },
     });
 
+    // Councillor has no chain → same-model retry with current model.
     expect(mocks.abort).not.toHaveBeenCalled();
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
 
   test('disableChain agent on session.status: no abort (not just no re-prompt)', async () => {
@@ -6190,20 +7790,484 @@ describe('ForegroundFallbackManager no-chain sessions', () => {
       },
     });
 
-    await mgr.handleEvent({
-      type: 'session.status',
+    // Attempts past the host budget stay silent too: the disabled chain
+    // skips the same-model retry (and its abort) on every path.
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      await mgr.handleEvent({
+        type: 'session.status',
+        properties: {
+          sessionID: 'disabled-status',
+          status: {
+            type: 'retry',
+            attempt,
+            message: 'rate limit, retrying...',
+          },
+        },
+      });
+    }
+
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  const seedNoChain = (mgr: ForegroundFallbackManager, sessionID: string) =>
+    mgr.handleEvent({
+      type: 'message.updated',
       properties: {
-        sessionID: 'disabled-status',
-        status: {
-          type: 'retry',
-          attempt: 1,
-          message: 'rate limit, retrying...',
+        info: {
+          sessionID,
+          agent: 'councillor',
+          providerID: 'openai',
+          modelID: 'gpt-5.4',
         },
       },
     });
 
+  const noChainError = (sessionID: string, id: string, error?: unknown) => ({
+    type: 'session.error',
+    properties: {
+      sessionID,
+      info: { id },
+      error: error ?? { message: 'streaming response failed: 502' },
+    },
+  });
+
+  test('multi-attempt host retry absorbs into the shared budget without per-attempt aborts', async () => {
+    // M1 regression: no-chain sessions must not bypass the host-retry
+    // budget into per-attempt aborts. Attempts 1..maxRetries are the
+    // host's own retries (swallowed); the spent budget then sticks the
+    // terminal exhaustion instead of replaying per attempt.
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    await seedNoChain(mgr, 'storm-nc');
+
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      await mgr.handleEvent({
+        type: 'session.status',
+        properties: {
+          sessionID: 'storm-nc',
+          status: {
+            type: 'retry',
+            attempt,
+            message: 'streaming response failed: 502',
+          },
+        },
+      });
+    }
+
     expect(mocks.abort).not.toHaveBeenCalled();
     expect(mocks.promptAsync).not.toHaveBeenCalled();
+    expect((mgr as any).sessionRetries.get('storm-nc')).toBe(3);
+    expect((mgr as any).chainExhaustion.get('storm-nc')).toBe(2);
+  });
+
+  test('no-chain exhaustion sticks across incidents until success', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as any,
+      2,
+    );
+    await seedNoChain(mgr, 'exh-nc');
+
+    await mgr.handleEvent(noChainError('exh-nc', 'e1'));
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    // Budget remains: a same-model retry is still pending.
+    expect(mgr.willAttemptFallback('exh-nc')).toBe(true);
+
+    await mgr.handleEvent(noChainError('exh-nc', 'e2'));
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+    expect(mgr.willAttemptFallback('exh-nc')).toBe(false);
+
+    // Budget spent: further incidents stick in the terminal state — no
+    // replay, and the counter stays charged (never deleted).
+    await mgr.handleEvent(noChainError('exh-nc', 'e3'));
+    await mgr.handleEvent(noChainError('exh-nc', 'e4'));
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+    expect((mgr as any).sessionRetries.get('exh-nc')).toBe(2);
+    expect((mgr as any).chainExhaustion.get('exh-nc')).toBe(2);
+
+    // A successful response clears the exhaustion; the next incident
+    // retries again.
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'exh-nc',
+          role: 'assistant',
+          agent: 'councillor',
+          providerID: 'openai',
+          modelID: 'gpt-5.4',
+          time: { completed: 1 },
+        },
+      },
+    });
+    await mgr.handleEvent(noChainError('exh-nc', 'e5'));
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(3);
+  });
+
+  test('deterministic errors skip the same-model retry without charging budget', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    await seedNoChain(mgr, 'gate-nc');
+
+    const errors = [
+      { message: 'AI_APICallError: Gone' },
+      { statusCode: 401, message: 'auth failed' },
+      { message: 'personal-team-blocked: spending-limit' },
+    ];
+    for (const [index, error] of errors.entries()) {
+      await mgr.handleEvent(noChainError('gate-nc', `g${index}`, error));
+    }
+
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    expect((mgr as any).sessionRetries.get('gate-nc')).toBeUndefined();
+  });
+
+  test('same-model replay treats a host error envelope as failure', async () => {
+    const { mocks } = createMockClient({
+      promptAsyncImpl: async () => ({
+        error: { message: 'admission refused' },
+      }),
+    });
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    await seedNoChain(mgr, 'env-nc');
+
+    const logSpy = spyOn(logger, 'log').mockImplementation(() => {});
+    try {
+      await mgr.handleEvent(noChainError('env-nc', 'e1'));
+
+      // One send, no busy abort, and the envelope is logged as a rejection
+      // rather than mistaken for an admitted replay.
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+      expect(mocks.abort).not.toHaveBeenCalled();
+      expect(logSpy).toHaveBeenCalledWith(
+        '[foreground-fallback] same-model re-prompt rejected by host error envelope',
+        expect.objectContaining({ sessionID: 'env-nc' }),
+      );
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test('stale-epoch abandonment: a newer turn fences the replay', async () => {
+    let resolveMessages!: (value: unknown) => void;
+    const { mocks } = createMockClient({
+      messagesImpl: () =>
+        new Promise((resolve) => {
+          resolveMessages = resolve;
+        }),
+    });
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    await seedNoChain(mgr, 'stale-nc');
+
+    const pending = mgr.handleEvent(noChainError('stale-nc', 'e1'));
+    // A newer user turn lands while the transcript read is suspended.
+    await mgr.handleEvent(redoEvents.user('stale-nc', 'u2'));
+    resolveMessages({ data: [] });
+    await pending;
+
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    expect(mgr.isFallbackInProgress('stale-nc')).toBe(false);
+  });
+
+  test('unparseable model never charges the budget', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    mgr.registerSessionAgent('unparse-nc', 'councillor');
+    (mgr as any).sessionModel.set('unparse-nc', 'not-a-model');
+
+    await mgr.handleEvent(noChainError('unparse-nc', 'e1'));
+    await mgr.handleEvent(noChainError('unparse-nc', 'e2'));
+
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    expect((mgr as any).sessionRetries.get('unparse-nc')).toBeUndefined();
+    expect((mgr as any).triggerIncidents.get('unparse-nc')).toBeUndefined();
+  });
+
+  test('first error before agent observed retries; construction-time-disabled agent then stays silent', async () => {
+    // S4 race: the disabled set is construction-time state, so silence
+    // applies as soon as the agent name is known — without any
+    // disableChain call.
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      { ...makeChains(), victim: [] },
+      true,
+      { directory: '/test' } as any,
+    );
+
+    // No agent or model observed: the last-resort chain path fires.
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 's4-nc',
+        error: { message: 'rate limit exceeded' },
+      },
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+
+    // The agent is observed as construction-time-disabled: silence, even
+    // though disableChain was never called.
+    await mgr.handleEvent({
+      type: 'subagent.session.created',
+      properties: { sessionID: 's4-nc', agentName: 'victim' },
+    });
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 's4-nc',
+        error: { message: 'rate limit exceeded' },
+      },
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mgr.willAttemptFallback('s4-nc')).toBe(false);
+  });
+
+  test('non-busy promptAsync failure logs without abort or re-send', async () => {
+    const { mocks } = createMockClient({
+      promptAsyncImpl: async () => {
+        throw new Error('validation failed');
+      },
+    });
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    await seedNoChain(mgr, 'nb-nc');
+
+    await mgr.handleEvent(noChainError('nb-nc', 'e1'));
+
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.abort).not.toHaveBeenCalled();
+  });
+
+  test('proven-busy refusal aborts once and re-sends', async () => {
+    let calls = 0;
+    const { mocks } = createMockClient({
+      promptAsyncImpl: async () => {
+        calls++;
+        if (calls === 1) throw new Error('session busy');
+        return {};
+      },
+    });
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    await seedNoChain(mgr, 'busy-nc');
+
+    await mgr.handleEvent(noChainError('busy-nc', 'e1'));
+
+    expect(mocks.abort).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+  });
+
+  test('F1: deterministic error before model known does not block later recovery', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+
+    // Agent known (no chain) but model not yet observed: returns before
+    // stamping any terminal state.
+    mgr.registerSessionAgent('f1-nc', 'councillor');
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: { sessionID: 'f1-nc', error: { message: 'Gone' } },
+    });
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    expect((mgr as any).deterministicTerminal.has('f1-nc')).toBe(false);
+
+    // The model arrives later: recovery is still possible.
+    await seedNoChain(mgr, 'f1-nc');
+    expect(mgr.willAttemptFallback('f1-nc')).toBe(true);
+    await mgr.handleEvent(noChainError('f1-nc', 'e1'));
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('F2: later retryable-transient lifts the deterministic terminal', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    await seedNoChain(mgr, 'f2-nc');
+
+    await mgr.handleEvent(
+      noChainError('f2-nc', 'g1', { statusCode: 401, message: 'auth failed' }),
+    );
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    expect((mgr as any).sessionRetries.get('f2-nc')).toBeUndefined();
+    expect((mgr as any).chainExhaustion.get('f2-nc')).toBeUndefined();
+    expect(mgr.willAttemptFallback('f2-nc')).toBe(false);
+
+    // A later distinct transient error in the same turn proceeds normally.
+    await mgr.handleEvent(noChainError('f2-nc', 'e1'));
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect((mgr as any).sessionRetries.get('f2-nc')).toBe(1);
+    expect(mgr.willAttemptFallback('f2-nc')).toBe(true);
+  });
+
+  test('F3: post-terminal status events do not charge the shared budget', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    await seedNoChain(mgr, 'f3-nc');
+
+    await mgr.handleEvent(
+      noChainError('f3-nc', 'g1', { message: 'AI_APICallError: Gone' }),
+    );
+    expect((mgr as any).sessionRetries.get('f3-nc')).toBeUndefined();
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'f3-nc',
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'AI_APICallError: Gone',
+        },
+      },
+    });
+    expect((mgr as any).sessionRetries.get('f3-nc')).toBeUndefined();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    expect(mocks.abort).not.toHaveBeenCalled();
+  });
+
+  test('F6: status-first-then-error charges once per turn+model episode', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    await seedNoChain(mgr, 'f6-nc');
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'f6-nc',
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'streaming response failed: 502',
+        },
+      },
+    });
+    expect((mgr as any).sessionRetries.get('f6-nc')).toBe(1);
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+
+    await mgr.handleEvent(noChainError('f6-nc', 'e1'));
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect((mgr as any).sessionRetries.get('f6-nc')).toBe(1);
+  });
+
+  test('R1: second distinct error in same episode charges again', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    await seedNoChain(mgr, 'r1-nc');
+
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'r1-nc',
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'streaming response failed: 502',
+        },
+      },
+    });
+    expect((mgr as any).sessionRetries.get('r1-nc')).toBe(1);
+
+    // Same failure's error replays without a second charge.
+    await mgr.handleEvent(noChainError('r1-nc', 'e1'));
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect((mgr as any).sessionRetries.get('r1-nc')).toBe(1);
+
+    // A later distinct error charges normally so the budget still bounds
+    // replays.
+    await mgr.handleEvent(noChainError('r1-nc', 'e2'));
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+    expect((mgr as any).sessionRetries.get('r1-nc')).toBe(2);
+    expect(mgr.willAttemptFallback('r1-nc')).toBe(true);
+  });
+
+  test('R2: deduped duplicate does not lift the deterministic terminal', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    await seedNoChain(mgr, 'r2-nc');
+
+    await mgr.handleEvent(noChainError('r2-nc', 'e1'));
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    await mgr.handleEvent(
+      noChainError('r2-nc', 'g1', { statusCode: 401, message: 'auth failed' }),
+    );
+    expect(mgr.willAttemptFallback('r2-nc')).toBe(false);
+
+    // Re-observation of the already-handled transient is dropped before it
+    // can lift the terminal: nothing new is pending.
+    await mgr.handleEvent(noChainError('r2-nc', 'e1'));
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect((mgr as any).sessionRetries.get('r2-nc')).toBe(1);
+    expect(mgr.willAttemptFallback('r2-nc')).toBe(false);
+  });
+
+  test('(b): failed admission restores the deterministic terminal', async () => {
+    const { mocks } = createMockClient({ messagesData: [] });
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    await seedNoChain(mgr, 'pb-nc');
+
+    await mgr.handleEvent(
+      noChainError('pb-nc', 'g1', { statusCode: 401, message: 'auth failed' }),
+    );
+    expect(mgr.willAttemptFallback('pb-nc')).toBe(false);
+
+    // The transient lifts the terminal, but its replay finds no user
+    // message: the charge is refunded and the terminal is restored, so the
+    // promise stays false with nothing pending.
+    await mgr.handleEvent(noChainError('pb-nc', 'e1'));
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    expect((mgr as any).sessionRetries.get('pb-nc')).toBe(0);
+    expect(mgr.willAttemptFallback('pb-nc')).toBe(false);
+  });
+
+  test('(d): two distinct anonymous failures both replay', async () => {
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    await seedNoChain(mgr, 'anon-nc');
+    const epoch = (mgr as any).turnEpoch.get('anon-nc') ?? 0;
+
+    // ID-less arrivals synthesize a unique namespaced incident each, so the
+    // second is not deduped as a duplicate of the first.
+    await (mgr as any).trySameModelRetry('anon-nc', {
+      error: { message: 'streaming response failed: 502' },
+      epoch,
+    });
+    await (mgr as any).trySameModelRetry('anon-nc', {
+      error: { message: 'streaming response failed: 503' },
+      epoch,
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+    expect((mgr as any).sessionRetries.get('anon-nc')).toBe(2);
   });
 });
 
@@ -6430,3 +8494,208 @@ describe('ForegroundFallbackManager dispose', () => {
 });
 
 // ---------------------------------------------------------------------------
+
+describe('ForegroundFallbackManager same-model retry classification', () => {
+  test('backpressure wording with a deterministic 4xx stays a hard error', () => {
+    const message = 'Streaming response failed: [400] invalid request';
+    expect(isFailoverError(message)).toBe(false);
+    expect(isFailoverError({ message })).toBe(false);
+    expect(
+      isFailoverError({
+        statusCode: 400,
+        message: 'streaming response failed',
+      }),
+    ).toBe(false);
+    // 429 is transient backpressure, not a deterministic rejection.
+    expect(isFailoverError('request queue is full (429)')).toBe(true);
+  });
+});
+
+describe('ForegroundFallbackManager same-model retry request scope', () => {
+  const seed = (
+    mgr: ForegroundFallbackManager,
+    sessionID: string,
+    agent = 'councillor',
+  ) =>
+    mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID,
+          agent,
+          providerID: 'openai',
+          modelID: 'gpt-5.4',
+        },
+      },
+    });
+
+  test('explicit policy rejections never replay on the same model', async () => {
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      client,
+      directory: '/test',
+    } as any);
+    await seed(mgr, 'policy-nc');
+
+    for (const [index, message] of [
+      'cyber_policy: request flagged',
+      'content_policy_violation',
+    ].entries()) {
+      await mgr.handleEvent({
+        type: 'session.error',
+        properties: {
+          sessionID: 'policy-nc',
+          info: { id: `p${index}` },
+          error: { message },
+        },
+      });
+    }
+
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    expect((mgr as any).sessionRetries.get('policy-nc')).toBeUndefined();
+    expect(mgr.willAttemptFallback('policy-nc')).toBe(false);
+  });
+});
+
+describe('ForegroundFallbackManager same-model retry hardening', () => {
+  const seed = (mgr: ForegroundFallbackManager, sessionID: string) =>
+    mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID,
+          agent: 'councillor',
+          providerID: 'openai',
+          modelID: 'gpt-5.4',
+        },
+      },
+    });
+  const streamError = (sessionID: string, id: string, error?: unknown) => ({
+    type: 'session.error',
+    properties: {
+      sessionID,
+      info: { id },
+      error: error ?? { message: 'streaming response failed: 502' },
+    },
+  });
+  const flush = async () => {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+  };
+
+  test('"upstream error" with a deterministic 4xx status stays a hard error', () => {
+    expect(
+      isFailoverError({
+        statusCode: 400,
+        message: 'upstream error: timeout must be positive',
+      }),
+    ).toBe(false);
+    expect(
+      isFailoverError({ statusCode: 429, message: 'upstream error: 429' }),
+    ).toBe(true);
+  });
+
+  test('v2 same-model replay does not require a model switch', async () => {
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      client,
+      directory: '/test',
+      hostFlavor: 'v2',
+    } as any);
+    await seed(mgr, 'v2-nc');
+    await mgr.handleEvent(streamError('v2-nc', 'e1'));
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync.mock.calls[0]?.[0]).not.toHaveProperty(
+      'modelSwitch',
+    );
+  });
+
+  test('a host retry status paired with a replayed error sends no second prompt', async () => {
+    const { client, mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      client,
+      directory: '/test',
+    } as any);
+    await seed(mgr, 'pair-nc');
+    await mgr.handleEvent(streamError('pair-nc', 'e1'));
+    await mgr.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: 'pair-nc',
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'streaming response failed: 502',
+        },
+      },
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect((mgr as any).sessionRetries.get('pair-nc')).toBe(1);
+  });
+
+  test('a success clears the deterministic same-model block', async () => {
+    const { client } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      client,
+      directory: '/test',
+    } as any);
+    await seed(mgr, 'det-nc');
+    await mgr.handleEvent(
+      streamError('det-nc', 'e1', { statusCode: 401, message: 'auth failed' }),
+    );
+    expect(mgr.willAttemptFallback('det-nc')).toBe(false);
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: 'det-nc',
+          role: 'assistant',
+          agent: 'councillor',
+          providerID: 'openai',
+          modelID: 'gpt-5.4',
+          time: { completed: 1 },
+        },
+      },
+    });
+    expect(mgr.willAttemptFallback('det-nc')).toBe(true);
+  });
+
+  describe('with fake timers', () => {
+    beforeEach(() => jest.useFakeTimers());
+    afterEach(() => jest.useRealTimers());
+
+    test('a replay send timeout keeps its charge', async () => {
+      const { client } = createMockClient({
+        promptAsyncImpl: () => new Promise(() => {}),
+      });
+      const mgr = new ForegroundFallbackManager(makeChains(), true, {
+        client,
+        directory: '/test',
+      } as any);
+      await seed(mgr, 'slow-nc');
+      const pending = mgr.handleEvent(streamError('slow-nc', 'e1'));
+      await flush();
+      jest.advanceTimersByTime(10_000);
+      await pending;
+      expect((mgr as any).sessionRetries.get('slow-nc')).toBe(1);
+      expect(mgr.isFallbackInProgress('slow-nc')).toBe(false);
+    });
+
+    test('a hung transcript read is bounded and refunds the charge', async () => {
+      const { client, mocks } = createMockClient({
+        messagesImpl: () => new Promise(() => {}),
+      });
+      const mgr = new ForegroundFallbackManager(makeChains(), true, {
+        client,
+        directory: '/test',
+      } as any);
+      await seed(mgr, 'hung-nc');
+      const pending = mgr.handleEvent(streamError('hung-nc', 'e1'));
+      await flush();
+      jest.advanceTimersByTime(2_000);
+      await pending;
+      expect(mocks.promptAsync).not.toHaveBeenCalled();
+      expect(mgr.isFallbackInProgress('hung-nc')).toBe(false);
+      expect((mgr as any).sessionRetries.get('hung-nc') ?? 0).toBe(0);
+    });
+  });
+});

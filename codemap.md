@@ -48,7 +48,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 | `src/hooks/loop-command/` | `/loop` runtime command: extracts goal/successCriteria/maxAttempts and drives an iterative retry loop with a per-run history directory. | [View Map](src/hooks/loop-command/codemap.md) |
 | `src/interview/` | `/interview` feature: per-session and dashboard prompt/state orchestration, persistence, local UI, and cross-process coordination. | [View Map](src/interview/codemap.md) |
 | `src/mcp/` | Built-in MCP registry and per-provider MCP definitions. | [View Map](src/mcp/codemap.md) |
-| `src/multiplexer/` | Terminal multiplexer abstraction layer: backend selection plus tmux/zellij/herdr/kitty/cmux adapters. Pane lifecycle (admission, spawn, stable-idle close, rebuild, leftover sweep) runs in the TUI client process under `client/`; the server does not participate. | [View Map](src/multiplexer/codemap.md) |
+| `src/multiplexer/` | Terminal multiplexer abstraction layer: backend selection plus tmux/zellij/herdr/kitty/wezterm/cmux adapters. Pane lifecycle (admission, spawn, stable-idle close, rebuild, leftover sweep) runs in the TUI client process under `client/`; the server does not participate. | [View Map](src/multiplexer/codemap.md) |
 | `src/multiplexer/tmux/` | tmux backend implementation for pane lifecycle and layout management. | [View Map](src/multiplexer/tmux/codemap.md) |
 | `src/multiplexer/zellij/` | zellij backend implementation for tab/pane lifecycle. | [View Map](src/multiplexer/zellij/codemap.md) |
 | `src/multiplexer/herdr/` | herdr backend implementation for pane lifecycle. | [View Map](src/multiplexer/herdr/codemap.md) |
@@ -87,7 +87,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
    - Native OpenCode background tasks are parsed from `task` output and tracked in the shared background job board (board + store + coordinator + supervisor in `src/utils/`).
    - `src/hooks/task-session-manager/` updates job-board state, resolves short aliases, and injects background/reusable job context; runtime-status reconciliation and the shared terminal-publication gate (`background-job-terminal-gate.ts`) keep board state honest against live session status.
    - `src/hooks/orchestrator-wake/` periodically nudges an idle parent orchestrator when incomplete TODOs remain and reacts to jobs that stop without a terminal result.
-   - The TUI client (`src/tui.ts` → `src/multiplexer/client/`) optionally mirrors those sessions into tmux, Zellij, Herdr, cmux, or kitty panes/surfaces; each client anchors new panes to its own pane resolved from the client environment at spawn time (never a shared registry).
+   - The TUI client (`src/tui.ts` → `src/multiplexer/client/`) optionally mirrors those sessions into tmux, Zellij, Herdr, cmux, kitty, or WezTerm panes/surfaces; each client anchors new panes to its own pane resolved from the client environment at spawn time (never a shared registry).
    - Results flow back into the parent session through notifications/output polling.
 
 4. **Install/release path**
@@ -113,6 +113,10 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 - `src/v2/` wraps the v1 factory for the v2 host: `setup(ctx)` shims a v1 `PluginInput`, runs the v1 `config()` hook, and adapts agent/tool/command/hook registrations into v2 domains.
 - Skill permissions are projected into agent/session configuration; native v1/v2 hosts discover and filter skills from those finalized permissions, denying hidden skills and asking for discoverable ones. The plugin does not rewrite `<available_skills>` in conversation text.
 - `src/interview/` hooks into plugin command/event surfaces exposed by `src/index.ts`.
+  `patch.ts` applies body-relative unified diffs, `history.ts` performs the
+  active-interview kickoff collapse, and `service.ts` handles quiet state turns
+  plus `/implement` (including newest completed-spec fallback). The
+  `interview_submit_state` tool is registered statically and bridged for v1/v2.
 
 ## Root Assets
 

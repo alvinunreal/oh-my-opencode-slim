@@ -37,6 +37,13 @@ export interface V2ToolDefinition {
 }
 export interface V2ToolDraft {
   add(tool: V2ToolDefinition): void;
+  /** Update a registered tool by id; missing ids are ignored (host
+   * `tool.transform` editor semantics). The callback receives the
+   * model-visible fields it may rewrite (description). */
+  update(id: string, update: (tool: { description: string }) => void): void;
+  /** Read back a registered tool's model-visible fields by id;
+   * undefined when absent. */
+  get(id: string): { description?: string } | undefined;
 }
 /** A v2 command definition passed to `command.transform` drafts. The command
  * body runs `execute` directly (no template field). */
@@ -210,6 +217,12 @@ export interface V2Context {
     transform(cb: (draft: V2CommandDraft) => void): Promise<V2Registration>;
     list(): Promise<unknown>;
   };
+  /** v2 model registry domain (`ctx.model`) — runtime-probed; older hosts
+   * expose no domain and callers must degrade. `list()` resolves the full
+   * catalog ⊕ config view with per-model capabilities. */
+  readonly model?: {
+    readonly list?: (input?: unknown) => Promise<unknown>;
+  };
   skill?: {
     transform(
       cb: (draft: {
@@ -279,7 +292,7 @@ export interface V2Context {
       sessionID: string;
       model: { id: string; providerID: string; variant?: string };
     }): Promise<unknown>;
-    /** v2 session.context — full transcript; replaces v1 session.messages. */
+    /** v2 session.context — active context, truncated by completed compaction. */
     context?(input: {
       sessionID: string;
     }): Promise<Array<Record<string, unknown>>>;
