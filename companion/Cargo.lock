@@ -2250,7 +2250,7 @@ dependencies = [
 
 [[package]]
 name = "oh-my-opencode-slim-companion"
-version = "0.1.4"
+version = "0.1.6"
 dependencies = [
  "dirs",
  "eframe",
