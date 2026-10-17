@@ -78,6 +78,32 @@ Structured report: Council Response / Per-Councillor Details / Council Summary
 
 > The diagram shows v1 wording; on v2 the same dispatches use `subagent()`.
 
+### Why councillors stay independent
+
+Councillors never see each other's responses. Each seat is dispatched
+with only the prompt it needs, and the council agent synthesizes all of
+them afterward. This is deliberate — the reason a council beats a single
+model is that seats on different models make *different* mistakes, not
+that they get to argue.
+
+Measured finding-level overlap between same-model reviewers runs 52–62%;
+across different models it drops to 37–46%. A three-seat council is
+already the mix of differently-biased reviewers that does the work.
+Adding a stage where seat B critiques seat A would trade that
+independence away for a review round with no measured accuracy gain
+behind it — and repeated review rounds have been observed to raise false
+positives without improving recall.
+
+The practical corollary when you build a lineup: **seat quality outranks
+seat count.** In testing, the spread between the strongest and weakest
+reviewer model was larger than the entire spread across all same-model
+setups, and the weakest reviewer scored below baseline self-review. A seat
+that fails over to a weak model dilutes the council rather than adding
+to it.
+
+Full reasoning, evidence, and the alternatives that were ruled out:
+[ADR-002: Council seats stay independent](adr/002-council-seat-independence.md).
+
 ---
 
 ## Quick Setup
