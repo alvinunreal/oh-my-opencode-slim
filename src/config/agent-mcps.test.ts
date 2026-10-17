@@ -58,6 +58,37 @@ describe('parseList', () => {
   test('exclusions without matching allows', () => {
     expect(parseList(['!mcp2'], ['mcp1', 'mcp2', 'mcp3'])).toEqual([]);
   });
+
+  test('exclude-all beats specific allows', () => {
+    expect(parseList(['mcp1', '!*'], ['mcp1', 'mcp2'])).toEqual([]);
+    expect(parseList(['*', '!*'], ['mcp1', 'mcp2'])).toEqual([]);
+  });
+
+  test('plain names never act as exclusions', () => {
+    expect(
+      parseList(['xabc', 'abc', '!zzz'], ['xabc', 'abc', 'zzz']),
+    ).toEqual(['xabc', 'abc']);
+  });
+});
+
+describe('default MCP policy', () => {
+  test('per-agent defaults are the documented policy', () => {
+    expect(DEFAULT_AGENT_MCPS).toEqual({
+      orchestrator: ['*', '!context7'],
+      designer: [],
+      oracle: [],
+      explorer: ['context7', 'gh_grep'],
+      fixer: [],
+      observer: [],
+      council: [],
+      councillor: [],
+    });
+  });
+
+  test('unknown agents get no MCPs', () => {
+    const runtime = runtimeFor({});
+    expect(getAgentMcpList('not-an-agent', runtime)).toEqual([]);
+  });
 });
 
 describe('getAgentMcpList rename continuity', () => {
@@ -76,5 +107,13 @@ describe('getAgentMcpList rename continuity', () => {
       },
     });
     expect(getAgentMcpList('explorer', runtime)).toEqual(['canonical-mcp']);
+  });
+
+  test('agent config without mcps falls back to the default policy', () => {
+    const runtime = runtimeFor({ agents: { explorer: {} } });
+    expect(getAgentMcpList('explorer', runtime)).toEqual([
+      'context7',
+      'gh_grep',
+    ]);
   });
 });
