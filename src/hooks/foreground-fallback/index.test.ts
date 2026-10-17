@@ -8053,6 +8053,54 @@ describe('ForegroundFallbackManager resolveChain cross-agent isolation', () => {
 // No-chain sessions (councillor / self-managed agents)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// host-retry budget guards (chain paths)
+// ---------------------------------------------------------------------------
+
+describe('ForegroundFallbackManager host-retry budget guards', () => {
+  test('host retry with a huge backoff delay is never absorbed on a chain', async () => {
+    // absorbHostRetry refuses to sit out a host backoff longer than
+    // MAX_HOST_RETRY_DELAY_MS (the refusal branch is chain-gated): the
+    // configured chain owns the recovery instead of letting a
+    // 30-minute-plus host timer hold the session hostage.
+    const sid = 'huge-delay';
+    const { manager } = makeManager({ chain: ['test/a', 'test/b'] });
+    await manager.handleV2Retry(
+      {
+        sessionID: sid,
+        agent: 'orchestrator',
+        model: { providerID: 'test', id: 'a' },
+        error: { message: 'rate limit' },
+        decision: { retry: true, delay: 30 * 60_000 + 1 },
+      },
+      async () => undefined,
+    );
+    expect((manager as any).sessionRetries.get(sid)).toBeUndefined();
+  });
+
+  test('a replay refund never debits the budget of a newer turn', async () => {
+    // refundSessionRetry guards the shared budget across turns: a replay
+    // resuming after the next external turn must not debit the NEW
+    // turn's budget.
+    const { manager } = makeManager({ chain: ['test/a', 'test/b'] });
+    const sid = 'refund-turn-advance';
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: { sessionID: sid, agent: 'orchestrator', role: 'user', id: 'u1' },
+      },
+    });
+    const epoch = (manager as any).turnEpoch.get(sid) ?? 0;
+    (manager as any).sessionRetries.set(sid, 1);
+    (manager as any).refundSessionRetry(sid, epoch);
+    expect((manager as any).sessionRetries.get(sid)).toBe(0);
+    // Refund charged against a previous turn is a no-op for this turn.
+    (manager as any).sessionRetries.set(sid, 1);
+    (manager as any).refundSessionRetry(sid, epoch - 1);
+    expect((manager as any).sessionRetries.get(sid)).toBe(1);
+  });
+});
+
 describe('ForegroundFallbackManager no-chain sessions', () => {
   test('councillor session.status retry: host retry absorbed, no abort and no re-prompt', async () => {
     // Councillor is owned by CouncilManager (own model chain + timeout).
@@ -8628,47 +8676,6 @@ describe('ForegroundFallbackManager no-chain sessions', () => {
     });
     expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
     expect((mgr as any).sessionRetries.get('anon-nc')).toBe(2);
-  });
-  test('host retry with a huge backoff delay is never absorbed on a chain', async () => {
-    // absorbHostRetry refuses to sit out a host backoff longer than
-    // MAX_HOST_RETRY_DELAY_MS (no chain): the configured chain owns the
-    // recovery instead of letting a 30-minute-plus host timer hold the
-    // session hostage.
-    const sid = 'huge-delay';
-    const { manager } = makeManager({ chain: ['test/a', 'test/b'] });
-    await manager.handleV2Retry(
-      {
-        sessionID: sid,
-        agent: 'orchestrator',
-        model: { providerID: 'test', id: 'a' },
-        error: { message: 'rate limit' },
-        decision: { retry: true, delay: 30 * 60_000 + 1 },
-      },
-      async () => undefined,
-    );
-    expect((manager as any).sessionRetries.get(sid)).toBeUndefined();
-  });
-
-  test('a replay refund never debits the budget of a newer turn', async () => {
-    // refundSessionRetry guards the shared budget across turns: a replay
-    // resuming after the next external turn must not debit the NEW
-    // turn's budget.
-    const { manager } = makeManager({ chain: ['test/a', 'test/b'] });
-    const sid = 'refund-turn-advance';
-    await manager.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: { sessionID: sid, agent: 'orchestrator', role: 'user', id: 'u1' },
-      },
-    });
-    const epoch = (manager as any).turnEpoch.get(sid) ?? 0;
-    (manager as any).sessionRetries.set(sid, 1);
-    (manager as any).refundSessionRetry(sid, epoch);
-    expect((manager as any).sessionRetries.get(sid)).toBe(0);
-    // Refund charged against a previous turn is a no-op for this turn.
-    (manager as any).sessionRetries.set(sid, 1);
-    (manager as any).refundSessionRetry(sid, epoch - 1);
-    expect((manager as any).sessionRetries.get(sid)).toBe(1);
   });
 });
 

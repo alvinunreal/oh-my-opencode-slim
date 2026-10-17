@@ -115,14 +115,17 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
+    "@hughescr/stryker-bun-runner": "1.6.0",
     "@opencode/plugin": "2.0.18",
+    "@stryker-mutator/core": "10.0.0",
     "@types/jsdom": "30",
     "@types/node": "^26.6.2",
     "@types/semver": "^7.7.1",
     "@types/turndown": "^5.0.6",
     "all-contributors-cli": "^6.26.1",
+    "bun": "1.4.3",
     "bun-types": "^1.4.2",
-    "typescript": "7.0"
+    "typescript": "6.0.3"
   },
   "peerDependencies": {
     "zod": "^4.6.5"
