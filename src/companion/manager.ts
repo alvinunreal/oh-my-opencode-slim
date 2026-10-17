@@ -6,6 +6,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import * as os from 'node:os';
@@ -35,6 +36,7 @@ import {
 let activeExitListener: (() => void) | null = null;
 const activeManagers = new Set<CompanionManager>();
 const MAX_PRESET_REQUESTS = 64;
+const MAX_KNOWN_COMPANION_PROJECTS = 64;
 const PRESET_REFRESH_EVERY_TICKS = 4;
 const STATE_PUBLISH_RETRY_MS = 250;
 const HARD_PRESET_REFRESH_WARNING_KINDS: ReadonlySet<ConfigLoadWarningKind> =
@@ -60,6 +62,7 @@ type CompanionPresetScope = 'effective' | 'project' | 'global';
 interface CompanionPresetRequest {
   request_id: string;
   session_id: string;
+  target_cwd?: string;
   scope?: CompanionPresetScope;
   preset?: string;
   inherit?: boolean;
@@ -85,9 +88,16 @@ interface CompanionSession {
   preset?: CompanionPresetState;
 }
 
+interface CompanionKnownProject {
+  cwd: string;
+  last_seen: number;
+  preset?: CompanionPresetState;
+}
+
 interface CompanionState {
   version: 1;
   sessions: CompanionSession[];
+  known_projects?: CompanionKnownProject[];
   window_positions?: Record<string, { x: number; y: number }>;
   preset_requests?: CompanionPresetRequest[];
   config?: {
@@ -170,6 +180,40 @@ function readState(): CompanionState {
     log('[companion] state load failed', String(err));
   }
   return { version: 1, sessions: [] };
+}
+
+function knownProjectKey(cwd: string): string {
+  const normalized = path.resolve(cwd).replace(/[\\/]+$/, '');
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+/** Persisted local history consists only of actual OpenCode plugin workspaces. */
+export function rememberKnownCompanionProject(
+  state: CompanionState,
+  cwd: string,
+  preset: CompanionPresetState | undefined,
+  now = Date.now(),
+): void {
+  const key = knownProjectKey(cwd);
+  const previous = (state.known_projects ?? []).filter(
+    (project) => knownProjectKey(project.cwd) !== key,
+  );
+  previous.push({ cwd: path.resolve(cwd), last_seen: now, preset });
+  state.known_projects = previous.slice(-MAX_KNOWN_COMPANION_PROJECTS);
+}
+
+/** Reject paths that were never registered by an OpenCode Companion manager. */
+export function resolveKnownCompanionProject(
+  state: CompanionState,
+  candidate: string,
+): string | null {
+  if (!candidate.trim() || !path.isAbsolute(candidate)) return null;
+  const key = knownProjectKey(candidate);
+  return (
+    state.known_projects?.find(
+      (project) => knownProjectKey(project.cwd) === key,
+    )?.cwd ?? null
+  );
 }
 
 function pruneDeadSessions(state: CompanionState): void {
@@ -463,30 +507,100 @@ export class CompanionManager {
       return true;
     }
 
-    const config = loadPluginConfig(this.cwd, {
-      silent: true,
-      hostFlavor: this.hostFlavor,
-    });
+    const offlineTarget = request.target_cwd?.trim();
+    const targetCwd = offlineTarget
+      ? resolveKnownCompanionProject(readState(), offlineTarget)
+      : this.cwd;
+    let targetAvailable = targetCwd !== null;
+    if (offlineTarget && targetCwd) {
+      try {
+        targetAvailable = statSync(targetCwd).isDirectory();
+      } catch {
+        targetAvailable = false;
+      }
+    }
     const scope: CompanionPresetScope =
       request.scope === 'global'
         ? 'global'
         : request.scope === 'project'
           ? 'project'
           : 'effective';
-    const result =
-      scope === 'project' && request.inherit === true
-        ? clearProjectPresetOnDisk(this.cwd, this.hostFlavor)
-        : typeof request.preset === 'string' && request.preset.trim()
-          ? switchPresetOnDisk(this.cwd, request.preset, config, {
-              scope,
-              hostFlavor: this.hostFlavor,
-            })
-          : {
-              ok: false,
-              presetName: '',
-              message: 'Preset request is missing a preset name.',
-              summary: [],
-            };
+    const result = (() => {
+      if (targetCwd === null || !targetAvailable) {
+        return {
+          ok: false,
+          presetName: '',
+          message: 'Project is not a known accessible Companion workspace.',
+          summary: [],
+        };
+      }
+
+      let invalidConfig = false;
+      const config = loadPluginConfig(targetCwd, {
+        silent: true,
+        hostFlavor: this.hostFlavor,
+        onWarning: (warning) => {
+          if (HARD_PRESET_REFRESH_WARNING_KINDS.has(warning.kind)) {
+            invalidConfig = true;
+          }
+        },
+      });
+      if (invalidConfig) {
+        return {
+          ok: false,
+          presetName: '',
+          message:
+            'Cannot edit preset: project configuration cannot be read or validated. No files were changed.',
+          summary: [],
+        };
+      }
+      if (scope === 'project' && request.inherit === true) {
+        return clearProjectPresetOnDisk(targetCwd, this.hostFlavor);
+      }
+      if (typeof request.preset !== 'string' || !request.preset.trim()) {
+        return {
+          ok: false,
+          presetName: '',
+          message: 'Preset request is missing a preset name.',
+          summary: [],
+        };
+      }
+      return switchPresetOnDisk(targetCwd, request.preset, config, {
+        scope,
+        hostFlavor: this.hostFlavor,
+      });
+    })();
+
+    // Only the TypeScript manager edits JSONC. On failure retain the last
+    // known preset catalog and publish explicit feedback, even if the folder
+    // became inaccessible since its last live OpenCode session.
+    if (offlineTarget && targetCwd) {
+      const next = result.ok
+        ? getPresetSelectionState(targetCwd, this.hostFlavor)
+        : null;
+      writeState((state) => {
+        const known = state.known_projects?.find(
+          (project) =>
+            knownProjectKey(project.cwd) === knownProjectKey(targetCwd),
+        );
+        if (!known) return;
+        known.preset = {
+          current: next?.effective ?? known.preset?.current,
+          available: next?.projectAvailable ?? known.preset?.available ?? [],
+          effective: next?.effective ?? known.preset?.effective,
+          project: next?.project ?? known.preset?.project,
+          global: next?.global ?? known.preset?.global,
+          project_available:
+            next?.projectAvailable ?? known.preset?.project_available ?? [],
+          global_available:
+            next?.globalAvailable ?? known.preset?.global_available ?? [],
+          message: result.message,
+          last_request_id: request.request_id,
+          result_ok: result.ok,
+          last_scope: scope,
+        };
+      });
+    }
     this.refreshPresetState();
     this.presetMessage = result.message;
     this.presetLastRequestId = request.request_id;
@@ -841,6 +955,7 @@ export class CompanionManager {
         } else {
           state.sessions.push(entry);
         }
+        rememberKnownCompanionProject(state, this.cwd, entry.preset);
         if (this.config) {
           state.config = {
             enabled: this.config.enabled ?? false,

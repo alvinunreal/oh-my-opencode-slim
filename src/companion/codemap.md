@@ -18,7 +18,9 @@ The companion system consists of two main components following a **Producer-Cons
   - Prunes state rows whose owning OpenCode process is no longer alive
   - Spawns the companion binary process when enabled
   - Publishes the current/available preset catalog for the active project
+  - Maintains a bounded (64) history of previously opened project directories and their last observed preset catalog; never scans disk for repositories
   - Consumes typed preset requests from the native Companion and applies them through the shared preset-switch domain
+  - For remembered/offline targets, routes writes only through a live TypeScript manager, checks registered absolute paths, directory accessibility, and invalid JSONC before any preset mutation; returns explicit rejection feedback without changing the relay's config
   - Implements a locking mechanism for concurrent state writes
 
 - **Consumer (updater.ts)**: Binary installation and update logic

@@ -25,3 +25,41 @@ fn platform_size() -> Option<[f32; 2]> {
 fn platform_size() -> Option<[f32; 2]> {
     None
 }
+
+#[cfg(target_os = "windows")]
+pub fn monitor_rects_physical() -> Option<Vec<[f32; 4]>> {
+    use windows_sys::Win32::Foundation::{BOOL, LPARAM, RECT};
+    use windows_sys::Win32::Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR};
+
+    unsafe extern "system" fn collect(
+        _monitor: HMONITOR,
+        _hdc: HDC,
+        rect: *mut RECT,
+        data: LPARAM,
+    ) -> BOOL {
+        if rect.is_null() {
+            return 0;
+        }
+        // EnumDisplayMonitors invokes this synchronously while the Vec lives.
+        let monitors = unsafe { &mut *(data as *mut Vec<[f32; 4]>) };
+        let rect = unsafe { &*rect };
+        monitors.push([
+            rect.left as f32,
+            rect.top as f32,
+            rect.right as f32,
+            rect.bottom as f32,
+        ]);
+        1
+    }
+
+    let mut monitors: Vec<[f32; 4]> = Vec::new();
+    let ok = unsafe {
+        EnumDisplayMonitors(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            Some(collect),
+            (&mut monitors as *mut Vec<[f32; 4]>) as LPARAM,
+        )
+    };
+    (ok != 0 && !monitors.is_empty()).then_some(monitors)
+}

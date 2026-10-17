@@ -29,17 +29,38 @@ Dock attention); unsupported environments may safely ignore it. Error/failure
 notifications are intentionally not emitted because the parent status PR does
 not claim canonical settled terminal evidence.
 
-Right-click the Companion to open its compact control menu. When the menu is
-closed, the displayed project continues to follow live agent activity. Opening
-the menu pins the currently displayed project so background activity in another
-repository cannot change the target while you are editing it. The first menu row
-cycles across every live project, even when that project is currently idle.
+Right-click the Companion to open a **separate native control popup**, outside
+the animation's window. It shows full project names/paths, a search field, and
+a directly selectable preset list. The popup has three project views:
 
-The preset row always applies to that explicitly selected project. Its center
-button shows a readable scoped value such as `Prj:Inherit` or `Gbl:openai`;
-clicking it toggles between **Project** and **Global** scope. If a project has
-not published preset state yet, the menu shows a disabled diagnostic row instead
-of silently hiding the controls.
+- **Active:** live OpenCode project instances with work underway or waiting for
+  input.
+- **All open:** every project currently published by a live OpenCode plugin
+  instance, including idle ones.
+- **Known:** up to 64 previously seen project directories, recorded only when
+  an actual OpenCode plugin instance runs there. Known does **not** scan the
+  filesystem or infer a common project root. Entries may refer to projects
+  whose OpenCode instance is no longer running.
+
+Opening the popup pins the current animation session. Selecting a project for
+preset editing **does not change the animation's session or window position**.
+Clicking a project in the list changes only the editor target, and background
+activity cannot steal that target until the menu is closed. If the selected
+live project exits (or a remembered entry is evicted) while the menu remains
+open, its identity is retained but preset editing is disabled with an explicit
+warning. No request silently falls back to the displayed project. A project
+with multiple OpenCode instances stays in Active while any one instance is
+working or awaiting input. Press Escape, use Close, or move focus outside the
+popup to dismiss it.
+
+Choose the explicit **Project / Global** scope, then select a preset by name
+from the dropdown. Project scope offers **Inherit**. When a remembered project
+has no active OpenCode instance, a live TypeScript CompanionManager relays its
+request to the registered directory; Rust never writes OMO config or JSONC.
+Its last observed preset catalog may be stale, and the interface indicates
+this. Nonexistent/unregistered folders and invalid configurations reject writes
+and return feedback. A remembered project can be edited only while at least one
+OpenCode instance is available to relay its request.
 
 Project scope is the safe default for desktop use with multiple projects open.
 It always writes the current project's `.opencode` layer, creating the
@@ -143,9 +164,12 @@ the last dragged position per project and restores it the next time that project
 opens. If no custom position is saved for a project, the configured
 `companion.position` corner is used.
 
-Saved positions are clamped to the current screen so the companion stays visible
-after monitor or resolution changes. Position persistence runs off the native UI
-thread; a busy shared-state lock therefore cannot freeze animation or dragging.
+On Windows, saved positions are checked against the actual connected monitor
+rectangles, including negative virtual-desktop origins, before restoring the
+native window. Disconnected/off-screen coordinates fall back to a visible
+anchor without overwriting the stored preference. Other platforms keep the
+existing position-restoration behavior. Position persistence runs off the native
+UI thread; a busy shared-state lock therefore cannot freeze animation or dragging.
 The in-memory position remains authoritative while a delayed write is retried.
 
 ---

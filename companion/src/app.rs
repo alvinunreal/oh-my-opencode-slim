@@ -12,8 +12,8 @@ use crate::niri;
 use crate::screen::primary_size;
 use crate::state::{
     read_state, start_watcher, write_preset_request, write_project_window_position,
-    CompanionAgentDetail, CompanionConfigState, CompanionPresetRequest, CompanionPresetState,
-    SessionInfo, WindowPositionState,
+    CompanionAgentDetail, CompanionConfigState, CompanionKnownProject, CompanionPresetRequest,
+    CompanionPresetState, SessionInfo, WindowPositionState,
 };
 
 const DEFAULT_SIZE: f32 = 120.0;
@@ -21,15 +21,16 @@ const GAP: f32 = 10.0;
 
 const SIZE_PRESETS: &[(&str, f32)] = &[("S", 80.0), ("M", 120.0), ("L", 160.0), ("XL", 200.0)];
 
-const MENU_W: f32 = 96.0;
-const MENU_H: f32 = 98.0;
-const MENU_PAD: f32 = 2.0;
+const POPUP_W: f32 = 382.0;
+const POPUP_H: f32 = 460.0;
 const SURFACE_INSET: f32 = 1.0;
 
 const SIZE_KEY: &str = "companion_size";
 const MENU_OPEN_KEY: &str = "companion_menu_open";
 const MENU_POS_KEY: &str = "companion_menu_pos";
-const MENU_JUST_OPENED_KEY: &str = "companion_menu_just_opened";
+const MENU_PROJECT_QUERY_KEY: &str = "companion_menu_project_query";
+const MENU_SHOW_KNOWN_KEY: &str = "companion_menu_show_known";
+const MENU_POPUP_FOCUSED_KEY: &str = "companion_menu_popup_focused";
 const PRESET_SCOPE_GLOBAL_KEY: &str = "companion_preset_scope_global";
 const PROJECT_OPEN_PENDING_KEY: &str = "companion_project_open_pending";
 const PROJECT_OPEN_ERROR_KEY: &str = "companion_project_open_error";
@@ -235,6 +236,64 @@ fn restore_window_position(pos: [f32; 2], screen: [f32; 2], win: [f32; 2]) -> [f
     }
 }
 
+fn visible_on_monitor(
+    position: [f32; 2],
+    size: [f32; 2],
+    native_pixels_per_point: f32,
+    monitors: &[[f32; 4]],
+) -> bool {
+    if !position
+        .iter()
+        .chain(size.iter())
+        .all(|value| value.is_finite())
+        || !native_pixels_per_point.is_finite()
+        || native_pixels_per_point <= 0.0
+        || size[0] <= 0.0
+        || size[1] <= 0.0
+    {
+        return false;
+    }
+
+    // egui viewport geometry is in logical points; Win32 EnumDisplayMonitors
+    // returns physical virtual-desktop coordinates, including negative origins.
+    let x = position[0] * native_pixels_per_point;
+    let y = position[1] * native_pixels_per_point;
+    let width = size[0] * native_pixels_per_point;
+    let height = size[1] * native_pixels_per_point;
+    let min_visible_w = width.min(48.0 * native_pixels_per_point);
+    let min_visible_h = height.min(48.0 * native_pixels_per_point);
+
+    monitors.iter().any(|rect| {
+        let overlap_w = (x + width).min(rect[2]) - x.max(rect[0]);
+        let overlap_h = (y + height).min(rect[3]) - y.max(rect[1]);
+        overlap_w >= min_visible_w && overlap_h >= min_visible_h
+    })
+}
+
+fn validated_saved_window_position(
+    position: [f32; 2],
+    screen: [f32; 2],
+    size: [f32; 2],
+    native_pixels_per_point: f32,
+) -> Option<[f32; 2]> {
+    if !position.iter().all(|value| value.is_finite()) {
+        return None;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let monitors = crate::screen::monitor_rects_physical()?;
+        let _ = screen;
+        visible_on_monitor(position, size, native_pixels_per_point, &monitors).then_some(position)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = native_pixels_per_point;
+        Some(restore_window_position(position, screen, size))
+    }
+}
+
 fn stack_window_position(
     position: [f32; 2],
     anchor: &str,
@@ -354,24 +413,6 @@ fn choose_session(sessions: &[SessionInfo]) -> Option<usize> {
         .or_else(|| sessions.last().map(|_| sessions.len() - 1))
 }
 
-fn compact_preset_label(value: &str) -> String {
-    let chars: Vec<char> = value.chars().collect();
-    if chars.len() <= 8 {
-        return value.to_string();
-    }
-    format!("{}…", chars[..7].iter().collect::<String>())
-}
-
-fn compact_scoped_label(prefix: &str, value: &str) -> String {
-    let chars: Vec<char> = value.chars().collect();
-    let value = if chars.len() <= 4 {
-        value.to_string()
-    } else {
-        format!("{}…", chars[..3].iter().collect::<String>())
-    };
-    format!("{prefix}:{value}")
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PresetScope {
     Project,
@@ -385,13 +426,6 @@ impl PresetScope {
             Self::Global => "global",
         }
     }
-
-    fn toggled(self) -> Self {
-        match self {
-            Self::Project => Self::Global,
-            Self::Global => Self::Project,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -403,7 +437,8 @@ struct PresetMenuAction {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum CompanionMenuAction {
-    SelectProject(isize),
+    SelectProject(String),
+    SelectKnownProject(String),
     SelectPreset(PresetMenuAction),
 }
 
@@ -428,99 +463,6 @@ fn project_current(state: &CompanionPresetState) -> Option<&str> {
         state.project.as_deref()
     } else {
         state.current.as_deref()
-    }
-}
-
-fn adjacent_preset(
-    state: &CompanionPresetState,
-    scope: PresetScope,
-    direction: isize,
-) -> Option<PresetMenuAction> {
-    match scope {
-        PresetScope::Project => {
-            let available = project_catalog(state);
-            let len = available.len() + 1; // slot 0 is "inherit global"
-            if len <= 1 && project_current(state).is_none() {
-                return None;
-            }
-            let current_index = project_current(state)
-                .and_then(|current| {
-                    available
-                        .iter()
-                        .position(|name| name == current)
-                        .map(|index| index + 1)
-                })
-                .unwrap_or(0);
-            let next = (current_index as isize + direction).rem_euclid(len as isize) as usize;
-            if next == 0 {
-                Some(PresetMenuAction {
-                    scope,
-                    preset: None,
-                    inherit: true,
-                })
-            } else {
-                Some(PresetMenuAction {
-                    scope,
-                    preset: available.get(next - 1).cloned(),
-                    inherit: false,
-                })
-            }
-        }
-        PresetScope::Global => {
-            let available = &state.global_available;
-            if available.is_empty() {
-                return None;
-            }
-            let Some(current) = state.global.as_deref() else {
-                return Some(PresetMenuAction {
-                    scope,
-                    preset: available.first().cloned(),
-                    inherit: false,
-                });
-            };
-            let index = available
-                .iter()
-                .position(|name| name == current)
-                .unwrap_or(0);
-            let next = (index as isize + direction).rem_euclid(available.len() as isize) as usize;
-            Some(PresetMenuAction {
-                scope,
-                preset: available.get(next).cloned(),
-                inherit: false,
-            })
-        }
-    }
-}
-
-fn scope_label(state: &CompanionPresetState, scope: PresetScope) -> String {
-    match scope {
-        PresetScope::Project => project_current(state)
-            .map(|current| compact_scoped_label("Prj", current))
-            .unwrap_or_else(|| "Prj:Inherit".to_string()),
-        PresetScope::Global => state
-            .global
-            .as_deref()
-            .map(|current| compact_scoped_label("Gbl", current))
-            .unwrap_or_else(|| "Gbl:None".to_string()),
-    }
-}
-
-fn scope_hover(state: &CompanionPresetState, scope: PresetScope) -> String {
-    match scope {
-        PresetScope::Project => match state.project.as_deref() {
-            Some(project) => format!(
-                "Project preset: {project}\nEffective: {}\nClick to edit Global instead. Project cycling includes Inherit.",
-                state.effective.as_deref().unwrap_or("none")
-            ),
-            None => format!(
-                "Project preset: Inherit Global\nEffective: {}\nClick to edit Global instead. Choosing a preset creates a project override.",
-                state.effective.as_deref().unwrap_or("none")
-            ),
-        },
-        PresetScope::Global => format!(
-            "Global preset: {}\nAffects projects that inherit the global setting. Projects with local overrides keep them.\nClick to edit this Project instead.",
-            state.global.as_deref().unwrap_or("none")
-        ),
     }
 }
 
@@ -563,6 +505,33 @@ fn selected_session_index(
         .or_else(|| choose_session(sessions))
 }
 
+fn preset_target_session_index(
+    sessions: &[SessionInfo],
+    preset_target_id: Option<&str>,
+    displayed_idx: usize,
+) -> Option<usize> {
+    // An explicitly selected editor session that has disappeared must stay
+    // unavailable. Never silently target the displayed (different) project.
+    match preset_target_id {
+        Some(session_id) => sessions
+            .iter()
+            .position(|entry| entry.session_id == session_id),
+        None => Some(displayed_idx),
+    }
+}
+
+fn session_activity_rank(session: &SessionInfo) -> u8 {
+    if session.status == "waiting-input" {
+        3
+    } else if session.active_agents.iter().any(|agent| agent != "intro") {
+        2
+    } else if session.status == "busy" {
+        1
+    } else {
+        0
+    }
+}
+
 fn project_session_indices(sessions: &[SessionInfo]) -> Vec<usize> {
     let mut indices: Vec<usize> = Vec::new();
     for (index, session) in sessions.iter().enumerate() {
@@ -570,29 +539,16 @@ fn project_session_indices(sessions: &[SessionInfo]) -> Vec<usize> {
             .iter_mut()
             .find(|existing| sessions[**existing].cwd == session.cwd)
         {
-            *existing = index;
+            // Prefer an active/waiting session over the last idle publisher.
+            // For equal priority keep the newest session for current state.
+            if session_activity_rank(session) >= session_activity_rank(&sessions[*existing]) {
+                *existing = index;
+            }
         } else {
             indices.push(index);
         }
     }
     indices
-}
-
-fn adjacent_project_session_index(
-    sessions: &[SessionInfo],
-    current_session_id: &str,
-    direction: isize,
-) -> Option<usize> {
-    let projects = project_session_indices(sessions);
-    if projects.len() <= 1 {
-        return None;
-    }
-    let current = projects
-        .iter()
-        .position(|index| sessions[*index].session_id == current_session_id)
-        .unwrap_or(0);
-    let next = (current as isize + direction).rem_euclid(projects.len() as isize) as usize;
-    projects.get(next).copied()
 }
 
 fn project_display_name(cwd: &str) -> String {
@@ -608,6 +564,7 @@ pub struct CompanionApp {
     state_path: std::path::PathBuf,
     owner_session_id: Option<String>,
     sessions: Vec<SessionInfo>,
+    known_projects: Vec<CompanionKnownProject>,
     gifs: Gifs,
     rx: Receiver<()>,
     registered: bool,
@@ -625,6 +582,9 @@ pub struct CompanionApp {
     project_keys: std::collections::BTreeMap<String, String>,
     drag_project_key: Option<String>,
     menu_target_session_id: Option<String>,
+    preset_target_session_id: Option<String>,
+    preset_target_cwd: Option<String>,
+    menu_known_target_cwd: Option<String>,
     last_attention_key: Option<(String, u64)>,
     preset_request_seq: u64,
     position_write_generation: Arc<AtomicU64>,
@@ -646,6 +606,7 @@ impl CompanionApp {
             state.sessions.len()
         ));
         let sessions = state.sessions;
+        let known_projects = state.known_projects;
         let window_positions = state.window_positions;
 
         let mut initial_size = DEFAULT_SIZE;
@@ -674,6 +635,7 @@ impl CompanionApp {
             state_path,
             owner_session_id,
             sessions,
+            known_projects,
             gifs: Gifs::new(),
             rx,
             registered: false,
@@ -691,6 +653,9 @@ impl CompanionApp {
             project_keys: std::collections::BTreeMap::new(),
             drag_project_key: None,
             menu_target_session_id: None,
+            preset_target_session_id: None,
+            preset_target_cwd: None,
+            menu_known_target_cwd: None,
             last_attention_key: None,
             preset_request_seq: 0,
             position_write_generation: Arc::new(AtomicU64::new(0)),
@@ -713,6 +678,7 @@ impl CompanionApp {
                 self.pending_preset_request = None;
             }
             self.sessions = state.sessions;
+            self.known_projects = state.known_projects;
             let owned_config = config_for_owner(
                 &self.sessions,
                 self.owner_session_id.as_deref(),
@@ -818,6 +784,9 @@ impl eframe::App for CompanionApp {
         });
         if !menu_open {
             self.menu_target_session_id = None;
+            self.preset_target_session_id = None;
+            self.preset_target_cwd = None;
+            self.menu_known_target_cwd = None;
         }
         let pinned_session = if menu_open {
             self.menu_target_session_id.as_deref()
@@ -838,6 +807,40 @@ impl eframe::App for CompanionApp {
         };
 
         let session = self.sessions[selected_idx].clone();
+        // A menu's editing target must never replace the displayed animation
+        // session. Keeping the display pinned also prevents background activity
+        // from stealing the visible session while the user edits presets.
+        let preset_target_idx = preset_target_session_index(
+            &self.sessions,
+            self.preset_target_session_id.as_deref(),
+            selected_idx,
+        );
+        let mut preset_target = self.sessions[preset_target_idx.unwrap_or(selected_idx)].clone();
+        if preset_target_idx.is_none() {
+            // Preserve the selected project identity for diagnostics and
+            // actions, but disable preset writes until it is selected again.
+            preset_target.session_id = self.preset_target_session_id.clone().unwrap_or_default();
+            preset_target.cwd = self.preset_target_cwd.clone().unwrap_or_default();
+            preset_target.preset = None;
+            preset_target.status = "unavailable".to_string();
+        }
+        if let Some(cwd) = self.menu_known_target_cwd.as_deref() {
+            if let Some(known) = self.known_projects.iter().find(|known| known.cwd == cwd) {
+                // A remembered project has no running manager; route its action
+                // via the currently displayed live manager without displaying it.
+                preset_target.session_id = session.session_id.clone();
+                preset_target.cwd = known.cwd.clone();
+                preset_target.preset = known.preset.clone();
+                preset_target.status = "offline".to_string();
+            } else {
+                // A remembered target can be evicted while the popup is open.
+                // Preserve its name and block editing; never silently fall
+                // back to the old live target or the displayed session.
+                preset_target.cwd = cwd.to_string();
+                preset_target.preset = None;
+                preset_target.status = "unavailable".to_string();
+            }
+        }
         if let Some(next_attention_key) = attention_key(&session) {
             if self.last_attention_key.as_ref() != Some(&next_attention_key) {
                 if let Some(attention) = attention_type_for_status(&session.status) {
@@ -869,6 +872,9 @@ impl eframe::App for CompanionApp {
         }
         let project_key = self.project_key_for(&session.cwd);
         let saved_position = self.window_positions.get(&project_key).copied();
+        let pixels_per_point = ctx
+            .input(|input| input.viewport().native_pixels_per_point)
+            .unwrap_or(1.0);
         let time_seconds = ctx.input(|input| input.time);
         let agent_frames: Vec<(usize, AnimationFrame)> = if session.active_agents.is_empty() {
             self.gifs
@@ -927,17 +933,28 @@ impl eframe::App for CompanionApp {
             &geometry,
         ) {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(win_w, win_h)));
-            let pos = saved_position
-                .map(|pos| restore_window_position([pos.x, pos.y], self.screen, [win_w, win_h]))
-                .unwrap_or_else(|| {
-                    stack_window_position(
-                        place_window(&self.position, self.screen, [win_w, win_h]),
-                        &self.position,
-                        selected_idx,
-                        self.screen,
-                        [win_w, win_h],
-                    )
-                });
+            let validated_position = saved_position.and_then(|pos| {
+                validated_saved_window_position(
+                    [pos.x, pos.y],
+                    self.screen,
+                    [win_w, win_h],
+                    pixels_per_point,
+                )
+            });
+            if saved_position.is_some() && validated_position.is_none() {
+                crate::log::debug(format!(
+                    "invalid/off-screen saved geometry for project={project_key:?}; using visible anchor"
+                ));
+            }
+            let pos = validated_position.unwrap_or_else(|| {
+                stack_window_position(
+                    place_window(&self.position, self.screen, [win_w, win_h]),
+                    &self.position,
+                    selected_idx,
+                    self.screen,
+                    [win_w, win_h],
+                )
+            });
             crate::log::debug(format!(
                 "geometry owner={:?} session_id={} saved_position={:?} pos={:?} win=({}, {}) screen={:?} selected_idx={}",
                 self.owner_session_id,
@@ -986,10 +1003,13 @@ impl eframe::App for CompanionApp {
         if ctx.input(|i| i.pointer.secondary_released()) {
             let cursor = ctx.input(|i| i.pointer.interact_pos()).unwrap_or_default();
             self.menu_target_session_id = Some(session.session_id.clone());
+            self.preset_target_session_id = Some(session.session_id.clone());
+            self.preset_target_cwd = Some(session.cwd.clone());
+            self.menu_known_target_cwd = None;
             ctx.data_mut(|d| {
                 d.insert_temp(egui::Id::new(MENU_POS_KEY), [cursor.x, cursor.y]);
                 d.insert_temp(egui::Id::new(MENU_OPEN_KEY), true);
-                d.insert_temp(egui::Id::new(MENU_JUST_OPENED_KEY), true);
+                d.insert_temp(egui::Id::new(MENU_POPUP_FOCUSED_KEY), false);
             });
         }
 
@@ -1006,29 +1026,39 @@ impl eframe::App for CompanionApp {
 
         if let Some(action) = render_companion_menu(
             ctx,
-            win_w,
-            win_h,
             &self.sessions,
-            &session,
+            &self.known_projects,
+            &preset_target,
             self.pending_preset_request.is_some(),
         ) {
             match action {
-                CompanionMenuAction::SelectProject(direction) => {
-                    if let Some(next_index) = adjacent_project_session_index(
-                        &self.sessions,
-                        &session.session_id,
-                        direction,
-                    ) {
-                        self.menu_target_session_id =
-                            Some(self.sessions[next_index].session_id.clone());
+                CompanionMenuAction::SelectProject(session_id) => {
+                    if self.sessions.iter().any(|s| s.session_id == session_id) {
+                        self.preset_target_cwd = self
+                            .sessions
+                            .iter()
+                            .find(|entry| entry.session_id == session_id)
+                            .map(|entry| entry.cwd.clone());
+                        self.preset_target_session_id = Some(session_id);
+                        self.menu_known_target_cwd = None;
+                    }
+                }
+                CompanionMenuAction::SelectKnownProject(cwd) => {
+                    if self.known_projects.iter().any(|known| known.cwd == cwd) {
+                        self.menu_known_target_cwd = Some(cwd);
                     }
                 }
                 CompanionMenuAction::SelectPreset(action) => {
+                    if preset_target.status == "unavailable" {
+                        crate::log::debug("preset request ignored: selected project exited");
+                        return;
+                    }
                     self.preset_request_seq = self.preset_request_seq.wrapping_add(1);
                     let request_id = format!("{}-{}", std::process::id(), self.preset_request_seq);
                     let request = CompanionPresetRequest {
                         request_id: request_id.clone(),
-                        session_id: session.session_id.clone(),
+                        session_id: preset_target.session_id.clone(),
+                        target_cwd: self.menu_known_target_cwd.clone(),
                         scope: action.scope.as_str().to_string(),
                         preset: action.preset,
                         inherit: action.inherit,
@@ -1037,7 +1067,7 @@ impl eframe::App for CompanionApp {
                         Ok(()) => {
                             self.pending_preset_request = Some(PendingPresetRequest {
                                 request_id,
-                                session_id: session.session_id.clone(),
+                                session_id: preset_target.session_id.clone(),
                             });
                         }
                         Err(err) => {
@@ -1251,330 +1281,399 @@ fn start_project_directory_open(ctx: &egui::Context, session_id: &str, path: &st
     }
 }
 
+fn popup_position_for_monitors(
+    pointer: [f32; 2],
+    popup: [f32; 2],
+    points_to_pixels: f32,
+    monitors: &[[f32; 4]],
+) -> [f32; 2] {
+    if !pointer
+        .iter()
+        .chain(popup.iter())
+        .all(|coordinate| coordinate.is_finite())
+        || !points_to_pixels.is_finite()
+        || points_to_pixels <= 0.0
+    {
+        return pointer;
+    }
+
+    let p = [pointer[0] * points_to_pixels, pointer[1] * points_to_pixels];
+    let rect = monitors
+        .iter()
+        .find(|rect| p[0] >= rect[0] && p[0] < rect[2] && p[1] >= rect[1] && p[1] < rect[3]);
+    let Some(rect) = rect else {
+        return pointer;
+    };
+    let gap = 8.0;
+    let left = rect[0] / points_to_pixels + gap;
+    let top = rect[1] / points_to_pixels + gap;
+    let right = (rect[2] / points_to_pixels - popup[0] - gap).max(left);
+    let bottom = (rect[3] / points_to_pixels - popup[1] - gap).max(top);
+    [pointer[0].clamp(left, right), pointer[1].clamp(top, bottom)]
+}
+
 fn render_companion_menu(
     ctx: &egui::Context,
-    win_w: f32,
-    win_h: f32,
     sessions: &[SessionInfo],
+    known_projects: &[CompanionKnownProject],
     target: &SessionInfo,
     preset_pending: bool,
 ) -> Option<CompanionMenuAction> {
-    let open: bool = ctx.data(|d| d.get_temp(egui::Id::new(MENU_OPEN_KEY)).unwrap_or(false));
+    let open = ctx.data(|d| {
+        d.get_temp::<bool>(egui::Id::new(MENU_OPEN_KEY))
+            .unwrap_or(false)
+    });
     if !open {
         return None;
     }
 
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new(MENU_OPEN_KEY), false));
-        return None;
-    }
-
-    let scope = if ctx.data(|d| {
-        d.get_temp::<bool>(egui::Id::new(PRESET_SCOPE_GLOBAL_KEY))
-            .unwrap_or(false)
-    }) {
-        PresetScope::Global
-    } else {
-        PresetScope::Project
-    };
-
-    let pos: [f32; 2] = ctx.data(|d| {
+    let menu_pos: [f32; 2] = ctx.data(|d| {
         d.get_temp(egui::Id::new(MENU_POS_KEY))
             .unwrap_or([20.0, 20.0])
     });
-    let size: f32 = ctx.data(|d| d.get_temp(egui::Id::new(SIZE_KEY)).unwrap_or(DEFAULT_SIZE));
-    let pending_id = project_open_pending_id(&target.session_id);
-    let error_id = project_open_error_id(&target.session_id);
-    let project_open_pending = ctx.data(|d| d.get_temp::<bool>(pending_id).unwrap_or(false));
-    let project_open_error = ctx
-        .data(|d| d.get_temp::<String>(error_id).unwrap_or_default())
-        .trim()
-        .to_string();
-    let x = pos[0].clamp(MENU_PAD, (win_w - MENU_W - MENU_PAD).max(MENU_PAD));
-    let y = pos[1].clamp(MENU_PAD, (win_h - MENU_H - MENU_PAD).max(MENU_PAD));
+    let origin = ctx
+        .input(|input| input.viewport().outer_rect)
+        .map(|rect| rect.min)
+        .unwrap_or(egui::Pos2::ZERO);
+    let desired = [origin.x + menu_pos[0], origin.y + menu_pos[1]];
+    #[cfg(target_os = "windows")]
+    let popup = {
+        let scale = ctx.input(|input| input.viewport().native_pixels_per_point.unwrap_or(1.0));
+        let monitors = crate::screen::monitor_rects_physical().unwrap_or_default();
+        popup_position_for_monitors(desired, [POPUP_W, POPUP_H], scale, &monitors)
+    };
+    #[cfg(not(target_os = "windows"))]
+    let popup = desired;
+    let popup_position = egui::pos2(popup[0], popup[1]);
     let mut selected: Option<CompanionMenuAction> = None;
-    let multiple_projects = project_session_indices(sessions).len() > 1;
-    let project_label = compact_preset_label(&project_display_name(&target.cwd));
 
-    let response =
-        egui::Area::new(egui::Id::new("companion_menu"))
-            .fixed_pos(egui::pos2(x, y))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                egui::Frame::none()
-                    .fill(egui::Color32::from_rgb(20, 20, 22))
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(35)))
-                    .inner_margin(egui::Margin::symmetric(4.0, 4.0))
-                    .show(ui, |ui| {
-                        ui.set_min_width(MENU_W - MENU_PAD * 2.0);
-                        ui.spacing_mut().item_spacing = egui::vec2(1.0, 2.0);
-
-                        ui.horizontal(|ui| {
-                            if ui
-                                .add_enabled(
-                                    multiple_projects,
-                                    egui::Button::new("‹").min_size(egui::vec2(16.0, 18.0)),
-                                )
-                                .on_hover_text("Previous project")
-                                .clicked()
-                            {
-                                selected = Some(CompanionMenuAction::SelectProject(-1));
-                            }
-
-                            ui.add_sized(
-                                [54.0, 18.0],
-                                egui::Button::new(
-                                    egui::RichText::new(&project_label).size(9.0).strong(),
-                                )
-                                .fill(egui::Color32::from_rgb(30, 30, 32))
-                                .stroke(egui::Stroke::NONE),
-                            )
-                            .on_hover_text(format!("Preset target project:\n{}", target.cwd));
-
-                            if ui
-                                .add_enabled(
-                                    multiple_projects,
-                                    egui::Button::new("›").min_size(egui::vec2(16.0, 18.0)),
-                                )
-                                .on_hover_text("Next project")
-                                .clicked()
-                            {
-                                selected = Some(CompanionMenuAction::SelectProject(1));
-                            }
-                        });
-
-                        if let Some(preset_state) = target.preset.as_ref() {
-                            let previous = adjacent_preset(preset_state, scope, -1);
-                            let next = adjacent_preset(preset_state, scope, 1);
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .add_enabled(
-                                        !preset_pending && previous.is_some(),
-                                        egui::Button::new("‹").min_size(egui::vec2(16.0, 18.0)),
-                                    )
-                                    .on_hover_text("Previous preset")
-                                    .clicked()
-                                {
-                                    selected = previous.map(CompanionMenuAction::SelectPreset);
-                                }
-
-                                let feedback_matches_scope =
-                                    preset_state.last_scope.as_deref() == Some(scope.as_str());
-                                let hover = match preset_state.message.as_deref() {
-                                    Some(message) if feedback_matches_scope => {
-                                        format!("{}\n{message}", scope_hover(preset_state, scope))
-                                    }
-                                    _ if preset_pending => {
-                                        format!(
-                                            "{}\nApplying preset…",
-                                            scope_hover(preset_state, scope)
-                                        )
-                                    }
-                                    _ => scope_hover(preset_state, scope),
-                                };
-                                let color = if preset_pending {
-                                    egui::Color32::from_rgb(200, 200, 204)
-                                } else if feedback_matches_scope {
-                                    match preset_state.result_ok {
-                                        Some(true) => egui::Color32::from_rgb(120, 220, 150),
-                                        Some(false) => egui::Color32::from_rgb(240, 110, 110),
-                                        None => egui::Color32::WHITE,
-                                    }
-                                } else {
-                                    egui::Color32::WHITE
-                                };
-                                let mut label = scope_label(preset_state, scope);
-                                if !preset_pending
-                                    && feedback_matches_scope
-                                    && preset_state.result_ok == Some(false)
-                                {
-                                    label = format!("!{label}");
-                                }
-                                if ui
-                                    .add_enabled(
-                                        !preset_pending,
-                                        egui::Button::new(
-                                            egui::RichText::new(if preset_pending {
-                                                "Applying…".to_string()
-                                            } else {
-                                                label
-                                            })
-                                            .size(8.5)
-                                            .strong()
-                                            .color(color),
-                                        )
-                                        .min_size(egui::vec2(54.0, 18.0))
-                                        .fill(egui::Color32::from_rgb(30, 30, 32))
-                                        .stroke(egui::Stroke::NONE),
-                                    )
-                                    .on_hover_text(format!(
-                                        "{hover}\nClick to switch Project / Global scope."
-                                    ))
-                                    .clicked()
-                                {
-                                    let next_scope = scope.toggled();
-                                    ctx.data_mut(|d| {
-                                        d.insert_temp(
-                                            egui::Id::new(PRESET_SCOPE_GLOBAL_KEY),
-                                            next_scope == PresetScope::Global,
-                                        );
-                                    });
-                                }
-
-                                if ui
-                                    .add_enabled(
-                                        !preset_pending && next.is_some(),
-                                        egui::Button::new("›").min_size(egui::vec2(16.0, 18.0)),
-                                    )
-                                    .on_hover_text("Next preset")
-                                    .clicked()
-                                {
-                                    selected = next.map(CompanionMenuAction::SelectPreset);
-                                }
-                            });
-                        } else {
-                            ui.add_sized(
-                                [88.0, 18.0],
-                                egui::Button::new(
-                                    egui::RichText::new("Preset unavailable")
-                                        .size(8.5)
-                                        .color(egui::Color32::from_rgb(165, 165, 170)),
-                                )
-                                .fill(egui::Color32::from_rgb(30, 30, 32))
-                                .stroke(egui::Stroke::NONE),
-                            )
-                            .on_hover_text("This project has not published preset state yet.");
-                        }
-
-                        ui.horizontal(|ui| {
-                            for (label, preset) in SIZE_PRESETS {
-                                let active = (size - preset).abs() < 0.5;
-                                let fill = if active {
-                                    egui::Color32::from_rgb(58, 72, 102)
-                                } else {
-                                    egui::Color32::from_rgb(30, 30, 32)
-                                };
-                                let text = egui::RichText::new(*label).size(11.0).strong().color(
-                                    if active {
-                                        egui::Color32::WHITE
-                                    } else {
-                                        egui::Color32::from_rgb(200, 200, 204)
-                                    },
-                                );
-                                if ui
-                                    .add_sized(
-                                        [20.0, 18.0],
-                                        egui::Button::new(text)
-                                            .fill(fill)
-                                            .stroke(egui::Stroke::NONE),
-                                    )
-                                    .on_hover_text(format!("Companion size {label}"))
-                                    .clicked()
-                                {
-                                    ctx.data_mut(|d| {
-                                        d.insert_temp(egui::Id::new(SIZE_KEY), *preset);
-                                        d.insert_temp(egui::Id::new(MENU_OPEN_KEY), false);
-                                    });
-                                }
-                            }
-                        });
-
-                        ui.horizontal(|ui| {
-                            let open_label = if project_open_pending {
-                                "..."
-                            } else if project_open_error.is_empty() {
-                                "Open"
-                            } else {
-                                "!Open"
-                            };
-                            let open_color = if project_open_error.is_empty() {
-                                egui::Color32::WHITE
-                            } else {
-                                egui::Color32::from_rgb(240, 110, 110)
-                            };
-                            let open_hover = if project_open_pending {
-                                "Opening the selected project folder…".to_string()
-                            } else if project_open_error.is_empty() {
-                                "Open the selected project folder".to_string()
-                            } else {
-                                format!("Open the selected project folder\n{project_open_error}")
-                            };
-                            if ui
-                                .add_enabled(
-                                    !project_open_pending,
-                                    egui::Button::new(
-                                        egui::RichText::new(open_label).size(9.0).color(open_color),
-                                    )
-                                    .min_size(egui::vec2(30.0, 17.0))
-                                    .fill(egui::Color32::from_rgb(30, 30, 32))
-                                    .stroke(egui::Stroke::NONE),
-                                )
-                                .on_hover_text(open_hover)
-                                .clicked()
-                            {
-                                start_project_directory_open(ctx, &target.session_id, &target.cwd);
-                            }
-
-                            if ui
-                                .add_sized(
-                                    [30.0, 17.0],
-                                    egui::Button::new(egui::RichText::new("Copy").size(9.0))
-                                        .fill(egui::Color32::from_rgb(30, 30, 32))
-                                        .stroke(egui::Stroke::NONE),
-                                )
-                                .on_hover_text("Copy the selected project path")
-                                .clicked()
-                            {
-                                ctx.copy_text(target.cwd.clone());
-                                ctx.data_mut(|d| {
-                                    d.insert_temp(egui::Id::new(MENU_OPEN_KEY), false);
-                                });
-                            }
-
-                            if ui
-                                .add_sized(
-                                    [20.0, 17.0],
-                                    egui::Button::new(
-                                        egui::RichText::new("×")
-                                            .size(12.0)
-                                            .color(egui::Color32::from_rgb(240, 110, 110)),
-                                    )
-                                    .fill(egui::Color32::from_rgb(38, 24, 26))
-                                    .stroke(egui::Stroke::NONE),
-                                )
-                                .on_hover_text("Close Companion")
-                                .clicked()
-                            {
-                                ctx.data_mut(|d| {
-                                    d.insert_temp(egui::Id::new(MENU_OPEN_KEY), false);
-                                    d.insert_temp(egui::Id::new("companion_quit"), true);
-                                });
-                            }
-                        });
-                    });
+    // Native eframe viewport: no clipping to the GIF-sized root viewport,
+    // no WindowGeometryKey updates, and readable independent menu controls.
+    ctx.show_viewport_immediate(
+        egui::ViewportId::from_hash_of("companion-controls"),
+        egui::ViewportBuilder::default()
+            .with_title("Companion controls")
+            .with_inner_size([POPUP_W, POPUP_H])
+            .with_min_inner_size([POPUP_W, POPUP_H])
+            .with_position(popup_position)
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_always_on_top()
+            .with_active(true),
+        |popup_ctx, _class| {
+            let was_focused = ctx.data(|data| {
+                data.get_temp::<bool>(egui::Id::new(MENU_POPUP_FOCUSED_KEY))
+                    .unwrap_or(false)
             });
+            let focused = popup_ctx.input(|input| input.viewport().focused);
+            if focused == Some(true) {
+                ctx.data_mut(|data| {
+                    data.insert_temp(egui::Id::new(MENU_POPUP_FOCUSED_KEY), true);
+                });
+            }
+            let should_close = popup_ctx.input(|input| {
+                input.key_pressed(egui::Key::Escape)
+                    || input.viewport().close_requested()
+                    || (was_focused && focused == Some(false))
+            });
+            if should_close {
+                ctx.data_mut(|d| d.insert_temp(egui::Id::new(MENU_OPEN_KEY), false));
+                return;
+            }
 
-    let just_opened = ctx.data_mut(|d| {
-        let id = egui::Id::new(MENU_JUST_OPENED_KEY);
-        let just_opened = d.get_temp::<bool>(id).unwrap_or(false);
-        d.insert_temp(id, false);
-        just_opened
-    });
-    if !just_opened && clicked_outside_menu(ctx, response.response.rect) {
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new(MENU_OPEN_KEY), false));
-    }
+            egui::CentralPanel::default()
+                .frame(
+                    egui::Frame::none()
+                        .fill(egui::Color32::from_rgb(25, 25, 29))
+                        .inner_margin(egui::Margin::same(12.0)),
+                )
+                .show(popup_ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.heading(egui::RichText::new("Companion").size(18.0));
+                        if ui.button("Close ✕").clicked() {
+                            ctx.data_mut(|d| {
+                                d.insert_temp(egui::Id::new(MENU_OPEN_KEY), false);
+                            });
+                        }
+                    });
+                    ui.separator();
 
+                    ui.label(egui::RichText::new("Preset target").strong());
+                    let mut view = ctx
+                        .data(|d| d.get_temp::<u8>(egui::Id::new(MENU_SHOW_KNOWN_KEY)))
+                        .unwrap_or(0);
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut view, 0, "Active");
+                        ui.selectable_value(&mut view, 1, "All open");
+                        ui.selectable_value(&mut view, 2, "Known");
+                    });
+                    ctx.data_mut(|d| {
+                        d.insert_temp(egui::Id::new(MENU_SHOW_KNOWN_KEY), view);
+                    });
+
+                    let mut query: String = ctx
+                        .data(|d| d.get_temp(egui::Id::new(MENU_PROJECT_QUERY_KEY)))
+                        .unwrap_or_default();
+                    ui.add(
+                        egui::TextEdit::singleline(&mut query)
+                            .hint_text("Search projects or paths"),
+                    );
+                    ctx.data_mut(|d| {
+                        d.insert_temp(egui::Id::new(MENU_PROJECT_QUERY_KEY), query.clone());
+                    });
+
+                    let mut matches = 0;
+                    egui::ScrollArea::vertical()
+                        .id_source("companion-project-list")
+                        .max_height(126.0)
+                        .show(ui, |ui| {
+                            if view == 2 {
+                                for known in known_projects.iter().rev() {
+                                    let name = project_display_name(&known.cwd);
+                                    if !query.trim().is_empty()
+                                        && !name.to_lowercase().contains(&query.to_lowercase())
+                                        && !known.cwd.to_lowercase().contains(&query.to_lowercase())
+                                    {
+                                        continue;
+                                    }
+                                    matches += 1;
+                                    let live = project_session_indices(sessions)
+                                        .into_iter()
+                                        .map(|index| &sessions[index])
+                                        .find(|session| session.cwd == known.cwd);
+                                    let label = if live.is_some() { "Open" } else { "Remembered" };
+                                    if ui
+                                        .selectable_label(
+                                            target.cwd == known.cwd,
+                                            format!("{name}  ·  {label}"),
+                                        )
+                                        .on_hover_text(&known.cwd)
+                                        .clicked()
+                                    {
+                                        selected = Some(match live {
+                                            Some(live) => CompanionMenuAction::SelectProject(
+                                                live.session_id.clone(),
+                                            ),
+                                            None => CompanionMenuAction::SelectKnownProject(
+                                                known.cwd.clone(),
+                                            ),
+                                        });
+                                    }
+                                    ui.label(
+                                        egui::RichText::new(&known.cwd)
+                                            .size(11.0)
+                                            .color(egui::Color32::GRAY),
+                                    );
+                                }
+                            }
+                            for index in project_session_indices(sessions) {
+                                if view == 2 {
+                                    continue;
+                                }
+                                let project = &sessions[index];
+                                let active = session_activity_rank(project) > 0;
+                                if view == 0 && !active {
+                                    continue;
+                                }
+                                let name = project_display_name(&project.cwd);
+                                if !query.trim().is_empty()
+                                    && !name.to_lowercase().contains(&query.to_lowercase())
+                                    && !project.cwd.to_lowercase().contains(&query.to_lowercase())
+                                {
+                                    continue;
+                                }
+                                matches += 1;
+                                let status = if project.status == "waiting-input" {
+                                    "Needs input"
+                                } else if active {
+                                    "Working"
+                                } else {
+                                    "Idle"
+                                };
+                                if ui
+                                    .selectable_label(
+                                        project.session_id == target.session_id,
+                                        format!("{name}  ·  {status}"),
+                                    )
+                                    .on_hover_text(&project.cwd)
+                                    .clicked()
+                                {
+                                    selected = Some(CompanionMenuAction::SelectProject(
+                                        project.session_id.clone(),
+                                    ));
+                                }
+                                ui.label(
+                                    egui::RichText::new(&project.cwd)
+                                        .size(11.0)
+                                        .color(egui::Color32::GRAY),
+                                );
+                            }
+                        });
+                    if matches == 0 {
+                        ui.label(
+                            egui::RichText::new("No matching projects in this view.")
+                                .color(egui::Color32::GRAY),
+                        );
+                    }
+
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Editing: {}",
+                            project_display_name(&target.cwd)
+                        ))
+                        .strong(),
+                    );
+                    let mut scope = if ctx.data(|d| {
+                        d.get_temp::<bool>(egui::Id::new(PRESET_SCOPE_GLOBAL_KEY))
+                            .unwrap_or(false)
+                    }) {
+                        PresetScope::Global
+                    } else {
+                        PresetScope::Project
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label("Preset scope:");
+                        ui.selectable_value(&mut scope, PresetScope::Project, "Project");
+                        ui.selectable_value(&mut scope, PresetScope::Global, "Global");
+                    });
+                    ctx.data_mut(|d| {
+                        d.insert_temp(
+                            egui::Id::new(PRESET_SCOPE_GLOBAL_KEY),
+                            scope == PresetScope::Global,
+                        );
+                    });
+
+                    if target.status == "unavailable" {
+                        ui.colored_label(
+                            egui::Color32::LIGHT_RED,
+                            "Selected project closed. Choose an open project to edit presets.",
+                        );
+                    }
+                    if target.status == "offline" {
+                        ui.label(
+                            egui::RichText::new("Remembered project · preset catalog may be stale")
+                                .size(11.0)
+                                .color(egui::Color32::YELLOW),
+                        );
+                    }
+                    if let Some(preset_state) = &target.preset {
+                        let current = match scope {
+                            PresetScope::Project => {
+                                project_current(preset_state).unwrap_or("Inherit")
+                            }
+                            PresetScope::Global => preset_state.global.as_deref().unwrap_or("None"),
+                        };
+                        ui.add_enabled_ui(!preset_pending, |ui| {
+                            egui::ComboBox::from_id_source("companion-preset-combobox")
+                                .selected_text(current)
+                                .width(290.0)
+                                .show_ui(ui, |ui| {
+                                    if scope == PresetScope::Project
+                                        && ui
+                                            .selectable_label(
+                                                project_current(preset_state).is_none(),
+                                                "Inherit",
+                                            )
+                                            .clicked()
+                                    {
+                                        selected = Some(CompanionMenuAction::SelectPreset(
+                                            PresetMenuAction {
+                                                scope,
+                                                preset: None,
+                                                inherit: true,
+                                            },
+                                        ));
+                                    }
+                                    let choices = match scope {
+                                        PresetScope::Project => project_catalog(preset_state),
+                                        PresetScope::Global => &preset_state.global_available,
+                                    };
+                                    for name in choices {
+                                        let is_active = match scope {
+                                            PresetScope::Project => {
+                                                project_current(preset_state) == Some(name)
+                                            }
+                                            PresetScope::Global => {
+                                                preset_state.global.as_deref() == Some(name)
+                                            }
+                                        };
+                                        if ui.selectable_label(is_active, name).clicked() {
+                                            selected = Some(CompanionMenuAction::SelectPreset(
+                                                PresetMenuAction {
+                                                    scope,
+                                                    preset: Some(name.clone()),
+                                                    inherit: false,
+                                                },
+                                            ));
+                                        }
+                                    }
+                                });
+                        });
+                        if let Some(message) = preset_state.message.as_deref() {
+                            ui.label(egui::RichText::new(message).size(11.0));
+                        } else if preset_pending {
+                            ui.label("Applying preset…");
+                        }
+                    } else {
+                        ui.label("This project has not published preset state.");
+                    }
+
+                    ui.separator();
+                    let size = ctx.data(|d| {
+                        d.get_temp::<f32>(egui::Id::new(SIZE_KEY))
+                            .unwrap_or(DEFAULT_SIZE)
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Overlay size:");
+                        for (label, preset) in SIZE_PRESETS {
+                            if ui
+                                .selectable_label((size - preset).abs() < 0.5, *label)
+                                .clicked()
+                            {
+                                ctx.data_mut(|d| d.insert_temp(egui::Id::new(SIZE_KEY), *preset));
+                            }
+                        }
+                    });
+
+                    let opening = popup_ctx.data(|data| {
+                        data.get_temp::<bool>(project_open_pending_id(&target.cwd))
+                            .unwrap_or(false)
+                    });
+                    let open_error = popup_ctx.data(|data| {
+                        data.get_temp::<String>(project_open_error_id(&target.cwd))
+                            .unwrap_or_default()
+                    });
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                !opening,
+                                egui::Button::new(if opening {
+                                    "Opening…"
+                                } else {
+                                    "Open project folder"
+                                }),
+                            )
+                            .clicked()
+                        {
+                            start_project_directory_open(popup_ctx, &target.cwd, &target.cwd);
+                        }
+                        if ui.button("Copy path").clicked() {
+                            popup_ctx.copy_text(target.cwd.clone());
+                        }
+                        if ui.button("Quit").on_hover_text("Quit Companion").clicked() {
+                            ctx.data_mut(|data| {
+                                data.insert_temp(egui::Id::new("companion_quit"), true);
+                            });
+                        }
+                    });
+                    if !open_error.is_empty() {
+                        ui.colored_label(egui::Color32::LIGHT_RED, open_error);
+                    }
+                });
+        },
+    );
     selected
-}
-
-fn clicked_outside_menu(ctx: &egui::Context, menu_rect: egui::Rect) -> bool {
-    ctx.input(|i| {
-        (i.pointer.primary_released() || i.pointer.secondary_released())
-            && i.pointer
-                .interact_pos()
-                .map(|pos| !menu_rect.contains(pos))
-                .unwrap_or(false)
-    })
 }
 
 fn fit_text(ctx: &egui::Context, text: &str, font_id: &egui::FontId, max_width: f32) -> String {
@@ -1620,12 +1719,13 @@ fn is_pid_alive(_pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        adjacent_preset, adjacent_project_session_index, agent_detail_tooltip, apply_config,
-        attention_key, attention_stroke, attention_type_for_status, choose_session, config_key,
-        grid_dims, handle_drag_start, pending_preset_request_should_clear, place_window,
-        preset_request_completed, project_session_indices, restore_window_position,
-        selected_session_index, should_apply_geometry, size_from_config, window_size, ConfigKey,
-        PendingPresetRequest, PresetMenuAction, PresetScope, SessionInfo, WindowGeometryKey, GAP,
+        agent_detail_tooltip, apply_config, attention_key, attention_stroke,
+        attention_type_for_status, choose_session, config_key, grid_dims, handle_drag_start,
+        pending_preset_request_should_clear, place_window, popup_position_for_monitors,
+        preset_request_completed, preset_target_session_index, project_session_indices,
+        restore_window_position, selected_session_index, session_activity_rank,
+        should_apply_geometry, size_from_config, visible_on_monitor, window_size, ConfigKey,
+        PendingPresetRequest, PresetScope, SessionInfo, WindowGeometryKey, GAP,
     };
     use crate::state::{CompanionAgentDetail, CompanionConfigState, CompanionPresetState};
 
@@ -1754,7 +1854,121 @@ mod tests {
     }
 
     #[test]
-    fn project_selector_deduplicates_projects_and_cycles_independently_of_activity() {
+    fn popup_renders_without_repositioning_the_animation_viewport() {
+        let ctx = egui::Context::default();
+        let sessions = vec![
+            session("display", "busy", &["fixer"]),
+            session("edit", "idle", &["intro"]),
+        ];
+        ctx.data_mut(|data| {
+            data.insert_temp(egui::Id::new(super::MENU_OPEN_KEY), true);
+            data.insert_temp(egui::Id::new(super::MENU_POS_KEY), [20.0, 20.0]);
+        });
+        let mut input = egui::RawInput::default();
+        input.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::Vec2::new(1920.0, 1080.0),
+        ));
+        let output = ctx.run(input, |ctx| {
+            assert!(
+                super::render_companion_menu(ctx, &sessions, &[], &sessions[1], false).is_none()
+            );
+        });
+        let commands = &output.viewport_output[&egui::ViewportId::ROOT].commands;
+        assert!(!commands
+            .iter()
+            .any(|command| matches!(command, egui::ViewportCommand::OuterPosition(_))));
+    }
+
+    #[test]
+    fn native_popup_clamps_near_screen_edges_and_negative_monitor_origins() {
+        let screens = [[0.0, 0.0, 1920.0, 1080.0], [-1600.0, 0.0, 0.0, 900.0]];
+        let popup = [382.0, 460.0];
+        assert_eq!(
+            popup_position_for_monitors([1900.0, 1000.0], popup, 1.0, &screens),
+            [1530.0, 612.0]
+        );
+        assert_eq!(
+            popup_position_for_monitors([-1580.0, 100.0], popup, 1.0, &screens),
+            [-1580.0, 100.0]
+        );
+        assert_eq!(
+            popup_position_for_monitors([-50.0, 890.0], popup, 1.0, &screens),
+            [-390.0, 432.0]
+        );
+        assert_eq!(
+            popup_position_for_monitors([1850.0, 900.0], popup, 2.0, &screens),
+            [1850.0, 900.0]
+        );
+    }
+
+    #[test]
+    fn editing_project_does_not_change_displayed_session_or_geometry() {
+        let mut alpha = session("alpha", "idle", &["intro"]);
+        alpha.cwd = "/work/alpha".into();
+        let mut beta = session("beta", "waiting-input", &["input"]);
+        beta.cwd = "/work/beta".into();
+        let sessions = vec![alpha, beta];
+
+        let displayed_idx = selected_session_index(&sessions, Some("alpha")).unwrap();
+        let edit_idx = preset_target_session_index(&sessions, Some("beta"), displayed_idx);
+        assert_eq!(displayed_idx, 0);
+        assert_eq!(edit_idx, Some(1));
+        assert_eq!(sessions[displayed_idx].cwd, "/work/alpha");
+        assert_eq!(sessions[edit_idx.unwrap()].cwd, "/work/beta");
+        assert_eq!(selected_session_index(&sessions, Some("alpha")), Some(0));
+        assert_eq!(
+            preset_target_session_index(&sessions, Some("gone"), 0),
+            None
+        );
+        assert_eq!(preset_target_session_index(&sessions, None, 0), Some(0));
+
+        let original = WindowGeometryKey {
+            session_id: "alpha".into(),
+            project_key: "/work/alpha".into(),
+            position: "bottom-right".into(),
+            custom_x: Some(100),
+            custom_y: Some(100),
+            size_px: 120,
+            cols: 1,
+            rows: 1,
+            screen_w: 1920,
+            screen_h: 1080,
+        };
+        assert!(!should_apply_geometry(false, Some(&original), &original));
+    }
+
+    #[test]
+    fn saved_position_visible_only_if_recoverable_on_actual_monitor() {
+        let monitors = [[0.0, 0.0, 1920.0, 1080.0], [-1600.0, 0.0, 0.0, 900.0]];
+        let size = [120.0, 120.0];
+        assert!(visible_on_monitor([100.0, 100.0], size, 1.0, &monitors));
+        assert!(visible_on_monitor([-1500.0, 120.0], size, 1.0, &monitors));
+        assert!(visible_on_monitor([-750.0, 120.0], size, 2.0, &monitors));
+        assert!(!visible_on_monitor([3000.0, 120.0], size, 1.0, &monitors));
+        assert!(!visible_on_monitor([-1600.0, 901.0], size, 1.0, &monitors));
+        assert!(!visible_on_monitor([1890.0, 1060.0], size, 1.0, &monitors));
+        assert!(!visible_on_monitor([f32::NAN, 100.0], size, 1.0, &monitors));
+        assert!(!visible_on_monitor([100.0, 100.0], size, 0.0, &monitors));
+        assert!(!visible_on_monitor([100.0, 100.0], size, 1.0, &[]));
+    }
+
+    #[test]
+    fn vanished_editor_target_does_not_fall_back_to_displayed_project() {
+        let mut alpha = session("displayed", "busy", &["fixer"]);
+        alpha.cwd = "/projects/alpha".into();
+        let sessions = vec![alpha];
+        let displayed = selected_session_index(&sessions, Some("displayed")).unwrap();
+        let editing = preset_target_session_index(&sessions, Some("gone-beta"), displayed);
+        assert_eq!(
+            editing, None,
+            "the missing editor must never write to alpha"
+        );
+        assert_eq!(sessions[displayed].cwd, "/projects/alpha");
+    }
+
+    #[test]
+    fn project_picker_deduplicates_live_sessions_by_cwd() {
         let mut alpha_old = session("alpha-old", "busy", &["fixer"]);
         alpha_old.cwd = "/projects/alpha".into();
         let mut alpha_new = session("alpha-new", "idle", &["intro"]);
@@ -1763,15 +1977,22 @@ mod tests {
         beta.cwd = "/projects/beta".into();
         let sessions = vec![alpha_old, alpha_new, beta];
 
-        assert_eq!(project_session_indices(&sessions), vec![1, 2]);
-        assert_eq!(
-            adjacent_project_session_index(&sessions, "alpha-new", 1),
-            Some(2)
-        );
-        assert_eq!(
-            adjacent_project_session_index(&sessions, "beta", 1),
-            Some(1)
-        );
+        assert_eq!(project_session_indices(&sessions), vec![0, 2]);
+        assert!(session_activity_rank(&sessions[project_session_indices(&sessions)[0]]) > 0);
+    }
+
+    #[test]
+    fn picker_favors_waiting_input_over_busy_and_idle_for_same_project() {
+        let mut waiting = session("waiting", "waiting-input", &["input"]);
+        waiting.cwd = "/projects/alpha".into();
+        let mut busy = session("busy", "busy", &["fixer"]);
+        busy.cwd = "/projects/alpha".into();
+        let mut idle = session("idle", "idle", &["intro"]);
+        idle.cwd = "/projects/alpha".into();
+
+        let sessions = vec![waiting, busy, idle];
+        assert_eq!(project_session_indices(&sessions), vec![0]);
+        assert_eq!(session_activity_rank(&sessions[0]), 3);
     }
 
     #[test]
@@ -1801,85 +2022,6 @@ mod tests {
             &[session("other", "idle", &["intro"])],
             "req-7"
         ));
-    }
-
-    #[test]
-    fn project_scope_cycles_through_inherit_and_project_catalog() {
-        let state = preset_state(
-            Some("balanced"),
-            Some("balanced"),
-            Some("cheap"),
-            &["cheap", "balanced", "deep"],
-            &["cheap", "deep"],
-        );
-
-        assert_eq!(
-            adjacent_preset(&state, PresetScope::Project, 1),
-            Some(PresetMenuAction {
-                scope: PresetScope::Project,
-                preset: Some("deep".into()),
-                inherit: false,
-            })
-        );
-        assert_eq!(
-            adjacent_preset(&state, PresetScope::Project, -1),
-            Some(PresetMenuAction {
-                scope: PresetScope::Project,
-                preset: Some("cheap".into()),
-                inherit: false,
-            })
-        );
-
-        let inherited = preset_state(
-            Some("cheap"),
-            None,
-            Some("cheap"),
-            &["cheap", "deep"],
-            &["cheap", "deep"],
-        );
-        assert_eq!(
-            adjacent_preset(&inherited, PresetScope::Project, -1),
-            Some(PresetMenuAction {
-                scope: PresetScope::Project,
-                preset: Some("deep".into()),
-                inherit: false,
-            })
-        );
-
-        let first_override = preset_state(
-            Some("cheap"),
-            Some("cheap"),
-            Some("deep"),
-            &["cheap", "deep"],
-            &["cheap", "deep"],
-        );
-        assert_eq!(
-            adjacent_preset(&first_override, PresetScope::Project, -1),
-            Some(PresetMenuAction {
-                scope: PresetScope::Project,
-                preset: None,
-                inherit: true,
-            })
-        );
-    }
-
-    #[test]
-    fn global_scope_uses_only_global_catalog() {
-        let state = preset_state(
-            Some("local"),
-            Some("local"),
-            Some("global-a"),
-            &["global-a", "local"],
-            &["global-a", "global-b"],
-        );
-        assert_eq!(
-            adjacent_preset(&state, PresetScope::Global, 1),
-            Some(PresetMenuAction {
-                scope: PresetScope::Global,
-                preset: Some("global-b".into()),
-                inherit: false,
-            })
-        );
     }
 
     #[test]

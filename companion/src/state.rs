@@ -43,6 +43,8 @@ pub struct CompanionState {
     #[serde(default)]
     pub sessions: Vec<SessionInfo>,
     #[serde(default)]
+    pub known_projects: Vec<CompanionKnownProject>,
+    #[serde(default)]
     pub config: Option<CompanionConfigState>,
     #[serde(default)]
     pub window_positions: BTreeMap<String, WindowPositionState>,
@@ -83,9 +85,19 @@ pub struct CompanionPresetState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompanionKnownProject {
+    pub cwd: String,
+    pub last_seen: u64,
+    #[serde(default)]
+    pub preset: Option<CompanionPresetState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompanionPresetRequest {
     pub request_id: String,
     pub session_id: String,
+    #[serde(default)]
+    pub target_cwd: Option<String>,
     #[serde(default = "default_preset_scope")]
     pub scope: String,
     #[serde(default)]
@@ -182,6 +194,20 @@ pub fn write_preset_request(
 
     let _lock = StateWriteLock::acquire(path)?;
     let mut state = read_state(path);
+    if let Some(target_cwd) = request.target_cwd.as_deref() {
+        // Only folders previously published by trusted OpenCode managers may
+        // receive offline config writes. Rust never edits the JSONC files.
+        if !state
+            .known_projects
+            .iter()
+            .any(|project| project.cwd == target_cwd)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "unknown Companion preset target",
+            ));
+        }
+    }
 
     // Drop orphaned requests whose target manager no longer has a published
     // session entry, then append without overwriting requests from other
@@ -603,6 +629,7 @@ mod tests {
             CompanionPresetRequest {
                 request_id: "inherit".into(),
                 session_id: "live".into(),
+                target_cwd: None,
                 scope: "project".into(),
                 preset: None,
                 inherit: true,
@@ -634,6 +661,7 @@ mod tests {
             CompanionPresetRequest {
                 request_id: "req-a".into(),
                 session_id: "a".into(),
+                target_cwd: None,
                 scope: "project".into(),
                 preset: Some("one".into()),
                 inherit: false,
@@ -645,6 +673,7 @@ mod tests {
             CompanionPresetRequest {
                 request_id: "req-b".into(),
                 session_id: "b".into(),
+                target_cwd: None,
                 scope: "global".into(),
                 preset: Some("two".into()),
                 inherit: false,
@@ -675,6 +704,7 @@ mod tests {
             CompanionPresetRequest {
                 request_id: "new".into(),
                 session_id: "live".into(),
+                target_cwd: None,
                 scope: "project".into(),
                 preset: Some("two".into()),
                 inherit: false,
@@ -686,6 +716,44 @@ mod tests {
         assert_eq!(state.preset_requests.len(), 1);
         assert_eq!(state.preset_requests[0].request_id, "new");
 
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn offline_preset_request_rejects_unregistered_folder_and_accepts_known_folder() {
+        let path = temp_state_path("known-offline");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"version":1,"sessions":[{"session_id":"relay","cwd":"/relay"}],"known_projects":[{"cwd":"/known","last_seen":1}]}"#,
+        )
+        .unwrap();
+
+        let unknown = CompanionPresetRequest {
+            request_id: "unknown".into(),
+            session_id: "relay".into(),
+            target_cwd: Some("/unknown".into()),
+            scope: "project".into(),
+            preset: Some("cheap".into()),
+            inherit: false,
+        };
+        let err = write_preset_request(&path, unknown).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(read_state(&path).preset_requests.is_empty());
+
+        let known = CompanionPresetRequest {
+            request_id: "known".into(),
+            session_id: "relay".into(),
+            target_cwd: Some("/known".into()),
+            scope: "project".into(),
+            preset: Some("cheap".into()),
+            inherit: false,
+        };
+        write_preset_request(&path, known).unwrap();
+        assert_eq!(
+            read_state(&path).preset_requests[0].target_cwd.as_deref(),
+            Some("/known")
+        );
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }
