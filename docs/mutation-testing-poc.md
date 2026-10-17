@@ -14,9 +14,11 @@ issue #1579 and the design spec `docs/specs/2026-10-15-hotspot-mutation-hardenin
   - `bun test <test file>` — ordinary baseline.
   - `bunx stryker run` — reads `stryker.conf.mjs`; JSON report lands at
     `reports/mutation/mutation.json` (gitignored; regenerable).
-  - The agent-mcps tables below were run with the mutate scope
-    overridden (`bunx stryker run --mutate src/config/agent-mcps.ts`);
-    the committed config scopes `mutate` to foreground-fallback only.
+  - The agent-mcps tables below need both scopes overridden (the
+    committed config pins foreground-fallback for each):
+    `bunx stryker run --mutate src/config/agent-mcps.ts --testFiles src/config/agent-mcps.test.ts`
+    (the runner's top-level `testFiles` selection wins over
+    `bun.testFiles`).
 
 ## Runner constraints (verified against @hughescr/stryker-bun-runner 1.6.0)
 
