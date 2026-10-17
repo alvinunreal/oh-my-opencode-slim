@@ -4,8 +4,13 @@ export default {
   appendPlugins: ['@hughescr/stryker-bun-runner'],
   testRunner: 'bun',
   coverageAnalysis: 'perTest',
-  // Experiment A: one decision-heavy pair, no module mocks.
-  mutate: ['src/config/agent-mcps.ts'],
+  // Step 1 of the hotspot loop: foreground-fallback decision paths.
+  mutate: ['src/hooks/foreground-fallback/index.ts'],
+  // CI-failing gate at the reproducible 2026-10-16 floor (3 sweeps:
+  // 64.51 -> 65.13 -> 65.17, run-to-run deltas traceable to named tests,
+  // zero unexplained drift). Below break fails the run so newly blind
+  // code cannot merge silently; revisit as the loop closes clusters.
+  thresholds: { high: 65, low: 62, break: 60 },
   reporters: ['clear-text', 'json'],
   concurrency: 2,
   bun: {
@@ -14,6 +19,6 @@ export default {
     // "bun" once the system bun is >= 1.4
     bunPath: 'node_modules/.bin/bun',
     timeout: 30000,
-    testFiles: ['src/config/agent-mcps.test.ts'],
+    testFiles: ['src/hooks/foreground-fallback/index.test.ts'],
   },
 };

@@ -21,6 +21,87 @@ import {
   isSpentQuotaError,
 } from './index';
 
+// ---------------------------------------------------------------------------
+// Classifier decision matrix: transient vs permanent errors, HTTP status
+// handling, quota exhaustion, failover eligibility. Written from the
+// classifier-band survivor triage; exercises reachable behavior through the
+// exported classifiers only (no new production exports).
+// ---------------------------------------------------------------------------
+describe('classifier decision matrix', () => {
+  test.each([
+    ['status 400', { data: { statusCode: 400 } }, false],
+    ['status 403', { data: { statusCode: 403 } }, true],
+    ['status 410', { data: { statusCode: 410 } }, true],
+    ['status 421', { data: { statusCode: 421 } }, true],
+    ['status 429', { data: { statusCode: 429 } }, true],
+    ['status 503', { data: { statusCode: 503 } }, true],
+    ['no status, no signal', { message: 'unrelated broke' }, false],
+  ])('failover scope for %s', (_label, error, expected) => {
+    expect(isFailoverError(error)).toBe(expected);
+  });
+
+  test('upstream error needs transient context', () => {
+    expect(isFailoverError({ message: 'upstream error' })).toBe(false);
+    expect(
+      isFailoverError({
+        message: 'upstream error, please try again',
+        data: { statusCode: 408 },
+      }),
+    ).toBe(true);
+    expect(
+      isFailoverError({
+        message: 'upstream error: [400] invalid request body',
+        data: { statusCode: 400 },
+      }),
+    ).toBe(false);
+  });
+
+  test('spent allowance signals read from every carrier', () => {
+    expect(isSpentQuotaError('quota exceeded')).toBe(true);
+    expect(isSpentQuotaError('quota exceeded, retry in 30s')).toBe(false);
+    expect(isSpentQuotaError('Free usage exceeded, subscribe to Go')).toBe(
+      false,
+    );
+    expect(isSpentQuotaError({ data: { message: 'quota exceeded' } })).toBe(
+      true,
+    );
+    expect(
+      isSpentQuotaError({ data: { responseBody: 'Usage limit reached' } }),
+    ).toBe(true);
+    expect(isSpentQuotaError(null)).toBe(false);
+    expect(isSpentQuotaError(42)).toBe(false);
+  });
+
+  test('401 and 410 stay inline, 429 gets a toast', () => {
+    expect(isInlineFailoverError({ data: { statusCode: 401 } })).toBe(true);
+    expect(isInlineFailoverError({ data: { statusCode: 410 } })).toBe(true);
+    expect(isInlineFailoverError({ data: { statusCode: 429 } })).toBe(false);
+    expect(
+      isInlineFailoverError({ message: 'model reached end of life' }),
+    ).toBe(true);
+  });
+
+  test('402 is permanent quota billing', () => {
+    expect(isPermanentQuotaBillingError({ data: { statusCode: 402 } })).toBe(
+      true,
+    );
+    expect(isPermanentQuotaBillingError({ data: { statusCode: 429 } })).toBe(
+      false,
+    );
+  });
+
+  test('request reason beats provider status and transport signals', () => {
+    expect(
+      isFailoverError({
+        data: { statusCode: 503, responseBody: 'cyber_policy block' },
+      }),
+    ).toBe(true);
+    expect(
+      isFailoverError({ code: 'ECONNREFUSED', message: 'connect failed' }),
+    ).toBe(true);
+  });
+});
+
 // ACCEPTANCE GAP: config() hook behaviour is not covered by CI — verify live.
 
 // Shared session reference so our mock.module for getClient returns the
@@ -8357,6 +8438,47 @@ describe('ForegroundFallbackManager no-chain sessions', () => {
     });
     expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
     expect((mgr as any).sessionRetries.get('anon-nc')).toBe(2);
+  });
+  test('host retry with a huge backoff delay is never absorbed on a chain', async () => {
+    // absorbHostRetry refuses to sit out a host backoff longer than
+    // MAX_HOST_RETRY_DELAY_MS (no chain): the configured chain owns the
+    // recovery instead of letting a 30-minute-plus host timer hold the
+    // session hostage.
+    const sid = 'huge-delay';
+    const { manager } = makeManager({ chain: ['test/a', 'test/b'] });
+    await manager.handleV2Retry(
+      {
+        sessionID: sid,
+        agent: 'orchestrator',
+        model: { providerID: 'test', id: 'a' },
+        error: { message: 'rate limit' },
+        decision: { retry: true, delay: 30 * 60_000 + 1 },
+      },
+      async () => undefined,
+    );
+    expect((manager as any).sessionRetries.get(sid)).toBeUndefined();
+  });
+
+  test('a replay refund never debits the budget of a newer turn', async () => {
+    // refundSessionRetry guards the shared budget across turns: a replay
+    // resuming after the next external turn must not debit the NEW
+    // turn's budget.
+    const { manager } = makeManager({ chain: ['test/a', 'test/b'] });
+    const sid = 'refund-turn-advance';
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: { sessionID: sid, agent: 'orchestrator', role: 'user', id: 'u1' },
+      },
+    });
+    const epoch = (manager as any).turnEpoch.get(sid) ?? 0;
+    (manager as any).sessionRetries.set(sid, 1);
+    (manager as any).refundSessionRetry(sid, epoch);
+    expect((manager as any).sessionRetries.get(sid)).toBe(0);
+    // Refund charged against a previous turn is a no-op for this turn.
+    (manager as any).sessionRetries.set(sid, 1);
+    (manager as any).refundSessionRetry(sid, epoch - 1);
+    expect((manager as any).sessionRetries.get(sid)).toBe(1);
   });
 });
 

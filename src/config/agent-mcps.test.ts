@@ -65,9 +65,10 @@ describe('parseList', () => {
   });
 
   test('plain names never act as exclusions', () => {
-    expect(
-      parseList(['xabc', 'abc', '!zzz'], ['xabc', 'abc', 'zzz']),
-    ).toEqual(['xabc', 'abc']);
+    expect(parseList(['xabc', 'abc', '!zzz'], ['xabc', 'abc', 'zzz'])).toEqual([
+      'xabc',
+      'abc',
+    ]);
   });
 });
 
