@@ -58,6 +58,22 @@ type BackgroundFallbackHandoff = ReturnType<
   typeof createBackgroundFallbackHandoff
 >;
 
+interface ForegroundFallbackManagerOptions {
+  /** Ordered fallback chains per agent. */
+  chains: Record<string, ReadonlyArray<ForegroundFallbackModel>>;
+  enabled: boolean;
+  input: PluginInput;
+  maxRetries?: number;
+  coordinator?: SessionLifecycle;
+  onSessionModelChanged?: (sessionID: string, model: string) => void;
+  initialRetryDelayMs?: number;
+  retryDelayMs?: number;
+  backgroundFallbackHandoff?: BackgroundFallbackHandoff;
+  readBackgroundGeneration?: (sessionID: string) => number | undefined;
+  hasRunningChildren?: (sessionID: string) => boolean;
+  v2RetryEnabled?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Retryable error detection
 // ---------------------------------------------------------------------------
@@ -141,7 +157,7 @@ const FAILOVER_ERROR_TYPES = new Set([
   'provider.auth',
   'provider.internal',
 ]);
-// (ponytail) validated against real OpenCode error shapes
+// shortcut: validated against real OpenCode error shapes, when to upgrade: if we find a better way
 const TRANSPORT_CODES = new Set([
   'ECONNREFUSED',
   'ECONNRESET',
@@ -225,10 +241,7 @@ const GATEWAY_BACKPRESSURE_PATTERNS = [
 ];
 /** 4xx other than 408 (timeout) and 429 (rate limit). */
 const DETERMINISTIC_4XX_PATTERN = /\b4(?!08\b|29\b)\d\d\b/;
-// "upstream error" alone is ambiguous: proxies wrap deterministic 4xx (a
-// 400-bodied validation failure, a policy rejection) in the same wording.
-// Only treat it as transient when the same message carries a 5xx status,
-// an outage marker, or a timeout/unavailable marker.
+// See failoverScope for rationale.
 const UPSTREAM_ERROR_PATTERN = /\bupstream error\b/i;
 const UPSTREAM_TRANSIENT_MARKERS = [
   /\b5\d\d\b/,
@@ -1173,6 +1186,7 @@ export class ForegroundFallbackManager {
   /** Drop all per-session state once the session is deleted. */
   private forgetSession(id: string): void {
     this.sessionModel.delete(id);
+    this.sessionParent.delete(id);
     this.activeFallback.delete(id);
     this.sessionAgent.delete(id);
     this.sessionTried.delete(id);

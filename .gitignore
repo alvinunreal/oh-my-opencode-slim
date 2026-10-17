@@ -103,3 +103,4 @@ companion/target/
 .slim/deepwork/
 .codegraph/
 .worktrees/
+.slim/codemap.json

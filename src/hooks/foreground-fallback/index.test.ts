@@ -147,7 +147,7 @@ const retryMgr = (
   new ForegroundFallbackManager(
     { orchestrator: ids.map((id) => `test/${id}`) },
     true,
-    { directory: '/test' } as any,
+    { directory: "/test" } as never,
     0, // Existing hook-switch tests isolate switching from host retry budgets.
     undefined,
     onChanged,

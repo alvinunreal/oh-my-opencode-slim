@@ -104,7 +104,7 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 
 ### Deduplication (identity-based)
 - No error-text-only time-window heuristic: identical text can be the next real failure. The one-shot cross-event bridge requires an exact payload, current model, current turn, and short time-window match.
-- `message.updated` dedupes by message id; `session.status` dedupes by `retryEpisode` (model + episode id + `seen` attempts, so repeated/out-of-order attempts dedupe but an incremented attempt is processed). An id-less terminal event is otherwise unique; only an exact one-shot match to its paired error event reuses that incident.
+- `message.updated` dedupes by message id; `session.status` dedupes by the `retryAttempt` map (`{turn, model, attempt}`) with `attempt <= previous.attempt` comparison, so repeated/out-of-order attempts dedupe but an incremented attempt is processed. An id-less terminal event is otherwise unique; only an exact one-shot match to its paired error event reuses that incident.
 - Dedup and the `inProgress` guard run **before** budget consumption, so a duplicate or concurrently-dropped event cannot burn a budget slot.
 
 ## Flow
@@ -133,7 +133,7 @@ Log fallback event
 ```
 
 ### Key Operations
-1. **Abort with timeout**: `abortSessionWithTimeout()` sends Ctrl+C to pane then kills it after 250ms delay
+1. **Abort with timeout**: `abortSessionWithTimeout()` calls `client.session.abort()` wrapped in a timeout (default 1000ms).
 2. **Message retrieval**: Queries session messages via `client.session.messages()` and finds last user message
 3. **Model switching**: Uses `parseModelReference()` to extract providerID/modelID from chain entry
 4. **Re-prompting**: Calls `promptAsync()` which queues prompt and returns immediately (non-blocking); appends trusted internal-initiator provenance so the replay is not mistaken for new external user input
@@ -166,7 +166,7 @@ Log fallback event
 - **Configuration**: Fallback chains provided at construction from agent configurations
 
 ### Configuration Schema
-Fallback chains are provided as `Record<string, string[]>` where:
+Fallback chains are provided as `Record<string, ReadonlyArray<ForegroundFallbackModel>>` where:
 - Key: Agent name (e.g., "orchestrator", "explorer")
 - Value: Ordered list of model strings (e.g., `["anthropic/claude-opus-4-5", "openai/gpt-4o"]`)
 
