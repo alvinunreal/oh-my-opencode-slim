@@ -235,6 +235,64 @@ fn restore_window_position(pos: [f32; 2], screen: [f32; 2], win: [f32; 2]) -> [f
     }
 }
 
+fn visible_on_monitor(
+    position: [f32; 2],
+    size: [f32; 2],
+    native_pixels_per_point: f32,
+    monitors: &[[f32; 4]],
+) -> bool {
+    if !position
+        .iter()
+        .chain(size.iter())
+        .all(|value| value.is_finite())
+        || !native_pixels_per_point.is_finite()
+        || native_pixels_per_point <= 0.0
+        || size[0] <= 0.0
+        || size[1] <= 0.0
+    {
+        return false;
+    }
+
+    // egui viewport geometry is in logical points; Win32 EnumDisplayMonitors
+    // returns physical virtual-desktop coordinates, including negative origins.
+    let x = position[0] * native_pixels_per_point;
+    let y = position[1] * native_pixels_per_point;
+    let width = size[0] * native_pixels_per_point;
+    let height = size[1] * native_pixels_per_point;
+    let min_visible_w = width.min(48.0 * native_pixels_per_point);
+    let min_visible_h = height.min(48.0 * native_pixels_per_point);
+
+    monitors.iter().any(|rect| {
+        let overlap_w = (x + width).min(rect[2]) - x.max(rect[0]);
+        let overlap_h = (y + height).min(rect[3]) - y.max(rect[1]);
+        overlap_w >= min_visible_w && overlap_h >= min_visible_h
+    })
+}
+
+fn validated_saved_window_position(
+    position: [f32; 2],
+    screen: [f32; 2],
+    size: [f32; 2],
+    native_pixels_per_point: f32,
+) -> Option<[f32; 2]> {
+    if !position.iter().all(|value| value.is_finite()) {
+        return None;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let monitors = crate::screen::monitor_rects_physical()?;
+        let _ = screen;
+        visible_on_monitor(position, size, native_pixels_per_point, &monitors).then_some(position)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = native_pixels_per_point;
+        Some(restore_window_position(position, screen, size))
+    }
+}
+
 fn stack_window_position(
     position: [f32; 2],
     anchor: &str,
@@ -563,6 +621,20 @@ fn selected_session_index(
         .or_else(|| choose_session(sessions))
 }
 
+fn preset_target_session_index(
+    sessions: &[SessionInfo],
+    preset_target_id: Option<&str>,
+    displayed_idx: usize,
+) -> usize {
+    preset_target_id
+        .and_then(|session_id| {
+            sessions
+                .iter()
+                .position(|entry| entry.session_id == session_id)
+        })
+        .unwrap_or(displayed_idx)
+}
+
 fn project_session_indices(sessions: &[SessionInfo]) -> Vec<usize> {
     let mut indices: Vec<usize> = Vec::new();
     for (index, session) in sessions.iter().enumerate() {
@@ -625,6 +697,7 @@ pub struct CompanionApp {
     project_keys: std::collections::BTreeMap<String, String>,
     drag_project_key: Option<String>,
     menu_target_session_id: Option<String>,
+    preset_target_session_id: Option<String>,
     last_attention_key: Option<(String, u64)>,
     preset_request_seq: u64,
     position_write_generation: Arc<AtomicU64>,
@@ -691,6 +764,7 @@ impl CompanionApp {
             project_keys: std::collections::BTreeMap::new(),
             drag_project_key: None,
             menu_target_session_id: None,
+            preset_target_session_id: None,
             last_attention_key: None,
             preset_request_seq: 0,
             position_write_generation: Arc::new(AtomicU64::new(0)),
@@ -818,6 +892,7 @@ impl eframe::App for CompanionApp {
         });
         if !menu_open {
             self.menu_target_session_id = None;
+            self.preset_target_session_id = None;
         }
         let pinned_session = if menu_open {
             self.menu_target_session_id.as_deref()
@@ -838,6 +913,15 @@ impl eframe::App for CompanionApp {
         };
 
         let session = self.sessions[selected_idx].clone();
+        // A menu's editing target must never replace the displayed animation
+        // session. Keeping the display pinned also prevents background activity
+        // from stealing the visible session while the user edits presets.
+        let preset_target_idx = preset_target_session_index(
+            &self.sessions,
+            self.preset_target_session_id.as_deref(),
+            selected_idx,
+        );
+        let preset_target = self.sessions[preset_target_idx].clone();
         if let Some(next_attention_key) = attention_key(&session) {
             if self.last_attention_key.as_ref() != Some(&next_attention_key) {
                 if let Some(attention) = attention_type_for_status(&session.status) {
@@ -869,6 +953,9 @@ impl eframe::App for CompanionApp {
         }
         let project_key = self.project_key_for(&session.cwd);
         let saved_position = self.window_positions.get(&project_key).copied();
+        let pixels_per_point = ctx
+            .input(|input| input.viewport().native_pixels_per_point)
+            .unwrap_or(1.0);
         let time_seconds = ctx.input(|input| input.time);
         let agent_frames: Vec<(usize, AnimationFrame)> = if session.active_agents.is_empty() {
             self.gifs
@@ -927,17 +1014,28 @@ impl eframe::App for CompanionApp {
             &geometry,
         ) {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(win_w, win_h)));
-            let pos = saved_position
-                .map(|pos| restore_window_position([pos.x, pos.y], self.screen, [win_w, win_h]))
-                .unwrap_or_else(|| {
-                    stack_window_position(
-                        place_window(&self.position, self.screen, [win_w, win_h]),
-                        &self.position,
-                        selected_idx,
-                        self.screen,
-                        [win_w, win_h],
-                    )
-                });
+            let validated_position = saved_position.and_then(|pos| {
+                validated_saved_window_position(
+                    [pos.x, pos.y],
+                    self.screen,
+                    [win_w, win_h],
+                    pixels_per_point,
+                )
+            });
+            if saved_position.is_some() && validated_position.is_none() {
+                crate::log::debug(format!(
+                    "invalid/off-screen saved geometry for project={project_key:?}; using visible anchor"
+                ));
+            }
+            let pos = validated_position.unwrap_or_else(|| {
+                stack_window_position(
+                    place_window(&self.position, self.screen, [win_w, win_h]),
+                    &self.position,
+                    selected_idx,
+                    self.screen,
+                    [win_w, win_h],
+                )
+            });
             crate::log::debug(format!(
                 "geometry owner={:?} session_id={} saved_position={:?} pos={:?} win=({}, {}) screen={:?} selected_idx={}",
                 self.owner_session_id,
@@ -986,6 +1084,7 @@ impl eframe::App for CompanionApp {
         if ctx.input(|i| i.pointer.secondary_released()) {
             let cursor = ctx.input(|i| i.pointer.interact_pos()).unwrap_or_default();
             self.menu_target_session_id = Some(session.session_id.clone());
+            self.preset_target_session_id = Some(session.session_id.clone());
             ctx.data_mut(|d| {
                 d.insert_temp(egui::Id::new(MENU_POS_KEY), [cursor.x, cursor.y]);
                 d.insert_temp(egui::Id::new(MENU_OPEN_KEY), true);
@@ -1009,17 +1108,17 @@ impl eframe::App for CompanionApp {
             win_w,
             win_h,
             &self.sessions,
-            &session,
+            &preset_target,
             self.pending_preset_request.is_some(),
         ) {
             match action {
                 CompanionMenuAction::SelectProject(direction) => {
                     if let Some(next_index) = adjacent_project_session_index(
                         &self.sessions,
-                        &session.session_id,
+                        &preset_target.session_id,
                         direction,
                     ) {
-                        self.menu_target_session_id =
+                        self.preset_target_session_id =
                             Some(self.sessions[next_index].session_id.clone());
                     }
                 }
@@ -1028,7 +1127,7 @@ impl eframe::App for CompanionApp {
                     let request_id = format!("{}-{}", std::process::id(), self.preset_request_seq);
                     let request = CompanionPresetRequest {
                         request_id: request_id.clone(),
-                        session_id: session.session_id.clone(),
+                        session_id: preset_target.session_id.clone(),
                         scope: action.scope.as_str().to_string(),
                         preset: action.preset,
                         inherit: action.inherit,
@@ -1037,7 +1136,7 @@ impl eframe::App for CompanionApp {
                         Ok(()) => {
                             self.pending_preset_request = Some(PendingPresetRequest {
                                 request_id,
-                                session_id: session.session_id.clone(),
+                                session_id: preset_target.session_id.clone(),
                             });
                         }
                         Err(err) => {
@@ -1623,9 +1722,10 @@ mod tests {
         adjacent_preset, adjacent_project_session_index, agent_detail_tooltip, apply_config,
         attention_key, attention_stroke, attention_type_for_status, choose_session, config_key,
         grid_dims, handle_drag_start, pending_preset_request_should_clear, place_window,
-        preset_request_completed, project_session_indices, restore_window_position,
-        selected_session_index, should_apply_geometry, size_from_config, window_size, ConfigKey,
-        PendingPresetRequest, PresetMenuAction, PresetScope, SessionInfo, WindowGeometryKey, GAP,
+        preset_request_completed, preset_target_session_index, project_session_indices,
+        restore_window_position, selected_session_index, should_apply_geometry, size_from_config,
+        visible_on_monitor, window_size, ConfigKey, PendingPresetRequest, PresetMenuAction,
+        PresetScope, SessionInfo, WindowGeometryKey, GAP,
     };
     use crate::state::{CompanionAgentDetail, CompanionConfigState, CompanionPresetState};
 
@@ -1679,6 +1779,17 @@ mod tests {
             &pending
         ));
         assert!(pending_preset_request_should_clear(&[], &pending));
+    }
+
+    #[test]
+    fn pending_edit_request_clears_when_target_exits_but_display_survives() {
+        let sessions = vec![session("display", "busy", &["fixer"])];
+        let pending = PendingPresetRequest {
+            request_id: "preset-for-target".into(),
+            session_id: "exited-edit-target".into(),
+        };
+        assert!(pending_preset_request_should_clear(&sessions, &pending));
+        assert_eq!(selected_session_index(&sessions, Some("display")), Some(0));
     }
 
     #[test]
@@ -1751,6 +1862,53 @@ mod tests {
             session("active", "busy", &["fixer"]),
         ];
         assert_eq!(selected_session_index(&sessions, Some("gone")), Some(1));
+    }
+
+    #[test]
+    fn editing_project_does_not_change_displayed_session_or_geometry() {
+        let mut alpha = session("alpha", "idle", &["intro"]);
+        alpha.cwd = "/work/alpha".into();
+        let mut beta = session("beta", "waiting-input", &["input"]);
+        beta.cwd = "/work/beta".into();
+        let sessions = vec![alpha, beta];
+
+        let displayed_idx = selected_session_index(&sessions, Some("alpha")).unwrap();
+        let edit_idx = preset_target_session_index(&sessions, Some("beta"), displayed_idx);
+        assert_eq!(displayed_idx, 0);
+        assert_eq!(edit_idx, 1);
+        assert_eq!(sessions[displayed_idx].cwd, "/work/alpha");
+        assert_eq!(sessions[edit_idx].cwd, "/work/beta");
+        assert_eq!(selected_session_index(&sessions, Some("alpha")), Some(0));
+        assert_eq!(preset_target_session_index(&sessions, Some("gone"), 0), 0);
+
+        let original = WindowGeometryKey {
+            session_id: "alpha".into(),
+            project_key: "/work/alpha".into(),
+            position: "bottom-right".into(),
+            custom_x: Some(100),
+            custom_y: Some(100),
+            size_px: 120,
+            cols: 1,
+            rows: 1,
+            screen_w: 1920,
+            screen_h: 1080,
+        };
+        assert!(!should_apply_geometry(false, Some(&original), &original));
+    }
+
+    #[test]
+    fn saved_position_visible_only_if_recoverable_on_actual_monitor() {
+        let monitors = [[0.0, 0.0, 1920.0, 1080.0], [-1600.0, 0.0, 0.0, 900.0]];
+        let size = [120.0, 120.0];
+        assert!(visible_on_monitor([100.0, 100.0], size, 1.0, &monitors));
+        assert!(visible_on_monitor([-1500.0, 120.0], size, 1.0, &monitors));
+        assert!(visible_on_monitor([-750.0, 120.0], size, 2.0, &monitors));
+        assert!(!visible_on_monitor([3000.0, 120.0], size, 1.0, &monitors));
+        assert!(!visible_on_monitor([-1600.0, 901.0], size, 1.0, &monitors));
+        assert!(!visible_on_monitor([1890.0, 1060.0], size, 1.0, &monitors));
+        assert!(!visible_on_monitor([f32::NAN, 100.0], size, 1.0, &monitors));
+        assert!(!visible_on_monitor([100.0, 100.0], size, 0.0, &monitors));
+        assert!(!visible_on_monitor([100.0, 100.0], size, 1.0, &[]));
     }
 
     #[test]
