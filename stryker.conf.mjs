@@ -12,10 +12,10 @@ export default {
   reporters: ['clear-text', 'json'],
   concurrency: 2,
   bun: {
-    // shortcut: pins npm-distributed bun 1.4 for the runner (system bun
-    // 1.3.14 is below the runner's >=1.4.0 engine floor); switch back to
-    // "bun" once the system bun is >= 1.4
-    bunPath: 'node_modules/.bin/bun',
+    // shortcut: the runner floor is bun >= 1.4.0; the npm bun devDep was
+    // removed (bun ci skips its postinstall, which breaks prepare in CI),
+    // so `bun add -d bun@1.4.3` locally when the system bun is older
+    bunPath: 'bun',
     timeout: 30000,
     testFiles: ['src/hooks/foreground-fallback/index.test.ts'],
   },

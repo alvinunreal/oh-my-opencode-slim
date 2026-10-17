@@ -24,7 +24,7 @@ issue #1579 and the design spec `docs/specs/2026-10-15-hotspot-mutation-hardenin
 |---|---|---|---|
 | @stryker-mutator/core | 10.0.0 | `^9 || ^10` | compatible |
 | typescript | 6.0.3 | `<7` | downgraded from `7.0` (tsgo) for the runner's `<7` peer; `typecheck` and `build` verified green on 6.0.3 |
-| bun (npm pin in `stryker.conf.mjs`) | 1.4.3 | `>=1.4.0` | system bun 1.3.14 is below the engine floor, so `bun.bunPath` is load-bearing |
+| bun | >=1.4.0 on PATH | `>=1.4.0` | system bun is 1.3.14, below the engine floor: run Stryker with a newer bun (or `bun add -d bun@1.4.3` locally — kept out of committed deps because `bun ci` skips its postinstall and breaks `prepare` in CI) |
 | system bun | 1.3.14 | — | normal `bun test` unaffected |
 
 Infrastructure facts (both trial-proven, needed to run under Stryker):
@@ -34,7 +34,8 @@ Infrastructure facts (both trial-proven, needed to run under Stryker):
   sandbox and fails with "preload not found"). Normal `bun test` works
   with either form; the literal path is also valid outside the sandbox,
   so the change is not conditional on running Stryker.
-- `bun.bunPath` pin to the npm-distributed bun 1.4.3.
+- `bun.bunPath` set to `bun`; Stryker itself must run on bun >= 1.4.0
+  (the runner's engine floor).
 
 ## Results
 

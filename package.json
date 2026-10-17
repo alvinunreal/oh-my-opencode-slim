@@ -123,7 +123,6 @@
     "@types/semver": "^7.7.1",
     "@types/turndown": "^5.0.6",
     "all-contributors-cli": "^6.26.1",
-    "bun": "1.4.3",
     "bun-types": "^1.4.2",
     "typescript": "6.0.3"
   },
