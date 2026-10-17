@@ -2022,16 +2022,13 @@ describe('foreground fallback redo: host retry budget', () => {
 
 describe('handleEvent decision band (mutation triage)', () => {
   test('S1: a v2 step.ended with finish stop re-arms a fresh descent budget', async () => {
-    // resetRecoveryState clears sessionRetries (and the terminal flags).
-    // With maxRetries:2: charge 1 (hit A), hit stop, then re-charge: the
-    // SAME attempt number after the reset charges again 1 -> 2. Under
-    // the never-reset mutant the second charge refuses (not < tried? No:
-    // tried stays 1, maxRetries 2, so absorb STILL succeeds on attempt
-    // row) — pending evidence, use exhaust-boundary observable instead:
-    // after reset, exactly maxRetries absorbed hits before refusal;
-    // without, only 1 remains. Distinguish: 3 hits with maxRetries:2.
-    // Reset case: h1(1), h2(2), h3 refuse (2). Mutant case: h1(1),
-    // h2 refuse. So the 3rd hit resolving to (2) vs (1) is the proof.
+    // Contract: on a v2 host a completed stop finish resets the descent
+    // state, so a retry after the stop charges a fresh budget instead of
+    // being refused as a stale event. The observable holds only under
+    // the reset: maxRetries=2 means the second charge is possible just
+    // once, at 0 -> 1 after the reset clears the first charge. Under
+    // the never-reset mutant the reset never fires and the refusal
+    // keeps the counter pinned at 1.
     const { manager } = makeManager({ maxRetries: 2, hostFlavor: 'v2' });
     const sid = 's1-fresh-descent';
     await manager.handleEvent(redoEvents.assistant(sid));
