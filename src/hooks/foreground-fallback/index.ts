@@ -196,6 +196,8 @@ const REQUEST_ERROR_PATTERNS = [
   /\bmodel is not available\b/i,
   /\bunsupported model\b/i,
   /\bunknown model\b/i,
+  /\bmodel unavailable\b/i,
+  /\bvariant unavailable\b/i,
   // OpenCode's ProviderModelNotFoundError uses "Model not found" wording; the
   // model may exist on a later entry in the configured chain.
   /\bmodel not found\b/i,
