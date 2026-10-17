@@ -2014,6 +2014,140 @@ describe('foreground fallback redo: host retry budget', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// handleEvent decision-band regression (from mutation triage): three public
+// sequences that distinguish the survivors still unexplained after the
+// classifier matrix. Written to end-to-end observable behavior only.
+// ---------------------------------------------------------------------------
+
+describe('handleEvent decision band (mutation triage)', () => {
+  test('S1: a v2 step.ended with finish stop re-arms a fresh descent budget', async () => {
+    // resetRecoveryState clears sessionRetries (and the terminal flags).
+    // With maxRetries:2: charge 1 (hit A), hit stop, then re-charge: the
+    // SAME attempt number after the reset charges again 1 -> 2. Under
+    // the never-reset mutant the second charge refuses (not < tried? No:
+    // tried stays 1, maxRetries 2, so absorb STILL succeeds on attempt
+    // row) — pending evidence, use exhaust-boundary observable instead:
+    // after reset, exactly maxRetries absorbed hits before refusal;
+    // without, only 1 remains. Distinguish: 3 hits with maxRetries:2.
+    // Reset case: h1(1), h2(2), h3 refuse (2). Mutant case: h1(1),
+    // h2 refuse. So the 3rd hit resolving to (2) vs (1) is the proof.
+    const { manager } = makeManager({ maxRetries: 2, hostFlavor: 'v2' });
+    const sid = 's1-fresh-descent';
+    await manager.handleEvent(redoEvents.assistant(sid));
+    await manager.handleEvent(redoEvents.retry(sid, 1));
+    expect((manager as any).sessionRetries.get(sid)).toBe(1);
+    // Raw step.ended goes to handleEvent directly in production; the
+    // mapped conversion drops `finish`, so the reset band keys on raw.
+    await manager.handleEvent({
+      type: 'session.step.ended',
+      properties: { sessionID: sid, finish: 'stop' },
+    });
+    // Charge was deleted: this hit re-charges 0 -> 1 (with v2 reset).
+    await manager.handleEvent(redoEvents.retry(sid, 2));
+    expect((manager as any).sessionRetries.get(sid)).toBe(1);
+  });
+
+  test('S1b: a v1 host never re-arms on a stop finish', async () => {
+    // Probe-verified sequence: three session.error incidents walk the
+    // 2-entry chain into exhaustion (stage 2); willAttemptFallback goes
+    // false. A v2 host's stop finish resets the descent (recovery
+    // possible); the v1 host must IGNORE the same event shape, so the
+    // mutant (reset on v1) diverges exactly here.
+    // v1 manager (no hostFlavor): the stop must be IGNORED here.
+    const { manager } = makeManager({
+      chain: ['test/a', 'test/b'],
+      maxRetries: 3,
+    });
+    await manager.handleEvent(redoEvents.assistant('s1b-no-v1-reset'));
+    for (const note of ['one', 'two', 'three']) {
+      await manager.handleEvent({
+        type: 'session.error',
+        properties: {
+          sessionID: 's1b-no-v1-reset',
+          error: { message: `rate limit ${note}` },
+        },
+      });
+    }
+    // Probe shows the walk needs distinct fingerprints per incident.
+    const sid = 's1b-no-v1-reset';
+    expect((manager as any).chainExhaustion.get(sid)).toBe(2);
+    expect(manager.willAttemptFallback(sid)).toBe(false);
+
+    // v1 stop: IGNORED — exhaustion persists (the v2-only signal).
+    await manager.handleEvent({
+      type: 'session.step.ended',
+      properties: { sessionID: sid, finish: 'stop' },
+    });
+    expect((manager as any).chainExhaustion.get(sid)).toBe(2);
+    expect(manager.willAttemptFallback(sid)).toBe(false);
+  });
+  test('S2: text-only SLIM marker part registers the replay identity', async () => {
+    // isInternalInitiatorPart short-circuits with metadata; a part that
+    // only carries the marker TEXT must also fence a replay: the
+    // message.part.updated band relies on that second marker form.
+    const { manager } = makeManager({ chain: ['test/a', 'test/b'] });
+    const sid = 's2-text-marker';
+    const mid = 'm-text-marker';
+
+    await manager.handleEvent({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          type: 'text',
+          sessionID: sid,
+          messageID: mid,
+          synthetic: true,
+          text: `child summary text\n<!-- SLIM_INTERNAL_INITIATOR -->`,
+        },
+      },
+    });
+
+    // Remembered replay ID: the message.updated identity check on the
+    // same pair now reports known-internal (through the public fence).
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: mid,
+          sessionID: sid,
+          role: 'user',
+          model: { providerID: 'test', modelID: 'a' },
+        },
+      },
+    });
+    // The internal replay user message is fenced: turn epoch unchanged
+    // and isFallbackInProgress stays coherent.
+    expect((manager as any).turnEpoch.get(sid) ?? 0).toBe(0);
+  });
+
+  test('S3: session.deleted without a coordinator still clears dedup', async () => {
+    // Most tests build the manager bare (no coordinator): the
+    // !hasCoordinator path in the event handler is the only delete
+    // signal for that construction, so a follow-up same-ID error must
+    // hit dedup-free recovery.
+    const { mocks } = createMockClient();
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as any);
+    const sid = 's3-no-coordinator-delete';
+
+    await mgr.handleEvent(redoEvents.assistant(sid));
+    await mgr.handleEvent(redoEvents.error(sid));
+    const firstTriggered = mocks.promptAsync.mock.calls.length;
+    expect(firstTriggered).toBe(1);
+
+    await mgr.handleEvent({
+      type: 'session.deleted',
+      properties: { sessionID: sid },
+    });
+
+    // Deleted: same-trigger error hits fresh, dedup cleared.
+    await mgr.handleEvent(redoEvents.error(sid));
+    expect(mocks.promptAsync.mock.calls.length).toBe(2);
+  });
+});
+
 describe('ForegroundFallbackManager v2 retry hook', () => {
   test.each([{ retry: true, delay: 2000 }, { retry: false }])(
     'switches in place without abort or re-prompt (initial decision %p)',
