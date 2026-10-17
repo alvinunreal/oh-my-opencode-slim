@@ -58,22 +58,6 @@ type BackgroundFallbackHandoff = ReturnType<
   typeof createBackgroundFallbackHandoff
 >;
 
-interface ForegroundFallbackManagerOptions {
-  /** Ordered fallback chains per agent. */
-  chains: Record<string, ReadonlyArray<ForegroundFallbackModel>>;
-  enabled: boolean;
-  input: PluginInput;
-  maxRetries?: number;
-  coordinator?: SessionLifecycle;
-  onSessionModelChanged?: (sessionID: string, model: string) => void;
-  initialRetryDelayMs?: number;
-  retryDelayMs?: number;
-  backgroundFallbackHandoff?: BackgroundFallbackHandoff;
-  readBackgroundGeneration?: (sessionID: string) => number | undefined;
-  hasRunningChildren?: (sessionID: string) => boolean;
-  v2RetryEnabled?: boolean;
-}
-
 // ---------------------------------------------------------------------------
 // Retryable error detection
 // ---------------------------------------------------------------------------

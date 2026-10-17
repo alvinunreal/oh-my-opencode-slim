@@ -147,7 +147,7 @@ const retryMgr = (
   new ForegroundFallbackManager(
     { orchestrator: ids.map((id) => `test/${id}`) },
     true,
-    { directory: "/test" } as never,
+    { directory: '/test' } as never,
     0, // Existing hook-switch tests isolate switching from host retry budgets.
     undefined,
     onChanged,
@@ -2548,12 +2548,20 @@ describe('isFailoverError', () => {
 
   test('returns true for model unavailable error', () => {
     expect(isFailoverError('Model unavailable: test/provider')).toBe(true);
-    expect(isFailoverError({ message: 'Model unavailable: anthropic/claude-3' })).toBe(true);
+    expect(
+      isFailoverError({ message: 'Model unavailable: anthropic/claude-3' }),
+    ).toBe(true);
   });
 
   test('returns true for variant unavailable error', () => {
-    expect(isFailoverError('Variant unavailable for test/provider: test-variant')).toBe(true);
-    expect(isFailoverError({ message: 'Variant unavailable for openai/gpt-4o: max' })).toBe(true);
+    expect(
+      isFailoverError('Variant unavailable for test/provider: test-variant'),
+    ).toBe(true);
+    expect(
+      isFailoverError({
+        message: 'Variant unavailable for openai/gpt-4o: max',
+      }),
+    ).toBe(true);
   });
 });
 
