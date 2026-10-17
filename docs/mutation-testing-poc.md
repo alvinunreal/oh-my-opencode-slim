@@ -14,13 +14,16 @@ issue #1579 and the design spec `docs/specs/2026-10-15-hotspot-mutation-hardenin
   - `bun test <test file>` — ordinary baseline.
   - `bunx stryker run` — reads `stryker.conf.mjs`; JSON report lands at
     `reports/mutation/mutation.json` (gitignored; regenerable).
+  - The agent-mcps tables below were run with the mutate scope
+    overridden (`bunx stryker run --mutate src/config/agent-mcps.ts`);
+    the committed config scopes `mutate` to foreground-fallback only.
 
 ## Runner constraints (verified against @hughescr/stryker-bun-runner 1.6.0)
 
 | Tool | Version | Runner requirement | Note |
 |---|---|---|---|
 | @stryker-mutator/core | 10.0.0 | `^9 || ^10` | compatible |
-| typescript | 6.0.3 | `<7` | pin `typescript@6` when running Stryker |
+| typescript | 6.0.3 | `<7` | downgraded from `7.0` (tsgo) for the runner's `<7` peer; `typecheck` and `build` verified green on 6.0.3 |
 | bun (npm pin in `stryker.conf.mjs`) | 1.4.3 | `>=1.4.0` | system bun 1.3.14 is below the engine floor, so `bun.bunPath` is load-bearing |
 | system bun | 1.3.14 | — | normal `bun test` unaffected |
 
@@ -114,7 +117,8 @@ issue (see "Open items").
   `/tmp` (`handlevent-mutants.json`, `ff-*.json`) are session-local and
   not durable; the tracked artifacts are the tests themselves, this
   report, the JSON-converted `reports/mutation/mutation.json` output
-  (regenerable), and the full 453-line journal kept locally.
+  (regenerable for the foreground-fallback scope), and the full
+  453-line journal kept locally.
 
 ## Artifacts disposition
 

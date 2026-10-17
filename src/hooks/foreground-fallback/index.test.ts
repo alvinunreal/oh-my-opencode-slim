@@ -90,10 +90,13 @@ describe('classifier decision matrix', () => {
     );
   });
 
-  test('request reason beats provider status and transport signals', () => {
+  test('policy body defeats a hard 400; transport codes fail over', () => {
+    // Discriminating: 400 is not a provider status and bare 400 stays
+    // false above, so true here can only come from the policy pattern
+    // matching first ("recognizable failover bodies count under 400").
     expect(
       isFailoverError({
-        data: { statusCode: 503, responseBody: 'cyber_policy block' },
+        data: { statusCode: 400, responseBody: 'cyber_policy block' },
       }),
     ).toBe(true);
     expect(
@@ -2027,8 +2030,8 @@ describe('handleEvent decision band (mutation triage)', () => {
     // being refused as a stale event. The observable holds only under
     // the reset: maxRetries=2 means the second charge is possible just
     // once, at 0 -> 1 after the reset clears the first charge. Under
-    // the never-reset mutant the reset never fires and the refusal
-    // keeps the counter pinned at 1.
+    // the never-reset mutant the reset never fires, so the second
+    // charge walks the counter to 2 and the expectation of 1 fails.
     const { manager } = makeManager({ maxRetries: 2, hostFlavor: 'v2' });
     const sid = 's1-fresh-descent';
     await manager.handleEvent(redoEvents.assistant(sid));
@@ -2116,6 +2119,7 @@ describe('handleEvent decision band (mutation triage)', () => {
     // The internal replay user message is fenced: turn epoch unchanged
     // and isFallbackInProgress stays coherent.
     expect((manager as any).turnEpoch.get(sid) ?? 0).toBe(0);
+    expect(manager.isFallbackInProgress(sid)).toBe(false);
   });
 
   test('S3: session.deleted without a coordinator still clears dedup', async () => {

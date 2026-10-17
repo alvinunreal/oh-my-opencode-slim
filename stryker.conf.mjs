@@ -6,12 +6,8 @@ export default {
   coverageAnalysis: 'perTest',
   // Step 1 of the hotspot loop: foreground-fallback decision paths.
   mutate: ['src/hooks/foreground-fallback/index.ts'],
-  // Mutation-score thresholds are configured for this scoped PoC. They
-  // become a CI-enforced gate only after a workflow invokes this
-  // configuration. Floor measured 2026-10-16 across 4 sweeps:
-  // 64.51 -> 65.13 -> 65.17 -> 66.50, run-to-run deltas traceable to
-  // named tests, zero unexplained drift. Below break fails the Stryker
-  // run; revisit as the loop closes clusters.
+  // Floor measured 2026-10-16 (see docs/mutation-testing-poc.md);
+  // config-only until a CI workflow invokes it (issue #1593).
   thresholds: { high: 65, low: 62, break: 60 },
   reporters: ['clear-text', 'json'],
   concurrency: 2,
