@@ -2146,6 +2146,65 @@ describe('handleEvent decision band (mutation triage)', () => {
     await mgr.handleEvent(redoEvents.error(sid));
     expect(mocks.promptAsync.mock.calls.length).toBe(2);
   });
+
+  test('parent edge clears on session.deleted so a recreated session frees its own retry', async () => {
+    // 1697 contract: deleting a session must clear its parent edge.
+    // forgetSession does NOT touch sessionParent, so the event-path
+    // sessionParent.delete(id) is the only clearer on this path. A
+    // stale edge pins the recreated session to child semantics
+    // (willAttemptFallback false); the cleared edge lets the no-chain
+    // same-model retry apply (true). Falsifier: the mutant that
+    // removes the delete call keeps the edge and fails this test.
+    const { manager } = makeManager({
+      chain: ['test/a', 'test/b'],
+      maxRetries: 3,
+      hostFlavor: 'v2',
+    });
+    const sid = 'parent-edge-delete-x';
+    // Seed the parent edge (a child of P) and a no-chain agent model.
+    await manager.handleEvent({
+      type: 'session.created',
+      properties: { info: { id: sid, parentID: 'some-parent' } },
+    });
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: sid,
+          agent: 'councillor',
+          role: 'assistant',
+          providerID: 'c',
+          modelID: 'm1',
+          time: { completed: 1 },
+        },
+      },
+    });
+    expect(manager.willAttemptFallback(sid)).toBe(false);
+    expect((manager as any).sessionParent.has(sid)).toBe(true);
+
+    await manager.handleEvent({
+      type: 'session.deleted',
+      properties: { sessionID: sid },
+    });
+
+    // Recreated session with the same ID, fresh state (the documented
+    // fresh-session contract): edge gone, no-chain retry eligible.
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID: sid,
+          agent: 'councillor',
+          role: 'assistant',
+          providerID: 'c',
+          modelID: 'm1',
+          time: { completed: 1 },
+        },
+      },
+    });
+    expect((manager as any).sessionParent.has(sid)).toBe(false);
+    expect(manager.willAttemptFallback(sid)).toBe(true);
+  });
 });
 
 describe('ForegroundFallbackManager v2 retry hook', () => {
