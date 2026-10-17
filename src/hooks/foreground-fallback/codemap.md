@@ -2,7 +2,7 @@
 
 ## Responsibility
 Runtime model fallback system for foreground (interactive) agent sessions. When OpenCode emits rate-limit signals via `message.updated`, `session.error`, or `session.status` events, this manager:
-- Detects retryable conditions using pattern matching against error messages and status codes (rate limits, 429, 403/Forbidden, 401/410 failover errors)
+- Detects retryable conditions using pattern matching against error messages and status codes (rate limits, 429, 403/Forbidden, 401/410 failover errors, model unavailable, variant unavailable)
 - On v1, withholds `session.abort(X)` while the background job board reports running children of X: held retry events do not seal dedup, exhausted chains still stop intervening, and busy replay errors withdraw any armed handoff when the abort is withheld (explicit refusal admits nothing), and settle it only after a failed abort with unknown outcome. v2 and v1 sessions without running children retain their abort behavior. `session.error` and `message.updated` can re-prompt directly without abort.
 - Retrieves the last user message from the session history
 - Re-prompts with the first eligible entry from the chain head, skipping tried models and providers abandoned by this session or its parent
@@ -60,7 +60,7 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 - **No cross-agent bleed**: When agent is identified, only that agent's chain is used (prevents re-prompting with wrong agent's models)
 
 ### Retryable Error Detection
-- **Pattern matching**: rate-limit/quota/outage/401/403/410/421/451 wording, content-policy moderation and OpenCode v1's content-filter finish error, transport codes (`ECONNRESET`, …) and transport messages
+- **Pattern matching**: rate-limit/quota/outage/401/403/410/421/451 wording, content-policy moderation and OpenCode v1's content-filter finish error, transport codes (`ECONNRESET`, …) and transport messages, model/variant unavailable errors
 - **Scope** (`failoverScope`): provider availability, transport, auth and quota failures have provider scope; policy/content-filter rejections and missing/retired models have request scope. The v2 `provider.content-filter` type has request scope regardless of message or HTTP status, including when the host's retry decision is false. Request wording takes precedence over HTTP status, including a policy rejection wrapped in 403. `isFailoverError` accepts either scope.
 - **Status-code probe** (`extractStatusCode`): priority order `statusCode` → `data.statusCode` → `cause.statusCode` → `status` → `response.status` → `response.statusCode` → `data.status` → `data.response.status` → `cause.status` → `cause.response.status`. `asHttpStatus` accepts only finite `100–599` codes (number or 3-digit numeric string), so arbitrary numeric fields are never mistaken for a status.
 - **Event coverage**: `message.updated` (message metadata error, or `finish: 'content-filter'` before its error is attached), `session.error` (session-level error), `session.status` (`retry` status). The content-filter finish and its later error share message-ID deduplication. On v1, completed error-free `finish: 'unknown'` messages with confirmed tool-free parts preserve retries and chain state while a per-session streak counts distinct IDs, triggering request-scoped abort and replay at three; unreadable parts neither count nor break the streak. A reply read across a confirmed fallback switch belongs to the previous model and does not count against the backup.
