@@ -2,7 +2,7 @@
 
 ## Responsibility
 Runtime model fallback system for foreground (interactive) agent sessions. When OpenCode emits rate-limit signals via `message.updated`, `session.error`, or `session.status` events, this manager:
-- Detects retryable conditions using pattern matching against error messages and status codes (rate limits, 429, 403/Forbidden, 401/410 failover errors, model unavailable, variant unavailable)
+- Detects retryable conditions using pattern matching against error messages and status codes (rate limits, 429, 403/Forbidden, 401/410 failover errors)
 - On v1, withholds `session.abort(X)` while the background job board reports running children of X: held retry events do not seal dedup, exhausted chains still stop intervening, and busy replay errors withdraw any armed handoff when the abort is withheld (explicit refusal admits nothing), and settle it only after a failed abort with unknown outcome. v2 and v1 sessions without running children retain their abort behavior. `session.error` and `message.updated` can re-prompt directly without abort.
 - Retrieves the last user message from the session history
 - Re-prompts with the first eligible entry from the chain head, skipping tried models and providers abandoned by this session or its parent
@@ -60,7 +60,7 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 - **No cross-agent bleed**: When agent is identified, only that agent's chain is used (prevents re-prompting with wrong agent's models)
 
 ### Retryable Error Detection
-- **Pattern matching**: rate-limit/quota/outage/401/403/410/421/451 wording, content-policy moderation and OpenCode v1's content-filter finish error, transport codes (`ECONNRESET`, …) and transport messages, model/variant unavailable errors
+- **Pattern matching**: rate-limit/quota/outage/401/403/410/421/451 wording, content-policy moderation and OpenCode v1's content-filter finish error, transport codes (`ECONNRESET`, …) and transport messages
 - **Scope** (`failoverScope`): provider availability, transport, auth and quota failures have provider scope; policy/content-filter rejections and missing/retired models have request scope. The v2 `provider.content-filter` type has request scope regardless of message or HTTP status, including when the host's retry decision is false. Request wording takes precedence over HTTP status, including a policy rejection wrapped in 403. `isFailoverError` accepts either scope.
 - **Status-code probe** (`extractStatusCode`): priority order `statusCode` → `data.statusCode` → `cause.statusCode` → `status` → `response.status` → `response.statusCode` → `data.status` → `data.response.status` → `cause.status` → `cause.response.status`. `asHttpStatus` accepts only finite `100–599` codes (number or 3-digit numeric string), so arbitrary numeric fields are never mistaken for a status.
 - **Event coverage**: `message.updated` (message metadata error, or `finish: 'content-filter'` before its error is attached), `session.error` (session-level error), `session.status` (`retry` status). The content-filter finish and its later error share message-ID deduplication. On v1, completed error-free `finish: 'unknown'` messages with confirmed tool-free parts preserve retries and chain state while a per-session streak counts distinct IDs, triggering request-scoped abort and replay at three; unreadable parts neither count nor break the streak. A reply read across a confirmed fallback switch belongs to the previous model and does not count against the backup.
@@ -104,7 +104,7 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 
 ### Deduplication (identity-based)
 - No error-text-only time-window heuristic: identical text can be the next real failure. The one-shot cross-event bridge requires an exact payload, current model, current turn, and short time-window match.
-- `message.updated` dedupes by message id; `session.status` dedupes by the `retryAttempt` map (`{turn, model, attempt}`) with `attempt <= previous.attempt` comparison, so repeated/out-of-order attempts dedupe but an incremented attempt is processed. An id-less terminal event is otherwise unique; only an exact one-shot match to its paired error event reuses that incident.
+- `message.updated` dedupes by message id; `session.status` dedupes by `retryEpisode` (model + episode id + `seen` attempts, so repeated/out-of-order attempts dedupe but an incremented attempt is processed). An id-less terminal event is otherwise unique; only an exact one-shot match to its paired error event reuses that incident.
 - Dedup and the `inProgress` guard run **before** budget consumption, so a duplicate or concurrently-dropped event cannot burn a budget slot.
 
 ## Flow
@@ -133,7 +133,7 @@ Log fallback event
 ```
 
 ### Key Operations
-1. **Abort with timeout**: `abortSessionWithTimeout()` calls `client.session.abort()` wrapped in a timeout (default 1000ms).
+1. **Abort with timeout**: `abortSessionWithTimeout()` sends Ctrl+C to pane then kills it after 250ms delay
 2. **Message retrieval**: Queries session messages via `client.session.messages()` and finds last user message
 3. **Model switching**: Uses `parseModelReference()` to extract providerID/modelID from chain entry
 4. **Re-prompting**: Calls `promptAsync()` which queues prompt and returns immediately (non-blocking); appends trusted internal-initiator provenance so the replay is not mistaken for new external user input
@@ -166,7 +166,7 @@ Log fallback event
 - **Configuration**: Fallback chains provided at construction from agent configurations
 
 ### Configuration Schema
-Fallback chains are provided as `Record<string, ReadonlyArray<ForegroundFallbackModel>>` where:
+Fallback chains are provided as `Record<string, string[]>` where:
 - Key: Agent name (e.g., "orchestrator", "explorer")
 - Value: Ordered list of model strings (e.g., `["anthropic/claude-opus-4-5", "openai/gpt-4o"]`)
 
