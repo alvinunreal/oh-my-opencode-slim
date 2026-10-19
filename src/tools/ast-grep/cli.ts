@@ -66,20 +66,10 @@ export function startBackgroundInit(): void {
 }
 
 export async function runSg(options: RunOptions): Promise<SgResult> {
-  const args = [
-    'run',
-    '-p',
-    options.pattern,
-    '--lang',
-    options.lang,
-    '--json=compact',
-  ];
+  const args = ['-p', options.pattern, '--lang', options.lang];
 
   if (options.rewrite) {
     args.push('-r', options.rewrite);
-    if (options.updateAll) {
-      args.push('--update-all');
-    }
   }
 
   if (options.context && options.context > 0) {
@@ -107,7 +97,7 @@ export async function runSg(options: RunOptions): Promise<SgResult> {
 
   const timeout = DEFAULT_TIMEOUT_MS;
 
-  const proc = crossSpawn([cliPath, ...args], {
+  const proc = crossSpawn([cliPath, 'run', '--json=compact', ...args], {
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -229,6 +219,21 @@ export async function runSg(options: RunOptions): Promise<SgResult> {
   }
 
   const totalMatches = matches.length;
+
+  // In --json mode ast-grep only reports rewrites and never writes them, even
+  // with --update-all. Apply them in a second, non-JSON run.
+  if (options.rewrite && options.updateAll && totalMatches > 0) {
+    const applyError = await applyRewrites(cliPath, args, timeout);
+    if (applyError) {
+      return {
+        matches: [],
+        totalMatches: 0,
+        truncated: false,
+        error: applyError,
+      };
+    }
+  }
+
   const matchesTruncated = totalMatches > DEFAULT_MAX_MATCHES;
   const finalMatches = matchesTruncated
     ? matches.slice(0, DEFAULT_MAX_MATCHES)
@@ -244,6 +249,41 @@ export async function runSg(options: RunOptions): Promise<SgResult> {
         ? 'max_matches'
         : undefined,
   };
+}
+
+async function applyRewrites(
+  cliPath: string,
+  args: string[],
+  timeout: number,
+): Promise<string | undefined> {
+  const proc = crossSpawn([cliPath, 'run', '--update-all', ...args], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => {
+      proc.kill();
+      resolve('timeout');
+    }, timeout);
+  });
+
+  try {
+    const exitCode = await Promise.race([proc.exited, timedOut]);
+    if (exitCode === 'timeout') {
+      return `Rewrite timeout after ${timeout}ms`;
+    }
+    if (exitCode !== 0) {
+      const stderr = (await proc.stderr()).trim();
+      return stderr || `ast-grep exited with code ${exitCode}`;
+    }
+    return undefined;
+  } catch (e) {
+    return `Failed to apply rewrite: ${(e as Error).message}`;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function isCliAvailable(): boolean {
