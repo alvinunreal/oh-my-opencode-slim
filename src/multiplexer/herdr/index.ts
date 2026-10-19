@@ -179,13 +179,16 @@ export class HerdrMultiplexer implements Multiplexer {
         stderr: 'ignore',
       }).exited;
 
-      // 3. Run opencode attach in the new pane
-      const opencodeCmd = buildViewCommand(
-        sessionId,
-        serverUrl,
-        attachDir,
-        options,
-      );
+      // 3. Run opencode attach in the new pane. Herdr types the command
+      // into the pane's shell, which it spawns itself from its own
+      // `terminal.default_shell` (pwsh by default on Windows) — independent
+      // of this process's `$SHELL`, which a Git Bash parent may have set.
+      // A herdr `default_shell` customized to a POSIX shell is not
+      // detectable from here (documented limitation).
+      const opencodeCmd = buildViewCommand(sessionId, serverUrl, attachDir, {
+        ...options,
+        paneShell: process.platform === 'win32' ? 'powershell' : undefined,
+      });
 
       const runProc = crossSpawn([herdr, 'pane', 'run', paneId, opencodeCmd], {
         stdout: 'pipe',
