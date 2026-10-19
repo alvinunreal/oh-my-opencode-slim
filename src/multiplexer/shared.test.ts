@@ -277,6 +277,49 @@ describe('buildOpencodeAttachCommand on Windows pane shells', () => {
     }
   });
 
+  test('pwsh quoting doubles apostrophes in the executable and arguments', async () => {
+    const restore = stubWin32Shell(
+      'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+    );
+    try {
+      const { buildOpencodeAttachCommand } = await importShared();
+      expect(
+        buildOpencodeAttachCommand(
+          'sess',
+          'http://x',
+          "C:\\King's repo",
+          "C:\\Users\\King's Tools\\opencode.exe",
+        ),
+      ).toBe(
+        "& 'C:/Users/King''s Tools/opencode.exe' attach 'http://x' --session 'sess' --dir 'C:/King''s repo'",
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  test('an explicit paneShell hint overrides $SHELL inference (herdr panes)', async () => {
+    const restore = stubWin32Shell('C:\\Program Files\\Git\\bin\\bash.exe');
+    try {
+      const { buildViewCommand } = await importShared();
+      // Git Bash parent ($SHELL) + herdr's own pwsh pane: the hint wins.
+      expect(
+        buildViewCommand('sess', 'http://x', 'C:\\repo', {
+          executable: 'C:\\Users\\foo\\opencode.exe',
+          paneShell: 'powershell',
+        }),
+      ).toStartWith("& 'C:/Users/foo/opencode.exe' attach");
+      // Without the hint, $SHELL inference still picks the POSIX form.
+      expect(
+        buildViewCommand('sess', 'http://x', 'C:\\repo', {
+          executable: 'C:\\Users\\foo\\opencode.exe',
+        }),
+      ).toStartWith("'C:/Users/foo/opencode.exe' attach");
+    } finally {
+      restore();
+    }
+  });
+
   test('Windows PowerShell panes use the call operator too', async () => {
     const restore = stubWin32Shell(
       'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
