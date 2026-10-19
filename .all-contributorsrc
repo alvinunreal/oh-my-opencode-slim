@@ -1244,6 +1244,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "jipeng6036-del",
+      "name": "Jasper",
+      "avatar_url": "https://avatars.githubusercontent.com/u/241105014?v=4",
+      "profile": "https://github.com/jipeng6036-del",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"
