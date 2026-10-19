@@ -22,11 +22,25 @@ export function normalizePathForShell(directory: string): string {
     : directory;
 }
 
-/** Quote an executable for sh -lc: bare fallback stays bare, Windows
- * backslashes become / so MSYS2/Git Bash single quotes don't preserve them. */
+/** Quote an executable for the shell that will run the command: bare
+ * fallback stays bare, Windows backslashes become / so MSYS2/Git Bash single
+ * quotes don't preserve them, and Windows shells that cannot execute a
+ * leading POSIX-quoted string get their own form — PowerShell needs the
+ * `&` call operator (a leading quoted string is a parse error) and cmd
+ * needs double quotes (single quotes are literal there). */
 function formatExecutableForShell(executable: string): string {
   if (executable === 'opencode') return executable;
-  return quoteShellArg(normalizePathForShell(executable));
+  const normalized = normalizePathForShell(executable);
+  if (process.platform === 'win32') {
+    // The herdr adapter runs the command in the pane's shell, not in
+    // $SHELL, and herdr's Windows default pane shell is pwsh; treat any
+    // non-POSIX shell name (including an unset $SHELL) as PowerShell.
+    const name = shellName(process.env.SHELL || '');
+    if (name === 'cmd') return `"${normalized}"`;
+    if (!POSIX_SHELLS.has(name) && name !== 'fish')
+      return `& ${quoteShellArg(normalized)}`;
+  }
+  return quoteShellArg(normalized);
 }
 
 export function buildOpencodeAttachCommand(
