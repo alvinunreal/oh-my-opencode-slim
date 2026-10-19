@@ -86,9 +86,10 @@ function eventGeneration(input: {
   return finiteNumber(info?.generation) ? info.generation : undefined;
 }
 
-function suppliedEventActivityAt(input: {
-  event: { properties?: Record<string, unknown> };
-}): number | undefined {
+function eventActivityAt(
+  input: { event: { properties?: Record<string, unknown> } },
+  fallback: number,
+): number {
   const properties = input.event.properties;
   const info = isRecord(properties?.info) ? properties.info : undefined;
   const infoTime = isRecord(info?.time) ? info.time : undefined;
@@ -100,14 +101,8 @@ function suppliedEventActivityAt(input: {
     info?.timestamp,
     infoTime?.updated,
   ];
-  return directCandidates.find(finiteNumber);
-}
-
-function eventActivityAt(
-  input: { event: { properties?: Record<string, unknown> } },
-  fallback: number,
-): number {
-  return suppliedEventActivityAt(input) ?? fallback;
+  const observed = directCandidates.find(finiteNumber);
+  return observed === undefined ? fallback : observed;
 }
 
 function rememberSessionGeneration(
@@ -171,50 +166,13 @@ function observeSessionEvent(
     activityIsBeforeCurrentBusy ||
     (fence.awaitingActivity && !isBusy && !suppliedCurrentGeneration);
 
-  // A host-stamped timestamp proving activity after the terminal transition
-  // reopens the run; unproven events keep the fence.
-  const suppliedAt = suppliedEventActivityAt(input);
-  const terminalJob =
-    job.state === 'completed' ||
-    job.state === 'error' ||
-    job.state === 'cancelled' ||
-    job.state === 'stopped';
-  const tsProvesCurrentRun =
-    suppliedAt !== undefined &&
-    terminalJob &&
-    job.completedAt !== undefined &&
-    suppliedAt > job.completedAt &&
-    suppliedAt >= job.runStartedAt &&
-    (job.lastLiveBusyAt === undefined || suppliedAt >= job.lastLiveBusyAt);
-
   // A host event without provenance can only establish a local activity
   // boundary. Do not let that first post-relaunch busy observation mutate G2;
   // a later event runs after the boundary has been established.
   const activityFenceOnly =
-    !stale &&
-    fence.awaitingActivity &&
-    isBusy &&
-    !suppliedCurrentGeneration &&
-    !tsProvesCurrentRun;
-  if (
-    !stale &&
-    (activityFenceOnly || suppliedCurrentGeneration || tsProvesCurrentRun)
-  ) {
-    if (fence.awaitingActivity && tsProvesCurrentRun) {
-      log('[task-session-manager] fence lifted by timestamped activity', {
-        sessionID,
-        generation: job.generation,
-        observedAt: suppliedAt,
-        completedAt: job.completedAt,
-      });
-    }
+    !stale && fence.awaitingActivity && isBusy && !suppliedCurrentGeneration;
+  if (!stale && (activityFenceOnly || suppliedCurrentGeneration)) {
     fence.awaitingActivity = false;
-  }
-  if (activityFenceOnly) {
-    log('[task-session-manager] busy swallowed by activity fence', {
-      sessionID,
-      generation: job.generation,
-    });
   }
 
   return {

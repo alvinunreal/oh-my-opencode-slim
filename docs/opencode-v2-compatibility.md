@@ -476,18 +476,6 @@ currently break this plugin:
   the idle pair so the error-then-idle flow the event-router expects is
   preserved). Without this synthesis the orchestrator-wake scheduler never
   arms on live v2 hosts.
-- **Run identity is the named convergence horizon.** Execution payloads carry
-  `{sessionID}` only — no generation, no attempt id, no run token — so the
-  plugin maintains its own provenance layer (session-event fences, timestamp
-  scavenging, `lastLiveBusyAt` windows, the router's proven-fresh guard).
-  This layer is deliberately temporary: when a host exposes per-run identity
-  (tracked upstream in anomalyco/opencode#56115-class work; delivery-ack
-  evidence is the adjacent gap), the fence map, `eventGeneration` /
-  `suppliedEventActivityAt`, the router's `tsProvesCurrentRun`, and its
-  `lastLiveBusyAt` routing windows are deleted in favor of an attempt
-  compare; the terminal gate, the native-delivery seen-set, and the
-  revived-run delivery ladder survive. Do not extend the provenance layer
-  further — the next unit of work on that axis belongs in the host.
 - **Transcript user messages carry no identity.** Context-hook
   transcript user messages on live v2 hosts carry `{id, time, text,
   type}` only — no `agent`, no `sessionID`. The v1 injection gates
