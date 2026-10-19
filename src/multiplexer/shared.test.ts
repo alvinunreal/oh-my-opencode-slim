@@ -148,14 +148,26 @@ describe('gracefulClosePane', () => {
 
 describe('buildOpencodeAttachCommand', () => {
   test('quotes an absolute executable containing spaces and apostrophes', async () => {
-    const { buildOpencodeAttachCommand } = await importShared();
-    const cmd = buildOpencodeAttachCommand(
-      'sess',
-      'url',
-      '/repo',
-      "/Users/King's Tools/opencode",
-    );
-    expect(cmd).toStartWith("'/Users/King'\\''s Tools/opencode' attach");
+    const original = process.platform;
+    Object.defineProperty(process, 'platform', {
+      value: 'linux',
+      configurable: true,
+    });
+    try {
+      const { buildOpencodeAttachCommand } = await importShared();
+      const cmd = buildOpencodeAttachCommand(
+        'sess',
+        'url',
+        '/repo',
+        "/Users/King's Tools/opencode",
+      );
+      expect(cmd).toStartWith("'/Users/King'\\''s Tools/opencode' attach");
+    } finally {
+      Object.defineProperty(process, 'platform', {
+        value: original,
+        configurable: true,
+      });
+    }
   });
 
   test('resolves host executable with env, process, and bare fallbacks', async () => {
@@ -222,6 +234,118 @@ describe('buildOpencodeAttachCommand', () => {
         value: original,
         configurable: true,
       });
+    }
+  });
+});
+
+describe('buildOpencodeAttachCommand on Windows pane shells', () => {
+  const exe = 'C:\\Users\\foo\\opencode.exe';
+
+  /** Stubs win32 plus a pane shell (unset = herdr default pwsh), returns a restore. */
+  function stubWin32Shell(shell: string | undefined): () => void {
+    const originalPlatform = process.platform;
+    const originalShell = process.env.SHELL;
+    Object.defineProperty(process, 'platform', {
+      value: 'win32',
+      configurable: true,
+    });
+    if (shell === undefined) delete process.env.SHELL;
+    else process.env.SHELL = shell;
+    return () => {
+      Object.defineProperty(process, 'platform', {
+        value: originalPlatform,
+        configurable: true,
+      });
+      if (originalShell === undefined) delete process.env.SHELL;
+      else process.env.SHELL = originalShell;
+    };
+  }
+
+  test('pwsh panes get the call operator before the quoted executable', async () => {
+    const restore = stubWin32Shell(
+      'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+    );
+    try {
+      const { buildOpencodeAttachCommand } = await importShared();
+      expect(
+        buildOpencodeAttachCommand('sess', 'http://x', 'C:\\repo', exe),
+      ).toBe(
+        "& 'C:/Users/foo/opencode.exe' attach 'http://x' --session 'sess' --dir 'C:/repo'",
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  test('Windows PowerShell panes use the call operator too', async () => {
+    const restore = stubWin32Shell(
+      'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+    );
+    try {
+      const { buildOpencodeAttachCommand } = await importShared();
+      expect(
+        buildOpencodeAttachCommand('sess', 'http://x', 'C:\\repo', exe),
+      ).toStartWith("& 'C:/Users/foo/opencode.exe' attach");
+    } finally {
+      restore();
+    }
+  });
+
+  test('an unset $SHELL keeps the PowerShell form (herdr default pane shell)', async () => {
+    const restore = stubWin32Shell(undefined);
+    try {
+      const { buildOpencodeAttachCommand } = await importShared();
+      expect(
+        buildOpencodeAttachCommand('sess', 'http://x', 'C:\\repo', exe),
+      ).toStartWith("& 'C:/Users/foo/opencode.exe' attach");
+    } finally {
+      restore();
+    }
+  });
+
+  test('cmd panes get a double-quoted executable', async () => {
+    const restore = stubWin32Shell('C:\\Windows\\System32\\cmd.exe');
+    try {
+      const { buildOpencodeAttachCommand } = await importShared();
+      expect(
+        buildOpencodeAttachCommand('sess', 'http://x', 'C:\\repo', exe),
+      ).toStartWith('"C:/Users/foo/opencode.exe" attach');
+    } finally {
+      restore();
+    }
+  });
+
+  test('Git Bash panes keep the POSIX single-quoted form', async () => {
+    const restore = stubWin32Shell('C:\\Program Files\\Git\\bin\\bash.exe');
+    try {
+      const { buildOpencodeAttachCommand } = await importShared();
+      expect(
+        buildOpencodeAttachCommand('sess', 'http://x', 'C:\\repo', exe),
+      ).toStartWith("'C:/Users/foo/opencode.exe' attach");
+    } finally {
+      restore();
+    }
+  });
+
+  test('non-Windows platforms never emit the call operator', async () => {
+    const originalPlatform = process.platform;
+    const originalShell = process.env.SHELL;
+    Object.defineProperty(process, 'platform', {
+      value: 'linux',
+      configurable: true,
+    });
+    try {
+      const { buildOpencodeAttachCommand } = await importShared();
+      expect(
+        buildOpencodeAttachCommand('sess', 'http://x', '/repo', '/opt/opencode'),
+      ).toStartWith("'/opt/opencode' attach");
+    } finally {
+      Object.defineProperty(process, 'platform', {
+        value: originalPlatform,
+        configurable: true,
+      });
+      if (originalShell === undefined) delete process.env.SHELL;
+      else process.env.SHELL = originalShell;
     }
   });
 });
@@ -432,15 +556,27 @@ describe('buildViewCommand', () => {
   });
 
   test('v2 flavors quote directories, session ids and executables', async () => {
-    const { buildViewCommand } = await importShared();
-    expect(
-      buildViewCommand("s'es s", 'http://x', "/tmp/a b's", {
-        viewerFlavor: 'v2-shared',
-        executable: "/opt/King's/opencode",
-      }),
-    ).toBe(
-      "'/opt/King'\\''s/opencode' --session 's'\\''es s' '/tmp/a b'\\''s'",
-    );
+    const original = process.platform;
+    Object.defineProperty(process, 'platform', {
+      value: 'linux',
+      configurable: true,
+    });
+    try {
+      const { buildViewCommand } = await importShared();
+      expect(
+        buildViewCommand("s'es s", 'http://x', "/tmp/a b's", {
+          viewerFlavor: 'v2-shared',
+          executable: "/opt/King's/opencode",
+        }),
+      ).toBe(
+        "'/opt/King'\\''s/opencode' --session 's'\\''es s' '/tmp/a b'\\''s'",
+      );
+    } finally {
+      Object.defineProperty(process, 'platform', {
+        value: original,
+        configurable: true,
+      });
+    }
   });
 
   test('v2-remote normalizes Windows backslash paths', async () => {
@@ -463,12 +599,14 @@ describe('buildViewCommand', () => {
     }
   });
 
-  test('normalizes Windows executable backslashes in both builders', async () => {
+  test('normalizes Windows executable backslashes in both builders (Git Bash pane)', async () => {
     const original = process.platform;
+    const originalShell = process.env.SHELL;
     Object.defineProperty(process, 'platform', {
       value: 'win32',
       configurable: true,
     });
+    process.env.SHELL = 'C:\\Program Files\\Git\\bin\\bash.exe';
     try {
       const { buildOpencodeAttachCommand, buildViewCommand } =
         await importShared();
@@ -492,6 +630,8 @@ describe('buildViewCommand', () => {
         value: original,
         configurable: true,
       });
+      if (originalShell === undefined) delete process.env.SHELL;
+      else process.env.SHELL = originalShell;
     }
   });
 });
