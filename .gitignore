@@ -103,3 +103,10 @@ companion/target/
 .slim/deepwork/
 .codegraph/
 .worktrees/
+.slim/codemap.json
+.slim/omos-code-review-session-ids.txt
+CATEGORIZED_DECISIONS.md
+DECISIONS.md
+OPEN_QUESTIONS.md
+PONYTAIL_TRIMMED.md
+SYNTHESIS.md

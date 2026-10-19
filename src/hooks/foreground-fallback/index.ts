@@ -141,7 +141,7 @@ const FAILOVER_ERROR_TYPES = new Set([
   'provider.auth',
   'provider.internal',
 ]);
-// (ponytail) validated against real OpenCode error shapes
+// shortcut: validated against real OpenCode error shapes, when to upgrade: if we find a better way
 const TRANSPORT_CODES = new Set([
   'ECONNREFUSED',
   'ECONNRESET',
@@ -196,6 +196,8 @@ const REQUEST_ERROR_PATTERNS = [
   /\bmodel is not available\b/i,
   /\bunsupported model\b/i,
   /\bunknown model\b/i,
+  /\bmodel unavailable\b/i,
+  /\bvariant unavailable\b/i,
   // OpenCode's ProviderModelNotFoundError uses "Model not found" wording; the
   // model may exist on a later entry in the configured chain.
   /\bmodel not found\b/i,
@@ -223,10 +225,7 @@ const GATEWAY_BACKPRESSURE_PATTERNS = [
 ];
 /** 4xx other than 408 (timeout) and 429 (rate limit). */
 const DETERMINISTIC_4XX_PATTERN = /\b4(?!08\b|29\b)\d\d\b/;
-// "upstream error" alone is ambiguous: proxies wrap deterministic 4xx (a
-// 400-bodied validation failure, a policy rejection) in the same wording.
-// Only treat it as transient when the same message carries a 5xx status,
-// an outage marker, or a timeout/unavailable marker.
+// See failoverScope for rationale.
 const UPSTREAM_ERROR_PATTERN = /\bupstream error\b/i;
 const UPSTREAM_TRANSIENT_MARKERS = [
   /\b5\d\d\b/,
@@ -1171,6 +1170,7 @@ export class ForegroundFallbackManager {
   /** Drop all per-session state once the session is deleted. */
   private forgetSession(id: string): void {
     this.sessionModel.delete(id);
+    this.sessionParent.delete(id);
     this.activeFallback.delete(id);
     this.sessionAgent.delete(id);
     this.sessionTried.delete(id);
