@@ -15,6 +15,12 @@ export function quoteShellArg(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+/** Quote a PowerShell single-quoted string: an apostrophe doubles (`''`),
+ * and backslashes have no escape meaning inside single quotes. */
+function quotePowerShellArg(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
 /** Normalize Windows backslashes to / so sh -lc (MSYS2/Git Bash) doesn't treat them as escape chars. */
 export function normalizePathForShell(directory: string): string {
   return process.platform === 'win32'
@@ -22,24 +28,46 @@ export function normalizePathForShell(directory: string): string {
     : directory;
 }
 
-/** Quote an executable for the shell that will run the command: bare
+/** Quoting dialect of the shell that executes a pane command. */
+export type PaneShellQuoting = 'posix' | 'powershell' | 'cmd';
+
+/**
+ * The quoting dialect a pane command needs. Adapters that know their
+ * execution shell pass it via `paneShell` (herdr types the command into a
+ * pane shell it spawns itself); otherwise `$SHELL` is the best inference on
+ * win32. POSIX platforms always use POSIX quoting.
+ */
+function paneShellQuoting(paneShell?: PaneShellQuoting): PaneShellQuoting {
+  if (paneShell) return paneShell;
+  if (process.platform !== 'win32') return 'posix';
+  const name = shellName(process.env.SHELL || '');
+  if (name === 'cmd') return 'cmd';
+  if (POSIX_SHELLS.has(name) || name === 'fish') return 'posix';
+  return 'powershell';
+}
+
+/** Quote one command argument for the pane shell dialect. cmd keeps POSIX
+ * single quotes for arguments (pre-existing limitation, documented). */
+function quoteArgFor(quoting: PaneShellQuoting, value: string): string {
+  return quoting === 'powershell'
+    ? quotePowerShellArg(value)
+    : quoteShellArg(value);
+}
+
+/** Format the executable for the shell that will run the command: bare
  * fallback stays bare, Windows backslashes become / so MSYS2/Git Bash single
  * quotes don't preserve them, and Windows shells that cannot execute a
  * leading POSIX-quoted string get their own form — PowerShell needs the
  * `&` call operator (a leading quoted string is a parse error) and cmd
  * needs double quotes (single quotes are literal there). */
-function formatExecutableForShell(executable: string): string {
+function formatExecutableForShell(
+  executable: string,
+  quoting: PaneShellQuoting,
+): string {
   if (executable === 'opencode') return executable;
   const normalized = normalizePathForShell(executable);
-  if (process.platform === 'win32') {
-    // The herdr adapter runs the command in the pane's shell, not in
-    // $SHELL, and herdr's Windows default pane shell is pwsh; treat any
-    // non-POSIX shell name (including an unset $SHELL) as PowerShell.
-    const name = shellName(process.env.SHELL || '');
-    if (name === 'cmd') return `"${normalized}"`;
-    if (!POSIX_SHELLS.has(name) && name !== 'fish')
-      return `& ${quoteShellArg(normalized)}`;
-  }
+  if (quoting === 'cmd') return `"${normalized}"`;
+  if (quoting === 'powershell') return `& ${quotePowerShellArg(normalized)}`;
   return quoteShellArg(normalized);
 }
 
@@ -51,16 +79,19 @@ export function buildOpencodeAttachCommand(
   // (zellij `sh -lc`, tmux server PATH) may not have `opencode` on PATH
   // (e.g. linuxbrew installs), #514.
   executable = resolveOpencodeExecutable(),
+  // Quoting dialect of the shell that runs the command (see
+  // paneShellQuoting).
+  quoting: PaneShellQuoting = paneShellQuoting(),
 ): string {
   const attachDir = normalizePathForShell(directory);
   return [
-    formatExecutableForShell(executable),
+    formatExecutableForShell(executable, quoting),
     'attach',
-    quoteShellArg(serverUrl),
+    quoteArgFor(quoting, serverUrl),
     '--session',
-    quoteShellArg(sessionId),
+    quoteArgFor(quoting, sessionId),
     '--dir',
-    quoteShellArg(attachDir),
+    quoteArgFor(quoting, attachDir),
   ].join(' ');
 }
 
@@ -79,6 +110,13 @@ export type ViewerCommandOptions = Pick<
   /** Absolute host binary; defaults to the resolved host binary (falls
    back to bare `opencode`). */
   executable?: string;
+  /**
+   * Quoting dialect of the shell that executes the pane command. Adapters
+   * that type the command into a pane they do not launch from `$SHELL`
+   * (herdr types into its own `default_shell` pane) pass their known
+   * dialect; when absent, `$SHELL` is inferred on win32.
+   */
+  paneShell?: PaneShellQuoting;
 };
 
 /**
@@ -108,23 +146,27 @@ export function buildViewCommand(
   const flavor = options.viewerFlavor ?? 'v1';
   const executable = options.executable ?? resolveOpencodeExecutable();
   const mini = options.viewerSurface === 'mini';
+  const quoting = paneShellQuoting(options.paneShell);
   if (flavor === 'v1') {
     const attach = buildOpencodeAttachCommand(
       sessionId,
       serverUrl,
       directory,
       executable,
+      quoting,
     );
     return mini ? `${attach} --mini` : attach;
   }
   const viewDir = normalizePathForShell(directory);
   return [
-    formatExecutableForShell(executable),
+    formatExecutableForShell(executable, quoting),
     ...(mini ? ['mini'] : []),
-    ...(flavor === 'v2-remote' ? ['--server', quoteShellArg(serverUrl)] : []),
+    ...(flavor === 'v2-remote'
+      ? ['--server', quoteArgFor(quoting, serverUrl)]
+      : []),
     '--session',
-    quoteShellArg(sessionId),
-    ...(viewerNeedsPaneCwd(options) ? [] : [quoteShellArg(viewDir)]),
+    quoteArgFor(quoting, sessionId),
+    ...(viewerNeedsPaneCwd(options) ? [] : [quoteArgFor(quoting, viewDir)]),
   ].join(' ');
 }
 
