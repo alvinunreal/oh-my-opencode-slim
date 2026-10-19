@@ -182,6 +182,25 @@ export async function runSg(options: RunOptions): Promise<SgResult> {
     return { matches: [], totalMatches: 0, truncated: false };
   }
 
+  // In --json mode ast-grep only reports rewrites and never writes them, even
+  // with --update-all. Apply them in a second, non-JSON run. Decide from the
+  // raw output, since the parsed report below may be cut short.
+  if (
+    options.rewrite &&
+    options.updateAll &&
+    stdout.trimStart().startsWith('[{')
+  ) {
+    const applyError = await applyRewrites(cliPath, args, timeout);
+    if (applyError) {
+      return {
+        matches: [],
+        totalMatches: 0,
+        truncated: false,
+        error: applyError,
+      };
+    }
+  }
+
   const outputTruncated = stdout.length >= DEFAULT_MAX_OUTPUT_BYTES;
   const outputToProcess = outputTruncated
     ? stdout.substring(0, DEFAULT_MAX_OUTPUT_BYTES)
@@ -219,20 +238,6 @@ export async function runSg(options: RunOptions): Promise<SgResult> {
   }
 
   const totalMatches = matches.length;
-
-  // In --json mode ast-grep only reports rewrites and never writes them, even
-  // with --update-all. Apply them in a second, non-JSON run.
-  if (options.rewrite && options.updateAll && totalMatches > 0) {
-    const applyError = await applyRewrites(cliPath, args, timeout);
-    if (applyError) {
-      return {
-        matches: [],
-        totalMatches: 0,
-        truncated: false,
-        error: applyError,
-      };
-    }
-  }
 
   const matchesTruncated = totalMatches > DEFAULT_MAX_MATCHES;
   const finalMatches = matchesTruncated

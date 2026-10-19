@@ -79,6 +79,27 @@ describe('runSg rewrite', () => {
     );
   });
 
+  test('writes the rewrite even when the report is cut short', async () => {
+    // A single match bigger than DEFAULT_MAX_OUTPUT_BYTES, so the JSON report
+    // can't be parsed into any complete match.
+    const big = `function add(a, b) {\n  console.log("${'x'.repeat(1024 * 1024)}");\n}\n`;
+    writeFileSync(file, big);
+
+    const result = await runSgInChild({
+      pattern: 'console.log($$$ARGS)',
+      rewrite: 'console.error($$$ARGS)',
+      lang: 'javascript',
+      paths: [file],
+      updateAll: true,
+    });
+
+    expect(result.truncated).toBe(true);
+    expect(result.truncatedReason).toBe('max_output_bytes');
+    expect(readFileSync(file, 'utf8')).toBe(
+      big.replace('console.log', 'console.error'),
+    );
+  });
+
   test('leaves the file alone without updateAll', async () => {
     const result = await runSgInChild({
       pattern: 'console.log($$$ARGS)',
