@@ -61,7 +61,8 @@ function host(options?: {
       id: CHILD,
       parentID: PARENT,
       agent: 'fixer',
-      time: { created: 9 },
+      outcome: 'succeeded',
+      time: { created: 9, idle: 13 },
     }));
   return buildPluginInput({
     directory: '/tmp/omo-implementation-repair',
@@ -90,6 +91,47 @@ function deps(board: BackgroundJobBoard, input: ReturnType<typeof host>) {
 }
 
 describe('v2 historical context', () => {
+  test('recovers a host-confirmed answer without a transcript idle marker', async () => {
+    const input = host({
+      context: () => round().filter((entry) => entry.type !== 'idle'),
+    });
+    const board = new BackgroundJobBoard();
+    expect(
+      await createSessionRecovery({
+        input: input as never,
+        backgroundJobBoard: board,
+        hostFlavor: 'v2',
+      })({ parentSessionID: PARENT, requested: CHILD }),
+    ).toEqual({ kind: 'recovered', taskID: CHILD });
+    expect(board.get(CHILD)).toMatchObject({
+      state: 'completed',
+      resultSummary: 'LAB-MARKER',
+    });
+  });
+
+  test('does not import a later assistant using an older host success', async () => {
+    const input = host({
+      context: () => [
+        ...round(),
+        {
+          id: 'new-answer',
+          type: 'assistant',
+          agent: 'fixer',
+          time: { created: 14 },
+          content: [{ type: 'text', text: 'PARTIAL' }],
+        },
+      ],
+    });
+    const board = new BackgroundJobBoard();
+    const result = await createSessionRecovery({
+      input: input as never,
+      backgroundJobBoard: board,
+      hostFlavor: 'v2',
+    })({ parentSessionID: PARENT, requested: CHILD });
+    expect(result.kind).toBe('refused');
+    expect(board.get(CHILD)).toBeUndefined();
+  });
+
   test('keeps scalar idle time, agent, and user text', async () => {
     const input = host();
     const response = await input.client.session.messages({
@@ -378,7 +420,8 @@ test('real parent context pairs an alias through the shim', async () => {
           id: childID,
           parentID: PARENT,
           agent,
-          time: { created: 9 },
+          outcome: 'succeeded',
+          time: { created: 9, idle: 13 },
         };
       },
       context: async (args: { sessionID: string }) =>

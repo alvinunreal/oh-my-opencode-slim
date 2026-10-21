@@ -334,7 +334,7 @@ async function recoverRetainedSession(
   }
   const round =
     options.hostFlavor === 'v2'
-      ? classifyV2HistoricalRound(childTranscript)
+      ? classifyV2HistoricalRound(childTranscript, hosted.info)
       : classifyCurrentDeliveredRound(childTranscript);
   if (round.verdict === 'unreadable') {
     return refuse(
@@ -534,6 +534,7 @@ async function readLiveStatus(
 
 interface HostSession {
   kind: 'ok';
+  info: Record<string, unknown>;
   parentID: string;
   agent?: string;
   createdAt?: number;
@@ -582,6 +583,7 @@ async function readHostSession(
         : undefined;
     return {
       kind: 'ok',
+      info: data ?? {},
       parentID,
       ...(agent ? { agent } : {}),
       ...(createdAt !== undefined ? { createdAt } : {}),

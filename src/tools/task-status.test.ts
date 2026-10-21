@@ -811,7 +811,13 @@ describe('task_status result mode', () => {
           : []),
       ]);
       const input = buildPluginInput({
-        session: { get: async () => ({ parentID: 'parent-1' }), context },
+        session: {
+          get: async () => ({
+            parentID: 'parent-1',
+            ...(outcome ? { outcome, time: { idle: 3 } } : {}),
+          }),
+          context,
+        },
       } as never) as never;
       const output = await createTaskStatusTool({
         input,

@@ -14,6 +14,7 @@ import {
   createBackgroundJobTerminalGate,
   runtimeObservationFromSnapshot,
 } from '../utils/background-job-terminal-gate';
+import { isRecord } from '../utils/guards';
 import { getClient } from '../utils/opencode-client';
 import { SESSION_ID_PATTERN } from '../utils/session';
 import {
@@ -307,6 +308,7 @@ async function readTaskResult(
 
   const token = current ? gate.capture(current) : undefined;
   const client = getClient(options.input);
+  let hostInfo: Record<string, unknown> | undefined;
   if (typeof client.session.get === 'function') {
     const response = await client.session.get({
       path: { id: taskID },
@@ -314,6 +316,7 @@ async function readTaskResult(
     });
     if (response.data?.parentID !== parentSessionID)
       throw new Error(`Task ${requested} does not belong to this session`);
+    if (isRecord(response.data)) hostInfo = response.data;
   } else if (!current)
     throw new Error(
       `Task ${requested} is not tracked by this session and cannot be verified`,
@@ -364,6 +367,7 @@ async function readTaskResult(
   const read = await readUntrackedEvidence(
     { input: options.input, readTimeoutMs: options.readTimeoutMs },
     taskID,
+    hostInfo,
   );
   if (read.live.status === 'busy' || read.live.status === 'retry')
     return runningResultRefusal(
@@ -433,7 +437,11 @@ async function reportUntrackedTaskStatus(
     'board: untracked',
   ];
 
-  const evidence = await readUntrackedEvidence(options, identity);
+  const evidence = await readUntrackedEvidence(
+    options,
+    identity,
+    ownership.hostInfo,
+  );
   // v1's live status map is real evidence of execution; v2 has no
   // equivalent (the shim omits `status`), so this probe is v1 only.
   if (evidence.live.status === 'busy' || evidence.live.status === 'retry') {

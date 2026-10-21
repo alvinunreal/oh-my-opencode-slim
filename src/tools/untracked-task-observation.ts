@@ -81,6 +81,7 @@ export async function verifyUntrackedOwnership(
   const created = isRecord(data.time) ? data.time.created : undefined;
   return {
     kind: 'verified',
+    hostInfo: data,
     agent,
     createdAt:
       typeof created === 'number' && Number.isFinite(created)
@@ -98,11 +99,20 @@ export async function readUntrackedEvidence(
     statusTimeoutMs?: number;
   },
   identity: string,
+  hostInfo?: Record<string, unknown>,
 ): Promise<UntrackedEvidence> {
   const readTimeoutMs = options.readTimeoutMs ?? DEFAULT_READ_TIMEOUT_MS;
   const client = getClient(options.input);
   const v2 = (options.input as { hostFlavor?: string }).hostFlavor === 'v2';
-  if (v2) return readTranscript(client, options, identity, readTimeoutMs, true);
+  if (v2)
+    return readTranscript(
+      client,
+      options,
+      identity,
+      readTimeoutMs,
+      true,
+      hostInfo,
+    );
   const snapshot = await getRuntimeSessionStatusSnapshot(options.input, {
     timeoutMs: options.statusTimeoutMs,
   });
@@ -127,6 +137,7 @@ async function readTranscript(
   identity: string,
   readTimeoutMs: number,
   v2: boolean,
+  hostInfo?: Record<string, unknown>,
 ): Promise<UntrackedEvidence> {
   const live: UntrackedEvidence['live'] = { status: v2 ? 'v2' : 'absent' };
   try {
@@ -145,7 +156,7 @@ async function readTranscript(
     return {
       live,
       round: v2
-        ? classifyV2HistoricalRound(transcript)
+        ? classifyV2HistoricalRound(transcript, hostInfo ?? {})
         : classifyTerminalEvidence(transcript),
     };
   } catch (error) {

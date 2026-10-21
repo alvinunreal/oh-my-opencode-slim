@@ -73,8 +73,9 @@ function harness(
         id: childID,
         parentID: options.foreign ? 'foreign' : parentID,
         agent: 'explorer',
-        outcome: 'completed',
-        time: { idle: Date.now() },
+        ...(options.busy
+          ? {}
+          : { outcome: 'succeeded', time: { idle: Date.now() } }),
       }),
       context: async ({ sessionID }: { sessionID: string }) =>
         sessionID === parentID ? (options.parentTranscript ?? []) : transcript,

@@ -3,9 +3,90 @@ import type { PluginInput } from '@opencode-ai/plugin';
 import {
   classifyAssistantTurnEvidence,
   classifyTerminalEvidence,
+  classifyV2HistoricalRound,
   fetchChildTranscript,
   stringifyError,
 } from './child-transcript';
+
+describe('V2 host outcome attribution', () => {
+  const input = {
+    info: { id: 'input', role: 'user', time: { created: 10 } },
+    parts: [{ type: 'text', text: 'work' }],
+  };
+  const answer = {
+    info: {
+      id: 'answer',
+      role: 'assistant',
+      time: { created: 11, completed: 12 },
+    },
+    parts: [{ type: 'text', text: 'RESULT' }],
+  };
+  const host = { outcome: 'succeeded', time: { idle: 13 } };
+
+  test('uses the host outcome without requiring a transcript idle marker', () => {
+    expect(
+      classifyV2HistoricalRound({ data: [input, answer] }, host),
+    ).toMatchObject({ verdict: 'completed', text: 'RESULT' });
+  });
+
+  test('never imports an assistant newer than the host terminal', () => {
+    const newer = {
+      ...answer,
+      info: { ...answer.info, time: { created: 14 } },
+    };
+    expect(
+      classifyV2HistoricalRound({ data: [input, answer, newer] }, host).verdict,
+    ).toBe('incomplete');
+  });
+
+  test.each(['failed', 'interrupted'])(
+    'recognizes textless %s outcomes',
+    (outcome) => {
+      expect(
+        classifyV2HistoricalRound({ data: [input] }, { ...host, outcome })
+          .verdict,
+      ).toBe(outcome === 'failed' ? 'error' : 'interrupted');
+    },
+  );
+
+  test.each([
+    { outcome: 'succeeded' },
+    { time: { idle: 13 } },
+    { outcome: 'succeeded', time: { idle: Number.NaN } },
+  ])('refuses partial or malformed host projections', (info) => {
+    expect(
+      classifyV2HistoricalRound({ data: [input, answer] }, info).verdict,
+    ).toBe('unreadable');
+  });
+
+  test('pending host work cannot borrow a historical transcript terminal', () => {
+    const idle = {
+      info: { sourceType: 'idle', outcome: 'succeeded', time: { created: 13 } },
+      parts: [],
+    };
+    expect(
+      classifyV2HistoricalRound({ data: [input, answer, idle] }, {}).verdict,
+    ).toBe('incomplete');
+  });
+
+  test('newer input and empty successful answers stay pending', () => {
+    expect(
+      classifyV2HistoricalRound(
+        {
+          data: [
+            input,
+            answer,
+            { ...input, info: { ...input.info, time: { created: 14 } } },
+          ],
+        },
+        host,
+      ).verdict,
+    ).toBe('incomplete');
+    expect(classifyV2HistoricalRound({ data: [input] }, host).verdict).toBe(
+      'incomplete',
+    );
+  });
+});
 
 function message(overrides: {
   id?: string;

@@ -179,6 +179,12 @@ input after verifying parent ownership, agent evidence, and readable history,
 without requiring status/idle APIs. Host-proven aliases retain the upstream
 ambiguity and ownership checks. Only explicit queued revival may continue an
 incomplete historical round; ordinary recovery keeps its terminal requirement.
+V2 retained-session recovery and untracked status/result reads use the host's
+`outcome` and `time.idle`, bound to the latest delivered input. They do not
+require an idle marker in the transcript. A newer assistant, unreadable
+evidence or a successful outcome without answer text remains unconfirmed.
+Failed and interrupted outcomes do not require assistant prose. This does not
+restore the job board automatically or prove interrupted work has resumed.
 The new generation is registered before the write and is not replaced by late
 acknowledgement. Only that input's completed answer is delivered to the parent;
 old execution outcomes are ignored. Transport uncertainty retains exclusion and

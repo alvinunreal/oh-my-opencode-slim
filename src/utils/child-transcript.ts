@@ -532,13 +532,14 @@ function textOf(message: TranscriptMessage): string {
 }
 
 /**
- * Historical v2 round. The latest user or synthetic message is the input
- * boundary. Only an idle/outcome after that boundary can confirm the round.
- * An older idle or Session-level outcome is not reused, and a missing time
- * is not treated as zero.
+ * Historical v2 round. A supplied session.get projection owns terminality;
+ * the transcript binds its outcome to the latest input and answer. Newer
+ * assistant activity invalidates that attribution. Without a projection,
+ * offline transcript callers require a closing idle entry instead.
  */
 export function classifyV2HistoricalRound(
   response: unknown,
+  hostInfo?: Record<string, unknown>,
 ): CurrentRoundClassification {
   if (response === undefined) {
     return { verdict: 'unreadable', reason: 'transcript source unavailable' };
@@ -581,14 +582,46 @@ export function classifyV2HistoricalRound(
     }
     if (source === 'idle') closingIdle = index;
   }
-  if (closingIdle < 0) return { verdict: 'incomplete', startedAt };
-  const idle = messages[closingIdle] as TranscriptMessage;
-  const idleOutcome = outcomeOf(idle);
-  const completedAt =
-    transcriptOrderKey(idle) ??
+  if (hostInfo === undefined && closingIdle < 0)
+    return { verdict: 'incomplete', startedAt };
+  const idle = messages[closingIdle] as TranscriptMessage | undefined;
+  let idleOutcome = idle ? outcomeOf(idle) : undefined;
+  let completedAt =
+    (idle ? transcriptOrderKey(idle) : undefined) ??
     (assistant >= 0
       ? assistantCompletedAt(messages[assistant] as TranscriptMessage)
       : undefined);
+  // session.get is authoritative when supplied. A graceful shutdown writes
+  // no idle message, and an older transcript idle cannot establish liveness.
+  if (hostInfo !== undefined) {
+    const idleAt = isRecord(hostInfo.time) ? hostInfo.time.idle : undefined;
+    const outcome = hostInfo.outcome;
+    if (outcome === undefined && idleAt === undefined)
+      return { verdict: 'incomplete', startedAt };
+    if (
+      !['succeeded', 'failed', 'interrupted'].includes(String(outcome)) ||
+      typeof idleAt !== 'number' ||
+      !Number.isSafeInteger(idleAt) ||
+      idleAt < 0
+    )
+      return {
+        verdict: 'unreadable',
+        reason: 'host outcome and idle time disagree',
+      };
+    if (startedAt === undefined || idleAt <= startedAt)
+      return { verdict: 'incomplete', startedAt };
+    for (const message of messages.slice(boundary + 1)) {
+      if (sourceTypeOf(message) !== 'assistant') continue;
+      const at = transcriptOrderKey(message);
+      const finished = assistantCompletedAt(message);
+      if (at === undefined)
+        return { verdict: 'unreadable', reason: 'assistant time is missing' };
+      if (at > idleAt || (finished !== undefined && finished > idleAt))
+        return { verdict: 'incomplete', startedAt };
+    }
+    idleOutcome = outcome as string;
+    completedAt = idleAt;
+  }
   if (idleOutcome === undefined) {
     return { verdict: 'unreadable', reason: 'idle outcome is missing' };
   }
