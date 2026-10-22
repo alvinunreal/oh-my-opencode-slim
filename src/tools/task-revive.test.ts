@@ -323,7 +323,7 @@ describe('task_revive tool', () => {
     const register = spyOn(fixture.revivedRunTracker, 'register');
     const probe = spyOn(fixture.revivedRunTracker, 'probe');
     const terminal = mock(() => {});
-    board.addTerminalStateListener(terminal);
+    board.setTerminalPublicationHandler(terminal);
     const result = taskRevive
       .execute({ task_id: 'ses_1', prompt: 'continue' }, context)
       .then(String, (error: Error) => error);

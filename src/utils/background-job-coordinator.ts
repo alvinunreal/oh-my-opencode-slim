@@ -17,7 +17,6 @@ import type {
 } from './background-job-terminal-gate';
 import { log } from './logger';
 
-type TerminalStateListener = (taskID: string) => void;
 type TerminalOutcomeListener = (record: BackgroundJobRecord) => void;
 
 /**
@@ -47,15 +46,14 @@ type LaunchIdentityListener = (event: BackgroundJobIdentityEvent) => void;
  * - Re-checks board state before notifying (handles races)
  */
 export class BackgroundJobCoordinator implements BackgroundJobStore {
-  private terminalStateListeners: TerminalStateListener[] = [];
   private terminalOutcomeListeners: TerminalOutcomeListener[] = [];
   private launchIdentityListeners: LaunchIdentityListener[] = [];
-  // Stores session IDs (which equal task IDs) awaiting close after background job completes
-  private readonly deferredIdleCloses = new Set<string>();
 
   constructor(private readonly board: BackgroundJobBoard) {
-    // Subscribe to the board's terminal state notifications
-    this.board.addTerminalStateListener((taskID) => {
+    // Terminal publication seam: the coordinator is the sole board→outcome
+    // subscriber, so it owns this single internal notification rather than a
+    // listener list the board would only ever fill with one entry.
+    this.board.setTerminalPublicationHandler((taskID) => {
       this.handleTerminalState(taskID);
     });
   }
@@ -80,18 +78,6 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
     }
   }
 
-  // ── Terminal state notification (guaranteed delivery) ─────────────
-
-  addTerminalStateListener(listener: TerminalStateListener): void {
-    this.terminalStateListeners.push(listener);
-  }
-
-  removeTerminalStateListener(listener: TerminalStateListener): void {
-    this.terminalStateListeners = this.terminalStateListeners.filter(
-      (entry) => entry !== listener,
-    );
-  }
-
   /**
    * Handle terminal state from board. Re-checks board state to handle races.
    * This is the centralized lifecycle policy.
@@ -100,22 +86,6 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
     // Re-check board state to handle races
     const state = this.board.getState(taskID);
     if (state === undefined) return; // Job was already cleaned up
-
-    // Check if this session should now close
-    const closeNow = this.retryDeferredClose(taskID);
-    if (closeNow) {
-      // Notify listeners that session should close
-      for (const listener of this.terminalStateListeners) {
-        try {
-          listener(taskID);
-        } catch (error) {
-          log('Coordinator terminal state listener threw', {
-            taskID,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-    }
 
     const record = this.board.get?.(taskID);
     if (record) {
@@ -126,7 +96,6 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
         generation: record.generation,
         state,
         parentSessionID: record.parentSessionID,
-        deferredClose: closeNow,
       });
       for (const listener of this.terminalOutcomeListeners) {
         try {
@@ -150,37 +119,6 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
     this.terminalOutcomeListeners = this.terminalOutcomeListeners.filter(
       (entry) => entry !== listener,
     );
-  }
-
-  // ── Lifecycle policy ─────────────────────────────────────────────
-
-  /**
-   * Evaluate close policy. Returns true if session should close now.
-   * Mutates deferred state: adds to deferred set if running, removes if not.
-   */
-  deferIfRunning(sessionId: string): boolean {
-    if (!this.board.isRunning(sessionId)) {
-      this.deferredIdleCloses.delete(sessionId);
-      return true;
-    }
-    this.deferredIdleCloses.add(sessionId);
-    return false;
-  }
-
-  /**
-   * Retry closing a deferred session. Called when a background job completes.
-   * Returns true if the session should now close.
-   */
-  retryDeferredClose(sessionId: string): boolean {
-    if (!this.deferredIdleCloses.has(sessionId)) return false;
-    return this.deferIfRunning(sessionId);
-  }
-
-  /**
-   * Clear deferred close state for a session being deleted.
-   */
-  clearDeferredClose(sessionId: string): void {
-    this.deferredIdleCloses.delete(sessionId);
   }
 
   // ── Mutation methods (sole writer to board) ──────────────────────
@@ -323,18 +261,6 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
     );
   }
 
-  noteStopConfirmation(
-    taskID: string,
-    startedAt: number,
-    expectedGeneration?: number,
-  ): BackgroundJobRecord | undefined {
-    return this.board.noteStopConfirmation(
-      taskID,
-      startedAt,
-      expectedGeneration,
-    );
-  }
-
   markStatusUncertain(
     taskID: string,
     lastStatusError: string,
@@ -386,10 +312,6 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
 
   getResultSummary(taskID: string): string | undefined {
     return this.board.getResultSummary(taskID);
-  }
-
-  getLastLiveBusyAt(taskID: string): number | undefined {
-    return this.board.getLastLiveBusyAt(taskID);
   }
 
   getParentSessionID(taskID: string): string | undefined {
@@ -466,10 +388,6 @@ export class BackgroundJobCoordinator implements BackgroundJobStore {
       expectedParentSessionID,
       metadata,
     );
-  }
-
-  hasConvergenceSignals(taskID: string, threshold = 3): boolean {
-    return this.board.hasConvergenceSignals(taskID, threshold);
   }
 
   clearParent(parentSessionID: string): void {

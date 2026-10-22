@@ -1095,12 +1095,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
     backgroundJobCoordinator.addTerminalOutcomeListener((record) => {
       revivedRunTracker.onTerminal(record);
+      // Sidebar activity bookkeeping only: pane lifecycle runs in the client
+      // (TUI) process, never here.
       markTuiAgentInactive(record.taskID);
-    });
-    // Pane lifecycle runs in the client (TUI) process, never here: the server
-    // entry only keeps its own sidebar activity bookkeeping.
-    backgroundJobCoordinator.addTerminalStateListener((taskID) => {
-      markTuiAgentInactive(taskID);
     });
 
     sessionLifecycle = new SessionLifecycle(log);

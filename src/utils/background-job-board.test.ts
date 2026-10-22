@@ -24,11 +24,8 @@ describe('BackgroundJobBoard', () => {
     };
     complete('ses_f2', 400);
     const f2 = structuredClone(board.get('ses_f2'));
-    const terminal = mock();
     const outcome = mock();
     const identity = mock();
-    board.addTerminalStateListener(terminal);
-    coordinator.addTerminalStateListener(terminal);
     coordinator.addTerminalOutcomeListener(outcome);
     coordinator.addLaunchIdentityListener(identity);
     const input = {
@@ -55,7 +52,6 @@ describe('BackgroundJobBoard', () => {
       ).toBeUndefined();
       expect(board.get('ses_f2')).toEqual(f2);
       expect(identity).toHaveBeenCalledTimes(1);
-      expect(terminal).not.toHaveBeenCalled();
       expect(outcome).not.toHaveBeenCalled();
       expect(board.hasTerminalUnreconciled('parent-1')).toBe(false);
       complete('ses_new', 1000);
@@ -422,7 +418,7 @@ describe('BackgroundJobBoard', () => {
   test('expected generation fences a late native terminal status', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalStateListener(listener);
+    board.setTerminalPublicationHandler(listener);
     const first = board.registerLaunch({
       taskID: 'ses_generation',
       parentSessionID: 'parent-1',
@@ -521,7 +517,6 @@ describe('BackgroundJobBoard', () => {
       timedOut: true,
       timeoutCount: 0,
     });
-    expect(board.hasConvergenceSignals('ses_1')).toBe(false);
   });
 
   test('marks terminal jobs as reconciled and hides them from prompt', () => {
@@ -987,7 +982,7 @@ describe('BackgroundJobBoard', () => {
   test('preserveRun terminal promotion re-fires the suppressed recovery wake', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalStateListener(listener);
+    board.setTerminalPublicationHandler(listener);
     board.registerLaunch({
       taskID: 'child-1',
       parentSessionID: 'parent-1',
@@ -1016,7 +1011,7 @@ describe('BackgroundJobBoard', () => {
   test('promoteProvisional re-fires the wake for a terminal placeholder and stays silent for a running one', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalStateListener(listener);
+    board.setTerminalPublicationHandler(listener);
     board.registerLaunch({
       taskID: 'child-1',
       parentSessionID: 'parent-1',
@@ -1069,7 +1064,7 @@ describe('BackgroundJobBoard', () => {
   test('notifies terminal listener on updateStatus terminal transition', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalStateListener(listener);
+    board.setTerminalPublicationHandler(listener);
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -1085,7 +1080,7 @@ describe('BackgroundJobBoard', () => {
   test('notifies terminal listener on markCancelled mutation', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalStateListener(listener);
+    board.setTerminalPublicationHandler(listener);
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -1101,7 +1096,7 @@ describe('BackgroundJobBoard', () => {
   test('notifies terminal listener on forced markCancelled from running', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalStateListener(listener);
+    board.setTerminalPublicationHandler(listener);
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -1119,7 +1114,7 @@ describe('BackgroundJobBoard', () => {
   test('does not force-cancel a newer generation or notify terminal listeners', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalStateListener(listener);
+    board.setTerminalPublicationHandler(listener);
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -1156,7 +1151,7 @@ describe('BackgroundJobBoard', () => {
   test('does not notify terminal listener on forced markCancelled from terminal', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalStateListener(listener);
+    board.setTerminalPublicationHandler(listener);
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -1175,7 +1170,7 @@ describe('BackgroundJobBoard', () => {
   test('does not notify terminal listener for running or stale updates', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalStateListener(listener);
+    board.setTerminalPublicationHandler(listener);
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -1191,14 +1186,10 @@ describe('BackgroundJobBoard', () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
-  test('throws in one listener does not prevent subsequent listeners from receiving notification', () => {
+  test('a throwing terminal publication handler is contained', () => {
     const board = new BackgroundJobBoard();
-    const order: string[] = [];
-    board.addTerminalStateListener(() => {
-      throw new Error('first listener failed');
-    });
-    board.addTerminalStateListener(() => {
-      order.push('second');
+    board.setTerminalPublicationHandler(() => {
+      throw new Error('publication handler failed');
     });
     board.registerLaunch({
       taskID: 'ses_1',
@@ -1206,9 +1197,10 @@ describe('BackgroundJobBoard', () => {
       agent: 'fixer',
     });
 
-    board.updateStatus({ taskID: 'ses_1', state: 'completed' });
-
-    expect(order).toEqual(['second']);
+    expect(() =>
+      board.updateStatus({ taskID: 'ses_1', state: 'completed' }),
+    ).not.toThrow();
+    expect(board.get('ses_1')).toMatchObject({ state: 'completed' });
   });
 
   test('cancelled jobs ignore late non-cancelled terminal statuses', () => {
@@ -1314,31 +1306,12 @@ describe('BackgroundJobBoard', () => {
       agent: 'fixer',
       now: 100,
     });
-    board.noteStopConfirmation('ses_1', 111, board.get('ses_1')?.generation);
-
     const updated = board.markRunningFromLiveSession('ses_1', 200);
 
     expect(updated).toMatchObject({
       state: 'running',
       stopConfirmationStartedAt: undefined,
       lastLiveBusyAt: 200,
-    });
-  });
-
-  test('noteStopConfirmation keeps the first observation and ignores later ones', () => {
-    const board = new BackgroundJobBoard();
-    board.registerLaunch({
-      taskID: 'ses_1',
-      parentSessionID: 'parent-1',
-      agent: 'fixer',
-    });
-    const generation = board.get('ses_1')?.generation;
-
-    expect(board.noteStopConfirmation('ses_1', 11, generation)).toMatchObject({
-      stopConfirmationStartedAt: 11,
-    });
-    expect(board.noteStopConfirmation('ses_1', 21, generation)).toMatchObject({
-      stopConfirmationStartedAt: 11,
     });
   });
 
@@ -1664,21 +1637,6 @@ describe('BackgroundJobBoard', () => {
 
       expect(board.getResultSummary('job-1')).toBe('all good');
       expect(board.getResultSummary('unknown-1')).toBeUndefined();
-    });
-
-    test('getLastLiveBusyAt: returns timestamp after markRunningFromLiveSession', () => {
-      const board = new BackgroundJobBoard();
-      board.registerLaunch({
-        taskID: 'job-1',
-        parentSessionID: 'parent-1',
-        agent: 'fixer',
-        now: 100,
-      });
-
-      expect(board.getLastLiveBusyAt('job-1')).toBe(100);
-      board.markRunningFromLiveSession('job-1', 200);
-      expect(board.getLastLiveBusyAt('job-1')).toBe(200);
-      expect(board.getLastLiveBusyAt('unknown-1')).toBeUndefined();
     });
 
     test('getParentSessionID: returns parentSessionID after registerLaunch', () => {
@@ -2099,21 +2057,6 @@ describe('BackgroundJobBoard', () => {
 
       expect(board.getResultSummary('job-1')).toBe('all good');
       expect(board.getResultSummary('unknown-1')).toBeUndefined();
-    });
-
-    test('getLastLiveBusyAt: returns timestamp after markRunningFromLiveSession', () => {
-      const board = new BackgroundJobBoard();
-      board.registerLaunch({
-        taskID: 'job-1',
-        parentSessionID: 'parent-1',
-        agent: 'fixer',
-        now: 100,
-      });
-
-      expect(board.getLastLiveBusyAt('job-1')).toBe(100);
-      board.markRunningFromLiveSession('job-1', 200);
-      expect(board.getLastLiveBusyAt('job-1')).toBe(200);
-      expect(board.getLastLiveBusyAt('unknown-1')).toBeUndefined();
     });
 
     test('getParentSessionID: returns parentSessionID after registerLaunch', () => {

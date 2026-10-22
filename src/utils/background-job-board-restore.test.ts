@@ -18,7 +18,7 @@ describe('restoreRetainedSession', () => {
   test('imports a terminal row without launching, notifying, or allocating an alias', () => {
     const board = new BackgroundJobBoard();
     const terminal: string[] = [];
-    board.addTerminalStateListener((taskID) => terminal.push(taskID));
+    board.setTerminalPublicationHandler((taskID) => terminal.push(taskID));
 
     const restored = board.restoreRetainedSession(retained);
 
@@ -103,7 +103,9 @@ describe('restoreRetainedSession', () => {
     coordinator.addLaunchIdentityListener((event) => {
       identity.push(`${event.kind}:${event.alias}`);
     });
-    coordinator.addTerminalStateListener((taskID) => terminal.push(taskID));
+    coordinator.addTerminalOutcomeListener((record) =>
+      terminal.push(record.taskID),
+    );
 
     const restored = coordinator.restoreRetainedSession({
       ...retained,

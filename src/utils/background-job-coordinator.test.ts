@@ -7,117 +7,60 @@ function createMockBoard(isRunning = false) {
   return {
     isRunning: mock(() => isRunning),
     getState: mock(() => (isRunning ? 'running' : 'completed')),
-    addTerminalStateListener: mock(() => {}),
-    removeTerminalStateListener: mock(() => {}),
+    setTerminalPublicationHandler: mock(() => {}),
   } as any;
 }
 
 describe('BackgroundJobCoordinator', () => {
-  test('deferIfRunning returns false when job is running', () => {
-    const board = createMockBoard(true);
-    const coordinator = new BackgroundJobCoordinator(board);
-    expect(coordinator.deferIfRunning('ses_123')).toBe(false);
-  });
-
-  test('deferIfRunning returns true when job is not running', () => {
+  test('installs its terminal publication handler on the board', () => {
     const board = createMockBoard(false);
-    const coordinator = new BackgroundJobCoordinator(board);
-    expect(coordinator.deferIfRunning('ses_123')).toBe(true);
+    new BackgroundJobCoordinator(board);
+    expect(board.setTerminalPublicationHandler).toHaveBeenCalledTimes(1);
+    expect(typeof board.setTerminalPublicationHandler.mock.calls[0]?.[0]).toBe(
+      'function',
+    );
   });
 
-  test('retryDeferredClose returns false when not in deferred set', () => {
-    const board = createMockBoard(false);
-    const coordinator = new BackgroundJobCoordinator(board);
-    expect(coordinator.retryDeferredClose('ses_123')).toBe(false);
-  });
-
-  test('retryDeferredClose returns true after job completes', () => {
-    const board = createMockBoard(true);
-    const coordinator = new BackgroundJobCoordinator(board);
-
-    // First call defers (job running)
-    expect(coordinator.deferIfRunning('ses_123')).toBe(false);
-
-    // Now simulate job completion
-    board.isRunning.mockReturnValue(false);
-    expect(coordinator.retryDeferredClose('ses_123')).toBe(true);
-  });
-
-  test('clearDeferredClose removes from deferred set', () => {
-    const board = createMockBoard(true);
-    const coordinator = new BackgroundJobCoordinator(board);
-
-    coordinator.deferIfRunning('ses_123');
-    coordinator.clearDeferredClose('ses_123');
-
-    // Now retryDeferredClose should return false (not in set)
-    board.isRunning.mockReturnValue(false);
-    expect(coordinator.retryDeferredClose('ses_123')).toBe(false);
-  });
-
-  test('handleTerminalState notifies listeners when retryDeferredClose returns true', () => {
+  test('handleTerminalState dispatches terminal outcomes with the record', () => {
     const board = createMockBoard(true);
     const coordinator = new BackgroundJobCoordinator(board);
     const listener = mock(() => {});
 
-    coordinator.addTerminalStateListener(listener);
-
-    // Defer the session
-    coordinator.deferIfRunning('ses_123');
+    coordinator.addTerminalOutcomeListener(listener);
 
     // Simulate terminal state notification from board
     board.getState.mockReturnValue('completed');
     board.isRunning.mockReturnValue(false);
+    board.get = mock(() => ({
+      taskID: 'ses_123',
+      parentSessionID: 'parent-1',
+      generation: 1,
+    }));
 
-    // Trigger handleTerminalState via board's listener callback
-    const boardListener = board.addTerminalStateListener.mock.calls[0]?.[0];
-    boardListener?.('ses_123');
+    const publish = board.setTerminalPublicationHandler.mock.calls[0]?.[0];
+    publish?.('ses_123');
 
-    expect(listener).toHaveBeenCalledWith('ses_123');
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({ taskID: 'ses_123' }),
+    );
   });
 
-  test('handleTerminalState does not notify when not in deferred set', () => {
-    const board = createMockBoard(false);
+  test('handleTerminalState drops a cleaned-up task without dispatching', () => {
+    const board = createMockBoard(true);
     const coordinator = new BackgroundJobCoordinator(board);
     const listener = mock(() => {});
 
-    coordinator.addTerminalStateListener(listener);
+    coordinator.addTerminalOutcomeListener(listener);
 
-    // Simulate terminal state notification without deferring first
-    board.getState.mockReturnValue('completed');
-    const boardListener = board.addTerminalStateListener.mock.calls[0]?.[0];
-    boardListener?.('ses_123');
+    board.getState.mockReturnValue(undefined);
+    const publish = board.setTerminalPublicationHandler.mock.calls[0]?.[0];
+    publish?.('ses_gone');
 
     expect(listener).not.toHaveBeenCalled();
   });
 
-  test('throws in one coordinator listener does not prevent subsequent listeners from receiving notification', () => {
-    const board = createMockBoard(true);
-    const coordinator = new BackgroundJobCoordinator(board);
-    const order: string[] = [];
-
-    coordinator.addTerminalStateListener(() => {
-      throw new Error('first listener failed');
-    });
-    coordinator.addTerminalStateListener(() => {
-      order.push('second');
-    });
-
-    // Defer the session
-    coordinator.deferIfRunning('ses_123');
-
-    // Simulate terminal state notification from board
-    board.getState.mockReturnValue('completed');
-    board.isRunning.mockReturnValue(false);
-
-    // Trigger handleTerminalState via board's listener callback
-    const boardListener = board.addTerminalStateListener.mock.calls[0]?.[0];
-    boardListener?.('ses_123');
-
-    expect(order).toEqual(['second']);
-  });
-
-  test('throws in one outcome listener without blocking later outcomes', () => {
+  test('throws in one outcome listener does not prevent subsequent outcomes', () => {
     const board = new BackgroundJobBoard();
     const coordinator = new BackgroundJobCoordinator(board);
     const delivered: string[] = [];
@@ -138,11 +81,11 @@ describe('BackgroundJobCoordinator', () => {
     expect(delivered).toEqual(['ses_123']);
   });
 
-  test('full chain: board terminal → coordinator → listener for deferred job', () => {
+  test('full chain: board terminal → coordinator → outcome listener', () => {
     const board = new BackgroundJobBoard();
     const coordinator = new BackgroundJobCoordinator(board);
     const listener = mock(() => {});
-    coordinator.addTerminalStateListener(listener);
+    coordinator.addTerminalOutcomeListener(listener);
 
     // Register and start a job
     board.registerLaunch({
@@ -155,16 +98,12 @@ describe('BackgroundJobCoordinator', () => {
       state: 'running',
     });
 
-    // Defer close while job is running
-    expect(coordinator.deferIfRunning('full-chain-test')).toBe(false);
-
-    // Transition to completed — board fires listener, coordinator re-checks
+    // Transition to completed — board publishes, coordinator dispatches
     board.updateStatus({
       taskID: 'full-chain-test',
       state: 'completed',
     });
 
-    expect(listener).toHaveBeenCalledWith('full-chain-test');
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
@@ -354,7 +293,6 @@ describe('BackgroundJobCoordinator', () => {
         agent: 'fixer',
       });
       board.updateStatus({ taskID: job.taskID, state: 'running' });
-      expect(coordinator.deferIfRunning(job.taskID)).toBe(false);
       board.updateStatus({ taskID: job.taskID, state: 'completed' });
       const dispatch = entries.find(
         (entry) =>
@@ -365,8 +303,8 @@ describe('BackgroundJobCoordinator', () => {
         generation: job.generation,
         state: 'completed',
         parentSessionID: 'parent-1',
-        deferredClose: true,
       });
+      expect(dispatch?.data).not.toHaveProperty('deferredClose');
     } finally {
       spy.mockRestore();
     }

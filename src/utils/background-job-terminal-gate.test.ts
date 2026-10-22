@@ -843,7 +843,7 @@ describe('terminal gate', () => {
   test('quiescence plus attributable transcript commits exactly once', async () => {
     const h = harness();
     const listener = mock(() => {});
-    h.board.addTerminalStateListener(listener);
+    h.board.setTerminalPublicationHandler(listener);
     h.observe('quiescent');
     expect((await h.gate.reconcile(h.run)).kind).toBe('committed');
     await h.gate.reconcile(h.run);
