@@ -1,4 +1,4 @@
-import type { BackgroundJobStore } from '../../utils/background-job-store';
+import type { BackgroundJobBoard } from '../../utils/background-job-board';
 import type { FallbackNotice, RevivedRunTracker } from './revived-run-tracker';
 
 /**
@@ -38,7 +38,7 @@ import type { FallbackNotice, RevivedRunTracker } from './revived-run-tracker';
  * owning run, so a late admission finds delivery already owned.
  */
 export function createBackgroundFallbackHandoff(options: {
-  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobBoard: BackgroundJobBoard;
   revivedRunTracker: RevivedRunTracker;
 }): {
   isEligible: (sessionID: string, generation: number | undefined) => boolean;

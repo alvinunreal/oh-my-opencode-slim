@@ -12,11 +12,11 @@
 import { createHash } from 'node:crypto';
 import { formatSystemReminder } from '../../config/constants';
 import type {
+  BackgroundJobBoard,
   BackgroundJobExecution,
   BackgroundJobInjectedCompletionFence,
   BackgroundJobLifecycleLedger,
   BackgroundJobRecord,
-  BackgroundJobStore,
   BackgroundJobSyntheticTerminalOccurrence,
   BackgroundJobSyntheticTerminalOccurrencePhase,
   ContextFile,
@@ -208,7 +208,7 @@ export function pruneReopenCorrectionState(
 const HOST_MESSAGE_OCCURRENCE_PREFIX = 'host-message:';
 
 export interface InjectionState {
-  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobBoard: BackgroundJobBoard;
   terminalGate: BackgroundJobTerminalGate;
   lifecycleLedger: BackgroundJobLifecycleLedger;
   /**

@@ -1,7 +1,6 @@
 import { describe, expect, mock, test } from 'bun:test';
 import { buildPluginInput } from '../v2/client-shim';
 import { BackgroundJobBoard } from './background-job-board';
-import { BackgroundJobCoordinator } from './background-job-coordinator';
 import { boardFixture } from './background-job-fixture';
 import { BackgroundJobSupervisor } from './background-job-supervisor';
 import { createBackgroundJobTerminalGate } from './background-job-terminal-gate';
@@ -15,15 +14,14 @@ function createSupervisor(
   } = {},
 ) {
   const board = new BackgroundJobBoard();
-  const coordinator = new BackgroundJobCoordinator(board);
   const timers = createTimerHarness();
   const abort = mock(overrides.abort ?? (async () => undefined)) as unknown as (
     taskID: string,
   ) => Promise<unknown>;
   const supervisor = new BackgroundJobSupervisor({
-    backgroundJobStore: coordinator,
+    backgroundJobStore: board,
     terminalGate: createBackgroundJobTerminalGate({
-      backgroundJobBoard: coordinator,
+      backgroundJobBoard: board,
       now: timers.now,
     }),
     wallClockTimeoutMs: overrides.timeoutMs ?? 100,
@@ -33,11 +31,9 @@ function createSupervisor(
     setTimeout: timers.setTimeout,
     clearTimeout: timers.clearTimeout,
   });
-  coordinator.addTerminalOutcomeListener((record) =>
-    supervisor.onTerminal(record),
-  );
+  board.addTerminalOutcomeListener((record) => supervisor.onTerminal(record));
 
-  return { board, coordinator, supervisor, timers, abort };
+  return { board, supervisor, timers, abort };
 }
 
 function launch(
@@ -84,18 +80,17 @@ describe('BackgroundJobSupervisor', () => {
   });
 
   test('a reopened live run arms a fresh deadline from its new fence', async () => {
-    const { board, coordinator, supervisor, timers, abort } =
-      createSupervisor();
+    const { board, supervisor, timers, abort } = createSupervisor();
     const job = launch(board, true);
     supervisor.onLaunch(job);
-    const completed = boardFixture.updateStatus(coordinator, {
+    const completed = boardFixture.updateStatus(board, {
       taskID: job.taskID,
       state: 'completed',
       now: 50,
     });
     if (completed) supervisor.onTerminal(completed);
 
-    const reopened = coordinator.markRunningFromLiveSession(job.taskID, 60);
+    const reopened = board.markRunningFromLiveSession(job.taskID, 60);
     expect(reopened).toMatchObject({ state: 'running', runStartedAt: 60 });
     if (reopened) supervisor.onLaunch(reopened);
 
@@ -108,11 +103,10 @@ describe('BackgroundJobSupervisor', () => {
   });
 
   test('terminal state wins before the deadline and clears timers', async () => {
-    const { board, coordinator, supervisor, timers, abort } =
-      createSupervisor();
+    const { board, supervisor, timers, abort } = createSupervisor();
     const job = launch(board, true);
     supervisor.onLaunch(job);
-    const completed = boardFixture.updateStatus(coordinator, {
+    const completed = boardFixture.updateStatus(board, {
       taskID: job.taskID,
       state: 'completed',
       now: 99,
@@ -155,13 +149,12 @@ describe('BackgroundJobSupervisor', () => {
   );
 
   test('completion after the deadline claim cannot replace the timeout', async () => {
-    const { board, coordinator, supervisor, timers, abort } =
-      createSupervisor();
+    const { board, supervisor, timers, abort } = createSupervisor();
     const job = launch(board, true);
     supervisor.onLaunch(job);
     await timers.advanceTo(100);
 
-    const late = coordinator.updateStatus({
+    const late = board.updateStatus({
       taskID: job.taskID,
       state: 'completed',
       resultSummary: 'late success',
@@ -173,21 +166,18 @@ describe('BackgroundJobSupervisor', () => {
   });
 
   test('busy activity after the deadline neither recovers nor renews the run', async () => {
-    const { board, coordinator, supervisor, timers, abort } =
-      createSupervisor();
+    const { board, supervisor, timers, abort } = createSupervisor();
     const job = launch(board, true);
     supervisor.onLaunch(job);
     await timers.advanceTo(100);
-    coordinator.markRunningFromLiveSession(job.taskID, 101);
+    board.markRunningFromLiveSession(job.taskID, 101);
 
     expect(board.get(job.taskID)).toMatchObject({
       state: 'running',
       lastLiveBusyAt: 101,
       deadlineExceededAt: 100,
     });
-    expect(
-      coordinator.resolveRecoverable('parent', job.taskID),
-    ).toBeUndefined();
+    expect(board.resolveRecoverable('parent', job.taskID)).toBeUndefined();
     await timers.advanceTo(120);
     expect(abort).toHaveBeenCalledTimes(1);
     expect(board.get(job.taskID)?.state).toBe('running');
@@ -195,12 +185,12 @@ describe('BackgroundJobSupervisor', () => {
 
   test('error and cancellation labels during grace are not terminal authority', async () => {
     for (const state of ['error', 'cancelled'] as const) {
-      const { board, coordinator, supervisor, timers } = createSupervisor();
+      const { board, supervisor, timers } = createSupervisor();
       const job = launch(board, true);
       supervisor.onLaunch(job);
       await timers.advanceTo(100);
 
-      const settled = coordinator.updateStatus({
+      const settled = board.updateStatus({
         taskID: job.taskID,
         state,
         resultSummary: 'child terminal',
@@ -243,25 +233,21 @@ describe('BackgroundJobSupervisor', () => {
   });
 
   test('wall-clock timeout is not recoverable while external timeout remains recoverable', async () => {
-    const { board, coordinator, supervisor, timers } = createSupervisor();
+    const { board, supervisor, timers } = createSupervisor();
     const external = launch(board, false, 0, 'external');
-    coordinator.updateStatus({
+    board.updateStatus({
       taskID: external.taskID,
       state: 'running',
       timedOut: true,
     });
-    coordinator.markRunningFromLiveSession(external.taskID, 1);
-    expect(
-      coordinator.resolveRecoverable('parent', external.taskID),
-    ).toBeDefined();
+    board.markRunningFromLiveSession(external.taskID, 1);
+    expect(board.resolveRecoverable('parent', external.taskID)).toBeDefined();
 
     const wall = launch(board, true, 0, 'wall');
     supervisor.onLaunch(wall);
     await timers.advanceTo(100);
-    coordinator.markRunningFromLiveSession(wall.taskID, 101);
-    expect(
-      coordinator.resolveRecoverable('parent', wall.taskID),
-    ).toBeUndefined();
+    board.markRunningFromLiveSession(wall.taskID, 101);
+    expect(board.resolveRecoverable('parent', wall.taskID)).toBeUndefined();
   });
 
   // ── v2-sim pin: shim abort mapping + deadline error semantics ──
@@ -287,7 +273,7 @@ describe('BackgroundJobSupervisor', () => {
         session: { abort: (args: Record<string, unknown>) => Promise<unknown> };
       }
     ).session.abort;
-    const { board, coordinator, supervisor, timers } = createSupervisor({
+    const { board, supervisor, timers } = createSupervisor({
       // The exact production wiring (src/index.ts): the supervisor's
       // abort delegates to client.session.abort({path:{id}}), which the
       // shim translates to interrupt({sessionID, resume:false}).
@@ -312,7 +298,7 @@ describe('BackgroundJobSupervisor', () => {
     // The v2 host then reports the interrupted execution; the evidence
     // chain maps it to the stop family — but the deadline claim is a
     // hard, non-recoverable terminal authority.
-    const stopFamily = boardFixture.updateStatus(coordinator, {
+    const stopFamily = boardFixture.updateStatus(board, {
       taskID: job.taskID,
       state: 'stopped',
       resultSummary: 'host reported the interrupted execution',

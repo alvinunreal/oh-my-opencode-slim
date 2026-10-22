@@ -1,7 +1,9 @@
 import { tool } from '@opencode-ai/plugin';
 import type { CanonicalTaskReference } from '../hooks/task-session-manager/session-recovery';
-import type { BackgroundJobRecord } from '../utils/background-job-board';
-import type { BackgroundJobStore } from '../utils/background-job-store';
+import type {
+  BackgroundJobBoard,
+  BackgroundJobRecord,
+} from '../utils/background-job-board';
 import { SESSION_ID_PATTERN } from '../utils/session';
 import { controlParamName } from '../v2/adapters';
 import { v2ResumeCall } from '../v2/delegation';
@@ -79,7 +81,7 @@ export const RECENT_TASK_HANDLE_LIMIT = 5;
  * `sessionID:`/`Task (`/`state:`) can never capture it.
  */
 export function recentTaskHandles(
-  board: BackgroundJobStore,
+  board: BackgroundJobBoard,
   parentSessionID: string,
 ): string | undefined {
   const recent = board.list(parentSessionID).slice(-RECENT_TASK_HANDLE_LIMIT);
@@ -152,7 +154,7 @@ export async function resolveTaskRecord(
   options: {
     resolveCanonicalTaskRef?: CanonicalTaskResolver;
     isDisposed?: () => boolean;
-    backgroundJobBoard: BackgroundJobStore;
+    backgroundJobBoard: BackgroundJobBoard;
   },
   parentSessionID: string,
   requested: string,

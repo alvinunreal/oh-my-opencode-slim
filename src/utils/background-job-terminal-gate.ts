@@ -1,10 +1,10 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import type {
+  BackgroundJobBoard,
   BackgroundJobLease,
   BackgroundJobRecord,
   BackgroundJobTerminalInput,
 } from './background-job-board';
-import type { BackgroundJobStore } from './background-job-store';
 import {
   classifyTerminalEvidence,
   fetchChildTranscript,
@@ -313,7 +313,7 @@ export function readSessionInfoForObservation(
 }
 
 export function createBackgroundJobTerminalGate(options: {
-  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobBoard: BackgroundJobBoard;
   input?: PluginInput;
   readRuntime?: (run: RunRef, startedAt: number) => Promise<RuntimeObservation>;
   readTerminalEvidence?: (

@@ -5,16 +5,14 @@ import {
 } from '../config/constants';
 import { escapeRegExp } from './agent-variant';
 import {
+  clearSuppression as clearSuppressionPersisted,
   getPersistedBackgroundChild,
   type PersistedBackgroundChild,
+  persistedBackgroundJobState,
   recordPersistedBackgroundChild,
+  recordSuppression as recordSuppressionPersisted,
   restorePersistedBackgroundChild,
 } from './background-job-persistence';
-import type { BackgroundJobStore } from './background-job-store';
-import {
-  clearBackgroundJobSuppression,
-  recordBackgroundJobSuppression,
-} from './background-job-store';
 import {
   type BackgroundJobTerminalGate,
   consumeTerminalCommitToken,
@@ -278,6 +276,153 @@ export interface WallClockTimeoutFinalizeInput {
 
 type MutationListener = () => void;
 
+/** Canonical terminal publication delivered to outcome subscribers. */
+export type TerminalOutcomeListener = (record: BackgroundJobRecord) => void;
+
+/**
+ * Identity projection event for accepted/removed launches. Consumed by the
+ * host plugin to mirror alias↔session links into TUI state; consumers must
+ * be best-effort (failures are logged, never propagated to the launch).
+ */
+export interface BackgroundJobIdentityEvent {
+  kind: 'registered' | 'removed';
+  taskID: string;
+  parentSessionID: string;
+  agent: string;
+  alias: string;
+}
+
+/** Alias↔session projection consumer. Best-effort: throws are contained. */
+export type LaunchIdentityListener = (
+  event: BackgroundJobIdentityEvent,
+) => void;
+
+export type BackgroundJobSyntheticTerminalOccurrencePhase =
+  | 'observed'
+  | 'processed'
+  | 'ambiguous';
+
+export interface BackgroundJobSyntheticTerminalOccurrence {
+  taskID: string;
+  occurrenceID: string;
+  generationAtObservation?: number;
+  lifecycleEpochAtObservation: number;
+  phase: BackgroundJobSyntheticTerminalOccurrencePhase;
+}
+
+export interface BackgroundJobInjectedCompletionFence {
+  taskID: string;
+  generation: number;
+  lifecycleEpoch: number;
+}
+
+/**
+ * Process-local lifecycle memory shared by every consumer of one board.
+ *
+ * These sets/maps intentionally have no count cap. Evicting an old identity
+ * would turn a replay of valid history into a false negative for the current
+ * generation. The ledger is process-local by design; it is not persistence.
+ */
+export interface BackgroundJobLifecycleLedger {
+  tombstones: Set<string>;
+  deletionEpochs: Map<string, number>;
+  injectedCompletionFences: Map<string, BackgroundJobInjectedCompletionFence>;
+  syntheticTerminalOccurrences: Map<
+    string,
+    BackgroundJobSyntheticTerminalOccurrence
+  >;
+  syntheticTerminalOccurrenceOrder: string[];
+  processedInjectedCompletions: Set<string>;
+  processedInjectedCompletionOrder: string[];
+  nextEpoch: number;
+}
+
+/**
+ * One ledger per board instance: boards are constructed independently by
+ * tests, fixtures, and the plugin, and must not share lifecycle memory.
+ */
+const lifecycleLedgers = new WeakMap<object, BackgroundJobLifecycleLedger>();
+
+/**
+ * Seed a freshly created ledger from backend-loaded persistence state.
+ * No-op without a configured storage backend (v1 / hosts without the
+ * domain) — fresh ledgers then stay exactly as process-local as before.
+ */
+function seedFromPersistence(ledger: BackgroundJobLifecycleLedger): void {
+  const snapshot = persistedBackgroundJobState();
+  if (snapshot.tombstones.size === 0 && snapshot.deletionEpochs.size === 0) {
+    return;
+  }
+  for (const [taskID, record] of snapshot.tombstones) {
+    ledger.tombstones.add(taskID);
+    ledger.deletionEpochs.set(taskID, record.epoch);
+  }
+  for (const [taskID, epoch] of snapshot.deletionEpochs) {
+    if (!ledger.deletionEpochs.has(taskID)) {
+      ledger.deletionEpochs.set(taskID, epoch);
+    }
+  }
+  if (snapshot.nextEpoch > ledger.nextEpoch) {
+    ledger.nextEpoch = snapshot.nextEpoch;
+  }
+}
+
+export function getBackgroundJobLifecycleLedger(
+  board: object,
+): BackgroundJobLifecycleLedger {
+  const existing = lifecycleLedgers.get(board);
+  if (existing) return existing;
+
+  const ledger: BackgroundJobLifecycleLedger = {
+    tombstones: new Set<string>(),
+    deletionEpochs: new Map<string, number>(),
+    injectedCompletionFences: new Map(),
+    syntheticTerminalOccurrences: new Map(),
+    syntheticTerminalOccurrenceOrder: [],
+    processedInjectedCompletions: new Set<string>(),
+    processedInjectedCompletionOrder: [],
+    nextEpoch: 0,
+  };
+  seedFromPersistence(ledger);
+  lifecycleLedgers.set(board, ledger);
+  return ledger;
+}
+
+/** Record a task drop/eviction as a rehydrate and late-output tombstone.
+ * Write-through: the persisted tombstone (and its deletion epoch) is
+ * updated together with the in-memory ledger so the two can never
+ * diverge across a restart. Cleared only by clearBackgroundJobSuppression
+ * via registerLaunch — an explicit (re)launch/adoption is proof of life;
+ * the deletion epoch intentionally survives for generation fencing. */
+export function recordBackgroundJobSuppression(
+  board: object,
+  taskID: string,
+  terminal?: {
+    state: 'completed' | 'error' | 'cancelled';
+    resultSummary: string;
+  },
+): void {
+  const ledger = getBackgroundJobLifecycleLedger(board);
+  if (ledger.tombstones.has(taskID)) return;
+  ledger.tombstones.add(taskID);
+  const epoch = ++ledger.nextEpoch;
+  ledger.deletionEpochs.set(taskID, epoch);
+  recordSuppressionPersisted(taskID, epoch, terminal);
+}
+
+/** Clear only the active rehydrate tombstone for a proven new launch.
+ * Write-through: clearing on relaunch is load-bearing — a task deleted
+ * then legitimately relaunched must NOT be ghost-skipped after a
+ * restart. The deletion epoch intentionally survives (generation
+ * fencing), matching the in-memory ledger semantics. */
+export function clearBackgroundJobSuppression(
+  board: object,
+  taskID: string,
+): void {
+  getBackgroundJobLifecycleLedger(board).tombstones.delete(taskID);
+  clearSuppressionPersisted(taskID);
+}
+
 const CANONICAL_TERMINAL_STATES = new Set<TaskOutputState>([
   'completed',
   'error',
@@ -298,7 +443,7 @@ function aliasPrefixForAgent(agent: string): string {
   return AGENT_PREFIX[agent] ?? (agent.slice(0, 3) || 'job');
 }
 
-export class BackgroundJobBoard implements BackgroundJobStore {
+export class BackgroundJobBoard {
   private terminalGate?: BackgroundJobTerminalGate;
   private readonly jobs = new Map<string, BackgroundJobRecord>();
   /** Persisted identity overwritten by a launch that may still be refused. */
@@ -312,7 +457,8 @@ export class BackgroundJobBoard implements BackgroundJobStore {
   private executionSequence = 0;
   private leaseSequence = 0;
   private mutationListeners: MutationListener[] = [];
-  private terminalPublicationHandler?: (taskID: string) => void;
+  private terminalOutcomeListeners: TerminalOutcomeListener[] = [];
+  private launchIdentityListeners: LaunchIdentityListener[] = [];
 
   private readonly maxReusablePerAgent: number;
   private readonly delegationTool: string;
@@ -346,10 +492,35 @@ export class BackgroundJobBoard implements BackgroundJobStore {
     if (createdAt >= this.startedAt) this.freshParents.add(sessionID);
   }
 
-  /** Single-owner hook for a canonical terminal publication. The coordinator
-   * installs it; the dead public listener chain is gone. */
-  setTerminalPublicationHandler(handler?: (taskID: string) => void): void {
-    this.terminalPublicationHandler = handler;
+  /** Observe every canonical terminal publication, including non-idle jobs. */
+  addTerminalOutcomeListener(listener: TerminalOutcomeListener): void {
+    this.terminalOutcomeListeners.push(listener);
+  }
+
+  removeTerminalOutcomeListener(listener: TerminalOutcomeListener): void {
+    this.terminalOutcomeListeners = this.terminalOutcomeListeners.filter(
+      (entry) => entry !== listener,
+    );
+  }
+
+  // ── Launch identity projection (best-effort, sidebar details) ─────
+
+  addLaunchIdentityListener(listener: LaunchIdentityListener): void {
+    this.launchIdentityListeners.push(listener);
+  }
+
+  private notifyLaunchIdentity(event: BackgroundJobIdentityEvent): void {
+    for (const listener of this.launchIdentityListeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        log('Coordinator launch identity listener threw', {
+          taskID: event.taskID,
+          kind: event.kind,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   /** Subscribe to ANY board mutation (set/delete/trim/drop). The listener
@@ -376,18 +547,59 @@ export class BackgroundJobBoard implements BackgroundJobStore {
     }
   }
 
+  /**
+   * Single-owner seam for a canonical terminal publication: the board owns
+   * the single internal notification and fans out to outcome subscribers.
+   * State is re-checked here to handle races.
+   */
   private notifyTerminalPublication(taskID: string): void {
-    try {
-      this.terminalPublicationHandler?.(taskID);
-    } catch (error) {
-      log('Board terminal publication handler threw', {
-        taskID,
-        error: error instanceof Error ? error.message : String(error),
-      });
+    // Nothing observes this board's publications: stay silent, exactly as the
+    // pre-merge board was before a coordinator installed its handler.
+    if (this.terminalOutcomeListeners.length === 0) return;
+
+    // Re-check board state to handle races
+    const state = this.getState(taskID);
+    if (state === undefined) return; // Job was already cleaned up
+
+    const record = this.get(taskID);
+    if (!record) return;
+    // Observation only: every canonical terminal publication that
+    // reaches listener dispatch is logged with its record identity.
+    log('[job-coordinator] terminal state dispatch', {
+      taskID,
+      generation: record.generation,
+      state,
+      parentSessionID: record.parentSessionID,
+    });
+    for (const listener of this.terminalOutcomeListeners) {
+      try {
+        listener(record);
+      } catch (error) {
+        log('Coordinator terminal outcome listener threw', {
+          taskID,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
 
   registerLaunch(input: BackgroundJobLaunchInput): BackgroundJobRecord {
+    const record = this.insertLaunchRecord(input);
+    this.notifyLaunchIdentity({
+      kind: 'registered',
+      taskID: record.taskID,
+      parentSessionID: record.parentSessionID,
+      agent: record.agent,
+      alias: record.alias,
+    });
+    return record;
+  }
+
+  /** State transition for an accepted launch; throws when the host has
+   * refused it. The identity projection fires only for accepted records. */
+  private insertLaunchRecord(
+    input: BackgroundJobLaunchInput,
+  ): BackgroundJobRecord {
     const now = input.now ?? Date.now();
     const existing = this.jobs.get(input.taskID);
     const requestedLease = input.relaunchLease ?? input.lease;
@@ -570,6 +782,14 @@ export class BackgroundJobBoard implements BackgroundJobStore {
       resultSummary: input.resultSummary,
     };
     this.setJob(record);
+    const { taskID, parentSessionID, agent, alias } = record;
+    this.notifyLaunchIdentity({
+      kind: 'registered',
+      taskID,
+      parentSessionID,
+      agent,
+      alias,
+    });
     return record;
   }
 
@@ -1482,13 +1702,25 @@ export class BackgroundJobBoard implements BackgroundJobStore {
     // A deleted parent's life ends; a restored copy (export/import emits no
     // session.created) carries numbers this board never issued.
     this.freshParents.delete(parentSessionID);
-    for (const job of this.list(parentSessionID)) {
+    // Capture identities before the board removes them so the projection
+    // can retract aliases for every affected record.
+    const removed = this.list(parentSessionID);
+    for (const job of removed) {
       recordBackgroundJobSuppression(
         this,
         job.taskID,
         terminalResultPayloadOf(job),
       );
       this.deleteJob(job.taskID);
+    }
+    for (const record of removed) {
+      this.notifyLaunchIdentity({
+        kind: 'removed',
+        taskID: record.taskID,
+        parentSessionID: record.parentSessionID,
+        agent: record.agent,
+        alias: record.alias,
+      });
     }
   }
 
@@ -1500,6 +1732,15 @@ export class BackgroundJobBoard implements BackgroundJobStore {
       record ? terminalResultPayloadOf(record) : undefined,
     );
     this.deleteJob(taskID);
+    if (record) {
+      this.notifyLaunchIdentity({
+        kind: 'removed',
+        taskID: record.taskID,
+        parentSessionID: record.parentSessionID,
+        agent: record.agent,
+        alias: record.alias,
+      });
+    }
   }
 
   /** Single eviction path for the retention trims: suppression, delete,
@@ -1703,6 +1944,13 @@ export class BackgroundJobBoard implements BackgroundJobStore {
       timeoutCount: 0,
     };
     this.setJob(record);
+    this.notifyLaunchIdentity({
+      kind: 'registered',
+      taskID: record.taskID,
+      parentSessionID: record.parentSessionID,
+      agent: record.agent,
+      alias: record.alias,
+    });
     return record;
   }
 

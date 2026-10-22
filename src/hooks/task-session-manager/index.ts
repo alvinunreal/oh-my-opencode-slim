@@ -2,7 +2,6 @@ import type { PluginInput } from '@opencode-ai/plugin';
 import {
   BackgroundJobBoard,
   type BackgroundJobExecution,
-  type BackgroundJobStore,
   type BackgroundJobSupervisor,
   type BackgroundTaskConcurrency,
   clearBackgroundJobSuppression,
@@ -82,7 +81,7 @@ const RECOVERED_TASK_AGENT_FALLBACK = 'unknown';
 
 function rehydrateHistoricalRunningTasks(
   messages: unknown[],
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobBoard: BackgroundJobBoard,
   shouldManageSession: (sessionID: string) => boolean,
   registerSessionAsOrchestrator?: (sessionID: string) => void,
   rehydrateTombstones?: ReadonlySet<string>,
@@ -323,7 +322,7 @@ export function createTaskSessionManagerHook(
   _ctx: PluginInput,
   options: {
     maxSessionsPerAgent: number;
-    backgroundJobBoard?: BackgroundJobStore;
+    backgroundJobBoard?: BackgroundJobBoard;
     terminalGate?: BackgroundJobTerminalGate;
     hostOutcomeClock?: 'shared-unix-ms';
     backgroundJobSupervisor?: BackgroundJobSupervisor;

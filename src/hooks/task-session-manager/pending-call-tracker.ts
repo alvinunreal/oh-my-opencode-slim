@@ -1,12 +1,14 @@
-import type { BackgroundJobLease } from '../../utils/background-job-board';
-import type { BackgroundJobStore } from '../../utils/background-job-store';
+import type {
+  BackgroundJobBoard,
+  BackgroundJobLease,
+} from '../../utils/background-job-board';
 import type { BackgroundJobSupervisor } from '../../utils/background-job-supervisor';
 import type { BackgroundTaskConcurrencyTicket } from '../../utils/background-task-concurrency';
 
 export interface EarlyTaskRegistration {
   taskID: string;
   generation: number;
-  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobBoard: BackgroundJobBoard;
   backgroundJobSupervisor?: BackgroundJobSupervisor;
 }
 
@@ -42,7 +44,7 @@ export interface PendingCallTracker {
   take(
     callId?: string,
     parentSessionId?: string,
-    ownerBoard?: BackgroundJobStore,
+    ownerBoard?: BackgroundJobBoard,
     options?: { recordConsumed?: boolean },
   ): PendingTaskCall | undefined;
   /** Remove and return the pending call whose early registration claimed
@@ -53,7 +55,7 @@ export interface PendingCallTracker {
   takeByTaskID(
     parentSessionId: string,
     taskID: string,
-    ownerBoard?: BackgroundJobStore,
+    ownerBoard?: BackgroundJobBoard,
   ): PendingTaskCall | undefined;
   /** Guarded drain fallback for no-tool-call-ID hosts: when neither a
    *  call ID nor an early-registration claim could identify the
@@ -75,7 +77,7 @@ export interface PendingCallTracker {
       /** Agent of the child session that produced that output. */
       agentType?: string;
       /** Board-generation fence, same as take()/takeByTaskID(). */
-      ownerBoard?: BackgroundJobStore;
+      ownerBoard?: BackgroundJobBoard;
     },
   ): PendingTaskCall | undefined;
   release(call: PendingTaskCall): void;
@@ -91,7 +93,7 @@ export interface PendingCallTracker {
    * a stale child of the consumed call, so claims must be refused. */
   hasConsumedCall(parentSessionId: string, agentType?: string): boolean;
   adoptEarlyRegistrations(
-    backgroundJobBoard: BackgroundJobStore,
+    backgroundJobBoard: BackgroundJobBoard,
     backgroundJobSupervisor?: BackgroundJobSupervisor,
   ): void;
   clearSession(sessionId: string): void;
@@ -183,7 +185,7 @@ export function createPendingCallTracker(
     take(
       callId?: string,
       parentSessionId?: string,
-      ownerBoard?: BackgroundJobStore,
+      ownerBoard?: BackgroundJobBoard,
       takeOptions?: { recordConsumed?: boolean },
     ) {
       // Set for a no-callId sole-survivor take on a parent whose
@@ -316,7 +318,7 @@ export function createPendingCallTracker(
     takeByTaskID(
       parentSessionId: string,
       taskID: string,
-      ownerBoard?: BackgroundJobStore,
+      ownerBoard?: BackgroundJobBoard,
     ) {
       for (const [callId, call] of pendingCalls.entries()) {
         if (
@@ -344,7 +346,7 @@ export function createPendingCallTracker(
       selection?: {
         identityTaskID?: string;
         agentType?: string;
-        ownerBoard?: BackgroundJobStore;
+        ownerBoard?: BackgroundJobBoard;
       },
     ) {
       for (const [callId, call] of pendingCalls.entries()) {
@@ -390,7 +392,7 @@ export function createPendingCallTracker(
     },
 
     adoptEarlyRegistrations(
-      backgroundJobBoard: BackgroundJobStore,
+      backgroundJobBoard: BackgroundJobBoard,
       backgroundJobSupervisor?: BackgroundJobSupervisor,
     ) {
       for (const pending of pendingCalls.values()) {

@@ -6,7 +6,7 @@
  * (read context tracking, task launch registration/update from output).
  */
 import type {
-  BackgroundJobStore,
+  BackgroundJobBoard,
   BackgroundJobSupervisor,
   BackgroundTaskConcurrency,
   ContextFile,
@@ -20,7 +20,7 @@ import {
   parseTaskStatusOutput,
 } from '../../utils';
 import type { BackgroundJobRecord } from '../../utils/background-job-board';
-import { getBackgroundJobLifecycleLedger } from '../../utils/background-job-store';
+import { getBackgroundJobLifecycleLedger } from '../../utils/background-job-board';
 import type { BackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
 import { isRecord as isObjectRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
@@ -114,7 +114,7 @@ function councilSeatBody(record: BackgroundJobRecord | undefined): string {
 function assembleCouncilSeatResponses(
   args: TaskArgs,
   parentSessionID: string,
-  board: BackgroundJobStore,
+  board: BackgroundJobBoard,
 ): void {
   if (typeof args.prompt !== 'string') return;
   const lines = args.prompt.split('\n');
@@ -236,13 +236,13 @@ export async function handleToolExecuteBefore(
   deps: {
     shouldManageSession: (sessionID: string) => boolean;
     registerSessionAsOrchestrator?: (sessionID: string) => void;
-    backgroundJobBoard: BackgroundJobStore;
+    backgroundJobBoard: BackgroundJobBoard;
     pendingCallTracker: {
       add(call: PendingTaskCall): void;
       take(
         callID?: string,
         sessionID?: string,
-        ownerBoard?: BackgroundJobStore,
+        ownerBoard?: BackgroundJobBoard,
         options?: { recordConsumed?: boolean },
       ): PendingTaskCall | undefined;
       release?(call: PendingTaskCall): void;
@@ -792,26 +792,26 @@ export async function handleToolExecuteAfter(
   output: { output: unknown; metadata?: unknown },
   deps: {
     directory: string;
-    backgroundJobBoard: BackgroundJobStore;
+    backgroundJobBoard: BackgroundJobBoard;
     terminalGate: BackgroundJobTerminalGate;
     pendingCallTracker: {
       take(
         callID?: string,
         sessionID?: string,
-        ownerBoard?: BackgroundJobStore,
+        ownerBoard?: BackgroundJobBoard,
         options?: { recordConsumed?: boolean },
       ): PendingTaskCall | undefined;
       takeByTaskID(
         sessionID: string,
         taskID: string,
-        ownerBoard?: BackgroundJobStore,
+        ownerBoard?: BackgroundJobBoard,
       ): PendingTaskCall | undefined;
       takeUnresolvedFirstMatch(
         sessionID: string,
         selection?: {
           identityTaskID?: string;
           agentType?: string;
-          ownerBoard?: BackgroundJobStore;
+          ownerBoard?: BackgroundJobBoard;
         },
       ): PendingTaskCall | undefined;
       release?(call: PendingTaskCall): void;
@@ -1163,14 +1163,14 @@ function registerTaskOutputLaunch(
   exactCallConfirmed: boolean,
   hostConfirmedBackground: boolean,
   deps: {
-    backgroundJobBoard: BackgroundJobStore;
+    backgroundJobBoard: BackgroundJobBoard;
     backgroundJobSupervisor?: BackgroundJobSupervisor;
     isStaleDeletedTaskOutput?: (
       taskID: string,
       lifecycleEpoch: number,
     ) => boolean;
   },
-): ReturnType<BackgroundJobStore['get']> {
+): ReturnType<BackgroundJobBoard['get']> {
   if (deps.isStaleDeletedTaskOutput?.(taskID, pending.lifecycleEpoch)) {
     log('[task-session-manager] ignored stale task output after deletion', {
       taskID,

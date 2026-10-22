@@ -4,7 +4,6 @@ import { createRevivedRunTracker } from '../hooks/task-session-manager/revived-r
 import { createTaskStatusTool } from '../tools/task-status';
 import { buildPluginInput } from '../v2/client-shim';
 import { BackgroundJobBoard } from './background-job-board';
-import { BackgroundJobCoordinator } from './background-job-coordinator';
 import {
   type BackgroundJobTerminalGate,
   createBackgroundJobTerminalGate,
@@ -843,7 +842,7 @@ describe('terminal gate', () => {
   test('quiescence plus attributable transcript commits exactly once', async () => {
     const h = harness();
     const listener = mock(() => {});
-    h.board.setTerminalPublicationHandler(listener);
+    h.board.addTerminalOutcomeListener(listener);
     h.observe('quiescent');
     expect((await h.gate.reconcile(h.run)).kind).toBe('committed');
     await h.gate.reconcile(h.run);
@@ -1124,14 +1123,13 @@ describe('terminal gate', () => {
 
 test('integration: historical replay + rehydration + busy host publishes nothing and retains capacity', async () => {
   const board = new BackgroundJobBoard();
-  const coordinator = new BackgroundJobCoordinator(board);
   const capacity = new BackgroundTaskConcurrency({
     defaultConcurrency: 1,
     providerConcurrency: {},
     modelConcurrency: {},
   });
   const release = mock((taskID: string) => capacity.releaseTask(taskID));
-  coordinator.addTerminalOutcomeListener((record) => release(record.taskID));
+  board.addTerminalOutcomeListener((record) => release(record.taskID));
   const input = {
     directory: '/tmp',
     client: {
@@ -1146,11 +1144,11 @@ test('integration: historical replay + rehydration + busy host publishes nothing
   } as never;
   const gate = createBackgroundJobTerminalGate({
     input,
-    backgroundJobBoard: coordinator,
+    backgroundJobBoard: board,
   });
   gates.push(gate);
   const hook = createTaskSessionManagerHook(input, {
-    backgroundJobBoard: coordinator,
+    backgroundJobBoard: board,
     terminalGate: gate,
     backgroundTaskConcurrency: capacity,
     shouldManageSession: () => true,

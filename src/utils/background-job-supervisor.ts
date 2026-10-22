@@ -1,5 +1,7 @@
-import type { BackgroundJobRecord } from './background-job-board';
-import type { BackgroundJobStore } from './background-job-store';
+import type {
+  BackgroundJobBoard,
+  BackgroundJobRecord,
+} from './background-job-board';
 import type { BackgroundJobTerminalGate } from './background-job-terminal-gate';
 import { log } from './logger';
 
@@ -7,7 +9,7 @@ import { log } from './logger';
 type TimerHandle = Timer;
 
 export interface BackgroundJobSupervisorOptions {
-  backgroundJobStore: BackgroundJobStore;
+  backgroundJobStore: BackgroundJobBoard;
   terminalGate: BackgroundJobTerminalGate;
   wallClockTimeoutMs: number;
   abortGraceMs: number;

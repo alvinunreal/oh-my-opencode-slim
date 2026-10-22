@@ -10,8 +10,10 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import {
   type BackgroundJobBoard,
+  clearBackgroundJobSuppression,
   deriveFullObjective,
   deriveTaskSessionLabel,
+  getBackgroundJobLifecycleLedger,
   type RestoreRetainedSessionInput,
 } from '../../utils/background-job-board';
 import {
@@ -20,11 +22,6 @@ import {
   type PersistedBackgroundChild,
   persistedBackgroundChildren,
 } from '../../utils/background-job-persistence';
-import type { BackgroundJobStore } from '../../utils/background-job-store';
-import {
-  clearBackgroundJobSuppression,
-  getBackgroundJobLifecycleLedger,
-} from '../../utils/background-job-store';
 import { STOP_CONFIRMATION_GRACE_MS } from '../../utils/background-job-terminal-gate';
 import type { BackgroundTaskConcurrency } from '../../utils/background-task-concurrency';
 import {
@@ -117,7 +114,7 @@ export interface RetainedRecoveryRequest {
 
 export interface SessionRecoveryOptions {
   input: PluginInput;
-  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobBoard: BackgroundJobBoard;
   isDisposed?: () => boolean;
   hostFlavor?: string;
   stableStoppedMs?: number;
@@ -548,7 +545,7 @@ async function recoverRetainedSession(
 
 export interface StartupSubagentRecoveryOptions {
   input: PluginInput;
-  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobBoard: BackgroundJobBoard;
   shouldManageSession: (sessionID: string) => boolean;
   hostFlavor?: string;
   isDisposed?: () => boolean;
@@ -1043,7 +1040,7 @@ function startupRowKeepsObservedRun(input: {
  */
 function correctStartupTerminal(
   options: StartupSubagentRecoveryOptions,
-  board: BackgroundJobStore,
+  board: BackgroundJobBoard,
   row: { taskID: string; generation: number },
   state: Extract<StartupChildState, { kind: 'terminal' }>,
 ): boolean {

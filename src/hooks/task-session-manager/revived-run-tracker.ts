@@ -1,10 +1,10 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import type {
+  BackgroundJobBoard,
   BackgroundJobLease,
   BackgroundJobRecord,
   ContextFile,
 } from '../../utils/background-job-board';
-import type { BackgroundJobStore } from '../../utils/background-job-store';
 import type { BackgroundJobSupervisor } from '../../utils/background-job-supervisor';
 import type { BackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
 import {
@@ -148,7 +148,7 @@ export interface RevivedRunTracker {
 
 export function createRevivedRunTracker(options: {
   input: PluginInput;
-  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobBoard: BackgroundJobBoard;
   terminalGate: BackgroundJobTerminalGate;
   backgroundJobSupervisor?: BackgroundJobSupervisor;
   maxNotificationRetries?: number;

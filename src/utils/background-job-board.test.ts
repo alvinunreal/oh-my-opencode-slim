@@ -4,14 +4,13 @@ import {
   isPrunableEvictedSession,
   BackgroundJobBoard as ProductionBoard,
 } from './background-job-board';
-import { BackgroundJobCoordinator } from './background-job-coordinator';
 import { BackgroundJobBoard } from './background-job-fixture';
+import * as loggerModule from './logger';
 
 describe('BackgroundJobBoard', () => {
   test('T-B: silent adoption does not outrank known F2 sessions', () => {
     const clock = spyOn(Date, 'now').mockReturnValue(1000);
     const board = new BackgroundJobBoard({ maxReusablePerAgent: 2 });
-    const coordinator = new BackgroundJobCoordinator(board);
     const complete = (taskID: string, now: number) => {
       board.registerLaunch({
         taskID,
@@ -26,8 +25,8 @@ describe('BackgroundJobBoard', () => {
     const f2 = structuredClone(board.get('ses_f2'));
     const outcome = mock();
     const identity = mock();
-    coordinator.addTerminalOutcomeListener(outcome);
-    coordinator.addLaunchIdentityListener(identity);
+    board.addTerminalOutcomeListener(outcome);
+    board.addLaunchIdentityListener(identity);
     const input = {
       taskID: 'ses_adopted',
       parentSessionID: 'parent-1',
@@ -39,7 +38,7 @@ describe('BackgroundJobBoard', () => {
       updatedAt: 100,
     };
     try {
-      const adopted = coordinator.adoptTerminal(input);
+      const adopted = board.adoptTerminal(input);
       expect(adopted).toMatchObject({
         alias: 'ses_adopted',
         state: 'reconciled',
@@ -48,7 +47,7 @@ describe('BackgroundJobBoard', () => {
         resultSummary: 'host error',
       });
       expect(
-        coordinator.adoptTerminal({ ...input, taskID: 'ses_f2' }),
+        board.adoptTerminal({ ...input, taskID: 'ses_f2' }),
       ).toBeUndefined();
       expect(board.get('ses_f2')).toEqual(f2);
       expect(identity).toHaveBeenCalledTimes(1);
@@ -418,7 +417,7 @@ describe('BackgroundJobBoard', () => {
   test('expected generation fences a late native terminal status', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalPublicationHandler(listener);
+    board.addTerminalOutcomeListener((record) => listener(record.taskID));
     const first = board.registerLaunch({
       taskID: 'ses_generation',
       parentSessionID: 'parent-1',
@@ -982,7 +981,7 @@ describe('BackgroundJobBoard', () => {
   test('preserveRun terminal promotion re-fires the suppressed recovery wake', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalPublicationHandler(listener);
+    board.addTerminalOutcomeListener((record) => listener(record.taskID));
     board.registerLaunch({
       taskID: 'child-1',
       parentSessionID: 'parent-1',
@@ -1011,7 +1010,7 @@ describe('BackgroundJobBoard', () => {
   test('promoteProvisional re-fires the wake for a terminal placeholder and stays silent for a running one', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalPublicationHandler(listener);
+    board.addTerminalOutcomeListener((record) => listener(record.taskID));
     board.registerLaunch({
       taskID: 'child-1',
       parentSessionID: 'parent-1',
@@ -1064,7 +1063,7 @@ describe('BackgroundJobBoard', () => {
   test('notifies terminal listener on updateStatus terminal transition', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalPublicationHandler(listener);
+    board.addTerminalOutcomeListener((record) => listener(record.taskID));
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -1080,7 +1079,7 @@ describe('BackgroundJobBoard', () => {
   test('notifies terminal listener on markCancelled mutation', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalPublicationHandler(listener);
+    board.addTerminalOutcomeListener((record) => listener(record.taskID));
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -1096,7 +1095,7 @@ describe('BackgroundJobBoard', () => {
   test('notifies terminal listener on forced markCancelled from running', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalPublicationHandler(listener);
+    board.addTerminalOutcomeListener((record) => listener(record.taskID));
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -1114,7 +1113,7 @@ describe('BackgroundJobBoard', () => {
   test('does not force-cancel a newer generation or notify terminal listeners', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalPublicationHandler(listener);
+    board.addTerminalOutcomeListener((record) => listener(record.taskID));
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -1151,7 +1150,7 @@ describe('BackgroundJobBoard', () => {
   test('does not notify terminal listener on forced markCancelled from terminal', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalPublicationHandler(listener);
+    board.addTerminalOutcomeListener((record) => listener(record.taskID));
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -1170,7 +1169,7 @@ describe('BackgroundJobBoard', () => {
   test('does not notify terminal listener for running or stale updates', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalPublicationHandler(listener);
+    board.addTerminalOutcomeListener((record) => listener(record.taskID));
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -1188,7 +1187,7 @@ describe('BackgroundJobBoard', () => {
 
   test('a throwing terminal publication handler is contained', () => {
     const board = new BackgroundJobBoard();
-    board.setTerminalPublicationHandler(() => {
+    board.addTerminalOutcomeListener(() => {
       throw new Error('publication handler failed');
     });
     board.registerLaunch({
@@ -2722,5 +2721,165 @@ describe('terminal-session GC provenance', () => {
     expect(
       isPrunableEvictedSession({ ...eligible, externalOrigin: true }),
     ).toBe(false);
+  });
+});
+
+// ── Merged subscription seams (formerly the coordinator's) ──────────
+// The board owns the terminal-outcome fan-out and the launch-identity
+// projection that the dissolved coordinator used to wrap.
+describe('BackgroundJobBoard subscription seams', () => {
+  test('notifies launch identity on accepted register, drop, and clearParent', () => {
+    const board = new BackgroundJobBoard();
+    const events: Array<{ kind: string; taskID: string; alias: string }> = [];
+    board.addLaunchIdentityListener((event) => {
+      events.push({
+        kind: event.kind,
+        taskID: event.taskID,
+        alias: event.alias,
+      });
+    });
+
+    const first = board.registerLaunch({
+      taskID: 'ses_ora_1',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+    });
+    expect(events).toEqual([
+      { kind: 'registered', taskID: 'ses_ora_1', alias: first.alias },
+    ]);
+
+    board.drop('ses_ora_1');
+    expect(events.at(-1)).toEqual({
+      kind: 'removed',
+      taskID: 'ses_ora_1',
+      alias: first.alias,
+    });
+
+    const sibling = board.registerLaunch({
+      taskID: 'ses_ora_2',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+    });
+    board.clearParent('parent-1');
+    expect(events.at(-1)).toEqual({
+      kind: 'removed',
+      taskID: 'ses_ora_2',
+      alias: sibling.alias,
+    });
+    expect(board.list('parent-1')).toEqual([]);
+  });
+
+  test('does not notify identity for a rejected launch, and a throwing listener does not fail the launch', () => {
+    const board = new BackgroundJobBoard();
+    const first = board.registerLaunch({
+      taskID: 'ses_busy',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+    });
+    const lease = board.acquireMessageLease(first.taskID, first.generation);
+    expect(lease).toBeDefined();
+
+    const events: string[] = [];
+    board.addLaunchIdentityListener(() => {
+      throw new Error('identity listener failed');
+    });
+    board.addLaunchIdentityListener((event) => {
+      events.push(`${event.kind}:${event.taskID}`);
+    });
+
+    expect(() =>
+      board.registerLaunch({
+        taskID: 'ses_busy',
+        parentSessionID: 'parent-1',
+        agent: 'oracle',
+      }),
+    ).toThrow();
+    expect(events).toEqual([]);
+
+    const accepted = board.registerLaunch({
+      taskID: 'ses_ok',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+    });
+    expect(accepted.taskID).toBe('ses_ok');
+    expect(events).toEqual(['registered:ses_ok']);
+  });
+
+  test('a throwing outcome listener does not prevent subsequent outcomes', () => {
+    const board = new BackgroundJobBoard();
+    const delivered: string[] = [];
+    board.addTerminalOutcomeListener(() => {
+      throw new Error('first outcome listener failed');
+    });
+    board.addTerminalOutcomeListener((record) => {
+      delivered.push(record.taskID);
+    });
+    board.registerLaunch({
+      taskID: 'ses_123',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+    });
+
+    board.updateStatus({ taskID: 'ses_123', state: 'completed' });
+
+    expect(delivered).toEqual(['ses_123']);
+  });
+
+  test('logs the terminal state dispatch with record identity', () => {
+    const entries: Array<{ message: string; data: unknown }> = [];
+    const spy = spyOn(loggerModule, 'log').mockImplementation(
+      (message: string, data?: unknown) => {
+        entries.push({ message, data });
+      },
+    );
+    try {
+      const board = new BackgroundJobBoard();
+      board.addTerminalOutcomeListener(() => {});
+      const job = board.registerLaunch({
+        taskID: 'ses_dispatch_log',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+      });
+      board.updateStatus({ taskID: job.taskID, state: 'running' });
+      board.updateStatus({ taskID: job.taskID, state: 'completed' });
+      const dispatch = entries.find(
+        (entry) =>
+          entry.message === '[job-coordinator] terminal state dispatch',
+      );
+      expect(dispatch?.data).toMatchObject({
+        taskID: job.taskID,
+        generation: job.generation,
+        state: 'completed',
+        parentSessionID: 'parent-1',
+      });
+      expect(dispatch?.data).not.toHaveProperty('deferredClose');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('stays silent on publication when no outcome listener is installed', () => {
+    const entries: string[] = [];
+    const spy = spyOn(loggerModule, 'log').mockImplementation(
+      (message: string) => {
+        entries.push(message);
+      },
+    );
+    try {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'ses_quiet',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+      });
+      board.updateStatus({ taskID: 'ses_quiet', state: 'completed' });
+      expect(
+        entries.filter((message) =>
+          message.includes('terminal state dispatch'),
+        ),
+      ).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

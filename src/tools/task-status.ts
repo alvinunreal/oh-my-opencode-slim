@@ -8,8 +8,10 @@ import {
   listChildInputWaits,
 } from '../hooks/task-session-manager/child-input-wait';
 import { pluginDisposedMessage } from '../hooks/task-session-manager/session-recovery';
-import type { BackgroundJobRecord } from '../utils/background-job-board';
-import type { BackgroundJobStore } from '../utils/background-job-store';
+import type {
+  BackgroundJobBoard,
+  BackgroundJobRecord,
+} from '../utils/background-job-board';
 import {
   type BackgroundJobTerminalGate,
   createBackgroundJobTerminalGate,
@@ -101,7 +103,7 @@ async function probeTerminalOutcome(
   options: {
     input: PluginInput;
     gate: BackgroundJobTerminalGate;
-    board: BackgroundJobStore;
+    board: BackgroundJobBoard;
   },
   run: { taskID: string; generation: number },
   snapshot?: RuntimeSessionStatusSnapshot,
@@ -159,7 +161,7 @@ function committedStatusOutput(
 
 export function createTaskStatusTool(options: {
   input: PluginInput;
-  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobBoard: BackgroundJobBoard;
   activityTracker?: TaskActivityTracker;
   terminalGate?: BackgroundJobTerminalGate;
   now?: () => number;
@@ -417,7 +419,7 @@ function runningResultRefusal(
 interface TaskResultReadOptions {
   input: PluginInput;
   gate: BackgroundJobTerminalGate;
-  board: BackgroundJobStore;
+  board: BackgroundJobBoard;
   isDisposed?: () => boolean;
   readTimeoutMs?: number;
   resolveCanonicalTaskRef?: CanonicalTaskResolver;
@@ -703,7 +705,7 @@ async function readTaskResult(
 
 interface UntrackedStatusOptions {
   input: PluginInput;
-  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobBoard: BackgroundJobBoard;
   now?: () => number;
   statusTimeoutMs?: number;
   isDisposed?: () => boolean;

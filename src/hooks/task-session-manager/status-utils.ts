@@ -1,4 +1,4 @@
-import type { BackgroundJobRecord, BackgroundJobStore } from '../../utils';
+import type { BackgroundJobBoard, BackgroundJobRecord } from '../../utils';
 import { parseTaskStatusOutput } from '../../utils';
 import { isRecord as isObjectRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
@@ -41,7 +41,7 @@ export function formatCancelledTaskStatusOutput(
 
 export function normalizeLateCancelledTaskOutput(
   output: { output: unknown; metadata?: unknown },
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobBoard: BackgroundJobBoard,
   idParam = 'task_id',
 ): void {
   if (typeof output.output !== 'string') return;

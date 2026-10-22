@@ -14,13 +14,13 @@ import {
   type RevivedRunTracker,
 } from '../hooks/task-session-manager/revived-run-tracker';
 import { createSessionRecovery } from '../hooks/task-session-manager/session-recovery';
-import { BackgroundJobBoard as ProductionBoard } from '../utils/background-job-board';
-import { BackgroundJobBoard } from '../utils/background-job-fixture';
-import { getSuppressionTombstone } from '../utils/background-job-persistence';
 import {
   getBackgroundJobLifecycleLedger,
+  BackgroundJobBoard as ProductionBoard,
   recordBackgroundJobSuppression,
-} from '../utils/background-job-store';
+} from '../utils/background-job-board';
+import { BackgroundJobBoard } from '../utils/background-job-fixture';
+import { getSuppressionTombstone } from '../utils/background-job-persistence';
 import {
   type BackgroundJobTerminalGate,
   createBackgroundJobTerminalGate,
@@ -323,7 +323,7 @@ describe('task_revive tool', () => {
     const register = spyOn(fixture.revivedRunTracker, 'register');
     const probe = spyOn(fixture.revivedRunTracker, 'probe');
     const terminal = mock(() => {});
-    board.setTerminalPublicationHandler(terminal);
+    board.addTerminalOutcomeListener(terminal);
     const result = taskRevive
       .execute({ task_id: 'ses_1', prompt: 'continue' }, context)
       .then(String, (error: Error) => error);

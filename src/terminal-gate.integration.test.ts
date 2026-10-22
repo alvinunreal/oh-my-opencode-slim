@@ -10,8 +10,10 @@ import { BACKGROUND_JOB_BOARD_METADATA_KEY } from './hooks/task-session-manager/
 import type { RevivedRunTracker } from './hooks/task-session-manager/revived-run-tracker';
 import * as runtimeFactories from './hooks/task-session-manager/runtime-status-reconciliation';
 import { OhMyOpenCodeLite as plugin } from './index';
-import type { BackgroundJobRecord } from './utils/background-job-board';
-import type { BackgroundJobCoordinator } from './utils/background-job-coordinator';
+import type {
+  BackgroundJobRecord,
+  BackgroundJobBoard as ProductionBoard,
+} from './utils/background-job-board';
 import {
   configureBackgroundJobPersistence,
   loadInitialBackgroundJobPersistence,
@@ -62,7 +64,7 @@ const transcript = () => ({
 
 async function assembly(
   onHookCreated?: (
-    board: BackgroundJobCoordinator,
+    board: ProductionBoard,
     gate: gateFactories.BackgroundJobTerminalGate,
   ) => void,
   setup: {
@@ -105,7 +107,7 @@ async function assembly(
       },
     }),
   );
-  let board!: BackgroundJobCoordinator;
+  let board!: ProductionBoard;
   let gate!: gateFactories.BackgroundJobTerminalGate;
   let taskHook!: ReturnType<typeof hookFactories.createTaskSessionManagerHook>;
   // The production tracker instance, captured from the hook factory's
@@ -132,7 +134,7 @@ async function assembly(
     gateFactories,
     'createBackgroundJobTerminalGate',
   ).mockImplementation((options) => {
-    board = options.backgroundJobBoard as BackgroundJobCoordinator;
+    board = options.backgroundJobBoard as ProductionBoard;
     gate = originalGate({
       ...options,
       graceMs: setup.graceMs ?? options.graceMs,
@@ -1226,7 +1228,7 @@ async function driveV2Lifecycle(
   probe: V2HostProbe,
   events: V2RawEventSpec[],
   setup: { withoutHostOutcomeClock?: boolean } = {},
-): Promise<BackgroundJobCoordinator> {
+): Promise<ProductionBoard> {
   const childID = String(
     events.find((event) => event.type === 'session.created')?.data.sessionID ??
       events[0]?.data.sessionID ??
