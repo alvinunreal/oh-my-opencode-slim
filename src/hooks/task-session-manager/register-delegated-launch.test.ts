@@ -25,14 +25,25 @@ function makePending(
 
 function makeHarness() {
   const board = new BackgroundJobBoard();
-  const reconciles: Array<{ kind?: string; status?: { state?: string } }> = [];
+  const reconciles: Array<{
+    kind?: string;
+    status?: {
+      taskID?: string;
+      state?: string;
+      timedOut?: boolean;
+      result?: string;
+    };
+  }> = [];
   const deps: RegisterDelegatedLaunchDeps = {
     directory: '/tmp',
     backgroundJobBoard: board,
     terminalGate: {
       reconcile: async (_record: unknown, signal: unknown) => {
         reconciles.push(
-          signal as { kind?: string; status?: { state?: string } },
+          signal as {
+            kind?: string;
+            status?: { taskID?: string; state?: string; result?: string };
+          },
         );
         return undefined;
       },
@@ -97,6 +108,93 @@ describe('registerDelegatedLaunchFromStructured', () => {
     expect(reconciles).toHaveLength(1);
     expect(reconciles[0]?.kind).toBe('output');
     expect(reconciles[0]?.status?.state).toBe('completed');
+  });
+
+  test("a completed wrapper result carries the child's final text (incident 1115 regression)", async () => {
+    // The wrapper used to register state 'completed' WITHOUT the child's
+    // final text; the gate's textless-completion policy then recorded an
+    // error claiming the child produced no public text even though the
+    // executor returned a valid answer (the after-hook recovery lane is
+    // gated off by registeredByWrapper). The result text must reach the
+    // gate so the policy cannot misfire on the wrapper path.
+    const { deps, reconciles } = makeHarness();
+    const pending = makePending();
+    const result =
+      '<subagent sessionID="ses_done" state="completed">\n  <result>ok</result>\n</subagent>';
+
+    await registerDelegatedLaunchFromStructured(
+      {
+        callID: 'call_1',
+        childTaskID: 'ses_done',
+        state: 'completed',
+        background: false,
+        result,
+        exactCallConfirmed: true,
+        pending,
+        handledByWrapper: true,
+      },
+      deps,
+    );
+
+    expect(reconciles).toHaveLength(1);
+    expect(reconciles[0]?.status).toEqual({
+      taskID: 'ses_done',
+      state: 'completed',
+      timedOut: false,
+      result,
+    });
+  });
+
+  test('a thrown-error wrapper result reaches the gate with the host error message', async () => {
+    const { deps, reconciles } = makeHarness();
+    const pending = makePending();
+
+    await registerDelegatedLaunchFromStructured(
+      {
+        callID: 'call_1',
+        childTaskID: 'ses_fail',
+        state: 'error',
+        background: false,
+        result: 'Subagent failed (sessionID: ses_fail): provider timeout',
+        exactCallConfirmed: true,
+        pending,
+        handledByWrapper: true,
+      },
+      deps,
+    );
+
+    expect(reconciles).toHaveLength(1);
+    expect(reconciles[0]?.status).toEqual({
+      taskID: 'ses_fail',
+      state: 'error',
+      timedOut: false,
+      result: 'Subagent failed (sessionID: ses_fail): provider timeout',
+    });
+  });
+
+  test('the terminal status omits the result key when the wrapper carries no text', async () => {
+    const { deps, reconciles } = makeHarness();
+    const pending = makePending();
+
+    await registerDelegatedLaunchFromStructured(
+      {
+        callID: 'call_1',
+        childTaskID: 'ses_done',
+        state: 'completed',
+        background: false,
+        exactCallConfirmed: true,
+        pending,
+        handledByWrapper: true,
+      },
+      deps,
+    );
+
+    expect(reconciles).toHaveLength(1);
+    expect(reconciles[0]?.status).toEqual({
+      taskID: 'ses_done',
+      state: 'completed',
+      timedOut: false,
+    });
   });
 
   test('applies host-confirmed background promotion before registration', async () => {

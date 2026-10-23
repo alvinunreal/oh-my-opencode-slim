@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  createSubagentExecutorWrapper,
   HOST_FAILURE_MESSAGE_PATTERN,
   type SubagentStructuredLaunch,
-  createSubagentExecutorWrapper,
 } from './subagent-executor-wrapper';
 
 function recorder() {
@@ -40,6 +40,7 @@ describe('createSubagentExecutorWrapper', () => {
         childTaskID: 'ses_child',
         state: 'running',
         background: false,
+        result: result.content,
       },
     ]);
   });
@@ -79,7 +80,54 @@ describe('createSubagentExecutorWrapper', () => {
     expect(rec.launches[0]).toMatchObject({
       childTaskID: 'ses_done',
       state: 'completed',
+      result: content,
     });
+  });
+
+  test('a completed result passes the child text verbatim through register', async () => {
+    const rec = recorder();
+    const wrapper = createSubagentExecutorWrapper({ register: rec.register });
+    // Host-authored prose with intentional spacing/quotes: the wrapper must
+    // carry the string byte-for-byte, never reformat it.
+    const content =
+      '<subagent sessionID="ses_done" state="completed">\n  <result>  done &amp; dusted  </result>\n</subagent>';
+    const wrapped = wrapper.wrap(async () => ({
+      output: { sessionID: 'ses_done', status: 'completed' },
+      content,
+      metadata: { sessionID: 'ses_done', status: 'completed' },
+    }));
+
+    await wrapped({}, ctx);
+
+    expect(rec.launches).toHaveLength(1);
+    expect(rec.launches[0].result).toBe(content);
+  });
+
+  test('a result with no text omits the result field (fail-open)', async () => {
+    const rec = recorder();
+    const wrapper = createSubagentExecutorWrapper({ register: rec.register });
+    const wrapped = wrapper.wrap(async () => ({
+      output: { sessionID: 'ses_done', status: 'completed' },
+      content: '   ',
+      metadata: { sessionID: 'ses_done', status: 'completed' },
+    }));
+
+    await wrapped({}, ctx);
+
+    expect(rec.launches).toHaveLength(1);
+    expect('result' in rec.launches[0]).toBe(false);
+  });
+
+  test('falls back to output.result when content is absent', async () => {
+    const rec = recorder();
+    const wrapper = createSubagentExecutorWrapper({ register: rec.register });
+    const wrapped = wrapper.wrap(async () => ({
+      output: { sessionID: 'ses_done', status: 'completed', result: 'plain' },
+    }));
+
+    await wrapped({}, ctx);
+
+    expect(rec.launches[0].result).toBe('plain');
   });
 
   test('fails open when the result carries no structured session ID', async () => {
@@ -127,6 +175,7 @@ describe('createSubagentExecutorWrapper', () => {
         childTaskID: 'ses_fail',
         state: 'error',
         background: false,
+        result: failure.message,
       },
     ]);
   });

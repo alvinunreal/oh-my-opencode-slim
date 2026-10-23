@@ -3253,6 +3253,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                 childTaskID: string;
                 state: 'running' | 'completed' | 'error' | 'cancelled';
                 background: boolean;
+                result?: string;
                 exactCallConfirmed: boolean;
               }) => Promise<unknown>)
             | undefined;

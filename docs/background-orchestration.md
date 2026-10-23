@@ -1019,8 +1019,12 @@ activity, and liveness timestamps do not renew it. An explicit relaunch or reuse
 starts a new run generation.
 
 When the deadline fires, the watchdog acquires the same cancellation lease
-`task_cancel` uses (it stands down when another operation already owns the
-child), issues exactly one native session abort, and releases the lease when
+`task_cancel` uses; if another operation (message queueing, cancel, relaunch)
+already owns the child, it retries the acquisition on a fixed 1s interval
+while the same run is still tracked and the board record is still running —
+a message only queues text and never ends the run, so an occupied lease must
+not make the watchdog forget the deadline. Once the lease is acquired it
+issues exactly one native session abort, and releases the lease when
 the abort settles. The host — which offers no live-hang timeout of its own —
 then reports the real terminal for the aborted run (typically an interrupted
 outcome, which the terminal gate publishes in the stop family), and that

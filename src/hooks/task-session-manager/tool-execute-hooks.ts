@@ -1361,6 +1361,13 @@ export interface DelegatedLaunchFromStructuredInput {
   state: TaskOutputState;
   /** Host-confirmed background promotion from structured metadata. */
   background: boolean;
+  /**
+   * The child's final text (v2 executor-wrapper path only): carried
+   * verbatim into the terminal gate's status so the textless-completion
+   * policy cannot turn a valid answer into an error. The v1 after-hook
+   * path never sets it (its terminal branch parses its own output).
+   */
+  result?: string;
   exactCallConfirmed: boolean;
   pending: PendingTaskCall;
   /** Set only on the v2 executor-wrapper path — marks the pending so the
@@ -1439,6 +1446,7 @@ export async function registerDelegatedLaunchFromStructured(
           taskID: input.childTaskID,
           state: input.state,
           timedOut: false,
+          ...(input.result !== undefined ? { result: input.result } : {}),
         },
         origin: {
           kind: 'native',

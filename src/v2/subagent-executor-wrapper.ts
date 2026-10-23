@@ -31,6 +31,14 @@ export interface SubagentStructuredLaunch {
   state: SubagentStructuredState;
   /** Host-confirmed background promotion from structured metadata. */
   background: boolean;
+  /**
+   * The child's final text, passed VERBATIM (never reformatted): the
+   * native v2 foreground completion carries the full host-authored
+   * `<subagent …>` block in `content`. Omitted when the result carries
+   * no text (fail-open). The terminal gate's textless-completion policy
+   * needs it so a valid answer is not recorded as an error.
+   */
+  result?: string;
 }
 
 export interface SubagentExecutorWrapperOptions {
@@ -54,12 +62,14 @@ const WRAPPED_MARKER = Symbol.for(
 );
 
 interface ExecutorResultLike {
-  output?: { sessionID?: unknown; status?: unknown };
+  output?: { sessionID?: unknown; status?: unknown; result?: unknown };
   metadata?: {
     sessionID?: unknown;
     status?: unknown;
     background?: unknown;
   };
+  /** The host-authored completion prose (the full `<subagent …>` block). */
+  content?: unknown;
 }
 
 function readString(value: unknown): string | undefined {
@@ -82,11 +92,18 @@ function structuredLaunch(
     rawState === 'completed' || rawState === 'error' || rawState === 'cancelled'
       ? rawState
       : 'running';
+  // The child's final text, verbatim: the native v2 foreground completion
+  // carries the full host-authored `<subagent …>` block in `content`.
+  // Never reformat it — the terminal gate's textless-completion policy
+  // reads this as the run's public answer text.
+  const resultText =
+    readString(shaped.content) ?? readString(shaped.output?.result);
   return {
     callID,
     childTaskID,
     state,
     background: shaped.metadata?.background === true,
+    ...(resultText !== undefined ? { result: resultText } : {}),
   };
 }
 
@@ -111,6 +128,9 @@ function threwLaunch(
     // A thrown failure never represents a promoted background run: the
     // background lane returns its handle instead of throwing.
     background: false,
+    // Failure details preserved: the host error message is the only text a
+    // thrown Tool.Error carries.
+    ...(message !== '' ? { result: message } : {}),
   };
 }
 
