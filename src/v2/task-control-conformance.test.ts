@@ -92,7 +92,6 @@ function harness(
       tracker?.attemptStartedAtFor(id, generation),
     isObservationPending: (id, generation) =>
       tracker?.isObservationPending(id, generation) ?? false,
-    onTerminal,
     graceMs: 5,
   });
   tracker = createRevivedRunTracker({
@@ -100,6 +99,10 @@ function harness(
     backgroundJobBoard: board,
     terminalGate: gate,
   });
+  // The retained-state setup above already published before this point;
+  // from here on the board's outcome fan-out is the publication channel,
+  // exactly as production wires the tracker (index.ts).
+  board.addTerminalOutcomeListener(onTerminal);
   const baseline = spyOn(tracker, 'captureBaseline');
   const register = spyOn(tracker, 'register');
   dispose.push(() => {

@@ -161,7 +161,6 @@ interface Observation {
     token: ObservationToken;
     readSettled: Promise<void>;
   };
-  idleCandidate?: RuntimeObservation;
   quiescentSince?: number;
   candidate?: { signal: TerminalSignal; token: ObservationToken };
   retries: number;
@@ -336,7 +335,6 @@ export function createBackgroundJobTerminalGate(options: {
   ) => number | undefined;
   isObservationPending?: (taskID: string, generation: number) => boolean;
   onRunning?: (record: BackgroundJobRecord) => void;
-  onTerminal?: (record: BackgroundJobRecord) => void;
   graceMs?: number;
   readTimeoutMs?: number;
   maxEvidenceRetries?: number;
@@ -541,7 +539,6 @@ export function createBackgroundJobTerminalGate(options: {
     if (value.timer) clearTimer(value.timer);
     value.timer = undefined;
     value.candidate = undefined;
-    options.onTerminal?.(record);
     // Log-only corroboration: when a window-attributed host outcome is in
     // hand for this episode, compare it with the state being published and
     // log bounded-evidence disagreements. Same contract as
@@ -620,14 +617,12 @@ export function createBackgroundJobTerminalGate(options: {
       value.quiescentSince = undefined;
       // Ambiguous busy/retry is live activity: drop held candidates.
       value.candidate = undefined;
-      value.idleCandidate = undefined;
       if (value.timer) clearTimer(value.timer);
       value.timer = undefined;
       return deferred(token);
     }
     if (predatesPublication) return { kind: 'stale' };
     if (runtime.origin === 'session.idle') {
-      value.idleCandidate = runtime;
       value.pendingRuntime = false;
       value.retries = 0;
       return deferred(token);
@@ -640,7 +635,6 @@ export function createBackgroundJobTerminalGate(options: {
       value.quiescentSince = undefined;
       value.retries = 0;
       value.candidate = undefined;
-      value.idleCandidate = undefined;
       if (value.timer) clearTimer(value.timer);
       value.timer = undefined;
       value.runtime = runtime;

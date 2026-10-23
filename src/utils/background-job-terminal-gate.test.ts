@@ -209,13 +209,12 @@ describe('terminal gate', () => {
         ...overrides,
       };
       let clock = 140;
-      const onTerminal = mock(() => {});
+      const publications: string[] = [];
       const h = harness({
         hostOutcomeClock: spec.clock,
         now: () => clock,
         attemptStartedAtFor: () => spec.attempt,
         maxEvidenceRetries: 0,
-        onTerminal,
         baselineFor: () => undefined,
         readTerminalEvidence: async () => ({ data: [] }),
         input: {
@@ -244,6 +243,11 @@ describe('terminal gate', () => {
             });
       if (spec.activity !== undefined)
         h.board.markRunningFromLiveSession(run.taskID, spec.activity);
+      // The board's outcome fan-out is the single publication channel: the
+      // gate no longer carries its own terminal callback.
+      h.board.addTerminalOutcomeListener((record) => {
+        publications.push(`${record.taskID}:${record.terminalRevision}`);
+      });
       const revision = h.board.get(run.taskID)?.terminalRevision;
       await h.gate.reconcile(run);
       expect(h.board.get(run.taskID)).toMatchObject(
@@ -261,7 +265,7 @@ describe('terminal gate', () => {
       );
       if (!accepted)
         expect(h.board.get(run.taskID)?.resultSummary).toBeUndefined();
-      expect(onTerminal).toHaveBeenCalledTimes(accepted ? 1 : 0);
+      expect(publications).toHaveLength(accepted ? 1 : 0);
     },
   );
 
@@ -561,7 +565,11 @@ describe('terminal gate', () => {
     const validate = mock(() => true);
     h.board.commitTerminal(
       { taskID: h.run.taskID, state: 'completed', resultSummary: 'forged' },
-      { taskID: h.run.taskID, generation: h.run.generation, validate } as never,
+      {
+        taskID: h.run.taskID,
+        generation: h.run.generation,
+        validate,
+      } as never,
     );
     expect(h.board.get(h.run.taskID)?.state).toBe('running');
     expect(validate).not.toHaveBeenCalled();
@@ -1270,7 +1278,6 @@ test('integration: late acknowledgement and transport success for A cannot consu
     backgroundJobBoard: board,
     input,
     baselineFor: () => 'baseline',
-    onTerminal: (record) => tracker.onTerminal(record),
   });
   gates.push(gate);
   tracker = createRevivedRunTracker({
@@ -1279,6 +1286,11 @@ test('integration: late acknowledgement and transport success for A cannot consu
     terminalGate: gate,
     maxNotificationRetries: 2,
     notificationRetryDelayMs: 1,
+  });
+  // Production wires the tracker through the board's outcome fan-out
+  // (index.ts), not through a private gate callback.
+  board.addTerminalOutcomeListener((record) => {
+    tracker.onTerminal(record);
   });
   tracker.register({ ...run, baselineMessageID: 'baseline' });
   const hook = createTaskSessionManagerHook(input, {

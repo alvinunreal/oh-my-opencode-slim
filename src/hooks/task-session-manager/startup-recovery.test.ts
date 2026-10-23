@@ -11,6 +11,7 @@ import {
   persistedBackgroundChildren,
   recordPersistedBackgroundChild,
 } from '../../utils/background-job-persistence';
+import { createBackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
 import { BackgroundTaskConcurrency } from '../../utils/background-task-concurrency';
 import { createTimerHarness, tick } from '../../utils/test-timers';
 import { buildPluginInput } from '../../v2/client-shim';
@@ -1027,6 +1028,100 @@ describe('startup subagent recovery', () => {
     expect(rerun).toEqual([]);
     expect(restarted.get(RUNNING)).toBeUndefined();
     expect(wakes).toEqual([`${PARENT}:${RUNNING}`]);
+  });
+
+  test('host restart re-delivery plus startup recovery notify the parent exactly once (v2)', async () => {
+    // The v2 host re-delivers a background subagent's terminal outcome on its
+    // own restart (core/session/execution/restart.ts recoverSubagent ->
+    // SubagentCompletion.deliver with resume:false), which lands in the
+    // parent's history as a trusted <subagent> delivery. omos's startup
+    // recovery must publish beside it exactly zero times: the host's
+    // re-delivery is the single notification for that run.
+    const storage = memoryStorage();
+    const board = new BackgroundJobBoard();
+    const wakes: string[] = [];
+    const publications: string[] = [];
+    board.addTerminalOutcomeListener((record) => {
+      publications.push(`${record.taskID}:${record.terminalRevision}`);
+    });
+    await seedPersistence(storage, [persistedChild(DONE)]);
+    board.registerLaunch({
+      taskID: DONE,
+      parentSessionID: PARENT,
+      agent: 'explorer',
+      description: 'delegated',
+      background: true,
+      adopted: true,
+      now: 0,
+    });
+    const parent = parentTranscript([
+      {
+        callID: 'call-done',
+        sessionID: DONE,
+        value: launchText(DONE),
+        background: true,
+      },
+    ]);
+    // The host's restart re-delivery, timestamped after the child's terminal
+    // boundary so it covers this run.
+    parent.data.push(deliveryMessage(DONE, 20));
+
+    const result = await recoverSubagentSessionsAtStartup({
+      input: input({
+        sessions: [
+          { id: PARENT, agent: 'orchestrator' },
+          {
+            id: DONE,
+            parentID: PARENT,
+            agent: 'explorer',
+            outcome: 'succeeded',
+          },
+        ],
+        parent,
+        children: { [DONE]: completedChildTranscript('Done') },
+      }),
+      backgroundJobBoard: board,
+      hostFlavor: 'v2',
+      shouldManageSession: () => false,
+      onRecoveredTerminal: (parentSessionID, taskID) => {
+        wakes.push(`${parentSessionID}:${taskID}`);
+        return true;
+      },
+    });
+
+    expect(result).toEqual([]);
+    expect(wakes).toEqual([]);
+    // The running startup row is corrected to terminal without a publication:
+    // correctStartupRecoveredTerminal deliberately fires no terminal listener
+    // so a restart cannot double-wake the parent.
+    expect(board.get(DONE)).toMatchObject({
+      state: 'completed',
+      resultSummary: 'Done',
+      recoveredAtStartup: true,
+      verifiedRetainedRound: true,
+    });
+    expect(publications).toEqual([]);
+    // The host's re-delivery is recorded as the run's single delivery.
+    expect(persistedBackgroundChildren().get(DONE)?.deliveredAt).toBe(20);
+
+    // A later plugin reconcile of the corrected run stays a retained round:
+    // it neither re-reads evidence nor publishes a second terminal.
+    const gate = createBackgroundJobTerminalGate({
+      backgroundJobBoard: board,
+      readTerminalEvidence: async () => completedChildTranscript('Done'),
+      baselineFor: () => undefined,
+      now: () => 100,
+    });
+    const corrected = board.get(DONE);
+    if (!corrected) throw new Error('missing corrected row');
+    const reconcile = await gate.reconcile({
+      taskID: DONE,
+      generation: corrected.generation,
+    });
+    gate.dispose();
+    expect(reconcile).toEqual({ kind: 'committed', record: corrected });
+    expect(publications).toEqual([]);
+    expect(board.get(DONE)?.terminalRevision).toBe(corrected.terminalRevision);
   });
 
   test('keeps an undelivered identity when a terminal wake is declined', async () => {

@@ -386,7 +386,15 @@ the delivery marker prevents replay on later restarts. The marker is written
 only after an accepted parent-visible wake, or when a trusted delivery for the
 current run is found in the parent history; native notification ownership
 alone is not delivery evidence, and a restored terminal row alone does not
-acknowledge delivery. A busy, throttled, or failed publication keeps its
+acknowledge delivery. On v2 the host itself re-delivers a background subagent's
+terminal outcome after a *host* restart (`recoverSubagent` →
+`SubagentCompletion.deliver`, `resume: false`), and that re-delivery lands in
+the parent history as a trusted `<subagent>` delivery: the startup scan treats
+it as the run's single notification and stays silent beside it (a running row
+it had adopted is corrected to terminal without a publication, and a later
+terminal-gate reconcile keeps the retained round instead of republishing).
+v1 has no host restart re-delivery, so the plugin's own startup recovery
+remains its only notification mechanism there. A busy, throttled, or failed publication keeps its
 execution pending. Publication retries survive a parent busy-to-idle transition
 even when periodic wakes are disabled. A startup correction from running to
 terminal also releases the recovered child's concurrency slot. The wake body
