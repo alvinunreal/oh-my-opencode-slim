@@ -8,6 +8,14 @@ import { log } from './logger';
 /** Platform timer handle; fake harnesses may return bare numeric ids. */
 type TimerHandle = Timer;
 
+/**
+ * Interval between re-attempts of the deadline's lease acquisition while
+ * another operation (message queueing, cancel, relaunch) owns the child's
+ * cancellation lease. Leases are short-lived by construction, so the retry
+ * chain is bounded by the child's lifetime, not a counter.
+ */
+export const LEASE_RETRY_INTERVAL_MS = 1_000;
+
 export interface BackgroundJobSupervisorOptions {
   backgroundJobBoard: BackgroundJobBoard;
   wallClockTimeoutMs: number;
@@ -36,7 +44,10 @@ interface RunTimer {
  * The host offers no live-hang timeout, so this is the only thing that
  * eventually stops a hung background child. It owns timer/generation/abort
  * mechanics ONLY: on expiry it asks the host to stop the child through the
- * same lease-guarded abort `task_cancel` uses, then drops the timer. It never
+ * same lease-guarded abort `task_cancel` uses, then drops the timer. When
+ * the deadline fires while another operation holds the cancellation lease,
+ * the acquisition is retried on a short interval instead of dropping the
+ * run — a message/relaunch lease does not end the run. It never
  * writes terminal state — the host's real aborted terminal flows through the
  * terminal gate's evidence path like any other outcome.
  */
@@ -136,16 +147,23 @@ export class BackgroundJobSupervisor {
     run.deadlineTimer = undefined;
 
     // The same ownership primitive task_cancel acquires: while it is held no
-    // other operation can abort, message, or relaunch this child. An occupied
-    // lease means that operation owns the child and will produce its own
-    // terminal, so the watchdog stands down.
+    // other operation can abort, message, or relaunch this child. An
+    // occupied lease means that operation owns the child RIGHT NOW — but a
+    // message only queues text and a relaunch only starts a new run; neither
+    // ends this run. The watchdog must not forget the run, so it retries the
+    // acquisition instead of standing down: every settling operation either
+    // releases its lease or produces a terminal that clears the run via
+    // onTerminal/drop/onSessionDeleted.
     const lease = this.options.backgroundJobBoard.acquireLease(
       taskID,
       generation,
       'cancellation',
     );
     if (!lease) {
-      this.clear(taskID);
+      run.deadlineTimer = this.setTimer(
+        () => this.retryDeadline(taskID, generation),
+        LEASE_RETRY_INTERVAL_MS,
+      );
       return;
     }
     run.abortLease = lease;
@@ -168,6 +186,21 @@ export class BackgroundJobSupervisor {
         // Harmless when clear() already released it: token mismatch refuses.
         this.options.backgroundJobBoard.releaseLease(lease);
       });
+  }
+
+  /** Re-attempt the deadline's lease acquisition. */
+  private retryDeadline(taskID: string, generation: number): void {
+    const run = this.runs.get(taskID);
+    if (this.disposed || !run || run.generation !== generation) return;
+    // The competing operation settled with a terminal: the run clears itself
+    // via onTerminal/drop/onSessionDeleted when the terminal publishes, and a
+    // non-running record means the watchdog's work is over either way.
+    const record = this.options.backgroundJobBoard.get(taskID);
+    if (record?.state !== 'running') {
+      this.clear(taskID);
+      return;
+    }
+    this.onDeadline(taskID, generation);
   }
 
   private clear(taskID: string): void {

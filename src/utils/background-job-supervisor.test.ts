@@ -2,7 +2,10 @@ import { describe, expect, mock, test } from 'bun:test';
 import { buildPluginInput } from '../v2/client-shim';
 import { BackgroundJobBoard } from './background-job-board';
 import { boardFixture } from './background-job-fixture';
-import { BackgroundJobSupervisor } from './background-job-supervisor';
+import {
+  BackgroundJobSupervisor,
+  LEASE_RETRY_INTERVAL_MS,
+} from './background-job-supervisor';
 import { createBackgroundJobTerminalGate } from './background-job-terminal-gate';
 import { createTimerHarness } from './test-timers';
 
@@ -213,11 +216,105 @@ describe('BackgroundJobSupervisor', () => {
 
     await timers.advanceTo(100);
     expect(abort).not.toHaveBeenCalled();
-    expect(timers.pending()).toBe(0);
+    // The watchdog does not forget the run: it retries the lease on a fixed
+    // interval while the competing operation still owns the child.
+    expect(timers.pending()).toBe(1);
     if (lease) {
       expect(board.validateLease(lease)).toBe(true);
       board.releaseLease(lease);
     }
+  });
+
+  test('an occupied lease at expiry retries the acquisition and aborts once released', async () => {
+    const { board, supervisor, timers, abort } = createSupervisor();
+    const job = launch(board, true);
+    supervisor.onLaunch(job);
+    // A message operation holds the lease at the deadline: it only queues
+    // text, so the run must stay watched.
+    const lease = board.acquireLease(
+      job.taskID,
+      job.generation,
+      'cancellation',
+    );
+    expect(lease).toBeDefined();
+
+    await timers.advanceTo(100);
+    expect(abort).not.toHaveBeenCalled();
+    // No abort, and the run is still tracked with one retry timer armed.
+    expect(timers.pending()).toBe(1);
+
+    if (lease) board.releaseLease(lease);
+    await timers.advanceTo(100 + LEASE_RETRY_INTERVAL_MS);
+
+    // The retry acquired the lease and took the exact abort path a clear
+    // deadline would have: one abort, then the lease is released.
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(abort).toHaveBeenCalledWith('ses_1');
+    expect(
+      board.acquireLease(job.taskID, job.generation, 'cancellation'),
+    ).toEqual(expect.objectContaining({ kind: 'cancellation' }));
+    expect(timers.pending()).toBe(0);
+  });
+
+  test('a competing terminal before the retry tick clears the run without aborting', async () => {
+    const { board, supervisor, timers, abort } = createSupervisor();
+    const job = launch(board, true);
+    supervisor.onLaunch(job);
+    const lease = board.acquireLease(
+      job.taskID,
+      job.generation,
+      'cancellation',
+    );
+    expect(lease).toBeDefined();
+
+    await timers.advanceTo(100);
+    expect(abort).not.toHaveBeenCalled();
+    expect(timers.pending()).toBe(1);
+
+    // The owning operation (a user cancel) settles with a terminal; the run
+    // clears itself via the terminal publication, cancelling the retry timer.
+    const cancelled = boardFixture.markCancelled(
+      board,
+      job.taskID,
+      'user cancel',
+      100,
+      lease ? { cancellationLease: lease } : {},
+    );
+    expect(cancelled).toMatchObject({ state: 'cancelled' });
+    if (cancelled) supervisor.onTerminal(cancelled);
+    if (lease) board.releaseLease(lease);
+
+    await timers.advanceTo(100 + 10 * LEASE_RETRY_INTERVAL_MS);
+
+    expect(abort).not.toHaveBeenCalled();
+    expect(timers.pending()).toBe(0);
+    expect(board.get(job.taskID)).toMatchObject({ state: 'cancelled' });
+  });
+
+  test('a lease held across many ticks keeps rescheduling without crashing, then aborts when freed', async () => {
+    const { board, supervisor, timers, abort } = createSupervisor();
+    const job = launch(board, true);
+    supervisor.onLaunch(job);
+    const lease = board.acquireLease(
+      job.taskID,
+      job.generation,
+      'cancellation',
+    );
+    expect(lease).toBeDefined();
+
+    await timers.advanceTo(100);
+    for (let i = 1; i <= 5; i += 1) {
+      await timers.advanceTo(100 + i * LEASE_RETRY_INTERVAL_MS);
+      expect(abort).not.toHaveBeenCalled();
+      // Each fired retry reschedules itself: exactly one pending timer.
+      expect(timers.pending()).toBe(1);
+    }
+
+    if (lease) board.releaseLease(lease);
+    await timers.advanceTo(100 + 6 * LEASE_RETRY_INTERVAL_MS);
+
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(timers.pending()).toBe(0);
   });
 
   test('the later real aborted terminal publishes exactly once through the host evidence path', async () => {
