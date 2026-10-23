@@ -139,9 +139,10 @@ export class BackgroundJobSupervisor {
     // other operation can abort, message, or relaunch this child. An occupied
     // lease means that operation owns the child and will produce its own
     // terminal, so the watchdog stands down.
-    const lease = this.options.backgroundJobBoard.acquireCancellationLease(
+    const lease = this.options.backgroundJobBoard.acquireLease(
       taskID,
       generation,
+      'cancellation',
     );
     if (!lease) {
       this.clear(taskID);

@@ -615,9 +615,10 @@ export async function handleToolExecuteBefore(
       if (steered) {
         // Same generation fence as a relaunch: a cancellation or another
         // lifecycle operation that owns this generation must win.
-        const fence = deps.backgroundJobBoard.acquireRelaunchLease(
+        const fence = deps.backgroundJobBoard.acquireLease(
           remembered.taskID,
           remembered.generation,
+          'relaunch',
         );
         if (!fence) {
           throw new Error(
@@ -627,9 +628,10 @@ export async function handleToolExecuteBefore(
         deps.backgroundJobBoard.releaseLease(fence);
       }
       if (!steered) {
-        const relaunchLease = deps.backgroundJobBoard.acquireRelaunchLease(
+        const relaunchLease = deps.backgroundJobBoard.acquireLease(
           remembered.taskID,
           remembered.generation,
+          'relaunch',
         );
         if (!relaunchLease) {
           throw new Error(

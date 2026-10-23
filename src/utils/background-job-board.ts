@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   DEFAULT_CONTEXT_FILE_CAP,
   DEFAULT_MAX_SESSIONS_PER_AGENT,
@@ -89,8 +90,6 @@ export interface BackgroundJobRecord {
   runStartedAt: number;
   updatedAt: number;
   lastLiveBusyAt?: number;
-  /** First non-busy runtime observation for the current stop-confirmation grace. */
-  stopConfirmationStartedAt?: number;
   completedAt?: number;
   resultSummary?: string;
   lastStatusError?: string;
@@ -98,9 +97,6 @@ export interface BackgroundJobRecord {
   lastUsedAt: number;
   terminalState?: TaskOutputState;
   contextFiles: ContextFile[];
-  totalErrors?: number;
-  timeoutCount?: number;
-  lastErrorAt?: number;
   /** In-memory only: this row is a verified old host round, not a live run. */
   verifiedRetainedRound?: true;
   /** Recovery has not sent a prompt; importing a row does not own host work. */
@@ -437,8 +433,13 @@ export class BackgroundJobBoard {
   /** One live operation/relaunch owner per native session ID. */
   private readonly liveLeases = new Map<string, BackgroundJobLease>();
   private readonly counters = new Map<string, number>();
+  /**
+   * The board's single numeric counter: the monotonic run ordinal that
+   * backs every record's `generation`. Lease tokens no longer consume a
+   * counter: they are opaque unique ids, so a stale lease can never share
+   * a token with a reissued lease of the same run.
+   */
   private executionSequence = 0;
-  private leaseSequence = 0;
   private mutationListeners: MutationListener[] = [];
   private terminalOutcomeListeners: TerminalOutcomeListener[] = [];
   private launchIdentityListeners: LaunchIdentityListener[] = [];
@@ -679,11 +680,8 @@ export class BackgroundJobBoard {
         lastLaunchedAt: now,
         runStartedAt: now,
         lastLiveBusyAt: now,
-        stopConfirmationStartedAt: undefined,
         lastUsedAt: now,
         updatedAt: now,
-        totalErrors: existing.totalErrors ?? 0,
-        timeoutCount: existing.timeoutCount ?? 0,
       } satisfies BackgroundJobRecord;
       this.setJob(updated);
       this.persistBackgroundChild(updated, {});
@@ -815,8 +813,6 @@ export class BackgroundJobBoard {
           ? input.taskID
           : this.nextAlias(input.parentSessionID, input.agent),
       contextFiles: [],
-      totalErrors: 0,
-      timeoutCount: 0,
     };
   }
 
@@ -920,22 +916,7 @@ export class BackgroundJobBoard {
       terminalState: terminal ? input.state : existing.terminalState,
       resultSummary: input.resultSummary ?? existing.resultSummary,
       lastStatusError: input.lastStatusError,
-      stopConfirmationStartedAt:
-        input.state === 'running'
-          ? existing.stopConfirmationStartedAt
-          : undefined,
     };
-
-    if (input.state === 'completed') {
-      updated.timeoutCount = 0;
-    }
-    if (input.state === 'error') {
-      updated.totalErrors = (existing.totalErrors ?? 0) + 1;
-      updated.lastErrorAt = updated.updatedAt;
-    }
-    if (input.timedOut && input.state !== 'completed') {
-      updated.timeoutCount = (existing.timeoutCount ?? 0) + 1;
-    }
 
     this.setJob(updated);
     this.trimReusable(input.taskID);
@@ -983,7 +964,6 @@ export class BackgroundJobBoard {
       runStartedAt: existing.state === 'running' ? existing.runStartedAt : now,
       lastLiveBusyAt: now,
       activityRevision: existing.activityRevision + 1,
-      stopConfirmationStartedAt: undefined,
       timedOut: false,
       recoverableAfterLiveBusy:
         existing.recoverableAfterLiveBusy || existing.timedOut,
@@ -1049,7 +1029,6 @@ export class BackgroundJobBoard {
       completedAt: existing.completedAt ?? now,
       resultSummary,
       lastStatusError: undefined,
-      stopConfirmationStartedAt: undefined,
     };
     this.setJob(updated);
     this.notifyTerminalPublication(taskID);
@@ -1190,7 +1169,6 @@ export class BackgroundJobBoard {
       terminalState: 'cancelled',
       resultSummary: summary,
       lastStatusError: undefined,
-      stopConfirmationStartedAt: undefined,
     };
 
     this.setJob(updated);
@@ -1198,95 +1176,58 @@ export class BackgroundJobBoard {
     return updated;
   }
 
-  acquireCancellationLease(
+  /**
+   * The single ownership entry point: at most one live lease exists per
+   * native session ID regardless of kind (cancellation, message, relaunch,
+   * terminal-notification), enforcing the single-owner rule for
+   * plugin-initiated lifecycle operations. The kind label stays in the
+   * lease and in refusal wording; only the acquisition machinery is
+   * collapsed. Per-kind record-state preconditions:
+   * - cancellation/message: the run must be live;
+   * - relaunch: any state (it authorizes a same-ID relaunch observation);
+   * - terminal-notification: a completed/error publication, optionally
+   *   pinned to an exact terminalRevision; the lease then carries it so a
+   *   later revision invalidates the lease.
+   */
+  acquireLease(
     taskID: string,
     generation: number,
+    kind: BackgroundJobLeaseKind,
+    options?: { terminalRevision?: number },
   ): BackgroundJobLease | undefined {
     const existing = this.jobs.get(taskID);
     if (
-      existing?.generation !== generation ||
-      existing.state !== 'running' ||
+      !existing ||
+      existing.generation !== generation ||
       this.liveLeases.has(taskID)
     ) {
       return undefined;
     }
-    const lease: BackgroundJobLease = {
-      taskID,
-      generation,
-      token: this.nextLeaseToken('cancellation'),
-      kind: 'cancellation',
-    };
-    this.liveLeases.set(taskID, lease);
-    return lease;
-  }
-
-  acquireRelaunchLease(
-    taskID: string,
-    generation: number,
-  ): BackgroundJobLease | undefined {
-    const existing = this.jobs.get(taskID);
-    if (existing?.generation !== generation || this.liveLeases.has(taskID)) {
-      return undefined;
+    if (kind === 'cancellation' || kind === 'message') {
+      if (existing.state !== 'running') return undefined;
+    } else if (kind === 'terminal-notification') {
+      const terminal =
+        existing.state === 'completed' ||
+        existing.state === 'error' ||
+        (existing.state === 'reconciled' &&
+          (existing.terminalState === 'completed' ||
+            existing.terminalState === 'error'));
+      if (
+        !terminal ||
+        (options?.terminalRevision !== undefined &&
+          existing.terminalRevision !== options.terminalRevision)
+      ) {
+        return undefined;
+      }
     }
     const lease: BackgroundJobLease = {
       taskID,
       generation,
-      token: this.nextLeaseToken('relaunch'),
-      kind: 'relaunch',
-    };
-    this.liveLeases.set(taskID, lease);
-    return lease;
-  }
-
-  acquireMessageLease(
-    taskID: string,
-    generation: number,
-  ): BackgroundJobLease | undefined {
-    const existing = this.jobs.get(taskID);
-    if (
-      existing?.generation !== generation ||
-      existing.state !== 'running' ||
-      this.liveLeases.has(taskID)
-    ) {
-      return undefined;
-    }
-    const lease: BackgroundJobLease = {
-      taskID,
-      generation,
-      token: this.nextLeaseToken('message'),
-      kind: 'message',
-    };
-    this.liveLeases.set(taskID, lease);
-    return lease;
-  }
-
-  acquireTerminalNotificationLease(
-    taskID: string,
-    generation: number,
-    terminalRevision?: number,
-  ): BackgroundJobLease | undefined {
-    const existing = this.jobs.get(taskID);
-    const terminal =
-      existing?.state === 'completed' ||
-      existing?.state === 'error' ||
-      (existing?.state === 'reconciled' &&
-        (existing.terminalState === 'completed' ||
-          existing.terminalState === 'error'));
-    if (
-      existing?.generation !== generation ||
-      (terminalRevision !== undefined &&
-        existing.terminalRevision !== terminalRevision) ||
-      !terminal ||
-      this.liveLeases.has(taskID)
-    ) {
-      return undefined;
-    }
-    const lease: BackgroundJobLease = {
-      taskID,
-      generation,
-      token: this.nextLeaseToken('terminal-notification'),
-      kind: 'terminal-notification',
-      terminalRevision: existing.terminalRevision,
+      token: this.nextLeaseToken(kind),
+      kind,
+      ...(kind === 'terminal-notification'
+        ? { terminalRevision: existing.terminalRevision }
+        : {}),
     };
     this.liveLeases.set(taskID, lease);
     return lease;
@@ -1811,8 +1752,6 @@ export class BackgroundJobBoard {
       recoveredWithoutPrompt: true,
       externalOrigin: true,
       contextFiles: [],
-      totalErrors: input.state === 'error' ? 1 : 0,
-      timeoutCount: 0,
     };
     this.setJob(record);
     this.notifyLaunchIdentity({
@@ -1851,8 +1790,7 @@ export class BackgroundJobBoard {
   }
 
   private nextLeaseToken(kind: BackgroundJobLeaseKind): string {
-    this.leaseSequence += 1;
-    return `background-job-${kind}-lease-${this.leaseSequence}`;
+    return `background-job-${kind}-lease-${randomUUID()}`;
   }
 }
 

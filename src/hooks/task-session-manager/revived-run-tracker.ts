@@ -455,10 +455,11 @@ export function createRevivedRunTracker(options: {
       ) {
         return;
       }
-      lease = options.backgroundJobBoard.acquireTerminalNotificationLease(
+      lease = options.backgroundJobBoard.acquireLease(
         run.taskID,
         run.generation,
-        record.terminalRevision,
+        'terminal-notification',
+        { terminalRevision: record.terminalRevision },
       );
       if (!lease) {
         // Waiting for an older publication's transport does not spend this

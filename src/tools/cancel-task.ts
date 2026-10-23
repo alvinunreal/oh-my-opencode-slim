@@ -217,9 +217,10 @@ export async function cancelTrackedExecution(
   if (options.isDisposed?.()) {
     throw new Error(pluginDisposedMessage());
   }
-  const lease = options.backgroundJobBoard.acquireCancellationLease(
+  const lease = options.backgroundJobBoard.acquireLease(
     execution.taskID,
     execution.generation,
+    'cancellation',
   );
   if (!lease) {
     throw new Error(

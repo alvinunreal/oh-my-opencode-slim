@@ -255,7 +255,7 @@ describe('task_message', () => {
     expect(job?.state).toBe('running');
     if (!job) throw new Error('missing running job');
     expect(
-      board.acquireCancellationLease(job.taskID, job.generation)?.kind,
+      board.acquireLease(job.taskID, job.generation, 'cancellation')?.kind,
     ).toBe('cancellation');
   });
 
@@ -282,7 +282,11 @@ describe('task_message', () => {
     const job = board.get('ses_child1');
     expect(job?.state).toBe('running');
     if (!job) throw new Error('missing running job');
-    const lease = board.acquireCancellationLease(job.taskID, job.generation);
+    const lease = board.acquireLease(
+      job.taskID,
+      job.generation,
+      'cancellation',
+    );
     expect(lease?.kind).toBe('cancellation');
     if (lease) board.releaseLease(lease);
   });
@@ -318,9 +322,10 @@ describe('task_message', () => {
     const job = board.get('ses_child1');
     expect(job?.state).toBe('completed');
     if (!job) throw new Error('missing completed job');
-    const terminalLease = board.acquireTerminalNotificationLease(
+    const terminalLease = board.acquireLease(
       job.taskID,
       job.generation,
+      'terminal-notification',
     );
     expect(terminalLease?.kind).toBe('terminal-notification');
     if (terminalLease) board.releaseLease(terminalLease);
@@ -348,10 +353,10 @@ describe('task_message', () => {
     expect(job?.state).toBe('running');
     if (!job) throw new Error('missing running job');
     expect(
-      board.acquireCancellationLease(job.taskID, job.generation),
+      board.acquireLease(job.taskID, job.generation, 'cancellation'),
     ).toBeUndefined();
     expect(
-      board.acquireRelaunchLease(job.taskID, job.generation),
+      board.acquireLease(job.taskID, job.generation, 'relaunch'),
     ).toBeUndefined();
     expect(() =>
       board.registerLaunch({
@@ -364,7 +369,7 @@ describe('task_message', () => {
     releasePrompt();
     await expect(pending).resolves.toContain('queued');
     expect(
-      board.acquireCancellationLease(job.taskID, job.generation)?.kind,
+      board.acquireLease(job.taskID, job.generation, 'cancellation')?.kind,
     ).toBe('cancellation');
   });
 
@@ -385,7 +390,7 @@ describe('task_message', () => {
     expect(job?.state).toBe('running');
     if (!job) throw new Error('missing running job');
     expect(
-      board.acquireCancellationLease(job.taskID, job.generation)?.kind,
+      board.acquireLease(job.taskID, job.generation, 'cancellation')?.kind,
     ).toBe('cancellation');
   });
 
@@ -402,7 +407,7 @@ describe('task_message', () => {
           : Promise.resolve({}),
       );
       client = { session: makeSession(prompt) };
-      const acquire = spyOn(ProductionBoard.prototype, 'acquireMessageLease');
+      const acquire = spyOn(ProductionBoard.prototype, 'acquireLease');
       const release = spyOn(ProductionBoard.prototype, 'releaseLease');
       const context = { sessionID: 'parent-1' } as any;
       const tool = createTool(board);
@@ -413,7 +418,9 @@ describe('task_message', () => {
           context,
         ),
       ).rejects.toThrow('timed out');
-      const lease = acquire.mock.results[0]?.value;
+      const lease = acquire.mock.results
+        .map((result) => result?.value)
+        .find((value) => value?.kind === 'message');
       if (!lease) throw new Error('missing message lease');
       const retirements = () =>
         release.mock.calls.filter(
@@ -422,10 +429,10 @@ describe('task_message', () => {
       expect(board.validateLease(lease)).toBe(true);
       expect(retirements()).toHaveLength(0);
       expect(
-        board.acquireCancellationLease(lease.taskID, lease.generation),
+        board.acquireLease(lease.taskID, lease.generation, 'cancellation'),
       ).toBeUndefined();
       expect(
-        board.acquireRelaunchLease(lease.taskID, lease.generation),
+        board.acquireLease(lease.taskID, lease.generation, 'relaunch'),
       ).toBeUndefined();
       await expect(
         tool.execute(
@@ -457,9 +464,10 @@ describe('task_message', () => {
         });
         expect(board.getResultSummary(lease.taskID)).toBe('done');
         expect(
-          board.acquireTerminalNotificationLease(
+          board.acquireLease(
             lease.taskID,
             lease.generation,
+            'terminal-notification',
           ),
         ).toBeUndefined();
       }
@@ -473,8 +481,12 @@ describe('task_message', () => {
       expect(board.get(lease.taskID)).toEqual(beforeSettlement);
 
       const replacement = completed
-        ? board.acquireTerminalNotificationLease(lease.taskID, lease.generation)
-        : board.acquireMessageLease(lease.taskID, lease.generation);
+        ? board.acquireLease(
+            lease.taskID,
+            lease.generation,
+            'terminal-notification',
+          )
+        : board.acquireLease(lease.taskID, lease.generation, 'message');
       expect(replacement?.kind).toBe(
         completed ? 'terminal-notification' : 'message',
       );
@@ -847,11 +859,12 @@ describe('task_message', () => {
     const job = board.get('ses_child1');
     if (!job) throw new Error('missing completed job');
     expect(
-      board.acquireMessageLease(job.taskID, job.generation),
+      board.acquireLease(job.taskID, job.generation, 'message'),
     ).toBeUndefined();
-    const terminalLease = board.acquireTerminalNotificationLease(
+    const terminalLease = board.acquireLease(
       job.taskID,
       job.generation,
+      'terminal-notification',
     );
     expect(terminalLease?.kind).toBe('terminal-notification');
     if (terminalLease) board.releaseLease(terminalLease);

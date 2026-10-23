@@ -156,19 +156,20 @@ describe('BackgroundJobSupervisor', () => {
     await timers.advanceTo(100);
     await timers.tick();
 
-    expect(board.acquireCancellationLease(job.taskID, job.generation)).toBe(
+    expect(board.acquireLease(job.taskID, job.generation, 'cancellation')).toBe(
       undefined,
     );
     expect(
-      board.acquireRelaunchLease(job.taskID, job.generation),
+      board.acquireLease(job.taskID, job.generation, 'relaunch'),
     ).toBeUndefined();
 
     // A teardown while the abort is in flight releases the lease, so the
     // run cannot outlive its watchdog ownership.
     supervisor.drop(job.taskID);
-    const reclaimed = board.acquireCancellationLease(
+    const reclaimed = board.acquireLease(
       job.taskID,
       job.generation,
+      'cancellation',
     );
     expect(reclaimed).toEqual(
       expect.objectContaining({ kind: 'cancellation' }),
@@ -187,15 +188,15 @@ describe('BackgroundJobSupervisor', () => {
     supervisor.onLaunch(job);
     await timers.advanceTo(100);
     await timers.tick();
-    expect(board.acquireCancellationLease(job.taskID, job.generation)).toBe(
+    expect(board.acquireLease(job.taskID, job.generation, 'cancellation')).toBe(
       undefined,
     );
 
     settle.resolve();
     await timers.tick();
-    expect(board.acquireCancellationLease(job.taskID, job.generation)).toEqual(
-      expect.objectContaining({ kind: 'cancellation' }),
-    );
+    expect(
+      board.acquireLease(job.taskID, job.generation, 'cancellation'),
+    ).toEqual(expect.objectContaining({ kind: 'cancellation' }));
   });
 
   test('a lease already held by another operation stands the watchdog down', async () => {
@@ -203,7 +204,11 @@ describe('BackgroundJobSupervisor', () => {
     const job = launch(board, true);
     supervisor.onLaunch(job);
     // A user task_cancel (or relaunch/message operation) already owns the child.
-    const lease = board.acquireCancellationLease(job.taskID, job.generation);
+    const lease = board.acquireLease(
+      job.taskID,
+      job.generation,
+      'cancellation',
+    );
     expect(lease).toBeDefined();
 
     await timers.advanceTo(100);
@@ -328,7 +333,7 @@ describe('BackgroundJobSupervisor', () => {
 
     // The watchdog holds the lease for the abort's duration, so the racing
     // user task_cancel is refused instead of sending a second abort.
-    expect(board.acquireCancellationLease(job.taskID, job.generation)).toBe(
+    expect(board.acquireLease(job.taskID, job.generation, 'cancellation')).toBe(
       undefined,
     );
 
@@ -336,9 +341,10 @@ describe('BackgroundJobSupervisor', () => {
     // terminal publishes exactly once.
     settle.resolve();
     await timers.tick();
-    const userLease = board.acquireCancellationLease(
+    const userLease = board.acquireLease(
       job.taskID,
       job.generation,
+      'cancellation',
     );
     expect(userLease).toEqual(
       expect.objectContaining({ kind: 'cancellation' }),

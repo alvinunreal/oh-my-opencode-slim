@@ -175,9 +175,10 @@ export function createTaskReviveTool(
         );
       }
 
-      const relaunchLease = options.backgroundJobBoard.acquireRelaunchLease(
+      const relaunchLease = options.backgroundJobBoard.acquireLease(
         current.taskID,
         current.generation,
+        'relaunch',
       );
       if (!relaunchLease) {
         throw new Error(

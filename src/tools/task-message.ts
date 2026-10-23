@@ -116,9 +116,10 @@ export function createTaskMessageTool(options: {
         delegation,
       );
 
-      const lease = options.backgroundJobBoard.acquireMessageLease(
+      const lease = options.backgroundJobBoard.acquireLease(
         currentJob.taskID,
         currentJob.generation,
+        'message',
       );
       if (!lease) {
         throw new Error(
@@ -249,7 +250,7 @@ export function createTaskMessageTool(options: {
 
 function assertMessageLease(
   backgroundJobBoard: BackgroundJobBoard,
-  lease: NonNullable<ReturnType<BackgroundJobBoard['acquireMessageLease']>>,
+  lease: NonNullable<ReturnType<BackgroundJobBoard['acquireLease']>>,
   requested: string,
 ): void {
   if (lease.kind !== 'message' || !backgroundJobBoard.validateLease(lease)) {
@@ -261,7 +262,7 @@ function assertMessageLease(
 
 async function awaitMessageTransport<T>(
   backgroundJobBoard: BackgroundJobBoard,
-  lease: NonNullable<ReturnType<BackgroundJobBoard['acquireMessageLease']>>,
+  lease: NonNullable<ReturnType<BackgroundJobBoard['acquireLease']>>,
   operation: () => Promise<T>,
   timeoutMs: number,
 ): Promise<T> {

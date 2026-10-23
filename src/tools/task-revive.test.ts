@@ -317,7 +317,7 @@ describe('task_revive tool', () => {
     });
     const { board, taskRevive, abort, status, promptAsync, onLaunch } = fixture;
     acknowledgedCompleted(board);
-    const acquire = spyOn(ProductionBoard.prototype, 'acquireRelaunchLease');
+    const acquire = spyOn(ProductionBoard.prototype, 'acquireLease');
     const release = spyOn(ProductionBoard.prototype, 'releaseLease');
     const launch = spyOn(ProductionBoard.prototype, 'registerLaunch');
     const register = spyOn(fixture.revivedRunTracker, 'register');
@@ -328,7 +328,9 @@ describe('task_revive tool', () => {
       .execute({ task_id: 'ses_1', prompt: 'continue' }, context)
       .then(String, (error: Error) => error);
     const fireDeadline = await deadline.ready;
-    const lease = acquire.mock.results[0]?.value;
+    const lease = acquire.mock.results
+      .map((result) => result?.value)
+      .find((value) => value?.kind === 'relaunch');
     if (!lease) throw new Error('missing relaunch lease');
     if (timing === 'late') {
       fireDeadline();
@@ -380,9 +382,10 @@ describe('task_revive tool', () => {
           acknowledgedCompleted(board);
           const successor = board.get('ses_1');
           if (!successor) throw new Error('missing successor');
-          const replacement = board.acquireRelaunchLease(
+          const replacement = board.acquireLease(
             'ses_1',
             successor.generation,
+            'relaunch',
           );
           if (!replacement) throw new Error('missing replacement');
           read.resolve({ data: {} });
@@ -516,9 +519,10 @@ describe('task_revive tool', () => {
           generation: run.generation + 1,
           state: 'running',
         });
-        const lease = board.acquireMessageLease(
+        const lease = board.acquireLease(
           current.taskID,
           current.generation,
+          'message',
         );
         if (!lease) throw new Error('missing new-generation lease');
         if (outcome === 'success') resolve({});
@@ -529,7 +533,7 @@ describe('task_revive tool', () => {
         expect(board.get(run.taskID)).toEqual(current);
         expect(board.validateLease(lease)).toBe(true);
         expect(
-          board.acquireRelaunchLease(current.taskID, current.generation),
+          board.acquireLease(current.taskID, current.generation, 'relaunch'),
         ).toBeUndefined();
         expect(board.releaseLease(lease)).toBe(true);
         expect(
@@ -568,7 +572,7 @@ describe('task_revive tool', () => {
       generation: 2,
       state: 'running',
     });
-    const lease = board.acquireRelaunchLease('ses_1', 2);
+    const lease = board.acquireLease('ses_1', 2, 'relaunch');
     expect(lease?.kind).toBe('relaunch');
     if (lease) board.releaseLease(lease);
   });
@@ -749,7 +753,7 @@ describe('task_revive tool', () => {
       await expect(
         taskRevive.execute({ task_id: 'ses_1', prompt: 'continue' }, context),
       ).rejects.toThrow(/baseline.*deadline/i);
-      const replacement = board.acquireRelaunchLease('ses_1', 1);
+      const replacement = board.acquireLease('ses_1', 1, 'relaunch');
       expect(replacement?.kind).toBe('relaunch');
       if (!replacement) throw new Error('missing replacement lease');
       if (settlement === 'resolve') baseline.resolve('late-baseline');
@@ -792,20 +796,22 @@ describe('task_revive tool', () => {
         },
       });
       stoppedSession(board);
-      const acquire = spyOn(ProductionBoard.prototype, 'acquireRelaunchLease');
+      const acquire = spyOn(ProductionBoard.prototype, 'acquireLease');
       const pending = taskRevive.execute(
         { task_id: 'ses_1', prompt: 'continue' },
         context,
       );
       await entered.promise;
-      const lease = acquire.mock.results[0]?.value;
+      const lease = acquire.mock.results
+        .map((result) => result?.value)
+        .find((value) => value?.kind === 'relaunch');
       if (!lease) throw new Error('missing relaunch lease');
       let replacement: typeof lease | undefined;
       if (change === 'drop') board.drop('ses_1');
       if (change === 'generation' || change === 'lease') {
         board.releaseLease(lease);
         if (change === 'generation') acknowledgedCompleted(board);
-        else replacement = board.acquireRelaunchLease('ses_1', 1);
+        else replacement = board.acquireLease('ses_1', 1, 'relaunch');
       }
       if (change === 'running') board.markRunningFromLiveSession('ses_1', 115);
       read.resolve();
@@ -824,9 +830,10 @@ describe('task_revive tool', () => {
         board.releaseLease(replacement);
       }
       if (change === 'drop') acknowledgedCompleted(board);
-      const reLease = board.acquireRelaunchLease(
+      const reLease = board.acquireLease(
         'ses_1',
         board.get('ses_1')?.generation ?? -1,
+        'relaunch',
       );
       expect(reLease?.kind).toBe('relaunch');
       if (reLease) board.releaseLease(reLease);
@@ -851,7 +858,7 @@ describe('task_revive tool', () => {
       state: 'stopped',
       generation: 1,
     });
-    const reLease = board.acquireRelaunchLease('ses_1', 1);
+    const reLease = board.acquireLease('ses_1', 1, 'relaunch');
     expect(reLease?.kind).toBe('relaunch');
     if (reLease) board.releaseLease(reLease);
   });
@@ -906,9 +913,10 @@ describe('task_revive tool', () => {
       const result = originalResolve(parent, requested);
       if (result && requested === 'ses_stale' && !mutated) {
         mutated = true;
-        const lease = board.acquireRelaunchLease(
+        const lease = board.acquireLease(
           'ses_stale',
           result.generation,
+          'relaunch',
         );
         if (!lease) throw new Error('missing stale relaunch lease');
         board.registerLaunch({
@@ -947,7 +955,7 @@ describe('task_revive tool', () => {
         taskRevive.execute({ task_id: 'ses_1', prompt: 'retry' }, context),
       ).rejects.toThrow(`revive failed: ${error.message}`);
       expect(promptAsync).toHaveBeenCalledTimes(1);
-      const lease = board.acquireRelaunchLease('ses_1', 1);
+      const lease = board.acquireLease('ses_1', 1, 'relaunch');
       expect(lease?.kind).toBe('relaunch');
       if (lease) board.releaseLease(lease);
       expect(board.get('ses_1')).toMatchObject({
@@ -1189,7 +1197,7 @@ describe('task_revive tool', () => {
         generation: 2,
         state: 'running',
       });
-      const lease = board.acquireRelaunchLease('ses_1', 2);
+      const lease = board.acquireLease('ses_1', 2, 'relaunch');
       expect(lease?.kind).toBe('relaunch');
       if (lease) board.releaseLease(lease);
       expect(log).not.toHaveBeenCalled();
@@ -1233,7 +1241,7 @@ describe('task_revive tool', () => {
         },
       });
     acknowledgedCompleted(board);
-    const acquire = spyOn(ProductionBoard.prototype, 'acquireRelaunchLease');
+    const acquire = spyOn(ProductionBoard.prototype, 'acquireLease');
     const launch = spyOn(ProductionBoard.prototype, 'registerLaunch');
     const register = spyOn(revivedRunTracker, 'register');
     const probe = spyOn(revivedRunTracker, 'probe');
@@ -1248,10 +1256,12 @@ describe('task_revive tool', () => {
     expect(launch).not.toHaveBeenCalled();
     expect(register).not.toHaveBeenCalled();
     expect(onLaunch).not.toHaveBeenCalled();
-    const lease = acquire.mock.results[0]?.value;
+    const lease = acquire.mock.results
+      .map((result) => result?.value)
+      .find((value) => value?.kind === 'relaunch');
     if (!lease) throw new Error('missing relaunch lease');
     expect(board.validateLease(lease)).toBe(true);
-    expect(board.acquireRelaunchLease('ses_1', 1)).toBeUndefined();
+    expect(board.acquireLease('ses_1', 1, 'relaunch')).toBeUndefined();
     if (outcome === 'pending') return;
 
     let replacement: typeof lease | undefined;
@@ -1263,9 +1273,10 @@ describe('task_revive tool', () => {
     ) {
       board.releaseLease(lease);
       if (outcome === 'superseded') acknowledgedCompleted(board);
-      replacement = board.acquireRelaunchLease(
+      replacement = board.acquireLease(
         'ses_1',
         board.get('ses_1')?.generation ?? -1,
+        'relaunch',
       );
     }
     const generation = board.get('ses_1')?.generation;
@@ -1324,9 +1335,10 @@ describe('task_revive tool', () => {
       ).toBe(true);
       return;
     }
-    const available = board.acquireRelaunchLease(
+    const available = board.acquireLease(
       'ses_1',
       board.get('ses_1')?.generation ?? -1,
+      'relaunch',
     );
     expect(available?.kind).toBe('relaunch');
     if (available) board.releaseLease(available);
@@ -1366,7 +1378,7 @@ describe('task_revive tool', () => {
         send.resolve({});
       }
       await probing.promise;
-      const lease = board.acquireRelaunchLease('ses_1', 2);
+      const lease = board.acquireLease('ses_1', 2, 'relaunch');
       expect(lease?.kind).toBe('relaunch');
       if (lease) board.releaseLease(lease);
       if (timing === 'superseded') {

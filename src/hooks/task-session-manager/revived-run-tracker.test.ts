@@ -53,7 +53,7 @@ function createHarness(
     resultSummary: 'old result',
   });
   board.markReconciled('ses_child');
-  const lease = board.acquireRelaunchLease('ses_child', 1);
+  const lease = board.acquireLease('ses_child', 1, 'relaunch');
   if (!lease) throw new Error('missing relaunch lease');
   const run = board.registerLaunch({
     taskID: 'ses_child',
@@ -590,9 +590,10 @@ describe('revived run tracker', () => {
       baselineMessageID: 'baseline',
       description: 'inspect the change',
     });
-    const staleLease = harness.board.acquireRelaunchLease(
+    const staleLease = harness.board.acquireLease(
       harness.run.taskID,
       harness.run.generation,
+      'relaunch',
     );
     if (!staleLease) throw new Error('missing stale lease');
     const newer = harness.board.registerLaunch({
@@ -721,9 +722,10 @@ describe('revived run tracker', () => {
     const harness = createHarness(() => ({ data: [] }));
     let relaunchLease: unknown;
     harness.prompt.mockImplementation(async () => {
-      relaunchLease = harness.board.acquireRelaunchLease(
+      relaunchLease = harness.board.acquireLease(
         harness.run.taskID,
         harness.run.generation,
+        'relaunch',
       );
       return {};
     });
@@ -791,9 +793,10 @@ describe('revived run tracker', () => {
     if (!terminal) throw new Error('missing terminal record');
     harness.tracker.onTerminal(terminal);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    const lease = harness.board.acquireRelaunchLease(
+    const lease = harness.board.acquireLease(
       harness.run.taskID,
       harness.run.generation,
+      'relaunch',
     );
     if (!lease) throw new Error('missing relaunch lease');
     const newer = harness.board.registerLaunch({
@@ -838,9 +841,10 @@ describe('revived run tracker', () => {
     expect(harness.pruned).toHaveBeenCalledTimes(1);
     expect(harness.prompt).not.toHaveBeenCalled();
 
-    const lease = harness.board.acquireRelaunchLease(
+    const lease = harness.board.acquireLease(
       harness.run.taskID,
       harness.run.generation,
+      'relaunch',
     );
     if (!lease) throw new Error('missing revive lease');
     const next = harness.board.registerLaunch({
@@ -912,9 +916,10 @@ describe('revived run tracker', () => {
   }
 
   function expectRelaunchAvailable(harness: ReturnType<typeof createHarness>) {
-    const lease = harness.board.acquireRelaunchLease(
+    const lease = harness.board.acquireLease(
       harness.run.taskID,
       harness.run.generation,
+      'relaunch',
     );
     expect(lease).toBeDefined();
     if (lease) harness.board.releaseLease(lease);
@@ -1018,11 +1023,10 @@ describe('revived run tracker', () => {
     const capture = captureTransportLogs();
     try {
       const harness = createHarness(() => ({ data: [] }));
-      const acquire = harness.board.acquireTerminalNotificationLease.bind(
-        harness.board,
-      );
+      const acquire = harness.board.acquireLease.bind(harness.board);
       let deferred = false;
-      harness.board.acquireTerminalNotificationLease = (...args) => {
+      harness.board.acquireLease = (...args) => {
+        if (args[2] !== 'terminal-notification') return acquire(...args);
         if (!deferred) {
           deferred = true;
           return undefined;
@@ -1064,9 +1068,10 @@ describe('revived run tracker', () => {
         await clock.settle();
         expect(harness.prompt).toHaveBeenCalledTimes(attempt);
         expect(
-          harness.board.acquireRelaunchLease(
+          harness.board.acquireLease(
             terminal.taskID,
             terminal.generation,
+            'relaunch',
           ),
         ).toBeUndefined();
         expect(clock.fire(10_000)).toBeDefined();
@@ -1351,9 +1356,10 @@ describe('revived run tracker', () => {
       a.resolve({});
       await clock.settle();
       expect(
-        harness.board.acquireRelaunchLease(
+        harness.board.acquireLease(
           terminal.taskID,
           terminal.generation,
+          'relaunch',
         ),
       ).toBeUndefined();
       if (outcome === 'timeout') clock.fire(10_000);
@@ -1405,9 +1411,10 @@ describe('revived run tracker', () => {
       const hasSuccessor = replacement.includes('generation');
       let current = terminal;
       if (replacement === 'new generation') {
-        const lease = harness.board.acquireRelaunchLease(
+        const lease = harness.board.acquireLease(
           terminal.taskID,
           terminal.generation,
+          'relaunch',
         );
         if (!lease) throw new Error('missing relaunch lease');
         harness.board.registerLaunch({ ...harness.run, relaunchLease: lease });
@@ -1452,9 +1459,10 @@ describe('revived run tracker', () => {
         }
         expect(harness.prompt).toHaveBeenCalledTimes(2);
         expect(
-          harness.board.acquireRelaunchLease(
+          harness.board.acquireLease(
             current.taskID,
             current.generation,
+            'relaunch',
           ),
         ).toBeUndefined();
         b.reject(new Error('successor not accepted'));
@@ -1489,12 +1497,11 @@ describe('revived run tracker', () => {
     async (invalidation) => {
       const clock = installCapturedTimers();
       const harness = createHarness(() => ({ data: [] }));
-      const acquire = harness.board.acquireTerminalNotificationLease.bind(
-        harness.board,
-      );
+      const acquire = harness.board.acquireLease.bind(harness.board);
       let acquired = false;
       let invalidated = false;
-      harness.board.acquireTerminalNotificationLease = (...args) => {
+      harness.board.acquireLease = (...args) => {
+        if (args[2] !== 'terminal-notification') return acquire(...args);
         const lease = acquire(...args);
         acquired = lease !== undefined && harness.board.validateLease(lease);
         queueMicrotask(() => {

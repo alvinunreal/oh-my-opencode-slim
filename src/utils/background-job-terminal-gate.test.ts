@@ -1357,11 +1357,11 @@ test('integration: late acknowledgement and transport success for A cannot consu
     // The adapter rejects A before invoking the board's acknowledgement method.
     expect(acknowledge).not.toHaveBeenCalled();
     expect(
-      board.acquireRelaunchLease(run.taskID, run.generation),
+      board.acquireLease(run.taskID, run.generation, 'relaunch'),
     ).toBeUndefined();
     fire(10_000); // A never settled: its local wait alone must release ownership.
     await tick();
-    const lease = board.acquireRelaunchLease(run.taskID, run.generation);
+    const lease = board.acquireLease(run.taskID, run.generation, 'relaunch');
     expect(lease).toBeDefined();
     if (lease) board.releaseLease(lease);
     fire(1);
@@ -1370,7 +1370,7 @@ test('integration: late acknowledgement and transport success for A cannot consu
     resolveA({});
     await tick();
     expect(
-      board.acquireRelaunchLease(run.taskID, run.generation),
+      board.acquireLease(run.taskID, run.generation, 'relaunch'),
     ).toBeUndefined();
     rejectB(new Error('B was not accepted'));
     await tick();
@@ -2019,9 +2019,10 @@ describe('outcome corroboration (log-only mirror)', () => {
           terminalOutcome,
         });
         h.advance(20);
-        const lease = h.board.acquireCancellationLease(
+        const lease = h.board.acquireLease(
           h.run.taskID,
           h.run.generation,
+          'cancellation',
         );
         if (!lease) throw new Error('missing cancellation lease');
         const before = capture.entries.length;

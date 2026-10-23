@@ -79,7 +79,11 @@ describe('restoreRetainedSession', () => {
     expect(board.get('ses_child')?.resultSummary).toBeUndefined();
     expect(board.restoreRetainedSession(retained)).toBeUndefined();
 
-    const lease = board.acquireRelaunchLease('ses_child', running.generation);
+    const lease = board.acquireLease(
+      'ses_child',
+      running.generation,
+      'relaunch',
+    );
     expect(lease).toBeDefined();
     board.drop('ses_child');
     expect(board.restoreRetainedSession(retained)).toBeUndefined();

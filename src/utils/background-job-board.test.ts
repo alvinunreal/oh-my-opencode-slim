@@ -251,15 +251,18 @@ describe('BackgroundJobBoard', () => {
         agent: 'fixer',
       });
       const acquire = {
-        message: () => board.acquireMessageLease(run.taskID, run.generation),
-        relaunch: () => board.acquireRelaunchLease(run.taskID, run.generation),
+        message: () =>
+          board.acquireLease(run.taskID, run.generation, 'message'),
+        relaunch: () =>
+          board.acquireLease(run.taskID, run.generation, 'relaunch'),
         cancellation: () =>
-          board.acquireCancellationLease(run.taskID, run.generation),
+          board.acquireLease(run.taskID, run.generation, 'cancellation'),
         'terminal-notification': () =>
-          board.acquireTerminalNotificationLease(
+          board.acquireLease(
             run.taskID,
             run.generation,
-            board.get(run.taskID)?.terminalRevision,
+            'terminal-notification',
+            { terminalRevision: board.get(run.taskID)?.terminalRevision },
           ),
       };
       const complete = () =>
@@ -305,6 +308,167 @@ describe('BackgroundJobBoard', () => {
     },
   );
 
+  // P3c: the four acquire seams collapsed into one owner mutex, but the kind
+  // label stays load-bearing for the model-visible refusal. Pin each kind's
+  // conflict wording byte-identically so the collapse cannot silently
+  // reword a refusal.
+  test.each(leaseKinds)(
+    'a live $kind lease refuses a launch with byte-identical wording',
+    (kind) => {
+      const board = new BackgroundJobBoard();
+      const run = board.registerLaunch({
+        taskID: 'ses_refuse',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+      });
+      if (kind === 'terminal-notification') {
+        board.updateStatus({
+          taskID: 'ses_refuse',
+          state: 'completed',
+          resultSummary: 'done',
+        });
+      }
+      const lease = board.acquireLease(
+        run.taskID,
+        run.generation,
+        kind,
+        kind === 'terminal-notification'
+          ? {
+              terminalRevision: board.get(run.taskID)?.terminalRevision,
+            }
+          : undefined,
+      );
+      if (!lease) throw new Error(`missing ${kind} lease`);
+      expect(() =>
+        board.registerLaunch({
+          taskID: run.taskID,
+          parentSessionID: 'parent-1',
+          agent: 'fixer',
+        }),
+      ).toThrow(
+        `Cannot register launch for ses_refuse: a ${kind} lease already owns this session`,
+      );
+    },
+  );
+
+  // P3c counter collapse: lease tokens no longer consume a numeric sequence
+  // (the run ordinal is the board's single counter); each issued token is a
+  // fresh unique id, so a replayed token can never authorize anything.
+  // Generation magnitude IS load-bearing outside the board (event-router's
+  // ambiguous-relaunch-deletion check reads `generation > 1`), so lease
+  // issuances must never spend run ordinals.
+  test('lease issuances never advance the run ordinal', () => {
+    const board = new BackgroundJobBoard();
+    const run = board.registerLaunch({
+      taskID: 'sesOrdinal',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+    });
+    expect(run.generation).toBe(1);
+
+    // Spend leases of every kind, repeatedly, including terminal ones.
+    const message = board.acquireLease('sesOrdinal', run.generation, 'message');
+    if (!message) throw new Error('missing message lease');
+    board.releaseLease(message);
+    const cancellation = board.acquireLease(
+      'sesOrdinal',
+      run.generation,
+      'cancellation',
+    );
+    if (!cancellation) throw new Error('missing cancellation lease');
+    board.releaseLease(cancellation);
+    const relaunchLease = board.acquireLease(
+      'sesOrdinal',
+      run.generation,
+      'relaunch',
+    );
+    if (!relaunchLease) throw new Error('missing relaunch lease');
+    board.releaseLease(relaunchLease);
+    board.updateStatus({ taskID: 'sesOrdinal', state: 'completed' });
+    const terminal = board.acquireLease(
+      'sesOrdinal',
+      run.generation,
+      'terminal-notification',
+    );
+    if (!terminal) throw new Error('missing terminal-notification lease');
+    board.releaseLease(terminal);
+
+    // A launch after all that churn still takes the board's second ordinal:
+    // generations stay contiguous per launch, never per lease issuance.
+    const relaunched = board.registerLaunch({
+      taskID: 'sesOrdinal',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      now: 200,
+    });
+    expect(relaunched.generation).toBe(2);
+  });
+  test('a superseded run rejects stale writers and replayed lease tokens', () => {
+    const board = new BackgroundJobBoard();
+    const first = board.registerLaunch({
+      taskID: 'ses_stale',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      now: 100,
+    });
+    const seeded = board.acquireLease(
+      'ses_stale',
+      first.generation,
+      'relaunch',
+    );
+    if (!seeded) throw new Error('missing seeded relaunch lease');
+    board.releaseLease(seeded);
+    const second = board.registerLaunch({
+      taskID: 'ses_stale',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      now: 200,
+    });
+
+    // Stale writers replaying the superseded run's generation are ignored.
+    expect(
+      board.updateStatus({
+        taskID: 'ses_stale',
+        state: 'error',
+        expectedGeneration: first.generation,
+      }),
+    ).toMatchObject({ state: 'running', generation: second.generation });
+    expect(
+      board.markRunningFromLiveSession('ses_stale', 300, first.generation),
+    ).toMatchObject({ state: 'running', generation: second.generation });
+
+    // A replayed lease token is not authoritative once the run's lease has
+    // been reissued: unique tokens, no shared counter value to collide on.
+    const retired = board.acquireLease(
+      'ses_stale',
+      second.generation,
+      'relaunch',
+    );
+    if (!retired) throw new Error('missing relaunch lease');
+    board.releaseLease(retired);
+    expect(board.validateLease(retired)).toBe(false);
+    const reissued = board.acquireLease(
+      'ses_stale',
+      second.generation,
+      'relaunch',
+    );
+    if (!reissued) throw new Error('missing reissued lease');
+    expect(reissued.token).not.toBe(retired.token);
+    expect(board.validateLease(retired)).toBe(false);
+    expect(board.releaseLease(retired)).toBe(false);
+    expect(() =>
+      board.registerLaunch({
+        taskID: 'ses_stale',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        relaunchLease: retired,
+      }),
+    ).toThrow(
+      'Cannot register launch for ses_stale: the relaunch lease is missing, stale, or belongs to another generation',
+    );
+    board.releaseLease(reissued);
+  });
+
   test('relaunch lease fences cancellation and validates token/generation', () => {
     const board = new BackgroundJobBoard();
     const first = board.registerLaunch({
@@ -312,15 +476,16 @@ describe('BackgroundJobBoard', () => {
       parentSessionID: 'parent-1',
       agent: 'fixer',
     });
-    const relaunchLease = board.acquireRelaunchLease(
+    const relaunchLease = board.acquireLease(
       first.taskID,
       first.generation,
+      'relaunch',
     );
 
     expect(relaunchLease).toBeDefined();
     if (!relaunchLease) throw new Error('relaunch lease was not acquired');
     expect(
-      board.acquireCancellationLease(first.taskID, first.generation),
+      board.acquireLease(first.taskID, first.generation, 'cancellation'),
     ).toBeUndefined();
     expect(
       board.releaseLease({
@@ -353,9 +518,10 @@ describe('BackgroundJobBoard', () => {
       parentSessionID: 'parent-1',
       agent: 'fixer',
     });
-    const cancellationLease = board.acquireCancellationLease(
+    const cancellationLease = board.acquireLease(
       first.taskID,
       first.generation,
+      'cancellation',
     );
     expect(cancellationLease).toBeDefined();
     if (!cancellationLease) {
@@ -511,10 +677,14 @@ describe('BackgroundJobBoard', () => {
       timedOut: true,
     });
 
+    // P3c: the write-only timeout/error counters (timeoutCount, totalErrors,
+    // lastErrorAt) are gone. What remains pinned: repeated timed-out
+    // running observations then a completed publication still land the row
+    // terminal exactly once (terminalRevision 1) with the terminal evidence.
     expect(completed).toMatchObject({
       state: 'completed',
       timedOut: true,
-      timeoutCount: 0,
+      terminalRevision: 1,
     });
   });
 
@@ -613,7 +783,7 @@ describe('BackgroundJobBoard', () => {
     board.markReconciled('ses_a', 120);
 
     // ses_a holds a relaunch lease (revive in flight).
-    const lease = board.acquireRelaunchLease('ses_a', 1);
+    const lease = board.acquireLease('ses_a', 1, 'relaunch');
     expect(lease).toBeDefined();
 
     board.registerLaunch({
@@ -660,7 +830,7 @@ describe('BackgroundJobBoard', () => {
         });
       const a = completed('ses_a', 100);
       board.addContext('ses_a', [{ path: 'a.ts', lineCount, lastReadAt: 1 }]);
-      const lease = a && board.acquireRelaunchLease('ses_a', a.generation);
+      const lease = a && board.acquireLease('ses_a', a.generation, 'relaunch');
       // While A's revive is admitted, B completes and is acknowledged later.
       completed('ses_b', 200);
       board.markReconciled('ses_b', 220);
@@ -761,9 +931,10 @@ describe('BackgroundJobBoard', () => {
     });
     board.markReconciled(first.taskID);
 
-    const relaunchLease = board.acquireRelaunchLease(
+    const relaunchLease = board.acquireLease(
       first.taskID,
       first.generation,
+      'relaunch',
     );
     expect(relaunchLease).toBeDefined();
     if (!relaunchLease) throw new Error('relaunch lease was not acquired');
@@ -1316,7 +1487,6 @@ describe('BackgroundJobBoard', () => {
 
     expect(updated).toMatchObject({
       state: 'running',
-      stopConfirmationStartedAt: undefined,
       lastLiveBusyAt: 200,
     });
   });
@@ -1400,7 +1570,7 @@ describe('BackgroundJobBoard', () => {
     const generation = board.get('ses_1')?.generation;
     board.markStopped('ses_1', 'no result', 150, generation, 150);
 
-    const lease = board.acquireRelaunchLease('ses_1', generation ?? 1);
+    const lease = board.acquireLease('ses_1', generation ?? 1, 'relaunch');
     expect(lease).toBeDefined();
 
     const leased = board.markRunningFromLiveSession('ses_1', 200, generation);
@@ -1410,7 +1580,7 @@ describe('BackgroundJobBoard', () => {
       lastLiveBusyAt: 200,
     });
     expect(
-      board.acquireRelaunchLease('ses_1', generation ?? 1),
+      board.acquireLease('ses_1', generation ?? 1, 'relaunch'),
     ).toBeUndefined();
     if (lease) expect(board.validateLease(lease)).toBe(true);
 
@@ -1918,9 +2088,10 @@ describe('BackgroundJobBoard', () => {
         'ses_second',
       );
 
-      const lease = board.acquireRelaunchLease(
+      const lease = board.acquireLease(
         'ses_second',
         board.get('ses_second')?.generation ?? -1,
+        'relaunch',
       );
       expect(lease).toBeDefined();
       board.registerLaunch({
@@ -2772,7 +2943,7 @@ describe('BackgroundJobBoard subscription seams', () => {
       parentSessionID: 'parent-1',
       agent: 'oracle',
     });
-    const lease = board.acquireMessageLease(first.taskID, first.generation);
+    const lease = board.acquireLease(first.taskID, first.generation, 'message');
     expect(lease).toBeDefined();
 
     const events: string[] = [];

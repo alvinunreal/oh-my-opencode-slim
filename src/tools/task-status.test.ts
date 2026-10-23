@@ -123,7 +123,11 @@ function makeResultTool(
       } as never);
     if (state === 'stopped') messages.mockResolvedValue({ data: [] });
     if (state === 'cancelled') {
-      const lease = board.acquireCancellationLease(run.taskID, run.generation);
+      const lease = board.acquireLease(
+        run.taskID,
+        run.generation,
+        'cancellation',
+      );
       const token = gate.capture(run);
       if (!lease || !token) throw new Error('missing cancellation authority');
       gate.observe(token, {
