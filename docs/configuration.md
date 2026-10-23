@@ -245,8 +245,7 @@ All config files support **JSONC** (JSON with Comments):
 | `backgroundJobs.orchestratorWake.periodicWakeEnabled` | boolean | `true` | When false, the periodic idle evaluation never runs; only event-driven wakes (stopped-job recovery, later terminal publications, child-input asks) still deliver, and failed event wakes keep their timer-based retry. v1 hosts only: on v2 the whole `orchestratorWake` section is ignored with a warning (the native background notifier owns terminal delivery). | See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler). |
 | `backgroundJobs.orchestratorWake.wakeOnTerminalPublication` | boolean | `true` | When true, a terminal completed/error publication that reaches an idle parent wakes it immediately instead of waiting for the next periodic evaluation. The first terminal publication of any generation (terminalRevision 1) is skipped (the native notifier armed by that generation's `subagent` tool call already delivers it); busy parents are skipped the same way See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler) See [Background Job Management](#background-job-management). |
 | `backgroundJobs.orchestratorWake.publicationWakeMinIntervalMs` | integer | `30000` | Per-parent minimum spacing between terminal-publication wakes (`1000`–`2147483647` ms; `0` is invalid — the schema floor is 1,000ms). A burst of publications collapses into one wake; later-result `<completed-job>` pushes honor the same spacing (queued, then delivered together when the window elapses); the window is consumed only when a wake is actually delivered. See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler) See [Background Job Management](#background-job-management). |
-| `backgroundJobs.wallClockTimeoutMs` | integer | `0` | **Opt-in wall-clock supervisor.** `0` disables it. Otherwise, only native background child sessions (`task(..., background: true)` on v1, `subagent(..., background: true)` on v2) are supervised; accepted values are `60000`–`2147483647` milliseconds See [Background Job Management](#background-job-management). |
-| `backgroundJobs.abortGraceMs` | integer | `10000` | Grace period after a wall-clock deadline for a terminal confirmation. Accepted values are `1000`–`60000` milliseconds; a hanging or failed abort does not extend this grace See [Background Job Management](#background-job-management). |
+| `backgroundJobs.wallClockTimeoutMs` | integer | `0` | **Opt-in wall-clock watchdog.** `0` disables it. Otherwise, only native background child sessions (`task(..., background: true)` on v1, `subagent(..., background: true)` on v2) are supervised; accepted values are `60000`–`2147483647` milliseconds. On expiry the plugin asks the host to stop the child (a session abort, the same primitive `task_cancel` uses) and the host's own terminal report publishes the row — the plugin never fabricates a terminal for the deadline See [Background Job Management](#background-job-management). |
 | `backgroundJobs.stopConfirmationMs` | integer | `5000` | Terminal-gate grace period the background-job terminal gate waits for stop confirmation evidence before publishing a stopped job. Accepted values are `1000`–`60000` milliseconds See [Background Job Management](#background-job-management). |
 | `backgroundJobs.concurrency.defaultConcurrency` | integer | `0` | Maximum concurrently running native background tasks. `0` means unlimited; accepted values are `0`–`1000` See [Background Job Management](#background-job-management). |
 | `backgroundJobs.concurrency.providerConcurrency` | object | `{}` | Per-provider caps keyed by provider ID. Each value must be `0`–`1000`, where `0` means unlimited for that provider. The most specific configured cap wins: model > provider > default See [Background Job Management](#background-job-management). |
@@ -606,7 +605,6 @@ The wall-clock supervisor is separately opt-in and remains disabled unless
       "mode": "auto"
     },
     "wallClockTimeoutMs": 900000,
-    "abortGraceMs": 10000,
     "concurrency": {
       "defaultConcurrency": 2,
       "providerConcurrency": {
@@ -696,8 +694,9 @@ its value is not migrated. Use `orchestratorWake.enabled`.
 `wallClockTimeoutMs` is a hard deadline that only supervises explicitly
 background native task calls; foreground calls or calls with `background`
 omitted are not supervised. It is independent from OpenCode's external
-task-wait timeout, and a wall-clock timeout cannot be recovered by reusing the
-running session.
+task-wait timeout. When it expires, the plugin sends one host session abort —
+the same primitive `task_cancel` uses — and the host's own terminal report
+publishes the result; no local terminal is fabricated for the deadline.
 
 `fallback.maxRetries` is unrelated to the wall-clock supervisor and to
 OpenCode's provider retry policy. A value of `0` allows no host retry events

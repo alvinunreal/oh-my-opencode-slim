@@ -85,8 +85,7 @@ export type TerminalSignal =
   | { kind: 'inspect' }
   | { kind: 'output'; status: TaskStatusOutput; origin: TaskOutputOrigin }
   | { kind: 'session-error'; message: string }
-  | { kind: 'cancel'; lease: BackgroundJobLease; reason?: string }
-  | { kind: 'deadline' };
+  | { kind: 'cancel'; lease: BackgroundJobLease; reason?: string };
 export type GateResult =
   | { kind: 'deferred'; record: BackgroundJobRecord }
   | { kind: 'committed'; record: BackgroundJobRecord }
@@ -685,16 +684,6 @@ export function createBackgroundJobTerminalGate(options: {
       );
     }
     value.quiescentSince ??= now();
-    if (
-      runtime.kind === 'deleted' &&
-      board.get(token.taskID)?.deadlineExceededAt !== undefined
-    ) {
-      return commit(
-        token,
-        'error',
-        'Background task exceeded its wall-clock deadline; session deletion confirmed the abort.',
-      );
-    }
     return deferred(token);
   }
 
@@ -1045,13 +1034,6 @@ export function createBackgroundJobTerminalGate(options: {
         'cancelled',
         signal.reason ?? 'cancelled',
         signal.lease,
-      );
-    }
-    if (job.deadlineExceededAt !== undefined) {
-      return commit(
-        token,
-        'error',
-        'Background task exceeded its wall-clock deadline; quiescence confirmed the abort.',
       );
     }
     if (signal?.kind === 'session-error')

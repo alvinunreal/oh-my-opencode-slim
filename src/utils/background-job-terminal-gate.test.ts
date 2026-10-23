@@ -1109,15 +1109,11 @@ describe('terminal gate', () => {
       ).kind,
     ).toBe('unknown');
   });
-  test('deadline deletion commits synchronously before drop', () => {
+  test('a deleted child session publishes nothing on its own', () => {
     const h = harness();
-    h.board.claimWallClockDeadline(h.run);
     const result = h.observe('deleted');
-    expect(result.kind).toBe('committed');
-    expect(h.board.get(h.run.taskID)).toMatchObject({
-      state: 'error',
-      timedOut: true,
-    });
+    expect(result.kind).toBe('deferred');
+    expect(h.board.get(h.run.taskID)?.state).toBe('running');
   });
 });
 

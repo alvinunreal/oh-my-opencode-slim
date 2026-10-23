@@ -9,7 +9,6 @@ import { createTimerHarness } from './test-timers';
 function createSupervisor(
   overrides: {
     timeoutMs?: number;
-    graceMs?: number;
     abort?: (taskID: string) => Promise<unknown>;
   } = {},
 ) {
@@ -19,13 +18,8 @@ function createSupervisor(
     taskID: string,
   ) => Promise<unknown>;
   const supervisor = new BackgroundJobSupervisor({
-    backgroundJobStore: board,
-    terminalGate: createBackgroundJobTerminalGate({
-      backgroundJobBoard: board,
-      now: timers.now,
-    }),
+    backgroundJobBoard: board,
     wallClockTimeoutMs: overrides.timeoutMs ?? 100,
-    abortGraceMs: overrides.graceMs ?? 20,
     abort,
     now: timers.now,
     setTimeout: timers.setTimeout,
@@ -64,7 +58,11 @@ describe('BackgroundJobSupervisor', () => {
 
     expect(abort).toHaveBeenCalledTimes(1);
     expect(abort).toHaveBeenCalledWith('ses_2');
-    expect(board.get('ses_1')?.deadlineExceededAt).toBeUndefined();
+    // The watchdog stops the child; the HOST reports the terminal, so the
+    // board row is untouched by the expiry itself.
+    expect(board.get('ses_1')?.state).toBe('running');
+    expect(board.get('ses_1')?.timedOut).toBe(false);
+    expect(board.get('ses_2')?.state).toBe('running');
   });
 
   test('duplicate launch observations do not renew one run deadline', async () => {
@@ -124,7 +122,7 @@ describe('BackgroundJobSupervisor', () => {
     ['reject', async () => Promise.reject(new Error('abort failed'))],
     ['hang', () => new Promise<never>(() => {})],
   ])(
-    'abort %s is requested once and grace remains independent',
+    'abort %s never fabricates a board terminal or a second abort',
     async (_, abortCall) => {
       const { board, supervisor, timers, abort } = createSupervisor({
         abort: abortCall,
@@ -132,40 +130,156 @@ describe('BackgroundJobSupervisor', () => {
       const job = launch(board, true);
       supervisor.onLaunch(job);
       await timers.advanceTo(100);
-      await timers.advanceTo(119);
+      await timers.advanceTo(200);
 
       expect(abort).toHaveBeenCalledTimes(1);
-      expect(board.get(job.taskID)?.state).toBe('running');
-      await timers.advanceTo(120);
-
+      // The watchdog only asks the host to stop the child. The board row
+      // stays exactly as it was: no timeout claim, no fabricated terminal.
       expect(board.get(job.taskID)).toMatchObject({
         state: 'running',
-        timedOut: true,
-        statusUncertain: true,
-        cancellationRequested: true,
+        timedOut: false,
+        statusUncertain: false,
+        cancellationRequested: false,
+        terminalUnreconciled: false,
       });
-      expect(board.get(job.taskID)?.deadlineExceededAt).toBe(100);
+      expect(timers.pending()).toBe(0);
     },
   );
 
-  test('completion after the deadline claim cannot replace the timeout', async () => {
-    const { board, supervisor, timers, abort } = createSupervisor();
+  test('expiry acquires the task_cancel cancellation lease and releases it when the abort settles', async () => {
+    const { board, supervisor, timers } = createSupervisor({
+      // A hanging host abort: the lease must stay held for its duration.
+      abort: () => new Promise<never>(() => {}),
+    });
     const job = launch(board, true);
     supervisor.onLaunch(job);
     await timers.advanceTo(100);
+    await timers.tick();
 
-    const late = board.updateStatus({
-      taskID: job.taskID,
-      state: 'completed',
-      resultSummary: 'late success',
-      now: 101,
-    });
-    expect(late?.state).toBe('running');
-    expect(late?.resultSummary).not.toBe('late success');
-    expect(abort).toHaveBeenCalledTimes(1);
+    expect(board.acquireCancellationLease(job.taskID, job.generation)).toBe(
+      undefined,
+    );
+    expect(
+      board.acquireRelaunchLease(job.taskID, job.generation),
+    ).toBeUndefined();
+
+    // A teardown while the abort is in flight releases the lease, so the
+    // run cannot outlive its watchdog ownership.
+    supervisor.drop(job.taskID);
+    const reclaimed = board.acquireCancellationLease(
+      job.taskID,
+      job.generation,
+    );
+    expect(reclaimed).toEqual(
+      expect.objectContaining({ kind: 'cancellation' }),
+    );
+    if (reclaimed) board.releaseLease(reclaimed);
   });
 
-  test('busy activity after the deadline neither recovers nor renews the run', async () => {
+  test('the lease is released once a settling abort completes', async () => {
+    const settle = Promise.withResolvers<void>();
+    const { board, supervisor, timers } = createSupervisor({
+      abort: async () => {
+        await settle.promise;
+      },
+    });
+    const job = launch(board, true);
+    supervisor.onLaunch(job);
+    await timers.advanceTo(100);
+    await timers.tick();
+    expect(board.acquireCancellationLease(job.taskID, job.generation)).toBe(
+      undefined,
+    );
+
+    settle.resolve();
+    await timers.tick();
+    expect(board.acquireCancellationLease(job.taskID, job.generation)).toEqual(
+      expect.objectContaining({ kind: 'cancellation' }),
+    );
+  });
+
+  test('a lease already held by another operation stands the watchdog down', async () => {
+    const { board, supervisor, timers, abort } = createSupervisor();
+    const job = launch(board, true);
+    supervisor.onLaunch(job);
+    // A user task_cancel (or relaunch/message operation) already owns the child.
+    const lease = board.acquireCancellationLease(job.taskID, job.generation);
+    expect(lease).toBeDefined();
+
+    await timers.advanceTo(100);
+    expect(abort).not.toHaveBeenCalled();
+    expect(timers.pending()).toBe(0);
+    if (lease) {
+      expect(board.validateLease(lease)).toBe(true);
+      board.releaseLease(lease);
+    }
+  });
+
+  test('the later real aborted terminal publishes exactly once through the host evidence path', async () => {
+    const { board, supervisor, timers, abort } = createSupervisor();
+    const gate = createBackgroundJobTerminalGate({
+      backgroundJobBoard: board,
+      now: timers.now,
+      setTimeout: timers.setTimeout,
+      clearTimeout: timers.clearTimeout,
+      graceMs: 5,
+      maxEvidenceRetries: 0,
+      readTerminalEvidence: async () => ({ data: [] }),
+    });
+    const publications: string[] = [];
+    board.addTerminalOutcomeListener((record) =>
+      publications.push(`${record.state}:${record.terminalRevision}`),
+    );
+    const job = launch(board, true);
+    supervisor.onLaunch(job);
+    await timers.advanceTo(100);
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(board.get(job.taskID)).toMatchObject({ state: 'running' });
+
+    // The host reports the outcome of the abort it performed: an interrupted
+    // run lands in the stop family through the gate's evidence path.
+    const token = gate.capture({
+      taskID: job.taskID,
+      generation: job.generation,
+    });
+    expect(token).toBeDefined();
+    if (token) {
+      const observed = gate.observe(token, {
+        kind: 'quiescent',
+        origin: 'host-outcome',
+        readStartedAt: token.readStartedAt,
+        terminalOutcome: 'interrupted',
+      });
+      expect(observed.kind).toBe('deferred');
+    }
+    await timers.advanceTo(110);
+
+    const result = await gate.reconcile({
+      taskID: job.taskID,
+      generation: job.generation,
+    });
+    expect(result.kind).toBe('committed');
+    expect(board.get(job.taskID)).toMatchObject({
+      state: 'stopped',
+      terminalUnreconciled: true,
+      resultSummary: 'Host reported outcome: interrupted.',
+    });
+    expect(publications).toEqual(['stopped:1']);
+
+    // Nothing re-opens a published terminal, and no second abort happens.
+    const again = await gate.reconcile({
+      taskID: job.taskID,
+      generation: job.generation,
+    });
+    expect(again.kind).toBe('committed');
+    expect(publications).toEqual(['stopped:1']);
+    await timers.advanceTo(400);
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(timers.pending()).toBe(0);
+    gate.dispose();
+  });
+
+  test('busy activity after the abort keeps the row running until real evidence lands', async () => {
     const { board, supervisor, timers, abort } = createSupervisor();
     const job = launch(board, true);
     supervisor.onLaunch(job);
@@ -175,93 +289,88 @@ describe('BackgroundJobSupervisor', () => {
     expect(board.get(job.taskID)).toMatchObject({
       state: 'running',
       lastLiveBusyAt: 101,
-      deadlineExceededAt: 100,
     });
-    expect(board.resolveRecoverable('parent', job.taskID)).toBeUndefined();
-    await timers.advanceTo(120);
     expect(abort).toHaveBeenCalledTimes(1);
     expect(board.get(job.taskID)?.state).toBe('running');
+    expect(board.get(job.taskID)?.resultSummary).toBeUndefined();
   });
 
-  test('error and cancellation labels during grace are not terminal authority', async () => {
-    for (const state of ['error', 'cancelled'] as const) {
-      const { board, supervisor, timers } = createSupervisor();
-      const job = launch(board, true);
-      supervisor.onLaunch(job);
-      await timers.advanceTo(100);
-
-      const settled = board.updateStatus({
-        taskID: job.taskID,
-        state,
-        resultSummary: 'child terminal',
-        now: 101,
-      });
-
-      expect(settled).toMatchObject({
-        state: 'running',
-        timedOut: true,
-        statusUncertain: false,
-        deadlineExceededAt: 100,
-      });
-      expect(timers.pending()).toBe(1);
-    }
-  });
-
-  test('child deletion during grace publishes a visible timed-out terminal', async () => {
-    const { board, supervisor, timers, abort } = createSupervisor();
+  test('wallClockTimeoutMs = 0 disables the watchdog entirely', async () => {
+    const { board, supervisor, timers, abort } = createSupervisor({
+      timeoutMs: 0,
+    });
     const job = launch(board, true);
     supervisor.onLaunch(job);
-    await timers.advanceTo(100);
 
-    expect(supervisor.onSessionDeleted(job.taskID)).toBe(true);
-    expect(abort).toHaveBeenCalledTimes(1);
-    expect(board.get(job.taskID)).toMatchObject({
-      state: 'error',
-      timedOut: true,
-      terminalUnreconciled: true,
-      statusUncertain: false,
-    });
-    expect(board.hasTerminalUnreconciled('parent')).toBe(true);
-    board.markReconciled(job.taskID, 130);
-    expect(board.get(job.taskID)).toMatchObject({
-      state: 'reconciled',
-      terminalState: 'error',
-      statusUncertain: false,
-      deadlineExceededAt: 100,
-    });
+    expect(timers.pending()).toBe(0);
+    await timers.advanceTo(1_000_000);
+    expect(abort).not.toHaveBeenCalled();
+    expect(board.get(job.taskID)).toMatchObject({ state: 'running' });
+    supervisor.onTerminal({ ...job, state: 'completed', terminalRevision: 1 });
+    supervisor.onSessionDeleted(job.taskID);
     expect(timers.pending()).toBe(0);
   });
 
-  test('wall-clock timeout is not recoverable while external timeout remains recoverable', async () => {
-    const { board, supervisor, timers } = createSupervisor();
-    const external = launch(board, false, 0, 'external');
-    board.updateStatus({
-      taskID: external.taskID,
-      state: 'running',
-      timedOut: true,
+  test('cancel-vs-watchdog race publishes one terminal and leaks no lease', async () => {
+    // The watchdog's abort and a user task_cancel race: whichever acquires the
+    // cancellation lease owns the child; the other stands down. Exactly one
+    // terminal is published and no lease survives the run.
+    const settle = Promise.withResolvers<void>();
+    const { board, supervisor, timers, abort } = createSupervisor({
+      abort: async () => {
+        await settle.promise;
+      },
     });
-    board.markRunningFromLiveSession(external.taskID, 1);
-    expect(board.resolveRecoverable('parent', external.taskID)).toBeDefined();
-
-    const wall = launch(board, true, 0, 'wall');
-    supervisor.onLaunch(wall);
+    const job = launch(board, true);
+    supervisor.onLaunch(job);
     await timers.advanceTo(100);
-    board.markRunningFromLiveSession(wall.taskID, 101);
-    expect(board.resolveRecoverable('parent', wall.taskID)).toBeUndefined();
+    await timers.tick();
+
+    // The watchdog holds the lease for the abort's duration, so the racing
+    // user task_cancel is refused instead of sending a second abort.
+    expect(board.acquireCancellationLease(job.taskID, job.generation)).toBe(
+      undefined,
+    );
+
+    // The watchdog's abort settles, the user's cancel takes over, and its
+    // terminal publishes exactly once.
+    settle.resolve();
+    await timers.tick();
+    const userLease = board.acquireCancellationLease(
+      job.taskID,
+      job.generation,
+    );
+    expect(userLease).toEqual(
+      expect.objectContaining({ kind: 'cancellation' }),
+    );
+    if (!userLease) throw new Error('lease not restored after abort settled');
+
+    const cancelled = boardFixture.markCancelled(
+      board,
+      job.taskID,
+      'user cancel',
+      110,
+      { cancellationLease: userLease },
+    );
+    expect(cancelled).toMatchObject({ state: 'cancelled' });
+    if (cancelled) supervisor.onTerminal(cancelled);
+    expect(board.validateLease(userLease)).toBe(true);
+    board.releaseLease(userLease);
+
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(board.get(job.taskID)).toMatchObject({ state: 'cancelled' });
+    expect(timers.pending()).toBe(0);
   });
 
-  // ── v2-sim pin: shim abort mapping + deadline error semantics ──
+  // ── v2-sim pin: shim abort mapping ──
   //
   // On a v2 host the plugin's abort seam is `ctx.client.session.abort`
   // (src/index.ts), which the REAL v2 client shim maps to the host's
   // `session.interrupt({sessionID, resume: false})`. When the deadline
-  // fires, that interrupt must be invoked (exactly once), and the
-  // terminal outcome must be the wall-clock `error` — the interrupted
-  // execution event the host publishes afterwards maps to the stop
-  // family (Task 5), but a stop-family report can never outrank the
-  // deadline claim: 'stopped' is not an acceptable terminal state for a
-  // wall-clock timeout.
-  test('v2-sim: deadline aborts via the shim interrupt mapping and finalizes error, never stopped', async () => {
+  // fires, that interrupt must be invoked exactly once; the host then
+  // reports the interrupted execution through the normal evidence path,
+  // which is the only place a terminal is published.
+  test('v2-sim: deadline aborts via the shim interrupt mapping exactly once', async () => {
     const interrupt = mock(
       async (_input: { sessionID: string; resume?: boolean }) => undefined,
     );
@@ -283,21 +392,17 @@ describe('BackgroundJobSupervisor', () => {
     supervisor.onLaunch(job);
     await timers.advanceTo(100);
 
-    // The shim mapping fired the host interrupt exactly once.
+    // The shim mapping fired the host interrupt exactly once, and the
+    // watchdog wrote no terminal state of its own.
     expect(interrupt).toHaveBeenCalledTimes(1);
     expect(interrupt).toHaveBeenCalledWith({
       sessionID: 'ses_1',
       resume: false,
     });
-    expect(board.get(job.taskID)).toMatchObject({
-      state: 'running',
-      timedOut: true,
-      deadlineExceededAt: 100,
-    });
+    expect(board.get(job.taskID)).toMatchObject({ state: 'running' });
 
     // The v2 host then reports the interrupted execution; the evidence
-    // chain maps it to the stop family — but the deadline claim is a
-    // hard, non-recoverable terminal authority.
+    // chain maps it to the stop family — the only terminal this run gets.
     const stopFamily = boardFixture.updateStatus(board, {
       taskID: job.taskID,
       state: 'stopped',
@@ -305,13 +410,9 @@ describe('BackgroundJobSupervisor', () => {
       now: 101,
     });
     expect(stopFamily).toMatchObject({
-      state: 'error',
-      terminalState: 'error',
-      timedOut: true,
+      state: 'stopped',
       terminalUnreconciled: true,
-      deadlineExceededAt: 100,
     });
-    expect(stopFamily?.state).not.toBe('stopped');
 
     // The interrupt stays exactly-once after the terminal settles.
     await timers.advanceTo(200);
@@ -354,7 +455,7 @@ describe('BackgroundJobSupervisor', () => {
     supervisor.onLaunch(disposedJob);
     supervisor.dispose();
     supervisor.dispose();
-    expect(supervisor.onSessionDeleted(disposedJob.taskID)).toBe(false);
+    supervisor.onSessionDeleted(disposedJob.taskID);
     expect(board.get(disposedJob.taskID)?.state).toBe('running');
     await timers.advanceTo(500);
     expect(abort).toHaveBeenCalledTimes(1);

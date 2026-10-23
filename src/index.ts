@@ -1010,10 +1010,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       },
     });
     backgroundJobSupervisor = new BackgroundJobSupervisor({
-      backgroundJobStore: backgroundJobBoard,
-      terminalGate,
+      backgroundJobBoard,
       wallClockTimeoutMs: runtime.backgroundJobs.wallClockTimeoutMs,
-      abortGraceMs: runtime.backgroundJobs.abortGraceMs,
       abort: (taskID) =>
         ctx.client.session.abort({
           path: { id: taskID },

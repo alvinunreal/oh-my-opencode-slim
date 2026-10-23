@@ -1123,7 +1123,6 @@ describe('plugin tool registration', () => {
       JSON.stringify({
         backgroundJobs: {
           wallClockTimeoutMs: 60_000,
-          abortGraceMs: 1_000,
         },
       }),
     );

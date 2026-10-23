@@ -821,13 +821,13 @@ export async function handleEvent(
   clearChildInputWaitsForSession(sessionId);
   const fallbackInProgress =
     deps.options.isFallbackInProgress?.(sessionId) === true;
-  const job = deps.backgroundJobBoard.get(sessionId);
-  if (!fallbackInProgress || job?.deadlineExceededAt !== undefined) {
+  if (!fallbackInProgress) {
     deps.backgroundJobSupervisor?.onSessionDeleted(sessionId);
   }
 
   // Deletion may precede idle, so a deferred error may have no backstop yet.
   // Token invalidation preserves any backstop already awaiting fallback.
+  const job = deps.backgroundJobBoard.get(sessionId);
   const deferredError = deps.deferredInlineErrors.get(sessionId);
   if (deferredError !== undefined) {
     if (fallbackInProgress) {

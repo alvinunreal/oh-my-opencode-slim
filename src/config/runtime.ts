@@ -88,7 +88,6 @@ const DEFAULT_BACKGROUND_JOBS: BackgroundJobsConfig = {
     publicationWakeMinIntervalMs: 30_000,
   },
   wallClockTimeoutMs: 0,
-  abortGraceMs: 10_000,
   stopConfirmationMs: 5_000,
   concurrency: {
     defaultConcurrency: 0,

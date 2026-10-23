@@ -588,14 +588,14 @@ export function createTaskSessionManagerHook(
           }
           // The session no longer exists on the host. The four probe
           // cleanup actions run as one synchronous block — supervisor
-          // FIRST: its onSessionDeleted needs the record to still exist
-          // so deadline-exceeded runs finalize their wall-clock timeout
-          // (same ordering as the event-router/coordinator deletion
-          // paths). All four are idempotent but all are required — a
-          // missing releaseTask would leak an admission slot forever.
-          // The canonical full cleanup (input waits, idle tokens,
-          // pending-call tracker, clearParent, task-context tracker,
-          // snapshots) runs via the session.deleted event path.
+          // FIRST: its onSessionDeleted clears the run's watchdog timer
+          // while the record still identifies it (same ordering as the
+          // event-router/coordinator deletion paths). All four are
+          // idempotent but all are required — a missing releaseTask would
+          // leak an admission slot forever. The canonical full cleanup
+          // (input waits, idle tokens, pending-call tracker, clearParent,
+          // task-context tracker, snapshots) runs via the session.deleted
+          // event path.
           options.backgroundJobSupervisor?.onSessionDeleted(taskID);
           recordBackgroundJobSuppression(backgroundJobBoard, taskID);
           backgroundJobBoard.drop(taskID);
@@ -718,16 +718,11 @@ export function createTaskSessionManagerHook(
           options.backgroundTaskConcurrency?.releaseTask(child.taskID);
         }
         options.backgroundJobSupervisor?.onSessionDeleted(sessionId);
-        const hardTimedOut =
-          backgroundJobBoard.field(sessionId, 'deadlineExceededAt') !==
-          undefined;
-        if (!hardTimedOut) {
-          rememberDeletedSession(sessionId);
-          backgroundJobBoard.drop(sessionId);
-        }
+        rememberDeletedSession(sessionId);
+        backgroundJobBoard.drop(sessionId);
         options.backgroundJobSupervisor?.clearParent(sessionId);
         backgroundJobBoard.clearParent(sessionId);
-        if (!hardTimedOut) options.backgroundJobSupervisor?.drop(sessionId);
+        options.backgroundJobSupervisor?.drop(sessionId);
       }
       historyBoundaries.delete(sessionId);
       // Orphaned reopen corrections must never surface in a recreated
@@ -1051,10 +1046,7 @@ export function createTaskSessionManagerHook(
           // teardown. An unconditional clear would swallow the error
           // and strand a mid-fallback record in `running` forever.
           if (!options.isFallbackInProgress?.(sessionID)) {
-            const hardTimedOut =
-              backgroundJobBoard.field(sessionID, 'deadlineExceededAt') !==
-              undefined;
-            if (!hardTimedOut) rememberDeletedSession(sessionID);
+            rememberDeletedSession(sessionID);
           }
         }
       }

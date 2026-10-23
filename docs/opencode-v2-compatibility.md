@@ -885,10 +885,9 @@ taskID:
   same-ID relaunch (new generation, tombstone cleared) skips all cleanup
   instead of deleting the live relaunched record. On a fresh hit, the four
   probe cleanup actions run as one synchronous block — supervisor
-  `onSessionDeleted` first (it needs the record to exist so
-  deadline-exceeded runs finalize their wall-clock timeout; same ordering
-  as the event-router/coordinator deletion paths), then the rehydrate
-  tombstone, board drop, and concurrency `releaseTask` (all idempotent; a
+  `onSessionDeleted` first (it clears the run's watchdog timer while the
+  record still identifies it; same ordering as the event-router/coordinator
+  deletion paths), then the rehydrate tombstone, board drop, and concurrency `releaseTask` (all idempotent; a
   missing `releaseTask` would leak an admission slot forever). The
   canonical full deletion cleanup (input waits, idle tokens, pending-call
   tracker, `clearParent`, task-context tracker, snapshots) runs via the
