@@ -1029,7 +1029,13 @@ export async function handleToolExecuteAfter(
         deps,
       );
       if (!record) return;
-      appendRegisteredChildRef(output, record, pending, childRefAllowed);
+      appendRegisteredChildRef(
+        output,
+        record,
+        pending,
+        childRefAllowed,
+        deps.hostFlavor,
+      );
       log('[task-session-manager] background task launch registered', {
         taskID: record.taskID,
         alias: record.alias,
@@ -1058,7 +1064,13 @@ export async function handleToolExecuteAfter(
         deps.backgroundJobBoard,
         controlParamName(deps.hostFlavor),
       );
-      appendRegisteredChildRef(output, record, pending, childRefAllowed);
+      appendRegisteredChildRef(
+        output,
+        record,
+        pending,
+        childRefAllowed,
+        deps.hostFlavor,
+      );
       if (exactCallConfirmed) deps.backgroundJobSupervisor?.onLaunch(record);
       await deps.terminalGate.reconcile(record, {
         kind: 'output',
@@ -1149,7 +1161,13 @@ export async function handleToolExecuteAfter(
       if (exactCallConfirmed) {
         deps.backgroundJobSupervisor?.onLaunch(promoted);
       }
-      appendRegisteredChildRef(output, promoted, pending, childRefAllowed);
+      appendRegisteredChildRef(
+        output,
+        promoted,
+        pending,
+        childRefAllowed,
+        deps.hostFlavor,
+      );
       deps.taskContextTracker.pendingManagedTaskIds.add(taskId);
     } else {
       deps.taskContextTracker.pendingManagedTaskIds.delete(taskId);
@@ -1454,7 +1472,14 @@ function appendRegisteredChildRef(
   },
   pending: PendingTaskCall,
   allowed: boolean,
+  hostFlavor?: string,
 ): void {
+  // v2 renders the contract-native sessionID; the child-ref comment is a
+  // v1-only identity format and must never appear on v2 surfaces. The
+  // alias is still allocated and resolvable on v2 (board.resolve plus the
+  // parent-history markers read by the alias authority) — only the
+  // rendered comment disappears.
+  if (hostFlavor === 'v2') return;
   if (!allowed || record.provisional) return;
   if (pending.identityUnresolved) return;
   if (record.parentSessionID !== pending.parentSessionId) return;

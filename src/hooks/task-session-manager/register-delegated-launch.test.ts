@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import { BackgroundJobBoard } from '../../utils/background-job-board';
 import type { BackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
+import type { PendingTaskCall } from './pending-call-tracker';
 import {
   handleToolExecuteAfter,
   type RegisterDelegatedLaunchDeps,
   registerDelegatedLaunchFromStructured,
 } from './tool-execute-hooks';
-import type { PendingTaskCall } from './pending-call-tracker';
 
 function makePending(
   overrides: Partial<PendingTaskCall> = {},
@@ -226,5 +226,44 @@ describe('handleToolExecuteAfter v2 wrapper gate', () => {
     );
 
     expect(board.get('ses_launch')?.state).toBe('running');
+  });
+
+  const statusOutput =
+    '<task id="child-1" state="completed">\n<task_result>\nok\n</task_result>\n</task>';
+
+  test('v2 registers a status-branch output without the v1 child-ref marker', async () => {
+    const board = new BackgroundJobBoard();
+    const pending = makePending();
+    const { deps } = gateDeps(board, pending);
+    const output = { output: statusOutput, metadata: {} };
+
+    await handleToolExecuteAfter(
+      { tool: 'task', sessionID: 'parent_1', callID: 'call_1' },
+      output,
+      deps,
+    );
+
+    // Registration still happens (the alias is allocated and resolvable),
+    // but the v1-only identity comment is never rendered on v2 surfaces.
+    expect(board.get('child-1')?.state).toBe('running');
+    expect(String(output.output)).not.toContain('slim-child-ref');
+    expect(String(output.output)).toBe(statusOutput);
+  });
+
+  test('v1 renders the child-ref marker for the same status-branch output', async () => {
+    const board = new BackgroundJobBoard();
+    const pending = makePending();
+    const { deps } = gateDeps(board, pending);
+    (deps as { hostFlavor?: string }).hostFlavor = undefined;
+    const output = { output: statusOutput, metadata: {} };
+
+    await handleToolExecuteAfter(
+      { tool: 'task', sessionID: 'parent_1', callID: 'call_1' },
+      output,
+      deps,
+    );
+
+    expect(board.get('child-1')?.state).toBe('running');
+    expect(String(output.output)).toContain('slim-child-ref:v1');
   });
 });
