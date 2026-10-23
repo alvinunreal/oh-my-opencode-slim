@@ -41,18 +41,23 @@ export interface V2ToolDefinition {
 export interface V2ToolDraft {
   add(tool: V2ToolDefinition): void;
   /** Update a registered tool by id; missing ids are ignored (host
-   * `tool.transform` editor semantics). The callback receives the
-   * model-visible fields it may rewrite (description). */
+   * `tool.transform` editor semantics). The callback receives the fields it
+   * may rewrite: description and, for the executor-wrapper seam, the
+   * execution closure (host `editor.update` replaces `execute`). */
   update(
     id: string,
     update: (tool: {
       description: string;
-      execute?: V2ToolDefinition['execute'];
+      execute?: (input: unknown, context: unknown) => Promise<unknown>;
     }) => void,
   ): void;
-  /** Read back a registered tool's model-visible fields by id;
-   * undefined when absent. */
-  get(id: string): { description?: string } | undefined;
+  /** Read back a registered tool by id; undefined when absent. */
+  get(id: string):
+    | {
+        description?: string;
+        execute?: (input: unknown, context: unknown) => Promise<unknown>;
+      }
+    | undefined;
 }
 /** A v2 command definition passed to `command.transform` drafts. The command
  * body runs `execute` directly (no template field). */

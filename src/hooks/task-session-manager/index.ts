@@ -67,6 +67,8 @@ import { createTaskContextTracker } from './task-context-tracker';
 import {
   handleToolExecuteAfter,
   handleToolExecuteBefore,
+  registerDelegatedLaunchFromStructured,
+  type DelegatedLaunchFromStructuredInput,
 } from './tool-execute-hooks';
 
 export { BACKGROUND_JOB_BOARD_METADATA_KEY } from './board-injection';
@@ -767,6 +769,52 @@ export function createTaskSessionManagerHook(
   );
 
   return {
+    /**
+     * v2-only extension handle (consumed by src/v2/setup.ts's executor
+     * wrapper): register a delegated `subagent` launch from its STRUCTURED
+     * executor result — sessionID/status/background, no prose parsing. The
+     * pending for this callID is looked up (NOT consumed, so the after-hook
+     * still takes and releases it) and routed through the SAME shared fence
+     * pipeline the after-hook's launch branch uses; the pending is marked
+     * handled-by-wrapper so the after-hook gates its launch-output and
+     * background-promotion branches off (exactly-once registration on v2).
+     * Registration/fence errors are logged and swallowed; the tool result
+     * passes through untouched.
+     */
+    'v2.registerDelegatedLaunchFromStructured': (
+      input: Omit<DelegatedLaunchFromStructuredInput, 'pending'>,
+    ): Promise<ReturnType<BackgroundJobBoard['get']>> => {
+      const pending = pendingCallTracker.peekByCallId(input.callID);
+      if (!pending) {
+        log('[task-session-manager] v2 wrapper: pending call not found', {
+          callID: input.callID,
+        });
+        return Promise.resolve(undefined);
+      }
+      return registerDelegatedLaunchFromStructured(
+        { ...input, pending, handledByWrapper: true },
+        {
+          directory: _ctx.directory,
+          backgroundJobBoard,
+          terminalGate,
+          backgroundJobSupervisor: options.backgroundJobSupervisor,
+          backgroundTaskConcurrency: options.backgroundTaskConcurrency,
+          getModelForAgent: options.getModelForAgent,
+          taskContextTracker,
+          isStaleDeletedTaskOutput: (taskID, lifecycleEpoch) => {
+            const deletionEpoch = rehydrateState.deletionEpochs.get(taskID);
+            return (
+              deletionEpoch !== undefined && lifecycleEpoch < deletionEpoch
+            );
+          },
+          bindConcurrencyTicket: (taskID, tracked) =>
+            tracked.concurrencyTicket?.bind(taskID),
+          clearRehydrateTombstone: (taskID) =>
+            clearBackgroundJobSuppression(backgroundJobBoard, taskID),
+        },
+      );
+    },
+
     hasDeferredError: (sessionID: string): boolean =>
       deferredInlineErrors.has(sessionID),
     markRevivedRunPending: (taskID: string): void => {

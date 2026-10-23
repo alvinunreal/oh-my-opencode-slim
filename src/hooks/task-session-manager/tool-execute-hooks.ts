@@ -10,6 +10,7 @@ import type {
   BackgroundJobSupervisor,
   BackgroundTaskConcurrency,
   ContextFile,
+  TaskOutputState,
 } from '../../utils';
 import {
   deriveFullObjective,
@@ -941,6 +942,22 @@ export async function handleToolExecuteAfter(
   if (!pending) return;
 
   try {
+    // v2 gate: the executor wrapper registered this call's delegated
+    // (subagent) launch from the STRUCTURED executor result — launch
+    // registration, background promotion, ticket binding, tombstone clear,
+    // supervisor binding, context merge, and any terminal reconcile already
+    // happened there. Re-registering from the rendered prose would
+    // double-register. The status branch (task_status tool outputs),
+    // read-context tracking, and residual identity fallback stay live; v1
+    // never sets the flag. The finally block still releases the pending, its
+    // lease, and its ticket.
+    if (deps.hostFlavor === 'v2' && pending.registeredByWrapper === true) {
+      log(
+        '[task-session-manager] v2 subagent launch already registered by executor wrapper',
+        { callID: pending.callId },
+      );
+      return;
+    }
     if (typeof output.output !== 'string') return;
     const backgroundMeta = output.metadata as
       | { background?: unknown }
@@ -996,17 +1013,22 @@ export async function handleToolExecuteAfter(
 
     const launch = parseTaskLaunchOutput(output.output);
     if (launch && !launch.result?.match(/Timed out after \d+ms/i)) {
-      const record = registerTaskOutputLaunch(
-        launch.taskID,
-        pending,
-        exactCallConfirmed,
-        hostConfirmedBackground,
+      // Shared launch-registration pipeline (fences + promotion + ticket/
+      // gate/supervisor/context routing). Used by both the v1 after-hook and
+      // the v2 executor wrapper so the delegated-subagent launch line has one
+      // source of truth.
+      const record = await registerDelegatedLaunchFromStructured(
+        {
+          callID: pending.callId,
+          childTaskID: launch.taskID,
+          state: 'running',
+          background: hostConfirmedBackground,
+          exactCallConfirmed,
+          pending,
+        },
         deps,
       );
       if (!record) return;
-      deps.bindConcurrencyTicket?.(record.taskID, pending);
-      deps.clearRehydrateTombstone?.(launch.taskID);
-      if (exactCallConfirmed) deps.backgroundJobSupervisor?.onLaunch(record);
       appendRegisteredChildRef(output, record, pending, childRefAllowed);
       log('[task-session-manager] background task launch registered', {
         taskID: record.taskID,
@@ -1016,14 +1038,6 @@ export async function handleToolExecuteAfter(
         description: record.description,
         state: record.state,
       });
-      deps.taskContextTracker.pendingManagedTaskIds.add(launch.taskID);
-      deps.backgroundJobBoard.addContext(
-        launch.taskID,
-        filterStaleContextFiles(deps.directory, [
-          ...(deps.backgroundJobBoard.get(launch.taskID)?.contextFiles ?? []),
-          ...deps.taskContextTracker.contextFilesForPrompt(launch.taskID),
-        ]),
-      );
       return;
     }
 
@@ -1276,6 +1290,155 @@ function registerTaskOutputLaunch(
       callID: pending.callId,
       error: error instanceof Error ? error.message : String(error),
     });
+    return undefined;
+  }
+}
+
+/**
+ * Shared delegated-launch registration entry point, used by BOTH the v1
+ * after-hook's launch-output branch and the v2-only executor wrapper, so the
+ * delegated-`subagent` launch line has ONE source of truth. All registration
+ * fences (stale lifecycle epoch, early-registration generation,
+ * resumed-without-lease refusal, earlyRejected collision, authoritative-ID
+ * override) live in `registerTaskOutputLaunch` unchanged.
+ *
+ * Routing order matches the after-hook launch branch: host-confirmed
+ * background promotion, board registration, concurrency-ticket binding,
+ * rehydrate-tombstone clear, supervisor launch binding, task-context mark +
+ * board context merge, and — for terminal (non-running) outcomes — the
+ * terminal-gate reconcile. Registration/fence errors are logged and
+ * swallowed; the tool result always passes through.
+ */
+export interface RegisterDelegatedLaunchDeps {
+  directory: string;
+  backgroundJobBoard: BackgroundJobBoard;
+  terminalGate: BackgroundJobTerminalGate;
+  backgroundJobSupervisor?: BackgroundJobSupervisor;
+  backgroundTaskConcurrency?: BackgroundTaskConcurrency;
+  getModelForAgent?: (
+    agentType: string,
+    parentSessionID?: string,
+  ) => string | undefined;
+  taskContextTracker: {
+    pendingManagedTaskIds: Set<string>;
+    addContext(taskId: string, files: ContextFile[]): void;
+    contextFilesForPrompt(taskId: string): ContextFile[];
+  };
+  isStaleDeletedTaskOutput?: (
+    taskID: string,
+    lifecycleEpoch: number,
+  ) => boolean;
+  bindConcurrencyTicket?: (taskID: string, pending: PendingTaskCall) => void;
+  clearRehydrateTombstone?: (taskID: string) => void;
+}
+
+export interface DelegatedLaunchFromStructuredInput {
+  /** Tool.CallID the before-hook recorded for this pending call. */
+  callID: string;
+  /** The child session/task ID reported by the host (sessionID). */
+  childTaskID: string;
+  /** Structured status: 'running' | 'completed' | 'error' | 'cancelled'. */
+  state: TaskOutputState;
+  /** Host-confirmed background promotion from structured metadata. */
+  background: boolean;
+  exactCallConfirmed: boolean;
+  pending: PendingTaskCall;
+  /** Set only on the v2 executor-wrapper path — marks the pending so the
+   *  after-hook gates its launch-output / background-promotion branches off
+   *  (launch is registered exactly once on v2). v1 leaves this undefined. */
+  handledByWrapper?: boolean;
+}
+
+export async function registerDelegatedLaunchFromStructured(
+  input: DelegatedLaunchFromStructuredInput,
+  deps: RegisterDelegatedLaunchDeps,
+): Promise<BackgroundJobRecord | undefined> {
+  try {
+    // Host-confirmed background promotion (formerly only in the after-hook):
+    // a foreground waiter promoted before its fallback abort must follow the
+    // background lane and take the same admission ticket a native background
+    // launch holds. Idempotent for v1, where the after-hook already promoted.
+    if (input.background && !input.pending.background) {
+      input.pending.background = true;
+      if (
+        deps.backgroundTaskConcurrency &&
+        !input.pending.concurrencyTicket &&
+        // A host-promoted steer must not double-bind the running child's
+        // existing admission slot (same rule as the after-hook block).
+        !isSteeredCall(input.pending)
+      ) {
+        const isManagedTask = deps.backgroundJobBoard
+          .taskIDs()
+          .has(input.pending.parentSessionId);
+        if (!isManagedTask) {
+          input.pending.concurrencyTicket =
+            deps.backgroundTaskConcurrency.acquire({
+              model: deps.getModelForAgent?.(
+                input.pending.agentType,
+                input.pending.parentSessionId,
+              ),
+            });
+          // Fire-and-forget accounting, matching the after-hook: nobody
+          // awaits ticket.ready here, so a rejection (queue cancelled by
+          // disposal while waiting) must be marked handled.
+          void input.pending.concurrencyTicket.ready.catch(() => {});
+        }
+      }
+    }
+
+    const record = registerTaskOutputLaunch(
+      input.childTaskID,
+      input.pending,
+      input.exactCallConfirmed,
+      input.background,
+      deps,
+    );
+    if (!record) return undefined;
+    if (input.handledByWrapper === true) {
+      input.pending.registeredByWrapper = true;
+    }
+    deps.bindConcurrencyTicket?.(record.taskID, input.pending);
+    deps.clearRehydrateTombstone?.(input.childTaskID);
+    if (input.exactCallConfirmed) {
+      deps.backgroundJobSupervisor?.onLaunch(record);
+    }
+    deps.taskContextTracker.pendingManagedTaskIds.add(input.childTaskID);
+    // Preserves the after-hook launch-branch context order: board context
+    // files first, then the tracker-derived set, so the merge is identical.
+    deps.backgroundJobBoard.addContext(
+      input.childTaskID,
+      filterStaleContextFiles(deps.directory, [
+        ...(deps.backgroundJobBoard.get(input.childTaskID)?.contextFiles ?? []),
+        ...deps.taskContextTracker.contextFilesForPrompt(input.childTaskID),
+      ]),
+    );
+    if (input.state !== 'running') {
+      await deps.terminalGate.reconcile(record, {
+        kind: 'output',
+        status: {
+          taskID: input.childTaskID,
+          state: input.state,
+          timedOut: false,
+        },
+        origin: {
+          kind: 'native',
+          run: record,
+          callID: input.callID,
+          callIDConfirmed: input.exactCallConfirmed,
+        },
+      });
+    }
+    return record;
+  } catch (error) {
+    log('[task-session-manager] structured launch registration failed', {
+      taskID: input.childTaskID,
+      callID: input.callID,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    // v1 keeps the after-hook's historic fail-loud semantics (its outer
+    // finally still releases the pending, lease, and ticket); the v2 wrapper
+    // path must never let a registration failure corrupt the tool result.
+    if (input.handledByWrapper !== true) throw error;
     return undefined;
   }
 }

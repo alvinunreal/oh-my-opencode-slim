@@ -31,6 +31,12 @@ export interface PendingTaskCall {
   earlyRegisteredTaskID?: string;
   earlyRegistration?: EarlyTaskRegistration;
   earlyRegistrationRejected?: boolean;
+  /** Set by the v2 executor wrapper when it handled this call's delegated
+   *  (subagent) launch registration from the STRUCTURED executor result, so
+   *  the after-hook gates its launch-output and background-promotion branches
+   *  off (launch is registered exactly once on v2: in the wrapper). v1 never
+   *  sets this. */
+  registeredByWrapper?: boolean;
   /** Consumed without verified call identity (no-ID drain fallback or a
    *  window-shifted sole take): the label/objective may belong to a
    *  sibling call and must not be painted onto the board record. */
@@ -81,6 +87,11 @@ export interface PendingCallTracker {
     },
   ): PendingTaskCall | undefined;
   release(call: PendingTaskCall): void;
+  /** Read a pending call by its exact call ID WITHOUT consuming it. The v2
+   *  executor wrapper uses this to resolve the pending registered by the
+   *  before-hook (callID = context.id) and mark launch registration handled,
+   *  leaving the after-hook to consume and release it. No side effects. */
+  peekByCallId(callId: string | undefined): PendingTaskCall | undefined;
   peekByParent(parentSessionId: string): PendingTaskCall | undefined;
   peekByParentAndAgent(
     parentSessionId: string,
@@ -236,6 +247,12 @@ export function createPendingCallTracker(
 
     release(call: PendingTaskCall) {
       releaseCallLease(call);
+    },
+
+    /** Peek a pending call by exact call ID without removing it. */
+    peekByCallId(callId: string | undefined) {
+      if (!callId) return undefined;
+      return pendingCalls.get(callId);
     },
 
     /** Peek oldest pending call for a parent without removing it. */
