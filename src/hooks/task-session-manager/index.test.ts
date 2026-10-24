@@ -6286,7 +6286,9 @@ describe('task-session-manager hook', () => {
     const messages = createMessages('parent-1', 'continue');
     await transformMessages(hook, messages);
     expect(board.get('child-1')?.state).toBe('running');
-    expect(board.listReusable('parent-1')).toHaveLength(0);
+    expect(
+      board.resolveReusable('parent-1', 'child-1', 'explorer'),
+    ).toBeUndefined();
   });
 
   test('bare task id output without state does not create reusable job', async () => {
