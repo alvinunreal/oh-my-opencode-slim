@@ -65,10 +65,10 @@ import type { RevivedRunTracker } from './revived-run-tracker';
 import { createRuntimeStatusReconciler } from './runtime-status-reconciliation';
 import { createTaskContextTracker } from './task-context-tracker';
 import {
+  type DelegatedLaunchFromStructuredInput,
   handleToolExecuteAfter,
   handleToolExecuteBefore,
   registerDelegatedLaunchFromStructured,
-  type DelegatedLaunchFromStructuredInput,
 } from './tool-execute-hooks';
 
 export { BACKGROUND_JOB_BOARD_METADATA_KEY } from './board-injection';
@@ -777,9 +777,14 @@ export function createTaskSessionManagerHook(
      * passes through untouched.
      */
     'v2.registerDelegatedLaunchFromStructured': (
-      input: Omit<DelegatedLaunchFromStructuredInput, 'pending'>,
+      input: Omit<DelegatedLaunchFromStructuredInput, 'pending'> & {
+        parentSessionID: string;
+      },
     ): Promise<ReturnType<BackgroundJobBoard['get']>> => {
-      const pending = pendingCallTracker.peekByCallId(input.callID);
+      const pending = pendingCallTracker.peekByCallId(
+        input.callID,
+        input.parentSessionID,
+      );
       if (!pending) {
         log('[task-session-manager] v2 wrapper: pending call not found', {
           callID: input.callID,

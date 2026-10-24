@@ -3250,6 +3250,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           ] as
             | ((input: {
                 callID: string;
+                parentSessionID: string;
                 childTaskID: string;
                 state: 'running' | 'completed' | 'error' | 'cancelled';
                 background: boolean;

@@ -15,7 +15,7 @@ function recorder() {
   };
 }
 
-const ctx = { id: 'call_1' };
+const ctx = { id: 'call_1', sessionID: 'parent_1' };
 
 describe('createSubagentExecutorWrapper', () => {
   test('registers a running background launch from the structured result', async () => {
@@ -37,6 +37,7 @@ describe('createSubagentExecutorWrapper', () => {
     expect(rec.launches).toEqual([
       {
         callID: 'call_1',
+        parentSessionID: 'parent_1',
         childTaskID: 'ses_child',
         state: 'running',
         background: false,
@@ -153,6 +154,16 @@ describe('createSubagentExecutorWrapper', () => {
     expect(rec.launches).toHaveLength(0);
   });
 
+  test('fails open when the executor has no parent session identity', async () => {
+    const rec = recorder();
+    const wrapper = createSubagentExecutorWrapper({ register: rec.register });
+    const result = { metadata: { sessionID: 'ses_child' } };
+    expect(await wrapper.wrap(async () => result)({}, { id: 'call_1' })).toBe(
+      result,
+    );
+    expect(rec.launches).toEqual([]);
+  });
+
   test('registers a failed launch from the host failure sentence and rethrows the original error', async () => {
     const rec = recorder();
     const wrapper = createSubagentExecutorWrapper({ register: rec.register });
@@ -172,6 +183,7 @@ describe('createSubagentExecutorWrapper', () => {
     expect(rec.launches).toEqual([
       {
         callID: 'call_1',
+        parentSessionID: 'parent_1',
         childTaskID: 'ses_fail',
         state: 'error',
         background: false,

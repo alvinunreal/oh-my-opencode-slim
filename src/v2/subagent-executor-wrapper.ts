@@ -26,6 +26,8 @@ export type SubagentStructuredState =
 export interface SubagentStructuredLaunch {
   /** Tool.CallID of the wrapped call (`context.id`). */
   callID: string;
+  /** Tool call IDs are scoped to their parent session. */
+  parentSessionID: string;
   /** Child session/task ID from the structured executor result. */
   childTaskID: string;
   state: SubagentStructuredState;
@@ -78,6 +80,7 @@ function readString(value: unknown): string | undefined {
 
 function structuredLaunch(
   callID: string,
+  parentSessionID: string,
   result: unknown,
 ): SubagentStructuredLaunch | undefined {
   if (!result || typeof result !== 'object') return undefined;
@@ -100,6 +103,7 @@ function structuredLaunch(
     readString(shaped.content) ?? readString(shaped.output?.result);
   return {
     callID,
+    parentSessionID,
     childTaskID,
     state,
     background: shaped.metadata?.background === true,
@@ -109,6 +113,7 @@ function structuredLaunch(
 
 function threwLaunch(
   callID: string,
+  parentSessionID: string,
   error: unknown,
 ): SubagentStructuredLaunch | undefined {
   const message =
@@ -123,6 +128,7 @@ function threwLaunch(
   if (!childTaskID) return undefined;
   return {
     callID,
+    parentSessionID,
     childTaskID,
     state: match[1]?.toLowerCase() === 'cancelled' ? 'cancelled' : 'error',
     // A thrown failure never represents a promoted background run: the
@@ -178,15 +184,21 @@ export function createSubagentExecutorWrapper(
       }
       const run = original as (input: unknown, context: unknown) => unknown;
       const wrapped = async (input: unknown, context: unknown) => {
-        const callID = readString(
-          (context as { id?: unknown } | undefined)?.id,
-        );
+        const call = context as
+          | { id?: unknown; sessionID?: unknown }
+          | undefined;
+        const callID = readString(call?.id);
+        const parentSessionID = readString(call?.sessionID);
         try {
           const result = await run(input, context);
-          if (callID) registerSafely(structuredLaunch(callID, result));
+          if (callID && parentSessionID) {
+            registerSafely(structuredLaunch(callID, parentSessionID, result));
+          }
           return result;
         } catch (error) {
-          if (callID) registerSafely(threwLaunch(callID, error));
+          if (callID && parentSessionID) {
+            registerSafely(threwLaunch(callID, parentSessionID, error));
+          }
           throw error;
         }
       };

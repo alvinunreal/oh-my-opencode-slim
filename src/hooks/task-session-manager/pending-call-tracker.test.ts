@@ -133,6 +133,23 @@ describe('peekByParentAndAgent', () => {
 });
 
 describe('take', () => {
+  test('identical call IDs in different parents retain separate ownership', () => {
+    const tracker = createPendingCallTracker();
+    const first = pending({ parentSessionId: 'parent-1' });
+    const second = pending({ parentSessionId: 'parent-2' });
+    tracker.add(first);
+    tracker.add(second);
+
+    expect(tracker.peekByCallId('call-1')).toBeUndefined();
+    expect(tracker.take('call-1', 'wrong-parent')).toBeUndefined();
+    expect(tracker.peekByCallId('call-1', 'parent-1')).toBe(first);
+    expect(tracker.peekByCallId('call-1', 'parent-2')).toBe(second);
+    expect(tracker.take('call-1', 'parent-1')).toBe(first);
+    expect(tracker.hasConsumedCall('parent-1')).toBe(true);
+    expect(tracker.hasConsumedCall('parent-2')).toBe(false);
+    expect(tracker.take('call-1', 'parent-2')).toBe(second);
+  });
+
   test('without callID, refuses when multiple pendings match the parent', () => {
     const tracker = createPendingCallTracker();
     tracker.add(pending({ callId: 'a' }));

@@ -1986,7 +1986,12 @@ describe('BackgroundJobBoard', () => {
         agent: 'oracle',
         now: 100,
       });
-      board.markStatusUncertain('ses_uncertain', 'status unavailable', 150);
+      board.markStatusUncertain(
+        'ses_uncertain',
+        'status unavailable',
+        undefined,
+        150,
+      );
       board.markReconciled('ses_uncertain', 300);
 
       board.registerLaunch({
@@ -2396,18 +2401,12 @@ describe('BackgroundJobBoard', () => {
         agent: 'oracle',
         now: 100,
       });
-      board.claimWallClockDeadline({
-        taskID: 'ses_uncertain',
-        generation: board.get('ses_uncertain')?.generation ?? -1,
-        now: 150,
-      });
-      board.finalizeWallClockTimeout({
-        taskID: 'ses_uncertain',
-        generation: board.get('ses_uncertain')?.generation ?? -1,
-        statusUncertain: true,
-        resultSummary: 'status unavailable',
-        now: 200,
-      });
+      board.markStatusUncertain(
+        'ses_uncertain',
+        'status unavailable',
+        undefined,
+        150,
+      );
       board.markReconciled('ses_uncertain', 300);
 
       board.registerLaunch({
@@ -2509,9 +2508,10 @@ describe('BackgroundJobBoard', () => {
         'ses_second',
       );
 
-      const lease = board.acquireRelaunchLease(
+      const lease = board.acquireLease(
         'ses_second',
         board.get('ses_second')?.generation ?? -1,
+        'relaunch',
       );
       expect(lease).toBeDefined();
       board.registerLaunch({

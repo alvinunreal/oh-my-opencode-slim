@@ -21,7 +21,7 @@ The directory follows a **Facade + Strategy** pattern where `index.ts` acts as t
 - **input-wait-tracker.ts**: Provides the single `hasInputWait()` seam used by idle reconciliation and continuation evaluation. It combines local question/permission waits with the process-global explicit user-wait latch.
 - **child-input-wait.ts**: Tracks pending child requests and formats their details/guidance for both wakes and `task_status`. V2 forms carry summaries and host-UI/wait/cancel guidance; v1 questions retain answer options.
 - **continuation-model-selection.ts**: Normalizes current-session and chat-hook model shapes before forwarding runtime model and variant choices to idle continuation prompts.
-- **pending-call-tracker.ts**: Tracks in-flight task calls using a capped ordered map (`MAX_PENDING_TASK_CALLS`) to correlate launch output safely. Provides call ID generation, storage, retrieval, and cleanup for pending task invocations.
+- **pending-call-tracker.ts**: Tracks in-flight task calls in a capped ordered map keyed by `(parentSessionID, callID)`; identical native call IDs in different parents never overwrite or consume each other. The v2 executor wrapper peeks with both identities, and the after-hook consumes the same pending to release its resources.
 - **admission-runtime.ts**: Re-exports the per-directory admission runtime
   lease used by plugin generations; its scheduler and pending-call tracker are
   torn down only after the final unclaimed owner release.

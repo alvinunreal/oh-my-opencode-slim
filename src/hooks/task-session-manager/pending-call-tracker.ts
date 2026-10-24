@@ -91,7 +91,10 @@ export interface PendingCallTracker {
    *  executor wrapper uses this to resolve the pending registered by the
    *  before-hook (callID = context.id) and mark launch registration handled,
    *  leaving the after-hook to consume and release it. No side effects. */
-  peekByCallId(callId: string | undefined): PendingTaskCall | undefined;
+  peekByCallId(
+    callId: string | undefined,
+    parentSessionId?: string,
+  ): PendingTaskCall | undefined;
   peekByParent(parentSessionId: string): PendingTaskCall | undefined;
   peekByParentAndAgent(
     parentSessionId: string,
@@ -117,6 +120,20 @@ export function createPendingCallTracker(
 ) {
   const pendingCalls = new Map<string, PendingTaskCall>();
   let anonymousPendingCallId = 0;
+  const callKey = (parentSessionId: string, callId: string) =>
+    JSON.stringify([parentSessionId, callId]);
+  const keyForCall = (callId: string, parentSessionId?: string) => {
+    if (parentSessionId !== undefined) {
+      return callKey(parentSessionId, callId);
+    }
+    let found: string | undefined;
+    for (const [key, call] of pendingCalls) {
+      if (call.callId !== callId) continue;
+      if (found !== undefined) return undefined;
+      found = key;
+    }
+    return found;
+  };
 
   /** Parents where a pending was consumed through the unresolved-identity
    *  drain fallback. The sole-survivor argument for a later no-callID
@@ -135,7 +152,7 @@ export function createPendingCallTracker(
   const MAX_CONSUMED_CALLS = 200;
 
   const recordConsumed = (call: PendingTaskCall): void => {
-    consumedCalls.set(call.callId, {
+    consumedCalls.set(callKey(call.parentSessionId, call.callId), {
       parentSessionId: call.parentSessionId,
       agentType: call.agentType,
     });
@@ -180,10 +197,11 @@ export function createPendingCallTracker(
 
   const tracker: PendingCallTracker = {
     add(call: PendingTaskCall) {
-      const replaced = pendingCalls.get(call.callId);
+      const key = callKey(call.parentSessionId, call.callId);
+      const replaced = pendingCalls.get(key);
       if (replaced) releaseCallLease(replaced);
-      pendingCalls.delete(call.callId);
-      pendingCalls.set(call.callId, call);
+      pendingCalls.delete(key);
+      pendingCalls.set(key, call);
       while (pendingCalls.size > MAX_PENDING_TASK_CALLS) {
         const firstKey = pendingCalls.keys().next().value;
         if (firstKey === undefined) break;
@@ -205,6 +223,7 @@ export function createPendingCallTracker(
       // pending (a fenced take returns without consuming and must not
       // stain the pending for its owning generation).
       let unresolvedWindowTake = false;
+      let key: string | undefined;
       if (!callId && parentSessionId) {
         // Without a tool call ID a take can only be sound when exactly
         // one pending exists for the parent. "A sole survivor belongs
@@ -219,15 +238,16 @@ export function createPendingCallTracker(
         // guarded takeUnresolvedFirstMatch fallback.
         const sole = solePendingIdForParent(parentSessionId);
         if (!sole) return undefined;
-        callId = sole;
+        key = sole;
         // Window-shift propagation: an unresolved drain earlier in this
         // parent's burst means "sole survivor belongs to this call" no
         // longer proves identity — the consumed pending is flagged
         // unresolved below.
         unresolvedWindowTake = unresolvedDrainParents.has(parentSessionId);
       }
-      if (!callId) return undefined;
-      const pending = pendingCalls.get(callId);
+      key ??= callId ? keyForCall(callId, parentSessionId) : undefined;
+      if (!key) return undefined;
+      const pending = pendingCalls.get(key);
       if (
         pending?.earlyRegistration &&
         ownerBoard &&
@@ -235,7 +255,7 @@ export function createPendingCallTracker(
       ) {
         return undefined;
       }
-      pendingCalls.delete(callId);
+      pendingCalls.delete(key);
       if (pending && unresolvedWindowTake) {
         pending.identityUnresolved = true;
       }
@@ -249,10 +269,11 @@ export function createPendingCallTracker(
       releaseCallLease(call);
     },
 
-    /** Peek a pending call by exact call ID without removing it. */
-    peekByCallId(callId: string | undefined) {
+    /** Exact parent/call lookup; an unscoped ambiguous ID is never guessed. */
+    peekByCallId(callId: string | undefined, parentSessionId?: string) {
       if (!callId) return undefined;
-      return pendingCalls.get(callId);
+      const key = keyForCall(callId, parentSessionId);
+      return key === undefined ? undefined : pendingCalls.get(key);
     },
 
     /** Peek oldest pending call for a parent without removing it. */
