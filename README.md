@@ -282,6 +282,11 @@ If any agent fails to respond, check your provider authentication and config fil
 
 ## 🏛️ Meet the Pantheon
 
+> [!TIP]
+> **The Pantheon has a saga.** *The Chronicle of the Pantheon* tells where
+> these agents came from, starting in the emptiness before the world.
+> Read it at [ohmyopencodeslim.com/lore](https://ohmyopencodeslim.com/lore).
+
 ### 01. Orchestrator: The Embodiment Of Order
 
 <table>
