@@ -43,7 +43,7 @@ export interface OrchestratorPromptOptions {
   excludeDescriptions?: readonly string[];
   /** v1 only: `wait_for_user` is registered. v2 never registers it. */
   waitForUser?: boolean;
-  /** `backgroundJobs.orchestratorWake.enabled`: the wake scheduler can resume the session. */
+  /** `backgroundJobs.orchestratorWake.enabled`. Ignored on v2: no scheduler exists there. */
   wakeScheduler?: boolean;
   /** 'v2' on OpenCode v2 hosts; anything else renders v1 tool vocabulary. */
   hostFlavor?: string;
@@ -77,9 +77,13 @@ ${renderRoutingLines(disabledAgents, excludeDescriptions)}
 `
     : '';
 
-  const resumeChannel = wakeScheduler
-    ? 'completion notifications and the wake scheduler resume you'
-    : 'completion notifications resume you';
+  // v2 never builds a wake scheduler: the native background notifier owns
+  // terminal delivery, so promising a scheduler there names a resume channel
+  // that cannot exist.
+  const resumeChannel =
+    !v2 && wakeScheduler
+      ? 'completion notifications and the wake scheduler resume you'
+      : 'completion notifications resume you';
 
   const delegateTool = v2 ? 'subagent' : 'task';
 

@@ -106,6 +106,15 @@ export const CouncilPresetSchema = z
     return councillors;
   });
 
+/** Declared council keys; anything else is reported and dropped. */
+export const COUNCIL_CONFIG_KEYS: readonly string[] = [
+  'presets',
+  'default_preset',
+  'master',
+  'master_timeout',
+  'master_fallback',
+];
+
 /**
  * Top-level council configuration.
  *
@@ -136,6 +145,7 @@ export const CouncilConfigSchema = z
       .never({ error: 'council.master_fallback was removed' })
       .optional(),
   })
+  // Keep a typo non-fatal; the silence-aware loader reports dropped keys.
   .passthrough()
   .transform((data) => ({
     presets: data.presets,

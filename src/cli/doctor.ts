@@ -4,6 +4,7 @@ import {
   findPluginConfigPaths,
   mergePluginConfigs,
   normalizeDisabledArrayKeys,
+  reportUnknownCouncilKeys,
 } from '../config/loader';
 import {
   stripRemovedConfigKeys,
@@ -140,6 +141,9 @@ function checkConfigFile(
       console.warn(`[oh-my-opencode-slim] ${message}`);
     });
     normalizeDisabledArrayKeys(rawConfig, (message) => {
+      console.warn(`[oh-my-opencode-slim] ${message}`);
+    });
+    reportUnknownCouncilKeys(rawConfig, (message) => {
       console.warn(`[oh-my-opencode-slim] ${message}`);
     });
     const parseResult = PluginConfigSchema.safeParse(rawConfig);

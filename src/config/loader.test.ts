@@ -205,6 +205,66 @@ describe('loadPluginConfig', () => {
     });
   });
 
+  test('reports an unknown council key without discarding the config', () => {
+    const projectDir = path.join(tempDir, 'project');
+    writeProjectConfig(projectDir, {
+      council: {
+        presets: { review: { a: { model: 'test/model' } } },
+        defaultPreset: 'review',
+      },
+    });
+    const warnings: ConfigLoadWarning[] = [];
+
+    const config = loadPluginConfig(projectDir, {
+      silent: true,
+      onWarning: (warning) => warnings.push(warning),
+    });
+
+    expect(config.council?.presets?.review).toBeDefined();
+    expect(config.council?.default_preset).toBe('default');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({ kind: 'unknown-key' });
+    expect(warnings[0]?.message).toContain('council.defaultPreset');
+  });
+
+  test('stays quiet on a silent read with an unknown council key', () => {
+    const projectDir = path.join(tempDir, 'project');
+    writeProjectConfig(projectDir, {
+      council: {
+        presets: { review: { a: { model: 'test/model' } } },
+        defaultPreset: 'review',
+      },
+    });
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const config = loadPluginConfig(projectDir, { silent: true });
+      expect(config.council?.presets?.review).toBeDefined();
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('prints the unknown council key when the read is not silent', () => {
+    const projectDir = path.join(tempDir, 'project');
+    writeProjectConfig(projectDir, {
+      council: {
+        presets: { review: { a: { model: 'test/model' } } },
+        defaultPreset: 'review',
+      },
+    });
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      loadPluginConfig(projectDir);
+      const printed = warnSpy.mock.calls
+        .map((call) => String(call[0]))
+        .join('\n');
+      expect(printed).toContain('council.defaultPreset');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   test('attributes inherited preset errors to the layer defining the broken parent', () => {
     const workspace = path.join(tempDir, 'workspace');
     const nested = path.join(workspace, 'repo', 'worktree');

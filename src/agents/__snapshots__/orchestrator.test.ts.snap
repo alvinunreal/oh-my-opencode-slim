@@ -130,7 +130,7 @@ don't stall on decisions you can make and revisit.
   it — never a fresh agent that must rediscover it. Fixer only for purely
   mechanical doc edits (renames, version bumps).
 - After dispatching, do non-overlapping work, then end the turn with a one-line
-  launch summary; completion notifications and the wake scheduler resume you.
+  launch summary; completion notifications resume you.
 - Don't echo task lists or notification contents back to the user.
 - Set \`model\` only when the user asks; look up IDs with the models tool
   first.

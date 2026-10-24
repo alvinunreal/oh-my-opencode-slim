@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { stripJsonComments } from '../cli/config-io';
 import { getConfigSearchDirs } from '../cli/paths';
 import { DEFAULT_DISABLED_AGENTS } from './constants';
+import { COUNCIL_CONFIG_KEYS } from './council-schema';
 import type { ResolvedPresetMap } from './presets';
 import {
   deepMerge,
@@ -51,6 +52,7 @@ export type ConfigLoadWarningKind =
   | 'read-error'
   | 'missing-preset'
   | 'normalized'
+  | 'unknown-key'
   | 'removed-key';
 
 /**
@@ -395,6 +397,21 @@ export function loadPluginConfigFromPath(
   return config ? normalizePresetDeclarations(config) : null;
 }
 
+/**
+ * Council keys the schema drops silently: it cannot see whether this read
+ * asked for silence, so the reporter (loader or doctor) decides.
+ */
+export function reportUnknownCouncilKeys(
+  rawConfig: unknown,
+  emit: (message: string) => void,
+): void {
+  if (!isPlainRecord(rawConfig) || !isPlainRecord(rawConfig.council)) return;
+  for (const key of Object.keys(rawConfig.council)) {
+    if (COUNCIL_CONFIG_KEYS.includes(key)) continue;
+    emit(`Config key "council.${key}" is unknown and ignored.`);
+  }
+}
+
 /** Validate a layer without changing its editable preset declaration syntax. */
 export function loadRawPluginConfigFromPath(
   configPath: string,
@@ -426,47 +443,40 @@ export function loadRawPluginConfigFromPath(
       }
       return null;
     }
+    // Every non-fatal fix is reported the same way: onWarning first, then the
+    // console unless this read asked for silence.
+    const emitWarning = (
+      kind: ConfigLoadWarningKind,
+      message: string,
+    ): void => {
+      options?.onWarning?.({ path: configPath, kind, message });
+      if (!options?.silent) console.warn(`[oh-my-opencode-slim] ${message}`);
+    };
+
     // Drop keys removed in this version before schema validation: a stale
     // removed key must not invalidate the whole file (and silently discard
     // every other user setting). Reported per key, not migrated.
-    stripRemovedConfigKeys(rawConfig, (message) => {
-      options?.onWarning?.({
-        path: configPath,
-        kind: 'removed-key',
-        message,
-      });
-      if (!options?.silent) {
-        console.warn(`[oh-my-opencode-slim] ${message}`);
-      }
-    });
+    stripRemovedConfigKeys(rawConfig, (message) =>
+      emitWarning('removed-key', message),
+    );
 
     // Same for enum members removed from disabled_* arrays: strip them
     // before the value enum rejects the whole file, reported per value.
-    stripRemovedDisabledValues(rawConfig, (message) => {
-      options?.onWarning?.({
-        path: configPath,
-        kind: 'removed-key',
-        message,
-      });
-      if (!options?.silent) {
-        console.warn(`[oh-my-opencode-slim] ${message}`);
-      }
-    });
+    stripRemovedDisabledValues(rawConfig, (message) =>
+      emitWarning('removed-key', message),
+    );
 
     // Normalize disabled_* config keys before schema validation so a
     // non-array value does not reject the whole config object (which would
     // silently discard every other user setting). Reported with the
     // 'normalized' kind so TUI/doctor do not treat a fixed config as invalid.
-    normalizeDisabledArrayKeys(rawConfig, (message) => {
-      options?.onWarning?.({
-        path: configPath,
-        kind: 'normalized',
-        message,
-      });
-      if (!options?.silent) {
-        console.warn(`[oh-my-opencode-slim] ${message}`);
-      }
-    });
+    normalizeDisabledArrayKeys(rawConfig, (message) =>
+      emitWarning('normalized', message),
+    );
+
+    reportUnknownCouncilKeys(rawConfig, (message) =>
+      emitWarning('unknown-key', message),
+    );
 
     const result = PluginConfigSchema.safeParse(rawConfig);
 

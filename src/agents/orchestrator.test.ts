@@ -72,14 +72,18 @@ describe('orchestrator prompt: blocking on the user', () => {
 
 describe('orchestrator prompt: options', () => {
   test('wake scheduler off drops the scheduler from the resume promise', () => {
-    for (const render of [v1, v2]) {
-      expect(render()).toContain(
-        'completion notifications and the wake scheduler resume you',
-      );
-      const off = render({ wakeScheduler: false });
-      expect(off).toContain('completion notifications resume you');
-      expect(off).not.toContain('wake scheduler');
-    }
+    expect(v1()).toContain(
+      'completion notifications and the wake scheduler resume you',
+    );
+    const off = v1({ wakeScheduler: false });
+    expect(off).toContain('completion notifications resume you');
+    expect(off).not.toContain('wake scheduler');
+  });
+
+  test('v2 never promises the wake scheduler', () => {
+    expect(v2()).toContain('completion notifications resume you');
+    expect(v2()).not.toContain('wake scheduler');
+    expect(v2({ wakeScheduler: true })).toBe(v2());
   });
 
   test('disabledAgents and excludeDescriptions filter routing lines', () => {
