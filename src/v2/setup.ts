@@ -1651,7 +1651,10 @@ export function createSessionPromptBridge(
   /** Latest known agent/model per session (learned from context). */
   const sessionState = new Map<
     string,
-    { agent?: string; model?: { providerID: string; modelID: string } }
+    {
+      agent?: string;
+      model?: { providerID: string; modelID: string; variant?: string };
+    }
   >();
   /** First admitted prompt per session, deferred until the agent is
    * learned from a context event (bounded: one per session). */
@@ -1761,7 +1764,8 @@ export function createSessionPromptBridge(
           (previous.model !== undefined &&
             model !== undefined &&
             previous.model.providerID === model.providerID &&
-            previous.model.modelID === model.modelID));
+            previous.model.modelID === model.modelID &&
+            previous.model.variant === model.variant));
       if (!unchanged) {
         sessionState.set(sessionID, {
           ...(agent ? { agent } : {}),

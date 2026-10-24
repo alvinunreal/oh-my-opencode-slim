@@ -5468,6 +5468,70 @@ describe('plugin foreground fallback host gating', () => {
     }
   });
 
+  test('chat.message live model syncs the sidebar projection (v2 bridge)', async () => {
+    const hooks = await createHooks();
+    try {
+      // The v2 prompt bridge (createSessionPromptBridge) forwards
+      // {agent, model:{providerID, modelID, variant?}} — on v2 it is the
+      // only event-sourced carrier of the live session model, because the
+      // usage-synthesized message.updated has no agent/model fields.
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'ses-live-model',
+          agent: 'orchestrator',
+          model: {
+            providerID: 'zai-coding-plan',
+            modelID: 'glm-5.3-highspeed',
+            variant: 'max',
+          },
+          messageID: 'msg-live-1',
+        } as never,
+        {} as never,
+      );
+      expect(readTuiSnapshot(projectDir).agentModels.orchestrator).toBe(
+        'zai-coding-plan/glm-5.3-highspeed',
+      );
+      expect(readTuiSnapshot(projectDir).agentVariants.orchestrator).toBe(
+        'max',
+      );
+
+      // A re-selection without a variant is the live choice too (model
+      // default): it must clear the stale variant, and the unchanged-write
+      // short-circuit in updateSnapshot must not block a genuinely
+      // different projection.
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'ses-live-model',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', modelID: 'gpt-6' },
+          messageID: 'msg-live-2',
+        } as never,
+        {} as never,
+      );
+      expect(readTuiSnapshot(projectDir).agentModels.orchestrator).toBe(
+        'openai/gpt-6',
+      );
+      expect(
+        readTuiSnapshot(projectDir).agentVariants.orchestrator,
+      ).toBeUndefined();
+
+      // A delivery without any model leaves the projection untouched.
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'ses-live-model',
+          agent: 'orchestrator',
+          messageID: 'msg-live-3',
+        } as never,
+        {} as never,
+      );
+      expect(readTuiSnapshot(projectDir).agentModels.orchestrator).toBe(
+        'openai/gpt-6',
+      );
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
   test('v2 host with fallback explicitly disabled: no notice, no steering', async () => {
     await Bun.write(
       `${projectDir}/oh-my-opencode-slim.json`,

@@ -3413,6 +3413,26 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             ...(liveVariant ? { variant: liveVariant } : {}),
             variantObserved: true,
           });
+          // Sidebar live-model projection. On v2 the prompt bridge
+          // (createSessionPromptBridge) is the only event-sourced carrier of
+          // agent+model+variant together — the usage-synthesized
+          // message.updated has none of them — so the projection rides this
+          // hook. A missing variant is the live choice too (model default):
+          // no policy fallback, or a variant-only re-selection could never
+          // clear the row. No caller-side dedupe: updateSnapshot short-
+          // circuits unchanged writes through its memo, which also keeps
+          // this path in step with recordTuiAgentModels bulk replacement
+          // and retries after a failed write.
+          if (agent) {
+            recordTuiAgentModel(
+              {
+                agentName: agent,
+                model,
+                variant: liveVariant ?? null,
+              },
+              tuiActivityDirectory(input.sessionID),
+            );
+          }
         }
         backgroundTaskConcurrency.migrateTask(input.sessionID, model);
       }

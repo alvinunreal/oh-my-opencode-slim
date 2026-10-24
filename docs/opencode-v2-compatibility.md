@@ -437,7 +437,7 @@ side cannot be observed.
 | Slash commands `/deepwork` `/reflect` `/loop` | ✅ | ✅ marker round-trip | — |
 | `/interview` | ✅ | ✅ marker command + trailing-message context bridge | — |
 | Message transforms (phase reminder, skills filter, image routing, display-name rewrite) | ✅ | ✅ via the single context hook | — |
-| Event handling (session tracking, lifecycle, cache telemetry) | ✅ | ✅ event pump + additive v2→v1 synthesis | — |
+| Event handling (session tracking, lifecycle, cache telemetry) | ✅ | ✅ event pump + additive v2→v1 synthesis | The synthesized usage `message.updated` carries no agent/model fields, so live session-model observation (sidebar model projection + `sessionMetadata` tracking) rides the prompt-bridge `chat.message` deliveries (agent + model + variant together; unchanged writes are short-circuited by the tui-state memo); the v2 TUI additionally overlays the picker's live selection on root orchestrator rows until the next prompt commits it. The static projection is republished on `config()` re-invocations |
 | Tool execute hooks (apply-patch recovery, task-session, json-recovery) | ✅ | ✅ `createToolExecuteBridges` with subagent→task normalization | — |
 | Built-in MCPs (context7, gh_grep) auto-registered | ✅ | ✅ `ctx.mcp.transform` | `ctx.mcp.transform` is present in all v2.0.x stable hosts; the runtime capability probe is belt-and-suspenders |
 | Background-job state persistence (tombstones, deletion epochs) | ➖ process-local | ✅ via `ctx.storage` | optional domain; absent → pure in-memory fallback, zero behavior change (see [Background job state](#background-job-state-rehydrate-probe-and-persistence)) |

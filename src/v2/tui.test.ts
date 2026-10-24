@@ -6,7 +6,11 @@ import { testRender } from '@opentui/solid';
 import { createSignal } from 'solid-js';
 import type { PluginConfig } from '../config';
 import baseTui from '../tui';
-import { recordTuiAgentActivity, recordTuiSessionParent } from '../tui-state';
+import {
+  recordTuiAgentActivity,
+  recordTuiAgentModels,
+  recordTuiSessionParent,
+} from '../tui-state';
 import {
   notifyConfigChanged,
   registerConfigChangeListener,
@@ -708,6 +712,138 @@ describe('v2 tui preset plugin', () => {
           presetName: null,
           affects: 'future-children-only',
         });
+        cleanup?.();
+        screen?.renderer.destroy();
+      }
+    });
+
+    test('sidebar overlays the picker selection only on a root orchestrator session', async () => {
+      writeUserConfig(makeConfig() as unknown as Record<string, unknown>);
+      process.env.XDG_DATA_HOME = path.join(configHome, 'overlay-data');
+      process.env.OPENCODE_LOG_DIR = path.join(configHome, 'logs');
+      process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '60000';
+      // Static on-disk projection: what the sidebar shows WITHOUT the overlay.
+      recordTuiAgentModels(
+        { agentModels: { orchestrator: 'zai-coding-plan/glm-5.3' } },
+        projectDir,
+      );
+      const [route, setRoute] = createSignal({
+        type: 'session',
+        sessionID: 'root-a',
+      });
+      const stub = makeSetupCtx();
+      const ui = stub.ctx.ui as {
+        router: { current: () => unknown };
+        model?: unknown;
+      };
+      ui.router.current = route;
+      ui.model = {
+        current: () => ({
+          providerID: 'opencode-go',
+          modelID: 'gemini-x',
+          variant: 'high',
+        }),
+      };
+      stub.ctx.data = {
+        session: {
+          get: (sessionID: string) =>
+            sessionID === 'root-a'
+              ? { agent: 'orchestrator' }
+              : sessionID === 'child-1'
+                ? { parentID: 'root-a', agent: 'explorer' }
+                : { agent: 'general' },
+        },
+      };
+      let notifyRendered = () => {};
+      const rendered = new Promise<void>((resolve) => {
+        notifyRendered = resolve;
+      });
+      stub.ctx.renderer = { requestRender: () => notifyRendered() };
+      stub.ctx.client = {
+        rpc: () => ({
+          read: async (input: { sessionID: string }) => ({
+            sessionID: input.sessionID,
+            status: 'unbound',
+            presetName: null,
+            affects: 'future-children-only',
+          }),
+        }),
+      };
+      let cleanup: (() => void) | undefined;
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      /**
+       * Flip the preset row (a real config-state change) to re-drive
+       * refreshSidebar, then poll the rendered frame until it shows the
+       * expected model. The refresh itself is event-driven; waitFor only
+       * bridges the renderOnce/frame microtask gap.
+       */
+      const assertRouteShows = async (
+        preset: string,
+        nextRoute: unknown,
+        expectedModel: string,
+        notExpectedModel: string,
+      ) => {
+        writeUserConfig({
+          ...makeConfig(),
+          preset,
+        } as unknown as Record<string, unknown>);
+        setRoute(nextRoute as { type: string; sessionID?: string });
+        await notifyConfigChanged(projectDir, 'overlay-refresh');
+        await waitFor(() => {
+          void screen?.renderOnce();
+          return screen?.captureCharFrame().includes(expectedModel) === true;
+        });
+        const frame = screen?.captureCharFrame() ?? '';
+        expect(frame).not.toContain(notExpectedModel);
+      };
+      try {
+        cleanup = await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        );
+        await rendered;
+        const sidebar = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        if (!sidebar?.render) throw new Error('Sidebar slot missing');
+        screen = await testRender(() => sidebar.render?.() as never, {
+          width: 80,
+          height: 32,
+        });
+        await screen.renderOnce();
+        // Root orchestrator session: the picker selection replaces the
+        // static row immediately, before any prompt commits the switch.
+        expect(screen.captureCharFrame()).toContain('gemini-x');
+        expect(screen.captureCharFrame()).not.toContain('glm-5.3');
+
+        // Every leg starts from a root-a frame showing gemini-x, so each
+        // route change below has an observable transition (no vacuous
+        // passes) — child sessions, other root agents, and the home screen
+        // all lift the overlay back to the static on-disk model.
+        await assertRouteShows(
+          'cheap',
+          { type: 'session', sessionID: 'child-1' },
+          'glm-5.3',
+          'gemini-x',
+        );
+        await assertRouteShows(
+          'balanced',
+          { type: 'session', sessionID: 'root-a' },
+          'gemini-x',
+          'glm-5.3',
+        );
+        await assertRouteShows(
+          'cheap',
+          { type: 'session', sessionID: 'root-b' },
+          'glm-5.3',
+          'gemini-x',
+        );
+        await assertRouteShows(
+          'balanced',
+          { type: 'home', sessionID: '' },
+          'glm-5.3',
+          'gemini-x',
+        );
+      } finally {
         cleanup?.();
         screen?.renderer.destroy();
       }

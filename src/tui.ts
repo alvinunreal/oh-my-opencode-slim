@@ -1817,6 +1817,11 @@ interface V2TuiContext extends V2PresetManagerContext {
   client?: unknown;
   data?: V2PresetManagerContext['data'] & {
     on?: (type: string, handler: (event: unknown) => void) => unknown;
+    session?: {
+      get?: (
+        sessionID: string,
+      ) => { parentID?: unknown; agent?: unknown } | undefined;
+    };
   };
   renderer: { requestRender: () => void; getSelection?: () => unknown };
   theme: V2TuiThemeTokens;
@@ -1826,6 +1831,12 @@ interface V2TuiContext extends V2PresetManagerContext {
       current: () => { type?: string; sessionID?: string };
       /** Optional navigation capability; absent on hosts that don't expose it. */
       navigate?: (route: { type: string; sessionID: string }) => void;
+    };
+    model?: {
+      /** The prompt's selected model; variant undefined = model default. */
+      current?: () =>
+        | { providerID: string; modelID: string; variant?: string }
+        | undefined;
     };
   };
 }
@@ -1872,6 +1883,93 @@ interface SidebarRuntimeAdapter {
   ) => SidebarPresetRow | undefined;
   readSessionPreset?: (directory: string, sessionID: string) => Promise<string>;
   onMultiplexerConfig?: (type: MultiplexerType) => void;
+  /** v2 hosts only: the prompt's live selected model while the visible
+   * route is a root orchestrator session. Overlays the sidebar's
+   * orchestrator row so the picker's choice shows before the first turn
+   * on the new model commits it to tui-state. */
+  getSelectedRootModel?: () =>
+    | { model: string; variant?: string | undefined }
+    | undefined;
+}
+
+/**
+ * Resolve the live picker selection that may overlay the orchestrator row.
+ *
+ * Gate 1 — route: only a session route yields a sessionID; the home
+ * screen's selection belongs to a session that does not exist yet.
+ * Gate 2 — session shape: child sessions (parentID) own their own agent
+ * rows, and a root session under another primary agent is not the
+ * plugin's orchestrator row.
+ * Gate 3 — selection shape: the host's picker payload must carry usable
+ * providerID/modelID strings.
+ */
+export function resolveSelectedRootModel(input: {
+  route: { type?: string; sessionID?: string } | undefined;
+  sessionInfo?: { parentID?: unknown; agent?: unknown } | undefined;
+  selected?:
+    | { providerID?: unknown; modelID?: unknown; variant?: unknown }
+    | undefined;
+}): { model: string; variant?: string | undefined } | undefined {
+  const sessionID = input.route
+    ? resolveRouteSessionId(input.route)
+    : undefined;
+  if (!sessionID) return undefined;
+  const info = input.sessionInfo;
+  if (!info || info.parentID) return undefined;
+  if (typeof info.agent === 'string' && info.agent !== 'orchestrator') {
+    return undefined;
+  }
+  const selected = input.selected;
+  if (
+    !selected ||
+    typeof selected.providerID !== 'string' ||
+    !selected.providerID ||
+    typeof selected.modelID !== 'string' ||
+    !selected.modelID
+  ) {
+    return undefined;
+  }
+  return {
+    model: `${selected.providerID}/${selected.modelID}`,
+    ...(typeof selected.variant === 'string' && selected.variant
+      ? { variant: selected.variant }
+      : {}),
+  };
+}
+
+/**
+ * Overlay the host picker's live selected model onto the orchestrator row.
+ *
+ * v2 defers `session.switchModel` until the next prompt commits it, so the
+ * server-side projection (tui-state) lags one turn behind the picker. This
+ * TUI-side overlay closes that window for root orchestrator sessions — the
+ * one row whose model the user just changed with their own hands. Returns
+ * the input snapshot (reference-equal) when there is nothing to change, so
+ * unchanged overlays never trip the snapshot change check.
+ */
+export function overlaySelectedRootModel(
+  snapshot: TuiSnapshot,
+  selected: { model: string; variant?: string | undefined } | undefined,
+): TuiSnapshot {
+  if (!selected?.model) return snapshot;
+  if (snapshot.agentModels.orchestrator === undefined) return snapshot;
+  if (
+    snapshot.agentModels.orchestrator === selected.model &&
+    snapshot.agentVariants.orchestrator === (selected.variant ?? undefined)
+  ) {
+    return snapshot;
+  }
+  const agentVariants = { ...snapshot.agentVariants };
+  if (typeof selected.variant === 'string' && selected.variant) {
+    agentVariants.orchestrator = selected.variant;
+  } else {
+    delete agentVariants.orchestrator;
+  }
+  return {
+    ...snapshot,
+    agentModels: { ...snapshot.agentModels, orchestrator: selected.model },
+    agentVariants,
+  };
 }
 
 /** One refresh/animation/interaction lifecycle for both host slot contracts. */
@@ -1949,6 +2047,13 @@ function createSidebarRuntime(adapter: SidebarRuntimeAdapter) {
       remoteCache,
     );
     if (disposed) return;
+    // Fold the live picker selection in BEFORE the change check so a new
+    // selection triggers requestRender on this poll (server-side state only
+    // learns the switch when the next prompt commits it).
+    nextSnapshot = overlaySelectedRootModel(
+      nextSnapshot,
+      adapter.getSelectedRootModel?.(),
+    );
     const namesBefore = modelNamesCache.names;
     await hydrateModelNames(adapter.client, currentDirectory, modelNamesCache);
     if (!isRefreshCurrent(currentDirectory, adapter.getDirectory())) {
@@ -2200,6 +2305,17 @@ async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
     hostFlavor: 'v2',
     getDirectory: () => ctx.location?.directory ?? process.cwd(),
     getVisibleSession: () => resolveRouteSessionId(ctx.ui.router.current()),
+    getSelectedRootModel: () => {
+      const route = ctx.ui.router.current();
+      const sessionID = resolveRouteSessionId(route);
+      return resolveSelectedRootModel({
+        route,
+        sessionInfo: sessionID
+          ? ctx.data?.session?.get?.(sessionID)
+          : undefined,
+        selected: ctx.ui.model?.current?.(),
+      });
+    },
     client: ctx.client,
     renderer: ctx.renderer,
     theme: () => v2ThemeView(ctx.theme),
