@@ -898,7 +898,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
     backgroundJobBoard = new BackgroundJobBoard({
       maxReusablePerAgent: runtime.backgroundJobs.maxSessionsPerAgent,
-      delegationTool: delegation.tool,
       deferNumberedAliases: true,
       // Terminal-session GC (#1387 P2): when a retention trim evicts a
       // terminal or retained-stopped record, remove the underlying host

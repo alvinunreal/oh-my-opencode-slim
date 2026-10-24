@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import {
   DEFAULT_CONTEXT_FILE_CAP,
   DEFAULT_MAX_SESSIONS_PER_AGENT,
-  formatSystemReminder,
 } from '../config/constants';
 import { escapeRegExp } from './agent-variant';
 import {
@@ -73,8 +72,6 @@ export interface BackgroundJobRecord {
   timedOut: boolean;
   recoverableAfterLiveBusy: boolean;
   statusUncertain: boolean;
-  /** When status became unconfirmable; drives stale-uncertain removal from the board render. */
-  statusUncertainSince?: number;
   cancellationRequested: boolean;
   terminalUnreconciled: boolean;
   launchedAt: number;
@@ -88,7 +85,6 @@ export interface BackgroundJobRecord {
   taskGeneration: number;
   /** First launch observation for the current generation. */
   runStartedAt: number;
-  updatedAt: number;
   lastLiveBusyAt?: number;
   completedAt?: number;
   resultSummary?: string;
@@ -119,10 +115,6 @@ export interface BackgroundJobRecord {
 
 export interface BackgroundJobBoardOptions {
   maxReusablePerAgent?: number;
-  /** Delegation tool name for model-visible recovery guidance: `subagent` on
-   * v2 hosts, `task` on v1/default. Only the two retained/recovery wording
-   * lines vary; the board stays v1 by default. */
-  delegationTool?: string;
   /**
    * Production boards number only parents created while they run (see
    * noteSessionCreated); other parents' new records use the task ID as
@@ -217,8 +209,6 @@ export interface BackgroundJobLaunchInput {
   pluginLaunched?: true;
   /** Lease proving that this is an authorized same-ID relaunch observation. */
   relaunchLease?: BackgroundJobLease;
-  /** Backwards-compatible generic spelling for the relaunch lease. */
-  lease?: BackgroundJobLease;
   now?: number;
 }
 
@@ -445,7 +435,6 @@ export class BackgroundJobBoard {
   private launchIdentityListeners: LaunchIdentityListener[] = [];
 
   private readonly maxReusablePerAgent: number;
-  private readonly delegationTool: string;
   private readonly deferNumberedAliases: boolean;
   private readonly onEvictedSession?:
     | ((evicted: BackgroundJobEvictedSession) => void)
@@ -457,7 +446,6 @@ export class BackgroundJobBoard {
   constructor(options: BackgroundJobBoardOptions = {}) {
     this.maxReusablePerAgent =
       options.maxReusablePerAgent ?? DEFAULT_MAX_SESSIONS_PER_AGENT;
-    this.delegationTool = options.delegationTool ?? 'task';
     this.deferNumberedAliases = options.deferNumberedAliases === true;
     this.onEvictedSession = options.onEvictedSession;
   }
@@ -586,7 +574,7 @@ export class BackgroundJobBoard {
   ): BackgroundJobRecord {
     const now = input.now ?? Date.now();
     const existing = this.jobs.get(input.taskID);
-    const requestedLease = input.relaunchLease ?? input.lease;
+    const requestedLease = input.relaunchLease;
     const liveLease = this.liveLeases.get(input.taskID);
 
     if (requestedLease) {
@@ -667,8 +655,6 @@ export class BackgroundJobBoard {
         timedOut: false,
         recoverableAfterLiveBusy: false,
         statusUncertain: false,
-        // A relaunch starts a fresh episode: no stale demotion clock.
-        statusUncertainSince: undefined,
         cancellationRequested: false,
         terminalUnreconciled: false,
         completedAt: undefined,
@@ -681,7 +667,6 @@ export class BackgroundJobBoard {
         runStartedAt: now,
         lastLiveBusyAt: now,
         lastUsedAt: now,
-        updatedAt: now,
       } satisfies BackgroundJobRecord;
       this.setJob(updated);
       this.persistBackgroundChild(updated, {});
@@ -757,7 +742,6 @@ export class BackgroundJobBoard {
       terminalState: input.terminalState,
       terminalRevision: 1,
       completedAt: input.updatedAt,
-      updatedAt: input.updatedAt,
       lastUsedAt: input.updatedAt,
       resultSummary: input.resultSummary,
     };
@@ -807,7 +791,6 @@ export class BackgroundJobBoard {
       runStartedAt: now,
       lastLiveBusyAt: now,
       lastUsedAt: now,
-      updatedAt: now,
       alias:
         input.adopted || !this.isNumberedAliasReady(input.parentSessionID)
           ? input.taskID
@@ -909,7 +892,6 @@ export class BackgroundJobBoard {
       statusUncertain: input.statusUncertain ?? false,
       terminalUnreconciled: terminal ? true : existing.terminalUnreconciled,
       terminalRevision: existing.terminalRevision + (terminal ? 1 : 0),
-      updatedAt: now,
       completedAt: terminal
         ? (existing.completedAt ?? now)
         : existing.completedAt,
@@ -956,7 +938,6 @@ export class BackgroundJobBoard {
     const updated: BackgroundJobRecord = {
       ...existing,
       state: 'running',
-      updatedAt: now,
       launchedAt: existing.state === 'running' ? existing.launchedAt : now,
       // A terminal/reconciled row observed live again is a genuinely new
       // execution: the per-run fence must move with it. Repeated busy
@@ -968,8 +949,6 @@ export class BackgroundJobBoard {
       recoverableAfterLiveBusy:
         existing.recoverableAfterLiveBusy || existing.timedOut,
       statusUncertain: false,
-      // A live observation restarts the demotion clock.
-      statusUncertainSince: undefined,
       terminalUnreconciled: false,
       terminalRevision:
         existing.terminalRevision + (existing.state === 'running' ? 0 : 1),
@@ -1025,7 +1004,6 @@ export class BackgroundJobBoard {
       recoverableAfterLiveBusy: false,
       statusUncertain: false,
       terminalUnreconciled: true,
-      updatedAt: now,
       completedAt: existing.completedAt ?? now,
       resultSummary,
       lastStatusError: undefined,
@@ -1039,7 +1017,6 @@ export class BackgroundJobBoard {
     taskID: string,
     lastStatusError: string,
     expectedGeneration?: number,
-    now = Date.now(),
   ): BackgroundJobRecord | undefined {
     const existing = this.jobs.get(taskID);
     if (existing?.state !== 'running') return existing;
@@ -1052,14 +1029,7 @@ export class BackgroundJobBoard {
     const updated: BackgroundJobRecord = {
       ...existing,
       statusUncertain: true,
-      // Stamp the episode start once; a confirmed observation restarts the
-      // clock on re-entry. Paths flagging uncertainty elsewhere leave the
-      // stamp unset — the renderer falls back to updatedAt.
-      statusUncertainSince: existing.statusUncertain
-        ? (existing.statusUncertainSince ?? now)
-        : now,
       lastStatusError,
-      updatedAt: now,
     };
     this.setJob(updated);
     return updated;
@@ -1092,7 +1062,6 @@ export class BackgroundJobBoard {
         ...existing,
         terminalUnreconciled: false,
         statusUncertain: false,
-        updatedAt: now,
         lastUsedAt: now,
       };
       this.setJob(updated);
@@ -1105,7 +1074,6 @@ export class BackgroundJobBoard {
       state: 'reconciled',
       terminalUnreconciled: false,
       statusUncertain: false,
-      updatedAt: now,
       lastUsedAt: now,
       terminalState: existing.terminalState ?? terminalStateOf(existing.state),
     };
@@ -1164,7 +1132,6 @@ export class BackgroundJobBoard {
       statusUncertain: false,
       cancellationRequested: true,
       terminalUnreconciled: true,
-      updatedAt: now,
       completedAt: existing.completedAt ?? now,
       terminalState: 'cancelled',
       resultSummary: summary,
@@ -1348,7 +1315,6 @@ export class BackgroundJobBoard {
     this.setJob({
       ...job,
       lastUsedAt: usedAt,
-      updatedAt: now,
     });
   }
 
@@ -1463,10 +1429,6 @@ export class BackgroundJobBoard {
       this.notifyTerminalPublication(taskID);
     }
     return promoted;
-  }
-
-  private listReusable(parent?: string): BackgroundJobRecord[] {
-    return this.list(parent).filter((j) => isReusable(j));
   }
 
   /** Sessions the sidebar may surface as navigation destinations: canonical
@@ -1664,14 +1626,12 @@ export class BackgroundJobBoard {
         input.state === 'stopped'
           ? existing.terminalRevision
           : existing.terminalRevision + 1,
-      updatedAt: now,
       completedAt: existing.completedAt ?? now,
       terminalState: input.state === 'stopped' ? undefined : input.state,
       ...(input.resultSummary !== undefined
         ? { resultSummary: input.resultSummary }
         : {}),
       statusUncertain: false,
-      statusUncertainSince: undefined,
       lastStatusError: undefined,
       verifiedRetainedRound: true,
       recoveredAtStartup: true,
@@ -1740,7 +1700,6 @@ export class BackgroundJobBoard {
       activityRevision: 0,
       taskGeneration: 1,
       runStartedAt: launchedAt,
-      updatedAt: observedAt,
       lastUsedAt: observedAt,
       ...(completedAt !== undefined ? { completedAt } : {}),
       ...(input.resultSummary !== undefined

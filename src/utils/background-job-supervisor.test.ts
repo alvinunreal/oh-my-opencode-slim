@@ -72,7 +72,7 @@ describe('BackgroundJobSupervisor', () => {
     const { board, supervisor, timers, abort } = createSupervisor();
     const first = launch(board, true);
     supervisor.onLaunch(first);
-    supervisor.onLaunch({ ...first, updatedAt: 80, lastLiveBusyAt: 80 });
+    supervisor.onLaunch({ ...first, lastLiveBusyAt: 80 });
 
     await timers.advanceTo(100);
 

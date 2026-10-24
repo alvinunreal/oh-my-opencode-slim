@@ -1,7 +1,6 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import {
   BackgroundJobBoard,
-  type BackgroundJobExecution,
   type BackgroundJobSupervisor,
   type BackgroundTaskConcurrency,
   clearBackgroundJobSuppression,

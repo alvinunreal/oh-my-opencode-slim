@@ -287,7 +287,7 @@ describe('BackgroundJobBoard', () => {
       if (!current) throw new Error('missing current record');
       board.markRunningFromLiveSession(
         run.taskID,
-        current.updatedAt + 1,
+        (current.completedAt ?? current.runStartedAt) + 1,
         run.generation,
         current.terminalRevision,
       );
@@ -702,7 +702,6 @@ describe('BackgroundJobBoard', () => {
     expect(board.get('ses_1')).toMatchObject({
       state: 'reconciled',
       terminalUnreconciled: false,
-      updatedAt: 300,
     });
     expect(board.resolveReusable('parent-1', 'ses_1', 'oracle')).toBeDefined();
   });
@@ -883,7 +882,7 @@ describe('BackgroundJobBoard', () => {
       );
     }
 
-    expect(board.listReusable('parent-1').map((job) => job.taskID)).toEqual(
+    expect(board.list('parent-1').map((job) => job.taskID)).toEqual(
       expect.arrayContaining(['ses_cancelled', 'ses_error']),
     );
   });
@@ -1004,7 +1003,6 @@ describe('BackgroundJobBoard', () => {
       resultSummary: undefined,
       launchedAt: 100,
       lastLaunchedAt: 300,
-      updatedAt: 300,
     });
   });
 
@@ -1637,7 +1635,6 @@ describe('BackgroundJobBoard', () => {
       recoverableAfterLiveBusy: true,
       statusUncertain: false,
       lastLiveBusyAt: 200,
-      updatedAt: 200,
       alias: 'exp-1',
     });
   });
@@ -1748,7 +1745,6 @@ describe('BackgroundJobBoard', () => {
       terminalUnreconciled: false,
       completedAt: undefined,
       resultSummary: undefined,
-      updatedAt: 400,
     });
   });
 
@@ -1986,12 +1982,7 @@ describe('BackgroundJobBoard', () => {
         agent: 'oracle',
         now: 100,
       });
-      board.markStatusUncertain(
-        'ses_uncertain',
-        'status unavailable',
-        undefined,
-        150,
-      );
+      board.markStatusUncertain('ses_uncertain', 'status unavailable');
       board.markReconciled('ses_uncertain', 300);
 
       board.registerLaunch({
@@ -2401,12 +2392,7 @@ describe('BackgroundJobBoard', () => {
         agent: 'oracle',
         now: 100,
       });
-      board.markStatusUncertain(
-        'ses_uncertain',
-        'status unavailable',
-        undefined,
-        150,
-      );
+      board.markStatusUncertain('ses_uncertain', 'status unavailable');
       board.markReconciled('ses_uncertain', 300);
 
       board.registerLaunch({

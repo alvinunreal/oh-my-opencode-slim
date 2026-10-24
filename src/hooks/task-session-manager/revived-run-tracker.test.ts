@@ -1433,7 +1433,7 @@ describe('revived run tracker', () => {
       } else if (replacement === 'discardRun') {
         harness.board.markRunningFromLiveSession(
           terminal.taskID,
-          terminal.updatedAt + 1,
+          (terminal.completedAt ?? terminal.runStartedAt) + 1,
           terminal.generation,
           terminal.terminalRevision,
         );

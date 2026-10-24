@@ -685,8 +685,9 @@ Two behaviors to know about when concurrency is enabled:
 - Admission has no timeout of its own. A running task that never reaches a
   terminal state keeps its slot forever, and queued tasks as well as the
   orchestrator's `task` calls block behind it. When you enable
-  `concurrency`, pair it with an opt-in `wallClockTimeoutMs` so stalled
-  tasks are eventually forced to a terminal state and release their slots.
+  `concurrency`, pair it with an opt-in `wallClockTimeoutMs` so stalled tasks
+  eventually prompt the host to stop; their slots are released only when a
+  real terminal report confirms that they have ended.
 
 `backgroundJobs.continueOnIdle` was removed: it is ignored with a warning and
 its value is not migrated. Use `orchestratorWake.enabled`.
@@ -697,6 +698,10 @@ omitted are not supervised. It is independent from OpenCode's external
 task-wait timeout. When it expires, the plugin sends one host session abort —
 the same primitive `task_cancel` uses — and the host's own terminal report
 publishes the result; no local terminal is fabricated for the deadline.
+If another control operation holds the child's lease, the watchdog retries
+acquisition every second while the same run remains active. No abort is sent
+until the lease is available; a never-settling control operation can therefore
+delay cancellation. `abortGraceMs` was removed and is ignored with a warning.
 
 `fallback.maxRetries` is unrelated to the wall-clock supervisor and to
 OpenCode's provider retry policy. A value of `0` allows no host retry events

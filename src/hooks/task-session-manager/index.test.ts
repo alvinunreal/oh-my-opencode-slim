@@ -17,7 +17,6 @@ import {
   createInternalAgentTextPart,
   getBackgroundJobLifecycleLedger,
   BackgroundJobBoard as ProductionBoard,
-  SLIM_INTERNAL_INITIATOR_MARKER,
 } from '../../utils';
 import { BackgroundJobBoard } from '../../utils/background-job-fixture';
 import {
@@ -50,11 +49,6 @@ import { resetUserWaitGateForTests } from './user-wait-gate';
 mock.module('../../utils/opencode-client', () => ({
   getClient: (input: { client: unknown }) => input.client as never,
 }));
-
-async function flushContinuation(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
 
 /** Flush delayed child idle-reconcile timers when idleReconcileDelayMs is 0. */
 async function flushChildIdleReconcile(): Promise<void> {
@@ -290,16 +284,6 @@ function boardText(messages: { messages: unknown[] }): string | undefined {
 
 function isBoardPartForTest(part: { metadata?: Record<string, unknown> }) {
   return part.metadata?.[BACKGROUND_JOB_BOARD_METADATA_KEY] === true;
-}
-
-function boardSnapshotIDs(messages: { messages: unknown[] }): string[] {
-  return messages.messages.flatMap((message) =>
-    message.parts.flatMap((part) =>
-      isBoardPartForTest(part) && typeof part.metadata?.snapshotID === 'string'
-        ? [part.metadata.snapshotID]
-        : [],
-    ),
-  );
 }
 
 /**
