@@ -123,7 +123,11 @@ function makeResultTool(
       } as never);
     if (state === 'stopped') messages.mockResolvedValue({ data: [] });
     if (state === 'cancelled') {
-      const lease = board.acquireCancellationLease(run.taskID, run.generation);
+      const lease = board.acquireLease(
+        run.taskID,
+        run.generation,
+        'cancellation',
+      );
       const token = gate.capture(run);
       if (!lease || !token) throw new Error('missing cancellation authority');
       gate.observe(token, {
@@ -445,7 +449,7 @@ describe('task_status', () => {
       const reconciles = spyOn(h.gate, 'reconcile');
       const markUsed = spyOn(h.board, 'markUsed');
       const terminal = mock(() => {});
-      h.board.addTerminalStateListener(terminal);
+      h.board.addTerminalOutcomeListener(terminal);
       const before = structuredClone(h.board.get('ses_child1'));
       h.get.mockClear();
       h.status.mockClear();
@@ -482,7 +486,7 @@ describe('task_status', () => {
       observes.mockRestore();
       reconciles.mockRestore();
       markUsed.mockRestore();
-      h.board.removeTerminalStateListener(terminal);
+      h.board.removeTerminalOutcomeListener(terminal);
       if (state === 'error') {
         const used = spyOn(h.board, 'markUsed');
         await expect(h.execute()).rejects.toThrow('ended in error');

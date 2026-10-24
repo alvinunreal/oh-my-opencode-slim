@@ -8,7 +8,7 @@ import {
   parseContinuationModelSelection,
 } from '../hooks/task-session-manager/continuation-model-selection';
 import { pluginDisposedMessage } from '../hooks/task-session-manager/session-recovery';
-import type { BackgroundJobStore } from '../utils/background-job-store';
+import type { BackgroundJobBoard } from '../utils/background-job-board';
 import { isRecord } from '../utils/guards';
 import { getClient } from '../utils/opencode-client';
 import { OperationTimeoutError, withTimeout } from '../utils/session';
@@ -46,7 +46,7 @@ class MessageLeaseOperationTimeoutError extends Error {
 
 export function createTaskMessageTool(options: {
   input: PluginInput;
-  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobBoard: BackgroundJobBoard;
   messageTimeoutMs?: number;
   resolveCanonicalTaskRef?: CanonicalTaskResolver;
   isDisposed?: () => boolean;
@@ -116,9 +116,10 @@ export function createTaskMessageTool(options: {
         delegation,
       );
 
-      const lease = options.backgroundJobBoard.acquireMessageLease(
+      const lease = options.backgroundJobBoard.acquireLease(
         currentJob.taskID,
         currentJob.generation,
+        'message',
       );
       if (!lease) {
         throw new Error(
@@ -248,8 +249,8 @@ export function createTaskMessageTool(options: {
 }
 
 function assertMessageLease(
-  backgroundJobBoard: BackgroundJobStore,
-  lease: NonNullable<ReturnType<BackgroundJobStore['acquireMessageLease']>>,
+  backgroundJobBoard: BackgroundJobBoard,
+  lease: NonNullable<ReturnType<BackgroundJobBoard['acquireLease']>>,
   requested: string,
 ): void {
   if (lease.kind !== 'message' || !backgroundJobBoard.validateLease(lease)) {
@@ -260,8 +261,8 @@ function assertMessageLease(
 }
 
 async function awaitMessageTransport<T>(
-  backgroundJobBoard: BackgroundJobStore,
-  lease: NonNullable<ReturnType<BackgroundJobStore['acquireMessageLease']>>,
+  backgroundJobBoard: BackgroundJobBoard,
+  lease: NonNullable<ReturnType<BackgroundJobBoard['acquireLease']>>,
   operation: () => Promise<T>,
   timeoutMs: number,
 ): Promise<T> {
@@ -368,12 +369,12 @@ async function readCurrentChildModel(
 }
 
 function getCurrentTaskMessageJob(
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobBoard: BackgroundJobBoard,
   parentSessionID: string,
   expectedTaskID: string,
   expectedGeneration: number,
   delegation: DelegationWording,
-): NonNullable<ReturnType<BackgroundJobStore['get']>> {
+): NonNullable<ReturnType<BackgroundJobBoard['get']>> {
   const current = backgroundJobBoard.get(expectedTaskID);
   if (!current || current.parentSessionID !== parentSessionID) {
     throw new Error(

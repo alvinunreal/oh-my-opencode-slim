@@ -3,7 +3,7 @@ import { type ToolDefinition, tool } from '@opencode-ai/plugin';
 import type { RevivedRunTracker } from '../hooks/task-session-manager/revived-run-tracker';
 import { pluginDisposedMessage } from '../hooks/task-session-manager/session-recovery';
 import type { BackgroundJobLease } from '../utils/background-job-board';
-import { getBackgroundJobLifecycleLedger } from '../utils/background-job-store';
+import { getBackgroundJobLifecycleLedger } from '../utils/background-job-board';
 import type { BackgroundJobSupervisor } from '../utils/background-job-supervisor';
 import { responseError } from '../utils/child-transcript';
 import { log } from '../utils/logger';
@@ -175,9 +175,10 @@ export function createTaskReviveTool(
         );
       }
 
-      const relaunchLease = options.backgroundJobBoard.acquireRelaunchLease(
+      const relaunchLease = options.backgroundJobBoard.acquireLease(
         current.taskID,
         current.generation,
+        'relaunch',
       );
       if (!relaunchLease) {
         throw new Error(

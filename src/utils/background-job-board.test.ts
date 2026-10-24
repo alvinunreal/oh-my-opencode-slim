@@ -4,14 +4,13 @@ import {
   isPrunableEvictedSession,
   BackgroundJobBoard as ProductionBoard,
 } from './background-job-board';
-import { BackgroundJobCoordinator } from './background-job-coordinator';
-import { BackgroundJobBoard } from './background-job-fixture';
+import { BackgroundJobBoard, boardFixture } from './background-job-fixture';
+import * as loggerModule from './logger';
 
 describe('BackgroundJobBoard', () => {
   test('T-B: silent adoption does not outrank known F2 sessions', () => {
     const clock = spyOn(Date, 'now').mockReturnValue(1000);
     const board = new BackgroundJobBoard({ maxReusablePerAgent: 2 });
-    const coordinator = new BackgroundJobCoordinator(board);
     const complete = (taskID: string, now: number) => {
       board.registerLaunch({
         taskID,
@@ -24,13 +23,10 @@ describe('BackgroundJobBoard', () => {
     };
     complete('ses_f2', 400);
     const f2 = structuredClone(board.get('ses_f2'));
-    const terminal = mock();
     const outcome = mock();
     const identity = mock();
-    board.addTerminalStateListener(terminal);
-    coordinator.addTerminalStateListener(terminal);
-    coordinator.addTerminalOutcomeListener(outcome);
-    coordinator.addLaunchIdentityListener(identity);
+    board.addTerminalOutcomeListener(outcome);
+    board.addLaunchIdentityListener(identity);
     const input = {
       taskID: 'ses_adopted',
       parentSessionID: 'parent-1',
@@ -42,7 +38,7 @@ describe('BackgroundJobBoard', () => {
       updatedAt: 100,
     };
     try {
-      const adopted = coordinator.adoptTerminal(input);
+      const adopted = board.adoptTerminal(input);
       expect(adopted).toMatchObject({
         alias: 'ses_adopted',
         state: 'reconciled',
@@ -51,11 +47,10 @@ describe('BackgroundJobBoard', () => {
         resultSummary: 'host error',
       });
       expect(
-        coordinator.adoptTerminal({ ...input, taskID: 'ses_f2' }),
+        board.adoptTerminal({ ...input, taskID: 'ses_f2' }),
       ).toBeUndefined();
       expect(board.get('ses_f2')).toEqual(f2);
       expect(identity).toHaveBeenCalledTimes(1);
-      expect(terminal).not.toHaveBeenCalled();
       expect(outcome).not.toHaveBeenCalled();
       expect(board.hasTerminalUnreconciled('parent-1')).toBe(false);
       complete('ses_new', 1000);
@@ -256,15 +251,18 @@ describe('BackgroundJobBoard', () => {
         agent: 'fixer',
       });
       const acquire = {
-        message: () => board.acquireMessageLease(run.taskID, run.generation),
-        relaunch: () => board.acquireRelaunchLease(run.taskID, run.generation),
+        message: () =>
+          board.acquireLease(run.taskID, run.generation, 'message'),
+        relaunch: () =>
+          board.acquireLease(run.taskID, run.generation, 'relaunch'),
         cancellation: () =>
-          board.acquireCancellationLease(run.taskID, run.generation),
+          board.acquireLease(run.taskID, run.generation, 'cancellation'),
         'terminal-notification': () =>
-          board.acquireTerminalNotificationLease(
+          board.acquireLease(
             run.taskID,
             run.generation,
-            board.get(run.taskID)?.terminalRevision,
+            'terminal-notification',
+            { terminalRevision: board.get(run.taskID)?.terminalRevision },
           ),
       };
       const complete = () =>
@@ -289,7 +287,7 @@ describe('BackgroundJobBoard', () => {
       if (!current) throw new Error('missing current record');
       board.markRunningFromLiveSession(
         run.taskID,
-        current.updatedAt + 1,
+        (current.completedAt ?? current.runStartedAt) + 1,
         run.generation,
         current.terminalRevision,
       );
@@ -310,6 +308,167 @@ describe('BackgroundJobBoard', () => {
     },
   );
 
+  // P3c: the four acquire seams collapsed into one owner mutex, but the kind
+  // label stays load-bearing for the model-visible refusal. Pin each kind's
+  // conflict wording byte-identically so the collapse cannot silently
+  // reword a refusal.
+  test.each(leaseKinds)(
+    'a live $kind lease refuses a launch with byte-identical wording',
+    (kind) => {
+      const board = new BackgroundJobBoard();
+      const run = board.registerLaunch({
+        taskID: 'ses_refuse',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+      });
+      if (kind === 'terminal-notification') {
+        board.updateStatus({
+          taskID: 'ses_refuse',
+          state: 'completed',
+          resultSummary: 'done',
+        });
+      }
+      const lease = board.acquireLease(
+        run.taskID,
+        run.generation,
+        kind,
+        kind === 'terminal-notification'
+          ? {
+              terminalRevision: board.get(run.taskID)?.terminalRevision,
+            }
+          : undefined,
+      );
+      if (!lease) throw new Error(`missing ${kind} lease`);
+      expect(() =>
+        board.registerLaunch({
+          taskID: run.taskID,
+          parentSessionID: 'parent-1',
+          agent: 'fixer',
+        }),
+      ).toThrow(
+        `Cannot register launch for ses_refuse: a ${kind} lease already owns this session`,
+      );
+    },
+  );
+
+  // P3c counter collapse: lease tokens no longer consume a numeric sequence
+  // (the run ordinal is the board's single counter); each issued token is a
+  // fresh unique id, so a replayed token can never authorize anything.
+  // Generation magnitude IS load-bearing outside the board (event-router's
+  // ambiguous-relaunch-deletion check reads `generation > 1`), so lease
+  // issuances must never spend run ordinals.
+  test('lease issuances never advance the run ordinal', () => {
+    const board = new BackgroundJobBoard();
+    const run = board.registerLaunch({
+      taskID: 'sesOrdinal',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+    });
+    expect(run.generation).toBe(1);
+
+    // Spend leases of every kind, repeatedly, including terminal ones.
+    const message = board.acquireLease('sesOrdinal', run.generation, 'message');
+    if (!message) throw new Error('missing message lease');
+    board.releaseLease(message);
+    const cancellation = board.acquireLease(
+      'sesOrdinal',
+      run.generation,
+      'cancellation',
+    );
+    if (!cancellation) throw new Error('missing cancellation lease');
+    board.releaseLease(cancellation);
+    const relaunchLease = board.acquireLease(
+      'sesOrdinal',
+      run.generation,
+      'relaunch',
+    );
+    if (!relaunchLease) throw new Error('missing relaunch lease');
+    board.releaseLease(relaunchLease);
+    board.updateStatus({ taskID: 'sesOrdinal', state: 'completed' });
+    const terminal = board.acquireLease(
+      'sesOrdinal',
+      run.generation,
+      'terminal-notification',
+    );
+    if (!terminal) throw new Error('missing terminal-notification lease');
+    board.releaseLease(terminal);
+
+    // A launch after all that churn still takes the board's second ordinal:
+    // generations stay contiguous per launch, never per lease issuance.
+    const relaunched = board.registerLaunch({
+      taskID: 'sesOrdinal',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      now: 200,
+    });
+    expect(relaunched.generation).toBe(2);
+  });
+  test('a superseded run rejects stale writers and replayed lease tokens', () => {
+    const board = new BackgroundJobBoard();
+    const first = board.registerLaunch({
+      taskID: 'ses_stale',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      now: 100,
+    });
+    const seeded = board.acquireLease(
+      'ses_stale',
+      first.generation,
+      'relaunch',
+    );
+    if (!seeded) throw new Error('missing seeded relaunch lease');
+    board.releaseLease(seeded);
+    const second = board.registerLaunch({
+      taskID: 'ses_stale',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      now: 200,
+    });
+
+    // Stale writers replaying the superseded run's generation are ignored.
+    expect(
+      board.updateStatus({
+        taskID: 'ses_stale',
+        state: 'error',
+        expectedGeneration: first.generation,
+      }),
+    ).toMatchObject({ state: 'running', generation: second.generation });
+    expect(
+      board.markRunningFromLiveSession('ses_stale', 300, first.generation),
+    ).toMatchObject({ state: 'running', generation: second.generation });
+
+    // A replayed lease token is not authoritative once the run's lease has
+    // been reissued: unique tokens, no shared counter value to collide on.
+    const retired = board.acquireLease(
+      'ses_stale',
+      second.generation,
+      'relaunch',
+    );
+    if (!retired) throw new Error('missing relaunch lease');
+    board.releaseLease(retired);
+    expect(board.validateLease(retired)).toBe(false);
+    const reissued = board.acquireLease(
+      'ses_stale',
+      second.generation,
+      'relaunch',
+    );
+    if (!reissued) throw new Error('missing reissued lease');
+    expect(reissued.token).not.toBe(retired.token);
+    expect(board.validateLease(retired)).toBe(false);
+    expect(board.releaseLease(retired)).toBe(false);
+    expect(() =>
+      board.registerLaunch({
+        taskID: 'ses_stale',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        relaunchLease: retired,
+      }),
+    ).toThrow(
+      'Cannot register launch for ses_stale: the relaunch lease is missing, stale, or belongs to another generation',
+    );
+    board.releaseLease(reissued);
+  });
+
   test('relaunch lease fences cancellation and validates token/generation', () => {
     const board = new BackgroundJobBoard();
     const first = board.registerLaunch({
@@ -317,15 +476,16 @@ describe('BackgroundJobBoard', () => {
       parentSessionID: 'parent-1',
       agent: 'fixer',
     });
-    const relaunchLease = board.acquireRelaunchLease(
+    const relaunchLease = board.acquireLease(
       first.taskID,
       first.generation,
+      'relaunch',
     );
 
     expect(relaunchLease).toBeDefined();
     if (!relaunchLease) throw new Error('relaunch lease was not acquired');
     expect(
-      board.acquireCancellationLease(first.taskID, first.generation),
+      board.acquireLease(first.taskID, first.generation, 'cancellation'),
     ).toBeUndefined();
     expect(
       board.releaseLease({
@@ -358,9 +518,10 @@ describe('BackgroundJobBoard', () => {
       parentSessionID: 'parent-1',
       agent: 'fixer',
     });
-    const cancellationLease = board.acquireCancellationLease(
+    const cancellationLease = board.acquireLease(
       first.taskID,
       first.generation,
+      'cancellation',
     );
     expect(cancellationLease).toBeDefined();
     if (!cancellationLease) {
@@ -422,7 +583,7 @@ describe('BackgroundJobBoard', () => {
   test('expected generation fences a late native terminal status', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalStateListener(listener);
+    board.addTerminalOutcomeListener((record) => listener(record.taskID));
     const first = board.registerLaunch({
       taskID: 'ses_generation',
       parentSessionID: 'parent-1',
@@ -516,12 +677,15 @@ describe('BackgroundJobBoard', () => {
       timedOut: true,
     });
 
+    // P3c: the write-only timeout/error counters (timeoutCount, totalErrors,
+    // lastErrorAt) are gone. What remains pinned: repeated timed-out
+    // running observations then a completed publication still land the row
+    // terminal exactly once (terminalRevision 1) with the terminal evidence.
     expect(completed).toMatchObject({
       state: 'completed',
       timedOut: true,
-      timeoutCount: 0,
+      terminalRevision: 1,
     });
-    expect(board.hasConvergenceSignals('ses_1')).toBe(false);
   });
 
   test('marks terminal jobs as reconciled and hides them from prompt', () => {
@@ -538,7 +702,6 @@ describe('BackgroundJobBoard', () => {
     expect(board.get('ses_1')).toMatchObject({
       state: 'reconciled',
       terminalUnreconciled: false,
-      updatedAt: 300,
     });
     expect(board.resolveReusable('parent-1', 'ses_1', 'oracle')).toBeDefined();
   });
@@ -619,7 +782,7 @@ describe('BackgroundJobBoard', () => {
     board.markReconciled('ses_a', 120);
 
     // ses_a holds a relaunch lease (revive in flight).
-    const lease = board.acquireRelaunchLease('ses_a', 1);
+    const lease = board.acquireLease('ses_a', 1, 'relaunch');
     expect(lease).toBeDefined();
 
     board.registerLaunch({
@@ -666,7 +829,7 @@ describe('BackgroundJobBoard', () => {
         });
       const a = completed('ses_a', 100);
       board.addContext('ses_a', [{ path: 'a.ts', lineCount, lastReadAt: 1 }]);
-      const lease = a && board.acquireRelaunchLease('ses_a', a.generation);
+      const lease = a && board.acquireLease('ses_a', a.generation, 'relaunch');
       // While A's revive is admitted, B completes and is acknowledged later.
       completed('ses_b', 200);
       board.markReconciled('ses_b', 220);
@@ -719,7 +882,7 @@ describe('BackgroundJobBoard', () => {
       );
     }
 
-    expect(board.listReusable('parent-1').map((job) => job.taskID)).toEqual(
+    expect(board.list('parent-1').map((job) => job.taskID)).toEqual(
       expect.arrayContaining(['ses_cancelled', 'ses_error']),
     );
   });
@@ -731,19 +894,26 @@ describe('BackgroundJobBoard', () => {
       parentSessionID: 'parent-1',
       agent: 'oracle',
     });
-    board.claimWallClockDeadline({
+    // The markStatusUncertain overlay alone (a read that cannot confirm the
+    // state) is what blocks reuse; an acknowledged terminal with a confirmed
+    // state stays reusable.
+    board.markStatusUncertain('ses_uncertain', 'status unavailable');
+    expect(board.get('ses_uncertain')?.statusUncertain).toBe(true);
+    expect(board.resolveReusable('parent-1', 'ses_uncertain')).toBeUndefined();
+
+    const committed = boardFixture.updateStatus(board, {
       taskID: 'ses_uncertain',
-      generation: board.get('ses_uncertain')?.generation ?? -1,
-    });
-    board.finalizeWallClockTimeout({
-      taskID: 'ses_uncertain',
-      generation: board.get('ses_uncertain')?.generation ?? -1,
-      statusUncertain: true,
+      state: 'error',
       resultSummary: 'status unavailable',
     });
     board.markReconciled('ses_uncertain');
-
-    expect(board.resolveReusable('parent-1', 'ses_uncertain')).toBeUndefined();
+    expect(committed).toMatchObject({ state: 'error', statusUncertain: false });
+    expect(board.get('ses_uncertain')).toMatchObject({
+      state: 'reconciled',
+      terminalUnreconciled: false,
+      statusUncertain: false,
+    });
+    expect(board.resolveReusable('parent-1', 'ses_uncertain')).toBeDefined();
   });
 
   test('stale generations cannot alter a newer relaunch after terminal acknowledgement', () => {
@@ -760,9 +930,10 @@ describe('BackgroundJobBoard', () => {
     });
     board.markReconciled(first.taskID);
 
-    const relaunchLease = board.acquireRelaunchLease(
+    const relaunchLease = board.acquireLease(
       first.taskID,
       first.generation,
+      'relaunch',
     );
     expect(relaunchLease).toBeDefined();
     if (!relaunchLease) throw new Error('relaunch lease was not acquired');
@@ -832,7 +1003,6 @@ describe('BackgroundJobBoard', () => {
       resultSummary: undefined,
       launchedAt: 100,
       lastLaunchedAt: 300,
-      updatedAt: 300,
     });
   });
 
@@ -987,7 +1157,7 @@ describe('BackgroundJobBoard', () => {
   test('preserveRun terminal promotion re-fires the suppressed recovery wake', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalStateListener(listener);
+    board.addTerminalOutcomeListener((record) => listener(record.taskID));
     board.registerLaunch({
       taskID: 'child-1',
       parentSessionID: 'parent-1',
@@ -1016,7 +1186,7 @@ describe('BackgroundJobBoard', () => {
   test('promoteProvisional re-fires the wake for a terminal placeholder and stays silent for a running one', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalStateListener(listener);
+    board.addTerminalOutcomeListener((record) => listener(record.taskID));
     board.registerLaunch({
       taskID: 'child-1',
       parentSessionID: 'parent-1',
@@ -1069,7 +1239,7 @@ describe('BackgroundJobBoard', () => {
   test('notifies terminal listener on updateStatus terminal transition', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalStateListener(listener);
+    board.addTerminalOutcomeListener((record) => listener(record.taskID));
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -1085,7 +1255,7 @@ describe('BackgroundJobBoard', () => {
   test('notifies terminal listener on markCancelled mutation', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalStateListener(listener);
+    board.addTerminalOutcomeListener((record) => listener(record.taskID));
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -1101,7 +1271,7 @@ describe('BackgroundJobBoard', () => {
   test('notifies terminal listener on forced markCancelled from running', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalStateListener(listener);
+    board.addTerminalOutcomeListener((record) => listener(record.taskID));
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -1119,7 +1289,7 @@ describe('BackgroundJobBoard', () => {
   test('does not force-cancel a newer generation or notify terminal listeners', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalStateListener(listener);
+    board.addTerminalOutcomeListener((record) => listener(record.taskID));
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -1156,7 +1326,7 @@ describe('BackgroundJobBoard', () => {
   test('does not notify terminal listener on forced markCancelled from terminal', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalStateListener(listener);
+    board.addTerminalOutcomeListener((record) => listener(record.taskID));
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -1175,7 +1345,7 @@ describe('BackgroundJobBoard', () => {
   test('does not notify terminal listener for running or stale updates', () => {
     const board = new BackgroundJobBoard();
     const listener = mock(() => {});
-    board.setTerminalStateListener(listener);
+    board.addTerminalOutcomeListener((record) => listener(record.taskID));
     board.registerLaunch({
       taskID: 'ses_1',
       parentSessionID: 'parent-1',
@@ -1191,14 +1361,10 @@ describe('BackgroundJobBoard', () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
-  test('throws in one listener does not prevent subsequent listeners from receiving notification', () => {
+  test('a throwing terminal publication handler is contained', () => {
     const board = new BackgroundJobBoard();
-    const order: string[] = [];
-    board.addTerminalStateListener(() => {
-      throw new Error('first listener failed');
-    });
-    board.addTerminalStateListener(() => {
-      order.push('second');
+    board.addTerminalOutcomeListener(() => {
+      throw new Error('publication handler failed');
     });
     board.registerLaunch({
       taskID: 'ses_1',
@@ -1206,9 +1372,10 @@ describe('BackgroundJobBoard', () => {
       agent: 'fixer',
     });
 
-    board.updateStatus({ taskID: 'ses_1', state: 'completed' });
-
-    expect(order).toEqual(['second']);
+    expect(() =>
+      board.updateStatus({ taskID: 'ses_1', state: 'completed' }),
+    ).not.toThrow();
+    expect(board.get('ses_1')).toMatchObject({ state: 'completed' });
   });
 
   test('cancelled jobs ignore late non-cancelled terminal statuses', () => {
@@ -1314,31 +1481,11 @@ describe('BackgroundJobBoard', () => {
       agent: 'fixer',
       now: 100,
     });
-    board.noteStopConfirmation('ses_1', 111, board.get('ses_1')?.generation);
-
     const updated = board.markRunningFromLiveSession('ses_1', 200);
 
     expect(updated).toMatchObject({
       state: 'running',
-      stopConfirmationStartedAt: undefined,
       lastLiveBusyAt: 200,
-    });
-  });
-
-  test('noteStopConfirmation keeps the first observation and ignores later ones', () => {
-    const board = new BackgroundJobBoard();
-    board.registerLaunch({
-      taskID: 'ses_1',
-      parentSessionID: 'parent-1',
-      agent: 'fixer',
-    });
-    const generation = board.get('ses_1')?.generation;
-
-    expect(board.noteStopConfirmation('ses_1', 11, generation)).toMatchObject({
-      stopConfirmationStartedAt: 11,
-    });
-    expect(board.noteStopConfirmation('ses_1', 21, generation)).toMatchObject({
-      stopConfirmationStartedAt: 11,
     });
   });
 
@@ -1421,7 +1568,7 @@ describe('BackgroundJobBoard', () => {
     const generation = board.get('ses_1')?.generation;
     board.markStopped('ses_1', 'no result', 150, generation, 150);
 
-    const lease = board.acquireRelaunchLease('ses_1', generation ?? 1);
+    const lease = board.acquireLease('ses_1', generation ?? 1, 'relaunch');
     expect(lease).toBeDefined();
 
     const leased = board.markRunningFromLiveSession('ses_1', 200, generation);
@@ -1431,7 +1578,7 @@ describe('BackgroundJobBoard', () => {
       lastLiveBusyAt: 200,
     });
     expect(
-      board.acquireRelaunchLease('ses_1', generation ?? 1),
+      board.acquireLease('ses_1', generation ?? 1, 'relaunch'),
     ).toBeUndefined();
     if (lease) expect(board.validateLease(lease)).toBe(true);
 
@@ -1488,7 +1635,6 @@ describe('BackgroundJobBoard', () => {
       recoverableAfterLiveBusy: true,
       statusUncertain: false,
       lastLiveBusyAt: 200,
-      updatedAt: 200,
       alias: 'exp-1',
     });
   });
@@ -1599,7 +1745,6 @@ describe('BackgroundJobBoard', () => {
       terminalUnreconciled: false,
       completedAt: undefined,
       resultSummary: undefined,
-      updatedAt: 400,
     });
   });
 
@@ -1664,21 +1809,6 @@ describe('BackgroundJobBoard', () => {
 
       expect(board.getResultSummary('job-1')).toBe('all good');
       expect(board.getResultSummary('unknown-1')).toBeUndefined();
-    });
-
-    test('getLastLiveBusyAt: returns timestamp after markRunningFromLiveSession', () => {
-      const board = new BackgroundJobBoard();
-      board.registerLaunch({
-        taskID: 'job-1',
-        parentSessionID: 'parent-1',
-        agent: 'fixer',
-        now: 100,
-      });
-
-      expect(board.getLastLiveBusyAt('job-1')).toBe(100);
-      board.markRunningFromLiveSession('job-1', 200);
-      expect(board.getLastLiveBusyAt('job-1')).toBe(200);
-      expect(board.getLastLiveBusyAt('unknown-1')).toBeUndefined();
     });
 
     test('getParentSessionID: returns parentSessionID after registerLaunch', () => {
@@ -1852,18 +1982,7 @@ describe('BackgroundJobBoard', () => {
         agent: 'oracle',
         now: 100,
       });
-      board.claimWallClockDeadline({
-        taskID: 'ses_uncertain',
-        generation: board.get('ses_uncertain')?.generation ?? -1,
-        now: 150,
-      });
-      board.finalizeWallClockTimeout({
-        taskID: 'ses_uncertain',
-        generation: board.get('ses_uncertain')?.generation ?? -1,
-        statusUncertain: true,
-        resultSummary: 'status unavailable',
-        now: 200,
-      });
+      board.markStatusUncertain('ses_uncertain', 'status unavailable');
       board.markReconciled('ses_uncertain', 300);
 
       board.registerLaunch({
@@ -1965,9 +2084,10 @@ describe('BackgroundJobBoard', () => {
         'ses_second',
       );
 
-      const lease = board.acquireRelaunchLease(
+      const lease = board.acquireLease(
         'ses_second',
         board.get('ses_second')?.generation ?? -1,
+        'relaunch',
       );
       expect(lease).toBeDefined();
       board.registerLaunch({
@@ -2101,21 +2221,6 @@ describe('BackgroundJobBoard', () => {
       expect(board.getResultSummary('unknown-1')).toBeUndefined();
     });
 
-    test('getLastLiveBusyAt: returns timestamp after markRunningFromLiveSession', () => {
-      const board = new BackgroundJobBoard();
-      board.registerLaunch({
-        taskID: 'job-1',
-        parentSessionID: 'parent-1',
-        agent: 'fixer',
-        now: 100,
-      });
-
-      expect(board.getLastLiveBusyAt('job-1')).toBe(100);
-      board.markRunningFromLiveSession('job-1', 200);
-      expect(board.getLastLiveBusyAt('job-1')).toBe(200);
-      expect(board.getLastLiveBusyAt('unknown-1')).toBeUndefined();
-    });
-
     test('getParentSessionID: returns parentSessionID after registerLaunch', () => {
       const board = new BackgroundJobBoard();
       board.registerLaunch({
@@ -2287,18 +2392,7 @@ describe('BackgroundJobBoard', () => {
         agent: 'oracle',
         now: 100,
       });
-      board.claimWallClockDeadline({
-        taskID: 'ses_uncertain',
-        generation: board.get('ses_uncertain')?.generation ?? -1,
-        now: 150,
-      });
-      board.finalizeWallClockTimeout({
-        taskID: 'ses_uncertain',
-        generation: board.get('ses_uncertain')?.generation ?? -1,
-        statusUncertain: true,
-        resultSummary: 'status unavailable',
-        now: 200,
-      });
+      board.markStatusUncertain('ses_uncertain', 'status unavailable');
       board.markReconciled('ses_uncertain', 300);
 
       board.registerLaunch({
@@ -2400,9 +2494,10 @@ describe('BackgroundJobBoard', () => {
         'ses_second',
       );
 
-      const lease = board.acquireRelaunchLease(
+      const lease = board.acquireLease(
         'ses_second',
         board.get('ses_second')?.generation ?? -1,
+        'relaunch',
       );
       expect(lease).toBeDefined();
       board.registerLaunch({
@@ -2779,5 +2874,165 @@ describe('terminal-session GC provenance', () => {
     expect(
       isPrunableEvictedSession({ ...eligible, externalOrigin: true }),
     ).toBe(false);
+  });
+});
+
+// ── Merged subscription seams (formerly the coordinator's) ──────────
+// The board owns the terminal-outcome fan-out and the launch-identity
+// projection that the dissolved coordinator used to wrap.
+describe('BackgroundJobBoard subscription seams', () => {
+  test('notifies launch identity on accepted register, drop, and clearParent', () => {
+    const board = new BackgroundJobBoard();
+    const events: Array<{ kind: string; taskID: string; alias: string }> = [];
+    board.addLaunchIdentityListener((event) => {
+      events.push({
+        kind: event.kind,
+        taskID: event.taskID,
+        alias: event.alias,
+      });
+    });
+
+    const first = board.registerLaunch({
+      taskID: 'ses_ora_1',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+    });
+    expect(events).toEqual([
+      { kind: 'registered', taskID: 'ses_ora_1', alias: first.alias },
+    ]);
+
+    board.drop('ses_ora_1');
+    expect(events.at(-1)).toEqual({
+      kind: 'removed',
+      taskID: 'ses_ora_1',
+      alias: first.alias,
+    });
+
+    const sibling = board.registerLaunch({
+      taskID: 'ses_ora_2',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+    });
+    board.clearParent('parent-1');
+    expect(events.at(-1)).toEqual({
+      kind: 'removed',
+      taskID: 'ses_ora_2',
+      alias: sibling.alias,
+    });
+    expect(board.list('parent-1')).toEqual([]);
+  });
+
+  test('does not notify identity for a rejected launch, and a throwing listener does not fail the launch', () => {
+    const board = new BackgroundJobBoard();
+    const first = board.registerLaunch({
+      taskID: 'ses_busy',
+      parentSessionID: 'parent-1',
+      agent: 'oracle',
+    });
+    const lease = board.acquireLease(first.taskID, first.generation, 'message');
+    expect(lease).toBeDefined();
+
+    const events: string[] = [];
+    board.addLaunchIdentityListener(() => {
+      throw new Error('identity listener failed');
+    });
+    board.addLaunchIdentityListener((event) => {
+      events.push(`${event.kind}:${event.taskID}`);
+    });
+
+    expect(() =>
+      board.registerLaunch({
+        taskID: 'ses_busy',
+        parentSessionID: 'parent-1',
+        agent: 'oracle',
+      }),
+    ).toThrow();
+    expect(events).toEqual([]);
+
+    const accepted = board.registerLaunch({
+      taskID: 'ses_ok',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+    });
+    expect(accepted.taskID).toBe('ses_ok');
+    expect(events).toEqual(['registered:ses_ok']);
+  });
+
+  test('a throwing outcome listener does not prevent subsequent outcomes', () => {
+    const board = new BackgroundJobBoard();
+    const delivered: string[] = [];
+    board.addTerminalOutcomeListener(() => {
+      throw new Error('first outcome listener failed');
+    });
+    board.addTerminalOutcomeListener((record) => {
+      delivered.push(record.taskID);
+    });
+    board.registerLaunch({
+      taskID: 'ses_123',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+    });
+
+    board.updateStatus({ taskID: 'ses_123', state: 'completed' });
+
+    expect(delivered).toEqual(['ses_123']);
+  });
+
+  test('logs the terminal state dispatch with record identity', () => {
+    const entries: Array<{ message: string; data: unknown }> = [];
+    const spy = spyOn(loggerModule, 'log').mockImplementation(
+      (message: string, data?: unknown) => {
+        entries.push({ message, data });
+      },
+    );
+    try {
+      const board = new BackgroundJobBoard();
+      board.addTerminalOutcomeListener(() => {});
+      const job = board.registerLaunch({
+        taskID: 'ses_dispatch_log',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+      });
+      board.updateStatus({ taskID: job.taskID, state: 'running' });
+      board.updateStatus({ taskID: job.taskID, state: 'completed' });
+      const dispatch = entries.find(
+        (entry) =>
+          entry.message === '[job-coordinator] terminal state dispatch',
+      );
+      expect(dispatch?.data).toMatchObject({
+        taskID: job.taskID,
+        generation: job.generation,
+        state: 'completed',
+        parentSessionID: 'parent-1',
+      });
+      expect(dispatch?.data).not.toHaveProperty('deferredClose');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('stays silent on publication when no outcome listener is installed', () => {
+    const entries: string[] = [];
+    const spy = spyOn(loggerModule, 'log').mockImplementation(
+      (message: string) => {
+        entries.push(message);
+      },
+    );
+    try {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'ses_quiet',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+      });
+      board.updateStatus({ taskID: 'ses_quiet', state: 'completed' });
+      expect(
+        entries.filter((message) =>
+          message.includes('terminal state dispatch'),
+        ),
+      ).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

@@ -158,24 +158,55 @@ describe('alias numbering', () => {
   type PluginHooks = Awaited<ReturnType<typeof OhMyOpenCodeLite>>;
 
   /** One background fixer launch through the production hooks; returns its
-   * model-visible alias. */
+   * model-visible alias.
+   *
+   * v1 reads the alias straight out of the v1-only child-ref comment the
+   * after-hook renders. v2 never renders that comment (the native
+   * sessionID is the model-visible identity), so the alias is observed
+   * through task_status — a real model-visible surface that renders the
+   * board record's alias — by first solving the child ID from the launch
+   * output, then reading that child's status line. */
   async function launchAlias(
     hooks: PluginHooks,
     parent: string,
     child: string,
-  ) {
+    renderedOutputs?: string[],
+  ): Promise<string | undefined> {
     const call = { tool: 'task', sessionID: parent, callID: `call_${child}` };
     await hooks['tool.execute.before']?.(call, {
       args: { subagent_type: 'fixer', description: child, background: true },
     });
     const output = { output: `task_id: ${child}\nstate: running` };
     await hooks['tool.execute.after']?.(call, output as never);
-    return /"alias":"([^"]+)"/.exec(output.output)?.[1];
+    const rendered = String(output.output);
+    renderedOutputs?.push(rendered);
+    if (!optionsV2()) {
+      return /"alias":"([^"]+)"/.exec(rendered)?.[1];
+    }
+    // v2: the alias is still allocated and resolvable (board.resolve), and
+    // task_status renders `Task <alias> (<taskID>)` for a tracked child.
+    // A live `running` observation is not required: a missing live entry is
+    // an uncertain board fallback that still renders the alias header.
+    const status = await hooks.tool?.task_status?.execute(
+      { [idParam()]: child } as never,
+      { sessionID: parent, agent: 'orchestrator' } as never,
+    );
+    return /Task ([^\s(]+) \(/.exec(String(status))?.[1];
   }
 
+  function optionsV2(): boolean {
+    return currentOptions.hostFlavor === 'v2';
+  }
+
+  function idParam(): string {
+    return currentOptions.hostFlavor === 'v2' ? 'sessionID' : 'task_id';
+  }
+
+  let currentOptions: { hostFlavor?: 'v2' } = {};
+
   /** Launches background fixers through the production plugin hooks and
-   * returns each launch's model-visible alias. `events` are built after the
-   * plugin starts. */
+   * returns each launch's model-visible alias plus its rendered launch
+   * output. `events` are built after the plugin starts. */
   async function pluginAliases(
     launches: [parent: string, child: string][],
     options: {
@@ -184,7 +215,11 @@ describe('alias numbering', () => {
       hostFlavor?: 'v2';
       after?: (hooks: PluginHooks) => unknown;
     } = {},
-  ): Promise<(string | undefined)[]> {
+  ): Promise<{
+    aliases: (string | undefined)[];
+    outputs: string[];
+  }> {
+    currentOptions = options;
     const projectDir = await mkdtemp(join(tmpdir(), 'omo-alias-numbering-'));
     // Another file's mock.module of opencode-client outlives mock.restore().
     spyOn(opencodeClient, 'getClient').mockImplementation(
@@ -204,6 +239,7 @@ describe('alias numbering', () => {
       serverUrl: new URL('http://127.0.0.1:4096'),
       hostFlavor: options.hostFlavor,
     } as never);
+    const captured: string[] = [];
     try {
       for (const event of options.events?.() ?? []) {
         await hooks.event?.({ event } as never);
@@ -216,10 +252,10 @@ describe('alias numbering', () => {
       }
       const aliases: (string | undefined)[] = [];
       for (const [parent, child] of launches) {
-        aliases.push(await launchAlias(hooks, parent, child));
+        aliases.push(await launchAlias(hooks, parent, child, captured));
       }
       await options.after?.(hooks);
-      return aliases;
+      return { aliases, outputs: captured };
     } finally {
       await hooks.dispose?.();
       await rm(projectDir, { recursive: true, force: true }).catch(() => {});
@@ -233,7 +269,7 @@ describe('alias numbering', () => {
   test('a new child of an existing parent gets no number', async () => {
     const live = 'ses_livesibling';
     const history = [taskPart({ output: withRef(live, 'fix-1') })];
-    const aliases = await pluginAliases([[PARENT, 'ses_newchild']], {
+    const { aliases } = await pluginAliases([[PARENT, 'ses_newchild']], {
       messages: async (args) => ({
         data: args.path?.id === PARENT ? history : [],
       }),
@@ -253,16 +289,15 @@ describe('alias numbering', () => {
       type: 'session.created',
       properties: { info: { id, time: { created: at } } },
     });
-    expect(
-      await pluginAliases(
-        [
-          [PARENT, 'ses_freshchild'],
-          [OTHER, 'ses_replayedchild'],
-          [PARENT, 'ses_freshchild2'],
-        ],
-        { events: () => [created(PARENT, Date.now()), created(OTHER, 0)] },
-      ),
-    ).toEqual(['fix-1', 'ses_replayedchild', 'fix-2']);
+    const { aliases } = await pluginAliases(
+      [
+        [PARENT, 'ses_freshchild'],
+        [OTHER, 'ses_replayedchild'],
+        [PARENT, 'ses_freshchild2'],
+      ],
+      { events: () => [created(PARENT, Date.now()), created(OTHER, 0)] },
+    );
+    expect(aliases).toEqual(['fix-1', 'ses_replayedchild', 'fix-2']);
   });
 
   // Export/import restores a deleted session under the same ID without a
@@ -272,7 +307,7 @@ describe('alias numbering', () => {
     const history = [taskPart({ output: withRef(imported, 'fix-2') })];
     const ctx = { sessionID: PARENT, agent: 'orchestrator' } as never;
     let restored: string | undefined;
-    const aliases = await pluginAliases([[PARENT, 'ses_firstchild']], {
+    const { aliases } = await pluginAliases([[PARENT, 'ses_firstchild']], {
       messages: async (args) => ({
         data: args.path?.id === PARENT ? history : [],
       }),
@@ -311,23 +346,28 @@ describe('alias numbering', () => {
         data: { sessionID },
       });
     const undated = 'ses_undatedparent';
-    expect(
-      await pluginAliases(
-        [
-          [PARENT, 'ses_freshchild'],
-          [OTHER, 'ses_replayedchild'],
-          [undated, 'ses_undatedchild'],
+    const { aliases, outputs } = await pluginAliases(
+      [
+        [PARENT, 'ses_freshchild'],
+        [OTHER, 'ses_replayedchild'],
+        [undated, 'ses_undatedchild'],
+      ],
+      {
+        hostFlavor: 'v2',
+        events: () => [
+          ...created(PARENT, Date.now()),
+          ...created(OTHER, 0),
+          ...created(undated),
         ],
-        {
-          hostFlavor: 'v2',
-          events: () => [
-            ...created(PARENT, Date.now()),
-            ...created(OTHER, 0),
-            ...created(undated),
-          ],
-        },
-      ),
-    ).toEqual(['fix-1', 'ses_replayedchild', 'ses_undatedchild']);
+      },
+    );
+    expect(aliases).toEqual(['fix-1', 'ses_replayedchild', 'ses_undatedchild']);
+    // P2b: v2 renders the contract-native sessionID and never the v1-only
+    // child-ref comment, yet the alias is still allocated and resolvable
+    // (observed above through task_status, a model-visible surface).
+    for (const rendered of outputs) {
+      expect(rendered).not.toContain('slim-child-ref');
+    }
   });
 });
 

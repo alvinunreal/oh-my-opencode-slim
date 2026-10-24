@@ -5,7 +5,7 @@
  *
  * Design invariants:
  * - **Write-through.** `recordBackgroundJobSuppression` /
- *   `clearBackgroundJobSuppression` (background-job-store.ts) call this
+ *   `clearBackgroundJobSuppression` (background-job-board.ts) call this
  *   module on every mutation so the persisted state tracks the in-process
  *   ledger. Writes are queued fire-and-forget: a crash between the
  *   in-memory mutation and the queue flush loses that persisted entry —

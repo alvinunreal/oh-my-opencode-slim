@@ -386,7 +386,15 @@ the delivery marker prevents replay on later restarts. The marker is written
 only after an accepted parent-visible wake, or when a trusted delivery for the
 current run is found in the parent history; native notification ownership
 alone is not delivery evidence, and a restored terminal row alone does not
-acknowledge delivery. A busy, throttled, or failed publication keeps its
+acknowledge delivery. On v2 the host itself re-delivers a background subagent's
+terminal outcome after a *host* restart (`recoverSubagent` →
+`SubagentCompletion.deliver`, `resume: false`), and that re-delivery lands in
+the parent history as a trusted `<subagent>` delivery: the startup scan treats
+it as the run's single notification and stays silent beside it (a running row
+it had adopted is corrected to terminal without a publication, and a later
+terminal-gate reconcile keeps the retained round instead of republishing).
+v1 has no host restart re-delivery, so the plugin's own startup recovery
+remains its only notification mechanism there. A busy, throttled, or failed publication keeps its
 execution pending. Publication retries survive a parent busy-to-idle transition
 even when periodic wakes are disabled. A startup correction from running to
 terminal also releases the recovered child's concurrency slot. The wake body
@@ -953,8 +961,8 @@ one would self-deadlock once the queue saturates.
 Admission itself has no timeout. A running task that never reaches a terminal
 state keeps its slot forever, and queued tasks as well as the orchestrator's
 `task` calls block behind it. When you enable `concurrency`, pair it with the
-opt-in wall-clock supervisor below so stalled tasks are eventually forced to
-a terminal state and release their slots.
+opt-in wall-clock watchdog below so stalled tasks are eventually stopped by
+the host and release their slots.
 
 ### Same-Provider Foreground Conversion
 
@@ -998,8 +1006,7 @@ child sessions. It is disabled by default:
 ```jsonc
 {
   "backgroundJobs": {
-    "wallClockTimeoutMs": 900000,
-    "abortGraceMs": 10000
+    "wallClockTimeoutMs": 900000
   }
 }
 ```
@@ -1011,26 +1018,21 @@ run. Duplicate `session.created`/tool-hook observations, busy activity, tool
 activity, and liveness timestamps do not renew it. An explicit relaunch or reuse
 starts a new run generation.
 
-When the deadline wins a race with a real terminal transition, the board records
-a persistent hard-deadline marker, marks cancellation as requested, starts the
-bounded abort grace period, and issues exactly one native session abort. The
-grace timer is independent of whether the SDK abort resolves, rejects, or hangs.
-An error, cancellation, or child deletion during grace publishes one stable
-timed-out terminal outcome. If no terminal confirmation arrives before grace
-expires, the outcome is `error`, `timedOut: true`, and `statusUncertain: true`,
-with a summary stating that abort was not confirmed.
+When the deadline fires, the watchdog acquires the same cancellation lease
+`task_cancel` uses; if another operation (message queueing, cancel, relaunch)
+already owns the child, it retries the acquisition on a fixed 1s interval
+while the same run is still tracked and the board record is still running —
+a message only queues text and never ends the run, so an occupied lease must
+not make the watchdog forget the deadline. Once the lease is acquired it
+issues exactly one native session abort, and releases the lease when
+the abort settles. The host — which offers no live-hang timeout of its own —
+then reports the real terminal for the aborted run (typically an interrupted
+outcome, which the terminal gate publishes in the stop family), and that
+report is the only terminal the run gets. A rejected or hanging abort promise
+never escapes the watchdog, but also no longer bounds the transition locally:
+the board row stays `running` until host evidence arrives.
 
-Late completion, busy, retry, or error events cannot replace a published hard
-timeout, and a hard wall-clock timeout is not recoverable through the existing
-external task-wait timeout path. The timeout outcome stays on the
-machine board as a terminal-unreconciled record the parent can pull with
-`task_status`; no prompt or raw task-result rewrite is used. The timeout path has no multiplexer
-coupling: pane lifecycle runs entirely in the TUI client and reacts only to
-session events, so the former permanent logical pane-close intent was removed
-together with the server-side pane lifecycle.
-
-`wallClockTimeoutMs` accepts `0` or integers from `60000` through `2147483647`;
-`abortGraceMs` accepts integers from `1000` through `60000`. This feature is
+`wallClockTimeoutMs` accepts `0` or integers from `60000` through `2147483647`. This feature is
 wall-clock-only: no no-progress/plateau policy, foreground fallback, model swap,
 session deletion retry, or worker-death guarantee is implied.
 

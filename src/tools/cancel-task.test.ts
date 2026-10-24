@@ -177,10 +177,7 @@ describe('task_cancel tool', () => {
         agent: 'explorer',
       });
       const commit = spyOn(ProductionBoard.prototype, 'commitTerminal');
-      const acquire = spyOn(
-        ProductionBoard.prototype,
-        'acquireCancellationLease',
-      );
+      const acquire = spyOn(ProductionBoard.prototype, 'acquireLease');
       const pending = taskCancel.execute({ task_id: 'ses_1' }, context);
       const output = await Promise.race([
         pending,
@@ -200,10 +197,12 @@ describe('task_cancel tool', () => {
         terminalUnreconciled: false,
       });
       expect(commit).not.toHaveBeenCalled();
-      const oldLease = acquire.mock.results[0]?.value;
+      const oldLease = acquire.mock.results
+        .map((result) => result?.value)
+        .find((value) => value?.kind === 'cancellation');
       if (!oldLease) throw new Error('missing cancellation lease');
       expect(board.validateLease(oldLease)).toBe(false);
-      const replacement = board.acquireCancellationLease('ses_1', 1);
+      const replacement = board.acquireLease('ses_1', 1, 'cancellation');
       expect(replacement?.kind).toBe('cancellation');
       if (!replacement) throw new Error('read timeout retained exclusion');
       const uncertain = board.get('ses_1');
@@ -216,7 +215,7 @@ describe('task_cancel tool', () => {
       expect(board.get('ses_1')).toEqual(uncertain);
       expect(board.validateLease(replacement)).toBe(true);
       board.releaseLease(replacement);
-      const relaunch = board.acquireRelaunchLease('ses_1', 1);
+      const relaunch = board.acquireLease('ses_1', 1, 'relaunch');
       expect(relaunch?.kind).toBe('relaunch');
       if (relaunch) board.releaseLease(relaunch);
     },
@@ -249,7 +248,7 @@ describe('task_cancel tool', () => {
       expect(String(output)).toContain('state: running');
       expect(board.get('ses_1')).toMatchObject({ statusUncertain: true });
       expect(commit).not.toHaveBeenCalled();
-      const available = board.acquireRelaunchLease('ses_1', 1);
+      const available = board.acquireLease('ses_1', 1, 'relaunch');
       expect(available?.kind).toBe('relaunch');
       if (available) board.releaseLease(available);
     },
@@ -268,12 +267,11 @@ describe('task_cancel tool', () => {
         agent: 'explorer',
       });
       const commit = spyOn(ProductionBoard.prototype, 'commitTerminal');
-      const acquire = spyOn(
-        ProductionBoard.prototype,
-        'acquireCancellationLease',
-      );
+      const acquire = spyOn(ProductionBoard.prototype, 'acquireLease');
       const pending = taskCancel.execute({ task_id: 'ses_1' }, context);
-      const lease = acquire.mock.results[0]?.value;
+      const lease = acquire.mock.results
+        .map((result) => result?.value)
+        .find((value) => value?.kind === 'cancellation');
       if (!lease) throw new Error('missing cancellation lease');
       // No await: mutate after the chain is created but before its callback.
       let replacement: typeof lease | undefined;
@@ -288,9 +286,10 @@ describe('task_cancel tool', () => {
             parentSessionID: 'parent-1',
             agent: 'explorer',
           });
-        replacement = board.acquireCancellationLease(
+        replacement = board.acquireLease(
           'ses_1',
           board.get('ses_1')?.generation ?? -1,
+          'cancellation',
         );
         expect(replacement?.kind).toBe('cancellation');
       }
@@ -307,7 +306,11 @@ describe('task_cancel tool', () => {
           generation: 1,
           state: 'completed',
         });
-        const notification = board.acquireTerminalNotificationLease('ses_1', 1);
+        const notification = board.acquireLease(
+          'ses_1',
+          1,
+          'terminal-notification',
+        );
         expect(notification?.kind).toBe('terminal-notification');
         if (notification) board.releaseLease(notification);
       }
@@ -327,9 +330,10 @@ describe('task_cancel tool', () => {
           parentSessionID: 'parent-1',
           agent: 'explorer',
         });
-      const available = board.acquireRelaunchLease(
+      const available = board.acquireLease(
         'ses_1',
         board.get('ses_1')?.generation ?? -1,
+        'relaunch',
       );
       expect(available?.kind).toBe('relaunch');
       if (available) board.releaseLease(available);
@@ -350,10 +354,7 @@ describe('task_cancel tool', () => {
         agent: 'explorer',
       });
       const commit = spyOn(ProductionBoard.prototype, 'commitTerminal');
-      const acquire = spyOn(
-        ProductionBoard.prototype,
-        'acquireCancellationLease',
-      );
+      const acquire = spyOn(ProductionBoard.prototype, 'acquireLease');
       const output = await taskCancel.execute({ task_id: 'ses_1' }, context);
       expect(String(output)).toContain('Session abort timed out after 5ms');
       expect(String(output)).toContain('state: running');
@@ -366,21 +367,23 @@ describe('task_cancel tool', () => {
         statusUncertain: true,
         terminalUnreconciled: false,
       });
-      const lease = acquire.mock.results[0]?.value;
+      const lease = acquire.mock.results
+        .map((result) => result?.value)
+        .find((value) => value?.kind === 'cancellation');
       if (!lease) throw new Error('missing cancellation lease');
       expect(board.validateLease(lease)).toBe(true);
-      expect(board.acquireCancellationLease('ses_1', 1)).toBeUndefined();
-      expect(board.acquireMessageLease('ses_1', 1)).toBeUndefined();
-      expect(board.acquireRelaunchLease('ses_1', 1)).toBeUndefined();
+      expect(board.acquireLease('ses_1', 1, 'cancellation')).toBeUndefined();
+      expect(board.acquireLease('ses_1', 1, 'message')).toBeUndefined();
+      expect(board.acquireLease('ses_1', 1, 'relaunch')).toBeUndefined();
       expect(commit).not.toHaveBeenCalled();
       if (settlement === 'pending') {
         board.updateStatus({ taskID: 'ses_1', state: 'completed' });
         expect(board.get('ses_1')?.state).toBe('completed');
         expect(board.validateLease(lease)).toBe(true);
         expect(
-          board.acquireTerminalNotificationLease('ses_1', 1),
+          board.acquireLease('ses_1', 1, 'terminal-notification'),
         ).toBeUndefined();
-        expect(board.acquireRelaunchLease('ses_1', 1)).toBeUndefined();
+        expect(board.acquireLease('ses_1', 1, 'relaunch')).toBeUndefined();
         return;
       }
       const uncertain = board.get('ses_1');
@@ -392,10 +395,10 @@ describe('task_cancel tool', () => {
       expect(commit).not.toHaveBeenCalled();
       expect(board.get('ses_1')).toEqual(uncertain);
       expect(board.validateLease(lease)).toBe(false);
-      const available = board.acquireCancellationLease('ses_1', 1);
+      const available = board.acquireLease('ses_1', 1, 'cancellation');
       expect(available?.kind).toBe('cancellation');
       if (available) board.releaseLease(available);
-      const relaunch = board.acquireRelaunchLease('ses_1', 1);
+      const relaunch = board.acquireLease('ses_1', 1, 'relaunch');
       expect(relaunch?.kind).toBe('relaunch');
       if (relaunch) board.releaseLease(relaunch);
     },
@@ -529,7 +532,7 @@ describe('task_cancel tool', () => {
       terminalState: 'cancelled',
     });
     expect(deleteSession).not.toHaveBeenCalled();
-    expect(board.acquireRelaunchLease('ses_1', 1)?.kind).toBe('relaunch');
+    expect(board.acquireLease('ses_1', 1, 'relaunch')?.kind).toBe('relaunch');
   });
 
   test('returns an uncertain running result when quiescence cannot be verified', async () => {

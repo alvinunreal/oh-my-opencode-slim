@@ -5,7 +5,7 @@
  * session.idle, session.error, session.status, session.deleted) to
  * the appropriate subsystems.
  */
-import type { BackgroundJobStore } from '../../utils/background-job-store';
+import type { BackgroundJobBoard } from '../../utils/background-job-board';
 import type { BackgroundJobSupervisor } from '../../utils/background-job-supervisor';
 import { structuredErrorMessage } from '../../utils/child-transcript';
 import { isRecord } from '../../utils/guards';
@@ -28,7 +28,7 @@ import type {
 } from './pending-call-tracker';
 import type { RevivedRunTracker } from './revived-run-tracker';
 
-type BackgroundJobRecord = NonNullable<ReturnType<BackgroundJobStore['get']>>;
+type BackgroundJobRecord = NonNullable<ReturnType<BackgroundJobBoard['get']>>;
 
 interface SessionEventGenerationFence {
   generation: number;
@@ -60,7 +60,7 @@ const sessionEventFences = new WeakMap<
 >();
 
 function eventFenceMap(
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobBoard: BackgroundJobBoard,
 ): Map<string, SessionEventGenerationFence> {
   const key = backgroundJobBoard as object;
   const existing = sessionEventFences.get(key);
@@ -104,7 +104,7 @@ function eventActivityAt(
 }
 
 function rememberSessionGeneration(
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobBoard: BackgroundJobBoard,
   sessionID: string,
 ): void {
   const job = backgroundJobBoard.get(sessionID);
@@ -120,7 +120,7 @@ function rememberSessionGeneration(
 }
 
 function observeSessionEvent(
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobBoard: BackgroundJobBoard,
   input: { event: { properties?: Record<string, unknown> } },
   sessionID: string,
   observedAt: number,
@@ -184,7 +184,7 @@ function observeSessionEvent(
 }
 
 function isCurrentSessionObservation(
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobBoard: BackgroundJobBoard,
   observation: SessionEventObservation,
 ): boolean {
   if (!observation.job || observation.generation === undefined) return true;
@@ -277,7 +277,7 @@ export async function handleEvent(
      *  with an armed fallback chain). */
     deferredInlineErrors: Map<string, string>;
     withFallbackReason: (sessionID: string, text: string) => string;
-    backgroundJobBoard: BackgroundJobStore;
+    backgroundJobBoard: BackgroundJobBoard;
     terminalGate: import('../../utils/background-job-terminal-gate').BackgroundJobTerminalGate;
     pendingCallTracker: {
       peekByParentAndAgent(
@@ -587,7 +587,7 @@ export async function handleEvent(
         // Record non-retryable errors on the job board so the
         // orchestrator sees the failure instead of a false completion.
         if (job && job.state === 'running') {
-          // BackgroundJobStore has no expected-generation/CAS form for
+          // BackgroundJobBoard has no expected-generation/CAS form for
           // updateStatus. The check immediately above is the strongest
           // synchronous boundary available; a remote event cannot be made
           // atomic with a later relaunch through this API.
@@ -821,13 +821,13 @@ export async function handleEvent(
   clearChildInputWaitsForSession(sessionId);
   const fallbackInProgress =
     deps.options.isFallbackInProgress?.(sessionId) === true;
-  const job = deps.backgroundJobBoard.get(sessionId);
-  if (!fallbackInProgress || job?.deadlineExceededAt !== undefined) {
+  if (!fallbackInProgress) {
     deps.backgroundJobSupervisor?.onSessionDeleted(sessionId);
   }
 
   // Deletion may precede idle, so a deferred error may have no backstop yet.
   // Token invalidation preserves any backstop already awaiting fallback.
+  const job = deps.backgroundJobBoard.get(sessionId);
   const deferredError = deps.deferredInlineErrors.get(sessionId);
   if (deferredError !== undefined) {
     if (fallbackInProgress) {
@@ -889,7 +889,7 @@ function routeChildInputWait(
     };
   },
   deps: {
-    backgroundJobBoard: BackgroundJobStore;
+    backgroundJobBoard: BackgroundJobBoard;
     onChildInputWait?: (notification: ChildInputWaitNotification) => void;
     now?: () => number;
   },

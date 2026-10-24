@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test';
 import { BackgroundJobBoard } from './background-job-board';
-import { BackgroundJobCoordinator } from './background-job-coordinator';
 
 const retained = {
   taskID: 'ses_child',
@@ -18,7 +17,7 @@ describe('restoreRetainedSession', () => {
   test('imports a terminal row without launching, notifying, or allocating an alias', () => {
     const board = new BackgroundJobBoard();
     const terminal: string[] = [];
-    board.addTerminalStateListener((taskID) => terminal.push(taskID));
+    board.addTerminalOutcomeListener((record) => terminal.push(record.taskID));
 
     const restored = board.restoreRetainedSession(retained);
 
@@ -80,7 +79,11 @@ describe('restoreRetainedSession', () => {
     expect(board.get('ses_child')?.resultSummary).toBeUndefined();
     expect(board.restoreRetainedSession(retained)).toBeUndefined();
 
-    const lease = board.acquireRelaunchLease('ses_child', running.generation);
+    const lease = board.acquireLease(
+      'ses_child',
+      running.generation,
+      'relaunch',
+    );
     expect(lease).toBeDefined();
     board.drop('ses_child');
     expect(board.restoreRetainedSession(retained)).toBeUndefined();
@@ -95,17 +98,16 @@ describe('restoreRetainedSession', () => {
     expect(next.generation).toBe(running.generation + 1);
   });
 
-  test('coordinator projects identity and still does not emit a terminal wake', () => {
+  test('restore projects identity and still does not emit a terminal wake', () => {
     const board = new BackgroundJobBoard();
-    const coordinator = new BackgroundJobCoordinator(board);
     const identity: string[] = [];
     const terminal: string[] = [];
-    coordinator.addLaunchIdentityListener((event) => {
+    board.addLaunchIdentityListener((event) => {
       identity.push(`${event.kind}:${event.alias}`);
     });
-    coordinator.addTerminalStateListener((taskID) => terminal.push(taskID));
+    board.addTerminalOutcomeListener((record) => terminal.push(record.taskID));
 
-    const restored = coordinator.restoreRetainedSession({
+    const restored = board.restoreRetainedSession({
       ...retained,
       alias: 'fix-2',
     });

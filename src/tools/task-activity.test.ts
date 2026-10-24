@@ -231,7 +231,7 @@ describe('trickle-no-progress advisory consequence', () => {
     expect(before.possiblyStuck).toBe(false);
 
     // Past 120s with still no completion: advisory flag fires, board state
-    // stays running, no terminal is published, no deadline is claimed.
+    // stays running, no terminal is published.
     applyActivityEvent(
       tracker,
       {
@@ -249,7 +249,6 @@ describe('trickle-no-progress advisory consequence', () => {
     );
     expect(stuck.possiblyStuck).toBe(true);
     expect(board.get('ses_stream')?.state).toBe('running');
-    expect(board.get('ses_stream')?.deadlineExceededAt).toBeUndefined();
 
     // A completed request resets the clock: flag clears.
     applyActivityEvent(

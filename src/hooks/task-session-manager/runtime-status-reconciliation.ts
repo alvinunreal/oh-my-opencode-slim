@@ -1,5 +1,5 @@
 import type { PluginInput } from '@opencode-ai/plugin';
-import type { BackgroundJobStore } from '../../utils/background-job-store';
+import type { BackgroundJobBoard } from '../../utils/background-job-board';
 import {
   type BackgroundJobTerminalGate,
   runtimeObservationFromSnapshot,
@@ -12,7 +12,7 @@ export const RUNTIME_STATUS_RECONCILE_DELAY_MS = 5_000;
 /** Batching, cadence and capability detection only; no terminal policy. */
 export function createRuntimeStatusReconciler(options: {
   input: PluginInput;
-  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobBoard: BackgroundJobBoard;
   terminalGate: BackgroundJobTerminalGate;
   delayMs?: number;
   statusTimeoutMs?: number;

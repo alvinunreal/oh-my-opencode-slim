@@ -17,7 +17,6 @@ import {
   createInternalAgentTextPart,
   getBackgroundJobLifecycleLedger,
   BackgroundJobBoard as ProductionBoard,
-  SLIM_INTERNAL_INITIATOR_MARKER,
 } from '../../utils';
 import { BackgroundJobBoard } from '../../utils/background-job-fixture';
 import {
@@ -50,11 +49,6 @@ import { resetUserWaitGateForTests } from './user-wait-gate';
 mock.module('../../utils/opencode-client', () => ({
   getClient: (input: { client: unknown }) => input.client as never,
 }));
-
-async function flushContinuation(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
 
 /** Flush delayed child idle-reconcile timers when idleReconcileDelayMs is 0. */
 async function flushChildIdleReconcile(): Promise<void> {
@@ -290,16 +284,6 @@ function boardText(messages: { messages: unknown[] }): string | undefined {
 
 function isBoardPartForTest(part: { metadata?: Record<string, unknown> }) {
   return part.metadata?.[BACKGROUND_JOB_BOARD_METADATA_KEY] === true;
-}
-
-function boardSnapshotIDs(messages: { messages: unknown[] }): string[] {
-  return messages.messages.flatMap((message) =>
-    message.parts.flatMap((part) =>
-      isBoardPartForTest(part) && typeof part.metadata?.snapshotID === 'string'
-        ? [part.metadata.snapshotID]
-        : [],
-    ),
-  );
 }
 
 /**
@@ -681,8 +665,8 @@ describe('task-session-manager hook', () => {
 
     const secondBoard = new BackgroundJobBoard();
     // The assembly, not the after-hook, owns terminal capacity release.
-    secondBoard.addTerminalStateListener((taskID) =>
-      concurrency.releaseTask(taskID),
+    secondBoard.addTerminalOutcomeListener((record) =>
+      concurrency.releaseTask(record.taskID),
     );
     const secondGeneration = createHook({
       backgroundJobBoard: secondBoard,
@@ -981,7 +965,7 @@ describe('task-session-manager hook', () => {
       expect(own?.state).toBe('reconciled');
       expect(own?.terminalState).toBe('completed');
       expect(
-        board.acquireRelaunchLease('ses_own', own.generation),
+        board.acquireLease('ses_own', own.generation, 'relaunch'),
       ).toBeUndefined();
       await resume('ses_error');
       expect(board.get('ses_error')).toMatchObject({
@@ -1048,7 +1032,7 @@ describe('task-session-manager hook', () => {
     const board = new BackgroundJobBoard();
     const pendingCallTracker = createPendingCallTracker();
     const markUsed = spyOn(board, 'markUsed');
-    const acquire = spyOn(board, 'acquireRelaunchLease');
+    const acquire = spyOn(board, 'acquireLease');
     const adopt = spyOn(board, 'adoptTerminal');
     const { hook, complete } = createHook({
       backgroundJobBoard: board,
@@ -1107,7 +1091,11 @@ describe('task-session-manager hook', () => {
     );
     expect(board.get('ses_waiting')).toBeUndefined();
     expect(adopt).not.toHaveBeenCalled();
-    expect(acquire).not.toHaveBeenCalled();
+    // No relaunch lease was acquired (the collapsed single acquire seam is
+    // spied: assert no acquisition of this flow's kind happened).
+    expect(acquire.mock.calls.some((call) => call[2] === 'relaunch')).toBe(
+      false,
+    );
     expect(markUsed).not.toHaveBeenCalled();
     expect(pendingCallTracker.peekByParent('parent-1')).toBeUndefined();
   });
@@ -2832,9 +2820,10 @@ describe('task-session-manager hook', () => {
     const relaunched = board.get('child-1');
     expect(resume.args.task_id).toBe('child-1');
     expect(relaunched).toMatchObject({ generation: 2, state: 'running' });
-    const cancellationLease = board.acquireCancellationLease(
+    const cancellationLease = board.acquireLease(
       'child-1',
       relaunched?.generation ?? -1,
+      'cancellation',
     );
     expect(cancellationLease).toBeDefined();
     if (!cancellationLease) {
@@ -2850,9 +2839,10 @@ describe('task-session-manager hook', () => {
       parentSessionID: 'parent-1',
       agent: 'oracle',
     });
-    const cancellationLease = board.acquireCancellationLease(
+    const cancellationLease = board.acquireLease(
       first.taskID,
       first.generation,
+      'cancellation',
     );
     expect(cancellationLease).toBeDefined();
     const { hook } = createHook({ backgroundJobBoard: board });
@@ -2878,7 +2868,7 @@ describe('task-session-manager hook', () => {
       generation: first.generation,
       state: 'running',
     });
-    expect(board.acquireRelaunchLease('child-1', first.generation)).toBe(
+    expect(board.acquireLease('child-1', first.generation, 'relaunch')).toBe(
       undefined,
     );
     if (!cancellationLease) {
@@ -2904,9 +2894,10 @@ describe('task-session-manager hook', () => {
       Date.now(),
       first.generation,
     );
-    const cancellationLease = board.acquireCancellationLease(
+    const cancellationLease = board.acquireLease(
       first.taskID,
       first.generation,
+      'cancellation',
     );
     expect(cancellationLease).toBeDefined();
     const { hook } = createHook({ backgroundJobBoard: board });
@@ -3081,7 +3072,7 @@ describe('task-session-manager hook', () => {
       { output: undefined },
     );
 
-    const secondLease = board.acquireRelaunchLease('child-1', 1);
+    const secondLease = board.acquireLease('child-1', 1, 'relaunch');
     expect(secondLease).toBeDefined();
     if (!secondLease) throw new Error('relaunch lease was not released');
     board.releaseLease(secondLease);
@@ -3110,7 +3101,7 @@ describe('task-session-manager hook', () => {
       ),
     ).rejects.toThrow('context tracking failed');
 
-    const cancellationLease = board.acquireCancellationLease('child-1', 2);
+    const cancellationLease = board.acquireLease('child-1', 2, 'cancellation');
     expect(cancellationLease).toBeDefined();
     if (!cancellationLease) {
       throw new Error('cancellation lease was not acquired');
@@ -5769,7 +5760,7 @@ describe('task-session-manager hook', () => {
     // The deferral entry from error#1 must be gone: relaunch the task and
     // prove a later idle runs the normal inspect path instead of the
     // deferred-error backstop with the stale message.
-    const lease = board.acquireRelaunchLease('child-1', run.generation);
+    const lease = board.acquireLease('child-1', run.generation, 'relaunch');
     if (!lease) throw new Error('missing relaunch lease');
     board.registerLaunch({
       taskID: 'child-1',
@@ -6295,7 +6286,9 @@ describe('task-session-manager hook', () => {
     const messages = createMessages('parent-1', 'continue');
     await transformMessages(hook, messages);
     expect(board.get('child-1')?.state).toBe('running');
-    expect(board.listReusable('parent-1')).toHaveLength(0);
+    expect(
+      board.resolveReusable('parent-1', 'child-1', 'explorer'),
+    ).toBeUndefined();
   });
 
   test('bare task id output without state does not create reusable job', async () => {
@@ -6615,7 +6608,7 @@ describe('task-session-manager hook', () => {
           return timer;
         },
       );
-      const acquire = spyOn(ProductionBoard.prototype, 'acquireRelaunchLease');
+      const acquire = spyOn(ProductionBoard.prototype, 'acquireLease');
       const releaseLease = board.releaseLease.bind(board);
       const release = spyOn(
         ProductionBoard.prototype,
@@ -6637,7 +6630,7 @@ describe('task-session-manager hook', () => {
       };
       const onLaunch = mock(() => {});
       const terminal = mock(() => {});
-      board.addTerminalStateListener(terminal);
+      board.addTerminalOutcomeListener(terminal);
       const { task_revive } = createTaskReviveTool({
         input: {
           directory: '/tmp',
@@ -6662,7 +6655,9 @@ describe('task-session-manager hook', () => {
         );
         (await deadline.promise)();
         expect(String(await pending)).toContain('status: admission_unknown');
-        const lease = acquire.mock.results[0]?.value;
+        const lease = acquire.mock.results
+          .map((result) => result?.value)
+          .find((value) => value?.kind === 'relaunch');
         if (!lease) throw new Error('missing relaunch lease');
         coordinator.dispatchSessionDeleted(deletedID);
         expect(board.get('child-1')).toBeUndefined();
@@ -6820,7 +6815,7 @@ describe('task-session-manager hook', () => {
       description: 'late completion',
     });
     const listener = mock(() => {});
-    board.addTerminalStateListener(listener);
+    board.addTerminalOutcomeListener(listener);
     const { hook } = createHook({
       backgroundJobBoard: board,
       shouldManageSession: (id) => id === 'parent-1',
@@ -7134,7 +7129,7 @@ describe('task-session-manager hook', () => {
     const coordinator = new SessionLifecycle(() => {});
     const board = new BackgroundJobBoard();
     const terminalListener = mock(() => {});
-    board.addTerminalStateListener(terminalListener);
+    board.addTerminalOutcomeListener(terminalListener);
     const first = createHook({
       backgroundJobBoard: board,
       coordinator,
@@ -7277,7 +7272,7 @@ describe('task-session-manager hook', () => {
     const coordinator = new SessionLifecycle(() => {});
     const board = new BackgroundJobBoard();
     const terminalListener = mock(() => {});
-    board.addTerminalStateListener(terminalListener);
+    board.addTerminalOutcomeListener(terminalListener);
     const first = createHook({
       backgroundJobBoard: board,
       coordinator,
@@ -7458,7 +7453,7 @@ describe('task-session-manager hook', () => {
   test('allows an observed synthetic completion in the same generation', async () => {
     const board = new BackgroundJobBoard();
     const terminalListener = mock(() => {});
-    board.addTerminalStateListener(terminalListener);
+    board.addTerminalOutcomeListener(terminalListener);
     const { hook, complete } = createHook({
       backgroundJobBoard: board,
       runtimeStatusReconcileDelayMs: 60_000,
@@ -7514,7 +7509,7 @@ describe('task-session-manager hook', () => {
     const coordinator = new SessionLifecycle(() => {});
     const board = new BackgroundJobBoard();
     const terminalListener = mock(() => {});
-    board.addTerminalStateListener(terminalListener);
+    board.addTerminalOutcomeListener(terminalListener);
     const first = createHook({
       backgroundJobBoard: board,
       coordinator,
@@ -7786,7 +7781,7 @@ describe('task-session-manager hook', () => {
   test('keeps unobserved legacy and host-message completions fail-closed after deletion', async () => {
     const board = new BackgroundJobBoard();
     const terminalListener = mock(() => {});
-    board.addTerminalStateListener(terminalListener);
+    board.addTerminalOutcomeListener(terminalListener);
     const { hook } = createHook({
       backgroundJobBoard: board,
       runtimeStatusReconcileDelayMs: 60_000,
@@ -7863,7 +7858,7 @@ describe('task-session-manager hook', () => {
   test('accepts a host messageID occurrence in the current generation', async () => {
     const board = new BackgroundJobBoard();
     const terminalListener = mock(() => {});
-    board.addTerminalStateListener(terminalListener);
+    board.addTerminalOutcomeListener(terminalListener);
     const { hook, complete } = createHook({
       backgroundJobBoard: board,
       runtimeStatusReconcileDelayMs: 60_000,
@@ -7936,7 +7931,7 @@ describe('task-session-manager hook', () => {
   test('keeps a host completion without observed provenance fail-closed', async () => {
     const board = new BackgroundJobBoard();
     const terminalListener = mock(() => {});
-    board.addTerminalStateListener(terminalListener);
+    board.addTerminalOutcomeListener(terminalListener);
     const { hook } = createHook({
       backgroundJobBoard: board,
       runtimeStatusReconcileDelayMs: 60_000,
@@ -7984,7 +7979,7 @@ describe('task-session-manager hook', () => {
   test('keeps an exact explicit ID collision independent from host provenance', async () => {
     const board = new BackgroundJobBoard();
     const terminalListener = mock(() => {});
-    board.addTerminalStateListener(terminalListener);
+    board.addTerminalOutcomeListener(terminalListener);
     const { hook, complete } = createHook({
       backgroundJobBoard: board,
       runtimeStatusReconcileDelayMs: 60_000,
@@ -8073,7 +8068,7 @@ describe('task-session-manager hook', () => {
   test('rejects weak provenance after relaunch without session deletion', async () => {
     const board = new BackgroundJobBoard();
     const terminalListener = mock(() => {});
-    board.addTerminalStateListener(terminalListener);
+    board.addTerminalOutcomeListener(terminalListener);
     const { hook } = createHook({
       backgroundJobBoard: board,
       runtimeStatusReconcileDelayMs: 60_000,
@@ -8141,7 +8136,7 @@ describe('task-session-manager hook', () => {
   test('does not reject weak provenance after an unrelated task deletion', async () => {
     const board = new BackgroundJobBoard();
     const terminalListener = mock(() => {});
-    board.addTerminalStateListener(terminalListener);
+    board.addTerminalOutcomeListener(terminalListener);
     const { hook, complete } = createHook({
       backgroundJobBoard: board,
       runtimeStatusReconcileDelayMs: 60_000,
@@ -8208,7 +8203,7 @@ describe('task-session-manager hook', () => {
   test('keeps a distinct weak origin after processing the first one fail-closed', async () => {
     const board = new BackgroundJobBoard();
     const terminalListener = mock(() => {});
-    board.addTerminalStateListener(terminalListener);
+    board.addTerminalOutcomeListener(terminalListener);
     const { hook, complete } = createHook({
       backgroundJobBoard: board,
       runtimeStatusReconcileDelayMs: 60_000,
@@ -8284,7 +8279,7 @@ describe('task-session-manager hook', () => {
   test('keeps multiple current-generation host messageID origins fail-closed', async () => {
     const board = new BackgroundJobBoard();
     const terminalListener = mock(() => {});
-    board.addTerminalStateListener(terminalListener);
+    board.addTerminalOutcomeListener(terminalListener);
     const { hook } = createHook({
       backgroundJobBoard: board,
       runtimeStatusReconcileDelayMs: 60_000,
@@ -8345,7 +8340,7 @@ describe('task-session-manager hook', () => {
   test('retains an old occurrence provenance after more than 500 later occurrences', async () => {
     const board = new BackgroundJobBoard();
     const terminalListener = mock(() => {});
-    board.addTerminalStateListener(terminalListener);
+    board.addTerminalOutcomeListener(terminalListener);
     const { hook } = createHook({
       backgroundJobBoard: board,
       runtimeStatusReconcileDelayMs: 60_000,
@@ -8840,9 +8835,8 @@ describe('task-session-manager hook', () => {
       const clock = createSupervisorClock();
       const abort = mock(async () => undefined);
       const supervisor = new BackgroundJobSupervisor({
-        backgroundJobStore: board,
+        backgroundJobBoard: board,
         wallClockTimeoutMs: 100,
-        abortGraceMs: 10,
         abort,
         now: clock.now,
         setTimeout: clock.setTimeout,
@@ -8913,9 +8907,8 @@ describe('task-session-manager hook', () => {
     const clock = createSupervisorClock();
     const abort = mock(async () => undefined);
     const supervisor = new BackgroundJobSupervisor({
-      backgroundJobStore: board,
+      backgroundJobBoard: board,
       wallClockTimeoutMs: 100,
-      abortGraceMs: 10,
       abort,
       now: clock.now,
       setTimeout: clock.setTimeout,
@@ -8973,15 +8966,14 @@ describe('task-session-manager hook', () => {
     expect(abort).toHaveBeenCalledWith('background-child');
   });
 
-  test('fallback delete/recreate/busy preserves an unclaimed absolute deadline', async () => {
+  test('fallback delete/recreate/busy keeps the watchdog armed for the live run', async () => {
     const board = new BackgroundJobBoard();
     const coordinator = new SessionLifecycle(() => {});
     const clock = createSupervisorClock();
     const abort = mock(async () => undefined);
     const supervisor = new BackgroundJobSupervisor({
-      backgroundJobStore: board,
+      backgroundJobBoard: board,
       wallClockTimeoutMs: 100,
-      abortGraceMs: 10,
       abort,
       now: clock.now,
       setTimeout: clock.setTimeout,
@@ -9031,12 +9023,14 @@ describe('task-session-manager hook', () => {
     fallback = false;
     await clock.advanceTo(100);
 
+    // A foreground-fallback delete/recreate does not consume the one-shot
+    // deadline: the live run is still aborted through the host.
     expect(abort).toHaveBeenCalledTimes(1);
     expect(abort).toHaveBeenCalledWith('fallback-child');
-    expect(board.get('fallback-child')?.deadlineExceededAt).toBe(100);
+    expect(board.get('fallback-child')?.state).toBe('running');
   });
 
-  test('fallback deletion during grace confirms rather than clears a hard timeout', async () => {
+  test('a fallback deletion after the watchdog abort drops the row without inventing a terminal', async () => {
     const board = new BackgroundJobBoard();
     const coordinator = new SessionLifecycle(() => {});
     const clock = createSupervisorClock();
@@ -9046,10 +9040,8 @@ describe('task-session-manager hook', () => {
       now: clock.now,
     });
     const supervisor = new BackgroundJobSupervisor({
-      backgroundJobStore: board,
-      terminalGate,
+      backgroundJobBoard: board,
       wallClockTimeoutMs: 100,
-      abortGraceMs: 20,
       abort,
       now: clock.now,
       setTimeout: clock.setTimeout,
@@ -9074,6 +9066,13 @@ describe('task-session-manager hook', () => {
     });
 
     await clock.advanceTo(100);
+    expect(abort).toHaveBeenCalledTimes(1);
+    // The watchdog aborted; no terminal state was fabricated locally.
+    expect(board.get('fallback-grace-child')).toMatchObject({
+      state: 'running',
+      timedOut: false,
+    });
+
     fallback = true;
     await hook.event({
       event: {
@@ -9084,11 +9083,7 @@ describe('task-session-manager hook', () => {
     coordinator.dispatchSessionDeleted('fallback-grace-child');
 
     expect(abort).toHaveBeenCalledTimes(1);
-    expect(board.get('fallback-grace-child')).toMatchObject({
-      state: 'error',
-      timedOut: true,
-      deadlineExceededAt: 100,
-    });
+    expect(board.get('fallback-grace-child')?.state).toBe('running');
     terminalGate.dispose();
   });
 

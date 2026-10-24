@@ -1,35 +1,55 @@
-import type { BackgroundJobRecord } from './background-job-board';
-import type { BackgroundJobStore } from './background-job-store';
-import type { BackgroundJobTerminalGate } from './background-job-terminal-gate';
+import type {
+  BackgroundJobBoard,
+  BackgroundJobLease,
+  BackgroundJobRecord,
+} from './background-job-board';
 import { log } from './logger';
 
 /** Platform timer handle; fake harnesses may return bare numeric ids. */
 type TimerHandle = Timer;
 
+/**
+ * Interval between re-attempts of the deadline's lease acquisition while
+ * another operation (message queueing, cancel, relaunch) owns the child's
+ * cancellation lease. Leases are short-lived by construction, so the retry
+ * chain is bounded by the child's lifetime, not a counter.
+ */
+export const LEASE_RETRY_INTERVAL_MS = 1_000;
+
 export interface BackgroundJobSupervisorOptions {
-  backgroundJobStore: BackgroundJobStore;
-  terminalGate: BackgroundJobTerminalGate;
+  backgroundJobBoard: BackgroundJobBoard;
   wallClockTimeoutMs: number;
-  abortGraceMs: number;
+  /**
+   * The host primitive `task_cancel` sends: `client.session.abort({ path: { id } })`.
+   * The watchdog only triggers it; the host's own terminal evidence publishes the row.
+   */
   abort: (taskID: string) => Promise<unknown>;
   now?: () => number;
   setTimeout?: (callback: () => void, delay: number) => TimerHandle;
   clearTimeout?: (timer: TimerHandle) => void;
 }
 
-interface RunTimers {
+interface RunTimer {
   generation: number;
   runStartedAt: number;
   parentSessionID: string;
+  /** Held only across the abort request, so a racing cancel cannot double-abort. */
+  abortLease?: BackgroundJobLease;
   deadlineTimer?: TimerHandle;
-  graceTimer?: TimerHandle;
 }
 
 /**
- * One-shot wall-clock supervision for native background task sessions.
+ * One-shot wall-clock watchdog for native background task sessions.
  *
- * This class owns only timer/generation/abort mechanics. The board/coordinator
- * remains the atomic state and terminal-publication boundary.
+ * The host offers no live-hang timeout, so this is the only thing that
+ * eventually stops a hung background child. It owns timer/generation/abort
+ * mechanics ONLY: on expiry it asks the host to stop the child through the
+ * same lease-guarded abort `task_cancel` uses, then drops the timer. When
+ * the deadline fires while another operation holds the cancellation lease,
+ * the acquisition is retried on a short interval instead of dropping the
+ * run — a message/relaunch lease does not end the run. It never
+ * writes terminal state — the host's real aborted terminal flows through the
+ * terminal gate's evidence path like any other outcome.
  */
 export class BackgroundJobSupervisor {
   private readonly now: () => number;
@@ -38,7 +58,7 @@ export class BackgroundJobSupervisor {
     delay: number,
   ) => TimerHandle;
   private readonly clearTimer: (timer: TimerHandle) => void;
-  private readonly runs = new Map<string, RunTimers>();
+  private readonly runs = new Map<string, RunTimer>();
   private disposed = false;
 
   constructor(private readonly options: BackgroundJobSupervisorOptions) {
@@ -67,15 +87,11 @@ export class BackgroundJobSupervisor {
       return;
     this.clear(record.taskID);
 
-    const run: RunTimers = {
+    const run: RunTimer = {
       generation: record.generation,
       runStartedAt: record.runStartedAt,
       parentSessionID: record.parentSessionID,
     };
-    if (record.deadlineExceededAt !== undefined) {
-      this.runs.set(record.taskID, run);
-      return;
-    }
     run.deadlineTimer = this.setTimer(
       () => this.onDeadline(record.taskID, record.generation),
       Math.max(
@@ -100,34 +116,9 @@ export class BackgroundJobSupervisor {
     }
   }
 
-  /**
-   * Handle a child deletion before the normal board drop callback. A deletion
-   * during grace confirms the timed-out terminal; an ordinary deletion simply
-   * invalidates the run without inventing a terminal result.
-   */
-  onSessionDeleted(taskID: string): boolean {
-    if (this.disposed) {
-      this.clear(taskID);
-      return false;
-    }
-    const record = this.options.backgroundJobStore.get(taskID);
-    if (!record) {
-      this.clear(taskID);
-      return false;
-    }
-    if (record.deadlineExceededAt !== undefined && record.state === 'running') {
-      const token = this.options.terminalGate.capture(record);
-      if (token)
-        this.options.terminalGate.observe(token, {
-          kind: 'deleted',
-          origin: 'session.deleted',
-          readStartedAt: token.readStartedAt,
-        });
-      this.clear(taskID);
-      return true;
-    }
+  /** A child deletion invalidates the run; no terminal is invented. */
+  onSessionDeleted(taskID: string): void {
     this.clear(taskID);
-    return false;
   }
 
   drop(taskID: string): void {
@@ -155,54 +146,69 @@ export class BackgroundJobSupervisor {
     if (this.disposed || !run || run.generation !== generation) return;
     run.deadlineTimer = undefined;
 
-    const claimed = this.options.backgroundJobStore.claimWallClockDeadline({
+    // The same ownership primitive task_cancel acquires: while it is held no
+    // other operation can abort, message, or relaunch this child. An
+    // occupied lease means that operation owns the child RIGHT NOW — but a
+    // message only queues text and a relaunch only starts a new run; neither
+    // ends this run. The watchdog must not forget the run, so it retries the
+    // acquisition instead of standing down: every settling operation either
+    // releases its lease or produces a terminal that clears the run via
+    // onTerminal/drop/onSessionDeleted.
+    const lease = this.options.backgroundJobBoard.acquireLease(
       taskID,
       generation,
-      now: this.now(),
-    });
-    if (!claimed) {
+      'cancellation',
+    );
+    if (!lease) {
+      run.deadlineTimer = this.setTimer(
+        () => this.retryDeadline(taskID, generation),
+        LEASE_RETRY_INTERVAL_MS,
+      );
+      return;
+    }
+    run.abortLease = lease;
+
+    // A rejected or hanging SDK promise must never escape the watchdog. The
+    // lease is held only for the abort's duration: releasing it afterwards
+    // keeps cancel/relaunch ownership available while the host's terminal
+    // evidence is still in flight.
+    Promise.resolve()
+      .then(() => this.options.abort(taskID))
+      .catch((error) => {
+        log(
+          '[background-job-supervisor] wall-clock abort failed',
+          String(error),
+        );
+      })
+      .finally(() => {
+        const active = this.runs.get(taskID);
+        if (active === run) active.abortLease = undefined;
+        // Harmless when clear() already released it: token mismatch refuses.
+        this.options.backgroundJobBoard.releaseLease(lease);
+      });
+  }
+
+  /** Re-attempt the deadline's lease acquisition. */
+  private retryDeadline(taskID: string, generation: number): void {
+    const run = this.runs.get(taskID);
+    if (this.disposed || !run || run.generation !== generation) return;
+    // The competing operation settled with a terminal: the run clears itself
+    // via onTerminal/drop/onSessionDeleted when the terminal publishes, and a
+    // non-running record means the watchdog's work is over either way.
+    const record = this.options.backgroundJobBoard.get(taskID);
+    if (record?.state !== 'running') {
       this.clear(taskID);
       return;
     }
-
-    // The grace timer is armed before abort is invoked. A rejected or hanging
-    // SDK promise must never prevent the bounded terminal transition.
-    run.graceTimer = this.setTimer(
-      () => this.onGraceExpired(taskID, generation),
-      this.options.abortGraceMs,
-    );
-    Promise.resolve()
-      .then(() => this.options.abort(taskID))
-      .catch(() => undefined);
-  }
-
-  private onGraceExpired(taskID: string, generation: number): void {
-    const run = this.runs.get(taskID);
-    if (this.disposed || !run || run.generation !== generation) return;
-    run.graceTimer = undefined;
-    this.options.backgroundJobStore.markStatusUncertain(
-      taskID,
-      'Background task exceeded its wall-clock deadline; abort was not confirmed before the grace period expired.',
-      generation,
-      this.now(),
-    );
-    // Background reconciliation is fail-soft: a failure must be logged
-    // and swallowed, never escape as an unhandled rejection.
-    void this.options.terminalGate
-      .reconcile({ taskID, generation }, { kind: 'deadline' })
-      .catch((err) => {
-        log(
-          '[background-job-supervisor] deadline reconcile failed',
-          String(err),
-        );
-      });
+    this.onDeadline(taskID, generation);
   }
 
   private clear(taskID: string): void {
     const run = this.runs.get(taskID);
     if (!run) return;
     if (run.deadlineTimer !== undefined) this.clearTimer(run.deadlineTimer);
-    if (run.graceTimer !== undefined) this.clearTimer(run.graceTimer);
+    if (run.abortLease !== undefined)
+      this.options.backgroundJobBoard.releaseLease(run.abortLease);
     this.runs.delete(taskID);
   }
 }

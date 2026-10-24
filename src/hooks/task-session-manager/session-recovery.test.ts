@@ -2,14 +2,14 @@ import { afterEach, describe, expect, jest, mock, spyOn, test } from 'bun:test';
 import { createCancelTaskTool } from '../../tools/cancel-task';
 import { createTaskReviveTool } from '../../tools/task-revive';
 import { createTaskStatusTool } from '../../tools/task-status';
-import { BackgroundJobBoard } from '../../utils/background-job-board';
-import { BackgroundJobBoard as FixtureBoard } from '../../utils/background-job-fixture';
-import { getSuppressionTombstone } from '../../utils/background-job-persistence';
 import {
+  BackgroundJobBoard,
   clearBackgroundJobSuppression,
   getBackgroundJobLifecycleLedger,
   recordBackgroundJobSuppression,
-} from '../../utils/background-job-store';
+} from '../../utils/background-job-board';
+import { BackgroundJobBoard as FixtureBoard } from '../../utils/background-job-fixture';
+import { getSuppressionTombstone } from '../../utils/background-job-persistence';
 import { createBackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
 import * as opencodeClient from '../../utils/opencode-client';
 import { registerPendingSessionPrune } from '../../utils/pending-session-prunes';

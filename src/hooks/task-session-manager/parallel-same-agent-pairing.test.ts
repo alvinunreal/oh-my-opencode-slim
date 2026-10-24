@@ -55,8 +55,8 @@ function createHook(
       ],
     }),
   });
-  board.addTerminalStateListener((taskID) =>
-    extra.backgroundTaskConcurrency?.releaseTask(taskID),
+  board.addTerminalOutcomeListener((record) =>
+    extra.backgroundTaskConcurrency?.releaseTask(record.taskID),
   );
   const hook = createTaskSessionManagerHook(
     {

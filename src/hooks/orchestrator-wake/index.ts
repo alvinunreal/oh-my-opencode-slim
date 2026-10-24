@@ -193,7 +193,7 @@ export function stoppedJobRecoveryReason(record: {
   statusUncertain: boolean;
   resultSummary?: string;
 }): string {
-  if (record.timedOut) return 'wall-clock deadline exceeded';
+  if (record.timedOut) return 'external task-wait timeout';
   if (record.statusUncertain) return 'runtime status uncertain';
   const attributed = HOST_ATTRIBUTED_STOP_OUTCOME.exec(
     record.resultSummary ?? '',

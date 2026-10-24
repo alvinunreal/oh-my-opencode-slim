@@ -10,8 +10,10 @@ import { BACKGROUND_JOB_BOARD_METADATA_KEY } from './hooks/task-session-manager/
 import type { RevivedRunTracker } from './hooks/task-session-manager/revived-run-tracker';
 import * as runtimeFactories from './hooks/task-session-manager/runtime-status-reconciliation';
 import { OhMyOpenCodeLite as plugin } from './index';
-import type { BackgroundJobRecord } from './utils/background-job-board';
-import type { BackgroundJobCoordinator } from './utils/background-job-coordinator';
+import type {
+  BackgroundJobRecord,
+  BackgroundJobBoard as ProductionBoard,
+} from './utils/background-job-board';
 import {
   configureBackgroundJobPersistence,
   loadInitialBackgroundJobPersistence,
@@ -62,7 +64,7 @@ const transcript = () => ({
 
 async function assembly(
   onHookCreated?: (
-    board: BackgroundJobCoordinator,
+    board: ProductionBoard,
     gate: gateFactories.BackgroundJobTerminalGate,
   ) => void,
   setup: {
@@ -105,7 +107,7 @@ async function assembly(
       },
     }),
   );
-  let board!: BackgroundJobCoordinator;
+  let board!: ProductionBoard;
   let gate!: gateFactories.BackgroundJobTerminalGate;
   let taskHook!: ReturnType<typeof hookFactories.createTaskSessionManagerHook>;
   // The production tracker instance, captured from the hook factory's
@@ -132,7 +134,7 @@ async function assembly(
     gateFactories,
     'createBackgroundJobTerminalGate',
   ).mockImplementation((options) => {
-    board = options.backgroundJobBoard as BackgroundJobCoordinator;
+    board = options.backgroundJobBoard as ProductionBoard;
     gate = originalGate({
       ...options,
       graceMs: setup.graceMs ?? options.graceMs,
@@ -1226,7 +1228,7 @@ async function driveV2Lifecycle(
   probe: V2HostProbe,
   events: V2RawEventSpec[],
   setup: { withoutHostOutcomeClock?: boolean } = {},
-): Promise<BackgroundJobCoordinator> {
+): Promise<ProductionBoard> {
   const childID = String(
     events.find((event) => event.type === 'session.created')?.data.sessionID ??
       events[0]?.data.sessionID ??
@@ -2340,7 +2342,7 @@ async function verifyRevivedDelivery(moved: boolean) {
     // recreate the exact post-admission state task_revive leaves behind
     // (task-revive.ts registerLaunch + tracker.register) — the board
     // runs a NEW generation and the tracker owns observing it.
-    const lease = h.board.acquireRelaunchLease('child', first.generation);
+    const lease = h.board.acquireLease('child', first.generation, 'relaunch');
     if (!lease) throw new Error('missing relaunch lease');
     const relaunched = h.board.registerLaunch({
       taskID: 'child',
@@ -2510,7 +2512,7 @@ test('revived-run tracker exhaustion sends no further prompt; result is pull-onl
     expect(promptAsync).not.toHaveBeenCalled();
 
     // Revive the child in task_revive's exact post-admission shape.
-    const lease = h.board.acquireRelaunchLease('child', first.generation);
+    const lease = h.board.acquireLease('child', first.generation, 'relaunch');
     if (!lease) throw new Error('missing relaunch lease');
     const relaunched = h.board.registerLaunch({
       taskID: 'child',
@@ -2774,7 +2776,7 @@ test('first publication of an unowned second generation delivers nothing (pull-o
     // re-arms the native background notifier with a fresh `started_at`.
     // On v2 the plugin has no wake to fire beside it at all (council
     // 2026-10-23): the publication is natively delivered or pulled.
-    const lease = h.board.acquireRelaunchLease('child', first.generation);
+    const lease = h.board.acquireLease('child', first.generation, 'relaunch');
     if (!lease) throw new Error('missing relaunch lease');
     const relaunched = h.board.registerLaunch({
       taskID: 'child',
@@ -2930,7 +2932,7 @@ test('revived stop with no prior tracker delivery injects nothing; the attribute
 
     // Revive (task_revive's post-admission shape), then the host
     // interrupts the revived run before it ever completes.
-    const lease = h.board.acquireRelaunchLease('child', first.generation);
+    const lease = h.board.acquireLease('child', first.generation, 'relaunch');
     if (!lease) throw new Error('missing relaunch lease');
     const relaunched = h.board.registerLaunch({
       taskID: 'child',
@@ -3061,7 +3063,7 @@ test('revived generation stays silent after a tracker-delivered terminal and a l
 
     // Revive; the revived generation completes and the tracker delivers
     // its <task> notification (the generation's one admission).
-    const lease = h.board.acquireRelaunchLease('child', first.generation);
+    const lease = h.board.acquireLease('child', first.generation, 'relaunch');
     if (!lease) throw new Error('missing relaunch lease');
     const relaunched = h.board.registerLaunch({
       taskID: 'child',
@@ -3285,7 +3287,7 @@ test('runbook §3-D: zero cache-monitor warnings across a full revival/notificat
 
     // Revival: tracker-owned relaunch (task_revive's exact post-admission
     // shape).
-    const lease = h.board.acquireRelaunchLease('child', first.generation);
+    const lease = h.board.acquireLease('child', first.generation, 'relaunch');
     if (!lease) throw new Error('missing relaunch lease');
     const relaunched = h.board.registerLaunch({
       taskID: 'child',

@@ -532,6 +532,12 @@ export const BackgroundJobsConfigStrictSchema = z.object({
         'backgroundJobs.boardInjection was removed; the job board is never rendered — terminal results arrive as one-shot pushes and task_status is the pull channel',
     })
     .optional(),
+  abortGraceMs: z
+    .never({
+      error:
+        'backgroundJobs.abortGraceMs was removed; the wall-clock watchdog no longer fabricates a terminal: it aborts the child and the host reports the real outcome',
+    })
+    .optional(),
   orchestratorWake: z
     .object({
       enabled: z
@@ -592,16 +598,7 @@ export const BackgroundJobsConfigStrictSchema = z.object({
     .union([z.literal(0), z.number().int().min(60_000).max(2_147_483_647)])
     .default(0)
     .describe(
-      'Explicit opt-in wall-clock deadline for native task(..., background: true) child sessions. 0 disables supervision; finite values are 60,000–2,147,483,647ms.',
-    ),
-  abortGraceMs: z
-    .number()
-    .int()
-    .min(1_000)
-    .max(60_000)
-    .default(10_000)
-    .describe(
-      'Grace period after a wall-clock deadline while OpenCode confirms the child terminal state (1,000–60,000ms).',
+      'Explicit opt-in wall-clock deadline for native task(..., background: true) child sessions. On expiry the plugin asks the host to stop the child (session abort) and lets the host report the real terminal. 0 disables supervision; finite values are 60,000–2,147,483,647ms.',
     ),
   stopConfirmationMs: z
     .number()

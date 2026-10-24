@@ -4,7 +4,6 @@ import { createRevivedRunTracker } from '../hooks/task-session-manager/revived-r
 import { createTaskStatusTool } from '../tools/task-status';
 import { buildPluginInput } from '../v2/client-shim';
 import { BackgroundJobBoard } from './background-job-board';
-import { BackgroundJobCoordinator } from './background-job-coordinator';
 import {
   type BackgroundJobTerminalGate,
   createBackgroundJobTerminalGate,
@@ -210,13 +209,12 @@ describe('terminal gate', () => {
         ...overrides,
       };
       let clock = 140;
-      const onTerminal = mock(() => {});
+      const publications: string[] = [];
       const h = harness({
         hostOutcomeClock: spec.clock,
         now: () => clock,
         attemptStartedAtFor: () => spec.attempt,
         maxEvidenceRetries: 0,
-        onTerminal,
         baselineFor: () => undefined,
         readTerminalEvidence: async () => ({ data: [] }),
         input: {
@@ -245,6 +243,11 @@ describe('terminal gate', () => {
             });
       if (spec.activity !== undefined)
         h.board.markRunningFromLiveSession(run.taskID, spec.activity);
+      // The board's outcome fan-out is the single publication channel: the
+      // gate no longer carries its own terminal callback.
+      h.board.addTerminalOutcomeListener((record) => {
+        publications.push(`${record.taskID}:${record.terminalRevision}`);
+      });
       const revision = h.board.get(run.taskID)?.terminalRevision;
       await h.gate.reconcile(run);
       expect(h.board.get(run.taskID)).toMatchObject(
@@ -262,7 +265,7 @@ describe('terminal gate', () => {
       );
       if (!accepted)
         expect(h.board.get(run.taskID)?.resultSummary).toBeUndefined();
-      expect(onTerminal).toHaveBeenCalledTimes(accepted ? 1 : 0);
+      expect(publications).toHaveLength(accepted ? 1 : 0);
     },
   );
 
@@ -562,7 +565,11 @@ describe('terminal gate', () => {
     const validate = mock(() => true);
     h.board.commitTerminal(
       { taskID: h.run.taskID, state: 'completed', resultSummary: 'forged' },
-      { taskID: h.run.taskID, generation: h.run.generation, validate } as never,
+      {
+        taskID: h.run.taskID,
+        generation: h.run.generation,
+        validate,
+      } as never,
     );
     expect(h.board.get(h.run.taskID)?.state).toBe('running');
     expect(validate).not.toHaveBeenCalled();
@@ -843,7 +850,7 @@ describe('terminal gate', () => {
   test('quiescence plus attributable transcript commits exactly once', async () => {
     const h = harness();
     const listener = mock(() => {});
-    h.board.addTerminalStateListener(listener);
+    h.board.addTerminalOutcomeListener(listener);
     h.observe('quiescent');
     expect((await h.gate.reconcile(h.run)).kind).toBe('committed');
     await h.gate.reconcile(h.run);
@@ -1110,28 +1117,23 @@ describe('terminal gate', () => {
       ).kind,
     ).toBe('unknown');
   });
-  test('deadline deletion commits synchronously before drop', () => {
+  test('a deleted child session publishes nothing on its own', () => {
     const h = harness();
-    h.board.claimWallClockDeadline(h.run);
     const result = h.observe('deleted');
-    expect(result.kind).toBe('committed');
-    expect(h.board.get(h.run.taskID)).toMatchObject({
-      state: 'error',
-      timedOut: true,
-    });
+    expect(result.kind).toBe('deferred');
+    expect(h.board.get(h.run.taskID)?.state).toBe('running');
   });
 });
 
 test('integration: historical replay + rehydration + busy host publishes nothing and retains capacity', async () => {
   const board = new BackgroundJobBoard();
-  const coordinator = new BackgroundJobCoordinator(board);
   const capacity = new BackgroundTaskConcurrency({
     defaultConcurrency: 1,
     providerConcurrency: {},
     modelConcurrency: {},
   });
   const release = mock((taskID: string) => capacity.releaseTask(taskID));
-  coordinator.addTerminalOutcomeListener((record) => release(record.taskID));
+  board.addTerminalOutcomeListener((record) => release(record.taskID));
   const input = {
     directory: '/tmp',
     client: {
@@ -1146,11 +1148,11 @@ test('integration: historical replay + rehydration + busy host publishes nothing
   } as never;
   const gate = createBackgroundJobTerminalGate({
     input,
-    backgroundJobBoard: coordinator,
+    backgroundJobBoard: board,
   });
   gates.push(gate);
   const hook = createTaskSessionManagerHook(input, {
-    backgroundJobBoard: coordinator,
+    backgroundJobBoard: board,
     terminalGate: gate,
     backgroundTaskConcurrency: capacity,
     shouldManageSession: () => true,
@@ -1276,7 +1278,6 @@ test('integration: late acknowledgement and transport success for A cannot consu
     backgroundJobBoard: board,
     input,
     baselineFor: () => 'baseline',
-    onTerminal: (record) => tracker.onTerminal(record),
   });
   gates.push(gate);
   tracker = createRevivedRunTracker({
@@ -1285,6 +1286,11 @@ test('integration: late acknowledgement and transport success for A cannot consu
     terminalGate: gate,
     maxNotificationRetries: 2,
     notificationRetryDelayMs: 1,
+  });
+  // Production wires the tracker through the board's outcome fan-out
+  // (index.ts), not through a private gate callback.
+  board.addTerminalOutcomeListener((record) => {
+    tracker.onTerminal(record);
   });
   tracker.register({ ...run, baselineMessageID: 'baseline' });
   const hook = createTaskSessionManagerHook(input, {
@@ -1351,11 +1357,11 @@ test('integration: late acknowledgement and transport success for A cannot consu
     // The adapter rejects A before invoking the board's acknowledgement method.
     expect(acknowledge).not.toHaveBeenCalled();
     expect(
-      board.acquireRelaunchLease(run.taskID, run.generation),
+      board.acquireLease(run.taskID, run.generation, 'relaunch'),
     ).toBeUndefined();
     fire(10_000); // A never settled: its local wait alone must release ownership.
     await tick();
-    const lease = board.acquireRelaunchLease(run.taskID, run.generation);
+    const lease = board.acquireLease(run.taskID, run.generation, 'relaunch');
     expect(lease).toBeDefined();
     if (lease) board.releaseLease(lease);
     fire(1);
@@ -1364,7 +1370,7 @@ test('integration: late acknowledgement and transport success for A cannot consu
     resolveA({});
     await tick();
     expect(
-      board.acquireRelaunchLease(run.taskID, run.generation),
+      board.acquireLease(run.taskID, run.generation, 'relaunch'),
     ).toBeUndefined();
     rejectB(new Error('B was not accepted'));
     await tick();
@@ -2013,9 +2019,10 @@ describe('outcome corroboration (log-only mirror)', () => {
           terminalOutcome,
         });
         h.advance(20);
-        const lease = h.board.acquireCancellationLease(
+        const lease = h.board.acquireLease(
           h.run.taskID,
           h.run.generation,
+          'cancellation',
         );
         if (!lease) throw new Error('missing cancellation lease');
         const before = capture.entries.length;

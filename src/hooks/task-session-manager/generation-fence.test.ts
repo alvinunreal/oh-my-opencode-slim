@@ -193,7 +193,7 @@ describe('task generation fences', () => {
     const board = new BackgroundJobBoard();
     const hook = createHook(board);
     const terminalListener = mock(() => {});
-    board.addTerminalStateListener(terminalListener);
+    board.addTerminalOutcomeListener(terminalListener);
 
     board.registerLaunch({
       taskID: 'same-task-id',

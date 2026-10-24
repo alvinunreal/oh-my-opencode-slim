@@ -1,10 +1,10 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import type {
+  BackgroundJobBoard,
   BackgroundJobLease,
   BackgroundJobRecord,
   BackgroundJobTerminalInput,
 } from './background-job-board';
-import type { BackgroundJobStore } from './background-job-store';
 import {
   classifyTerminalEvidence,
   fetchChildTranscript,
@@ -85,8 +85,7 @@ export type TerminalSignal =
   | { kind: 'inspect' }
   | { kind: 'output'; status: TaskStatusOutput; origin: TaskOutputOrigin }
   | { kind: 'session-error'; message: string }
-  | { kind: 'cancel'; lease: BackgroundJobLease; reason?: string }
-  | { kind: 'deadline' };
+  | { kind: 'cancel'; lease: BackgroundJobLease; reason?: string };
 export type GateResult =
   | { kind: 'deferred'; record: BackgroundJobRecord }
   | { kind: 'committed'; record: BackgroundJobRecord }
@@ -162,7 +161,6 @@ interface Observation {
     token: ObservationToken;
     readSettled: Promise<void>;
   };
-  idleCandidate?: RuntimeObservation;
   quiescentSince?: number;
   candidate?: { signal: TerminalSignal; token: ObservationToken };
   retries: number;
@@ -313,7 +311,7 @@ export function readSessionInfoForObservation(
 }
 
 export function createBackgroundJobTerminalGate(options: {
-  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobBoard: BackgroundJobBoard;
   input?: PluginInput;
   readRuntime?: (run: RunRef, startedAt: number) => Promise<RuntimeObservation>;
   readTerminalEvidence?: (
@@ -337,7 +335,6 @@ export function createBackgroundJobTerminalGate(options: {
   ) => number | undefined;
   isObservationPending?: (taskID: string, generation: number) => boolean;
   onRunning?: (record: BackgroundJobRecord) => void;
-  onTerminal?: (record: BackgroundJobRecord) => void;
   graceMs?: number;
   readTimeoutMs?: number;
   maxEvidenceRetries?: number;
@@ -542,7 +539,6 @@ export function createBackgroundJobTerminalGate(options: {
     if (value.timer) clearTimer(value.timer);
     value.timer = undefined;
     value.candidate = undefined;
-    options.onTerminal?.(record);
     // Log-only corroboration: when a window-attributed host outcome is in
     // hand for this episode, compare it with the state being published and
     // log bounded-evidence disagreements. Same contract as
@@ -621,14 +617,12 @@ export function createBackgroundJobTerminalGate(options: {
       value.quiescentSince = undefined;
       // Ambiguous busy/retry is live activity: drop held candidates.
       value.candidate = undefined;
-      value.idleCandidate = undefined;
       if (value.timer) clearTimer(value.timer);
       value.timer = undefined;
       return deferred(token);
     }
     if (predatesPublication) return { kind: 'stale' };
     if (runtime.origin === 'session.idle') {
-      value.idleCandidate = runtime;
       value.pendingRuntime = false;
       value.retries = 0;
       return deferred(token);
@@ -641,7 +635,6 @@ export function createBackgroundJobTerminalGate(options: {
       value.quiescentSince = undefined;
       value.retries = 0;
       value.candidate = undefined;
-      value.idleCandidate = undefined;
       if (value.timer) clearTimer(value.timer);
       value.timer = undefined;
       value.runtime = runtime;
@@ -685,16 +678,6 @@ export function createBackgroundJobTerminalGate(options: {
       );
     }
     value.quiescentSince ??= now();
-    if (
-      runtime.kind === 'deleted' &&
-      board.get(token.taskID)?.deadlineExceededAt !== undefined
-    ) {
-      return commit(
-        token,
-        'error',
-        'Background task exceeded its wall-clock deadline; session deletion confirmed the abort.',
-      );
-    }
     return deferred(token);
   }
 
@@ -1045,13 +1028,6 @@ export function createBackgroundJobTerminalGate(options: {
         'cancelled',
         signal.reason ?? 'cancelled',
         signal.lease,
-      );
-    }
-    if (job.deadlineExceededAt !== undefined) {
-      return commit(
-        token,
-        'error',
-        'Background task exceeded its wall-clock deadline; quiescence confirmed the abort.',
       );
     }
     if (signal?.kind === 'session-error')

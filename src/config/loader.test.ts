@@ -3051,6 +3051,14 @@ describe('removed config keys', () => {
       'backgroundJobs.continueOnIdle',
       { backgroundJobs: { continueOnIdle: true } },
     ],
+    [
+      'backgroundJobs.boardInjection',
+      { backgroundJobs: { boardInjection: true } },
+    ],
+    [
+      'backgroundJobs.abortGraceMs',
+      { backgroundJobs: { abortGraceMs: 10_000 } },
+    ],
     ['fallback.timeoutMs', { fallback: { timeoutMs: 15000 } }],
     ['fallback.retry_on_empty', { fallback: { retry_on_empty: true } }],
     ['fallback.runtimeOverride', { fallback: { runtimeOverride: true } }],

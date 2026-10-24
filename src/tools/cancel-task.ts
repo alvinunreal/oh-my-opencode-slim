@@ -10,9 +10,9 @@ import type {
 import { pluginDisposedMessage } from '../hooks/task-session-manager/session-recovery';
 import type { BackgroundJobLease } from '../utils/background-job-board';
 import {
-  type BackgroundJobStore,
+  type BackgroundJobBoard,
   getBackgroundJobLifecycleLedger,
-} from '../utils/background-job-store';
+} from '../utils/background-job-board';
 import {
   type BackgroundJobTerminalGate,
   createBackgroundJobTerminalGate,
@@ -43,7 +43,7 @@ const z = tool.schema;
 
 export interface TaskControlToolOptions {
   input: PluginInput;
-  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobBoard: BackgroundJobBoard;
   terminalGate?: BackgroundJobTerminalGate;
   shouldManageSession: (sessionID: string) => boolean;
   abortTimeoutMs?: number;
@@ -217,9 +217,10 @@ export async function cancelTrackedExecution(
   if (options.isDisposed?.()) {
     throw new Error(pluginDisposedMessage());
   }
-  const lease = options.backgroundJobBoard.acquireCancellationLease(
+  const lease = options.backgroundJobBoard.acquireLease(
     execution.taskID,
     execution.generation,
+    'cancellation',
   );
   if (!lease) {
     throw new Error(
@@ -593,7 +594,7 @@ async function getSessionStatus(
   taskID: string,
   timeoutMs: number,
   lease: BackgroundJobLease,
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobBoard: BackgroundJobBoard,
 ): Promise<{ status: 'busy' | 'retry' | 'idle' | undefined; source: string }> {
   assertLease(backgroundJobBoard, lease, {
     taskID: lease.taskID,
@@ -637,7 +638,7 @@ async function getSessionStatus(
 }
 
 async function awaitLeaseOperation<T>(
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobBoard: BackgroundJobBoard,
   lease: BackgroundJobLease,
   operation: () => Promise<T>,
   timeoutMs: number,
@@ -671,7 +672,7 @@ async function awaitLeaseOperation<T>(
 }
 
 function assertLease(
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobBoard: BackgroundJobBoard,
   lease: BackgroundJobLease,
   execution: CapturedExecution,
 ): void {
@@ -762,7 +763,7 @@ function unknownTaskOutput(
 }
 
 function isCapturedExecution(
-  record: ReturnType<BackgroundJobStore['get']>,
+  record: ReturnType<BackgroundJobBoard['get']>,
   capturedExecution: CapturedExecution,
 ): boolean {
   return (
@@ -772,7 +773,7 @@ function isCapturedExecution(
 }
 
 function assertCapturedExecution(
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobBoard: BackgroundJobBoard,
   execution: CapturedExecution,
 ): void {
   if (

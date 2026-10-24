@@ -109,6 +109,7 @@ import {
   userTextFromContent,
   type V2CommandSubmit,
 } from './session-submit';
+import { createSubagentExecutorWrapper } from './subagent-executor-wrapper';
 import type {
   V2AgentDraft,
   V2Cleanup,
@@ -3215,10 +3216,13 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             });
             disposers.push(() => reg.dispose());
           }
-          // Background-default flip, wording half: rewrite the native
-          // `subagent` description to state the default the execute.before
-          // rewrite applies, so prose and mechanism declare one contract.
-          // Pairing: the per-instance mechanism half (the args rewrite in
+          // Background-default flip (wording half) and delegated-launch
+          // registration (structured half) share ONE tool-transform pass:
+          // the registry replays transforms on the next read after a change,
+          // so both halves re-run on every replay and stay in lockstep with
+          // the native tool catalog.
+          //
+          // Flip pairing: the mechanism half (the args rewrite in
           // tool-execute-hooks) reads this setup's flip handle, armed when a
           // registry replay verifiably lands the rewrite (draft.get probe).
           // The v2 registry replays transforms on the next read after a
@@ -3230,20 +3234,61 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           // delegation still fails closed when execute wrapping is unavailable;
           // only reduced hosts retain native compatibility. Per-instance state:
           // disposing one location's setup disarms only its own flip.
-          if (before && backgroundFlip) {
+          //
+          // Wrapper half: wraps the native `subagent` executor so launches
+          // register from the STRUCTURED result
+          // (sessionID/status/background), not the rendered prose. The prose
+          // lane in tool.execute.after stays as the v1 path; on v2 the
+          // wrapper marks the pending handled so the after-hook gates its
+          // launch branches off (exactly-once registration). Fail-safe: any
+          // wrapper failure leaves the prose lane as the only path — the
+          // wrapper only registers what the after-hook would have registered
+          // anyway. The wrapper sits INSIDE the session-preset wrapper so
+          // the preset WeakSet replay guard covers both wraps.
+          const registerStructuredLaunch = v1Hooks[
+            'v2.registerDelegatedLaunchFromStructured'
+          ] as
+            | ((input: {
+                callID: string;
+                parentSessionID: string;
+                childTaskID: string;
+                state: 'running' | 'completed' | 'error' | 'cancelled';
+                background: boolean;
+                result?: string;
+                exactCallConfirmed: boolean;
+              }) => Promise<unknown>)
+            | undefined;
+          if (before && (backgroundFlip || registerStructuredLaunch)) {
             try {
+              const wrapper = registerStructuredLaunch
+                ? createSubagentExecutorWrapper({
+                    register: (launch) =>
+                      registerStructuredLaunch({
+                        ...launch,
+                        exactCallConfirmed: launch.callID !== '',
+                      }),
+                  })
+                : undefined;
               const wrapped = new WeakSet<object>();
               const reg = await ctx.tool.transform((draft) => {
                 nativePresetWrapperReady = false;
                 try {
                   draft.update(DELEGATION_TOOL_V2, (tool) => {
-                    tool.description = SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION;
+                    if (backgroundFlip)
+                      tool.description =
+                        SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION;
                     if (tool.execute && wrapped.has(tool.execute)) {
                       nativePresetWrapperReady = true;
                     }
                     if (tool.execute && !wrapped.has(tool.execute)) {
-                      const execute = wrapSessionPresetSubagent({
-                        execute: tool.execute,
+                      // Executor-wrapper seam: wrap the native executor
+                      // first so the structured registration observes the
+                      // host's own result, then keep the preset wrapper
+                      // outermost (its WeakSet guard then covers both).
+                      let execute = tool.execute;
+                      if (wrapper) execute = wrapper.wrap(execute);
+                      execute = wrapSessionPresetSubagent({
+                        execute,
                         presets: sessionPresets,
                         capture: captureTeam,
                       });
@@ -3252,34 +3297,38 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                       nativePresetWrapperReady = true;
                     }
                   });
-                  const flipped = draft.get(DELEGATION_TOOL_V2);
-                  if (
-                    flipped?.description ===
-                    SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION
-                  ) {
-                    backgroundFlip.arm();
-                  } else {
-                    // A replay that cannot find the native tool must undo
-                    // a previous arm so the two halves never disagree.
-                    backgroundFlip.disarm();
-                    log('[v2] subagent description flip missed (tool absent)');
+                  if (backgroundFlip) {
+                    const flipped = draft.get(DELEGATION_TOOL_V2);
+                    if (
+                      flipped?.description ===
+                      SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION
+                    ) {
+                      backgroundFlip.arm();
+                    } else {
+                      // A replay that cannot find the native tool must undo
+                      // a previous arm so the two halves never disagree.
+                      backgroundFlip.disarm();
+                      log(
+                        '[v2] subagent description flip missed (tool absent)',
+                      );
+                    }
                   }
                 } catch (err) {
                   // A throwing replay must not leave a stale arm behind
                   // either; disarm is the fail-safe direction on every
                   // error path, not just registration-time throws.
-                  backgroundFlip.disarm();
+                  backgroundFlip?.disarm();
                   log('[v2] subagent description flip failed', String(err));
                 }
               });
               disposers.push(() => {
                 // Disarm first: a throwing reg.dispose() must never leave a
                 // stale armed mechanism behind (fail-safe direction).
-                backgroundFlip.disarm();
+                backgroundFlip?.disarm();
                 reg.dispose();
               });
             } catch (err) {
-              log('[v2] subagent description flip failed', String(err));
+              log('[v2] tool transform registration failed', String(err));
             }
           }
           log('[v2] tool hooks registered', {

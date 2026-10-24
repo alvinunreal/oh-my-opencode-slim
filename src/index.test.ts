@@ -45,11 +45,10 @@ import {
   snapshotSectionsEqual,
   updateSnapshot,
 } from './tui-state';
-import type {
-  BackgroundJobEvictedSession,
+import {
+  type BackgroundJobEvictedSession,
   BackgroundJobBoard as ProductionBoard,
 } from './utils/background-job-board';
-import { BackgroundJobCoordinator } from './utils/background-job-coordinator';
 import { BackgroundJobBoard } from './utils/background-job-fixture';
 import { resetLiveDirectoriesForTests } from './utils/event-directory-scope';
 import { createInternalAgentTextPart } from './utils/internal-initiator';
@@ -1106,109 +1105,116 @@ describe('plugin tool registration', () => {
     }
   });
 
-  test('disposes generation one timers and fresh generation two supervises launches', async () => {
-    const originalEnv = { ...process.env };
-    const originalSetTimeout = globalThis.setTimeout;
-    const originalClearTimeout = globalThis.clearTimeout;
-    const originalNow = Date.now;
-    const clock = createHostTimerHarness();
-    const abortCalls: string[] = [];
-    const noop = async () => ({});
-    const client = createPluginClient(noop, async ({ path }) => {
-      abortCalls.push(path.id);
-      return {};
-    });
-    const configDir = await mkdtemp('/tmp/oh-my-opencode-slim-phase-2r-');
-    await Bun.write(
-      `${configDir}/oh-my-opencode-slim.json`,
-      JSON.stringify({
-        backgroundJobs: {
-          wallClockTimeoutMs: 60_000,
-          abortGraceMs: 1_000,
-        },
-      }),
-    );
-    process.env = {
-      ...originalEnv,
-      OPENCODE_CONFIG_DIR: configDir,
-    };
-    delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
-    globalThis.setTimeout = clock.setTimeout as typeof globalThis.setTimeout;
-    globalThis.clearTimeout =
-      clock.clearTimeout as typeof globalThis.clearTimeout;
-    Date.now = clock.now;
-
-    const launch = async (
-      hooks: Awaited<ReturnType<typeof plugin>>,
-      callID: string,
-      taskID: string,
-    ) => {
-      await hooks['tool.execute.before']?.(
-        { tool: 'task', sessionID: 'parent-1', callID },
-        {
-          args: {
-            subagent_type: 'explorer',
-            background: true,
-            description: taskID,
+  test.each(['v1', 'v2'] as const)(
+    '%s generation teardown preserves deadline aborts without a v2 wake scheduler',
+    async (hostFlavor) => {
+      const originalEnv = { ...process.env };
+      const originalSetTimeout = globalThis.setTimeout;
+      const originalClearTimeout = globalThis.clearTimeout;
+      const originalNow = Date.now;
+      const clock = createHostTimerHarness();
+      const abortCalls: string[] = [];
+      const scheduler = spyOn(wakeHooks, 'createOrchestratorWakeScheduler');
+      const noop = async () => ({});
+      const client = createPluginClient(noop, async ({ path }) => {
+        abortCalls.push(path.id);
+        return {};
+      });
+      const configDir = await mkdtemp('/tmp/oh-my-opencode-slim-phase-2r-');
+      await Bun.write(
+        `${configDir}/oh-my-opencode-slim.json`,
+        JSON.stringify({
+          backgroundJobs: {
+            wallClockTimeoutMs: 60_000,
           },
-        },
+        }),
       );
-      await hooks['tool.execute.after']?.(
-        { tool: 'task', sessionID: 'parent-1', callID },
-        {
-          output: [
-            `task_id: ${taskID}`,
-            'state: running',
-            '',
-            '<task_result>',
-            'started',
-            '</task_result>',
-          ].join('\n'),
-        },
-      );
-    };
+      process.env = {
+        ...originalEnv,
+        OPENCODE_CONFIG_DIR: configDir,
+      };
+      delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
+      globalThis.setTimeout = clock.setTimeout as typeof globalThis.setTimeout;
+      globalThis.clearTimeout =
+        clock.clearTimeout as typeof globalThis.clearTimeout;
+      Date.now = clock.now;
 
-    let generationOne: Awaited<ReturnType<typeof plugin>> | undefined;
-    let generationTwo: Awaited<ReturnType<typeof plugin>> | undefined;
-    try {
-      generationOne = await plugin({
-        client,
-        directory: configDir,
-        worktree: configDir,
-        serverUrl: new URL('http://127.0.0.1:4096'),
-      } as never);
-      expect(generationOne.dispose).toBeFunction();
-      await launch(generationOne, 'call-1', 'child-generation-1');
+      const launch = async (
+        hooks: Awaited<ReturnType<typeof plugin>>,
+        callID: string,
+        taskID: string,
+      ) => {
+        await hooks['tool.execute.before']?.(
+          { tool: 'task', sessionID: 'parent-1', callID },
+          {
+            args: {
+              subagent_type: 'explorer',
+              background: true,
+              description: taskID,
+            },
+          },
+        );
+        await hooks['tool.execute.after']?.(
+          { tool: 'task', sessionID: 'parent-1', callID },
+          {
+            output: [
+              `task_id: ${taskID}`,
+              'state: running',
+              '',
+              '<task_result>',
+              'started',
+              '</task_result>',
+            ].join('\n'),
+          },
+        );
+      };
 
-      await clock.advanceTo(59_999);
-      expect(abortCalls).toEqual([]);
-      await generationOne.dispose?.();
-      await generationOne.dispose?.();
-      await clock.advanceTo(60_000);
-      expect(abortCalls).toEqual([]);
+      let generationOne: Awaited<ReturnType<typeof plugin>> | undefined;
+      let generationTwo: Awaited<ReturnType<typeof plugin>> | undefined;
+      try {
+        generationOne = await plugin({
+          client,
+          directory: configDir,
+          worktree: configDir,
+          serverUrl: new URL('http://127.0.0.1:4096'),
+          hostFlavor,
+        } as never);
+        expect(generationOne.dispose).toBeFunction();
+        await launch(generationOne, 'call-1', 'child-generation-1');
 
-      generationTwo = await plugin({
-        client,
-        directory: configDir,
-        worktree: configDir,
-        serverUrl: new URL('http://127.0.0.1:4096'),
-      } as never);
-      expect(generationTwo.dispose).toBeFunction();
-      await launch(generationTwo, 'call-2', 'child-generation-2');
-      await clock.advanceTo(119_999);
-      expect(abortCalls).toEqual([]);
-      await clock.advanceTo(120_000);
-      expect(abortCalls).toEqual(['child-generation-2']);
-    } finally {
-      await generationTwo?.dispose?.();
-      await generationOne?.dispose?.();
-      process.env = originalEnv;
-      globalThis.setTimeout = originalSetTimeout;
-      globalThis.clearTimeout = originalClearTimeout;
-      Date.now = originalNow;
-      await rm(configDir, { recursive: true, force: true });
-    }
-  });
+        await clock.advanceTo(59_999);
+        expect(abortCalls).toEqual([]);
+        await generationOne.dispose?.();
+        await generationOne.dispose?.();
+        await clock.advanceTo(60_000);
+        expect(abortCalls).toEqual([]);
+
+        generationTwo = await plugin({
+          client,
+          directory: configDir,
+          worktree: configDir,
+          serverUrl: new URL('http://127.0.0.1:4096'),
+          hostFlavor,
+        } as never);
+        expect(generationTwo.dispose).toBeFunction();
+        await launch(generationTwo, 'call-2', 'child-generation-2');
+        await clock.advanceTo(119_999);
+        expect(abortCalls).toEqual([]);
+        await clock.advanceTo(120_000);
+        expect(abortCalls).toEqual(['child-generation-2']);
+        expect(scheduler).toHaveBeenCalledTimes(hostFlavor === 'v2' ? 0 : 2);
+      } finally {
+        await generationTwo?.dispose?.();
+        await generationOne?.dispose?.();
+        scheduler.mockRestore();
+        process.env = originalEnv;
+        globalThis.setTimeout = originalSetTimeout;
+        globalThis.clearTimeout = originalClearTimeout;
+        Date.now = originalNow;
+        await rm(configDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test('disposing a plugin generation retracts its board spinner before same-PID re-init', async () => {
     const originalEnv = { ...process.env };
@@ -2056,7 +2062,7 @@ describe('plugin reload generation cleanup', () => {
         triggerStoppedJobRecovery: wake,
       }));
       const subscriptions = spyOn(
-        BackgroundJobCoordinator.prototype,
+        ProductionBoard.prototype,
         'addTerminalOutcomeListener',
       );
       let hooks: Awaited<ReturnType<typeof plugin>> | undefined;
@@ -2112,7 +2118,7 @@ describe('plugin reload generation cleanup', () => {
     "%s terminal outcome clears the child's open input waits",
     async (hostFlavor) => {
       const subscriptions = spyOn(
-        BackgroundJobCoordinator.prototype,
+        ProductionBoard.prototype,
         'addTerminalOutcomeListener',
       );
       let hooks: Awaited<ReturnType<typeof plugin>> | undefined;
@@ -2174,7 +2180,7 @@ describe('plugin reload generation cleanup', () => {
       triggerTerminalPublicationWake: publicationWake,
     }));
     const subscriptions = spyOn(
-      BackgroundJobCoordinator.prototype,
+      ProductionBoard.prototype,
       'addTerminalOutcomeListener',
     );
     let hooks: Awaited<ReturnType<typeof plugin>> | undefined;
@@ -2308,7 +2314,7 @@ describe('plugin reload generation cleanup', () => {
       triggerStoppedJobRecovery: wake,
     }));
     const subscriptions = spyOn(
-      BackgroundJobCoordinator.prototype,
+      ProductionBoard.prototype,
       'addTerminalOutcomeListener',
     );
     const realCreateTracker = trackerModule.createRevivedRunTracker;
@@ -2471,7 +2477,7 @@ describe('plugin reload generation cleanup', () => {
       captured = args[1] as unknown as typeof captured;
       return createScheduler(...args);
     });
-    const getSpy = spyOn(BackgroundJobCoordinator.prototype, 'get');
+    const getSpy = spyOn(ProductionBoard.prototype, 'get');
     let hooks: Awaited<ReturnType<typeof plugin>> | undefined;
     try {
       hooks = await createHooks();
@@ -5753,13 +5759,12 @@ describe('backgroundJobs.pruneEvictedSessions wiring', () => {
   const createHooksWithBoard = async (
     sessionOverrides: Record<string, unknown> = {},
   ) => {
-    let coordinator: BackgroundJobCoordinator | undefined;
-    const original =
-      BackgroundJobCoordinator.prototype.addLaunchIdentityListener;
+    let coordinator: ProductionBoard | undefined;
+    const original = ProductionBoard.prototype.addLaunchIdentityListener;
     const spy = spyOn(
-      BackgroundJobCoordinator.prototype,
+      ProductionBoard.prototype,
       'addLaunchIdentityListener',
-    ).mockImplementation(function (this: BackgroundJobCoordinator, listener) {
+    ).mockImplementation(function (this: ProductionBoard, listener) {
       coordinator ??= this;
       return original.call(this, listener);
     });
@@ -5770,14 +5775,14 @@ describe('backgroundJobs.pruneEvictedSessions wiring', () => {
         worktree: projectDir,
         serverUrl: new URL('http://127.0.0.1:4096'),
       } as never);
-      return { hooks, coordinator: coordinator as BackgroundJobCoordinator };
+      return { hooks, coordinator: coordinator as ProductionBoard };
     } finally {
       spy.mockRestore();
     }
   };
 
-  const gcCallbackOf = (coordinator: BackgroundJobCoordinator) => {
-    const board = (coordinator as unknown as { board: ProductionBoard }).board;
+  const gcCallbackOf = (coordinator: ProductionBoard) => {
+    const board = coordinator;
     return (
       board as unknown as {
         onEvictedSession?: (evicted: BackgroundJobEvictedSession) => void;
@@ -5943,8 +5948,7 @@ describe('backgroundJobs.pruneEvictedSessions wiring', () => {
       status: async () => ({ data: {} }),
     });
     try {
-      const board = (coordinator as unknown as { board: ProductionBoard })
-        .board;
+      const board = coordinator;
       // Revived / re-registered after the eviction snapshot.
       board.registerLaunch({
         taskID: 'ses_gc_child',

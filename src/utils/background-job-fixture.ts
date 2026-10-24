@@ -7,21 +7,16 @@ import type {
   BackgroundJobTerminalInput,
 } from './background-job-board';
 import { BackgroundJobBoard as ProductionBoard } from './background-job-board';
-import type { BackgroundJobStore } from './background-job-store';
 
 function commit(
-  board: BackgroundJobStore,
+  board: ProductionBoard,
   input: BackgroundJobTerminalInput,
   generation = board.get(input.taskID)?.generation,
 ) {
   // This test-only module deliberately accesses the private builder. Production
   // tokens cannot be fabricated, even by this fixture.
-  const raw =
-    board instanceof ProductionBoard
-      ? board
-      : (board as unknown as { board: ProductionBoard }).board;
   return (
-    raw as unknown as {
+    board as unknown as {
       commitTerminalRecord(
         input: BackgroundJobTerminalInput,
         generation: number,
@@ -31,7 +26,7 @@ function commit(
 }
 
 export const boardFixture = {
-  updateStatus(board: BackgroundJobStore, input: BackgroundJobStatusInput) {
+  updateStatus(board: ProductionBoard, input: BackgroundJobStatusInput) {
     return input.state === 'running'
       ? board.updateStatus({ ...input, state: 'running' })
       : commit(
@@ -45,7 +40,7 @@ export const boardFixture = {
         );
   },
   markStopped(
-    board: BackgroundJobStore,
+    board: ProductionBoard,
     taskID: string,
     resultSummary: string,
     observedAt = Date.now(),
@@ -61,7 +56,7 @@ export const boardFixture = {
     );
   },
   markCancelled(
-    board: BackgroundJobStore,
+    board: ProductionBoard,
     taskID: string,
     reason?: string,
     now = Date.now(),

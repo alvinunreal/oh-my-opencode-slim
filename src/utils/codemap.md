@@ -17,10 +17,8 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 
 ### Core Abstractions
 
-- **BackgroundJobBoard** (`background-job-board.ts`): Singleton registry and lifecycle manager for background tasks with reusable session pool patterns, automatic cleanup, and reconciliation hooks. Machine-side only: it is never rendered into a prompt (issue #1647)
-- **BackgroundJobStore** (`background-job-store.ts`): Atomic state-store contract for terminal transitions, leases, and deadline claims implemented by the board
-- **BackgroundJobCoordinator** (`background-job-coordinator.ts`): Lifecycle policy layer between board and consumers with terminal-state subscriptions, deferred-close policy, and metadata shaping
-- **BackgroundJobSupervisor** (`background-job-supervisor.ts`): One-shot wall-clock deadline supervision with timer/generation/abort mechanics
+- **BackgroundJobBoard** (`background-job-board.ts`): Singleton registry and lifecycle manager for background tasks with reusable session pool patterns, automatic cleanup, and reconciliation hooks. Also owns the terminal-outcome subscription fan-out, launch-identity projection, and the process-local lifecycle ledger (tombstones, deletion epochs, suppression write-through). The board is never rendered: records retain run/activity/publication fences and observed status, not render-age or generic update timestamps.
+- **BackgroundJobSupervisor** (`background-job-supervisor.ts`): One-shot wall-clock watchdog with timer/generation/abort mechanics; on expiry it aborts the child through the same lease-guarded host primitive `task_cancel` uses and never publishes a terminal itself
 - **BackgroundTaskConcurrency** (`background-task-concurrency.ts`): Process-local admission scheduler for native background task launches with model/provider capacity tracking
 - **Runtime Session Status** (`session-runtime-status.ts`): Reads and validates the in-process OpenCode session-status map with absent/unknown distinction; reduces the `session.get` outcome/idleAt projection to terminal/pending/unknown verdicts for v2 recovery triage (`hostRoundStateOf`), and classifies one live session for a probe (`classifyLiveSession`: `running`/`idle`/an attributable host terminal outcome read through a bounded, timer-injectable shared host read on hosts without the map).
 - **Session Info Read** (`session-info-read.ts`): Single-flight raw `session.get` per client session domain and task id, shared by the probe, the ownership gate, and the gate's rehydration observer; a consumer deadline releases only its waiter, never the underlying read, and a differing identity is refused while the read is open (`raceEvidenceDeadline` bounds waits deterministically).
@@ -69,12 +67,12 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 ## Flow
 
 ### Background Job Lifecycle
-1. Agent launches a background task via BackgroundJobBoard.registerLaunch() (supervisor arms wall-clock deadline)
+1. Agent launches a background task via BackgroundJobBoard.registerLaunch() (watchdog arms wall-clock deadline)
 2. Task runs and updates status via BackgroundJobBoard.updateStatus()
-3. On completion/error/cancellation, task is marked terminal and added to reusable pool; supervisor timers cleared
+3. On completion/error/cancellation, task is marked terminal and added to reusable pool; watchdog timers cleared
 4. Subsequent tasks reuse completed sessions via aliases
 5. Unused reusable sessions are automatically trimmed based on maxReusablePerAgent
-6. Deadline exceeded during execution → coordinator claims it, supervisor aborts, grace timer finalizes terminal state
+6. Deadline exceeded during execution → watchdog aborts the child via the host; the host's real terminal evidence publishes the run
 
 ### Session Selection Flow
 1. resolveCurrentSelection() reads session.get() with bounded timeout
@@ -131,9 +129,7 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 ```typescript
 export * from './agent-variant';
 export * from './background-job-board';
-export * from './background-job-coordinator';
 export * from './background-job-persistence';
-export * from './background-job-store';
 export * from './background-job-supervisor';
 export * from './background-task-concurrency';
 export * from './internal-initiator';
@@ -155,10 +151,8 @@ Session metadata, the opencode client accessor, and the type-only call-shape con
 |------|---------|
 | `index.ts` | Public API re-exporting most utilities |
 | `agent-variant.ts` | Agent name normalization and regex escaping |
-| `background-job-board.ts` | Background task registry and lifecycle manager (never rendered into a prompt) |
-| `background-job-coordinator.ts` | Lifecycle policy and terminal-state subscriptions |
-| `background-job-store.ts` | Atomic store contract and terminal transitions |
-| `background-job-supervisor.ts` | Wall-clock deadline supervision and abort grace |
+| `background-job-board.ts` | Background task registry, lifecycle manager, terminal-outcome subscriptions, launch-identity projection, and lifecycle ledger |
+| `background-job-supervisor.ts` | Wall-clock watchdog: one timer per run, host abort on expiry |
 | `background-task-concurrency.ts` | Process-local admission scheduler for background tasks |
 | `background-job-persistence.ts` | Persistence for lifecycle state (tombstones, deletion) |
 | `background-job-terminal-gate.ts` | Terminal evidence verification and attribution |

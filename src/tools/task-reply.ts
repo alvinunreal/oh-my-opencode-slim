@@ -10,7 +10,7 @@ import {
   listChildInputWaits,
 } from '../hooks/task-session-manager/child-input-wait';
 import { pluginDisposedMessage } from '../hooks/task-session-manager/session-recovery';
-import type { BackgroundJobStore } from '../utils/background-job-store';
+import type { BackgroundJobBoard } from '../utils/background-job-board';
 import { log } from '../utils/logger';
 import { getClient } from '../utils/opencode-client';
 import { OperationTimeoutError, withTimeout } from '../utils/session';
@@ -127,7 +127,7 @@ function toFormAnswer(
  */
 export function createTaskReplyTool(options: {
   input: PluginInput;
-  backgroundJobBoard: BackgroundJobStore;
+  backgroundJobBoard: BackgroundJobBoard;
   replyTimeoutMs?: number;
   resolveCanonicalTaskRef?: CanonicalTaskResolver;
   isDisposed?: () => boolean;

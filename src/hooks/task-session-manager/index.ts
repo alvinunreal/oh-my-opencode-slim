@@ -1,8 +1,6 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import {
   BackgroundJobBoard,
-  type BackgroundJobExecution,
-  type BackgroundJobStore,
   type BackgroundJobSupervisor,
   type BackgroundTaskConcurrency,
   clearBackgroundJobSuppression,
@@ -66,8 +64,10 @@ import type { RevivedRunTracker } from './revived-run-tracker';
 import { createRuntimeStatusReconciler } from './runtime-status-reconciliation';
 import { createTaskContextTracker } from './task-context-tracker';
 import {
+  type DelegatedLaunchFromStructuredInput,
   handleToolExecuteAfter,
   handleToolExecuteBefore,
+  registerDelegatedLaunchFromStructured,
 } from './tool-execute-hooks';
 
 export { BACKGROUND_JOB_BOARD_METADATA_KEY } from './board-injection';
@@ -82,7 +82,7 @@ const RECOVERED_TASK_AGENT_FALLBACK = 'unknown';
 
 function rehydrateHistoricalRunningTasks(
   messages: unknown[],
-  backgroundJobBoard: BackgroundJobStore,
+  backgroundJobBoard: BackgroundJobBoard,
   shouldManageSession: (sessionID: string) => boolean,
   registerSessionAsOrchestrator?: (sessionID: string) => void,
   rehydrateTombstones?: ReadonlySet<string>,
@@ -323,7 +323,7 @@ export function createTaskSessionManagerHook(
   _ctx: PluginInput,
   options: {
     maxSessionsPerAgent: number;
-    backgroundJobBoard?: BackgroundJobStore;
+    backgroundJobBoard?: BackgroundJobBoard;
     terminalGate?: BackgroundJobTerminalGate;
     hostOutcomeClock?: 'shared-unix-ms';
     backgroundJobSupervisor?: BackgroundJobSupervisor;
@@ -587,14 +587,14 @@ export function createTaskSessionManagerHook(
           }
           // The session no longer exists on the host. The four probe
           // cleanup actions run as one synchronous block — supervisor
-          // FIRST: its onSessionDeleted needs the record to still exist
-          // so deadline-exceeded runs finalize their wall-clock timeout
-          // (same ordering as the event-router/coordinator deletion
-          // paths). All four are idempotent but all are required — a
-          // missing releaseTask would leak an admission slot forever.
-          // The canonical full cleanup (input waits, idle tokens,
-          // pending-call tracker, clearParent, task-context tracker,
-          // snapshots) runs via the session.deleted event path.
+          // FIRST: its onSessionDeleted clears the run's watchdog timer
+          // while the record still identifies it (same ordering as the
+          // event-router/coordinator deletion paths). All four are
+          // idempotent but all are required — a missing releaseTask would
+          // leak an admission slot forever. The canonical full cleanup
+          // (input waits, idle tokens, pending-call tracker, clearParent,
+          // task-context tracker, snapshots) runs via the session.deleted
+          // event path.
           options.backgroundJobSupervisor?.onSessionDeleted(taskID);
           recordBackgroundJobSuppression(backgroundJobBoard, taskID);
           backgroundJobBoard.drop(taskID);
@@ -717,16 +717,11 @@ export function createTaskSessionManagerHook(
           options.backgroundTaskConcurrency?.releaseTask(child.taskID);
         }
         options.backgroundJobSupervisor?.onSessionDeleted(sessionId);
-        const hardTimedOut =
-          backgroundJobBoard.field(sessionId, 'deadlineExceededAt') !==
-          undefined;
-        if (!hardTimedOut) {
-          rememberDeletedSession(sessionId);
-          backgroundJobBoard.drop(sessionId);
-        }
+        rememberDeletedSession(sessionId);
+        backgroundJobBoard.drop(sessionId);
         options.backgroundJobSupervisor?.clearParent(sessionId);
         backgroundJobBoard.clearParent(sessionId);
-        if (!hardTimedOut) options.backgroundJobSupervisor?.drop(sessionId);
+        options.backgroundJobSupervisor?.drop(sessionId);
       }
       historyBoundaries.delete(sessionId);
       // Orphaned reopen corrections must never surface in a recreated
@@ -768,6 +763,57 @@ export function createTaskSessionManagerHook(
   );
 
   return {
+    /**
+     * v2-only extension handle (consumed by src/v2/setup.ts's executor
+     * wrapper): register a delegated `subagent` launch from its STRUCTURED
+     * executor result — sessionID/status/background, no prose parsing. The
+     * pending for this callID is looked up (NOT consumed, so the after-hook
+     * still takes and releases it) and routed through the SAME shared fence
+     * pipeline the after-hook's launch branch uses; the pending is marked
+     * handled-by-wrapper so the after-hook gates its launch-output and
+     * background-promotion branches off (exactly-once registration on v2).
+     * Registration/fence errors are logged and swallowed; the tool result
+     * passes through untouched.
+     */
+    'v2.registerDelegatedLaunchFromStructured': (
+      input: Omit<DelegatedLaunchFromStructuredInput, 'pending'> & {
+        parentSessionID: string;
+      },
+    ): Promise<ReturnType<BackgroundJobBoard['get']>> => {
+      const pending = pendingCallTracker.peekByCallId(
+        input.callID,
+        input.parentSessionID,
+      );
+      if (!pending) {
+        log('[task-session-manager] v2 wrapper: pending call not found', {
+          callID: input.callID,
+        });
+        return Promise.resolve(undefined);
+      }
+      return registerDelegatedLaunchFromStructured(
+        { ...input, pending, handledByWrapper: true },
+        {
+          directory: _ctx.directory,
+          backgroundJobBoard,
+          terminalGate,
+          backgroundJobSupervisor: options.backgroundJobSupervisor,
+          backgroundTaskConcurrency: options.backgroundTaskConcurrency,
+          getModelForAgent: options.getModelForAgent,
+          taskContextTracker,
+          isStaleDeletedTaskOutput: (taskID, lifecycleEpoch) => {
+            const deletionEpoch = rehydrateState.deletionEpochs.get(taskID);
+            return (
+              deletionEpoch !== undefined && lifecycleEpoch < deletionEpoch
+            );
+          },
+          bindConcurrencyTicket: (taskID, tracked) =>
+            tracked.concurrencyTicket?.bind(taskID),
+          clearRehydrateTombstone: (taskID) =>
+            clearBackgroundJobSuppression(backgroundJobBoard, taskID),
+        },
+      );
+    },
+
     hasDeferredError: (sessionID: string): boolean =>
       deferredInlineErrors.has(sessionID),
     markRevivedRunPending: (taskID: string): void => {
@@ -1004,10 +1050,7 @@ export function createTaskSessionManagerHook(
           // teardown. An unconditional clear would swallow the error
           // and strand a mid-fallback record in `running` forever.
           if (!options.isFallbackInProgress?.(sessionID)) {
-            const hardTimedOut =
-              backgroundJobBoard.field(sessionID, 'deadlineExceededAt') !==
-              undefined;
-            if (!hardTimedOut) rememberDeletedSession(sessionID);
+            rememberDeletedSession(sessionID);
           }
         }
       }
