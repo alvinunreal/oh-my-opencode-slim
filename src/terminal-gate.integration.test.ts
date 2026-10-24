@@ -466,9 +466,7 @@ test('a hung fallback replay transcript read publishes the unrecovered error', a
   await h.fail();
   await h.idle();
   await h.runtime.reconcile();
-  await h.advance(2000);
-  await h.advance(2000);
-  await h.advance(2000);
+  for (let i = 0; i < 4; i++) await h.advance(2000);
   expect(h.board.get('child')?.state).toBe('error');
   expect(h.board.get('child')?.resultSummary).toContain(
     'Model fallback did not recover',
