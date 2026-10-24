@@ -821,6 +821,24 @@ describe('PluginConfigSchema backgroundJobs', () => {
     expect(result.success).toBe(false);
   });
 
+  it.each(['boardInjection', 'abortGraceMs'] as const)(
+    'rejects removed backgroundJobs.%s independently',
+    (key) => {
+      const result = PluginConfigSchema.safeParse({
+        backgroundJobs: { [key]: key === 'boardInjection' ? true : 10_000 },
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toContainEqual(
+          expect.objectContaining({
+            path: ['backgroundJobs', key],
+            message: expect.stringContaining(`${key} was removed`),
+          }),
+        );
+      }
+    },
+  );
+
   it('defaults orchestratorWake to enabled with a 5-minute interval and auto mode', () => {
     const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
 
