@@ -797,6 +797,9 @@ export class ForegroundFallbackManager {
   private readonly inProgress = getProcessFallbacksInProgress();
   /** The turn in which a session used its one v2 authentication grace retry. */
   private readonly authGrace = new Map<string, number>();
+  /** This instance's real v2 native calls, including calls whose admission
+   * timed out. Other locations retain their own independent drain. */
+  private readonly switchRequests = new Set<Promise<unknown>>();
   /** sessionID → timestamp of last trigger (stale retry guard only) */
   private readonly lastTrigger = new Map<string, number>();
   /** sessionID → model in use when lastTrigger was set; a model change starts
@@ -1116,8 +1119,9 @@ export class ForegroundFallbackManager {
    *  mid-attempt — pending timers are cancelled here, and suspension
    *  points inside tryFallback/tryFallbackWithAbort/execFallback abandon
    *  their continuation (see abandonedByDispose) so no replay, abort, or
-   *  transcript read runs through the destroyed generation's client. */
-  dispose(): void {
+   *  transcript read runs through the destroyed generation's client. Real
+   *  native switches cannot be cancelled: return their settlement barrier. */
+  dispose(): Promise<void> {
     this.disposed = true;
     for (const finish of this.v1Waiters.values()) finish();
     this.v1Waiters.clear();
@@ -1131,6 +1135,7 @@ export class ForegroundFallbackManager {
     this.separateCompaction.clear();
     this.downProviders.clear();
     this.authGrace.clear();
+    return Promise.allSettled([...this.switchRequests]).then(() => {});
   }
 
   private rememberOutcome(key: string, outcome: ChildOutcome) {
@@ -2454,11 +2459,22 @@ export class ForegroundFallbackManager {
       const { agentName, nextModel, ref, variant } = selected;
       picked = nextModel;
       detail = { agentName, variant };
-      switchRequest = switchModel(sessionID, {
-        providerID: ref.providerID,
-        id: ref.modelID,
-        ...(variant ? { variant } : {}),
+      switchRequest = Promise.resolve().then(() => {
+        // Disposal can run after the slot is claimed but before this queued
+        // callback starts. Never issue a fresh native write from that callback.
+        if (this.disposed) return;
+        return switchModel(sessionID, {
+          providerID: ref.providerID,
+          id: ref.modelID,
+          ...(variant ? { variant } : {}),
+        });
       });
+      const request = switchRequest;
+      this.switchRequests.add(request);
+      const release = () => {
+        this.switchRequests.delete(request);
+      };
+      void request.then(release, release);
       await withTimeout(
         switchRequest,
         HOST_CALL_TIMEOUT_MS,
