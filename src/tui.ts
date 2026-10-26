@@ -53,9 +53,12 @@ import {
   canOpenPresetManagerV2,
   openPresetManagerV2,
   readSessionPreset,
+  sessionPresetLabel,
   type V2PresetManagerContext,
   type V2PresetUiSurface,
 } from './v2/preset-manager';
+import type { SessionPresetState } from './v2/preset-rpc';
+import { createTeamDisplayIdentity } from './v2/team-display';
 
 const PLUGIN_NAME = 'oh-my-opencode-slim';
 const CONFIG_WARNING_COLOR = 'orange';
@@ -315,6 +318,18 @@ function remoteModelId(model: unknown): string | undefined {
   return id ? `${rec.providerID}/${id}` : undefined;
 }
 
+/** Native committed models and picker selections share the same display rules. */
+function formatSidebarModel(model: unknown): string | undefined {
+  const id = remoteModelId(model);
+  if (!id) return undefined;
+  const variant =
+    model && typeof model === 'object' && 'variant' in model
+      ? model.variant
+      : undefined;
+  // Both absence and "default" mean no variant override in the native host.
+  return `${id}${typeof variant === 'string' && variant && variant !== 'default' ? ` #${variant}` : ''}`;
+}
+
 function modelsFromAgentList(response: unknown): Record<string, string> {
   const models: Record<string, string> = {};
   for (const entry of unwrapAgentList(response)) {
@@ -555,6 +570,8 @@ export interface SidebarSessionTarget {
   agentName: string;
   alias?: string;
   status?: 'busy' | 'retry' | 'reusable' | 'stopped';
+  /** Host session selection, separate from the saved future-delegation team. */
+  actualModel?: string;
   /**
    * 1-based position among the active sessions of the same agent sharing
    * this session's parent scope. Present only when that scope runs more
@@ -839,7 +856,7 @@ export interface SidebarInteraction {
  */
 export interface SidebarPresetRow {
   name: string;
-  /** V2-only: server-owned inference binding for future children, not a model. */
+  /** V2-only: server-owned inference binding for future delegations, not a model. */
   sessionLabel?: string;
   onActivate?: () => void;
 }
@@ -1339,6 +1356,19 @@ function sessionTargetRow(
         },
         [label],
       ),
+      ...(target.actualModel !== undefined
+        ? [
+            text(
+              {
+                fg: theme.textMuted,
+                flexShrink: 1,
+                wrapMode: 'none',
+                truncate: true,
+              },
+              [` · ${target.actualModel}`],
+            ),
+          ]
+        : []),
       ...(annotation !== undefined
         ? [
             text(
@@ -1416,6 +1446,84 @@ export function getContrastForeground(
   return RGBA.fromInts(255, 255, 255);
 }
 
+export interface SidebarSessionView {
+  state?: SessionPresetState;
+  nativeModel?: string;
+  selectedModel?: string;
+  taskModel?: (sessionID: string) => string | undefined;
+}
+
+/** Window-local view only. Never writes the directory-wide TuiSnapshot. */
+export function projectSidebarTeam(
+  snapshot: TuiSnapshot,
+  state?: SessionPresetState,
+): TuiSnapshot {
+  const team = state?.team;
+  const { canonicalName, projectValues } = createTeamDisplayIdentity(
+    snapshot.agentDisplayNames,
+  );
+  const models = projectValues(team?.agentModels ?? {});
+  const variants = projectValues(team?.agentVariants ?? {});
+  const inherited = projectValues(team?.inheritance ?? {});
+  // Compatibility IDs are not extra team members. Do not deduplicate display
+  // names or models: distinct custom agents can legitimately share either.
+  const names = new Set(
+    [
+      ...getSidebarAgentNames(snapshot),
+      ...Object.keys(team?.agentModels ?? {}),
+      ...Object.keys(team?.inheritance ?? {}),
+    ].map(canonicalName),
+  );
+  return {
+    ...snapshot,
+    agentModels: Object.fromEntries(
+      [...names].map((name) => {
+        const inheritance = inherited[name];
+        return [
+          name,
+          inheritance ? `Inherits ${inheritance}` : (models[name] ?? 'Unknown'),
+        ];
+      }),
+    ),
+    agentVariants: Object.fromEntries(
+      [...names].flatMap((name) => {
+        const variant = variants[name];
+        return variant === undefined ? [] : [[name, variant]];
+      }),
+    ),
+    // Preserve legacy task destinations under their canonical row. Only the
+    // local projection changes; the original execution IDs remain untouched.
+    activeSessions: Object.fromEntries(
+      Object.entries(snapshot.activeSessions).map(([sessionID, name]) => [
+        sessionID,
+        canonicalName(name),
+      ]),
+    ),
+    reusableByAgent: Object.fromEntries(
+      Object.entries(snapshot.reusableByAgent).map(([parentID, byAgent]) => {
+        const canonical = new Map<string, (typeof byAgent)[string]>();
+        for (const [name, entries] of Object.entries(byAgent)) {
+          const key = canonicalName(name);
+          canonical.set(key, [...(canonical.get(key) ?? []), ...entries]);
+        }
+        // The activity reader expects running entries before terminal history.
+        return [
+          parentID,
+          Object.fromEntries(
+            [...canonical].map(([name, entries]) => [
+              name,
+              entries.sort(
+                (a, b) =>
+                  Number(b.running === true) - Number(a.running === true),
+              ),
+            ]),
+          ),
+        ];
+      }),
+    ),
+  };
+}
+
 export function renderSidebar(
   snapshot: TuiSnapshot,
   version: string,
@@ -1437,6 +1545,7 @@ export function renderSidebar(
   interaction?: SidebarInteraction,
   presetRow?: SidebarPresetRow,
   modelNames?: ReadonlyMap<string, string>,
+  sessionView?: SidebarSessionView,
 ): JSX.Element {
   const configStatusRow = buildConfigStatusRow(configInvalid, theme);
   const presetRowEl = presetRow
@@ -1509,6 +1618,27 @@ export function renderSidebar(
     [
       header,
       ...(sidebarOpen ? [configStatusRow, presetRowEl] : []),
+      ...(sidebarOpen && sessionView
+        ? [
+            text({ fg: theme.textMuted, wrapMode: 'none', truncate: true }, [
+              `Current model: ${sessionView.nativeModel ?? 'Unknown'}`,
+            ]),
+            ...(sessionView.selectedModel &&
+            sessionView.selectedModel !== sessionView.nativeModel
+              ? [
+                  text(
+                    { fg: theme.textMuted, wrapMode: 'none', truncate: true },
+                    [`Next prompt: ${sessionView.selectedModel}`],
+                  ),
+                ]
+              : []),
+            text({ fg: theme.textMuted, marginTop: 1 }, [
+              sessionView.state?.pending
+                ? 'Team update pending · new work blocked'
+                : 'Team · next delegation',
+            ]),
+          ]
+        : []),
       ...(sidebarOpen
         ? getSidebarAgentNames(snapshot).flatMap((agentName) => {
             const model = snapshot.agentModels[agentName] ?? 'pending';
@@ -1534,7 +1664,16 @@ export function renderSidebar(
                         : 'reusable',
                 }),
               );
-            const mergedTargets = [...sessions, ...reusableTargets];
+            const mergedTargets = [...sessions, ...reusableTargets].map(
+              (target) =>
+                sessionView
+                  ? {
+                      ...target,
+                      actualModel:
+                        sessionView.taskModel?.(target.sessionID) ?? 'Unknown',
+                    }
+                  : target,
+            );
             const history = reusableTargets.some(
               (target) =>
                 target.status === 'reusable' || target.status === 'stopped',
@@ -1586,7 +1725,23 @@ export function renderSidebar(
             const agentRowEl = compactSidebar
               ? compactAgentRow(rowOptions)
               : agentRow(rowOptions);
-            if (!expanded) return [agentRowEl];
+            if (!expanded)
+              return [
+                agentRowEl,
+                ...(sessionView && mergedTargets.length === 1
+                  ? [
+                      text(
+                        {
+                          fg: theme.textMuted,
+                          paddingLeft: 2,
+                          wrapMode: 'none',
+                          truncate: true,
+                        },
+                        [`Task: ${mergedTargets[0].actualModel}`],
+                      ),
+                    ]
+                  : []),
+              ];
             return [
               agentRowEl,
               ...allTargets.map((target) =>
@@ -1679,7 +1834,7 @@ function buildPresetRow(
       : box({ width: '100%', flexDirection: 'column' }, [
           row,
           text({ fg: theme.textMuted, wrapMode: 'none', truncate: true }, [
-            `Session team snapshot: ${presetRow.sessionLabel}`,
+            `Session: ${presetRow.sessionLabel}`,
           ]),
         ]);
   if (!clickable) return content;
@@ -1834,7 +1989,7 @@ interface V2TuiContext extends V2PresetManagerContext {
     session?: {
       get?: (
         sessionID: string,
-      ) => { parentID?: unknown; agent?: unknown } | undefined;
+      ) => { model?: unknown; parentID?: unknown; agent?: unknown } | undefined;
     };
   };
   renderer: { requestRender: () => void; getSelection?: () => unknown };
@@ -1895,19 +2050,18 @@ interface SidebarRuntimeAdapter {
     presetName?: string,
     sessionLabel?: string,
   ) => SidebarPresetRow | undefined;
-  readSessionPreset?: (directory: string, sessionID: string) => Promise<string>;
+  readSessionPreset?: (
+    directory: string,
+    sessionID: string,
+  ) => Promise<SessionPresetState>;
+  getSessionModel?: (sessionID: string) => string | undefined;
   onMultiplexerConfig?: (type: MultiplexerType) => void;
-  /** v2 hosts only: the prompt's live selected model while the visible
-   * route is a root orchestrator session. Overlays the sidebar's
-   * orchestrator row so the picker's choice shows before the first turn
-   * on the new model commits it to tui-state. */
-  getSelectedRootModel?: () =>
-    | { model: string; variant?: string | undefined }
-    | undefined;
+  /** Root picker selection, separate from committed models and saved team targets. */
+  getSelectedRootModel?: () => string | undefined;
 }
 
 /**
- * Resolve the live picker selection that may overlay the orchestrator row.
+ * Resolve the live picker selection without changing any saved team target.
  *
  * Gate 1 — route: only a session route yields a sessionID; the home
  * screen's selection belongs to a session that does not exist yet.
@@ -1923,7 +2077,7 @@ export function resolveSelectedRootModel(input: {
   selected?:
     | { providerID?: unknown; modelID?: unknown; variant?: unknown }
     | undefined;
-}): { model: string; variant?: string | undefined } | undefined {
+}): string | undefined {
   const sessionID = input.route
     ? resolveRouteSessionId(input.route)
     : undefined;
@@ -1943,47 +2097,7 @@ export function resolveSelectedRootModel(input: {
   ) {
     return undefined;
   }
-  return {
-    model: `${selected.providerID}/${selected.modelID}`,
-    ...(typeof selected.variant === 'string' && selected.variant
-      ? { variant: selected.variant }
-      : {}),
-  };
-}
-
-/**
- * Overlay the host picker's live selected model onto the orchestrator row.
- *
- * v2 defers `session.switchModel` until the next prompt commits it, so the
- * server-side projection (tui-state) lags one turn behind the picker. This
- * TUI-side overlay closes that window for root orchestrator sessions — the
- * one row whose model the user just changed with their own hands. Returns
- * the input snapshot (reference-equal) when there is nothing to change, so
- * unchanged overlays never trip the snapshot change check.
- */
-export function overlaySelectedRootModel(
-  snapshot: TuiSnapshot,
-  selected: { model: string; variant?: string | undefined } | undefined,
-): TuiSnapshot {
-  if (!selected?.model) return snapshot;
-  if (snapshot.agentModels.orchestrator === undefined) return snapshot;
-  if (
-    snapshot.agentModels.orchestrator === selected.model &&
-    snapshot.agentVariants.orchestrator === (selected.variant ?? undefined)
-  ) {
-    return snapshot;
-  }
-  const agentVariants = { ...snapshot.agentVariants };
-  if (typeof selected.variant === 'string' && selected.variant) {
-    agentVariants.orchestrator = selected.variant;
-  } else {
-    delete agentVariants.orchestrator;
-  }
-  return {
-    ...snapshot,
-    agentModels: { ...snapshot.agentModels, orchestrator: selected.model },
-    agentVariants,
-  };
+  return formatSidebarModel(selected);
 }
 
 /** One refresh/animation/interaction lifecycle for both host slot contracts. */
@@ -2019,6 +2133,7 @@ function createSidebarRuntime(adapter: SidebarRuntimeAdapter) {
     directory: string;
     sessionID: string;
     label: string;
+    state?: SessionPresetState;
   }>();
   let disposed = false;
   let unregisterConfigListener = () => {};
@@ -2061,13 +2176,6 @@ function createSidebarRuntime(adapter: SidebarRuntimeAdapter) {
       remoteCache,
     );
     if (disposed) return;
-    // Fold the live picker selection in BEFORE the change check so a new
-    // selection triggers requestRender on this poll (server-side state only
-    // learns the switch when the next prompt commits it).
-    nextSnapshot = overlaySelectedRootModel(
-      nextSnapshot,
-      adapter.getSelectedRootModel?.(),
-    );
     const namesBefore = modelNamesCache.names;
     await hydrateModelNames(adapter.client, currentDirectory, modelNamesCache);
     if (!isRefreshCurrent(currentDirectory, adapter.getDirectory())) {
@@ -2078,11 +2186,13 @@ function createSidebarRuntime(adapter: SidebarRuntimeAdapter) {
     }
     if (adapter.readSessionPreset && currentSession) {
       let label: string;
+      let state: SessionPresetState | undefined;
       try {
-        label = await adapter.readSessionPreset(
+        state = await adapter.readSessionPreset(
           currentDirectory,
           currentSession,
         );
+        label = sessionPresetLabel(state);
       } catch {
         label = 'Unavailable';
       }
@@ -2096,12 +2206,14 @@ function createSidebarRuntime(adapter: SidebarRuntimeAdapter) {
       if (
         previous?.directory !== currentDirectory ||
         previous?.sessionID !== currentSession ||
-        previous?.label !== label
+        previous?.label !== label ||
+        JSON.stringify(previous?.state) !== JSON.stringify(state)
       ) {
         setSessionPreset({
           directory: currentDirectory,
           sessionID: currentSession,
           label,
+          state,
         });
         stateChanged = true;
       }
@@ -2134,10 +2246,9 @@ function createSidebarRuntime(adapter: SidebarRuntimeAdapter) {
           log('[v2][tui] config state read failed', String(err));
           return { ok: false, reason: String(err) };
         }
-        if (changed) {
-          adapter.renderer.requestRender();
-          scheduleRefresh();
-        }
+        if (changed) adapter.renderer.requestRender();
+        // Same-name Apply may change the saved team without changing config.
+        scheduleRefresh();
         return { ok: true };
       },
     );
@@ -2165,6 +2276,20 @@ function createSidebarRuntime(adapter: SidebarRuntimeAdapter) {
       const visible = adapter.getVisibleSession();
       const currentSnapshot = snapshot();
       const projection = sessionPreset();
+      const isCurrentProjection =
+        projection?.directory === adapter.getDirectory() &&
+        projection.sessionID === visible;
+      const sessionView: SidebarSessionView | undefined =
+        adapter.readSessionPreset && visible
+          ? {
+              state: isCurrentProjection ? projection?.state : undefined,
+              nativeModel: adapter.getSessionModel?.(visible),
+              // Read the host's reactive picker here, not in the async snapshot
+              // refresh: selection changes must show before a prompt or RPC.
+              selectedModel: adapter.getSelectedRootModel?.(),
+              taskModel: adapter.getSessionModel,
+            }
+          : undefined;
       const sessionLabel = !adapter.readSessionPreset
         ? undefined
         : visible === undefined
@@ -2180,7 +2305,9 @@ function createSidebarRuntime(adapter: SidebarRuntimeAdapter) {
           : resolveTuiSnapshotRoot(currentSnapshot, visible),
       );
       return renderSidebar(
-        currentSnapshot,
+        sessionView
+          ? projectSidebarTeam(currentSnapshot, sessionView.state)
+          : currentSnapshot,
         adapter.version,
         adapter.theme(),
         configInvalid,
@@ -2190,6 +2317,7 @@ function createSidebarRuntime(adapter: SidebarRuntimeAdapter) {
         interaction,
         adapter.getPresetRow?.(configDirectory, presetName, sessionLabel),
         modelNames(),
+        sessionView,
       );
     }),
   );
@@ -2218,6 +2346,11 @@ async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
       notifyConfigChanged(directory, 'preset-manager');
     augmented.getSessionID = () =>
       resolveRouteSessionId(ctx.ui.router.current());
+    augmented.isHome = () => ctx.ui.router.current().type === 'home';
+    if (ctx.ui.router.navigate) {
+      augmented.openSession = (sessionID) =>
+        ctx.ui.router.navigate?.({ type: 'session', sessionID });
+    }
     return augmented;
   };
   // Tracks the runtime's effective `multiplexer.type` (onMultiplexerConfig).
@@ -2343,12 +2476,10 @@ async function setup(ctx: V2TuiContext): Promise<undefined | (() => void)> {
       warnPaneUnsupported();
       void reconcilePaneWiring();
     },
-    readSessionPreset: async (directory, sessionID) => {
-      const state = await readSessionPreset(ctx, sessionID, directory);
-      return state.status === 'bound'
-        ? (state.presetName ?? '(no named preset)')
-        : 'Not bound';
-    },
+    readSessionPreset: (directory, sessionID) =>
+      readSessionPreset(ctx, sessionID, directory),
+    getSessionModel: (sessionID) =>
+      formatSidebarModel(ctx.data?.session?.get?.(sessionID)?.model),
     getPresetRow: (directory, presetName, sessionLabel) => {
       const name = presetName ?? '(none)';
       if (!canOpenPresetManagerV2(ctx)) return { name, sessionLabel };

@@ -623,6 +623,34 @@ export class ForegroundFallbackManager {
     );
   }
   private readonly sessionRetryEnabled = new Map<string, boolean>();
+  private readonly executionRevisions = new Map<string, number>();
+
+  assertSessionTransitionIdle(sessionID: string): void {
+    if (this.inProgress.has(sessionID))
+      throw new Error(
+        'Fallback model switch is still in flight; retry after it settles',
+      );
+  }
+
+  publishSessionRevision(
+    sessionID: string,
+    revision: number,
+    chains: Record<string, ReadonlyArray<ForegroundFallbackModel>>,
+    enabled: boolean,
+  ): void {
+    this.assertSessionTransitionIdle(sessionID);
+    if (this.executionRevisions.get(sessionID) !== revision) {
+      this.noteExternalTurn(
+        sessionID,
+        this.lastUserMessageID.get(sessionID) ?? '',
+      );
+      this.sessionTried.delete(sessionID);
+      this.activeFallback.delete(sessionID);
+      this.sessionModel.delete(sessionID);
+      this.executionRevisions.set(sessionID, revision);
+    }
+    this.pinSessionChains(sessionID, chains, enabled);
+  }
   private retryEnabledFor(sessionID: string): boolean {
     return this.sessionRetryEnabled.get(sessionID) ?? this.v2RetryEnabled;
   }
@@ -641,6 +669,9 @@ export class ForegroundFallbackManager {
   private readonly quotaExhaustedProviders = new Map<string, Set<string>>();
   /** Process-local sessions with an active fallback switch in flight. */
   private readonly inProgress = getProcessFallbacksInProgress();
+  /** This instance's real v2 native calls, including calls whose admission
+   * timed out. Other locations retain their own independent drain. */
+  private readonly switchRequests = new Set<Promise<unknown>>();
   /** One-shot v2 retry-hook delivery notices, keyed by sessionID and the
    *  failing model ("providerID/modelID"). Proves hook delivery per
    *  session/model episode without per-event log noise. */
@@ -904,8 +935,9 @@ export class ForegroundFallbackManager {
    *  mid-attempt — pending timers are cancelled here, and suspension
    *  points inside tryFallback/tryFallbackWithAbort/execFallback abandon
    *  their continuation (see abandonedByDispose) so no replay, abort, or
-   *  transcript read runs through the destroyed generation's client. */
-  dispose(): void {
+   *  transcript read runs through the destroyed generation's client. Real
+   *  native switches cannot be cancelled: return their settlement barrier. */
+  dispose(): Promise<void> {
     this.disposed = true;
     for (const pending of this.pendingInitialDelay.values()) {
       clearTimeout(pending.timer);
@@ -914,6 +946,7 @@ export class ForegroundFallbackManager {
     this.replayMessageIds.clear();
     this.userEventSequence.clear();
     this.v2RetryNotices.clear();
+    return Promise.allSettled([...this.switchRequests]).then(() => {});
   }
 
   /** Dispose fence for fallback chains: true when this generation was
@@ -1235,6 +1268,7 @@ export class ForegroundFallbackManager {
     this.sessionAgent.delete(id);
     this.sessionTried.delete(id);
     this.sessionChains.delete(id);
+    this.executionRevisions.delete(id);
     this.sessionRetryEnabled.delete(id);
     this.unknownFinishStreak.delete(id);
     this.v2RetryNotices.delete(id);
@@ -1793,6 +1827,7 @@ export class ForegroundFallbackManager {
   ): Promise<void> {
     let picked: string | undefined;
     let switchRequest: Promise<unknown> | undefined;
+    const revision = this.executionRevisions.get(event.sessionID);
     const from = `${event.model.providerID}/${event.model.id}`;
     try {
       const { sessionID } = event;
@@ -1869,17 +1904,33 @@ export class ForegroundFallbackManager {
       if (!selected || selected === 'exhausted') return;
       const { agentName, nextModel, ref, variant } = selected;
       picked = nextModel;
-      switchRequest = switchModel(sessionID, {
-        providerID: ref.providerID,
-        id: ref.modelID,
-        ...(variant ? { variant } : {}),
+      this.inProgress.add(sessionID);
+      switchRequest = Promise.resolve().then(() => {
+        // Disposal can run after the slot is claimed but before this queued
+        // callback starts. Never issue a fresh native write from that callback.
+        if (this.disposed) return;
+        return switchModel(sessionID, {
+          providerID: ref.providerID,
+          id: ref.modelID,
+          ...(variant ? { variant } : {}),
+        });
       });
+      const request = switchRequest;
+      this.switchRequests.add(request);
+      // The timeout does not cancel the native switch. Keep the real flight
+      // fenced until settlement, including across a plugin-generation reload.
+      const release = () => {
+        this.switchRequests.delete(request);
+        this.inProgress.delete(sessionID);
+      };
+      void request.then(release, release);
       await withTimeout(
         switchRequest,
         HOST_CALL_TIMEOUT_MS,
         'foreground retry model switch timed out',
       );
-      if (this.disposed) return;
+      if (this.disposed || this.executionRevisions.get(sessionID) !== revision)
+        return;
       event.decision = { retry: true, delay: this.retryDelayMs };
       this.commitSwitch(sessionID, from, nextModel, event.error);
       this.showFallbackToast(agentName, nextModel, event.error);
@@ -1905,6 +1956,7 @@ export class ForegroundFallbackManager {
             const observedModel = this.sessionModel.get(event.sessionID);
             if (
               this.disposed ||
+              this.executionRevisions.get(event.sessionID) !== revision ||
               (observedModel !== from && observedModel !== target)
             )
               return;

@@ -3,6 +3,11 @@
 Use `/preset` to choose a session's subagent inference configuration or change
 the default for future sessions.
 
+> **Storage compatibility:** New bindings and explicit updates write v2 records,
+> which the previous v1-only reader rejects. See
+> [Testing and downgrading](#testing-and-downgrading) before trying a prerelease
+> with your existing sessions.
+
 ## Controls
 
 `/preset` opens a **three-level preset manager** in the TUI — pure TUI, like
@@ -25,6 +30,17 @@ the built-in `/models`, so it triggers no LLM turn.
 > its configuration-writing fast path: it changes the global default, not
 > the current session's binding.
 
+The manager shows the effective **Default** and the current **Session** binding
+separately. Inspect the session's saved team to see its models and variants;
+editing a preset with the same name does not change that saved view. Project
+and environment overrides can make the effective default differ from the
+user configuration's selection.
+
+The v2 sidebar's **Current model** is the committed host model. In a root
+orchestrator session, **Next prompt** shows a different picker selection
+immediately, before submission. **Team · next delegation** remains the saved
+team projection.
+
 ## Scope and when changes take effect
 
 On v2, a root work session captures its subagent inference configuration before
@@ -35,7 +51,8 @@ the existing session creates later.
 
 | Action | What is saved | Who uses the change |
 |--------|---------------|---------------------|
-| Manager → Current session | The session's inference snapshot in OpenCode's plugin storage | New delegations from that session after the switch |
+| Manager → Current session | The session's inference snapshot in OpenCode's plugin storage | New and explicitly resumed delegations from that session |
+| Manager → New empty session with this preset | A new empty session and its initial binding | Delegations from its first turn onward; the configuration default is unchanged |
 | Manager → Global default, or `/preset <name>` | The selected preset in the user configuration | Sessions that first bind after the configuration refresh, subject to project and environment overrides |
 | Edit the user configuration's `preset` | The global default | Future bindings that inherit the global default |
 | Edit a project configuration's `preset` | That project's default | Future bindings in that project |
@@ -59,13 +76,67 @@ pretending a global selection changed that project's effective default.
 3. A's new subagents still use its `cheap` snapshot; B's use `powerful`.
 4. Changing the global default back to `cheap` does not change B.
 5. Applying `powerful` to A's **Current session** changes A's future
-   delegations. Its already-created children keep their own snapshots.
+   delegations, including explicit continuations of existing children.
 
-A bound child also retains its snapshot when resumed. If it creates a
-grandchild after its parent switches presets, the grandchild inherits that
-child's older snapshot, not the root's latest selection. An explicit model
-or variant supplied to a delegation takes precedence over the preset default;
-an explicit model selection does not opt into that child's preset fallback chain.
+Apply saves the team target; it does not immediately rewrite existing children.
+A subsequent native `subagent` continuation keeps the child's session ID and
+history, and adopts the team captured from its direct parent. The child then
+uses that team for its own delegations. Parent Apply alone leaves the child's
+execution and team unchanged. A grandchild inherits its direct parent's team,
+not a later selection on the root.
+
+An explicit model or variant supplied to a delegation takes precedence over
+the preset default. An explicit model selection disables that execution's
+preset fallback chain. A later team change can select a new preset model;
+an ordinary continuation with unchanged settings preserves the current model
+and fallback state.
+
+For a managed same-agent continuation, the native tool authorizes the delegation
+first. Slim then validates any explicit model or variant and installs the
+inference configuration before the tool submits its prompt. A rejected
+authorization or unavailable explicit selection leaves the child's configuration
+unchanged. Unbound historical children retain native model validation.
+
+Concurrent continuations of a running child can reach this step in approval
+order, rather than invocation order. Each configuration change uses the team
+captured by that invocation. Avoid changing the child's agent manually while a
+continuation is waiting: the host does not provide an atomic boundary between
+that external change and the continuation.
+
+### Start a session with a preset
+
+From the home screen, open the preset manager through the command palette and
+choose **New empty session with this preset**. Select an initial agent and confirm the
+native model and directory. The plugin creates an empty session with the chosen
+team already bound. It sends no message and makes no model request.
+
+After creation, enter the session or stay on the home screen. The original home
+screen's next ordinary submission does not use this new session. To move an
+existing draft, use OpenCode's Stash and restore actions or copy it yourself;
+the plugin does not transfer it. Prefer the command palette when preserving a
+draft, since executing a slash command clears the home input.
+
+The new-session action uses the primary agent you select explicitly; it cannot
+read the home screen's current agent selection. Check OpenCode's native agent
+and model controls after entering, particularly when starting with `--agent`.
+
+If creation or binding times out, retry the same operation. It reuses the same
+session ID rather than creating another session. An unfinished initialization
+blocks messages until binding succeeds. A failed navigation does not undo a
+successful creation; open the recorded session from the session list.
+
+Creation retries must use the original directory and workspace, even when two
+workspaces share a directory. Older prerelease creation records that lack this
+workspace information cannot be retried by this version; completed sessions
+remain usable. The workspace check preserves the original creation target. It
+cannot detect a later move to another workspace at the same directory, because
+the host's public session lookup does not expose that identity.
+
+To stop retrying that creation, choose **Forget local retry record** and confirm.
+This releases the window for a new creation, including in another workspace.
+It leaves server state unchanged: the earlier request may still finish, so
+creating again can leave two empty sessions. The original directory, session
+ID and operation ID remain in the plugin log.
 
 ### Persistence and failures
 
@@ -74,6 +145,45 @@ preset name. They survive plugin and host restarts through OpenCode's
 `ctx.storage`; no separate snapshot directory or database is created. The
 plugin binds a new native child from a bound parent before its first prompt.
 A failed binding prevents that invocation from submitting the prompt.
+
+Changing an existing child's execution is a persisted transition. While it is
+in progress, new managed requests and tool calls are rejected. A provider
+request or tool invocation that has already passed its own admission check can
+finish. The next request or tool invocation is checked again, even within the
+same host run, and can use the new configuration once the transition completes.
+This can reject a request whose context was prepared under the previous revision
+but which has not yet passed model-request admission. Such a request is not sent
+with mixed settings or automatically retried.
+
+If a transition fails, retry the recorded target explicitly. A restart does not
+clear the pending state, and retry does not substitute the latest default or
+replay the failed prompt. Configuration may already be committed when a
+continuation fails; check the saved state before sending another continuation.
+Apply never silently replaces a supplied child session ID with a new session.
+
+Retry requires the saved target's dependencies to work. Restore a missing
+provider or agent configuration, or use another work session. Clearing pending
+would not undo a model change that already reached the host, so there is no
+discard-to-old-configuration action. If a native model change never finishes,
+stop the OpenCode server executing it before restarting and retrying. This
+interrupts that server's running sessions; closing a connected TUI or timing out
+a request does not cancel the server's operation.
+Plugin reload or unload also waits for an in-flight native model change.
+
+### Testing and downgrading
+
+New bindings and explicit updates use storage format v2. Existing v1 bindings
+remain readable; ordinary reads and unchanged continuations do not migrate
+them. Apply or an execution change writes the new format.
+
+The previous v1-only reader rejects v2 records. Earlier prerelease builds of this
+feature also reject new creation records containing workspace scope. There is
+no automatic downgrade.
+For a reversible trial, use separate OpenCode configuration and data directories,
+or stop the host and back up its data before testing with your usual sessions.
+Restoring the previous plugin reference alone does not convert records back or
+undo saved native model selections. If you test with your usual data, restoring
+its pre-test state requires the previous plugin and the matching data backup.
 
 Sessions created before this feature have no historical snapshot to recover.
 A root's first binding uses the then-current effective default. A child with
@@ -91,6 +201,10 @@ Unreadable or corrupt stored records are errors, not unbound-session fallbacks.
 Session isolation requires the host's plugin storage and session identity APIs.
 Reduced hosts without these APIs retain the previous execution behavior and
 cannot apply a session-only preset; they do not report a persistent binding.
+Managed continuations with an explicit model or variant also require the host's
+model-list API. Bound empty-session creation requires its full location context.
+Reduced hosts lacking these APIs reject the corresponding operation; they do
+not bypass validation or infer a workspace from its directory.
 
 User and project configuration files are still watched, including `.json`
 and `.jsonc` candidates created after startup. A successful configuration
@@ -128,6 +242,10 @@ a raw JSON prompt for provider-specific settings (e.g.
 
 ## Example Configuration
 
+These examples configure subagents. Presets can also configure `orchestrator`
+at startup, but applying a team to Current session does not change the main
+session's native model selection.
+
 ```jsonc
 {
   "presets": {
@@ -153,9 +271,9 @@ a raw JSON prompt for provider-specific settings (e.g.
 
 V2 session selection applies **only subagent inference settings**. It does
 not change the main session's model selection or hot-reload its agent
-registry. The default configuration and the current session's binding are
-different states; a default label is not evidence that a running child has
-changed models.
+registry. The sidebar's team models come from the saved binding and describe
+future delegations. They are not a live model reading for every existing child:
+explicit overrides and fallback may select another model.
 
 | Field | Description |
 |-------|-------------|

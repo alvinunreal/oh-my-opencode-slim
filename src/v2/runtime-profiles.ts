@@ -1,12 +1,12 @@
 /**
- * Session-frozen v2 runtime profiles.
+ * Execution-revision-frozen v2 runtime profiles.
  *
  * AGENTS.md: system prompts and tool sets stay frozen for the lifetime of a
  * session — so a config/preset change must never rebuild agent definitions or
  * reload the host registry. Instead, the adapter resolves ONLY the
  * inference/runtime fields (model, variant, temperature, provider options)
- * into a per-agent profile, freezes the current profile for each NEW child
- * session, and applies it before that child's first request:
+ * into a per-agent profile, freezes each child's execution revision, and
+ * applies it before that revision's first request:
  *
  * - `model`/`variant`: `session.switchModel` for host defaults; per-call models
  *   stay untouched (v2 prompts carry no model).
@@ -14,10 +14,11 @@
  *   `options` record for that captured session only (never system/messages/
  *   tools — prompt bytes and tool catalogs stay untouched).
  *
- * Existing/resumed child sessions keep the profile captured when they were
- * first seen; parents and foreign-agent sessions are never touched.
+ * Ordinary same-content resumes keep their profile/model/fallback state.
+ * Explicit parent re-delegation can install a new durable execution revision;
+ * parents and foreign-agent sessions are never profiled.
  */
-import type { V2Context, V2SessionContextEvent } from './types';
+import type { ModelRef, V2Context, V2SessionContextEvent } from './types';
 
 /** One agent's hot-applicable inference fields + sidebar projection. */
 export interface V2AgentRuntimeProfile {
@@ -42,7 +43,8 @@ const MAX_PROFILE_SESSIONS = 1024;
 const PROFILE_OPERATION_TIMEOUT_MS = 2_000;
 /** Bound for the request-path model switch. Rejecting (not proceeding) is
  * fail-closed: the prompt hook aborts the admission before any request can
- * run on a stale model, and a retry re-awaits the idempotent switch. */
+ * run on a stale model. Retrying cannot start another switch until the real
+ * native operation settles: a request timeout is not cancellation. */
 const PROFILE_SWITCH_TIMEOUT_MS = 10_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -63,18 +65,21 @@ async function withProfileTimeout<T>(
   operation: Promise<T>,
   message: string,
   timeoutMs: number = PROFILE_OPERATION_TIMEOUT_MS,
+  timers: Pick<SessionProfileBridgeOptions, 'setTimeout' | 'clearTimeout'> = {},
 ): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timer: ReturnType<typeof setTimeout> | number | undefined;
+  const schedule = timers.setTimeout ?? setTimeout;
+  const cancel = timers.clearTimeout ?? clearTimeout;
   try {
     return await Promise.race([
       operation,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+        timer = schedule(() => reject(new Error(message)), timeoutMs);
         (timer as unknown as { unref?: () => void }).unref?.();
       }),
     ]);
   } finally {
-    if (timer !== undefined) clearTimeout(timer);
+    if (timer !== undefined) cancel(timer);
   }
 }
 
@@ -99,6 +104,7 @@ export interface SessionProfileBridgeOptions {
    * when the session preset service is installed. */
   profilesForSession?: (sessionID: string) => Promise<V2AgentRuntimeProfiles>;
   preserveSessionModel?: (sessionID: string) => boolean;
+  revisionForSession?: (sessionID: string) => number | undefined;
   /** Startup profiles, matching the host-registered agent defaults. */
   registeredProfiles?: V2AgentRuntimeProfiles;
   /** Plugin-defined agent ids; foreign children are never profiled. */
@@ -121,6 +127,12 @@ export interface SessionProfileBridgeOptions {
   onSessionCaptureFailed?: (sessionID: string) => void;
   /** Test seam: override the request-path model-switch bound. */
   switchTimeoutMs?: number;
+  /** Scheduling seams for deterministic timeout tests; never replace globals. */
+  setTimeout?: (
+    callback: () => void,
+    delay: number,
+  ) => ReturnType<typeof setTimeout> | number;
+  clearTimeout?: (timer: ReturnType<typeof setTimeout> | number) => void;
 }
 
 /**
@@ -136,6 +148,17 @@ export interface SessionProfileIdentity {
 }
 
 export interface SessionProfileBridge {
+  /** Synchronously reject new work and post-await publication. */
+  retire(): void;
+  /** After retirement, wait for real native operations, not timeout wrappers. */
+  drain(): Promise<void>;
+  assertIdle(sessionID: string): void;
+  installSessionProfile(
+    sessionID: string,
+    profile: V2AgentRuntimeProfile | undefined,
+    revision: number,
+    model?: ModelRef,
+  ): Promise<void>;
   /** Observe one raw v2 event (prewarm/cleanup path); never throws. */
   observeEvent(event: Record<string, unknown>): Promise<void>;
   /**
@@ -183,13 +206,39 @@ export function createSessionProfileBridge(
   const deleted = new Set<string>();
   /** In-flight captures, so concurrent callers share one switch. */
   const pending = new Map<string, Promise<void>>();
+  // Unlike the bounded admission task, this entry outlives a timeout. Never
+  // evict an unresolved native call or let another operation share its slot.
+  const switching = new Map<string, Promise<unknown>>();
+  const revisions = new Map<string, number | undefined>();
   const emitLog = options.log ?? (() => {});
+  let retired = false;
+  const checkActive = () => {
+    if (retired) throw new Error('Session profile generation retired');
+  };
+
+  function startSwitch(sessionID: string, operation: () => Promise<unknown>) {
+    checkActive();
+    if (switching.has(sessionID))
+      throw new Error('Session profile model switch is still in flight');
+    // Claim before invoking the host, including synchronous throws/reentry.
+    const request = Promise.resolve().then(() => {
+      checkActive();
+      return operation();
+    });
+    switching.set(sessionID, request);
+    const release = () => {
+      if (switching.get(sessionID) === request) switching.delete(sessionID);
+    };
+    void request.then(release, release);
+    return request;
+  }
 
   function prune(): void {
     while (captured.size > MAX_PROFILE_SESSIONS) {
       const oldest = captured.keys().next().value as string | undefined;
       if (oldest === undefined) break;
       captured.delete(oldest);
+      revisions.delete(oldest);
     }
     while (ignored.size > MAX_PROFILE_SESSIONS) {
       const oldest = ignored.values().next().value as string | undefined;
@@ -234,6 +283,8 @@ export function createSessionProfileBridge(
         const response = await withProfileTimeout(
           get.call(options.session, { sessionID }),
           'session profile identity lookup timed out',
+          PROFILE_OPERATION_TIMEOUT_MS,
+          options,
         );
         const info =
           isRecord(response) && isRecord(response.data)
@@ -267,6 +318,22 @@ export function createSessionProfileBridge(
     sessionID: string,
     identity?: SessionProfileIdentity,
   ): Promise<void> {
+    checkActive();
+    const inFlight = pending.get(sessionID);
+    if (inFlight) {
+      await inFlight;
+      return;
+    }
+    // A previous admission may have timed out, or a revision installation
+    // may be running. Neither permits a fresh capture (even a model-less one)
+    // to publish a refreshed profile over the unresolved native selection.
+    if (switching.has(sessionID))
+      throw new Error('Session profile model switch is still in flight');
+    const revision = options.revisionForSession?.(sessionID);
+    if (captured.has(sessionID) && revisions.get(sessionID) !== revision) {
+      captured.delete(sessionID);
+      revisions.delete(sessionID);
+    }
     if (
       captured.has(sessionID) ||
       ignored.has(sessionID) ||
@@ -274,13 +341,9 @@ export function createSessionProfileBridge(
     ) {
       return;
     }
-    const inFlight = pending.get(sessionID);
-    if (inFlight) {
-      await inFlight;
-      return;
-    }
     const task = (async () => {
       const resolved = await resolveIdentity(sessionID, identity);
+      checkActive();
       if (!resolved.parentID) {
         if (resolved.authoritative) {
           // Proven root session: never profile it.
@@ -307,15 +370,19 @@ export function createSessionProfileBridge(
       const profiles = options.profilesForSession
         ? await options.profilesForSession(sessionID)
         : options.profiles();
+      checkActive();
+      const captureRevision = options.revisionForSession?.(sessionID);
       const profile = profiles[resolved.agent];
       if (!profile) {
         // Plugin-managed but absent from the profile table (e.g. a
         // marketplace-agent child: the registry registers it yet the table
         // is built from createAgents, which has no marketplace handling).
-        // Freeze null so admission proceeds on the host-registered model
-        // with no temperature/options applied — never reject the prompt hook.
-        captured.set(sessionID, null);
+        // Freeze null only after publishing its matching chain generation.
+        // A failed publisher rejects admission and must be retried.
         options.onSessionCaptured?.(sessionID);
+        checkActive();
+        captured.set(sessionID, null);
+        revisions.set(sessionID, captureRevision);
         prune();
         emitLog('[v2][profile] child session captured without a profile', {
           sessionID,
@@ -332,8 +399,10 @@ export function createSessionProfileBridge(
           !sameModel(resolved.model, registered))
       ) {
         // Nothing to switch, or the host already runs a per-call model.
-        captured.set(sessionID, profile);
         options.onSessionCaptured?.(sessionID);
+        checkActive();
+        captured.set(sessionID, profile);
+        revisions.set(sessionID, captureRevision);
         prune();
         emitLog('[v2][profile] child session captured without a model switch', {
           sessionID,
@@ -351,17 +420,22 @@ export function createSessionProfileBridge(
       options.onSessionCaptured?.(sessionID);
       // Bounded and fail-closed: this rejection propagates to the prompt hook
       // and aborts the admission BEFORE any request can run on the wrong
-      // model. The host call cannot be cancelled, but a late switch can only
-      // affect a later retry, which re-awaits the same idempotent call.
+      // model. A timeout does not release the real native-flight fence.
+      const selectedModel = profile.model;
       try {
-        await withProfileTimeout(
+        const request = startSwitch(sessionID, () =>
           switchModel.call(options.session, {
             sessionID,
-            model: profile.model,
+            model: selectedModel,
           }),
+        );
+        await withProfileTimeout(
+          request,
           'session profile model switch timed out',
           options.switchTimeoutMs ?? PROFILE_SWITCH_TIMEOUT_MS,
+          options,
         );
+        checkActive();
       } catch (err) {
         // Aborted admission: no request ran, so releasing the capture-time
         // pin lets the retry pair a fresh capture with the generation
@@ -370,6 +444,7 @@ export function createSessionProfileBridge(
         throw err;
       }
       captured.set(sessionID, profile);
+      revisions.set(sessionID, captureRevision);
       prune();
       emitLog('[v2][profile] applied model to child session', {
         sessionID,
@@ -381,11 +456,45 @@ export function createSessionProfileBridge(
     try {
       await task;
     } finally {
-      pending.delete(sessionID);
+      if (pending.get(sessionID) === task) pending.delete(sessionID);
     }
   }
 
   return {
+    retire() {
+      retired = true;
+    },
+    async drain() {
+      // retire() prevents queued captures from starting another host call.
+      // An unresolved native operation deliberately keeps teardown waiting.
+      await Promise.allSettled([...pending.values(), ...switching.values()]);
+    },
+    assertIdle(sessionID) {
+      checkActive();
+      if (pending.has(sessionID) || switching.has(sessionID))
+        throw new Error('Session profile model switch is still in flight');
+    },
+    async installSessionProfile(sessionID, profile, revision, model) {
+      this.assertIdle(sessionID);
+      if (model) {
+        const switchModel = options.session?.switchModel;
+        if (!switchModel)
+          throw new Error('session.switchModel unavailable for transition');
+        await withProfileTimeout(
+          startSwitch(sessionID, () =>
+            switchModel.call(options.session, { sessionID, model }),
+          ),
+          'session profile model switch timed out',
+          options.switchTimeoutMs ?? PROFILE_SWITCH_TIMEOUT_MS,
+          options,
+        );
+      }
+      checkActive();
+      captured.set(sessionID, profile ?? null);
+      revisions.set(sessionID, revision);
+      ignored.delete(sessionID);
+      prune();
+    },
     async observeEvent(event) {
       try {
         if (!isRecord(event)) return;
@@ -394,6 +503,7 @@ export function createSessionProfileBridge(
           const deletedID = payload.sessionID ?? payload.id;
           if (typeof deletedID === 'string' && deletedID) {
             captured.delete(deletedID);
+            revisions.delete(deletedID);
             ignored.delete(deletedID);
             deleted.add(deletedID);
             prune();

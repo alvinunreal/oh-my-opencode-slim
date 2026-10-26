@@ -326,19 +326,32 @@ On v2, `/preset` opens a manager with two application scopes:
 
 - **Current session** saves that session's subagent inference configuration
   without changing the configuration file's selected preset. It affects
-  future delegations, not already-created children or the main session's
-  native model selection.
+  new and explicitly resumed delegations. A continuation preserves the child
+  session's ID and history while adopting the parent's captured team. Apply
+  itself does not rewrite running children or the main session's native model.
 - **Global default** writes the user configuration. `/preset <name>` retains
   this configuration-writing behavior. It affects sessions that first bind
   after the refresh, subject to project and environment overrides.
+
+The manager also shows the current session's saved team separately from the
+effective configuration default. On the home screen, its new-session action
+creates an empty session with a preset already bound, without submitting a
+message or changing the global default.
 
 Each work session binds its resolved inference settings before its first
 managed prompt. New children inherit their direct parent's snapshot,
 including variants, options and fallback chains. **Manual edits to the user
 or project configuration, and edits to the same preset definition, do not
-change existing bindings or their future children.** Explicitly reapply the
+change existing bindings or later delegations.** Explicitly reapply the
 preset to Current session to use an updated definition. Bindings persist in
 OpenCode's plugin storage across restarts.
+
+Execution changes use a persisted transition. New managed calls are blocked
+until it completes. A provider request or tool invocation already admitted
+can finish; the next one is checked again, including within the same host run.
+A failed transition requires an explicit retry of its saved target, including
+after a restart. See [persistence and failures](preset-switching.md#persistence-and-failures)
+for recovery; retry does not replay the failed prompt or discard pending state.
 
 Only subagent inference settings (`model`, `variant`, `temperature`,
 `options`, and fallback chains) are isolated. Prompts, tools, permissions,

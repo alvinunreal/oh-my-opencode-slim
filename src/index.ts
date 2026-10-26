@@ -2448,6 +2448,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'v2.backgroundDefaultFlip': backgroundDefaultFlip,
     'v2.session.retry':
       foregroundFallback.handleV2Retry.bind(foregroundFallback),
+    'v2.assertSessionTransitionIdle':
+      foregroundFallback.assertSessionTransitionIdle.bind(foregroundFallback),
+    'v2.publishSessionRevision':
+      foregroundFallback.publishSessionRevision.bind(foregroundFallback),
     // v2-only extension hook: pin the chain generation in effect when a
     // child session registers — the same generation as its frozen profile.
     'v2.pinSessionChains': (
@@ -2922,42 +2926,49 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     },
 
     dispose: async () => {
-      eventDirectoryScope?.release();
       // Synchronous: v2 setup calls this directly and does not emit the
       // public server.instance.disposed event first.
       instanceDisposed = true;
-      registryBridge.retire();
-      terminalGate?.dispose();
-      // Cancel pending initial-delay fallback timers so a reloaded
-      // generation cannot observe one stale fallback call.
-      foregroundFallback.dispose();
-      await taskSessionManagerHook.event({
-        event: { type: 'server.instance.disposed' },
-      });
-      await orchestratorWakeScheduler?.event({
-        event: { type: 'server.instance.disposed' },
-      });
-      // The wake gate is process-global (globalThis + Symbol.for) and survives
-      // module re-entry, so a reloaded generation would otherwise inherit the
-      // previous generation's no-progress caps. Clear it only when this was the
-      // last live instance: disposing one of several locations must not wipe
-      // the other locations' wake state.
-      if (!hasLiveInstances()) clearAllWakeSessions();
-      v1InternalSelectionOverrides.clear();
-      v1DelegatedIntents.length = 0;
-      await interviewManager.dispose();
-      clearTuiActivities();
-      tuiReusableProjection?.dispose();
-      // Explicitly release this generation's companion ownership: a
-      // reloaded generation only replaces the active manager at its own
-      // onLoad, and if it fails before that the detached companion would
-      // survive until process exit. Idempotent (registerActiveManager's
-      // replacement path and the process-exit listener tolerate repeats).
-      companionManager.onExit();
-      // Release only this generation's ownership. The admission runtime
-      // defers final scheduler/tracker teardown by one macrotask so an
-      // immediate config-update re-init can retain active and queued calls.
-      admissionRuntimeLease?.release();
+      // Retire/cancel timers immediately, but keep cleaning other resources
+      // while native switches drain. Even a cleanup error must await them.
+      const fallbackDrain = foregroundFallback.dispose();
+      try {
+        eventDirectoryScope?.release();
+        registryBridge.retire();
+        terminalGate?.dispose();
+        await taskSessionManagerHook.event({
+          event: { type: 'server.instance.disposed' },
+        });
+        await orchestratorWakeScheduler?.event({
+          event: { type: 'server.instance.disposed' },
+        });
+        // The wake gate is process-global (globalThis + Symbol.for) and survives
+        // module re-entry, so a reloaded generation would otherwise inherit the
+        // previous generation's no-progress caps. Clear it only when this was the
+        // last live instance: disposing one of several locations must not wipe
+        // the other locations' wake state.
+        if (!hasLiveInstances()) clearAllWakeSessions();
+        v1InternalSelectionOverrides.clear();
+        v1DelegatedIntents.length = 0;
+        await interviewManager.dispose();
+        clearTuiActivities();
+        tuiReusableProjection?.dispose();
+        // Explicitly release this generation's companion ownership: a
+        // reloaded generation only replaces the active manager at its own
+        // onLoad, and if it fails before that the detached companion would
+        // survive until process exit. Idempotent (registerActiveManager's
+        // replacement path and the process-exit listener tolerate repeats).
+        companionManager.onExit();
+      } finally {
+        try {
+          await fallbackDrain;
+        } finally {
+          // Release only this generation's ownership, after native settlement.
+          // Runtime teardown is deferred one macrotask so an immediate re-init
+          // can retain active and queued calls.
+          admissionRuntimeLease?.release();
+        }
+      }
     },
 
     'tool.execute.before': async (input, output) => {
@@ -3682,6 +3693,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       enabled?: boolean,
     ) => void;
     'v2.releaseSessionChains': (sessionID: string) => void;
+    'v2.assertSessionTransitionIdle': ForegroundFallbackManager['assertSessionTransitionIdle'];
+    'v2.publishSessionRevision': ForegroundFallbackManager['publishSessionRevision'];
     'v2.registerDelegatedLaunchFromStructured': (typeof taskSessionManagerHook)['v2.registerDelegatedLaunchFromStructured'];
   };
 

@@ -260,13 +260,13 @@ describe('preset apply scopes', () => {
     stub.ctx.getSessionID = () => 'root-1';
     stub.ctx.client = {
       rpc: (contract: { id: string }) => {
-        expect(contract.id).toBe('oh-my-opencode-slim.session-preset.v1');
+        expect(contract.id).toBe('oh-my-opencode-slim.session-preset.v2');
         return {
           read: async () => ({
             sessionID: 'root-1',
             status: 'bound',
             presetName: 'balanced',
-            affects: 'future-children-only',
+            affects: 'future-delegations',
           }),
           apply: async (input: unknown, options: unknown) => {
             calls.push({ input, options });
@@ -274,7 +274,7 @@ describe('preset apply scopes', () => {
               sessionID: 'root-1',
               status: 'bound',
               presetName: 'balanced',
-              affects: 'future-children-only',
+              affects: 'future-delegations',
             };
           },
         };
@@ -284,21 +284,24 @@ describe('preset apply scopes', () => {
     expect(calls).toEqual([
       {
         input: { sessionID: 'root-1', presetName: 'balanced' },
-        options: { location: { directory: env.projectDir } },
+        options: {
+          location: { directory: env.projectDir },
+          signal: expect.any(AbortSignal),
+        },
       },
     ]);
     expect(stub.selectCalls[0].placeholder).toContain(
-      'Session team snapshot: balanced',
+      'Default: balanced · Session: balanced',
     );
-    expect(stub.selectCalls[0].placeholder).toContain(
-      'Same name does not imply the same definition',
+    expect(stub.selectCalls[0].options[0].description).toContain(
+      'saved models',
     );
-    expect(stub.confirmCalls[0].message).toContain('Inference only');
+    expect(stub.confirmCalls[0].message).toContain('Inference settings only');
     expectToast(
       stub,
       'success',
-      'future children',
-      'Root model, existing children and global default unchanged',
+      'new and resumed delegations',
+      'Current model, already-admitted work and global default unchanged',
     );
     expect(fs.readFileSync(env.userConfigPath, 'utf-8')).toBe(before);
     expect(stub.reloadCalls()).toBe(0);
@@ -348,10 +351,12 @@ describe('preset apply scopes', () => {
     }
   });
 
-  test('session apply failures report the reason without changing global config', async () => {
+  test('session Apply errors remain unconfirmed, including a lost reply after commit', async () => {
     for (const reason of [
       'Preset not found',
       'Session preset storage write failed',
+      'Request timed out',
+      'Connection lost',
     ]) {
       env.writeUserConfig(SWITCH);
       const stub = makeStub({
@@ -359,27 +364,44 @@ describe('preset apply scopes', () => {
         confirms: [true],
       });
       stub.ctx.getSessionID = () => 'root-1';
+      let committed = false;
+      let applies = 0;
       stub.ctx.client = {
         rpc: () => ({
           read: async () => ({
             sessionID: 'root-1',
-            status: 'unbound',
-            presetName: null,
+            status: committed ? 'bound' : 'unbound',
+            presetName: committed ? 'cheap' : null,
           }),
           apply: async () => {
+            applies++;
+            committed =
+              reason === 'Request timed out' || reason === 'Connection lost';
             throw new Error(reason);
           },
         }),
       };
       await openPresetManagerV2(stub.ctx, env.projectDir);
       expectToast(stub, 'warning', reason, 'Global default unchanged');
-      expect(lastToast(stub)?.title).toBe('Preset not applied');
+      expect(lastToast(stub)?.title).toBe('Apply not confirmed');
+      expectToast(
+        stub,
+        'warning',
+        'Reopen Presets to check the session state.',
+      );
       expect(readUserConfig()).toEqual(SWITCH);
       expect(stub.reloadCalls()).toBe(0);
+      if (committed) {
+        await openPresetManagerV2(stub.ctx, env.projectDir);
+        expect(stub.selectCalls.at(-1)?.placeholder).toContain(
+          'Session: cheap',
+        );
+        expect(applies).toBe(1);
+      }
     }
   });
 
-  test('Save & Apply saves before RPC and distinguishes a rejected apply from a failed save', async () => {
+  test('Save & Apply distinguishes the committed save from an unconfirmed Apply', async () => {
     env.writeUserConfig(SWITCH);
     const stub = makeStub({
       models: [GPT5_MODEL],
@@ -408,20 +430,21 @@ describe('preset apply scopes', () => {
           expect(agentOverride(readUserConfig(), 'balanced').model).toBe(
             'openai/gpt-5',
           );
-          throw new Error('Session preset storage write failed');
+          throw new Error('Request timed out');
         },
       }),
     };
     await openPresetManagerV2(stub.ctx, env.projectDir);
     expect(applies).toBe(1);
     expect(readUserConfig().preset).toBe('balanced');
-    expect(lastToast(stub)?.title).toBe('Preset saved — not applied');
+    expect(lastToast(stub)?.title).toBe('Preset saved — apply not confirmed');
     expectToast(
       stub,
       'warning',
       'Definition saved',
-      'Session preset storage write failed',
+      'Request timed out',
       'Global default unchanged',
+      'Reopen Presets to check the session state.',
     );
   });
 });
@@ -635,7 +658,7 @@ describe('openPresetManagerV2', () => {
       options: { withDialogs: false },
       check: (stub) => {
         expect(stub.toasts).toHaveLength(1);
-        expectToast(stub, 'warning', 'dialog API');
+        expectToast(stub, 'warning', 'Dialogs unavailable');
       },
     },
     {
@@ -1052,9 +1075,7 @@ describe('preset manager config refresh', () => {
       expect(lastToast(stub)?.variant).toBe('warning');
       if (title) expect(lastToast(stub)?.title).toBe(title);
       expect(lastMessage(stub)).toContain(reason);
-      expect(lastMessage(stub)).toContain(
-        'Reload OpenCode to refresh the default',
-      );
+      expect(lastMessage(stub)).toContain('Reload OpenCode');
     });
   }
 
@@ -1078,9 +1099,7 @@ describe('preset manager config refresh', () => {
       expect(stub.toasts).toHaveLength(1);
       expect(lastToast(stub)?.variant).toBe('warning');
       expect(lastMessage(stub)).toContain('sidebar re-read failed');
-      expect(lastMessage(stub)).toContain(
-        'Reload OpenCode to refresh the default',
-      );
+      expect(lastMessage(stub)).toContain('Reload OpenCode');
       expect(lastMessage(stub)).not.toContain('Live refresh requested');
     } finally {
       unregister();

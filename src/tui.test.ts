@@ -22,7 +22,6 @@ import {
   hydrateModelNames,
   isRefreshCurrent,
   makeRouteNavigator,
-  overlaySelectedRootModel,
   paneWiringOptions,
   readConfigState,
   renderSidebar,
@@ -218,13 +217,15 @@ describe('resolveSelectedRootModel', () => {
   };
 
   test('root orchestrator session yields the picker model', () => {
-    expect(
-      resolveSelectedRootModel({
-        route: { type: 'session', sessionID: 'root-a' },
-        sessionInfo: { agent: 'orchestrator' },
-        selected: selection,
-      }),
-    ).toEqual({ model: 'opencode-go/gemini-x', variant: 'high' });
+    for (const variant of ['high', undefined, '', 'default']) {
+      expect(
+        resolveSelectedRootModel({
+          route: { type: 'session', sessionID: 'root-a' },
+          sessionInfo: { agent: 'orchestrator' },
+          selected: { ...selection, variant },
+        }),
+      ).toBe(`opencode-go/gemini-x${variant === 'high' ? ' #high' : ''}`);
+    }
   });
 
   test('agent-less root session (host default shape) still yields it', () => {
@@ -234,7 +235,7 @@ describe('resolveSelectedRootModel', () => {
         sessionInfo: {},
         selected: { providerID: 'zai-coding-plan', modelID: 'glm-5.3' },
       }),
-    ).toEqual({ model: 'zai-coding-plan/glm-5.3' });
+    ).toBe('zai-coding-plan/glm-5.3');
   });
 
   test('child session (parentID) is not overlaid', () => {
@@ -285,61 +286,6 @@ describe('resolveSelectedRootModel', () => {
         selected: { providerID: 42, modelID: 'gemini-x' },
       }),
     ).toBeUndefined();
-  });
-});
-
-describe('overlaySelectedRootModel', () => {
-  test('overlays the live selection onto the orchestrator row', () => {
-    const snapshot = createSnapshot({
-      agentModels: { orchestrator: 'zai-coding-plan/glm-5.3' },
-      agentVariants: { orchestrator: 'max' },
-    });
-    const overlay = overlaySelectedRootModel(snapshot, {
-      model: 'opencode-go/gemini-4-argon-contributor',
-      variant: 'high',
-    });
-    expect(overlay.agentModels.orchestrator).toBe(
-      'opencode-go/gemini-4-argon-contributor',
-    );
-    expect(overlay.agentVariants.orchestrator).toBe('high');
-    // Clone-on-write: the input snapshot stays untouched.
-    expect(snapshot.agentModels.orchestrator).toBe('zai-coding-plan/glm-5.3');
-    expect(snapshot.agentVariants.orchestrator).toBe('max');
-  });
-
-  test('clears the variant when the selection has none', () => {
-    const snapshot = createSnapshot({
-      agentModels: { orchestrator: 'zai-coding-plan/glm-5.3' },
-      agentVariants: { orchestrator: 'max' },
-    });
-    const overlay = overlaySelectedRootModel(snapshot, {
-      model: 'zai-coding-plan/glm-5.3',
-    });
-    expect(overlay.agentModels.orchestrator).toBe('zai-coding-plan/glm-5.3');
-    expect(overlay.agentVariants.orchestrator).toBeUndefined();
-  });
-
-  test('returns the same reference when nothing changes', () => {
-    const snapshot = createSnapshot({
-      agentModels: { orchestrator: 'openai/gpt-6' },
-      agentVariants: { orchestrator: 'high' },
-    });
-    expect(overlaySelectedRootModel(snapshot, undefined)).toBe(snapshot);
-    expect(
-      overlaySelectedRootModel(snapshot, {
-        model: 'openai/gpt-6',
-        variant: 'high',
-      }),
-    ).toBe(snapshot);
-  });
-
-  test('no overlay without an orchestrator row', () => {
-    const snapshot = createSnapshot({
-      agentModels: { explorer: 'openai/gpt-6' },
-    });
-    expect(overlaySelectedRootModel(snapshot, { model: 'openai/gpt-6' })).toBe(
-      snapshot,
-    );
   });
 });
 
@@ -3131,14 +3077,14 @@ describe('clickable sidebar sessions', () => {
             );
             expect(defaultRow).toBeGreaterThan(0);
             expect(lines[defaultRow]).toContain('Default (none)');
-            expect(lines[defaultRow + 1]).toContain(
-              'Session team snapshot: Unavailable',
-            );
+            expect(lines[defaultRow + 1]).toContain('Session: Unavailable');
             expect(spans[defaultRow + 1][0]).toEqual([
-              'Session team snapshot: Unavailable',
+              'Session: Unavailable',
               [170, 170, 170, 255],
               [0, 0, 0, 0],
             ]);
+            expect(lines[defaultRow + 2]).toContain('Current model: Unknown');
+            expect(frame).toContain('Team · next delegation');
             if (process.env.OMO_REVIEW_SIDEBAR_FRAMES === '1') {
               console.log(JSON.stringify({ key, frame, spans }, null, 2));
             }
@@ -3154,8 +3100,9 @@ describe('clickable sidebar sessions', () => {
         }
       }
     }
-    // Session-preset baseline: removing only the new default/snapshot block
-    // (including its top margin) reproduced all 24 pre-change frame+color hashes.
+    // Session-team baseline includes the current model, next-delegation team,
+    // and separate task models. RPC-unavailable fixtures intentionally show
+    // Unknown rather than substituting the directory's current definitions.
     // Review updates with OMO_REVIEW_SIDEBAR_FRAMES=1 bun test src/tui.test.ts
     // -t 'sidebar frame text and colors remain byte-identical'; inspect frames
     // and colors before copying the printed hashes to sidebar-frame-golden.json.

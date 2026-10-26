@@ -266,6 +266,13 @@ export interface V2Context {
     ): Promise<V2Registration>;
   };
   session: {
+    /** Independently probed: read/apply still work without native create. */
+    create?(input: {
+      id: string;
+      agent: string;
+      model: ModelRef;
+      location?: { directory: string };
+    }): Promise<unknown>;
     hook(
       name: 'context',
       cb: (event: V2SessionContextEvent) => Promise<void>,

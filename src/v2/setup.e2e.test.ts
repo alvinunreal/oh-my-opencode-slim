@@ -27,13 +27,16 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import type { BundledSkillInfo } from '../cli/custom-skills';
-import { stateFilePath } from '../companion/manager';
+import { CompanionManager, stateFilePath } from '../companion/manager';
 import { RuntimeConfig } from '../config/runtime';
+import { ForegroundFallbackManager } from '../hooks/foreground-fallback';
 import { MarketplaceStore } from '../marketplace/store';
 import { createEventDirectoryScope } from '../utils/event-directory-scope';
 import { flushLoggerForTesting } from '../utils/logger';
+import { tick } from '../utils/test-timers';
 import { compilePermissionPolicy } from './permissions';
 import { createV2Setup } from './setup';
+import * as subagentWrapper from './subagent-executor-wrapper';
 import type { V2Context, V2PermissionRule } from './types';
 
 type CapturedTool = {
@@ -606,6 +609,12 @@ describe('createV2Setup e2e', () => {
         }),
       );
     const stored = new Map<string, any>();
+    const availableModels = [
+      { providerID: 'manual', id: 'resumed', variants: [{ id: 'low' }] },
+      { providerID: 'test', id: 'C', variants: [] },
+      { providerID: 'test', id: 'D', variants: [] },
+    ];
+    (ctx as any).model = { list: async () => availableModels };
     const identities = new Map<string, any>([
       [
         'root',
@@ -660,7 +669,7 @@ describe('createV2Setup e2e', () => {
     }: {
       sessionID: string;
     }) =>
-      sessionID === 'ses_child-1'
+      sessionID === 'ses_child-1' || sessionID === 'ses_host-created'
         ? [
             {
               id: 'msg_delivered_user',
@@ -684,22 +693,49 @@ describe('createV2Setup e2e', () => {
           ]
         : [];
     let retryHook: ((event: any) => Promise<void>) | undefined;
+    let requestHook: ((event: any) => Promise<void>) | undefined;
     const originalSessionHook = (ctx.session as any).hook;
     (ctx.session as any).hook = (name: string, callback: any) => {
       if (name === 'retry') retryHook = callback;
+      if (name === 'model.request') requestHook = callback;
       return originalSessionHook.call(ctx.session, name, callback);
     };
     const switches: unknown[] = [];
+    let pendingSwitch: Promise<void> | undefined;
+    let switchEntered: (() => void) | undefined;
     ctx.session.switchModel = async (input) => {
       switches.push(input);
+      switchEntered?.();
+      if (pendingSwitch) await pendingSwitch;
+      identities.get(input.sessionID).model = input.model;
     };
     let nativeCalls = 0;
+    let nativeFailure: Error | undefined;
+    let nativeResult: unknown;
+    let authorize: (input: any, context: any) => Promise<void> = async () => {};
+    let reportRunning = false;
+    const launches: subagentWrapper.SubagentStructuredLaunch[] = [];
+    const createWrapper = subagentWrapper.createSubagentExecutorWrapper;
+    const wrapperSpy = spyOn(
+      subagentWrapper,
+      'createSubagentExecutorWrapper',
+    ).mockImplementation((options) =>
+      createWrapper({
+        register: (launch) => {
+          launches.push(launch);
+          return options.register(launch);
+        },
+      }),
+    );
     const nativeInputs: Array<Record<string, unknown>> = [];
     const native = {
       description: 'native',
       execute: async (input: any, context: any) => {
         nativeCalls++;
         nativeInputs.push({ ...input });
+        // Fixed native 2.1.4 ordering: agent authorization precedes get,
+        // optional model switching, awaited progress, and prompt.
+        await authorize(input, context);
         const id = input.sessionID ?? `ses_child-${nativeCalls}`;
         const [selection, variant] = String(input.model ?? 'test/a#high').split(
           '#',
@@ -729,7 +765,23 @@ describe('createV2Setup e2e', () => {
           prompt: { text: 'work' },
         });
         order.push(`prompt:${id}`);
-        return { content: 'native-result', metadata: { sessionID: id } };
+        if (nativeFailure) throw nativeFailure;
+        const result = {
+          content: 'native-result',
+          metadata: { sessionID: id },
+          // Exercise the real structured lane once; later legacy-shaped
+          // results keep the existing compatibility coverage unchanged.
+          ...(nativeCalls === 1 || reportRunning
+            ? {
+                output: {
+                  sessionID: id,
+                  status: reportRunning ? 'running' : 'completed',
+                },
+              }
+            : {}),
+        };
+        nativeResult = result;
+        return result;
       },
     };
     let replay: (() => void) | undefined;
@@ -795,7 +847,7 @@ describe('createV2Setup e2e', () => {
       const execute = native.execute;
       replay?.();
       expect(native.execute).toBe(execute); // replay never nests wrappers
-      await native.execute(event.input, {
+      const firstResult = await native.execute(event.input, {
         sessionID: 'root',
         id: 'call-1',
         signal: new AbortController().signal,
@@ -804,6 +856,17 @@ describe('createV2Setup e2e', () => {
         },
       });
       expect(nativeCalls).toBe(1);
+      expect(firstResult).toBe(nativeResult);
+      expect(launches).toEqual([
+        {
+          callID: 'call-1',
+          parentSessionID: 'root',
+          childTaskID: 'ses_child-1',
+          state: 'completed',
+          background: false,
+          result: 'native-result',
+        },
+      ]);
       // No execute.after was delivered. The wrapper itself consumed the
       // handoff, so replaying the same call cannot create another child.
       await expect(
@@ -815,6 +878,7 @@ describe('createV2Setup e2e', () => {
         }),
       ).rejects.toThrow('admission capture missing');
       expect(nativeCalls).toBe(1);
+      expect(launches).toHaveLength(1);
       expect(order.slice(-4)).toEqual([
         'create:ses_child-1',
         'persist:ses_child-1',
@@ -926,7 +990,11 @@ describe('createV2Setup e2e', () => {
         retryHook?.({
           sessionID,
           agent: 'explorer',
-          model: { providerID, id },
+          model: {
+            providerID,
+            id,
+            variant: identities.get(sessionID)?.model?.variant,
+          },
           error: { message: 'quota exceeded' },
           decision: { retry: true },
         });
@@ -947,13 +1015,29 @@ describe('createV2Setup e2e', () => {
           },
         };
         await calls.toolBeforeCb?.(call);
-        const result = await native.execute(call.input, {
-          sessionID: parentID,
-          id: callID,
-          signal: new AbortController().signal,
-          progress: async () => {},
-        });
-        return result.metadata.sessionID as string;
+        let result: Awaited<ReturnType<typeof native.execute>> | undefined;
+        let error: unknown;
+        try {
+          result = await native.execute(call.input, {
+            sessionID: parentID,
+            id: callID,
+            signal: new AbortController().signal,
+            progress: async () => {},
+          });
+          return result.metadata.sessionID as string;
+        } catch (failure) {
+          error = failure;
+          throw failure;
+        } finally {
+          // Real hosts always close the call, including preflight failures;
+          // release the existing lifecycle lease before another continuation.
+          await calls.toolAfterCb?.({
+            ...call,
+            status: error ? 'error' : 'completed',
+            result,
+            error,
+          });
+        }
       };
       // Automatic before injection is not a user override: preset fallback
       // still runs, but a cross-vendor retry must not reuse preset options.
@@ -1021,16 +1105,264 @@ describe('createV2Setup e2e', () => {
         model: { providerID: 'backup', id: 'b' },
       });
       // A cached, already-profiled child gets the same protection on resume.
+      for (const model of ['missing/model', 'manual/resumed#unavailable']) {
+        const before = structuredClone([...stored]);
+        const selected = structuredClone(identities.get('ses_child-1').model);
+        const switchCount = switches.length;
+        const callCount = nativeCalls;
+        const launchCount = launches.length;
+        await expect(
+          launch(`invalid-${model}`, 'root', {
+            sessionID: 'ses_child-1',
+            model,
+          }),
+        ).rejects.toThrow('not available');
+        expect([...stored]).toEqual(before);
+        expect(identities.get('ses_child-1').model).toEqual(selected);
+        expect(switches).toHaveLength(switchCount);
+        expect(nativeCalls).toBe(callCount + 1); // authorized, but progress rejects before prompt
+        expect(nativeInputs.at(-1)).not.toHaveProperty('model');
+        expect(launches).toHaveLength(launchCount);
+      }
+      // Agent-specific denial happens INSIDE native execute (not the outer
+      // wholly-disabled-tool check), before any preset/profile mutation.
+      const denied = new Error('Subagent denied: explorer');
+      const deniedRecord = structuredClone([...stored]);
+      const deniedSelection = structuredClone(
+        identities.get('ses_child-1').model,
+      );
+      const deniedSwitchCount = switches.length;
+      const deniedPromptCount = order.filter((entry) =>
+        entry.startsWith('prompt:'),
+      ).length;
+      authorize = async () => {
+        throw denied;
+      };
+      try {
+        expect(
+          await launch('denied-agent-resume', 'root', {
+            sessionID: 'ses_child-1',
+            model: 'test/C',
+          }).catch((error) => error),
+        ).toBe(denied);
+        expect([...stored]).toEqual(deniedRecord);
+        expect(identities.get('ses_child-1').model).toEqual(deniedSelection);
+        expect(switches).toHaveLength(deniedSwitchCount);
+        expect(
+          order.filter((entry) => entry.startsWith('prompt:')),
+        ).toHaveLength(deniedPromptCount);
+      } finally {
+        authorize = async () => {};
+      }
+
+      // Terminal ownership still keeps its lease while native authorization
+      // is pending; no second continuation can enter native execute.
+      const terminalEntered = Promise.withResolvers<void>();
+      const terminalRelease = Promise.withResolvers<void>();
+      authorize = async (_input, context) => {
+        if (context.id === 'terminal-first') {
+          terminalEntered.resolve();
+          await terminalRelease.promise;
+        }
+      };
+      const terminalFirst = launch('terminal-first', 'root', {
+        sessionID: 'ses_child-1',
+        model: 'test/C',
+      });
+      try {
+        await terminalEntered.promise;
+        const enteredCalls = nativeCalls;
+        await expect(
+          launch('terminal-second', 'root', {
+            sessionID: 'ses_child-1',
+            model: 'test/D',
+          }),
+        ).rejects.toThrow('cannot be resumed safely');
+        expect(nativeCalls).toBe(enteredCalls);
+      } finally {
+        terminalRelease.resolve();
+        await terminalFirst;
+        authorize = async () => {};
+      }
       await launch('explicit-resume-call', 'root', {
         sessionID: 'ses_child-1',
         model: 'manual/resumed#low',
       });
       expect(
         stored.get('session-preset/v1/ses_child-1').bundle.presetName,
-      ).toBe('A');
+      ).toBe('B');
       const beforeResumeRetry = switches.length;
       await retry('ses_child-1', 'manual', 'resumed');
       expect(switches).toHaveLength(beforeResumeRetry);
+      // The next parent dispatch updates this SAME ID. A failed switch is
+      // durable and blocks every new admission, including a final request
+      // whose context was prepared before the transition.
+      await rpc.apply(
+        { sessionID: 'root', presetName: 'A' },
+        { signal: new AbortController().signal },
+      );
+      const entered = Promise.withResolvers<void>();
+      const blocked = Promise.withResolvers<void>();
+      pendingSwitch = blocked.promise;
+      switchEntered = entered.resolve;
+      const transitioning = launch('transition-call', 'root', {
+        sessionID: 'ses_child-1',
+      }).catch((error: Error) => error);
+      await entered.promise;
+      const transitioningState = await rpc.read({ sessionID: 'ses_child-1' });
+      expect(transitioningState.status).toBe('transitioning');
+      const prompt = {
+        sessionID: 'ses_child-1',
+        messageID: 'blocked-prompt',
+        prompt: { text: 'must not run' },
+      };
+      const request = {
+        sessionID: 'ses_child-1',
+        agent: 'explorer',
+        kind: 'primary',
+        model: { providerID: 'manual', id: 'resumed', variant: 'low' },
+        headers: {},
+      };
+      await expect(calls.promptHookCb?.(prompt)).rejects.toThrow('pending');
+      await expect(
+        calls.contextHookCb?.({
+          ...crossProviderContext,
+          sessionID: 'ses_child-1',
+        }),
+      ).rejects.toThrow('pending');
+      await expect(requestHook?.(request)).rejects.toThrow('pending');
+      await expect(
+        calls.toolBeforeCb?.({
+          tool: 'read',
+          sessionID: 'ses_child-1',
+          id: 'blocked-tool',
+          input: {},
+        }),
+      ).rejects.toThrow('pending');
+      await expect(retry('ses_child-1', 'manual', 'resumed')).rejects.toThrow(
+        'pending',
+      );
+      blocked.reject(new Error('transition switch failed'));
+      expect(await transitioning).toMatchObject({
+        message: 'transition switch failed',
+      });
+      pendingSwitch = undefined;
+      switchEntered = undefined;
+      const nativeCallsBeforeRetry = nativeCalls;
+      await rpc.retry(
+        {
+          sessionID: 'ses_child-1',
+          operationID: transitioningState.pending.operationID,
+        },
+        { signal: new AbortController().signal },
+      );
+      expect(nativeCalls).toBe(nativeCallsBeforeRetry); // configuration only
+      expect(identities.get('ses_child-1').model).toEqual({
+        providerID: 'test',
+        id: 'a',
+        variant: 'high',
+      });
+      const resumedContext = {
+        ...crossProviderContext,
+        sessionID: 'ses_child-1',
+        model: { providerID: 'test', id: 'a', variant: 'high' },
+        options: {},
+      };
+      await calls.contextHookCb?.(resumedContext);
+      await expect(requestHook?.(request)).rejects.toThrow(
+        'model/variant mismatch',
+      );
+      await expect(
+        requestHook?.({
+          ...request,
+          model: { ...resumedContext.model, variant: 'low' },
+        }),
+      ).rejects.toThrow('model/variant mismatch');
+      expect(requestHook).toBeFunction();
+      await requestHook?.({ ...request, model: resumedContext.model });
+      expect(resumedContext.options).toMatchObject({
+        temperature: 0.35,
+        reasoning: 'A',
+      });
+      // A real native model selection is not a stale preset request. Its
+      // actual request ref is checked against current host selection, while
+      // a previously selected A ref still waiting for admission is rejected.
+      const manualModel = {
+        providerID: 'manual',
+        id: 'native-choice',
+        variant: 'medium',
+      };
+      await ctx.session.switchModel?.({
+        sessionID: 'ses_child-1',
+        model: manualModel,
+      });
+      await expect(
+        requestHook?.({ ...request, model: resumedContext.model }),
+      ).rejects.toThrow('model/variant mismatch');
+      const manualContext = {
+        ...resumedContext,
+        model: manualModel,
+        options: {},
+      };
+      await calls.contextHookCb?.(manualContext);
+      await requestHook?.({ ...request, model: manualModel });
+      expect(manualContext.options).toEqual({ temperature: 0.35 });
+      // Child Apply selects its own future team; a subsequent parent
+      // re-delegation restores the parent's team without touching execution.
+      await rpc.apply(
+        { sessionID: 'ses_child-1', presetName: 'B' },
+        { signal: new AbortController().signal },
+      );
+      const revisionBeforeTeamReset = stored.get(
+        'session-preset/v1/ses_child-1',
+      ).revision;
+      const count = switches.length;
+      await launch('same-team-resume', 'root', { sessionID: 'ses_child-1' });
+      expect(switches).toHaveLength(count);
+      expect(identities.get('ses_child-1').model).toEqual(manualModel);
+      expect(stored.get('session-preset/v1/ses_child-1')).toMatchObject({
+        bundle: { presetName: 'A' },
+        revision: revisionBeforeTeamReset,
+      });
+      expect(stored.get('session-preset/v1/ses_child-1').explicitModel).toBe(
+        false,
+      );
+      await ctx.session.switchModel?.({
+        sessionID: 'ses_child-1',
+        model: resumedContext.model,
+      });
+      await retry('ses_child-1', 'test', 'a');
+      const fallbackModel = identities.get('ses_child-1').model;
+      expect(fallbackModel).toMatchObject({ providerID: 'backup', id: 'a' });
+      await rpc.apply(
+        { sessionID: 'ses_child-1', presetName: 'B' },
+        { signal: new AbortController().signal },
+      );
+      const fallbackSwitchCount = switches.length;
+      await launch('same-execution-fallback', 'root', {
+        sessionID: 'ses_child-1',
+      });
+      expect(switches).toHaveLength(fallbackSwitchCount);
+      expect(identities.get('ses_child-1').model).toEqual(fallbackModel);
+      // An unchanged continuation keeps the existing fallback selection and
+      // must not decorate a native error using an older completedOperationID.
+      const unchangedFailure = new Error('unchanged native prompt failed');
+      nativeFailure = unchangedFailure;
+      try {
+        expect(
+          await launch('unchanged-error', 'root', {
+            sessionID: 'ses_child-1',
+          }).catch((error) => error),
+        ).toBe(unchangedFailure);
+        expect(switches).toHaveLength(fallbackSwitchCount);
+      } finally {
+        nativeFailure = undefined;
+      }
+      // Leave the original test's subsequent independent launches on B.
+      await rpc.apply(
+        { sessionID: 'root', presetName: 'B' },
+        { signal: new AbortController().signal },
+      );
       const cancelled = {
         tool: 'subagent',
         sessionID: 'root',
@@ -1045,6 +1377,7 @@ describe('createV2Setup e2e', () => {
       const abort = new AbortController();
       abort.abort();
       const callsBeforeCancel = nativeCalls;
+      const launchesBeforeCancel = launches.length;
       await expect(
         native.execute(cancelled.input, {
           sessionID: 'root',
@@ -1062,28 +1395,50 @@ describe('createV2Setup e2e', () => {
         }),
       ).rejects.toThrow('admission capture missing');
       expect(nativeCalls).toBe(callsBeforeCancel);
+      expect(launches).toHaveLength(launchesBeforeCancel);
       // Historical/host-command children stay honestly unmanaged. Their
       // native workflow and descendants work, but acquire no guessed team.
-      identities.set('host-created', {
-        id: 'host-created',
+      identities.set('ses_host-created', {
+        id: 'ses_host-created',
         parentID: 'root',
         directory: projectDir,
         agent: 'explorer',
         model: { providerID: 'native', id: 'historical' },
       });
       await calls.promptHookCb?.({
-        sessionID: 'host-created',
+        sessionID: 'ses_host-created',
         messageID: 'host-created-first',
         prompt: { text: 'legacy work' },
       });
-      const compatChild = await launch('compat-child-call', 'host-created', {});
-      for (const sessionID of ['host-created', compatChild]) {
+      const modelDomain = (ctx as any).model;
+      delete (ctx as any).model;
+      const legacyNativeCalls = nativeCalls;
+      const legacySwitches = switches.length;
+      try {
+        expect(
+          await launch('legacy-explicit-resume', 'root', {
+            sessionID: 'ses_host-created',
+            model: 'manual/resumed#low',
+          }),
+        ).toBe('ses_host-created');
+        expect(nativeCalls).toBe(legacyNativeCalls + 1);
+        expect(switches).toHaveLength(legacySwitches);
+        expect(stored.has('session-preset/v1/ses_host-created')).toBe(false);
+      } finally {
+        (ctx as any).model = modelDomain;
+      }
+      const compatChild = await launch(
+        'compat-child-call',
+        'ses_host-created',
+        {},
+      );
+      for (const sessionID of ['ses_host-created', compatChild]) {
         expect(stored.has(`session-preset/v1/${sessionID}`)).toBe(false);
         expect((await rpc.read({ sessionID })).status).toBe('unbound');
       }
       await expect(
         rpc.apply(
-          { sessionID: 'host-created', presetName: 'B' },
+          { sessionID: 'ses_host-created', presetName: 'B' },
           { signal: new AbortController().signal },
         ),
       ).rejects.toThrow('unbound child');
@@ -1230,7 +1585,131 @@ describe('createV2Setup e2e', () => {
         ),
       ).rejects.toThrow('config load failed');
       await Bun.write(configPath, config);
+      // Running steering deliberately does not hold the terminal lease. Both
+      // calls can pass native authorization in reverse order: each awaited
+      // progress installs its own frozen bundle/model as one serial revision.
+      await rpc.apply(
+        { sessionID: 'root', presetName: 'A' },
+        { signal: new AbortController().signal },
+      );
+      reportRunning = true;
+      const runningChild = await launch('running-spawn', 'root', {
+        background: true,
+      });
+      const runningEntered = Promise.withResolvers<void>();
+      const runningRelease = Promise.withResolvers<void>();
+      authorize = async (_input, context) => {
+        if (context.id === 'running-first') {
+          runningEntered.resolve();
+          await runningRelease.promise;
+        }
+      };
+      const runningFirst = launch('running-first', 'root', {
+        sessionID: runningChild,
+        model: 'test/C',
+        background: true,
+      });
+      try {
+        await runningEntered.promise;
+        expect(stored.get(`session-preset/v1/${runningChild}`).revision).toBe(
+          0,
+        );
+        await rpc.apply(
+          { sessionID: 'root', presetName: 'B' },
+          { signal: new AbortController().signal },
+        );
+        await launch('running-second', 'root', {
+          sessionID: runningChild,
+          model: 'test/D',
+          background: true,
+        });
+        expect(identities.get(runningChild).model).toMatchObject({ id: 'D' });
+        expect(stored.get(`session-preset/v1/${runningChild}`)).toMatchObject({
+          revision: 1,
+          bundle: { presetName: 'B' },
+          executionModel: { id: 'D' },
+        });
+        runningRelease.resolve();
+        await runningFirst;
+        expect(identities.get(runningChild).model).toMatchObject({ id: 'C' });
+        expect(stored.get(`session-preset/v1/${runningChild}`)).toMatchObject({
+          revision: 2,
+          bundle: { presetName: 'A' },
+          executionModel: { id: 'C' },
+        });
+        const runningContext = {
+          ...crossProviderContext,
+          sessionID: runningChild,
+          model: identities.get(runningChild).model,
+          options: {},
+        };
+        await calls.contextHookCb?.(runningContext);
+        await requestHook?.({
+          ...request,
+          sessionID: runningChild,
+          model: runningContext.model,
+        });
+        expect(runningContext.options).toMatchObject({
+          temperature: 0.35,
+          reasoning: 'A',
+        });
+        const beforeExplicitFallback = switches.length;
+        await retry(runningChild, 'test', 'C');
+        expect(switches).toHaveLength(beforeExplicitFallback);
+        expect(nativeInputs.slice(-2).every((args) => !('model' in args))).toBe(
+          true,
+        );
+      } finally {
+        runningRelease.resolve();
+        await runningFirst;
+        authorize = async () => {};
+        reportRunning = false;
+      }
+      // The inner structured wrapper must see the host's ORIGINAL error,
+      // before the outer preset wrapper adds its committed-operation warning.
+      nativeFailure = new Error('Subagent failed (sessionID: ses_child-1)');
+      const launchesBeforeFailure = launches.length;
+      const nativeBeforeFailure = nativeCalls;
+      const failure = await launch('native-failure', 'root', {
+        sessionID: 'ses_child-1',
+        model: 'manual/resumed#low',
+      }).catch((error: Error) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).cause).toBe(nativeFailure);
+      expect(String(failure)).toContain('configuration committed');
+      expect(nativeCalls).toBe(nativeBeforeFailure + 1);
+      expect(launches).toHaveLength(launchesBeforeFailure + 1);
+      expect(launches.at(-1)).toMatchObject({
+        callID: 'native-failure',
+        childTaskID: 'ses_child-1',
+        state: 'error',
+        result: nativeFailure.message,
+      });
+      nativeFailure = undefined;
+      const retiredCall = {
+        tool: 'subagent',
+        sessionID: 'root',
+        id: 'retired-call',
+        input: {
+          agent: 'explorer',
+          prompt: 'never execute',
+          background: false,
+        },
+      };
+      await calls.toolBeforeCb?.(retiredCall);
       await cleanup();
+      const retiredNativeCount = nativeCalls;
+      const retiredLaunchCount = launches.length;
+      await expect(
+        native.execute(retiredCall.input, {
+          sessionID: 'root',
+          id: 'retired-call',
+          signal: new AbortController().signal,
+          progress: async () => {},
+        }),
+      ).rejects.toThrow();
+      expect(nativeCalls).toBe(retiredNativeCount);
+      expect(launches).toHaveLength(retiredLaunchCount);
       native.execute = nativeExecute;
       cleanup = await createV2Setup()(ctx);
       await calls.promptHookCb?.({
@@ -1247,8 +1726,501 @@ describe('createV2Setup e2e', () => {
         'B',
       );
     } finally {
+      wrapperSpy.mockRestore();
       await cleanup();
     }
+  }, 20_000);
+
+  test('native automatic model survives real before/wrapper admission and options-only revision while stale prepared requests reject', async () => {
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        preset: 'A',
+        presets: {
+          A: { agents: { explorer: { temperature: 0.2 } } },
+          B: {
+            agents: {
+              explorer: { temperature: 0.7, options: { changed: true } },
+            },
+          },
+          InheritedTail: {
+            agents: {
+              explorer: {
+                model: ['test/tail-A', 'test/tail-B'],
+                inheritModelFrom: 'session',
+              },
+            },
+          },
+          SelectedChain: {
+            agents: {
+              explorer: { model: ['test/selected-A', 'test/selected-B'] },
+            },
+          },
+        },
+      }),
+    );
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    const identities = new Map<string, any>([
+      ['root', { id: 'root', directory: projectDir, agent: 'orchestrator' }],
+    ]);
+    ctx.session.get = async ({ sessionID }) => identities.get(sessionID);
+    let switches = 0;
+    ctx.session.switchModel = async () => {
+      switches++;
+    };
+    let rpc: any;
+    (ctx as any).rpc = {
+      register: async (_definition: unknown, handlers: unknown) => {
+        rpc = handlers;
+        return { dispose() {} };
+      },
+    };
+    let requestHook: ((event: any) => Promise<void>) | undefined;
+    const hook = ctx.session.hook;
+    (ctx.session as any).hook = (name: string, callback: any) => {
+      if (name === 'model.request') requestHook = callback;
+      return hook.call(ctx.session, name as never, callback);
+    };
+    const childID = 'ses_automatic_child';
+    const native = {
+      description: 'native',
+      execute: async (input: any, context: any) => {
+        expect(input).not.toHaveProperty('model');
+        expect(
+          calls.agentUpdates.find((agent) => agent.id === 'explorer')?.model,
+        ).toBeUndefined();
+        // Pinned native create precedence: override ?? agent.model ?? parent.model.
+        // None is selected here, so the native runner supplies the request ref.
+        if (!input.sessionID)
+          identities.set(childID, {
+            id: childID,
+            parentID: 'root',
+            agent: 'explorer',
+            directory: projectDir,
+          });
+        await context.progress({ sessionID: childID, status: 'running' });
+        await calls.promptHookCb?.({
+          sessionID: childID,
+          messageID: context.id,
+          prompt: { text: 'work' },
+        });
+        return {
+          output: { sessionID: childID, status: 'running' },
+          content: 'running',
+        };
+      },
+    };
+    ctx.tool.transform = async (callback) => {
+      callback({
+        add: (tool) => calls.toolAdds.push(tool),
+        update: (id, update) => {
+          if (id === 'subagent') update(native);
+        },
+        get: (id) => (id === 'subagent' ? native : undefined),
+      });
+      return { dispose() {} };
+    };
+    const cleanup = await createV2Setup()(ctx);
+    const launch = async (id: string, resume: boolean) => {
+      const call = {
+        tool: 'subagent',
+        sessionID: 'root',
+        id,
+        input: {
+          agent: 'explorer',
+          prompt: 'work',
+          background: true,
+          ...(resume ? { sessionID: childID } : {}),
+        },
+      };
+      await calls.toolBeforeCb?.(call);
+      expect(call.input).not.toHaveProperty('model');
+      let result: unknown;
+      let error: unknown;
+      try {
+        result = await native.execute(call.input, {
+          sessionID: 'root',
+          id,
+          signal: new AbortController().signal,
+          progress: async () => {},
+        });
+      } catch (failure) {
+        error = failure;
+        throw failure;
+      } finally {
+        await calls.toolAfterCb?.({
+          ...call,
+          status: error ? 'error' : 'completed',
+          result,
+          error,
+        });
+      }
+    };
+    const context = () => ({
+      sessionID: childID,
+      agent: 'explorer',
+      model: { providerID: 'native', id: 'resolved-default' },
+      options: {},
+      system: [],
+      messages: [],
+      tools: {},
+    });
+    const request = { ...context(), kind: 'primary', headers: {} };
+    try {
+      await calls.promptHookCb?.({
+        sessionID: 'root',
+        messageID: 'root-message',
+        prompt: { text: 'delegate' },
+      });
+      await launch('auto-create', false);
+      expect(requestHook).toBeFunction();
+      const first = context();
+      await calls.contextHookCb?.(first);
+      expect(first.options).toMatchObject({ temperature: 0.2 });
+      await requestHook?.(request); // revision 0, host model still absent
+      await rpc.apply(
+        { sessionID: 'root', presetName: 'B' },
+        { signal: new AbortController().signal },
+      );
+      await launch('auto-options-revision', true);
+      expect(identities.get(childID)).not.toHaveProperty('model');
+      expect(switches).toBe(0);
+      // Same real Model.Ref, different execution revision: the old prepared
+      // context cannot use current KV to pretend it prepared the new options.
+      await expect(requestHook?.(request)).rejects.toThrow('revision mismatch');
+      const second = context();
+      await calls.contextHookCb?.(second);
+      expect(second.options).toMatchObject({ temperature: 0.7 });
+      await requestHook?.(request);
+      // Check the actual compiler + before boundary, not a synthetic bundle:
+      // a tail-only chain compiles without a model only under inheritance;
+      // before refuses it without the required parent ref, before native runs.
+      await rpc.apply(
+        { sessionID: 'root', presetName: 'InheritedTail' },
+        { signal: new AbortController().signal },
+      );
+      const inherited = (await ctx.storage?.get(
+        'session-preset/v1/root',
+      )) as any;
+      expect(inherited.bundle.profiles.explorer.model).toBeUndefined();
+      expect(inherited.bundle.chains.explorer).toHaveLength(2);
+      expect(inherited.bundle.inheritance.explorer).toBe('session');
+      await expect(
+        calls.toolBeforeCb?.({
+          tool: 'subagent',
+          sessionID: 'root',
+          id: 'unresolved-inheritance',
+          input: { agent: 'explorer', prompt: 'work', background: true },
+        }),
+      ).rejects.toThrow('Inherited subagent parent model unavailable');
+      // An independent configured chain instead owns a concrete head model.
+      await rpc.apply(
+        { sessionID: 'root', presetName: 'SelectedChain' },
+        { signal: new AbortController().signal },
+      );
+      const chained = (await ctx.storage?.get('session-preset/v1/root')) as any;
+      expect(chained.bundle.profiles.explorer.model).toMatchObject({
+        providerID: 'test',
+        id: 'selected-A',
+      });
+      expect(chained.bundle.chains.explorer).toHaveLength(2);
+      const selectedCall = {
+        tool: 'subagent',
+        sessionID: 'root',
+        id: 'compiled-selection',
+        input: {
+          agent: 'explorer',
+          prompt: 'work',
+          background: true,
+        } as Record<string, unknown>,
+      };
+      await calls.toolBeforeCb?.(selectedCall);
+      expect(selectedCall.input.model).toBe('test/selected-A');
+      await calls.toolAfterCb?.({
+        ...selectedCall,
+        status: 'error',
+        error: new Error('fixture ends before native selection'),
+      });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('real capture publisher failure rejects admission and is retried rather than cached as success', async () => {
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    const id = 'ses_publish_retry';
+    const record = {
+      schemaVersion: 2,
+      revision: 1,
+      parentID: 'root',
+      preserveModel: true,
+      explicitModel: false,
+      bundle: {
+        presetName: null,
+        fallbackEnabled: false,
+        profiles: { explorer: { sidebarModel: 'default', temperature: 0.2 } },
+        chains: {},
+        inheritance: {},
+      },
+    };
+    await ctx.storage?.set(`session-preset/v1/${id}`, record);
+    ctx.session.get = async ({ sessionID }) => ({
+      id: sessionID,
+      parentID: 'root',
+      directory: projectDir,
+      agent: 'explorer',
+    });
+    const publish = ForegroundFallbackManager.prototype.publishSessionRevision;
+    let attempts = 0;
+    const failure = new Error('fallback model switch is still in flight');
+    const spy = spyOn(
+      ForegroundFallbackManager.prototype,
+      'publishSessionRevision',
+    ).mockImplementation(function (...args) {
+      if (args[0] === id && ++attempts === 1) throw failure;
+      return publish.apply(this, args);
+    });
+    const cleanup = await createV2Setup()(ctx);
+    const prompt = {
+      sessionID: id,
+      messageID: 'attempt-one',
+      prompt: { text: 'work' },
+    };
+    try {
+      await expect(calls.promptHookCb?.(prompt)).rejects.toBe(failure);
+      await calls.promptHookCb?.({ ...prompt, messageID: 'attempt-two' });
+      expect(attempts).toBe(2);
+      await calls.promptHookCb?.({ ...prompt, messageID: 'attempt-three' });
+      expect(attempts).toBe(2);
+    } finally {
+      spy.mockRestore();
+      await cleanup();
+    }
+  });
+
+  test.each([false, true])(
+    'setup cleanup drains actual fallback native switch before replacement publication (other cleanup throws: %s)',
+    async (cleanupThrows) => {
+      const { ctx, calls, events } = makeMockV2Context(projectDir);
+      const id = 'ses_real_fallback_drain';
+      const record = {
+        schemaVersion: 2,
+        revision: 0,
+        parentID: 'root',
+        preserveModel: true,
+        explicitModel: false,
+        bundle: {
+          presetName: null,
+          fallbackEnabled: true,
+          profiles: {
+            explorer: {
+              model: { providerID: 'test', id: 'A' },
+              sidebarModel: 'test/A',
+            },
+          },
+          chains: { explorer: [{ id: 'test/A' }, { id: 'test/B' }] },
+          inheritance: {},
+        },
+      };
+      await ctx.storage?.set(`session-preset/v1/${id}`, record);
+      let selected = { providerID: 'test', id: 'A' };
+      ctx.session.get = async ({ sessionID }) => ({
+        id: sessionID,
+        parentID: 'root',
+        directory: projectDir,
+        agent: 'explorer',
+        model: selected,
+      });
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      ctx.session.switchModel = async ({ model }) => {
+        entered.resolve();
+        await release.promise;
+        selected = model;
+      };
+      let retryHook: ((event: any) => Promise<void>) | undefined;
+      const hook = ctx.session.hook;
+      (ctx.session as any).hook = (name: string, callback: any) => {
+        if (name === 'retry') retryHook = callback;
+        return hook.call(ctx.session, name as never, callback);
+      };
+      const cleanup = await createV2Setup()(ctx);
+      const prompt = {
+        sessionID: id,
+        messageID: 'prepare',
+        prompt: { text: 'work' },
+      };
+      await calls.promptHookCb?.(prompt);
+      expect(retryHook).toBeFunction();
+      const retry = retryHook?.({
+        sessionID: id,
+        agent: 'explorer',
+        model: selected,
+        error: { message: 'Rate limit exceeded' },
+        decision: { retry: false },
+      });
+      await entered.promise;
+      const retiring = Promise.withResolvers<void>();
+      const disposeFallback = ForegroundFallbackManager.prototype.dispose;
+      const disposeSpy = spyOn(
+        ForegroundFallbackManager.prototype,
+        'dispose',
+      ).mockImplementation(function () {
+        const drain = disposeFallback.call(this);
+        retiring.resolve();
+        return drain;
+      });
+      const exit = CompanionManager.prototype.onExit;
+      const exitSpy = cleanupThrows
+        ? spyOn(CompanionManager.prototype, 'onExit').mockImplementation(
+            function () {
+              exit.call(this);
+              throw new Error('other cleanup failed');
+            },
+          )
+        : undefined;
+      let finished = false;
+      const draining = cleanup().then(() => {
+        finished = true;
+      });
+      try {
+        await retiring.promise;
+        await tick();
+        expect(finished).toBe(false);
+        expect(events.isReturnCalled()).toBe(true);
+        expect(selected.id).toBe('A');
+        release.resolve();
+        await draining;
+        await retry;
+        expect(selected.id).toBe('B');
+        exitSpy?.mockRestore();
+        disposeSpy.mockRestore();
+        const next = makeMockV2Context(projectDir);
+        (next.ctx as any).storage = ctx.storage;
+        next.ctx.session.get = ctx.session.get;
+        const disposeNext = await createV2Setup()(next.ctx);
+        try {
+          // The next generation's FIRST real publisher must not see an old
+          // global inProgress owner after the previous setup cleanup resolved.
+          await next.calls.promptHookCb?.({
+            ...prompt,
+            messageID: 'next-generation',
+          });
+        } finally {
+          await disposeNext();
+        }
+      } finally {
+        release.resolve();
+        await retry;
+        await draining;
+        exitSpy?.mockRestore();
+        disposeSpy.mockRestore();
+      }
+    },
+  );
+
+  test('managed context revision survives >1024 interleaved contexts, rejects stale preparation, and clears on deletion', async () => {
+    const { ctx, calls, events } = makeMockV2Context(projectDir);
+    const stored = new Map<string, any>();
+    const binding = {
+      schemaVersion: 2,
+      revision: 1,
+      parentID: 'root',
+      preserveModel: true,
+      bundle: {
+        presetName: 'frozen',
+        fallbackEnabled: false,
+        profiles: {
+          explorer: {
+            model: { providerID: 'test', id: 'prepared' },
+            sidebarModel: 'test/prepared',
+            temperature: 0.2,
+          },
+        },
+        chains: {},
+        inheritance: {},
+      },
+    };
+    const id = 'ses_prepared_child';
+    const key = `session-preset/v1/${id}`;
+    const deleted = Promise.withResolvers<void>();
+    (ctx as any).storage = {
+      get: async (entry: string) => structuredClone(stored.get(entry)),
+      set: async (entry: string, value: unknown) => {
+        stored.set(entry, structuredClone(value));
+      },
+      remove: async (entry: string) => {
+        stored.delete(entry);
+        if (entry === key) deleted.resolve();
+      },
+      scan: async () => ({ entries: [] }),
+    };
+    ctx.session.get = async ({ sessionID }) => ({
+      id: sessionID,
+      parentID: 'root',
+      directory: projectDir,
+      agent: 'explorer',
+      model: { providerID: 'test', id: 'prepared' },
+    });
+    let requestHook: ((event: any) => Promise<void>) | undefined;
+    const originalHook = ctx.session.hook;
+    (ctx.session as any).hook = (name: string, callback: any) => {
+      if (name === 'model.request') requestHook = callback;
+      return originalHook.call(ctx.session, name as never, callback);
+    };
+    const context = (sessionID: string) => ({
+      sessionID,
+      agent: 'explorer',
+      model: { providerID: 'test', id: 'prepared' },
+      options: {},
+      system: [],
+      messages: [],
+      tools: {},
+    });
+    const request = {
+      sessionID: id,
+      kind: 'primary',
+      model: { providerID: 'test', id: 'prepared' },
+      headers: {},
+    };
+    stored.set(key, structuredClone(binding));
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(requestHook).toBeFunction();
+      // A current persistent record is not a context-preparation credential.
+      await expect(requestHook?.(request)).rejects.toThrow('revision mismatch');
+      await calls.contextHookCb?.(context(id));
+      await requestHook?.(request);
+      for (let index = 0; index < 1025; index++) {
+        const otherID = `ses_interleaved_${index}`;
+        stored.set(`session-preset/v1/${otherID}`, structuredClone(binding));
+        await calls.contextHookCb?.(context(otherID));
+      }
+      // All interleaved sessions are managed children: merely skipping roots
+      // or refreshing a FIFO/LRU entry cannot make this assertion safe.
+      await requestHook?.(request);
+      stored.set(key, { ...structuredClone(binding), revision: 2 });
+      await expect(requestHook?.(request)).rejects.toThrow('revision mismatch');
+      stored.set(key, structuredClone(binding));
+      await requestHook?.(request);
+      events.push({
+        id: 'evt_delete_prepared',
+        type: 'session.deleted',
+        location: { directory: projectDir },
+        data: { sessionID: id },
+      });
+      await deleted.promise;
+      // Reusing the ID and exact revision after deletion must not resurrect
+      // the old preparation credential, even though public identity matches.
+      stored.set(key, structuredClone(binding));
+      await expect(requestHook?.(request)).rejects.toThrow('revision mismatch');
+      await calls.contextHookCb?.(context(id));
+      await requestHook?.(request);
+    } finally {
+      await cleanup();
+    }
+    await expect(requestHook?.(request)).rejects.toThrow('retired');
   }, 20_000);
 
   test('returns cleanly without registering when disabled by env', async () => {
@@ -3735,7 +4707,7 @@ describe('createV2Setup e2e', () => {
     expect(logText).not.toContain('[v2] v1 dispose failed');
   }, 20_000);
 
-  test('disabled_hooks chat-headers skips the model.request bridge registration', async () => {
+  test('disabled chat-headers still registers the independent preset admission gate', async () => {
     await Bun.write(
       path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
       JSON.stringify({
@@ -3746,10 +4718,8 @@ describe('createV2Setup e2e', () => {
     const { ctx, calls } = makeMockV2Context(projectDir);
     const cleanup = await createV2Setup()(ctx);
 
-    // The v1 chat.headers key is absent, so the v2 bridge skips both the
-    // marker observer and the model.request registration; the rest of the
-    // session hooks still register.
-    expect(calls.hooks).not.toContain('session:model.request');
+    // Disabling header injection must not disable request admission safety.
+    expect(calls.hooks).toContain('session:model.request');
     expect(calls.hooks).toContain('session:context');
     expect(calls.hooks).toContain('session:prompt');
 

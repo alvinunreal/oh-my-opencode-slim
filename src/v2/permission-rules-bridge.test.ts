@@ -1610,7 +1610,7 @@ describe('createV2Setup permission rules wiring', () => {
               messageID: 'msg_late',
               prompt: { text: 'late prompt' },
             }),
-          ).rejects.toThrow('disposed');
+          ).rejects.toThrow('Session preset generation retired');
           expect(calls).toHaveLength(2);
           return;
         }

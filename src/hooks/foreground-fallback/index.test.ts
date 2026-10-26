@@ -10,6 +10,7 @@ import {
 } from 'bun:test';
 import { isInternalInitiatorPart } from '../../utils';
 import * as logger from '../../utils/logger';
+import { tick } from '../../utils/test-timers';
 import { mapV2EventToV1 } from '../../v2/event-adapter';
 import { SessionLifecycle } from '../session-lifecycle';
 import type { FallbackNotice } from '../task-session-manager/revived-run-tracker';
@@ -2160,7 +2161,11 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
 
   test.each([
     { kind: 'reconciles B', advance: false, calls: ['test/B'] },
-    { kind: 'does not roll C back to B', advance: true, calls: ['test/C'] },
+    {
+      kind: 'blocks a second switch until B settles',
+      advance: true,
+      calls: ['test/B'],
+    },
   ])('late-landing switch $kind', async ({ advance, calls }) => {
     jest.useFakeTimers();
     try {
@@ -2179,12 +2184,18 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
       jest.advanceTimersByTime(2_500);
       await pending;
       expect(observed).toEqual([]);
+      expect(() =>
+        mgr.publishSessionRevision(sid, 1, { explorer: ['test/C'] }, true),
+      ).toThrow('still in flight');
       if (advance)
         await mgr.handleV2Retry(retryEvent(sid, 'B'), async () => {});
-      // A late B must reconcile only if no later retry has advanced to C.
+      // A timeout never releases the real native model-switch fence.
       resolveSwitch();
       for (let i = 0; i < 10; i++) await Promise.resolve();
       expect(observed).toEqual(calls);
+      expect(() =>
+        mgr.publishSessionRevision(sid, 1, { explorer: ['test/C'] }, true),
+      ).not.toThrow();
     } finally {
       jest.useRealTimers();
     }
@@ -8675,6 +8686,163 @@ describe('ForegroundFallbackManager disableChain', () => {
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager dispose', () => {
+  const steeringManager = () =>
+    new ForegroundFallbackManager(
+      { explorer: ['test/A', 'test/B'] },
+      false,
+      undefined,
+      0,
+      undefined,
+      undefined,
+      0,
+      0,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+  const steeringEvent = (sessionID: string) => ({
+    sessionID,
+    agent: 'explorer',
+    model: { providerID: 'test', id: 'A' },
+    error: { message: 'Rate limit exceeded' },
+    decision: { retry: false },
+  });
+
+  test.each(['resolve', 'reject'])(
+    'dispose drains only its own real switch until native %s and releases the shared fence',
+    async (settlement) => {
+      const manager = steeringManager();
+      const other = steeringManager();
+      const entered = Promise.withResolvers<void>();
+      const native = Promise.withResolvers<void>();
+      const event = steeringEvent(`drain-${settlement}`);
+      const work = manager.handleV2Retry(event, async () => {
+        entered.resolve();
+        await native.promise;
+      });
+      await entered.promise;
+      let drained = false;
+      const drain = Promise.resolve(manager.dispose()).then(() => {
+        drained = true;
+      });
+      try {
+        await other.dispose(); // unrelated location does not drain this flight
+        await tick();
+        expect(drained).toBe(false);
+        expect(other.isFallbackInProgress(event.sessionID)).toBe(true);
+        expect(() =>
+          other.publishSessionRevision(event.sessionID, 1, {}, true),
+        ).toThrow('still in flight');
+        if (settlement === 'resolve') native.resolve();
+        else native.reject(new Error('native switch rejected'));
+        await drain;
+        await work;
+        expect(drained).toBe(true);
+        expect(other.isFallbackInProgress(event.sessionID)).toBe(false);
+        const next = steeringManager();
+        expect(() =>
+          next.publishSessionRevision(event.sessionID, 1, {}, true),
+        ).not.toThrow();
+        await next.dispose();
+        expect(event.decision.retry).toBe(false);
+      } finally {
+        native.resolve();
+        await work;
+        await drain;
+        await other.dispose();
+      }
+    },
+  );
+
+  test('dispose fences a queued switch before its microtask calls the host', async () => {
+    const manager = steeringManager();
+    const switchModel = mock(async () => {});
+    const event = steeringEvent('queued-retirement');
+    const work = manager.handleV2Retry(event, switchModel);
+    const drain = manager.dispose();
+    await drain;
+    await work;
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(manager.isFallbackInProgress(event.sessionID)).toBe(false);
+    expect(event.decision.retry).toBe(false);
+  });
+
+  test('retiring one manager does not cancel or wait for another manager native flight', async () => {
+    const first = steeringManager();
+    const second = steeringManager();
+    const firstNative = Promise.withResolvers<void>();
+    const secondNative = Promise.withResolvers<void>();
+    const firstEntered = Promise.withResolvers<void>();
+    const secondEntered = Promise.withResolvers<void>();
+    const firstWork = first.handleV2Retry(
+      steeringEvent('first-location'),
+      async () => {
+        firstEntered.resolve();
+        await firstNative.promise;
+      },
+    );
+    const secondWork = second.handleV2Retry(
+      steeringEvent('second-location'),
+      async () => {
+        secondEntered.resolve();
+        await secondNative.promise;
+      },
+    );
+    await Promise.all([firstEntered.promise, secondEntered.promise]);
+    const firstDrain = first.dispose();
+    let secondSettled = false;
+    void secondWork.then(() => {
+      secondSettled = true;
+    });
+    try {
+      firstNative.resolve();
+      await firstDrain;
+      expect(secondSettled).toBe(false);
+      expect(second.isFallbackInProgress('second-location')).toBe(true);
+      secondNative.resolve();
+      await secondWork;
+    } finally {
+      firstNative.resolve();
+      secondNative.resolve();
+      await Promise.all([firstWork, secondWork, firstDrain, second.dispose()]);
+    }
+  });
+
+  test('retry timeout does not shorten disposal of the real native flight', async () => {
+    jest.useFakeTimers();
+    const manager = steeringManager();
+    const native = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+    const event = steeringEvent('timed-out-retirement');
+    const work = manager.handleV2Retry(event, async () => {
+      entered.resolve();
+      await native.promise;
+    });
+    let drain: Promise<void> | undefined;
+    try {
+      await entered.promise;
+      jest.advanceTimersByTime(2_500);
+      await work;
+      let drained = false;
+      drain = Promise.resolve(manager.dispose()).then(() => {
+        drained = true;
+      });
+      await tick();
+      expect(drained).toBe(false);
+      expect(manager.isFallbackInProgress(event.sessionID)).toBe(true);
+      native.resolve();
+      await drain;
+      expect(manager.isFallbackInProgress(event.sessionID)).toBe(false);
+    } finally {
+      native.resolve();
+      await work;
+      await drain;
+      await manager.dispose();
+      jest.useRealTimers();
+    }
+  });
+
   test('dispose cancels pending initial-delay timers and empties the map', async () => {
     // `opencode reload` destroys the plugin instance while an initial
     // fallback delay may still be scheduled. The stale timer must not

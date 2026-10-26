@@ -77,7 +77,10 @@ export interface V2PresetTuiContext extends V2PresetManagerContext {
     };
   };
   ui?: V2PresetUiSurface & {
-    router?: { current?: () => unknown };
+    router?: {
+      current?: () => unknown;
+      navigate?: (route: { type: string; sessionID: string }) => void;
+    };
     tabs?: {
       enabled?: () => boolean;
       open?: (sessionID: string) => boolean;
@@ -99,7 +102,7 @@ export type V2TuiPluginContext = Parameters<(typeof omoTui)['setup']>[0] &
   V2PresetTuiContext;
 
 const PRESET_COMMAND_ID = 'omo.preset';
-const PRESET_COMMAND_TITLE = 'OMO: switch preset';
+const PRESET_COMMAND_TITLE = 'OMO: manage presets';
 const OPEN_SUBAGENT_COMMAND_ID = 'omo.open_subagent';
 const PRESET_APP_SLOT = 'app';
 
@@ -185,6 +188,13 @@ export async function runPresetFlow(
       const route = ctx.ui?.router?.current?.() as TuiRouteView | undefined;
       return route ? resolveRouteSessionId(route) : undefined;
     };
+    managerCtx.isHome = () =>
+      (ctx.ui?.router?.current?.() as { type?: string } | undefined)?.type ===
+      'home';
+    if (ctx.ui?.router?.navigate) {
+      managerCtx.openSession = (sessionID) =>
+        ctx.ui?.router?.navigate?.({ type: 'session', sessionID });
+    }
     managerCtx.onConfigChanged = () =>
       notifyConfigChanged(directory, '/preset-manager');
     await openPresetManagerV2(managerCtx, directory);

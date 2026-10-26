@@ -19,13 +19,15 @@
  * Apply explicitly chooses a scope. Global defaults and definition edits
  * persist to user config and request a refresh for future unbound roots.
  * Current-session inference bindings are owned by the server RPC, never local
- * config. Neither operation changes the root model or existing children.
+ * config. New and explicitly resumed delegations use the saved team; already
+ * admitted work and the root model are not changed.
  * A requested config refresh is not a confirmed watcher outcome; session
  * apply succeeds only when the RPC confirms its binding.
  *
  * UI capabilities are mirrored locally and guarded at runtime. The shared
  * RPC contract uses the official v2 plugin package; request options are mirrored.
  */
+import { randomUUID } from 'node:crypto';
 import type { AgentOverrideConfig, Preset, PresetDefinition } from '../config';
 import { resolvePreset } from '../config';
 import { loadPluginConfig } from '../config/loader';
@@ -67,8 +69,10 @@ import {
   wouldCreatePresetCycle,
   writePreset,
 } from '../tools/preset-switch';
+import { readTuiSnapshot } from '../tui-state';
 import { log } from '../utils/logger';
 import { type SessionPresetState, sessionPresetRpc } from './preset-rpc';
+import { createTeamDisplayIdentity } from './team-display';
 
 // --- v2 host mirror types (subset consumed here, capability-guarded) ---
 
@@ -141,6 +145,11 @@ export interface V2PresetModelCollection {
 export interface V2PresetUiSurface {
   dialog?: V2PresetDialogApi;
   toast?: V2PresetToastApi;
+  model?: {
+    current?: () =>
+      | { providerID: string; modelID: string; variant?: string }
+      | undefined;
+  };
 }
 
 /** Minimal v2 TUI manager context. `client` carries the v2 client for the
@@ -149,16 +158,30 @@ export interface V2PresetUiSurface {
  * never reloads the host agent registry itself (session/tool surfaces stay
  * frozen). */
 export interface V2PresetManagerContext {
-  location?: { directory: string };
+  location?: { directory: string; workspaceID?: string };
   ui?: V2PresetUiSurface;
   data?: {
     location?: {
       model?: V2PresetModelCollection;
+      agent?: {
+        list: (location?: unknown) =>
+          | Array<{
+              id: string;
+              name?: string;
+              mode: string;
+              hidden: boolean;
+            }>
+          | undefined;
+        sync?: (location?: unknown) => Promise<void>;
+      };
     };
   };
   client?: unknown;
   /** Live route accessor; no session on the home screen. */
   getSessionID?: () => string | undefined;
+  /** Explicit home check: a plugin page is not the home screen. */
+  isHome?: () => boolean;
+  openSession?: (sessionID: string) => void | Promise<void>;
   /** Runs after a successful config write (Save / Save & Apply / Apply).
    * This is a REQUEST seam: on the supported host it asks the server-side
    * watcher to refresh the runtime profiles and re-reads the TUI sidebar
@@ -188,6 +211,21 @@ const ACTION_SAVE_APPLY = PRESET_ACTION.SAVE_APPLY;
 const ACTION_BACK = PRESET_ACTION.BACK;
 const ACTION_BASE_PRESET = PRESET_ACTION.BASE_PRESET;
 const ACTION_INHERIT_MODEL = PRESET_ACTION.INHERIT_MODEL;
+const ACTION_VIEW_TEAM = '__omo_view_session_team__';
+const ACTION_RETRY_SESSION = '__omo_retry_session__';
+const ACTION_RETRY_CREATE = '__omo_retry_create__';
+const ACTION_FORGET_CREATE = '__omo_forget_create__';
+
+function presetListChoice(name: string): PresetChoice {
+  return [
+    ACTION_VIEW_TEAM,
+    ACTION_RETRY_SESSION,
+    ACTION_RETRY_CREATE,
+    ACTION_FORGET_CREATE,
+  ].includes(name)
+    ? { user: name }
+    : wrapUserChoice(name);
+}
 
 /** Dialog methods the manager requires; verified once at entry. */
 interface RequiredDialog {
@@ -200,6 +238,8 @@ interface ManagerRun {
   ctx: V2PresetManagerContext;
   directory: string;
   dialog: RequiredDialog;
+  sessionID?: string;
+  location: { directory: string; workspaceID?: string };
 }
 
 type ApplyTarget =
@@ -207,10 +247,47 @@ type ApplyTarget =
   | { scope: 'session'; sessionID: string };
 
 const SESSION_PRESET_READ_TIMEOUT_MS = 2_000;
+const SESSION_PRESET_WRITE_TIMEOUT_MS = 15_000;
+
+interface CreateBoundInput {
+  sessionID: string;
+  operationID: string;
+  presetName: string;
+  agent: string;
+  model: { providerID: string; id: string; variant?: string };
+}
+
+interface CreateOperation {
+  directory: string;
+  location: ManagerRun['location'];
+  input: CreateBoundInput;
+  attempted: boolean;
+  ready?: boolean;
+}
+
+interface WindowRun {
+  busy: boolean;
+  create?: CreateOperation;
+}
+
+// Context wrappers share ui, but different TUI windows never share operations.
+const windowRuns = new WeakMap<object, WindowRun>();
+function windowRun(ctx: V2PresetManagerContext): WindowRun {
+  const key = ctx.ui ?? ctx;
+  let state = windowRuns.get(key);
+  if (!state) {
+    state = { busy: false };
+    windowRuns.set(key, state);
+  }
+  return state;
+}
 
 /** The consumed subset of v2 RpcCallOptions; no dev-only client dependency. */
 export interface V2PresetRpcCallOptions {
-  readonly location?: { readonly directory?: string };
+  readonly location?: {
+    readonly directory?: string;
+    readonly workspaceID?: string;
+  };
   readonly signal?: AbortSignal;
 }
 
@@ -225,6 +302,14 @@ function sessionPresetClient(ctx: V2PresetManagerContext) {
           ) => Promise<SessionPresetState>;
           apply: (
             input: { sessionID: string; presetName: string },
+            options: V2PresetRpcCallOptions,
+          ) => Promise<SessionPresetState>;
+          createBound: (
+            input: CreateBoundInput,
+            options: V2PresetRpcCallOptions,
+          ) => Promise<SessionPresetState>;
+          retry: (
+            input: { sessionID: string; operationID: string },
             options: V2PresetRpcCallOptions,
           ) => Promise<SessionPresetState>;
         };
@@ -254,14 +339,22 @@ export async function readSessionPreset(
   return state;
 }
 
+function isManagerCurrent(run: ManagerRun): boolean {
+  return (
+    (run.ctx.location?.directory ?? run.directory) === run.directory &&
+    run.ctx.location?.workspaceID === run.location.workspaceID &&
+    run.ctx.getSessionID?.() === run.sessionID
+  );
+}
+
 function assertApplyTarget(run: ManagerRun, target: ApplyTarget): void {
   if (
-    (run.ctx.location?.directory ?? run.directory) !== run.directory ||
+    !isManagerCurrent(run) ||
     (target.scope === 'session' &&
       run.ctx.getSessionID?.() !== target.sessionID)
   ) {
     throw new Error(
-      'The displayed session or workspace changed. Nothing was applied; try again.',
+      'Session or workspace changed. Reopen Presets to confirm again.',
     );
   }
 }
@@ -274,19 +367,19 @@ async function chooseApplyTarget(
   const sessionID = run.ctx.getSessionID?.();
   const scope = await run.dialog.select<'session' | 'global'>({
     title: `${save ? 'Save & apply' : 'Apply'}: ${presetName}`,
-    placeholder: 'Choose where to apply — no change until confirmed',
+    placeholder: 'Choose scope',
     options: [
       {
         title: 'Current session',
         value: 'session',
         description: sessionID
-          ? 'Inference only for future children; root and existing children unchanged'
+          ? 'Team for new and resumed delegations'
           : 'Unavailable: open a session first',
       },
       {
         title: 'Global default',
         value: 'global',
-        description: 'Write the user default; already-bound sessions unchanged',
+        description: 'For unbound sessions; existing bindings stay unchanged',
       },
     ],
   });
@@ -305,15 +398,15 @@ async function chooseApplyTarget(
     scope === 'session' ? { scope, sessionID: sessionID as string } : { scope };
   const message =
     scope === 'session'
-      ? `Apply "${presetName}" to this session's future child team? Inference only: model, variant, temperature, options and fallback. Root model, existing children, prompts, skills and MCPs stay unchanged. Global default unchanged.`
-      : `Set "${presetName}" as the global default? This writes user config for future unbound roots; project overrides still apply. Live refresh is inference only, not a hot-swap of prompts, skills or MCPs. Already-bound sessions and their future children stay unchanged.`;
+      ? `Use "${presetName}" for new and resumed subagents? Inference settings only; the current model, prompts, skills, MCPs and global default stay unchanged.`
+      : `Set "${presetName}" as the global default for unbound sessions? Project overrides still apply. Existing bindings stay unchanged.`;
   if (
     !(await run.dialog.confirm({
       title:
         scope === 'session'
           ? 'Apply to current session?'
           : 'Change global default?',
-      message: `${save ? 'First save this preset definition to user config. Saving alone does not change any bound session. ' : ''}${message}`,
+      message: `${save ? 'Save the definition first. ' : ''}${message}`,
     }))
   )
     return undefined;
@@ -383,6 +476,9 @@ export async function openPresetManagerV2(
   ctx: V2PresetManagerContext,
   directory: string,
 ): Promise<void> {
+  const window = windowRun(ctx);
+  if (window.busy) return;
+  window.busy = true;
   try {
     const dialog = ctx.ui?.dialog;
     if (!canOpenPresetManagerV2(ctx)) {
@@ -393,7 +489,7 @@ export async function openPresetManagerV2(
         ctx,
         'warning',
         'Preset manager unavailable',
-        'This host does not expose the TUI dialog API (ui.dialog). Use /preset <name> to switch presets.',
+        'Dialogs unavailable. Use /preset <name> to change the global default.',
       );
       return;
     }
@@ -401,10 +497,14 @@ export async function openPresetManagerV2(
       ctx,
       directory,
       dialog: dialog as RequiredDialog,
+      sessionID: ctx.getSessionID?.(),
+      location: { ...ctx.location, directory },
     });
   } catch (err) {
     log('[v2][preset] manager failed', String(err));
     toast(ctx, 'warning', 'Preset manager failed', String(err));
+  } finally {
+    window.busy = false;
   }
 }
 
@@ -430,14 +530,14 @@ export function liveRefreshSuccessMessage(
   summary: string[] = [],
 ): string {
   const suffix = summary.length > 0 ? ` ${summary.join('; ')}` : '';
-  return `Saved preset "${presetName}" to user config. Live refresh requested, not confirmed — changes affect future unbound roots only; bound sessions unchanged, including their future children.${suffix}`;
+  return `Saved preset "${presetName}". Live refresh requested for unbound sessions; existing bindings unchanged.${suffix}`;
 }
 
 export function liveRefreshFailureMessage(
   presetName: string,
   reason: string,
 ): string {
-  return `Saved preset "${presetName}" to user config, but the live refresh request failed: ${reason}. Reload OpenCode to refresh the default for future unbound roots. Bound sessions unchanged.`;
+  return `Saved preset "${presetName}". Refresh request failed: ${reason}. Reload OpenCode. Existing bindings unchanged.`;
 }
 
 /** Run the live-refresh seam after a successful config write and report the
@@ -485,6 +585,317 @@ async function reportConfigWrite(
   }
 }
 
+/** A saved binding, never a lookup of the current same-named definition. */
+export function sessionPresetLabel(state: SessionPresetState): string {
+  if (state.status === 'unbound') return 'Not bound';
+  if (state.pending) {
+    return `${state.pending.presetName ?? '(unnamed)'} · ${state.status === 'initializing' ? 'initializing' : 'update pending'}`;
+  }
+  return state.presetName ?? '(unnamed)';
+}
+
+export function sessionTeamRows(
+  state: SessionPresetState,
+  identities: Readonly<Record<string, string>> = {},
+): V2PresetDialogOption<string>[] {
+  const team = state.team;
+  if (!team) return [];
+  const { projectValues } = createTeamDisplayIdentity(identities);
+  const models = projectValues(team.agentModels);
+  const inheritance = projectValues(team.inheritance);
+  const variants = projectValues(team.agentVariants);
+  return [...new Set([...Object.keys(models), ...Object.keys(inheritance)])]
+    .sort()
+    .map((agent) => ({
+      title: agent,
+      value: agent,
+      description: `${inheritance[agent] ? `Inherits ${inheritance[agent]} model` : (models[agent] ?? 'Unknown')}${variants[agent] ? ` #${variants[agent]}` : ''}`,
+    }));
+}
+
+async function showSessionTeam(run: ManagerRun, state: SessionPresetState) {
+  const rows = sessionTeamRows(
+    state,
+    readTuiSnapshot(run.directory).agentDisplayNames,
+  );
+  await run.dialog.select({
+    title: `Saved team: ${state.presetName ?? '(unnamed)'}`,
+    placeholder: [
+      state.pending
+        ? 'Update pending; new work blocked.'
+        : 'New and resumed delegations.',
+      state.executionPresetName !== undefined
+        ? `Current execution: ${state.executionPresetName ?? '(unnamed)'}.`
+        : 'Current model is separate.',
+      rows.length
+        ? 'Saved models, not the latest definition.'
+        : 'Saved models unavailable.',
+    ].join(' '),
+    options: [...rows, BACK_OPTION],
+  });
+}
+
+function writeOptions(run: ManagerRun): V2PresetRpcCallOptions {
+  return {
+    location: run.location,
+    signal: AbortSignal.timeout(SESSION_PRESET_WRITE_TIMEOUT_MS),
+  };
+}
+
+async function retrySession(run: ManagerRun, state: SessionPresetState) {
+  if (!state.pending) return;
+  if (
+    !(await run.dialog.confirm({
+      title: 'Retry pending update?',
+      message: `Complete the saved target "${state.pending.presetName ?? '(unnamed)'}"? No prompt is resent.`,
+    }))
+  )
+    return;
+  try {
+    assertApplyTarget(run, { scope: 'session', sessionID: state.sessionID });
+    const next = await sessionPresetClient(run.ctx).retry(
+      {
+        sessionID: state.sessionID,
+        operationID: state.pending.operationID,
+      },
+      writeOptions(run),
+    );
+    if (next.sessionID !== state.sessionID || next.status !== 'bound') {
+      throw new Error('Update still pending. Retry from Presets.');
+    }
+    if (!isManagerCurrent(run)) return;
+    toast(
+      run.ctx,
+      'success',
+      'Session ready',
+      'Configuration updated. No prompt was sent.',
+    );
+  } catch (error) {
+    if (!isManagerCurrent(run)) return;
+    toast(
+      run.ctx,
+      'warning',
+      'Update not confirmed',
+      `${String(error)} Reopen Presets to check or retry.`,
+    );
+  }
+}
+
+function atHome(run: ManagerRun): boolean {
+  return (
+    run.ctx.isHome?.() === true &&
+    (run.ctx.location?.directory ?? run.directory) === run.directory &&
+    run.ctx.location?.workspaceID === run.location.workspaceID
+  );
+}
+
+function currentCreateModel(
+  ctx: V2PresetManagerContext,
+): CreateBoundInput['model'] | undefined {
+  const model = ctx.ui?.model?.current?.();
+  if (!model?.providerID || !model.modelID) return undefined;
+  return {
+    providerID: model.providerID,
+    id: model.modelID,
+    ...(model.variant ? { variant: model.variant } : {}),
+  };
+}
+
+async function createEmptySession(run: ManagerRun, presetName: string) {
+  const window = windowRun(run.ctx);
+  if (window.create) {
+    toast(
+      run.ctx,
+      'warning',
+      'Creation already recorded',
+      'Finish it in the recorded workspace, or forget the local retry record in Presets.',
+    );
+    return;
+  }
+  if (!atHome(run))
+    throw new Error('Open Presets from home to create an empty session.');
+  const agents = run.ctx.data?.location?.agent;
+  if (!agents)
+    throw new Error('Agent list unavailable. Update the host and try again.');
+  await agents.sync?.(run.ctx.location);
+  if (!atHome(run)) return;
+  const candidates = (agents.list(run.ctx.location) ?? []).filter(
+    (agent) =>
+      !agent.hidden && (agent.mode === 'primary' || agent.mode === 'all'),
+  );
+  if (!candidates.length) throw new Error('No primary agent available.');
+  const agent = await run.dialog.select({
+    title: 'Primary agent',
+    placeholder: 'Choose the agent for the empty session',
+    options: candidates.map((entry) => ({
+      title: entry.name ?? entry.id,
+      value: entry.id,
+    })),
+  });
+  if (agent === undefined || !candidates.some((entry) => entry.id === agent))
+    return;
+  // Read again after every confirmation: changing the host model never silently
+  // creates a session with the previously displayed choice.
+  for (;;) {
+    if (!atHome(run)) return;
+    const model = currentCreateModel(run.ctx);
+    if (!model) throw new Error('Choose a model on home, then reopen Presets.');
+    const confirmed = await run.dialog.confirm({
+      title: 'Create empty session?',
+      message: `Directory: ${run.directory}\nAgent: ${agent}\nModel: ${model.providerID}/${model.id}${model.variant ? ` #${model.variant}` : ''}\nTeam: ${presetName}\nNo prompt is sent. Home draft is not moved; use the host stash to keep it.`,
+      label: { confirm: 'Create', cancel: 'Cancel' },
+    });
+    if (!confirmed || !atHome(run)) return;
+    if (JSON.stringify(currentCreateModel(run.ctx)) !== JSON.stringify(model)) {
+      toast(
+        run.ctx,
+        'warning',
+        'Model changed',
+        'Confirm the new model before creating.',
+      );
+      continue;
+    }
+    // The host Session.ID schema requires the "ses" prefix, not its internal
+    // timestamp generator. UUIDs avoid importing the host's Effect runtime.
+    window.create = {
+      directory: run.directory,
+      location: run.location,
+      input: {
+        sessionID: `ses_${randomUUID().replaceAll('-', '')}`,
+        operationID: randomUUID(),
+        presetName,
+        agent,
+        model,
+      },
+      attempted: false,
+    };
+    await finishCreate(run, window.create);
+    return;
+  }
+}
+
+async function showCreatedSession(run: ManagerRun, operation: CreateOperation) {
+  if (!atHome(run)) return;
+  const action = await run.dialog.select({
+    title: 'Session created',
+    options: [
+      ...(run.ctx.openSession
+        ? [{ title: 'Open session', value: 'open' }]
+        : []),
+      { title: 'Stay on home', value: 'stay' },
+    ],
+  });
+  if (!atHome(run)) return;
+  if (action === 'open') await run.ctx.openSession?.(operation.input.sessionID);
+  // Dismissal or failed navigation keeps the existing result accessible.
+  if (action === 'open' || action === 'stay')
+    windowRun(run.ctx).create = undefined;
+}
+
+async function finishCreate(run: ManagerRun, operation: CreateOperation) {
+  if (
+    !atHome(run) ||
+    operation.directory !== run.directory ||
+    operation.location.workspaceID !== run.location.workspaceID
+  ) {
+    toast(
+      run.ctx,
+      'warning',
+      'Creation belongs to another workspace',
+      'Return to its home screen to check or retry.',
+    );
+    return;
+  }
+  try {
+    const input = operation.input;
+    if (operation.ready) {
+      // Creation already committed. Read verifies the existing session, but
+      // opening it must not complete or alter any later configuration update.
+      await readSessionPreset(run.ctx, input.sessionID, run.directory);
+      await showCreatedSession(run, operation);
+      return;
+    }
+    const client = sessionPresetClient(run.ctx);
+    if (operation.attempted) {
+      const confirmed = await run.dialog.confirm({
+        title: 'Retry recorded creation?',
+        message: `Directory: ${operation.directory}\nAgent: ${input.agent}\nModel: ${input.model.providerID}/${input.model.id}${input.model.variant ? ` #${input.model.variant}` : ''}\nTeam: ${input.presetName}\nSame session ID. No prompt sent.`,
+      });
+      if (!confirmed || !atHome(run)) return;
+    }
+    let state: SessionPresetState;
+    if (!operation.attempted) {
+      operation.attempted = true;
+      state = await client.createBound(input, writeOptions(run));
+    } else {
+      const current = await readSessionPreset(
+        run.ctx,
+        input.sessionID,
+        run.directory,
+      ).catch(() => undefined);
+      if (!atHome(run)) return;
+      // A request can fail before admission. Reuse the exact identity and
+      // parameters when read cannot find the not-yet-created host session.
+      // createBound validates ownership and resumes only the same operation.
+      state =
+        !current || current.status === 'unbound'
+          ? await client.createBound(input, writeOptions(run))
+          : await client.retry(
+              { sessionID: input.sessionID, operationID: input.operationID },
+              writeOptions(run),
+            );
+    }
+    if (state.sessionID !== input.sessionID || state.status !== 'bound') {
+      throw new Error('Initialization is still pending.');
+    }
+    operation.ready = true;
+    toast(
+      run.ctx,
+      'success',
+      'Empty session ready',
+      `${input.sessionID}. No prompt sent.`,
+    );
+    await showCreatedSession(run, operation);
+  } catch (error) {
+    toast(
+      run.ctx,
+      'warning',
+      operation.ready
+        ? 'Session created — not opened'
+        : 'Creation not confirmed',
+      `${String(error)} ${operation.ready ? 'Reopen Presets to open the existing session.' : 'Reopen Presets to check or retry the same session. No prompt sent.'}`,
+    );
+  }
+}
+
+async function forgetCreate(run: ManagerRun, operation: CreateOperation) {
+  const window = windowRun(run.ctx);
+  if (!atHome(run) || window.create !== operation) return;
+  const receipt = `Directory: ${operation.directory}\nSession: ${operation.input.sessionID}\nOperation: ${operation.input.operationID}`;
+  // The window's manager lock prevents this menu from opening until the
+  // previous local call has settled, including a timeout. It does not cancel
+  // a server request that may still be running.
+  const confirmed = await run.dialog.confirm({
+    title: 'Forget local retry record?',
+    message: `${receipt}\nThe old request may still complete; the session may already exist. Creating again may make another empty session. Only the local retry record is cleared. Server sessions, bindings and pending targets stay unchanged.`,
+    label: { confirm: 'Forget record', cancel: 'Keep record' },
+  });
+  if (!confirmed || !atHome(run) || window.create !== operation) return;
+  window.create = undefined;
+  // Keep the recovery identifiers readable without another history store.
+  log('[v2][preset] local creation retry record forgotten', {
+    directory: operation.directory,
+    sessionID: operation.input.sessionID,
+    operationID: operation.input.operationID,
+  });
+  toast(
+    run.ctx,
+    'warning',
+    'Local retry record forgotten',
+    `${receipt}\nServer state unchanged. The old request may still complete.`,
+  );
+}
+
 /** Level 1: preset list (apply / edit / delete / create). */
 async function runPresetList(run: ManagerRun): Promise<void> {
   for (;;) {
@@ -501,7 +912,8 @@ async function runPresetList(run: ManagerRun): Promise<void> {
     );
     const activePreset = config.preset ?? null;
     const sessionID = run.ctx.getSessionID?.();
-    let sessionLabel = 'No session displayed';
+    let sessionLabel = 'None';
+    let sessionState: SessionPresetState | undefined;
     if (sessionID) {
       try {
         const state = await readSessionPreset(
@@ -509,20 +921,27 @@ async function runPresetList(run: ManagerRun): Promise<void> {
           sessionID,
           run.directory,
         );
-        sessionLabel =
-          state.status === 'bound'
-            ? (state.presetName ?? '(no named preset)')
-            : 'Not bound';
-        if (run.ctx.getSessionID?.() !== sessionID)
-          sessionLabel = 'Session changed — reopen manager';
+        sessionState = state;
+        sessionLabel = sessionPresetLabel(state);
       } catch {
         sessionLabel = 'Unavailable';
       }
     }
+    if (
+      (run.ctx.location?.directory ?? run.directory) !== run.directory ||
+      run.ctx.location?.workspaceID !== run.location.workspaceID ||
+      run.ctx.getSessionID?.() !== sessionID
+    )
+      return;
 
     // No presets at all: jump straight to "create" (same as v1). A cancelled
     // create closes the manager — there is nothing else to do.
-    if (names.length === 0 && !activePreset) {
+    if (
+      names.length === 0 &&
+      !activePreset &&
+      !sessionID &&
+      !windowRun(run.ctx).create
+    ) {
       if ((await createAndEditPreset(run)) !== 'created') return;
       continue;
     }
@@ -534,23 +953,70 @@ async function runPresetList(run: ManagerRun): Promise<void> {
       return {
         title:
           name === activePreset ? `${name} (default)${tag}` : `${name}${tag}`,
-        value: wrapUserChoice(name),
+        value: presetListChoice(name),
         description: describePreset(name, allPresets),
       };
     });
+    if (sessionState) {
+      options.unshift({
+        title: `Session team: ${sessionLabel}`,
+        value: ACTION_VIEW_TEAM,
+        description: 'View saved models · separate from editable definitions',
+      });
+      if (sessionState.pending)
+        options.unshift({
+          title: 'Retry pending update',
+          value: ACTION_RETRY_SESSION,
+          description: 'New work blocked until ready · no prompt resent',
+        });
+    }
+    const creation = windowRun(run.ctx).create;
+    if (creation && atHome(run))
+      options.unshift(
+        {
+          title: creation.ready
+            ? 'Open created session'
+            : 'Check / retry session creation',
+          value: ACTION_RETRY_CREATE,
+          description: `${creation.input.presetName} · ${creation.input.sessionID}`,
+        },
+        {
+          title: 'Forget local retry record',
+          value: ACTION_FORGET_CREATE,
+          description:
+            'Unblock new creation here · does not cancel the old request',
+        },
+      );
     options.push({ title: '+ Create new preset', value: ACTION_NEW_PRESET });
 
     const choice = await run.dialog.select<PresetChoice>({
       title: 'Presets',
-      placeholder: `Session team snapshot: ${sessionLabel}. Same name does not imply the same definition; reapply to update.`,
+      placeholder: `Default: ${activePreset ?? '(none)'} · Session: ${sessionLabel}${atHome(run) ? '. Use the command palette to keep your home draft.' : ''}`,
       options,
       // Only pass `current` when it matches an option: a stale config preset
       // name must not break the host dialog.
       ...(activePreset !== null && names.includes(activePreset)
-        ? { current: wrapUserChoice(activePreset) }
+        ? { current: presetListChoice(activePreset) }
         : {}),
     });
     if (choice === undefined) return; // dismissed → close the manager
+    assertApplyTarget(run, { scope: 'global' });
+    if (choice === ACTION_VIEW_TEAM && sessionState) {
+      await showSessionTeam(run, sessionState);
+      continue;
+    }
+    if (choice === ACTION_RETRY_SESSION && sessionState) {
+      await retrySession(run, sessionState);
+      return;
+    }
+    if (choice === ACTION_RETRY_CREATE && creation) {
+      await finishCreate(run, creation);
+      return;
+    }
+    if (choice === ACTION_FORGET_CREATE && creation) {
+      await forgetCreate(run, creation);
+      return;
+    }
 
     if (choice === ACTION_NEW_PRESET) {
       if ((await createAndEditPreset(run)) === 'dismiss') return;
@@ -584,6 +1050,16 @@ async function showPresetActions(
       getPresetSource(run.directory, presetName, 'v2') === 'project';
     const options: V2PresetDialogOption<string>[] = [
       { title: 'Apply preset', value: 'apply' },
+      ...(atHome(run)
+        ? [
+            {
+              title: 'New empty session with this preset',
+              value: 'create-session',
+              description:
+                'Choose primary agent and confirm model · no prompt sent',
+            },
+          ]
+        : []),
       ...(isProject
         ? []
         : [
@@ -598,9 +1074,13 @@ async function showPresetActions(
       options,
     });
     if (choice === undefined) return 'exit';
+    assertApplyTarget(run, { scope: 'global' });
     if (choice === ACTION_BACK) return 'list';
 
     switch (choice) {
+      case 'create-session':
+        await createEmptySession(run, presetName);
+        return 'exit';
       case 'apply':
         {
           const target = await chooseApplyTarget(run, presetName, false);
@@ -626,7 +1106,7 @@ async function showPresetActions(
   }
 }
 
-/** Apply the confirmed scope; keep a committed Save distinct from an apply failure. */
+/** Apply the confirmed scope; keep a committed Save distinct from an unconfirmed Apply. */
 async function applyPresetWithMessage(
   run: ManagerRun,
   presetName: string,
@@ -638,7 +1118,7 @@ async function applyPresetWithMessage(
     if (target.scope === 'session') {
       const state = await sessionPresetClient(run.ctx).apply(
         { sessionID: target.sessionID, presetName },
-        { location: { ...run.ctx.location, directory: run.directory } },
+        writeOptions(run),
       );
       if (
         state.sessionID !== target.sessionID ||
@@ -649,11 +1129,12 @@ async function applyPresetWithMessage(
           'Server did not confirm the requested session binding.',
         );
       }
+      if (!isManagerCurrent(run)) return;
       toast(
         run.ctx,
         'success',
         saved ? 'Preset saved & session team updated' : 'Session team updated',
-        `Session team snapshot: "${state.presetName ?? presetName}". Inference only for future children. Root model, existing children and global default unchanged.`,
+        `Team: "${state.presetName ?? presetName}" for new and resumed delegations. Current model, already-admitted work and global default unchanged.`,
       );
       return;
     }
@@ -680,11 +1161,12 @@ async function applyPresetWithMessage(
       result.summary,
     );
   } catch (err) {
+    if (!isManagerCurrent(run)) return;
     toast(
       run.ctx,
       'warning',
-      saved ? 'Preset saved — not applied' : 'Preset not applied',
-      `${saved ? 'Definition saved, but apply was not confirmed. ' : 'Apply was not confirmed. '}${target.scope === 'session' ? 'Global default unchanged. ' : ''}${String(err)}`,
+      saved ? 'Preset saved — apply not confirmed' : 'Apply not confirmed',
+      `${saved ? 'Definition saved. ' : ''}${String(err)} ${target.scope === 'session' ? 'Global default unchanged. Reopen Presets to check the session state.' : 'Reopen Presets to check the default.'}`,
     );
   }
 }

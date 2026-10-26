@@ -34,6 +34,7 @@
 import type { RpcCallOptions } from '@opencode/client';
 import type { EventDomain } from '@opencode/plugin/promise/event';
 import type { PermissionDomain } from '@opencode/plugin/promise/permission';
+import type { Context as OfficialContext } from '@opencode/plugin/promise/plugin';
 import type { RpcDomain, RpcHandlers } from '@opencode/plugin/promise/rpc';
 import type {
   SessionDomain,
@@ -45,6 +46,7 @@ import type { sessionPresetRpc } from './preset-rpc';
 import type {
   V2Context,
   V2PermissionRule,
+  V2SessionModelRequestEvent,
   V2SessionPresetRpcHandlers,
 } from './types';
 
@@ -106,7 +108,9 @@ type _rpcHandlerSignal = Expect<
   >
 >;
 type _rpcCallOptions = Expect<
-  Equal<V2PresetRpcCallOptions, Pick<RpcCallOptions, 'location' | 'signal'>>
+  V2PresetRpcCallOptions extends Pick<RpcCallOptions, 'location' | 'signal'>
+    ? true
+    : false
 >;
 
 /** Official session hook surface as of the pinned @opencode/plugin.
@@ -181,6 +185,43 @@ type _modelRequestKind = Expect<
   SessionHooks['model.request'] extends {
     kind: 'primary' | 'compaction' | 'title' | 'generate';
   }
+    ? true
+    : false
+>;
+type _modelRequestSelection = Expect<
+  SessionHooks['model.request']['model'] extends V2SessionModelRequestEvent['model']
+    ? true
+    : false
+>;
+type _modelRequestSelectionKeys = Expect<
+  Equal<
+    keyof V2SessionModelRequestEvent['model'],
+    keyof SessionHooks['model.request']['model']
+  >
+>;
+type _createMirrorInput = Expect<
+  Parameters<
+    NonNullable<V2Context['session']['create']>
+  >[0] extends NonNullable<Parameters<SessionDomain['create']>[0]>
+    ? true
+    : false
+>;
+type _contextCreationScope = Expect<
+  OfficialContext['location'] extends NonNullable<V2Context['location']>
+    ? true
+    : false
+>;
+type _contextWorkspaceAvailable = Expect<
+  Equal<
+    'workspaceID' extends keyof OfficialContext['location'] ? true : false,
+    true
+  >
+>;
+type _createDefaultLocation = Expect<
+  Omit<
+    Parameters<NonNullable<V2Context['session']['create']>>[0],
+    'location'
+  > extends NonNullable<Parameters<SessionDomain['create']>[0]>
     ? true
     : false
 >;
