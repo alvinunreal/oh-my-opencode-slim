@@ -44,7 +44,7 @@ The companion system consists of two main components following a **Producer-Cons
 interface CompanionSession {
   session_id: string;
   cwd: string;
-  active_agents: string[];  // Up to 9 agents displayed
+  active_agents: string[];  // Up to 9 agents displayed; empty hides the window
   status: 'idle' | 'busy' | 'waiting-input';
   pid: number;
   config?: CompanionConfig;
@@ -85,7 +85,7 @@ TUI plugin → per-process attachment → CompanionManager poll
 ```
 
 1. **Companion manager loads** (`CompanionManager.onLoad()`)
-   - Reads user configuration (`enabled`, `position`, `size`, `gifPack`, `loopStyle`, `speed`, `debug`)
+   - Reads user configuration (`enabled`, `position`, `size`, `gifPack`, `loopStyle`, `speed`, `debug`, `hideWhenIdle`)
    - Starts the poller without spawning the native binary
    - Publishes a project-scoped session row only when that directory has a live TUI attachment
    - Retries transient state-lock contention without blocking the plugin thread
@@ -105,7 +105,8 @@ TUI plugin → per-process attachment → CompanionManager poll
      - `busy` → adds agent to active_agents array
      - `idle` → removes agent from active_agents array
      - Project status reflects all active sessions, with pending input taking priority
-    - Flushes state to JSON file
+     - no active agents at idle → publishes `['intro']`, or `[]` when `hideWhenIdle` is set
+   - Flushes state to JSON file
 
    **Input requests** (`onWaitingInput()` / `onInputResolved()`)
    - Track permissions and questions by session, kind, and request ID
@@ -174,6 +175,7 @@ interface CompanionConfig {
   loopStyle?: 'classic' | 'smooth';
   speed?: number;
   debug?: boolean;
+  hideWhenIdle?: boolean;
 }
 ```
 
