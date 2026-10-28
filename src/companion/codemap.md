@@ -35,7 +35,7 @@ The companion system consists of two main components following a **Producer-Cons
 interface CompanionSession {
   session_id: string;
   cwd: string;
-  active_agents: string[];  // Up to 9 agents displayed
+  active_agents: string[];  // Up to 9 agents displayed; empty hides the window
   status: 'idle' | 'busy' | 'waiting-input';
   pid: number;
   config?: CompanionConfig;
@@ -66,7 +66,7 @@ OpenCode Session → CompanionManager.onSessionStatus() → Updates state → Sp
 ```
 
 1. **Plugin loads** (`CompanionManager.onLoad()`)
-   - Reads user configuration (`enabled`, `position`, `size`, `gifPack`, `loopStyle`, `speed`, `debug`)
+   - Reads user configuration (`enabled`, `position`, `size`, `gifPack`, `loopStyle`, `speed`, `debug`, `hideWhenIdle`)
    - Publishes a distinct project-scoped session row first, then spawns/joins the singleton companion only after publication succeeds
    - Retries transient state-lock contention without blocking the plugin thread
    - Cleans up stale sessions from dead OpenCode processes on state writes
@@ -79,6 +79,7 @@ OpenCode Session → CompanionManager.onSessionStatus() → Updates state → Sp
      - `idle` → removes agent from active_agents array
      - `waiting-input` → sets status to waiting-input
      - `input-resolved` → returns to busy/idle based on active agents
+     - no active agents at idle → publishes `['intro']`, or `[]` when `hideWhenIdle` is set
    - Flushes state to JSON file
 
 3. **Session termination** (`CompanionManager.onSessionDeleted()`)
@@ -140,6 +141,7 @@ interface CompanionConfig {
   loopStyle?: 'classic' | 'smooth';
   speed?: number;
   debug?: boolean;
+  hideWhenIdle?: boolean;
 }
 ```
 

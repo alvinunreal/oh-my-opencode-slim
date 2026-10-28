@@ -732,6 +732,7 @@ export class CompanionManager {
       // finished specialist can never get stuck on screen.
       this.busyAgentSessions.delete(sessionId);
       this.sessionDetails.delete(sessionId);
+      this.clearStaleBusy();
     }
     this.flush();
   }
@@ -784,6 +785,7 @@ export class CompanionManager {
       this.orchestratorBusy = false;
     }
     if (removed || wasOrchestrator) {
+      this.clearStaleBusy();
       this.flush();
     }
   }
@@ -816,6 +818,19 @@ export class CompanionManager {
         ? 'busy'
         : 'idle';
     this.flush();
+  }
+
+  // Only lowers stale busy; waiting-input is left alone because it has no
+  // session attribution. shortcut: a deleted waiting session can leave status
+  // stuck, upgrade when onWaitingInput learns its session id.
+  private clearStaleBusy(): void {
+    if (
+      this.status === 'busy' &&
+      this.busyAgentSessions.size === 0 &&
+      !this.orchestratorBusy
+    ) {
+      this.status = 'idle';
+    }
   }
 
   onExit(): void {
@@ -908,6 +923,7 @@ export class CompanionManager {
     if (agents.length > 0) return agents.slice(0, 9);
     if (this.status === 'waiting-input') return ['input'];
     if (this.status === 'busy') return ['orchestrator'];
+    if (this.config?.hideWhenIdle) return [];
     return ['intro'];
   }
 
