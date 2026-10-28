@@ -996,6 +996,7 @@ export function loadPluginConfig(
       loopStyle: runtimeConfig.companion.loopStyle ?? 'classic',
       speed: runtimeConfig.companion.speed ?? 1,
       debug: runtimeConfig.companion.debug ?? false,
+      hideWhenIdle: runtimeConfig.companion.hideWhenIdle ?? false,
     };
   }
 
