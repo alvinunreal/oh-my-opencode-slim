@@ -109,7 +109,8 @@ lifecycle lives in the TUI entry's dependency graph (`multiplexer/client/`).
 3. **Atomic Writes**: Cross-process file locking serializes read → mutate →
    atomic rename transactions. `withTuiSnapshotBatch` coalesces recorders and
    Board projections within one native event; standalone calls remain immediate.
-   A shared stat-key cache preserves reader isolation and parent insertion order.
+    A shared stat-key cache preserves reader isolation and parent insertion order;
+    verified single-key no-ops skip cloning, including within compatible batches.
 4. **Error Handling**: All operations are best-effort; failures don't crash plugin
 5. **Instance Cleanup**: On shutdown, each plugin instance removes only sessions
    it marked active, preserving activity owned by other running instances

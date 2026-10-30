@@ -754,6 +754,26 @@ describe('tui-state persistence', () => {
     expect(readTuiSnapshot(tempDir).agentModels.explorer).toBe(GPT.model);
   });
 
+  test('single-key no-op avoids cloning but an external replacement is respected', () => {
+    recordLuna();
+    const clone = spyOn(globalThis, 'structuredClone');
+    try {
+      recordLuna();
+      expect(clone).not.toHaveBeenCalled();
+
+      const filePath = getTuiStatePath(tempDir);
+      const external = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      external.agentModels.explorer = GPT.model;
+      fs.writeFileSync(`${filePath}.external`, JSON.stringify(external));
+      fs.renameSync(`${filePath}.external`, filePath);
+      recordLuna();
+      expect(readTuiSnapshot(tempDir).agentModels.explorer).toBe(LUNA.model);
+      expect(clone).toHaveBeenCalled();
+    } finally {
+      clone.mockRestore();
+    }
+  });
+
   test('external snapshot changes are not masked by the memo', () => {
     recordLuna();
     const external = readTuiSnapshot(tempDir);
