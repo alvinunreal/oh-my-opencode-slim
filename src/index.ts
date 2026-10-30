@@ -1385,11 +1385,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             )) === true
           );
         },
-      }).catch((error: unknown) => {
-        log('[task-session-manager] startup subagent recovery failed', {
-          error: error instanceof Error ? error.message : String(error),
+      })
+        .then((recovered) => {
+          if (hostFlavor !== 'v2' && recovered.length > 0)
+            taskSessionManagerHook?.scheduleRuntimeStatusReconciliation();
+        })
+        .catch((error: unknown) => {
+          log('[task-session-manager] startup subagent recovery failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
-      });
       backgroundJobBoard!.addTerminalOutcomeListener((record) => {
         // A placeholder is not delegated work; its stop is not recoverable
         // by the parent until a task launch has attributed the session.
