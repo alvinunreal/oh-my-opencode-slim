@@ -261,7 +261,7 @@ describe('marketplace config reference cleanup', () => {
                 name.endsWith('.lease'),
               );
               if (!leaseName) throw new Error('Config lease was not acquired');
-              leasePath = join(lockDir, leaseName);
+              leasePath = join(fs.realpathSync(lockDir), leaseName);
               onCommitted();
             },
           ),
