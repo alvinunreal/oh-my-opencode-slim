@@ -3067,13 +3067,18 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           ) {
             const agentName = resolveRuntimeAgentName(runtime, info.agent);
             const model = `${providerID}/${modelID}`;
-            const variant = resolveTuiVariantForModel(agentName, model);
+            const observedVariant = (info as { variant?: unknown }).variant;
             if (runtime.sidebarEnabled) {
               recordTuiAgentModel(
                 {
                   agentName,
                   model,
-                  variant: variant ?? null,
+                  ...(typeof observedVariant === 'string'
+                    ? { variant: observedVariant }
+                    : {
+                        fallbackVariant:
+                          resolveTuiVariantForModel(agentName, model) ?? null,
+                      }),
                   sessionID: info.sessionID,
                 },
                 (info?.sessionID &&

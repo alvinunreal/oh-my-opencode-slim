@@ -5481,6 +5481,59 @@ describe('plugin foreground fallback host gating', () => {
     }
   });
 
+  test('message updates preserve the selected variant until the model or variant changes', async () => {
+    const configPath = `${projectDir}/oh-my-opencode-slim.json`;
+    const config = await Bun.file(configPath).json();
+    config.agents.orchestrator.variant = 'medium';
+    config.agents.orchestrator.model = [
+      'openai/gpt-b',
+      { id: 'openai/gpt-c', variant: 'low' },
+    ];
+    await Bun.write(configPath, JSON.stringify(config));
+    const hooks = await createHooks('v1');
+    const sessionID = 'selected-variant';
+    const info = {
+      sessionID,
+      role: 'assistant',
+      agent: 'orchestrator',
+      providerID: 'openai',
+      modelID: 'gpt-b',
+    };
+    const observation = () =>
+      readTuiSnapshot(projectDir).sessionModels?.[sessionID]?.orchestrator;
+    try {
+      await hooks['chat.message']?.(
+        {
+          sessionID,
+          agent: 'orchestrator',
+          model: { providerID: 'openai', modelID: 'gpt-b' },
+          variant: 'high',
+        } as never,
+        {} as never,
+      );
+      await hooks.event?.({
+        event: { type: 'message.updated', properties: { info } },
+      } as never);
+      expect(observation()).toEqual({ model: 'openai/gpt-b', variant: 'high' });
+      await hooks.event?.({
+        event: {
+          type: 'message.updated',
+          properties: { info: { ...info, variant: 'low' } },
+        },
+      } as never);
+      expect(observation()?.variant).toBe('low');
+      await hooks.event?.({
+        event: {
+          type: 'message.updated',
+          properties: { info: { ...info, modelID: 'gpt-c' } },
+        },
+      } as never);
+      expect(observation()).toEqual({ model: 'openai/gpt-c', variant: 'low' });
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
   test('chat.message live model syncs the sidebar projection (v2 bridge)', async () => {
     const configPath = `${projectDir}/oh-my-opencode-slim.json`;
     const config = await Bun.file(configPath).json();

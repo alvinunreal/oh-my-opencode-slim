@@ -870,6 +870,7 @@ export function recordTuiAgentModel(
     agentName: string;
     model: string;
     variant?: string | null;
+    fallbackVariant?: string | null;
     sessionID: string;
   },
   projectDir: string,
@@ -880,7 +881,11 @@ export function recordTuiAgentModel(
     const agents = sessions[input.sessionID] ?? {};
     const previous = agents[input.agentName];
     const variant =
-      input.variant === undefined ? previous?.variant : input.variant;
+      input.variant !== undefined
+        ? input.variant
+        : previous?.model === input.model
+          ? previous.variant
+          : input.fallbackVariant;
     if (
       previous?.model === input.model &&
       previous.variant === (variant ?? undefined)
