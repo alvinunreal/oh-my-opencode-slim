@@ -56,6 +56,7 @@ import {
   parseModelReference,
   withTimeout,
 } from '../../utils/session';
+import type { ExperimentalV2, V2GenerateModelRef } from '../../v2/client-shim';
 import { isInternalAdmission } from '../../v2/internal-admissions';
 import type { SessionLifecycle } from '../session-lifecycle';
 import type { createBackgroundFallbackHandoff } from '../task-session-manager/fallback-observation-transfer';
@@ -64,6 +65,12 @@ import { isReplayableUserMessage } from '../types';
 type BackgroundFallbackHandoff = ReturnType<
   typeof createBackgroundFallbackHandoff
 >;
+
+type V2SwitchDetail = {
+  agentName: string | undefined;
+  variant: string | undefined;
+};
+type V2SwitchModel = NonNullable<ExperimentalV2['switchModel']>;
 
 // ---------------------------------------------------------------------------
 // Retryable error detection
@@ -700,6 +707,15 @@ export class ForegroundFallbackManager {
   private incidentSequence = 0;
   /** Confirmed external user-turn generations fence suspended work. */
   private readonly turnEpoch = new Map<string, number>();
+  private readonly v2Steps = new Map<
+    string,
+    {
+      assistantMessageID: string;
+      agent: string;
+      model: V2GenerateModelRef;
+      epoch: number;
+    }
+  >();
   private readonly lastUserMessageID = new Map<string, string>();
   /** Arrival order fences stale asynchronous transcript identity probes. */
   private readonly userEventSequence = new Map<string, number>();
@@ -759,6 +775,7 @@ export class ForegroundFallbackManager {
   private readonly onSessionModelChanged?: (
     sessionID: string,
     model: string,
+    detail?: V2SwitchDetail,
   ) => void;
   /** sessionID + transcript baseline + the board generation captured
    *  BEFORE the admission await, notified when a fallback re-prompt was
@@ -968,6 +985,10 @@ export class ForegroundFallbackManager {
     this.deterministicTerminal.delete(sessionID);
     this.v2RetryNotices.delete(sessionID);
     this.cancelInitialDelay(sessionID);
+  }
+
+  noteV2Prompt(sessionID: string): void {
+    this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
   }
 
   private nextUserEventSequence(sessionID: string): number {
@@ -1214,7 +1235,11 @@ export class ForegroundFallbackManager {
      *  together). */
     private readonly maxRetries: number = 3,
     coordinator?: SessionLifecycle,
-    onSessionModelChanged?: (sessionID: string, model: string) => void,
+    onSessionModelChanged?: (
+      sessionID: string,
+      model: string,
+      detail?: V2SwitchDetail,
+    ) => void,
     /** Delay before first fallback; gives intercepting plugins time to recover. */
     private readonly initialRetryDelayMs: number = 0,
     /** Delay between consecutive fallback attempts. */
@@ -1261,6 +1286,7 @@ export class ForegroundFallbackManager {
     this.sessionRetryEnabled.delete(id);
     this.unknownFinishStreak.delete(id);
     this.v2RetryNotices.delete(id);
+    this.v2Steps.delete(id);
     // NOTE: inProgress is intentionally NOT cleared here —
     // the finally blocks in tryFallback() and tryFallbackWithAbort()
     // manage inProgress lifecycle. Clearing it here would make
@@ -1313,6 +1339,7 @@ export class ForegroundFallbackManager {
     from: string | undefined,
     model: string,
     error: unknown,
+    detail?: V2SwitchDetail,
   ): void {
     const downProviders = new Map(
       this.activeFallback.get(sessionID)?.downProviders,
@@ -1328,7 +1355,8 @@ export class ForegroundFallbackManager {
     this.activeFallback.set(sessionID, { model, downProviders });
     this.sessionModel.set(sessionID, model);
     this.resetUnknownFinishStreak(sessionID);
-    this.onSessionModelChanged?.(sessionID, model);
+    if (detail) this.onSessionModelChanged?.(sessionID, model, detail);
+    else this.onSessionModelChanged?.(sessionID, model);
     log('[foreground-fallback] active fallback committed', {
       sessionID,
       model,
@@ -1387,6 +1415,53 @@ export class ForegroundFallbackManager {
       (this.input as PluginInput & { hostFlavor?: string }).hostFlavor === 'v2';
 
     switch (event.type) {
+      case 'session.step.started': {
+        if (!isV2Host) break;
+        const props = isRecord(event.data) ? event.data : event.properties;
+        if (
+          isRecord(props) &&
+          typeof props.sessionID === 'string' &&
+          typeof props.assistantMessageID === 'string' &&
+          typeof props.agent === 'string' &&
+          isRecord(props.model) &&
+          typeof props.model.providerID === 'string' &&
+          typeof props.model.id === 'string' &&
+          (props.model.variant === undefined ||
+            typeof props.model.variant === 'string')
+        ) {
+          this.v2Steps.set(props.sessionID, {
+            assistantMessageID: props.assistantMessageID,
+            agent: props.agent,
+            epoch: this.turnEpoch.get(props.sessionID) ?? 0,
+            model: {
+              providerID: props.model.providerID,
+              id: props.model.id,
+              ...(typeof props.model.variant === 'string'
+                ? { variant: props.model.variant }
+                : {}),
+            },
+          });
+        }
+        break;
+      }
+      case 'session.step.failed': {
+        if (!isV2Host) break;
+        const props = isRecord(event.data) ? event.data : event.properties;
+        if (
+          isRecord(props) &&
+          typeof props.sessionID === 'string' &&
+          typeof props.assistantMessageID === 'string' &&
+          props.finish === 'content-filter'
+        ) {
+          void this.handleV2Refusal(
+            props.sessionID,
+            props.assistantMessageID,
+            props.error,
+            props.rawFinish,
+          );
+        }
+        break;
+      }
       case 'session.step.ended':
       case 'session.execution.succeeded': {
         if (!isV2Host) break;
@@ -1821,8 +1896,6 @@ export class ForegroundFallbackManager {
       model: { providerID: string; id: string },
     ) => Promise<unknown>,
   ): Promise<void> {
-    let picked: string | undefined;
-    let switchRequest: Promise<unknown> | undefined;
     const from = `${event.model.providerID}/${event.model.id}`;
     try {
       const { sessionID } = event;
@@ -1895,10 +1968,43 @@ export class ForegroundFallbackManager {
         )
           return;
       }
-      const selected = this.selectFallbackModel(sessionID, event.error);
+      this.inProgress.add(sessionID);
+      try {
+        const nextModel = await this.switchV2InPlace(
+          sessionID,
+          from,
+          event.error,
+          switchModel,
+        );
+        if (nextModel)
+          event.decision = { retry: true, delay: this.retryDelayMs };
+      } finally {
+        this.inProgress.delete(sessionID);
+      }
+    } catch (err) {
+      log(
+        '[foreground-fallback] retry hook switch failed; host decision unchanged',
+        { sessionID: event?.sessionID, error: stringifyError(err) },
+      );
+    }
+  }
+
+  private async switchV2InPlace(
+    sessionID: string,
+    from: string,
+    error: unknown,
+    switchModel: V2SwitchModel,
+  ): Promise<string | undefined> {
+    let picked: string | undefined;
+    let switchRequest: Promise<unknown> | undefined;
+    let detail: V2SwitchDetail | undefined;
+    let confirmed = false;
+    try {
+      const selected = this.selectFallbackModel(sessionID, error);
       if (!selected || selected === 'exhausted') return;
       const { agentName, nextModel, ref, variant } = selected;
       picked = nextModel;
+      detail = { agentName, variant };
       switchRequest = switchModel(sessionID, {
         providerID: ref.providerID,
         id: ref.modelID,
@@ -1910,18 +2016,26 @@ export class ForegroundFallbackManager {
         'foreground retry model switch timed out',
       );
       if (this.disposed) return;
-      event.decision = { retry: true, delay: this.retryDelayMs };
-      this.commitSwitch(sessionID, from, nextModel, event.error);
-      this.showFallbackToast(agentName, nextModel, event.error);
-      log('[foreground-fallback] retry hook switched model in place', {
+      confirmed = true;
+      this.commitSwitch(sessionID, from, nextModel, error, detail);
+      this.showFallbackToast(agentName, nextModel, error);
+      log('[foreground-fallback] v2 switched model in place', {
         sessionID,
         from,
         to: nextModel,
       });
+      return nextModel;
     } catch (err) {
+      if (confirmed) {
+        log('[foreground-fallback] v2 switch bookkeeping failed', {
+          sessionID,
+          error: stringifyError(err),
+        });
+        return picked;
+      }
       // Unconfirmed switch: keep the target selectable (a timed-out switch
       // may still land; the next event's model is the host truth).
-      if (picked) this.sessionTried.get(event.sessionID)?.delete(picked);
+      if (picked) this.sessionTried.get(sessionID)?.delete(picked);
       const pendingSwitch = switchRequest;
       if (err instanceof OperationTimeoutError && picked && pendingSwitch) {
         // Late landing: the timeout cannot cancel the host call. Reconcile
@@ -1930,28 +2044,134 @@ export class ForegroundFallbackManager {
         // run synchronously. No toast here: the next event's success path
         // notifies; this only repairs state.
         const target = picked;
-        void pendingSwitch.then(
-          () => {
-            const observedModel = this.sessionModel.get(event.sessionID);
-            if (
-              this.disposed ||
-              (observedModel !== from && observedModel !== target)
-            )
-              return;
-            this.commitSwitch(event.sessionID, from, target, event.error);
-            log('[foreground-fallback] retry hook reconciled a late switch', {
-              sessionID: event.sessionID,
-              from,
-              to: target,
+        void pendingSwitch
+          .then(
+            () => {
+              const observedModel = this.sessionModel.get(sessionID);
+              if (
+                this.disposed ||
+                (observedModel !== from && observedModel !== target)
+              )
+                return;
+              this.commitSwitch(sessionID, from, target, error, detail);
+              log('[foreground-fallback] v2 reconciled a late model switch', {
+                sessionID,
+                from,
+                to: target,
+              });
+            },
+            () => {},
+          )
+          .catch((lateError) => {
+            log('[foreground-fallback] v2 late switch bookkeeping failed', {
+              sessionID,
+              error: stringifyError(lateError),
             });
-          },
-          () => {},
-        );
+          });
       }
-      log(
-        '[foreground-fallback] retry hook switch failed; host decision unchanged',
-        { sessionID: event?.sessionID, error: stringifyError(err) },
+      log('[foreground-fallback] v2 model switch failed', {
+        sessionID,
+        error: stringifyError(err),
+      });
+    }
+  }
+
+  private async handleV2Refusal(
+    sessionID: string,
+    assistantMessageID: string,
+    error: unknown,
+    rawFinish: unknown,
+  ): Promise<void> {
+    const step = this.v2Steps.get(sessionID);
+    const switchModel = (
+      this.input as PluginInput & { experimental_v2?: ExperimentalV2 }
+    ).experimental_v2?.switchModel;
+    if (
+      step?.assistantMessageID !== assistantMessageID ||
+      !this.retryEnabledFor(sessionID) ||
+      this.disposed ||
+      this.inProgress.has(sessionID) ||
+      !isFailoverError(error) ||
+      !switchModel
+    )
+      return;
+    const from = `${step.model.providerID}/${step.model.id}`;
+    if (
+      this.sessionTried.get(sessionID)?.has(from) &&
+      this.sessionModel.get(sessionID) !== from
+    )
+      return;
+    this.v2Steps.delete(sessionID);
+    this.registerSessionAgent(sessionID, step.agent);
+    if (!this.hasFallbackChain(sessionID)) return;
+    const epoch = step.epoch;
+    this.inProgress.add(sessionID);
+    log('[foreground-fallback] v2 refusal observed', {
+      sessionID,
+      agent: step.agent,
+      from,
+      rawFinish,
+    });
+    try {
+      const session = getClient(this.input).session;
+      if (typeof session.get !== 'function') return;
+      const result = await withTimeout(
+        session.get({ path: { id: sessionID } }),
+        HOST_CALL_TIMEOUT_MS,
+        'foreground refusal session lookup timed out',
       );
+      const data: unknown = result.data;
+      if (this.disposed || !isRecord(data)) return;
+      const current = data.model;
+      if (
+        (typeof data.agent === 'string' && data.agent !== step.agent) ||
+        (current !== undefined &&
+          (!isRecord(current) ||
+            current.providerID !== step.model.providerID ||
+            current.id !== step.model.id ||
+            (current.variant ?? 'default') !==
+              (step.model.variant ?? 'default')))
+      )
+        return;
+      if (typeof data.parentID === 'string' && data.parentID) {
+        this.sessionParent.set(sessionID, data.parentID);
+      }
+      this.sessionModel.set(sessionID, from);
+      const nextModel = await this.switchV2InPlace(
+        sessionID,
+        from,
+        error,
+        switchModel,
+      );
+      if (
+        !nextModel ||
+        this.disposed ||
+        data.parentID ||
+        (this.turnEpoch.get(sessionID) ?? 0) !== epoch
+      )
+        return;
+      await withTimeout(
+        session.promptAsync({
+          path: { id: sessionID },
+          body: {
+            agent: step.agent,
+            parts: [
+              createInternalAgentTextPart(
+                "The previous response was stopped by the provider's content filter. Continue from where it stopped without repeating completed content.",
+              ),
+            ],
+          },
+        }),
+        HOST_CALL_TIMEOUT_MS,
+        'foreground refusal continuation timed out',
+      );
+    } catch (err) {
+      log('[foreground-fallback] v2 refusal recovery failed', {
+        sessionID,
+        error: stringifyError(err),
+      });
+    } finally {
+      this.inProgress.delete(sessionID);
     }
   }
 

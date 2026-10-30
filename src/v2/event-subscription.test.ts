@@ -37,6 +37,8 @@ const PRODUCTION_REQUIRED = [
   // Telemetry → deduplicated completed-assistant message.updated
   // (cache-monitor) + task-activity.
   'session.usage.updated',
+  'session.step.started',
+  'session.step.failed',
   'session.step.ended',
   // Form flow → v1 question.* (input-wait tracker, companion, wake).
   'form.created',
