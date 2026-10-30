@@ -407,6 +407,8 @@ A pane is a **view**, and views belong to the viewer:
   panes still close under the normal rules. Reconciliation also checks held
   panes of other parents for lost idle or deletion signals. A rebuild requires the
   parent to be the displayed session again at that moment.
+- A displayed-session or project change triggers a debounced reconciliation;
+  the 30-second periodic pass remains a fallback.
 
 If you do not want a pane on a particular client, disable panes for that
 project there (`"type": "none"`), or simply close the pane; the child session
