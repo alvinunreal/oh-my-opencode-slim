@@ -91,7 +91,11 @@ export function createRuntimeStatusReconciler(options: {
         token,
         runtimeObservationFromSnapshot(snapshot, token.taskID, startedAt),
       );
-      if (result.kind !== 'stale')
+      if (
+        result.kind !== 'stale' &&
+        (options.backgroundJobBoard.get(token.taskID)?.state === 'running' ||
+          token.promptMessageID !== undefined)
+      )
         pending.push(options.terminalGate.reconcile(token));
     }
     await Promise.all(pending);
