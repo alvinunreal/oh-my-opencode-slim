@@ -484,6 +484,16 @@ async function createHarness(
   return { wiring, logger, bus, clock, state, adapters, createdTypes };
 }
 
+test('pane viewers do not start pane lifecycle wiring', async () => {
+  const h = await createHarness({
+    env: { TMUX_PANE: '%1', OH_MY_OPENCODE_SLIM_PANE_VIEWER: '1' },
+  });
+  expect(h.wiring.lifecycle).toBeNull();
+  expect(h.bus.listenerCount()).toBe(0);
+  expect(h.clock.pendingTimers).toBe(0);
+  await h.wiring.dispose();
+});
+
 /**
  * v2 host seams: the v2 adapter feeds already-projected events and supplies
  * the authenticated probe/URL. Wiring behavior must match the v1 bus path.

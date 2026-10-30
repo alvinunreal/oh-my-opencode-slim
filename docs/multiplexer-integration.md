@@ -385,11 +385,13 @@ Adapter notes:
 
 A pane is a **view**, and views belong to the viewer:
 
-- Every TUI client that displays the parent session manages **its own** panes.
+- Every independently opened TUI client that displays the parent session manages **its own** panes.
   Two clients displaying the same parent session and the same child each get
   their own pane, anchored to their own parent pane (next to it, or inside it
   as a tab for cmux-tui). This is expected, not a leak: anchors, control planes,
   and view handles are all client-local.
+- Full TUI viewers spawned by Slim do not manage panes, even after navigating
+  to a parent session; they therefore do not open panes for grandchildren.
 - There are **no cross-process files and no coordination** between clients. A
   client never writes where it is, and never touches another client's panes.
 - A single client maintains **at most one pane per child session** (in-process

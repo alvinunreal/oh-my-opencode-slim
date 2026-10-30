@@ -11,6 +11,20 @@ import { crossSpawn } from '../utils/compat';
 import { log } from '../utils/logger';
 import type { PaneSpawnOptions } from './types';
 
+export const PANE_VIEWER_ENV = 'OH_MY_OPENCODE_SLIM_PANE_VIEWER';
+
+/** Mark a viewer in the shell that launches it. */
+export function markViewerCommand(
+  command: string,
+  shell = process.env.SHELL || '/bin/sh',
+): string {
+  const name = shellName(shell);
+  if (name === 'pwsh' || name === 'powershell')
+    return `$env:${PANE_VIEWER_ENV}='1'; ${command}`;
+  if (name === 'cmd') return `set "${PANE_VIEWER_ENV}=1" && ${command}`;
+  return `env ${PANE_VIEWER_ENV}=1 ${command}`;
+}
+
 export function quoteShellArg(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }

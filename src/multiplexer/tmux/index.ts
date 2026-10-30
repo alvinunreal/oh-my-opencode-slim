@@ -18,6 +18,7 @@ import {
   buildViewCommand,
   findBinary,
   gracefulClosePane,
+  PANE_VIEWER_ENV,
   redactViewerSecretArgs,
   viewerNeedsPaneCwd,
 } from '../shared';
@@ -83,7 +84,7 @@ export class TmuxMultiplexer implements Multiplexer {
     }
 
     try {
-      const opencodeCmd = `env OPENCODE_DISABLE_TERMINAL_TITLE=1 ${buildViewCommand(
+      const opencodeCmd = `env OPENCODE_DISABLE_TERMINAL_TITLE=1 ${PANE_VIEWER_ENV}=1 ${buildViewCommand(
         sessionId,
         serverUrl,
         directory,

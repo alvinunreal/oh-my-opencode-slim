@@ -32,7 +32,7 @@ import {
 import { isRecord } from '../../utils/guards';
 import { initLogger } from '../../utils/logger';
 import { getMultiplexer } from '../factory';
-import type { ViewerFlavor } from '../shared';
+import { PANE_VIEWER_ENV, type ViewerFlavor } from '../shared';
 import type { Multiplexer } from '../types';
 import {
   createOnceGate,
@@ -535,6 +535,11 @@ export async function createTuiPaneWiring(
   const getDirectory = options.getDirectory ?? (() => directory);
 
   (options.initLogging ?? initClientLogging)();
+
+  if (env[PANE_VIEWER_ENV] === '1') {
+    logger.log('[multiplexer] pane wiring skipped in viewer');
+    return disabledWiring(decideAdmission('none', null), null);
+  }
 
   let loaded: LoadedPaneConfig;
   try {

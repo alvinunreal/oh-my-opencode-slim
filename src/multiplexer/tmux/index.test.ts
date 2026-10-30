@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { MultiplexerLayout } from '../../config/schema';
+import * as logger from '../../utils/logger';
 
 type SpawnResult = {
   exited: Promise<number>;
@@ -14,6 +15,7 @@ const logMock = mock(() => {});
 const crossSpawnMock = mock((_command: string[]) => createSpawnResult());
 
 mock.module('../../utils/logger', () => ({
+  ...logger,
   log: logMock,
 }));
 
@@ -119,6 +121,19 @@ describe('TmuxMultiplexer', () => {
 
     delete process.env.TMUX_PANE;
     expect(tmux.isInsideSession()).toBe(false);
+  });
+
+  test('marks spawned viewers so they do not manage panes', async () => {
+    const { TmuxMultiplexer } = await importFreshTmux();
+    await new TmuxMultiplexer().spawnPane(
+      'child',
+      'child',
+      'http://host',
+      '/repo',
+    );
+    expect(commandContaining('split-window')?.at(-1)).toContain(
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
+    );
   });
 
   test('spawnPane explicitly addresses the tmux server with -S <socket>', async () => {
