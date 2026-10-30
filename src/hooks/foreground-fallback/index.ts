@@ -2133,6 +2133,7 @@ export class ForegroundFallbackManager {
               (step.model.variant ?? 'default')))
       )
         return;
+      if ((this.turnEpoch.get(sessionID) ?? 0) !== epoch) return;
       if (typeof data.parentID === 'string' && data.parentID) {
         this.sessionParent.set(sessionID, data.parentID);
       }
