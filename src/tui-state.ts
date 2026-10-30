@@ -250,6 +250,15 @@ export function readTuiSnapshot(projectDir: string): TuiSnapshot {
   }
 }
 
+export function readTuiSessionParents(
+  projectDir: string,
+): Record<string, string> {
+  const memo = memoFor(getTuiStatePath(projectDir));
+  return memo
+    ? parseStringRecord(memo.sessionParents)
+    : readTuiSnapshot(projectDir).sessionParents;
+}
+
 // Locked-path reader: ENOENT is a first write; any other error must not
 // seed the memo (a fallback empty snapshot would swallow later retries).
 function readTuiSnapshotStrict(statePath: string): TuiSnapshot | null {
@@ -351,7 +360,8 @@ export async function readTuiSnapshotAsync(
     const cached = snapshotCache.get(statePath);
     if (cached && sameSnapshotStat(cached.stat, snapshotStatOf(stat))) {
       touchSnapshot(statePath, cached); // LRU refresh
-      return (cached.readerSnapshot ??= cloneSnapshot(cached.snapshot));
+      cached.readerSnapshot ??= cloneSnapshot(cached.snapshot);
+      return cached.readerSnapshot;
     }
     const snapshot = parseSnapshot(
       await fs.promises.readFile(statePath, 'utf8'),
@@ -366,7 +376,8 @@ export async function readTuiSnapshotAsync(
       const after = await fs.promises.stat(statePath);
       if (sameSnapshotStat(snapshotStatOf(stat), snapshotStatOf(after))) {
         const entry = cacheSnapshot(statePath, snapshot, snapshotStatOf(after));
-        return (entry.readerSnapshot = cloneSnapshot(entry.snapshot));
+        entry.readerSnapshot = cloneSnapshot(entry.snapshot);
+        return entry.readerSnapshot;
       }
     } catch {
       // Publication only; the read itself succeeded.

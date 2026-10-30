@@ -128,7 +128,7 @@ import {
   clearTuiSessionAlias,
   collectAgentDisplayNames,
   flushTuiSnapshotBatch,
-  readTuiSnapshot,
+  readTuiSessionParents,
   recordTuiAgentActivity,
   recordTuiAgentModel,
   recordTuiAgentModels,
@@ -529,11 +529,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       query: { directory: string };
     }) => Promise<{ data?: unknown; error?: unknown; parentID?: unknown }>;
     const visited = new Set<string>();
+    let parents = readTuiSessionParents(directory);
     let current = startSessionID;
     while (!visited.has(current)) {
       visited.add(current);
-      const snapshot = readTuiSnapshot(directory);
-      const known = snapshot.sessionParents[current];
+      const known = parents[current];
       if (known !== undefined) {
         current = known; // Persisted link; keep walking toward the root.
         continue;
@@ -570,6 +570,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         recordTuiSessionParent(current, parentID, directory);
         hydratedTuiParents.delete(current);
         current = parentID;
+        parents = readTuiSessionParents(directory);
         continue;
       }
       if (parentID !== undefined && parentID !== null) {

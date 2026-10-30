@@ -774,6 +774,14 @@ describe('tui-state persistence', () => {
     }
   });
 
+  test('synchronous reads retain the persisted snapshot normalization', () => {
+    updateSnapshot(tempDir, (snapshot) => {
+      snapshot.agentModels.explorer = 'model';
+      snapshot.sessionDetails.session = { alias: undefined };
+    });
+    expect(readTuiSnapshot(tempDir).sessionDetails).toEqual({});
+  });
+
   test('external snapshot changes are not masked by the memo', () => {
     recordLuna();
     const external = readTuiSnapshot(tempDir);
