@@ -579,7 +579,14 @@ describe('TmuxMultiplexer', () => {
   test('closePane treats kill-pane exit 1 as closed (pane already gone)', async () => {
     // Real tmux behavior: C-c makes the pane process exit, so the backstop
     // `kill-pane` fails with "can't find pane" (exit 1). The pane is closed.
-    installMockWithKillExit(1);
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which')
+        return createSpawnResult(0, '/usr/bin/tmux\n');
+      if (command.includes('-V')) return createSpawnResult(0, 'tmux 3.6a');
+      if (command.includes('kill-pane'))
+        return createSpawnResult(1, '', "can't find pane: %2\n");
+      return createSpawnResult();
+    });
     const { TmuxMultiplexer } = await importFreshTmux();
     const tmux = new TmuxMultiplexer('main-vertical', 60);
 
@@ -595,6 +602,19 @@ describe('TmuxMultiplexer', () => {
       '-t',
       '%2',
     ]);
+  });
+
+  test('closePane keeps tracking a pane when tmux reports a transport error', async () => {
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which')
+        return createSpawnResult(0, '/usr/bin/tmux\n');
+      if (command.includes('-V')) return createSpawnResult(0, 'tmux 3.6a');
+      if (command.includes('kill-pane'))
+        return createSpawnResult(1, '', 'error connecting to socket');
+      return createSpawnResult();
+    });
+    const { TmuxMultiplexer } = await importFreshTmux();
+    expect(await new TmuxMultiplexer().closePane('%2')).toBe(false);
   });
 
   test('closePane fails closed when kill-pane exits with any other code', async () => {

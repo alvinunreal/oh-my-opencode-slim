@@ -248,13 +248,9 @@ export class TmuxMultiplexer implements Multiplexer {
     const closed = await gracefulClosePane(tmux, paneId, {
       ctrlC: ['-S', socket, 'send-keys', '-t', paneId, 'C-c'],
       close: ['-S', socket, 'kill-pane', '-t', paneId],
-      // The C-c above usually makes the pane's process exit before the
-      // backstop runs, so `kill-pane` on the already-gone pane exits 1
-      // ("can't find pane"). The pane is closed — the goal is met — so exit 1
-      // counts as success (same as the herdr/kitty/zellij adapters). Any
-      // other non-zero exit still fails closed, and an empty pane id still
-      // returns false (`emptyPaneReturnsTrue` stays default).
-      acceptExitCode1: true,
+      // Only a missing target proves the pane is gone; transport errors also exit 1.
+      isAlreadyClosed: (stderr) =>
+        stderr.trim() === `can't find pane: ${paneId}`,
     });
     if (closed) {
       const anchor = this.paneTargets.get(paneId);
