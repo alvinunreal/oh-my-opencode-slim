@@ -14,7 +14,7 @@ describe('isCommandEnabled', () => {
 
   it('disables a command listed in disabledCommands', () => {
     expect(
-      isCommandEnabled('loop', { disabledCommands: new Set(['loop']) }),
+      isCommandEnabled('deepwork', { disabledCommands: new Set(['deepwork']) }),
     ).toBe(false);
   });
 

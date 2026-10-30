@@ -395,6 +395,13 @@ export function createBackgroundJobTerminalGate(options: {
   ) => number | undefined;
   isObservationPending?: (taskID: string, generation: number) => boolean;
   onRunning?: (record: BackgroundJobRecord) => void;
+  /**
+   * Final give-up only: the gate can never establish a terminal outcome for
+   * this task (no evidence source left to poll). The task stays `running` on
+   * the board, so anything it holds must be released here — otherwise a host
+   * that cannot read terminal evidence leaks one resource per such task.
+   */
+  onGiveUp?: (taskID: string, generation: number) => void;
   graceMs?: number;
   readTimeoutMs?: number;
   maxEvidenceRetries?: number;
@@ -644,6 +651,12 @@ export function createBackgroundJobTerminalGate(options: {
           verdict: 'gave-up',
           reason: refusal,
         });
+        // A host that exposes `session.status` still owns the read: its
+        // reconciler keeps polling, and the terminal publication releases the
+        // slot once the task is actually terminal. Releasing
+        // here would admit a queued child while this one is still working.
+        if (refusal !== 'no-polling-capability')
+          options.onGiveUp?.(run.taskID, run.generation);
       }
     }
     return deferred(run, diagnostic);

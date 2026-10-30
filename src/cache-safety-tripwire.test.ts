@@ -48,10 +48,6 @@ const ALLOWLIST = new Map<string, string>([
     'Moved shared atomic config I/O from CLI: randomUUID names temporary backup/config files only; no value reaches prompt content or agent definitions.',
   ],
   [
-    'hooks/loop-command/index.ts',
-    'Timestamps/randomness name per-run loop-history directories; the path only appears inside a newly appended user turn (payload tail), never in earlier prefix bytes.',
-  ],
-  [
     'hooks/foreground-fallback/index.ts',
     'Date.now() gates retry/dedup windows for model failover; no prompt content is derived from it.',
   ],
@@ -94,10 +90,6 @@ const ALLOWLIST = new Map<string, string>([
   [
     'hooks/task-session-manager/tool-execute-hooks.ts',
     'Date.now() stamps the internal markReconciled acknowledgement before a native continuation; the value is board bookkeeping and is never formatted into prompt content (the hook writes tool args and board state only).',
-  ],
-  [
-    'hooks/deepwork-guard/index.ts',
-    'Date.now() timestamps claim markers and receipts under .slim/deepwork/.runtime/ (machine-owned bookkeeping the workflow never reads); the completion gate deny message carries only slugs and paths, never timestamps.',
   ],
 ]);
 

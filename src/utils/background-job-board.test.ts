@@ -1,8 +1,11 @@
 import { describe, expect, mock, spyOn, test } from 'bun:test';
 import {
   type BackgroundJobEvictedSession,
+  clearBackgroundJobSuppression,
+  getBackgroundJobLifecycleLedger,
   isPrunableEvictedSession,
   BackgroundJobBoard as ProductionBoard,
+  type RestoreRetainedSessionInput,
 } from './background-job-board';
 import { BackgroundJobBoard, boardFixture } from './background-job-fixture';
 import * as loggerModule from './logger';
@@ -3249,6 +3252,751 @@ describe('BackgroundJobBoard direct queries and projection reuse', () => {
       expect(board.resolve(parentSessionID, alias)?.taskID).toBe(taskID);
       expect(board.resolve(parentSessionID, taskID)?.taskID).toBe(taskID);
     }
+  });
+});
+
+// ── Contract pins from the issue #1717 mutation sweep ──────────────
+// Each test names the behavioral contract it pins and targets a
+// surviving-mutant cluster in the board's decision logic.
+describe('BackgroundJobBoard contract pins (#1717)', () => {
+  test('contract: a replayed suppression keeps the first deletion epoch', () => {
+    // recordBackgroundJobSuppression must stamp the epoch exactly once:
+    // replayed drops are no-ops so valid history cannot re-epoch.
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_sup',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    board.drop('ses_sup');
+    const ledger = getBackgroundJobLifecycleLedger(board);
+    expect(ledger.tombstones.has('ses_sup')).toBe(true);
+    expect(ledger.deletionEpochs.get('ses_sup')).toBe(1);
+    const nextEpochAfterFirst = ledger.nextEpoch;
+    board.drop('ses_sup');
+    expect(ledger.tombstones.has('ses_sup')).toBe(true);
+    expect(ledger.deletionEpochs.get('ses_sup')).toBe(1);
+    expect(ledger.nextEpoch).toBe(nextEpochAfterFirst);
+  });
+
+  test('contract: a relaunch or explicit clear empties the tombstone', () => {
+    // A proven new launch is proof of life: the rehydrate tombstone
+    // must clear so the relaunched task is not ghost-skipped.
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_r1',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    board.drop('ses_r1');
+    const ledger = getBackgroundJobLifecycleLedger(board);
+    expect(ledger.tombstones.has('ses_r1')).toBe(true);
+    board.registerLaunch({
+      taskID: 'ses_r1',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 200,
+    });
+    expect(ledger.tombstones.has('ses_r1')).toBe(false);
+
+    board.registerLaunch({
+      taskID: 'ses_r2',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    board.drop('ses_r2');
+    expect(ledger.tombstones.has('ses_r2')).toBe(true);
+    clearBackgroundJobSuppression(board, 'ses_r2');
+    expect(ledger.tombstones.has('ses_r2')).toBe(false);
+  });
+
+  test('contract: a stale running status cannot reopen terminal rows', () => {
+    // The applyStatus guard keeps stopped, cancelled, and reconciled
+    // publications final against any late running status write.
+    const board = new BackgroundJobBoard();
+    const stopRun = board.registerLaunch({
+      taskID: 'ses_s',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    board.markStopped('ses_s', 'host stop', 200, stopRun.generation, 200);
+    expect(board.getState('ses_s')).toBe('stopped');
+    const cancelRun = board.registerLaunch({
+      taskID: 'ses_c',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    board.markCancelled('ses_c', 'user cancelled', 200);
+    expect(board.getState('ses_c')).toBe('cancelled');
+    const doneRun = board.registerLaunch({
+      taskID: 'ses_k',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    board.updateStatus({
+      taskID: 'ses_k',
+      state: 'completed',
+      now: 200,
+    });
+    board.markReconciled('ses_k', 250);
+    expect(board.getState('ses_k')).toBe('reconciled');
+
+    for (const run of [stopRun, cancelRun, doneRun]) {
+      const before = structuredClone(board.get(run.taskID));
+      const outcome = board.updateStatus({
+        taskID: run.taskID,
+        state: 'running',
+        now: 300,
+      });
+      expect(outcome).toEqual(before);
+      expect(board.get(run.taskID)).toEqual(before);
+    }
+    expect(board.hasRunning('p1')).toBe(false);
+  });
+
+  test('contract: status writes for unknown tasks stay no-ops', () => {
+    // Neither a running nor a terminal write may materialize a record
+    // (or throw) for a task the board does not track.
+    const board = new BackgroundJobBoard();
+    expect(
+      board.updateStatus({ taskID: 'ghost', state: 'running' }),
+    ).toBeUndefined();
+    expect(
+      boardFixture.updateStatus(board, {
+        taskID: 'ghost',
+        state: 'completed',
+        resultSummary: 'done',
+        now: 100,
+      }),
+    ).toBeUndefined();
+    expect(board.get('ghost')).toBeUndefined();
+  });
+
+  test('contract: busy observations respect the publication fence', () => {
+    // A busy observation that did not see the row's own terminal
+    // publication is stale evidence: it stamps the clock only. One that
+    // saw this publication is genuinely live again and reopens the run.
+    const board = new BackgroundJobBoard();
+    const runA = board.registerLaunch({
+      taskID: 'ses_a',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    board.updateStatus({
+      taskID: 'ses_a',
+      state: 'completed',
+      resultSummary: 'done',
+      now: 200,
+    });
+    const published = board.get('ses_a');
+    if (!published) throw new Error('missing terminal record');
+    const stale = board.markRunningFromLiveSession(
+      'ses_a',
+      150,
+      runA.generation,
+      99,
+    );
+    expect(stale).toEqual({ ...published, lastLiveBusyAt: 150 });
+    // The stamp lands on the board, not just the return value.
+    expect(board.get('ses_a')).toEqual(stale);
+    expect(board.getState('ses_a')).toBe('completed');
+
+    const runB = board.registerLaunch({
+      taskID: 'ses_b',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    board.updateStatus({
+      taskID: 'ses_b',
+      state: 'completed',
+      resultSummary: 'done',
+      now: 200,
+    });
+    const reopened = board.markRunningFromLiveSession(
+      'ses_b',
+      150,
+      runB.generation,
+      1,
+    );
+    expect(reopened).toMatchObject({
+      state: 'running',
+      terminalRevision: 2,
+      activityRevision: 1,
+      lastLiveBusyAt: 150,
+    });
+    expect(reopened?.completedAt).toBeUndefined();
+    expect(reopened?.launchedAt).toBe(150);
+    expect(reopened?.runStartedAt).toBe(150);
+  });
+
+  test('contract: a running heartbeat keeps the run fence in place', () => {
+    // Repeated busy observations of an in-flight run move only the
+    // activity clock: run identity and publication revision are fixed
+    // until a terminal transition, and stale generations touch nothing.
+    const board = new BackgroundJobBoard();
+    const run = board.registerLaunch({
+      taskID: 'ses_h',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      runInputMessageID: 'msg_open',
+      now: 100,
+    });
+    const beat = board.markRunningFromLiveSession(
+      'ses_h',
+      150,
+      run.generation,
+      0,
+    );
+    expect(beat).toMatchObject({
+      state: 'running',
+      launchedAt: 100,
+      runStartedAt: 100,
+      activityRevision: 1,
+      terminalRevision: 0,
+      lastLiveBusyAt: 150,
+      recoverableAfterLiveBusy: false,
+    });
+    // A heartbeat keeps the run's input anchor: nothing reopens here.
+    expect(beat?.runInputMessageID).toBe('msg_open');
+
+    const beforeFence = structuredClone(board.get('ses_h'));
+    expect(
+      board.markRunningFromLiveSession('ses_h', 300, run.generation + 1, 0),
+    ).toEqual(beforeFence);
+    expect(board.get('ses_h')).toEqual(beforeFence);
+  });
+
+  test('contract: restore admission rejects blanks and unknown states', () => {
+    // Blank identities are not evidence of a session, and an
+    // unlisted state is not a terminal cache row.
+    const board = new BackgroundJobBoard();
+    const base = {
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      description: 'recovered run',
+      state: 'completed' as const,
+      background: true,
+    };
+    expect(
+      board.restoreRetainedSession({ ...base, taskID: ' ' }),
+    ).toBeUndefined();
+    expect(
+      board.restoreRetainedSession({
+        ...base,
+        taskID: 'ses_x',
+        parentSessionID: ' ',
+      }),
+    ).toBeUndefined();
+    expect(
+      board.restoreRetainedSession({
+        ...base,
+        taskID: 'ses_x',
+        agent: ' ',
+      }),
+    ).toBeUndefined();
+    expect(
+      board.restoreRetainedSession({
+        ...base,
+        taskID: 'ses_x',
+        state: 'running' as unknown as RestoreRetainedSessionInput['state'],
+      }),
+    ).toBeUndefined();
+    expect(board.taskIDs().size).toBe(0);
+  });
+
+  test('contract: a duplicate restore refuses and keeps the first row', () => {
+    // restoreRetainedSession admits absent, unleased rows exactly
+    // once; a retry must not overwrite or extend the cache row.
+    const board = new BackgroundJobBoard();
+    const base = {
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      description: 'recovered run',
+      objective: 'plan-o',
+      state: 'completed' as const,
+      background: true,
+      launchedAt: 100,
+      completedAt: 110,
+      resultSummary: 'done',
+    };
+    const first = board.restoreRetainedSession({
+      ...base,
+      taskID: 'ses_d',
+    });
+    expect(first).toMatchObject({
+      state: 'completed',
+      terminalState: 'completed',
+      terminalRevision: 1,
+      terminalUnreconciled: true,
+      cancellationRequested: false,
+      timedOut: false,
+      background: true,
+      objective: 'plan-o',
+      completedAt: 110,
+      resultSummary: 'done',
+    });
+    expect(
+      board.restoreRetainedSession({ ...base, taskID: 'ses_d' }),
+    ).toBeUndefined();
+    expect(board.get('ses_d')).toEqual(first);
+
+    const fallback = board.restoreRetainedSession({
+      ...base,
+      taskID: 'ses_fb',
+      description: ' ',
+    });
+    expect(fallback?.description).toBe('recovered explorer session');
+  });
+
+  test('contract: restored rows carry the lifecycle of their state', () => {
+    // Completed/error rows record their terminal revision and state;
+    // stopped rows keep the publication ladder at zero with no
+    // terminalState key; only cancelled rows carry cancellation intent.
+    const board = new BackgroundJobBoard();
+    const base = {
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      description: 'recovered run',
+      background: true,
+      launchedAt: 100,
+      completedAt: 110,
+      resultSummary: 'done',
+    };
+    const stopped = board.restoreRetainedSession({
+      ...base,
+      taskID: 'ses_stop',
+      state: 'stopped',
+      completedAt: undefined,
+    });
+    expect(stopped).toMatchObject({
+      state: 'stopped',
+      terminalRevision: 0,
+      terminalUnreconciled: true,
+      timedOut: false,
+    });
+    expect(Object.hasOwn(stopped ?? {}, 'terminalState')).toBe(false);
+
+    const cancelled = board.restoreRetainedSession({
+      ...base,
+      taskID: 'ses_cancel',
+      state: 'cancelled',
+    });
+    expect(cancelled).toMatchObject({
+      state: 'cancelled',
+      terminalState: 'cancelled',
+      terminalRevision: 1,
+      cancellationRequested: true,
+    });
+
+    const errored = board.restoreRetainedSession({
+      ...base,
+      taskID: 'ses_err',
+      state: 'error',
+    });
+    expect(errored).toMatchObject({
+      state: 'error',
+      terminalState: 'error',
+      terminalRevision: 1,
+      cancellationRequested: false,
+    });
+  });
+
+  test('contract: a trusted historical alias advances the counter', () => {
+    // A restored trusted alias claims its number, so the next numbered
+    // alias of the same parent/agent must skip past it.
+    const board = new BackgroundJobBoard();
+    const restored = board.restoreRetainedSession({
+      taskID: 'ses_h2',
+      parentSessionID: 'p1',
+      agent: 'oracle',
+      description: 'old run',
+      state: 'completed',
+      background: true,
+      alias: 'ora-9',
+      launchedAt: 100,
+      completedAt: 110,
+    });
+    expect(restored?.alias).toBe('ora-9');
+    const next = board.registerLaunch({
+      taskID: 'ses_n',
+      parentSessionID: 'p1',
+      agent: 'oracle',
+      now: 200,
+    });
+    expect(next.alias).toBe('ora-10');
+    // A lower historical alias never rewinds the counter.
+    board.restoreRetainedSession({
+      taskID: 'ses_h3',
+      parentSessionID: 'p1',
+      agent: 'oracle',
+      description: 'older run',
+      state: 'completed',
+      background: true,
+      alias: 'ora-3',
+      launchedAt: 50,
+      completedAt: 60,
+    });
+    const afterLower = board.registerLaunch({
+      taskID: 'ses_n2',
+      parentSessionID: 'p1',
+      agent: 'oracle',
+      now: 300,
+    });
+    expect(afterLower.alias).toBe('ora-11');
+
+    // ora-1 is the smallest claimable historical number.
+    const board2 = new BackgroundJobBoard();
+    board2.restoreRetainedSession({
+      taskID: 'ses_o',
+      parentSessionID: 'p1',
+      agent: 'oracle',
+      description: 'old run',
+      state: 'completed',
+      background: true,
+      alias: 'ora-1',
+      launchedAt: 100,
+      completedAt: 110,
+    });
+    const next2 = board2.registerLaunch({
+      taskID: 'ses_o2',
+      parentSessionID: 'p1',
+      agent: 'oracle',
+      now: 200,
+    });
+    expect(next2.alias).toBe('ora-2');
+
+    // An unsafe historical number never advances the counter.
+    const board3 = new BackgroundJobBoard();
+    board3.restoreRetainedSession({
+      taskID: 'ses_u',
+      parentSessionID: 'p1',
+      agent: 'oracle',
+      description: 'old run',
+      state: 'completed',
+      background: true,
+      alias: 'ora-99999999999999999999',
+      launchedAt: 100,
+      completedAt: 110,
+    });
+    const next3 = board3.registerLaunch({
+      taskID: 'ses_u2',
+      parentSessionID: 'p1',
+      agent: 'oracle',
+      now: 200,
+    });
+    expect(next3.alias).toBe('ora-1');
+  });
+
+  test('contract: trimRetained eviction stays within the agent', () => {
+    // The per-agent count cap may evict only the triggering agent's
+    // retained rows; other agents' rows are out of scope.
+    const board = new BackgroundJobBoard({ maxReusablePerAgent: 1 });
+    const exp = board.registerLaunch({
+      taskID: 'ses_exp',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    board.markStopped('ses_exp', 'stop', 150, exp.generation, 150);
+    board.markReconciled('ses_exp', 160);
+    const fix = board.registerLaunch({
+      taskID: 'ses_fix',
+      parentSessionID: 'p1',
+      agent: 'fixer',
+      now: 200,
+    });
+    board.markStopped('ses_fix', 'stop', 250, fix.generation, 250);
+    board.markReconciled('ses_fix', 260);
+    expect(board.get('ses_exp')).toBeDefined();
+    expect(board.get('ses_fix')).toBeDefined();
+
+    const fix2 = board.registerLaunch({
+      taskID: 'ses_fix2',
+      parentSessionID: 'p1',
+      agent: 'fixer',
+      now: 300,
+    });
+    board.markStopped('ses_fix2', 'stop', 350, fix2.generation, 350);
+    board.markReconciled('ses_fix2', 360);
+    expect(board.get('ses_exp')).toBeDefined();
+    expect(board.get('ses_fix2')).toBeDefined();
+    expect(board.get('ses_fix')).toBeUndefined();
+  });
+
+  test('contract: releasing a lease for a dropped job trims nothing', () => {
+    // A release whose job is already gone is a plain lease drop: it
+    // must neither throw nor reach the retention trim.
+    const board = new BackgroundJobBoard({ maxReusablePerAgent: 1 });
+    const keep = board.registerLaunch({
+      taskID: 'ses_keep',
+      parentSessionID: 'p1',
+      agent: 'fixer',
+      now: 100,
+    });
+    board.markStopped('ses_keep', 'stop', 150, keep.generation, 150);
+    board.markReconciled('ses_keep', 160);
+    const leased = board.registerLaunch({
+      taskID: 'ses_leased',
+      parentSessionID: 'p1',
+      agent: 'fixer',
+      now: 200,
+    });
+    const lease = board.acquireLease(
+      'ses_leased',
+      leased.generation,
+      'message',
+    );
+    expect(lease).toBeDefined();
+    board.drop('ses_leased');
+    if (!lease) throw new Error('missing lease');
+    expect(() => board.releaseLease(lease)).not.toThrow();
+    expect(board.isTracked('ses_leased')).toBe(false);
+    expect(board.get('ses_keep')).toBeDefined();
+  });
+
+  test('contract: preserveRun paints metadata and provenance when proven', () => {
+    // Caller metadata overwrites on observation; native provenance is
+    // painted only for this plugin's own tracked background launches —
+    // never for foreground rows, adopted inputs, or external origins.
+    const board = new BackgroundJobBoard();
+    const first = board.registerLaunch({
+      taskID: 'ses_p1',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      description: 'old',
+      objective: 'plan-a',
+      now: 100,
+    });
+    const observed = board.registerLaunch({
+      taskID: 'ses_p1',
+      parentSessionID: 'p1',
+      agent: 'fixer',
+      description: 'fresh',
+      background: true,
+      preserveRun: true,
+      pluginLaunched: true,
+      now: 200,
+    });
+    expect(observed).toMatchObject({
+      agent: 'fixer',
+      description: 'fresh',
+      objective: 'plan-a',
+      background: true,
+      pluginLaunched: true,
+    });
+    expect(observed.generation).toBe(first.generation);
+
+    board.registerLaunch({
+      taskID: 'ses_p2',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    const foreground = board.registerLaunch({
+      taskID: 'ses_p2',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      preserveRun: true,
+      pluginLaunched: true,
+      now: 200,
+    });
+    expect(foreground.pluginLaunched).toBeUndefined();
+    expect(foreground.background).toBe(false);
+
+    board.registerLaunch({
+      taskID: 'ses_p3',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      background: true,
+      now: 100,
+    });
+    const adopted = board.registerLaunch({
+      taskID: 'ses_p3',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      background: true,
+      preserveRun: true,
+      pluginLaunched: true,
+      adopted: true,
+      now: 200,
+    });
+    expect(adopted.pluginLaunched).toBeUndefined();
+
+    board.registerLaunch({
+      taskID: 'ses_p4',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      background: true,
+      provisional: true,
+      now: 100,
+    });
+    const provisional = board.registerLaunch({
+      taskID: 'ses_p4',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      background: true,
+      preserveRun: true,
+      pluginLaunched: true,
+      now: 200,
+    });
+    expect(provisional.pluginLaunched).toBeUndefined();
+    expect(provisional.provisional).toBe(false);
+  });
+
+  test('contract: a relaunch resets run state, keeps metadata fallbacks', () => {
+    // A relaunch is a new generation of the same task: dirty run state,
+    // terminal evidence, and input anchors die with the old run, empty
+    // metadata falls back to the existing record, and the task-local run
+    // ordinal advances. Each case seeds non-default state first so the
+    // resets are discriminating.
+    const board = new BackgroundJobBoard();
+    // (a) live run state: heartbeat, timeout overlay, uncertainty.
+    const first = board.registerLaunch({
+      taskID: 'ses_rl',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      description: 'old',
+      objective: 'plan-a',
+      background: true,
+      runInputMessageID: 'msg-1',
+      now: 100,
+    });
+    board.markRunningFromLiveSession('ses_rl', 150, first.generation, 0);
+    board.updateStatus({
+      taskID: 'ses_rl',
+      state: 'running',
+      timedOut: true,
+      now: 200,
+    });
+    board.markStatusUncertain('ses_rl', 'status error');
+    expect(board.get('ses_rl')).toMatchObject({
+      activityRevision: 1,
+      timedOut: true,
+      statusUncertain: true,
+    });
+    const relaunched = board.registerLaunch({
+      taskID: 'ses_rl',
+      parentSessionID: 'p1',
+      agent: '',
+      description: '',
+      now: 300,
+    });
+    expect(relaunched).toMatchObject({
+      agent: 'explorer',
+      description: 'old',
+      objective: 'plan-a',
+      background: true,
+      state: 'running',
+      taskGeneration: 2,
+      terminalRevision: 0,
+      activityRevision: 0,
+      timedOut: false,
+      statusUncertain: false,
+    });
+    expect(relaunched.generation).not.toBe(first.generation);
+    // A new generation never inherits the previous run's input anchor.
+    expect(relaunched.runInputMessageID).toBeUndefined();
+    expect(relaunched.lastLaunchedAt).toBe(300);
+    expect(relaunched.runStartedAt).toBe(300);
+
+    // (b) a live-busy recovery flag dies with the run.
+    const second = board.registerLaunch({
+      taskID: 'ses_rl2',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    board.updateStatus({
+      taskID: 'ses_rl2',
+      state: 'running',
+      timedOut: true,
+      now: 150,
+    });
+    board.markRunningFromLiveSession('ses_rl2', 200, second.generation);
+    expect(board.get('ses_rl2')?.recoverableAfterLiveBusy).toBe(true);
+    expect(
+      board.registerLaunch({
+        taskID: 'ses_rl2',
+        parentSessionID: 'p1',
+        agent: 'explorer',
+        now: 300,
+      }),
+    ).toMatchObject({ recoverableAfterLiveBusy: false });
+
+    // (c) terminal evidence dies with the run.
+    board.registerLaunch({
+      taskID: 'ses_rl3',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      background: true,
+      now: 100,
+    });
+    board.markCancelled('ses_rl3', 'user cancelled', 200);
+    expect(board.get('ses_rl3')).toMatchObject({
+      cancellationRequested: true,
+      terminalUnreconciled: true,
+    });
+    const relaunched3 = board.registerLaunch({
+      taskID: 'ses_rl3',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 300,
+    });
+    expect(relaunched3).toMatchObject({
+      cancellationRequested: false,
+      terminalUnreconciled: false,
+      state: 'running',
+      taskGeneration: 2,
+      terminalRevision: 0,
+      activityRevision: 0,
+    });
+    expect(relaunched3.completedAt).toBeUndefined();
+    expect(relaunched3.resultSummary).toBeUndefined();
+    expect(relaunched3.terminalState).toBeUndefined();
+  });
+
+  test('contract: launch registration never steals a live lease', () => {
+    // A live message lease owns the session, and a relaunch lease
+    // naming another generation cannot authorize a registration.
+    const board = new BackgroundJobBoard();
+    const run = board.registerLaunch({
+      taskID: 'ses_l',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    const lease = board.acquireLease('ses_l', run.generation, 'message');
+    expect(lease).toBeDefined();
+    expect(() =>
+      board.registerLaunch({
+        taskID: 'ses_l',
+        parentSessionID: 'p1',
+        agent: 'explorer',
+        now: 200,
+      }),
+    ).toThrow(/already owns this session/);
+    expect(() =>
+      board.registerLaunch({
+        taskID: 'ses_ghost',
+        parentSessionID: 'p1',
+        agent: 'explorer',
+        relaunchLease: {
+          taskID: 'ses_ghost',
+          generation: 7,
+          token: 'stale-token',
+          kind: 'relaunch',
+        },
+        now: 100,
+      }),
+    ).toThrow(/relaunch lease is missing, stale/);
   });
 });
 

@@ -177,7 +177,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `disabled_mcps`: List of MCPs to disable
 - `disabled_tools`: List of tools to disable
 - `disabled_skills`: List of skills to disable
-- `disabled_hooks`: List of hooks to disable (`phase-reminder`, `foreground-fallback`, `deepwork-guard`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`)
+- `disabled_hooks`: List of hooks to disable (`phase-reminder`, `foreground-fallback`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`)
 - `disabled_commands`: List of slash commands to disable (`interview`, `implement`, `deepwork`, `reflect`, `loop`, `preset`)
 - Enum-backed disabled keys use whole-family replacement semantics: explicit `[]` overrides a lower layer, a mixed list replaces it with the valid subset, and a list containing only unknown names is treated as unset so the lower layer applies.
 - `multiplexer`: Unified pane management config (type, layout, sizes, viewer surface)

@@ -338,6 +338,19 @@ describe('foreground fallback redo harness', () => {
   });
   afterEach(() => jest.useRealTimers());
 
+  test('a replay reserves a msg_ id that sorts between v1 host ids', async () => {
+    // v1 host IDs at 999_000 and 1_001_000 ms; the harness is at 1_000_000.
+    const hostBefore = 'msg_0000f3e58001AbCdEfGhIjKlMn';
+    const hostAfter = 'msg_0000f4628001AbCdEfGhIjKlMn';
+    const { manager, mocks } = makeManager();
+    manager.registerSessionAgent('reserved-id', 'orchestrator');
+    await manager.handleEvent(redoEvents.assistant('reserved-id'));
+    await manager.handleEvent(redoEvents.error('reserved-id'));
+    const id: string = mocks.promptAsync.mock.calls[0]?.[0].body.messageID;
+    expect(id).toMatch(/^msg_[0-9a-f]{26}$/);
+    expect(hostBefore < id && id < hostAfter).toBe(true);
+  });
+
   test('host-ordered error replay selects the next model', async () => {
     const { manager, mocks } = makeManager();
     manager.registerSessionAgent('harness', 'orchestrator');
@@ -2826,6 +2839,39 @@ describe('isFailoverError', () => {
     expect(isFailoverError({ message: 'invalid model configuration' })).toBe(
       false,
     );
+  });
+});
+
+// hasDeterministic4xx status-code boundary (issue #1710): pins when a 4xx
+// is deterministic (reproduces on every replay) vs transient. Probe message
+// 'upstream error overload' matches only the transient path (no digits for
+// DETERMINISTIC_4XX_PATTERN, no provider pattern; keep it that way), so
+// the statusCode clauses decide; 400/499 also sit outside
+// PROVIDER_STATUS_CODES. No 429/500 rows: those inputs fail over through
+// other paths whatever the clauses say (transient wording, or
+// PROVIDER_STATUS_CODES once a clause flips) — nothing observable there.
+
+describe('hasDeterministic4xx status-code boundary (issue #1710)', () => {
+  const transientText = 'upstream error overload';
+
+  test.each([
+    [
+      'statusCode 300 (below 400): not a 4xx, transient carries failover',
+      300,
+      true,
+    ],
+    [
+      'statusCode 400 (lower bound): deterministic 4xx suppresses failover',
+      400,
+      false,
+    ],
+    ['statusCode 408 is exempt (request timeout is retriable)', 408, true],
+    ['statusCode 499 (upper bound): still a deterministic 4xx', 499, false],
+    ['statusCode 550 (5xx): not a 4xx, transient carries failover', 550, true],
+  ])('%s', (_label, status, expected) => {
+    expect(
+      isFailoverError({ data: { statusCode: status }, message: transientText }),
+    ).toBe(expected);
   });
 });
 
@@ -7782,6 +7828,24 @@ describe('ForegroundFallbackManager session.deleted', () => {
     (mgr as any).inProgress.delete(sessionID);
   });
 
+  test('handleEvent session.deleted clears sessionParent without a coordinator', async () => {
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    } as never);
+
+    await mgr.handleEvent({
+      type: 'session.created',
+      properties: { info: { id: 'child', parentID: 'parent' } },
+    });
+    expect((mgr as any).sessionParent.has('child')).toBe(true);
+
+    await mgr.handleEvent({
+      type: 'session.deleted',
+      properties: { info: { id: 'child' } },
+    });
+    expect((mgr as any).sessionParent.has('child')).toBe(false);
+  });
+
   test('shares fallback progress across plugin manager instances', () => {
     const first = new ForegroundFallbackManager(
       makeChains(),
@@ -7802,8 +7866,157 @@ describe('ForegroundFallbackManager session.deleted', () => {
 });
 
 // ---------------------------------------------------------------------------
-// ForegroundFallbackManager - willAttemptFallback
+// ForegroundFallbackManager - cleanup semantics (issue #1721)
 // ---------------------------------------------------------------------------
+
+// Teardown must actually drop per-session state. None of the maps below
+// have a per-entry TTL or prune sweep, so a leaked entry outlives its session
+// and can change later behavior — e.g. one stale sessionRetryEnabled entry
+// reopens handleEvent's idle gate for every session (see the behavioral
+// test below).
+
+function seedMap(target, id) {
+  if (typeof target.add === 'function') target.add(id);
+  else target.set(id, 1);
+}
+
+describe('ForegroundFallbackManager forgetSession cleanup', () => {
+  test.each([
+    'sessionModel',
+    'activeFallback',
+    'sessionAgent',
+    'sessionTried',
+    'sessionChains',
+    'sessionRetryEnabled',
+    'unknownFinishStreak',
+    'v2RetryNotices',
+    'lastTrigger',
+    'lastTriggerModel',
+    'lastSwitchTrigger',
+    'triggerIncidents',
+    'pendingErrorCorrelation',
+    'lastUserMessageID',
+    'userEventSequence',
+    'replayMessageIds',
+    'retryAttempt',
+    'sessionRetries',
+    'deterministicTerminal',
+    'lastFallbackTime',
+    'initialDelayUsed',
+    'chainExhaustion',
+    'quotaExhaustedProviders',
+  ])('%s entry is removed on session.deleted', (mapName) => {
+    const coordinator = new SessionLifecycle(() => {});
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as never,
+      3,
+      coordinator,
+    );
+    const target = (mgr as any)[mapName];
+    expect(target).toBeDefined();
+    seedMap(target, 'gone');
+    seedMap(target, 'keep');
+    coordinator.dispatchSessionDeleted('gone');
+    expect(target.has('gone')).toBe(false);
+    expect(target.has('keep')).toBe(true);
+  });
+
+  test('teardown closes the idle gate for a disabled manager', async () => {
+    const coordinator = new SessionLifecycle(() => {});
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      false,
+      { directory: '/test' } as never,
+      3,
+      coordinator,
+    );
+    (mgr as any).sessionRetryEnabled.set('gone', true);
+    coordinator.dispatchSessionDeleted('gone');
+    await mgr.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: { role: 'user', sessionID: 'live', agent: 'orchestrator' },
+      },
+    });
+    expect((mgr as any).sessionAgent.has('live')).toBe(false);
+  });
+});
+
+describe('ForegroundFallbackManager noteExternalTurn cleanup', () => {
+  test.each([
+    'lastTrigger',
+    'lastTriggerModel',
+    'lastSwitchTrigger',
+    'triggerIncidents',
+    'pendingErrorCorrelation',
+    'lastFallbackTime',
+    'initialDelayUsed',
+    'sessionRetries',
+    'quotaExhaustedProviders',
+    'unknownFinishStreak',
+    'retryAttempt',
+    'chainExhaustion',
+    'deterministicTerminal',
+    'v2RetryNotices',
+  ])('%s entry is removed on an external turn', (mapName) => {
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    });
+    const target = (mgr as any)[mapName];
+    expect(target).toBeDefined();
+    seedMap(target, 'gone');
+    seedMap(target, 'keep');
+    (mgr as any).noteExternalTurn('gone', 'msg-1');
+    expect(target.has('gone')).toBe(false);
+    expect(target.has('keep')).toBe(true);
+  });
+});
+
+describe('ForegroundFallbackManager dispose cleanup', () => {
+  test.each(['replayMessageIds', 'userEventSequence', 'v2RetryNotices'])(
+    '%s is cleared on dispose',
+    (mapName) => {
+      const mgr = new ForegroundFallbackManager(makeChains(), true, {
+        directory: '/test',
+      });
+      const target = (mgr as any)[mapName];
+      expect(target).toBeDefined();
+      target.set('gone', 1);
+      mgr.dispose();
+      expect(target.has('gone')).toBe(false);
+    },
+  );
+});
+
+describe('ForegroundFallbackManager resetRecoveryState cleanup', () => {
+  test.each([
+    'lastFallbackTime',
+    'initialDelayUsed',
+    'retryAttempt',
+    'v2RetryNotices',
+    'sessionRetries',
+    'chainExhaustion',
+    'deterministicTerminal',
+    'sessionTried',
+    'quotaExhaustedProviders',
+  ])('%s entry is removed on resetRecoveryState', (mapName) => {
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    });
+    const target = (mgr as any)[mapName];
+    expect(target).toBeDefined();
+    seedMap(target, 'gone');
+    seedMap(target, 'keep');
+    (mgr as any).resetRecoveryState('gone');
+    expect(target.has('gone')).toBe(false);
+    expect(target.has('keep')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ForegroundFallbackManager - willAttemptFallback
 
 describe('ForegroundFallbackManager willAttemptFallback', () => {
   test('returns true when the session has a chain and it is not exhausted', () => {

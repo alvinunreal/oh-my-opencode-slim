@@ -19,9 +19,10 @@ and maintenance cost of a feature most don't use. The plugin intentionally
 stays an orchestration layer; loop harnesses fit the ecosystem as standalone
 plugins users opt into.
 
-Note the built-in `/loop` command (goal/successCriteria/maxAttempts with a
-per-run history directory) is the narrow supported form; a general
-autonomous-iteration harness is the standalone-plugin candidate.
+Note the host now owns this surface: OpenCode v2.2.1+ ships a built-in
+`/goal` command (an objective plus reviewer-driven continuation), so this
+plugin bundles no loop command of its own. A general autonomous-iteration
+harness remains the standalone-plugin candidate.
 
 ## Prior requests
 

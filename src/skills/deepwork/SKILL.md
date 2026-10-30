@@ -97,21 +97,23 @@ At the end of each pass:
 
 ## State
 
-Keep state small and current. It exists to resume after compaction, not to
-log activity.
+`.slim/deepwork/` is the resume index for Deepwork-owned state, not a second
+workspace for process documents. Keep it small and current; it exists to
+resume after compaction, not to log activity.
 
 - **Router head** `.slim/deepwork/<session-id>.md`, pinned by the activation
   prompt and reused on re-run: `status: active` (or `status: completed`) and
   `slug:` — nothing else. Never modify another session's head.
 - **Progress file** `.slim/deepwork/<task-slug>/progress.md`, rewritten in
   place, at most about 40 lines of plain prose: status, pass and its goal,
-  next step, constraints and decisions, running lanes (one line each), and the
-  ranked known-issues list. No activity log — history lives in git commits and
-  gate verdicts.
-- **Topic files** in `.slim/deepwork/<task-slug>/` only for what will be
-  re-read: gate verdicts and research. One file per topic; a retry overwrites
-  it. Plans, specs, and docs go to real project paths. Routine lane results
-  stay in the task results.
+  next step, constraints and decisions, running lanes (one line each), a concise
+  References list of project files (with an optional `sha`), and the ranked
+  known-issues list. No activity log; durable decisions live at referenced
+  project paths.
+- Other Deepwork process files do not belong under `.slim/deepwork`. Durable
+  verdicts, research, and decisions go to the project's existing tracked
+  documentation paths. Generated assets stay where their producing script or
+  path contract requires them.
 - Update state at pass transitions, decisions, and blockers — not after every
   lane.
 
@@ -123,12 +125,15 @@ if it already exists and another session's `status: active` head names that
 slug, pick another slug, otherwise adopt it. Write the `slug:` into your head
 before working.
 
-Resume: read your head, then its progress file, then only the topic files the
-progress file points to. Nothing else.
+Resume: read your head, then its progress file, then only the References it
+points to. Nothing else.
 
 ## Completion
 
 Rewrite the progress file as a tombstone of at most 15 lines: first line
 `status: completed`, then the final outcome, pointers to key deliverables,
 the remaining known issues, and the date. Flip the head to
-`status: completed`. Finish with final validation and a concise summary.
+`status: completed`. Then delete only the Deepwork-owned head and progress
+state when no longer needed, or follow the project's own tombstone convention.
+Do not delete producer-owned asset directories. Finish with final validation
+and a concise summary.

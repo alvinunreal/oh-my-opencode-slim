@@ -41,9 +41,10 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
     with its adjacent errored `message.updated` in either event order
   - `turnEpoch`: fences fallback work suspended across promotion, abort,
     backoff, transcript reads, and busy-session retry from acting on a newer
-    external user turn; each replay reserves and registers its host-valid
-    `msg...` ID in the v1 prompt body before submission, so info-only
-    notifications remain identifiable when parts arrive later
+    external user turn; each replay reserves and registers a v1
+    host-shaped, time-ordered `msg_...` ID in the v1 prompt body before
+    submission, so info-only notifications remain identifiable when parts
+    arrive later
   - `userEventSequence`: orders asynchronous user-message identity probes so
     an older transcript lookup cannot overwrite newer turn state; known
     internal replay IDs do not advance the sequence; duplicate/stale external

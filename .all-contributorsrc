@@ -1316,6 +1316,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "akrhin",
+      "name": "akrhin",
+      "avatar_url": "https://avatars.githubusercontent.com/u/17483152?v=4",
+      "profile": "https://github.com/akrhin",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"

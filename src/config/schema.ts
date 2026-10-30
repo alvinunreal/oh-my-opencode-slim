@@ -982,7 +982,6 @@ function rejectOrchestratorPromptOnOrchestrator(
 export const DISABLED_HOOKS_VALUES = [
   'phase-reminder',
   'foreground-fallback',
-  'deepwork-guard',
   'deepwork-goal',
   'chat-headers',
   'cache-monitor',
@@ -1001,7 +1000,6 @@ export const DISABLED_COMMANDS_VALUES = [
   'interview',
   'deepwork',
   'reflect',
-  'loop',
   'preset',
   'killall',
   'subagent',
@@ -1075,16 +1073,6 @@ export const RawPluginConfigSchema = z
           'nudging delegation to @observer. "direct": always passes ' +
           'attachments to the orchestrator untouched.',
       ),
-    deepworkGuardMode: z
-      .enum(['shadow', 'enforce'])
-      .optional()
-      .describe(
-        'Deepwork guard mode. "shadow" (default) records receipts and claim ' +
-          'markers under .slim/deepwork/.runtime/ but never blocks; ' +
-          '"enforce" additionally blocks completion writes whose tombstone ' +
-          'references artifacts with no recorded receipt. The guard itself ' +
-          'is disabled by listing "deepwork-guard" in disabled_hooks.',
-      ),
     disabled_mcps: z
       .array(z.string())
       .optional()
@@ -1110,7 +1098,7 @@ export const RawPluginConfigSchema = z
       .describe(
         'Hook names to disable completely. Valid values: ' +
           DISABLED_HOOKS_VALUES.join(', ') +
-          '. "phase-reminder" is not registered, so orchestrator phase reminders are never injected; "foreground-fallback" prevents the fallback manager from being constructed at all and never triggers automatic intervention, same effect as fallback.enabled = false; "chat-headers" is not registered, so the Copilot x-initiator header is never stamped (v1 chat.headers and the v2 model.request bridge); "cache-monitor" stops the prompt-cache bust watchdog, so cache warnings are never logged; the on-demand tool guards ("json-error-recovery", "tool-loop-guard", "search-path-guard", "absolute-path-rescue", "apply-patch" — v1 apply_patch / v2 patch) stop intercepting tool calls entirely, so malformed output, repeated identical calls, and invalid or guessed paths surface raw to the model; "deepwork-guard" prevents the receipt/claim guard from being constructed; "council-inject" is not registered, so the keyword-triggered Council Mode injection is never appended to orchestrator messages; "auto-update-checker" stops both update checking and automatic installation (a stronger switch than autoUpdate, which only controls installation). Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer\'s list still applies.',
+          '. "phase-reminder" is not registered, so orchestrator phase reminders are never injected; "foreground-fallback" prevents the fallback manager from being constructed at all and never triggers automatic intervention, same effect as fallback.enabled = false; "chat-headers" is not registered, so the Copilot x-initiator header is never stamped (v1 chat.headers and the v2 model.request bridge); "cache-monitor" stops the prompt-cache bust watchdog, so cache warnings are never logged; the on-demand tool guards ("json-error-recovery", "tool-loop-guard", "search-path-guard", "absolute-path-rescue", "apply-patch" — v1 apply_patch / v2 patch) stop intercepting tool calls entirely, so malformed output, repeated identical calls, and invalid or guessed paths surface raw to the model; "council-inject" is not registered, so the keyword-triggered Council Mode injection is never appended to orchestrator messages; "auto-update-checker" stops both update checking and automatic installation (a stronger switch than autoUpdate, which only controls installation). Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer\'s list still applies.',
       ),
     disabled_commands: z
       .array(z.enum(DISABLED_COMMANDS_VALUES))

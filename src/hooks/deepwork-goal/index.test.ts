@@ -2,10 +2,12 @@ import { describe, expect, test } from 'bun:test';
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
+import path from 'node:path';
 import { stripTaggedContent } from '../cache-safe-injection';
 import { routerHeadAnnouncement } from '../deepwork';
 import { createMessageTransformView } from '../message-transform-view';
@@ -15,6 +17,7 @@ import {
   createDeepworkGoalHook,
   createDeepworkHeadGate,
   GOAL_POINTER_METADATA_KEY,
+  isCompletedFlip,
 } from './index';
 
 const SESSION = 's1';
@@ -564,6 +567,23 @@ describe('createDeepworkGoalHook', () => {
     // tail only.
     await closedTransform({}, output);
     expect(goalMessages(output.messages)).toHaveLength(0);
+  });
+});
+
+describe('isCompletedFlip', () => {
+  test('completion format is pinned to the SKILL.md contract', () => {
+    // SSoT: the flip detection parses the contract's stated tombstone
+    // format; a contract format change must update both together.
+    const skill = readFileSync(
+      path.join(import.meta.dir, '../../skills/deepwork/SKILL.md'),
+      'utf-8',
+    );
+    expect(skill).toContain('`status: completed`');
+    // The shared predicate matches the first line only: a completed
+    // status below the first line is not a flip.
+    expect(isCompletedFlip('status: completed')).toBe(true);
+    expect(isCompletedFlip('notes:\nstatus: completed')).toBe(false);
+    expect(isCompletedFlip('status: completed_x')).toBe(false);
   });
 });
 

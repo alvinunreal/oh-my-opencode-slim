@@ -1142,6 +1142,64 @@ describe('v2 tui preset plugin', () => {
       }
     });
 
+    test('agent hover contrasts with the raised sidebar surface and restores on exit', async () => {
+      const stub = makeSetupCtx();
+      writeUserConfig(makeConfig() as unknown as Record<string, unknown>);
+      recordTuiAgentModels(
+        { agentModels: { oracle: 'openai/gpt-5-mini' } },
+        projectDir,
+      );
+      let cleanup: (() => void) | undefined;
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        (stub.ctx.ui as { router: { current: () => unknown } }).router.current =
+          () => ({ type: 'session', sessionID: 'root' });
+        const sidebarSlot = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        screen = await testRender(() => sidebarSlot?.render?.() as never, {
+          width: 80,
+          height: 16,
+        });
+        await screen.renderOnce();
+
+        const row = screen
+          .captureCharFrame()
+          .split('\n')
+          .findIndex((line) => line.includes('oracle'));
+        expect(row).toBeGreaterThanOrEqual(0);
+        const backgrounds = () =>
+          screen
+            ?.captureSpans()
+            .lines[row]?.spans.map((span) => span.bg.toInts());
+        const before = backgrounds();
+        expect(before?.length).toBeGreaterThan(0);
+        // Unpainted rows inherit the fixture's raised (#202020) sidebar
+        // surface. Hover must be an opaque contrast color, not that surface.
+        expect(before?.every((color) => color[3] === 0)).toBe(true);
+        await screen.mockMouse.moveTo(5, row);
+        await screen.renderOnce();
+        const hovered = backgrounds();
+        expect(hovered).not.toEqual(before);
+        const painted = hovered?.filter((color) => color[3] > 0) ?? [];
+        expect(
+          painted.length > 0 &&
+            painted.every(
+              (color) => color[0] !== 32 || color[1] !== 32 || color[2] !== 32,
+            ),
+        ).toBe(true);
+        await screen.mockMouse.moveTo(0, 15);
+        await screen.renderOnce();
+        expect(backgrounds()).toEqual(before);
+      } finally {
+        cleanup?.();
+        screen?.renderer.destroy();
+      }
+    });
+
     test('renders retry indicators with the v2 warning token', async () => {
       const stub = makeSetupCtx();
       for (const sessionID of ['retrying', 'retrying2']) {

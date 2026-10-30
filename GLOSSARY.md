@@ -47,20 +47,11 @@ A glossary of the terms used in this project's domain. Definitions describe what
 
 ## Skills
 
-- **Skill** — A bundled, self-contained workflow or capability shipped with the plugin. Bundled skills: codemap, clonedeps, simplify, deepwork, reflect, worktrees, oh-my-opencode-slim. Note: `loop-engineering` exists on disk but is not registered as a bundled skill.
+- **Skill** — A bundled, self-contained workflow or capability shipped with the plugin. Bundled skills: codemap, clonedeps, simplify, deepwork, reflect, worktrees, oh-my-opencode-slim.
 
 ## Hooks
 
-- **Hook** — A plugin extension point that reacts to OpenCode lifecycle events (e.g., apply-patch, loop-command, session-lifecycle).
-
-## Loop
-
-- **Loop** — An auto-iterative run that executes work with an agent, verifies it against success criteria, and repeats until done or escalated.
-- **Loop session** — The state of one loop run (goal, current phase, attempts, history).
-- **Loop phase** — A stage of a loop: `executing`, `verifying`, `done`, `escalated`, or `cancelled`.
-- **Execute agent** — The agent that performs loop work (`fixer`, `designer`, or `explorer`).
-- **Verify agent** — The agent or strategy that verifies loop output (`oracle`, `observer`, or `test`).
-- **Success criterion** — A check that decides whether a loop iteration passed (test, build, lint, fileExists, command, oracle, observer, or manual).
+- **Hook** — A plugin extension point that reacts to OpenCode lifecycle events (e.g., apply-patch, deepwork, session-lifecycle).
 
 ## Interview
 
@@ -81,7 +72,7 @@ A glossary of the terms used in this project's domain. Definitions describe what
 - **Variant** — An optional model qualifier (e.g., a preview build) used in fallback resolution.
 - **Fallback / failover** — The mechanism that switches models when a call is rate-limited or returns empty.
 - **Disabled agents** — Agents turned off via config; `observer` is disabled by default.
-- **Disabled hooks / commands** — Config keys that disable hooks or slash commands entirely: `disabled_hooks` (`phase-reminder`, `foreground-fallback`, `deepwork-guard`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`) and `disabled_commands` (`interview`, `deepwork`, `reflect`, `loop`).
+- **Disabled hooks / commands** — Config keys that disable hooks or slash commands entirely: `disabled_hooks` (`phase-reminder`, `foreground-fallback`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`) and `disabled_commands` (`interview`, `deepwork`, `reflect`).
 
 ## Flagged
 

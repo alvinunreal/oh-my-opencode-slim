@@ -62,7 +62,6 @@ import {
   stripTaggedContent,
 } from '../cache-safe-injection';
 import { routerHeadAnnouncement } from '../deepwork';
-import { isCompletedFlip } from '../deepwork-guard';
 import {
   type MessageTransformView,
   resolveView,
@@ -74,6 +73,13 @@ export const GOAL_POINTER_METADATA_KEY = 'oh-my-opencode-slim.deepworkGoal';
 
 /** Bound on the mtime cache (FIFO eviction), mirroring the prompt bridge. */
 const MAX_TRACKED_HEADS = 256;
+
+/** The tombstone flip: the SKILL.md contract's completion shape (first line
+ * `status: completed`), single machine implementation shared with the goal
+ * pointer's head gate. Pinned by the SSoT fixture test. */
+export function isCompletedFlip(text: string): boolean {
+  return /^status:\s*completed\b/.test(text.trimStart());
+}
 
 function pointerText(sessionID: string): string | undefined {
   return omittedOrFull(

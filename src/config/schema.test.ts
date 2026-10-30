@@ -281,7 +281,6 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
         'implement',
         'deepwork',
         'reflect',
-        'loop',
         'preset',
       ],
     });
@@ -297,7 +296,6 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
         'implement',
         'deepwork',
         'reflect',
-        'loop',
         'preset',
       ]);
     }
@@ -317,7 +315,6 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
     expect(DISABLED_HOOKS_VALUES).toEqual([
       'phase-reminder',
       'foreground-fallback',
-      'deepwork-guard',
       'deepwork-goal',
       'chat-headers',
       'cache-monitor',
@@ -334,7 +331,6 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
       'interview',
       'deepwork',
       'reflect',
-      'loop',
       'preset',
       'killall',
       'subagent',

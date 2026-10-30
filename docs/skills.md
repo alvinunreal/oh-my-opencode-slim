@@ -140,10 +140,20 @@ Start it directly with:
 - Router head `.slim/deepwork/<session-id>.md`: `status:` and `slug:` only.
 - Progress file `.slim/deepwork/<task-slug>/progress.md`: ~40 lines of current
   state — pass, goal, next step, decisions, running lanes, ranked known
-  issues. No activity log; history lives in git commits and gate verdicts.
-- Topic files only for gate verdicts and research, one per topic.
+  issues, and concise References to project files (add a sha when its revision
+  matters). No activity log.
+- Deepwork-owned process files stop at head and progress. Durable verdicts,
+  research, and decisions go to the project's existing tracked documentation;
+  generated assets stay where their producing script or path contract requires.
 - Before creating state, `.gitignore` gets `.slim/deepwork/` and `.ignore` gets
   `!.slim/deepwork/` plus `!.slim/deepwork/**` (only missing entries).
+
+**Migrating existing `.slim/deepwork/` trees** (one-time, per project; no tooling):
+- Keep generated or pinned assets where code, tests, or frozen pins require them.
+- Promote durable old topic files individually to existing tracked project docs;
+  discard transient process notes instead of bulk-migrating them.
+- Existing `.runtime/receipts/` data is obsolete after the guard removal and
+  may be deleted locally. Tombstone archiving remains a project convention.
 
 **When to use:** Large-scale refactoring, multi-file architectural changes, complex feature development spanning modules.
 

@@ -30,7 +30,7 @@
  * try/catch, which is not possible for interactive (foreground) sessions.
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import type { PluginInput } from '@opencode-ai/plugin';
 import {
   responseError,
@@ -566,6 +566,16 @@ const SAME_MODEL_RETRY_TRAILER = 'Same-model retry after transient error.';
 /** Prompt admissions per same-model replay: the initial send plus a single
  *  busy-path re-send after abort. */
 const SAME_MODEL_REPLAY_ATTEMPTS = 2;
+
+// Shaped like a v1 host id: v2's Session.Message.ID (and its import of
+// v1 rows) requires msg_, and v1 orders ids by this 48-bit ms clock;
+// counter 0 sorts before a host reply minted in the same millisecond.
+function createReplayMessageID(): string {
+  const clock = (BigInt(Date.now()) * 0x1000n) & 0xffff_ffff_ffffn;
+  const random = randomBytes(7).toString('hex');
+  return `msg_${clock.toString(16).padStart(12, '0')}${random}`;
+}
+
 const FALLBACK_IN_PROGRESS_KEY = Symbol.for(
   'oh-my-opencode-slim.foreground-fallback.in-progress',
 );
@@ -2343,7 +2353,7 @@ export class ForegroundFallbackManager {
     const promptBody = {
       path: { id: sessionID },
       body: {
-        messageID: `msg${randomUUID()}`,
+        messageID: createReplayMessageID(),
         // Trailer only, as in execFallback.
         parts: [createInternalAgentTextPart(opts.trailerText)],
         model,
@@ -2440,7 +2450,7 @@ export class ForegroundFallbackManager {
           if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
           return false;
         }
-        promptBody.body.messageID = `msg${randomUUID()}`;
+        promptBody.body.messageID = createReplayMessageID();
       }
     }
     if (!delivered) return false;
@@ -3143,7 +3153,7 @@ export class ForegroundFallbackManager {
       const promptBody = {
         path: { id: sessionID },
         body: {
-          messageID: `msg${randomUUID()}`,
+          messageID: createReplayMessageID(),
           // Reminder only: the user's request is already in the history the
           // fallback model reads. Copying its stored parts (ids included)
           // would make the host upsert the original rows and re-expand
@@ -3290,7 +3300,7 @@ export class ForegroundFallbackManager {
           return;
         }
         try {
-          promptBody.body.messageID = `msg${randomUUID()}`;
+          promptBody.body.messageID = createReplayMessageID();
           promptResult = await sendReplayPrompt();
         } catch (retryErr) {
           // Transport failed without a response: the host may still

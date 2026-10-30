@@ -30,13 +30,11 @@ export {
   createDeepworkHeadGate,
   GOAL_POINTER_METADATA_KEY,
 } from './deepwork-goal';
-export { createDeepworkGuardHook } from './deepwork-guard';
 export {
   ForegroundFallbackManager,
   type ForegroundFallbackModel,
 } from './foreground-fallback';
 export { createJsonErrorRecoveryHook } from './json-error-recovery/hook';
-export { createLoopCommandHook } from './loop-command';
 export {
   CHILD_INPUT_QUEUE_CAP,
   CHILD_INPUT_WAKE_CHUNK,

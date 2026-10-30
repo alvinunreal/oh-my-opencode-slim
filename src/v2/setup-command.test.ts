@@ -180,8 +180,8 @@ describe('command marker wrap/parse', () => {
     expect(wrapCommandMarker('deepwork', 'focus')).toBe(
       '<omos-cmd-command data-name="deepwork">focus</omos-cmd-command>',
     );
-    expect(wrapCommandMarker('loop', '')).toBe(
-      '<omos-cmd-command data-name="loop"></omos-cmd-command>',
+    expect(wrapCommandMarker('deepwork', '')).toBe(
+      '<omos-cmd-command data-name="deepwork"></omos-cmd-command>',
     );
   });
 
@@ -249,7 +249,7 @@ describe('createCommandRegistration', () => {
     });
     createCommandRegistration(
       { add: (def) => added.push(def) },
-      'loop',
+      'deepwork',
       {},
       submit,
     );
@@ -257,7 +257,10 @@ describe('createCommandRegistration', () => {
     await expect(
       added[0]?.execute({ sessionID: 'ses_2', prompt: { text: '' } }),
     ).resolves.toBeUndefined();
-    expect(submit).toHaveBeenCalledWith('ses_2', wrapCommandMarker('loop', ''));
+    expect(submit).toHaveBeenCalledWith(
+      'ses_2',
+      wrapCommandMarker('deepwork', ''),
+    );
   });
 
   test('a throwing draft.add propagates to the caller (no internal catch)', () => {
@@ -267,7 +270,7 @@ describe('createCommandRegistration', () => {
       },
     };
     expect(() =>
-      createCommandRegistration(draft, 'loop', {}, async () => {}),
+      createCommandRegistration(draft, 'deepwork', {}, async () => {}),
     ).toThrow('draft rejected');
   });
 
@@ -275,7 +278,7 @@ describe('createCommandRegistration', () => {
     expect(() =>
       createCommandRegistration(
         {} as V2CommandDraft,
-        'loop',
+        'deepwork',
         {},
         async () => {},
       ),
@@ -283,7 +286,7 @@ describe('createCommandRegistration', () => {
   });
 });
 
-describe('registerSynthCommands (generic loop skips bridge-owned interview)', () => {
+describe('registerSynthCommands (generic path skips bridge-owned interview)', () => {
   test('interview is NOT add()ed from the generic path; the bridge registers it', () => {
     const added: V2CommandDefinition[] = [];
     const draft: V2CommandDraft = { add: (def) => added.push(def) };
@@ -322,11 +325,11 @@ describe('registerSynthCommands (generic loop skips bridge-owned interview)', ()
       draft,
       [
         ['deepwork', {}],
-        ['loop', {}],
+        ['reflect', {}],
       ],
       async () => {},
     );
-    expect(added.map((def) => def.name)).toEqual(['loop']);
+    expect(added.map((def) => def.name)).toEqual(['reflect']);
   });
 });
 

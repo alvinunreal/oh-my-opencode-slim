@@ -79,6 +79,41 @@ The main idea is simple: instead of forcing one model to do everything, the plug
 >
 > \- `xenstar1`
 
+### Merch · The Pantheon in gold
+
+The six agents as gold tarot artwork, on clothing, desk gear and prints.
+
+<table>
+  <tr>
+    <td width="25%" align="center" valign="top">
+      <a href="https://ohmyopencodeslim.com/merch/the-orchestrator-tee">
+        <img src="img/merch/the-orchestrator-tee.webp" alt="The Orchestrator in gold on a black tee" width="160"><br>
+        <sub><b>Tee</b></sub>
+      </a>
+    </td>
+    <td width="25%" align="center" valign="top">
+      <a href="https://ohmyopencodeslim.com/merch/the-oracle-hoodie">
+        <img src="img/merch/the-oracle-hoodie.webp" alt="The Oracle tarot card on the back of a black hoodie" width="160"><br>
+        <sub><b>Hoodie</b></sub>
+      </a>
+    </td>
+    <td width="25%" align="center" valign="top">
+      <a href="https://ohmyopencodeslim.com/merch/the-six-cards-framed-poster">
+        <img src="img/merch/the-six-cards-framed-poster.webp" alt="All six agent tarot cards in a black frame" width="160"><br>
+        <sub><b>Framed poster</b></sub>
+      </a>
+    </td>
+    <td width="25%" align="center" valign="top">
+      <a href="https://ohmyopencodeslim.com/merch/the-six-agents-mouse-pad">
+        <img src="img/merch/the-six-agents-mouse-pad.webp" alt="All six agents in gold on a black mouse pad" width="160"><br>
+        <sub><b>Mouse pad</b></sub>
+      </a>
+    </td>
+  </tr>
+</table>
+
+<p align="center"><a href="https://ohmyopencodeslim.com/merch"><b>Explore the collection →</b></a></p>
+
 ### Quick Start
 
 Copy and paste this prompt to your LLM agent (Claude Code, AmpCode, Cursor, etc.):
@@ -752,7 +787,7 @@ Use this section as a map: start with installation, then jump to features, confi
   <p><sub>Every merged contribution leaves a mark on the realm.</sub></p>
 
   <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
-[![All Contributors](https://img.shields.io/badge/all_contributors-145-orange.svg?style=flat-square)](#contributors-)
+[![All Contributors](https://img.shields.io/badge/all_contributors-146-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 </div>
 
@@ -957,6 +992,7 @@ Use this section as a map: start with installation, then jump to features, confi
     </tr>
     <tr>
       <td align="center" valign="top" width="16.66%"><a href="https://github.com/niheaven"><img src="https://avatars.githubusercontent.com/u/5832170?v=4?s=100" width="100px;" alt="Hsiao-nan Cheung"/><br /><sub><b>Hsiao-nan Cheung</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=niheaven" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://github.com/akrhin"><img src="https://avatars.githubusercontent.com/u/17483152?v=4?s=100" width="100px;" alt="akrhin"/><br /><sub><b>akrhin</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=akrhin" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>

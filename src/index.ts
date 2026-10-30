@@ -55,10 +55,8 @@ import {
   createCouncilInjectHook,
   createDeepworkCommandHook,
   createDeepworkGoalHook,
-  createDeepworkGuardHook,
   createDeepworkHeadGate,
   createJsonErrorRecoveryHook,
-  createLoopCommandHook,
   createOrchestratorWakeScheduler,
   createPhaseReminderHook,
   createReflectCommandHook,
@@ -616,11 +614,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let deepworkCommandHook:
     | ReturnType<typeof createDeepworkCommandHook>
     | undefined;
-  let deepworkGuardHook: ReturnType<typeof createDeepworkGuardHook> | undefined;
   let reflectCommandHook:
     | ReturnType<typeof createReflectCommandHook>
     | undefined;
-  let loopCommandHook: ReturnType<typeof createLoopCommandHook> | undefined;
   let taskSessionManagerHook:
     | ReturnType<typeof createTaskSessionManagerHook>
     | undefined;
@@ -634,9 +630,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     | ReturnType<typeof createAbsolutePathRescueHook>
     | undefined;
   let toolLoopGuard: ToolLoopGuardHook | undefined;
-  let deepworkGuardAfter:
-    | ((i: unknown, o: unknown) => Promise<void>)
-    | undefined;
   let jsonErrorRecoveryAfter: (i: unknown, o: unknown) => Promise<void> =
     async () => {};
   let taskSessionManagerAfter: (i: unknown, o: unknown) => Promise<void> =
@@ -968,9 +961,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     if (isCommandEnabled('reflect', commandOptions)) {
       reflectCommandHook = createReflectCommandHook();
     }
-    if (isCommandEnabled('loop', commandOptions)) {
-      loopCommandHook = createLoopCommandHook();
-    }
     agentDefs = createAgents(runtime, {
       projectDirectory: ctx.directory,
       hostFlavor,
@@ -1126,6 +1116,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           )
             backgroundJobSupervisor?.onLaunch(record);
         },
+        // A task the gate gives up on stays `running` on the board forever
+        // (its termination can never be confirmed on hosts that cannot read
+        // terminal evidence). Keep its admission slot only for as long as it
+        // is genuinely in flight: without this, `defaultConcurrency` such
+        // tasks wedge every later background launch on `await ticket.ready`.
+        onGiveUp: (taskID) => backgroundTaskConcurrency?.releaseTask(taskID),
       });
       backgroundJobSupervisor = new BackgroundJobSupervisor({
         backgroundJobBoard,
@@ -1775,13 +1771,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       absolutePathRescue = createAbsolutePathRescueHook(ctx);
     }
 
-    if (!runtime.disabledHooks.has('deepwork-guard')) {
-      const hook = createDeepworkGuardHook(ctx);
-      deepworkGuardHook = hook;
-      deepworkGuardAfter = wrapPostToolHook('deepwork-guard', (i, o) =>
-        hook['tool.execute.after'](i as never, o as never),
-      );
-    }
     if (!runtime.disabledHooks.has('json-error-recovery')) {
       const jsonErrorRecoveryHook = createJsonErrorRecoveryHook(ctx);
       jsonErrorRecoveryAfter = wrapPostToolHook('json-error-recovery', (i, o) =>
@@ -2247,9 +2236,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
       if (isCommandEnabled('reflect', commandGate)) {
         reflectCommandHook?.registerCommand(opencodeConfig);
-      }
-      if (isCommandEnabled('loop', commandGate)) {
-        loopCommandHook?.registerCommand(opencodeConfig);
       }
     },
     retire() {
@@ -3289,10 +3275,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         input as never,
         output as never,
       );
-      await deepworkGuardHook?.['tool.execute.before'](
-        input as never,
-        output as never,
-      );
       await taskSessionManagerHook?.['tool.execute.before'](
         input as never,
         output as never,
@@ -3371,17 +3353,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
       if (commandEnabled('reflect')) {
         await reflectCommandHook?.handleCommandExecuteBefore(
-          input as {
-            command: string;
-            sessionID: string;
-            arguments: string;
-          },
-          output as { parts: Array<{ type: string; text?: string }> },
-        );
-      }
-
-      if (commandEnabled('loop')) {
-        await loopCommandHook?.handleCommandExecuteBefore(
           input as {
             command: string;
             sessionID: string;
@@ -3997,7 +3968,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     },
 
     'tool.execute.after': async (input, output) => {
-      await deepworkGuardAfter?.(input, output);
       await jsonErrorRecoveryAfter(input, output);
       await toolLoopGuard?.['tool.execute.after'](
         input as never,

@@ -1568,7 +1568,13 @@ export function renderSidebar(
       : getSidebarReusableTargets(snapshot, visibleRootID);
   const expandedAgents = interaction?.expandedAgents() ?? new Set<string>();
   const sidebarOpen = interaction?.isOpen() ?? true;
-  const hoverBackground = resolveHoverBackground(theme);
+  // Sidebar rows sit on backgroundElement; using that same surface for hover
+  // produces no visible change. Resolve from the page colors, as for presets.
+  const hoverBackground = resolveHoverBackground({
+    background: theme.background,
+    text: theme.text,
+    hover: theme.hover,
+  });
   const header = box(
     {
       width: '100%',
