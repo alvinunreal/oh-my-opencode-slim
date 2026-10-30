@@ -274,7 +274,10 @@ export function getSidebarAgentNames(snapshot: TuiSnapshot): string[] {
     : FALLBACK_SIDEBAR_AGENTS;
 }
 
-type AgentListFn = (input?: unknown) => Promise<unknown>;
+type AgentListFn = (
+  input?: unknown,
+  options?: { signal: AbortSignal },
+) => Promise<unknown>;
 
 function asFunction(value: unknown): AgentListFn | undefined {
   return typeof value === 'function' ? (value as AgentListFn) : undefined;
@@ -346,6 +349,13 @@ function modelsFromAgentList(response: unknown): Record<string, string> {
 export async function fetchRemoteAgentModels(
   client: unknown,
   directory: string,
+  scheduleTimeout: (callback: () => void, delay: number) => () => void = (
+    callback,
+    delay,
+  ) => {
+    const timer = setTimeout(callback, delay);
+    return () => clearTimeout(timer);
+  },
 ): Promise<Record<string, string>> {
   const rec = client as
     | {
@@ -356,19 +366,30 @@ export async function fetchRemoteAgentModels(
     | undefined;
   if (!rec) return {};
 
+  const v1Agents = asFunction(rec.app?.agents);
+  const v2Receiver = rec.agent ?? rec.v2?.agent;
+  const receiver = v1Agents ? rec.app : v2Receiver;
+  const list = v1Agents ?? asFunction(v2Receiver?.list);
+  if (!list) return {};
+  const controller = new AbortController();
+  let cancelTimeout: (() => void) | undefined;
   try {
-    const v1Agents = asFunction(rec.app?.agents);
-    if (v1Agents) {
-      return modelsFromAgentList(await v1Agents.call(rec.app, { directory }));
-    }
-    const v2Receiver = rec.agent ?? rec.v2?.agent;
-    const v2List = asFunction(v2Receiver?.list);
-    if (!v2List) return {};
-    return modelsFromAgentList(
-      await v2List.call(v2Receiver, { location: { directory } }),
+    const timeout = new Promise<unknown>((resolve) => {
+      cancelTimeout = scheduleTimeout(() => {
+        controller.abort();
+        resolve([]);
+      }, 2_000);
+    });
+    const request = list.call(
+      receiver,
+      v1Agents ? { directory } : { location: { directory } },
+      { signal: controller.signal },
     );
+    return modelsFromAgentList(await Promise.race([request, timeout]));
   } catch {
     return {};
+  } finally {
+    cancelTimeout?.();
   }
 }
 

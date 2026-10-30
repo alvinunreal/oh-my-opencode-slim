@@ -55,6 +55,7 @@ import {
   updateSnapshot,
 } from './tui-state';
 import { BackgroundJobBoard } from './utils/background-job-fixture';
+import { createTimerHarness } from './utils/test-timers';
 import { createTuiReusableProjection } from './utils/tui-reusable-projection';
 
 const ACTIVITY_FRAME_PATTERN = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/;
@@ -538,6 +539,44 @@ describe('tui sidebar agents', () => {
     expect(applyRemoteAgentModels(createSnapshot({}), {}).agentModels).toEqual(
       {},
     );
+  });
+
+  test('a stalled remote agent request is cancelled and later refreshes run', async () => {
+    const clock = createTimerHarness();
+    const signals: AbortSignal[] = [];
+    const client = {
+      agent: {
+        list: (_input: unknown, options?: { signal: AbortSignal }) => {
+          if (options) signals.push(options.signal);
+          if (signals.length > 1) return Promise.resolve({ data: [] });
+          return new Promise<never>((_, reject) => {
+            options?.signal.addEventListener('abort', () =>
+              reject(new Error('aborted')),
+            );
+          });
+        },
+      },
+    };
+    const scheduleTimer = (callback: () => void, delay: number) => {
+      const id = clock.setTimeout(callback, delay);
+      return () => clock.clearTimeout(id);
+    };
+    let commits = 0;
+    const refresh = createSerializedRefresh(async () => {
+      await fetchRemoteAgentModels(client, '/project', scheduleTimer);
+      commits++;
+    });
+    refresh();
+    await clock.tick();
+    refresh();
+    await clock.advance(2_000);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(commits).toBe(1);
+    refresh();
+    await clock.tick();
+    expect(signals).toHaveLength(2);
+    expect(commits).toBe(2);
+    expect(clock.pending()).toBe(0);
   });
 
   test('serialized refresh skips overlap and drops a stale directory (#1133)', async () => {
