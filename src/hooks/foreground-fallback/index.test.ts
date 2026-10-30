@@ -2443,13 +2443,13 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     expect(onChanged).not.toHaveBeenCalled();
   });
 
-  test('v2 refusal from a step predating an external prompt never continues', async () => {
+  test('v2 refusal from a step predating an external prompt neither switches nor continues', async () => {
     const { manager, mocks, switchModel } = fixture();
     await manager.handleEvent(started('old-step'));
     manager.noteV2Prompt('old-step');
     await manager.handleEvent(failed('old-step'));
     await settle();
-    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(switchModel).not.toHaveBeenCalled();
     expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
 
