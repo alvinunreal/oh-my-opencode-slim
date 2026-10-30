@@ -7,26 +7,45 @@ the cleanup PRs that follow this workflow convert survivors into named tests.
 
 ## Toolchain
 
-- `@stryker-mutator/core` 10.0.0 with
-  [`@hughescr/stryker-bun-runner`](https://github.com/hughescr/stryker-bun-runner) 1.6.0
-  and `coverageAnalysis: 'perTest'`, so every mutant is attributed to the
-  tests that reach it.
+- `tools/mutation/` pins the toolchain beside the runner:
+  `@stryker-mutator/core` 10.0.0,
+  [`@hughescr/stryker-bun-runner`](https://github.com/hughescr/stryker-bun-runner) 1.6.0,
+  and `typescript` 7.0 — the same as the repo's. The root `bun.lock` and the
+  repo's `typescript: 7.0` are never touched. Sweeps use
+  `coverageAnalysis: 'perTest'`, so every mutant is attributed to the tests
+  that reach it.
+- Stryker core's tsconfig preprocessor calls `ts.parseConfigFileTextToJson`,
+  removed in TypeScript 7 (it fails with
+  `TypeError: ts.parseConfigFileTextToJson is not a function`). It exists only
+  to rewrite `extends`/`references` paths that cross the sandbox boundary, and
+  this project's `tsconfig.json` has none, so `stryker.conf.mjs` points
+  `tsconfigFile` at a non-file and the machinery never runs. If you add
+  `extends` or `references` to `tsconfig.json`, point `tsconfigFile` back at
+  it and expect that preprocessor to need Stryker's upstream fix. The bun
+  runner's `typescript: '<7'` peer describes its dormant
+  `checkers: ['typescript']` hook (not enabled here; it degrades with a log
+  line).
+- Requires Bun >= 1.4.0 (the runner refuses older) and Node >= 22
+  (`@stryker-mutator/core` engines). The repo's `packageManager` pin
+  (`bun@1.3.14`) is below that floor, so run sweeps with a newer Bun.
 - Config: `stryker.conf.mjs` — mutates `src/utils/background-job-board.ts` and
   runs `src/utils/background-job-board.test.ts`. Point `mutate` and
   `bun.testFiles` at another file pair to sweep something else.
+- `bunfig.toml` `[test].preload` lists the literal
+  `./node_modules/@opentui/solid/scripts/preload.js` path because the Stryker
+  sandbox cannot resolve the `@opentui/solid/preload` package export. Keep it
+  literal; it is byte-equivalent to the export today.
 
 ## Run a sweep
 
 ```sh
-bun add -d typescript@6.0.3   # required: the bun runner peer-depends on typescript <7
 bun run mutation
-git checkout -- package.json bun.lock && bun install   # restore the pinned typescript 7.0
 ```
 
-The repository pins `typescript: 7.0`; the runner cannot parse TypeScript 7's
-programmatic API, so the downgrade is temporary and must stay uncommitted.
-Never reinstall while a sweep is running. A full background-job-board sweep is
-1,515 mutants and takes roughly 6-7 minutes at `concurrency: 2`.
+The first run installs the tool tree (`bun install --cwd tools/mutation`,
+frozen lockfile). Nothing in the repo root is modified to run a sweep. A full
+background-job-board sweep is 1,515 mutants and takes roughly 6-7 minutes at
+`concurrency: 2`.
 
 The JSON report lands at `reports/mutation/mutation.json` (`reports/` is
 gitignored). Keep sweep output out of commits.
@@ -39,6 +58,9 @@ gitignored). Keep sweep output out of commits.
 | `Survived` | Every covering test passed: no test discriminates this mutation. |
 | `NoCoverage` | No test reached the mutated code. This is a coverage gap, not a kill — never report it as survived. |
 | `Timeout` | The mutant made a covering test hang; counts as detected, but name it. |
+
+Tests that pin a mutant carry a `contract:` title prefix, so
+`bun test -t contract` selects the mutation-pin subset.
 
 ## Evidence bar for a mutation-cleanup PR
 
