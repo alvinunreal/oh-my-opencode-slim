@@ -670,6 +670,31 @@ describe('v2 tui preset plugin', () => {
       expect(typeof tui2Plugin.setup).toBe('function');
     });
 
+    test('viewer TUI does not check for updates', async () => {
+      writeUserConfig({ sidebar: false });
+      process.env.OH_MY_OPENCODE_SLIM_PANE_VIEWER = '1';
+      const originalFetch = globalThis.fetch;
+      let requests = 0;
+      globalThis.fetch = (async () => {
+        requests += 1;
+        return new Response('{"version":"1.0.0"}');
+      }) as typeof fetch;
+      jest.useFakeTimers();
+      let cleanup: (() => void) | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          makeSetupCtx().ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        jest.advanceTimersByTime(1_500);
+        for (let i = 0; i < 30; i += 1) await Promise.resolve();
+        expect(requests).toBe(0);
+      } finally {
+        cleanup?.();
+        jest.useRealTimers();
+        globalThis.fetch = originalFetch;
+      }
+    });
+
     test('sidebar separates default from session snapshot and rejects stale route/workspace responses', async () => {
       writeUserConfig(makeConfig() as unknown as Record<string, unknown>);
       process.env.XDG_DATA_HOME = path.join(configHome, 'sidebar-data');
