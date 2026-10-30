@@ -6,6 +6,7 @@ import { RGBA } from '@opentui/core';
 import { testRender } from '@opentui/solid';
 import { createSignal } from 'solid-js';
 import type { PluginConfig } from '../config';
+import { TmuxMultiplexer } from '../multiplexer/tmux';
 import baseTui, { readTuiGates } from '../tui';
 import {
   recordTuiAgentActivity,
@@ -1629,6 +1630,408 @@ describe('v2 tui preset plugin', () => {
       // Disposal must release every host subscription (fire-and-forget in the
       // setup cleanup; the unsubscribe loop runs synchronously).
       expect([...unsubscribed].sort()).toEqual(expectedEvents);
+    });
+
+    async function assertProjectPaneAdmission(sidebar: boolean) {
+      writeUserConfig({
+        sidebar,
+        disabled_hooks: ['auto-update-checker'],
+      });
+      const projectB = path.join(projectDir, 'project-b');
+      for (const [directory, type] of [
+        [projectDir, 'tmux'],
+        [projectB, 'none'],
+      ]) {
+        const configDir = path.join(directory, '.opencode');
+        fs.mkdirSync(configDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(configDir, 'oh-my-opencode-slim.json'),
+          JSON.stringify({ multiplexer: { type } }),
+        );
+      }
+      process.env.TMUX_PANE = '%test';
+      const originalArgv = process.argv;
+      process.argv = ['opencode'];
+      const spawn = jest
+        .spyOn(TmuxMultiplexer.prototype, 'spawnPane')
+        .mockResolvedValue({ success: true, paneId: '%test-child' });
+      const close = jest
+        .spyOn(TmuxMultiplexer.prototype, 'closePane')
+        .mockResolvedValue(true);
+      const layout = jest
+        .spyOn(TmuxMultiplexer.prototype, 'applyLayout')
+        .mockResolvedValue();
+      const sweep = jest
+        .spyOn(TmuxMultiplexer.prototype, 'listPanesWithTitles')
+        .mockResolvedValue([]);
+      const stub = makeSetupCtx();
+      let directory = projectDir;
+      let parent = 'parent-a';
+      Object.defineProperty(stub.ctx, 'location', {
+        get: () => ({ directory }),
+      });
+      (stub.ctx.ui as { router: { current: () => unknown } }).router.current =
+        () => ({ type: 'session', sessionID: parent });
+      const handlers = new Map<string, (event: unknown) => void>();
+      stub.ctx.data = {
+        on: (type: string, handler: (event: unknown) => void) => {
+          handlers.set(type, handler);
+          return () => handlers.delete(type);
+        },
+      };
+      stub.ctx.client = {
+        server: { info: async () => ({ urls: ['http://127.0.0.1:1'] }) },
+        session: {
+          list: async () => [],
+          active: async () => ({ 'child-a': {}, 'child-b': {} }),
+        },
+      };
+      jest.useFakeTimers();
+      let cleanup: (() => Promise<void>) | undefined;
+      try {
+        expect(readTuiGates(projectB, 'v2').gates.multiplexerType).toBe('none');
+        cleanup = await baseTui.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        );
+        handlers.get('session.created')?.({
+          data: {
+            sessionID: 'child-a',
+            parentID: parent,
+            location: { directory },
+          },
+        });
+        for (let i = 0; i < 40; i += 1) await Promise.resolve();
+        expect(spawn).toHaveBeenCalledTimes(1);
+        directory = projectB;
+        parent = 'parent-b';
+        handlers.get('session.created')?.({
+          data: {
+            sessionID: 'child-b',
+            parentID: parent,
+            location: { directory },
+          },
+        });
+        for (let i = 0; i < 40; i += 1) await Promise.resolve();
+        expect(spawn).toHaveBeenCalledTimes(1);
+        jest.advanceTimersByTime(5_000);
+        for (let i = 0; i < 40; i += 1) await Promise.resolve();
+        handlers.get('session.created')?.({
+          data: {
+            sessionID: 'child-b',
+            parentID: parent,
+            location: { directory },
+          },
+        });
+        for (let i = 0; i < 40; i += 1) await Promise.resolve();
+        expect(spawn).toHaveBeenCalledTimes(1);
+      } finally {
+        await cleanup?.();
+        jest.useRealTimers();
+        process.argv = originalArgv;
+        spawn.mockRestore();
+        close.mockRestore();
+        layout.mockRestore();
+        sweep.mockRestore();
+      }
+    }
+
+    test('sidebar-off project changes apply the new pane admission', () =>
+      assertProjectPaneAdmission(false));
+
+    test('sidebar-on project changes apply the new pane admission', () =>
+      assertProjectPaneAdmission(true));
+
+    test('sidebar refresh renders project config already synced by pane wiring', async () => {
+      writeUserConfig({
+        ...makeConfig(),
+        sidebar: true,
+        disabled_hooks: ['auto-update-checker'],
+      });
+      process.env.XDG_DATA_HOME = path.join(configHome, 'sidebar-project-data');
+      process.env.TMUX_PANE = '%test';
+      delete process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS;
+      delete process.env.OH_MY_OPENCODE_SLIM_PANE_VIEWER;
+      const originalArgv = process.argv;
+      process.argv = ['opencode'];
+      const projectB = path.join(projectDir, 'project-b');
+      for (const [directory, type, preset] of [
+        [projectDir, 'tmux', 'balanced'],
+        [projectB, 'none', 'cheap'],
+      ]) {
+        const configDir = path.join(directory, '.opencode');
+        fs.mkdirSync(configDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(configDir, 'oh-my-opencode-slim.json'),
+          JSON.stringify({
+            multiplexer: { type },
+            preset,
+            compactSidebar: type !== 'none',
+          }),
+        );
+      }
+      const sweep = jest
+        .spyOn(TmuxMultiplexer.prototype, 'listPanesWithTitles')
+        .mockResolvedValue([]);
+      const spawn = jest
+        .spyOn(TmuxMultiplexer.prototype, 'spawnPane')
+        .mockResolvedValue({ success: true, paneId: '%test-child' });
+      const close = jest
+        .spyOn(TmuxMultiplexer.prototype, 'closePane')
+        .mockResolvedValue(true);
+      const layout = jest
+        .spyOn(TmuxMultiplexer.prototype, 'applyLayout')
+        .mockResolvedValue();
+      const stub = makeSetupCtx();
+      let directory = projectDir;
+      (stub.ctx.ui as { router: { current: () => unknown } }).router.current =
+        () => ({
+          type: 'session',
+          sessionID: directory === projectDir ? 'parent-a' : 'parent-b',
+        });
+      Object.defineProperty(stub.ctx, 'location', {
+        get: () => ({ directory }),
+      });
+      const handlers = new Map<string, (event: unknown) => void>();
+      stub.ctx.data = {
+        on: (type: string, handler: (event: unknown) => void) => {
+          handlers.set(type, handler);
+          return () => handlers.delete(type);
+        },
+      };
+      stub.ctx.client = {
+        server: { info: async () => ({ urls: ['http://127.0.0.1:1'] }) },
+        session: { list: async () => [], active: async () => ({}) },
+        rpc: () => ({
+          read: async (input: { sessionID: string }) => ({
+            sessionID: input.sessionID,
+            status: 'unbound',
+            presetName: null,
+            affects: 'future-children-only',
+          }),
+        }),
+      };
+      let notifyRender = () => {};
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      stub.ctx.renderer = {
+        requestRender: () => {
+          notifyRender();
+          screen?.renderer.requestRender();
+        },
+      };
+      jest.useFakeTimers();
+      let cleanup: (() => Promise<void>) | undefined;
+      try {
+        let rendered = new Promise<void>((resolve) => {
+          notifyRender = resolve;
+        });
+        cleanup = await baseTui.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        );
+        await rendered;
+        for (let i = 0; i < 5; i += 1) await Promise.resolve();
+        const sidebar = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        if (!sidebar?.render) throw new Error('Sidebar slot missing');
+        screen = await testRender(() => sidebar.render?.() as never, {
+          width: 80,
+          height: 24,
+        });
+        await screen.renderOnce();
+        expect(screen.captureCharFrame()).toContain('Default balanced');
+        directory = projectB;
+        handlers.get('session.created')?.({
+          data: {
+            sessionID: 'child-b',
+            parentID: 'parent-b',
+            location: { directory },
+          },
+        });
+        rendered = new Promise<void>((resolve) => {
+          notifyRender = resolve;
+        });
+        jest.advanceTimersByTime(1_000);
+        await rendered;
+        await screen.renderOnce();
+        expect(screen.captureCharFrame()).toContain('Default cheap');
+        for (let i = 0; i < 5; i += 1) await Promise.resolve();
+        rendered = new Promise<void>((resolve) => {
+          notifyRender = resolve;
+        });
+        recordTuiAgentModels(
+          { agentModels: { oracle: 'r2-provider/r2-model' } },
+          projectB,
+        );
+        jest.advanceTimersByTime(1_000);
+        await rendered;
+        await screen.renderOnce();
+        expect(screen.captureCharFrame()).toContain('r2-model');
+        expect(screen.captureCharFrame()).toContain('r2-provider');
+      } finally {
+        await cleanup?.();
+        jest.useRealTimers();
+        process.argv = originalArgv;
+        sweep.mockRestore();
+        spawn.mockRestore();
+        close.mockRestore();
+        layout.mockRestore();
+        screen?.renderer.destroy();
+      }
+    });
+
+    test('sidebar updates the default preset changed in the preset manager', async () => {
+      writeUserConfig({
+        ...makeConfig(),
+        disabled_hooks: ['auto-update-checker'],
+        multiplexer: { type: 'none' },
+      });
+      process.env.XDG_DATA_HOME = path.join(configHome, 'preset-sidebar-data');
+      delete process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS;
+      delete process.env.OH_MY_OPENCODE_SLIM_PANE_VIEWER;
+      const stub = makeSetupCtx();
+      const ui = stub.ctx.ui as {
+        router: { current: () => unknown };
+        dialog?: unknown;
+      };
+      ui.router.current = () => ({ type: 'session', sessionID: 'root' });
+      const selections = ['cheap', 'apply', 'global'];
+      ui.dialog = {
+        select: async () => selections.shift(),
+        prompt: async () => undefined,
+        confirm: async () => true,
+      };
+      let notifyRead = () => {};
+      stub.ctx.client = {
+        rpc: () => ({
+          read: async () => {
+            notifyRead();
+            return {
+              sessionID: 'root',
+              status: 'bound',
+              presetName: 'session-team',
+              affects: 'future-children-only',
+              team: {
+                agentModels: { oracle: 'provider/model' },
+                agentVariants: {},
+                inheritance: {},
+              },
+            };
+          },
+        }),
+      };
+      let notifyRender = () => {};
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      stub.ctx.renderer = {
+        requestRender: () => {
+          notifyRender();
+          screen?.renderer.requestRender();
+        },
+      };
+      jest.useFakeTimers();
+      let cleanup: (() => Promise<void>) | undefined;
+      try {
+        let rendered = new Promise<void>((resolve) => {
+          notifyRender = resolve;
+        });
+        cleanup = await baseTui.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        );
+        await rendered;
+        for (let i = 0; i < 5; i += 1) await Promise.resolve();
+        rendered = new Promise<void>((resolve) => {
+          notifyRender = resolve;
+        });
+        recordTuiAgentModels(
+          { agentModels: { oracle: 'provider/model' } },
+          projectDir,
+        );
+        jest.advanceTimersByTime(1_000);
+        await rendered;
+        const sidebar = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        if (!sidebar?.render) throw new Error('Sidebar slot missing');
+        screen = await testRender(() => sidebar.render?.() as never, {
+          width: 80,
+          height: 24,
+        });
+        await screen.renderOnce();
+        expect(screen.captureCharFrame()).toContain('Default balanced');
+        expect(screen.captureCharFrame()).toContain(
+          'Session team snapshot: session-team',
+        );
+
+        await runPresetFlow(stub.ctx as unknown as V2TuiPluginContext);
+        expect(readUserConfig().preset).toBe('cheap');
+        const refreshed = new Promise<void>((resolve) => {
+          notifyRead = resolve;
+        });
+        jest.advanceTimersByTime(1_000);
+        await refreshed;
+        await screen.renderOnce();
+        expect(screen.captureCharFrame()).toContain('Default cheap');
+        expect(screen.captureCharFrame()).toContain(
+          'Session team snapshot: session-team',
+        );
+      } finally {
+        await cleanup?.();
+        jest.useRealTimers();
+        screen?.renderer.destroy();
+      }
+    });
+
+    test('pane wiring follows the live v2 project location', async () => {
+      writeUserConfig({ sidebar: false, multiplexer: { type: 'tmux' } });
+      process.env.TMUX_PANE = '%1';
+      delete process.env.TMUX;
+      const originalArgv = process.argv;
+      process.argv = ['opencode'];
+      const stub = makeSetupCtx();
+      let directory = projectDir;
+      Object.defineProperty(stub.ctx, 'location', {
+        get: () => ({ directory }),
+      });
+      const ui = stub.ctx.ui as { router: { current: () => unknown } };
+      ui.router.current = () => ({ type: 'session', sessionID: 'parent' });
+      const handlers = new Map<string, (event: unknown) => void>();
+      stub.ctx.data = {
+        on: (type: string, handler: (event: unknown) => void) => {
+          handlers.set(type, handler);
+          return () => handlers.delete(type);
+        },
+      };
+      const reads: string[] = [];
+      stub.ctx.client = {
+        server: { info: async () => ({ urls: ['http://127.0.0.1:1'] }) },
+        session: {
+          list: async (input: { directory: string; parentID?: string }) => {
+            if (!input.parentID) reads.push(input.directory);
+            return [];
+          },
+          active: async () => [],
+        },
+      };
+      let cleanup: (() => void) | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
+        reads.length = 0;
+        directory = `${projectDir}-new`;
+        handlers.get('session.created')?.({
+          data: {
+            sessionID: 'child',
+            parentID: 'parent',
+            location: { directory },
+          },
+        });
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
+        expect(reads).toContain(directory);
+      } finally {
+        cleanup?.();
+        process.argv = originalArgv;
+      }
     });
 
     test('does not wire panes when the v2 server URL cannot be resolved', async () => {
