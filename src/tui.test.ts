@@ -51,6 +51,8 @@ import {
   recordTuiAgentModel,
   recordTuiAgentModels,
   recordTuiSessionParent,
+  resolveTuiSnapshotRoot,
+  TUI_SESSION_PARENTS_MAX,
   type TuiSnapshot,
   updateSnapshot,
 } from './tui-state';
@@ -1225,6 +1227,51 @@ describe('dual-contract plugin module', () => {
 });
 
 describe('clickable sidebar sessions', () => {
+  test('pruning keeps ancestry of reusable destinations and their live siblings', () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'omos-reusable-parents-'),
+    );
+    const restore = withIsolatedDataHome(root);
+    try {
+      const snapshot = createSnapshot();
+      snapshot.sessionParents.retained = 'middle';
+      snapshot.sessionParents.middle = 'conversation';
+      for (let i = 0; i < TUI_SESSION_PARENTS_MAX - 3; i++) {
+        snapshot.sessionParents[`old-${i}`] = `other-${i}`;
+      }
+      snapshot.sessionParents.live = 'conversation';
+      snapshot.activeSessions.live = 'oracle';
+      snapshot.activityPids.live = process.pid;
+      snapshot.sessionDetails.live = { status: 'busy' };
+      snapshot.reusableByAgent.conversation = {
+        oracle: [
+          {
+            taskID: 'retained',
+            alias: 'ora-1',
+            terminalState: 'completed',
+            lastUsedAt: 1,
+          },
+        ],
+      };
+      snapshot.reusableOwners.conversation = process.pid;
+      expect(
+        updateSnapshot(root, (target) => Object.assign(target, snapshot)),
+      ).toBe(true);
+      recordTuiSessionParent('new', 'other', root);
+      const after = readTuiSnapshot(root);
+      expect(resolveTuiSnapshotRoot(after, 'retained')).toBe('conversation');
+      expect(
+        getSidebarAgentTargets(after, 'retained')[0]?.sessions[0]?.sessionID,
+      ).toBe('live');
+      expect(
+        getSidebarReusableTargets(after, 'retained').get('oracle')?.[0]?.taskID,
+      ).toBe('retained');
+    } finally {
+      restore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('getSidebarAgentTargets groups active subagents by agent with alias/status', () => {
     const snapshot = createSnapshot({
       activeSessions: {

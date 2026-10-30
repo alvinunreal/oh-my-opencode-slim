@@ -644,10 +644,22 @@ export function updateSnapshot(
       excess--;
     }
     snapshot.updatedAt = Date.now();
-    // Any write drops the oldest links past the cap but keeps active chains.
-    const { sessionParents: parents, activeSessions } = snapshot;
+    // Keep active chains and every destination still offered by the sidebar.
+    const {
+      sessionParents: parents,
+      activeSessions,
+      reusableByAgent,
+    } = snapshot;
     const keep = new Set<string>();
-    for (let id of Object.keys(activeSessions))
+    const destinations = Object.entries(reusableByAgent).flatMap(
+      ([parentID, agents]) => [
+        parentID,
+        ...Object.values(agents).flatMap((sessions) =>
+          sessions.map((session) => session.taskID),
+        ),
+      ],
+    );
+    for (let id of [...Object.keys(activeSessions), ...destinations])
       for (; parents[id] && !keep.has(id); id = parents[id]) keep.add(id);
     for (const key of Object.keys(parents).slice(0, -TUI_SESSION_PARENTS_MAX))
       if (!keep.has(key)) delete parents[key];
