@@ -945,10 +945,8 @@ interface AgentRowTheme {
   secondary?: unknown;
   info?: unknown;
   background?: unknown;
-  backgroundElement?: unknown;
   success?: unknown;
   warning?: unknown;
-  hover?: unknown;
 }
 
 const STATUS_ACTIVE_COLOR = '#22c55e';
@@ -1003,25 +1001,20 @@ export function selectionGuard(renderer: {
 
 export function resolveHoverBackground(theme: {
   background?: unknown;
-  backgroundElement?: unknown;
   text?: unknown;
   hover?: unknown;
 }): unknown {
-  if (theme.hover !== undefined && theme.hover !== null) return theme.hover;
-  if (
-    theme.backgroundElement !== undefined &&
-    theme.backgroundElement !== null
-  ) {
-    return theme.backgroundElement;
-  }
   try {
+    if (theme.hover != null && parseColor(theme.hover as ColorInput).a > 0) {
+      return theme.hover;
+    }
     const bg = parseColor((theme.background ?? '#111111') as ColorInput);
     const fg = parseColor((theme.text ?? '#ffffff') as ColorInput);
     return RGBA.fromValues(
       bg.r * 0.82 + fg.r * 0.18,
       bg.g * 0.82 + fg.g * 0.18,
       bg.b * 0.82 + fg.b * 0.18,
-      bg.a,
+      1,
     );
   } catch {
     return '#2a2a2a';
@@ -1176,7 +1169,7 @@ interface AgentRowOptions {
   expanded: boolean;
   annotation?: string;
   onClick?: () => void;
-  hoverBackground?: unknown;
+  hoverBackground: unknown;
   hasSelectedText?: () => boolean;
   hasHistory: boolean;
 }
@@ -1275,7 +1268,7 @@ function agentRow(options: AgentRowOptions): JSX.Element {
     agentHeaderCells(options),
   );
   decorateInteractiveRow(header, {
-    hoverBackground: hoverBackground ?? resolveHoverBackground(theme),
+    hoverBackground,
     onActivate: onClick,
     hasSelectedText,
   });
@@ -1326,7 +1319,7 @@ function compactAgentRow(options: AgentRowOptions): JSX.Element {
     ],
   );
   return decorateInteractiveRow(row, {
-    hoverBackground: hoverBackground ?? resolveHoverBackground(theme),
+    hoverBackground,
     onActivate: onClick,
     hasSelectedText,
   });
@@ -1567,7 +1560,6 @@ export function renderSidebar(
     borderActive: unknown;
     text: unknown;
     textMuted: unknown;
-    backgroundElement?: unknown;
     success?: unknown;
     warning?: unknown;
     hover?: unknown;
@@ -1585,7 +1577,7 @@ export function renderSidebar(
   modelNames?: ReadonlyMap<string, string>,
 ): JSX.Element {
   const configStatusRow = buildConfigStatusRow(configInvalid, theme);
-  const presetHoverBackground = resolveHoverBackground({
+  const hoverBackground = resolveHoverBackground({
     background: theme.background,
     text: theme.text,
     hover: theme.hover,
@@ -1594,7 +1586,7 @@ export function renderSidebar(
     ? buildPresetRow(
         presetRow,
         theme,
-        presetHoverBackground,
+        hoverBackground,
         interaction?.hasSelectedText,
       )
     : null;
@@ -1614,13 +1606,6 @@ export function renderSidebar(
       : getSidebarReusableTargets(snapshot, visibleRootID);
   const expandedAgents = interaction?.expandedAgents() ?? new Set<string>();
   const sidebarOpen = interaction?.isOpen() ?? true;
-  // Sidebar rows sit on backgroundElement; using that same surface for hover
-  // produces no visible change. Resolve from the page colors, as for presets.
-  const hoverBackground = resolveHoverBackground({
-    background: theme.background,
-    text: theme.text,
-    hover: theme.hover,
-  });
   const header = box(
     {
       width: '100%',
@@ -1842,10 +1827,6 @@ export function buildPresetRow(
         ]);
   if (!clickable) return content;
   return decorateInteractiveRow(content, {
-    // Sidebar rows sit on backgroundElement, so using that color as the
-    // hover fill leaves this row visually unchanged. Use the normal hover
-    // color when the host provides one, otherwise derive a visible fill from
-    // the page background and text colors.
     hoverBackground,
     onActivate: presetRow.onActivate,
     hasSelectedText,
@@ -2114,7 +2095,11 @@ interface V2TuiThemeTokens {
       warning?: { base: unknown };
     };
   };
-  background: { base?: unknown; default?: unknown; raised?: { base: unknown } };
+  background: {
+    base?: unknown;
+    default?: unknown;
+    raised?: { base: unknown };
+  };
   border: { base?: unknown; default?: unknown };
   success?: unknown;
   warning?: unknown;
@@ -2162,7 +2147,6 @@ interface V2TuiContext extends V2PresetManagerContext {
 function v2ThemeView(theme: V2TuiThemeTokens): {
   accent: unknown;
   background: unknown;
-  backgroundElement: unknown;
   borderActive: unknown;
   text: unknown;
   textMuted: unknown;
@@ -2173,10 +2157,6 @@ function v2ThemeView(theme: V2TuiThemeTokens): {
   return {
     accent: theme.hue?.interactive[200],
     background: theme.background.base ?? theme.background.default,
-    backgroundElement:
-      theme.background.raised?.base ??
-      theme.background.base ??
-      theme.background.default,
     borderActive: theme.border.base ?? theme.border.default,
     text: theme.text.base ?? theme.text.default,
     textMuted: theme.text.muted ?? theme.text.subdued,

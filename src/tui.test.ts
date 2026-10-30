@@ -1810,22 +1810,14 @@ describe('clickable sidebar sessions', () => {
     expect(() => throwing?.('ses-3')).not.toThrow();
   });
 
-  test('resolveHoverBackground prefers theme.hover then backgroundElement', () => {
+  test('resolveHoverBackground prefers an explicit hover color', () => {
     expect(
       resolveHoverBackground({
         hover: '#333333',
-        backgroundElement: '#222222',
         background: '#111111',
         text: '#ffffff',
       }),
     ).toBe('#333333');
-    expect(
-      resolveHoverBackground({
-        backgroundElement: '#222222',
-        background: '#111111',
-        text: '#ffffff',
-      }),
-    ).toBe('#222222');
   });
 
   test('expansion state is local to each sidebar instance', () => {
@@ -2055,6 +2047,8 @@ describe('clickable sidebar sessions', () => {
     sessionID: string;
     navigate?: (name: string, params?: Record<string, unknown>) => void;
     host?: 'v1' | 'v2';
+    transparentTheme?: boolean;
+    sameSurfaceTheme?: boolean;
     /** Golden frames must capture settled RPC state, not race Loading… against Unavailable. */
     waitForInitialRefresh?: boolean;
   }) {
@@ -2074,7 +2068,17 @@ describe('clickable sidebar sessions', () => {
         client: undefined,
         theme: {
           text: { default: '#ffffff', subdued: '#aaaaaa' },
-          background: { default: '#111111' },
+          background: opts.transparentTheme
+            ? {
+                default: RGBA.fromValues(0.1, 0.1, 0.1, 0),
+                raised: { base: '#222222', high: '#555555' },
+              }
+            : opts.sameSurfaceTheme
+              ? {
+                  default: '#002b36',
+                  raised: { base: '#073642', high: '#073642' },
+                }
+              : { default: '#111111' },
           border: { default: '#555555' },
           success: '#00ff00',
           warning: '#ffcc00',
@@ -2124,11 +2128,16 @@ describe('clickable sidebar sessions', () => {
           theme: {
             current: {
               accent: '#22c55e',
-              background: '#111111',
-              backgroundElement: '#222222',
+              background: opts.transparentTheme
+                ? RGBA.fromValues(0.1, 0.1, 0.1, 0)
+                : opts.sameSurfaceTheme
+                  ? '#002b36'
+                  : '#111111',
+              backgroundPanel: opts.sameSurfaceTheme ? '#073642' : '#333333',
+              backgroundElement: opts.sameSurfaceTheme ? '#073642' : '#333333',
               borderActive: '#555555',
               success: '#00ff00',
-              text: '#ffffff',
+              text: opts.sameSurfaceTheme ? '#839496' : '#ffffff',
               textMuted: '#aaaaaa',
               warning: '#ffcc00',
             },
@@ -2140,6 +2149,73 @@ describe('clickable sidebar sessions', () => {
     }
     return { slotPlugin, disposers };
   }
+
+  test('hover contrasts with the sidebar on matching and transparent themes', async () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'omos-transparent-hover-'),
+    );
+    const restore = withIsolatedDataHome(root);
+    const disposers: Array<() => void> = [];
+    const screens: Array<Awaited<ReturnType<typeof testRender>>> = [];
+    try {
+      recordTuiAgentModels({ agentModels: { oracle: 'openai/gpt-6' } }, root);
+      const checkHover = async (
+        host: 'v1' | 'v2',
+        transparentTheme: boolean,
+      ) => {
+        const mounted = await mountClickableSidebar({
+          projectDir: root,
+          sessionID: 'root',
+          host,
+          transparentTheme,
+          sameSurfaceTheme: !transparentTheme,
+        });
+        disposers.push(...mounted.disposers);
+        const screen = await testRender(
+          () => mounted.slotPlugin?.slots.sidebar_content() as never,
+          { width: 60, height: 18 },
+        );
+        screens.push(screen);
+        await screen.renderOnce();
+        const row = screen
+          .captureCharFrame()
+          .split('\n')
+          .findIndex((line) => line.includes('oracle'));
+        expect(row).toBeGreaterThanOrEqual(0);
+        await screen.mockMouse.moveTo(5, row);
+        await screen.renderOnce();
+        const surface = transparentTheme
+          ? host === 'v1'
+            ? '51,51,51'
+            : '34,34,34'
+          : '7,54,66';
+        expect(
+          screen.captureSpans().lines[row].spans.some((span) => {
+            const [r, g, b, a] = span.bg.toInts();
+            return a === 255 && [r, g, b].join(',') !== surface;
+          }),
+        ).toBe(true);
+      };
+      await checkHover('v1', false);
+      await checkHover('v2', false);
+      await checkHover('v1', true);
+      await checkHover('v2', true);
+      expect(
+        (
+          resolveHoverBackground({
+            background: RGBA.fromValues(0, 0, 0, 0.2),
+            text: '#ffffff',
+            hover: RGBA.fromValues(0, 0, 0, 0),
+          }) as RGBA
+        ).a,
+      ).toBe(1);
+    } finally {
+      for (const dispose of disposers) dispose();
+      for (const screen of screens) screen.renderer.destroy();
+      restore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   test('mounted sidebar keeps its spinner and expanded targets through the idle-to-terminal gap', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-flicker-'));
