@@ -180,6 +180,7 @@ function toV1Message(m: Record<string, unknown>) {
             {
               type: 'text',
               text,
+              ...(sourceType === 'synthetic' ? { synthetic: true } : {}),
               ...(sourceType === 'synthetic' && isRecord(m.metadata)
                 ? { metadata: m.metadata }
                 : {}),

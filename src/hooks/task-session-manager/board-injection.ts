@@ -1105,17 +1105,15 @@ function reconcileExecutionBatch(
   }
 }
 
-// ── Native delivery observer (v2 boardless primary; v1 never reaches it) ─
+// ── Native delivery observer (v1 and v2) ─────────────────────────────────
 //
-// On OpenCode v2 hosts the host itself delivers each background completion
-// exactly once as a synthetic session message in the parent's history:
-// `<subagent sessionID="..." state="completed|error|cancelled">…</subagent>`
-// (host `SessionInbox` steer/queue delivery; the native notifier never
-// delivers `stopped`). Observing that delivery retires the tracked record
-// directly, replacing the prompt-shape registration bookkeeping
-// on the v2 path. On v1 the native delivery is untagged, so the plugin
-// cannot attribute it; those runs retire through the plugin's own tagged
-// push or the stale-terminal fallback instead.
+// The host delivers each background completion as a synthetic message in
+// the parent's history: `<subagent sessionID="..." state="completed|error|
+// cancelled">…</subagent>` on v2 (host `SessionInbox` steer/queue delivery;
+// the native notifier never delivers `stopped`) and a synthetic
+// `<task id="..." state="...">` part on v1. Observing that delivery retires
+// the tracked record directly, behind the same parent, timestamp and
+// terminal-state fences on both hosts.
 
 /**
  * Skew allowance for the current-publication check: the terminal event the
@@ -1157,7 +1155,7 @@ function nativeDeliverySeenKey(
 }
 
 /**
- * Reconcile tracked records against the native v2 deliveries already
+ * Reconcile tracked records against the native host deliveries already
  * present in the parent's message history. Pairing is ONE-SHOT: a delivery
  * key is remembered on first observation and can retire at most one
  * terminal publication — the record's CURRENT terminal run at that moment,

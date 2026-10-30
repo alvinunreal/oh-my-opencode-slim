@@ -1795,6 +1795,52 @@ describe('startup subagent recovery', () => {
     expect(board.get(DONE)).toBeUndefined();
   });
 
+  test('v2 startup acknowledges the migrated v1 delivery in synthetic history', async () => {
+    await seedPersistence(memoryStorage(), [persistedChild(DONE)]);
+    const ctx = {
+      location: {
+        directory: '/tmp',
+        project: { id: 'project', directory: '/tmp', canonical: '/tmp' },
+      },
+      session: {
+        get: async ({ sessionID }: { sessionID: string }) => ({
+          id: sessionID,
+          parentID: PARENT,
+          agent: 'explorer',
+        }),
+        context: async ({ sessionID }: { sessionID: string }) =>
+          sessionID === DONE
+            ? [
+                { id: 'u', type: 'user', text: 'go', time: { created: 12 } },
+                {
+                  id: 'a',
+                  type: 'assistant',
+                  finish: 'stop',
+                  content: [{ type: 'text', text: 'answer' }],
+                  time: { created: 13, completed: 14 },
+                },
+              ]
+            : [
+                {
+                  id: 'd',
+                  type: 'synthetic',
+                  text: `<task id="${DONE}" state="completed">\nanswer\n</task>`,
+                  time: { created: 20 },
+                },
+              ],
+      },
+    };
+    const board = new BackgroundJobBoard();
+    await recoverSubagentSessionsAtStartup({
+      input: buildPluginInput(ctx as never) as never,
+      backgroundJobBoard: board,
+      hostFlavor: 'v2',
+      shouldManageSession: () => false,
+    });
+    expect(board.get(DONE)).toBeUndefined();
+    expect(persistedBackgroundChildren().get(DONE)?.deliveredAt).toBe(20);
+  });
+
   test('recovers from persisted identity on a real v2 context without list', async () => {
     const storage = memoryStorage();
     await seedPersistence(storage, [persistedChild(RUNNING)]);

@@ -1,11 +1,13 @@
 /**
- * Trusted native v2 completion delivery evidence.
+ * Trusted native host completion delivery evidence.
  *
- * The host's `sessions.synthetic` part opens with the
+ * v2: the host's `sessions.synthetic` part opens with the
  * `<subagent sessionID="..." state="...">` tag AND carries
  * `metadata: { source: 'subagent', childID, state }`. The context hook
  * strips metadata, so its caller may use the exact native header instead,
  * but only behind parent, timestamp and terminal-state fences.
+ * v1: the host delivers a `synthetic: true` part opening with
+ * `<task id="..." state="...">`.
  */
 import { isRecord } from '../../utils/guards';
 import {
@@ -33,6 +35,17 @@ export function parseNativeDelivery(
   allowContextHeader = false,
 ): NativeDelivery | undefined {
   const text = part.text;
+  if (
+    part.type === 'text' &&
+    part.synthetic === true &&
+    typeof text === 'string'
+  ) {
+    const v1 =
+      /^<task id="(ses_[A-Za-z0-9_-]+)" state="(completed|error|cancelled)">/.exec(
+        text,
+      );
+    if (v1) return { taskID: v1[1], state: v1[2] as NativeDeliveryState };
+  }
   if (typeof text !== 'string' || !/^\s*<subagent\b/i.test(text)) {
     return undefined;
   }
