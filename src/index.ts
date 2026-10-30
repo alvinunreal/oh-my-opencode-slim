@@ -78,7 +78,7 @@ import { isCommandEnabled } from './hooks/command-hook-utils';
 import { createCouncilSeatHook } from './hooks/council-seats';
 import { createManagedSeatResolver } from './hooks/council-seats/managed';
 import { createNativeSeatResolver } from './hooks/council-seats/native';
-import { processImageAttachments } from './hooks/image-hook';
+import { isImagePart, processImageAttachments } from './hooks/image-hook';
 import { createMessageTransformView } from './hooks/message-transform-view';
 import { clearAllWakeSessions } from './hooks/orchestrator-wake/wake-gate';
 import { PHASE_REMINDER_METADATA_KEY } from './hooks/phase-reminder';
@@ -3891,9 +3891,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
               sessionMetadata.getModel(sessionID),
           )
         : undefined;
-      const hasImageParts = view.userMessages.some((message) =>
-        message.parts.some((part) => view.imageView(part) !== null),
-      );
+      const hasImageParts =
+        runtime.imageRouting !== 'direct' &&
+        !!turnModelRef &&
+        view.userMessages.some((message) => message.parts.some(isImagePart));
       const acceptsImages =
         turnModelRef && hasImageParts
           ? await modelAcceptsImageInput(turnModelRef, {
