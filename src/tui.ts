@@ -1441,6 +1441,31 @@ export function getContrastForeground(
   return RGBA.fromInts(255, 255, 255);
 }
 
+function projectSidebarSessionModels(
+  snapshot: TuiSnapshot,
+  visibleSessionID?: string,
+): TuiSnapshot {
+  if (!snapshot.sessionModels) return snapshot;
+  const agentModels = { ...snapshot.agentModels };
+  const agentVariants = { ...snapshot.agentVariants };
+  const root =
+    visibleSessionID && resolveTuiSnapshotRoot(snapshot, visibleSessionID);
+  for (const [sessionID, agents] of Object.entries(snapshot.sessionModels)) {
+    if (!root || resolveTuiSnapshotRoot(snapshot, sessionID) !== root) continue;
+    if (
+      sessionID !== root &&
+      !Object.hasOwn(snapshot.activeSessions, sessionID)
+    )
+      continue;
+    for (const [agent, observation] of Object.entries(agents)) {
+      agentModels[agent] = observation.model;
+      if (observation.variant === undefined) delete agentVariants[agent];
+      else agentVariants[agent] = observation.variant;
+    }
+  }
+  return { ...snapshot, agentModels, agentVariants, sessionModels: undefined };
+}
+
 /** Window-local projection; never writes the directory-wide snapshot. */
 export function projectSidebarTeam(
   snapshot: TuiSnapshot,
@@ -2514,7 +2539,7 @@ function createSidebarRuntime(
           return renderSidebar(
             overlaySelectedRootModel(
               projectSidebarTeam(
-                currentSnapshot,
+                projectSidebarSessionModels(currentSnapshot, visible),
                 isCurrentProjection ? projection.state : undefined,
               ),
               adapter.getSelectedRootModel?.(),

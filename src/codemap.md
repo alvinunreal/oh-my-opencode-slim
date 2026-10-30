@@ -102,7 +102,9 @@ lifecycle lives in the TUI entry's dependency graph (`multiplexer/client/`).
    - `readTuiSnapshot()`: Reads and parses state file (returns empty snapshot on error)
    - `readTuiSnapshotAsync()`: Async variant for TUI rendering
    - `recordTuiAgentModels()`: Updates both agent models and variants atomically
-   - `recordTuiAgentModel()`: Updates single agent's model/variant
+   - `recordTuiAgentModel()`: Records session-scoped model/variant observations;
+     the sidebar projects the root and active children of the visible conversation,
+     falling back to configured defaults; pruning retains active sessions
    - `recordTuiAgentActivity()`: Tracks active agents by session so concurrent
      runs of the same agent remain visible until all runs finish
    - `clearTuiAgentActivities()`: Removes stale activity during startup

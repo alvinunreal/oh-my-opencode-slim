@@ -46,7 +46,9 @@ import {
   killAllSummaryMessage,
 } from './tui-kill';
 import {
+  readTuiSnapshot,
   recordTuiAgentActivity,
+  recordTuiAgentModel,
   recordTuiAgentModels,
   recordTuiSessionParent,
   type TuiSnapshot,
@@ -3713,6 +3715,179 @@ describe('sidebar model display names', () => {
       setup.renderer.destroy();
     }
   }
+
+  test('model and variant observations stay in their visible conversation', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-model-scope-'));
+    const previousHome = process.env.XDG_DATA_HOME;
+    const disposers: Array<() => void> = [];
+    process.env.XDG_DATA_HOME = root;
+    try {
+      fs.mkdirSync(path.join(root, '.opencode'));
+      fs.writeFileSync(
+        path.join(root, '.opencode', 'oh-my-opencode-slim.json'),
+        JSON.stringify({ compactSidebar: false }),
+      );
+      recordTuiAgentModels(
+        {
+          agentModels: { orchestrator: 'default' },
+          agentVariants: { orchestrator: 'configured' },
+        },
+        root,
+      );
+      recordTuiSessionParent('child-a', 'root-a', root);
+      recordTuiAgentModel(
+        {
+          sessionID: 'root-a',
+          agentName: 'orchestrator',
+          model: 'openai/model-a',
+          variant: 'low',
+        },
+        root,
+      );
+      recordTuiAgentModel(
+        {
+          sessionID: 'root-b',
+          agentName: 'orchestrator',
+          model: 'openai/model-b',
+          variant: 'high',
+        },
+        root,
+      );
+      const defaultModel = {
+        sessionID: 'root-c',
+        agentName: 'orchestrator',
+        model: 'openai/model-c',
+      };
+      recordTuiAgentModel({ ...defaultModel, variant: 'max' }, root);
+      recordTuiAgentModel({ ...defaultModel, variant: null }, root);
+      let visible = 'root-a';
+      let render: (() => unknown) | undefined;
+      await tuiPlugin.tui(
+        {
+          state: { path: { directory: root } },
+          route: {
+            get current() {
+              return { name: 'session', params: { sessionID: visible } };
+            },
+          },
+          lifecycle: {
+            onDispose: (dispose: () => void) => {
+              disposers.push(dispose);
+            },
+          },
+          renderer: { requestRender: () => {} },
+          slots: {
+            register: (slot: { slots: { sidebar_content: () => unknown } }) => {
+              render = slot.slots.sidebar_content;
+            },
+          },
+          theme: { current: rowTheme },
+        } as never,
+        {},
+        { version: 'test' } as never,
+      );
+      if (!render) throw new Error('Sidebar slot missing');
+      const frame = async (sessionID: string) => {
+        visible = sessionID;
+        return (await renderSidebarFrame(() => render?.())).join('\n');
+      };
+      expect(await frame('root-a')).toContain('model-a');
+      expect(await frame('child-a')).toContain('low');
+      expect(await frame('root-b')).toContain('model-b');
+      expect(await frame('root-b')).toContain('high');
+      expect(await frame('root-d')).toContain('default');
+      const defaultVariant = await frame('root-c');
+      expect(defaultVariant).toContain('model-c');
+      expect(defaultVariant).not.toContain('variant');
+    } finally {
+      for (const dispose of disposers) dispose();
+      if (previousHome === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = previousHome;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('idle child observations yield to the configured model until active', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-model-idle-'));
+    const previousHome = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = root;
+    try {
+      fs.mkdirSync(path.join(root, '.opencode'));
+      fs.writeFileSync(
+        path.join(root, '.opencode', 'oh-my-opencode-slim.json'),
+        JSON.stringify({ compactSidebar: false }),
+      );
+      recordTuiSessionParent('child', 'root', root);
+      recordTuiAgentModel(
+        {
+          sessionID: 'child',
+          agentName: 'explorer',
+          model: 'openai/old-explorer',
+          variant: 'high',
+        },
+        root,
+      );
+      recordTuiAgentModels(
+        {
+          agentModels: { explorer: 'openai/new-explorer' },
+          agentVariants: { explorer: 'medium' },
+        },
+        root,
+      );
+      const frame = async () => {
+        const disposers: Array<() => void> = [];
+        let render: (() => unknown) | undefined;
+        await tuiPlugin.tui(
+          {
+            state: { path: { directory: root } },
+            route: {
+              current: { name: 'session', params: { sessionID: 'root' } },
+            },
+            lifecycle: {
+              onDispose: (dispose: () => void) => {
+                disposers.push(dispose);
+              },
+            },
+            renderer: { requestRender: () => {} },
+            slots: {
+              register: (slot: {
+                slots: { sidebar_content: () => unknown };
+              }) => {
+                render = slot.slots.sidebar_content;
+              },
+            },
+            theme: { current: rowTheme },
+          } as never,
+          {},
+          { version: 'test' } as never,
+        );
+        try {
+          if (!render) throw new Error('Sidebar slot missing');
+          return (await renderSidebarFrame(() => render?.())).join('\n');
+        } finally {
+          for (const dispose of disposers) dispose();
+        }
+      };
+      const idle = await frame();
+      expect(idle).toContain('new-explorer');
+      expect(idle).toContain('medium');
+      expect(idle).not.toContain('old-explorer');
+      recordTuiAgentActivity(
+        { sessionID: 'child', agentName: 'explorer', active: true },
+        root,
+      );
+      const active = await frame();
+      expect(active).toContain('old-explorer');
+      expect(active).toContain('high');
+      expect(active).not.toContain('new-explorer');
+      recordTuiAgentActivity({ sessionID: 'child', active: false }, root);
+      expect(await frame()).toContain('new-explorer');
+    } finally {
+      if (previousHome === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = previousHome;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   function providersClient(options: {
     empty?: boolean;

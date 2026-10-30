@@ -12,6 +12,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import * as os from 'node:os';
 import path from 'node:path';
+import { testRender } from '@opentui/solid';
 import type { RegistryFactoryBridge } from './agents/registry-bridge';
 import {
   companionSessionIdForDirectory,
@@ -39,9 +40,11 @@ import type { MessageWithParts } from './hooks/types';
 import pluginModuleDefault, { OhMyOpenCodeLite as plugin } from './index';
 import { MarketplaceStore } from './marketplace/store';
 import { createBuiltinMcps } from './mcp';
+import tuiPlugin from './tui';
 import {
   getTuiStatePath,
   readTuiSnapshot,
+  recordTuiAgentModels,
   snapshotSectionsEqual,
   updateSnapshot,
 } from './tui-state';
@@ -5398,9 +5401,10 @@ describe('plugin foreground fallback host gating', () => {
         modelID: 'gpt-c',
         variant: 'reasoning-high',
       });
-      expect(readTuiSnapshot(projectDir).agentVariants.orchestrator).toBe(
-        'reasoning-high',
-      );
+      expect(
+        readTuiSnapshot(projectDir).sessionModels?.['session-variant']
+          ?.orchestrator?.variant,
+      ).toBe('reasoning-high');
     } finally {
       await hooks.dispose?.();
     }
@@ -5468,7 +5472,8 @@ describe('plugin foreground fallback host gating', () => {
       await hooks['chat.message']?.(input as never, output as never);
       expect({
         projectedVariant:
-          readTuiSnapshot(projectDir).agentVariants.orchestrator,
+          readTuiSnapshot(projectDir).sessionModels?.variantless?.orchestrator
+            ?.variant,
         continuationModel: output.message.model,
       }).toEqual({ projectedVariant: undefined, continuationModel: fallback });
     } finally {
@@ -5477,6 +5482,12 @@ describe('plugin foreground fallback host gating', () => {
   });
 
   test('chat.message live model syncs the sidebar projection (v2 bridge)', async () => {
+    const configPath = `${projectDir}/oh-my-opencode-slim.json`;
+    const config = await Bun.file(configPath).json();
+    await Bun.write(
+      configPath,
+      JSON.stringify({ ...config, compactSidebar: false }),
+    );
     const hooks = await createHooks();
     try {
       // The v2 prompt bridge (createSessionPromptBridge) forwards
@@ -5496,12 +5507,14 @@ describe('plugin foreground fallback host gating', () => {
         } as never,
         {} as never,
       );
-      expect(readTuiSnapshot(projectDir).agentModels.orchestrator).toBe(
-        'zai-coding-plan/glm-5.3-highspeed',
-      );
-      expect(readTuiSnapshot(projectDir).agentVariants.orchestrator).toBe(
-        'max',
-      );
+      expect(
+        readTuiSnapshot(projectDir).sessionModels?.['ses-live-model']
+          ?.orchestrator?.model,
+      ).toBe('zai-coding-plan/glm-5.3-highspeed');
+      expect(
+        readTuiSnapshot(projectDir).sessionModels?.['ses-live-model']
+          ?.orchestrator?.variant,
+      ).toBe('max');
 
       // A re-selection without a variant is the live choice too (model
       // default): it must clear the stale variant, and the unchanged-write
@@ -5511,16 +5524,21 @@ describe('plugin foreground fallback host gating', () => {
         {
           sessionID: 'ses-live-model',
           agent: 'orchestrator',
-          model: { providerID: 'openai', modelID: 'gpt-6' },
+          model: {
+            providerID: 'zai-coding-plan',
+            modelID: 'glm-5.3-highspeed',
+          },
           messageID: 'msg-live-2',
         } as never,
         {} as never,
       );
-      expect(readTuiSnapshot(projectDir).agentModels.orchestrator).toBe(
-        'openai/gpt-6',
-      );
       expect(
-        readTuiSnapshot(projectDir).agentVariants.orchestrator,
+        readTuiSnapshot(projectDir).sessionModels?.['ses-live-model']
+          ?.orchestrator?.model,
+      ).toBe('zai-coding-plan/glm-5.3-highspeed');
+      expect(
+        readTuiSnapshot(projectDir).sessionModels?.['ses-live-model']
+          ?.orchestrator?.variant,
       ).toBeUndefined();
 
       // A delivery without any model leaves the projection untouched.
@@ -5532,9 +5550,62 @@ describe('plugin foreground fallback host gating', () => {
         } as never,
         {} as never,
       );
-      expect(readTuiSnapshot(projectDir).agentModels.orchestrator).toBe(
-        'openai/gpt-6',
+      expect(
+        readTuiSnapshot(projectDir).sessionModels?.['ses-live-model']
+          ?.orchestrator?.model,
+      ).toBe('zai-coding-plan/glm-5.3-highspeed');
+
+      recordTuiAgentModels(
+        {
+          agentModels: { orchestrator: 'zai-coding-plan/glm-5.3-highspeed' },
+          agentVariants: { orchestrator: 'configured' },
+        },
+        projectDir,
       );
+      const disposers: Array<() => void> = [];
+      let sidebar: (() => unknown) | undefined;
+      let rendered: Awaited<ReturnType<typeof testRender>> | undefined;
+      try {
+        await tuiPlugin.tui(
+          {
+            state: { path: { directory: projectDir } },
+            route: {
+              current: {
+                name: 'session',
+                params: { sessionID: 'ses-live-model' },
+              },
+            },
+            lifecycle: {
+              onDispose: (dispose: () => void) => {
+                disposers.push(dispose);
+              },
+            },
+            renderer: { requestRender: () => {} },
+            slots: {
+              register: (slot: {
+                slots: { sidebar_content: () => unknown };
+              }) => {
+                sidebar = slot.slots.sidebar_content;
+              },
+            },
+            theme: { current: {} },
+          } as never,
+          {},
+          { version: 'test' } as never,
+        );
+        if (!sidebar) throw new Error('Sidebar slot missing');
+        rendered = await testRender(() => sidebar?.() as never, {
+          width: 60,
+          height: 24,
+        });
+        await rendered.renderOnce();
+        const frame = rendered.captureCharFrame();
+        expect(frame).toContain('glm-5.3-highspeed');
+        expect(frame).not.toContain('variant');
+      } finally {
+        rendered?.renderer.destroy();
+        for (const dispose of disposers) dispose();
+      }
     } finally {
       await hooks.dispose?.();
     }
