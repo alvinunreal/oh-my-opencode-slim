@@ -593,6 +593,30 @@ describe('startup subagent recovery', () => {
     expect(board.get(RUNNING)?.generation).toBe(generation);
   });
 
+  test('restores a persisted migrated child as terminal on startup', async () => {
+    const board = new BackgroundJobBoard();
+    await seedPersistence(memoryStorage(), [persistedChild(DONE)]);
+    const migrated = completedChildTranscript('migrated answer');
+    migrated.data.pop();
+
+    await recoverSubagentSessionsAtStartup({
+      input: input({
+        sessions: [{ id: DONE, parentID: PARENT, agent: 'explorer' }],
+        parent: parentTranscript([]),
+        children: { [DONE]: migrated },
+      }),
+      backgroundJobBoard: board,
+      hostFlavor: 'v2',
+      shouldManageSession: () => false,
+    });
+
+    expect(board.get(DONE)).toMatchObject({
+      state: 'completed',
+      resultSummary: 'migrated answer',
+      verifiedRetainedRound: true,
+    });
+  });
+
   test('restores a child that completed during downtime and requests one wake', async () => {
     const board = new BackgroundJobBoard();
     const wakes: string[] = [];

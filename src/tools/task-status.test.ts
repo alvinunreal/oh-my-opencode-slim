@@ -1109,6 +1109,61 @@ describe('task_status untracked read-only fallback', () => {
     expect(output).not.toContain('The task is still running.');
   });
 
+  test('v2 reads the retained result of a migrated child after restart', async () => {
+    client = hostClient({ transcript: 'completed' });
+    const { task_status } = makeTool({
+      board: new BackgroundJobBoard(),
+      hostFlavor: 'v2',
+    });
+    expect(
+      await task_status.execute({ task_id: KID }, {
+        sessionID: 'parent-1',
+      } as any),
+    ).toContain('state: completed (verified from history)');
+    expect(
+      await task_status.execute({ task_id: KID, result: true }, {
+        sessionID: 'parent-1',
+      } as any),
+    ).toBe('LAB-MARKER: done');
+  });
+
+  test('an untracked migrated child reports its provider error instead of refusing partial output', async () => {
+    client = hostClient();
+    client.session.messages = mock(async () => ({
+      data: [
+        {
+          info: { id: 'msg_user', role: 'user', time: { created: 10 } },
+          parts: [{ type: 'text', text: 'ask' }],
+        },
+        {
+          info: {
+            id: 'msg_turn',
+            role: 'assistant',
+            finish: 'content-filter',
+            error: {
+              type: 'provider.content-filter',
+              message:
+                'The response was blocked by the provider’s content filter',
+            },
+            time: { created: 11, completed: 12 },
+          },
+          parts: [],
+        },
+      ],
+    }));
+    const { task_status } = makeTool({
+      board: new BackgroundJobBoard(),
+      hostFlavor: 'v2',
+    });
+    const context = { sessionID: 'parent-1' } as never;
+    await expect(
+      task_status.execute({ task_id: KID, result: true }, context),
+    ).rejects.toThrow('ended in error:');
+    const status = await task_status.execute({ task_id: KID }, context);
+    expect(status).toContain('state: error (verified from history)');
+    expect(status).toContain('diagnostic: true');
+  });
+
   test('v2 status classifies from the ownership read without an extra get', async () => {
     client = hostClient({
       transcript: 'incomplete',

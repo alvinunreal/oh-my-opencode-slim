@@ -170,6 +170,7 @@ function toV1Message(m: Record<string, unknown>) {
       ...(typeof m.outcome === 'string' ? { outcome: m.outcome } : {}),
       ...(time ? { time } : {}),
       ...(m.finish !== undefined ? { finish: m.finish } : {}),
+      ...(m.rawFinish !== undefined ? { rawFinish: m.rawFinish } : {}),
       ...(m.error !== undefined ? { error: m.error } : {}),
     },
     parts: text === undefined ? contentParts : [{ type: 'text', text }],

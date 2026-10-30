@@ -692,6 +692,10 @@ async function readTaskResult(
   const evidence = read.round;
   if (!evidence || evidence.verdict === 'incomplete')
     return runningResultRefusal(idParam, taskID, true, undefined, false);
+  if (evidence.verdict === 'error')
+    throw new Error(
+      `Task ${requested} ended in error: ${evidence.text ?? 'no error details available'}`,
+    );
   const completedText =
     evidence.verdict === 'completed' && 'text' in evidence
       ? evidence.text
@@ -976,7 +980,8 @@ async function reportUntrackedTaskStatus(
   } else if (evidence.round) {
     evidenceLine = describeUntrackedEvidence(
       evidence.round,
-      evidence.live.status === 'v2' ? 'host state' : 'history',
+      evidence.source ??
+        (evidence.live.status === 'v2' ? 'host state' : 'history'),
     );
   } else {
     evidenceLine = `state: ${UNTRACKED_STATE} (uncertain; transcript could not be read)`;
@@ -987,7 +992,9 @@ async function reportUntrackedTaskStatus(
   if (ownership.createdAt !== undefined)
     details.push(`created_at: ${new Date(ownership.createdAt).toISOString()}`);
   details.push(
-    "next: use task_status with { result: true } for a completed task's final text",
+    evidence.round?.verdict === 'error'
+      ? 'next: use task_status with { result: true } for this error; { diagnostic: true } requires a tracked task'
+      : "next: use task_status with { result: true } for a completed task's final text",
   );
   return details.join('\n');
 }
