@@ -502,6 +502,9 @@ export async function buildV2PaneWiringOptions(
   // response seeds the wiring's first liveness probe. Later probes re-read.
   const { baseUrl, info } = await resolveV2BaseUrlWithInfo(mode, client);
   if (baseUrl === undefined) {
+    if (mode.mode === 'shared' && typeof client?.server?.info === 'function') {
+      return { mode, options: null };
+    }
     return {
       mode: { mode: 'invalid', reason: 'server URL unavailable' },
       options: null,

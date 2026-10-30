@@ -27,6 +27,7 @@ import {
 } from './multiplexer/client/diagnostics';
 import {
   createTuiPaneWiring,
+  HOST_REPROBE_INTERVAL_MS,
   initClientLogging,
   type LoadedPaneConfig,
   paneConfigOf,
@@ -37,6 +38,7 @@ import {
   describeV2HostMode,
   detectV2HostMode,
 } from './multiplexer/client/v2-host';
+import { PANE_VIEWER_ENV } from './multiplexer/shared';
 import {
   KILL_ALL_KEYBIND,
   killAllRunningSubagents,
@@ -2596,6 +2598,7 @@ async function setup(
       ? describeV2HostMode(v2HostMode)
       : null;
   let paneWiring: TuiPaneWiring | null = null;
+  let paneWiringRetry: ReturnType<typeof setTimeout> | null = null;
   let paneWiringSetting: string | null = null;
   let currentPaneConfig = gatesRead.paneConfig;
   // Set by the setup teardown. A config-triggered rebuild can be waiting on
@@ -2603,6 +2606,8 @@ async function setup(
   // such a rebuild self-dispose instead of going live after teardown.
   let paneWiringClosed = false;
   const disposePaneWiring = async (): Promise<void> => {
+    if (paneWiringRetry !== null) clearTimeout(paneWiringRetry);
+    paneWiringRetry = null;
     const stale = paneWiring;
     if (stale === null) return;
     paneWiring = null;
@@ -2641,6 +2646,18 @@ async function setup(
         }
         paneWiring = wiring;
         paneWiringSetting = multiplexerType;
+      } else if (paneHost.mode.mode === 'shared') {
+        if (
+          !paneWiringClosed &&
+          multiplexerType !== 'none' &&
+          paneWiringRetry === null
+        ) {
+          paneWiringRetry = setTimeout(() => {
+            paneWiringRetry = null;
+            void reconcilePaneWiring();
+          }, HOST_REPROBE_INTERVAL_MS);
+          paneWiringRetry.unref?.();
+        }
       } else {
         hostFailureDetail = describeV2HostMode(paneHost.mode);
       }
@@ -2662,7 +2679,11 @@ async function setup(
     paneWiringSync = paneWiringSync
       .then(async () => {
         if (paneWiringClosed) return;
-        if (hostFailureDetail !== null || multiplexerType === 'none') {
+        if (
+          process.env[PANE_VIEWER_ENV] === '1' ||
+          hostFailureDetail !== null ||
+          multiplexerType === 'none'
+        ) {
           await disposePaneWiring();
           return;
         }

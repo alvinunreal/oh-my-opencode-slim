@@ -92,6 +92,9 @@ Pane behavior is fixed per host mode:
 | v2 host, `--server <url>` | TUI client of an explicit server | `--server` URL | Supported: default viewers run `opencode mini --server <url> --session <id>`; `viewer: "tui"` uses `opencode --server <url> --session <id> <dir>`. The `OPENCODE_PASSWORD` secret comes from the parent process environment and is injected at pane creation through the multiplexer's spawn-time environment mechanism (see [Secret handling](#known-limitations)), never through the viewer's command line |
 | v2 host, `--standalone` | private stdio server (no registration, random password, exits with the parent) | ephemeral loopback | **Not supported**: fail-closed + exactly one diagnostic; the fallback is v2's native subagent surfaces (`/subagent` opens the latest child session in a tab without moving focus — the tab is a salience and quick-switch affordance, and the displayed session stays the interaction surface) |
 
+If the v2 shared service cannot initially resolve its URL, pane setup retries
+every five seconds while enabled; unsupported host modes remain disabled.
+
 On v2 hosts the event source is the TUI's own `data` feed
 (`session.created` / `session.execution.*` / `session.idle` /
 `session.deleted`). Execution events carry no directory, so the pane

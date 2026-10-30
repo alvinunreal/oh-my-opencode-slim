@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, jest, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -2030,6 +2030,55 @@ describe('v2 tui preset plugin', () => {
         expect(reads).toContain(directory);
       } finally {
         cleanup?.();
+        process.argv = originalArgv;
+      }
+    });
+
+    test('pane wiring retries a transient initial shared server failure', async () => {
+      writeUserConfig({
+        sidebar: false,
+        disabled_hooks: ['auto-update-checker'],
+        multiplexer: { type: 'tmux' },
+      });
+      process.env.TMUX_PANE = '%1';
+      delete process.env.TMUX;
+      const originalArgv = process.argv;
+      process.argv = ['opencode'];
+      const stub = makeSetupCtx();
+      const subscriptions: string[] = [];
+      stub.ctx.data = {
+        on: (type: string) => {
+          subscriptions.push(type);
+          return () => {};
+        },
+      };
+      let available = false;
+      let calls = 0;
+      stub.ctx.client = {
+        server: {
+          info: async () => {
+            calls += 1;
+            if (!available) throw new Error('temporary');
+            return { urls: ['http://127.0.0.1:1'] };
+          },
+        },
+      };
+      jest.useFakeTimers();
+      let cleanup: (() => void) | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        expect(calls).toBe(1);
+        expect(subscriptions).toEqual([]);
+        available = true;
+        jest.advanceTimersByTime(5_000);
+        for (let i = 0; i < 30; i += 1) await Promise.resolve();
+        expect(calls).toBeGreaterThan(1);
+        expect(subscriptions).toContain('session.created');
+      } finally {
+        cleanup?.();
+        jest.useRealTimers();
         process.argv = originalArgv;
       }
     });
