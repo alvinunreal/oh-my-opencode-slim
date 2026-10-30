@@ -1436,12 +1436,34 @@ describe('rebuild and reconnect backfill (2.4)', () => {
     // The user switches back; the server list only knows PARENT's child.
     h.lifecycle.setDisplayedSession(PARENT);
     h.list.setSessionIds(CHILD);
+    h.list.listSessions = async (_directory, parentID) => ({
+      sessions: [{ sessionId: parentID === PARENT ? CHILD : 'child-2' }],
+    });
     await h.lifecycle.onReconnect();
 
     // The other conversation's pane is still live: it must not be closed as
     // backfill-gone just because this parent's list does not name it.
     expect(h.adapter.closeCalls).toHaveLength(0);
     expect(h.lifecycle.getPane('child-2')?.directory).toBe(DIRECTORY);
+  });
+
+  test('reconnect recovers lost idle and deletion for panes while home is displayed', async () => {
+    const h = createHarness();
+    await activatePane(h);
+    h.reader.statuses.set('deleted-child', 'busy');
+    h.adapter.spawnResult = { success: true, paneId: 'pane-2' };
+    await h.lifecycle.handleEvent(createdEvent({ sessionId: 'deleted-child' }));
+    h.list.setSessionIds(CHILD);
+    h.reader.statuses.delete(CHILD);
+    h.lifecycle.setDisplayedSession(null);
+
+    await h.lifecycle.onReconnect();
+    expect(h.adapter.closeCalls).toEqual(['pane-2']);
+    expect(h.clock.pendingTimers).toBe(1);
+    h.clock.advance(STABLE_IDLE_MS);
+    await flushAsync();
+    expect(h.adapter.closeCalls).toEqual(['pane-2', 'pane-1']);
+    expect(h.adapter.spawnCalls).toHaveLength(2);
   });
 
   test('reconcile skips a parent that changed during the list read', async () => {

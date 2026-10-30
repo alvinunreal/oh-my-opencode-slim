@@ -401,7 +401,8 @@ A pane is a **view**, and views belong to the viewer:
   not cause additional subagent dispatches.
 - Switching the displayed session does not leak panes: status/idle/deleted
   events for children this client already holds keep being processed, so their
-  panes still close under the normal rules. A rebuild, however, requires the
+  panes still close under the normal rules. Reconciliation also checks held
+  panes of other parents for lost idle or deletion signals. A rebuild requires the
   parent to be the displayed session again at that moment.
 
 If you do not want a pane on a particular client, disable panes for that

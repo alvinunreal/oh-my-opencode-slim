@@ -285,8 +285,14 @@ export class PaneLifecycle {
    */
   async onReconnect(): Promise<void> {
     const parentSessionId = this.displayedSessionId;
-    if (parentSessionId === null || this.config.adapter === null) return;
     const directory = this.displayedDirectory;
+    if (this.config.adapter === null) return;
+    await this.reconcileOtherHeldPanes(parentSessionId, directory);
+    if (
+      parentSessionId === null ||
+      !this.isDisplayed(parentSessionId, directory)
+    )
+      return;
     const heldAtStart = new Set(this.panes.keys());
 
     const list = await this.listSessions(directory, parentSessionId);
@@ -311,7 +317,11 @@ export class PaneLifecycle {
     // a pane for a previously displayed session stays tracked (FR-3) and must
     // not be closed just because this parent's child list does not name it.
     for (const [childSessionId, record] of [...this.panes]) {
-      if (record.parentSessionId !== parentSessionId) continue;
+      if (
+        record.parentSessionId !== parentSessionId ||
+        record.directory !== directory
+      )
+        continue;
       if (!heldAtStart.has(childSessionId)) continue;
       if (!serverChildIds.has(childSessionId)) {
         await this.closePane(childSessionId, record, 'backfill-gone');
@@ -342,7 +352,11 @@ export class PaneLifecycle {
         // Foreign-parent watches are not judged here: their child cannot
         // appear in this parent's list, and deleting them would permanently
         // lose the FR-11 rebuild (same rule as the removal pass above).
-        if (watched.parentSessionId !== parentSessionId) continue;
+        if (
+          watched.parentSessionId !== parentSessionId ||
+          watched.directory !== directory
+        )
+          continue;
         if (!serverChildIds.has(childSessionId)) {
           this.closedWatch.delete(childSessionId);
           continue;
@@ -384,6 +398,56 @@ export class PaneLifecycle {
         directory,
         live,
       );
+    }
+  }
+
+  /** Recheck held panes without backfilling conversations that are not visible. */
+  private async reconcileOtherHeldPanes(
+    parent: string | null,
+    directory: string,
+  ): Promise<void> {
+    const groups = new Map<
+      string,
+      { records: Array<{ record: PaneRecord; epoch: number }> }
+    >();
+    for (const record of this.panes.values()) {
+      if (record.parentSessionId === parent && record.directory === directory)
+        continue;
+      const key = JSON.stringify([record.directory, record.parentSessionId]);
+      const group = groups.get(key) ?? { records: [] };
+      group.records.push({
+        record,
+        epoch: this.activityEpoch.get(record.childSessionId) ?? 0,
+      });
+      groups.set(key, group);
+    }
+    for (const { records } of groups.values()) {
+      const first = records[0]?.record;
+      if (!first || this.disposed) continue;
+      const list = await this.listSessions(
+        first.directory,
+        first.parentSessionId,
+      );
+      if (list.error) continue;
+      const statuses = await this.readStatus(first.directory);
+      const children = new Set(list.sessions.map((entry) => entry.sessionId));
+      for (const { record, epoch } of records) {
+        const id = record.childSessionId;
+        if (
+          this.disposed ||
+          this.panes.get(id) !== record ||
+          (this.activityEpoch.get(id) ?? 0) !== epoch
+        )
+          continue;
+        if (!children.has(id))
+          await this.closePane(id, record, 'backfill-gone');
+        else if (
+          !statuses.error &&
+          statuses.statuses.get(id) !== 'busy' &&
+          statuses.statuses.get(id) !== 'retry'
+        )
+          this.scheduleStableIdleClose(id, record, true);
+      }
     }
   }
 
