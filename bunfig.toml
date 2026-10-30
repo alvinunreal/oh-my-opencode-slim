@@ -1,7 +1,8 @@
 [test]
 root = "./src"
-# Literal path, not the "@opentui/solid/preload" export: Stryker copies the
-# project into .stryker-tmp/sandbox-* where package subpath resolution fails,
-# and bun treats the entry as a sandbox-relative file. Plain `bun test` runs
-# this file the same way.
+# Literal path, not the "@opentui/solid/preload" export: the Stryker bun
+# runner's bunfig sanitizer resolves preload entries against the project
+# root, so in the sandbox the export becomes a nonexistent
+# <root>/@opentui/solid/preload. This is the same file the export's bun
+# condition loads; plain `bun test` runs it the same way.
 preload = ["./node_modules/@opentui/solid/scripts/preload.js", "./test-isolation.ts"]

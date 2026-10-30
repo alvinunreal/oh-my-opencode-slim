@@ -4657,6 +4657,7 @@ describe('BackgroundJobBoard GAP-HIGH contract pins (#1723) — recoverable term
     });
     board.markRunningFromLiveSession('ses_ext', 300);
     expect(board.get('ses_ext')?.recoverableAfterLiveBusy).toBe(true);
+    const revisionBefore = board.get('ses_ext')?.terminalRevision ?? -1;
     const corrected = board.correctStartupRecoveredTerminal({
       taskID: 'ses_ext',
       generation: board.get('ses_ext')?.generation ?? -1,
@@ -4664,6 +4665,8 @@ describe('BackgroundJobBoard GAP-HIGH contract pins (#1723) — recoverable term
       now: 400,
     });
     expect(corrected?.state).toBe('completed');
+    expect(corrected?.terminalUnreconciled).toBe(true);
+    expect(corrected?.terminalRevision).toBe(revisionBefore + 1);
     expect(board.get('ses_ext')?.recoverableAfterLiveBusy).toBe(true);
     expect(board.resolveRecoverable('p1', 'ses_ext')).toBeUndefined();
   });

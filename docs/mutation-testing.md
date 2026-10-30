@@ -34,9 +34,11 @@ the cleanup PRs that follow this workflow convert survivors into named tests.
   runs `src/utils/background-job-board.test.ts`. Point `mutate` and
   `bun.testFiles` at another file pair to sweep something else.
 - `bunfig.toml` `[test].preload` lists the literal
-  `./node_modules/@opentui/solid/scripts/preload.js` path because the Stryker
-  sandbox cannot resolve the `@opentui/solid/preload` package export. Keep it
-  literal; it is byte-equivalent to the export today.
+  `./node_modules/@opentui/solid/scripts/preload.js` path because the bun
+  test runner's bunfig sanitizer resolves every preload entry against the
+  project root, turning the `@opentui/solid/preload` export into a
+  nonexistent path inside the Stryker sandbox. Keep it literal; it is the
+  same file the export's `bun` condition loads today.
 
 ## Run a sweep
 
@@ -45,9 +47,10 @@ bun run mutation
 ```
 
 The first run installs the tool tree (`bun install --cwd tools/mutation`,
-frozen lockfile). Nothing in the repo root is modified to run a sweep. A full
-background-job-board sweep is 1,515 mutants and takes roughly 6-7 minutes at
-`concurrency: 2`.
+frozen lockfile). Nothing in the repo root is modified to run a sweep, but
+the repo root's `node_modules` must already be installed: the sandboxed
+tests resolve the project's own dependencies. A full background-job-board
+sweep is 1,515 mutants and takes roughly 6-7 minutes at `concurrency: 2`.
 
 The JSON report lands at `reports/mutation/mutation.json` (`reports/` is
 gitignored). Keep sweep output out of commits.
@@ -67,7 +70,9 @@ Tests that pin a mutant carry a `contract:` title prefix, so
 ## Evidence bar for a mutation-cleanup PR
 
 1. Green baseline: the target test file passes and
-   `bunx stryker run --dryRunOnly` succeeds before any change.
+   `bun tools/mutation/node_modules/@stryker-mutator/core/bin/stryker.js run
+   --dryRunOnly` succeeds before any change. Never `bunx stryker`: the bare
+   `stryker` package is an unrelated, dead v0 project.
 2. At least one known mutant killed, attributed to named tests via the
    `killedBy` ids.
 3. Uncovered mutants reported as `NoCoverage`, never folded into `Survived`.
