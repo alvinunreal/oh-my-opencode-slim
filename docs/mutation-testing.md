@@ -19,12 +19,14 @@ the cleanup PRs that follow this workflow convert survivors into named tests.
   `TypeError: ts.parseConfigFileTextToJson is not a function`). It exists only
   to rewrite `extends`/`references` paths that cross the sandbox boundary, and
   this project's `tsconfig.json` has none, so `stryker.conf.mjs` points
-  `tsconfigFile` at a non-file and the machinery never runs. If you add
-  `extends` or `references` to `tsconfig.json`, point `tsconfigFile` back at
-  it and expect that preprocessor to need Stryker's upstream fix. The bun
+  `tsconfigFile` at a non-file and the machinery never runs. The bun
   runner's `typescript: '<7'` peer describes its dormant
   `checkers: ['typescript']` hook (not enabled here; it degrades with a log
   line).
+- **If you add `extends` or `references` to `tsconfig.json`:** point
+  `tsconfigFile` back at it in `stryker.conf.mjs`. The TypeScript 7 skip only
+  holds while nothing needs the tsconfig rewrite, and that rewrite needs
+  Stryker's upstream fix on TypeScript 7.
 - Requires Bun >= 1.4.0 (the runner refuses older) and Node >= 22
   (`@stryker-mutator/core` engines). The repo's `packageManager` pin
   (`bun@1.3.14`) is below that floor, so run sweeps with a newer Bun.

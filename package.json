@@ -86,7 +86,7 @@
     "format": "biome format . --write",
     "check": "biome check --write .",
     "check:ci": "biome check .",
-    "mutation": "bun install --cwd tools/mutation --frozen-lockfile && ./tools/mutation/node_modules/.bin/stryker run",
+    "mutation": "bun install --cwd tools/mutation --frozen-lockfile && bun tools/mutation/node_modules/@stryker-mutator/core/bin/stryker.js run",
     "eval": "bun run src/cli/eval.ts",
     "eval:smoke": "bun run src/cli/eval.ts --smoke",
     "ci:eval": "bun run eval --suite orchestrator-direct-execution --outputs-file /tmp/eval-outputs.json",
