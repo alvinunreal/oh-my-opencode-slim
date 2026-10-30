@@ -3518,7 +3518,7 @@ describe('kill-all running subagents', () => {
     expect(falseResult).toEqual({ killed: 0, failed: 2, total: 2 });
   });
 
-  test('v2 SDK-shaped client aborts with flat sessionID + directory', async () => {
+  test('v1 SDK v2 accessor aborts with flat sessionID + directory', async () => {
     const calls: Record<string, unknown>[] = [];
     // Real v2 clients carry app.agents AND the v2 accessor — this fixture
     // reproduces both, so the old app.agents-first routing would misroute
@@ -3547,6 +3547,26 @@ describe('kill-all running subagents', () => {
     expect(calls.map((c) => c.sessionID).sort()).toEqual([
       'ora-busy',
       'ora-retry',
+    ]);
+  });
+
+  test('v2 TUI client interrupts each target and counts failures', async () => {
+    const calls: Array<{ sessionID: string; resume: boolean }> = [];
+    const client = {
+      session: {
+        interrupt: async (args: { sessionID: string; resume: boolean }) => {
+          calls.push(args);
+          return args.sessionID === 'ora-retry' ? { error: 'busy' } : true;
+        },
+      },
+    };
+
+    expect(
+      await killAllRunningSubagents(client, killSnapshot(), 'conv-1', '/proj'),
+    ).toEqual({ killed: 1, failed: 1, total: 2 });
+    expect(calls).toEqual([
+      { sessionID: 'ora-busy', resume: false },
+      { sessionID: 'ora-retry', resume: false },
     ]);
   });
 
