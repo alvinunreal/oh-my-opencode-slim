@@ -82,7 +82,8 @@ lifecycle lives in the TUI entry's dependency graph (`multiplexer/client/`).
 4. **Snapshot Loading**: Reads agent models, variants, and per-session activity
    from `tui-state.ts`
 5. **Live Updates**: Refreshes persisted state every 1000ms and reactively
-   advances 100ms animation frames only while agents are active
+   advances 100ms animation frames only while agents are active; identical
+   model-name refreshes do not rebuild the sidebar
 6. **Pane Lifecycle Wiring**: `createTuiPaneWiring()` resolves admission from
    the client's own environment, initializes plugin logging, reflects the
    server URL, subscribes to session events, and drives per-client pane
