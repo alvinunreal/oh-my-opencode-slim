@@ -26,6 +26,7 @@ oh-my-opencode-slim is a **lightweight harness**. Every change is reviewed again
 | `bun run format` | Format entire codebase with Biome |
 | `bun run check` | Run Biome check with auto-fix (lint + format + organize imports) |
 | `bun run check:ci` | Run Biome check without auto-fix (CI mode) |
+| `bun run mutation` | Run the scoped Stryker sweep (see `docs/mutation-testing.md`; temporary `typescript@6` install required) |
 | `bun run dev` | Build and run with OpenCode |
 
 **Running a single test:** Use Bun's test filtering with the `-t` flag:

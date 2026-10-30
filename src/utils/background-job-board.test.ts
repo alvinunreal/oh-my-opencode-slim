@@ -3251,3 +3251,712 @@ describe('BackgroundJobBoard direct queries and projection reuse', () => {
     }
   });
 });
+
+describe('BackgroundJobBoard GAP-HIGH contract pins (#1723) — terminal writes, amendments, resolve', () => {
+  // A row whose recoverability was earned by live busy: the timeout
+  // observation clears the flag, then markRunningFromLiveSession (SRC:1005)
+  // restores it because the row had timedOut.
+  const seedRecoverable = (board: ProductionBoard, taskID: string) => {
+    board.registerLaunch({
+      taskID,
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    board.updateStatus({ taskID, state: 'running', timedOut: true, now: 200 });
+    board.markRunningFromLiveSession(taskID, 300);
+  };
+
+  test('contract: a terminal write resets timedOut to the input default', () => {
+    // applyStatus always publishes `input.timedOut ?? false` (SRC:935:35), so
+    // a completed write clears an earlier timeout; the BooleanLiteral true
+    // mutant leaves timedOut set and the assertion flips.
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_reset',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    board.updateStatus({
+      taskID: 'ses_reset',
+      state: 'running',
+      timedOut: true,
+      now: 200,
+    });
+    expect(board.get('ses_reset')?.timedOut).toBe(true);
+    board.updateStatus({ taskID: 'ses_reset', state: 'completed', now: 300 });
+    expect(board.get('ses_reset')?.timedOut).toBe(false);
+  });
+
+  test('contract: a plain running update keeps live-busy recoverability', () => {
+    // A non-timed-out running publish keeps existing.recoverableAfterLiveBusy
+    // (SRC:937 outer condition false, 939 inner condition false). The CE true
+    // and SL "" mutants force the reset arm, and the recoverable lookup goes
+    // absent.
+    const board = new BackgroundJobBoard();
+    seedRecoverable(board, 'ses_busy');
+    expect(board.resolveRecoverable('p1', 'ses_busy')?.taskID).toBe('ses_busy');
+    board.updateStatus({ taskID: 'ses_busy', state: 'running', now: 400 });
+    expect(board.get('ses_busy')?.recoverableAfterLiveBusy).toBe(true);
+    expect(board.resolveRecoverable('p1', 'ses_busy')?.taskID).toBe('ses_busy');
+  });
+
+  test('contract: a timed-out running update drops recoverability', () => {
+    // The inner `input.timedOut === true` arm resets the flag (SRC:939). CE
+    // false, the EQ flip, and the BooleanLiteral false on that test all take
+    // the preserve arm, leaving the stale true.
+    const board = new BackgroundJobBoard();
+    seedRecoverable(board, 'ses_timed_out');
+    board.updateStatus({
+      taskID: 'ses_timed_out',
+      state: 'running',
+      timedOut: true,
+      now: 400,
+    });
+    expect(board.get('ses_timed_out')?.recoverableAfterLiveBusy).toBe(false);
+  });
+
+  test('contract: a terminal update drops recoverability', () => {
+    // The outer `input.state !== 'running' ? false` arm (SRC:937-938) clears
+    // the flag on any terminal publish. CE false, the EQ flip, and the
+    // BooleanLiteral true arm all preserve the stale true instead.
+    const board = new BackgroundJobBoard();
+    seedRecoverable(board, 'ses_rec_done');
+    board.updateStatus({
+      taskID: 'ses_rec_done',
+      state: 'completed',
+      now: 400,
+    });
+    expect(board.get('ses_rec_done')?.recoverableAfterLiveBusy).toBe(false);
+  });
+
+  test('contract: reconciling reusable rows enforces the per-agent cap', () => {
+    // The reusable cap keeps only maxReusablePerAgent reconciled rows per
+    // parent+agent: completing and reconciling the newer row evicts the older
+    // one instead of retaining both.
+    const board = new BackgroundJobBoard({ maxReusablePerAgent: 1 });
+    const complete = (taskID: string, now: number) => {
+      board.registerLaunch({
+        taskID,
+        parentSessionID: 'p1',
+        agent: 'explorer',
+        now,
+      });
+      board.updateStatus({ taskID, state: 'completed', now });
+      board.markReconciled(taskID, now + 1);
+    };
+    complete('ses_old', 100);
+    complete('ses_new', 200);
+    expect(board.get('ses_old')).toBeUndefined();
+    expect(board.get('ses_new')?.state).toBe('reconciled');
+  });
+
+  test('contract: a repeated amendment id is a no-op', () => {
+    // noteRunAmendment returns early when the row already carries the message
+    // id (SRC:1481), so the record object is not re-set. The CE false mutant
+    // re-sets the job and the identity assertion flips.
+    const board = new BackgroundJobBoard();
+    const run = board.registerLaunch({
+      taskID: 'ses_amend',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    const messageID = 'msg_1';
+    expect(
+      board.noteRunAmendment('ses_amend', run.generation, messageID, 0),
+    ).toBe(true);
+    const before = board.get('ses_amend');
+    expect(
+      board.noteRunAmendment('ses_amend', run.generation, messageID, 0),
+    ).toBe(true);
+    expect(board.get('ses_amend')).toBe(before);
+  });
+
+  test('contract: resolve prefers the earliest launch when an alias shadows a task ID', () => {
+    // An alias match and a task ID match compete in one scan and the smallest
+    // launchedAt wins (SRC:1348). The CE true mutant keeps the last iterated
+    // match, which is the later-launched restored row.
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_first',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    board.restoreRetainedSession({
+      taskID: 'ses_second',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      description: 'restored row',
+      state: 'completed',
+      background: true,
+      alias: 'ses_first',
+      launchedAt: 200,
+      completedAt: 200,
+    });
+    expect(board.get('ses_second')?.alias).toBe('ses_first');
+    expect(board.resolve('p1', 'ses_first')?.taskID).toBe('ses_first');
+  });
+
+  test('contract: resolveReusable refuses another agent', () => {
+    // The agent filter (SRC:1362) is the last refusal: a reusable row is not
+    // handed to a different agent. The CE false mutant returns it anyway.
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_reuse',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    board.updateStatus({ taskID: 'ses_reuse', state: 'completed', now: 200 });
+    board.markReconciled('ses_reuse', 300);
+    expect(board.resolveReusable('p1', 'ses_reuse', 'oracle')).toBeUndefined();
+    expect(board.resolveReusable('p1', 'ses_reuse', 'explorer')?.taskID).toBe(
+      'ses_reuse',
+    );
+  });
+
+  test('contract: resolveRecoverable ignores an unknown id', () => {
+    // The missing-row guard (SRC:1372) returns undefined; the CE false mutant
+    // dereferences the absent record and throws instead.
+    const board = new BackgroundJobBoard();
+    expect(board.resolveRecoverable('p1', 'ghost')).toBeUndefined();
+  });
+
+  test('contract: resolveRecoverable ignores a completed row', () => {
+    // Recoverability requires a running row with the live-busy flag
+    // (SRC:1374); the CE false mutant returns the completed row.
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_done',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    board.updateStatus({ taskID: 'ses_done', state: 'completed', now: 200 });
+    expect(board.resolveRecoverable('p1', 'ses_done')).toBeUndefined();
+  });
+
+  test('contract: markUsed ignores an unknown id', () => {
+    // The missing-row guard (SRC:1382) returns without writing; the CE false
+    // mutant dereferences the absent record and throws.
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_used',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    expect(() => board.markUsed('p1', 'ghost', 500)).not.toThrow();
+    expect(board.get('ses_used')?.lastUsedAt).toBe(100);
+  });
+
+  test('contract: markUsed on a running row stamps the explicit clock', () => {
+    // Without completedAt the use stamps `now` directly (SRC:1387); the CE
+    // false mutant takes the completedAt + 1 branch and writes NaN.
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_run',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 100,
+    });
+    board.markUsed('p1', 'ses_run', 500);
+    expect(board.get('ses_run')?.lastUsedAt).toBe(500);
+  });
+});
+
+describe('BackgroundJobBoard GAP-HIGH contract pins (#1723) — stop, reconcile, cancel guards', () => {
+  const running = (board: BackgroundJobBoard, taskID = 'ses_run', now = 100) =>
+    board.registerLaunch({
+      taskID,
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now,
+    });
+
+  // Relaunch the row to a second generation, then publish its completion:
+  // the stale-generation and matching-generation cases start from this state.
+  const relaunchedCompleted = (
+    board: BackgroundJobBoard,
+    taskID = 'ses_run',
+  ) => {
+    const first = running(board, taskID, 100);
+    board.registerLaunch({
+      taskID,
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 150,
+    });
+    boardFixture.updateStatus(board, { taskID, state: 'completed', now: 200 });
+    const current = board.get(taskID);
+    if (!current) throw new Error('missing relaunched row');
+    return {
+      firstGeneration: first.generation,
+      generation: current.generation,
+    };
+  };
+
+  test('contract: a stopped publication clears timedOut and recoverableAfterLiveBusy', () => {
+    // SRC:1059:17 BL false->true and SRC:1060:33 BL false->true: the stop
+    // publication retires both flags. Falsifier: the mutants write `true`, so
+    // get() reports a timed-out, still-recoverable stopped row.
+    const board = new BackgroundJobBoard();
+    running(board);
+    board.updateStatus({
+      taskID: 'ses_run',
+      state: 'running',
+      timedOut: true,
+      now: 150,
+    });
+    expect(board.get('ses_run')?.timedOut).toBe(true);
+    boardFixture.markStopped(
+      board,
+      'ses_run',
+      'host stopped',
+      200,
+      undefined,
+      300,
+    );
+    const stopped = board.get('ses_run');
+    expect(stopped?.state).toBe('stopped');
+    expect(stopped?.timedOut).toBe(false);
+    expect(stopped?.recoverableAfterLiveBusy).toBe(false);
+  });
+
+  test('contract: markStatusUncertain refuses a reconciled reusable row', () => {
+    // SRC:1078:9 CE false: only a running row may become uncertain. Falsifier:
+    // the mutant marks this reconciled row uncertain, so the later assertions
+    // see statusUncertain true and resolveReusable drops the row.
+    const board = new BackgroundJobBoard();
+    running(board);
+    boardFixture.updateStatus(board, {
+      taskID: 'ses_run',
+      state: 'completed',
+      now: 200,
+    });
+    board.markReconciled('ses_run', 250);
+    expect(board.resolveReusable('p1', 'ses_run')?.taskID).toBe('ses_run');
+    const returned = board.markStatusUncertain('ses_run', 'host went quiet');
+    expect(returned?.statusUncertain).toBe(false);
+    expect(board.get('ses_run')?.statusUncertain).toBe(false);
+    expect(board.resolveReusable('p1', 'ses_run')?.taskID).toBe('ses_run');
+  });
+
+  test('contract: markStatusUncertain ignores an unknown id', () => {
+    // SRC:1078:9 OC: the optional chain keeps the ghost lookup total. Falsifier:
+    // the mutant dereferences `existing.state` on undefined and throws.
+    const board = new BackgroundJobBoard();
+    expect(() => board.markStatusUncertain('ghost', 'err')).not.toThrow();
+    expect(board.markStatusUncertain('ghost', 'err')).toBeUndefined();
+  });
+
+  test('contract: markStatusUncertain refuses a stale generation', () => {
+    // SRC:1080:7 CE false: the generation fence is what keeps a stale host
+    // observation off the live run. Falsifier: the mutant marks the gen2 row
+    // uncertain from a gen1 write, so statusUncertain becomes true.
+    const board = new BackgroundJobBoard();
+    const first = running(board);
+    board.registerLaunch({
+      taskID: 'ses_run',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now: 150,
+    });
+    const current = board.get('ses_run');
+    expect(current?.generation).not.toBe(first.generation);
+    const returned = board.markStatusUncertain(
+      'ses_run',
+      'stale host error',
+      first.generation,
+    );
+    expect(returned?.statusUncertain).toBe(false);
+    expect(board.get('ses_run')?.statusUncertain).toBe(false);
+  });
+
+  test('contract: markReconciled ignores an unknown id', () => {
+    // SRC:1101:9 CE false: the missing-row guard is the only total exit.
+    // Falsifier: the mutant dereferences the absent record and throws.
+    const board = new BackgroundJobBoard();
+    expect(() => board.markReconciled('ghost', 500)).not.toThrow();
+    expect(board.markReconciled('ghost', 500)).toBeUndefined();
+  });
+
+  test('contract: markReconciled refuses a wrong revision pin', () => {
+    // SRC:1103:7 CE false (whole guard) and SRC:1105:8 CE false (revision
+    // half): a pinned terminal revision that no longer matches must refuse.
+    // Falsifier: the mutants reconcile the row, leaving state `reconciled`.
+    const board = new BackgroundJobBoard();
+    running(board);
+    boardFixture.updateStatus(board, {
+      taskID: 'ses_run',
+      state: 'completed',
+      now: 200,
+    });
+    const revision = board.get('ses_run')?.terminalRevision ?? -1;
+    const returned = board.markReconciled(
+      'ses_run',
+      300,
+      undefined,
+      revision + 1,
+    );
+    expect(returned?.state).toBe('completed');
+    expect(board.get('ses_run')?.state).toBe('completed');
+  });
+
+  test('contract: markReconciled refuses a stale generation without a revision pin', () => {
+    // SRC:1103:7 LO (|| -> &&) and SRC:1103:8 CE false: a stale generation
+    // alone must refuse even with no revision pinned. Falsifier: the mutants
+    // reconcile the relaunched row's completion.
+    const board = new BackgroundJobBoard();
+    const { firstGeneration } = relaunchedCompleted(board);
+    const returned = board.markReconciled('ses_run', 300, firstGeneration);
+    expect(returned?.state).toBe('completed');
+    expect(board.get('ses_run')?.state).toBe('completed');
+  });
+
+  test('contract: markReconciled accepts the matching generation', () => {
+    // SRC:1104:9 CE true and SRC:1104:9 EQ (!== -> ===): the comparison must
+    // accept the live generation. Falsifier: the mutants refuse the matching
+    // pin, leaving the row `completed` instead of `reconciled`.
+    const board = new BackgroundJobBoard();
+    const { generation } = relaunchedCompleted(board);
+    const returned = board.markReconciled('ses_run', 300, generation);
+    expect(returned?.state).toBe('reconciled');
+    expect(board.get('ses_run')?.state).toBe('reconciled');
+  });
+
+  test('contract: cancellation refuses a presented non-cancellation lease', () => {
+    // SRC:1162:7 CE false: a presented lease is always validated, so a forged
+    // message-scope lease over a row with no live lease must refuse.
+    // Falsifier: the mutant skips the guard and cancels the running row.
+    const board = new BackgroundJobBoard();
+    running(board);
+    const result = board.markCancelled('ses_run', 'stop', 300, {
+      cancellationLease: {
+        taskID: 'ses_run',
+        generation: board.get('ses_run')?.generation ?? -1,
+        token: 'forged',
+        kind: 'message',
+      },
+    });
+    expect(result?.state).toBe('running');
+    expect(board.get('ses_run')?.state).toBe('running');
+  });
+
+  test('contract: a stale cancellation lease cannot authorize a cancel', () => {
+    // SRC:1163:8 LO (|| -> &&) and SRC:1165:7 BSt {}: the token check must
+    // refuse a cancellation lease that is not live. Falsifier: the mutants let
+    // the retired lease through and cancel the running row.
+    const board = new BackgroundJobBoard();
+    running(board);
+    const retired = {
+      taskID: 'ses_run',
+      generation: board.get('ses_run')?.generation ?? -1,
+      token: 'retired',
+      kind: 'cancellation' as const,
+    };
+    expect(board.validateLease(retired)).toBe(false);
+    const result = board.markCancelled('ses_run', 'stop', 300, {
+      cancellationLease: retired,
+    });
+    expect(result?.state).toBe('running');
+    expect(board.get('ses_run')?.state).toBe('running');
+  });
+
+  test('contract: a valid message lease on another session cannot authorize a cancel', () => {
+    // SRC:1163:8 CE false (kind half): validateLease accepts a live lease by
+    // token/generation/kind, so the kind check is the only thing refusing a
+    // message-scope authorization. Falsifier: the mutant ignores the kind and
+    // cancels the target row with another session's message lease.
+    const board = new BackgroundJobBoard();
+    running(board, 'ses_target', 100);
+    running(board, 'ses_owner', 120);
+    const ownerGeneration = board.get('ses_owner')?.generation ?? -1;
+    const messageLease = board.acquireLease(
+      'ses_owner',
+      ownerGeneration,
+      'message',
+    );
+    if (!messageLease) throw new Error('missing message lease');
+    expect(board.validateLease(messageLease)).toBe(true);
+    const result = board.markCancelled('ses_target', 'stop', 300, {
+      cancellationLease: messageLease,
+    });
+    expect(result?.state).toBe('running');
+    expect(board.get('ses_target')?.state).toBe('running');
+  });
+
+  test('contract: a live message lease on the row refuses a cancel with no lease', () => {
+    // SRC:1169:7 CE false: the active-lease fence is not optional. Falsifier:
+    // the mutant skips it and cancels a row whose message-scope operation owns
+    // it, so the state leaves `running`.
+    const board = new BackgroundJobBoard();
+    const run = running(board);
+    const lease = board.acquireLease('ses_run', run.generation, 'message');
+    if (!lease) throw new Error('missing message lease');
+    const result = board.markCancelled('ses_run', 'stop', 300);
+    expect(result?.state).toBe('running');
+    expect(board.get('ses_run')?.state).toBe('running');
+    expect(board.validateLease(lease)).toBe(true);
+  });
+
+  test('contract: a live cancellation lease must be presented by token', () => {
+    // SRC:1170:8 LO (|| -> &&), SRC:1170:8 CE false and SRC:1171:9 CE false:
+    // owning a live cancellation lease is not authority to cancel without
+    // presenting it. Falsifier: the mutants skip the requirement and cancel.
+    const board = new BackgroundJobBoard();
+    const run = running(board);
+    const lease = board.acquireLease('ses_run', run.generation, 'cancellation');
+    if (!lease) throw new Error('missing cancellation lease');
+    const result = board.markCancelled('ses_run', 'stop', 300);
+    expect(result?.state).toBe('running');
+    expect(board.get('ses_run')?.state).toBe('running');
+    expect(board.validateLease(lease)).toBe(true);
+  });
+
+  test('contract: a successful cancel clears recoverableAfterLiveBusy and statusUncertain', () => {
+    // SRC:1187:33 BL false->true and SRC:1188:24 BL false->true: the cancel
+    // publication retires both flags. Falsifier: the mutants leave the
+    // cancelled row recoverable and status-uncertain.
+    const board = new BackgroundJobBoard();
+    running(board);
+    board.updateStatus({
+      taskID: 'ses_run',
+      state: 'running',
+      timedOut: true,
+      now: 150,
+    });
+    board.markRunningFromLiveSession('ses_run', 200);
+    expect(board.get('ses_run')?.recoverableAfterLiveBusy).toBe(true);
+    board.markStatusUncertain('ses_run', 'host unreachable');
+    expect(board.get('ses_run')?.statusUncertain).toBe(true);
+    const cancelled = board.markCancelled('ses_run', 'host stopped', 300);
+    expect(cancelled?.state).toBe('cancelled');
+    expect(board.get('ses_run')?.recoverableAfterLiveBusy).toBe(false);
+    expect(board.get('ses_run')?.statusUncertain).toBe(false);
+  });
+});
+
+describe('BackgroundJobBoard GAP-HIGH contract pins (#1723) — lease lifecycle', () => {
+  const running = (board: BackgroundJobBoard, taskID = 'ses_run', now = 100) =>
+    board.registerLaunch({
+      taskID,
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      now,
+    });
+
+  const completed = (board: BackgroundJobBoard, taskID = 'ses_run') => {
+    running(board, taskID, 100);
+    boardFixture.updateStatus(board, { taskID, state: 'completed', now: 200 });
+    const row = board.get(taskID);
+    if (!row) throw new Error('missing completed row');
+    return row;
+  };
+
+  test('contract: acquireLease refuses a task the board has never seen', () => {
+    // SRC:1225:7 CE false (whole guard): an unknown task must never receive a
+    // lease. Falsifier: the mutant issues a relaunch lease for 'ghost' and
+    // leaves it in the live-lease index.
+    const board = new BackgroundJobBoard();
+    expect(board.acquireLease('ghost', 1, 'relaunch')).toBeUndefined();
+    expect(board.isTracked('ghost')).toBe(false);
+  });
+
+  test('contract: acquireLease refuses a mismatched generation on an existing row', () => {
+    // SRC:1225:7 LO (|| -> &&) and SRC:1226:7 CE false: the generation fence
+    // applies to existing rows. Falsifier: the mutants lease the row to a
+    // stale generation, so the correct-generation acquire that follows is
+    // refused by the live-lease fence.
+    const board = new BackgroundJobBoard();
+    const run = running(board);
+    expect(
+      board.acquireLease('ses_run', run.generation + 1, 'relaunch'),
+    ).toBeUndefined();
+    const lease = board.acquireLease('ses_run', run.generation, 'relaunch');
+    if (!lease) throw new Error('missing relaunch lease');
+    expect(lease.generation).toBe(run.generation);
+    expect(board.validateLease(lease)).toBe(true);
+  });
+
+  test('contract: acquireLease refuses cancellation on a completed row', () => {
+    // SRC:1231:9 CE false, SRC:1231:18 SL "" and SRC:1233:50 BSt {}: the
+    // cancellation/message branch requires a live run. Falsifier: the mutants
+    // skip the running precondition, issue a cancellation lease for a
+    // completed row, and that lease blocks the relaunch acquire below.
+    const board = new BackgroundJobBoard();
+    const row = completed(board);
+    expect(
+      board.acquireLease('ses_run', row.generation, 'cancellation'),
+    ).toBeUndefined();
+    expect(
+      board.acquireLease('ses_run', row.generation, 'relaunch')?.taskID,
+    ).toBe('ses_run');
+  });
+
+  test('contract: acquireLease refuses terminal-notification while the run is live', () => {
+    // SRC:1233:16 CE false, SRC:1233:25 SL "", SRC:1235:9 CE true,
+    // SRC:1241:9 CE false and SRC:1241:9 LO (|| -> &&): a terminal
+    // publication lease requires terminal evidence. Falsifier: the mutants
+    // skip that evidence check and lease a running row.
+    const board = new BackgroundJobBoard();
+    const run = running(board);
+    expect(
+      board.acquireLease('ses_run', run.generation, 'terminal-notification'),
+    ).toBeUndefined();
+    expect(
+      board.acquireLease('ses_run', run.generation, 'relaunch')?.taskID,
+    ).toBe('ses_run');
+  });
+
+  test('contract: acquireLease refuses terminal-notification pinned to the wrong terminalRevision', () => {
+    // SRC:1241:9 LO (|| -> &&) and SRC:1242:10 CE false: a revision-pinned
+    // lease must match the row's current terminalRevision. Falsifier: the
+    // mutants ignore the pin mismatch and lease a stale publication.
+    const board = new BackgroundJobBoard();
+    const row = completed(board);
+    expect(row.terminalRevision).toBe(1);
+    expect(
+      board.acquireLease('ses_run', row.generation, 'terminal-notification', {
+        terminalRevision: row.terminalRevision - 1,
+      }),
+    ).toBeUndefined();
+    const lease = board.acquireLease(
+      'ses_run',
+      row.generation,
+      'terminal-notification',
+      { terminalRevision: row.terminalRevision },
+    );
+    if (!lease) throw new Error('missing terminal-notification lease');
+    expect(lease.terminalRevision).toBe(row.terminalRevision);
+  });
+
+  test('contract: a cancellation lease carries no terminalRevision property', () => {
+    // SRC:1253:11 CE true: only terminal-notification leases carry the pin.
+    // Falsifier: the mutant attaches terminalRevision to the cancellation
+    // lease shape.
+    const board = new BackgroundJobBoard();
+    const run = running(board);
+    const lease = board.acquireLease('ses_run', run.generation, 'cancellation');
+    if (!lease) throw new Error('missing cancellation lease');
+    expect('terminalRevision' in lease).toBe(false);
+  });
+
+  test('contract: validateLease rejects a lease whose generation drifted', () => {
+    // SRC:1265:7 CE true: the generation comparison is load bearing.
+    // Falsifier: the mutant accepts a lease carrying another generation.
+    const board = new BackgroundJobBoard();
+    const run = running(board);
+    const lease = board.acquireLease('ses_run', run.generation, 'relaunch');
+    if (!lease) throw new Error('missing relaunch lease');
+    expect(board.validateLease(lease)).toBe(true);
+    expect(
+      board.validateLease({ ...lease, generation: run.generation + 1 }),
+    ).toBe(false);
+  });
+
+  test('contract: validateLease rejects a lease whose kind drifted', () => {
+    // SRC:1266:7 CE true: the kind comparison is load bearing. Falsifier: the
+    // mutant accepts a lease presented under another kind.
+    const board = new BackgroundJobBoard();
+    const run = running(board);
+    const lease = board.acquireLease('ses_run', run.generation, 'relaunch');
+    if (!lease) throw new Error('missing relaunch lease');
+    expect(board.validateLease(lease)).toBe(true);
+    expect(board.validateLease({ ...lease, kind: 'message' })).toBe(false);
+  });
+
+  test('contract: validateLease returns false after the leased row is dropped', () => {
+    // SRC:1268:9 OC (optional chaining removed): validating a pin lease whose
+    // row was dropped must be false, not a throw. Falsifier: the mutant
+    // dereferences the missing row and throws.
+    const board = new BackgroundJobBoard();
+    const row = completed(board);
+    const lease = board.acquireLease(
+      'ses_run',
+      row.generation,
+      'terminal-notification',
+    );
+    if (!lease) throw new Error('missing terminal-notification lease');
+    board.drop('ses_run');
+    expect(board.get('ses_run')).toBeUndefined();
+    expect(() => board.validateLease(lease)).not.toThrow();
+    expect(board.validateLease(lease)).toBe(false);
+  });
+
+  test('contract: releaseLease refuses a lease presented under another kind', () => {
+    // SRC:1278:7 CE false: the kind fence protects the live slot. Falsifier:
+    // the mutant accepts the retyped lease, frees the slot, and the second
+    // acquire succeeds.
+    const board = new BackgroundJobBoard();
+    const run = running(board);
+    const lease = board.acquireLease('ses_run', run.generation, 'cancellation');
+    if (!lease) throw new Error('missing cancellation lease');
+    expect(board.releaseLease({ ...lease, kind: 'message' })).toBe(false);
+    expect(board.validateLease(lease)).toBe(true);
+    expect(
+      board.acquireLease('ses_run', run.generation, 'cancellation'),
+    ).toBeUndefined();
+  });
+
+  test('contract: releaseLease refuses a terminal-notification lease with a drifted terminalRevision', () => {
+    // SRC:1280:7 CE false: the terminalRevision fence is load bearing.
+    // Falsifier: the mutant releases a lease whose pin no longer matches and
+    // frees the live slot.
+    const board = new BackgroundJobBoard();
+    const row = completed(board);
+    const lease = board.acquireLease(
+      'ses_run',
+      row.generation,
+      'terminal-notification',
+    );
+    if (!lease) throw new Error('missing terminal-notification lease');
+    expect(lease.terminalRevision).toBe(row.terminalRevision);
+    expect(
+      board.releaseLease({
+        ...lease,
+        terminalRevision: row.terminalRevision - 1,
+      }),
+    ).toBe(false);
+    expect(board.validateLease(lease)).toBe(true);
+  });
+});
+
+describe('BackgroundJobBoard GAP-HIGH contract pins (#1723) — recoverable terminal rows', () => {
+  test('contract: resolveRecoverable refuses a terminal row that kept live-busy recoverability', () => {
+    // SRC:1374:9-1374:32 CE false: the state half of the guard is load
+    // bearing even when the recoverability flag is set. correctStartup-
+    // RecoveredTerminal (SRC:1737) retires a run without clearing
+    // recoverableAfterLiveBusy (it spreads ...existing), so a terminal row
+    // can carry the flag. Falsifier: the mutant replaces `job.state !==
+    // 'running'` with false, drops the state check, and returns the row.
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_ext',
+      parentSessionID: 'p1',
+      agent: 'explorer',
+      adopted: true,
+      now: 100,
+    });
+    board.updateStatus({
+      taskID: 'ses_ext',
+      state: 'running',
+      timedOut: true,
+      now: 200,
+    });
+    board.markRunningFromLiveSession('ses_ext', 300);
+    expect(board.get('ses_ext')?.recoverableAfterLiveBusy).toBe(true);
+    const corrected = board.correctStartupRecoveredTerminal({
+      taskID: 'ses_ext',
+      generation: board.get('ses_ext')?.generation ?? -1,
+      state: 'completed',
+      now: 400,
+    });
+    expect(corrected?.state).toBe('completed');
+    expect(board.get('ses_ext')?.recoverableAfterLiveBusy).toBe(true);
+    expect(board.resolveRecoverable('p1', 'ses_ext')).toBeUndefined();
+  });
+});

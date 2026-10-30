@@ -86,6 +86,7 @@
     "format": "biome format . --write",
     "check": "biome check --write .",
     "check:ci": "biome check .",
+    "mutation": "stryker run",
     "eval": "bun run src/cli/eval.ts",
     "eval:smoke": "bun run src/cli/eval.ts --smoke",
     "ci:eval": "bun run eval --suite orchestrator-direct-execution --outputs-file /tmp/eval-outputs.json",
@@ -119,7 +120,9 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
+    "@hughescr/stryker-bun-runner": "1.6.0",
     "@opencode/plugin": "2.2.0",
+    "@stryker-mutator/core": "10.0.0",
     "@types/jsdom": "30",
     "@types/node": "^26.6.2",
     "@types/semver": "^7.7.1",
