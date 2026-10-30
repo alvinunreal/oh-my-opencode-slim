@@ -568,7 +568,8 @@ produces one `multiplexer.host-unsupported` record per process; shared and
   v1, WezTerm also uses the bridge when the TUI's environment has
   `OPENCODE_SERVER_PASSWORD`: it exports only that variable (never a v2
   `OPENCODE_PASSWORD`) for `opencode attach`, plus `OPENCODE_SERVER_USERNAME`
-  when set. A TUI attached with `attach -p` but without the environment
+  when set. tmux forwards those v1 environment variables via `split-window -e`.
+  A TUI attached with `attach -p` but without the environment
   variable gets no forwarded password, so its viewer panes cannot
   authenticate. The client wiring itself must also be able to authenticate
   against a v1 password-protected server (see `host-unreachable` under

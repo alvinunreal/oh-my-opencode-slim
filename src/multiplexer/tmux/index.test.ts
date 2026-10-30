@@ -136,6 +136,74 @@ describe('TmuxMultiplexer', () => {
     );
   });
 
+  test('forwards v1 viewer credentials without logging either value', async () => {
+    const password = process.env.OPENCODE_SERVER_PASSWORD;
+    const username = process.env.OPENCODE_SERVER_USERNAME;
+    process.env.OPENCODE_SERVER_PASSWORD = 'test-secret';
+    process.env.OPENCODE_SERVER_USERNAME = 'test-user';
+    try {
+      crossSpawnMock.mockImplementation((command: string[]) => {
+        if (command[0] === 'which')
+          return createSpawnResult(0, '/usr/bin/tmux\n');
+        if (command.includes('-V')) return createSpawnResult(0, 'tmux 3.6a');
+        if (command.includes('split-window'))
+          return createSpawnResult(0, '%2\n', 'test-user test-secret');
+        return createSpawnResult();
+      });
+      const { TmuxMultiplexer } = await importFreshTmux();
+      await new TmuxMultiplexer().spawnPane(
+        'child',
+        'child',
+        'http://host',
+        '/repo',
+      );
+      const split = commandContaining('split-window') ?? [];
+      expect(split).toContain('OPENCODE_SERVER_PASSWORD=test-secret');
+      expect(split).toContain('OPENCODE_SERVER_USERNAME=test-user');
+      expect(JSON.stringify(logMock.mock.calls)).not.toContain('test-secret');
+      expect(JSON.stringify(logMock.mock.calls)).not.toContain('test-user');
+    } finally {
+      if (password === undefined) delete process.env.OPENCODE_SERVER_PASSWORD;
+      else process.env.OPENCODE_SERVER_PASSWORD = password;
+      if (username === undefined) delete process.env.OPENCODE_SERVER_USERNAME;
+      else process.env.OPENCODE_SERVER_USERNAME = username;
+    }
+  });
+
+  test('tmux 2.9 keeps inherited v1 credentials without unsupported split flags', async () => {
+    const password = process.env.OPENCODE_SERVER_PASSWORD;
+    const username = process.env.OPENCODE_SERVER_USERNAME;
+    process.env.OPENCODE_SERVER_PASSWORD = 'test-secret';
+    process.env.OPENCODE_SERVER_USERNAME = 'test-user';
+    try {
+      crossSpawnMock.mockImplementation((command: string[]) => {
+        if (command[0] === 'which')
+          return createSpawnResult(0, '/usr/bin/tmux\n');
+        if (command.includes('-V')) return createSpawnResult(0, 'tmux 2.9');
+        if (command.includes('split-window'))
+          return createSpawnResult(0, '%2\n');
+        return createSpawnResult();
+      });
+      const { TmuxMultiplexer } = await importFreshTmux();
+      expect(
+        await new TmuxMultiplexer().spawnPane(
+          'child',
+          'child',
+          'http://host',
+          '/repo',
+        ),
+      ).toEqual({ success: true, paneId: '%2' });
+      expect(commandContaining('split-window')).not.toContain('-e');
+      expect(JSON.stringify(logMock.mock.calls)).not.toContain('test-secret');
+      expect(JSON.stringify(logMock.mock.calls)).not.toContain('test-user');
+    } finally {
+      if (password === undefined) delete process.env.OPENCODE_SERVER_PASSWORD;
+      else process.env.OPENCODE_SERVER_PASSWORD = password;
+      if (username === undefined) delete process.env.OPENCODE_SERVER_USERNAME;
+      else process.env.OPENCODE_SERVER_USERNAME = username;
+    }
+  });
+
   test('spawnPane explicitly addresses the tmux server with -S <socket>', async () => {
     const { TmuxMultiplexer } = await importFreshTmux();
     const tmux = new TmuxMultiplexer('main-vertical', 60);

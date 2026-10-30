@@ -243,7 +243,9 @@ export function redactViewerSecretArgs(args: readonly string[]): string[] {
     const separator = arg.indexOf('=');
     if (separator === -1) return arg;
     const name = arg.slice(0, separator);
-    return name === 'OPENCODE_PASSWORD' || name === 'OPENCODE_SERVER_PASSWORD'
+    return name === 'OPENCODE_PASSWORD' ||
+      name === 'OPENCODE_SERVER_PASSWORD' ||
+      name === 'OPENCODE_SERVER_USERNAME'
       ? `${name}=<redacted>`
       : arg;
   });
@@ -371,7 +373,11 @@ export function findBinaryLogPrefix(
 
 export async function findBinary(
   binaryName: string,
-  options: { verify?: boolean; logPrefix?: string } = {},
+  options: {
+    verify?: boolean;
+    logPrefix?: string;
+    onVerified?: (version: string) => void;
+  } = {},
 ): Promise<string | null> {
   const isWindows = process.platform === 'win32';
   const cmd = isWindows ? 'where' : 'which';
@@ -413,6 +419,7 @@ export async function findBinary(
           return null;
         }
         const verifyStdout = await verifyProc.stdout();
+        options.onVerified?.(verifyStdout.trim());
         log(`${logPrefix} findBinary: verified`, {
           version: verifyStdout.trim(),
         });
