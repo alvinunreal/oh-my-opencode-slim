@@ -477,7 +477,7 @@ export async function hydrateModelNames(
   try {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const names = await Promise.race([
-      fetchModelNameMap({ client }),
+      fetchModelNameMap({ client, directory }),
       new Promise<never>((_, reject) => {
         timer = setTimeout(
           () => reject(new Error('model names fetch timed out')),

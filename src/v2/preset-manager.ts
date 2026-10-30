@@ -1494,7 +1494,7 @@ async function fetchModelOptions(run: ManagerRun): Promise<ModelOption[]> {
 
 /** Defensive normalization of one host model entry; unusable entries are
  * dropped rather than crashing the picker. */
-function normalizeModelOption(entry: unknown): ModelOption | undefined {
+export function normalizeModelOption(entry: unknown): ModelOption | undefined {
   if (!entry || typeof entry !== 'object') return undefined;
   const rec = entry as {
     providerID?: unknown;

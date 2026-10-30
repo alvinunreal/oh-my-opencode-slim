@@ -4135,6 +4135,36 @@ describe('sidebar model display names', () => {
       return { names: new Map() };
     }
 
+    test('loads v2 model names from the location-scoped model list', async () => {
+      const calls: unknown[] = [];
+      const client = {
+        model: {
+          list: async (input: unknown) => {
+            calls.push(input);
+            return {
+              data: [
+                { providerID: 'openai', id: 'gpt-test', name: 'GPT Test' },
+                {
+                  providerID: 'other',
+                  modelID: 'model-two',
+                  name: 'Model Two',
+                },
+                { providerID: 'other', id: 'model-empty', name: '' },
+                { id: 'missing-provider', name: 'Invalid' },
+              ],
+            };
+          },
+        },
+      };
+      const names = await hydrateModelNames(client, '/project', cache());
+      expect(calls).toEqual([{ location: { directory: '/project' } }]);
+      expect(Object.fromEntries(names)).toEqual({
+        'openai/gpt-test': 'GPT Test',
+        'other/model-two': 'Model Two',
+        'other/model-empty': 'model-empty',
+      });
+    });
+
     test('serves TTL hits and refetches when the directory changes', async () => {
       let clock = 0;
       const stub = providersClient({});
