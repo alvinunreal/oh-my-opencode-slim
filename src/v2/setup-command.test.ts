@@ -651,6 +651,35 @@ describe('createSessionContextHandler (merged context hook seam)', () => {
     ]);
   });
 
+  test('context bridge exposes the stored synthetic delivery time to the observer', async () => {
+    const text =
+      '<subagent sessionID="ses_child" state="completed" description="work">\ndone\n</subagent>';
+    const event = makeEvent([
+      { id: 'msg_delivery', role: 'user', content: [{ type: 'text', text }] },
+    ]);
+    let observedTime: unknown;
+    const handler = createSessionContextHandler({
+      interviewHandleContext: async () => {},
+      sessionContext: async () => [
+        {
+          id: 'msg_delivery',
+          type: 'synthetic',
+          text,
+          time: { created: 2000 },
+        },
+      ],
+      messagesTransform: async (_input, output) => {
+        observedTime = (
+          output.messages[0]?.info as { time?: unknown } | undefined
+        )?.time;
+      },
+    });
+
+    await handler(event);
+    expect(observedTime).toEqual({ created: 2000 });
+    expect(event.messages[0]).not.toHaveProperty('time');
+  });
+
   test('context bridge collapses v2 tool parts without mutating them', async () => {
     const kickoff = {
       type: 'tool-call',

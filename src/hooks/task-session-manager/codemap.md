@@ -82,7 +82,7 @@ All modules depend on `BackgroundJobBoard` from `src/utils/background-job-board.
 
 4. **Delivery Observation (`experimental.chat.messages.transform`)**
     - The job board is NEVER rendered into a prompt (issue #1647): there is no board part, no change-only digest, and no retained-board replay
-    - Observes terminal deliveries already present in the parent's history and retires exactly the run they reported: the host's native `<subagent>` delivery (v2), the plugin's own tagged `<completed-job>` push part (generation + terminal revision fenced), and the revived-run `<task>` notification
+    - Observes terminal deliveries already present in the parent's history and retires exactly the run they reported: the host's native `<subagent>` delivery (v2; exact metadata-free context header is parent, time and terminal-state fenced), the plugin's own tagged `<completed-job>` push part (generation + terminal revision fenced), and the revived-run `<task>` notification
     - A text fallback recognizes the plugin's own delta bodies in wake parts (internal-initiator tagged), so model-authored text can never retire a record
     - A stale-terminal fallback retires a completed, error, or cancelled record once the parent demonstrably moved past the terminal report (a later parent turn); `stopped` records are excluded (recovery-wake ownership)
     - Reopen corrections (a reconciled job that reopened) are appended as one trailing volatile message pointing at `task_status`

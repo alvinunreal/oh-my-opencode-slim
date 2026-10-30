@@ -74,7 +74,7 @@ The v2 runtime surface and plugin contracts are adapted through the following da
    - **Tool domain**: Uses `adaptTool` to convert v1 tool definitions to v2 JSON schemas via zod shape adaptation, passing the native cancellation signal to `abort` and tool metadata to `progress`
    - **MCP domain**: Uses `adaptMcpServer` to convert v1 McpConfig to v2 Mcp.ServerConfig (fields are nearly identical with minor cleanup)
    - **Command domain**: Uses marker-based round-trip registration where v2 command drafts are add-only, and `execute` submits whole-text-anchored `<omos-cmd-command>` markers as user prompts
-   - **Session hooks**: Single `ctx.session.hook("context")` handles system/messages transforms, chat.message agent tracking, and marker dispatch with interview bridge integration
+   - **Session hooks**: Single `ctx.session.hook("context")` handles system/messages transforms, chat.message agent tracking, and marker dispatch with interview bridge integration. Stored synthetic delivery timestamps are projected into the observer by message ID and omitted again from the outgoing context.
    - **Runtime bridges**: Separate session hooks for `prompt`, `model.request`, and `compaction` bridges that adapt v1 chat.headers, chat.message, and session.compaction to v2
    - **Permission rules**: Uses `createPermissionRulesBridge` to apply child-session permission rules via `ctx.session.update({sessionID, permissions})`
    - **Tool execute bridges**: Uses `createToolExecuteBridges` to normalize `subagent`→`task` semantics for tool.execute.before/after hooks

@@ -3,11 +3,9 @@
  *
  * The host's `sessions.synthetic` part opens with the
  * `<subagent sessionID="..." state="...">` tag AND carries
- * `metadata: { source: 'subagent', childID, state }`. Both are required:
- * header anchoring alone would let pasted user/assistant text masquerade
- * as a delivery, so the metadata must exist and agree with the tag. A
- * result body merely quoting foreign task markup is nested, never at the
- * header, and cannot match either.
+ * `metadata: { source: 'subagent', childID, state }`. The context hook
+ * strips metadata, so its caller may use the exact native header instead,
+ * but only behind parent, timestamp and terminal-state fences.
  */
 import { isRecord } from '../../utils/guards';
 import {
@@ -32,6 +30,7 @@ export type NativeDelivery = {
 
 export function parseNativeDelivery(
   part: MessagePart,
+  allowContextHeader = false,
 ): NativeDelivery | undefined {
   const text = part.text;
   if (typeof text !== 'string' || !/^\s*<subagent\b/i.test(text)) {
@@ -43,6 +42,15 @@ export function parseNativeDelivery(
     return undefined;
   }
   const meta = part.metadata;
+  if (
+    meta === undefined &&
+    allowContextHeader &&
+    /^<subagent sessionID="ses_[A-Za-z0-9_-]+" state="(?:completed|error|cancelled)"(?:>| [^>\r\n]*>)/.test(
+      text,
+    )
+  ) {
+    return { taskID, state: state as NativeDeliveryState };
+  }
   if (
     !isRecord(meta) ||
     meta.source !== 'subagent' ||

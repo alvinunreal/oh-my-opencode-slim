@@ -24,6 +24,7 @@ import type {
 } from '../../utils';
 import {
   isInternalInitiatorPart,
+  markPersistedBackgroundChildDelivered,
   parseTaskIdFromTaskOutput,
   parseTaskStateFromOutput,
   parseTaskStatusOutput,
@@ -39,12 +40,7 @@ import {
 } from '../cache-safe-injection';
 import type { MessagePart, MessageWithParts } from '../types';
 import { isMessageWithParts, isUserMessageWithParts } from '../types';
-import {
-  messageCreatedAt,
-  NATIVE_DELIVERY_STATES,
-  type NativeDelivery,
-  parseNativeDelivery,
-} from './native-delivery';
+import { messageCreatedAt, parseNativeDelivery } from './native-delivery';
 import { extractTaskSummary, isLateCancelledTaskError } from './status-utils';
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -1121,11 +1117,6 @@ function reconcileExecutionBatch(
 // cannot attribute it; those runs retire through the plugin's own tagged
 // push or the stale-terminal fallback instead.
 
-type ObservedNativeDelivery = NativeDelivery & {
-  /** Dedupe key: the delivery part's own message/part identity. */
-  seenKey: string;
-};
-
 /**
  * Skew allowance for the current-publication check: the terminal event the
  * plugin observes and the host's delivery-message creation are concurrent
@@ -1170,11 +1161,9 @@ function nativeDeliverySeenKey(
  * present in the parent's message history. Pairing is ONE-SHOT: a delivery
  * key is remembered on first observation and can retire at most one
  * terminal publication — the record's CURRENT terminal run at that moment,
- * and only when the delivered state equals it. Deliveries observed earlier
- * (running, reconciled, mismatched, stopped) can never pair later (Greptile
- * P1-2). Untracked sessionIDs are idempotent no-ops. `stopped` records are
- * never retired here (native never delivers stops; they retire through the
- * recovery-wake + task_revive ack flow).
+ * and only when its state matches, or v2 reports an interruption as cancelled.
+ * Deliveries observed earlier (running, reconciled, mismatched) can never pair
+ * later (Greptile P1-2). Untracked sessionIDs are idempotent no-ops.
  */
 function reconcileObservedNativeDeliveries(
   state: InjectionState,
@@ -1196,7 +1185,10 @@ function reconcileObservedNativeDeliveries(
     message.parts.forEach((part, partIndex) => {
       if (part.type !== 'text' || typeof part.text !== 'string') return;
       if (isTaggedPart(part, state.metadataKey)) return;
-      const delivery = parseNativeDelivery(part);
+      const delivery = parseNativeDelivery(
+        part,
+        state.hostFlavor === 'v2' && message.info.role === 'user',
+      );
       if (!delivery) return;
       const seenKey = nativeDeliverySeenKey(message, partIndex, part.text);
       if (seen.has(seenKey)) {
@@ -1222,8 +1214,7 @@ function reconcileObservedNativeDeliveries(
       // so lastLiveBusyAt is unset). The current publication otherwise
       // retires via its own delivery or retireStaleTerminalRecords.
       const deliveryTime = messageCreatedAt(message);
-      // Trusted metadata proves who authored the delivery, not WHICH run it
-      // reports. Without a host timestamp no causal fence can be checked.
+      // Without a host timestamp no causal fence can be checked.
       if (deliveryTime === undefined) return;
       if (!record.terminalUnreconciled) {
         if (
@@ -1274,19 +1265,18 @@ function reconcileObservedNativeDeliveries(
       ) {
         return;
       }
-      // A delivery retires only the terminal run it reports: the record's
-      // terminal state must equal the delivered state.
       const terminalState = record.terminalState ?? record.state;
-      if (terminalState !== delivery.state) return;
+      const interrupted =
+        state.hostFlavor === 'v2' &&
+        delivery.state === 'cancelled' &&
+        (terminalState === 'error' ||
+          terminalState === 'cancelled' ||
+          terminalState === 'stopped');
       if (
-        !NATIVE_DELIVERY_STATES.has(
-          record.state as ObservedNativeDelivery['state'],
-        )
-      ) {
-        // stopped: retires only through the recovery-wake + task_revive
-        // ack flow; the remembered key never pairs.
+        !interrupted &&
+        (terminalState !== delivery.state || record.state === 'stopped')
+      )
         return;
-      }
       reconcileExecutionBatch(state, parentSessionID, [
         {
           taskID: record.taskID,
@@ -1294,6 +1284,11 @@ function reconcileObservedNativeDeliveries(
           terminalRevision: record.terminalRevision,
         },
       ]);
+      markPersistedBackgroundChildDelivered(
+        record.taskID,
+        deliveryTime,
+        record.runStartedAt,
+      );
     });
   }
 }

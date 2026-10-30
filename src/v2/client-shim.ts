@@ -173,7 +173,18 @@ function toV1Message(m: Record<string, unknown>) {
       ...(m.rawFinish !== undefined ? { rawFinish: m.rawFinish } : {}),
       ...(m.error !== undefined ? { error: m.error } : {}),
     },
-    parts: text === undefined ? contentParts : [{ type: 'text', text }],
+    parts:
+      text === undefined
+        ? contentParts
+        : [
+            {
+              type: 'text',
+              text,
+              ...(sourceType === 'synthetic' && isRecord(m.metadata)
+                ? { metadata: m.metadata }
+                : {}),
+            },
+          ],
   };
 }
 
