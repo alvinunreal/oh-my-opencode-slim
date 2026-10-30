@@ -52,6 +52,20 @@ function makeCtxWithPermission(options: {
 }
 
 describe('v2 client shim delegation', () => {
+  test('exposes the real switchModel capability only when available', async () => {
+    const calls: unknown[] = [];
+    const input = buildPluginInput(
+      makeCtx({ switchModel: async (args) => void calls.push(args) }),
+    );
+    const channel = input.experimental_v2 as {
+      switchModel: (sessionID: string, model: unknown) => Promise<unknown>;
+    };
+    const model = { providerID: 'test', id: 'b', variant: 'fast' };
+    await channel.switchModel('session', model);
+    expect(calls).toEqual([{ sessionID: 'session', model }]);
+    expect(buildPluginInput(makeCtx()).experimental_v2).toBeUndefined();
+  });
+
   test('messages maps session.context to v1 {data} with info/parts', async () => {
     const calls: unknown[] = [];
     const input = buildPluginInput(

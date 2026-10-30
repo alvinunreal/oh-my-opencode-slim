@@ -2228,7 +2228,436 @@ describe('foreground fallback redo: host retry budget', () => {
   });
 });
 
+describe('ForegroundFallbackManager v2 content-filter refusal', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  function fixture(options?: {
+    parentID?: string;
+    chains?: Record<string, Array<string | { id: string; variant: string }>>;
+    switchModel?: (sessionID: string, model: unknown) => Promise<unknown>;
+    promptAsyncImpl?: (args: unknown) => Promise<unknown>;
+  }) {
+    const durable = { providerID: 'test', id: 'a', variant: 'source' };
+    const info: { model?: typeof durable; parentID?: string; agent?: string } =
+      {
+        model: durable,
+        parentID: options?.parentID,
+        agent: 'orchestrator',
+      };
+    const { client, mocks } = createMockClient({
+      getData: info,
+      promptAsyncImpl: options?.promptAsyncImpl,
+    });
+    const switchModel = mock(
+      options?.switchModel ??
+        (async (_sessionID: string, _model: unknown) => {}),
+    );
+    const onChanged = mock();
+    const manager = new ForegroundFallbackManager(
+      options?.chains ?? {
+        orchestrator: ['test/a', { id: 'test/b', variant: 'high' }],
+      },
+      false,
+      {
+        directory: '/test',
+        hostFlavor: 'v2',
+        client,
+        experimental_v2: { switchModel },
+      } as never,
+      0,
+      undefined,
+      onChanged,
+      0,
+      0,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    return { manager, mocks, switchModel, onChanged, durable, info };
+  }
+
+  const started = (id: string, model = 'a', message = 'assistant-1') => ({
+    type: 'session.step.started',
+    data: {
+      sessionID: id,
+      assistantMessageID: message,
+      agent: 'orchestrator',
+      model: {
+        providerID: 'test',
+        id: model,
+        ...(model === 'a' ? { variant: 'source' } : { variant: 'high' }),
+      },
+    },
+  });
+  const failed = (
+    id: string,
+    message = 'assistant-1',
+    finish = 'content-filter',
+  ) => ({
+    type: 'session.step.failed',
+    data: {
+      sessionID: id,
+      assistantMessageID: message,
+      finish,
+      rawFinish: 'refusal',
+      error: {
+        type: 'provider.content-filter',
+        message: 'Provider blocked the response',
+      },
+    },
+  });
+  const settle = async () => {
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+  };
+
+  test('v2 refusal continuation names the refused step agent', async () => {
+    const { manager, mocks } = fixture();
+    await manager.handleEvent(started('agent'));
+    await manager.handleEvent(failed('agent'));
+    await settle();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
+      body: { agent: 'orchestrator' },
+    });
+  });
+
+  test('v2 refusal reports a failed switch without implying a retry hook', async () => {
+    const logSpy = spyOn(logger, 'log').mockImplementation(() => {});
+    try {
+      const { manager } = fixture({
+        switchModel: async () => {
+          throw new Error('denied');
+        },
+      });
+      await manager.handleEvent(started('failed-log'));
+      await manager.handleEvent(failed('failed-log'));
+      await settle();
+      expect(logSpy).toHaveBeenCalledWith(
+        '[foreground-fallback] v2 model switch failed',
+        expect.objectContaining({ sessionID: 'failed-log' }),
+      );
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test('v2 refusal consumes one step and accepts the next distinct step', async () => {
+    const { manager, mocks, switchModel, durable } = fixture();
+    await manager.handleEvent(started('consume'));
+    await manager.handleEvent(failed('consume'));
+    await settle();
+    await manager.handleEvent(failed('consume'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+
+    durable.id = 'b';
+    durable.variant = 'high';
+    await manager.handleEvent(started('consume', 'b', 'assistant-2'));
+    await manager.handleEvent(failed('consume'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    await manager.handleEvent(failed('consume', 'assistant-2'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(2);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+  });
+
+  test('v2 refusal does not race a pending retry-hook switch', async () => {
+    const pending = deferred<void>();
+    const { manager, mocks, switchModel } = fixture({
+      switchModel: () => pending.promise,
+    });
+    await manager.handleEvent(started('retry-race'));
+    const retry = manager.handleV2Retry(
+      retryEvent('retry-race', 'a', { retry: false }),
+      switchModel,
+    );
+    try {
+      await settle();
+      expect(switchModel).toHaveBeenCalledTimes(1);
+      await manager.handleEvent(failed('retry-race'));
+      await settle();
+      expect(switchModel).toHaveBeenCalledTimes(1);
+      expect(mocks.promptAsync).not.toHaveBeenCalled();
+    } finally {
+      pending.resolve();
+      await retry;
+      await settle();
+    }
+  });
+
+  test('v2 refusal from a tried model does not poison a later retry-hook fallback', async () => {
+    const { manager, mocks, switchModel, durable } = fixture();
+    await manager.handleV2Retry(
+      retryEvent('late-refusal', 'a', { retry: false }),
+      switchModel,
+    );
+    durable.id = 'b';
+    durable.variant = 'high';
+    await manager.handleEvent(started('late-refusal'));
+    await manager.handleEvent(failed('late-refusal'));
+    expect(manager.isFallbackInProgress('late-refusal')).toBe(false);
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    const retry = retryEvent('late-refusal', 'b', { retry: false });
+    await manager.handleV2Retry(retry, switchModel);
+    expect(switchModel).toHaveBeenCalledTimes(2);
+    expect(retry.decision).toEqual({ retry: true, delay: 0 });
+  });
+
+  test('v2 child refusal with no chain does not delay terminal bookkeeping', async () => {
+    const { manager, mocks, switchModel } = fixture({
+      parentID: 'parent',
+      chains: { orchestrator: [] },
+    });
+    const get = spyOn(currentMockSession as any, 'get');
+    await manager.handleEvent({
+      type: 'session.created',
+      properties: { info: { id: 'no-chain-child', parentID: 'parent' } },
+    });
+    await manager.handleEvent(started('no-chain-child'));
+    await manager.handleEvent(failed('no-chain-child'));
+    await settle();
+    expect(get).not.toHaveBeenCalled();
+    expect(manager.isFallbackInProgress('no-chain-child')).toBe(false);
+    expect(manager.willAttemptFallback('no-chain-child')).toBe(false);
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('v2 stale durable selection does not overwrite the observed session model', async () => {
+    const { manager, mocks, switchModel, durable, onChanged } = fixture();
+    durable.id = 'b';
+    durable.variant = 'high';
+    manager.observeExternalTurn('stale-model', 'test/b');
+    await manager.handleEvent(started('stale-model'));
+    await manager.handleEvent(failed('stale-model'));
+    await settle();
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    manager.observeContinuationModel('stale-model', 'test/b');
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  test('v2 refusal from a step predating an external prompt never continues', async () => {
+    const { manager, mocks, switchModel } = fixture();
+    await manager.handleEvent(started('old-step'));
+    manager.noteV2Prompt('old-step');
+    await manager.handleEvent(failed('old-step'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('v2 content-filter ignores a failure before step start', async () => {
+    const { manager, switchModel } = fixture();
+    await manager.handleEvent(failed('root'));
+    await settle();
+    expect(switchModel).not.toHaveBeenCalled();
+  });
+
+  test('v2 content-filter ignores a failure for a different step', async () => {
+    const { manager, switchModel } = fixture();
+    await manager.handleEvent(started('root'));
+    await manager.handleEvent(failed('root', 'other'));
+    await settle();
+    expect(switchModel).not.toHaveBeenCalled();
+  });
+
+  test('v2 content-filter ignores other step finishes', async () => {
+    const { manager, switchModel } = fixture();
+    await manager.handleEvent(started('root'));
+    await manager.handleEvent(failed('root', 'assistant-1', ''));
+    await settle();
+    expect(switchModel).not.toHaveBeenCalled();
+  });
+
+  test('v2 content-filter switches to the configured fallback variant', async () => {
+    const { manager, switchModel } = fixture();
+    await manager.handleEvent(started('root'));
+    await manager.handleEvent(failed('root'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(switchModel).toHaveBeenCalledWith('root', {
+      providerID: 'test',
+      id: 'b',
+      variant: 'high',
+    });
+  });
+
+  test('v2 content-filter projects the confirmed agent and variant', async () => {
+    const { manager, onChanged } = fixture();
+    await manager.handleEvent(started('root'));
+    await manager.handleEvent(failed('root'));
+    await settle();
+    expect(onChanged).toHaveBeenCalledWith('root', 'test/b', {
+      agentName: 'orchestrator',
+      variant: 'high',
+    });
+  });
+
+  test('v2 content-filter does not mark the provider down', async () => {
+    const { manager } = fixture();
+    await manager.handleEvent(started('root'));
+    await manager.handleEvent(failed('root'));
+    await settle();
+    expect(manager.getActiveFallback('root')?.downProviders.size).toBe(0);
+  });
+
+  test('v2 content-filter continuation is internal and does not override the model', async () => {
+    const { manager, mocks } = fixture();
+    await manager.handleEvent(started('root'));
+    await manager.handleEvent(failed('root'));
+    await settle();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    const request = mocks.promptAsync.mock.calls[0]?.[0] as {
+      body: { parts: unknown[]; model?: unknown };
+    };
+    expect(request.body.model).toBeUndefined();
+    expect(isInternalInitiatorPart(request.body.parts[0])).toBe(true);
+  });
+
+  test('v2 content-filter remains in progress until continuation admission settles', async () => {
+    const admission = deferred<void>();
+    const { manager } = fixture({ promptAsyncImpl: () => admission.promise });
+    await manager.handleEvent(started('root'));
+    await manager.handleEvent(failed('root'));
+    await settle();
+    expect(manager.isFallbackInProgress('root')).toBe(true);
+    admission.resolve();
+    await settle();
+    expect(manager.isFallbackInProgress('root')).toBe(false);
+  });
+
+  test('v2 content-filter child switches without an orphan continuation', async () => {
+    const { manager, mocks, switchModel } = fixture({ parentID: 'parent' });
+    await manager.handleEvent(started('child'));
+    await manager.handleEvent(failed('child'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('v2 content-filter uses the step model when the session has no explicit model', async () => {
+    const { manager, mocks, switchModel, info } = fixture();
+    delete info.model;
+    info.agent = 'explorer';
+    await manager.handleEvent(started('implicit'));
+    await manager.handleEvent(failed('implicit'));
+    await settle();
+    expect(switchModel).not.toHaveBeenCalled();
+    info.agent = 'orchestrator';
+    await manager.handleEvent(started('implicit', 'a', 'assistant-2'));
+    await manager.handleEvent(failed('implicit', 'assistant-2'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('v2 content-filter matches the host default variant to an unpinned durable selection', async () => {
+    const { manager, mocks, switchModel, durable } = fixture();
+    (durable as { variant?: string }).variant = undefined;
+    const start = started('default');
+    start.data.model.variant = 'default';
+    await manager.handleEvent(start);
+    await manager.handleEvent(failed('default'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('v2 content-filter refuses a stale durable variant then handles the current step', async () => {
+    const { manager, mocks, switchModel, durable } = fixture();
+    durable.variant = 'newer';
+    await manager.handleEvent(started('stale'));
+    await manager.handleEvent(failed('stale'));
+    await settle();
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    durable.variant = 'source';
+    await manager.handleEvent(started('stale', 'a', 'assistant-2'));
+    await manager.handleEvent(failed('stale', 'assistant-2'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('v2 content-filter does not continue over a newer external prompt', async () => {
+    const pending = deferred<void>();
+    const { manager, mocks, switchModel } = fixture({
+      switchModel: () => pending.promise,
+    });
+    await manager.handleEvent(started('epoch'));
+    await manager.handleEvent(failed('epoch'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    manager.noteV2Prompt('epoch');
+    pending.resolve();
+    await settle();
+    expect(manager.getActiveFallback('epoch')?.model).toBe('test/b');
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('v2 content-filter rejected switch leaves its target available to the next step', async () => {
+    let calls = 0;
+    const { manager, mocks, switchModel } = fixture({
+      switchModel: async () => {
+        if (++calls === 1) throw new Error('denied');
+      },
+    });
+    await manager.handleEvent(started('retry'));
+    await manager.handleEvent(failed('retry'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    await manager.handleEvent(started('retry', 'a', 'assistant-2'));
+    await manager.handleEvent(failed('retry', 'assistant-2'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(2);
+    expect(switchModel.mock.calls[1]?.[1]).toEqual({
+      providerID: 'test',
+      id: 'b',
+      variant: 'high',
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('v2 content-filter keeps the existing sticky retry and exhaustion policy', async () => {
+    const { manager, mocks, switchModel, durable } = fixture();
+    await manager.handleEvent(started('exhaust'));
+    await manager.handleEvent(failed('exhaust'));
+    await settle();
+    durable.id = 'b';
+    durable.variant = 'high';
+    await manager.handleEvent(started('exhaust', 'b', 'assistant-2'));
+    await manager.handleEvent(failed('exhaust', 'assistant-2'));
+    await settle();
+    await manager.handleEvent(started('exhaust', 'b', 'assistant-3'));
+    await manager.handleEvent(failed('exhaust', 'assistant-3'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(2);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+    expect(manager.willAttemptFallback('exhaust')).toBe(false);
+  });
+});
+
 describe('ForegroundFallbackManager v2 retry hook', () => {
+  test('retains a confirmed switch when the projection callback throws', async () => {
+    const retryManager = retryMgr(['A', 'B'], () => {
+      throw new Error('projection failed');
+    });
+    const retry = retryEvent('retry-projection-error', 'A', { retry: false });
+    await retryManager.handleV2Retry(retry, async () => {});
+    expect(retry.decision).toEqual({ retry: true, delay: 500 });
+    expect(
+      retryManager.getActiveFallback('retry-projection-error')?.model,
+    ).toBe('test/B');
+  });
+
   test.each([{ retry: true, delay: 2000 }, { retry: false }])(
     'switches in place without abort or re-prompt (initial decision %p)',
     async (decision) => {
@@ -2245,7 +2674,10 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
       expect(event.decision).toEqual({ retry: true, delay: 500 });
       expect(mocks.abort).not.toHaveBeenCalled();
       expect(mocks.promptAsync).not.toHaveBeenCalled();
-      expect(onChanged).toHaveBeenCalledWith('c', 'test/B');
+      expect(onChanged).toHaveBeenCalledWith('c', 'test/B', {
+        agentName: 'orchestrator',
+        variant: undefined,
+      });
       await mgr.handleV2Retry(
         retryEvent('c', 'A', { ...decision }),
         switchModel,

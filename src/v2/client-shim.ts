@@ -48,6 +48,10 @@ export interface V2GenerateModelRef {
 /** Optional v2 capabilities threaded into the v1 PluginInput. Absent
  * capabilities must leave the input object unchanged (v1 parity). */
 export interface ExperimentalV2 {
+  switchModel?: (
+    sessionID: string,
+    model: V2GenerateModelRef,
+  ) => Promise<unknown>;
   /** Queued prompts preserve caller-chosen message IDs in session.context. */
   queuedPromptIdentity?: true;
   /** Real host wait; not a snapshot, and not abortable by the 2.0.5 adapter. */
@@ -908,6 +912,7 @@ export function buildPluginInput(
 
   const directory = resolveV2Directory(ctx);
   const wait = typeof s.wait === 'function' ? s.wait.bind(s) : undefined;
+  const switchModel = s.switchModel?.bind(s);
   return {
     client,
     hostFlavor: 'v2',
@@ -919,11 +924,17 @@ export function buildPluginInput(
     worktree: directory,
     experimental_workspace: { register() {} },
     $: typeof Bun !== 'undefined' ? Bun.$ : undefined,
-    ...(extras?.modelDomain || wait || (s.prompt && s.context)
+    ...(extras?.modelDomain || wait || switchModel || (s.prompt && s.context)
       ? {
           experimental_v2: {
             ...(s.prompt && s.context ? { queuedPromptIdentity: true } : {}),
             ...(extras?.modelDomain ? { modelDomain: extras.modelDomain } : {}),
+            ...(switchModel
+              ? {
+                  switchModel: (sessionID: string, model: V2GenerateModelRef) =>
+                    switchModel({ sessionID, model }),
+                }
+              : {}),
             ...(wait
               ? {
                   waitForSessionIdle: (sessionID: string) =>
