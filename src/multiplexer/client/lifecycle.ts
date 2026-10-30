@@ -14,6 +14,7 @@ import type { Multiplexer, PaneResult, PaneSpawnOptions } from '../types';
 import {
   type DiagnosticLogger,
   logNoPane,
+  logPaneClosed,
   logPaneCreated,
   PLUGIN_LOG_SINK,
 } from './diagnostics';
@@ -167,7 +168,8 @@ export class PaneLifecycle {
       records.map(async (record) => {
         try {
           const adapter = this.ports.adapterFactory.create(record.adapter);
-          await adapter?.closePane(record.paneId);
+          if (await adapter?.closePane(record.paneId))
+            logPaneClosed(this.logger, record, 'dispose');
         } catch {
           // Fail-soft: a leftover pane is handled by the FR-8 sweep.
         }
@@ -336,11 +338,6 @@ export class PaneLifecycle {
       const live = statuses?.get(childSessionId);
       if (statuses && live !== 'busy' && live !== 'retry')
         this.scheduleStableIdleClose(childSessionId, record, true);
-      logNoPane(this.logger, 'backfill-skipped', {
-        childSessionId,
-        parentSessionId,
-        adapter: this.config.adapter,
-      });
     }
 
     // Closed-but-watched children: drop the ones the server no longer has,
@@ -627,7 +624,19 @@ export class PaneLifecycle {
       // registering it, so disposal cannot leak a late pane.
       if (this.disposed) {
         try {
-          await adapter.closePane(result.paneId);
+          if (await adapter.closePane(result.paneId)) {
+            logPaneClosed(
+              this.logger,
+              {
+                childSessionId,
+                parentSessionId,
+                paneId: result.paneId,
+                adapter: adapterType,
+                anchoredTarget: this.resolveAnchoredTarget(),
+              },
+              'dispose',
+            );
+          }
         } catch {
           // Fail-soft: the FR-8 sweep is the documented fallback.
         }
@@ -881,6 +890,11 @@ export class PaneLifecycle {
     }
 
     if (closed) {
+      logPaneClosed(
+        this.logger,
+        record,
+        reason === 'idle' ? 'stable-idle' : reason,
+      );
       this.panes.delete(childSessionId);
       this.activityEpoch.delete(childSessionId);
       this.closeAttempts.delete(childSessionId);
@@ -924,7 +938,15 @@ export class PaneLifecycle {
     if (this.disposed || this.panes.get(childSessionId) !== record) return;
     const attempts = (this.closeAttempts.get(childSessionId) ?? 0) + 1;
     this.closeAttempts.set(childSessionId, attempts);
-    if (attempts >= MAX_CLOSE_ATTEMPTS) return;
+    if (attempts >= MAX_CLOSE_ATTEMPTS) {
+      this.logger.log('[multiplexer] pane close retries exhausted', {
+        event: 'multiplexer.pane-close-failed',
+        ...record,
+        reason: 'retries-exhausted',
+        closeReason: reason,
+      });
+      return;
+    }
     const handle = this.ports.clock.setTimeout(() => {
       this.idleTimers.delete(childSessionId);
       if (this.panes.get(childSessionId) !== record) return;

@@ -430,7 +430,6 @@ a structured, distinguishable reason:
 | `adapter-unavailable` | The adapter cannot run here (binary missing, old version, protocol self-check failed, no control plane, or the platform/shell cannot support the viewer-secret bridge) |
 | `adapter-not-found` | The adapter could not resolve its anchor target; **no multiplexer command is issued** |
 | `adapter-hard` | The multiplexer command failed for another reason |
-| `backfill-skipped` | Reconnect compensation found this client already holds that child's pane |
 
 Every successful creation logs the full identity: child session, parent
 session, adapter, view handle (for cmux-tui the terminal id), and the anchored

@@ -1466,6 +1466,25 @@ describe('rebuild and reconnect backfill (2.4)', () => {
     expect(h.adapter.spawnCalls).toHaveLength(2);
   });
 
+  test('logs successful closes with their reason without noisy backfill skips', async () => {
+    const h = createHarness();
+    await activatePane(h);
+    h.list.setSessionIds(CHILD);
+    await h.lifecycle.onReconnect();
+    expect(noPaneReasons(h.logger)).not.toContain('backfill-skipped');
+    h.reader.statuses.set(CHILD, 'idle');
+    await h.lifecycle.handleEvent(lifecycleEvent('idle'));
+    h.clock.advance(STABLE_IDLE_MS);
+    await flushAsync();
+    expect(h.logger.entries.map((entry) => entry.data)).toContainEqual(
+      expect.objectContaining({
+        event: 'multiplexer.pane-closed',
+        reason: 'stable-idle',
+        paneId: 'pane-1',
+      }),
+    );
+  });
+
   test('reconcile skips a parent that changed during the list read', async () => {
     const h = createHarness();
     const deferred = createDeferred();
@@ -1655,7 +1674,7 @@ describe('rebuild and reconnect backfill (2.4)', () => {
     expect(h.lifecycle.getPanes().size).toBe(0);
   });
 
-  test('skips already-held children and records backfill-skipped', async () => {
+  test('skips already-held children without logging a missing pane', async () => {
     const h = createHarness();
     await activatePane(h);
     h.list.setSessionIds(CHILD);
@@ -1665,11 +1684,7 @@ describe('rebuild and reconnect backfill (2.4)', () => {
     expect(h.adapter.spawnCalls).toHaveLength(1);
     expect(h.lifecycle.getPanes().size).toBe(1);
     expect(h.clock.pendingTimers).toBe(0);
-    expect(noPaneReasons(h.logger)).toEqual(['backfill-skipped']);
-    expect(h.logger.entries.at(-1)?.data).toMatchObject({
-      childSessionId: CHILD,
-      parentSessionId: PARENT,
-    });
+    expect(noPaneReasons(h.logger)).toEqual([]);
   });
 
   test('keeps local state when the session list cannot be read', async () => {
