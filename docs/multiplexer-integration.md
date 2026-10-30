@@ -457,10 +457,10 @@ produces one `multiplexer.host-unsupported` record per process; shared and
   spawned process's argv instead (its tab name is the human-readable
   `parent_name/child_name` name). On startup/reconnect the client scans its own
   multiplexer for views whose owner process is dead **and** whose child session
-  is gone, closing them. For the title-based adapters, once `opencode attach`
-  starts inside the pane the host may rewrite the pane title (for example to
-  `OC | <title>`), so the sweep often cannot recognize a crashed client's
-  leftover pane — it is then left for you to close manually. For cmux-tui the
+  is gone, closing them. tmux 3.0a and later also store the marker in a pane
+  option, so host title changes do not erase it. No minimum tmux version is
+  enforced; older versions fall back to the pane title. For title-only adapters,
+  the host may overwrite that title, leaving a pane to close manually. For cmux-tui the
   sweep discovers candidates from `terminal list` and reads each terminal's
   argv with `terminal <sel> process show`, so user terminals are never touched.
   Exited terminals still appear in `terminal list` and still return their
@@ -573,7 +573,8 @@ produces one `multiplexer.host-unsupported` record per process; shared and
   v1, WezTerm also uses the bridge when the TUI's environment has
   `OPENCODE_SERVER_PASSWORD`: it exports only that variable (never a v2
   `OPENCODE_PASSWORD`) for `opencode attach`, plus `OPENCODE_SERVER_USERNAME`
-  when set. tmux forwards those v1 environment variables via `split-window -e`.
+  when set. tmux 3.0+ forwards those v1 variables via `split-window -e`;
+  older versions rely on the tmux server's inherited environment.
   A TUI attached with `attach -p` but without the environment
   variable gets no forwarded password, so its viewer panes cannot
   authenticate. The client wiring itself must also be able to authenticate
@@ -689,7 +690,7 @@ removed or changed behavior, with migration guidance:
 **Leftover views after a client crash**
 
 - The sweep is best-effort, and WezTerm and Orca panes are never swept (close
-  them manually). For tmux / Zellij / Herdr / kitty it often cannot
+  them manually). For older tmux / Zellij / Herdr / kitty it often cannot
   match a pane whose title was rewritten by `opencode attach`. For cmux-tui it
   identifies views by the `# omosc:...` argv marker; exited terminals keep that
   argv and `terminal close` still works on them, so a crashed client's leftover

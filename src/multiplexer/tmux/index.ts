@@ -168,6 +168,29 @@ export class TmuxMultiplexer implements Multiplexer {
         );
         await renameProc.exited;
 
+        // Pane user options require tmux 3.0a; older servers keep the title fallback.
+        if (this.supportsPaneOptions) {
+          try {
+            const metadataProc = crossSpawn(
+              [
+                tmux,
+                '-S',
+                socket,
+                'set-option',
+                '-p',
+                '-t',
+                paneId,
+                '@omosc',
+                description,
+              ],
+              { stdout: 'ignore', stderr: 'ignore' },
+            );
+            await metadataProc.exited;
+          } catch {
+            // The pane still exists even when its metadata option cannot be set.
+          }
+        }
+
         // Rebalance panes after bursts of child sessions settle.
         this.paneTargets.set(paneId, anchor);
         this.scheduleLayout(anchor);
@@ -206,7 +229,9 @@ export class TmuxMultiplexer implements Multiplexer {
           'list-panes',
           '-a',
           '-F',
-          '#{pane_id}|#{pane_title}',
+          this.supportsPaneOptions
+            ? '#{pane_id}|#{?@omosc,#{@omosc},#{pane_title}}'
+            : '#{pane_id}|#{pane_title}',
         ],
         { stdout: 'pipe', stderr: 'pipe' },
       );

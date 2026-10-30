@@ -656,6 +656,56 @@ describe('TmuxMultiplexer', () => {
     expect(commandContaining('select-pane')?.at(-1)).toBe(encoded);
   });
 
+  test('tmux 3.0 falls back to pane titles without pane options', async () => {
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which')
+        return createSpawnResult(0, '/usr/bin/tmux\n');
+      if (command.includes('-V')) return createSpawnResult(0, 'tmux 3.0');
+      if (command.includes('split-window')) return createSpawnResult(0, '%2\n');
+      if (command.includes('list-panes'))
+        return createSpawnResult(0, '%2|omosc:123:child\n');
+      return createSpawnResult();
+    });
+    const { TmuxMultiplexer } = await importFreshTmux();
+    const tmux = new TmuxMultiplexer();
+    await tmux.spawnPane('child', 'omosc:123:child', 'http://host', '/repo');
+    expect(commandContaining('set-option')).toBeUndefined();
+    expect(await tmux.listPanesWithTitles()).toEqual([
+      { paneId: '%2', title: 'omosc:123:child' },
+    ]);
+    expect(commandContaining('list-panes')).toContain(
+      '#{pane_id}|#{pane_title}',
+    );
+  });
+
+  test('tmux 3.0a sweep metadata survives a viewer changing its pane title', async () => {
+    let metadata = '';
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which')
+        return createSpawnResult(0, '/usr/bin/tmux\n');
+      if (command.includes('-V')) return createSpawnResult(0, 'tmux 3.0a');
+      if (command.includes('split-window')) return createSpawnResult(0, '%2\n');
+      if (command.includes('set-option') && command.includes('@omosc'))
+        metadata = command.at(-1) ?? '';
+      if (command.includes('list-panes')) {
+        const title =
+          command.at(-1)?.includes('@omosc') && metadata
+            ? metadata
+            : 'OC | child';
+        return createSpawnResult(0, `%1|user-title\n%2|${title}\n`);
+      }
+      return createSpawnResult();
+    });
+    const { TmuxMultiplexer } = await importFreshTmux();
+    const tmux = new TmuxMultiplexer();
+    const encoded = 'omosc:123:ses_child';
+    await tmux.spawnPane('child', encoded, 'http://localhost', '/repo');
+    expect(await tmux.listPanesWithTitles()).toEqual([
+      { paneId: '%1', title: 'user-title' },
+      { paneId: '%2', title: encoded },
+    ]);
+  });
+
   test('listPanesWithTitles parses list-panes output with explicit addressing', async () => {
     crossSpawnMock.mockImplementation((command: string[]) => {
       if (command[0] === 'which')
