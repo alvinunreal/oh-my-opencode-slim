@@ -1624,6 +1624,29 @@ describe('rebuild and reconnect backfill (2.4)', () => {
     expect(h.lifecycle.getPanes().size).toBe(0);
   });
 
+  test('dispose does not wait for a stalled readiness read before spawning', async () => {
+    const h = createHarness();
+    const deferred = createDeferred();
+    h.reader.statuses.set(CHILD, 'busy');
+    h.reader.readBarrier = deferred.promise;
+    const creating = h.lifecycle.handleEvent(createdEvent());
+    await flushAsync();
+    let disposed = false;
+    const disposing = h.lifecycle.dispose().then(() => {
+      disposed = true;
+    });
+    try {
+      await flushAsync();
+      expect(disposed).toBe(true);
+      expect(h.adapter.spawnCalls).toHaveLength(0);
+    } finally {
+      deferred.resolve();
+      h.reader.readBarrier = null;
+    }
+    await Promise.all([creating, disposing]);
+    expect(h.adapter.spawnCalls).toHaveLength(0);
+  });
+
   test('a busy edge during an in-flight close rebuilds the pane', async () => {
     const h = createHarness();
     await activatePane(h);
@@ -1648,12 +1671,13 @@ describe('rebuild and reconnect backfill (2.4)', () => {
     expect(h.lifecycle.getPane(CHILD)?.directory).toBe(DIRECTORY);
   });
 
-  test('dispose closes tracked panes and a spawn that finishes later', async () => {
+  test('dispose waits for a late spawn and its pane to close', async () => {
     const h = createHarness();
     await activatePane(h); // pane-1 is tracked
 
     // A second spawn is in flight while the client disposes.
     const deferred = createDeferred();
+    const lateClose = createDeferred();
     h.adapter.spawnBarrier = deferred.promise;
     h.reader.statuses.set('child-2', 'busy');
     const spawnPromise = h.lifecycle.handleEvent(
@@ -1661,17 +1685,31 @@ describe('rebuild and reconnect backfill (2.4)', () => {
     );
     await flushAsync();
 
-    await h.lifecycle.dispose();
-    expect(h.adapter.closeCalls).toEqual(['pane-1']);
-    expect(h.lifecycle.getPanes().size).toBe(0);
-
-    // The late spawn must close its own pane instead of registering it.
-    deferred.resolve();
-    h.adapter.spawnBarrier = null;
-    await spawnPromise;
+    let disposed = false;
+    const disposing = h.lifecycle.dispose().then(() => {
+      disposed = true;
+    });
+    try {
+      await flushAsync();
+      expect(h.adapter.closeCalls).toEqual(['pane-1']);
+      expect(h.lifecycle.getPanes().size).toBe(0);
+      expect(disposed).toBe(false);
+      h.adapter.closeBarrier = lateClose.promise;
+      deferred.resolve();
+      await flushAsync();
+      expect(h.adapter.closeCalls).toEqual(['pane-1', 'pane-1']);
+      expect(disposed).toBe(false);
+    } finally {
+      deferred.resolve();
+      lateClose.resolve();
+      h.adapter.spawnBarrier = null;
+      h.adapter.closeBarrier = null;
+    }
+    await Promise.all([spawnPromise, disposing]);
 
     expect(h.adapter.closeCalls).toEqual(['pane-1', 'pane-1']);
     expect(h.lifecycle.getPanes().size).toBe(0);
+    expect(disposed).toBe(true);
   });
 
   test('skips already-held children without logging a missing pane', async () => {

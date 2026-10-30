@@ -695,6 +695,19 @@ describe('v2 tui preset plugin', () => {
       }
     });
 
+    test('v2 cleanup returns a promise to the host', async () => {
+      writeUserConfig({
+        sidebar: false,
+        disabled_hooks: ['auto-update-checker'],
+      });
+      const cleanup = await tui2Plugin.setup(
+        makeSetupCtx().ctx as unknown as V2TuiPluginContext,
+      );
+      const done = cleanup?.();
+      expect(done).toBeInstanceOf(Promise);
+      await done;
+    });
+
     test('sidebar separates default from session snapshot and rejects stale route/workspace responses', async () => {
       writeUserConfig(makeConfig() as unknown as Record<string, unknown>);
       process.env.XDG_DATA_HOME = path.join(configHome, 'sidebar-data');
@@ -2416,11 +2429,11 @@ describe('v2 tui preset plugin', () => {
         'session.idle',
       ];
 
-      let cleanup: (() => void) | undefined;
+      let cleanup: (() => Promise<void>) | undefined;
       try {
         cleanup = (await tui2Plugin.setup(
           stub.ctx as unknown as V2TuiPluginContext,
-        )) as (() => void) | undefined;
+        )) as (() => Promise<void>) | undefined;
         expect(subscriptions.size).toBe(0);
 
         // Start a rebuild, let it park on the host probe, then tear down
@@ -2434,14 +2447,21 @@ describe('v2 tui preset plugin', () => {
           'pane-rebuild-test',
         );
         expect(notified.ok).toBe(true);
-        await waitFor(() => infoCalls >= 1);
-        cleanup();
+        for (let i = 0; i < 30; i += 1) await Promise.resolve();
+        expect(infoCalls).toBeGreaterThan(0);
+        const done = cleanup();
+        let completed = false;
+        void done.then(() => {
+          completed = true;
+        });
+        await Promise.resolve();
+        expect(completed).toBe(false);
         cleanup = undefined;
         releaseResolve?.({ urls: ['http://127.0.0.1:1'] });
 
         // The late wiring must dispose itself instead of staying subscribed
         // (and creating panes) for a closed TUI.
-        await waitFor(() => unsubscribed.length >= expectedEvents.length);
+        await done;
         expect([...unsubscribed].sort()).toEqual(expectedEvents);
       } finally {
         cleanup?.();

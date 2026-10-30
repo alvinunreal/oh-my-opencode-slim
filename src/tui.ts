@@ -2564,7 +2564,7 @@ function createSidebarRuntime(
 async function setup(
   ctx: V2TuiContext,
   initial?: TuiGatesRead,
-): Promise<undefined | (() => void)> {
+): Promise<undefined | (() => Promise<void>)> {
   if (isPluginDisabledByEnv()) return;
   const gatesRead =
     initial ?? readTuiGates(ctx.location?.directory ?? process.cwd(), 'v2');
@@ -2767,8 +2767,9 @@ async function setup(
     // synchronously), then settle any in-flight rebuild: it self-disposes
     // when it sees `paneWiringClosed`, so a wiring created during the
     // teardown window cannot outlive the TUI.
-    void disposePaneWiring();
-    void (async () => {
+    const disposing = disposePaneWiring();
+    return (async () => {
+      await disposing;
       await paneWiringSync;
       await disposePaneWiring();
     })();
@@ -2851,7 +2852,7 @@ interface TuiDualContractModule {
   setup: (
     ctx: V2TuiContext,
     initial?: TuiGatesRead,
-  ) => Promise<undefined | (() => void)>;
+  ) => Promise<undefined | (() => Promise<void>)>;
 }
 
 const plugin: TuiDualContractModule = {

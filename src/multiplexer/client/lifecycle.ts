@@ -77,8 +77,8 @@ const MAX_CLOSE_ATTEMPTS = 4;
 export class PaneLifecycle {
   /** The in-process uniqueness store (FR-6), keyed by child session id. */
   private readonly panes = new Map<string, PaneRecord>();
-  /** Children whose spawn is in flight; the dedup marker for FR-6. */
-  private readonly spawnsInFlight = new Set<string>();
+  /** Dedup markers for FR-6; the promise tracks an actual adapter spawn. */
+  private readonly spawnsInFlight = new Map<string, Promise<void> | null>();
   /** Bounded tombstones: a deleted session must never spawn or rebuild. */
   private readonly deletedSessions = new Set<string>();
   /** Idle edges observed while the child's spawn is in flight. */
@@ -119,6 +119,7 @@ export class PaneLifecycle {
   private displayedDirectory: string;
   /** Set by `dispose()`: no pane is registered after this point. */
   private disposed = false;
+  private disposal: Promise<void> | null = null;
 
   constructor(
     private readonly ports: ClientPorts,
@@ -152,6 +153,7 @@ export class PaneLifecycle {
    * registering it, so disposal can never leave a late pane behind.
    */
   async dispose(): Promise<void> {
+    if (this.disposal) return this.disposal;
     this.disposed = true;
     for (const timer of this.idleTimers.values()) {
       this.ports.clock.clearTimeout(timer.handle);
@@ -164,8 +166,11 @@ export class PaneLifecycle {
     this.pendingDelays.clear();
     const records = [...this.panes.values()];
     this.panes.clear();
-    await Promise.allSettled(
-      records.map(async (record) => {
+    this.disposal = Promise.allSettled([
+      ...[...this.spawnsInFlight.values()].filter(
+        (spawn): spawn is Promise<void> => spawn !== null,
+      ),
+      ...records.map(async (record) => {
         try {
           const adapter = this.ports.adapterFactory.create(record.adapter);
           if (await adapter?.closePane(record.paneId))
@@ -174,7 +179,8 @@ export class PaneLifecycle {
           // Fail-soft: a leftover pane is handled by the FR-8 sweep.
         }
       }),
-    );
+    ]).then(() => {});
+    await this.disposal;
   }
 
   /** The client-local pane for a child session, if one is tracked. */
@@ -553,6 +559,7 @@ export class PaneLifecycle {
     if (adapterType === null) return;
     // Every creation path shares this in-process FR-6 dedup gate.
     if (
+      this.disposed ||
       this.panes.has(childSessionId) ||
       this.spawnsInFlight.has(childSessionId) ||
       this.deletedSessions.has(childSessionId)
@@ -562,7 +569,8 @@ export class PaneLifecycle {
     // Creation supersedes any pending rebuild watch for this child; the watch
     // is dropped only once the pane exists, so a failed attempt (readiness
     // timeout, adapter failure) stays eligible for a later busy edge.
-    this.spawnsInFlight.add(childSessionId);
+    let finishSpawn = () => {};
+    this.spawnsInFlight.set(childSessionId, null);
     try {
       // Host reachability first: embedded mode (no listener) must stay
       // distinguishable from a readiness timeout (D3/FR-13).
@@ -603,6 +611,10 @@ export class PaneLifecycle {
       // Deleted while waiting for readiness: never create the pane (FR-10).
       if (this.deletedSessions.has(childSessionId)) return;
 
+      const spawnFinished = new Promise<void>((resolve) => {
+        finishSpawn = resolve;
+      });
+      this.spawnsInFlight.set(childSessionId, spawnFinished);
       const result = await this.spawn(
         adapter,
         childSessionId,
@@ -675,6 +687,8 @@ export class PaneLifecycle {
         this.scheduleStableIdleClose(childSessionId, record, true);
       }
 
+      this.spawnsInFlight.set(childSessionId, null);
+      finishSpawn();
       await this.applyLayout(adapter);
     } finally {
       this.spawnsInFlight.delete(childSessionId);
@@ -691,6 +705,7 @@ export class PaneLifecycle {
         );
       }
       this.idleWhileSpawning.delete(childSessionId);
+      finishSpawn();
     }
   }
 

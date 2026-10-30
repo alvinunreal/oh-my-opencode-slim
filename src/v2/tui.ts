@@ -339,7 +339,9 @@ const plugin = {
   id: omoTui.id,
   tui: omoTui.tui,
 
-  async setup(ctx: V2TuiPluginContext): Promise<undefined | (() => void)> {
+  async setup(
+    ctx: V2TuiPluginContext,
+  ): Promise<undefined | (() => Promise<void>)> {
     if (isPluginDisabledByEnv()) return;
 
     const directory = ctx.location?.directory ?? process.cwd();
@@ -351,7 +353,7 @@ const plugin = {
       return undefined;
     }
 
-    const disposers: Array<() => void> = [];
+    const disposers: Array<() => void | Promise<void>> = [];
     const baseCleanup = await omoTui.setup(ctx, gatesRead);
     if (typeof baseCleanup === 'function') disposers.push(baseCleanup);
 
@@ -405,9 +407,10 @@ const plugin = {
       log('[v2][tui] update notice skipped: auto-update-checker disabled');
     }
 
-    return () => {
-      for (const dispose of disposers.reverse()) dispose();
-    };
+    return () =>
+      Promise.all(disposers.reverse().map((dispose) => dispose())).then(
+        () => {},
+      );
   },
 };
 
