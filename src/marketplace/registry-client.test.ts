@@ -287,34 +287,34 @@ describe('MarketplaceRegistryClient', () => {
       pluginVersion: '3.1.0',
       fetch: async () => response({}, 302),
     });
-    await expect(redirecting.fetchIndex()).rejects.toBeInstanceOf(
-      MarketplaceRegistryProtocolError,
-    );
+    await expect(
+      redirecting.download('community/registry-agent'),
+    ).rejects.toBeInstanceOf(MarketplaceRegistryProtocolError);
 
     const notFound = new MarketplaceRegistryClient({
       pluginVersion: '3.1.0',
       fetch: async () => response({}, 404),
     });
-    await expect(notFound.fetchIndex()).rejects.toBeInstanceOf(
-      MarketplaceRegistryNotFoundError,
-    );
+    await expect(
+      notFound.download('community/registry-agent'),
+    ).rejects.toBeInstanceOf(MarketplaceRegistryNotFoundError);
 
     const unavailable = new MarketplaceRegistryClient({
       pluginVersion: '3.1.0',
       fetch: async () => response({}, 503),
     });
-    await expect(unavailable.fetchIndex()).rejects.toBeInstanceOf(
-      MarketplaceRegistryUnavailableError,
-    );
+    await expect(
+      unavailable.download('community/registry-agent'),
+    ).rejects.toBeInstanceOf(MarketplaceRegistryUnavailableError);
 
     const oversized = new MarketplaceRegistryClient({
       pluginVersion: '3.1.0',
       maxIndexBytes: 10,
       fetch: async () => response({ schemaVersion: 3, entries: [] }),
     });
-    await expect(oversized.fetchIndex()).rejects.toBeInstanceOf(
-      MarketplaceRegistryProtocolError,
-    );
+    await expect(
+      oversized.download('community/registry-agent'),
+    ).rejects.toBeInstanceOf(MarketplaceRegistryProtocolError);
     expect(DEFAULT_MARKETPLACE_REGISTRY_ARTIFACT_MAX_BYTES).toBeGreaterThan(0);
   });
 
@@ -339,7 +339,9 @@ describe('MarketplaceRegistryClient', () => {
           new Response(body, { status: responseStatus, headers }),
       });
 
-      await expect(client.fetchIndex()).rejects.toBeInstanceOf(expectedError);
+      await expect(
+        client.download('community/registry-agent'),
+      ).rejects.toBeInstanceOf(expectedError);
       expect(cancelled).toBe(true);
     }
 
@@ -372,9 +374,9 @@ describe('MarketplaceRegistryClient', () => {
           );
         }),
     });
-    await expect(timedOut.fetchIndex()).rejects.toBeInstanceOf(
-      MarketplaceRegistryUnavailableError,
-    );
+    await expect(
+      timedOut.download('community/registry-agent'),
+    ).rejects.toBeInstanceOf(MarketplaceRegistryUnavailableError);
 
     const controller = new AbortController();
     const observedSignal = new Promise<void>((resolve) => {
@@ -391,7 +393,11 @@ describe('MarketplaceRegistryClient', () => {
           );
         }),
     });
-    const request = cancelled.fetchIndex(controller.signal);
+    const request = cancelled.download(
+      'community/registry-agent',
+      undefined,
+      controller.signal,
+    );
     controller.abort();
     await observedSignal;
     await expect(request).rejects.toBeInstanceOf(
@@ -424,9 +430,9 @@ describe('MarketplaceRegistryClient', () => {
       },
     });
     const timeoutStarted = performance.now();
-    await expect(timedOut.fetchIndex()).rejects.toBeInstanceOf(
-      MarketplaceRegistryUnavailableError,
-    );
+    await expect(
+      timedOut.download('community/registry-agent'),
+    ).rejects.toBeInstanceOf(MarketplaceRegistryUnavailableError);
     expect(performance.now() - timeoutStarted).toBeLessThan(500);
     expect(timeoutCancellationCount).toBe(1);
     expect(timeoutResponse?.body?.locked).toBe(false);
@@ -442,7 +448,11 @@ describe('MarketplaceRegistryClient', () => {
         return externalResponse;
       },
     });
-    const request = cancelled.fetchIndex(controller.signal);
+    const request = cancelled.download(
+      'community/registry-agent',
+      undefined,
+      controller.signal,
+    );
     await Promise.resolve();
     controller.abort();
     await expect(request).rejects.toBeInstanceOf(

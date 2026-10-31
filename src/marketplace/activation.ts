@@ -15,8 +15,6 @@ import {
 } from './schemas.js';
 import type { StoredMarketplacePackage } from './store.js';
 
-export { ambiguousMcpNamespaces } from './mcp-namespaces.js';
-
 export type MarketplaceDiagnosticCode =
   | 'invalid-selection'
   | 'duplicate-selection'

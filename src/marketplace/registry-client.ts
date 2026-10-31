@@ -175,19 +175,6 @@ export class MarketplaceRegistryClient {
     }
   }
 
-  async fetchIndex(signal?: AbortSignal): Promise<MarketplaceRegistryIndex> {
-    const value = await this.fetchJson(
-      MARKETPLACE_REGISTRY_INDEX_URL,
-      this.maxIndexBytes,
-      signal,
-    );
-    try {
-      return parseMarketplaceRegistryIndex(value);
-    } catch (error) {
-      throw new MarketplaceRegistryProtocolError(errorMessage(error));
-    }
-  }
-
   download(
     selectorText: string,
     minimumVersion?: string,

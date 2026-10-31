@@ -22,6 +22,10 @@ import type { MarketplaceRegistryDownload } from './registry-client.js';
 import type { MarketplacePackageBundle } from './schemas.js';
 import { MarketplaceService } from './service.js';
 
+function readStoredLockfile(store: MarketplaceService['store']) {
+  return JSON.parse(readFileSync(store.paths.lockfilePath, 'utf8'));
+}
+
 const tempDirs: string[] = [];
 const originalConfigHome = process.env.XDG_CONFIG_HOME;
 
@@ -701,9 +705,9 @@ describe('MarketplaceService', () => {
       } finally {
         unlink.mockRestore();
       }
-      expect(service.store.getLockfile().packages['community/example']).toBe(
-        undefined,
-      );
+      expect(
+        readStoredLockfile(service.store).packages['community/example'],
+      ).toBe(undefined);
       expect(
         existsSync(
           join(service.store.paths.packagesDir, 'community', 'example'),
@@ -770,7 +774,7 @@ describe('MarketplaceService', () => {
           'community/example',
         );
         expect(
-          service.store.getLockfile().packages['community/example'],
+          readStoredLockfile(service.store).packages['community/example'],
         ).toBeUndefined();
         expect(
           existsSync(

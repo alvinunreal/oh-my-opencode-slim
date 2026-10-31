@@ -142,15 +142,11 @@ export class MarketplaceService {
     return this.store.install(parseBundle(input), source);
   }
 
-  installFile(filePath: string): StoredMarketplacePackage {
+  importFile(filePath: string): StoredMarketplacePackage {
     return this.install(
       parseBundleFromFile(filePath),
       sourceForImport(filePath),
     );
-  }
-
-  importFile(filePath: string): StoredMarketplacePackage {
-    return this.installFile(filePath);
   }
 
   update(
@@ -165,10 +161,6 @@ export class MarketplaceService {
       parseBundleFromFile(filePath),
       sourceForImport(filePath),
     );
-  }
-
-  importFileUpdate(filePath: string): StoredMarketplacePackage {
-    return this.updateFile(filePath);
   }
 
   async installRemote(
