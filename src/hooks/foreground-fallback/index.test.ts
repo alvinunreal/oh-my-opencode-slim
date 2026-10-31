@@ -3,6 +3,7 @@ import {
   beforeEach,
   describe,
   expect,
+  jest,
   mock,
   spyOn,
   test,
@@ -490,7 +491,7 @@ describe('foreground fallback redo harness', () => {
       },
     });
     await manager.handleEvent(assistant('m2', 'b', { finish: 'tool-calls' }));
-    jest.advanceTimersByTime(6_000);
+    await clock.advance(6_000);
     await manager.handleEvent(assistant('m3', 'b', { error: policy }));
     expect(
       mocks.promptAsync.mock.calls.map(([args]) => (args as any).body.model),
@@ -501,7 +502,7 @@ describe('foreground fallback redo harness', () => {
 
     await manager.handleEvent(assistant('m4', 'c', { finish: 'stop' }));
     await manager.handleEvent(redoEvents.user(sessionID, 'new-user', 'c'));
-    jest.advanceTimersByTime(6_000);
+    await clock.advance(6_000);
     await manager.handleEvent(assistant('m5', 'c', { error: policy }));
     expect((mocks.promptAsync.mock.calls[2][0] as any).body.model).toEqual({
       providerID: 'test',
