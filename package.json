@@ -119,6 +119,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
+    "@opencode/client": "2.2.0",
     "@opencode/plugin": "2.2.0",
     "@types/jsdom": "30",
     "@types/node": "^26.6.2",
@@ -126,6 +127,7 @@
     "@types/turndown": "^5.0.6",
     "all-contributors-cli": "^6.26.1",
     "bun-types": "^1.4.2",
+    "knip": "^6.44.0",
     "typescript": "7.0"
   },
   "peerDependencies": {
