@@ -55,6 +55,7 @@ export function createDeepworkCommandHook(): {
     handleCommandExecuteBefore: async (input, output) => {
       if (input.command !== COMMAND_NAME) return;
 
+      const attachments = output.parts.filter((part) => part.type !== 'text');
       output.parts.length = 0;
       const task = input.arguments.trim();
       if (!task) {
@@ -63,6 +64,7 @@ export function createDeepworkCommandHook(): {
             'What task should deepwork manage? Run `/deepwork <task>`.',
           ),
         );
+        output.parts.push(...attachments);
         return;
       }
 
@@ -70,6 +72,7 @@ export function createDeepworkCommandHook(): {
         type: 'text',
         text: activationPrompt(task, input.sessionID),
       });
+      output.parts.push(...attachments);
     },
   };
 }

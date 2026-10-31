@@ -217,6 +217,73 @@ describe('command marker wrap/parse', () => {
 });
 
 describe('createCommandRegistration', () => {
+  test('preserves deepwork attachments through v1 and the v2 command flow', async () => {
+    const deepwork = createDeepworkCommandHook();
+    const filePart = {
+      type: 'file',
+      mime: 'text/plain',
+      url: 'file:///task.txt',
+    };
+    const v1 = { parts: [{ type: 'text', text: 'template' }, filePart] };
+    await deepwork.handleCommandExecuteBefore(
+      { command: 'deepwork', sessionID: 'ses_v1', arguments: 'Update it' },
+      v1,
+    );
+    expect(v1.parts).toContainEqual(filePart);
+    expect(v1.parts[0].text).toContain('# Deepwork');
+
+    const files = [{ uri: 'file:///task.txt', name: 'task.txt' }];
+    const prompt = mock(async () => ({}));
+    const added: V2CommandDefinition[] = [];
+    createCommandRegistration(
+      { add: (def) => added.push(def) },
+      'deepwork',
+      {},
+      createSessionSubmit({ session: { prompt } } as never),
+    );
+    await added[0].execute({
+      sessionID: 'ses_v2',
+      prompt: { text: 'Update it', files },
+    });
+    expect(prompt).toHaveBeenCalledWith({
+      sessionID: 'ses_v2',
+      text: wrapCommandMarker('deepwork', 'Update it'),
+      files,
+    });
+    const textAttachment = {
+      type: 'text',
+      text: '\n\nAttached file: task.txt\n\ncontents',
+      metadata: { attachment: { name: 'task.txt' } },
+    };
+    const imageLocation = {
+      type: 'text',
+      text: 'Attached file: /tmp/picture.png',
+    };
+    const image = { type: 'media', media: 'image bytes' };
+    const event = makeEvent([
+      {
+        id: 'm',
+        role: 'user',
+        content: [
+          { type: 'text', text: wrapCommandMarker('deepwork', 'Update it') },
+          textAttachment,
+          imageLocation,
+          image,
+        ],
+      },
+    ]);
+    await applyCommandMarkerToContext(
+      event,
+      deepwork.handleCommandExecuteBefore,
+    );
+    expect(event.messages[0].content.slice(1)).toEqual([
+      textAttachment,
+      imageLocation,
+      image,
+    ]);
+    expect(event.messages[0].content[0].text).toContain('# Deepwork');
+  });
+
   test('add-only draft registers via add and execute submits the marker', async () => {
     const added: V2CommandDefinition[] = [];
     const submit = mock(async () => {});

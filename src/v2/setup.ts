@@ -121,7 +121,6 @@ import {
 } from './session-presets';
 import {
   createSessionSubmit,
-  userTextFromContent,
   type V2CommandSubmit,
 } from './session-submit';
 import { createSubagentExecutorWrapper } from './subagent-executor-wrapper';
@@ -222,6 +221,7 @@ export function createCommandRegistration(
         await submit(
           invocation?.sessionID ?? '',
           wrapCommandMarker(name, invocation?.prompt?.text ?? ''),
+          ...(invocation?.prompt?.files ? [invocation.prompt.files] : []),
         );
       } catch (err) {
         log('[v2] command submit failed', { name, err: String(err) });
@@ -263,7 +263,11 @@ export async function applyCommandMarkerToContext(
 ): Promise<void> {
   for (const trailing of event.messages) {
     if (trailing.role !== 'user') continue;
-    const text = userTextFromContent(trailing.content);
+    const markerIndex = trailing.content.findIndex(
+      (part) => part.type === 'text' && part.synthetic !== true,
+    );
+    const marker = trailing.content[markerIndex];
+    const text = typeof marker?.text === 'string' ? marker.text : '';
     const parsed = parseCommandMarker(text);
     if (!parsed) continue;
 
@@ -292,21 +296,18 @@ export async function applyCommandMarkerToContext(
       throw error;
     });
 
-    const syntheticParts = trailing.content.filter(
-      (part) => part.synthetic === true,
+    const otherParts = trailing.content.filter(
+      (_, index) => index !== markerIndex,
     );
 
     if (parts.length > 0) {
-      trailing.content = [
-        ...parts.map((part) => ({ ...part })),
-        ...syntheticParts,
-      ];
+      trailing.content = [...parts.map((part) => ({ ...part })), ...otherParts];
       continue;
     }
     // Hook produced nothing: strip the marker and leave the raw args text.
     trailing.content = [
       { type: 'text', text: stripCommandMarker(text) },
-      ...syntheticParts,
+      ...otherParts,
     ];
   }
 }
