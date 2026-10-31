@@ -234,6 +234,45 @@ function normalizePermission(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function nativeEditPermission(
+  existing: Record<string, unknown>,
+  tools: readonly string[],
+): unknown {
+  const rules = [
+    existing.edit,
+    ...tools
+      .filter((tool) => tool === 'write' || tool === 'apply_patch')
+      .map((tool) => existing[tool]),
+  ].filter((rule) => rule !== undefined);
+  if (rules.length === 0) return permissionEffect(existing, 'edit');
+  if (rules.some((rule) => rule === 'deny')) return 'deny';
+  const maps = rules.filter(
+    (rule): rule is Record<string, unknown> =>
+      !!rule && typeof rule === 'object' && !Array.isArray(rule),
+  );
+  // Distinct path maps cannot be safely intersected as one native edit rule.
+  if (
+    rules.some(
+      (rule) =>
+        rule !== 'allow' &&
+        rule !== 'ask' &&
+        !maps.includes(rule as Record<string, unknown>),
+    ) ||
+    maps.some((rule) => JSON.stringify(rule) !== JSON.stringify(maps[0]))
+  ) {
+    return 'deny';
+  }
+  if (maps.length > 0) {
+    return Object.fromEntries(
+      Object.entries(maps[0]).map(([pattern, effect]) => [
+        pattern,
+        rules.includes('ask') && effect === 'allow' ? 'ask' : effect,
+      ]),
+    );
+  }
+  return rules.includes('ask') ? 'ask' : 'allow';
+}
+
 function projectMarketplacePermission(
   existing: Record<string, unknown>,
   tools: readonly string[],
@@ -249,6 +288,9 @@ function projectMarketplacePermission(
     if (existingRule && typeof existingRule === 'object') {
       projected[tool] = clone(existingRule);
     }
+  }
+  if (tools.some((tool) => tool === 'write' || tool === 'apply_patch')) {
+    projected.edit = nativeEditPermission(existing, tools);
   }
   // `external_directory` is a native safety guard, not a manifest tool
   // capability: it is never in `tools`, never inferred from a tool grant or
@@ -339,6 +381,7 @@ function marketplacePermissionCeilings(
     external_directory: 'allow',
   };
   for (const tool of tools) {
+    if (tool === 'write' || tool === 'apply_patch') actions.edit = 'allow';
     if (tool === 'bash') {
       for (const { action } of v1PermKeyToV2(tool)) actions[action] = 'allow';
     } else if ((MARKETPLACE_TOOL_NAMES as readonly string[]).includes(tool)) {
