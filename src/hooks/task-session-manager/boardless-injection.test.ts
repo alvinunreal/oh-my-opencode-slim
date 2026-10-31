@@ -13,7 +13,7 @@
  *   - a terminal run retires when its own tagged `<completed-job>` push
  *     part is observed in the parent history, and only for that exact run.
  */
-import { describe, expect, spyOn, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { TERMINAL_DELTA_METADATA_KEY } from '../../utils';
 import { BackgroundJobBoard } from '../../utils/background-job-fixture';
 import { isVolatileTaggedMessage } from '../cache-safe-injection';
@@ -79,27 +79,19 @@ describe('boardless injection', () => {
       synthetic: true,
       text: '<task id="child-1" state="completed"><task_result>answer</task_result></task>',
     };
-    const originalExec = RegExp.prototype.exec;
-    let resultParses = 0;
-    const exec = spyOn(RegExp.prototype, 'exec').mockImplementation(function (
-      this: RegExp,
-      text: string,
-    ) {
-      if (this.source.startsWith('<task_(result|error)>')) resultParses++;
-      return originalExec.call(this, text);
-    });
-    try {
-      await updateFromInjectedCompletion(
-        state,
-        part as never,
-        { info: { id: 'message', sessionID: SESSION }, parts: [part] } as never,
-        0,
-        0,
-      );
-    } finally {
-      exec.mockRestore();
-    }
-    expect(resultParses).toBe(0);
+    // Spying on RegExp.prototype.exec would knock the engine off its regex
+    // fast path for the rest of the process, so pin the outcome instead: a
+    // processed occurrence returns early and leaves the board untouched.
+    const before = board.list();
+    const result = await updateFromInjectedCompletion(
+      state,
+      part as never,
+      { info: { id: 'message', sessionID: SESSION }, parts: [part] } as never,
+      0,
+      0,
+    );
+    expect(result).toBeUndefined();
+    expect(board.list()).toEqual(before);
   });
 
   test('the payload never carries board bytes, whatever the board holds', async () => {
