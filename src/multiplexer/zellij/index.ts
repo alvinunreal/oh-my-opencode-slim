@@ -37,6 +37,7 @@ import {
   buildViewCommand,
   findBinary,
   gracefulClosePane,
+  markViewerCommand,
   viewerNeedsPaneCwd,
   withParentEnvPassword,
 } from '../shared';
@@ -195,11 +196,9 @@ export class ZellijMultiplexer implements Multiplexer {
       return { success: false, error: 'unavailable' };
     }
 
-    const viewerCommand = buildViewCommand(
-      sessionId,
-      serverUrl,
-      directory,
-      options,
+    const viewerCommand = markViewerCommand(
+      buildViewCommand(sessionId, serverUrl, directory, options),
+      '/bin/sh',
     );
     const opencodeCmd = needsSecretBridge
       ? withParentEnvPassword(viewerCommand)

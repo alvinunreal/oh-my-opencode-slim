@@ -484,6 +484,16 @@ async function createHarness(
   return { wiring, logger, bus, clock, state, adapters, createdTypes };
 }
 
+test('pane viewers do not start pane lifecycle wiring', async () => {
+  const h = await createHarness({
+    env: { TMUX_PANE: '%1', OH_MY_OPENCODE_SLIM_PANE_VIEWER: '1' },
+  });
+  expect(h.wiring.lifecycle).toBeNull();
+  expect(h.bus.listenerCount()).toBe(0);
+  expect(h.clock.pendingTimers).toBe(0);
+  await h.wiring.dispose();
+});
+
 /**
  * v2 host seams: the v2 adapter feeds already-projected events and supplies
  * the authenticated probe/URL. Wiring behavior must match the v1 bus path.
@@ -1598,6 +1608,30 @@ describe('default adapter factory', () => {
 });
 
 describe('FR-7 reconcile trigger', () => {
+  test('route changes debounce backfill without waiting for the periodic tick', async () => {
+    let displayed = 'other-parent';
+    const state = createClientState({
+      sessions: [{ id: CHILD, parentID: PARENT }],
+    });
+    const h = await createHarness({
+      state,
+      getDisplayedSessionId: () => displayed,
+    });
+    for (let i = 0; i < 30; i += 1) await Promise.resolve();
+    expect(h.adapters.get('tmux')?.spawns).toHaveLength(0);
+    displayed = PARENT;
+    h.clock.advance(250);
+    h.clock.advance(99);
+    expect(h.adapters.get('tmux')?.spawns).toHaveLength(0);
+    h.clock.advance(1);
+    for (let i = 0; i < 50; i += 1) await Promise.resolve();
+    expect(
+      h.adapters.get('tmux')?.spawns.map((spawn) => spawn.sessionId),
+    ).toEqual([CHILD]);
+    await h.wiring.dispose();
+    expect(h.clock.pendingTimers).toBe(0);
+  });
+
   test('a reconcile tick reads the current displayed session directory', async () => {
     let displayedDirectory = DIRECTORY;
     let displayedSession = PARENT;
@@ -1684,17 +1718,21 @@ describe('FR-7 reconcile trigger', () => {
     await flush();
     expect(h.adapters.get('tmux')?.spawns).toHaveLength(1);
 
-    // The user moves to another conversation while the event stream is quiet;
-    // the server now reports the live child under the new parent.
-    h.state.sessions = [{ id: CHILD, parentID: 'parent-2' }];
+    // The original child stays under its parent while a different child is
+    // active in the newly displayed conversation.
+    h.state.sessions = [
+      { id: CHILD, parentID: PARENT },
+      { id: 'child-2', parentID: 'parent-2' },
+    ];
+    h.state.statuses['child-2'] = { type: 'busy' };
     displayed = 'parent-2';
     h.clock.advance(30_000);
     await flush();
 
-    // A stale displayed session would make the reconcile treat the live child
-    // as gone and close its pane.
+    // The old parent's live child remains held while the new parent backfills.
     expect(h.adapters.get('tmux')?.closes).toHaveLength(0);
     expect(h.wiring.lifecycle.getPane(CHILD)).toBeDefined();
+    expect(h.wiring.lifecycle.getPane('child-2')).toBeDefined();
   });
 
   test('a backfilled child is remembered for a later rebuild', async () => {

@@ -1436,12 +1436,53 @@ describe('rebuild and reconnect backfill (2.4)', () => {
     // The user switches back; the server list only knows PARENT's child.
     h.lifecycle.setDisplayedSession(PARENT);
     h.list.setSessionIds(CHILD);
+    h.list.listSessions = async (_directory, parentID) => ({
+      sessions: [{ sessionId: parentID === PARENT ? CHILD : 'child-2' }],
+    });
     await h.lifecycle.onReconnect();
 
     // The other conversation's pane is still live: it must not be closed as
     // backfill-gone just because this parent's list does not name it.
     expect(h.adapter.closeCalls).toHaveLength(0);
     expect(h.lifecycle.getPane('child-2')?.directory).toBe(DIRECTORY);
+  });
+
+  test('reconnect recovers lost idle and deletion for panes while home is displayed', async () => {
+    const h = createHarness();
+    await activatePane(h);
+    h.reader.statuses.set('deleted-child', 'busy');
+    h.adapter.spawnResult = { success: true, paneId: 'pane-2' };
+    await h.lifecycle.handleEvent(createdEvent({ sessionId: 'deleted-child' }));
+    h.list.setSessionIds(CHILD);
+    h.reader.statuses.delete(CHILD);
+    h.lifecycle.setDisplayedSession(null);
+
+    await h.lifecycle.onReconnect();
+    expect(h.adapter.closeCalls).toEqual(['pane-2']);
+    expect(h.clock.pendingTimers).toBe(1);
+    h.clock.advance(STABLE_IDLE_MS);
+    await flushAsync();
+    expect(h.adapter.closeCalls).toEqual(['pane-2', 'pane-1']);
+    expect(h.adapter.spawnCalls).toHaveLength(2);
+  });
+
+  test('logs successful closes with their reason without noisy backfill skips', async () => {
+    const h = createHarness();
+    await activatePane(h);
+    h.list.setSessionIds(CHILD);
+    await h.lifecycle.onReconnect();
+    expect(noPaneReasons(h.logger)).not.toContain('backfill-skipped');
+    h.reader.statuses.set(CHILD, 'idle');
+    await h.lifecycle.handleEvent(lifecycleEvent('idle'));
+    h.clock.advance(STABLE_IDLE_MS);
+    await flushAsync();
+    expect(h.logger.entries.map((entry) => entry.data)).toContainEqual(
+      expect.objectContaining({
+        event: 'multiplexer.pane-closed',
+        reason: 'stable-idle',
+        paneId: 'pane-1',
+      }),
+    );
   });
 
   test('reconcile skips a parent that changed during the list read', async () => {
@@ -1583,6 +1624,29 @@ describe('rebuild and reconnect backfill (2.4)', () => {
     expect(h.lifecycle.getPanes().size).toBe(0);
   });
 
+  test('dispose does not wait for a stalled readiness read before spawning', async () => {
+    const h = createHarness();
+    const deferred = createDeferred();
+    h.reader.statuses.set(CHILD, 'busy');
+    h.reader.readBarrier = deferred.promise;
+    const creating = h.lifecycle.handleEvent(createdEvent());
+    await flushAsync();
+    let disposed = false;
+    const disposing = h.lifecycle.dispose().then(() => {
+      disposed = true;
+    });
+    try {
+      await flushAsync();
+      expect(disposed).toBe(true);
+      expect(h.adapter.spawnCalls).toHaveLength(0);
+    } finally {
+      deferred.resolve();
+      h.reader.readBarrier = null;
+    }
+    await Promise.all([creating, disposing]);
+    expect(h.adapter.spawnCalls).toHaveLength(0);
+  });
+
   test('a busy edge during an in-flight close rebuilds the pane', async () => {
     const h = createHarness();
     await activatePane(h);
@@ -1607,12 +1671,13 @@ describe('rebuild and reconnect backfill (2.4)', () => {
     expect(h.lifecycle.getPane(CHILD)?.directory).toBe(DIRECTORY);
   });
 
-  test('dispose closes tracked panes and a spawn that finishes later', async () => {
+  test('dispose waits for a late spawn and its pane to close', async () => {
     const h = createHarness();
     await activatePane(h); // pane-1 is tracked
 
     // A second spawn is in flight while the client disposes.
     const deferred = createDeferred();
+    const lateClose = createDeferred();
     h.adapter.spawnBarrier = deferred.promise;
     h.reader.statuses.set('child-2', 'busy');
     const spawnPromise = h.lifecycle.handleEvent(
@@ -1620,20 +1685,34 @@ describe('rebuild and reconnect backfill (2.4)', () => {
     );
     await flushAsync();
 
-    await h.lifecycle.dispose();
-    expect(h.adapter.closeCalls).toEqual(['pane-1']);
-    expect(h.lifecycle.getPanes().size).toBe(0);
-
-    // The late spawn must close its own pane instead of registering it.
-    deferred.resolve();
-    h.adapter.spawnBarrier = null;
-    await spawnPromise;
+    let disposed = false;
+    const disposing = h.lifecycle.dispose().then(() => {
+      disposed = true;
+    });
+    try {
+      await flushAsync();
+      expect(h.adapter.closeCalls).toEqual(['pane-1']);
+      expect(h.lifecycle.getPanes().size).toBe(0);
+      expect(disposed).toBe(false);
+      h.adapter.closeBarrier = lateClose.promise;
+      deferred.resolve();
+      await flushAsync();
+      expect(h.adapter.closeCalls).toEqual(['pane-1', 'pane-1']);
+      expect(disposed).toBe(false);
+    } finally {
+      deferred.resolve();
+      lateClose.resolve();
+      h.adapter.spawnBarrier = null;
+      h.adapter.closeBarrier = null;
+    }
+    await Promise.all([spawnPromise, disposing]);
 
     expect(h.adapter.closeCalls).toEqual(['pane-1', 'pane-1']);
     expect(h.lifecycle.getPanes().size).toBe(0);
+    expect(disposed).toBe(true);
   });
 
-  test('skips already-held children and records backfill-skipped', async () => {
+  test('skips already-held children without logging a missing pane', async () => {
     const h = createHarness();
     await activatePane(h);
     h.list.setSessionIds(CHILD);
@@ -1643,11 +1722,7 @@ describe('rebuild and reconnect backfill (2.4)', () => {
     expect(h.adapter.spawnCalls).toHaveLength(1);
     expect(h.lifecycle.getPanes().size).toBe(1);
     expect(h.clock.pendingTimers).toBe(0);
-    expect(noPaneReasons(h.logger)).toEqual(['backfill-skipped']);
-    expect(h.logger.entries.at(-1)?.data).toMatchObject({
-      childSessionId: CHILD,
-      parentSessionId: PARENT,
-    });
+    expect(noPaneReasons(h.logger)).toEqual([]);
   });
 
   test('keeps local state when the session list cannot be read', async () => {
