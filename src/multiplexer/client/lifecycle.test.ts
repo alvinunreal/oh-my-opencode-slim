@@ -27,6 +27,7 @@ import type {
   SessionLifecycleEvent,
   SessionRuntimeStatus,
 } from './types';
+import { createV2SessionListReader } from './v2-host';
 
 const DIRECTORY = '/project';
 const PARENT = 'parent-1';
@@ -1008,6 +1009,30 @@ describe('dedup and stable-idle close (2.3)', () => {
 });
 
 describe('rebuild and reconnect backfill (2.4)', () => {
+  test('keeps a child pane after the child moves to another directory', async () => {
+    const child = { id: CHILD, parentID: PARENT, directory: DIRECTORY };
+    const list = createV2SessionListReader({
+      session: {
+        list: async (query = {}) =>
+          query.parentID === child.parentID &&
+          (query.directory === undefined || query.directory === child.directory)
+            ? [child]
+            : [],
+      },
+    });
+    const h = createHarness({ ports: { sessionListReader: list } });
+    await activatePane(h);
+
+    child.directory = '/worktree';
+    await h.lifecycle.onReconnect();
+
+    expect(h.adapter.closeCalls).toEqual([]);
+    expect(h.lifecycle.getPane(CHILD)).toBeDefined();
+    expect((await list.listSessions(DIRECTORY, PARENT)).sessions).toEqual([
+      { sessionId: CHILD },
+    ]);
+  });
+
   test('a watch retains its original directory after switching away and back', async () => {
     const h = createHarness();
     await activatePane(h);

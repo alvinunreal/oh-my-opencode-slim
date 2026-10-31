@@ -357,7 +357,7 @@ export function createV2SessionListReader(
 ): SessionListReader {
   return {
     async listSessions(
-      directory: string,
+      _directory: string,
       parentID: string,
     ): Promise<SessionListRead> {
       const list = client?.session?.list;
@@ -366,7 +366,7 @@ export function createV2SessionListReader(
       }
       try {
         let query: Record<string, unknown> = {
-          directory,
+          // A child can move directories while retaining its parent.
           parentID,
           order: 'asc',
           limit: V2_LIST_PAGE,
