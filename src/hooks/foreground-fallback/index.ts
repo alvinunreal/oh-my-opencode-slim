@@ -2347,6 +2347,7 @@ export class ForegroundFallbackManager {
             ? session.message({ path: { id: sessionID, messageID: parentID } })
             : session.messages({ path: { id: sessionID } }),
           'same-model replay transcript read timed out',
+          this.timerSeam,
         );
       } catch (err) {
         return this.abandonReplayRead(sessionID, opts, err);
@@ -3146,6 +3147,7 @@ export class ForegroundFallbackManager {
             ? session.message({ path: { id: sessionID, messageID: parentID } })
             : session.messages({ path: { id: sessionID } }),
           'fallback replay user message read timed out',
+          this.timerSeam,
         );
         if (!this.isCurrentTurn(sessionID, expectedEpoch)) return;
         lastUser = [deepResult.data ?? []]

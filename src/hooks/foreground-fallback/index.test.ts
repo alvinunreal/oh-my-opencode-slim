@@ -450,30 +450,45 @@ describe('foreground fallback redo harness', () => {
 
   test('a replay read answering after a host stall still replays', async () => {
     const { manager, mocks } = makeManager();
-    const read = deferred<unknown>();
-    mocks.messages.mockImplementation(async () => ({
-      data: [
-        { info: { id: 'a', role: 'assistant', parentID: 'u' }, parts: [] },
-      ],
-    }));
-    mocks.message.mockImplementation(() => read.promise as never);
-    manager.registerSessionAgent('stall', 'orchestrator');
-    await manager.handleEvent(redoEvents.assistant('stall'));
-    const pending = manager.handleEvent(redoEvents.error('stall'));
-    await flush();
-    await clock.advance(2_000);
-    await flush();
-    read.resolve({
-      data: {
-        info: { id: 'u', role: 'user' },
-        parts: [{ type: 'text', text: 'hi' }],
+    const captured: string[] = [];
+    const logSpy = spyOn(logger, 'log').mockImplementation(
+      (message: string) => {
+        captured.push(message);
       },
-    });
-    await pending;
-    expect(mocks.message).toHaveBeenCalledTimes(1);
-    expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
-      body: { model: { providerID: 'test', modelID: 'b' } },
-    });
+    );
+    try {
+      const read = deferred<unknown>();
+      mocks.messages.mockImplementation(async () => ({
+        data: [
+          { info: { id: 'a', role: 'assistant', parentID: 'u' }, parts: [] },
+        ],
+      }));
+      mocks.message.mockImplementation(() => read.promise as never);
+      manager.registerSessionAgent('stall', 'orchestrator');
+      await manager.handleEvent(redoEvents.assistant('stall'));
+      const pending = manager.handleEvent(redoEvents.error('stall'));
+      await flush();
+      await clock.advance(2_000);
+      await flush();
+      // Proves the deeper read's first window expired before the late
+      // response arrives; without this the read succeeds in window one.
+      expect(captured.some((line) => line.includes('missed its window'))).toBe(
+        true,
+      );
+      read.resolve({
+        data: {
+          info: { id: 'u', role: 'user' },
+          parts: [{ type: 'text', text: 'hi' }],
+        },
+      });
+      await pending;
+      expect(mocks.message).toHaveBeenCalledTimes(1);
+      expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
+        body: { model: { providerID: 'test', modelID: 'b' } },
+      });
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   test('a replay read that never answers releases the fence after two windows', async () => {
@@ -9817,35 +9832,53 @@ describe('ForegroundFallbackManager same-model retry hardening', () => {
     });
 
     test('a stalled user-message read still sends the same-model replay', async () => {
-      const read = deferred<unknown>();
-      const { client, mocks } = createMockClient({
-        messagesImpl: async () => ({
-          data: [
-            { info: { id: 'a', role: 'assistant', parentID: 'u' }, parts: [] },
-          ],
-        }),
-      });
-      mocks.message.mockImplementation(() => read.promise as never);
-      const mgr = timedManager(makeChains(), true, {
-        client,
-        directory: '/test',
-      } as any);
-      await seed(mgr, 'deep-nc');
-      const pending = mgr.handleEvent(streamError('deep-nc', 'e1'));
-      await flush();
-      expect(mocks.message).toHaveBeenCalledTimes(1);
-      await clock.advance(2_000);
-      await flush();
-      read.resolve({
-        data: {
-          info: { id: 'u', role: 'user' },
-          parts: [{ type: 'text', text: 'hi' }],
+      const captured: string[] = [];
+      const logSpy = spyOn(logger, 'log').mockImplementation(
+        (message: string) => {
+          captured.push(message);
         },
-      });
-      await pending;
-      expect(mocks.message).toHaveBeenCalledTimes(1);
-      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-      expect((mgr as any).sessionRetries.get('deep-nc')).toBe(1);
+      );
+      try {
+        const read = deferred<unknown>();
+        const { client, mocks } = createMockClient({
+          messagesImpl: async () => ({
+            data: [
+              {
+                info: { id: 'a', role: 'assistant', parentID: 'u' },
+                parts: [],
+              },
+            ],
+          }),
+        });
+        mocks.message.mockImplementation(() => read.promise as never);
+        const mgr = timedManager(makeChains(), true, {
+          client,
+          directory: '/test',
+        } as any);
+        await seed(mgr, 'deep-nc');
+        const pending = mgr.handleEvent(streamError('deep-nc', 'e1'));
+        await flush();
+        expect(mocks.message).toHaveBeenCalledTimes(1);
+        await clock.advance(2_000);
+        await flush();
+        // Proves the deeper read's first window expired before the late
+        // response arrives; without this the read succeeds in window one.
+        expect(
+          captured.some((line) => line.includes('missed its window')),
+        ).toBe(true);
+        read.resolve({
+          data: {
+            info: { id: 'u', role: 'user' },
+            parts: [{ type: 'text', text: 'hi' }],
+          },
+        });
+        await pending;
+        expect(mocks.message).toHaveBeenCalledTimes(1);
+        expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+        expect((mgr as any).sessionRetries.get('deep-nc')).toBe(1);
+      } finally {
+        logSpy.mockRestore();
+      }
     });
   });
 });
