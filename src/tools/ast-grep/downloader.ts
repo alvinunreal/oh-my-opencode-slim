@@ -57,7 +57,7 @@ export function getCachedBinaryPath(): string | null {
   return existsSync(binaryPath) ? binaryPath : null;
 }
 
-export async function downloadAstGrep(
+async function downloadAstGrep(
   version: string = DEFAULT_VERSION,
 ): Promise<string | null> {
   const platformKey = `${process.platform}-${process.arch}`;

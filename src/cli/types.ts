@@ -1,4 +1,4 @@
-export type BooleanArg = 'yes' | 'no';
+type BooleanArg = 'yes' | 'no';
 export type BackgroundSubagentsArg = 'ask' | 'yes' | 'no';
 
 export interface InstallArgs {

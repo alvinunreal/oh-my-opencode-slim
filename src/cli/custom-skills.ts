@@ -1,9 +1,9 @@
 import { existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { getConfigDir } from '../config/paths';
-import { CUSTOM_SKILLS, type CustomSkill } from './custom-skills-registry';
+import { CUSTOM_SKILLS } from './custom-skills-registry';
 
-export { CUSTOM_SKILLS, type CustomSkill };
+export { CUSTOM_SKILLS };
 
 export interface BundledSkillInfo {
   id: string;

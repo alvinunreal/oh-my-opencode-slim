@@ -11,9 +11,7 @@ import {
 } from './schemas.js';
 import type { StoredMarketplacePackage } from './store.js';
 
-export { ambiguousMcpNamespaces } from './mcp-namespaces.js';
-
-export type MarketplaceDiagnosticCode =
+type MarketplaceDiagnosticCode =
   | 'invalid-selection'
   | 'duplicate-selection'
   | 'missing'
@@ -27,7 +25,7 @@ export type MarketplaceDiagnosticCode =
   | 'ambiguous-mcp-namespace'
   | 'invalid-capability';
 
-export interface MarketplaceActivationDiagnostic {
+interface MarketplaceActivationDiagnostic {
   readonly packageId: string;
   readonly code: MarketplaceDiagnosticCode;
   readonly message: string;

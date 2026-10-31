@@ -1,6 +1,6 @@
 import type { V2PermissionRule } from './types';
 
-export type PermissionEffect = V2PermissionRule['effect'];
+type PermissionEffect = V2PermissionRule['effect'];
 
 export interface PermissionCeilings {
   /** Default effect within admitted capability ceilings. */

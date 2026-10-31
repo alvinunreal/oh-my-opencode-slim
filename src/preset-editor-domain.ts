@@ -59,7 +59,7 @@ const ACTION_SENTINELS: ReadonlySet<string> = new Set<string>([
 ]);
 
 /** A user-controlled select value wrapped to avoid action-sentinel collisions. */
-export interface WrappedUserChoice {
+interface WrappedUserChoice {
   user: string;
 }
 
@@ -67,9 +67,7 @@ export interface WrappedUserChoice {
 export type PresetChoice = string | WrappedUserChoice;
 
 /** True when `value` is a wrapped user choice (not an action sentinel). */
-export function isWrappedUserChoice(
-  value: unknown,
-): value is WrappedUserChoice {
+function isWrappedUserChoice(value: unknown): value is WrappedUserChoice {
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -92,7 +90,7 @@ export function unwrapUserChoice(choice: PresetChoice): string {
 // --- new preset names ---
 
 /** Allowed characters for newly created preset names. */
-export const PRESET_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
+const PRESET_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 /**
  * Names that collide with JavaScript object internals. Existing config entries
@@ -112,7 +110,7 @@ export function isPrototypeSensitiveName(name: string): boolean {
 
 /** Reserved-name validation shared by both editors (pre-existing names are
  * not affected — only new creations). */
-export function reservedPresetNameError(name: string): string | undefined {
+function reservedPresetNameError(name: string): string | undefined {
   if (name.startsWith('__omo_')) {
     return 'Preset names starting with "__omo_" are reserved for the preset manager UI. Choose a different name.';
   }
@@ -212,9 +210,7 @@ export function describeOverride(override: AgentOverrideConfig): string {
 }
 
 /** Normalize one raw preset declaration, tolerating malformed entries. */
-export function safeNormalizePreset(
-  raw: PresetInput,
-): PresetDefinition | undefined {
+function safeNormalizePreset(raw: PresetInput): PresetDefinition | undefined {
   try {
     return normalizePreset(raw);
   } catch {

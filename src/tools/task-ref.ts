@@ -8,8 +8,6 @@ import { SESSION_ID_PATTERN } from '../utils/session';
 import { controlParamName } from '../v2/adapters';
 import { v2ResumeCall } from '../v2/delegation';
 
-export type { CanonicalTaskReference };
-
 const z = tool.schema;
 
 /**
@@ -69,7 +67,7 @@ export type CanonicalTaskResolver = (
 ) => Promise<CanonicalTaskReference>;
 
 /** How many tracked handles an unknown-handle error enumerates. */
-export const RECENT_TASK_HANDLE_LIMIT = 5;
+const RECENT_TASK_HANDLE_LIMIT = 5;
 
 /**
  * Parent-scoped enumeration of the most recently launched tracked handles,

@@ -575,7 +575,7 @@ export function updateInstallerManagedVersions(
 /**
  * Fetches the latest version for a specific channel from the NPM registry.
  */
-export async function getLatestVersion(
+async function getLatestVersion(
   channel: string = 'latest',
 ): Promise<string | null> {
   const distTags = await fetchDistTags();

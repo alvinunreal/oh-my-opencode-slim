@@ -48,6 +48,7 @@ function formatExecutableForShell(
   return shell === 'powershell' ? `& ${quoted}` : quoted;
 }
 
+/** @public Consumed by tests via cache-busted `?test=N` dynamic imports (invisible to static analysis). */
 export function buildOpencodeAttachCommand(
   sessionId: string,
   serverUrl: string,
@@ -240,7 +241,7 @@ export function redactViewerSecretArgs(args: readonly string[]): string[] {
  * (e.g. a kitty-launched window) don't need `opencode` on their PATH. Falls
  * back to the bare `opencode` name when no absolute path can be determined.
  */
-export function resolveOpencodeExecutable(): string {
+function resolveOpencodeExecutable(): string {
   return resolveHostOpencodeBinary() ?? 'opencode';
 }
 
@@ -348,6 +349,7 @@ export function resolveHostOpencodeBinary(
  * that probe a differently named distribution binary (cmux probes `cmux` as a
  * legacy fallback while its logs are prefixed `[cmux-tui]`) pass `logPrefix`.
  */
+/** @public Consumed by tests via cache-busted `?test=N` dynamic imports (invisible to static analysis). */
 export function findBinaryLogPrefix(
   binaryName: string,
   logPrefix?: string,

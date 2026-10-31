@@ -37,11 +37,9 @@ import { legacyAliasesFor } from './utils';
 export {
   deepMerge,
   mergeAgentOverrides,
-  mergePresetMaps,
   normalizePreset,
   PresetResolutionError,
   resolvePreset,
-  resolvePresets,
 } from './presets';
 
 /**

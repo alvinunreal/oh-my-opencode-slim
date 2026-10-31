@@ -317,9 +317,6 @@ export async function acquirePidFileLockWithRetryAsync(
  *   owner PID answers: the PID was recycled by an unrelated process, or the
  *   holder wedged past its own install timeout.
  */
-export function pidFileLockHasLiveOwner(
-  lock: string,
-  maxAgeMs?: number,
-): boolean {
+function pidFileLockHasLiveOwner(lock: string, maxAgeMs?: number): boolean {
   return snapshotHasLiveOwner(readLockSnapshot(lock), maxAgeMs);
 }

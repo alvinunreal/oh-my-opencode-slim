@@ -5,7 +5,7 @@ export function normalizeLineEndings(text: string): string {
   return text.replace(/\r\n?/g, '\n');
 }
 
-export function stripHeredoc(input: string): string {
+function stripHeredoc(input: string): string {
   const normalized = normalizeLineEndings(input);
   const match = normalized.match(
     /^(?:cat\s+)?<<['"]?(\w+)['"]?\s*\n([\s\S]*?)\n\1\s*$/,

@@ -7,7 +7,7 @@ import { log } from '../utils/logger';
 import { type DelegationVocabulary, delegationVocabulary } from './adapters';
 
 export const DELEGATION_TOOL_V2 = 'subagent';
-export const DELEGATION_TOOL_V1 = 'task';
+const DELEGATION_TOOL_V1 = 'task';
 
 /**
  * task_reply's honest v2 surface: until a host exposes form.reply through
@@ -94,7 +94,6 @@ export function v2ResumeCall(taskID?: string): string {
 }
 
 /** Static literal v2 resume call for prompt copy without a concrete id. */
-export const V2_RESUME_CALL = v2ResumeCall();
 
 /** Rewritten native `subagent` description for the background-default flip
  * (v2 only): the native prose anchors the omitted-parameter default to the

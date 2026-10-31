@@ -111,7 +111,7 @@ export async function getAstGrepPath(): Promise<string | null> {
   return initializeAstGrep();
 }
 
-export function startBackgroundInit(): void {
+function startBackgroundInit(): void {
   if (!initPromise) {
     getAstGrepPath().catch((err) => {
       console.warn(
@@ -317,12 +317,12 @@ export async function runSg(
   };
 }
 
-export function isCliAvailable(): boolean {
+function isCliAvailable(): boolean {
   const path = findSgCliPathSync();
   return path !== null && existsSync(path);
 }
 
-export async function ensureCliAvailable(): Promise<boolean> {
+async function ensureCliAvailable(): Promise<boolean> {
   const path = await getAstGrepPath();
   return path !== null && existsSync(path);
 }

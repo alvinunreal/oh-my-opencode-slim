@@ -166,7 +166,6 @@ Shown for v1. On v2, `v2-host.ts` supplies the base URL, an authenticated
 
 | File | Purpose |
 |------|---------|
-| `index.ts` | Client lifecycle submodule exports |
 | `lifecycle.ts` | Per-client pane lifecycle core (FR-3/4/6/7/10/11) |
 | `tui-wiring.ts` | TUI host wiring: admission, config, logs, serverUrl, events, reconcile |
 | `sweep.ts` | FR-8 crash-leftover pane sweep |

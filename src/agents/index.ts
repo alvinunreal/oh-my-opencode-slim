@@ -42,7 +42,6 @@ import {
   OBSERVER_DISPATCH_ROLES,
 } from './task-rejection';
 
-export { ensureCouncilCompactionException } from './council';
 export type { AgentDefinition } from './orchestrator';
 
 type AgentFactory = (
@@ -347,7 +346,7 @@ export interface AgentModelProjection {
  * sessions plus the sidebar. Everything else (prompt, tools, permissions,
  * skills, MCPs, description) stays frozen for a session's lifetime.
  */
-export interface AgentRuntimeProfile {
+interface AgentRuntimeProfile {
   model?: { providerID: string; id: string; variant?: string };
   temperature?: number;
   providerOptions?: Record<string, unknown>;

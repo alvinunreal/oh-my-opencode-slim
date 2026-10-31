@@ -7,7 +7,7 @@ export type RemoteMcpConfig = {
   oauth?: false;
 };
 
-export type LocalMcpConfig = {
+type LocalMcpConfig = {
   type: 'local';
   command: string[];
   environment?: Record<string, string>;

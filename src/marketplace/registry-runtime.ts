@@ -11,9 +11,6 @@ export interface MarketplaceRegistryImplementation {
   createMarketplaceAgentDefinitions: typeof createMarketplaceAgentDefinitions;
 }
 
-export type {
-  MarketplaceAgentDefinitions,
-  MarketplaceAgentMetadata,
-  ResolveMarketplaceActivationOptions,
-};
+export type { MarketplaceAgentMetadata };
+/** @public Consumed as namespace properties by src/index.ts (knip blind spot). */
 export { createMarketplaceAgentDefinitions, resolveMarketplaceActivation };

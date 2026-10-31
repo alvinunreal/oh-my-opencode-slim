@@ -2,7 +2,7 @@ import { parseContinuationModelSelection } from '../hooks/task-session-manager/c
 import { isRecord } from './guards';
 
 /** Which source produced a resolved selection. */
-export type SessionSelectionProvenance =
+type SessionSelectionProvenance =
   /** Selection persisted in the host (`session.get()`). */
   | 'host-persisted'
   /** Last selection observed from an external (user-initiated) chat
@@ -34,7 +34,7 @@ export interface SessionSelectionReader {
 
 /** Bound only the host `session.get` read. Metadata fallback must still
  * run if that read is slow or hangs (#1079 Oracle r2). */
-export const HOST_SELECTION_TIMEOUT_MS = 2_000;
+const HOST_SELECTION_TIMEOUT_MS = 2_000;
 
 /**
  * Resolve the session's CURRENT selection for lifecycle continuations

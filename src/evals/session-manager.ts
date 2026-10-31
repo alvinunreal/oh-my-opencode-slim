@@ -32,7 +32,7 @@ export type EvalSessionResult = {
   durationSecs: number;
 };
 
-export type RunViaServer = (
+type RunViaServer = (
   agent: string,
   prompt: string,
   label: string,

@@ -57,12 +57,12 @@ const BACKGROUND_COMPLETION_FAILED = /^Background task failed: /;
 
 // ── State shape ────────────────────────────────────────────────────────
 
-export type InjectedCompletionFence = BackgroundJobInjectedCompletionFence;
+type InjectedCompletionFence = BackgroundJobInjectedCompletionFence;
 
-export type SyntheticTerminalOccurrencePhase =
+type SyntheticTerminalOccurrencePhase =
   BackgroundJobSyntheticTerminalOccurrencePhase;
 
-export type SyntheticTerminalOccurrenceOrigin =
+type SyntheticTerminalOccurrenceOrigin =
   BackgroundJobSyntheticTerminalOccurrence;
 
 type SyntheticTerminalOccurrenceLookup =
@@ -103,9 +103,7 @@ function reportedRunKey(taskID: string, generation: number): string {
  * correction itself is a staleness notice, not board status — the native
  * notifier covers terminal publications, not the reopen-to-running
  * transition (#1314's anti-narration scope is board status lines). */
-export function formatReopenCorrectionText(
-  correction: ReopenCorrection,
-): string {
+function formatReopenCorrectionText(correction: ReopenCorrection): string {
   return formatSystemReminder(
     [
       '### Background Job — Reopened',
@@ -1046,7 +1044,7 @@ export async function updateFromInjectedCompletion(
   return updated;
 }
 
-export function rememberProcessedInjectedCompletion(
+function rememberProcessedInjectedCompletion(
   state: InjectionState,
   taskID: string,
   occurrenceId: string,

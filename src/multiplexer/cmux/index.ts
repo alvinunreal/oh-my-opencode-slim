@@ -79,10 +79,10 @@ export interface CmuxTarget {
   sessionName?: string;
 }
 
-export type CmuxError = 'not_found' | 'unavailable' | 'hard';
+type CmuxError = 'not_found' | 'unavailable' | 'hard';
 
 /** Distinguishable failure causes for logs (FR-13 diagnostics). */
-export type CmuxFailureReason =
+type CmuxFailureReason =
   | 'binary-not-found'
   | 'no-control-plane'
   | 'no-anchor'
@@ -92,7 +92,7 @@ export type CmuxFailureReason =
   | 'invalid-response'
   | 'command-failed';
 
-export type CmuxResult<T> =
+type CmuxResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: CmuxError; reason: CmuxFailureReason };
 
@@ -107,19 +107,19 @@ export interface CmuxAnchor {
 }
 
 /** One `tab list` entry (only the fields this adapter reads). */
-export interface CmuxTab {
+interface CmuxTab {
   tabId: string;
   paneId: string;
   focused: boolean;
 }
 
 /** One `terminal list` entry (sweep candidate discovery). */
-export interface CmuxTerminal {
+interface CmuxTerminal {
   terminalId: string;
 }
 
 /** The handle of a created child view: terminal id plus its tab. */
-export interface CmuxRunResult {
+interface CmuxRunResult {
   tabId: string;
   terminalId: string;
 }
@@ -587,6 +587,7 @@ export class CmuxMultiplexer implements Multiplexer {
   }
 }
 
+/** @public Consumed by tests via cache-busted `?test=N` dynamic imports (invisible to static analysis). */
 export class SpawnCommandRunner implements CommandRunner {
   constructor(
     private readonly timeoutMs = 5_000,
@@ -625,6 +626,7 @@ export class SpawnCommandRunner implements CommandRunner {
   }
 }
 
+/** @public Consumed by tests via cache-busted `?test=N` dynamic imports (invisible to static analysis). */
 export class CliCmuxClient implements CmuxClient {
   private binary: string | null;
 
@@ -901,6 +903,7 @@ export class CliCmuxClient implements CmuxClient {
  * True when the command carries a shell argv payload (the attach script,
  * separated by `--`), whose stderr may echo it. Such stderr is redacted.
  */
+/** @public Consumed by tests via cache-busted `?test=N` dynamic imports (invisible to static analysis). */
 export function commandCarriesArgv(args: string[]): boolean {
   return args.includes('--');
 }
@@ -914,6 +917,7 @@ export function commandCarriesArgv(args: string[]): boolean {
 const ARGV_MARKER_PATTERN =
   /(?:^|\n)# (omosc:\d{1,10}:[A-Za-z0-9_-]{1,64})(?=\n|$)/;
 
+/** @public Consumed by tests via cache-busted `?test=N` dynamic imports (invisible to static analysis). */
 export function extractArgvMarker(argv: string[]): string | null {
   for (const arg of argv) {
     const match = ARGV_MARKER_PATTERN.exec(arg);
@@ -927,7 +931,7 @@ export function extractArgvMarker(argv: string[]): string | null {
  * socket wins over the legacy name; an explicit session name is only used
  * when no socket path exists (the CLI gives `--socket` precedence anyway).
  */
-export function resolveCmuxTarget(
+function resolveCmuxTarget(
   env: CmuxEnvironment,
   sessionName?: string,
 ): CmuxTarget | null {

@@ -309,7 +309,7 @@ export const ORCHESTRATOR_WAKE_UNCHANGED_CAP = 2;
  * idle parent; the first eligible publication wins and later ones inside
  * the window are dropped (their results surface on the next board render).
  */
-export const DEFAULT_PUBLICATION_WAKE_MIN_INTERVAL_MS = 30_000;
+const DEFAULT_PUBLICATION_WAKE_MIN_INTERVAL_MS = 30_000;
 
 /** Max stopped-job deltas queued per parent. Oldest entries are dropped
  * when a new distinct stop would exceed the cap, so a busy/waiting parent
@@ -343,7 +343,7 @@ export const COMPLETED_JOB_WAKE_CHUNK = 8;
 /** Upper bound on task identifiers inlined in the overflow notice: keeps the
  * wake prompt bounded under pathological stop floods; evictions beyond the
  * cap are reported as a count, not listed. */
-export const STOPPED_RECOVERY_OVERFLOW_ID_CAP = 64;
+const STOPPED_RECOVERY_OVERFLOW_ID_CAP = 64;
 
 /** Bounded overflow IDs shared by all queues; unretained entries stay honest. */
 function overflowedTaskIDs(
@@ -427,7 +427,7 @@ type LocalSessionState = {
  * completed/error publication reaching an idle parent. */
 type WakeReason = 'periodic' | 'recovery' | 'publication';
 
-export type OrchestratorWakeConfig = {
+type OrchestratorWakeConfig = {
   enabled: boolean;
   intervalMs: number;
   /** Wake-condition source; resolved against host capabilities (see
@@ -452,7 +452,7 @@ export type OrchestratorWakeConfig = {
   publicationWakeMinIntervalMs?: number;
 };
 
-export type WakeSchedulerTimers = {
+type WakeSchedulerTimers = {
   setTimeout: (
     callback: () => void,
     delay: number,

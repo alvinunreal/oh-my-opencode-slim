@@ -105,7 +105,7 @@ function ensureImagesGitignore(
   }
 }
 
-export function isImagePart(p: unknown): boolean {
+function isImagePart(p: unknown): boolean {
   return asImagePart(p) !== null;
 }
 function sanitizeFilename(name: string): string {

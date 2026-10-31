@@ -10,7 +10,7 @@
  * Paths use `*` for one arbitrary record key (a council preset name).
  * Delete entries (or this whole module) once the compatibility window ends.
  */
-export const REMOVED_CONFIG_KEYS = [
+const REMOVED_CONFIG_KEYS = [
   'tmux',
   'council.master',
   'council.master_timeout',
@@ -32,7 +32,7 @@ export const REMOVED_CONFIG_KEYS = [
   'webfetch.model',
 ] as const;
 
-export function removedConfigKeyMessage(path: string): string {
+function removedConfigKeyMessage(path: string): string {
   return `Config key "${path}" was removed in this version and is ignored; see docs/configuration.md`;
 }
 
@@ -87,7 +87,7 @@ export function stripRemovedConfigKeys(
  * the same `removed-key` channel as removed keys — the generic
  * unknown-value normalization would otherwise label it a typo.
  */
-export const REMOVED_DISABLED_VALUES: Readonly<
+const REMOVED_DISABLED_VALUES: Readonly<
   Record<string, Readonly<Record<string, string>>>
 > = {
   disabled_hooks: {

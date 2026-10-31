@@ -19,7 +19,7 @@ import type { SeatRequest, SeatResult, SeatResultResolver } from './types';
 /** Trigger line the orchestrator emits on a council synthesis call. No
  * /g flag: lastIndex state would skip matches across the
  * findLastIndex/exec passes. */
-export const SEATS_LINE_PATTERN = /^Seats:\s*(.+)$/;
+const SEATS_LINE_PATTERN = /^Seats:\s*(.+)$/;
 
 /**
  * Canonical placeholder tails, one per non-completed kind. The managed

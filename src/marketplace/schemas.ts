@@ -37,7 +37,7 @@ export const MarketplaceBuiltinSchema = z.enum([
   ...SUPPORTED_SPECIALIST_ROLES,
   'librarian',
 ] as const);
-export type MarketplaceBuiltin = z.infer<typeof MarketplaceBuiltinSchema>;
+type MarketplaceBuiltin = z.infer<typeof MarketplaceBuiltinSchema>;
 
 /**
  * Rename continuity: packages extending `librarian` extend the merged
@@ -110,7 +110,7 @@ const UniqueSingleLineStringArraySchema = z
 
 const MarketplaceToolSchema = z.enum(MARKETPLACE_TOOL_NAMES);
 
-export const MarketplaceAuthorSchema = z
+const MarketplaceAuthorSchema = z
   .object({
     name: BoundedTextSchema(120),
     email: z.string().email().optional(),
@@ -139,14 +139,14 @@ const MarketplaceExplicitModelSchema = z
   })
   .strict();
 
-export const MarketplaceModelPolicySchema = z.discriminatedUnion('source', [
+const MarketplaceModelPolicySchema = z.discriminatedUnion('source', [
   z.object({ source: z.literal('session') }).strict(),
   z.object({ source: z.literal('orchestrator') }).strict(),
   MarketplaceExplicitModelSchema,
   z.object({ source: z.literal('builtin') }).strict(),
 ]);
 
-export const MarketplaceCompatibilitySchema = z
+const MarketplaceCompatibilitySchema = z
   .object({
     plugin: BoundedTextSchema(64).refine(
       (range) => validRange(range) !== null,
@@ -155,7 +155,7 @@ export const MarketplaceCompatibilitySchema = z
   })
   .strict();
 
-export const MarketplaceRoutingSchema = z
+const MarketplaceRoutingSchema = z
   .object({
     description: SingleLineTextSchema(500),
     when: SingleLineTextSchema(500),
@@ -180,7 +180,7 @@ export const MarketplaceRoutingV3Schema = z
   })
   .strict();
 
-export const MarketplaceExtensionSchema = z
+const MarketplaceExtensionSchema = z
   .object({
     builtin: MarketplaceBuiltinSchema,
     promptMode: z.enum(['append', 'replace']),
@@ -356,10 +356,10 @@ export type MarketplaceVersion = z.infer<typeof MarketplaceVersionSchema>;
 export type MarketplaceModelPolicy = z.infer<
   typeof MarketplaceModelPolicySchema
 >;
-export type MarketplaceAgentManifestV2 = z.infer<
+type MarketplaceAgentManifestV2 = z.infer<
   typeof MarketplacePackageManifestV2Schema
 >;
-export type MarketplaceAgentManifestV3 = z.infer<
+type MarketplaceAgentManifestV3 = z.infer<
   typeof MarketplacePackageManifestV3Schema
 >;
 export type MarketplacePackageManifest = z.infer<

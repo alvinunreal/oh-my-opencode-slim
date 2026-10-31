@@ -93,6 +93,6 @@ export async function runCase(options: RunCaseOptions): Promise<RunCaseResult> {
 /**
  * Check if an error message indicates a database lock condition.
  */
-export function isLockError(error: string | undefined): boolean {
+function isLockError(error: string | undefined): boolean {
   return /database is locked|Failed query/i.test(error ?? '');
 }

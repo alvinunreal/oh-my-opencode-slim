@@ -680,7 +680,7 @@ function trailingUserId(event: V2SessionContextEvent): string | undefined {
 /** Trailing-user-message internal-initiator state per session, learned
  * from context events by `observeChatHeaderState` and consumed by
  * `createChatHeadersBridge`. Bounded via `pruneSessionMap`. */
-export interface ChatHeaderSessionState {
+interface ChatHeaderSessionState {
   messageID?: string;
   internal: boolean;
 }
@@ -1009,7 +1009,7 @@ export function resolveDeclaredBuiltinAgents(
  * follow host config edits); exact names only, so removal replays
  * idempotently and never touches the plugin's `explorer`.
  */
-export function removeHostBuiltinSubagents(
+function removeHostBuiltinSubagents(
   draft: V2AgentDraft,
   directory: string,
 ): void {

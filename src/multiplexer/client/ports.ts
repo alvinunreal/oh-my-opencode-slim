@@ -64,7 +64,7 @@ export interface AdapterFactory {
 }
 
 /** Reflected server URL; a guessed default is never substituted (D3). */
-export interface ServerUrlResolution {
+interface ServerUrlResolution {
   /** Usable base URL for `opencode attach`; absent when unreachable. */
   url?: string;
   /** True for the embedded-mode sentinel: no listener to attach to. */
@@ -72,7 +72,7 @@ export interface ServerUrlResolution {
 }
 
 /** Reflects the host's server URL and its reachability. */
-export type ServerUrlResolver = () => ServerUrlResolution;
+type ServerUrlResolver = () => ServerUrlResolution;
 
 /** The complete injected surface of the pane lifecycle core. */
 export interface ClientPorts {

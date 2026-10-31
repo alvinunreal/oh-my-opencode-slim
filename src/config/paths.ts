@@ -71,7 +71,7 @@ export function getLiteConfig(): string {
   return join(getConfigDir(), 'oh-my-opencode-slim.json');
 }
 
-export function getLiteConfigJsonc(): string {
+function getLiteConfigJsonc(): string {
   return join(getConfigDir(), 'oh-my-opencode-slim.jsonc');
 }
 

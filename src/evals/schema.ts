@@ -34,7 +34,7 @@ import { z } from 'zod';
  * - `agent_invocations_count`: total agent invocations must match. `value`
  *   is either an exact number or JSON `{"min?": n, "max?": m}`.
  */
-export const AssertionSchema = z.object({
+const AssertionSchema = z.object({
   type: z.enum([
     'contains',
     'not_contains',
@@ -67,7 +67,7 @@ export type Assertion = z.infer<typeof AssertionSchema>;
  * Reference solution for validating graders.
  * A known working output that passes all graders.
  */
-export const ReferenceSolutionSchema = z.object({
+const ReferenceSolutionSchema = z.object({
   /** The reference output text */
   output: z.string(),
   /** How to compare against reference */
@@ -75,9 +75,9 @@ export const ReferenceSolutionSchema = z.object({
   /** For semantic similarity: minimum similarity threshold (0-1) */
   threshold: z.number().optional(),
 });
-export type ReferenceSolution = z.infer<typeof ReferenceSolutionSchema>;
+type ReferenceSolution = z.infer<typeof ReferenceSolutionSchema>;
 
-export const EvalCaseSchema = z.object({
+const EvalCaseSchema = z.object({
   id: z.string(),
   prompt: z.string(),
   agent: z.string().default('orchestrator'),

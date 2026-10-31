@@ -65,10 +65,6 @@ export function v1PermKeyToV2(
   return [{ action: key, resource: '*' }];
 }
 
-export const TASK_V2_ACTIONS: ReadonlySet<string> = Object.freeze(
-  new Set(v1PermKeyToV2('task').map((t) => t.action)),
-);
-
 /** Convert a v1 permission map (or shorthand string) into v2 permission rules. */
 export function adaptPermissions(
   perm: unknown,

@@ -503,11 +503,6 @@ export function markPersistedBackgroundChildDelivered(
   return true;
 }
 
-/** Remove a persisted child identity (e.g. after a deletion tombstone). */
-export function removePersistedBackgroundChild(taskID: string): void {
-  removeChild(taskID);
-}
-
 function removeChild(taskID: string): void {
   if (!liveChildren.delete(taskID)) return;
   if (!backend) return;

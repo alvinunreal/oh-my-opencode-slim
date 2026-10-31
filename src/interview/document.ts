@@ -380,7 +380,7 @@ export function extractTitle(document: string): string {
   return match?.[1]?.trim() ?? '';
 }
 
-export function buildInterviewDocument(
+function buildInterviewDocument(
   idea: string,
   summary: string,
   history: string,

@@ -89,7 +89,7 @@ export function getCustomAgentNames(
   });
 }
 
-export function getAcpAgentNames(config: PluginConfig | undefined): string[] {
+function getAcpAgentNames(config: PluginConfig | undefined): string[] {
   return Object.keys(config?.acpAgents ?? {});
 }
 

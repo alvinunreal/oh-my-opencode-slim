@@ -17,7 +17,7 @@ export function saveResults(
   return filepath;
 }
 
-export function loadLatestResult(suiteName: string): EvalSuiteResult | null {
+function loadLatestResult(suiteName: string): EvalSuiteResult | null {
   const path = loadLatestResultPath(suiteName);
   if (!path) return null;
   try {

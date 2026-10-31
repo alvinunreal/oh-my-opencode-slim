@@ -20,7 +20,7 @@ export type SessionRuntimeStatus = 'busy' | 'retry' | 'idle';
  * - `active`: pane exists and is managed by this client
  * - `closing`: close in flight; the record is dropped once the pane is gone
  */
-export type PaneStatus = 'spawning' | 'active' | 'closing';
+type PaneStatus = 'spawning' | 'active' | 'closing';
 
 /** Identity fields of a created pane (the FR-13 success record fields). */
 export interface PaneIdentity {
@@ -45,11 +45,7 @@ export interface PaneRecord extends PaneIdentity {
 }
 
 /** The four host events the client consumes (FR-3). */
-export type SessionLifecycleEventKind =
-  | 'created'
-  | 'status'
-  | 'idle'
-  | 'deleted';
+type SessionLifecycleEventKind = 'created' | 'status' | 'idle' | 'deleted';
 
 /** Minimal projection of a host session event. */
 export interface SessionLifecycleEvent {

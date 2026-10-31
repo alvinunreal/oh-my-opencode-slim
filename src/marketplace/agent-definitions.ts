@@ -15,7 +15,7 @@ import { MARKETPLACE_TOOL_NAMES } from './capabilities.js';
 import { renderMarketplaceAutoDelegationBlock } from './routing.js';
 import type { MarketplaceModelPolicy } from './schemas.js';
 
-export interface MarketplaceAgentCapabilityCeiling {
+interface MarketplaceAgentCapabilityCeiling {
   readonly tools: readonly string[];
   readonly skills: readonly string[];
   readonly mcps: readonly string[];

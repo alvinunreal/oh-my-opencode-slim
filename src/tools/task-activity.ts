@@ -45,9 +45,7 @@ export interface ActivityEvent {
  * the only message.updated shape that counts as progress. Streaming text
  * trickles (no completed marker) return false.
  */
-export function isCompletedAssistantMessageEvent(
-  event: ActivityEvent,
-): boolean {
+function isCompletedAssistantMessageEvent(event: ActivityEvent): boolean {
   if (event.type !== 'message.updated') return false;
   const info = event.properties?.info;
   if (info?.role !== undefined && info.role !== 'assistant') return false;
@@ -89,7 +87,7 @@ export function resolveEventSessionID(
  * trickles (no completed marker) return false and must never reset the
  * possibly-stuck clock.
  */
-export function shouldRecordActivity(event: ActivityEvent): boolean {
+function shouldRecordActivity(event: ActivityEvent): boolean {
   const statusType = event.properties?.status?.type;
   return (
     (event.type === 'message.updated' &&
@@ -101,7 +99,7 @@ export function shouldRecordActivity(event: ActivityEvent): boolean {
 }
 
 /** True when the session is gone and its activity bookkeeping can be dropped. */
-export function shouldForgetActivity(event: ActivityEvent): boolean {
+function shouldForgetActivity(event: ActivityEvent): boolean {
   return event.type === 'session.deleted';
 }
 

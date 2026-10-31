@@ -434,6 +434,7 @@ function showSkippedUpdateToast(
   );
 }
 
+/** @public Consumed by tests via cache-busted `?test=N` dynamic imports (invisible to static analysis). */
 export function getAutoUpdateInstallDir(): string {
   return resolveInstallContext()?.installDir ?? CACHE_DIR;
 }

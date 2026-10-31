@@ -17,11 +17,7 @@
 import { log } from '../utils/logger';
 import { parseTaskResultFromOutput } from '../utils/task';
 
-export type SubagentStructuredState =
-  | 'running'
-  | 'completed'
-  | 'error'
-  | 'cancelled';
+type SubagentStructuredState = 'running' | 'completed' | 'error' | 'cancelled';
 
 export interface SubagentStructuredLaunch {
   /** Tool.CallID of the wrapped call (`context.id`). */

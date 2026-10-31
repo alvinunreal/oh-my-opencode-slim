@@ -118,10 +118,7 @@ export interface ToolLoopGuardOptions {
   directory?: string;
 }
 
-export function normalizeReadTarget(
-  rawPath: string,
-  directory?: string,
-): string {
+function normalizeReadTarget(rawPath: string, directory?: string): string {
   let cleaned = rawPath.replace(/\\/g, '/').trim().replace(/\/+/g, '/');
   while (cleaned.startsWith('./')) {
     cleaned = cleaned.slice(2);

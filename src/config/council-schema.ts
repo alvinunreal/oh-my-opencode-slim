@@ -5,8 +5,6 @@ import {
 } from '../utils/councillor-models';
 import { ProviderModelIdSchema } from './model-id-schema';
 
-export type { CouncillorModelEntry };
-
 const CouncillorModelEntrySchema = z.object({
   id: ProviderModelIdSchema,
   variant: z.string().optional(),

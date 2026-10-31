@@ -97,8 +97,6 @@ export const DEFAULT_MARKETPLACE_REGISTRY_URL =
   'https://registry.ohmyopencodeslim.com/v2/' as const;
 export const DEFAULT_MARKETPLACE_REGISTRY_V3_URL =
   'https://registry.ohmyopencodeslim.com/v3/' as const;
-export const DEFAULT_MARKETPLACE_REGISTRY_URL_V3 =
-  DEFAULT_MARKETPLACE_REGISTRY_V3_URL;
 export const MARKETPLACE_REGISTRY_V3_SCHEMA_VERSION = 3 as const;
 
 // The v2 endpoint intentionally remains v2-only. In particular, changing the
@@ -245,8 +243,6 @@ const MarketplaceRegistryIndexV2EndpointSchema = z
 
 export const MarketplaceRegistryIndexSchema =
   MarketplaceRegistryIndexV2EndpointSchema;
-export const MarketplaceRegistryEntryV2Schema = MarketplaceRegistryEntrySchema;
-export const MarketplaceRegistryIndexV2Schema = MarketplaceRegistryIndexSchema;
 
 export const MarketplaceRegistryIndexV3Schema = z
   .object({
@@ -390,8 +386,6 @@ export function parseMarketplaceRegistryIndex(
   }
   return result.data;
 }
-
-export const parseMarketplaceRegistryIndexV2 = parseMarketplaceRegistryIndex;
 
 export function parseMarketplaceRegistryIndexV3(
   value: unknown,

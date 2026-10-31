@@ -55,7 +55,7 @@ export interface MarketplaceDesiredState {
   readonly error?: string;
 }
 
-export const MARKETPLACE_UNINSTALL_SCOPE_WARNING =
+const MARKETPLACE_UNINSTALL_SCOPE_WARNING =
   'Other project configurations were not inspected and may retain dangling marketplace package references.';
 
 export interface MarketplaceUninstallResult {
@@ -97,9 +97,7 @@ function sourceForImport(filePath: string): MarketplaceSource {
   }
 }
 
-export function parseBundleFromFile(
-  filePath: string,
-): MarketplacePackageBundle {
+function parseBundleFromFile(filePath: string): MarketplacePackageBundle {
   let value: unknown;
   try {
     value = JSON.parse(readFileSync(filePath, 'utf8')) as unknown;

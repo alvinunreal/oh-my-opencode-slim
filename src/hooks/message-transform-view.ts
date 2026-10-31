@@ -24,7 +24,7 @@ import {
 } from './types';
 
 /** A well-formed user message with its position in the source array. */
-export interface UserMessageEntry {
+interface UserMessageEntry {
   readonly index: number;
   readonly message: MessageWithParts;
 }

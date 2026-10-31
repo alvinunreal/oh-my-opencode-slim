@@ -19,7 +19,7 @@ type PathGuardContext = {
   worktreeReal?: Promise<string>;
 };
 
-export type PreparedFileState =
+type PreparedFileState =
   | {
       exists: false;
       derived: boolean;
@@ -45,7 +45,7 @@ export type SimulatedStep =
       nextText: string;
     };
 
-export type PatchExecutionContext = {
+type PatchExecutionContext = {
   hunks: PatchHunk[];
   pathsNormalized: boolean;
   staged: Map<string, PreparedFileState>;
@@ -59,12 +59,12 @@ export type PatchExecutionContext = {
   ) => Promise<void>;
 };
 
-export type ResolvedPreparedUpdate = {
+type ResolvedPreparedUpdate = {
   resolved: ReturnType<typeof resolveUpdate>['resolved'];
   nextText: string;
 };
 
-export function isMissingPathError(error: unknown): boolean {
+function isMissingPathError(error: unknown): boolean {
   return (
     !!error &&
     typeof error === 'object' &&
@@ -207,7 +207,7 @@ async function guardPatchTargets(
   }
 }
 
-export function parseValidatedPatch(patchText: string): PatchHunk[] {
+function parseValidatedPatch(patchText: string): PatchHunk[] {
   let hunks: PatchHunk[];
 
   try {
@@ -409,7 +409,7 @@ export async function simulatePatch(
   return { hunks, pathsNormalized, steps };
 }
 
-export function resolvePreparedUpdate(
+function resolvePreparedUpdate(
   filePath: string,
   currentText: string,
   hunk: UpdatePatchHunk,

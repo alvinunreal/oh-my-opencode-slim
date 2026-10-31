@@ -106,15 +106,12 @@ export function setSgCliPath(path: string): void {
   resolvedCliPath = path;
 }
 
-// Re-export language constants
-export { CLI_LANGUAGES };
-
 // Defaults
 export const DEFAULT_TIMEOUT_MS = 300_000;
 export const DEFAULT_MAX_OUTPUT_BYTES = 1 * 1024 * 1024;
 export const DEFAULT_MAX_MATCHES = 500;
 
-export interface EnvironmentCheckResult {
+interface EnvironmentCheckResult {
   cli: {
     available: boolean;
     path: string;

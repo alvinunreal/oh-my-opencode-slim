@@ -21,10 +21,10 @@ import type {
   V2SessionContextEvent,
 } from './types';
 
-export const INTERVIEW_COMMAND_MARKER =
+const INTERVIEW_COMMAND_MARKER =
   '<omos-interview-command>$ARGUMENTS</omos-interview-command>';
 
-export const IMPLEMENT_COMMAND_MARKER =
+const IMPLEMENT_COMMAND_MARKER =
   '<omos-implement-command>$ARGUMENTS</omos-implement-command>';
 
 // Whole-text anchored: v2 writes the marker as the entire submitted prompt,
@@ -43,7 +43,7 @@ export function markerText(args: string): string {
 }
 
 /** Render the `/implement` command marker with the given arguments. */
-export function implementMarkerText(args: string): string {
+function implementMarkerText(args: string): string {
   return IMPLEMENT_COMMAND_MARKER.replace('$ARGUMENTS', () => args);
 }
 

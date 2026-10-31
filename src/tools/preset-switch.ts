@@ -30,7 +30,7 @@ import {
   withoutAgentOverride,
 } from '../preset-editor-domain';
 
-export type PresetMap = Record<string, PresetInput>;
+type PresetMap = Record<string, PresetInput>;
 
 function interpolateConfigEnvironment(raw: string): string {
   return raw.replace(
@@ -65,7 +65,7 @@ export interface PresetSwitchResult {
   summary: string[];
 }
 
-export type PresetSwitchScope = 'user' | 'effective' | 'project' | 'global';
+type PresetSwitchScope = 'user' | 'effective' | 'project' | 'global';
 
 export interface PresetSwitchOptions {
   hostFlavor?: string;
@@ -120,7 +120,7 @@ export interface AgentUpdate {
  * Non-model fields (inheritModelFrom, skills, mcps, prompts, permissions, etc.)
  * make an override valid.
  */
-export function hasPresetOverrides(preset: Preset): boolean {
+function hasPresetOverrides(preset: Preset): boolean {
   for (const override of Object.values(preset)) {
     if (override && typeof override === 'object' && !Array.isArray(override)) {
       if (Object.keys(override).length > 0) {
@@ -357,7 +357,7 @@ export function clearProjectPresetOnDisk(
  * Build the SDK-shaped agent overrides from a preset, resolving legacy alias
  * keys (e.g. "explore" → "explorer").
  */
-export function buildAgentUpdates(preset: Preset): Record<string, AgentUpdate> {
+function buildAgentUpdates(preset: Preset): Record<string, AgentUpdate> {
   const agentUpdates: Record<string, AgentUpdate> = {};
   for (const [agentName, override] of Object.entries(preset)) {
     if (!override || typeof override !== 'object' || Array.isArray(override)) {
@@ -376,9 +376,7 @@ export function buildAgentUpdates(preset: Preset): Record<string, AgentUpdate> {
  * Map an AgentOverrideConfig (from plugin config) to the subset of agent
  * config fields shown in the saved preset summary.
  */
-export function mapOverrideToAgentConfig(
-  override: AgentOverrideConfig,
-): AgentUpdate {
+function mapOverrideToAgentConfig(override: AgentOverrideConfig): AgentUpdate {
   const agentConfig: AgentUpdate = {};
 
   if (typeof override.model === 'string') {
@@ -602,9 +600,7 @@ function describeError(error: unknown): string {
  * Read the user-level config file as a parsed object. Returns null if the
  * file is absent or unreadable.
  */
-export function readUserConfig(
-  directory: string,
-): Record<string, unknown> | null {
+function readUserConfig(directory: string): Record<string, unknown> | null {
   try {
     const { userConfigPath } = findPluginConfigPaths(directory);
     if (!userConfigPath) return null;
@@ -620,9 +616,7 @@ export function readUserConfig(
 /**
  * Read raw presets from the editable user config file.
  */
-export function readUserPresets(
-  directory: string,
-): Record<string, PresetInput> {
+function readUserPresets(directory: string): Record<string, PresetInput> {
   const config = readUserConfig(directory);
   if (
     !config ||

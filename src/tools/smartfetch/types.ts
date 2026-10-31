@@ -2,7 +2,7 @@ export type SmartfetchOptions = {
   binaryDir?: string;
 };
 
-export type RedirectStep = {
+type RedirectStep = {
   from: string;
   to: string;
   status: number;

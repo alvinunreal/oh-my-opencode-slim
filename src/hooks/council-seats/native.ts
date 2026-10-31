@@ -44,7 +44,7 @@ import { SEAT_REASONS } from './assemble';
 import type { SeatResult, SeatResultResolver } from './types';
 
 /** Whole-call budget (parent read + every per-seat read). */
-export const DEFAULT_NATIVE_SEAT_TIMEOUT_MS = 5_000;
+const DEFAULT_NATIVE_SEAT_TIMEOUT_MS = 5_000;
 
 /** Scheduler seam, matching `raceEvidenceDeadline`'s timer contract. */
 export interface NativeSeatTimers {

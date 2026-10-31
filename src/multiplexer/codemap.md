@@ -359,11 +359,9 @@ has no cwd flag (the split inherits the anchor's working directory).
 
 | File | Purpose |
 |------|---------|
-| `index.ts` | Public API exports |
 | `types.ts` | Core interfaces (`Multiplexer`, `PaneResult`, `PaneSpawnOptions`) |
 | `shared.ts` | Shared infrastructure (quoteShellArg, PaneShell, buildOpencodeAttachCommand, buildShellLaunchArgs, findBinary, resolveHostOpencodeBinary, gracefulClosePane) |
 | `factory.ts` | Multiplexer instance creation and environment detection |
-| `client/index.ts` | Client lifecycle submodule exports |
 | `client/lifecycle.ts` | Per-client pane lifecycle core (FR-3/4/6/7/10/11) |
 | `client/tui-wiring.ts` | TUI host wiring: admission, config, logs, serverUrl, events, reconcile |
 | `client/sweep.ts` | FR-8 crash-leftover pane sweep |

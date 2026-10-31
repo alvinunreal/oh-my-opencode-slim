@@ -64,7 +64,7 @@ interface CapturedExecution {
   generation: number;
 }
 
-export class SessionStillRunningError extends Error {}
+class SessionStillRunningError extends Error {}
 
 class LeaseOwnershipLostError extends Error {}
 

@@ -7,7 +7,7 @@ import {
 import type { TaskActivityTracker } from './task-activity';
 
 /** A live child is reported possibly stuck after this much time without activity. */
-export const STUCK_IDLE_THRESHOLD_MS = 120_000;
+const STUCK_IDLE_THRESHOLD_MS = 120_000;
 
 /** Preserve the timestamp fallback chain; provenance is not proof of progress. */
 export function resolveLastActivity(

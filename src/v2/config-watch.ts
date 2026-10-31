@@ -313,7 +313,7 @@ export function watchPluginConfigFiles(
 }
 
 /** Discriminated refresh outcome (matches the v1 `v2.refreshProfiles` hook). */
-export type ProfileRefreshOutcome =
+type ProfileRefreshOutcome =
   | { ok: true; profiles: V2AgentRuntimeProfiles }
   | { ok: false; reason: string };
 

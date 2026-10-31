@@ -13,7 +13,7 @@ export const MARKETPLACE_LOCKFILE_SCHEMA_VERSION = 2 as const;
 
 const BoundedTextSchema = (max: number) => z.string().trim().min(1).max(max);
 
-export const MarketplaceLocalSourceSchema = z
+const MarketplaceLocalSourceSchema = z
   .object({
     kind: z.literal('local'),
     path: z
@@ -24,7 +24,7 @@ export const MarketplaceLocalSourceSchema = z
   })
   .strict();
 
-export const MarketplaceRegistrySourceSchema = z
+const MarketplaceRegistrySourceSchema = z
   .object({
     kind: z.literal('registry'),
     registry: BoundedTextSchema(200),
@@ -33,7 +33,7 @@ export const MarketplaceRegistrySourceSchema = z
   })
   .strict();
 
-export const MarketplaceInMemorySourceSchema = z
+const MarketplaceInMemorySourceSchema = z
   .object({
     kind: z.literal('in-memory'),
     label: BoundedTextSchema(120),
@@ -67,7 +67,7 @@ export const MarketplaceLockEntryV3Schema = z
   })
   .strict();
 
-export const MarketplaceLockEntrySchema = z.discriminatedUnion(
+const MarketplaceLockEntrySchema = z.discriminatedUnion(
   'manifestSchemaVersion',
   [MarketplaceLockEntryV2Schema, MarketplaceLockEntryV3Schema],
 );

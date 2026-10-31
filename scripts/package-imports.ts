@@ -21,7 +21,7 @@ import path from 'node:path';
 const DIST_PREFIX = 'dist/';
 
 /** Import kinds reported by Bun.Transpiler.scan(). */
-export type ScannedImport = {
+type ScannedImport = {
   kind: string;
   path: string;
 };

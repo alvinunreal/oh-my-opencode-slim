@@ -39,7 +39,7 @@ export function parseDoctorArgs(args: string[]): DoctorArgs {
   return result;
 }
 
-export type ConfigCheckResult = {
+type ConfigCheckResult = {
   scope: 'user' | 'project';
   path: string | null;
   exists: boolean;
@@ -52,7 +52,7 @@ export type ConfigCheckResult = {
   };
 };
 
-export type PresetCheckResult = {
+type PresetCheckResult = {
   preset: string;
   ok: boolean;
   error?: { kind: 'missing-preset'; message: string };
@@ -276,7 +276,7 @@ export function runDoctorCheck(cwd: string): DoctorResult {
   };
 }
 
-export function formatHumanDoctorResult(result: DoctorResult): string {
+function formatHumanDoctorResult(result: DoctorResult): string {
   const lines: string[] = [];
 
   lines.push(`Project: ${result.project}`);

@@ -115,7 +115,7 @@ export interface SweepStats {
   scanIncomplete: boolean;
 }
 
-export const SWEEP_EVENT = 'multiplexer.sweep';
+const SWEEP_EVENT = 'multiplexer.sweep';
 
 /**
  * Runs one sweep pass. Never throws: a failed scan, probe or close is

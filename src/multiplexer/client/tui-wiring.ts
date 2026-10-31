@@ -74,20 +74,20 @@ export const EMBEDDED_HOST_BASE_URL = 'http://opencode.internal';
  * Stable-idle debounce window (FR-10). OQ-1 fixes the final value after the
  * scenario 6 measurement; 5s keeps the 1-2s "brief idle" case alive.
  */
-export const DEFAULT_STABLE_IDLE_MS = 5_000;
+const DEFAULT_STABLE_IDLE_MS = 5_000;
 
 /** Bounded readiness probe: ~2s total, inside the NFR-1 latency budget. */
-export const DEFAULT_READINESS: ReadinessPolicy = {
+const DEFAULT_READINESS: ReadinessPolicy = {
   maxAttempts: 10,
   retryDelayMs: 200,
 };
 
-export const DEFAULT_PROBE_TIMEOUT_MS = 1_500;
-export const DEFAULT_STATUS_TIMEOUT_MS = 1_500;
-export const DEFAULT_LIST_TIMEOUT_MS = 5_000;
+const DEFAULT_PROBE_TIMEOUT_MS = 1_500;
+const DEFAULT_STATUS_TIMEOUT_MS = 1_500;
+const DEFAULT_LIST_TIMEOUT_MS = 5_000;
 
 /** Minimum gap between recovery probes once the host looked unreachable. */
-export const HOST_REPROBE_INTERVAL_MS = 5_000;
+const HOST_REPROBE_INTERVAL_MS = 5_000;
 
 /**
  * Low-frequency reconcile cadence (FR-7). The TUI event bus exposes no
@@ -96,10 +96,10 @@ export const HOST_REPROBE_INTERVAL_MS = 5_000;
  * after `unreachable → reachable` drains on this tick, never inline with an
  * event; completed sweeps do not repeat every 30s.
  */
-export const RECONCILE_INTERVAL_MS = 30_000;
+const RECONCILE_INTERVAL_MS = 30_000;
 
 /** Raw session events the client consumes (FR-3). */
-export const SESSION_EVENT_TYPES = [
+const SESSION_EVENT_TYPES = [
   'session.created',
   'session.status',
   'session.idle',

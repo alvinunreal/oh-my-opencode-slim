@@ -30,15 +30,15 @@ import {
 } from './task';
 
 export const STOP_CONFIRMATION_GRACE_MS = 5_000;
-export const DEFAULT_EVIDENCE_READ_TIMEOUT_MS = 5_000;
+const DEFAULT_EVIDENCE_READ_TIMEOUT_MS = 5_000;
 /** Slow-tier base delay for the bounded evidence re-arm (see
  * `scheduleEvidenceRearm`). Internal seam: no user-facing config. */
-export const DEFAULT_EVIDENCE_REARM_MS = 30_000;
+const DEFAULT_EVIDENCE_REARM_MS = 30_000;
 /** Cap on the slow tier's exponential backoff. */
-export const REARM_CAP_MS = 300_000;
+const REARM_CAP_MS = 300_000;
 /** How many slow re-arms one observation episode may arm. */
-export const DEFAULT_MAX_EVIDENCE_REARMS = 12;
-export const STOPPED_WITHOUT_TERMINAL_RESULT =
+const DEFAULT_MAX_EVIDENCE_REARMS = 12;
+const STOPPED_WITHOUT_TERMINAL_RESULT =
   'Background session stopped before a terminal task result was received.';
 export const EVIDENCE_UNAVAILABLE_DIAGNOSTIC =
   'Terminal evidence could not be read after repeated attempts; task termination is unconfirmed (observation unavailable).';
@@ -74,7 +74,7 @@ export type RuntimeObservation = {
   stable?: boolean;
   terminalOutcome?: string;
 };
-export type TaskOutputOrigin =
+type TaskOutputOrigin =
   | {
       kind: 'native';
       run: RunRef;
@@ -88,7 +88,7 @@ export type TaskOutputOrigin =
       run?: RunRef;
       provenance: string;
     };
-export type TerminalSignal =
+type TerminalSignal =
   | { kind: 'inspect' }
   | { kind: 'output'; status: TaskStatusOutput; origin: TaskOutputOrigin }
   | { kind: 'session-error'; message: string }
