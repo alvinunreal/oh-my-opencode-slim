@@ -26,6 +26,7 @@ import {
   fetchChildTranscript,
 } from '../../utils/child-transcript';
 import { isRecord as isObjectRecord } from '../../utils/guards';
+import { isNativeBackgroundTaskNotification } from '../../utils/internal-initiator';
 import { getClient } from '../../utils/opencode-client';
 import { withTimeout } from '../../utils/session';
 import {
@@ -355,7 +356,7 @@ export function createTaskSessionManagerHook(
     /** Host flavor marker ('v2' on OpenCode v2 hosts); selects the native
      *  delegation vocabulary in model-visible tool guidance. Defaults v1. */
     hostFlavor?: string;
-    foregroundReplayOutcome?: (
+    v1ReplayOutcome?: (
       sessionID: string,
       generation: number,
       agent: string,
@@ -970,7 +971,7 @@ export function createTaskSessionManagerHook(
       const resolved = resolveView(view, messages);
       // Keep native running task results byte-stable before adding recovery output.
       stabilizeRunningTaskParts(messages);
-      if (options.hostFlavor !== 'v2' && options.foregroundReplayOutcome) {
+      if (options.hostFlavor !== 'v2' && options.v1ReplayOutcome) {
         for (const [index, message] of messages.entries()) {
           if (
             !isObjectRecord(message) ||
@@ -981,35 +982,61 @@ export function createTaskSessionManagerHook(
             continue;
           let parts: unknown[] | undefined;
           for (const [partIndex, part] of message.parts.entries()) {
-            if (
-              !isObjectRecord(part) ||
-              part.type !== 'tool' ||
-              part.tool !== 'task' ||
-              !isObjectRecord(part.state) ||
-              part.state.status !== 'error' ||
-              typeof part.state.error !== 'string'
-            )
-              continue;
-            const taskID = /^Subagent failed \(task_id: ([^)]+)\):/.exec(
-              part.state.error,
-            )?.[1];
+            if (!isObjectRecord(part)) continue;
+            const state = isObjectRecord(part.state) ? part.state : undefined;
+            const foregroundError =
+              part.type === 'tool' &&
+              part.tool === 'task' &&
+              state?.status === 'error' &&
+              typeof state.error === 'string'
+                ? state.error
+                : undefined;
+            const nativeNotice =
+              part.type === 'text' &&
+              message.info.role === 'user' &&
+              part.synthetic === true &&
+              typeof part.text === 'string'
+                ? [...part.text.matchAll(/<task\b[^>]*>[\s\S]*?<\/task>/gi)]
+                    .map((match) => match[0])
+                    .find(
+                      (text) =>
+                        parseTaskStateFromOutput(text) === 'error' &&
+                        isNativeBackgroundTaskNotification({ ...part, text }),
+                    )
+                : undefined;
+            const taskID = nativeNotice
+              ? parseTaskIdFromTaskOutput(nativeNotice)
+              : typeof foregroundError === 'string'
+                ? /^Subagent failed \(task_id: ([^)]+)\):/.exec(
+                    foregroundError,
+                  )?.[1]
+                : undefined;
             const record = taskID ? backgroundJobBoard.get(taskID) : undefined;
             if (
               !record ||
               record.parentSessionID !== message.info.sessionID ||
-              record.background ||
+              record.background !== (nativeNotice !== undefined) ||
               record.provisional
             )
               continue;
-            const completedAt = isObjectRecord(part.state.time)
-              ? part.state.time.end
-              : undefined;
+            const completedAt = nativeNotice
+              ? isObjectRecord(message.info.time)
+                ? message.info.time.created
+                : undefined
+              : isObjectRecord(state?.time)
+                ? state.time.end
+                : undefined;
+            if (
+              nativeNotice &&
+              (typeof completedAt !== 'number' || !Number.isFinite(completedAt))
+            )
+              continue;
             if (
               typeof completedAt === 'number' &&
               completedAt < record.runStartedAt
             )
               continue;
-            const model = await options.foregroundReplayOutcome(
+            const model = await options.v1ReplayOutcome(
               record.taskID,
               record.generation,
               record.agent,
@@ -1021,15 +1048,23 @@ export function createTaskSessionManagerHook(
                 record.generation
             )
               continue;
-            const state: Record<string, unknown> = {
-              ...part.state,
-              status: 'completed',
-              title: record.description,
-              output: `<task id="${record.taskID}" state="running">\nThe child switched to ${model} and continues; the result will arrive. Do not relaunch or replace it.\n</task>`,
-            };
-            delete state.error;
+            const running = `<task id="${record.taskID}" state="running">\nThe child switched to ${model} and continues; the result will arrive. Do not relaunch or replace it.\n</task>`;
             parts ??= [...message.parts];
-            parts[partIndex] = { ...part, state };
+            if (nativeNotice && typeof part.text === 'string') {
+              parts[partIndex] = {
+                ...part,
+                text: part.text.replace(nativeNotice, () => running),
+              };
+            } else {
+              const nextState: Record<string, unknown> = {
+                ...state,
+                status: 'completed',
+                title: record.description,
+                output: running,
+              };
+              delete nextState.error;
+              parts[partIndex] = { ...part, state: nextState };
+            }
           }
           if (parts) messages[index] = { ...message, parts };
         }

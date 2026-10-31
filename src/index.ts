@@ -1227,8 +1227,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
       taskSessionManagerHook = createTaskSessionManagerHook(ctx, {
         terminalGate,
-        foregroundReplayOutcome: (sessionID, generation, agent, completedAt) =>
-          foregroundFallback?.foregroundReplayOutcome(
+        v1ReplayOutcome: (sessionID, generation, agent, completedAt) =>
+          foregroundFallback?.v1ReplayOutcome(
             sessionID,
             generation,
             agent,

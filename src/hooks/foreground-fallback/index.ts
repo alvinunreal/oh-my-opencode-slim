@@ -726,6 +726,7 @@ export class ForegroundFallbackManager {
       resolve: (model: string | undefined) => void;
       timer: ReturnType<typeof setTimeout>;
       generation: number | undefined;
+      claimed: boolean;
     }
   >();
   private readonly lastUserMessageID = new Map<string, string>();
@@ -1008,7 +1009,11 @@ export class ForegroundFallbackManager {
     this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
   }
 
-  private fallbackOutcome(key: string, generation?: number) {
+  private fallbackOutcome(
+    key: string,
+    generation?: number,
+    timeout = REFUSAL_OUTCOME_TIMEOUT_MS,
+  ) {
     const current = this.fallbackOutcomes.get(key);
     if (current) return current;
     if (this.fallbackOutcomes.size >= MAX_REFUSAL_OUTCOMES) {
@@ -1024,7 +1029,7 @@ export class ForegroundFallbackManager {
     });
     const timer = setTimeout(() => {
       complete(undefined);
-    }, REFUSAL_OUTCOME_TIMEOUT_MS);
+    }, timeout);
     // Retain resolved outcomes for late parent notices; cap the registry above.
     const resolve = (model: string | undefined) => {
       clearTimeout(timer);
@@ -1035,6 +1040,7 @@ export class ForegroundFallbackManager {
       resolve,
       timer,
       generation,
+      claimed: false,
     };
     this.fallbackOutcomes.set(key, outcome);
     return outcome;
@@ -1047,7 +1053,7 @@ export class ForegroundFallbackManager {
     );
   }
 
-  foregroundReplayOutcome(
+  v1ReplayOutcome(
     sessionID: string,
     generation: number,
     agent: string,
@@ -1058,14 +1064,51 @@ export class ForegroundFallbackManager {
     const existing = this.fallbackOutcomes.get(key);
     if (existing) return existing.promise;
     this.registerSessionAgent(sessionID, agent);
+    const timeout =
+      REFUSAL_OUTCOME_TIMEOUT_MS +
+      Math.max(this.initialRetryDelayMs, this.retryDelayMs);
     if (
       !this.hasFallbackChain(sessionID) ||
       typeof completedAt !== 'number' ||
       !Number.isFinite(completedAt) ||
-      Date.now() - completedAt >= REFUSAL_OUTCOME_TIMEOUT_MS
+      Date.now() - completedAt >= timeout
     )
       return Promise.resolve(undefined);
-    return this.fallbackOutcome(key, generation).promise;
+    const outcome = this.fallbackOutcome(key, generation, timeout);
+    void (async () => {
+      try {
+        const result = await withTimeout(
+          getClient(this.input).session.messages({
+            path: { id: sessionID },
+            query: { limit: FALLBACK_REPLAY_TAIL_MESSAGES },
+          }),
+          HOST_CALL_TIMEOUT_MS,
+          'fallback outcome transcript read timed out',
+        );
+        if (result.error || !Array.isArray(result.data)) return;
+        const messages = result.data as unknown[];
+        const last = messages.findLast(
+          (message) =>
+            isRecord(message) &&
+            isRecord(message.info) &&
+            message.info.role === 'assistant',
+        );
+        const info =
+          isRecord(last) && isRecord(last.info) ? last.info : undefined;
+        if (
+          !outcome.claimed &&
+          info?.finish !== 'content-filter' &&
+          !isFailoverError(info?.error)
+        )
+          outcome.resolve(undefined);
+      } catch (error) {
+        log('[foreground-fallback] outcome transcript read failed', {
+          sessionID,
+          error: stringifyError(error),
+        });
+      }
+    })();
+    return outcome.promise;
   }
 
   refusalOutcome(
@@ -3416,21 +3459,21 @@ export class ForegroundFallbackManager {
     if (!this.isCurrentTurn(sessionID, expectedEpoch)) return;
     const isV2Host =
       (this.input as PluginInput & { hostFlavor?: string }).hostFlavor === 'v2';
-    const backgroundGeneration = this.readBackgroundGeneration?.(sessionID);
-    const preparedGeneration =
-      backgroundGeneration ??
-      this.readBackgroundGeneration?.(sessionID, announce && !isV2Host);
+    const preparedGeneration = this.readBackgroundGeneration?.(
+      sessionID,
+      announce && !isV2Host,
+    );
     const outcome =
-      announce &&
-      !isV2Host &&
-      backgroundGeneration === undefined &&
-      preparedGeneration !== undefined
+      announce && !isV2Host && preparedGeneration !== undefined
         ? this.fallbackOutcome(
             `v1\0${sessionID}\0${preparedGeneration}`,
             preparedGeneration,
           )
         : undefined;
-    if (outcome) clearTimeout(outcome.timer);
+    if (outcome) {
+      outcome.claimed = true;
+      clearTimeout(outcome.timer);
+    }
     let admittedModel: string | undefined;
     try {
       const session = getClient(this.input).session;

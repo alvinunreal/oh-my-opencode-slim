@@ -869,6 +869,156 @@ test('v1 foreground task error stays visible when the fallback chain is exhauste
   expect(h.promptAsync).not.toHaveBeenCalled();
 });
 
+test('v1 background refusal notice waits through the configured delay and is rewritten only in the request', async () => {
+  const h = await fallbackAssembly(undefined, 6000);
+  const error = {
+    name: 'ContentFilterError',
+    data: {
+      message: "The response was blocked by the provider's content filter",
+    },
+  };
+  h.history.pop();
+  h.history.push({
+    info: {
+      id: 'filtered',
+      role: 'assistant',
+      finish: 'content-filter',
+      error,
+      time: { completed: Date.now() },
+    },
+    parts: [],
+  });
+  const text =
+    '<task id="child" state="error">\n<summary>Background task failed: ordinary task</summary>\n<task_error>\nSubagent failed (task_id: child): The response was blocked by the provider\'s content filter\n</task_error>\n</task>';
+  const prefix = '\u00a742\u00a7 ';
+  const suffix = '\nOther context';
+  const storedPart = {
+    type: 'text',
+    synthetic: true,
+    text: prefix + text + suffix,
+  };
+  const request = {
+    messages: [
+      {
+        info: {
+          id: 'notice',
+          sessionID: 'parent',
+          role: 'user',
+          time: { created: Date.now() },
+        },
+        parts: [storedPart],
+      },
+    ],
+  };
+  let transformed = false;
+  const transform = h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    request as never,
+  ).then(() => {
+    transformed = true;
+  });
+  await flush();
+  expect(transformed).toBe(false);
+  await h.event('session.error', { sessionID: 'child', error });
+  await h.idle();
+  await h.advance(5001);
+  expect(transformed).toBe(false);
+  await h.advance(999);
+  await transform;
+  expect(request.messages[0].parts[0].text).toStartWith(prefix);
+  expect(request.messages[0].parts[0].text).toContain('state="running"');
+  expect(request.messages[0].parts[0].text).toContain('test/fallback');
+  expect(request.messages[0].parts[0].text).not.toContain(
+    'Background task failed',
+  );
+  expect(request.messages[0].parts[0].text).toEndWith(suffix);
+  expect(storedPart.text).toBe(prefix + text + suffix);
+});
+
+test('v1 background refusal notice stays unchanged with an exhausted chain', async () => {
+  const h = await fallbackAssembly(undefined, 2000, false, ['test/primary']);
+  const error = {
+    name: 'ContentFilterError',
+    data: {
+      message: "The response was blocked by the provider's content filter",
+    },
+  };
+  (h.history.at(-1) as { info: { error: unknown } }).info.error = error;
+  const text =
+    '<task id="child" state="error">\n<summary>Background task failed: ordinary task</summary>\n<task_error>\nSubagent failed (task_id: child): The response was blocked by the provider\'s content filter\n</task_error>\n</task>';
+  const part = { type: 'text', synthetic: true, text };
+  const request = {
+    messages: [
+      {
+        info: {
+          id: 'notice',
+          sessionID: 'parent',
+          role: 'user',
+          time: { created: Date.now() },
+        },
+        parts: [part],
+      },
+    ],
+  };
+  const transform = h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    request as never,
+  );
+  await h.event('session.error', { sessionID: 'child', error });
+  await h.advance(2000);
+  await transform;
+  expect(request.messages[0].parts[0].text).toBe(text);
+  expect(h.promptAsync).not.toHaveBeenCalled();
+});
+
+test('v1 foreground non-failover error reaches the parent without waiting for a replay', async () => {
+  const h = await fallbackAssembly(undefined, 2000, true);
+  h.history.pop();
+  h.history.push({
+    info: {
+      id: 'bad-request',
+      role: 'assistant',
+      error: {
+        name: 'APIError',
+        data: { statusCode: 400, message: 'invalid request' },
+      },
+      time: { completed: Date.now() },
+    },
+    parts: [],
+  });
+  const part = {
+    type: 'tool',
+    tool: 'task',
+    callID: 'native',
+    state: {
+      status: 'error',
+      input: { subagent_type: 'explorer' },
+      error: 'Subagent failed (task_id: child): invalid request',
+      time: { start: Date.now() - 10, end: Date.now() },
+    },
+  };
+  const request = {
+    messages: [
+      {
+        info: { id: 'parent-message', sessionID: 'parent', role: 'assistant' },
+        parts: [part],
+      },
+    ],
+  };
+  let transformed = false;
+  const transform = h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    request as never,
+  ).then(() => {
+    transformed = true;
+  });
+  await flush();
+  expect(transformed).toBe(true);
+  await transform;
+  expect(request.messages[0].parts[0]).toEqual(part);
+  expect(h.promptAsync).not.toHaveBeenCalled();
+});
+
 test('v2 production wiring retires task_revive and keeps no replay notice', async () => {
   const h = await fallbackAssembly('v2');
   await h.fail();
