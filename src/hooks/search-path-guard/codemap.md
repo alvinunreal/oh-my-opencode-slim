@@ -6,7 +6,7 @@ Validates search paths before host tool execution to prevent ripgrep execution f
 
 - Resolved paths exist (ENOTDIR for invalid paths raises actionable errors)
 - Missing paths are reported with helpful guidance rather than cryptic "ripgrep execution failed" errors
-- Search path resolution respects host tool semantics (v1's grep uses `path.join`, v1's glob uses `path.resolve`, v2 uses `path.resolve` for both)
+- Search path resolution respects host tool semantics (v1 grep uses `path.join`, v1 glob uses `path.resolve`, v2 expands home and uses `path.resolve` for both; v2 glob ignores `"undefined"`/`"null"`)
 - Invalid paths are blocked before tool execution with clear error messages
 
 The hook operates exclusively on `grep` and `glob` tools to provide precise path validation for search operations while avoiding interference with other tool categories.
