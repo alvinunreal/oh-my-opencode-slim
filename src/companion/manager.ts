@@ -849,6 +849,9 @@ export class CompanionManager {
     if (!sessionId || (status !== 'busy' && status !== 'idle')) return;
 
     if (agent === 'orchestrator') {
+      // A v2 start can precede agent identification for this same session.
+      this.busyAgentSessions.delete(sessionId);
+      if (status === 'idle') this.sessionDetails.delete(sessionId);
       this.orchestratorSessionId = sessionId;
       this.orchestratorBusy = status === 'busy';
       // A pending input request is cleared only by its explicit reply/reject

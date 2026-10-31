@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { mapV2EventToV1 } from '../v2/event-adapter';
 import {
   CompanionManager,
   companionSessionIdForDirectory,
@@ -828,6 +829,38 @@ describe('CompanionManager', () => {
     });
     expect(readState().sessions[0].active_agents).toEqual(['orchestrator']);
     expect(readState().sessions[0].status).toBe('busy');
+  });
+
+  it('removes a provisional v2 root after its agent is identified and it finishes', () => {
+    const m = make();
+    m.onLoad();
+    const project = (type: string, agent?: string) => {
+      for (const event of mapV2EventToV1({
+        type,
+        data: { sessionID: 'root' },
+      })) {
+        if (event.type === 'session.status') {
+          m.onSessionStatus({
+            sessionId: 'root',
+            agent,
+            status: (event.properties as { status: { type: string } }).status
+              .type,
+          });
+        }
+      }
+    };
+    project('session.execution.started');
+    m.onSessionStatus({
+      sessionId: 'root',
+      agent: 'orchestrator',
+      status: 'busy',
+    });
+    project('session.execution.succeeded', 'orchestrator');
+    expect(readState().sessions[0]).toMatchObject({
+      status: 'idle',
+      active_agents: ['intro'],
+      active_agent_details: [],
+    });
   });
 
   it('shows a specialist while its session is busy', () => {
