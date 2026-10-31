@@ -98,7 +98,6 @@ export const HOST_REPROBE_INTERVAL_MS = 5_000;
  */
 export const RECONCILE_INTERVAL_MS = 30_000;
 const ROUTE_POLL_INTERVAL_MS = 250;
-const ROUTE_RECONCILE_DEBOUNCE_MS = 100;
 
 /** Raw session events the client consumes (FR-3). */
 export const SESSION_EVENT_TYPES = [
@@ -664,8 +663,6 @@ export async function createTuiPaneWiring(
       directory,
       displayedSessionId: options.getDisplayedSessionId?.() ?? null,
       adapter: admission.adapter,
-      layout: loaded.multiplexer.layout,
-      mainPaneSize: loaded.multiplexer.main_pane_size,
       stableIdleMs: options.stableIdleMs ?? DEFAULT_STABLE_IDLE_MS,
       readiness: options.readiness ?? DEFAULT_READINESS,
       viewer: {
@@ -739,7 +736,6 @@ export async function createTuiPaneWiring(
   const knownDirectories = new Map<string, string>();
   let displayedSession = options.getDisplayedSessionId?.() ?? null;
   let displayedDirectory = getDirectory();
-  let routeReconcileHandle: ClockTimerHandle | null = null;
   const updateDisplayed = (schedule = true): void => {
     const session = options.getDisplayedSessionId?.() ?? null;
     const directory = getDirectory();
@@ -749,12 +745,8 @@ export async function createTuiPaneWiring(
     displayedDirectory = directory;
     lifecycle.setDisplayedSession(session);
     lifecycle.setDisplayedDirectory(directory);
-    if (!changed || !schedule) return;
-    if (routeReconcileHandle !== null) clock.clearTimeout(routeReconcileHandle);
-    routeReconcileHandle = clock.setTimeout(() => {
-      routeReconcileHandle = null;
-      void runReconcile();
-    }, ROUTE_RECONCILE_DEBOUNCE_MS);
+    // An in-flight pass queues exactly one rerun, which coalesces bursts.
+    if (changed && schedule) void runReconcile();
   };
 
   const processProjectedEvent = async (
@@ -835,9 +827,10 @@ export async function createTuiPaneWiring(
       await ensureReachable();
       if (disposed) return;
       if (hostState === 'reachable') {
-        await drainDueSweep();
-        if (disposed) return;
+        // Visible panes first; the leftover sweep never gates them.
         await lifecycle.onReconnect();
+        if (disposed) return;
+        await drainDueSweep();
       }
     } finally {
       reconciling = false;

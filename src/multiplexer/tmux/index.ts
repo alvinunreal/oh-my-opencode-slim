@@ -318,17 +318,6 @@ export class TmuxMultiplexer implements Multiplexer {
     }
   }
 
-  async applySpawnLayout(
-    layout: MultiplexerLayout,
-    mainPaneSize: number,
-  ): Promise<void> {
-    if (
-      layout !== this.storedLayout ||
-      mainPaneSize !== this.storedMainPaneSize
-    )
-      await this.applyLayout(layout, mainPaneSize);
-  }
-
   /**
    * The configured layout as one command sequence. tmux runs a sequence in
    * one pass and resizes each pane once for its final geometry. The leading
