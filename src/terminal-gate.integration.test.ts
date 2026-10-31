@@ -24,7 +24,7 @@ import * as gateFactories from './utils/background-job-terminal-gate';
 import { BackgroundTaskConcurrency } from './utils/background-task-concurrency';
 import { createEventDirectoryScope } from './utils/event-directory-scope';
 import {
-  type createInternalAgentTextPart,
+  createInternalAgentTextPart,
   isInternalInitiatorPart,
   isNativeBackgroundTaskNotification,
 } from './utils/internal-initiator';
@@ -897,6 +897,9 @@ test('v1 background refusal notice waits through the configured delay and is rew
     synthetic: true,
     text: prefix + text + suffix,
   };
+  const terminalPart = createInternalAgentTextPart(
+    '<task id="child" state="error">\n<summary>Background task failed: ordinary task</summary>\n<task_error>\ninvalid request fixture\n</task_error>\n</task>',
+  );
   const request = {
     messages: [
       {
@@ -907,6 +910,15 @@ test('v1 background refusal notice waits through the configured delay and is rew
           time: { created: Date.now() },
         },
         parts: [storedPart],
+      },
+      {
+        info: {
+          id: 'terminal-delivery',
+          sessionID: 'parent',
+          role: 'user',
+          time: { created: Date.now() },
+        },
+        parts: [terminalPart],
       },
     ],
   };
@@ -933,6 +945,7 @@ test('v1 background refusal notice waits through the configured delay and is rew
   );
   expect(request.messages[0].parts[0].text).toEndWith(suffix);
   expect(storedPart.text).toBe(prefix + text + suffix);
+  expect(request.messages[1].parts[0]).toEqual(terminalPart);
 });
 
 test('v1 background refusal notice stays unchanged with an exhausted chain', async () => {

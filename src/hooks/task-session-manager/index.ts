@@ -995,6 +995,7 @@ export function createTaskSessionManagerHook(
               part.type === 'text' &&
               message.info.role === 'user' &&
               part.synthetic === true &&
+              !isInternalInitiatorPart(part) &&
               typeof part.text === 'string'
                 ? [...part.text.matchAll(/<task\b[^>]*>[\s\S]*?<\/task>/gi)]
                     .map((match) => match[0])
