@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { log } from '../../utils/logger';
 
@@ -281,7 +282,13 @@ export function createToolLoopGuardHook(
 
   /** FIFO-cap tracked maps; a throwing tool never runs `after` (callKeys). */
   function keepSessionsBounded(): void {
-    for (const map of [sessions, waitRuns, callKeys]) {
+    for (const map of [
+      sessions,
+      waitRuns,
+      callKeys,
+      taskSupervision,
+      userMessageIdentities,
+    ]) {
       while (map.size > MAX_TRACKED_SESSIONS) {
         map.delete(map.keys().next().value as string);
       }
@@ -473,6 +480,7 @@ export function createToolLoopGuardHook(
             previous?.lifecycleState === lifecycleState ? previous.runs + 1 : 1,
         };
         states.set(taskID, state);
+        keepSessionsBounded();
         if (
           state.runs >= LOOP_GUARD_WARN_AT &&
           typeof output.output === 'string' &&
@@ -503,7 +511,9 @@ export function createToolLoopGuardHook(
       }
 
       const key = call?.key;
-      const outputHash = fingerprint(tool, outputToHash);
+      const outputHash = createHash('sha256')
+        .update(fingerprint(tool, outputToHash))
+        .digest('hex');
 
       const existing = sessions.get(sessionID);
       let state: SessionState;
@@ -558,6 +568,7 @@ export function createToolLoopGuardHook(
     ): void {
       if (userMessageIdentities.get(sessionID) === messageID) return;
       userMessageIdentities.set(sessionID, messageID);
+      keepSessionsBounded();
       // Plugin-injected admissions (wakes, completion pushes) still open a
       // fresh polling/wait window but must not clear a confirmed read loop.
       if (options?.internalAdmission !== true) sessions.delete(sessionID);
