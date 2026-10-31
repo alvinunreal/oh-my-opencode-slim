@@ -1,0 +1,27 @@
+{
+  "$schema": "https://unpkg.com/knip@latest/schema.json",
+  // Files the import graph cannot see: each is invoked or looked up by path
+  // string. Keep this list in sync when adding spawn targets, contract
+  // registries, compile-time guards, or manual-run tools.
+  // Liveness rule: an export is dead only when no consumer exists in any
+  // channel — static imports, test references (incl. cache-busted `?test=N`
+  // dynamic imports), namespace/module-object consumption, string lookups.
+  // Knip only sees the first channel; kept exports carry `/** @public */`
+  // (knip's built-in always-ignore) with the reason.
+  "entry": [
+    "src/tui.ts",
+    "src/**/*.test.ts",
+    "scripts/**/*.test.ts",
+    "src/utils/tui-reusable-projection.child.ts",
+    "src/utils/session-calls.contract.ts",
+    "src/v2/mirror-conformance.ts",
+    "scripts/benchmark-opencode-cache.ts",
+    "scripts/e2e-windows-spawn.ts"
+  ],
+  // Platform tools invoked by name at runtime; not package dependencies.
+  "ignoreBinaries": ["opencode", "mkfifo", "where"],
+  // Root-relative spawn path in companion-release-scripts.test.ts; knip
+  // resolves spawn specifiers relative to the spawning file.
+  "ignoreUnresolved": ["scripts/verify-companion-manifest.ts"],
+  "project": ["src/**/*.ts", "scripts/**/*.{ts,mjs}"]
+}
