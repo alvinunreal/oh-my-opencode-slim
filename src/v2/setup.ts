@@ -600,7 +600,9 @@ export function createSessionContextHandler(
               if (!text) continue;
               // Memoized per notice: a parent request must not re-read every
               // failed child, and the rewrite must stay byte-stable.
-              const noticeKey = `${childID}\0${text}`;
+              // Keyed by the notice message: a resumed child that is refused
+              // again produces a new notice that needs its own lookup.
+              const noticeKey = `${message.id ?? ''}\0${childID}\0${text}`;
               let recovery = refusalNotices.get(noticeKey);
               if (!refusalNotices.has(noticeKey)) {
                 recovery = await readRefusalOutcome(
