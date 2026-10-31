@@ -708,7 +708,6 @@ function applyDefaultPermissions(
   agent: AgentDefinition,
   configuredSkills?: readonly string[],
   disabledSkills?: readonly string[],
-  nestedDispatchEnabled = false,
   hostFlavor?: string,
   isPrimaryAgent = false,
 ): void {
@@ -779,9 +778,8 @@ function applyDefaultPermissions(
     // `task` stance (custom, ACP, write-capable marketplace) deny spawning.
     // The compiled v2 permission base allows every unmatched action, so an
     // absent entry would let any child spawn once the host depth limit is
-    // raised; primary agents keep unrestricted delegation. Gated on the
-    // same v2 + observer condition as the stances (v1 stays untouched).
-    ...(nestedDispatchEnabled && existing.task === undefined && !isPrimaryAgent
+    // raised; primary agents keep unrestricted delegation. v1 stays untouched.
+    ...(hostFlavor === 'v2' && existing.task === undefined && !isPrimaryAgent
       ? { task: { ...TASK_NO_NESTED_DISPATCH } }
       : {}),
     question: questionPerm,
@@ -841,9 +839,8 @@ export function createAgents(
     // The bare councillor is only meaningful as part of configured Council Mode.
     disabled.add('councillor');
   }
-  // Nested dispatch ships only where it is live: v2 hosts (the only flavor
-  // with a depth limit) and an enabled observer. The v1 host enables a
-  // child's task tool whenever its permission carries ANY task rule — with
+  // Observer dispatch requires a v2 host and an enabled observer. The v1 host
+  // enables a child's task tool whenever its permission carries ANY task rule — with
   // no depth limit — so emitting stances there would change every advisor's
   // toolset for nothing.
   const nestedDispatchEnabled =
@@ -905,8 +902,7 @@ export function createAgents(
       // Get base agent definition using the subagent factory with undefined prompts
       const agent = factory(getModelForAgent(name), undefined, undefined);
       if (!nestedDispatchEnabled) {
-        // Drop only the pattern stances this branch adds (object-shaped
-        // task entries); pre-existing blanket-deny strings stay untouched.
+        // v1 omits object stances; v2 denies dispatch without an observer.
         const permission = agent.config.permission as
           | Record<string, unknown>
           | undefined;
@@ -916,7 +912,11 @@ export function createAgents(
           typeof permission.task === 'object'
         ) {
           const rest = { ...permission };
-          delete rest.task;
+          if (options?.hostFlavor === 'v2') {
+            rest.task = { ...TASK_NO_NESTED_DISPATCH };
+          } else {
+            delete rest.task;
+          }
           agent.config.permission = rest as typeof agent.config.permission;
         }
       }
@@ -1055,7 +1055,6 @@ export function createAgents(
       agent,
       override?.skills,
       runtime.disabledSkills,
-      nestedDispatchEnabled,
       options?.hostFlavor,
     );
     return agent;
@@ -1071,7 +1070,6 @@ export function createAgents(
       agent,
       override?.skills,
       runtime.disabledSkills,
-      nestedDispatchEnabled,
       options?.hostFlavor,
       override?.primary === true,
     );
@@ -1083,7 +1081,6 @@ export function createAgents(
       agent,
       undefined,
       runtime.disabledSkills,
-      nestedDispatchEnabled,
       options?.hostFlavor,
     );
     return agent;
@@ -1109,7 +1106,6 @@ export function createAgents(
       agent,
       undefined,
       runtime.disabledSkills,
-      nestedDispatchEnabled,
       options?.hostFlavor,
     );
     return agent;
@@ -1179,7 +1175,6 @@ export function createAgents(
     orchestrator,
     orchestratorOverride?.skills,
     runtime.disabledSkills,
-    nestedDispatchEnabled,
     options?.hostFlavor,
     true,
   );
