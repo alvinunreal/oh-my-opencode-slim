@@ -1105,22 +1105,26 @@ export function loadAgentPrompt(
   }
 
   const readFirstPrompt = (
-    fileName: string,
+    suffix: string,
     errorPrefix: string,
   ): string | undefined => {
     for (const dir of searchDirs) {
-      const promptPath = path.join(dir, fileName);
-      if (!fs.existsSync(promptPath)) {
-        continue;
-      }
+      for (const candidate of [agentName, ...legacyAliasesFor(agentName)]) {
+        const fileName = `${candidate}${suffix}.md`;
+        const promptPath = path.join(dir, fileName);
+        if (!fs.existsSync(promptPath)) continue;
 
-      try {
-        return fs.readFileSync(promptPath, 'utf-8');
-      } catch (error) {
-        console.warn(
-          `[oh-my-opencode-slim] ${errorPrefix} ${promptPath}:`,
-          error instanceof Error ? error.message : String(error),
-        );
+        try {
+          const content = fs.readFileSync(promptPath, 'utf-8');
+          if (candidate !== agentName)
+            warnLegacyPromptFile(agentName, fileName);
+          return content;
+        } catch (error) {
+          console.warn(
+            `[oh-my-opencode-slim] ${errorPrefix} ${promptPath}:`,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
       }
     }
 
@@ -1129,34 +1133,13 @@ export function loadAgentPrompt(
 
   const result: { prompt?: string; appendPrompt?: string } = {};
 
-  // Rename continuity: fall back to pre-rename file names (e.g. a
-  // `librarian.md` override keeps applying to the merged `explorer`). Warn
-  // once per process so users learn to rename.
-  const nameCandidates = [agentName, ...legacyAliasesFor(agentName)];
-
-  // Check for replacement prompt
-  for (const candidate of nameCandidates) {
-    const fileName = `${candidate}.md`;
-    const found = readFirstPrompt(fileName, 'Error reading prompt file');
-    if (found === undefined) continue;
-    if (candidate !== agentName) {
-      warnLegacyPromptFile(agentName, fileName);
-    }
-    result.prompt = found;
-    break;
-  }
-
-  // Check for append prompt
-  for (const candidate of nameCandidates) {
-    const fileName = `${candidate}_append.md`;
-    const found = readFirstPrompt(fileName, 'Error reading append prompt file');
-    if (found === undefined) continue;
-    if (candidate !== agentName) {
-      warnLegacyPromptFile(agentName, fileName);
-    }
-    result.appendPrompt = found;
-    break;
-  }
+  const prompt = readFirstPrompt('', 'Error reading prompt file');
+  const appendPrompt = readFirstPrompt(
+    '_append',
+    'Error reading append prompt file',
+  );
+  if (prompt !== undefined) result.prompt = prompt;
+  if (appendPrompt !== undefined) result.appendPrompt = appendPrompt;
 
   return result;
 }
