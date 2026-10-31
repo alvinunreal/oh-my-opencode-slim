@@ -345,7 +345,30 @@ export interface V2SessionContextHandlerDeps {
   /** Session-frozen runtime profile application: mutates ONLY the request
    * `options` record (temperature/provider options) for a captured child
    * session. Never touches system/messages/tools. */
-  applyRuntimeProfile?: (event: V2SessionContextEvent) => void;
+  applyRuntimeProfile?: (event: V2SessionContextEvent) => void | Promise<void>;
+}
+
+/** Keep primary options not superseded by the host's variant defaults. */
+function withoutVariantSettings(
+  options: Record<string, unknown>,
+  settings: Record<string, unknown>,
+): Record<string, unknown> {
+  const entries: Array<[string, unknown]> = [];
+  for (const [key, value] of Object.entries(options)) {
+    const selected = Object.hasOwn(settings, key) ? settings[key] : undefined;
+    if (selected === undefined) {
+      entries.push([key, value]);
+    } else if (
+      isRecord(value) &&
+      !Array.isArray(value) &&
+      isRecord(selected) &&
+      !Array.isArray(selected)
+    ) {
+      const remaining = withoutVariantSettings(value, selected);
+      if (Object.keys(remaining).length > 0) entries.push([key, remaining]);
+    }
+  }
+  return Object.fromEntries(entries);
 }
 
 /**
@@ -640,7 +663,7 @@ export function createSessionContextHandler(
     // system/messages/tools stay byte-stable.
     if (deps.applyRuntimeProfile) {
       try {
-        deps.applyRuntimeProfile(event);
+        await deps.applyRuntimeProfile(event);
       } catch (err) {
         log('[v2] runtime profile apply failed', String(err));
       }
@@ -2417,6 +2440,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         | undefined;
       let permissionRulesBridgeEnabled = false;
       const pluginAgents = new Set<string>();
+      const primaryRequestOptions = new Map<
+        string,
+        { options: Record<string, unknown>; temperature?: number }
+      >();
       let marketplaceAgentsRequirePromptPolicy = false;
       let permissionRulesBridge:
         | ReturnType<typeof createPermissionRulesBridge>
@@ -2485,6 +2512,14 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             !Object.hasOwn(registry.identities, name)
           )
             continue;
+          if (cfg.mode === 'primary') {
+            primaryRequestOptions.set(name, {
+              options: isRecord(cfg.options) ? { ...cfg.options } : {},
+              ...(typeof cfg.temperature === 'number'
+                ? { temperature: cfg.temperature }
+                : {}),
+            });
+          }
           applyAgentToDraft(
             draft,
             name,
@@ -3226,14 +3261,80 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           sessionContext: sessionContextRead,
           systemTransform,
           messagesTransform,
-          // Captured child sessions get their frozen temperature/provider
-          // options on the request options record only.
-          applyRuntimeProfile: (event) =>
-            applyRuntimeProfileOptions(
-              event,
-              sessionProfileBridge.profileForSession(event.sessionID),
-              sessionPresets.peek(event.sessionID),
-            ),
+          // Primaries use the startup registry; child profiles stay session-frozen.
+          applyRuntimeProfile: async (event) => {
+            const profile = sessionProfileBridge.profileForSession(
+              event.sessionID,
+            );
+            const binding = sessionPresets.peek(event.sessionID);
+            if (profile) {
+              applyRuntimeProfileOptions(event, profile, binding);
+            } else if (!binding?.parentID && isRecord(event.options)) {
+              const primary = primaryRequestOptions.get(event.agent);
+              if (!primary) return;
+              let options = primary.options;
+              const { providerID, id, variant } = event.model;
+              if (
+                Object.keys(options).length > 0 &&
+                variant &&
+                variant !== 'default'
+              ) {
+                options = {};
+                try {
+                  const catalog = ctx.model?.list
+                    ? await withTimeout(
+                        ctx.model.list(),
+                        2_000,
+                        'Model variant lookup timed out',
+                      )
+                    : undefined;
+                  const models =
+                    isRecord(catalog) && Array.isArray(catalog.data)
+                      ? catalog.data
+                      : [];
+                  const model = models.find(
+                    (entry) =>
+                      isRecord(entry) &&
+                      entry.providerID === providerID &&
+                      entry.id === id,
+                  );
+                  const selected =
+                    isRecord(model) && Array.isArray(model.variants)
+                      ? model.variants.find(
+                          (entry: unknown) =>
+                            isRecord(entry) && entry.id === variant,
+                        )
+                      : undefined;
+                  if (isRecord(selected) && selected.settings === undefined) {
+                    options = primary.options;
+                  } else if (
+                    isRecord(selected) &&
+                    isRecord(selected.settings) &&
+                    !Array.isArray(selected.settings)
+                  ) {
+                    options = withoutVariantSettings(
+                      primary.options,
+                      selected.settings,
+                    );
+                  } else {
+                    log(
+                      '[v2] primary options omitted: model variant unavailable',
+                      { providerID, modelID: id, variant },
+                    );
+                  }
+                } catch (err) {
+                  log(
+                    '[v2] primary options omitted: model variant lookup failed',
+                    { providerID, modelID: id, variant, error: String(err) },
+                  );
+                }
+              }
+              Object.assign(event.options, options);
+              if (primary.temperature !== undefined) {
+                event.options.temperature = primary.temperature;
+              }
+            }
+          },
         });
         const reg = await ctx.session.hook('context', handler);
         disposers.push(() => reg.dispose());

@@ -241,11 +241,14 @@ not an optional-degradation path.
       transforms (SystemPart[]/Message.content shape conversion),
       `chat.message` agent tracking, and interview + generic command marker
       dispatch — keeping earlier prompt content stable for provider cache
-      prefix reuse. After the
+       prefix reuse. After the
       bridged transform, if plugin-tagged parts exist, the v2 bridge copies
       the last part of the last non-board-only message and gives it one
       `ContentPart.cache` `{type: "ephemeral"}` hint. The shared injection
-      helper adds no hints; the v1 pipeline remains unchanged.
+       helper adds no hints; the v1 pipeline remains unchanged.
+       Primary agents use their startup `temperature` and provider `options`
+       on request options; live profile refresh continues to affect new child
+       sessions only.
     - a native `ctx.session.hook("prompt")` registration (capability-
       guarded): the v2 prompt hook fires **once per admitted input** with
       the eventual inbox User `messageID`, giving the v1 `chat.message`

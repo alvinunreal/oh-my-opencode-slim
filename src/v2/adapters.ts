@@ -278,9 +278,8 @@ export function applyAgentToDraft(
     if (typeof v1.temperature === 'number') {
       settings.temperature = v1.temperature;
     }
-    // v1 `options` are provider-specific request options; the v2 host merges
-    // `request.body` into the outgoing provider request body. Dropping them
-    // here would silently lose configured thinking/reasoning options on v2.
+    // Keep provider options on the native agent projection. The context hook
+    // separately applies inference options to actual requests.
     if (
       v1.options &&
       typeof v1.options === 'object' &&
