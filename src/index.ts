@@ -3467,8 +3467,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           isInternalAdmission(input.sessionID, messageID));
       if (!internalAdmission) {
         const model = input.model ?? output?.message?.model;
-        foregroundFallback?.observeExternalTurn(
+        foregroundFallback?.noteExternalTurn(
           input.sessionID,
+          // v2 retains its retry budget across external prompts.
+          hostFlavor === 'v2' ? undefined : messageID,
           model ? `${model.providerID}/${model.modelID}` : undefined,
         );
       }

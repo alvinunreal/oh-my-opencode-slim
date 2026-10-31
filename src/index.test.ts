@@ -5096,6 +5096,129 @@ describe('plugin foreground fallback host gating', () => {
     await rm(projectDir, { recursive: true, force: true });
   });
 
+  test('v1 external admission fences a pending fallback before message.updated', async () => {
+    const { client, messages, abort, promptAsync } = createFallbackClient();
+    const promotion = Promise.withResolvers<unknown>();
+    const started = Promise.withResolvers<void>();
+    (client as any)._client = {
+      post: () => {
+        started.resolve();
+        return promotion.promise;
+      },
+    };
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    const sessionID = 'admission-race';
+    const model = { providerID: 'openai', modelID: 'gpt-b' };
+    try {
+      await hooks.config?.({ agent: {} });
+      await hooks.event?.({
+        event: {
+          type: 'session.created',
+          properties: { info: { id: sessionID, parentID: 'parent' } },
+        },
+      } as never);
+      await hooks['chat.message']?.(
+        {
+          sessionID,
+          messageID: 'msg_old',
+          agent: 'orchestrator',
+          model,
+        } as never,
+        {
+          message: { id: 'msg_old', sessionID, role: 'user', model },
+          parts: [],
+        } as never,
+      );
+      const pending = hooks.event?.({
+        event: {
+          type: 'session.status',
+          properties: {
+            sessionID,
+            status: { type: 'retry', attempt: 1, message: 'rate limit' },
+          },
+        },
+      } as never);
+      await started.promise;
+      await hooks['chat.message']?.(
+        {
+          sessionID,
+          messageID: 'msg_new',
+          agent: 'orchestrator',
+          model,
+        } as never,
+        {
+          message: { id: 'msg_new', sessionID, role: 'user', model },
+          parts: [],
+        } as never,
+      );
+      promotion.resolve({});
+      await pending;
+      await hooks.event?.({
+        event: {
+          type: 'message.updated',
+          properties: {
+            info: { id: 'msg_new', sessionID, role: 'user', model },
+          },
+        },
+      } as never);
+
+      expect(abort).not.toHaveBeenCalled();
+      expect(promptAsync).not.toHaveBeenCalled();
+      expect(messages).not.toHaveBeenCalled();
+    } finally {
+      promotion.resolve({});
+      await hooks.dispose?.();
+    }
+  });
+
+  test('v2 external admission preserves the host retry budget', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: false },
+        fallback: { enabled: true, maxRetries: 1 },
+        agents: { orchestrator: { model: ['openai/gpt-b', 'openai/gpt-c'] } },
+      }),
+    );
+    const hooks = await createHooks('v2');
+    const switchModel = mock(async () => ({}));
+    const sessionID = 'v2-retry-admission';
+    const model = { providerID: 'openai', modelID: 'gpt-b' };
+    const retry = () => ({
+      sessionID,
+      agent: 'orchestrator',
+      model: { providerID: 'openai', id: 'gpt-b' },
+      error: { message: 'rate limit' },
+      decision: { retry: true, delay: 2_000 },
+    });
+    try {
+      await hooks.config?.({ agent: {} });
+      await hooks['v2.session.retry']?.(retry() as never, switchModel as never);
+      expect(switchModel).not.toHaveBeenCalled();
+      await hooks['chat.message']?.(
+        {
+          sessionID,
+          messageID: 'msg_new',
+          agent: 'orchestrator',
+          model,
+        } as never,
+        {
+          message: { id: 'msg_new', sessionID, role: 'user', model },
+          parts: [],
+        } as never,
+      );
+      await hooks['v2.session.retry']?.(retry() as never, switchModel as never);
+      expect(switchModel).toHaveBeenCalledTimes(1);
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
   test('v2 host: the replay path stays disabled', async () => {
     const captured: string[] = [];
     const capture = spyOn(loggerModule, 'log').mockImplementation(

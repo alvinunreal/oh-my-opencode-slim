@@ -875,32 +875,22 @@ describe('foreground fallback redo harness', () => {
     });
   });
 
-  test('a re-emitted user-message update is inert while a newer turn classifies', async () => {
-    // v1 republishes a turn's user message (info only) on every step finish.
+  test('a re-emitted older user message cannot replace a newer admission', async () => {
     const { manager, mocks } = makeManager();
-    const newerTurnRead = deferred<unknown>();
-    mocks.messages
-      .mockImplementationOnce(async () => ({ data: [] }))
-      .mockImplementationOnce(() => newerTurnRead.promise);
-    const update = (id: string, modelID: string) => ({
+    manager.noteExternalTurn('reemitted', 'turn-1', 'test/a');
+    manager.noteExternalTurn('reemitted', 'turn-2', 'test/b');
+    await manager.handleEvent({
       type: 'message.updated',
       properties: {
         info: {
-          id,
+          id: 'turn-1',
           sessionID: 'reemitted',
           role: 'user',
-          model: { providerID: 'test', modelID },
+          model: { providerID: 'test', modelID: 'a' },
         },
       },
     });
-
-    await manager.handleEvent(update('turn-1', 'a'));
-    const newerTurn = manager.handleEvent(update('turn-2', 'b'));
-    await manager.handleEvent(update('turn-1', 'a'));
-    newerTurnRead.resolve({ data: [] });
-    await newerTurn;
-
-    expect(mocks.messages).toHaveBeenCalledTimes(2);
+    expect(mocks.messages).not.toHaveBeenCalled();
     expect((manager as any).sessionModel.get('reemitted')).toBe('test/b');
   });
 
@@ -1029,139 +1019,6 @@ describe('foreground fallback redo harness', () => {
     manager.registerSessionAgent('external-turn-fence', 'orchestrator');
     await manager.handleEvent(redoEvents.assistant('external-turn-fence'));
     await manager.handleEvent(redoEvents.error('external-turn-fence'));
-
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(onChanged).not.toHaveBeenCalled();
-  });
-
-  test('an older transcript probe cannot overwrite a newer external turn', async () => {
-    const olderProbe = deferred<unknown>();
-    let lookupCount = 0;
-    const onChanged = mock((_sessionID: string, _model: string) => {});
-    const { mocks } = createMockClient({
-      messagesImpl: async () => {
-        lookupCount += 1;
-        if (lookupCount === 1) return olderProbe.promise;
-        if (lookupCount === 2) {
-          return {
-            data: [{ info: { id: 'newer-user', role: 'user' }, parts: [] }],
-          };
-        }
-        return {
-          data: [
-            {
-              info: { id: 'replay-source', role: 'user' },
-              parts: [{ type: 'text', text: 'hello' }],
-            },
-          ],
-        };
-      },
-    });
-    const manager = new ForegroundFallbackManager(
-      { orchestrator: ['test/a', 'test/b', 'test/c'] },
-      true,
-      { directory: '/test' } as never,
-      0,
-      undefined,
-      onChanged,
-    );
-    const userEvent = (id: string, modelID: string) => ({
-      type: 'message.updated',
-      properties: {
-        info: {
-          id,
-          sessionID: 'turn-probe-order',
-          role: 'user',
-          model: { providerID: 'test', modelID },
-        },
-      },
-    });
-
-    const oldEvent = manager.handleEvent(userEvent('older-user', 'a'));
-    await manager.handleEvent(userEvent('newer-user', 'b'));
-    olderProbe.resolve({
-      data: [{ info: { id: 'older-user', role: 'user' }, parts: [] }],
-    });
-    await oldEvent;
-
-    await manager.handleEvent(redoEvents.error('turn-probe-order'));
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
-      body: { model: { providerID: 'test', modelID: 'a' } },
-    });
-    expect(onChanged).toHaveBeenCalledWith('turn-probe-order', 'test/a');
-  });
-
-  test('an internal replay notification does not invalidate an external turn probe', async () => {
-    const externalProbe = deferred<unknown>();
-    const promptStarted = deferred<void>();
-    const promptResponse = deferred<unknown>();
-    let lookupCount = 0;
-    let manager!: ForegroundFallbackManager;
-    const onChanged = mock((_sessionID: string, _model: string) => {});
-    const { mocks } = createMockClient({
-      messagesImpl: async () => {
-        lookupCount += 1;
-        if (lookupCount === 1) return externalProbe.promise;
-        return {
-          data: [
-            {
-              info: { id: 'fallback-source', role: 'user' },
-              parts: [{ type: 'text', text: 'hello' }],
-            },
-          ],
-        };
-      },
-      promptAsyncImpl: async (args) => {
-        const messageID = (args as { body: { messageID: string } }).body
-          .messageID;
-        await manager.handleEvent({
-          type: 'message.updated',
-          properties: {
-            info: {
-              id: messageID,
-              sessionID: 'internal-does-not-fence',
-              role: 'user',
-            },
-          },
-        });
-        promptStarted.resolve();
-        return promptResponse.promise;
-      },
-    });
-    manager = new ForegroundFallbackManager(
-      { orchestrator: ['test/a', 'test/b'] },
-      true,
-      { directory: '/test' } as never,
-      0,
-      undefined,
-      onChanged,
-    );
-    const sessionID = 'internal-does-not-fence';
-
-    manager.registerSessionAgent(sessionID, 'orchestrator');
-    await manager.handleEvent(redoEvents.assistant(sessionID));
-    const externalTurn = manager.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          id: 'genuine-external-turn',
-          sessionID,
-          role: 'user',
-          model: { providerID: 'test', modelID: 'b' },
-        },
-      },
-    });
-    const fallback = manager.handleEvent(redoEvents.error(sessionID));
-    await promptStarted.promise;
-    externalProbe.resolve({
-      data: [
-        { info: { id: 'genuine-external-turn', role: 'user' }, parts: [] },
-      ],
-    });
-    await externalTurn;
-    promptResponse.resolve({});
-    await fallback;
 
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
     expect(onChanged).not.toHaveBeenCalled();
@@ -3594,11 +3451,11 @@ describe('ForegroundFallbackManager session.error', () => {
     };
     expect(mgr.getActiveFallback('sess-1')).toEqual(activeFallback);
 
-    mgr.observeExternalTurn('sess-1', undefined);
+    mgr.noteExternalTurn('sess-1', undefined);
     expect(mgr.getActiveFallback('sess-1')).toEqual(activeFallback);
-    mgr.observeExternalTurn('sess-1', 'openai/gpt-4o');
+    mgr.noteExternalTurn('sess-1', 'turn-2', 'openai/gpt-4o');
     expect(mgr.getActiveFallback('sess-1')).toEqual(activeFallback);
-    mgr.observeExternalTurn('sess-1', 'anthropic/claude-opus-4-5');
+    mgr.noteExternalTurn('sess-1', 'turn-3', 'anthropic/claude-opus-4-5');
     expect(mgr.getActiveFallback('sess-1')).toBeUndefined();
   });
 
@@ -7716,9 +7573,7 @@ describe('ForegroundFallbackManager forgetSession cleanup', () => {
     'lastSwitchTrigger',
     'triggerIncidents',
     'pendingErrorCorrelation',
-    'lastUserMessageID',
-    'userEventSequence',
-    'replayMessageIds',
+    'observedUserMessageIds',
     'retryAttempt',
     'sessionRetries',
     'deterministicTerminal',
@@ -7796,7 +7651,7 @@ describe('ForegroundFallbackManager noteExternalTurn cleanup', () => {
 });
 
 describe('ForegroundFallbackManager dispose cleanup', () => {
-  test.each(['replayMessageIds', 'userEventSequence', 'v2RetryNotices'])(
+  test.each(['observedUserMessageIds', 'v2RetryNotices'])(
     '%s is cleared on dispose',
     (mapName) => {
       const mgr = new ForegroundFallbackManager(makeChains(), true, {

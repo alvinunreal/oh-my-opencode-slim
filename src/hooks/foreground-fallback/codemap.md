@@ -45,12 +45,9 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
     host-shaped, time-ordered `msg_...` ID in the v1 prompt body before
     submission, so info-only notifications remain identifiable when parts
     arrive later
-  - `userEventSequence`: orders asynchronous user-message identity probes so
-    an older transcript lookup cannot overwrite newer turn state; known
-    internal replay IDs do not advance the sequence; duplicate/stale external
-    user-message updates cannot rewind the current model after a fallback
-  - `replayMessageIds`: retain exact IDs of internal replay messages; synthetic
-    marker checks remain a fallback for delayed part notifications
+  - `observedUserMessageIds`: retain exact IDs of admitted external turns and
+    internal replays, so stale user-message updates cannot rewind the model;
+    synthetic marker checks cover delayed part notifications
 
 ### Fallback Chain Resolution
 - **Agent-specific chains**: Each agent defines an ordered list of fallback models via `modelArrays`, preserving per-entry variants
@@ -95,7 +92,7 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 - The v2 in-place retry hook (`handleV2Retry`) is gated by the separate `v2RetryEnabled` constructor flag — the replay path's `enabled` stays false on v2 hosts, so only steering runs there. It shares the chain-global budget and quota policy. Absorbed retries, recoverable failures, missing chains and unsuccessful model switches leave the host decision unchanged. Once `selectFallbackModel` returns `exhausted` the hook returns without touching the decision: the host's own retry verdict stands, so a spent chain never forces a retry. A first ordinary exhaustion still takes the sticky re-fallback (only the second lands here).
 - `handleV2Retry` performs no turn-epoch fencing (removed with the retry state machine in 858c5bb4): the hook runs synchronously inside the host's retry decision for the currently failing turn, so no newer-turn write-back can race it. The only asynchronous window is the `switchModel` await; a timed-out switch that settles late is reconciled only while `sessionModel` equals the failed `from` model or the switch target. A different observed selection is left untouched.
 - Observability + initial delay: the first retry-hook event per session and failing model logs a deterministic `[foreground-fallback] v2 retry hook observed` line (failover classification + steering state) before any guard returns, so a disabled or never-invoked hook is distinguishable in postmortems. The notice set clears on confirmed recovery and on a confirmed new v1 user turn, so a later failure episode is visible again. `fallback.initialRetryDelayMs` has no steering form (no replay to delay; the host's own retry backoff is the window) — noted once per session instead of silently disabling steering.
-- v2 bookkeeping split: `handleEvent` runs agent/model tracking and confirmed-recovery resets whenever either path is enabled, while the replay interventions (`session.error`, `message.updated` error, `session.status` retry) stay gated behind `enabled`. Successful v2 steps and executions can clear descent state with replay disabled. `observeExternalTurn` separately records a model selected outside the confirmed fallback so returning to the configured primary can re-arm the descent.
+- v2 bookkeeping split: `handleEvent` runs agent/model tracking and confirmed-recovery resets whenever either path is enabled, while the replay interventions (`session.error`, `message.updated` error, `session.status` retry) stay gated behind `enabled`. Successful v2 steps and executions can clear descent state with replay disabled. `noteExternalTurn` records a model selected outside the confirmed fallback so returning to the configured primary can re-arm the descent.
 - `maxRetries = N` absorbs failures `1..N` on the current model; failure `N+1` (and every later failure) advances the chain. `maxRetries = 0` switches immediately.
 - The budget is **chain-global** and is not cleared on a model switch.
 - The budget clears on confirmed recovery, `session.deleted`, a confirmed new v1 user turn, or an observed fresh descent from the configured primary outside our committed fallback. A new v2 turn alone does not reset it. A completed assistant `message.updated` with `finish: 'content-filter'` is not a successful response: OpenCode v1 publishes it before attaching the `ContentFilterError`, so it never clears the budget.
@@ -105,7 +102,7 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 - Stage 1 retries `chain[last]` once, ignoring provider exclusions and retaining
   tried models; a failure of that sticky retry reaches stage 2 without reopening
   the chain.
-- `noteExternalTurn` cancels the initial-delay trigger, clears retry/dedup/backoff state and increments `turnEpoch`, retaining `replayMessageIds`. `isKnownInternalReplayUserMessage` synchronously checks retained IDs, shared internal admissions recorded by `chat.message`, and event parts (Slim markers or strict native background-task notifications) before advancing `userEventSequence`; `isInternalReplayUserMessage` probes the transcript for Slim markers when parts are missing. Duplicate user-message updates are inert. `userEventSequence` fences out-of-order probes, and `isCurrentTurn` prevents superseded replay work from claiming a switch. `rearmIfFreshDescent` clears tried/exhaustion state only after an observed return to the configured primary outside our committed fallback; a fallback onto the head keeps its descent state.
+- On v1, `noteExternalTurn` runs at `chat.message` admission, cancels the initial-delay trigger, clears retry/dedup/backoff state and increments `turnEpoch`. v2 admissions reconcile model selection without resetting the retry budget. `isKnownUserMessage` synchronously checks retained IDs, shared internal admissions recorded by `chat.message`, and event parts (Slim markers or strict native background-task notifications). Duplicate and stale user-message updates are inert, and `isCurrentTurn` prevents superseded replay work from claiming a switch. `rearmIfFreshDescent` clears tried/exhaustion state only after an observed return to the configured primary outside our committed fallback; a fallback onto the head keeps its descent state.
 
 ### Deduplication (identity-based)
 - No error-text-only time-window heuristic: identical text can be the next real failure. The one-shot cross-event bridge requires an exact payload, current model, current turn, and short time-window match.

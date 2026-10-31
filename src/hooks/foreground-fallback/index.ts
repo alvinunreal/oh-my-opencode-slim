@@ -689,10 +689,8 @@ export class ForegroundFallbackManager {
   private incidentSequence = 0;
   /** Confirmed external user-turn generations fence suspended work. */
   private readonly turnEpoch = new Map<string, number>();
-  private readonly lastUserMessageID = new Map<string, string>();
-  /** Arrival order fences stale asynchronous transcript identity probes. */
-  private readonly userEventSequence = new Map<string, number>();
-  private readonly replayMessageIds = new Map<string, Set<string>>();
+  /** Seen user IDs keep old host re-emissions from rewinding a newer turn. */
+  private readonly observedUserMessageIds = new Map<string, Set<string>>();
   /** Last host retry attempt charged for each turn/model episode. */
   private readonly retryAttempt = new Map<
     string,
@@ -919,8 +917,7 @@ export class ForegroundFallbackManager {
       clearTimeout(pending.timer);
     }
     this.pendingInitialDelay.clear();
-    this.replayMessageIds.clear();
-    this.userEventSequence.clear();
+    this.observedUserMessageIds.clear();
     this.v2RetryNotices.clear();
   }
 
@@ -938,8 +935,23 @@ export class ForegroundFallbackManager {
     return true;
   }
 
-  private noteExternalTurn(sessionID: string, messageID: string): void {
-    this.lastUserMessageID.set(sessionID, messageID);
+  /** v1 overrides are per-message; v2 switches persist across external turns. */
+  noteExternalTurn(
+    sessionID: string,
+    messageID: string | undefined,
+    model?: string,
+  ): void {
+    if (messageID && this.observedUserMessageIds.get(sessionID)?.has(messageID))
+      return;
+    if (
+      model !== undefined &&
+      this.activeFallback.get(sessionID)?.model !== model
+    ) {
+      this.activeFallback.delete(sessionID);
+      this.sessionModel.set(sessionID, model);
+    }
+    if (!messageID) return;
+    this.rememberUserMessage(sessionID, messageID);
     this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
     this.lastTrigger.delete(sessionID);
     this.lastTriggerModel.delete(sessionID);
@@ -959,21 +971,18 @@ export class ForegroundFallbackManager {
     this.cancelInitialDelay(sessionID);
   }
 
-  private nextUserEventSequence(sessionID: string): number {
-    const next = (this.userEventSequence.get(sessionID) ?? 0) + 1;
-    this.userEventSequence.set(sessionID, next);
-    return next;
-  }
-
-  private isKnownInternalReplayUserMessage(
+  private isKnownUserMessage(
     sessionID: string,
     messageID: string,
     parts: unknown[],
   ): boolean {
-    if (this.replayMessageIds.get(sessionID)?.has(messageID)) return true;
+    if (this.observedUserMessageIds.get(sessionID)?.has(messageID)) return true;
     // v1 chat.message records internal admissions before message.updated.
-    // Recognize them before advancing the external-turn probe sequence.
-    if (isInternalAdmission(sessionID, messageID)) return true;
+    // Recognize them before treating the notification as an external turn.
+    if (isInternalAdmission(sessionID, messageID)) {
+      this.rememberUserMessage(sessionID, messageID);
+      return true;
+    }
     const marked = parts.some(
       (part) =>
         isInternalInitiatorPart(part) ||
@@ -982,7 +991,7 @@ export class ForegroundFallbackManager {
           typeof part.text === 'string' &&
           part.text.includes(SLIM_INTERNAL_INITIATOR_MARKER)),
     );
-    if (marked) this.rememberReplayMessage(sessionID, messageID);
+    if (marked) this.rememberUserMessage(sessionID, messageID);
     return marked;
   }
 
@@ -1100,11 +1109,11 @@ export class ForegroundFallbackManager {
     return matched;
   }
 
-  private rememberReplayMessage(sessionID: string, messageID: string): void {
-    let ids = this.replayMessageIds.get(sessionID);
+  private rememberUserMessage(sessionID: string, messageID: string): void {
+    let ids = this.observedUserMessageIds.get(sessionID);
     if (!ids) {
       ids = new Set();
-      this.replayMessageIds.set(sessionID, ids);
+      this.observedUserMessageIds.set(sessionID, ids);
     }
     ids.add(messageID);
   }
@@ -1128,50 +1137,6 @@ export class ForegroundFallbackManager {
     } catch {
       return;
     }
-  }
-
-  private async isInternalReplayUserMessage(
-    sessionID: string,
-    messageID: string,
-    eventParts: unknown[],
-    partsAvailable: boolean,
-  ): Promise<boolean> {
-    // In v1, message.updated can carry only info while message parts are
-    // emitted separately. When parts are present on this event and contain
-    // no internal marker (the caller checked them), it is an external turn.
-    if (partsAvailable && eventParts.length > 0) return false;
-
-    try {
-      const result = await getClient(this.input).session.messages({
-        path: { id: sessionID },
-        query: { limit: FALLBACK_REPLAY_TAIL_MESSAGES },
-      });
-      const messages = (result.data ?? []) as unknown[];
-      const found = [...messages].reverse().find((message) => {
-        if (!isRecord(message)) return false;
-        const info = isRecord(message.info) ? message.info : undefined;
-        return info?.id === messageID || message.id === messageID;
-      });
-      if (isRecord(found)) {
-        const parts = Array.isArray(found.parts) ? found.parts : [];
-        const internal =
-          parts.some(
-            (part) =>
-              isInternalInitiatorPart(part) ||
-              (isRecord(part) &&
-                typeof part.text === 'string' &&
-                part.text.includes(SLIM_INTERNAL_INITIATOR_MARKER)),
-          ) ||
-          (typeof found.text === 'string' &&
-            found.text.includes(SLIM_INTERNAL_INITIATOR_MARKER));
-        if (internal) this.rememberReplayMessage(sessionID, messageID);
-        return internal;
-      }
-    } catch {
-      // An unavailable transcript is unknown identity, not proof of a user
-      // turn. A retained replay record covers this window conservatively.
-    }
-    return false;
   }
 
   private withholdsAbortForLiveChildren(sessionID: string): boolean {
@@ -1263,9 +1228,7 @@ export class ForegroundFallbackManager {
     this.triggerIncidents.delete(id);
     this.pendingErrorCorrelation.delete(id);
     this.turnEpoch.set(id, (this.turnEpoch.get(id) ?? 0) + 1);
-    this.lastUserMessageID.delete(id);
-    this.userEventSequence.delete(id);
-    this.replayMessageIds.delete(id);
+    this.observedUserMessageIds.delete(id);
     this.retryAttempt.delete(id);
     this.sessionRetries.delete(id);
     this.chainExhaustion.delete(id);
@@ -1339,15 +1302,6 @@ export class ForegroundFallbackManager {
     }
   }
 
-  /** v1 overrides are per-message; v2 switches persist across external turns. */
-  observeExternalTurn(sessionID: string, model: string | undefined): void {
-    if (model === undefined) return;
-    if (this.activeFallback.get(sessionID)?.model !== model) {
-      this.activeFallback.delete(sessionID);
-      this.sessionModel.set(sessionID, model);
-    }
-  }
-
   /**
    * Process an OpenCode plugin event.
    * Call this from the plugin's `event` hook for every event received.
@@ -1409,33 +1363,20 @@ export class ForegroundFallbackManager {
               : [];
           if (
             typeof info.id === 'string' &&
-            !this.isKnownInternalReplayUserMessage(sessionID, info.id, parts)
+            !this.isKnownUserMessage(sessionID, info.id, parts)
           ) {
-            // A re-emitted update of the observed turn (v1: one per step
-            // finish) is inert: no transcript probe, no model re-seed (fallback
-            // may have advanced it), no sequence bump superseding a newer turn.
-            if (this.lastUserMessageID.get(sessionID) === info.id) break;
-            const eventSequence = this.nextUserEventSequence(sessionID);
-            const isInternal = await this.isInternalReplayUserMessage(
-              sessionID,
-              info.id,
-              parts,
-              Array.isArray(props?.parts) || Array.isArray(info.parts),
-            );
-            if (this.userEventSequence.get(sessionID) !== eventSequence) {
-              break;
-            }
-            if (!isInternal) this.noteExternalTurn(sessionID, info.id);
-            if (!isInternal && isRecord(info.model)) {
+            let model: string | undefined;
+            if (isRecord(info.model)) {
               const providerID = info.model.providerID;
               const modelID = info.model.modelID ?? info.model.id;
               if (
                 typeof providerID === 'string' &&
                 typeof modelID === 'string'
               ) {
-                this.sessionModel.set(sessionID, `${providerID}/${modelID}`);
+                model = `${providerID}/${modelID}`;
               }
             }
+            this.noteExternalTurn(sessionID, info.id, model);
           }
         }
         // Assistant identity may belong to compaction or a stale agent turn.
@@ -1577,7 +1518,7 @@ export class ForegroundFallbackManager {
           typeof part.sessionID === 'string' &&
           typeof part.messageID === 'string'
         ) {
-          this.rememberReplayMessage(part.sessionID, part.messageID);
+          this.rememberUserMessage(part.sessionID, part.messageID);
         }
         break;
       }
@@ -2352,7 +2293,7 @@ export class ForegroundFallbackManager {
       ...(isV2Host && opts.variant ? { modelVariant: opts.variant } : {}),
     };
     const sendReplayPrompt = (): Promise<unknown> => {
-      this.rememberReplayMessage(sessionID, promptBody.body.messageID);
+      this.rememberUserMessage(sessionID, promptBody.body.messageID);
       return withTimeout(
         promptAsync(promptBody),
         REPLAY_SEND_TIMEOUT_MS,
@@ -3134,7 +3075,7 @@ export class ForegroundFallbackManager {
         }
       };
       const sendReplayPrompt = (): Promise<unknown> => {
-        this.rememberReplayMessage(sessionID, promptBody.body.messageID);
+        this.rememberUserMessage(sessionID, promptBody.body.messageID);
         return withTimeout(
           promptAsync(promptBody),
           REPLAY_SEND_TIMEOUT_MS,
