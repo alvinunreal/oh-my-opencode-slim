@@ -183,7 +183,8 @@ function diagnosticErrorText(error: unknown) {
 export function diagnosticTail(text: string, maxBytes: number): string {
   if (maxBytes <= 0) return '';
   const tail = diagnosticSlice(text, -maxBytes);
-  let bytes = Buffer.byteLength(tail, 'utf8');
+  // Bun's Buffer.byteLength undercounts lone surrogates; encode once instead.
+  let bytes = new TextEncoder().encode(tail).byteLength;
   let start = 0;
   let end = tail.length;
   while (bytes > maxBytes) {
