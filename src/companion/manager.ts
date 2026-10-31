@@ -738,13 +738,17 @@ export class CompanionManager {
           // The frozen snapshot handed out above may have been consumed by
           // the switch; the memoized known-project row is persisted JSON, so
           // clone the derived objects to keep the cache private.
-          current: cloneConfigValue(next?.effective ?? known.preset?.current),
+          current: cloneConfigValue(
+            next ? next.effective : known.preset?.current,
+          ),
           available: next?.projectAvailable ?? known.preset?.available ?? [],
           effective: cloneConfigValue(
-            next?.effective ?? known.preset?.effective,
+            next ? next.effective : known.preset?.effective,
           ),
-          project: cloneConfigValue(next?.project ?? known.preset?.project),
-          global: cloneConfigValue(next?.global ?? known.preset?.global),
+          project: cloneConfigValue(
+            next ? next.project : known.preset?.project,
+          ),
+          global: cloneConfigValue(next ? next.global : known.preset?.global),
           project_available:
             next?.projectAvailable ?? known.preset?.project_available ?? [],
           global_available:

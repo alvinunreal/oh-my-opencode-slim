@@ -1969,6 +1969,52 @@ describe('CompanionManager', () => {
     });
   });
 
+  it('publishes the inherited selection after clearing an offline project override', () => {
+    const closedDir = path.join(TEST_DIR, 'closed');
+    mkdirSync(path.join(closedDir, '.opencode'), { recursive: true });
+    const configFile = path.join(
+      closedDir,
+      '.opencode',
+      'oh-my-opencode-slim.jsonc',
+    );
+    writeFileSync(configFile, '{ "preset": "local" }');
+    writeFileSync(
+      path.join(TEST_DIR, 'config', 'opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        preset: 'global',
+        presets: {
+          global: { fixer: { model: 'p/g' } },
+          local: { fixer: { model: 'p/l' } },
+        },
+      }),
+    );
+    const closed = make('closed', closedDir);
+    closed.onLoad();
+    closed.onExit();
+    const relay = make('relay');
+    relay.onLoad();
+    const state = readState();
+    state.preset_requests = [
+      {
+        request_id: 'inherit',
+        session_id: 'relay',
+        target_cwd: closedDir,
+        scope: 'project',
+        inherit: true,
+      },
+    ];
+    writeFileSync(stateFilePath(), JSON.stringify(state));
+    (
+      relay as unknown as { consumePresetRequest: () => boolean }
+    ).consumePresetRequest();
+    const preset = readState().known_projects.find(
+      (p: { cwd: string }) => p.cwd === closedDir,
+    ).preset;
+    expect(preset.project).toBeUndefined();
+    expect(preset.effective).toBe('global');
+    expect(readFileSync(configFile, 'utf8')).not.toContain('local');
+  });
+
   it('rejects unregistered offline target without modifying its JSONC', () => {
     const knownDir = path.join(TEST_DIR, 'unknown-target');
     mkdirSync(path.join(knownDir, '.opencode'), { recursive: true });
