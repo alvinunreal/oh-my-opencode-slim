@@ -12,6 +12,7 @@ import {
   SESSION_ID,
   userTurn,
 } from '../hooks/cache-safety-harness.test';
+import { createDeepworkCommandHook } from '../hooks/deepwork';
 import { createJsonErrorRecoveryHook } from '../hooks/json-error-recovery/hook';
 import {
   createPhaseReminderHook,
@@ -395,6 +396,33 @@ describe('interview registerCommand (add-only draft)', () => {
 });
 
 describe('applyCommandMarkerToContext', () => {
+  test('replays the same deepwork expansion after tool calls and later turns', async () => {
+    const hook = createDeepworkCommandHook();
+    const commandBefore = mock(hook.handleCommandExecuteBefore);
+    const user = {
+      id: 'msg_deepwork',
+      role: 'user',
+      content: [
+        { type: 'text', text: wrapCommandMarker('deepwork', 'Build it') },
+      ],
+    };
+    const first = makeEvent([structuredClone(user)]);
+    const next = makeEvent([
+      structuredClone(user),
+      {
+        id: 'a',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Working' }],
+      },
+      { id: 'u2', role: 'user', content: [{ type: 'text', text: 'Continue' }] },
+    ]);
+    await applyCommandMarkerToContext(first, commandBefore);
+    await applyCommandMarkerToContext(next, commandBefore);
+    expect(first.messages[0].content[0].text).toContain('# Deepwork');
+    expect(next.messages[0].content).toEqual(first.messages[0].content);
+    expect(commandBefore).toHaveBeenCalledTimes(1);
+  });
+
   test('replaces the trailing marker with hook parts; other messages untouched', async () => {
     const earlier = {
       id: 'm1',

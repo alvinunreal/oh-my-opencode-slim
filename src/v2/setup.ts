@@ -15,6 +15,7 @@
  */
 
 import path from 'node:path';
+import { LRUCache } from 'lru-cache';
 import type { RegistryFactoryBridge } from '../agents/registry-bridge';
 import {
   buildBundledSkillInfos,
@@ -250,47 +251,64 @@ export function registerSynthCommands(
   }
 }
 
-/** Dispatch a generic command marker found in the trailing user message to
- * the v1 `command.execute.before` hook, then replace that message's content
- * with the hook-produced parts. Mirrors the interview bridge mutation
- * semantics: only the trailing message is touched so earlier messages stay
- * byte-for-byte identical (provider prompt-cache prefix reuse). */
+const commandExpansions = new WeakMap<
+  V1CommandBeforeHook,
+  LRUCache<string, Promise<V1CommandPart[]>>
+>();
+
+/** Replay the same expansion whenever the host rebuilds its message history. */
 export async function applyCommandMarkerToContext(
   event: V2SessionContextEvent,
   commandBefore: V1CommandBeforeHook,
 ): Promise<void> {
-  const trailing = event.messages.at(-1);
-  if (trailing?.role !== 'user') return;
-  const text = userTextFromContent(trailing.content);
-  const parsed = parseCommandMarker(text);
-  if (!parsed) return;
+  for (const trailing of event.messages) {
+    if (trailing.role !== 'user') continue;
+    const text = userTextFromContent(trailing.content);
+    const parsed = parseCommandMarker(text);
+    if (!parsed) continue;
 
-  const output = { parts: [] as V1CommandPart[] };
-  await commandBefore(
-    {
-      command: parsed.name,
-      sessionID: event.sessionID,
-      arguments: parsed.args.trim(),
-    },
-    output,
-  );
+    let cache = commandExpansions.get(commandBefore);
+    if (!cache) {
+      cache = new LRUCache({ max: 512 });
+      commandExpansions.set(commandBefore, cache);
+    }
+    const key =
+      trailing.id && JSON.stringify([event.sessionID, trailing.id, text]);
+    let expansion = key ? cache.get(key) : undefined;
+    if (!expansion) {
+      const output = { parts: [] as V1CommandPart[] };
+      expansion = commandBefore(
+        {
+          command: parsed.name,
+          sessionID: event.sessionID,
+          arguments: parsed.args.trim(),
+        },
+        output,
+      ).then(() => output.parts);
+      if (key) cache.set(key, expansion);
+    }
+    const parts = await expansion.catch((error) => {
+      if (key) cache.delete(key);
+      throw error;
+    });
 
-  const syntheticParts = trailing.content.filter(
-    (part) => part.synthetic === true,
-  );
+    const syntheticParts = trailing.content.filter(
+      (part) => part.synthetic === true,
+    );
 
-  if (output.parts.length > 0) {
+    if (parts.length > 0) {
+      trailing.content = [
+        ...parts.map((part) => ({ ...part })),
+        ...syntheticParts,
+      ];
+      continue;
+    }
+    // Hook produced nothing: strip the marker and leave the raw args text.
     trailing.content = [
-      ...output.parts.map((part) => ({ ...part })),
+      { type: 'text', text: stripCommandMarker(text) },
       ...syntheticParts,
     ];
-    return;
   }
-  // Hook produced nothing: strip the marker and leave the raw args text.
-  trailing.content = [
-    { type: 'text', text: stripCommandMarker(text) },
-    ...syntheticParts,
-  ];
 }
 
 /** Payload the v1 `chat.message` bridge feeds its consumers (a subset of
