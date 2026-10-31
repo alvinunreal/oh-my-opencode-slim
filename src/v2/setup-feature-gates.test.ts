@@ -133,6 +133,7 @@ function makeCtx(
   const commandAdds: Array<{ name: string }> = [];
   const toolUpdates: Array<{ id: string; description?: unknown }> = [];
   const beforeHooks: Array<(event: never) => Promise<void>> = [];
+  const subagentTools: Array<Record<string, unknown>> = [];
   const hooks: string[] = [];
   const skillCallbacks = new Set<(draft: unknown) => void>();
   const contextHooks: Array<(event: never) => Promise<void>> = [];
@@ -203,6 +204,7 @@ function makeCtx(
           description: 'native',
           execute: async () => ({}),
         };
+        subagentTools.push(subagentTool);
         cb({
           // The native subagent executor is what the wrapper(s) wrap; record
           // each update plus the description the rewrite left behind, so the
@@ -308,6 +310,7 @@ function makeCtx(
     commandAdds,
     toolUpdates,
     beforeHooks,
+    subagentTools,
     hooks,
     contextHooks,
     storageCalls,
@@ -485,6 +488,71 @@ describe('v2 setup feature gates', () => {
       }
     }, 20_000);
   }
+
+  // Regression: a continuation (`sessionID` without `agent`) must reach the
+  // host. The preset wrapper consumes an admission for EVERY call, so the
+  // bridge must capture one for resumes too, not only for `agent` launches.
+  for (const [label, backgroundJobs] of [
+    ['mode "native"', { mode: 'native' }],
+    ['mode "off"', { mode: 'off' }],
+  ] as const) {
+    test(`${label}: a resume without agent runs the wrapped executor`, async () => {
+      await writeProjectConfig({
+        companion: { enabled: false },
+        backgroundJobs: backgroundJobs as Record<string, unknown>,
+      });
+      const { ctx, beforeHooks, subagentTools } = makeCtx(projectDir);
+      const cleanup = await createV2Setup()(ctx);
+      try {
+        const hook = beforeHooks[0];
+        const subagent = subagentTools.at(-1);
+        if (!hook || !subagent) throw new Error('subagent wiring not captured');
+        const event = {
+          ...delegationEvent(),
+          id: 'call_gate_resume',
+          input: { sessionID: 'ses_gate_child', prompt: 'Continue' },
+        };
+        await hook(event as never);
+        const execute = subagent.execute as (
+          input: unknown,
+          context: unknown,
+        ) => Promise<unknown>;
+        await expect(
+          execute(event.input, {
+            sessionID: event.sessionID,
+            id: event.id,
+            signal: new AbortController().signal,
+            progress: async () => {},
+          }),
+        ).resolves.toEqual({});
+      } finally {
+        await cleanup();
+      }
+    }, 20_000);
+  }
+
+  test('managed: a resume without agent is refused by the explicit-agent guard', async () => {
+    await writeProjectConfig({
+      companion: { enabled: false },
+      backgroundJobs: { mode: 'managed' },
+    });
+    const { ctx, beforeHooks } = makeCtx(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      const hook = beforeHooks[0];
+      if (!hook) throw new Error('tool:execute.before not captured');
+      const event = {
+        ...delegationEvent(),
+        id: 'call_gate_resume_managed',
+        input: { sessionID: 'ses_gate_child', prompt: 'Continue' },
+      };
+      await expect(hook(event as never)).rejects.toThrow(
+        'requires a valid agent',
+      );
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
 
   test('lifecycle-disabled project preserves live queued persistence writes', async () => {
     const persistence = createMemoryBackend();

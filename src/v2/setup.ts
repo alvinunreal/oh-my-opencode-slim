@@ -1983,10 +1983,16 @@ export function createToolExecuteBridges(
       isDelegation &&
       resolveDelegatedModel &&
       isRecord(argsView) &&
-      typeof argsView.subagent_type === 'string'
+      // A continuation may omit the agent; it still needs the admission the
+      // session-preset wrapper consumes, or the wrapped executor throws.
+      (typeof argsView.subagent_type === 'string' ||
+        typeof argsView.task_id === 'string')
     ) {
       const model = await resolveDelegatedModel({
-        agentType: argsView.subagent_type,
+        agentType:
+          typeof argsView.subagent_type === 'string'
+            ? argsView.subagent_type
+            : '',
         parentSessionID: e.sessionID,
         callID: e.id,
         args: argsView,
