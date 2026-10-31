@@ -21,6 +21,12 @@ export function normalizeAgentName(agentName: string): string {
   return trimmed.startsWith('@') ? trimmed.slice(1) : trimmed;
 }
 
+/** Default primary classifier (issue #1591): the built-in orchestrator name
+ *  only. Wire `collectPrimaryNames` for the full declared-primary set. */
+export function isBuiltInPrimaryAgent(agent: string): boolean {
+  return agent === 'orchestrator';
+}
+
 function getRuntimeAgentNames(runtime: RuntimeConfig): string[] {
   const unique = new Set<string>([
     ...ALL_AGENT_NAMES,

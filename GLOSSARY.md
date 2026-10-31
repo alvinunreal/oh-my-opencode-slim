@@ -6,8 +6,9 @@ A glossary of the terms used in this project's domain. Definitions describe what
 
 - **Agent** — A named LLM role with a defined lane (permissions, tools, prompt); the unit of work delegation in the system.
 - **Orchestrator** — The canonical primary agent. Plans work, delegates to subagents, monitors them, and reconciles their results. One per session; cannot be disabled.
-- **Primary agent** — An agent projected with SDK mode `primary`: a long-lived foreground session that orchestrates rather than doing bounded work. The orchestrator is the canonical one; a custom agent joins via `agents.<name>.primary: true`.
-- **Subagent** — A specialist agent the orchestrator delegates bounded work to.
+- **Primary agent** — An agent projected with SDK mode `primary`: a long-lived foreground session that orchestrates rather than doing bounded work. The orchestrator is the canonical one; a custom agent joins via `agents.<name>.primary: true` and delegates within its `agents.<name>.subagents` scope when set.
+- **Subagent** — A specialist agent a primary agent delegates bounded work to.
+- **Delegation scope** — A primary agent's `agents.<name>.subagents` allowlist: the specialists it may delegate to, compiled into the `task` permission stance and rendered as its scoped `<Agents>` catalog.
 - **Explorer** — Subagent for fast codebase search, pattern matching, and external documentation/library research.
 - **Oracle** — Subagent for architecture, debugging strategy, and code review.
 - **Designer** — Subagent for UI/UX design and visual polish.
@@ -38,10 +39,10 @@ A glossary of the terms used in this project's domain. Definitions describe what
 
 ## Background Jobs
 
-- **Background job** — A delegated specialist task that runs asynchronously; tracked until its result is reconciled into the orchestrator's response.
+- **Background job** — A delegated specialist task that runs asynchronously; tracked until its result is reconciled into the delegating primary's response.
 - **Background Job Board** — The store of background job state and metadata. It is machine-side only: it is never rendered into a prompt.
 - **Background Job Coordinator** — The layer that owns background-job lifecycle policy and deferred-close state, writing through the board.
-- **Job state** — A background job's status: `running`, `completed`, `error`, `cancelled`, or `reconciled`. `reconciled` is a distinct post-consumption phase marking that a terminal job's result has been folded into the orchestrator's response; it is not a terminal outcome itself.
+- **Job state** — A background job's status: `running`, `completed`, `error`, `cancelled`, or `reconciled`. `reconciled` is a distinct post-consumption phase marking that a terminal job's result has been folded into the delegating primary's response; it is not a terminal outcome itself.
 - **Job alias** — A short human-readable identifier for a background job (e.g., `fix-1`, `exp-2`).
 - **Terminal state** — A job state from which no further transition occurs (`completed`, `error`, `cancelled`).
 

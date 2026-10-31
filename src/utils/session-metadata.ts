@@ -1,3 +1,5 @@
+import { isBuiltInPrimaryAgent } from './agent-variant';
+
 type SessionMetadataEviction = (sessionID: string) => void;
 
 export class SessionMetadataStore {
@@ -5,7 +7,10 @@ export class SessionMetadataStore {
   readonly #models = new Map<string, string>();
   readonly #directories = new Map<string, string>();
   readonly #insertionOrder = new Map<string, undefined>();
+  /** Sessions running a primary agent (issue #1591): the built-in
+   *  orchestrator or a declared primary. Protected from eviction first. */
   readonly #activeOrchestratorSessionIDs = new Set<string>();
+  readonly #isPrimaryAgentName: (agent: string) => boolean;
   /** Sessions that dispatched background work. Distinct from the user's
    * current agent selection (#1079): a Plan/Build parent that called
    * `task` stays task-managed without being rewritten to orchestrator. */
@@ -16,9 +21,13 @@ export class SessionMetadataStore {
   constructor(options: {
     maxEntries: number;
     onEvict?: SessionMetadataEviction;
+    /** Primary classification (issue #1591); defaults to built-in only. */
+    isPrimaryAgentName?: (agent: string) => boolean;
   }) {
     this.#maxEntries = options.maxEntries;
     this.#onEvict = options.onEvict;
+    this.#isPrimaryAgentName =
+      options.isPrimaryAgentName ?? isBuiltInPrimaryAgent;
   }
 
   getAgent(sessionID: string): string | undefined {
@@ -41,7 +50,7 @@ export class SessionMetadataStore {
   setAgent(sessionID: string, agent: string): void {
     this.#agents.set(sessionID, agent);
 
-    if (agent === 'orchestrator') {
+    if (this.#isPrimaryAgentName(agent)) {
       this.#activeOrchestratorSessionIDs.add(sessionID);
     } else {
       this.#activeOrchestratorSessionIDs.delete(sessionID);
@@ -56,7 +65,8 @@ export class SessionMetadataStore {
   }
 
   markOrchestratorActive(sessionID: string): void {
-    if (this.#agents.get(sessionID) === 'orchestrator') {
+    const agent = this.#agents.get(sessionID);
+    if (agent !== undefined && this.#isPrimaryAgentName(agent)) {
       this.#activeOrchestratorSessionIDs.add(sessionID);
     }
   }

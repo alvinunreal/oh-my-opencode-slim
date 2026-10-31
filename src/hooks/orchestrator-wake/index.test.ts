@@ -164,6 +164,7 @@ function createScheduler(options?: {
   isChildInputWaitCurrent?: (taskID: string, requestID: string) => boolean;
   isCompletedJobCurrent?: (taskID: string, generation: number) => boolean;
   hasPendingDelegatedWork?: (id: string) => boolean;
+  isPrimaryAgentName?: (agent: string) => boolean;
   resolveSelection?: (sessionID: string) => Promise<{
     agent?: string;
     model?: { providerID: string; modelID: string };
@@ -198,6 +199,7 @@ function createScheduler(options?: {
     isChildInputWaitCurrent: options?.isChildInputWaitCurrent,
     isCompletedJobCurrent: options?.isCompletedJobCurrent,
     hasPendingDelegatedWork: options?.hasPendingDelegatedWork,
+    isPrimaryAgentName: options?.isPrimaryAgentName,
     resolveSelection: options?.resolveSelection,
     coordinator: options?.coordinator,
   });
@@ -2530,6 +2532,28 @@ describe('wake selection for delegated work', () => {
     });
     await clock.advance(120_000);
     expect(promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('wakes a declared primary parent with no delegated work', async () => {
+    const promptAsync = mock(async () => ({}));
+    const { scheduler } = createScheduler({
+      shouldManageSession: (id) => id === 'coworker',
+      hasPendingDelegatedWork: () => false,
+      isPrimaryAgentName: (agent) => agent === 'coworker',
+      resolveSelection: async () => ({
+        agent: 'coworker',
+        provenance: 'host-persisted',
+      }),
+      sessionClient: makeClient({ promptAsync }),
+    });
+    await scheduler.event({
+      event: {
+        type: 'session.idle',
+        properties: { sessionID: 'coworker' },
+      },
+    });
+    await clock.advance(60_000);
+    expect(promptAsync).toHaveBeenCalledTimes(1);
   });
 
   test('recovers a stopped job on a Plan parent with pending delegated work', async () => {

@@ -291,7 +291,8 @@ and [Council](council.md) for what remains.
 | `agents.<agent>.displayName` | string | - | Custom user-facing alias for the agent in the active config |
 | `agents.<agent>.color` | string | - | Agent display color as `#RRGGBB` or a theme color: `primary`, `secondary`, `accent`, `success`, `warning`, `error`, or `info` |
 | `agents.<agent>.description` | string | generated | Description shown to OpenCode and the orchestrator; defaults to `Custom subagent '<name>'` for custom agents and `Primary orchestrator '<name>'` for primary ones |
-| `agents.<agent>.primary` | boolean | - | Registers this custom agent as a peer primary orchestrator (mode `primary`) instead of a subagent: delegation, task monitoring/messaging, and ask-channel permissions, plus a delegating default prompt (its own `prompt`/prompt file wins). Ignored with a warning on built-in agents and on keys that override an installed marketplace agent (marketplace agents are never primary). See [Custom Agents](#custom-agents) |
+| `agents.<agent>.primary` | boolean | - | Registers this custom agent as a peer primary orchestrator (mode `primary`) instead of a subagent: delegation, task monitoring/cancellation, the ask channel, `wait_for_user`, and marketplace tool permissions, plus a delegating default prompt (its own `prompt`/prompt file wins). Ignored with a warning on built-in agents and on keys that override an installed marketplace agent (marketplace agents are never primary). See [Custom Agents](#custom-agents) |
+| `agents.<agent>.subagents` | string[] | - | Primary agents only (including the built-in orchestrator): delegation scope allowlist of specialist names. Compiled into the `task` permission stance (`{"*": "deny", "<name>": "allow"}`); an explicit `permission.task` entry wins. Also renders as the agent's scoped `<Agents>` routing catalog (rendered into the default prompt; a custom `prompt`/prompt file replaces it, and an explicit `permission.task` entry skips the catalog). Entries accept internal names, display names, or `@`-mentions (normalized internally); configured ACP wrappers and active council seat names are valid, whereas installed marketplace agents are not (the scope normalizes against the plugin roster only); unknown entries are dropped with a warning, as are entries naming a primary agent or a disabled agent; `'*'` is reserved. On a non-primary agent the key warns and is ignored. An absent list keeps unrestricted delegation |
 | `agents.<agent>.skills_include_local` | boolean | - | Adds valid skills from the project's and ancestors' `.opencode/skills/**/SKILL.md` and `.agents/skills/**/SKILL.md` trees before `skills_remove` applies |
 | `acpAgents.<name>.command` | string | - | Command for an external ACP-compatible agent; creates a wrapper subagent named `<name>` See [ACP-connected agents](#acp-connected-agents). |
 | `acpAgents.<name>.args` | string[] | `[]` | Arguments for the ACP agent command See [ACP-connected agents](#acp-connected-agents). |
@@ -1177,13 +1178,27 @@ Notes:
 - Custom agents without a `model` are skipped with a warning
 - Disabled custom agents are not registered or injected into the orchestrator prompt
 - Setting `primary: true` registers the custom agent as a peer primary orchestrator
-  (mode `primary`) instead of a subagent: it gets delegation, task
-  monitoring/messaging, and ask-channel permissions plus a delegating default
-  prompt, and its own `prompt`/prompt file wins
-- Primary agents are limited for now: `task_cancel`, `task_revive`,
-  `wait_for_user`, and the marketplace tools stay orchestrator-only, and
-  per-primary `<Agents>` catalog scoping plus task-board/wake membership are
-  planned follow-ups (issue #1591)
+  (mode `primary`) instead of a subagent: it gets the full orchestration
+  permission set (delegation, task monitoring/cancellation, the ask channel,
+  `wait_for_user`, marketplace tools) plus a delegating default prompt, and its
+  own `prompt`/prompt file wins
+- Each primary delegates within its `subagents` allowlist (compiled into the
+  `permission.task` stance); out-of-scope specialists are rejected by the host.
+  The allowlist also renders as the primary's scoped `<Agents>` routing catalog
+  (including for the built-in orchestrator when it sets `subagents`). The
+  catalog renders into the default prompt: a custom `prompt`/prompt file
+  replaces it, and an explicit `permission.task` entry skips it. Entries
+  accept internal names, display names, or `@`-mentions; unknown entries —
+  and entries naming a primary or a disabled agent — are dropped with a warning.
+  Configured ACP wrappers and the active council's seat names are valid entries;
+  entries for installed marketplace agents are not supported (the scope
+  normalizes against the plugin roster only). Without a `subagents` list, delegation is unrestricted
+- Task lifecycle management (status, cancel, revive, wake, wait) works for every
+  primary over its own delegated runs; shared task-session semantics decide
+  contention (v1-only channels where registered: `task_revive`, `task_message`,
+  `wait_for_user`, and the wake scheduler)
+- Role-specific helpers beyond delegation (deepwork-goal, phase reminders,
+  council injection) stay tied to the built-in orchestrator
 - `primary` only applies to custom agents: on a built-in name it logs a warning
   and does nothing. A primary with a `model` chain gets re-stamped on plugin
   re-init, so prefer a scalar `model` when relying on `/model`
@@ -1268,7 +1283,7 @@ The field accepts either:
 | `lsp` | string or object | Language server protocol operations |
 | `skill` | string or object | Skill execution |
 | `todowrite` | string only | Todo list writing |
-| `question` | string only | Asking the user questions (subagents default to `deny`; explicit `allow`/`ask`/`deny` per agent is honored; only the orchestrator asks by default) |
+| `question` | string only | Asking the user questions (subagents default to `deny`; explicit `allow`/`ask`/`deny` per agent is honored; only primary agents ask by default) |
 | `webfetch` | string only | Web content fetching |
 | `websearch` | string only | Web search |
 | `codesearch` | string only | Code search |
