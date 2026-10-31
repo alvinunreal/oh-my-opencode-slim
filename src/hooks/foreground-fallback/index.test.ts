@@ -3,20 +3,20 @@ import {
   beforeEach,
   describe,
   expect,
-  jest,
   mock,
-  setSystemTime,
   spyOn,
   test,
 } from 'bun:test';
 import { isInternalInitiatorPart } from '../../utils';
 import * as logger from '../../utils/logger';
+import { createTimerHarness } from '../../utils/test-timers';
 import { mapV2EventToV1 } from '../../v2/event-adapter';
 import { recordInternalAdmission } from '../../v2/internal-admissions';
 import { SessionLifecycle } from '../session-lifecycle';
 import type { FallbackNotice } from '../task-session-manager/revived-run-tracker';
 import {
   ForegroundFallbackManager,
+  type ForegroundFallbackTimers,
   isFailoverError,
   isInlineFailoverError,
   isPermanentQuotaBillingError,
@@ -153,7 +153,7 @@ const retryMgr = (
   ids: string[],
   onChanged?: (sessionID: string, model: string) => void,
 ): ForegroundFallbackManager =>
-  new ForegroundFallbackManager(
+  timedManager(
     { orchestrator: ids.map((id) => `test/${id}`) },
     true,
     { directory: '/test' } as any,
@@ -267,6 +267,7 @@ function makeManager({
   retryDelayMs = 0,
   hostFlavor,
   onChanged,
+  timers = clock,
 }: {
   chain?: ReadonlyArray<string | { id: string; variant?: string }>;
   maxRetries?: number;
@@ -274,6 +275,7 @@ function makeManager({
   retryDelayMs?: number;
   hostFlavor?: 'v2';
   onChanged?: (sessionID: string, model: string) => void;
+  timers?: ForegroundFallbackTimers;
 } = {}) {
   const { mocks } = createMockClient({
     messagesData: [
@@ -293,9 +295,63 @@ function makeManager({
       onChanged,
       initialRetryDelayMs,
       retryDelayMs,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      timers,
     ),
     mocks,
   };
+}
+
+/** Split time control: scheduling through the harness, observation through
+ *  an independent clock so jumps fire nothing (the jest.setSystemTime /
+ *  advanceTimersByTime distinction). */
+function createTestClock(start = 1_000_000) {
+  const harness = createTimerHarness();
+  let now = start;
+
+  return {
+    now: () => now,
+    set: (target: number) => {
+      now = target;
+    },
+    advance: async (ms: number) => {
+      now += ms;
+      await harness.advance(ms);
+    },
+    setTimeout: harness.setTimeout,
+    clearTimeout: harness.clearTimeout,
+    pending: harness.pending,
+  };
+}
+
+// Per-test clock: managers wired through the timers port (makeManager /
+// makeBoundaryManager default to it, raw constructions pass it explicitly)
+// observe and schedule on it; it is replaced fresh for every test.
+let clock: ReturnType<typeof createTestClock>;
+beforeEach(() => {
+  clock = createTestClock();
+});
+
+/** Ctor passthrough for tests that drive the clock: pads the positional
+ *  options and wires the per-test clock as the timers port (restores the
+ *  frozen-clock semantics the fake-timer suites were authored against).
+ *  Pads to the ctor's 13th slot; if the ctor gains parameters before
+ *  `timers`, update here (options-bag migration is deferred: 100+ call
+ *  sites). */
+function timedManager(
+  ...args: ConstructorParameters<typeof ForegroundFallbackManager>
+) {
+  const wired: unknown[] = [...args];
+  while (wired.length < 12) wired.push(undefined);
+  wired.push(clock);
+  return new ForegroundFallbackManager(
+    ...(wired as unknown as ConstructorParameters<
+      typeof ForegroundFallbackManager
+    >),
+  );
 }
 
 describe('foreground fallback agent identity', () => {
@@ -354,12 +410,6 @@ describe('foreground fallback agent identity', () => {
 });
 
 describe('foreground fallback redo harness', () => {
-  beforeEach(() => {
-    jest.useFakeTimers();
-    jest.setSystemTime(1_000_000);
-  });
-  afterEach(() => jest.useRealTimers());
-
   test('a replay reserves a msg_ id that sorts between v1 host ids', async () => {
     // v1 host IDs at 999_000 and 1_001_000 ms; the harness is at 1_000_000.
     const hostBefore = 'msg_0000f3e58001AbCdEfGhIjKlMn';
@@ -407,7 +457,7 @@ describe('foreground fallback redo harness', () => {
     await manager.handleEvent(redoEvents.assistant('stall'));
     const pending = manager.handleEvent(redoEvents.error('stall'));
     await flush();
-    jest.advanceTimersByTime(2_000);
+    await clock.advance(2_000);
     await flush();
     read.resolve({
       data: {
@@ -429,10 +479,10 @@ describe('foreground fallback redo harness', () => {
     await manager.handleEvent(redoEvents.assistant('hung'));
     const pending = manager.handleEvent(redoEvents.error('hung'));
     await flush();
-    jest.advanceTimersByTime(2_000);
+    await clock.advance(2_000);
     await flush();
     expect(manager.isFallbackInProgress('hung')).toBe(true);
-    jest.advanceTimersByTime(2_000);
+    await clock.advance(2_000);
     await flush();
     expect(manager.isFallbackInProgress('hung')).toBe(false);
     await pending;
@@ -478,7 +528,7 @@ describe('foreground fallback redo harness', () => {
       chain[3],
       chain[3],
     ].entries()) {
-      jest.advanceTimersByTime(6_000);
+      await clock.advance(6_000);
       const [providerID, modelID] = model.split('/');
       const info = {
         id: `filtered-${index}`,
@@ -487,7 +537,7 @@ describe('foreground fallback redo harness', () => {
         agent: 'orchestrator',
         providerID,
         modelID,
-        time: { created: Date.now() - 1, completed: Date.now() },
+        time: { created: clock.now() - 1, completed: clock.now() },
       };
       await manager.handleEvent({
         type: 'message.updated',
@@ -536,7 +586,7 @@ describe('foreground fallback redo harness', () => {
         switchModel,
       );
     };
-    const recordedAt = Date.now();
+    const recordedAt = clock.now();
 
     await fail('expiry-parent', 'primary/a');
     expect(manager.getActiveFallback('expiry-parent')).toEqual({
@@ -555,7 +605,7 @@ describe('foreground fallback redo harness', () => {
       properties: { info: { id: 'expiry-child', parentID: 'expiry-parent' } },
     });
 
-    jest.setSystemTime(recordedAt + 30 * 60_000 - 1);
+    clock.set(recordedAt + 30 * 60_000 - 1);
     await fail('expiry-parent', 'backup/b');
     expect(switchModel.mock.calls.at(-1)).toEqual([
       'expiry-parent',
@@ -567,7 +617,7 @@ describe('foreground fallback redo harness', () => {
       { providerID: 'last', id: 'd' },
     ]);
 
-    jest.setSystemTime(recordedAt + 30 * 60_000);
+    clock.set(recordedAt + 30 * 60_000);
     await fail('expiry-child', 'last/d');
     expect(switchModel.mock.calls.at(-1)).toEqual([
       'expiry-child',
@@ -586,7 +636,7 @@ describe('foreground fallback redo harness', () => {
 
   test('T2: v2 chain walk skips providers abandoned by the session or its parent', async () => {
     const { mocks } = createMockClient();
-    const manager = new ForegroundFallbackManager(
+    const manager = timedManager(
       {
         orchestrator: [
           'anthropic/claude-opus-5-5',
@@ -667,7 +717,7 @@ describe('foreground fallback redo harness', () => {
       'anthropic/claude-sonnet-5-5',
       'opencode-go/muse-spark-1.3-contributor',
     ];
-    const manager = new ForegroundFallbackManager(
+    const manager = timedManager(
       { orchestrator: chain },
       false,
       { directory: '/test', hostFlavor: 'v2' } as never,
@@ -696,7 +746,7 @@ describe('foreground fallback redo harness', () => {
     };
 
     for (const [index, model] of [chain[2], chain[0], chain[1]].entries()) {
-      jest.advanceTimersByTime(6_000);
+      await clock.advance(6_000);
       const tokens = {
         input: (index + 1) * 100,
         output: (index + 1) * 10,
@@ -735,7 +785,7 @@ describe('foreground fallback redo harness', () => {
 
   test('G1: successful mapped v2 steps re-arm retries within one execution', async () => {
     createMockClient();
-    const manager = new ForegroundFallbackManager(
+    const manager = timedManager(
       {
         orchestrator: ['anthropic/claude-opus-5-5', 'openai/gpt-6.1-sol-fast'],
       },
@@ -756,7 +806,7 @@ describe('foreground fallback redo harness', () => {
 
     // One ongoing execution: each transient error is followed by a tool step.
     for (let step = 1; step <= 4; step++) {
-      jest.advanceTimersByTime(1_000);
+      await clock.advance(1_000);
       await manager.handleV2Retry(
         {
           sessionID,
@@ -976,7 +1026,7 @@ describe('foreground fallback redo harness', () => {
         return {};
       },
     });
-    manager = new ForegroundFallbackManager(
+    manager = timedManager(
       { orchestrator: ['test/a', 'test/b'] },
       true,
       { directory: '/test' } as never,
@@ -1037,7 +1087,7 @@ describe('foreground fallback redo harness', () => {
         return {};
       },
     });
-    manager = new ForegroundFallbackManager(
+    manager = timedManager(
       { orchestrator: ['test/a', 'test/b'] },
       true,
       { directory: '/test' } as never,
@@ -1079,7 +1129,7 @@ describe('foreground fallback redo harness', () => {
         };
       },
     });
-    const manager = new ForegroundFallbackManager(
+    const manager = timedManager(
       { orchestrator: ['test/a', 'test/b', 'test/c'] },
       true,
       { directory: '/test' } as never,
@@ -1151,7 +1201,7 @@ describe('foreground fallback redo harness', () => {
         return promptResponse.promise;
       },
     });
-    manager = new ForegroundFallbackManager(
+    manager = timedManager(
       { orchestrator: ['test/a', 'test/b'] },
       true,
       { directory: '/test' } as never,
@@ -1192,7 +1242,7 @@ describe('foreground fallback redo harness', () => {
   test('delayed fallback retains inline 410 context for toast suppression', async () => {
     const { mocks } = createMockClient();
     const showToast = mock(async () => ({}));
-    const manager = new ForegroundFallbackManager(
+    const manager = timedManager(
       makeChains(),
       true,
       {
@@ -1216,7 +1266,7 @@ describe('foreground fallback redo harness', () => {
         message: 'AI_APICallError: Gone',
       }),
     );
-    jest.advanceTimersByTime(100);
+    await clock.advance(100);
     for (let i = 0; i < 10; i++) await Promise.resolve();
 
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
@@ -1238,7 +1288,7 @@ describe('foreground fallback redo harness', () => {
     );
 
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(jest.getTimerCount()).toBe(0);
+    expect(clock.pending()).toBe(0);
   });
 
   test('initial retry delay is used once per descent before normal retry backoff', async () => {
@@ -1250,17 +1300,17 @@ describe('foreground fallback redo harness', () => {
     manager.registerSessionAgent(sessionID, 'orchestrator');
     await manager.handleEvent(redoEvents.assistant(sessionID));
     await manager.handleEvent(redoEvents.error(sessionID));
-    jest.advanceTimersByTime(1_000);
+    await clock.advance(1_000);
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
 
     const secondFailure = manager.handleEvent(
       redoEvents.assistant(sessionID, 'b', { message: 'rate limit' }),
     );
-    jest.advanceTimersByTime(99);
+    await clock.advance(99);
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    jest.advanceTimersByTime(1);
+    await clock.advance(1);
     for (let i = 0; i < 10; i++) await Promise.resolve();
     await secondFailure;
 
@@ -1313,7 +1363,7 @@ describe('foreground fallback redo harness', () => {
         return admission.promise;
       },
     });
-    const manager = new ForegroundFallbackManager(
+    const manager = timedManager(
       { orchestrator: ['test/a', 'test/b'] },
       true,
       { directory: '/test' } as never,
@@ -1349,7 +1399,7 @@ describe('foreground fallback redo harness', () => {
     > = {
       orchestrator: ['test/a', 'test/old'],
     };
-    const manager = new ForegroundFallbackManager(
+    const manager = timedManager(
       chains,
       true,
       { directory: '/test' } as never,
@@ -1472,7 +1522,7 @@ describe('foreground fallback redo harness', () => {
       redoEvents.assistant('backoff-race', 'b', { message: 'rate limit' }),
     );
     await manager.handleEvent(redoEvents.user('backoff-race', 'new-turn'));
-    jest.advanceTimersByTime(500);
+    await clock.advance(500);
     await Promise.resolve();
     await Promise.resolve();
     await pending;
@@ -1482,17 +1532,11 @@ describe('foreground fallback redo harness', () => {
 });
 
 describe('foreground fallback redo: host retry budget', () => {
-  beforeEach(() => {
-    jest.useFakeTimers();
-    jest.setSystemTime(1_000_000);
-  });
-  afterEach(() => jest.useRealTimers());
-
   test('identical retry attempts are deduplicated before charging the budget', async () => {
     const { manager, mocks } = makeManager({ maxRetries: 1 });
     manager.registerSessionAgent('retry-attempt-dedup', 'orchestrator');
     await manager.handleEvent(redoEvents.assistant('retry-attempt-dedup'));
-    const next = Date.now() + 30 * 60_000;
+    const next = clock.now() + 30 * 60_000;
     await manager.handleEvent(redoEvents.retry('retry-attempt-dedup', 1, next));
     await manager.handleEvent(redoEvents.retry('retry-attempt-dedup', 1, next));
 
@@ -1512,7 +1556,7 @@ describe('foreground fallback redo: host retry budget', () => {
     const retry = redoEvents.retry(
       sid,
       1,
-      Date.now() + (23 * 60 + 55) * 60_000,
+      clock.now() + (23 * 60 + 55) * 60_000,
     );
     retry.properties.status.message =
       "This request would exceed your account's rate limit. Please try again later.";
@@ -1558,17 +1602,17 @@ describe('foreground fallback redo: host retry budget', () => {
     manager.registerSessionAgent(sid, 'orchestrator');
     await manager.handleEvent(redoEvents.assistant(sid));
     await manager.handleEvent(redoEvents.retry(sid));
-    jest.advanceTimersByTime(600);
+    await clock.advance(600);
     await manager.handleEvent(redoEvents.retry(sid, 2));
     expect(mocks.abort).not.toHaveBeenCalled();
-    jest.advanceTimersByTime(400);
+    await clock.advance(400);
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(mocks.abort).toHaveBeenCalledTimes(1);
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
     expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
       body: { model: { providerID: 'test', modelID: 'b' } },
     });
-    jest.advanceTimersByTime(600);
+    await clock.advance(600);
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(mocks.abort).toHaveBeenCalledTimes(1);
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
@@ -1583,9 +1627,9 @@ describe('foreground fallback redo: host retry budget', () => {
     manager.registerSessionAgent(sid, 'orchestrator');
     await manager.handleEvent(redoEvents.assistant(sid));
     await manager.handleEvent(redoEvents.retry(sid));
-    jest.advanceTimersByTime(300);
+    await clock.advance(300);
     await manager.handleEvent(redoEvents.error(sid));
-    jest.advanceTimersByTime(700);
+    await clock.advance(700);
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(mocks.abort).not.toHaveBeenCalled();
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
@@ -1610,7 +1654,7 @@ describe('foreground fallback redo: host retry budget', () => {
       type: 'message.updated',
       properties: { info: { ...info, agent: 'orchestrator' } },
     });
-    jest.advanceTimersByTime(1_000);
+    await clock.advance(1_000);
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(mocks.abort).not.toHaveBeenCalled();
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
@@ -1646,7 +1690,7 @@ describe('foreground fallback redo: host retry budget', () => {
     expect(manager.isFallbackInProgress(sid)).toBe(true);
     await manager.handleEvent(redoEvents.user(sid, 'new-user'));
     expect(manager.isFallbackInProgress(sid)).toBe(false);
-    jest.advanceTimersByTime(1_000);
+    await clock.advance(1_000);
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
@@ -1660,13 +1704,13 @@ describe('foreground fallback redo: host retry budget', () => {
     manager.registerSessionAgent(sid, 'orchestrator');
     await manager.handleEvent(redoEvents.assistant(sid));
     await manager.handleEvent(redoEvents.error(sid));
-    jest.advanceTimersByTime(300);
+    await clock.advance(300);
     await manager.handleEvent(redoEvents.retry(sid, 1));
-    jest.advanceTimersByTime(700);
+    await clock.advance(700);
     expect(mocks.abort).not.toHaveBeenCalled();
     expect(mocks.promptAsync).not.toHaveBeenCalled();
     await manager.handleEvent(redoEvents.retry(sid, 2));
-    jest.advanceTimersByTime(1_000);
+    await clock.advance(1_000);
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(mocks.abort).toHaveBeenCalledTimes(1);
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
@@ -1685,7 +1729,7 @@ describe('foreground fallback redo: host retry budget', () => {
     await manager.handleEvent(redoEvents.assistant(sid));
     await manager.handleEvent(redoEvents.error(sid));
     await manager.handleEvent(redoEvents.retry(sid));
-    jest.advanceTimersByTime(1_000);
+    await clock.advance(1_000);
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(mocks.abort).toHaveBeenCalledTimes(1);
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
@@ -1788,12 +1832,12 @@ describe('foreground fallback redo: host retry budget', () => {
     manager.registerSessionAgent(sid, 'orchestrator');
     await manager.handleEvent(redoEvents.assistant(sid, 'b'));
     await manager.handleEvent(redoEvents.error(sid));
-    jest.setSystemTime(1_006_000);
+    clock.set(1_006_000);
     await manager.handleEvent(redoEvents.error(sid));
     expect(mocks.abort).toHaveBeenCalledTimes(2);
     expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
 
-    jest.setSystemTime(1_012_000);
+    clock.set(1_012_000);
     manager.registerSessionAgent(sid, 'orchestrator');
     await manager.handleEvent(redoEvents.assistant(sid));
     await manager.handleEvent(redoEvents.retry(sid, 1));
@@ -1814,7 +1858,7 @@ describe('foreground fallback redo: host retry budget', () => {
       await manager.handleEvent(redoEvents.retry(sid, attempt));
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
 
-    jest.setSystemTime(1_006_000);
+    clock.set(1_006_000);
     await manager.handleEvent(redoEvents.success(sid, 'b'));
     for (let attempt = 1; attempt <= 2; attempt++) {
       await manager.handleEvent(redoEvents.retry(sid, attempt));
@@ -1839,9 +1883,9 @@ describe('foreground fallback redo: host retry budget', () => {
     await manager.handleEvent(redoEvents.error(sid));
     manager.registerSessionAgent(sid, 'orchestrator');
     await manager.handleEvent(redoEvents.assistant(sid, 'b'));
-    jest.setSystemTime(1_006_000);
+    clock.set(1_006_000);
     await manager.handleEvent(redoEvents.error(sid));
-    jest.setSystemTime(1_012_000);
+    clock.set(1_012_000);
     await manager.handleEvent(redoEvents.error(sid));
     expect(mocks.abort).toHaveBeenCalledTimes(1);
     expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
@@ -1849,7 +1893,7 @@ describe('foreground fallback redo: host retry budget', () => {
       'chain exhausted; tried: test/a, test/b.',
     );
 
-    jest.setSystemTime(1_018_000);
+    clock.set(1_018_000);
     manager.registerSessionAgent(sid, 'orchestrator');
     await manager.handleEvent(redoEvents.assistant(sid, 'b'));
     await manager.handleEvent(redoEvents.retry(sid));
@@ -1943,7 +1987,7 @@ describe('foreground fallback redo: host retry budget', () => {
   });
 
   test('v2 steering disabled leaves the retry hook inert', async () => {
-    const mgr = new ForegroundFallbackManager(
+    const mgr = timedManager(
       makeChains({ orchestrator: ['test/a', 'test/b', 'test/c'] }),
       false,
       { directory: '/test', hostFlavor: 'v2' } as never,
@@ -1972,7 +2016,7 @@ describe('foreground fallback redo: host retry budget', () => {
       },
     );
     try {
-      const mgr = new ForegroundFallbackManager(
+      const mgr = timedManager(
         makeChains({ orchestrator: ['test/a', 'test/b', 'test/c'] }),
         false,
         { directory: '/test', hostFlavor: 'v2' } as never,
@@ -2010,7 +2054,7 @@ describe('foreground fallback redo: host retry budget', () => {
   });
 
   test('v2 steering ignores the configured initial delay', async () => {
-    const mgr = new ForegroundFallbackManager(
+    const mgr = timedManager(
       makeChains({ orchestrator: ['test/a', 'test/b', 'test/c'] }),
       true,
       { directory: '/test', hostFlavor: 'v2' } as never,
@@ -2033,7 +2077,7 @@ describe('foreground fallback redo: host retry budget', () => {
   });
 
   test('v2 bookkeeping resets descent state without replay interventions', async () => {
-    const mgr = new ForegroundFallbackManager(
+    const mgr = timedManager(
       makeChains({ orchestrator: ['test/a', 'test/b', 'test/c'] }),
       false, // replay path off (v2)
       { directory: '/test', hostFlavor: 'v2' } as never,
@@ -2076,7 +2120,7 @@ describe('foreground fallback redo: host retry budget', () => {
   });
 
   test('willAttemptFallback follows the steering flag on v2', () => {
-    const steering = new ForegroundFallbackManager(
+    const steering = timedManager(
       makeChains({ orchestrator: ['test/a', 'test/b', 'test/c'] }),
       false,
       { directory: '/test', hostFlavor: 'v2' } as never,
@@ -2091,7 +2135,7 @@ describe('foreground fallback redo: host retry budget', () => {
       true,
     );
     expect(steering.willAttemptFallback('v2-wa')).toBe(true);
-    const inert = new ForegroundFallbackManager(
+    const inert = timedManager(
       makeChains({ orchestrator: ['test/a', 'test/b', 'test/c'] }),
       false,
       { directory: '/test', hostFlavor: 'v2' } as never,
@@ -2323,7 +2367,6 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
     { kind: 'reconciles B', advance: false, calls: ['test/B'] },
     { kind: 'does not roll C back to B', advance: true, calls: ['test/C'] },
   ])('late-landing switch $kind', async ({ advance, calls }) => {
-    jest.useFakeTimers();
     try {
       const observed: string[] = [];
       const mgr = retryMgr(
@@ -2337,7 +2380,7 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
         retryEvent(sid, 'A'),
         () => switchRequest,
       );
-      jest.advanceTimersByTime(2_500);
+      await clock.advance(2_500);
       await pending;
       expect(observed).toEqual([]);
       if (advance)
@@ -2347,7 +2390,7 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
       for (let i = 0; i < 10; i++) await Promise.resolve();
       expect(observed).toEqual(calls);
     } finally {
-      jest.useRealTimers();
+      // Per-test clock; nothing to reset.
     }
   });
 });
@@ -3038,12 +3081,6 @@ describe('isSpentQuotaError (issue #966)', () => {
 });
 
 describe('ForegroundFallbackManager spent allowance (issue #966)', () => {
-  beforeEach(() => {
-    jest.useFakeTimers();
-    jest.setSystemTime(1_000_000);
-  });
-  afterEach(() => jest.useRealTimers());
-
   const SPENT = {
     message: 'AI_APICallError: The usage limit has been reached',
   };
@@ -3114,7 +3151,7 @@ describe('ForegroundFallbackManager spent allowance (issue #966)', () => {
       properties: { sessionID: sid, info: { id: 'luna-msg' }, error: SPENT },
     });
     // A late observation of the handled incident, past the dedup window.
-    jest.advanceTimersByTime(6_000);
+    await clock.advance(6_000);
     await manager.handleEvent({
       type: 'session.error',
       properties: { sessionID: sid, info: { id: 'luna-msg' }, error: SPENT },
@@ -3166,7 +3203,7 @@ describe('ForegroundFallbackManager spent allowance (issue #966)', () => {
     // Uncorrelated errors: once p2 has emitted a message, a repeated
     // signature is p2's own failure, not p1's echo.
     mocks.promptAsync.mockClear();
-    jest.advanceTimersByTime(6_000);
+    await clock.advance(6_000);
     const seeded = 'spent-cascade-uncorrelated';
     manager.registerSessionAgent(seeded, 'orchestrator');
     await manager.handleEvent({
@@ -3217,12 +3254,7 @@ describe('ForegroundFallbackManager spent allowance (issue #966)', () => {
 
   test('a no-chain session never replays the same model on spent quota', async () => {
     const { mocks } = createMockClient();
-    const manager = new ForegroundFallbackManager(
-      {},
-      true,
-      { directory: '/test' } as never,
-      3,
-    );
+    const manager = timedManager({}, true, { directory: '/test' } as never, 3);
     const update = (sid: string, error: unknown) => ({
       type: 'message.updated',
       properties: {
@@ -3443,7 +3475,7 @@ describe('ForegroundFallbackManager spent allowance (issue #966)', () => {
     });
     const sid = 'spent-no-loop';
     for (let i = 0; i < 10; i++) {
-      jest.advanceTimersByTime(6_000);
+      await clock.advance(6_000);
       for (const model of ['openai/luna', 'ollama/glm']) {
         await manager.handleEvent(failed(sid, model, SPENT, `${model}-${i}`));
         await manager.handleEvent({
@@ -3485,11 +3517,11 @@ describe('ForegroundFallbackManager spent allowance (issue #966)', () => {
         },
       },
     });
-    jest.advanceTimersByTime(6_000);
+    await clock.advance(6_000);
     // Bun's advanceTimersByTime drops the pinned system time and Date.now()
     // jumps to the real clock, which would expire the 30-minute provider
     // marks. Re-pin the clock to the advanced fake time.
-    jest.setSystemTime(1_006_000);
+    clock.set(1_006_000);
     await manager.handleEvent(failed(sid, 'p2/c', SPENT, 'after-recovery'));
     // p1 is no longer exhausted, only down (activeFallback keeps abandoned
     // providers), so the bounded sticky retry may use p1 again instead of
@@ -3500,7 +3532,7 @@ describe('ForegroundFallbackManager spent allowance (issue #966)', () => {
   test('session delete clears the exhausted providers', () => {
     const coordinator = new SessionLifecycle(() => {});
     createMockClient();
-    const mgr = new ForegroundFallbackManager(
+    const mgr = timedManager(
       { orchestrator: ['p1/a', 'p2/b'] },
       true,
       { directory: '/test' } as any,
@@ -3556,15 +3588,15 @@ describe('ForegroundFallbackManager spent allowance (issue #966)', () => {
         message: 'rate limit, try again in 20s',
       }),
     );
-    expect(jest.getTimerCount()).toBe(1);
+    expect(clock.pending()).toBe(1);
     manager.registerSessionAgent(sid, 'orchestrator');
     await manager.handleEvent(
       redoEvents.assistant(sid, 'b', {
         message: 'Monthly usage limit reached. Resets in X days.',
       }),
     );
-    expect(jest.getTimerCount()).toBe(0);
-    jest.advanceTimersByTime(1_000);
+    expect(clock.pending()).toBe(0);
+    await clock.advance(1_000);
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
@@ -3581,8 +3613,8 @@ describe('ForegroundFallbackManager spent allowance (issue #966)', () => {
       }),
     );
     expect(mocks.promptAsync).not.toHaveBeenCalled();
-    expect(jest.getTimerCount()).toBe(1);
-    jest.advanceTimersByTime(1_000);
+    expect(clock.pending()).toBe(1);
+    await clock.advance(1_000);
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
@@ -4327,11 +4359,10 @@ describe('ForegroundFallbackManager session.error', () => {
   ];
 
   test('retry-path fallback admits without a notice', async () => {
-    jest.useFakeTimers();
     const { handoff } = handoffMock();
     const admit = spyOn(handoff, 'admit');
     ({ mocks } = createMockClient({ messagesData: taskPrompt }));
-    mgr = new ForegroundFallbackManager(
+    mgr = timedManager(
       { orchestrator: ['test/a', 'test/b', 'test/c'] },
       true,
       { directory: '/test' } as never,
@@ -4353,7 +4384,7 @@ describe('ForegroundFallbackManager session.error', () => {
     } finally {
       mgr.dispose();
       admit.mockRestore();
-      jest.useRealTimers();
+      // Per-test clock; nothing to reset.
     }
   });
 
@@ -5134,11 +5165,7 @@ describe('ForegroundFallbackManager message.updated', () => {
   });
 
   describe('unknown finish streak', () => {
-    beforeEach(() => {
-      jest.useFakeTimers();
-      jest.setSystemTime(1_015_000);
-    });
-    afterEach(() => jest.useRealTimers());
+    beforeEach(() => clock.set(1_015_000));
 
     const info = {
       id: 'msgUnknownFinish',
@@ -5239,7 +5266,7 @@ describe('ForegroundFallbackManager message.updated', () => {
           return {};
         },
       });
-      const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      const mgr = timedManager(makeChains(), true, {
         directory: '/test',
       } as never);
       await mgr.handleEvent(redoEvents.retry(info.sessionID));
@@ -5251,7 +5278,7 @@ describe('ForegroundFallbackManager message.updated', () => {
       expect(mocks.promptAsync).not.toHaveBeenCalled();
       expect((mgr as any).sessionRetries.get(info.sessionID)).toBe(1);
 
-      jest.setSystemTime(1_030_000);
+      clock.set(1_030_000);
       await update(mgr, mocks, 'msgUnknown2');
       mocks.message.mockImplementation(async () => ({
         error: { name: 'NotFoundError' },
@@ -5263,9 +5290,9 @@ describe('ForegroundFallbackManager message.updated', () => {
       expect(mocks.abort).not.toHaveBeenCalled();
       expect(mocks.promptAsync).not.toHaveBeenCalled();
 
-      jest.setSystemTime(1_045_000);
+      clock.set(1_045_000);
       await update(mgr, mocks, 'msgUnknown3');
-      jest.setSystemTime(1_060_000);
+      clock.set(1_060_000);
       await mgr.handleEvent({
         type: 'message.updated',
         properties: {
@@ -5302,7 +5329,7 @@ describe('ForegroundFallbackManager message.updated', () => {
 
     test('a tool-bearing message breaks the streak', async () => {
       const { mocks } = createMockClient();
-      const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      const mgr = timedManager(makeChains(), true, {
         directory: '/test',
       } as never);
 
@@ -5344,7 +5371,7 @@ describe('ForegroundFallbackManager message.updated', () => {
 
     test('completed or errored messages and new turns break the streak', async () => {
       const { mocks } = createMockClient();
-      const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      const mgr = timedManager(makeChains(), true, {
         directory: '/test',
       } as never);
 
@@ -7659,7 +7686,8 @@ describe('ForegroundFallbackManager deduplication', () => {
   // DEDUP_WINDOW_MS inclusivity (issue #1721): the isDeduped sweep expires
   // a recorded incident once DEDUP_WINDOW_MS elapses, inclusively, so the
   // boundary decides exactly at 5000ms. The clock is driven through
-  // setSystemTime so Date.now is exact. Not reached here: the id-less
+  // clock.set so Date.now is exact. Not
+  // reached here: the id-less
   // correlation guards and the hasSameTurnErrorIncident sweep (a message-id
   // match returns its incidentID before the window is read); those sites
   // need their own fixtures. The three rows kill the relational flips and
@@ -7669,10 +7697,10 @@ describe('ForegroundFallbackManager deduplication', () => {
     [5_000, 2],
     [5_001, 2],
   ])('delta %dms -> %d prompts', async (delta, prompts) => {
-    setSystemTime(new Date(1_000_000));
+    clock.set(1_000_000);
     try {
       const { mocks } = createMockClient();
-      const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      const mgr = timedManager(makeChains(), true, {
         directory: '/test',
       } as never);
       const sid = `dedup-edge-${delta}`;
@@ -7682,11 +7710,11 @@ describe('ForegroundFallbackManager deduplication', () => {
       // fingerprint or window is read), so only the time boundary decides.
       const err = redoEvents.error(sid, { message: 'rate limit exceeded' });
       await mgr.handleEvent(err);
-      setSystemTime(new Date(1_000_000 + delta));
+      clock.set(1_000_000 + delta);
       await mgr.handleEvent(err);
       expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
     } finally {
-      setSystemTime();
+      // Per-test clock; nothing to reset.
     }
   });
 
@@ -7834,6 +7862,7 @@ function expectStampSplit(mgr: unknown, sid: string): void {
 const makeBoundaryManager = (
   chains: ConstructorParameters<typeof ForegroundFallbackManager>[0],
   maxRetries = 3,
+  timers: ForegroundFallbackTimers = clock,
 ) =>
   new ForegroundFallbackManager(
     chains,
@@ -7844,6 +7873,11 @@ const makeBoundaryManager = (
     undefined,
     0,
     0,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    timers,
   );
 
 describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
@@ -7854,7 +7888,7 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
   ])(
     'incidentForMessageError correlates an id-less error at %dms -> %d prompts',
     async (delta, prompts) => {
-      setSystemTime(new Date(1_000_000));
+      clock.set(1_000_000);
       try {
         const { mocks } = createMockClient();
         const mgr = makeBoundaryManager(makeChains());
@@ -7867,14 +7901,14 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
         const first = mgr.handleEvent(
           redoEvents.assistant(sid, 'a', RATE_LIMIT),
         );
-        setSystemTime(new Date(1_001_000));
+        clock.set(1_001_000);
         await first;
         expectStampSplit(mgr, sid);
-        setSystemTime(new Date(1_000_000 + delta));
+        clock.set(1_000_000 + delta);
         await mgr.handleEvent(redoEvents.idlessAssistant(sid, 'a', RATE_LIMIT));
         expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
       } finally {
-        setSystemTime();
+        // Per-test clock; nothing to reset.
       }
     },
   );
@@ -7886,7 +7920,7 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
   ])(
     'incidentForSessionError correlates an id-less error at %dms -> %d prompts',
     async (delta, prompts) => {
-      setSystemTime(new Date(1_000_000));
+      clock.set(1_000_000);
       try {
         // The host session's agent has no fallback chain: the first error
         // replays on the same model, so sessionModel still matches the
@@ -7897,14 +7931,14 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
         await mgr.handleEvent(redoEvents.assistant(sid, 'a'));
         // Suspends on agent resolution (see the message-error case above).
         const first = mgr.handleEvent(redoEvents.idlessError(sid, RATE_LIMIT));
-        setSystemTime(new Date(1_001_000));
+        clock.set(1_001_000);
         await first;
         expectStampSplit(mgr, sid);
-        setSystemTime(new Date(1_000_000 + delta));
+        clock.set(1_000_000 + delta);
         await mgr.handleEvent(redoEvents.idlessError(sid, RATE_LIMIT));
         expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
       } finally {
-        setSystemTime();
+        // Per-test clock; nothing to reset.
       }
     },
   );
@@ -7916,7 +7950,7 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
   ])(
     'hasSameTurnErrorIncident consumes a no-chain retry at %dms -> %d prompts',
     async (delta, prompts) => {
-      setSystemTime(new Date(1_000_000));
+      clock.set(1_000_000);
       try {
         const { mocks } = createMockClient({ getData: { agent: 'unlisted' } });
         const mgr = makeBoundaryManager(makeChains());
@@ -7933,11 +7967,11 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
             message: 'Payment Required',
           }),
         );
-        setSystemTime(new Date(1_000_000 + delta));
+        clock.set(1_000_000 + delta);
         await mgr.handleEvent(redoEvents.retry(sid));
         expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
       } finally {
-        setSystemTime();
+        // Per-test clock; nothing to reset.
       }
     },
   );
@@ -7949,7 +7983,7 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
   ])(
     'stale attempt 2 retry is skipped at %dms -> %d prompts',
     async (delta, prompts) => {
-      setSystemTime(new Date(1_000_000));
+      clock.set(1_000_000);
       try {
         const { mocks } = createMockClient();
         const mgr = makeBoundaryManager(
@@ -7963,11 +7997,11 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
         // The replacement speaks: sessionModel names test/b while
         // lastTriggerModel still names the failed test/a.
         await mgr.handleEvent(redoEvents.assistant(sid, 'b'));
-        setSystemTime(new Date(1_000_000 + delta));
+        clock.set(1_000_000 + delta);
         await mgr.handleEvent(redoEvents.retry(sid, 2));
         expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
       } finally {
-        setSystemTime();
+        // Per-test clock; nothing to reset.
       }
     },
   );
@@ -7979,7 +8013,7 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
   ])(
     'recentlyHandledMessage keeps the replacement model at %dms (next fallback -> %s)',
     async (delta, target) => {
-      setSystemTime(new Date(1_000_000));
+      clock.set(1_000_000);
       try {
         const { mocks } = createMockClient();
         const mgr = makeBoundaryManager({
@@ -7995,7 +8029,7 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
         await mgr.handleEvent(
           redoEvents.assistant(sid, 'b', undefined, 'replacement'),
         );
-        setSystemTime(new Date(1_000_000 + delta));
+        clock.set(1_000_000 + delta);
         // A late re-emit of the failed message carries its own model again.
         // Inside the window it is inert; expired it re-seeds sessionModel to
         // test/a, and the next descent returns to the configured head.
@@ -8014,7 +8048,7 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
           modelID: target,
         });
       } finally {
-        setSystemTime();
+        // Per-test clock; nothing to reset.
       }
     },
   );
@@ -8026,7 +8060,7 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
   ])(
     'triggeringModel attributes a spent echo at %dms to %j',
     async (delta, providers) => {
-      setSystemTime(new Date(1_000_000));
+      clock.set(1_000_000);
       try {
         const { mocks } = createMockClient();
         const mgr = makeBoundaryManager({ orchestrator: ['p1/a', 'p2/b'] });
@@ -8045,7 +8079,7 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
         });
         // Spent quota on p1: records the switch trigger and switches to p2.
         await mgr.handleEvent(redoEvents.idlessError(sid, SPENT_QUOTA));
-        setSystemTime(new Date(1_000_000 + delta));
+        clock.set(1_000_000 + delta);
         // A retry echo carries no message id, so surfacesSpentQuota asks
         // triggeringModel which model the error belongs to.
         await mgr.handleEvent({
@@ -8063,7 +8097,7 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
         ).toEqual(providers);
         expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
       } finally {
-        setSystemTime();
+        // Per-test clock; nothing to reset.
       }
     },
   );
@@ -9551,10 +9585,9 @@ describe('ForegroundFallbackManager dispose', () => {
     // test files could poll the shared getClient mock during that window,
     // polluting the call-count assertions below (the full-suite flake;
     // the test always passed in isolation).
-    jest.useFakeTimers();
     try {
       const { mocks } = createMockClient();
-      const mgr = new ForegroundFallbackManager(
+      const mgr = timedManager(
         { orchestrator: ['openai/gpt-b', 'openai/gpt-c'] },
         true,
         { directory: '/test' } as any,
@@ -9581,7 +9614,7 @@ describe('ForegroundFallbackManager dispose', () => {
       // execFallback. Advance the faked clock (moves the mocked
       // Date.now() past the dedup window without firing any timer),
       // then run the trigger synchronously into the faked backoff sleep.
-      jest.setSystemTime(Date.now() + 6_000);
+      clock.set(clock.now() + 6_000);
       const pending = mgr.handleEvent({
         type: 'session.error',
         properties: {
@@ -9594,7 +9627,7 @@ describe('ForegroundFallbackManager dispose', () => {
       // the computed delay is retryDelayMs 6_500 − 6_000 elapsed =
       // 500ms; advance past it so the sleep settles synchronously.
       mgr.dispose();
-      jest.advanceTimersByTime(1_000);
+      await clock.advance(1_000);
       await pending;
 
       expect(mocks.messages).toHaveBeenCalledTimes(1); // no second read
@@ -9602,7 +9635,7 @@ describe('ForegroundFallbackManager dispose', () => {
       expect(mocks.abort).not.toHaveBeenCalled();
       expect(mgr.isFallbackInProgress('sess-backoff-dispose')).toBe(false);
     } finally {
-      jest.useRealTimers();
+      // Per-test clock; nothing to reset.
     }
   });
 });
@@ -9779,21 +9812,18 @@ describe('ForegroundFallbackManager same-model retry hardening', () => {
   });
 
   describe('with fake timers', () => {
-    beforeEach(() => jest.useFakeTimers());
-    afterEach(() => jest.useRealTimers());
-
     test('a replay send timeout keeps its charge', async () => {
       const { client } = createMockClient({
         promptAsyncImpl: () => new Promise(() => {}),
       });
-      const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      const mgr = timedManager(makeChains(), true, {
         client,
         directory: '/test',
       } as any);
       await seed(mgr, 'slow-nc');
       const pending = mgr.handleEvent(streamError('slow-nc', 'e1'));
       await flush();
-      jest.advanceTimersByTime(10_000);
+      await clock.advance(10_000);
       await pending;
       expect((mgr as any).sessionRetries.get('slow-nc')).toBe(1);
       expect(mgr.isFallbackInProgress('slow-nc')).toBe(false);
@@ -9803,17 +9833,17 @@ describe('ForegroundFallbackManager same-model retry hardening', () => {
       const { client, mocks } = createMockClient({
         messagesImpl: () => new Promise(() => {}),
       });
-      const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      const mgr = timedManager(makeChains(), true, {
         client,
         directory: '/test',
       } as any);
       await seed(mgr, 'hung-nc');
       const pending = mgr.handleEvent(streamError('hung-nc', 'e1'));
       await flush();
-      jest.advanceTimersByTime(2_000);
+      await clock.advance(2_000);
       await flush();
       expect(mgr.isFallbackInProgress('hung-nc')).toBe(true);
-      jest.advanceTimersByTime(2_000);
+      await clock.advance(2_000);
       await pending;
       expect(mocks.promptAsync).not.toHaveBeenCalled();
       expect(mgr.isFallbackInProgress('hung-nc')).toBe(false);
@@ -9830,7 +9860,7 @@ describe('ForegroundFallbackManager same-model retry hardening', () => {
         }),
       });
       mocks.message.mockImplementation(() => read.promise as never);
-      const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      const mgr = timedManager(makeChains(), true, {
         client,
         directory: '/test',
       } as any);
@@ -9838,7 +9868,7 @@ describe('ForegroundFallbackManager same-model retry hardening', () => {
       const pending = mgr.handleEvent(streamError('deep-nc', 'e1'));
       await flush();
       expect(mocks.message).toHaveBeenCalledTimes(1);
-      jest.advanceTimersByTime(2_000);
+      await clock.advance(2_000);
       await flush();
       read.resolve({
         data: {
