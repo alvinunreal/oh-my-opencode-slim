@@ -280,12 +280,6 @@ function isTransientGatewayError(
   );
 }
 
-/** True when a promptAsync rejection proves the session is busy (the only
- *  rejection that justifies aborting and re-sending the replay). */
-function isBusyRefusalError(error: unknown): boolean {
-  return /\bbusy\b/i.test(stringifyError(error));
-}
-
 const CONTENT_FILTER_ERROR = {
   name: 'ContentFilterError',
   message: "The response was blocked by the provider's content filter",
@@ -527,7 +521,6 @@ export function isInlineFailoverError(error: unknown): boolean {
 
 /** Used only to reject stale retry events from the previous model episode. */
 const DEDUP_WINDOW_MS = 5_000;
-const REPROMPT_DELAY_MS = 500;
 /** Longer host backoffs should use the configured model chain instead. */
 const MAX_HOST_RETRY_DELAY_MS = 30 * 60_000;
 const PROVIDER_MARK_TTL_MS = 30 * 60_000;
@@ -563,10 +556,6 @@ async function readForReplay<T>(
 /** Trailer marking a same-model replay; identical at every call site so the
  *  replay is recognizable as an internal retry, never a user turn. */
 const SAME_MODEL_RETRY_TRAILER = 'Same-model retry after transient error.';
-/** Prompt admissions per same-model replay: the initial send plus a single
- *  busy-path re-send after abort. */
-const SAME_MODEL_REPLAY_ATTEMPTS = 2;
-
 // Shaped like a v1 host id: v2's Session.Message.ID (and its import of
 // v1 rows) requires msg_, and v1 orders ids by this 48-bit ms clock;
 // counter 0 sorts before a host reply minted in the same millisecond.
@@ -2371,89 +2360,17 @@ export class ForegroundFallbackManager {
       );
     };
 
-    // Bounded admissions (SAME_MODEL_REPLAY_ATTEMPTS): the initial send
-    // plus a single busy-path re-send after abort.
     let promptResult: unknown;
-    let delivered = false;
-    for (
-      let sendAttempt = 1;
-      sendAttempt <= SAME_MODEL_REPLAY_ATTEMPTS;
-      sendAttempt++
-    ) {
-      try {
-        promptResult = await sendReplayPrompt();
-        delivered = true;
-        break;
-      } catch (promptErr) {
-        const lastChance = sendAttempt >= SAME_MODEL_REPLAY_ATTEMPTS;
-        if (promptErr instanceof OperationTimeoutError) {
-          // A send timeout cannot prove busyness: never abort or duplicate
-          // the replay (matches the chain replay path).
-          // Delivery is unknown (the host may still admit it), so the
-          // charge stands; only a confirmed rejection refunds.
-          log('[foreground-fallback] same-model replay send timed out', {
-            sessionID,
-            error: stringifyError(promptErr),
-          });
-          return false;
-        }
-        if (lastChance || isV2Host || !isBusyRefusalError(promptErr)) {
-          // Exhausted admissions, an unproven-busy rejection, or a v2
-          // host: a rejected v2 replay is final, and only a proven busy
-          // refusal justifies aborting and re-sending. Log and stop;
-          // never let the re-send escape through try/finally-only
-          // callers.
-          log('[foreground-fallback] same-model re-prompt failed', {
-            sessionID,
-            error: stringifyError(promptErr),
-          });
-          if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
-          return false;
-        }
-        if (!this.isCurrentTurn(sessionID, opts.epoch)) {
-          if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
-          return false;
-        }
-        if (this.withholdsAbortForLiveChildren(sessionID)) {
-          if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
-          return false;
-        }
-        log('[foreground-fallback] promptAsync on busy session, aborting', {
-          sessionID,
-          error: stringifyError(promptErr),
-        });
-        await this.promoteForegroundWaiter(sessionID);
-        if (!this.isCurrentTurn(sessionID, opts.epoch)) {
-          if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
-          return false;
-        }
-        if (this.withholdsAbortForLiveChildren(sessionID)) {
-          if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
-          return false;
-        }
-        try {
-          await abortSessionWithTimeout(getClient(this.input), sessionID);
-        } catch (err) {
-          log('[foreground-fallback] busy re-send abort failed', {
-            sessionID,
-            error: stringifyError(err),
-          });
-          if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
-          return false;
-        }
-        if (!this.isCurrentTurn(sessionID, opts.epoch)) {
-          if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
-          return false;
-        }
-        await new Promise((r) => setTimeout(r, REPROMPT_DELAY_MS));
-        if (!this.isCurrentTurn(sessionID, opts.epoch)) {
-          if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
-          return false;
-        }
-        promptBody.body.messageID = createReplayMessageID();
-      }
+    try {
+      promptResult = await sendReplayPrompt();
+    } catch (promptErr) {
+      // A transport failure cannot prove the host refused the replay.
+      log('[foreground-fallback] same-model re-prompt failed', {
+        sessionID,
+        error: stringifyError(promptErr),
+      });
+      return false;
     }
-    if (!delivered) return false;
 
     // SDK envelopes can resolve (not reject) with `{ error }` — an
     // unadmitted replay is a failure, not a silent success.
@@ -3041,8 +2958,7 @@ export class ForegroundFallbackManager {
       const selection = this.selectFallbackModel(sessionID, error);
       if (!selection) return;
       if (selection === 'exhausted') {
-        // Same withhold as the retry and busy paths: the merged chain
-        // selection collapses both exhaustion aborts into this one point.
+        // Withhold the exhaustion abort while background children are live.
         if (this.withholdsAbortForLiveChildren(sessionID)) return;
         if (!this.isCurrentTurn(sessionID, expectedEpoch)) return;
         await abortSessionWithTimeout(getClient(this.input), sessionID);
@@ -3228,86 +3144,13 @@ export class ForegroundFallbackManager {
       try {
         promptResult = await sendReplayPrompt();
       } catch (promptErr) {
-        if (promptErr instanceof OperationTimeoutError) {
-          // A timeout cannot prove refusal; never abort or duplicate the replay.
+        if (isV2Host && !(promptErr instanceof OperationTimeoutError)) {
+          withdrawHandoff();
+        } else {
+          // A transport failure cannot prove the host refused the replay.
           settleUnresolvedHandoff();
-          throw promptErr;
         }
-        if (!this.isCurrentTurn(sessionID, expectedEpoch)) {
-          withdrawHandoff();
-          return;
-        }
-        if (isV2Host) {
-          // v2 steer delivery does not reject with BusyError: any rejected
-          // replay is final, not a signal to retry. An abort cannot make
-          // the admission succeed and may kill a promoted background job.
-          // Preserve the cause rather than misreporting it as busy.
-          withdrawHandoff();
-          throw promptErr;
-        }
-        if (this.withholdsAbortForLiveChildren(sessionID)) {
-          // Explicit busy refusal with no abort attempted: nothing was
-          // admitted, so release ownership (reject) like the v2 branch
-          // above instead of converting into a tracked run.
-          withdrawHandoff();
-          throw promptErr;
-        }
-        log('[foreground-fallback] promptAsync on busy session, aborting', {
-          sessionID,
-          error: stringifyError(promptErr),
-        });
-        await this.promoteForegroundWaiter(sessionID);
-        if (!this.isCurrentTurn(sessionID, expectedEpoch)) {
-          withdrawHandoff();
-          return;
-        }
-        if (this.withholdsAbortForLiveChildren(sessionID)) {
-          // Explicit busy refusal with no abort attempted: nothing was
-          // admitted, so release ownership (reject) like the v2 branch
-          // above instead of converting into a tracked run.
-          withdrawHandoff();
-          throw promptErr;
-        }
-        try {
-          if (!this.isCurrentTurn(sessionID, expectedEpoch)) {
-            withdrawHandoff();
-            return;
-          }
-          await abortSessionWithTimeout(getClient(this.input), sessionID);
-        } catch (abortErr) {
-          // Unknown outcome: the abort transport failed — the admission
-          // state cannot be proven either way, so the prepared ownership
-          // CONVERTS into a tracked run instead of being dropped.
-          settleUnresolvedHandoff();
-          throw abortErr;
-        }
-        if (!this.isCurrentTurn(sessionID, expectedEpoch)) {
-          withdrawHandoff();
-          return;
-        }
-        await new Promise((r) => setTimeout(r, REPROMPT_DELAY_MS));
-        // Recheck after the abort/backoff: a cancelled or superseded child
-        // admits no second replay, so withdraw its prepared handoff.
-        if (
-          !this.isCurrentTurn(sessionID, expectedEpoch) ||
-          (handoffArmed &&
-            !this.backgroundFallbackHandoff?.isEligible(
-              sessionID,
-              preparedGeneration,
-            ))
-        ) {
-          withdrawHandoff();
-          return;
-        }
-        try {
-          promptBody.body.messageID = createReplayMessageID();
-          promptResult = await sendReplayPrompt();
-        } catch (retryErr) {
-          // Transport failed without a response: the host may still
-          // have accepted the replay — convert, never drop.
-          settleUnresolvedHandoff();
-          throw retryErr;
-        }
+        throw promptErr;
       }
 
       if (!this.isCurrentTurn(sessionID, expectedEpoch)) {

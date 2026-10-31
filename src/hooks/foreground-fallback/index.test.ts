@@ -1413,32 +1413,6 @@ describe('foreground fallback redo harness', () => {
     expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
 
-  test('a newer turn during busy promotion fences the busy abort and retry', async () => {
-    const promotion = deferred<unknown>();
-    const { manager, mocks } = makeManager({
-      maxRetries: 0,
-    });
-    mocks.promptAsync.mockImplementationOnce(async () => {
-      throw new Error('session busy');
-    });
-    currentMockPost = mock(() => promotion.promise);
-    await manager.handleEvent({
-      type: 'session.created',
-      properties: { info: { id: 'busy-race', parentID: 'parent' } },
-    });
-    manager.registerSessionAgent('busy-race', 'orchestrator');
-    const pending = manager.handleEvent(redoEvents.error('busy-race'));
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-    await manager.handleEvent(redoEvents.user('busy-race', 'new-turn'));
-    promotion.resolve({});
-    await pending;
-
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(mocks.abort).not.toHaveBeenCalled();
-  });
-
   test('a newer turn during fallback backoff fences the delayed replay', async () => {
     const { manager, mocks } = makeManager({ retryDelayMs: 500 });
     manager.registerSessionAgent('backoff-race', 'orchestrator');
@@ -4137,7 +4111,6 @@ describe('ForegroundFallbackManager session.error', () => {
     return {
       calls,
       handoff: {
-        isEligible: () => true,
         prepare: (
           sessionID: string,
           generation: number | undefined,
@@ -4315,12 +4288,12 @@ describe('ForegroundFallbackManager session.error', () => {
     expect(calls.reject).toHaveLength(1);
   });
 
-  test('converts the handoff to a owner when every promptAsync attempt rejects', async () => {
+  test('transport failure keeps unresolved handoff without aborting or resending', async () => {
     // A transport failure without a response does NOT prove the host
     // refused — the replay may have been accepted. The prepared
     // ownership converts into a tracked run instead of being dropped.
     const { calls, handoff } = handoffMock();
-    await runFallbackScenario({
+    const mocks = await runFallbackScenario({
       handoff,
       messagesData: taskPrompt,
       promptAsyncImpl: async () => {
@@ -4335,6 +4308,9 @@ describe('ForegroundFallbackManager session.error', () => {
     expect(calls.admit).toEqual([]);
     expect(calls.reject).toEqual([]);
     expect(calls.settleUnresolved).toHaveLength(1);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mocks.post).not.toHaveBeenCalled();
   });
 
   test('switched:false still delivers — the handoff is admitted without the switch claim', async () => {
@@ -4370,7 +4346,6 @@ describe('ForegroundFallbackManager session.error', () => {
     const mocks = await runFallbackScenario({
       messagesData: taskPrompt,
       handoff: {
-        isEligible: () => false,
         prepare: (
           sessionID: string,
           generation: number | undefined,
@@ -4498,32 +4473,6 @@ describe('ForegroundFallbackManager session.error', () => {
 
     expect(mocks.abort).not.toHaveBeenCalled();
     expect(mocks.promptAsync).not.toHaveBeenCalled();
-  });
-
-  test('falls back to abort+retry when promptAsync fails on busy session', async () => {
-    const { mocks } = createMockClient({
-      promptAsyncImpl: async () => {
-        throw new Error('session busy');
-      },
-      abortImpl: async () => {
-        // abort succeeds on first call
-      },
-    });
-    const mgr = new ForegroundFallbackManager(makeChains(), true, {
-      directory: '/test',
-    } as any);
-
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 'sess-busy',
-        error: { message: 'Rate limit exceeded' },
-      },
-    });
-
-    // First promptAsync attempt failed → abort called, then promptAsync retried
-    expect(mocks.abort).toHaveBeenCalledTimes(1);
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
   });
 
   test('promptAsync is invoked bound: a this-reading implementation must not throw', async () => {
@@ -5529,42 +5478,6 @@ describe('ForegroundFallbackManager v1 abort protection for live children', () =
     }
   });
 
-  test('T5: busy replay withdraws armed handoff without promoting, aborting or retrying', async () => {
-    const { mocks } = createMockClient({
-      promptAsyncImpl: async () => {
-        throw new Error('session busy');
-      },
-    });
-    const prepare = mock(() => true);
-    const reject = mock(() => {});
-    const settleUnresolved = mock(() => {});
-    const mgr = manager(
-      undefined,
-      makeChains(),
-      {
-        isEligible: () => true,
-        prepare,
-        admit: mock(() => {}),
-        reject,
-        settleUnresolved,
-      },
-      () => 1,
-    );
-    live.add('sess-child');
-    await mgr.handleEvent({
-      type: 'session.created',
-      properties: { info: { id: 'sess-child', parentID: 'sess-parent' } },
-    });
-    await seed(mgr, 'sess-child');
-    await mgr.handleEvent(error('sess-child'));
-    expect(prepare).toHaveBeenCalledTimes(1);
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(mocks.post).toHaveBeenCalledTimes(0);
-    expect(mocks.abort).toHaveBeenCalledTimes(0);
-    expect(reject).toHaveBeenCalledTimes(1);
-    expect(settleUnresolved).toHaveBeenCalledTimes(0);
-  });
-
   test('T6: a background job for the failing child is not a child of that session', async () => {
     const { mocks } = createMockClient();
     const mgr = manager();
@@ -5609,43 +5522,6 @@ describe('ForegroundFallbackManager v1 abort protection for live children', () =
     expect(mocks.abort).toHaveBeenCalledTimes(0);
     expect(mocks.promptAsync).toHaveBeenCalledTimes(0);
     expect(mgr.isFallbackInProgress('sess-child')).toBe(false);
-  });
-
-  test('T9: children appearing during busy promotion withdraw the armed handoff without abort', async () => {
-    const { mocks } = createMockClient({
-      postImpl: async () => {
-        live.add('sess-child');
-        return {};
-      },
-      promptAsyncImpl: async () => {
-        throw new Error('session busy');
-      },
-    });
-    const reject = mock(() => {});
-    const settleUnresolved = mock(() => {});
-    const mgr = manager(
-      undefined,
-      makeChains(),
-      {
-        isEligible: () => true,
-        prepare: mock(() => true),
-        admit: mock(() => {}),
-        reject,
-        settleUnresolved,
-      },
-      () => 1,
-    );
-    await mgr.handleEvent({
-      type: 'session.created',
-      properties: { info: { id: 'sess-child', parentID: 'sess-parent' } },
-    });
-    await seed(mgr, 'sess-child');
-    await mgr.handleEvent(error('sess-child'));
-    expect(mocks.post).toHaveBeenCalledTimes(1);
-    expect(mocks.abort).toHaveBeenCalledTimes(0);
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(reject).toHaveBeenCalledTimes(1);
-    expect(settleUnresolved).toHaveBeenCalledTimes(0);
   });
 });
 
@@ -5877,61 +5753,6 @@ describe('ForegroundFallbackManager session.status', () => {
       }
     },
   );
-
-  test('promotes the waiter before the busy-session abort in execFallback too', async () => {
-    const calls: string[] = [];
-    const postArgs: unknown[] = [];
-    const { mocks } = createMockClient({
-      promptAsyncImpl: async () => {
-        calls.push('promptAsync');
-        throw new Error('session busy');
-      },
-      abortImpl: async () => {
-        calls.push('abort');
-      },
-      postImpl: async (args) => {
-        postArgs.push(args);
-        calls.push('promote');
-        return true;
-      },
-    });
-    const mgr = new ForegroundFallbackManager(
-      makeChains(),
-      true,
-      { directory: '/test' } as any,
-      3,
-    );
-
-    await mgr.handleEvent({
-      type: 'session.created',
-      properties: {
-        info: {
-          id: 'sess-busy-promoted',
-          parentID: 'sess-busy-promoted-parent',
-        },
-      },
-    });
-
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 'sess-busy-promoted',
-        error: { message: 'Rate limit exceeded' },
-      },
-    });
-
-    // Same ordering contract as tryFallbackWithAbort, exercised through
-    // the promptAsync-busy abort inside execFallback: the promotion must
-    // land between the first (busy) attempt and the abort.
-    expect(calls[0]).toBe('promptAsync');
-    expect(calls[1]).toBe('promote');
-    expect(calls[2]).toBe('abort');
-    expect(postArgs[0]).toMatchObject({
-      url: '/experimental/session/{sessionID}/background',
-      path: { sessionID: 'sess-busy-promoted-parent' },
-    });
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
-  });
 
   test('v2 without post reports promotion unavailable without network calls', async () => {
     const calls: string[] = [];
@@ -8756,26 +8577,6 @@ describe('ForegroundFallbackManager no-chain sessions', () => {
 
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
     expect(mocks.abort).not.toHaveBeenCalled();
-  });
-
-  test('proven-busy refusal aborts once and re-sends', async () => {
-    let calls = 0;
-    const { mocks } = createMockClient({
-      promptAsyncImpl: async () => {
-        calls++;
-        if (calls === 1) throw new Error('session busy');
-        return {};
-      },
-    });
-    const mgr = new ForegroundFallbackManager(makeChains(), true, {
-      directory: '/test',
-    } as any);
-    await seedNoChain(mgr, 'busy-nc');
-
-    await mgr.handleEvent(noChainError('busy-nc', 'e1'));
-
-    expect(mocks.abort).toHaveBeenCalledTimes(1);
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
   });
 
   test('F1: deterministic error before model known does not block later recovery', async () => {
