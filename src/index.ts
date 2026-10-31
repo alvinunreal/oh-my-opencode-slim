@@ -2964,9 +2964,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // message id in info.id and the session id in info.sessionID. Resolve
         // by session so child activity refreshes the correct stuck timer.
         const eventSessionID = resolveEventSessionID(event);
-        // cache-monitor is created only when its disabled_hooks entry is
-        // absent; the optional chain keeps the event path fail-open either way.
-        await cacheMonitor?.event(input);
         const rawStatus = event.properties?.status;
         const statusType =
           typeof rawStatus === 'string'
@@ -2977,6 +2974,63 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
                 typeof (rawStatus as { type?: unknown }).type === 'string'
               ? (rawStatus as { type: string }).type
               : undefined;
+        // Publish before any awaited consumer can admit a newer run.
+        const companionProperties = event.properties;
+        const companionData = (
+          input.event as { data?: Record<string, unknown> }
+        ).data;
+        const companionRequestId =
+          typeof companionProperties?.id === 'string'
+            ? companionProperties.id
+            : typeof companionProperties?.requestID === 'string'
+              ? companionProperties.requestID
+              : typeof companionData?.id === 'string'
+                ? companionData.id
+                : typeof companionData?.requestID === 'string'
+                  ? companionData.requestID
+                  : undefined;
+
+        if (
+          event.type === 'permission.asked' ||
+          event.type === 'question.asked'
+        ) {
+          companionManager?.onWaitingInput({
+            sessionId: eventSessionID,
+            kind: event.type === 'permission.asked' ? 'permission' : 'question',
+            requestId: companionRequestId,
+          });
+        }
+
+        if (
+          event.type === 'permission.replied' ||
+          event.type === 'question.replied' ||
+          event.type === 'question.rejected'
+        ) {
+          companionManager?.onInputResolved({
+            sessionId: eventSessionID,
+            kind:
+              event.type === 'permission.replied' ? 'permission' : 'question',
+            requestId: companionRequestId,
+          });
+        }
+
+        const companionStatus = normalizeCompanionSessionStatus(
+          event.type,
+          statusType,
+        );
+        if (eventSessionID && companionStatus) {
+          const job = backgroundJobBoard?.get(eventSessionID);
+          companionManager?.onSessionStatus({
+            sessionId: eventSessionID,
+            agent: sessionMetadata.getAgent(eventSessionID),
+            status: companionStatus,
+            jobFinished: job !== undefined && job.state !== 'running',
+          });
+        }
+
+        // cache-monitor is created only when its disabled_hooks entry is
+        // absent; the optional chain keeps the event path fail-open either way.
+        await cacheMonitor?.event(input);
         if (
           eventSessionID &&
           sessionMetadata.getAgent(eventSessionID) === 'orchestrator' &&
@@ -3181,59 +3235,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             event: { type: string; properties?: Record<string, unknown> };
           },
         );
-
-        const companionProperties = event.properties;
-        const companionData = (
-          input.event as { data?: Record<string, unknown> }
-        ).data;
-        const companionRequestId =
-          typeof companionProperties?.id === 'string'
-            ? companionProperties.id
-            : typeof companionProperties?.requestID === 'string'
-              ? companionProperties.requestID
-              : typeof companionData?.id === 'string'
-                ? companionData.id
-                : typeof companionData?.requestID === 'string'
-                  ? companionData.requestID
-                  : undefined;
-
-        if (
-          event.type === 'permission.asked' ||
-          event.type === 'question.asked'
-        ) {
-          companionManager?.onWaitingInput({
-            sessionId: eventSessionID,
-            kind: event.type === 'permission.asked' ? 'permission' : 'question',
-            requestId: companionRequestId,
-          });
-        }
-
-        if (
-          event.type === 'permission.replied' ||
-          event.type === 'question.replied' ||
-          event.type === 'question.rejected'
-        ) {
-          companionManager?.onInputResolved({
-            sessionId: eventSessionID,
-            kind:
-              event.type === 'permission.replied' ? 'permission' : 'question',
-            requestId: companionRequestId,
-          });
-        }
-
-        const companionStatus = normalizeCompanionSessionStatus(
-          event.type,
-          statusType,
-        );
-        if (eventSessionID && companionStatus) {
-          const job = backgroundJobBoard?.get(eventSessionID);
-          companionManager?.onSessionStatus({
-            sessionId: eventSessionID,
-            agent: sessionMetadata.getAgent(eventSessionID),
-            status: companionStatus,
-            jobFinished: job !== undefined && job.state !== 'running',
-          });
-        }
 
         if (input.event.type === 'session.deleted') {
           const props = input.event.properties as

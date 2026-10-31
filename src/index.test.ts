@@ -5124,6 +5124,81 @@ describe('plugin foreground fallback host gating', () => {
     await rm(projectDir, { recursive: true, force: true });
   });
 
+  test('companion preserves replay busy when an older error starts fallback', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: true, binaryPath: `${projectDir}/missing` },
+        fallback: { enabled: true, maxRetries: 0 },
+        agents: { orchestrator: { model: ['openai/gpt-b', 'openai/gpt-c'] } },
+      }),
+    );
+    const { client, messages, promptAsync } = createFallbackClient();
+    messages.mockResolvedValue({
+      data: [
+        {
+          info: { id: 'user', role: 'user' },
+          parts: [{ type: 'text', text: 'hello' }],
+        },
+      ],
+    });
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    const busy = () =>
+      hooks.event?.({
+        event: {
+          type: 'session.status',
+          properties: { sessionID: 'root', status: { type: 'busy' } },
+        },
+      } as never);
+    promptAsync.mockImplementation(async () => {
+      await busy();
+      return {};
+    });
+    try {
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'root',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', modelID: 'gpt-b' },
+        } as never,
+        {} as never,
+      );
+      await hooks.event?.({
+        event: {
+          type: 'message.updated',
+          properties: {
+            info: {
+              id: 'assistant',
+              sessionID: 'root',
+              role: 'assistant',
+              agent: 'orchestrator',
+              providerID: 'openai',
+              modelID: 'gpt-b',
+            },
+          },
+        },
+      } as never);
+      await busy();
+      await hooks.event?.({
+        event: {
+          type: 'session.error',
+          properties: { sessionID: 'root', error: { message: 'rate limit' } },
+        },
+      } as never);
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+      expect(
+        JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions[0],
+      ).toMatchObject({ status: 'busy', active_agents: ['orchestrator'] });
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
   test('v2 host: the replay path stays disabled', async () => {
     const captured: string[] = [];
     const capture = spyOn(loggerModule, 'log').mockImplementation(
