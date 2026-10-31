@@ -34,9 +34,8 @@ const PRODUCTION_REQUIRED = [
   // v1 status/idle consumers read the native passthrough too.
   'session.status',
   'session.idle',
-  // Telemetry → deduplicated completed-assistant message.updated
-  // (cache-monitor) + task-activity.
-  'session.usage.updated',
+  // Per-request telemetry → completed-assistant message.updated
+  // (cache-monitor); foreground-fallback reads the raw event.
   'session.step.ended',
   // Form flow → v1 question.* (input-wait tracker, companion, wake).
   'form.created',
