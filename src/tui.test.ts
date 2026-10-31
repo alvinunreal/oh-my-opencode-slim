@@ -31,6 +31,7 @@ import {
   resolveSelectedRootModel,
   resolveSidebarSlotOrder,
   resolveTuiPaneDirectory,
+  retainEqualModelNames,
   STATUS_DOT_GLYPH,
   STATUS_STOPPED_GLYPH,
   selectionGuard,
@@ -3818,6 +3819,19 @@ describe('sidebar model display names', () => {
     const block = lines.slice(oracleIdx, oracleIdx + 4).join('\n');
     expect(block).not.toContain('provider');
     expect(block).not.toContain('name');
+  });
+
+  test('an equal-content refetch keeps the current map; a change replaces it', () => {
+    const current = new Map([['anthropic/claude-haiku', 'Claude Haiku']]);
+    const equal = new Map(current);
+    expect(retainEqualModelNames(equal, current)).toBe(current);
+
+    const renamed = new Map([['anthropic/claude-haiku', 'Claude Haiku 5']]);
+    expect(retainEqualModelNames(renamed, current)).toBe(renamed);
+    const added = new Map([...current, ['openai/gpt-9', 'GPT 9']]);
+    expect(retainEqualModelNames(added, current)).toBe(added);
+    const emptied = new Map<string, string>();
+    expect(retainEqualModelNames(emptied, current)).toBe(emptied);
   });
 
   describe('hydrateModelNames', () => {

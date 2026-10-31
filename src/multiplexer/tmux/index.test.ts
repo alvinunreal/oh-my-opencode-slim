@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { MultiplexerLayout } from '../../config/schema';
+import { createTimerHarness } from '../../utils/test-timers';
 
 type SpawnResult = {
   exited: Promise<number>;
@@ -417,6 +418,49 @@ describe('TmuxMultiplexer', () => {
     expect(layoutCommands).toHaveLength(1);
     expect(layoutCommands[0]).toContain('tiled');
     expectExplicitSocket(layoutCommands[0]);
+  });
+
+  test('applySpawnLayout with unchanged preferences keeps one debounced layout', async () => {
+    const { TmuxMultiplexer } = await importFreshTmux();
+    const timers = createTimerHarness();
+    const tmux = new TmuxMultiplexer('main-vertical', 60, timers);
+    const layouts = () =>
+      commands().filter((command) => command.includes('select-layout'));
+
+    for (const id of ['session-1', 'session-2']) {
+      await tmux.spawnPane(id, 'Worker', 'http://localhost:4096', '/repo');
+      await tmux.applySpawnLayout('main-vertical', 60);
+    }
+
+    expect(layouts()).toHaveLength(0);
+    expect(timers.pending()).toBe(1);
+
+    await timers.advance(150);
+
+    expect(timers.pending()).toBe(0);
+    expect(layouts()).toHaveLength(2); // select-layout before and after resize
+    expect(layouts()[0]).toContain('main-vertical');
+  });
+
+  test('applySpawnLayout with changed preferences applies immediately', async () => {
+    const { TmuxMultiplexer } = await importFreshTmux();
+    const timers = createTimerHarness();
+    const tmux = new TmuxMultiplexer('main-vertical', 60, timers);
+
+    await tmux.spawnPane(
+      'session-1',
+      'Worker',
+      'http://localhost:4096',
+      '/repo',
+    );
+    await tmux.applySpawnLayout('tiled', 60);
+
+    expect(timers.pending()).toBe(0);
+    const layouts = commands().filter((command) =>
+      command.includes('select-layout'),
+    );
+    expect(layouts).toHaveLength(1);
+    expect(layouts[0]).toContain('tiled');
   });
 
   test('debounced layout keeps the anchor captured at spawn time', async () => {

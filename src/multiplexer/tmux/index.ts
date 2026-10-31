@@ -25,6 +25,17 @@ import type { Multiplexer, PaneResult, PaneSpawnOptions } from '../types';
 
 const TMUX_LAYOUT_DEBOUNCE_MS = 150;
 
+/** Scheduling seam; tests inject a deterministic timer harness. */
+interface LayoutTimers {
+  setTimeout(callback: () => void, delay: number): unknown;
+  clearTimeout(timer: unknown): void;
+}
+
+const REAL_TIMERS: LayoutTimers = {
+  setTimeout: (callback, delay) => setTimeout(callback, delay),
+  clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+};
+
 export class TmuxMultiplexer implements Multiplexer {
   readonly type = 'tmux' as const;
 
@@ -32,11 +43,15 @@ export class TmuxMultiplexer implements Multiplexer {
   private hasChecked = false;
   private storedLayout: MultiplexerLayout;
   private storedMainPaneSize: number;
-  private layoutTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private layoutTimers = new Map<string, unknown>();
   /** Panes created by this instance, mapped to the anchor they were split from. */
   private paneTargets = new Map<string, string>();
 
-  constructor(layout: MultiplexerLayout = 'main-vertical', mainPaneSize = 60) {
+  constructor(
+    layout: MultiplexerLayout = 'main-vertical',
+    mainPaneSize = 60,
+    private readonly timers: LayoutTimers = REAL_TIMERS,
+  ) {
     this.storedLayout = layout;
     this.storedMainPaneSize = mainPaneSize;
   }
@@ -232,7 +247,8 @@ export class TmuxMultiplexer implements Multiplexer {
     layout: MultiplexerLayout,
     mainPaneSize: number,
   ): Promise<void> {
-    for (const timer of this.layoutTimers.values()) clearTimeout(timer);
+    for (const timer of this.layoutTimers.values())
+      this.timers.clearTimeout(timer);
     this.layoutTimers.clear();
     this.storedLayout = layout;
     this.storedMainPaneSize = mainPaneSize;
@@ -264,9 +280,9 @@ export class TmuxMultiplexer implements Multiplexer {
 
   private scheduleLayout(targetPane: string): void {
     const pending = this.layoutTimers.get(targetPane);
-    if (pending) clearTimeout(pending);
+    if (pending) this.timers.clearTimeout(pending);
 
-    const timer = setTimeout(() => {
+    const timer = this.timers.setTimeout(() => {
       this.layoutTimers.delete(targetPane);
       const socket = this.resolveSocket();
       if (!socket) return;
@@ -278,7 +294,7 @@ export class TmuxMultiplexer implements Multiplexer {
       );
     }, TMUX_LAYOUT_DEBOUNCE_MS);
     this.layoutTimers.set(targetPane, timer);
-    timer.unref?.();
+    (timer as { unref?: () => void }).unref?.();
   }
 
   private async applyLayoutNow(
