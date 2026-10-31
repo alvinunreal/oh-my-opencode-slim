@@ -378,6 +378,61 @@ describe('foreground fallback redo harness', () => {
     for (let i = 0; i < 10; i++) await Promise.resolve();
   };
 
+  test('v1 request rejections survive a successful replay until the next external prompt', async () => {
+    const { manager, mocks } = makeManager();
+    const sessionID = 'request-rejection-v1';
+    manager.registerSessionAgent(sessionID, 'orchestrator');
+    const assistant = (id: string, modelID: string, result: object) => ({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id,
+          sessionID,
+          role: 'assistant',
+          agent: 'orchestrator',
+          providerID: 'test',
+          modelID,
+          time: { created: Date.now() - 1, completed: Date.now() },
+          ...result,
+        },
+      },
+    });
+    const policy = {
+      name: 'APIError',
+      data: { message: 'cyber_policy: request flagged', statusCode: 400 },
+    };
+
+    await manager.handleEvent(
+      assistant('m1', 'a', { finish: 'content-filter' }),
+    );
+    const replay = (mocks.promptAsync.mock.calls[0][0] as any).body;
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: { id: replay.messageID, sessionID, role: 'user' },
+        parts: replay.parts,
+      },
+    });
+    await manager.handleEvent(assistant('m2', 'b', { finish: 'tool-calls' }));
+    jest.advanceTimersByTime(6_000);
+    await manager.handleEvent(assistant('m3', 'b', { error: policy }));
+    expect(
+      mocks.promptAsync.mock.calls.map(([args]) => (args as any).body.model),
+    ).toEqual([
+      { providerID: 'test', modelID: 'b' },
+      { providerID: 'test', modelID: 'c' },
+    ]);
+
+    await manager.handleEvent(assistant('m4', 'c', { finish: 'stop' }));
+    await manager.handleEvent(redoEvents.user(sessionID, 'new-user', 'c'));
+    jest.advanceTimersByTime(6_000);
+    await manager.handleEvent(assistant('m5', 'c', { error: policy }));
+    expect((mocks.promptAsync.mock.calls[2][0] as any).body.model).toEqual({
+      providerID: 'test',
+      modelID: 'a',
+    });
+  });
+
   test('a replay read answering after a host stall still replays', async () => {
     const { manager, mocks } = makeManager();
     const read = deferred<unknown>();
@@ -2246,6 +2301,7 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     handoff?: ReturnType<typeof createBackgroundFallbackHandoff>;
     readBackgroundGeneration?: (sessionID: string) => number | undefined;
     retryEnabled?: boolean;
+    maxRetries?: number;
   }) {
     const durable = { providerID: 'test', id: 'a', variant: 'source' };
     const info: { model?: typeof durable; parentID?: string; agent?: string } =
@@ -2274,7 +2330,7 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
         client,
         experimental_v2: { switchModel },
       } as never,
-      0,
+      options?.maxRetries ?? 0,
       undefined,
       onChanged,
       0,
@@ -2330,6 +2386,102 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
   const settle = async () => {
     for (let i = 0; i < 30; i++) await Promise.resolve();
   };
+
+  test('v2 request rejections survive a successful tool step on the fallback', async () => {
+    const { manager, switchModel } = fixture({
+      chains: { orchestrator: ['test/a', 'test/b', 'test/c'] },
+    });
+    const sessionID = 'request-rejection-v2';
+    await manager.handleEvent(started(sessionID));
+    await manager.handleEvent(failed(sessionID));
+    await settle();
+    await manager.handleEvent({
+      type: 'session.step.ended',
+      data: { sessionID, finish: 'tool-calls' },
+    });
+    await manager.handleV2Retry(
+      {
+        sessionID,
+        agent: 'orchestrator',
+        model: { providerID: 'test', id: 'b' },
+        error: { type: 'provider.invalid-request', message: 'cyber_policy' },
+        decision: { retry: false },
+      },
+      switchModel,
+    );
+    expect(switchModel.mock.calls.map(([, model]) => model)).toEqual([
+      { providerID: 'test', id: 'b' },
+      { providerID: 'test', id: 'c' },
+    ]);
+  });
+
+  test('v2 retryable cyber policy errors switch without consuming the host retry budget', async () => {
+    const { manager, switchModel } = fixture({
+      chains: { orchestrator: ['test/a', 'test/b', 'test/c'] },
+      maxRetries: 1,
+    });
+    const sessionID = 'policy-retry-budget-v2';
+    const policy = {
+      sessionID,
+      agent: 'orchestrator',
+      model: { providerID: 'test', id: 'a' },
+      error: { type: 'provider.transport', message: 'cyber_policy' },
+      decision: { retry: true, delay: 2_000 },
+    };
+    await manager.handleV2Retry(policy, switchModel);
+    expect(switchModel.mock.calls.map(([, model]) => model)).toEqual([
+      { providerID: 'test', id: 'b' },
+    ]);
+    expect(policy.decision).toEqual({ retry: true, delay: 0 });
+
+    const transport = {
+      sessionID,
+      agent: 'orchestrator',
+      model: { providerID: 'test', id: 'b' },
+      error: { type: 'provider.transport', message: 'socket hang up' },
+      decision: { retry: true, delay: 2_000 },
+    };
+    await manager.handleV2Retry(transport, switchModel);
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    await manager.handleV2Retry(transport, switchModel);
+    expect(switchModel.mock.calls.map(([, model]) => model)).toEqual([
+      { providerID: 'test', id: 'b' },
+      { providerID: 'test', id: 'c' },
+    ]);
+  });
+
+  test('v2 external prompt makes request-rejected models selectable again', async () => {
+    const { manager, switchModel } = fixture({
+      chains: { orchestrator: ['test/a', 'test/b', 'test/c'] },
+    });
+    const sessionID = 'new-prompt-request-rejection-v2';
+    await manager.handleEvent(started(sessionID));
+    await manager.handleEvent(failed(sessionID));
+    await settle();
+    await manager.handleEvent({
+      type: 'session.step.ended',
+      data: { sessionID, finish: 'tool-calls' },
+    });
+    const policy = (id: string) => ({
+      sessionID,
+      agent: 'orchestrator',
+      model: { providerID: 'test', id },
+      error: { type: 'provider.invalid-request', message: 'cyber_policy' },
+      decision: { retry: false },
+    });
+    await manager.handleV2Retry(policy('b'), switchModel);
+    await manager.handleEvent({
+      type: 'session.step.ended',
+      data: { sessionID, finish: 'stop' },
+    });
+    manager.noteV2Prompt(sessionID);
+    await manager.handleV2Retry(policy('c'), switchModel);
+    expect(switchModel.mock.calls.map(([, model]) => model)).toEqual([
+      { providerID: 'test', id: 'b' },
+      { providerID: 'test', id: 'c' },
+      { providerID: 'test', id: 'a' },
+    ]);
+  });
 
   test('v2 background refusal hands off its continued run and defers an empty successor', async () => {
     const board = new BackgroundJobBoard();

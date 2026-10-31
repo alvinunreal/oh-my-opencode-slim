@@ -669,6 +669,8 @@ export class ForegroundFallbackManager {
   private readonly sessionParent = new Map<string, string>();
   /** sessionID → set of models already attempted this session */
   private readonly sessionTried = new Map<string, Set<string>>();
+  /** Request-scoped rejections remain ineligible until the next external turn. */
+  private readonly requestRejected = new Map<string, Set<string>>();
   /** sessionID → providers whose allowance is spent (issue #966). The chain
    *  walk skips them; once every chain provider is listed the error
    *  surfaces. Holds at most the providers seen failing, and re-arms with
@@ -1112,6 +1114,7 @@ export class ForegroundFallbackManager {
 
   private noteExternalTurn(sessionID: string, messageID: string): void {
     this.lastUserMessageID.set(sessionID, messageID);
+    this.requestRejected.delete(sessionID);
     this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
     this.lastTrigger.delete(sessionID);
     this.lastTriggerModel.delete(sessionID);
@@ -1132,6 +1135,7 @@ export class ForegroundFallbackManager {
   }
 
   noteV2Prompt(sessionID: string): void {
+    this.requestRejected.delete(sessionID);
     this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
   }
 
@@ -1429,6 +1433,7 @@ export class ForegroundFallbackManager {
     this.activeFallback.delete(id);
     this.sessionAgent.delete(id);
     this.sessionTried.delete(id);
+    this.requestRejected.delete(id);
     this.sessionChains.delete(id);
     this.sessionRetryEnabled.delete(id);
     this.unknownFinishStreak.delete(id);
@@ -2053,7 +2058,8 @@ export class ForegroundFallbackManager {
       // classified, independent of steering enablement. One line per
       // session and failing model, so a disabled steering path can never
       // masquerade as a working hook (a3ac0bee postmortem).
-      const failover = isFailoverError(event.error);
+      const scope = failoverScope(event.error);
+      const failover = scope !== undefined;
       let notices = this.v2RetryNotices.get(sessionID);
       if (!notices) {
         notices = new Set();
@@ -2107,12 +2113,12 @@ export class ForegroundFallbackManager {
       if (this.surfacesSpentQuota(sessionID, event.error, from)) return;
       if (event.decision?.retry === true) {
         this.rearmIfFreshDescent(sessionID);
-        // Permanent quota/billing exhaustion and spent allowance never
-        // recover by host retries on this provider — skip the host-retry
-        // budget and steer at once.
+        // Request rejections and spent allowance cannot recover by retrying
+        // this model, so steer without charging the host-retry budget.
         if (
           !isPermanentQuotaBillingError(event.error) &&
           !isSpentQuotaError(event.error) &&
+          scope !== 'request' &&
           this.absorbHostRetry(sessionID, event.decision.delay)
         )
           return;
@@ -3324,6 +3330,12 @@ export class ForegroundFallbackManager {
     const exhaustion = this.chainExhaustion.get(sessionID) ?? 0;
     if (exhaustion === 2) return;
     if (currentModel) tried.add(currentModel);
+    if (observedModel && failoverScope(error) === 'request') {
+      const rejected = this.requestRejected.get(sessionID) ?? new Set();
+      rejected.add(observedModel);
+      this.requestRejected.set(sessionID, rejected);
+    }
+    const rejected = this.requestRejected.get(sessionID);
     // Re-mark after a re-arm above: the failing provider stays excluded.
     const quotaExhausted = this.markQuotaExhausted(
       sessionID,
@@ -3346,6 +3358,7 @@ export class ForegroundFallbackManager {
           const provider = parseModelReference(model)?.providerID ?? '';
           return (
             !tried.has(model) &&
+            !rejected?.has(model) &&
             hasAllowance(model) &&
             !downProviders?.has(provider) &&
             !parentDownProviders?.has(provider)
