@@ -6,6 +6,7 @@ import {
 import {
   type AgentModelProjection,
   type AgentRuntimeProfiles,
+  createAgentInferenceViews,
   createAgents,
   getAgentConfigsFromDefinitions,
   isSubagent,
@@ -2328,7 +2329,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
    * surfaces (agent definitions, prompts, tools, permissions, skills, MCPs)
    * are never rebuilt and the host agent registry is never reloaded. The
    * running generation state (`config`, `runtime`, `agentDefs`, `agents`,
-   * `finalHostAgentConfig`) is untouched — a throwaway `RuntimeConfig.create`
+   * `finalHostAgentConfig`) is untouched — a throwaway `RuntimeConfig.createDetached`
    * view resolves the fresh file against the captured host layer. On success
    * the refresh republishes the complete next chain generation (config +
    * marketplace-merged, see buildChainGeneration) beside the sidebar write,
@@ -2416,13 +2417,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         freshRuntime.setRuntimePreset(runtimePresetName);
         runtimePreset = freshConfig.presets[runtimePresetName] as Preset;
       }
-      const freshAgentDefs = createAgents(freshRuntime, {
+      const freshAgentViews = createAgentInferenceViews(freshRuntime, {
         projectDirectory: ctx.directory,
         hostFlavor,
       });
       const freshAgents = getAgentConfigsFromDefinitions(
         freshRuntime,
-        freshAgentDefs,
+        freshAgentViews,
       );
       // Keep the finalized roster (including marketplace agents), but resolve
       // only inference overrides. No package/resource activation occurs here.
@@ -2520,7 +2521,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
       const { profiles, projection } = projectAgentRuntimeState({
         runtime: freshRuntime,
-        agentDefs: freshAgentDefs,
+        agentDefs: freshAgentViews,
         agentConfigs: mergedAgents,
         runtimePreset,
       });
@@ -2532,7 +2533,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         : undefined;
       const chains = buildChainGeneration(
         freshRuntime,
-        freshAgentDefs,
+        freshAgentViews,
         freshCandidates,
       );
       const inheritance: SessionTeamBundle['inheritance'] = {};
@@ -2584,7 +2585,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // refreshed (the caller swaps only on an ok result).
       //
       // The refresh resolves inference fields for the core agent set only:
-      // `createAgents()` is marketplace-unaware, while the finalized registry
+      // The inference view is marketplace-unaware, while the finalized registry
       // is the authoritative roster and already includes marketplace agents.
       // Union the fresh projection over the registry projection so a startup
       // or watcher refresh cannot shrink the roster and drop marketplace

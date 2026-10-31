@@ -16,6 +16,7 @@ export function buildCouncillorAgents(
   runtime: RuntimeConfig,
   disabled: Set<string>,
   observerDispatchEnabled = false,
+  inferenceOnly = false,
 ): AgentDefinition[] {
   const council = runtime.council;
   if (!council) return [];
@@ -32,13 +33,16 @@ export function buildCouncillorAgents(
   for (const [name, cfg] of Object.entries(preset)) {
     const agentName = `${COUNCILLOR_AGENT_PREFIX}${name}`;
     if (disabled.has(agentName)) continue;
-    const base = createCouncillorAgent(
-      cfg.model,
-      undefined,
-      cfg.prompt,
-      cfg.models[0]?.variant ?? cfg.variant,
-      observerDispatchEnabled,
-    );
+    const variant = cfg.models[0]?.variant ?? cfg.variant;
+    const base: AgentDefinition = inferenceOnly
+      ? { name: 'councillor', config: { model: cfg.model, variant } }
+      : createCouncillorAgent(
+          cfg.model,
+          undefined,
+          cfg.prompt,
+          variant,
+          observerDispatchEnabled,
+        );
 
     // If a fallback chain is configured, attach _modelArray for runtime
     // resolution and clear the primary model so the single-model field

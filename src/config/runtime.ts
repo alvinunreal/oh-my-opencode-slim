@@ -242,21 +242,6 @@ export class RuntimeConfig {
     return instance;
   }
 
-  /**
-   * Build an UNREGISTERED instance from a plugin config. Used by read-only
-   * resolution paths (the v2 hot-profile refresh) that must not disturb the
-   * live per-directory singleton. Host override and runtime-preset state can
-   * be applied on the throwaway instance without any global side effect.
-   */
-  static create(
-    directory: string,
-    pluginConfig: ResolvedPluginConfig,
-  ): RuntimeConfig {
-    const instance = new RuntimeConfig(directory);
-    instance.seedPlugin(pluginConfig);
-    return instance;
-  }
-
   /** Remove a directory from the registry (plugin re-init / dispose). */
   static reset(directory: string): void {
     registry.delete(directory);

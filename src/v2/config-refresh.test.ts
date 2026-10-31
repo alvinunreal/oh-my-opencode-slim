@@ -1,8 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { Hooks } from '@opencode-ai/plugin';
+import * as agentFactory from '../agents';
+import * as councillorFactory from '../agents/councillor';
+import * as orchestratorFactory from '../agents/orchestrator';
 import { OhMyOpenCodeLite } from '../index';
 import { MarketplaceStore } from '../marketplace/store';
 import { readTuiSnapshot } from '../tui-state';
@@ -84,12 +87,14 @@ interface TestFactory {
 
 async function bootFactory(
   hostConfig: Record<string, unknown> = {},
+  hostFlavor?: 'v2',
 ): Promise<TestFactory> {
   const hooks = await OhMyOpenCodeLite({
     client: createPluginClient(),
     directory: env.projectDir,
     worktree: env.projectDir,
     serverUrl: new URL('http://127.0.0.1:4096'),
+    hostFlavor,
   } as never);
   // The host calls the config hook once at init; mirror that so the initial
   // registry/tui-state snapshot exists. `hostConfig.agent.<name>.model`
@@ -106,8 +111,9 @@ async function bootFactory(
 async function withFactory(
   body: (fac: TestFactory) => Promise<void>,
   hostConfig: Record<string, unknown> = {},
+  hostFlavor?: 'v2',
 ): Promise<void> {
-  const fac = await bootFactory(hostConfig);
+  const fac = await bootFactory(hostConfig, hostFlavor);
   try {
     await body(fac);
   } finally {
@@ -333,6 +339,11 @@ describe('v2 profile refresh hook', () => {
   test('does not rebuild agent definitions or mutate session-frozen surfaces', async () => {
     env.writeUserConfig({
       preset: 'cheap',
+      agents: { reviewer: { model: 'openai/gpt-5' } },
+      acpAgents: {
+        external: { command: 'agent', wrapperModel: 'openai/gpt-5' },
+      },
+      council: { presets: { default: { alpha: { model: 'openai/gpt-5' } } } },
       presets: {
         cheap: {
           explorer: {
@@ -344,26 +355,85 @@ describe('v2 profile refresh hook', () => {
       },
     });
 
-    await withFactory(async ({ hooks, refresh }) => {
-      const beforeAgentDefs = JSON.stringify(hooks.agent?.explorer);
-      env.writeUserConfig({
-        preset: 'cheap',
-        presets: {
-          cheap: {
-            explorer: {
-              model: 'anthropic/claude-sonnet-4-5',
-              prompt: 'You are a DIFFERENT explorer.',
-              permission: { edit: 'allow' },
+    await withFactory(
+      async ({ hooks, refresh }) => {
+        const beforeAgentDefs = JSON.stringify(hooks.agent?.explorer);
+        env.writeUserConfig({
+          preset: 'cheap',
+          agents: { reviewer: { model: 'openai/gpt-5-mini' } },
+          acpAgents: {
+            external: { command: 'agent', wrapperModel: 'openai/gpt-5-mini' },
+          },
+          council: {
+            presets: {
+              default: {
+                alpha: {
+                  model: [{ id: 'openai/gpt-5-mini', variant: 'high' }],
+                },
+              },
             },
           },
+          presets: {
+            cheap: {
+              explorer: {
+                model: 'anthropic/claude-sonnet-4-5',
+                prompt: 'You are a DIFFERENT explorer.',
+                permission: { edit: 'allow' },
+              },
+            },
+          },
+        });
+        const createAgents = spyOn(agentFactory, 'createAgents');
+        const createCouncillor = spyOn(
+          councillorFactory,
+          'createCouncillorAgent',
+        );
+        const createOrchestrator = spyOn(
+          orchestratorFactory,
+          'createOrchestratorAgent',
+        );
+        try {
+          const refreshed = await refresh();
+          expect(refreshed.ok).toBe(true);
+          if (!refreshed.ok) throw new Error(refreshed.reason);
+          expect(refreshed.profiles.explorer?.model).toEqual({
+            providerID: 'anthropic',
+            id: 'claude-sonnet-4-5',
+          });
+          expect(refreshed.profiles.explorer?.temperature).toBe(0.4);
+          expect(refreshed.profiles.explorer?.providerOptions).toEqual({
+            native: true,
+          });
+          expect(refreshed.profiles.reviewer?.model).toEqual({
+            providerID: 'openai',
+            id: 'gpt-5-mini',
+          });
+          expect(refreshed.profiles.external?.model).toEqual({
+            providerID: 'openai',
+            id: 'gpt-5-mini',
+          });
+          expect(refreshed.profiles['councillor-alpha']?.model).toEqual({
+            providerID: 'openai',
+            id: 'gpt-5-mini',
+            variant: 'high',
+          });
+          expect(createAgents).not.toHaveBeenCalled();
+          expect(createCouncillor).not.toHaveBeenCalled();
+          expect(createOrchestrator).not.toHaveBeenCalled();
+          expect(JSON.stringify(hooks.agent?.explorer)).toBe(beforeAgentDefs);
+        } finally {
+          createAgents.mockRestore();
+          createCouncillor.mockRestore();
+          createOrchestrator.mockRestore();
+        }
+      },
+      {
+        agent: {
+          explorer: { temperature: 0.4, request: { body: { native: true } } },
         },
-      });
-      await refresh();
-
-      // Prompt/permission surfaces stay frozen: the refresh only resolves
-      // the inference profile (the v2 adapter never re-registers agents).
-      expect(JSON.stringify(hooks.agent?.explorer)).toBe(beforeAgentDefs);
-    });
+      },
+      'v2',
+    );
   });
 
   test('malformed JSON is a hard refresh failure: last-good sidebar (and profiles) retained', async () => {
