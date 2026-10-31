@@ -343,7 +343,7 @@ describe('ZellijMultiplexer', () => {
       '--',
       'sh',
       '-lc',
-      "opencode attach 'http://localhost:4096' --session 'session-1' --dir '/repo'",
+      "env OH_MY_OPENCODE_SLIM_PANE_VIEWER=1 opencode attach 'http://localhost:4096' --session 'session-1' --dir '/repo'",
     ]);
 
     // The anchor lookup is also explicitly addressed.

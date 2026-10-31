@@ -18,6 +18,7 @@
  */
 import { loadPluginConfig } from '../config/loader';
 import { isCommandEnabled } from '../hooks/command-hook-utils';
+import { PANE_VIEWER_ENV } from '../multiplexer/shared';
 import type { TuiRouteView } from '../tui';
 import omoTui, {
   readTuiGates,
@@ -338,7 +339,9 @@ const plugin = {
   id: omoTui.id,
   tui: omoTui.tui,
 
-  async setup(ctx: V2TuiPluginContext): Promise<undefined | (() => void)> {
+  async setup(
+    ctx: V2TuiPluginContext,
+  ): Promise<undefined | (() => Promise<void>)> {
     if (isPluginDisabledByEnv()) return;
 
     const directory = ctx.location?.directory ?? process.cwd();
@@ -350,7 +353,7 @@ const plugin = {
       return undefined;
     }
 
-    const disposers: Array<() => void> = [];
+    const disposers: Array<() => void | Promise<void>> = [];
     const baseCleanup = await omoTui.setup(ctx, gatesRead);
     if (typeof baseCleanup === 'function') disposers.push(baseCleanup);
 
@@ -391,19 +394,23 @@ const plugin = {
     // shim — so the TUI owns the message. Scheduled off the startup path and
     // silent on every failure; see ./update-notice.
     // `disabled_hooks: ["auto-update-checker"]` is the explicit off switch.
-    if (!gatesRead.gates.disabledHooks.has('auto-update-checker')) {
+    if (
+      process.env[PANE_VIEWER_ENV] !== '1' &&
+      !gatesRead.gates.disabledHooks.has('auto-update-checker')
+    ) {
       disposers.push(
         registerUpdateNotice(ctx, {
           renderBadge: (latest, color) => renderUpdateBadge(latest, color),
         }),
       );
-    } else {
+    } else if (gatesRead.gates.disabledHooks.has('auto-update-checker')) {
       log('[v2][tui] update notice skipped: auto-update-checker disabled');
     }
 
-    return () => {
-      for (const dispose of disposers.reverse()) dispose();
-    };
+    return () =>
+      Promise.all(disposers.reverse().map((dispose) => dispose())).then(
+        () => {},
+      );
   },
 };
 

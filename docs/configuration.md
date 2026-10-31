@@ -15,6 +15,10 @@ Complete reference for all configuration files and options in oh-my-opencode-sli
 
 > **💡 JSONC recommended:** Use the `.jsonc` extension to add comments and trailing commas. If both `.jsonc` and `.json` exist, `.jsonc` takes precedence.
 
+Config edits follow existing symbolic links and update their targets while
+preserving the links. A dangling or unresolvable link causes the write to fail;
+repair the link before retrying. Backups are written beside the config path.
+
 Project configuration discovery searches the current directory and every
 ancestor within the host's discovery boundary. V2 walks through the filesystem
 root, including above Git repository and worktree roots. V1 stops at the Git

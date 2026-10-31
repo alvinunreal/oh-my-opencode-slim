@@ -92,6 +92,9 @@ Pane behavior is fixed per host mode:
 | v2 host, `--server <url>` | TUI client of an explicit server | `--server` URL | Supported: default viewers run `opencode mini --server <url> --session <id>`; `viewer: "tui"` uses `opencode --server <url> --session <id> <dir>`. The `OPENCODE_PASSWORD` secret comes from the parent process environment and is injected at pane creation through the multiplexer's spawn-time environment mechanism (see [Secret handling](#known-limitations)), never through the viewer's command line |
 | v2 host, `--standalone` | private stdio server (no registration, random password, exits with the parent) | ephemeral loopback | **Not supported**: fail-closed + exactly one diagnostic; the fallback is v2's native subagent surfaces (`/subagent` opens the latest child session in a tab without moving focus — the tab is a salience and quick-switch affordance, and the displayed session stays the interaction surface) |
 
+If the v2 shared service cannot initially resolve its URL, pane setup retries
+every five seconds while enabled; unsupported host modes remain disabled.
+
 On v2 hosts the event source is the TUI's own `data` feed
 (`session.created` / `session.execution.*` / `session.idle` /
 `session.deleted`). Execution events carry no directory, so the pane
@@ -385,11 +388,13 @@ Adapter notes:
 
 A pane is a **view**, and views belong to the viewer:
 
-- Every TUI client that displays the parent session manages **its own** panes.
+- Every independently opened TUI client that displays the parent session manages **its own** panes.
   Two clients displaying the same parent session and the same child each get
   their own pane, anchored to their own parent pane (next to it, or inside it
   as a tab for cmux-tui). This is expected, not a leak: anchors, control planes,
   and view handles are all client-local.
+- Full TUI viewers spawned by Slim do not manage panes, even after navigating
+  to a parent session; they therefore do not open panes for grandchildren.
 - There are **no cross-process files and no coordination** between clients. A
   client never writes where it is, and never touches another client's panes.
 - A single client maintains **at most one pane per child session** (in-process
@@ -399,8 +404,11 @@ A pane is a **view**, and views belong to the viewer:
   not cause additional subagent dispatches.
 - Switching the displayed session does not leak panes: status/idle/deleted
   events for children this client already holds keep being processed, so their
-  panes still close under the normal rules. A rebuild, however, requires the
+  panes still close under the normal rules. Reconciliation also checks held
+  panes of other parents for lost idle or deletion signals. A rebuild requires the
   parent to be the displayed session again at that moment.
+- A displayed-session or project change triggers a debounced reconciliation;
+  the 30-second periodic pass remains a fallback.
 
 If you do not want a pane on a particular client, disable panes for that
 project there (`"type": "none"`), or simply close the pane; the child session
@@ -422,7 +430,6 @@ a structured, distinguishable reason:
 | `adapter-unavailable` | The adapter cannot run here (binary missing, old version, protocol self-check failed, no control plane, or the platform/shell cannot support the viewer-secret bridge) |
 | `adapter-not-found` | The adapter could not resolve its anchor target; **no multiplexer command is issued** |
 | `adapter-hard` | The multiplexer command failed for another reason |
-| `backfill-skipped` | Reconnect compensation found this client already holds that child's pane |
 
 Every successful creation logs the full identity: child session, parent
 session, adapter, view handle (for cmux-tui the terminal id), and the anchored
@@ -449,10 +456,10 @@ produces one `multiplexer.host-unsupported` record per process; shared and
   spawned process's argv instead (its tab name is the human-readable
   `parent_name/child_name` name). On startup/reconnect the client scans its own
   multiplexer for views whose owner process is dead **and** whose child session
-  is gone, closing them. For the title-based adapters, once `opencode attach`
-  starts inside the pane the host may rewrite the pane title (for example to
-  `OC | <title>`), so the sweep often cannot recognize a crashed client's
-  leftover pane — it is then left for you to close manually. For cmux-tui the
+  is gone, closing them. tmux 3.0a and later also store the marker in a pane
+  option, so host title changes do not erase it. No minimum tmux version is
+  enforced; older versions fall back to the pane title. For title-only adapters,
+  the host may overwrite that title, leaving a pane to close manually. For cmux-tui the
   sweep discovers candidates from `terminal list` and reads each terminal's
   argv with `terminal <sel> process show`, so user terminals are never touched.
   Exited terminals still appear in `terminal list` and still return their
@@ -565,7 +572,9 @@ produces one `multiplexer.host-unsupported` record per process; shared and
   v1, WezTerm also uses the bridge when the TUI's environment has
   `OPENCODE_SERVER_PASSWORD`: it exports only that variable (never a v2
   `OPENCODE_PASSWORD`) for `opencode attach`, plus `OPENCODE_SERVER_USERNAME`
-  when set. A TUI attached with `attach -p` but without the environment
+  when set. tmux 3.0+ forwards those v1 variables via `split-window -e`;
+  older versions rely on the tmux server's inherited environment.
+  A TUI attached with `attach -p` but without the environment
   variable gets no forwarded password, so its viewer panes cannot
   authenticate. The client wiring itself must also be able to authenticate
   against a v1 password-protected server (see `host-unreachable` under
@@ -680,7 +689,7 @@ removed or changed behavior, with migration guidance:
 **Leftover views after a client crash**
 
 - The sweep is best-effort, and WezTerm and Orca panes are never swept (close
-  them manually). For tmux / Zellij / Herdr / kitty it often cannot
+  them manually). For older tmux / Zellij / Herdr / kitty it often cannot
   match a pane whose title was rewritten by `opencode attach`. For cmux-tui it
   identifies views by the `# omosc:...` argv marker; exited terminals keep that
   argv and `terminal close` still works on them, so a crashed client's leftover

@@ -47,7 +47,7 @@ TUI host wiring (v1 `tui()` and v2 `setup()`) that:
 - **Strict parsing**: NFR-5: title content is data, never a command
 
 #### `diagnostics.ts` - Structured Logging
-- **FR-13 records**: `multiplexer.no-pane`, `multiplexer.pane-created`
+- **FR-13 records**: `multiplexer.no-pane`, `multiplexer.pane-created`, `multiplexer.pane-closed`
 - **Plugin file logger**: All diagnostics through centralized sink
 - **Once-per-process gate**: Prevents duplicate logging
 
@@ -130,7 +130,7 @@ Shown for v1. On v2, `v2-host.ts` supplies the base URL, an authenticated
    ├─ Server list by parentID is authoritative
    ├─ Missing children backfilled (same eligibility/dedup guards)
    ├─ Local panes whose child is gone are closed
-   └─ Already-held children log backfill-skipped; quiescent ones re-arm a
+   └─ Already-held quiescent children re-arm a
       provisional idle deadline (the first real idle edge restarts it)
 
 5. FR-8 sweep (startup/reconcile):
@@ -166,7 +166,6 @@ Shown for v1. On v2, `v2-host.ts` supplies the base URL, an authenticated
 
 | File | Purpose |
 |------|---------|
-| `index.ts` | Client lifecycle submodule exports |
 | `lifecycle.ts` | Per-client pane lifecycle core (FR-3/4/6/7/10/11) |
 | `tui-wiring.ts` | TUI host wiring: admission, config, logs, serverUrl, events, reconcile |
 | `sweep.ts` | FR-8 crash-leftover pane sweep |

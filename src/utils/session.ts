@@ -15,25 +15,43 @@ export class OperationTimeoutError extends Error {
   }
 }
 
+/** Timer handle: platform timers or a harness's numeric ids. */
+export type TimerHandle = ReturnType<typeof setTimeout> | number;
+
+/** Scheduling seam (see src/utils/test-timers.ts); defaults to platform
+ *  timers. */
+export type TimerSeam = {
+  setTimeout: (callback: () => void, delay: number) => TimerHandle;
+  clearTimeout: (timer: TimerHandle) => void;
+};
+
 export async function withTimeout<T>(
   operation: Promise<T>,
   timeoutMs: number,
   message: string,
+  timers?: TimerSeam,
 ): Promise<T> {
   if (timeoutMs <= 0) return operation;
 
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const setTimer =
+    timers?.setTimeout ?? ((callback, delay) => setTimeout(callback, delay));
+  const clearTimer =
+    timers?.clearTimeout ??
+    ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>));
+
+  let timer: TimerHandle | undefined;
   try {
     return await Promise.race([
       operation,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
+        timer = setTimer(() => {
           reject(new OperationTimeoutError(message));
         }, timeoutMs);
       }),
     ]);
   } finally {
-    clearTimeout(timer);
+    // The Promise executor above runs synchronously, but TS cannot see that.
+    if (timer !== undefined) clearTimer(timer);
   }
 }
 

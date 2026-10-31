@@ -86,6 +86,7 @@
     "format": "biome format . --write",
     "check": "biome check --write .",
     "check:ci": "biome check .",
+    "knip": "knip",
     "eval": "bun run src/cli/eval.ts",
     "eval:smoke": "bun run src/cli/eval.ts --smoke",
     "ci:eval": "bun run eval --suite orchestrator-direct-execution --outputs-file /tmp/eval-outputs.json",
@@ -119,6 +120,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
+    "@opencode/client": "2.2.0",
     "@opencode/plugin": "2.2.0",
     "@types/jsdom": "30",
     "@types/node": "^26.6.2",
@@ -126,6 +128,7 @@
     "@types/turndown": "^5.0.6",
     "all-contributors-cli": "^6.26.1",
     "bun-types": "^1.4.2",
+    "knip": "^6.44.0",
     "typescript": "7.0"
   },
   "peerDependencies": {

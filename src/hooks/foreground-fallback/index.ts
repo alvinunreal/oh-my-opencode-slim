@@ -54,6 +54,8 @@ import {
   abortSessionWithTimeout,
   OperationTimeoutError,
   parseModelReference,
+  type TimerHandle,
+  type TimerSeam,
   withTimeout,
 } from '../../utils/session';
 import type { ExperimentalV2, V2GenerateModelRef } from '../../v2/client-shim';
@@ -61,6 +63,14 @@ import { isInternalAdmission } from '../../v2/internal-admissions';
 import type { SessionLifecycle } from '../session-lifecycle';
 import type { createBackgroundFallbackHandoff } from '../task-session-manager/fallback-observation-transfer';
 import { isReplayableUserMessage } from '../types';
+
+/** Timer port for deterministic test control (see `src/utils/test-timers.ts`):
+ *  `now` is observation time (dedup windows, incident clocks); scheduling
+ *  comes from `TimerSeam`. Wire both from one harness only when a test wants
+ *  them to track together. */
+export interface ForegroundFallbackTimers extends TimerSeam {
+  now?: () => number;
+}
 
 type BackgroundFallbackHandoff = ReturnType<
   typeof createBackgroundFallbackHandoff
@@ -539,7 +549,7 @@ export function isInlineFailoverError(error: unknown): boolean {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Used only to reject stale retry events from the previous model episode. */
+/** Bounds stale-retry rejection, incident correlation, and incident dedup. */
 const DEDUP_WINDOW_MS = 5_000;
 const REPROMPT_DELAY_MS = 500;
 /** Longer host backoffs should use the configured model chain instead. */
@@ -564,17 +574,18 @@ async function readForReplay<T>(
   sessionID: string,
   read: Promise<T>,
   message: string,
+  timers?: TimerSeam,
 ): Promise<T> {
   const started = Date.now();
   try {
-    return await withTimeout(read, HOST_CALL_TIMEOUT_MS, message);
+    return await withTimeout(read, HOST_CALL_TIMEOUT_MS, message, timers);
   } catch (err) {
     if (!(err instanceof OperationTimeoutError)) throw err;
     log('[foreground-fallback] replay read missed its window; waiting once', {
       sessionID,
       elapsedMs: Date.now() - started,
     });
-    return withTimeout(read, HOST_CALL_TIMEOUT_MS, message);
+    return withTimeout(read, HOST_CALL_TIMEOUT_MS, message, timers);
   }
 }
 /** Trailer marking a same-model replay; identical at every call site so the
@@ -587,8 +598,8 @@ const SAME_MODEL_REPLAY_ATTEMPTS = 2;
 // Shaped like a v1 host id: v2's Session.Message.ID (and its import of
 // v1 rows) requires msg_, and v1 orders ids by this 48-bit ms clock;
 // counter 0 sorts before a host reply minted in the same millisecond.
-function createReplayMessageID(): string {
-  const clock = (BigInt(Date.now()) * 0x1000n) & 0xffff_ffff_ffffn;
+function createReplayMessageID(now: () => number = Date.now): string {
+  const clock = (BigInt(now()) * 0x1000n) & 0xffff_ffff_ffffn;
   const random = randomBytes(7).toString('hex');
   return `msg_${clock.toString(16).padStart(12, '0')}${random}`;
 }
@@ -701,6 +712,15 @@ export class ForegroundFallbackManager {
     string,
     { model: string; signature: string; turn: number; time: number }
   >();
+
+  // Timer seams
+  private readonly now: () => number;
+  private readonly setTimer: (
+    callback: () => void,
+    delay: number,
+  ) => TimerHandle;
+  private readonly clearTimer: (timer: TimerHandle) => void;
+  private readonly timerSeam: TimerSeam;
   /** Recent event identities deduplicate only repeated observations of one incident. */
   private readonly triggerIncidents = new Map<
     string,
@@ -749,7 +769,7 @@ export class ForegroundFallbackManager {
   private readonly pendingInitialDelay = new Map<
     string,
     {
-      timer: ReturnType<typeof setTimeout>;
+      timer: TimerHandle;
       needsAbort: boolean;
       turn: number;
       retryAttempt?: number;
@@ -957,7 +977,7 @@ export class ForegroundFallbackManager {
     this.v1Waiters.clear();
     this.childOutcomes.clear();
     for (const pending of this.pendingInitialDelay.values()) {
-      clearTimeout(pending.timer);
+      this.clearTimer(pending.timer);
     }
     this.pendingInitialDelay.clear();
     this.replayMessageIds.clear();
@@ -1181,7 +1201,7 @@ export class ForegroundFallbackManager {
       pending.turn === (this.turnEpoch.get(sessionID) ?? 0) &&
       pending.model === this.sessionModel.get(sessionID) &&
       pending.fingerprint === stringifyError(error) &&
-      Date.now() - pending.time < DEDUP_WINDOW_MS
+      this.now() - pending.time < DEDUP_WINDOW_MS
     ) {
       return pending.incidentID;
     }
@@ -1194,7 +1214,7 @@ export class ForegroundFallbackManager {
         turn: this.turnEpoch.get(sessionID) ?? 0,
         model: this.sessionModel.get(sessionID),
         fingerprint: stringifyError(error),
-        time: Date.now(),
+        time: this.now(),
       });
     }
     return incidentID;
@@ -1213,7 +1233,7 @@ export class ForegroundFallbackManager {
       pending.turn === (this.turnEpoch.get(sessionID) ?? 0) &&
       pending.model === this.sessionModel.get(sessionID) &&
       pending.fingerprint === stringifyError(error) &&
-      Date.now() - pending.time < DEDUP_WINDOW_MS
+      this.now() - pending.time < DEDUP_WINDOW_MS
     ) {
       return pending.incidentID;
     }
@@ -1223,7 +1243,7 @@ export class ForegroundFallbackManager {
       turn: this.turnEpoch.get(sessionID) ?? 0,
       model: this.sessionModel.get(sessionID),
       fingerprint: stringifyError(error),
-      time: Date.now(),
+      time: this.now(),
     });
     return incidentID;
   }
@@ -1265,7 +1285,7 @@ export class ForegroundFallbackManager {
     const incidents = this.triggerIncidents.get(sessionID);
     if (!incidents) return false;
     const turn = this.turnEpoch.get(sessionID) ?? 0;
-    const now = Date.now();
+    const now = this.now();
     let matched = false;
     for (const [id, previous] of incidents) {
       if (previous.turn !== turn || now - previous.time >= DEDUP_WINDOW_MS) {
@@ -1304,6 +1324,7 @@ export class ForegroundFallbackManager {
         }),
         HOST_CALL_TIMEOUT_MS,
         'foreground message parts lookup timed out',
+        this.timerSeam,
       );
       const parts = result.data?.parts;
       if (!Array.isArray(parts)) return;
@@ -1419,6 +1440,7 @@ export class ForegroundFallbackManager {
      *  decision and calls session.switchModel, so it can run on v2 hosts.
      *  Defaults to `enabled` for hosts where both paths apply. */
     private readonly v2RetryEnabled: boolean = enabled,
+    timers?: ForegroundFallbackTimers,
   ) {
     this.chainSource = chains;
     this.onSessionModelChanged = onSessionModelChanged;
@@ -1428,6 +1450,22 @@ export class ForegroundFallbackManager {
       this.hasCoordinator = true;
       coordinator.onSessionDeleted((id) => this.forgetSession(id));
     }
+
+    // Timer seams: defaults to platform globals
+    // Late-bound: tests may patch the Date.now global after construction.
+    this.now = timers?.now ?? (() => Date.now());
+    this.setTimer =
+      timers?.setTimeout ?? ((callback, delay) => setTimeout(callback, delay));
+    this.clearTimer = timers?.clearTimeout ?? ((timer) => clearTimeout(timer));
+    this.timerSeam = {
+      setTimeout: this.setTimer,
+      clearTimeout: this.clearTimer,
+    };
+  }
+
+  /** Sleep for ms using the injected timer seam. */
+  private sleep(ms: number): Promise<void> {
+    return new Promise<void>((resolve) => this.setTimer(() => resolve(), ms));
   }
 
   /** Drop all per-session state once the session is deleted. */
@@ -1475,7 +1513,7 @@ export class ForegroundFallbackManager {
     const active = this.activeFallback.get(sessionID);
     if (!active) return;
     const downProviders = new Set<string>();
-    const now = Date.now();
+    const now = this.now();
     for (const [provider, recordedAt] of active.downProviders) {
       if (now - recordedAt < PROVIDER_MARK_TTL_MS) downProviders.add(provider);
     }
@@ -1504,7 +1542,7 @@ export class ForegroundFallbackManager {
       ? parseModelReference(from)?.providerID
       : undefined;
     if (fromProvider && failoverScope(error) === 'provider') {
-      downProviders.set(fromProvider, Date.now());
+      downProviders.set(fromProvider, this.now());
     }
     const toProvider = parseModelReference(model)?.providerID;
     if (toProvider) downProviders.delete(toProvider);
@@ -1693,7 +1731,7 @@ export class ForegroundFallbackManager {
           : undefined;
         const recentlyHandledMessage =
           priorMessageIncident?.turn === (this.turnEpoch.get(sessionID) ?? 0) &&
-          Date.now() - priorMessageIncident.time < DEDUP_WINDOW_MS;
+          this.now() - priorMessageIncident.time < DEDUP_WINDOW_MS;
         if (
           info.role !== 'user' &&
           !recentlyHandledMessage &&
@@ -1904,7 +1942,7 @@ export class ForegroundFallbackManager {
             curModel !== undefined &&
             prevModel !== curModel;
           const withinDedupWindow =
-            Date.now() - lastTriggerTime < DEDUP_WINDOW_MS;
+            this.now() - lastTriggerTime < DEDUP_WINDOW_MS;
           if (modelChanged && withinDedupWindow && attempt > 1) {
             // Model changed since last trigger, within dedup window, and
             // attempt > 1: this is a stale retry from the old model's
@@ -1944,7 +1982,7 @@ export class ForegroundFallbackManager {
               sessionID,
               props.status?.next === undefined
                 ? undefined
-                : props.status.next - Date.now(),
+                : props.status.next - this.now(),
             )
           ) {
             this.recordRetryAttempt(sessionID, attempt);
@@ -2173,6 +2211,7 @@ export class ForegroundFallbackManager {
         switchRequest,
         HOST_CALL_TIMEOUT_MS,
         'foreground retry model switch timed out',
+        this.timerSeam,
       );
       if (this.disposed) return;
       confirmed = true;
@@ -2426,7 +2465,7 @@ export class ForegroundFallbackManager {
   private cancelInitialDelay(sessionID: string): void {
     const pending = this.pendingInitialDelay.get(sessionID);
     if (!pending) return;
-    clearTimeout(pending.timer);
+    this.clearTimer(pending.timer);
     this.pendingInitialDelay.delete(sessionID);
   }
 
@@ -2487,7 +2526,7 @@ export class ForegroundFallbackManager {
       model,
       signature: spentQuotaSignature(error),
       turn: this.turnEpoch.get(sessionID) ?? 0,
-      time: Date.now(),
+      time: this.now(),
     });
   }
 
@@ -2516,7 +2555,7 @@ export class ForegroundFallbackManager {
         ?.has(parseModelReference(trigger.model)?.providerID ?? '') &&
       trigger.signature === spentQuotaSignature(error) &&
       trigger.turn === (this.turnEpoch.get(sessionID) ?? 0) &&
-      Date.now() - trigger.time < DEDUP_WINDOW_MS
+      this.now() - trigger.time < DEDUP_WINDOW_MS
     )
       return trigger.model;
     return current;
@@ -2608,7 +2647,7 @@ export class ForegroundFallbackManager {
         return true;
       }
       const turn = this.turnEpoch.get(sessionID) ?? 0;
-      const timer = setTimeout(() => {
+      const timer = this.setTimer(() => {
         const latest = this.pendingInitialDelay.get(sessionID);
         if (!latest) return;
         this.pendingInitialDelay.delete(sessionID);
@@ -2693,6 +2732,7 @@ export class ForegroundFallbackManager {
           query: { limit: FALLBACK_REPLAY_TAIL_MESSAGES },
         }),
         'same-model replay transcript read timed out',
+        this.timerSeam,
       );
     } catch (err) {
       return this.abandonReplayRead(sessionID, opts, err);
@@ -2712,6 +2752,7 @@ export class ForegroundFallbackManager {
             ? session.message({ path: { id: sessionID, messageID: parentID } })
             : session.messages({ path: { id: sessionID } }),
           'same-model replay transcript read timed out',
+          this.timerSeam,
         );
       } catch (err) {
         return this.abandonReplayRead(sessionID, opts, err);
@@ -2758,7 +2799,7 @@ export class ForegroundFallbackManager {
     const promptBody = {
       path: { id: sessionID },
       body: {
-        messageID: createReplayMessageID(),
+        messageID: createReplayMessageID(this.now),
         // Trailer only, as in execFallback.
         parts: [createInternalAgentTextPart(opts.trailerText)],
         model,
@@ -2773,6 +2814,7 @@ export class ForegroundFallbackManager {
         promptAsync(promptBody),
         REPLAY_SEND_TIMEOUT_MS,
         'same-model replay prompt timed out',
+        this.timerSeam,
       );
     };
 
@@ -2850,12 +2892,12 @@ export class ForegroundFallbackManager {
           if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
           return false;
         }
-        await new Promise((r) => setTimeout(r, REPROMPT_DELAY_MS));
+        await this.sleep(REPROMPT_DELAY_MS);
         if (!this.isCurrentTurn(sessionID, opts.epoch)) {
           if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
           return false;
         }
-        promptBody.body.messageID = createReplayMessageID();
+        promptBody.body.messageID = createReplayMessageID(this.now);
       }
     }
     if (!delivered) return false;
@@ -2916,7 +2958,7 @@ export class ForegroundFallbackManager {
       // which uses initialRetryDelayMs in shouldTriggerFallback).
       const lastFallback = this.lastFallbackTime.get(sessionID);
       if (lastFallback && this.retryDelayMs > 0) {
-        const elapsed = Date.now() - lastFallback;
+        const elapsed = this.now() - lastFallback;
         if (elapsed < this.retryDelayMs) {
           const delay = this.retryDelayMs - elapsed;
           log('[foreground-fallback] delaying retry fallback', {
@@ -2924,7 +2966,7 @@ export class ForegroundFallbackManager {
             delayMs: delay,
             elapsed,
           });
-          await new Promise((r) => setTimeout(r, delay));
+          await this.sleep(delay);
           // The backoff slept through a dispose(): execFallback would
           // read the transcript and re-prompt through the destroyed
           // generation's client. The finally below still releases the
@@ -2936,7 +2978,7 @@ export class ForegroundFallbackManager {
       if (!this.isCurrentTurn(sessionID, epoch)) return;
       await this.execFallback(sessionID, error, epoch, true);
       if (this.isCurrentTurn(sessionID, epoch)) {
-        this.lastFallbackTime.set(sessionID, Date.now());
+        this.lastFallbackTime.set(sessionID, this.now());
       }
     } finally {
       this.inProgress.delete(sessionID);
@@ -2988,6 +3030,7 @@ export class ForegroundFallbackManager {
         }),
         HOST_CALL_TIMEOUT_MS,
         'foreground waiter promotion timed out',
+        this.timerSeam,
       );
       const err = responseError(result);
       if (err !== undefined) throw new Error(stringifyError(err));
@@ -3234,7 +3277,7 @@ export class ForegroundFallbackManager {
     incidentID?: string,
     error?: unknown,
   ): boolean {
-    const now = Date.now();
+    const now = this.now();
     const curModel = this.sessionModel.get(sessionID);
     const turn = this.turnEpoch.get(sessionID) ?? 0;
     if (incidentID !== undefined) {
@@ -3502,6 +3545,7 @@ export class ForegroundFallbackManager {
           query: { limit: FALLBACK_REPLAY_TAIL_MESSAGES },
         }),
         'fallback replay transcript read timed out',
+        this.timerSeam,
       );
       // Transcript read suspended across a dispose(): everything from
       // here on — handoff arming, replay prompt, switch claim — would
@@ -3527,6 +3571,7 @@ export class ForegroundFallbackManager {
             ? session.message({ path: { id: sessionID, messageID: parentID } })
             : session.messages({ path: { id: sessionID } }),
           'fallback replay user message read timed out',
+          this.timerSeam,
         );
         if (!this.isCurrentTurn(sessionID, expectedEpoch)) return;
         lastUser = [deepResult.data ?? []]
@@ -3574,7 +3619,7 @@ export class ForegroundFallbackManager {
       const promptBody = {
         path: { id: sessionID },
         body: {
-          messageID: createReplayMessageID(),
+          messageID: createReplayMessageID(this.now),
           // Reminder only: the user's request is already in the history the
           // fallback model reads. Copying its stored parts (ids included)
           // would make the host upsert the original rows and re-expand
@@ -3644,6 +3689,7 @@ export class ForegroundFallbackManager {
           promptAsync(promptBody),
           REPLAY_SEND_TIMEOUT_MS,
           'fallback replay prompt timed out',
+          this.timerSeam,
         );
       };
       try {
@@ -3706,7 +3752,7 @@ export class ForegroundFallbackManager {
           withdrawHandoff();
           return;
         }
-        await new Promise((r) => setTimeout(r, REPROMPT_DELAY_MS));
+        await this.sleep(REPROMPT_DELAY_MS);
         // Recheck after the abort/backoff: a cancelled or superseded child
         // admits no second replay, so withdraw its prepared handoff.
         if (
@@ -3721,7 +3767,7 @@ export class ForegroundFallbackManager {
           return;
         }
         try {
-          promptBody.body.messageID = createReplayMessageID();
+          promptBody.body.messageID = createReplayMessageID(this.now);
           promptResult = await sendReplayPrompt();
         } catch (retryErr) {
           // Transport failed without a response: the host may still

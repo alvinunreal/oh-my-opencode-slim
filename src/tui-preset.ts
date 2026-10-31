@@ -51,6 +51,7 @@ import {
   writePreset,
 } from './tools/preset-switch';
 import type { TuiSnapshot } from './tui-state';
+import { normalizeModelOption } from './v2/preset-manager';
 
 /** Build a `<text>` JSX element — required for DialogPrompt.description(). */
 function desc(text: string): JSX.Element {
@@ -795,7 +796,36 @@ async function fetchModelOptions(api: TuiPluginApi): Promise<ModelOption[]> {
 /** provider/model-id -> configured display name, for sidebar rendering. */
 export async function fetchModelNameMap(api: {
   client?: unknown;
+  directory?: string;
 }): Promise<Record<string, string>> {
+  const client = api.client as
+    | {
+        config?: { providers?: unknown };
+        model?: {
+          list?: (input: {
+            location?: { directory: string };
+          }) => Promise<unknown>;
+        };
+      }
+    | undefined;
+  if (
+    typeof client?.config?.providers !== 'function' &&
+    typeof client?.model?.list === 'function'
+  ) {
+    const response = await client.model.list({
+      ...(api.directory ? { location: { directory: api.directory } } : {}),
+    });
+    const entries = Array.isArray(response)
+      ? response
+      : (response as { data?: unknown } | undefined)?.data;
+    if (!Array.isArray(entries)) return {};
+    const names: Record<string, string> = {};
+    for (const entry of entries) {
+      const option = normalizeModelOption(entry);
+      if (option) names[option.value] = option.title;
+    }
+    return names;
+  }
   const options = await fetchModelOptions(api as TuiPluginApi);
   return Object.fromEntries(options.map((o) => [o.value, o.title]));
 }

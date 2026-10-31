@@ -183,6 +183,8 @@ describe('HerdrMultiplexer', () => {
       '--no-focus',
       '--ratio',
       '0.6',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
   });
 
@@ -228,6 +230,8 @@ describe('HerdrMultiplexer', () => {
       '--no-focus',
       '--ratio',
       '0.6',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
 
     // 3. pane rename
@@ -278,8 +282,9 @@ describe('HerdrMultiplexer', () => {
     // The secret travels as a spawn-time herdr environment entry (`--env`),
     // never in the `pane run` command text (which herdr types into the shell).
     const split = commands().find((command) => command.includes('split'));
-    const envIndex = split?.indexOf('--env') ?? -1;
+    const envIndex = (split?.indexOf('OPENCODE_PASSWORD=pw') ?? 0) - 1;
     expect(envIndex).toBeGreaterThan(-1);
+    expect(split?.[envIndex]).toBe('--env');
     expect(split?.[envIndex + 1]).toBe('OPENCODE_PASSWORD=pw');
     expect((split ?? []).filter((arg) => arg.includes('pw'))).toEqual([
       'OPENCODE_PASSWORD=pw',
@@ -301,8 +306,9 @@ describe('HerdrMultiplexer', () => {
 
     // No password environment is injected outside v2-remote.
     const sharedSplit = commands().find((command) => command.includes('split'));
-    expect(sharedSplit).not.toContain('--env');
-    expect(sharedSplit).not.toContain('OPENCODE_PASSWORD');
+    expect(
+      sharedSplit?.filter((_, index) => sharedSplit[index - 1] === '--env'),
+    ).toEqual(['OH_MY_OPENCODE_SLIM_PANE_VIEWER=1']);
 
     const shared = runCommand();
     expect(shared).toContain('--session');
@@ -633,6 +639,8 @@ describe('HerdrMultiplexer', () => {
       '--cwd',
       '/repo',
       '--no-focus',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
     expect(splitCommands[1]).toEqual([
       '/usr/bin/herdr',
@@ -644,6 +652,8 @@ describe('HerdrMultiplexer', () => {
       '--cwd',
       '/repo',
       '--no-focus',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
     // main_pane_size applies to main-* layouts only.
     expect(splitCommands[0]).not.toContain('--ratio');
@@ -688,6 +698,8 @@ describe('HerdrMultiplexer', () => {
       '--no-focus',
       '--ratio',
       '0.6',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
     // Later children stack to the right INSIDE the agent row, unsized.
     expect(splitCommands[1]).toEqual([
@@ -700,6 +712,8 @@ describe('HerdrMultiplexer', () => {
       '--cwd',
       '/repo',
       '--no-focus',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
     expect(splitCommands[2]).toEqual([
       '/usr/bin/herdr',
@@ -711,6 +725,8 @@ describe('HerdrMultiplexer', () => {
       '--cwd',
       '/repo',
       '--no-focus',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
   });
 
@@ -780,6 +796,8 @@ describe('HerdrMultiplexer', () => {
       '--no-focus',
       '--ratio',
       '0.7',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
   });
 
@@ -801,6 +819,8 @@ describe('HerdrMultiplexer', () => {
       '--cwd',
       '/repo',
       '--no-focus',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
   });
 
@@ -861,6 +881,8 @@ describe('HerdrMultiplexer', () => {
       '--no-focus',
       '--ratio',
       '0.6',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
     // Stacked sibling inside the agent area: herdr's default 50/50, no ratio.
     expect(splitCommands[1]).toEqual([
@@ -873,6 +895,8 @@ describe('HerdrMultiplexer', () => {
       '--cwd',
       '/repo',
       '--no-focus',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
   });
 
@@ -895,6 +919,8 @@ describe('HerdrMultiplexer', () => {
       '--cwd',
       '/repo',
       '--no-focus',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
     expect(splitCommands[2]).not.toContain('--ratio');
   });
@@ -931,6 +957,8 @@ describe('HerdrMultiplexer', () => {
       '--no-focus',
       '--ratio',
       '0.6',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
   });
 
@@ -985,6 +1013,8 @@ describe('HerdrMultiplexer', () => {
       '--no-focus',
       '--ratio',
       '0.6',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
 
     // 2nd: agent area split → down (second spawn) — fails; no ratio
@@ -998,6 +1028,8 @@ describe('HerdrMultiplexer', () => {
       '--cwd',
       '/repo',
       '--no-focus',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
 
     // 3rd: agent-area split retried once (still fails)
@@ -1011,6 +1043,8 @@ describe('HerdrMultiplexer', () => {
       '--cwd',
       '/repo',
       '--no-focus',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
 
     // 4th: parent split → right, WITHOUT --ratio: the old agent area still
@@ -1025,6 +1059,8 @@ describe('HerdrMultiplexer', () => {
       '--cwd',
       '/repo',
       '--no-focus',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
 
     // agentAreaPaneId was updated to the new pane from the parent split
@@ -1071,6 +1107,8 @@ describe('HerdrMultiplexer', () => {
       '--no-focus',
       '--ratio',
       '0.7',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
   });
 
@@ -1146,6 +1184,8 @@ describe('HerdrMultiplexer', () => {
       '--cwd',
       '/repo',
       '--no-focus',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
   });
 
@@ -1170,6 +1210,8 @@ describe('HerdrMultiplexer', () => {
       '--no-focus',
       '--ratio',
       '0.75',
+      '--env',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     ]);
   });
 

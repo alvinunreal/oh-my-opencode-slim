@@ -333,10 +333,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
           'Use --reset to overwrite.',
       );
     } else {
-      const liteResult = writeLiteConfig(
-        config,
-        configExists ? configPath : undefined,
-      );
+      const liteResult = writeLiteConfig(config, configPath);
       if (
         !handleStepResult(
           liteResult,
