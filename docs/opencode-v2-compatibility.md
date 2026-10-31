@@ -309,8 +309,9 @@ not an optional-degradation path.
       **rethrows** — v2 rejects the tool call, which is how the v1
       anti-duplicate / relaunch-lease guards enforce on v2. The after
       bridge honors v2's status discrimination: `error` events synthesize
-      the v1 after-hook output from the error text (so json-error-recovery
-      still appends its reminder to a failed call's output), and an
+      the v1 after-hook output from the error text (so v1 after-hooks such
+      as tool-loop-guard can append warnings, written back where the host
+      renders the failure: its cause when it has one), and an
       errored call never presents its result content as a success.
       The v2 executor wrapper registers child identity and state from the
       structured result, scoped by `(parentSessionID, callID)`. For terminal

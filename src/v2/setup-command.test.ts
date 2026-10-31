@@ -1956,6 +1956,37 @@ describe('tool execute bridge normalization', () => {
 });
 
 describe('tool execute bridge status discrimination', () => {
+  test('only diagnoses v1 invalid-tool results', async () => {
+    const recovery = createJsonErrorRecoveryHook({} as never);
+    const text = 'Diagnosis: invalid JSON in a configuration file';
+    const successful = { title: '', output: text, metadata: {} };
+    await recovery['tool.execute.after'](
+      { tool: 'task', sessionID: 's', callID: 'c' },
+      successful,
+    );
+    expect(successful.output).toBe(text);
+    const invalid = { title: '', output: text, metadata: {} };
+    await recovery['tool.execute.after'](
+      { tool: 'invalid', sessionID: 's', callID: 'c' },
+      invalid,
+    );
+    expect(invalid.output).toContain('invalid JSON arguments');
+    const bridge = createToolExecuteBridges(
+      undefined,
+      recovery['tool.execute.after'],
+    );
+    const event = {
+      tool: 'subagent',
+      sessionID: 's',
+      id: 'c',
+      input: {},
+      status: 'completed',
+      result: { content: text },
+    };
+    await bridge.afterBridge(event);
+    expect(event.result.content).toBe(text);
+  });
+
   test('error status synthesizes the v1 output from the error text', async () => {
     const seen: Array<{ tool: string; output: unknown }> = [];
     const after = async (_i: unknown, o: { output: unknown }) => {
@@ -2001,7 +2032,7 @@ describe('tool execute bridge status discrimination', () => {
     expect(seen).toEqual(['file not found']);
   });
 
-  test('errored output still feeds json-error-recovery (reminder appended)', async () => {
+  test('v2 tool failures do not trigger the v1 JSON reminder', async () => {
     const recovery = createJsonErrorRecoveryHook({} as never);
     const event = {
       tool: 'task',
@@ -2012,17 +2043,16 @@ describe('tool execute bridge status discrimination', () => {
       input: {},
       status: 'error' as const,
       error: 'SyntaxError: Unexpected token in JSON',
-      result: {},
+      result: { content: 'stale result' },
     };
     const { afterBridge } = createToolExecuteBridges(
       undefined,
       recovery['tool.execute.after'],
     );
     await afterBridge(event);
-    // The reminder the recovery hook appended to output.output must land
-    // in the model-visible content field of the errored result.
-    expect(event.result.content).toContain('invalid JSON arguments');
-    expect(event.result.content).toContain('SyntaxError');
+    expect(event.status).toBe('error');
+    expect(event.error).toBe('SyntaxError: Unexpected token in JSON');
+    expect(event.result.content).toBe('stale result');
   });
 
   test('error status with no error field never presents result content as success', async () => {

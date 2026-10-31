@@ -1851,7 +1851,7 @@ describe('plugin reload generation cleanup', () => {
         metadata: {},
       };
       await hooks['tool.execute.after']?.(
-        { tool: 'Edit', sessionID: 'guards-on', callID: 'c-7' } as never,
+        { tool: 'invalid', sessionID: 'guards-on', callID: 'c-7' } as never,
         jsonOutput as never,
       );
       expect(String(jsonOutput.output)).toContain(JSON_ERROR_REMINDER);

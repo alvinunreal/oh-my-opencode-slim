@@ -119,10 +119,7 @@ import {
   type SessionTeamBundle,
   wrapSessionPresetSubagent,
 } from './session-presets';
-import {
-  createSessionSubmit,
-  type V2CommandSubmit,
-} from './session-submit';
+import { createSessionSubmit, type V2CommandSubmit } from './session-submit';
 import { createSubagentExecutorWrapper } from './subagent-executor-wrapper';
 import type {
   V2AgentDraft,
@@ -2126,6 +2123,7 @@ export function createToolExecuteBridges(
         tool: toolNameToV1(e.tool),
         sessionID: e.sessionID,
         callID: e.id,
+        status: e.status,
         args: isDelegation ? subagentArgsToV1(e.input) : e.input,
       },
       output,
