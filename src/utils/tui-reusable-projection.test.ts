@@ -74,15 +74,20 @@ describe('tui-reusable-projection', () => {
       await withTuiSnapshotBatch(async () => {
         seedReconciled(board, 'batched-child');
         recordTuiAgentModel(
-          { agentName: 'oracle', model: 'provider/model' },
+          {
+            sessionID: 'batched-child',
+            agentName: 'oracle',
+            model: 'provider/model',
+          },
           projectDir,
         );
       });
       expect(projectionSpy).toHaveBeenCalledTimes(1);
       expect(writes).toBe(1);
-      expect(readTuiSnapshot(projectDir).agentModels.oracle).toBe(
-        'provider/model',
-      );
+      expect(
+        readTuiSnapshot(projectDir).sessionModels?.['batched-child']?.oracle
+          ?.model,
+      ).toBe('provider/model');
       expect(
         readTuiSnapshot(projectDir).reusableByAgent['parent-1']?.oracle?.[0]
           ?.taskID,
@@ -707,7 +712,7 @@ describe('tui-reusable-projection', () => {
       // locked path over the freshly parsed (key-less) shape.
       for (let i = 0; i < 8; i += 1) {
         recordTuiAgentModel(
-          { agentName: 'explorer', model: `model-${i}` },
+          { sessionID: 'filler', agentName: 'explorer', model: `model-${i}` },
           path.join(projectDir, `cache-filler-${i}`),
         );
       }
