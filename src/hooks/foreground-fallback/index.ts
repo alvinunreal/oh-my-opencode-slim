@@ -525,7 +525,7 @@ export function isInlineFailoverError(error: unknown): boolean {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Used only to reject stale retry events from the previous model episode. */
+/** Bounds stale-retry rejection, incident correlation, and incident dedup. */
 const DEDUP_WINDOW_MS = 5_000;
 const REPROMPT_DELAY_MS = 500;
 /** Longer host backoffs should use the configured model chain instead. */
