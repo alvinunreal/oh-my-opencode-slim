@@ -47,6 +47,7 @@ export interface MarketplaceServiceOptions
   getLivePackages?: () => readonly MarketplaceLivePackage[] | undefined;
   getDesiredState?: (
     inspection: MarketplaceStoreInspection,
+    availableSkillNames?: readonly string[],
   ) => MarketplaceDesiredState;
   getPresetOverride?: () => string | undefined;
 }
@@ -217,18 +218,22 @@ export class MarketplaceService {
       : this.store.verifyAll();
   }
 
-  status(): MarketplaceRuntimeStatus {
-    return readMarketplaceRuntimeStatus(this.statusInput());
+  status(availableSkillNames?: readonly string[]): MarketplaceRuntimeStatus {
+    return readMarketplaceRuntimeStatus(this.statusInput(availableSkillNames));
   }
 
-  requestReload(): MarketplaceReloadRequest {
-    return requestMarketplaceReload(this.statusInput());
+  requestReload(
+    availableSkillNames?: readonly string[],
+  ): MarketplaceReloadRequest {
+    return requestMarketplaceReload(this.statusInput(availableSkillNames));
   }
 
-  private statusInput(): Parameters<typeof readMarketplaceRuntimeStatus>[0] {
+  private statusInput(
+    availableSkillNames?: readonly string[],
+  ): Parameters<typeof readMarketplaceRuntimeStatus>[0] {
     const livePackages = this.getLivePackages?.();
     const inspection = this.store.inspectAll();
-    const desired = this.readDesiredPackages(inspection);
+    const desired = this.readDesiredPackages(inspection, availableSkillNames);
     const presetOverride = this.getPresetOverride?.();
     return {
       directory: this.projectDir,
@@ -251,10 +256,11 @@ export class MarketplaceService {
 
   private readDesiredPackages(
     inspection: MarketplaceStoreInspection,
+    availableSkillNames?: readonly string[],
   ): MarketplaceDesiredState | undefined {
     if (!this.getDesiredState) return undefined;
     try {
-      return this.getDesiredState(inspection);
+      return this.getDesiredState(inspection, availableSkillNames);
     } catch (error) {
       return {
         packageIds: [],

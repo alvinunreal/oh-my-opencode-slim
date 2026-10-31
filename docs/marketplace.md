@@ -4,6 +4,7 @@ Marketplace packages add third-party specialist agents. Package data is stored
 locally and selected in the active preset; installing a package does not add it
 to the running agent registry. Registry membership and permissions are frozen
 for each plugin generation.
+On v2, a native config agent with the same ID modifies a package agent instead of being rejected.
 
 ## CLI
 

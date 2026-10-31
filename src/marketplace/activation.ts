@@ -65,7 +65,7 @@ export interface ResolveMarketplaceActivationOptions {
   readonly selectedPackageIds: readonly string[];
   readonly store: MarketplaceActivationStore;
   readonly pluginVersion: string;
-  readonly availableSkillNames: readonly string[];
+  readonly availableSkillNames?: readonly string[];
   readonly availableMcpNames: readonly string[];
   readonly disabledSkillNames?: readonly string[];
   readonly disabledMcpNames?: readonly string[];
@@ -199,7 +199,7 @@ export function resolveMarketplaceActivation(
     }
   }
   const skills = new Set(
-    options.availableSkillNames.filter(
+    (options.availableSkillNames ?? []).filter(
       (name) => !options.disabledSkillNames?.includes(name),
     ),
   );
@@ -274,7 +274,11 @@ export function resolveMarketplaceActivation(
       : [];
     const requiredMcps = [...new Set([...inheritedMcps, ...manifest.mcps])];
     const inheritedMcpSet = new Set(inheritedMcps);
-    const missingSkills = manifest.skills.filter((name) => !skills.has(name));
+    const missingSkills = manifest.skills.filter(
+      (name) =>
+        options.disabledSkillNames?.includes(name) ||
+        (options.availableSkillNames !== undefined && !skills.has(name)),
+    );
     const missingMcps = requiredMcps.filter((name) => !mcps.has(name));
     if (missingSkills.length || missingMcps.length) {
       diagnostics.push(

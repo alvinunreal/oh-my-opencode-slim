@@ -99,9 +99,12 @@ import type { MessageWithParts } from './hooks/types';
 import type { createInterviewManager } from './interview';
 import type { collapseInterviewHistory } from './interview/history';
 import { retryMarketplaceLeases } from './marketplace/lease';
-import { discoverPreflightSkills } from './marketplace/preflight';
 import type { MarketplaceRegistryImplementation } from './marketplace/registry-runtime';
 import type { MarketplaceService } from './marketplace/service';
+import {
+  missingMarketplaceSkills,
+  skillIdsFromResponse,
+} from './marketplace/skills';
 import { resolveDesiredMarketplacePackageIds } from './marketplace/status';
 import { createBuiltinMcps, getOverriddenBuiltinMcpKeys } from './mcp';
 import {
@@ -2061,6 +2064,37 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   // package IDs are ignored. This is distinct from an empty per-preset
   // activation list, which keeps the service running with nothing selected.
   const marketplaceEnabled = runtime.marketplaceEnabled;
+  let marketplaceSkillReader = async (): Promise<readonly string[]> =>
+    skillIdsFromResponse(
+      // The v1 SDK omits /skill, but its transport preserves host auth and in-process routing.
+      await (
+        ctx.client as unknown as {
+          _client: {
+            get(input: {
+              url: string;
+              query: { directory: string };
+              throwOnError: true;
+            }): Promise<unknown>;
+          };
+        }
+      )._client.get({
+        url: '/skill',
+        query: { directory: ctx.directory },
+        throwOnError: true,
+      }),
+      'name',
+    );
+  const readMarketplaceSkillIds = async (): Promise<readonly string[]> => {
+    try {
+      return await withTimeout(
+        marketplaceSkillReader(),
+        5_000,
+        'Skill inventory timed out',
+      );
+    } catch (cause) {
+      throw new Error('Could not verify the native skill inventory', { cause });
+    }
+  };
   let marketplaceImplementation: MarketplaceRegistryImplementation | undefined;
   let marketplaceService: MarketplaceService | undefined;
   if (marketplaceEnabled) {
@@ -2076,7 +2110,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         return registryBridge.requireRegistry().marketplacePackages;
       },
       getPresetOverride: () => runtime.getRuntimePreset() ?? undefined,
-      getDesiredState: (packageInspection) => {
+      getDesiredState: (packageInspection, availableSkillNames) => {
         const snapshot = readPluginConfigSnapshot(ctx.directory, {
           hostFlavor,
         });
@@ -2114,6 +2148,36 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
               'Marketplace package inspection is incomplete',
           };
         }
+        const liveRequirements =
+          resolvedAgentRegistry?.marketplaceRequiredSkills ?? [];
+        const desiredRequirements = packageInspection.packages
+          .filter(({ manifest }) => desiredPackageIds.includes(manifest.id))
+          .map(({ manifest }) => ({
+            packageId: manifest.id,
+            skills: manifest.skills,
+          }));
+        if (
+          [...liveRequirements, ...desiredRequirements].some(
+            ({ skills }) => skills.length > 0,
+          )
+        ) {
+          if (availableSkillNames === undefined) {
+            return {
+              packageIds: desiredPackageIds,
+              error: 'Could not verify the native skill inventory',
+            };
+          }
+          const missing = missingMarketplaceSkills(
+            liveRequirements,
+            availableSkillNames,
+          );
+          if (missing.length) {
+            return {
+              packageIds: desiredPackageIds,
+              error: `Live marketplace skills unavailable: ${missing.join(', ')}`,
+            };
+          }
+        }
         if (desiredPackageIds.length === 0) {
           return { packageIds: desiredPackageIds, packages: [] };
         }
@@ -2143,10 +2207,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         );
         freshRuntime.captureHostConfig(latestHostSnapshot ?? {});
         if (runtimePreset) freshRuntime.setRuntimePreset(runtimePreset);
-        const availableSkillNames = discoverPreflightSkills(
-          freshRuntime,
-          ctx.directory,
-        );
         const freshPluginMcps = createBuiltinMcps(freshRuntime.disabledMcps);
         try {
           const freshRegistry = buildResolvedAgentRegistry(freshRuntime, {
@@ -2177,6 +2237,24 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
   }
   registryBridge = {
+    hasSelectedMarketplaceAgents: selectedMarketplacePackageIds.length > 0,
+    setMarketplaceSkillReader(reader) {
+      marketplaceSkillReader = reader;
+    },
+    async verifyMarketplaceSkills() {
+      if (selectedMarketplacePackageIds.length === 0) return;
+      const requirements =
+        registryBridge.requireRegistry().marketplaceRequiredSkills;
+      if (!requirements.some(({ skills }) => skills.length > 0)) return;
+      const missing = missingMarketplaceSkills(
+        requirements,
+        await readMarketplaceSkillIds(),
+      );
+      if (missing.length)
+        throw new Error(
+          `Marketplace skills unavailable: ${missing.join(', ')}`,
+        );
+    },
     marketplaceService,
     finalize(hostSnapshot, nativePermissionsByAgent) {
       if (registryRetired) throw new Error('Agent registry is retired');
@@ -2203,9 +2281,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
                   selectedPackageIds: selectedMarketplacePackageIds,
                   store: marketplaceService.store,
                   pluginVersion: getBuildInfo().version,
-                  availableSkillNames: selectedMarketplacePackageIds.length
-                    ? discoverPreflightSkills(runtime, ctx.directory)
-                    : [],
                 },
               }
             : {}),
@@ -2265,6 +2340,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       await import('./tools/marketplace');
     const marketplaceTools = createMarketplaceTools({
       service: marketplaceService,
+      readSkillIds: readMarketplaceSkillIds,
       cwd: ctx.directory,
       getOrchestratorIdentities: () => {
         const registry = registryBridge.requireRegistry();
@@ -3400,6 +3476,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     ...(chatHeadersHook
       ? { 'chat.headers': chatHeadersHook['chat.headers'] }
       : {}),
+
+    'chat.params': async () => {
+      if (marketplaceEnabled) await registryBridge.verifyMarketplaceSkills();
+    },
 
     // v1 compaction requests use the same message transform as normal turns.
     // v2 handles compaction in its separate session.compaction bridge.

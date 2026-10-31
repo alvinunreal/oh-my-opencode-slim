@@ -1,19 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RuntimeConfig } from '../config/runtime';
-import {
-  discoverOnDiskSkillNames,
-  discoverPreflightSkills,
-  loadMergedOpenCodeConfig,
-} from './preflight';
+import { loadMergedOpenCodeConfig } from './preflight';
 
 const ENV_KEYS = [
   'XDG_CONFIG_HOME',
@@ -41,14 +31,6 @@ afterEach(() => {
 function setConfigHome(path: string): void {
   process.env.XDG_CONFIG_HOME = join(path, 'xdg');
   process.env.OPENCODE_TEST_HOME = join(path, 'home');
-}
-
-function writeSkill(path: string, name: string): void {
-  mkdirSync(join(path, '..'), { recursive: true });
-  writeFileSync(
-    path,
-    `---\nname: |-${'\n'}  ${name}\ndescription: Test skill.\n---\n\n# body\n`,
-  );
 }
 
 describe('marketplace host preflight', () => {
@@ -151,40 +133,6 @@ describe('marketplace host preflight', () => {
       expect(loadMergedOpenCodeConfig(root).mcp).toHaveProperty('from_env');
       process.env.OPENCODE_CONFIG_CONTENT = '{ "mcp": ';
       expect(loadMergedOpenCodeConfig(root).mcp).toBeUndefined();
-    } finally {
-      RuntimeConfig.reset(root);
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test('discovers block-scalar skills and confines symlinks to each root', () => {
-    const root = mkdtempSync(join(tmpdir(), 'marketplace-preflight-'));
-    const skillRoot = join(root, 'skills');
-    const outside = join(root, 'outside');
-    try {
-      setConfigHome(root);
-      writeSkill(join(skillRoot, 'good', 'SKILL.md'), 'block-skill');
-      writeSkill(join(outside, 'SKILL.md'), 'outside-skill');
-      symlinkSync(outside, join(skillRoot, 'escape'), 'dir');
-      expect(discoverOnDiskSkillNames(root, [skillRoot])).toEqual([
-        'block-skill',
-      ]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test('filters disabled runtime skills', () => {
-    const root = mkdtempSync(join(tmpdir(), 'marketplace-preflight-'));
-    const skills = join(root, 'skills');
-    try {
-      setConfigHome(root);
-      writeSkill(join(skills, 'one', 'SKILL.md'), 'one');
-      writeSkill(join(skills, 'two', 'SKILL.md'), 'two');
-      const runtime = RuntimeConfig.init(root, {
-        disabled_skills: ['one'],
-      });
-      expect(discoverPreflightSkills(runtime, root, [skills])).toEqual(['two']);
     } finally {
       RuntimeConfig.reset(root);
       rmSync(root, { recursive: true, force: true });

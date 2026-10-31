@@ -53,6 +53,7 @@ import {
   withImmediateMarketplaceLeases,
 } from '../marketplace/lease';
 import { loadMergedOpenCodeConfig } from '../marketplace/preflight';
+import { skillIdsFromResponse } from '../marketplace/skills';
 import type { McpConfig } from '../mcp/types';
 import {
   collectAgentDisplayNames,
@@ -2434,6 +2435,17 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         | undefined;
       if (!registryBridge)
         throw new Error('v1 factory registry bridge is unavailable');
+      if (registryBridge.hasSelectedMarketplaceAgents && !ctx.session) {
+        throw new Error(
+          'Marketplace agents require session model request hooks',
+        );
+      }
+      registryBridge.setMarketplaceSkillReader(async () => {
+        if (typeof ctx.skill?.list !== 'function') {
+          throw new Error('Native skill inventory unavailable');
+        }
+        return skillIdsFromResponse(await ctx.skill.list(), 'id');
+      });
       const configCommands: Record<string, unknown> = {};
       registryBridge.prepareCommands(configCommands);
       const command = configCommands.command as
@@ -2630,6 +2642,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           agentPassDeferred = !permissionSnapshotReady;
         } catch (error) {
           if (generationDisposed) throw error;
+          log('[v2] agent finalization failed', String(error));
           permissionSnapshotFailure =
             error instanceof Error ? error : new Error(String(error));
           resolvePermissionSnapshotReady();
@@ -3289,10 +3302,26 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         // HTTP headers; registered unconditionally when the v1
         // hook exists — a failure fails setup rather than silently skipping
         // the Copilot initiator header).
-        if (chatHeadersHook) {
+        if (chatHeadersHook || registryBridge.hasSelectedMarketplaceAgents) {
+          const headers = chatHeadersHook
+            ? createChatHeadersBridge(chatHeaderStates)
+            : undefined;
           const headerReg = await ctx.session.hook(
             'model.request',
-            createChatHeadersBridge(chatHeaderStates),
+            async (event) => {
+              if (registryBridge.hasSelectedMarketplaceAgents) {
+                if (!permissionSnapshotReady) {
+                  await withTimeout(
+                    permissionSnapshotReadiness,
+                    PERMISSION_RULES_OPERATION_TIMEOUT_MS,
+                    'Agent registry readiness timed out',
+                  );
+                }
+                if (permissionSnapshotFailure) throw permissionSnapshotFailure;
+                await registryBridge.verifyMarketplaceSkills();
+              }
+              await headers?.(event);
+            },
           );
           disposers.push(() => headerReg.dispose());
           log('[v2] chat.headers bridge registered (session.model.request)');

@@ -19,6 +19,7 @@ import type {
   MarketplaceAgentMetadata,
   MarketplaceRegistryImplementation,
 } from '../marketplace/registry-runtime';
+import type { MarketplaceSkillRequirements } from '../marketplace/skills';
 import { normalizeAgentName } from '../utils/agent-variant';
 import { adaptPermissions, v1PermKeyToV2 } from '../v2/adapters';
 import {
@@ -43,6 +44,7 @@ export interface ResolvedAgentRegistry {
   readonly agentNames: readonly string[];
   readonly marketplaceAgentNames: readonly string[];
   readonly marketplacePackages: readonly MarketplaceLivePackage[];
+  readonly marketplaceRequiredSkills: readonly MarketplaceSkillRequirements[];
   readonly identities: Readonly<Record<string, string>>;
   readonly modelCandidates: Readonly<
     Record<string, readonly { id: string; variant?: string }[]>
@@ -121,7 +123,7 @@ export interface RegistryBuildOptions {
     readonly selectedPackageIds: readonly string[];
     readonly store: MarketplaceActivationStore;
     readonly pluginVersion: string;
-    readonly availableSkillNames: readonly string[];
+    readonly availableSkillNames?: readonly string[];
   };
 }
 
@@ -991,6 +993,7 @@ export function buildResolvedAgentRegistry(
   const marketplaceMetadata = new Map<string, MarketplaceAgentMetadata>();
   let marketplaceSkillDefaults: Record<string, readonly string[]> = {};
   let marketplacePackages: MarketplaceLivePackage[] = [];
+  let marketplaceRequiredSkills: MarketplaceSkillRequirements[] = [];
   if (options.marketplace?.selectedPackageIds.length) {
     const customOwnerNames = new Set(runtime.customAgentNames);
     const reservedAgentNames = new Set<string>([
@@ -1024,6 +1027,10 @@ export function buildResolvedAgentRegistry(
         disabledMcpNames: runtime.disabledMcps,
         reservedAgentNames,
       });
+    marketplaceRequiredSkills = plan.agents.map((admission) => ({
+      packageId: admission.packageId,
+      skills: [...admission.requiredSkills],
+    }));
     marketplacePackages = plan.agents.map((admission) => ({
       id: admission.packageId,
       runtimeName: admission.agentName,
@@ -1805,6 +1812,7 @@ export function buildResolvedAgentRegistry(
     agentNames: Object.freeze(definitions.map((definition) => definition.name)),
     marketplaceAgentNames: Object.freeze([...marketplaceMetadata.keys()]),
     marketplacePackages: freeze(clone(frozenMarketplacePackages)),
+    marketplaceRequiredSkills: freeze(clone(marketplaceRequiredSkills)),
     identities: frozenIdentities,
     modelCandidates: frozenCandidates,
     marketplaceManifestChains: freeze(marketplaceManifestChains),

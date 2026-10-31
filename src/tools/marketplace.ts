@@ -38,6 +38,7 @@ export interface MarketplaceToolOptions {
   readonly orchestratorIdentities?: ReadonlySet<string>;
   readonly getOrchestratorIdentities?: () => ReadonlySet<string>;
   readonly cwd?: string;
+  readonly readSkillIds?: () => Promise<readonly string[]>;
 }
 
 export function resolveFinalizedOrchestratorIdentities(input: {
@@ -128,6 +129,14 @@ export function createMarketplaceTools(options: MarketplaceToolOptions): {
       ) {
         throw new Error(`${args.action} does not accept a target`);
       }
+      let availableSkillNames: readonly string[] | undefined;
+      if (args.action === 'status' || args.action === 'request_reload') {
+        try {
+          availableSkillNames = await options.readSkillIds?.();
+        } catch {
+          // An unavailable inventory remains unknown, not an empty catalog.
+        }
+      }
       return retryMarketplaceLeases(() => {
         switch (args.action) {
           case 'list':
@@ -149,9 +158,17 @@ export function createMarketplaceTools(options: MarketplaceToolOptions): {
               2,
             );
           case 'status':
-            return JSON.stringify(options.service.status(), null, 2);
+            return JSON.stringify(
+              options.service.status(availableSkillNames),
+              null,
+              2,
+            );
           case 'request_reload':
-            return JSON.stringify(options.service.requestReload(), null, 2);
+            return JSON.stringify(
+              options.service.requestReload(availableSkillNames),
+              null,
+              2,
+            );
         }
       }, context?.abort);
     },

@@ -20,7 +20,15 @@
  *   trip its bust warning, which is written to the plugin log
  *   (`OPENCODE_LOG_DIR` fixture + `flushLoggerForTesting`).
  */
-import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  jest,
+  spyOn,
+  test,
+} from 'bun:test';
 import * as fs from 'node:fs';
 import { existsSync, readdirSync as readDirSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
@@ -68,9 +76,14 @@ interface MockCalls {
         prompt: { text: string };
       }) => Promise<void>)
     | undefined;
+  modelRequestHookCb:
+    | ((event: Record<string, unknown>) => Promise<void>)
+    | undefined;
   disposed: string[];
   /** Replay registered skill transforms for one simulated state rebuild. */
   rebuildSkills: () => void;
+  pluginUpdates: Array<Record<string, unknown>>;
+  activatePlugins: () => Promise<void>;
 }
 
 /** Test-controlled event stream: manual push, pull/return observability. */
@@ -109,7 +122,10 @@ function createEventQueue() {
 
   return {
     iterable: {
-      [Symbol.asyncIterator]: () => iterator,
+      [Symbol.asyncIterator]: () => {
+        returnCalled = false;
+        return iterator;
+      },
     },
     push(event: Record<string, unknown>): void {
       if (returnCalled) return; // pump closed — dropped
@@ -137,7 +153,9 @@ function makeMockV2Context(
   events: ReturnType<typeof createEventQueue>;
 } {
   const skillCallbacks = new Set<(draft: unknown) => void>();
+  const agentCallbacks = new Set<(draft: unknown) => void>();
   const stored = new Map<string, unknown>();
+  let pluginInventoryPublished = false;
   const nativeSubagent = {
     description: 'Native subagent',
     execute: async (_input: unknown, _context: unknown) => ({}),
@@ -156,7 +174,9 @@ function makeMockV2Context(
     toolAfterCb: undefined,
     contextHookCb: undefined,
     promptHookCb: undefined,
+    modelRequestHookCb: undefined,
     disposed: [],
+    pluginUpdates: [],
     rebuildSkills: () => {
       for (const cb of skillCallbacks) {
         cb({
@@ -173,6 +193,22 @@ function makeMockV2Context(
           update: () => {},
         });
       }
+    },
+    activatePlugins: async () => {
+      if (pluginInventoryPublished) return;
+      pluginInventoryPublished = true;
+      calls.pluginUpdates.push({
+        id: 'evt_plugins',
+        created: 1,
+        type: 'plugin.updated',
+        location: {
+          directory: projectDir,
+          ...(ctx.location?.workspaceID === undefined
+            ? {}
+            : { workspaceID: ctx.location.workspaceID }),
+        },
+        data: {},
+      });
     },
   };
   const events = createEventQueue();
@@ -207,23 +243,19 @@ function makeMockV2Context(
     agent: {
       transform: async (cb: (draft: unknown) => void) => {
         calls.agentTransformCount += 1;
-        cb({
-          list: () => [],
-          get: () => undefined,
-          default: (id: string | undefined) => {
-            calls.agentDefault = id;
+        agentCallbacks.add(cb);
+        runAgentTransform(cb);
+        const registration = reg(`agent:${calls.agentTransformCount}`);
+        return {
+          dispose: () => {
+            agentCallbacks.delete(cb);
+            registration.dispose();
           },
-          update: (id: string, fn: (agent: unknown) => void) => {
-            calls.agentUpdates.push({ id });
-            fn({});
-          },
-          remove: (id: string) => {
-            calls.agentRemoves.push(id);
-          },
-        });
-        return reg(`agent:${calls.agentTransformCount}`);
+        };
       },
-      reload: async () => ({}),
+      reload: async () => {
+        for (const cb of agentCallbacks) runAgentTransform(cb);
+      },
       list: async () => [],
     },
     tool: {
@@ -296,6 +328,9 @@ function makeMockV2Context(
           calls.contextHookCb = cb as unknown as MockCalls['contextHookCb'];
         } else if (name === 'prompt') {
           calls.promptHookCb = cb as unknown as MockCalls['promptHookCb'];
+        } else if (name === 'model.request') {
+          calls.modelRequestHookCb =
+            cb as unknown as MockCalls['modelRequestHookCb'];
         }
         return reg(`session.hook:${name}`);
       },
@@ -324,6 +359,23 @@ function makeMockV2Context(
       }),
     },
   } as unknown as V2Context;
+
+  function runAgentTransform(cb: (draft: unknown) => void): void {
+    cb({
+      list: () => [],
+      get: () => undefined,
+      default: (id: string | undefined) => {
+        calls.agentDefault = id;
+      },
+      update: (id: string, fn: (agent: unknown) => void) => {
+        calls.agentUpdates.push({ id });
+        fn({});
+      },
+      remove: (id: string) => {
+        calls.agentRemoves.push(id);
+      },
+    });
+  }
 
   return { ctx, calls, events };
 }
@@ -759,6 +811,7 @@ describe('createV2Setup e2e', () => {
     const nativeExecute = native.execute;
     let cleanup = await createV2Setup()(ctx);
     try {
+      await calls.activatePlugins();
       await calls.promptHookCb?.({
         sessionID: 'root',
         messageID: 'root-first',
@@ -1270,6 +1323,7 @@ describe('createV2Setup e2e', () => {
       await cleanup();
       native.execute = nativeExecute;
       cleanup = await createV2Setup()(ctx);
+      await calls.activatePlugins();
       await calls.promptHookCb?.({
         sessionID: restoredMarket,
         messageID: 'restored-market',
@@ -2632,6 +2686,248 @@ describe('createV2Setup e2e', () => {
     }
   }, 20_000);
 
+  test('checks native and bundled skill ids before model requests and reports unverifiable status', async () => {
+    new MarketplaceStore({ pluginVersion: '2.2.25' }).install({
+      manifest: {
+        schemaVersion: 2,
+        id: 'team/skills',
+        version: '1.0.0',
+        displayName: 'Skill user',
+        description: 'Skill dependency fixture',
+        agentName: 'skill-user',
+        prompt: 'Use the requested skills.',
+        skills: ['reviewer', 'deepwork'],
+        mcps: [],
+        tools: ['read'],
+        author: { name: 'Test' },
+        tags: [],
+        license: 'MIT',
+        compatibility: { plugin: '>=2.0.0' },
+        model: { source: 'explicit', candidates: ['provider/model'] },
+        routing: {
+          description: 'Skill user',
+          when: 'Testing skills',
+          keywords: ['skills'],
+        },
+      } as never,
+    });
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        disabled_hooks: ['chat-headers'],
+        preset: 'marketplace-test',
+        presets: {
+          'marketplace-test': { marketplace: { agents: ['team/skills'] } },
+        },
+      }),
+    );
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    ctx.session.update = async () => {};
+    let skillReads = 0;
+    let inventory:
+      | Array<{
+          id: string;
+          name: string;
+          path: string;
+          content: string;
+        }>
+      | undefined = [
+      {
+        id: 'reviewer',
+        name: 'Reviewer display name',
+        path: '/skills/reviewer.md',
+        content: 'Review.',
+      },
+    ];
+    let includeBundled = true;
+    (ctx.skill as unknown as { list: () => Promise<unknown> }).list =
+      async () => {
+        skillReads++;
+        if (!inventory) throw new Error('inventory unavailable');
+        return {
+          data: [...inventory, ...(includeBundled ? calls.skillAdds : [])],
+        };
+      };
+
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(skillReads).toBe(0);
+      calls.rebuildSkills();
+      expect(calls.skillAdds.map(({ id }) => id)).toContain('deepwork');
+      await calls.activatePlugins();
+      expect(calls.modelRequestHookCb).toBeDefined();
+      const request = {
+        sessionID: 'ses_resume',
+        agent: 'orchestrator',
+        model: { id: 'model', providerID: 'provider' },
+        kind: 'primary',
+        headers: {},
+        body: {},
+      };
+      await calls.modelRequestHookCb?.(request);
+      expect(skillReads).toBe(1);
+      inventory = [];
+      includeBundled = false;
+      await expect(calls.modelRequestHookCb?.(request)).rejects.toThrow(
+        'team/skills',
+      );
+      inventory = undefined;
+      const inspect = calls.toolAdds.find(
+        (item) => item.name === 'marketplace_inspect',
+      );
+      expect(inspect).toBeDefined();
+      const result = (await inspect?.execute(
+        { action: 'status' },
+        { sessionID: 'ses_resume', agent: 'orchestrator' },
+      )) as { content: string };
+      const status = JSON.parse(result.content);
+      expect(status.reloadRequired).toBeNull();
+      expect(status.diagnostics.join(' ')).toContain('verify');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('reactivation publishes the roster and serves preset RPC before any prompt', async () => {
+    new MarketplaceStore({ pluginVersion: '2.2.25' }).install({
+      manifest: {
+        schemaVersion: 2,
+        id: 'team/reactivated',
+        version: '1.0.0',
+        displayName: 'Reactivated agent',
+        description: 'Reactivation fixture',
+        agentName: 'reactivated-agent',
+        prompt: 'Use the package capabilities.',
+        skills: [],
+        mcps: [],
+        tools: ['read'],
+        author: { name: 'Test' },
+        tags: [],
+        license: 'MIT',
+        compatibility: { plugin: '>=2.0.0' },
+        model: { source: 'explicit', candidates: ['provider/model'] },
+        routing: {
+          description: 'Reactivated agent',
+          when: 'Testing reactivation',
+          keywords: ['reactivation'],
+        },
+      } as never,
+    });
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        preset: 'marketplace-test',
+        presets: {
+          'marketplace-test': { marketplace: { agents: ['team/reactivated'] } },
+        },
+      }),
+    );
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    ctx.session.update = async () => {};
+    let presetRpc:
+      | {
+          apply: (
+            input: { sessionID: string; presetName: string },
+            context: { signal: AbortSignal },
+          ) => Promise<{ presetName: string }>;
+        }
+      | undefined;
+    ctx.rpc = {
+      register: async (contract, handlers) => {
+        if (contract.id === 'oh-my-opencode-slim.session-preset.v1') {
+          presetRpc = handlers as typeof presetRpc;
+        }
+        return { dispose() {} };
+      },
+    } as V2Context['rpc'];
+    const transforms = new Set<Parameters<typeof ctx.agent.transform>[0]>();
+    let publishedAgents: Array<Record<string, unknown>> = [];
+    const rebuildAgents = () => {
+      const agents = new Map<string, Record<string, unknown>>([
+        ['build', { id: 'build', mode: 'primary', permissions: [] }],
+      ]);
+      const draft = {
+        list: () => [...agents.values()],
+        get: (id: string) => agents.get(id),
+        default: () => {},
+        update: (
+          id: string,
+          update: (agent: Record<string, unknown>) => void,
+        ) => {
+          const agent = agents.get(id) ?? { id, permissions: [] };
+          update(agent);
+          agents.set(id, agent);
+        },
+        remove: (id: string) => {
+          agents.delete(id);
+        },
+      };
+      for (const transform of transforms) transform(draft);
+      return [...agents.values()];
+    };
+    ctx.agent.transform = async (transform) => {
+      transforms.add(transform);
+      publishedAgents = rebuildAgents();
+      return { dispose: () => transforms.delete(transform) };
+    };
+    ctx.agent.list = async () => {
+      return { data: rebuildAgents() };
+    };
+    ctx.agent.reload = async () => {
+      publishedAgents = rebuildAgents();
+    };
+
+    let cleanup = await createV2Setup()(ctx);
+    try {
+      await calls.activatePlugins();
+      expect(publishedAgents.some(({ id }) => id === 'reactivated-agent')).toBe(
+        true,
+      );
+      await cleanup();
+      ctx.options.revision = 2;
+      presetRpc = undefined;
+      cleanup = await createV2Setup()(ctx);
+      await calls.activatePlugins();
+      expect(calls.pluginUpdates).toHaveLength(1);
+      if (!presetRpc) throw new Error('missing preset RPC');
+
+      jest.useFakeTimers();
+      const applied = presetRpc
+        .apply(
+          { sessionID: 'ses_reactivated', presetName: 'marketplace-test' },
+          { signal: new AbortController().signal },
+        )
+        .then(
+          (result) => result.presetName,
+          (error: Error) => error.message,
+        );
+      for (let i = 0; i < 30; i++) await Promise.resolve();
+      jest.advanceTimersByTime(5_001);
+      const preset = await applied;
+      const session = await ctx.session.get({ sessionID: 'ses_reactivated' });
+      const roster = (await ctx.agent.list()) as {
+        data: Array<{ id: string }>;
+      };
+      const selected = roster.data.find((agent) => agent.id === session.agent);
+      expect({
+        preset,
+        resumedAgent: selected?.id,
+        packagePresent: roster.data.some(
+          (agent) => agent.id === 'reactivated-agent',
+        ),
+      }).toEqual({
+        preset: 'marketplace-test',
+        resumedAgent: 'orchestrator',
+        packagePresent: true,
+      });
+    } finally {
+      jest.useRealTimers();
+      await cleanup();
+    }
+  });
+
   test('marketplace agent projection and child session receive the same narrowed native policy', async () => {
     const store = new MarketplaceStore({
       pluginVersion: '2.2.25',
@@ -2720,20 +3016,25 @@ describe('createV2Setup e2e', () => {
       return { dispose: () => {} };
     };
     setupCtx.agent.transform = async (callback) => {
-      callback({
-        list: () => [],
-        get: () => undefined,
-        default: () => {},
-        update: (
-          name: string,
-          project: (agent: Record<string, unknown>) => void,
-        ) => {
-          const agent: Record<string, unknown> = {};
-          project(agent);
-          if (name === 'v2-marketplace-agent') packageAgent = agent;
-        },
-        remove: () => {},
-      });
+      const replay = () =>
+        callback({
+          list: () => [],
+          get: () => undefined,
+          default: () => {},
+          update: (
+            name: string,
+            project: (agent: Record<string, unknown>) => void,
+          ) => {
+            const agent: Record<string, unknown> = {};
+            project(agent);
+            if (name === 'v2-marketplace-agent') packageAgent = agent;
+          },
+          remove: () => {},
+        });
+      ctx.agent.reload = async () => {
+        replay();
+      };
+      replay();
       return { dispose: () => {} };
     };
     setupCtx.session.update = async (input) => {
@@ -2742,6 +3043,7 @@ describe('createV2Setup e2e', () => {
 
     const cleanup = await createV2Setup()(ctx);
     try {
+      await calls.activatePlugins();
       expect(packageAgent).toBeDefined();
       expect(packageAgent?.model).toMatchObject({
         providerID: 'provider',
@@ -2865,7 +3167,7 @@ describe('createV2Setup e2e', () => {
     }
   }, 20_000);
 
-  test('marketplace activation fails and unwinds when child session.update is unavailable', async () => {
+  test('marketplace activation fails when child session.update is unavailable', async () => {
     const store = new MarketplaceStore({ pluginVersion: '2.2.25' });
     store.install({
       manifest: {
@@ -2929,13 +3231,18 @@ describe('createV2Setup e2e', () => {
       };
     };
     setupCtx.agent.transform = async (callback) => {
-      callback({
-        list: () => [],
-        get: () => undefined,
-        default: () => {},
-        update: () => {},
-        remove: () => {},
-      });
+      const replay = () =>
+        callback({
+          list: () => [],
+          get: () => undefined,
+          default: () => {},
+          update: () => {},
+          remove: () => {},
+        });
+      ctx.agent.reload = async () => {
+        replay();
+      };
+      replay();
       return {
         dispose: () => calls.disposed.push('marketplace-agent-transform'),
       };
@@ -3279,6 +3586,10 @@ describe('createV2Setup e2e', () => {
           deferredMcpTransform(mcpDraft);
           deferredAgentTransform(agentDraft);
         }
+        ctx.agent.reload = async () => {
+          deferredAgentTransform?.(agentDraft);
+        };
+        await calls.activatePlugins();
 
         await expect(
           calls.promptHookCb?.({

@@ -347,6 +347,88 @@ describe('plugin tool registration', () => {
     await hooks.dispose?.();
   });
 
+  test('v1 checks the project native skill inventory at chat.params, not config time', async () => {
+    const originalEnv = { ...process.env };
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), 'marketplace-v1-skills-'),
+    );
+    const configDir = path.join(root, 'config');
+    await mkdir(configDir, { recursive: true });
+    process.env = {
+      ...originalEnv,
+      OPENCODE_CONFIG_DIR: configDir,
+      XDG_CONFIG_HOME: path.join(root, 'xdg'),
+      XDG_DATA_HOME: path.join(root, 'data'),
+    };
+    await Bun.write(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        preset: 'work',
+        presets: { work: { marketplace: { agents: ['team/skill-user'] } } },
+      }),
+    );
+    new MarketplaceStore({ pluginVersion: '3.2.0' }).install({
+      manifest: {
+        schemaVersion: 2,
+        id: 'team/skill-user',
+        version: '1.0.0',
+        displayName: 'Skill user',
+        description: 'Skill fixture',
+        agentName: 'skill-user',
+        prompt: 'Use the skill.',
+        skills: ['native-skill'],
+        mcps: [],
+        tools: ['read'],
+        author: { name: 'Test' },
+        tags: [],
+        license: 'MIT',
+        compatibility: { plugin: '*' },
+        model: { source: 'session' },
+        routing: { description: 'Skill', when: 'Testing', keywords: [] },
+      } as never,
+    });
+    let inventory = [
+      {
+        name: 'native-skill',
+        location: '/skills/native-skill/SKILL.md',
+        content: 'Native skill.',
+      },
+    ];
+    const requests: unknown[] = [];
+    const client = createPluginClient(async () => ({}));
+    Object.assign(client, {
+      _client: {
+        get: async (options: unknown) => {
+          requests.push(options);
+          return { data: inventory };
+        },
+      },
+    });
+    const hooks = await plugin({
+      client,
+      directory: root,
+      worktree: root,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    try {
+      await hooks.config?.({ agent: {} });
+      expect(requests).toHaveLength(0);
+      await hooks['chat.params']?.({} as never, {} as never);
+      expect(requests).toEqual([
+        expect.objectContaining({ url: '/skill', query: { directory: root } }),
+      ]);
+      inventory = [];
+      await expect(
+        hooks['chat.params']?.({} as never, {} as never),
+      ).rejects.toThrow('team/skill-user');
+    } finally {
+      await hooks.dispose?.();
+      process.env = originalEnv;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test('status and reload report a disabled marketplace against the live registry', async () => {
     const originalEnv = { ...process.env };
     const root = await mkdtemp(
