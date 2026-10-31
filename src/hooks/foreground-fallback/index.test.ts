@@ -9,11 +9,17 @@ import {
   test,
 } from 'bun:test';
 import { isInternalInitiatorPart } from '../../utils';
+import { BackgroundJobBoard } from '../../utils/background-job-board';
+import { createBackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
 import * as logger from '../../utils/logger';
 import { mapV2EventToV1 } from '../../v2/event-adapter';
 import { recordInternalAdmission } from '../../v2/internal-admissions';
+import { createSessionContextHandler } from '../../v2/setup';
+import { createSubagentExecutorWrapper } from '../../v2/subagent-executor-wrapper';
 import { SessionLifecycle } from '../session-lifecycle';
+import { createBackgroundFallbackHandoff } from '../task-session-manager/fallback-observation-transfer';
 import type { FallbackNotice } from '../task-session-manager/revived-run-tracker';
+import { createRevivedRunTracker } from '../task-session-manager/revived-run-tracker';
 import {
   ForegroundFallbackManager,
   isFailoverError,
@@ -2237,6 +2243,9 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     chains?: Record<string, Array<string | { id: string; variant: string }>>;
     switchModel?: (sessionID: string, model: unknown) => Promise<unknown>;
     promptAsyncImpl?: (args: unknown) => Promise<unknown>;
+    handoff?: ReturnType<typeof createBackgroundFallbackHandoff>;
+    readBackgroundGeneration?: (sessionID: string) => number | undefined;
+    retryEnabled?: boolean;
   }) {
     const durable = { providerID: 'test', id: 'a', variant: 'source' };
     const info: { model?: typeof durable; parentID?: string; agent?: string } =
@@ -2270,10 +2279,10 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
       onChanged,
       0,
       0,
+      options?.handoff,
+      options?.readBackgroundGeneration,
       undefined,
-      undefined,
-      undefined,
-      true,
+      options?.retryEnabled ?? true,
     );
     return { manager, mocks, switchModel, onChanged, durable, info };
   }
@@ -2308,9 +2317,221 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
       },
     },
   });
+  const refused = (completedAt = Date.now()) => ({
+    id: 'assistant-1',
+    type: 'assistant',
+    agent: 'orchestrator',
+    model: started('child').data.model,
+    finish: 'content-filter',
+    error: failed('child').data.error,
+    rawFinish: 'refusal',
+    time: { created: completedAt - 100, completed: completedAt },
+  });
   const settle = async () => {
     for (let i = 0; i < 30; i++) await Promise.resolve();
   };
+
+  test('v2 background refusal hands off its continued run and defers an empty successor', async () => {
+    const board = new BackgroundJobBoard();
+    const run = board.registerLaunch({
+      taskID: 'child-bg',
+      parentSessionID: 'parent',
+      agent: 'orchestrator',
+      background: true,
+    });
+    const admission = deferred<void>();
+    let manager: ForegroundFallbackManager;
+    const input = { directory: '/test', client: {} } as never;
+    const gate = createBackgroundJobTerminalGate({
+      backgroundJobBoard: board,
+      input,
+      readRuntime: async (_run, readStartedAt) => ({
+        kind: 'quiescent',
+        origin: 'v2-successor',
+        readStartedAt,
+        terminalOutcome: 'succeeded',
+      }),
+      baselineFor: (id, generation) => tracker.baselineFor(id, generation),
+      observationRevisionFor: (id, generation) =>
+        tracker.revisionFor(id, generation),
+      isObservationPending: (id, generation) =>
+        manager.isFallbackInProgress(id) ||
+        tracker.isObservationPending(id, generation),
+    });
+    const tracker = createRevivedRunTracker({
+      input,
+      backgroundJobBoard: board,
+      terminalGate: gate,
+    });
+    const child = fixture({
+      parentID: 'parent',
+      handoff: createBackgroundFallbackHandoff({
+        backgroundJobBoard: board,
+        revivedRunTracker: tracker,
+      }),
+      readBackgroundGeneration: () => run.generation,
+      promptAsyncImpl: () => admission.promise,
+    });
+    manager = child.manager;
+    try {
+      await manager.handleEvent(started('child-bg'));
+      await manager.handleEvent(failed('child-bg'));
+      await settle();
+      expect(child.switchModel).toHaveBeenCalledTimes(1);
+      expect(child.mocks.promptAsync).toHaveBeenCalledTimes(1);
+      expect(tracker.isObservationPending('child-bg', run.generation)).toBe(
+        true,
+      );
+      expect((await gate.reconcile(run)).kind).toBe('deferred');
+      admission.resolve();
+      await settle();
+      expect(tracker.isTracked('child-bg', run.generation)).toBe(true);
+    } finally {
+      admission.resolve();
+      manager.dispose();
+      tracker.dispose();
+      gate.dispose();
+    }
+  });
+
+  test('v2 waiter claims the refused assistant before the pump and both join once', async () => {
+    const { manager, switchModel } = fixture({ parentID: 'parent' });
+    const outcome = manager.refusedChildOutcome('child', refused());
+    await manager.handleEvent(started('child'));
+    await manager.handleEvent(failed('child'));
+    expect(await outcome).toBe('test/b');
+    expect(switchModel).toHaveBeenCalledTimes(1);
+  });
+
+  test('v2 waiter leaves a refusal from before manager startup unchanged', async () => {
+    const { manager, switchModel } = fixture({ parentID: 'parent' });
+    expect(
+      await manager.refusedChildOutcome('child', refused(Date.now() - 1)),
+    ).toBeUndefined();
+    expect(switchModel).not.toHaveBeenCalled();
+  });
+
+  test('v2 waiter returns immediately when fallback is disabled', async () => {
+    const { manager, switchModel } = fixture({
+      parentID: 'parent',
+      retryEnabled: false,
+    });
+    expect(
+      await manager.refusedChildOutcome('child', refused()),
+    ).toBeUndefined();
+    expect(switchModel).not.toHaveBeenCalled();
+  });
+
+  test('v2 foreground refusal reattaches the same child and returns its result', async () => {
+    const child = fixture({ parentID: 'parent' });
+    const wrapper = createSubagentExecutorWrapper({
+      register: () => {},
+      context: async () => [refused()],
+      refusalOutcome: (...args) => child.manager.refusedChildOutcome(...args),
+    });
+    const result = {
+      output: { sessionID: 'child', status: 'completed' },
+      content: 'CHILD_OK',
+    };
+    const execute = mock(async () => {
+      if (execute.mock.calls.length === 1) {
+        await child.manager.handleEvent(started('child'));
+        throw new Error(
+          'Subagent failed (sessionID: child): Provider blocked the response',
+        );
+      }
+      return result;
+    });
+    expect(
+      await wrapper.wrap(execute)(
+        { agent: 'orchestrator', model: 'test/a' },
+        { id: 'call', sessionID: 'parent' },
+      ),
+    ).toBe(result);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute.mock.calls[1]?.[0]).toMatchObject({ sessionID: 'child' });
+    expect(execute.mock.calls[1]?.[0]).not.toHaveProperty('model');
+  });
+
+  test('v2 foreground keeps the native error when no model or no refusal is available', async () => {
+    const failure = new Error(
+      'Subagent failed (sessionID: child): invalid request',
+    );
+    const outcome = mock(async () => undefined);
+    const history: Array<Record<string, unknown>> = [
+      { id: 'message', type: 'assistant', finish: 'stop' },
+    ];
+    const wrapper = createSubagentExecutorWrapper({
+      register: () => {},
+      context: async () => history,
+      refusalOutcome: outcome,
+    });
+    const execute = wrapper.wrap(async () => {
+      throw failure;
+    });
+    await expect(execute({}, { id: 'call', sessionID: 'parent' })).rejects.toBe(
+      failure,
+    );
+    expect(outcome).not.toHaveBeenCalled();
+    history[0].finish = 'content-filter';
+    await expect(execute({}, { id: 'call', sessionID: 'parent' })).rejects.toBe(
+      failure,
+    );
+    expect(outcome).toHaveBeenCalledTimes(1);
+  });
+
+  function notice(result: string | undefined) {
+    const text =
+      '<subagent sessionID="child" state="error" description="inspect">\nProvider blocked the response\n</subagent>';
+    const prefix = '\u00a742\u00a7 ';
+    const handler = createSessionContextHandler({
+      interviewHandleContext: async () => {},
+      messagesTransform: async () => {},
+      sessionContext: async () => [
+        {
+          id: 'assistant-1',
+          type: 'assistant',
+          finish: 'content-filter',
+          error: {
+            type: 'provider.content-filter',
+            message: 'Provider blocked the response',
+          },
+        },
+      ],
+      backgroundGeneration: (parent, child) =>
+        parent === 'parent' && child === 'child' ? 1 : undefined,
+      refusalOutcome: async () => result,
+    });
+    const event = {
+      sessionID: 'parent',
+      agent: 'orchestrator',
+      model: {},
+      system: [],
+      tools: {},
+      messages: [
+        {
+          id: 'notice',
+          role: 'user',
+          content: [{ type: 'text', text: prefix + text }],
+        },
+      ],
+    };
+    return { handler, event, text, prefix };
+  }
+
+  test('v2 parent sees a prefixed native refusal as running', async () => {
+    const { handler, event, prefix } = notice('test/b');
+    await handler(event as never);
+    expect(event.messages[0].content[0].text).toStartWith(prefix);
+    expect(event.messages[0].content[0].text).toContain('state="running"');
+    expect(event.messages[0].content[0].text).not.toContain('state="error"');
+  });
+
+  test('v2 parent retains the native error when no continuation is admitted', async () => {
+    const { handler, event, prefix, text } = notice(undefined);
+    await handler(event as never);
+    expect(event.messages[0].content[0].text).toBe(prefix + text);
+  });
 
   test('v2 refusal continuation names the refused step agent', async () => {
     const { manager, mocks } = fixture();

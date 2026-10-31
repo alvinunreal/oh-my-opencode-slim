@@ -14,7 +14,13 @@
  * the original executor and always returns its result unchanged.
  */
 
+import {
+  type ForegroundFallbackManager,
+  REFUSAL_CONTINUATION,
+} from '../hooks/foreground-fallback';
+import { isRecord } from '../utils/guards';
 import { log } from '../utils/logger';
+import { withTimeout } from '../utils/session';
 import { parseTaskResultFromOutput } from '../utils/task';
 
 export type SubagentStructuredState =
@@ -50,6 +56,41 @@ export interface SubagentExecutorWrapperOptions {
   /** Register one structured launch/status. The wrapper never lets a
    *  registration failure reach the tool result. */
   register: (launch: SubagentStructuredLaunch) => Promise<unknown> | unknown;
+  context?: (
+    sessionID: string,
+  ) => Promise<Array<Record<string, unknown>> | undefined>;
+  refusalOutcome?: ForegroundFallbackManager['refusedChildOutcome'];
+}
+
+export async function readRefusalOutcome(
+  context: NonNullable<SubagentExecutorWrapperOptions['context']>,
+  outcome: NonNullable<SubagentExecutorWrapperOptions['refusalOutcome']>,
+  sessionID: string,
+  text?: string,
+) {
+  try {
+    const history = await withTimeout(
+      context(sessionID),
+      2_000,
+      '[v2] refused child context lookup timed out',
+    );
+    const last = Array.isArray(history)
+      ? history.findLast(
+          (entry) =>
+            entry.type === 'assistant' &&
+            (text === undefined ||
+              (entry.finish === 'content-filter' &&
+                isRecord(entry.error) &&
+                entry.error.message === text)),
+        )
+      : undefined;
+    if (last?.finish !== 'content-filter' || typeof last.id !== 'string')
+      return;
+    const model = await outcome(sessionID, last);
+    if (model) return { id: last.id, model };
+  } catch (error) {
+    log('[v2] refused child context lookup failed', String(error));
+  }
 }
 
 /** Host-authored failure sentence; the ONLY prose the wrapper reads, and only
@@ -202,17 +243,45 @@ export function createSubagentExecutorWrapper(
           | undefined;
         const callID = readString(call?.id);
         const parentSessionID = readString(call?.sessionID);
-        try {
-          const result = await run(input, context);
-          if (callID && parentSessionID) {
-            registerSafely(structuredLaunch(callID, parentSessionID, result));
+        let currentInput = input;
+        const retried = new Set<string>();
+        while (true) {
+          try {
+            const result = await run(currentInput, context);
+            if (callID && parentSessionID)
+              registerSafely(structuredLaunch(callID, parentSessionID, result));
+            return result;
+          } catch (error) {
+            const launch =
+              callID && parentSessionID
+                ? threwLaunch(callID, parentSessionID, error)
+                : undefined;
+            if (
+              launch?.state === 'error' &&
+              isRecord(currentInput) &&
+              options.context &&
+              options.refusalOutcome
+            ) {
+              const recovery = await readRefusalOutcome(
+                options.context,
+                options.refusalOutcome,
+                launch.childTaskID,
+              );
+              if (recovery && !retried.has(recovery.id)) {
+                retried.add(recovery.id);
+                const next: Record<string, unknown> = {
+                  ...currentInput,
+                  sessionID: launch.childTaskID,
+                  prompt: REFUSAL_CONTINUATION,
+                };
+                delete next.model;
+                currentInput = next;
+                continue;
+              }
+            }
+            registerSafely(launch);
+            throw error;
           }
-          return result;
-        } catch (error) {
-          if (callID && parentSessionID) {
-            registerSafely(threwLaunch(callID, parentSessionID, error));
-          }
-          throw error;
         }
       };
       Object.defineProperty(wrapped, WRAPPED_MARKER, {

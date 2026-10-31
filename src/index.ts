@@ -1221,6 +1221,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       });
 
       taskSessionManagerHook = createTaskSessionManagerHook(ctx, {
+        v1ReplayOutcome: (...args) =>
+          foregroundFallback?.v1ReplayOutcome(...args) ??
+          Promise.resolve(undefined),
         terminalGate,
         // Flip mechanism half reads the per-instance box declared above.
         isBackgroundDefaultFlipArmed: backgroundDefaultFlip.isArmed,
@@ -1695,6 +1698,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ? createBackgroundFallbackHandoff({
           backgroundJobBoard: backgroundJobBoard!,
           revivedRunTracker: revivedRunTracker!,
+          allowForeground: hostFlavor !== 'v2',
         })
       : undefined;
     // The current v2 host interface has no per-turn/atomic conditional
@@ -1761,9 +1765,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           // Undefined remains exclusive to foreground/unmanaged sessions, and
           // is the honest value when no board exists.
           lifecycleEnabled
-            ? (sessionID) => {
+            ? (sessionID, includeForeground) => {
                 const record = backgroundJobBoard?.get(sessionID);
-                return record?.background === true
+                return record &&
+                  (record.background === true ||
+                    (includeForeground && record.provisional !== true))
                   ? record.generation
                   : undefined;
               }
@@ -2714,6 +2720,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // Per-instance background-default flip handle: v2 setup arms it after
     // its description rewrite verifies and disarms it with its teardown.
     'v2.backgroundDefaultFlip': backgroundDefaultFlip,
+    'v2.refusalOutcome':
+      foregroundFallback?.refusedChildOutcome.bind(foregroundFallback),
+    'v2.backgroundGeneration': (parentID: string, childID: string) => {
+      const record = backgroundJobBoard?.get(childID);
+      return record?.background && record.parentSessionID === parentID
+        ? record.generation
+        : undefined;
+    },
     'v2.session.retry': fallbackRetryHookEnabled
       ? (input: never, switchModel: never) =>
           foregroundFallback?.handleV2Retry(input, switchModel)
@@ -3989,6 +4003,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       if (taskSessionManagerHook) await taskSessionManagerAfter(input, output);
     },
   } as Hooks & {
+    'v2.refusalOutcome':
+      | ForegroundFallbackManager['refusedChildOutcome']
+      | undefined;
+    'v2.backgroundGeneration': (
+      parentID: string,
+      childID: string,
+    ) => number | undefined;
     'v2.foreignTaskEvent': typeof observeForeignTaskEvent;
     'v2.refreshProfiles': typeof refreshProfilesFromDisk;
     'v2.resolveDelegatedModel': typeof resolveV2DelegatedModel;

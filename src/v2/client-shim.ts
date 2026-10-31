@@ -151,7 +151,10 @@ function messageTime(time: unknown): Record<string, unknown> | undefined {
 
 function toV1Message(m: Record<string, unknown>) {
   const sourceType = typeof m.type === 'string' ? m.type : undefined;
-  const role = sourceType === 'idle' ? 'system' : (sourceType ?? m.role);
+  const role =
+    sourceType === 'idle' || sourceType === 'model-switched'
+      ? 'system'
+      : (sourceType ?? m.role);
   const time = messageTime(m.time);
   const contentParts = Array.isArray(m.content)
     ? (m.content as Array<Record<string, unknown>>).map((part) => ({ ...part }))
