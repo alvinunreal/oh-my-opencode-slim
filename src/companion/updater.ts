@@ -1,10 +1,11 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -185,7 +186,8 @@ export async function ensureCompanionVersion(
   if (
     existsSync(binaryPath) &&
     current?.target === target &&
-    compareSemver(current.version, manifest.version) >= 0
+    compareSemver(current.version, manifest.version) >= 0 &&
+    (process.platform !== 'win32' || dryRun)
   ) {
     return { status: 'current', binaryPath, version: current.version };
   }
@@ -200,6 +202,21 @@ export async function ensureCompanionVersion(
     options.lockStaleMs,
     async () => {
       if (startupWait) startupWait.acquired = true;
+      if (process.platform === 'win32' && existsSync(binaryPath)) {
+        const prefix = `${path.basename(binaryPath)}.old-`;
+        for (const name of readdirSync(path.dirname(binaryPath))) {
+          if (
+            !name.startsWith(prefix) ||
+            !/^[\da-f-]{36}$/i.test(name.slice(prefix.length))
+          )
+            continue;
+          try {
+            rmSync(path.join(path.dirname(binaryPath), name), { force: true });
+          } catch (err) {
+            log('[companion] old executable cleanup deferred', String(err));
+          }
+        }
+      }
       const lockedCurrent = readInstallMetadata(binaryPath);
       if (
         existsSync(binaryPath) &&
@@ -390,7 +407,26 @@ async function installCompanionArchive(
       chmodSync(tmpFinalPath, 0o755);
     }
 
-    renameSync(tmpFinalPath, finalBinaryPath);
+    const oldBinary =
+      isWindows && existsSync(finalBinaryPath)
+        ? `${finalBinaryPath}.old-${randomUUID()}`
+        : undefined;
+    if (oldBinary) renameSync(finalBinaryPath, oldBinary);
+    try {
+      renameSync(tmpFinalPath, finalBinaryPath);
+    } catch (err) {
+      if (oldBinary) {
+        try {
+          renameSync(oldBinary, finalBinaryPath);
+        } catch (restoreError) {
+          log(
+            '[companion] failed to restore previous executable',
+            String(restoreError),
+          );
+        }
+      }
+      throw err;
+    }
     writeInstallMetadata(finalBinaryPath, {
       version: manifest.version,
       tag: manifest.tag,

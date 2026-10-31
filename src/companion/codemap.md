@@ -120,6 +120,7 @@ ensureCompanionVersion() → installCompanionArchive() → extract → validate 
    - Validates SHA-256 checksum
    - Extracts tar.gz (Unix) or zip (Windows)
    - Copies binary to installation directory
+   - On Windows, moves the previous executable aside before replacement and retries old-image cleanup on later starts
    - Writes installation metadata
 
 3. **Error handling**
