@@ -6068,6 +6068,146 @@ describe('plugin foreground fallback host gating', () => {
     }
   });
 
+  test('v2 retry follows the failing agent and retains it for compaction', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: false },
+        fallback: { enabled: true, maxRetries: 0 },
+        agents: {
+          orchestrator: { model: ['openai/gpt-b', 'openai/gpt-c'] },
+          oracle: { model: ['openai/gpt-b', 'anthropic/claude-backup'] },
+        },
+      }),
+    );
+    const hooks = await createHooks('v2');
+    const switchModel = mock(async () => ({}));
+    try {
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'changed-agent',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', modelID: 'gpt-b' },
+        } as never,
+        {} as never,
+      );
+      await hooks['v2.session.retry']?.(
+        {
+          sessionID: 'changed-agent',
+          agent: 'oracle',
+          model: { providerID: 'openai', id: 'gpt-b' },
+          error: { type: 'provider.rate-limit', message: 'rate limit' },
+          decision: { retry: false },
+        } as never,
+        switchModel as never,
+      );
+      expect(switchModel).toHaveBeenCalledWith('changed-agent', {
+        providerID: 'anthropic',
+        id: 'claude-backup',
+      });
+
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'compaction-agent',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', modelID: 'gpt-b' },
+        } as never,
+        {} as never,
+      );
+      await hooks['v2.session.retry']?.(
+        {
+          sessionID: 'compaction-agent',
+          agent: 'compaction',
+          model: { providerID: 'openai', id: 'gpt-b' },
+          error: { type: 'provider.rate-limit', message: 'rate limit' },
+          decision: { retry: false },
+        } as never,
+        switchModel as never,
+      );
+      expect(switchModel).toHaveBeenCalledWith('compaction-agent', {
+        providerID: 'openai',
+        id: 'gpt-c',
+      });
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test('v2 refusal selects the chain of the started step agent', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: false },
+        fallback: { enabled: true, maxRetries: 0 },
+        agents: {
+          orchestrator: { model: ['openai/gpt-b', 'openai/gpt-c'] },
+          oracle: { model: ['openai/gpt-b', 'anthropic/claude-backup'] },
+        },
+      }),
+    );
+    const { client, promptAsync } = createFallbackClient();
+    client.session.get = mock(async () => ({
+      data: { agent: 'oracle', model: { providerID: 'openai', id: 'gpt-b' } },
+    }));
+    const switchModel = mock(async () => ({}));
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      hostFlavor: 'v2',
+      experimental_v2: { switchModel },
+    } as never);
+    try {
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'changed-refusal-agent',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', modelID: 'gpt-b' },
+        } as never,
+        {} as never,
+      );
+      const data = {
+        sessionID: 'changed-refusal-agent',
+        assistantMessageID: 'assistant-refused',
+        agent: 'oracle',
+        model: { providerID: 'openai', id: 'gpt-b' },
+      };
+      await hooks.event?.({
+        event: { type: 'session.step.started', data },
+      } as never);
+      await hooks.event?.({
+        event: {
+          type: 'session.step.failed',
+          data: {
+            ...data,
+            finish: 'content-filter',
+            error: { type: 'provider.content-filter', message: 'blocked' },
+          },
+        },
+      } as never);
+      expect(
+        await hooks['v2.refusalOutcome']?.(data.sessionID, {
+          id: data.assistantMessageID,
+          type: 'assistant',
+          agent: data.agent,
+          model: data.model,
+          finish: 'content-filter',
+          error: { type: 'provider.content-filter', message: 'blocked' },
+          time: { created: Date.now(), completed: Date.now() },
+        }),
+      ).toBe('anthropic/claude-backup');
+      expect(switchModel).toHaveBeenCalledWith(data.sessionID, {
+        providerID: 'anthropic',
+        id: 'claude-backup',
+      });
+      expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({
+        body: { agent: 'oracle' },
+      });
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
   test('v2 retry projects the fallback model and variant without another external prompt', async () => {
     await Bun.write(
       `${projectDir}/oh-my-opencode-slim.json`,

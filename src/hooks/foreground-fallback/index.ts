@@ -997,6 +997,13 @@ export class ForegroundFallbackManager {
     }
   }
 
+  private v2AgentName(sessionID: string, hint?: string): string | undefined {
+    const agent = hint ? normalizeAgentHint(hint) : undefined;
+    return agent && this.pinnedChains(sessionID)[agent]?.length
+      ? agent
+      : (this.sessionAgent.get(sessionID) ?? agent);
+  }
+
   /** Plugin dispose: cancel scheduled initial-delay timers and fence off
    *  in-flight fallback chains. `opencode reload` destroys this instance
    *  mid-attempt — pending timers are cancelled here, and suspension
@@ -2187,7 +2194,8 @@ export class ForegroundFallbackManager {
         this.sessionModel.get(sessionID) !== from
       )
         return;
-      if (event.agent) this.registerSessionAgent(sessionID, event.agent);
+      const agent = this.v2AgentName(sessionID, event.agent);
+      if (agent) this.sessionAgent.set(sessionID, agent);
       this.sessionModel.set(sessionID, from);
       // Spent allowance on every chain provider: leave the host decision.
       // The host names the model whose attempt failed, so attribution is
@@ -2339,8 +2347,8 @@ export class ForegroundFallbackManager {
     )
       return;
     this.v2Steps.delete(sessionID);
-    this.registerSessionAgent(sessionID, step.agent);
-    if (!this.hasFallbackChain(sessionID)) return;
+    const agent = this.v2AgentName(sessionID, step.agent);
+    if (!this.hasFallbackChain(sessionID, agent)) return;
     const epoch = step.epoch;
     const preparedGeneration = this.readBackgroundGeneration?.(sessionID);
     let handoffArmed = false;
@@ -2376,6 +2384,7 @@ export class ForegroundFallbackManager {
       if (typeof data.parentID === 'string' && data.parentID) {
         this.sessionParent.set(sessionID, data.parentID);
       }
+      if (agent) this.sessionAgent.set(sessionID, agent);
       this.sessionModel.set(sessionID, from);
       const nextModel = await this.switchV2InPlace(
         sessionID,
@@ -3824,13 +3833,13 @@ export class ForegroundFallbackManager {
   }
 
   /** True when resolveChain yields at least one model for this session. */
-  private hasFallbackChain(sessionID: string): boolean {
+  private hasFallbackChain(
+    sessionID: string,
+    agent = this.sessionAgent.get(sessionID),
+  ): boolean {
     return (
-      this.resolveChain(
-        this.sessionAgent.get(sessionID),
-        this.sessionModel.get(sessionID),
-        sessionID,
-      ).chain.length > 0
+      this.resolveChain(agent, this.sessionModel.get(sessionID), sessionID)
+        .chain.length > 0
     );
   }
 

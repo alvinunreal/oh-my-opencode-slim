@@ -63,6 +63,9 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
   2. Current model (fallback) → search all chains for containing model
   3. Merged list (last resort) → preserve insertion order across all agents
 - **No cross-agent bleed**: When agent is identified, only that agent's chain is used (prevents re-prompting with wrong agent's models)
+- The v2 retry and refusal paths use the current host agent when its pinned
+  generation has a chain; otherwise they retain the registered agent. A
+  refusal updates that agent only after the durable selection and epoch checks.
 
 ### Retryable Error Detection
 - **Pattern matching**: rate-limit/quota/outage/401/403/410/421/451 wording, content-policy moderation and OpenCode v1's content-filter finish error, v2's `provider.transport` type, transport codes (`ECONNRESET`, …) and transport messages
