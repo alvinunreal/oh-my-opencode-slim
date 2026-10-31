@@ -46,13 +46,18 @@ import {
   killAllSummaryMessage,
 } from './tui-kill';
 import {
+  readTuiSnapshot,
   recordTuiAgentActivity,
+  recordTuiAgentModel,
   recordTuiAgentModels,
   recordTuiSessionParent,
+  resolveTuiSnapshotRoot,
+  TUI_SESSION_PARENTS_MAX,
   type TuiSnapshot,
   updateSnapshot,
 } from './tui-state';
 import { BackgroundJobBoard } from './utils/background-job-fixture';
+import { createTimerHarness } from './utils/test-timers';
 import { createTuiReusableProjection } from './utils/tui-reusable-projection';
 
 const ACTIVITY_FRAME_PATTERN = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/;
@@ -568,6 +573,44 @@ describe('tui sidebar agents', () => {
     expect(applyRemoteAgentModels(createSnapshot({}), {}).agentModels).toEqual(
       {},
     );
+  });
+
+  test('a stalled remote agent request is cancelled and later refreshes run', async () => {
+    const clock = createTimerHarness();
+    const signals: AbortSignal[] = [];
+    const client = {
+      agent: {
+        list: (_input: unknown, options?: { signal: AbortSignal }) => {
+          if (options) signals.push(options.signal);
+          if (signals.length > 1) return Promise.resolve({ data: [] });
+          return new Promise<never>((_, reject) => {
+            options?.signal.addEventListener('abort', () =>
+              reject(new Error('aborted')),
+            );
+          });
+        },
+      },
+    };
+    const scheduleTimer = (callback: () => void, delay: number) => {
+      const id = clock.setTimeout(callback, delay);
+      return () => clock.clearTimeout(id);
+    };
+    let commits = 0;
+    const refresh = createSerializedRefresh(async () => {
+      await fetchRemoteAgentModels(client, '/project', scheduleTimer);
+      commits++;
+    });
+    refresh();
+    await clock.tick();
+    refresh();
+    await clock.advance(2_000);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(commits).toBe(1);
+    refresh();
+    await clock.tick();
+    expect(signals).toHaveLength(2);
+    expect(commits).toBe(2);
+    expect(clock.pending()).toBe(0);
   });
 
   test('serialized refresh skips overlap and drops a stale directory (#1133)', async () => {
@@ -1216,6 +1259,51 @@ describe('dual-contract plugin module', () => {
 });
 
 describe('clickable sidebar sessions', () => {
+  test('pruning keeps ancestry of reusable destinations and their live siblings', () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'omos-reusable-parents-'),
+    );
+    const restore = withIsolatedDataHome(root);
+    try {
+      const snapshot = createSnapshot();
+      snapshot.sessionParents.retained = 'middle';
+      snapshot.sessionParents.middle = 'conversation';
+      for (let i = 0; i < TUI_SESSION_PARENTS_MAX - 3; i++) {
+        snapshot.sessionParents[`old-${i}`] = `other-${i}`;
+      }
+      snapshot.sessionParents.live = 'conversation';
+      snapshot.activeSessions.live = 'oracle';
+      snapshot.activityPids.live = process.pid;
+      snapshot.sessionDetails.live = { status: 'busy' };
+      snapshot.reusableByAgent.conversation = {
+        oracle: [
+          {
+            taskID: 'retained',
+            alias: 'ora-1',
+            terminalState: 'completed',
+            lastUsedAt: 1,
+          },
+        ],
+      };
+      snapshot.reusableOwners.conversation = process.pid;
+      expect(
+        updateSnapshot(root, (target) => Object.assign(target, snapshot)),
+      ).toBe(true);
+      recordTuiSessionParent('new', 'other', root);
+      const after = readTuiSnapshot(root);
+      expect(resolveTuiSnapshotRoot(after, 'retained')).toBe('conversation');
+      expect(
+        getSidebarAgentTargets(after, 'retained')[0]?.sessions[0]?.sessionID,
+      ).toBe('live');
+      expect(
+        getSidebarReusableTargets(after, 'retained').get('oracle')?.[0]?.taskID,
+      ).toBe('retained');
+    } finally {
+      restore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('getSidebarAgentTargets groups active subagents by agent with alias/status', () => {
     const snapshot = createSnapshot({
       activeSessions: {
@@ -1801,22 +1889,14 @@ describe('clickable sidebar sessions', () => {
     expect(() => throwing?.('ses-3')).not.toThrow();
   });
 
-  test('resolveHoverBackground prefers theme.hover then backgroundElement', () => {
+  test('resolveHoverBackground prefers an explicit hover color', () => {
     expect(
       resolveHoverBackground({
         hover: '#333333',
-        backgroundElement: '#222222',
         background: '#111111',
         text: '#ffffff',
       }),
     ).toBe('#333333');
-    expect(
-      resolveHoverBackground({
-        backgroundElement: '#222222',
-        background: '#111111',
-        text: '#ffffff',
-      }),
-    ).toBe('#222222');
   });
 
   test('expansion state is local to each sidebar instance', () => {
@@ -2046,6 +2126,8 @@ describe('clickable sidebar sessions', () => {
     sessionID: string;
     navigate?: (name: string, params?: Record<string, unknown>) => void;
     host?: 'v1' | 'v2';
+    transparentTheme?: boolean;
+    sameSurfaceTheme?: boolean;
     /** Golden frames must capture settled RPC state, not race Loading… against Unavailable. */
     waitForInitialRefresh?: boolean;
   }) {
@@ -2065,7 +2147,17 @@ describe('clickable sidebar sessions', () => {
         client: undefined,
         theme: {
           text: { default: '#ffffff', subdued: '#aaaaaa' },
-          background: { default: '#111111' },
+          background: opts.transparentTheme
+            ? {
+                default: RGBA.fromValues(0.1, 0.1, 0.1, 0),
+                raised: { base: '#222222', high: '#555555' },
+              }
+            : opts.sameSurfaceTheme
+              ? {
+                  default: '#002b36',
+                  raised: { base: '#073642', high: '#073642' },
+                }
+              : { default: '#111111' },
           border: { default: '#555555' },
           success: '#00ff00',
           warning: '#ffcc00',
@@ -2115,11 +2207,16 @@ describe('clickable sidebar sessions', () => {
           theme: {
             current: {
               accent: '#22c55e',
-              background: '#111111',
-              backgroundElement: '#222222',
+              background: opts.transparentTheme
+                ? RGBA.fromValues(0.1, 0.1, 0.1, 0)
+                : opts.sameSurfaceTheme
+                  ? '#002b36'
+                  : '#111111',
+              backgroundPanel: opts.sameSurfaceTheme ? '#073642' : '#333333',
+              backgroundElement: opts.sameSurfaceTheme ? '#073642' : '#333333',
               borderActive: '#555555',
               success: '#00ff00',
-              text: '#ffffff',
+              text: opts.sameSurfaceTheme ? '#839496' : '#ffffff',
               textMuted: '#aaaaaa',
               warning: '#ffcc00',
             },
@@ -2131,6 +2228,73 @@ describe('clickable sidebar sessions', () => {
     }
     return { slotPlugin, disposers };
   }
+
+  test('hover contrasts with the sidebar on matching and transparent themes', async () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'omos-transparent-hover-'),
+    );
+    const restore = withIsolatedDataHome(root);
+    const disposers: Array<() => void> = [];
+    const screens: Array<Awaited<ReturnType<typeof testRender>>> = [];
+    try {
+      recordTuiAgentModels({ agentModels: { oracle: 'openai/gpt-6' } }, root);
+      const checkHover = async (
+        host: 'v1' | 'v2',
+        transparentTheme: boolean,
+      ) => {
+        const mounted = await mountClickableSidebar({
+          projectDir: root,
+          sessionID: 'root',
+          host,
+          transparentTheme,
+          sameSurfaceTheme: !transparentTheme,
+        });
+        disposers.push(...mounted.disposers);
+        const screen = await testRender(
+          () => mounted.slotPlugin?.slots.sidebar_content() as never,
+          { width: 60, height: 18 },
+        );
+        screens.push(screen);
+        await screen.renderOnce();
+        const row = screen
+          .captureCharFrame()
+          .split('\n')
+          .findIndex((line) => line.includes('oracle'));
+        expect(row).toBeGreaterThanOrEqual(0);
+        await screen.mockMouse.moveTo(5, row);
+        await screen.renderOnce();
+        const surface = transparentTheme
+          ? host === 'v1'
+            ? '51,51,51'
+            : '34,34,34'
+          : '7,54,66';
+        expect(
+          screen.captureSpans().lines[row].spans.some((span) => {
+            const [r, g, b, a] = span.bg.toInts();
+            return a === 255 && [r, g, b].join(',') !== surface;
+          }),
+        ).toBe(true);
+      };
+      await checkHover('v1', false);
+      await checkHover('v2', false);
+      await checkHover('v1', true);
+      await checkHover('v2', true);
+      expect(
+        (
+          resolveHoverBackground({
+            background: RGBA.fromValues(0, 0, 0, 0.2),
+            text: '#ffffff',
+            hover: RGBA.fromValues(0, 0, 0, 0),
+          }) as RGBA
+        ).a,
+      ).toBe(1);
+    } finally {
+      for (const dispose of disposers) dispose();
+      for (const screen of screens) screen.renderer.destroy();
+      restore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   test('mounted sidebar keeps its spinner and expanded targets through the idle-to-terminal gap', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-flicker-'));
@@ -3550,7 +3714,7 @@ describe('kill-all running subagents', () => {
     expect(falseResult).toEqual({ killed: 0, failed: 2, total: 2 });
   });
 
-  test('v2 SDK-shaped client aborts with flat sessionID + directory', async () => {
+  test('v1 SDK v2 accessor aborts with flat sessionID + directory', async () => {
     const calls: Record<string, unknown>[] = [];
     // Real v2 clients carry app.agents AND the v2 accessor — this fixture
     // reproduces both, so the old app.agents-first routing would misroute
@@ -3579,6 +3743,26 @@ describe('kill-all running subagents', () => {
     expect(calls.map((c) => c.sessionID).sort()).toEqual([
       'ora-busy',
       'ora-retry',
+    ]);
+  });
+
+  test('v2 TUI client interrupts each target and counts failures', async () => {
+    const calls: Array<{ sessionID: string; resume: boolean }> = [];
+    const client = {
+      session: {
+        interrupt: async (args: { sessionID: string; resume: boolean }) => {
+          calls.push(args);
+          return args.sessionID === 'ora-retry' ? { error: 'busy' } : true;
+        },
+      },
+    };
+
+    expect(
+      await killAllRunningSubagents(client, killSnapshot(), 'conv-1', '/proj'),
+    ).toEqual({ killed: 1, failed: 1, total: 2 });
+    expect(calls).toEqual([
+      { sessionID: 'ora-busy', resume: false },
+      { sessionID: 'ora-retry', resume: false },
     ]);
   });
 
@@ -3726,6 +3910,179 @@ describe('sidebar model display names', () => {
     }
   }
 
+  test('model and variant observations stay in their visible conversation', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-model-scope-'));
+    const previousHome = process.env.XDG_DATA_HOME;
+    const disposers: Array<() => void> = [];
+    process.env.XDG_DATA_HOME = root;
+    try {
+      fs.mkdirSync(path.join(root, '.opencode'));
+      fs.writeFileSync(
+        path.join(root, '.opencode', 'oh-my-opencode-slim.json'),
+        JSON.stringify({ compactSidebar: false }),
+      );
+      recordTuiAgentModels(
+        {
+          agentModels: { orchestrator: 'default' },
+          agentVariants: { orchestrator: 'configured' },
+        },
+        root,
+      );
+      recordTuiSessionParent('child-a', 'root-a', root);
+      recordTuiAgentModel(
+        {
+          sessionID: 'root-a',
+          agentName: 'orchestrator',
+          model: 'openai/model-a',
+          variant: 'low',
+        },
+        root,
+      );
+      recordTuiAgentModel(
+        {
+          sessionID: 'root-b',
+          agentName: 'orchestrator',
+          model: 'openai/model-b',
+          variant: 'high',
+        },
+        root,
+      );
+      const defaultModel = {
+        sessionID: 'root-c',
+        agentName: 'orchestrator',
+        model: 'openai/model-c',
+      };
+      recordTuiAgentModel({ ...defaultModel, variant: 'max' }, root);
+      recordTuiAgentModel({ ...defaultModel, variant: null }, root);
+      let visible = 'root-a';
+      let render: (() => unknown) | undefined;
+      await tuiPlugin.tui(
+        {
+          state: { path: { directory: root } },
+          route: {
+            get current() {
+              return { name: 'session', params: { sessionID: visible } };
+            },
+          },
+          lifecycle: {
+            onDispose: (dispose: () => void) => {
+              disposers.push(dispose);
+            },
+          },
+          renderer: { requestRender: () => {} },
+          slots: {
+            register: (slot: { slots: { sidebar_content: () => unknown } }) => {
+              render = slot.slots.sidebar_content;
+            },
+          },
+          theme: { current: rowTheme },
+        } as never,
+        {},
+        { version: 'test' } as never,
+      );
+      if (!render) throw new Error('Sidebar slot missing');
+      const frame = async (sessionID: string) => {
+        visible = sessionID;
+        return (await renderSidebarFrame(() => render?.())).join('\n');
+      };
+      expect(await frame('root-a')).toContain('model-a');
+      expect(await frame('child-a')).toContain('low');
+      expect(await frame('root-b')).toContain('model-b');
+      expect(await frame('root-b')).toContain('high');
+      expect(await frame('root-d')).toContain('default');
+      const defaultVariant = await frame('root-c');
+      expect(defaultVariant).toContain('model-c');
+      expect(defaultVariant).not.toContain('variant');
+    } finally {
+      for (const dispose of disposers) dispose();
+      if (previousHome === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = previousHome;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('idle child observations yield to the configured model until active', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-model-idle-'));
+    const previousHome = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = root;
+    try {
+      fs.mkdirSync(path.join(root, '.opencode'));
+      fs.writeFileSync(
+        path.join(root, '.opencode', 'oh-my-opencode-slim.json'),
+        JSON.stringify({ compactSidebar: false }),
+      );
+      recordTuiSessionParent('child', 'root', root);
+      recordTuiAgentModel(
+        {
+          sessionID: 'child',
+          agentName: 'explorer',
+          model: 'openai/old-explorer',
+          variant: 'high',
+        },
+        root,
+      );
+      recordTuiAgentModels(
+        {
+          agentModels: { explorer: 'openai/new-explorer' },
+          agentVariants: { explorer: 'medium' },
+        },
+        root,
+      );
+      const frame = async () => {
+        const disposers: Array<() => void> = [];
+        let render: (() => unknown) | undefined;
+        await tuiPlugin.tui(
+          {
+            state: { path: { directory: root } },
+            route: {
+              current: { name: 'session', params: { sessionID: 'root' } },
+            },
+            lifecycle: {
+              onDispose: (dispose: () => void) => {
+                disposers.push(dispose);
+              },
+            },
+            renderer: { requestRender: () => {} },
+            slots: {
+              register: (slot: {
+                slots: { sidebar_content: () => unknown };
+              }) => {
+                render = slot.slots.sidebar_content;
+              },
+            },
+            theme: { current: rowTheme },
+          } as never,
+          {},
+          { version: 'test' } as never,
+        );
+        try {
+          if (!render) throw new Error('Sidebar slot missing');
+          return (await renderSidebarFrame(() => render?.())).join('\n');
+        } finally {
+          for (const dispose of disposers) dispose();
+        }
+      };
+      const idle = await frame();
+      expect(idle).toContain('new-explorer');
+      expect(idle).toContain('medium');
+      expect(idle).not.toContain('old-explorer');
+      recordTuiAgentActivity(
+        { sessionID: 'child', agentName: 'explorer', active: true },
+        root,
+      );
+      const active = await frame();
+      expect(active).toContain('old-explorer');
+      expect(active).toContain('high');
+      expect(active).not.toContain('new-explorer');
+      recordTuiAgentActivity({ sessionID: 'child', active: false }, root);
+      expect(await frame()).toContain('new-explorer');
+    } finally {
+      if (previousHome === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = previousHome;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   function providersClient(options: {
     empty?: boolean;
     fail?: boolean;
@@ -3856,6 +4213,43 @@ describe('sidebar model display names', () => {
     function cache(): ModelNamesCache {
       return { names: new Map() };
     }
+
+    test('loads v2 model names from the location-scoped model list', async () => {
+      const calls: unknown[] = [];
+      const client = {
+        model: {
+          list: async (input: unknown) => {
+            calls.push(input);
+            return {
+              data: [
+                { providerID: 'openai', id: 'gpt-test', name: 'GPT Test' },
+                {
+                  providerID: 'openai',
+                  id: 'gpt-test-fast',
+                  modelID: 'gpt-test',
+                  name: 'GPT Test Fast',
+                },
+                {
+                  providerID: 'other',
+                  modelID: 'model-two',
+                  name: 'Model Two',
+                },
+                { providerID: 'other', id: 'model-empty', name: '' },
+                { id: 'missing-provider', name: 'Invalid' },
+              ],
+            };
+          },
+        },
+      };
+      const names = await hydrateModelNames(client, '/project', cache());
+      expect(calls).toEqual([{ location: { directory: '/project' } }]);
+      expect(Object.fromEntries(names)).toEqual({
+        'openai/gpt-test': 'GPT Test',
+        'openai/gpt-test-fast': 'GPT Test Fast',
+        'other/model-two': 'Model Two',
+        'other/model-empty': 'model-empty',
+      });
+    });
 
     test('serves TTL hits and refetches when the directory changes', async () => {
       let clock = 0;

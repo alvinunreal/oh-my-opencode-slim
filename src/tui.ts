@@ -276,7 +276,10 @@ export function getSidebarAgentNames(snapshot: TuiSnapshot): string[] {
     : FALLBACK_SIDEBAR_AGENTS;
 }
 
-type AgentListFn = (input?: unknown) => Promise<unknown>;
+type AgentListFn = (
+  input?: unknown,
+  options?: { signal: AbortSignal },
+) => Promise<unknown>;
 
 function asFunction(value: unknown): AgentListFn | undefined {
   return typeof value === 'function' ? (value as AgentListFn) : undefined;
@@ -348,6 +351,13 @@ function modelsFromAgentList(response: unknown): Record<string, string> {
 export async function fetchRemoteAgentModels(
   client: unknown,
   directory: string,
+  scheduleTimeout: (callback: () => void, delay: number) => () => void = (
+    callback,
+    delay,
+  ) => {
+    const timer = setTimeout(callback, delay);
+    return () => clearTimeout(timer);
+  },
 ): Promise<Record<string, string>> {
   const rec = client as
     | {
@@ -358,19 +368,30 @@ export async function fetchRemoteAgentModels(
     | undefined;
   if (!rec) return {};
 
+  const v1Agents = asFunction(rec.app?.agents);
+  const v2Receiver = rec.agent ?? rec.v2?.agent;
+  const receiver = v1Agents ? rec.app : v2Receiver;
+  const list = v1Agents ?? asFunction(v2Receiver?.list);
+  if (!list) return {};
+  const controller = new AbortController();
+  let cancelTimeout: (() => void) | undefined;
   try {
-    const v1Agents = asFunction(rec.app?.agents);
-    if (v1Agents) {
-      return modelsFromAgentList(await v1Agents.call(rec.app, { directory }));
-    }
-    const v2Receiver = rec.agent ?? rec.v2?.agent;
-    const v2List = asFunction(v2Receiver?.list);
-    if (!v2List) return {};
-    return modelsFromAgentList(
-      await v2List.call(v2Receiver, { location: { directory } }),
+    const timeout = new Promise<unknown>((resolve) => {
+      cancelTimeout = scheduleTimeout(() => {
+        controller.abort();
+        resolve([]);
+      }, 2_000);
+    });
+    const request = list.call(
+      receiver,
+      v1Agents ? { directory } : { location: { directory } },
+      { signal: controller.signal },
     );
+    return modelsFromAgentList(await Promise.race([request, timeout]));
   } catch {
     return {};
+  } finally {
+    cancelTimeout?.();
   }
 }
 
@@ -458,7 +479,7 @@ export async function hydrateModelNames(
   try {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const names = await Promise.race([
-      fetchModelNameMap({ client }),
+      fetchModelNameMap({ client, directory }),
       new Promise<never>((_, reject) => {
         timer = setTimeout(
           () => reject(new Error('model names fetch timed out')),
@@ -926,10 +947,8 @@ interface AgentRowTheme {
   secondary?: unknown;
   info?: unknown;
   background?: unknown;
-  backgroundElement?: unknown;
   success?: unknown;
   warning?: unknown;
-  hover?: unknown;
 }
 
 const STATUS_ACTIVE_COLOR = '#22c55e';
@@ -984,25 +1003,20 @@ export function selectionGuard(renderer: {
 
 export function resolveHoverBackground(theme: {
   background?: unknown;
-  backgroundElement?: unknown;
   text?: unknown;
   hover?: unknown;
 }): unknown {
-  if (theme.hover !== undefined && theme.hover !== null) return theme.hover;
-  if (
-    theme.backgroundElement !== undefined &&
-    theme.backgroundElement !== null
-  ) {
-    return theme.backgroundElement;
-  }
   try {
+    if (theme.hover != null && parseColor(theme.hover as ColorInput).a > 0) {
+      return theme.hover;
+    }
     const bg = parseColor((theme.background ?? '#111111') as ColorInput);
     const fg = parseColor((theme.text ?? '#ffffff') as ColorInput);
     return RGBA.fromValues(
       bg.r * 0.82 + fg.r * 0.18,
       bg.g * 0.82 + fg.g * 0.18,
       bg.b * 0.82 + fg.b * 0.18,
-      bg.a,
+      1,
     );
   } catch {
     return '#2a2a2a';
@@ -1157,7 +1171,7 @@ interface AgentRowOptions {
   expanded: boolean;
   annotation?: string;
   onClick?: () => void;
-  hoverBackground?: unknown;
+  hoverBackground: unknown;
   hasSelectedText?: () => boolean;
   hasHistory: boolean;
 }
@@ -1256,7 +1270,7 @@ function agentRow(options: AgentRowOptions): JSX.Element {
     agentHeaderCells(options),
   );
   decorateInteractiveRow(header, {
-    hoverBackground: hoverBackground ?? resolveHoverBackground(theme),
+    hoverBackground,
     onActivate: onClick,
     hasSelectedText,
   });
@@ -1307,7 +1321,7 @@ function compactAgentRow(options: AgentRowOptions): JSX.Element {
     ],
   );
   return decorateInteractiveRow(row, {
-    hoverBackground: hoverBackground ?? resolveHoverBackground(theme),
+    hoverBackground,
     onActivate: onClick,
     hasSelectedText,
   });
@@ -1443,6 +1457,31 @@ export function getContrastForeground(
   return RGBA.fromInts(255, 255, 255);
 }
 
+function projectSidebarSessionModels(
+  snapshot: TuiSnapshot,
+  visibleSessionID?: string,
+): TuiSnapshot {
+  if (!snapshot.sessionModels) return snapshot;
+  const agentModels = { ...snapshot.agentModels };
+  const agentVariants = { ...snapshot.agentVariants };
+  const root =
+    visibleSessionID && resolveTuiSnapshotRoot(snapshot, visibleSessionID);
+  for (const [sessionID, agents] of Object.entries(snapshot.sessionModels)) {
+    if (!root || resolveTuiSnapshotRoot(snapshot, sessionID) !== root) continue;
+    if (
+      sessionID !== root &&
+      !Object.hasOwn(snapshot.activeSessions, sessionID)
+    )
+      continue;
+    for (const [agent, observation] of Object.entries(agents)) {
+      agentModels[agent] = observation.model;
+      if (observation.variant === undefined) delete agentVariants[agent];
+      else agentVariants[agent] = observation.variant;
+    }
+  }
+  return { ...snapshot, agentModels, agentVariants, sessionModels: undefined };
+}
+
 /** Window-local projection; never writes the directory-wide snapshot. */
 export function projectSidebarTeam(
   snapshot: TuiSnapshot,
@@ -1523,7 +1562,6 @@ export function renderSidebar(
     borderActive: unknown;
     text: unknown;
     textMuted: unknown;
-    backgroundElement?: unknown;
     success?: unknown;
     warning?: unknown;
     hover?: unknown;
@@ -1541,7 +1579,7 @@ export function renderSidebar(
   modelNames?: ReadonlyMap<string, string>,
 ): JSX.Element {
   const configStatusRow = buildConfigStatusRow(configInvalid, theme);
-  const presetHoverBackground = resolveHoverBackground({
+  const hoverBackground = resolveHoverBackground({
     background: theme.background,
     text: theme.text,
     hover: theme.hover,
@@ -1550,7 +1588,7 @@ export function renderSidebar(
     ? buildPresetRow(
         presetRow,
         theme,
-        presetHoverBackground,
+        hoverBackground,
         interaction?.hasSelectedText,
       )
     : null;
@@ -1570,13 +1608,6 @@ export function renderSidebar(
       : getSidebarReusableTargets(snapshot, visibleRootID);
   const expandedAgents = interaction?.expandedAgents() ?? new Set<string>();
   const sidebarOpen = interaction?.isOpen() ?? true;
-  // Sidebar rows sit on backgroundElement; using that same surface for hover
-  // produces no visible change. Resolve from the page colors, as for presets.
-  const hoverBackground = resolveHoverBackground({
-    background: theme.background,
-    text: theme.text,
-    hover: theme.hover,
-  });
   const header = box(
     {
       width: '100%',
@@ -1798,10 +1829,6 @@ export function buildPresetRow(
         ]);
   if (!clickable) return content;
   return decorateInteractiveRow(content, {
-    // Sidebar rows sit on backgroundElement, so using that color as the
-    // hover fill leaves this row visually unchanged. Use the normal hover
-    // color when the host provides one, otherwise derive a visible fill from
-    // the page background and text colors.
     hoverBackground,
     onActivate: presetRow.onActivate,
     hasSelectedText,
@@ -2070,7 +2097,11 @@ interface V2TuiThemeTokens {
       warning?: { base: unknown };
     };
   };
-  background: { base?: unknown; default?: unknown; raised?: { base: unknown } };
+  background: {
+    base?: unknown;
+    default?: unknown;
+    raised?: { base: unknown };
+  };
   border: { base?: unknown; default?: unknown };
   success?: unknown;
   warning?: unknown;
@@ -2118,7 +2149,6 @@ interface V2TuiContext extends V2PresetManagerContext {
 function v2ThemeView(theme: V2TuiThemeTokens): {
   accent: unknown;
   background: unknown;
-  backgroundElement: unknown;
   borderActive: unknown;
   text: unknown;
   textMuted: unknown;
@@ -2129,10 +2159,6 @@ function v2ThemeView(theme: V2TuiThemeTokens): {
   return {
     accent: theme.hue?.interactive[200],
     background: theme.background.base ?? theme.background.default,
-    backgroundElement:
-      theme.background.raised?.base ??
-      theme.background.base ??
-      theme.background.default,
     borderActive: theme.border.base ?? theme.border.default,
     text: theme.text.base ?? theme.text.default,
     textMuted: theme.text.muted ?? theme.text.subdued,
@@ -2533,7 +2559,7 @@ function createSidebarRuntime(
           return renderSidebar(
             overlaySelectedRootModel(
               projectSidebarTeam(
-                currentSnapshot,
+                projectSidebarSessionModels(currentSnapshot, visible),
                 isCurrentProjection ? projection.state : undefined,
               ),
               adapter.getSelectedRootModel?.(currentSnapshot),

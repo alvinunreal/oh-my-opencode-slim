@@ -35,6 +35,11 @@ export interface TuiSnapshot {
   updatedAt: number;
   agentModels: Record<string, string>;
   agentVariants: Record<string, string>;
+  /** Effective observations by session, separate from configured defaults. */
+  sessionModels?: Record<
+    string,
+    Record<string, { model: string; variant?: string }>
+  >;
   /**
    * Canonical agent ID → visible display name, for the sidebar label only.
    * Keyed by the same canonical ID as `agentModels`/`activeSessions` so model
@@ -140,6 +145,32 @@ function parsePidRecord(value: unknown): Record<string, number> {
   return out;
 }
 
+function parseSessionModels(
+  value: unknown,
+): NonNullable<TuiSnapshot['sessionModels']> {
+  if (!value || typeof value !== 'object') return {};
+  const sessions: NonNullable<TuiSnapshot['sessionModels']> = {};
+  for (const [sessionID, agents] of Object.entries(value)) {
+    if (!agents || typeof agents !== 'object') continue;
+    const parsed: Record<string, { model: string; variant?: string }> = {};
+    for (const [agent, observation] of Object.entries(agents)) {
+      if (!observation || typeof observation !== 'object') continue;
+      const { model, variant } = observation as {
+        model?: unknown;
+        variant?: unknown;
+      };
+      if (typeof model === 'string') {
+        parsed[agent] = {
+          model,
+          ...(typeof variant === 'string' ? { variant } : {}),
+        };
+      }
+    }
+    if (Object.keys(parsed).length) sessions[sessionID] = parsed;
+  }
+  return sessions;
+}
+
 function parseSessionDetails(
   value: unknown,
 ): Record<string, TuiSessionDetails> {
@@ -230,6 +261,7 @@ function parseSnapshot(value: string): TuiSnapshot {
       typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now(),
     agentModels: parsed.agentModels ?? {},
     agentVariants: parsed.agentVariants ?? {},
+    sessionModels: parseSessionModels(parsed.sessionModels),
     agentDisplayNames: parseStringRecord(parsed.agentDisplayNames),
     activeSessions: parsed.activeSessions ?? {},
     activityPids: parsePidRecord(parsed.activityPids),
@@ -505,6 +537,7 @@ export function snapshotSectionsEqual(a: TuiSnapshot, b: TuiSnapshot): boolean {
       {
         agentModels: a.agentModels,
         agentVariants: a.agentVariants,
+        sessionModels: a.sessionModels ?? {},
         agentDisplayNames: a.agentDisplayNames,
         activeSessions: a.activeSessions,
         activityPids: a.activityPids,
@@ -516,6 +549,7 @@ export function snapshotSectionsEqual(a: TuiSnapshot, b: TuiSnapshot): boolean {
       {
         agentModels: b.agentModels,
         agentVariants: b.agentVariants,
+        sessionModels: b.sessionModels ?? {},
         agentDisplayNames: b.agentDisplayNames,
         activeSessions: b.activeSessions,
         activityPids: b.activityPids,
@@ -532,12 +566,15 @@ export function snapshotSectionsEqual(a: TuiSnapshot, b: TuiSnapshot): boolean {
   // entries are deep-equal: the parent cap prunes the oldest-inserted
   // links and a re-registered link moves to the end, so a pure reorder
   // must still count as a change.
-  return sameSessionParentOrder(a.sessionParents, b.sessionParents);
+  return (
+    sameSessionParentOrder(a.sessionParents, b.sessionParents) &&
+    sameSessionParentOrder(a.sessionModels ?? {}, b.sessionModels ?? {})
+  );
 }
 
 function sameSessionParentOrder(
-  a: Record<string, string>,
-  b: Record<string, string>,
+  a: Record<string, unknown>,
+  b: Record<string, unknown>,
 ): boolean {
   const aKeys = Object.keys(a);
   const bKeys = Object.keys(b);
@@ -598,11 +635,31 @@ export function updateSnapshot(
       rememberSnapshot(statePath, snapshot);
       return true;
     }
+    const sessions = snapshot.sessionModels ?? {};
+    let excess = Object.keys(sessions).length - TUI_SESSION_PARENTS_MAX;
+    for (const id of Object.keys(sessions)) {
+      if (excess <= 0) break;
+      if (Object.hasOwn(snapshot.activeSessions, id)) continue;
+      delete sessions[id];
+      excess--;
+    }
     snapshot.updatedAt = Date.now();
-    // Any write drops the oldest links past the cap but keeps active chains.
-    const { sessionParents: parents, activeSessions } = snapshot;
+    // Keep active chains and every destination still offered by the sidebar.
+    const {
+      sessionParents: parents,
+      activeSessions,
+      reusableByAgent,
+    } = snapshot;
     const keep = new Set<string>();
-    for (let id of Object.keys(activeSessions))
+    const destinations = Object.entries(reusableByAgent).flatMap(
+      ([parentID, agents]) => [
+        parentID,
+        ...Object.values(agents).flatMap((sessions) =>
+          sessions.map((session) => session.taskID),
+        ),
+      ],
+    );
+    for (let id of [...Object.keys(activeSessions), ...destinations])
       for (; parents[id] && !keep.has(id); id = parents[id]) keep.add(id);
     for (const key of Object.keys(parents).slice(0, -TUI_SESSION_PARENTS_MAX))
       if (!keep.has(key)) delete parents[key];
@@ -825,18 +882,33 @@ export function recordTuiAgentModel(
     agentName: string;
     model: string;
     variant?: string | null;
+    fallbackVariant?: string | null;
+    sessionID: string;
   },
   projectDir: string,
 ): void {
   recordSnapshotUpdate(projectDir, (snapshot) => {
-    snapshot.agentModels[input.agentName] = input.model;
-    if (input.variant !== undefined) {
-      if (input.variant === null) {
-        delete snapshot.agentVariants[input.agentName];
-      } else {
-        snapshot.agentVariants[input.agentName] = input.variant;
-      }
-    }
+    const sessions = snapshot.sessionModels ?? {};
+    snapshot.sessionModels = sessions;
+    const agents = sessions[input.sessionID] ?? {};
+    const previous = agents[input.agentName];
+    const variant =
+      input.variant !== undefined
+        ? input.variant
+        : previous?.model === input.model
+          ? previous.variant
+          : input.fallbackVariant;
+    if (
+      previous?.model === input.model &&
+      previous.variant === (variant ?? undefined)
+    )
+      return;
+    agents[input.agentName] = {
+      model: input.model,
+      ...(variant ? { variant } : {}),
+    };
+    delete sessions[input.sessionID];
+    sessions[input.sessionID] = agents;
   });
 }
 

@@ -10,6 +10,7 @@ import { TmuxMultiplexer } from '../multiplexer/tmux';
 import baseTui, { readTuiGates } from '../tui';
 import {
   recordTuiAgentActivity,
+  recordTuiAgentModel,
   recordTuiAgentModels,
   recordTuiSessionParent,
 } from '../tui-state';
@@ -837,6 +838,95 @@ describe('v2 tui preset plugin', () => {
           presetName: null,
           affects: 'future-children-only',
         });
+        cleanup?.();
+        screen?.renderer.destroy();
+      }
+    });
+
+    test('sidebar projects session observations before the session team', async () => {
+      writeUserConfig({ ...makeConfig(), compactSidebar: false });
+      process.env.XDG_DATA_HOME = path.join(configHome, 'session-team-data');
+      process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '60000';
+      recordTuiAgentModels(
+        {
+          agentModels: {
+            orchestrator: 'global/root',
+            explorer: 'global/child',
+          },
+        },
+        projectDir,
+      );
+      recordTuiSessionParent('child-a', 'root-a', projectDir);
+      recordTuiAgentActivity(
+        { sessionID: 'child-a', agentName: 'explorer', active: true },
+        projectDir,
+      );
+      recordTuiAgentModel(
+        {
+          sessionID: 'root-a',
+          agentName: 'orchestrator',
+          model: 'live/root-observed',
+          variant: 'high',
+        },
+        projectDir,
+      );
+      recordTuiAgentModel(
+        {
+          sessionID: 'child-a',
+          agentName: 'explorer',
+          model: 'live/child-observed',
+        },
+        projectDir,
+      );
+      const stub = makeSetupCtx();
+      (stub.ctx.ui as { router: { current: () => unknown } }).router.current =
+        () => ({ type: 'session', sessionID: 'root-a' });
+      let notifyRendered = () => {};
+      const rendered = new Promise<void>((resolve) => {
+        notifyRendered = resolve;
+      });
+      stub.ctx.renderer = { requestRender: notifyRendered };
+      stub.ctx.client = {
+        rpc: () => ({
+          read: async () => ({
+            sessionID: 'root-a',
+            status: 'bound',
+            presetName: 'balanced',
+            affects: 'future-children-only',
+            team: {
+              agentModels: {
+                orchestrator: 'saved/preset-root',
+                explorer: 'saved/team-child',
+              },
+              agentVariants: {},
+              inheritance: {},
+            },
+          }),
+        }),
+      };
+      let cleanup: (() => void) | undefined;
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      try {
+        cleanup = await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        );
+        await rendered;
+        const sidebar = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        if (!sidebar?.render) throw new Error('Sidebar slot missing');
+        screen = await testRender(() => sidebar.render?.() as never, {
+          width: 80,
+          height: 32,
+        });
+        await screen.renderOnce();
+        const frame = screen.captureCharFrame();
+        expect(frame).toContain('root-observed');
+        expect(frame).toMatch(/variant\s+high/);
+        expect(frame).toContain('team-child');
+        expect(frame).not.toContain('child-observed');
+        expect(frame).not.toContain('preset-root');
+      } finally {
         cleanup?.();
         screen?.renderer.destroy();
       }
