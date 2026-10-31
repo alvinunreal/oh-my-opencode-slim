@@ -648,6 +648,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let backgroundJobSupervisor: BackgroundJobSupervisor | undefined;
   let backgroundTaskConcurrency: BackgroundTaskConcurrency | undefined;
   let admissionRuntimeLease: AdmissionRuntimeLease | undefined;
+  let releaseRuntimeConfig: (() => void) | undefined;
   let finalHostAgentConfig: Record<string, unknown> | undefined;
   let interviewManager: ReturnType<typeof createInterviewManager> | undefined;
   let collapseActiveInterviewHistory:
@@ -889,13 +890,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // config. The runtime preset reapplication below mutates `config` for
     // legacy consumers; RuntimeConfig keeps the pre-mutation snapshot and
     // derives preset/runtime state through its own getters.
-    RuntimeConfig.init(ctx.directory, config, hostFlavor);
+    const runtimeConfig = RuntimeConfig.init(ctx.directory, config, hostFlavor);
+    releaseRuntimeConfig = runtimeConfig.acquire();
 
     // Safety net: instance disposal reruns the plugin factory and rebuilds
     // factory-local state, while module-level runtime preset state may persist.
     // Reapply that persisted preset so each fresh generation creates agents
     // with the correct models.
-    const runtimeConfig = RuntimeConfig.get(ctx.directory);
     const previousRuntimePreset = runtimeConfig.getRuntimePreset();
     const runtimePreset = runtimeConfig.resolveRuntimePreset(config);
     if (runtimePreset) {
@@ -1962,6 +1963,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   } catch (err) {
     terminalGate?.dispose();
     admissionRuntimeLease?.release();
+    releaseRuntimeConfig?.();
     // The scope claim must not outlive a failed init: a leaked live-directory
     // entry would keep other instances from ever reclaiming this location and
     // would block the last-instance wake reset.
@@ -3253,33 +3255,37 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // Cancel pending initial-delay fallback timers so a reloaded
       // generation cannot observe one stale fallback call.
       foregroundFallback?.dispose();
-      await taskSessionManagerHook?.event({
-        event: { type: 'server.instance.disposed' },
-      });
-      await orchestratorWakeScheduler?.event({
-        event: { type: 'server.instance.disposed' },
-      });
-      // The wake gate is process-global (globalThis + Symbol.for) and survives
-      // module re-entry, so a reloaded generation would otherwise inherit the
-      // previous generation's no-progress caps. Clear it only when this was the
-      // last live instance: disposing one of several locations must not wipe
-      // the other locations' wake state.
-      if (!hasLiveInstances()) clearAllWakeSessions();
-      v1InternalSelectionOverrides.clear();
-      v1DelegatedIntents.length = 0;
-      await interviewManager?.dispose();
-      clearTuiActivities();
-      tuiReusableProjection?.dispose();
-      // Explicitly release this generation's companion ownership: a
-      // reloaded generation only replaces the active manager at its own
-      // onLoad, and if it fails before that the detached companion would
-      // survive until process exit. Idempotent (registerActiveManager's
-      // replacement path and the process-exit listener tolerate repeats).
-      companionManager?.onExit();
-      // Release only this generation's ownership. The admission runtime
-      // defers final scheduler/tracker teardown by one macrotask so an
-      // immediate config-update re-init can retain active and queued calls.
-      admissionRuntimeLease?.release();
+      try {
+        await taskSessionManagerHook?.event({
+          event: { type: 'server.instance.disposed' },
+        });
+        await orchestratorWakeScheduler?.event({
+          event: { type: 'server.instance.disposed' },
+        });
+        // The wake gate is process-global (globalThis + Symbol.for) and survives
+        // module re-entry, so a reloaded generation would otherwise inherit the
+        // previous generation's no-progress caps. Clear it only when this was the
+        // last live instance: disposing one of several locations must not wipe
+        // the other locations' wake state.
+        if (!hasLiveInstances()) clearAllWakeSessions();
+        v1InternalSelectionOverrides.clear();
+        v1DelegatedIntents.length = 0;
+        await interviewManager?.dispose();
+        clearTuiActivities();
+        tuiReusableProjection?.dispose();
+        // Explicitly release this generation's companion ownership: a
+        // reloaded generation only replaces the active manager at its own
+        // onLoad, and if it fails before that the detached companion would
+        // survive until process exit. Idempotent (registerActiveManager's
+        // replacement path and the process-exit listener tolerate repeats).
+        companionManager?.onExit();
+        // Release only this generation's ownership. The admission runtime
+        // defers final scheduler/tracker teardown by one macrotask so an
+        // immediate config-update re-init can retain active and queued calls.
+      } finally {
+        admissionRuntimeLease?.release();
+        releaseRuntimeConfig?.();
+      }
     },
 
     'tool.execute.before': async (input, output) => {

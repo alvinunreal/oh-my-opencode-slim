@@ -74,6 +74,10 @@ export interface HostConfigSnapshot {
 
 /** Per-directory registry backing the singleton instances. */
 const registry = new Map<string, RuntimeConfig>();
+const reloadState = new Map<
+  string,
+  { preset: string | null; switchedModels: Set<string> }
+>();
 
 /**
  * Resolve the lifecycle mode from a raw/parsed `backgroundJobs` block.
@@ -205,9 +209,9 @@ export class RuntimeConfig {
       existing.seedPlugin(pluginConfig);
       return existing;
     }
-    const instance = new RuntimeConfig(directory, hostFlavor);
+    const instance = RuntimeConfig.get(directory);
+    instance.hostFlavor = hostFlavor;
     instance.seedPlugin(pluginConfig);
-    registry.set(directory, instance);
     return instance;
   }
 
@@ -227,6 +231,12 @@ export class RuntimeConfig {
     let instance = registry.get(directory);
     if (!instance) {
       instance = new RuntimeConfig(directory);
+      const saved = reloadState.get(directory);
+      if (saved) {
+        instance.runtimePresetName = saved.preset;
+        instance.switchedModels = saved.switchedModels;
+        reloadState.delete(directory);
+      }
       registry.set(directory, instance);
     }
     return instance;
@@ -250,8 +260,32 @@ export class RuntimeConfig {
   /** Remove a directory from the registry (plugin re-init / dispose). */
   static reset(directory: string): void {
     registry.delete(directory);
+    reloadState.delete(directory);
   }
 
+  /** Retain this generation until its owner disposes or initialization fails. */
+  acquire(): () => void {
+    if (registry.get(this.directory) !== this) {
+      throw new Error('Cannot acquire an unregistered runtime config');
+    }
+    this.owners += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.owners -= 1;
+      if (this.owners !== 0 || registry.get(this.directory) !== this) return;
+      if (this.runtimePresetName || this.switchedModels.size > 0) {
+        reloadState.set(this.directory, {
+          preset: this.runtimePresetName,
+          switchedModels: new Set(this.switchedModels),
+        });
+      }
+      registry.delete(this.directory);
+    };
+  }
+
+  private owners = 0;
   private pluginConfig: ResolvedPluginConfig | undefined;
   private hostSnapshot: HostConfigSnapshot | undefined;
   private runtimePresetName: string | null = null;
