@@ -4,7 +4,7 @@
 Runtime model fallback system for foreground (interactive) agent sessions. When OpenCode emits rate-limit signals via `message.updated`, `session.error`, or `session.status` events, this manager:
 - Detects retryable conditions using pattern matching against error messages and status codes (rate limits, 429, 403/Forbidden, 401/410 failover errors)
 - On v1, withholds `session.abort(X)` while the background job board reports running children of X: held retry events do not seal dedup, and exhausted chains still stop intervening. v2 and v1 sessions without running children retain their abort behavior. `session.error` and `message.updated` can re-prompt directly without abort. A replay transport failure leaves any armed handoff unresolved without aborting or resending.
-- Retrieves the last user message from the session history
+- Retrieves the last user message from the bounded transcript tail or its latest parent; an empty or failed tail never triggers a full-history read
 - Re-prompts with the first eligible entry from the chain head, skipping tried models and providers abandoned by this session or its parent
 - Operates reactively through the event system (cannot wrap `prompt()` directly for interactive sessions)
 - Defers terminal job-board bookkeeping for recoverable child failover errors (cooperates with task-session-manager's `willAttemptFallback`). The deferral fences every terminal gate path before replay preparation starts; idle always uses the bounded backstop.

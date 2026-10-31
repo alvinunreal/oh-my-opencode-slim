@@ -4098,27 +4098,8 @@ describe('ForegroundFallbackManager session.error', () => {
     );
   });
 
-  test('falls back to the full transcript read when the tail has no replayable user message', async () => {
-    // A host that ignores `limit` (or an exotic transcript whose tail
-    // carries no user message) must still fail over: pay the full read
-    // rather than skip the replay.
-    let reads = 0;
-    ({ mocks } = createMockClient({
-      messagesImpl: async () => {
-        reads += 1;
-        if (reads === 1) {
-          return { data: [{ info: { role: 'assistant' }, parts: [] }] };
-        }
-        return {
-          data: [
-            {
-              info: { role: 'user' },
-              parts: [{ type: 'text', text: 'deep prompt' }],
-            },
-          ],
-        };
-      },
-    }));
+  test('stops after an empty transcript tail without requesting the full history', async () => {
+    ({ mocks } = createMockClient({ messagesData: [] }));
     mgr = new ForegroundFallbackManager(makeChains(), true, {
       directory: '/test',
     } as any);
@@ -4142,24 +4123,16 @@ describe('ForegroundFallbackManager session.error', () => {
       },
     });
 
-    expect(reads).toBe(2);
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    const promptCall = mocks.promptAsync.mock.calls[0] as [
-      { parts: Array<{ text?: string }> },
-    ];
-    expect(promptCall[0].body.parts).toHaveLength(1);
+    expect(mocks.messages).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
 
-  test('keeps both errors when the tail and the full transcript reads fail', async () => {
-    // A dual transcript-read incident must surface the tail error too:
-    // the full-read error aggregates after it instead of overwriting it.
+  test('stops after a failed transcript tail without requesting the full history', async () => {
     let reads = 0;
     ({ mocks } = createMockClient({
       messagesImpl: async () => {
         reads += 1;
-        return reads === 1
-          ? { error: { message: 'tail down' }, data: [] }
-          : { error: { message: 'full down' }, data: [] };
+        return { error: { message: 'tail down' }, data: [] };
       },
     }));
     mgr = new ForegroundFallbackManager(makeChains(), true, {
@@ -4185,7 +4158,7 @@ describe('ForegroundFallbackManager session.error', () => {
       },
     });
 
-    expect(reads).toBe(2);
+    expect(reads).toBe(1);
     expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
 
@@ -9257,6 +9230,19 @@ describe('ForegroundFallbackManager same-model retry hardening', () => {
       },
     });
     expect(mgr.willAttemptFallback('det-nc')).toBe(true);
+  });
+
+  test('same-model replay stops and refunds on an empty transcript tail', async () => {
+    const { client, mocks } = createMockClient({ messagesData: [] });
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      client,
+      directory: '/test',
+    } as any);
+    await seed(mgr, 'empty-nc');
+    await mgr.handleEvent(streamError('empty-nc', 'e1'));
+    expect(mocks.messages).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    expect((mgr as any).sessionRetries.get('empty-nc') ?? 0).toBe(0);
   });
 
   describe('with fake timers', () => {
