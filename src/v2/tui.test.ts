@@ -1872,9 +1872,6 @@ describe('v2 tui preset plugin', () => {
       const close = jest
         .spyOn(TmuxMultiplexer.prototype, 'closePane')
         .mockResolvedValue(true);
-      const layout = jest
-        .spyOn(TmuxMultiplexer.prototype, 'applyLayout')
-        .mockResolvedValue();
       const sweep = jest
         .spyOn(TmuxMultiplexer.prototype, 'listPanesWithTitles')
         .mockResolvedValue([]);
@@ -1944,7 +1941,6 @@ describe('v2 tui preset plugin', () => {
         process.argv = originalArgv;
         spawn.mockRestore();
         close.mockRestore();
-        layout.mockRestore();
         sweep.mockRestore();
       }
     }
@@ -1992,9 +1988,6 @@ describe('v2 tui preset plugin', () => {
       const close = jest
         .spyOn(TmuxMultiplexer.prototype, 'closePane')
         .mockResolvedValue(true);
-      const layout = jest
-        .spyOn(TmuxMultiplexer.prototype, 'applyLayout')
-        .mockResolvedValue();
       const stub = makeSetupCtx();
       let directory = projectDir;
       (stub.ctx.ui as { router: { current: () => unknown } }).router.current =
@@ -2088,7 +2081,6 @@ describe('v2 tui preset plugin', () => {
         sweep.mockRestore();
         spawn.mockRestore();
         close.mockRestore();
-        layout.mockRestore();
         screen?.renderer.destroy();
       }
     });

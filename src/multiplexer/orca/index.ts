@@ -16,8 +16,7 @@
  * on `PATH`. Availability is `orca status --json` reporting
  * `ok: true` with `result.app.running === true`.
  *
- * Layout: Orca has no layout primitives, so `applyLayout` is a no-op (like
- * cmux-tui and Zellij) and `main_pane_size` is ignored. The configured
+ * Layout: Orca has no layout primitives and `main_pane_size` is ignored. The configured
  * layout only maps to the split direction at spawn time; every child splits
  * the anchor, so there is no shared placement state and no spawn mutex.
  *
@@ -275,15 +274,6 @@ export class OrcaMultiplexer implements Multiplexer {
       stderr: run.stderr.trim(),
     });
     return false;
-  }
-
-  async applyLayout(
-    _layout: MultiplexerLayout,
-    _mainPaneSize: number,
-  ): Promise<void> {
-    // No-op: Orca has no layout primitives to switch to. The configured
-    // layout is mapped to a split direction at spawn time only, and
-    // main_pane_size has no Orca expression at all.
   }
 
   private async getBinary(): Promise<string | null> {

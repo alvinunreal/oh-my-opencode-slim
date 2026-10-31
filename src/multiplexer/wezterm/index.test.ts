@@ -679,17 +679,4 @@ describe('WeztermMultiplexer', () => {
     expect(await wezterm.closePane('100')).toBe(false);
     expect(weztermCommands()).toHaveLength(0);
   });
-
-  test('applyLayout changes how later children are placed', async () => {
-    const { WeztermMultiplexer } = await importFreshWezterm();
-    const wezterm = new WeztermMultiplexer('main-vertical', 60);
-    await wezterm.applyLayout('even-vertical', 60);
-    await spawnWith(wezterm, 'ses_a');
-
-    expect(splitFlags(splits()[0]).slice(0, 3)).toEqual([
-      '--pane-id',
-      ANCHOR_PANE_ID,
-      '--bottom',
-    ]);
-  });
 });

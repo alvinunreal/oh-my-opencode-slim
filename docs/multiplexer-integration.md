@@ -373,8 +373,8 @@ Adapter notes:
   Closing sends Ctrl+C and then `kill-pane`; a failure counts as closed only
   on WezTerm's `no such pane N` error, so a transient CLI error keeps the pane
   tracked instead of forgetting a live viewer.
-- **Orca** — no layout primitives: `applyLayout` is a no-op and
-  `main_pane_size` is ignored. The layout only selects the split direction at
+- **Orca** — no layout primitives: `main_pane_size` is ignored. The layout
+  only selects the split direction at
   spawn time (`horizontal` for `main-vertical`, `even-horizontal` and `tiled`;
   `vertical` for `main-horizontal` and `even-vertical`), and every child
   splits the anchor terminal — there is no agent area, no sizing and no
@@ -496,8 +496,8 @@ produces one `multiplexer.host-unsupported` record per process; shared and
   inherit the worktree directory are unaffected. The v2 `mini` viewer, which
   has no directory argument, runs `cd <dir> && …` first (POSIX shells and
   fish).
-- **Orca has no layout primitives.** `applyLayout` is a no-op and
-  `main_pane_size` is ignored: the layout only picks the split direction at
+- **Orca has no layout primitives.** `main_pane_size` is ignored: the layout
+  only picks the split direction at
   spawn time, every child splits the anchor terminal, and nothing is ever
   resized or rebalanced.
 - **A timed-out Orca split is a soft failure.** The split command is bounded

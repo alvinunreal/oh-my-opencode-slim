@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test';
-import type { MultiplexerLayout } from '../../config/schema';
 import type { Multiplexer, PaneResult } from '../types';
 import {
   DIAGNOSTIC_EVENT_NO_PANE,
@@ -141,10 +140,6 @@ class FakeAdapter implements Multiplexer {
   readonly type: AdapterType;
   readonly spawnCalls: SpawnCall[] = [];
   readonly closeCalls: string[] = [];
-  readonly layoutCalls: Array<{
-    layout: MultiplexerLayout;
-    mainPaneSize: number;
-  }> = [];
   spawnResult: PaneResult = { success: true, paneId: 'pane-1' };
   spawnError: Error | null = null;
   spawnBarrier: Promise<void> | null = null;
@@ -187,13 +182,6 @@ class FakeAdapter implements Multiplexer {
     this.closeCalls.push(paneId);
     if (this.closeBarrier) await this.closeBarrier;
     return this.closeResult;
-  }
-
-  async applyLayout(
-    layout: MultiplexerLayout,
-    mainPaneSize: number,
-  ): Promise<void> {
-    this.layoutCalls.push({ layout, mainPaneSize });
   }
 }
 

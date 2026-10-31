@@ -18,7 +18,6 @@
 - After a successful attach, and after closing a pane this client spawned, `equalizeAgentArea` calls `layout-equalize.ts` with `HERDR_TAB_ID` / `HERDR_SOCKET_PATH`; missing context is skipped silently and failures only log. `multiplexer.equalize_panes` (constructor 4th parameter, default `true`) gates the step before any environment or socket access.
 - `listPanesWithTitles` reads `herdr pane list` and maps each pane's `label` for the FR-8 sweep.
 - `closePane` sends `ctrl+c` via `herdr pane send_keys`, waits 250ms, then runs `herdr pane close`; exit codes `0` and `1` count as closed.
-- `applyLayout` has no synchronous rebalance step: it stores the new layout and both split directions, and clears the tracked agent-area pane so the next spawn starts fresh from the parent pane; equalization runs on the next spawn/close.
 - Split directions are mapped per layout:
   - `getPaneDirection` (parent → agent area): `main-vertical`, `even-horizontal`, `tiled` → `right`; `main-horizontal`, `even-vertical` → `down`
   - `getStackDirection` (agent area → later children): `main-vertical` → `down`; `main-horizontal` → `right`
@@ -43,7 +42,6 @@
   - `herdr pane close <pane>`; treats exit codes `0` and `1` as successful closure
   - clears the tracked agent-area pane when that pane was the one closed
   - re-equalizes the agent area when the closed pane was spawned by this client
-- `applyLayout` stores the layout and both directions, and resets the agent-area state for subsequent spawns; equalization is deferred to the next spawn/close.
 
 ## Integration
 

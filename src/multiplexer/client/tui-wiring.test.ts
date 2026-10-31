@@ -201,8 +201,6 @@ class FakeAdapter implements Multiplexer {
     this.closes.push(paneId);
     return true;
   }
-
-  async applyLayout(): Promise<void> {}
 }
 
 type FakeSessionGetResult = 'found' | 'notfound' | 'error';

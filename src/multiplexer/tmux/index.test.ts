@@ -548,65 +548,6 @@ describe('TmuxMultiplexer', () => {
     );
   });
 
-  test('logs and stops layout sequence when a tmux layout command fails', async () => {
-    const { TmuxMultiplexer } = await importFreshTmux();
-    const tmux = new TmuxMultiplexer('main-vertical', 60);
-
-    crossSpawnMock.mockImplementation((command: string[]) => {
-      if (command[0] === 'which')
-        return createSpawnResult(0, '/usr/bin/tmux\n');
-      if (command.includes('-V')) return createSpawnResult(0, 'tmux 3.6a');
-      if (command.includes('select-layout')) {
-        return createSpawnResult(1, '', 'layout failed');
-      }
-      return createSpawnResult();
-    });
-
-    await tmux.applyLayout('main-vertical', 60);
-
-    expect(logMock).toHaveBeenCalledWith('[tmux] command failed', {
-      command: 'select-layout',
-      args: [
-        '/usr/bin/tmux',
-        '-S',
-        SOCKET,
-        'select-layout',
-        '-t',
-        '%1',
-        'main-vertical',
-        ';',
-        'set-window-option',
-        '-t',
-        '%1',
-        'main-pane-width',
-        '60%',
-        ';',
-        'select-layout',
-        '-t',
-        '%1',
-        'main-vertical',
-      ],
-      exitCode: 1,
-      stderr: 'layout failed',
-    });
-    expect(logMock).not.toHaveBeenCalledWith(
-      '[tmux] applyLayout: applied',
-      expect.anything(),
-    );
-  });
-
-  test('applyLayout resolves the anchor from the environment at call time', async () => {
-    const { TmuxMultiplexer } = await importFreshTmux();
-    const tmux = new TmuxMultiplexer('main-vertical', 60);
-    process.env.TMUX_PANE = '%7';
-
-    await tmux.applyLayout('even-horizontal', 60);
-
-    const layoutCommand = commandContaining('select-layout');
-    expect(layoutCommand).toContain('%7');
-    expect(layoutCommand).not.toContain('%1');
-  });
-
   test('closePane closes the given pane with explicit addressing', async () => {
     const { TmuxMultiplexer } = await importFreshTmux();
     const tmux = new TmuxMultiplexer('main-vertical', 60);

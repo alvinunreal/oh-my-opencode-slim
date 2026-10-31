@@ -16,8 +16,8 @@ multiplexer-specific command translation.
 ### Core Abstractions
 
 - **Multiplexer Interface** (`types.ts`): Defines the contract for terminal
-  multiplexer implementations with methods for pane lifecycle management and
-  layout application. The optional sweep extension
+  multiplexer implementations with methods for pane lifecycle management.
+  The optional sweep extension
   (`listPanesWithTitles` / `closePane`) is narrowed structurally by
   `client/sweep.ts`, so the shared interface stays untouched.
 - **Concrete Implementations** (all client-local):
@@ -94,7 +94,6 @@ export interface Multiplexer {
   isInsideSession(): boolean;
   spawnPane(sessionId: string, description: string, serverUrl: string, directory: string, options?: PaneSpawnOptions): Promise<PaneResult>;
   closePane(paneId: string): Promise<boolean>;
-  applyLayout(layout: MultiplexerLayout, mainPaneSize: number): Promise<void>;
 }
 ```
 
@@ -306,7 +305,7 @@ has no cwd flag (the split inherits the anchor's working directory).
   (never `hard`, never pane loss); a missing anchor is `not_found`.
 - Layout maps to split direction only (`main-vertical`/`even-horizontal`/
   `tiled` → horizontal, `main-horizontal`/`even-vertical` → vertical);
-  `applyLayout` is a no-op (Orca has no layout primitives).
+  Orca has no layout primitives.
 - Close: `orca terminal close --terminal <handle>`, exit 0 only. No FR-8
   sweep (titles are shell-overwritten, like WezTerm). win32: `spawnPane`
   refuses with `unavailable`.

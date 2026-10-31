@@ -294,30 +294,6 @@ export class TmuxMultiplexer implements Multiplexer {
     return closed;
   }
 
-  async applyLayout(
-    layout: MultiplexerLayout,
-    mainPaneSize: number,
-  ): Promise<void> {
-    this.storedLayout = layout;
-    this.storedMainPaneSize = mainPaneSize;
-
-    const socket = this.resolveSocket();
-    const anchor = this.resolveAnchor();
-    const tmux = await this.getBinary();
-    if (!socket || !anchor || !tmux) {
-      log('[tmux] applyLayout: no tmux target resolved; skipping', {
-        hasSocket: !!socket,
-        hasAnchor: !!anchor,
-      });
-      return;
-    }
-    try {
-      await this.runTmux(tmux, socket, this.layoutArgs(anchor));
-    } catch (err) {
-      log('[tmux] applyLayout: exception', { error: String(err) });
-    }
-  }
-
   /**
    * The configured layout as one command sequence. tmux runs a sequence in
    * one pass and resizes each pane once for its final geometry. The leading
