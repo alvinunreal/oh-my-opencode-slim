@@ -50,7 +50,19 @@ check directory/parent/storage. Attributed messages skip stored-history reads.
 `event-subscription.ts` freezes the native type union for enabled consumers,
 including correlated `session.step.started`/`session.step.failed` refusal
 signals for foreground fallback. The client shim exposes the real optional
-`session.switchModel` capability for that path.
+`session.switchModel` capability for that path. On older hosts a confirmed
+refusal switch continues managed background children through the observation
+handoff; the wrapped subagent executor reattaches foreground children after
+the assistant-specific outcome resolves. Hosts retrying the finish in place do
+not enter these continuation paths. The parent context bridge authenticates
+native background-error notices against their durable synthetic metadata and,
+for a content-filtered child, waits for that same bounded refusal outcome. A
+confirmed switch for the same board generation replaces the notice in that
+request with the running model; failed or timed-out outcomes leave the native
+error untouched. Resolved outcomes remain in the bounded refusal registry so
+later parent requests also supersede the historical notice. The client shim
+maps `model-switched` markers to the skippable system role, preserving their
+source type, so an in-place retry's completed answer remains terminal evidence.
 Interview receives `session.text.*` with `assistantMessageID`; its v2 bridge is
 the only Interview owner on this host. Event payload extraction is shared, but
 recovery/permission/profile owners remain distinct. One native-event batch

@@ -10,11 +10,13 @@
  * launch branches off (exactly-once registration on v2).
  *
  * v1 keeps the prose lane unchanged: this wrapper is installed only by the v2
- * setup path. The wrapper never reimplements host subagent behavior — it wraps
- * the original executor and always returns its result unchanged.
+ * setup path. A confirmed content-filter fallback reattaches the foreground
+ * child through the original executor and returns that executor's result.
  */
 
+import { isRecord } from '../utils/guards';
 import { log } from '../utils/logger';
+import { withTimeout } from '../utils/session';
 import { parseTaskResultFromOutput } from '../utils/task';
 
 export type SubagentStructuredState =
@@ -50,6 +52,11 @@ export interface SubagentExecutorWrapperOptions {
   /** Register one structured launch/status. The wrapper never lets a
    *  registration failure reach the tool result. */
   register: (launch: SubagentStructuredLaunch) => Promise<unknown> | unknown;
+  context?: (sessionID: string) => Promise<Array<Record<string, unknown>>>;
+  refusalOutcome?: (
+    sessionID: string,
+    assistantMessageID: string,
+  ) => Promise<string | undefined>;
 }
 
 /** Host-authored failure sentence; the ONLY prose the wrapper reads, and only
@@ -202,17 +209,59 @@ export function createSubagentExecutorWrapper(
           | undefined;
         const callID = readString(call?.id);
         const parentSessionID = readString(call?.sessionID);
-        try {
-          const result = await run(input, context);
-          if (callID && parentSessionID) {
-            registerSafely(structuredLaunch(callID, parentSessionID, result));
+        let currentInput = input;
+        const retried = new Set<string>();
+        while (true) {
+          try {
+            const result = await run(currentInput, context);
+            if (callID && parentSessionID) {
+              registerSafely(structuredLaunch(callID, parentSessionID, result));
+            }
+            return result;
+          } catch (error) {
+            const launch =
+              callID && parentSessionID
+                ? threwLaunch(callID, parentSessionID, error)
+                : undefined;
+            if (
+              launch?.state === 'error' &&
+              isRecord(currentInput) &&
+              options.context &&
+              options.refusalOutcome
+            ) {
+              try {
+                const messages = await withTimeout(
+                  options.context(launch.childTaskID),
+                  2_000,
+                  '[v2] refused subagent context lookup timed out',
+                );
+                const last = messages.findLast(
+                  (message) => message.type === 'assistant',
+                );
+                if (
+                  last?.finish === 'content-filter' &&
+                  typeof last.id === 'string' &&
+                  !retried.has(last.id) &&
+                  (await options.refusalOutcome(launch.childTaskID, last.id))
+                ) {
+                  retried.add(last.id);
+                  const next: Record<string, unknown> = {
+                    ...currentInput,
+                    sessionID: launch.childTaskID,
+                    prompt:
+                      "The previous response was stopped by the provider's content filter. Continue from where it stopped without repeating completed content.",
+                  };
+                  delete next.model;
+                  currentInput = next;
+                  continue;
+                }
+              } catch {
+                // Preserve the native failure if the refusal cannot be confirmed.
+              }
+            }
+            registerSafely(launch);
+            throw error;
           }
-          return result;
-        } catch (error) {
-          if (callID && parentSessionID) {
-            registerSafely(threwLaunch(callID, parentSessionID, error));
-          }
-          throw error;
         }
       };
       Object.defineProperty(wrapped, WRAPPED_MARKER, {

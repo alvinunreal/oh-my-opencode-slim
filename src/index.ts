@@ -2726,6 +2726,24 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ? (input: never, switchModel: never) =>
           foregroundFallback?.handleV2Retry(input, switchModel)
       : undefined,
+    'v2.refusalOutcome': (
+      sessionID: string,
+      assistantMessageID: string,
+      generation?: number,
+    ) =>
+      foregroundFallback?.refusalOutcome(
+        sessionID,
+        assistantMessageID,
+        generation,
+      ) ?? Promise.resolve(undefined),
+    'v2.backgroundGeneration': (parentID: string, childID: string) => {
+      const record = backgroundJobBoard?.get(childID);
+      return hostFlavor === 'v2' &&
+        record?.parentSessionID === parentID &&
+        record.background === true
+        ? record.generation
+        : undefined;
+    },
     // v2-only extension hook: pin the chain generation in effect when a
     // child session registers — the same generation as its frozen profile.
     'v2.pinSessionChains': (

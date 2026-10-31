@@ -9,11 +9,19 @@ import {
   test,
 } from 'bun:test';
 import { isInternalInitiatorPart } from '../../utils';
+import { BackgroundJobBoard } from '../../utils/background-job-fixture';
+import { createBackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
 import * as logger from '../../utils/logger';
 import { mapV2EventToV1 } from '../../v2/event-adapter';
 import { recordInternalAdmission } from '../../v2/internal-admissions';
+import { createSessionContextHandler } from '../../v2/setup';
+import { createSubagentExecutorWrapper } from '../../v2/subagent-executor-wrapper';
 import { SessionLifecycle } from '../session-lifecycle';
-import type { FallbackNotice } from '../task-session-manager/revived-run-tracker';
+import { createBackgroundFallbackHandoff } from '../task-session-manager/fallback-observation-transfer';
+import {
+  createRevivedRunTracker,
+  type FallbackNotice,
+} from '../task-session-manager/revived-run-tracker';
 import {
   ForegroundFallbackManager,
   isFailoverError,
@@ -2237,6 +2245,8 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     chains?: Record<string, Array<string | { id: string; variant: string }>>;
     switchModel?: (sessionID: string, model: unknown) => Promise<unknown>;
     promptAsyncImpl?: (args: unknown) => Promise<unknown>;
+    handoff?: ReturnType<typeof createBackgroundFallbackHandoff>;
+    readBackgroundGeneration?: (sessionID: string) => number | undefined;
   }) {
     const durable = { providerID: 'test', id: 'a', variant: 'source' };
     const info: { model?: typeof durable; parentID?: string; agent?: string } =
@@ -2270,8 +2280,8 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
       onChanged,
       0,
       0,
-      undefined,
-      undefined,
+      options?.handoff,
+      options?.readBackgroundGeneration,
       undefined,
       true,
     );
@@ -2540,6 +2550,292 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     await settle();
     expect(switchModel).toHaveBeenCalledTimes(1);
     expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('v2 background refusal continues with a handoff that fences an empty successor', async () => {
+    const board = new BackgroundJobBoard();
+    const run = board.registerLaunch({
+      taskID: 'child-bg',
+      parentSessionID: 'parent',
+      agent: 'orchestrator',
+      background: true,
+    });
+    const admission = deferred<void>();
+    let manager: ForegroundFallbackManager;
+    const input = { directory: '/test', client: {} } as never;
+    const gate = createBackgroundJobTerminalGate({
+      backgroundJobBoard: board,
+      input,
+      readRuntime: async (_run, readStartedAt) => ({
+        kind: 'quiescent',
+        origin: 'v2-successor',
+        readStartedAt,
+        terminalOutcome: 'succeeded',
+      }),
+      baselineFor: (id, generation) => tracker.baselineFor(id, generation),
+      observationRevisionFor: (id, generation) =>
+        tracker.revisionFor(id, generation),
+      isObservationPending: (id, generation) =>
+        manager.isFallbackInProgress(id) ||
+        tracker.isObservationPending(id, generation),
+    });
+    const tracker = createRevivedRunTracker({
+      input,
+      backgroundJobBoard: board,
+      terminalGate: gate,
+    });
+    const handoff = createBackgroundFallbackHandoff({
+      backgroundJobBoard: board,
+      revivedRunTracker: tracker,
+    });
+    const child = fixture({
+      parentID: 'parent',
+      handoff,
+      readBackgroundGeneration: () => run.generation,
+      promptAsyncImpl: (args) =>
+        (args as { path: { id: string } }).path.id === 'child-bg'
+          ? admission.promise
+          : Promise.resolve({}),
+    });
+    manager = child.manager;
+    try {
+      await manager.handleEvent(started('child-bg'));
+      await manager.handleEvent(failed('child-bg'));
+      await settle();
+      expect(child.switchModel).toHaveBeenCalledTimes(1);
+      expect(child.mocks.promptAsync).toHaveBeenCalledTimes(1);
+      expect(tracker.isObservationPending('child-bg', run.generation)).toBe(
+        true,
+      );
+      expect((await gate.reconcile(run)).kind).toBe('deferred');
+      expect(board.get('child-bg')?.state).toBe('running');
+      admission.resolve();
+      await settle();
+      expect(tracker.isTracked('child-bg', run.generation)).toBe(true);
+      expect(tracker.baselineFor('child-bg', run.generation)).toBe(
+        'assistant-1',
+      );
+    } finally {
+      admission.resolve();
+      tracker.dispose();
+      gate.dispose();
+    }
+  });
+
+  test('v2 native refusal notice waits for the child switch before the first parent request', async () => {
+    const board = new BackgroundJobBoard();
+    const run = board.registerLaunch({
+      taskID: 'child-notice',
+      parentSessionID: 'parent',
+      agent: 'orchestrator',
+      description: 'inspect',
+      background: true,
+    });
+    const input = { directory: '/test', client: {} } as never;
+    const tracker = createRevivedRunTracker({
+      input,
+      backgroundJobBoard: board,
+      terminalGate: {
+        reconcile: async () => ({ kind: 'deferred', record: run }),
+      } as never,
+    });
+    const handoff = createBackgroundFallbackHandoff({
+      backgroundJobBoard: board,
+      revivedRunTracker: tracker,
+    });
+    const { manager } = fixture({
+      parentID: 'parent',
+      handoff,
+      readBackgroundGeneration: () => board.get('child-notice')?.generation,
+    });
+    const text =
+      '<subagent sessionID="child-notice" state="error" description="inspect">\nProvider blocked the response\n</subagent>';
+    const notice = {
+      id: 'msg_notice',
+      type: 'synthetic',
+      text,
+      metadata: {
+        source: 'subagent',
+        childID: 'child-notice',
+        agent: 'orchestrator',
+        state: 'error',
+      },
+    };
+    const childHistory = [
+      {
+        id: 'assistant-1',
+        type: 'assistant',
+        finish: 'content-filter',
+        error: { message: 'Provider blocked the response' },
+      },
+    ];
+    const handler = createSessionContextHandler({
+      interviewHandleContext: async () => {},
+      messagesTransform: async () => {},
+      sessionContext: async (id) => (id === 'parent' ? [notice] : childHistory),
+      backgroundGeneration: (parentID, childID) => {
+        const record = board.get(childID);
+        return record?.parentSessionID === parentID &&
+          record.background === true
+          ? record.generation
+          : undefined;
+      },
+      refusalOutcome: (sessionID, assistantID, generation) =>
+        manager.refusalOutcome(sessionID, assistantID, generation),
+    });
+    const event = {
+      sessionID: 'parent',
+      agent: 'orchestrator',
+      model: {},
+      system: [],
+      tools: {},
+      messages: [
+        { id: 'msg_notice', role: 'user', content: [{ type: 'text', text }] },
+      ],
+    };
+    try {
+      await manager.handleEvent(started('child-notice'));
+      let finished = false;
+      const request = handler(event).then(() => {
+        finished = true;
+      });
+      await settle();
+      expect(finished).toBe(false);
+      await manager.handleEvent(failed('child-notice'));
+      await request;
+      expect(event.messages[0]?.content[0]?.text).toContain('state="running"');
+      expect(event.messages[0]?.content[0]?.text).toContain(
+        'switched to test/b',
+      );
+      expect(event.messages[0]?.content[0]?.text).not.toContain(
+        'state="error"',
+      );
+      expect(notice.text).toBe(text);
+      childHistory.push({
+        id: 'assistant-2',
+        type: 'assistant',
+        finish: 'stop',
+        error: { message: '' },
+      });
+      board.updateStatus({
+        taskID: 'child-notice',
+        state: 'completed',
+        resultSummary: 'CHILD_OK',
+      });
+      jest.advanceTimersByTime(5_001);
+      const delayed = {
+        ...event,
+        messages: [
+          { id: 'msg_notice', role: 'user', content: [{ type: 'text', text }] },
+        ],
+      };
+      let delayedFinished = false;
+      const delayedRequest = handler(delayed).then(() => {
+        delayedFinished = true;
+      });
+      await settle();
+      expect(delayedFinished).toBe(true);
+      await delayedRequest;
+      expect(delayed.messages[0]?.content[0]?.text).toContain(
+        'state="running"',
+      );
+      board.registerLaunch({
+        taskID: 'child-notice',
+        parentSessionID: 'parent',
+        agent: 'orchestrator',
+        background: true,
+      });
+      const relaunched = {
+        ...event,
+        messages: [
+          { id: 'msg_notice', role: 'user', content: [{ type: 'text', text }] },
+        ],
+      };
+      await handler(relaunched);
+      expect(relaunched.messages[0]?.content[0]?.text).toBe(text);
+      childHistory.push({
+        id: 'assistant-unobserved',
+        type: 'assistant',
+        finish: 'content-filter',
+        error: { message: 'Provider blocked the response' },
+      });
+      const timedOut = {
+        ...event,
+        messages: [
+          { id: 'msg_notice', role: 'user', content: [{ type: 'text', text }] },
+        ],
+      };
+      const timeoutRequest = handler(timedOut);
+      await settle();
+      jest.advanceTimersByTime(5_001);
+      await timeoutRequest;
+      expect(timedOut.messages[0]?.content[0]?.text).toBe(text);
+    } finally {
+      manager.dispose();
+      tracker.dispose();
+    }
+  });
+
+  test('v2 foreground refusal reattaches the child inside the same tool call', async () => {
+    const child = fixture({ parentID: 'parent' });
+    const launches: unknown[] = [];
+    const wrapper = createSubagentExecutorWrapper({
+      register: (launch) => launches.push(launch),
+      context: async () => [
+        {
+          id: 'assistant-1',
+          type: 'assistant',
+          finish: 'content-filter',
+          error: {
+            type: 'provider.content-filter',
+            message: 'Provider blocked the response',
+          },
+        },
+      ],
+      refusalOutcome: (sessionID, assistantID) =>
+        child.manager.refusalOutcome(sessionID, assistantID),
+    });
+    const result = {
+      output: { sessionID: 'child-fg', status: 'completed' },
+      content:
+        '<subagent sessionID="child-fg" state="completed">real answer</subagent>',
+    };
+    const execute = mock(async (_input: unknown, _context: unknown) => {
+      if (execute.mock.calls.length === 1) {
+        await child.manager.handleEvent(started('child-fg'));
+        await child.manager.handleEvent(failed('child-fg'));
+        throw new Error(
+          'Subagent failed (sessionID: child-fg): Provider blocked the response',
+        );
+      }
+      return result;
+    });
+    const initial = {
+      agent: 'orchestrator',
+      description: 'Inspect',
+      prompt: 'Do the work',
+      model: 'test/a',
+      background: false,
+    };
+    expect(
+      await wrapper.wrap(execute)(initial, {
+        id: 'call-1',
+        sessionID: 'parent',
+      }),
+    ).toBe(result);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute.mock.calls[1]?.[0]).toMatchObject({
+      agent: 'orchestrator',
+      sessionID: 'child-fg',
+      background: false,
+    });
+    expect(execute.mock.calls[1]?.[0]).not.toHaveProperty('model');
+    expect(launches).toHaveLength(1);
+    expect(launches[0]).toMatchObject({
+      childTaskID: 'child-fg',
+      state: 'completed',
+      result: 'real answer',
+    });
   });
 
   test('v2 content-filter uses the step model when the session has no explicit model', async () => {

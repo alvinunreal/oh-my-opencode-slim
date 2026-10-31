@@ -45,6 +45,7 @@ import { GOAL_POINTER_METADATA_KEY } from '../hooks/deepwork-goal';
 import type { ForegroundFallbackManager } from '../hooks/foreground-fallback';
 import { PHASE_REMINDER_METADATA_KEY } from '../hooks/phase-reminder';
 import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/task-session-manager/board-injection';
+import { parseNativeDelivery } from '../hooks/task-session-manager/native-delivery';
 import { OhMyOpenCodeLite } from '../index';
 import { loadMergedOpenCodeConfig } from '../marketplace/preflight';
 import type { McpConfig } from '../mcp/types';
@@ -329,6 +330,15 @@ export interface V2SessionContextHandlerDeps {
   sessionContext?: (
     sessionID: string,
   ) => Promise<Array<Record<string, unknown>> | undefined>;
+  backgroundGeneration?: (
+    parentID: string,
+    childID: string,
+  ) => number | undefined;
+  refusalOutcome?: (
+    sessionID: string,
+    assistantMessageID: string,
+    generation?: number,
+  ) => Promise<string | undefined>;
   /** v1 `experimental.chat.system.transform` hook. */
   systemTransform?: (
     input: unknown,
@@ -562,6 +572,94 @@ export function createSessionContextHandler(
           info.content = m.parts;
           return m.info;
         }) as V2SessionContextEvent['messages'];
+
+        if (
+          deps.backgroundGeneration &&
+          deps.refusalOutcome &&
+          deps.sessionContext &&
+          event.messages.some((message) =>
+            message.content.some(
+              (part) =>
+                part.type === 'text' &&
+                typeof part.text === 'string' &&
+                /^\s*<subagent\b/i.test(part.text),
+            ),
+          )
+        ) {
+          const history =
+            storedHistory ?? (await deps.sessionContext(event.sessionID));
+          const byID = new Map(history?.map((entry) => [entry.id, entry]));
+          for (const [index, message] of event.messages.entries()) {
+            const stored = byID.get(message.id);
+            if (message.role !== 'user' || stored?.type !== 'synthetic')
+              continue;
+            const delivery = parseNativeDelivery({
+              type: 'text',
+              text: typeof stored.text === 'string' ? stored.text : undefined,
+              metadata: stored.metadata,
+            });
+            if (
+              delivery?.state !== 'error' ||
+              !message.content.some(
+                (part) => part.type === 'text' && part.text === stored.text,
+              )
+            )
+              continue;
+            const generation = deps.backgroundGeneration(
+              event.sessionID,
+              delivery.taskID,
+            );
+            if (generation === undefined) continue;
+            let model: string | undefined;
+            try {
+              const childHistory = await withTimeout(
+                deps.sessionContext(delivery.taskID),
+                2_000,
+                '[v2] refused background child context lookup timed out',
+              );
+              const assistant = childHistory?.findLast(
+                (entry) =>
+                  entry.type === 'assistant' &&
+                  entry.finish === 'content-filter' &&
+                  isRecord(entry.error) &&
+                  typeof entry.error.message === 'string' &&
+                  typeof stored.text === 'string' &&
+                  stored.text
+                    .slice(
+                      stored.text.indexOf('>') + 1,
+                      stored.text.lastIndexOf('</subagent>'),
+                    )
+                    .trim() === entry.error.message,
+              );
+              if (typeof assistant?.id === 'string') {
+                model = await deps.refusalOutcome(
+                  delivery.taskID,
+                  assistant.id,
+                  generation,
+                );
+              }
+            } catch (err) {
+              log('[v2] background refusal notice lookup failed', String(err));
+            }
+            if (!model) continue;
+            log('[v2] background refusal notice superseded', {
+              sessionID: event.sessionID,
+              childID: delivery.taskID,
+              model,
+            });
+            event.messages[index] = {
+              ...message,
+              content: message.content.map((part) =>
+                part.type === 'text' && part.text === stored.text
+                  ? {
+                      ...part,
+                      text: `<subagent sessionID="${delivery.taskID}" state="running">\nThe child hit a provider refusal, switched to ${model} and continues; the result will arrive. Do not relaunch or replace it.\n</subagent>`,
+                    }
+                  : part,
+              ),
+            };
+          }
+        }
 
         // One manual breakpoint, after the shared transform: never spend
         // the host's four slots on historical reminders or a volatile board
@@ -3173,6 +3271,16 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           // Per-message agent attribution source: durable agent-switched
           // markers in the stored, compaction-bounded history stream.
           sessionContext: sessionContextRead,
+          backgroundGeneration: v1Hooks['v2.backgroundGeneration'] as
+            | ((parentID: string, childID: string) => number | undefined)
+            | undefined,
+          refusalOutcome: v1Hooks['v2.refusalOutcome'] as
+            | ((
+                sessionID: string,
+                assistantMessageID: string,
+                generation?: number,
+              ) => Promise<string | undefined>)
+            | undefined,
           systemTransform,
           messagesTransform,
           // Captured child sessions get their frozen temperature/provider
@@ -3438,6 +3546,13 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                         ...launch,
                         exactCallConfirmed: launch.callID !== '',
                       }),
+                    context: sessionContextRead,
+                    refusalOutcome: v1Hooks['v2.refusalOutcome'] as
+                      | ((
+                          sessionID: string,
+                          assistantMessageID: string,
+                        ) => Promise<string | undefined>)
+                      | undefined,
                   })
                 : undefined;
               const wrapped = new WeakSet<object>();

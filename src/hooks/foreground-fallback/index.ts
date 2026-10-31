@@ -540,6 +540,8 @@ const MAX_HOST_RETRY_DELAY_MS = 30 * 60_000;
 const PROVIDER_MARK_TTL_MS = 30 * 60_000;
 /** Ceiling on host calls: a hung transport must not stall fallback. */
 const HOST_CALL_TIMEOUT_MS = 2_000;
+const REFUSAL_OUTCOME_TIMEOUT_MS = 2 * HOST_CALL_TIMEOUT_MS + 1_000;
+const MAX_REFUSAL_OUTCOMES = 1_024;
 /** The replay send's ack can lag after the host admitted it: wait as long as
  *  the tracker's own `promptAsync`, so a slow ack is not read as a refusal. */
 const REPLAY_SEND_TIMEOUT_MS = 10_000;
@@ -714,6 +716,15 @@ export class ForegroundFallbackManager {
       agent: string;
       model: V2GenerateModelRef;
       epoch: number;
+    }
+  >();
+  private readonly v2RefusalOutcomes = new Map<
+    string,
+    {
+      promise: Promise<string | undefined>;
+      resolve: (model: string | undefined) => void;
+      timer: ReturnType<typeof setTimeout>;
+      generation: number | undefined;
     }
   >();
   private readonly lastUserMessageID = new Map<string, string>();
@@ -943,6 +954,11 @@ export class ForegroundFallbackManager {
    *  transcript read runs through the destroyed generation's client. */
   dispose(): void {
     this.disposed = true;
+    for (const outcome of this.v2RefusalOutcomes.values()) {
+      clearTimeout(outcome.timer);
+      outcome.resolve(undefined);
+    }
+    this.v2RefusalOutcomes.clear();
     for (const pending of this.pendingInitialDelay.values()) {
       clearTimeout(pending.timer);
     }
@@ -989,6 +1005,67 @@ export class ForegroundFallbackManager {
 
   noteV2Prompt(sessionID: string): void {
     this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
+  }
+
+  private v2RefusalOutcome(sessionID: string, assistantMessageID: string) {
+    const key = `${sessionID}\0${assistantMessageID}`;
+    const current = this.v2RefusalOutcomes.get(key);
+    if (current) return current;
+    if (this.v2RefusalOutcomes.size >= MAX_REFUSAL_OUTCOMES) {
+      const oldest = this.v2RefusalOutcomes.entries().next().value;
+      if (oldest) {
+        oldest[1].resolve(undefined);
+        this.v2RefusalOutcomes.delete(oldest[0]);
+      }
+    }
+    let complete!: (model: string | undefined) => void;
+    const promise = new Promise<string | undefined>((done) => {
+      complete = done;
+    });
+    const timer = setTimeout(() => {
+      this.v2RefusalOutcomes.delete(key);
+      complete(undefined);
+    }, REFUSAL_OUTCOME_TIMEOUT_MS);
+    // Retain resolved outcomes for late parent notices; cap the registry above.
+    const resolve = (model: string | undefined) => {
+      clearTimeout(timer);
+      complete(model);
+    };
+    const outcome = {
+      promise,
+      resolve,
+      timer,
+      generation: this.readBackgroundGeneration?.(sessionID),
+    };
+    this.v2RefusalOutcomes.set(key, outcome);
+    return outcome;
+  }
+
+  refusalOutcome(
+    sessionID: string,
+    assistantMessageID: string,
+    expectedGeneration?: number,
+  ): Promise<string | undefined> {
+    if (this.disposed) return Promise.resolve(undefined);
+    const existing = this.v2RefusalOutcomes.get(
+      `${sessionID}\0${assistantMessageID}`,
+    );
+    if (existing)
+      return expectedGeneration === undefined ||
+        existing.generation === expectedGeneration
+        ? existing.promise
+        : Promise.resolve(undefined);
+    const step = this.v2Steps.get(sessionID);
+    if (step?.assistantMessageID === assistantMessageID) {
+      this.registerSessionAgent(sessionID, step.agent);
+      if (!this.retryEnabledFor(sessionID) || !this.hasFallbackChain(sessionID))
+        return Promise.resolve(undefined);
+    }
+    const outcome = this.v2RefusalOutcome(sessionID, assistantMessageID);
+    return expectedGeneration === undefined ||
+      outcome.generation === expectedGeneration
+      ? outcome.promise
+      : Promise.resolve(undefined);
   }
 
   private nextUserEventSequence(sessionID: string): number {
@@ -1453,12 +1530,24 @@ export class ForegroundFallbackManager {
           typeof props.assistantMessageID === 'string' &&
           props.finish === 'content-filter'
         ) {
-          void this.handleV2Refusal(
-            props.sessionID,
-            props.assistantMessageID,
-            props.error,
-            props.rawFinish,
-          );
+          if (
+            this.v2Steps.get(props.sessionID)?.assistantMessageID ===
+            props.assistantMessageID
+          ) {
+            const outcome = this.v2RefusalOutcome(
+              props.sessionID,
+              props.assistantMessageID,
+            );
+            void this.handleV2Refusal(
+              props.sessionID,
+              props.assistantMessageID,
+              props.error,
+              props.rawFinish,
+            ).then(
+              (model) => outcome.resolve(model),
+              () => outcome.resolve(undefined),
+            );
+          }
         }
         break;
       }
@@ -2081,7 +2170,7 @@ export class ForegroundFallbackManager {
     assistantMessageID: string,
     error: unknown,
     rawFinish: unknown,
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     const step = this.v2Steps.get(sessionID);
     const switchModel = (
       this.input as PluginInput & { experimental_v2?: ExperimentalV2 }
@@ -2105,6 +2194,7 @@ export class ForegroundFallbackManager {
     this.registerSessionAgent(sessionID, step.agent);
     if (!this.hasFallbackChain(sessionID)) return;
     const epoch = step.epoch;
+    const preparedGeneration = this.readBackgroundGeneration?.(sessionID);
     this.inProgress.add(sessionID);
     log('[foreground-fallback] v2 refusal observed', {
       sessionID,
@@ -2147,25 +2237,56 @@ export class ForegroundFallbackManager {
       if (
         !nextModel ||
         this.disposed ||
-        data.parentID ||
         (this.turnEpoch.get(sessionID) ?? 0) !== epoch
       )
         return;
-      await withTimeout(
-        session.promptAsync({
-          path: { id: sessionID },
-          body: {
-            agent: step.agent,
-            parts: [
-              createInternalAgentTextPart(
-                "The previous response was stopped by the provider's content filter. Continue from where it stopped without repeating completed content.",
-              ),
-            ],
-          },
-        }),
-        HOST_CALL_TIMEOUT_MS,
-        'foreground refusal continuation timed out',
-      );
+      if (data.parentID && preparedGeneration === undefined) return nextModel;
+      const handoffArmed =
+        preparedGeneration !== undefined &&
+        (this.backgroundFallbackHandoff?.prepare(
+          sessionID,
+          preparedGeneration,
+          assistantMessageID,
+        ) ??
+          false);
+      if (preparedGeneration !== undefined && !handoffArmed) return;
+      let promptResult: unknown;
+      try {
+        promptResult = await withTimeout(
+          session.promptAsync({
+            path: { id: sessionID },
+            body: {
+              agent: step.agent,
+              parts: [
+                createInternalAgentTextPart(
+                  "The previous response was stopped by the provider's content filter. Continue from where it stopped without repeating completed content.",
+                ),
+              ],
+            },
+          }),
+          HOST_CALL_TIMEOUT_MS,
+          'foreground refusal continuation timed out',
+        );
+      } catch (err) {
+        if (handoffArmed)
+          this.backgroundFallbackHandoff?.settleUnresolved(
+            sessionID,
+            preparedGeneration,
+          );
+        throw err;
+      }
+      if (isRecord(promptResult) && responseError(promptResult) !== undefined) {
+        if (handoffArmed)
+          this.backgroundFallbackHandoff?.reject(sessionID, preparedGeneration);
+        return;
+      }
+      if (handoffArmed)
+        this.backgroundFallbackHandoff?.admit(sessionID, preparedGeneration, {
+          from,
+          to: nextModel,
+          error: structuredErrorMessage(error) ?? 'Session error',
+        });
+      return nextModel;
     } catch (err) {
       log('[foreground-fallback] v2 refusal recovery failed', {
         sessionID,

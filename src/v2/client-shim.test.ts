@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isReplayableUserMessage } from '../hooks/types';
+import { classifyTerminalEvidence } from '../utils/child-transcript';
 import { createInternalAgentTextPart } from '../utils/internal-initiator';
 import { buildPluginInput } from './client-shim';
 import type { V2Context } from './types';
@@ -1958,6 +1959,42 @@ describe('v2 client shim foreground-fallback integration', () => {
       time: { created: 1789774973283 },
     });
     expect(idle.parts).toEqual([]);
+  });
+
+  test('model switch after an in-place retry does not hide the completed child answer', async () => {
+    const input = buildPluginInput(
+      makeCtx({
+        context: async () => [
+          { id: 'msg_user', type: 'user', time: { created: 1 }, text: 'work' },
+          {
+            id: 'msg_answer',
+            type: 'assistant',
+            time: { created: 2, completed: 5 },
+            finish: 'stop',
+            content: [{ type: 'text', text: 'CHILD_OK' }],
+          },
+          { id: 'msg_switch', type: 'model-switched', time: { created: 3 } },
+          {
+            id: 'msg_idle',
+            type: 'idle',
+            time: { created: 6 },
+            outcome: 'succeeded',
+          },
+        ],
+      } as never),
+    );
+    const result = await input.client.session.messages({
+      path: { id: 'child' },
+    });
+    expect(
+      classifyTerminalEvidence(result, {
+        runStartedAt: 1,
+        terminalOutcomeConfirmed: true,
+      }),
+    ).toEqual({
+      verdict: 'completed',
+      text: 'CHILD_OK',
+    });
   });
 
   test('messages preserves assistant error and finish state for failed turns', async () => {
