@@ -2172,10 +2172,11 @@ interface SidebarRuntimeAdapter {
   /** v2 hosts only: the prompt's live selected model while the visible
    * route is a root orchestrator session. Overlays the sidebar's
    * orchestrator row so the picker's choice shows before the first turn
-   * on the new model commits it to tui-state. */
-  getSelectedRootModel?: () =>
-    | { model: string; variant?: string | undefined }
-    | undefined;
+   * on the new model commits it to tui-state. Receives the snapshot being
+   * overlaid so the orchestrator's displayName identity is honored. */
+  getSelectedRootModel?: (
+    snapshot: TuiSnapshot,
+  ) => { model: string; variant?: string | undefined } | undefined;
 }
 
 /** Shape `readTuiSnapshot` returns for an empty/missing state file. */
@@ -2200,7 +2201,9 @@ const EMPTY_TUI_SNAPSHOT: TuiSnapshot = {
  * screen's selection belongs to a session that does not exist yet.
  * Gate 2 — session shape: child sessions (parentID) own their own agent
  * rows, and a root session under another primary agent is not the
- * plugin's orchestrator row.
+ * plugin's orchestrator row. The root session may carry the
+ * orchestrator's displayName identity (v2 registers it as the visible
+ * agent), so that spelling passes too.
  * Gate 3 — selection shape: the host's picker payload must carry usable
  * providerID/modelID strings.
  */
@@ -2210,6 +2213,10 @@ export function resolveSelectedRootModel(input: {
   selected?:
     | { providerID?: unknown; modelID?: unknown; variant?: unknown }
     | undefined;
+  /** Canonical ID → display name; a root session's agent may be the
+   *  orchestrator's visible displayName identity instead of the canonical
+   *  ID. */
+  agentDisplayNames?: Record<string, string> | undefined;
 }): { model: string; variant?: string | undefined } | undefined {
   const sessionID = input.route
     ? resolveRouteSessionId(input.route)
@@ -2217,7 +2224,11 @@ export function resolveSelectedRootModel(input: {
   if (!sessionID) return undefined;
   const info = input.sessionInfo;
   if (!info || info.parentID) return undefined;
-  if (typeof info.agent === 'string' && info.agent !== 'orchestrator') {
+  if (
+    typeof info.agent === 'string' &&
+    info.agent !== 'orchestrator' &&
+    info.agent !== input.agentDisplayNames?.orchestrator
+  ) {
     return undefined;
   }
   const selected = input.selected;
@@ -2370,7 +2381,7 @@ function createSidebarRuntime(
     // learns the switch when the next prompt commits it).
     nextSnapshot = overlaySelectedRootModel(
       nextSnapshot,
-      adapter.getSelectedRootModel?.(),
+      adapter.getSelectedRootModel?.(nextSnapshot),
     );
     const namesBefore = modelNamesCache.names;
     await hydrateModelNames(adapter.client, currentDirectory, modelNamesCache);
@@ -2517,7 +2528,7 @@ function createSidebarRuntime(
                 currentSnapshot,
                 isCurrentProjection ? projection.state : undefined,
               ),
-              adapter.getSelectedRootModel?.(),
+              adapter.getSelectedRootModel?.(currentSnapshot),
             ),
             adapter.version,
             adapter.theme(),
@@ -2674,7 +2685,7 @@ async function setup(
       hostFlavor: 'v2',
       getDirectory: () => ctx.location?.directory ?? process.cwd(),
       getVisibleSession: () => resolveRouteSessionId(ctx.ui.router.current()),
-      getSelectedRootModel: () => {
+      getSelectedRootModel: (currentSnapshot) => {
         const route = ctx.ui.router.current();
         const sessionID = resolveRouteSessionId(route);
         return resolveSelectedRootModel({
@@ -2683,6 +2694,7 @@ async function setup(
             ? ctx.data?.session?.get?.(sessionID)
             : undefined,
           selected: ctx.ui.model?.current?.(),
+          agentDisplayNames: currentSnapshot.agentDisplayNames,
         });
       },
       client: ctx.client,
