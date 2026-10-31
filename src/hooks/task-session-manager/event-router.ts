@@ -203,8 +203,8 @@ function isCurrentSessionObservation(
  *  pre-persistence launch) goes idle/error with no row to claim the
  *  completion, so nothing would ever wake its parent. Re-adopt the orphan
  *  under its recorded parent and let the normal reconciliation publish its
- *  terminal outcome; that publication is the one-shot wake. Skipped whenever
- *  some other path will wake the parent anyway. */
+ *  terminal outcome; that publication is the one-shot wake (v1; v2 creates no
+ *  wake scheduler and keeps terminal delivery with the host's notifier). */
 function adoptOrphanedChildRow(
   board: BackgroundJobBoard,
   shouldManageSession: (sessionID: string) => boolean,
@@ -746,7 +746,8 @@ export async function handleEvent(
       }
       if (!job) {
         // #1560 orphan fallback, terminal flavor: adopt the lost child and
-        // publish its error so the parent's wake carries the failure.
+        // publish its error so the parent's wake carries the failure (v1; v2
+        // records it for the pull channel).
         const adopted = adoptOrphanedChildRow(
           deps.backgroundJobBoard,
           deps.options.shouldManageSession,

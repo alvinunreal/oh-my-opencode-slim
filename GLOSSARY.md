@@ -44,7 +44,7 @@ A glossary of the terms used in this project's domain. Definitions describe what
 - **Job state** — A background job's status: `running`, `completed`, `error`, `cancelled`, or `reconciled`. `reconciled` is a distinct post-consumption phase marking that a terminal job's result has been folded into the orchestrator's response; it is not a terminal outcome itself.
 - **Job alias** — A short human-readable identifier for a background job (e.g., `fix-1`, `exp-2`).
 - **Terminal state** — A job state from which no further transition occurs (`completed`, `error`, `cancelled`).
-- **Orphaned child** — A child session the board has no row for. Its idle or error observation re-adopts it under its recorded managed parent so its terminal outcome still publishes the owed wake.
+- **Orphaned child** — A child session the board has no row for. Its idle or error observation re-adopts it under its recorded managed parent so its terminal outcome is reconciled and, on v1, publishes the owed wake.
 
 ## Skills
 
