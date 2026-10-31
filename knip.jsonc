@@ -1,0 +1,17 @@
+{
+  "$schema": "https://unpkg.com/knip@latest/schema.json",
+  // Files the import graph cannot see: each is invoked or looked up by path
+  // string. Keep this list in sync when adding spawn targets, contract
+  // registries, compile-time guards, or manual-run tools.
+  "entry": [
+    "src/tui.ts",
+    "src/**/*.test.ts",
+    "scripts/**/*.test.ts",
+    "src/utils/tui-reusable-projection.child.ts",
+    "src/utils/session-calls.contract.ts",
+    "src/v2/mirror-conformance.ts",
+    "scripts/benchmark-opencode-cache.ts",
+    "scripts/e2e-windows-spawn.ts"
+  ],
+  "project": ["src/**/*.ts", "scripts/**/*.{ts,mjs}"]
+}
