@@ -276,6 +276,7 @@ export class MarketplaceService {
       this.projectDir,
       normalizedId,
       (onCommitted) => this.store.remove(normalizedId, { onCommitted }),
+      this.hostFlavor,
     );
     return {
       packageId: normalizedId,
