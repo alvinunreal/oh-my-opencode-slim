@@ -990,6 +990,75 @@ describe('terminal gate', () => {
       resultSummary: undefined,
     });
   });
+  test('a startup-recovered v1 child interrupted by restart stops after stable idle', async () => {
+    const h = harness({
+      input: {
+        client: { session: { status: async () => ({ data: {} }) } },
+      } as never,
+      readTerminalEvidence: async () => ({
+        data: [
+          { info: { id: 'baseline', role: 'user' }, parts: [] },
+          {
+            info: { id: 'answer', role: 'assistant', time: { created: 1 } },
+            parts: [],
+          },
+        ],
+      }),
+    });
+    const record = h.board.get(h.run.taskID);
+    if (!record) throw new Error('missing run');
+    record.recoveredAtStartup = true;
+    const publications: string[] = [];
+    h.board.addTerminalOutcomeListener((job) => publications.push(job.state));
+    await h.gate.reconcile(h.run);
+    expect(h.board.get(h.run.taskID)?.state).toBe('running');
+    h.advance(10);
+    await h.gate.reconcile(h.run);
+    expect(h.board.get(h.run.taskID)).toMatchObject({
+      state: 'stopped',
+      terminalUnreconciled: true,
+    });
+    expect(publications).toEqual(['stopped']);
+
+    const resumed = h.board.registerLaunch({
+      taskID: 'ses_resumed',
+      parentSessionID: 'parent',
+      agent: 'fixer',
+      background: true,
+      now: 10,
+    });
+    resumed.recoveredAtStartup = true;
+    const token = h.gate.capture(resumed);
+    if (!token) throw new Error('missing observation');
+    h.gate.observe(token, {
+      kind: 'busy',
+      origin: 'session.status',
+      readStartedAt: token.readStartedAt,
+    });
+    await h.gate.reconcile(resumed);
+    h.advance(20);
+    await h.gate.reconcile(resumed);
+    expect(h.board.get(resumed.taskID)?.state).toBe('running');
+  });
+
+  test('a stable idle v1 textless completion becomes an error after the evidence budget', async () => {
+    const h = harness({
+      input: {
+        client: { session: { status: async () => ({ data: {} }) } },
+      } as never,
+      maxEvidenceRetries: 1,
+      readTerminalEvidence: async () => answer(''),
+    });
+    await h.gate.reconcile(h.run);
+    expect(h.board.get(h.run.taskID)?.state).toBe('running');
+    h.advance(10);
+    await h.gate.reconcile(h.run);
+    expect(h.board.get(h.run.taskID)).toMatchObject({
+      state: 'error',
+      resultSummary: COMPLETED_WITHOUT_TEXT_DIAGNOSTIC,
+    });
+  });
+
   test('textless completion needs independent host termination and stabilization, never a parsed label', async () => {
     let terminated = false;
     const h = harness({

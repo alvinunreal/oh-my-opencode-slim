@@ -24,6 +24,7 @@ import {
   AGENT_ALIASES,
   BUILTIN_OPENCODE_SUBAGENTS_TO_DISABLE,
 } from '../config/constants';
+import { resolveBackgroundJobsMode } from '../config/runtime';
 import { InterviewConfigSchema } from '../config/schema';
 import type { PluginConfigSnapshot } from '../config/snapshot';
 import { readPluginConfigSnapshot } from '../config/snapshot';
@@ -499,9 +500,20 @@ export function createSessionContextHandler(
       // wakes need their first text part re-flagged (host drops internal
       // part metadata). Idempotent across context events.
       let storedHistory: Array<Record<string, unknown>> | undefined;
+      // Also read it for untimed native deliveries: their timestamp lives
+      // only in stored history, even when the envelope already has an agent.
       if (
         event.messages.some(
-          (message) => message.role === 'user' && message.agent === undefined,
+          (message) =>
+            message.role === 'user' &&
+            (message.agent === undefined ||
+              (!('time' in message) &&
+                message.content.some(
+                  (part) =>
+                    part.type === 'text' &&
+                    typeof part.text === 'string' &&
+                    part.text.startsWith('<subagent sessionID="'),
+                ))),
         )
       ) {
         try {
@@ -557,21 +569,47 @@ export function createSessionContextHandler(
         }
       }
       try {
-        const v1messages = event.messages.map((m) => ({
-          info: m,
-          parts: m.content.map((part) =>
-            ((part.type === 'tool-call' || part.type === 'tool-result') &&
-              part.toolName === 'interview_submit_state') ||
-            (part.type === 'text' &&
-              typeof part.text === 'string' &&
-              part.text.includes('<interview_state'))
-              ? { ...part }
-              : part,
-          ),
-        }));
+        const syntheticDeliveries = new Map(
+          storedHistory
+            ?.filter(
+              (entry) =>
+                entry.type === 'synthetic' &&
+                typeof entry.id === 'string' &&
+                typeof entry.text === 'string' &&
+                entry.text.startsWith('<subagent sessionID="') &&
+                entry.time !== undefined,
+            )
+            .map((entry) => [entry.id, entry]) ?? [],
+        );
+        const projectedTimes = new WeakSet<object>();
+        const v1messages = event.messages.map((m) => {
+          const stored = syntheticDeliveries.get(m.id);
+          const matches =
+            m.role === 'user' &&
+            !('time' in m) &&
+            stored &&
+            m.content.some(
+              (part) => part.type === 'text' && part.text === stored.text,
+            );
+          const info = matches ? { ...m, time: stored.time } : m;
+          if (matches) projectedTimes.add(info);
+          return {
+            info,
+            parts: m.content.map((part) =>
+              ((part.type === 'tool-call' || part.type === 'tool-result') &&
+                part.toolName === 'interview_submit_state') ||
+              (part.type === 'text' &&
+                typeof part.text === 'string' &&
+                part.text.includes('<interview_state'))
+                ? { ...part }
+                : part,
+            ),
+          };
+        });
         await deps.messagesTransform({}, { messages: v1messages });
         event.messages = v1messages.map((m) => {
-          const info = m.info as { content?: unknown };
+          const info = m.info as { content?: unknown; time?: unknown };
+          if (projectedTimes.has(info)) delete info.time;
           info.content = m.parts;
           return m.info;
         }) as V2SessionContextEvent['messages'];
@@ -2050,10 +2088,16 @@ export function createToolExecuteBridges(
       isDelegation &&
       resolveDelegatedModel &&
       isRecord(argsView) &&
-      typeof argsView.subagent_type === 'string'
+      // A continuation may omit the agent; it still needs the admission the
+      // session-preset wrapper consumes, or the wrapped executor throws.
+      (typeof argsView.subagent_type === 'string' ||
+        typeof argsView.task_id === 'string')
     ) {
       const model = await resolveDelegatedModel({
-        agentType: argsView.subagent_type,
+        agentType:
+          typeof argsView.subagent_type === 'string'
+            ? argsView.subagent_type
+            : '',
         parentSessionID: e.sessionID,
         callID: e.id,
         args: argsView,
@@ -2270,7 +2314,11 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       hostFlavor: 'v2',
     });
     const preFlightConfig = startupConfigSnapshot.config;
-    const lifecycleEnabled = preFlightConfig.backgroundJobs?.enabled !== false;
+    // Resolve the same mode the v1 factory will resolve: `native` and `off`
+    // must not wire board persistence or the native-subagent executor
+    // wrapper, and only `managed` may claim the lifecycle.
+    const lifecycleEnabled =
+      resolveBackgroundJobsMode(preFlightConfig.backgroundJobs) === 'managed';
     if (lifecycleEnabled) {
       try {
         const storage = ctx.storage;
@@ -3499,31 +3547,31 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                 exactCallConfirmed: boolean;
               }) => Promise<unknown>)
             | undefined;
-          if (
-            before &&
-            lifecycleEnabled &&
-            (backgroundFlip || registerStructuredLaunch)
-          ) {
+          // The preset wrapper consumes the admission the bridge captures and
+          // the preset subsystem runs in every mode, so it installs with
+          // `before`; only the board halves below stay managed-only.
+          if (before) {
             try {
-              const wrapper = registerStructuredLaunch
-                ? createSubagentExecutorWrapper({
-                    context: sessionContextRead,
-                    refusalOutcome: v1Hooks[
-                      'v2.refusalOutcome'
-                    ] as V2SessionContextHandlerDeps['refusalOutcome'],
-                    register: (launch) =>
-                      registerStructuredLaunch({
-                        ...launch,
-                        exactCallConfirmed: launch.callID !== '',
-                      }),
-                  })
-                : undefined;
+              const wrapper =
+                lifecycleEnabled && registerStructuredLaunch
+                  ? createSubagentExecutorWrapper({
+                      context: sessionContextRead,
+                      refusalOutcome: v1Hooks[
+                        'v2.refusalOutcome'
+                      ] as V2SessionContextHandlerDeps['refusalOutcome'],
+                      register: (launch) =>
+                        registerStructuredLaunch({
+                          ...launch,
+                          exactCallConfirmed: launch.callID !== '',
+                        }),
+                    })
+                  : undefined;
               const wrapped = new WeakSet<object>();
               const reg = await ctx.tool.transform((draft) => {
                 nativePresetWrapperReady = false;
                 try {
                   draft.update(DELEGATION_TOOL_V2, (tool) => {
-                    if (backgroundFlip)
+                    if (lifecycleEnabled && backgroundFlip)
                       tool.description =
                         SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION;
                     if (tool.execute && wrapped.has(tool.execute)) {
@@ -3546,7 +3594,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                       nativePresetWrapperReady = true;
                     }
                   });
-                  if (backgroundFlip) {
+                  if (lifecycleEnabled && backgroundFlip) {
                     const flipped = draft.get(DELEGATION_TOOL_V2);
                     if (
                       flipped?.description ===

@@ -62,6 +62,29 @@ test('batches all retained records, including consumed terminals, in one lookup'
   ]);
   expect(h.board.get('child')?.terminalRevision).toBe(2);
 });
+test('skips retained terminal transcripts but reconciles a busy reopen', async () => {
+  let busy = false;
+  const h = harness(async () => ({
+    data: busy ? { child: { type: 'busy' } } : {},
+  }));
+  h.board.updateStatus({
+    taskID: 'child',
+    state: 'completed',
+    resultSummary: 'answer',
+  });
+  h.board.markReconciled('child');
+  const reconcile = mock(h.gate.reconcile);
+  h.gate.reconcile = reconcile;
+
+  await h.reconciler.reconcile();
+  expect(reconcile).not.toHaveBeenCalled();
+  expect(h.board.get('child')?.state).toBe('reconciled');
+
+  busy = true;
+  await h.reconciler.reconcile();
+  expect(h.board.get('child')?.state).toBe('running');
+  expect(reconcile).toHaveBeenCalledTimes(1);
+});
 test.each([{ data: {} }, { data: { child: { type: 'idle' } } }])(
   'valid quiescence is only supplied to the gate: %j',
   async (response) => {

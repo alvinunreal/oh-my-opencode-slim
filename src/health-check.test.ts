@@ -124,6 +124,24 @@ describe('plugin health thresholds', () => {
     expect(minimumExpectedToolCount(['task_reply'])).toBe(8);
   });
 
+  test('native mode floors the two thin host-read controls only', () => {
+    // v1: task_cancel + task_status + webfetch + both ast-grep tools = 5.
+    expect(minimumExpectedToolCount([], true, 'v1', 'native')).toBe(5);
+    // v2 drops the v1-only tools as usual: same five survive.
+    expect(minimumExpectedToolCount([], true, 'v2', 'native')).toBe(5);
+    // task_reply is managed-only in native mode; listing it cannot mask a
+    // missing registered tool.
+    expect(minimumExpectedToolCount(['task_reply'], true, 'v2', 'native')).toBe(
+      5,
+    );
+    // A genuinely disabled native control still lowers the floor.
+    expect(
+      minimumExpectedToolCount(['task_cancel'], true, 'v2', 'native'),
+    ).toBe(4);
+    // off keeps the existing six-tool reduction.
+    expect(minimumExpectedToolCount([], true, 'v2', 'off')).toBe(3);
+  });
+
   test('drops the floor by six on v1 when the managed lifecycle is off', () => {
     // task_cancel, task_status, task_reply, task_message, task_revive and
     // wait_for_user all disappear → 9 - 6 = 3.

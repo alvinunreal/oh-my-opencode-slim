@@ -23,7 +23,6 @@ import {
   type ResolvedAgentRegistry,
 } from './agents/registry';
 import type { RegistryFactoryBridge } from './agents/registry-bridge';
-import { roleHasWriteCapability } from './agents/role-definitions';
 import type { CompanionManager } from './companion/manager';
 import { normalizeCompanionSessionStatus } from './companion/status';
 import { deepMerge, type loadPluginConfig, type Preset } from './config';
@@ -77,7 +76,7 @@ import { isCommandEnabled } from './hooks/command-hook-utils';
 import { createCouncilSeatHook } from './hooks/council-seats';
 import { createManagedSeatResolver } from './hooks/council-seats/managed';
 import { createNativeSeatResolver } from './hooks/council-seats/native';
-import { processImageAttachments } from './hooks/image-hook';
+import { isImagePart, processImageAttachments } from './hooks/image-hook';
 import { createMessageTransformView } from './hooks/message-transform-view';
 import { clearAllWakeSessions } from './hooks/orchestrator-wake/wake-gate';
 import { PHASE_REMINDER_METADATA_KEY } from './hooks/phase-reminder';
@@ -110,6 +109,7 @@ import {
   createAcpRunTool,
   createCancelTaskTool,
   createInterviewSubmitStateTool,
+  createNativeTaskControlTools,
   createTaskMessageTool,
   createTaskReplyTool,
   createTaskReviveTool,
@@ -127,7 +127,7 @@ import {
   clearTuiSessionAlias,
   collectAgentDisplayNames,
   flushTuiSnapshotBatch,
-  readTuiSnapshot,
+  readTuiSessionParents,
   recordTuiAgentActivity,
   recordTuiAgentModel,
   recordTuiAgentModels,
@@ -540,11 +540,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       query: { directory: string };
     }) => Promise<{ data?: unknown; error?: unknown; parentID?: unknown }>;
     const visited = new Set<string>();
+    let parents = readTuiSessionParents(directory);
     let current = startSessionID;
     while (!visited.has(current)) {
       visited.add(current);
-      const snapshot = readTuiSnapshot(directory);
-      const known = snapshot.sessionParents[current];
+      const known = parents[current];
       if (known !== undefined) {
         current = known; // Persisted link; keep walking toward the root.
         continue;
@@ -581,6 +581,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         recordTuiSessionParent(current, parentID, directory);
         hydratedTuiParents.delete(current);
         current = parentID;
+        parents = readTuiSessionParents(directory);
         continue;
       }
       if (parentID !== undefined && parentID !== null) {
@@ -942,12 +943,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       clearTuiAgentActivities(ctx.directory);
     }
 
-    // Master switch for the OMOS managed background-task lifecycle. When
-    // false, nothing board-shaped is constructed: no job board, admission
-    // lease, TUI projection, terminal gate, supervisor, revived-run
-    // tracker, session recovery, alias authority, task-session-manager
-    // hook, wake scheduler, or task_* / wait_for_user tool factories. The
-    // native OpenCode task/subagent machinery stays completely untouched.
+    // Managed lifecycle gate (`backgroundJobs.mode: "managed"`, the default;
+    // the legacy `enabled: false` resolves to `off`). When it is not managed,
+    // nothing board-shaped is constructed: no job board, admission lease, TUI
+    // projection, terminal gate, supervisor, revived-run tracker, session
+    // recovery, alias authority, task-session-manager hook, wake scheduler,
+    // or task_* / wait_for_user tool factories. Native OpenCode task/subagent
+    // delegation stays completely untouched; `native` mode separately
+    // registers the two thin host-read controls below.
     const lifecycleEnabled = runtime.backgroundJobsEnabled;
     if (lifecycleEnabled) {
       taskActivityTracker = new TaskActivityTracker();
@@ -1314,12 +1317,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
               isFallbackInProgress: (sessionID) =>
                 foregroundFallback?.isFallbackInProgress(sessionID) ?? false,
               resolveSelection: lifecycleSelectionResolver,
-              // C2 writer-lane predicate: the queued child's agent from the board
-              // record, graded by its role's write permission data. A missing
-              // record/agent reads as writer (fail-safe, verdict defaults to
-              // attaching the verification sentence).
-              isWriterLaneTask: (taskID) =>
-                roleHasWriteCapability(backgroundJobBoard!.get(taskID)?.agent),
               isStoppedJobRecoveryCurrent: (taskID, generation) => {
                 const record = backgroundJobBoard!.get(taskID);
                 return (
@@ -1400,11 +1397,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             )) === true
           );
         },
-      }).catch((error: unknown) => {
-        log('[task-session-manager] startup subagent recovery failed', {
-          error: error instanceof Error ? error.message : String(error),
+      })
+        .then((recovered) => {
+          if (hostFlavor !== 'v2' && recovered.length > 0)
+            taskSessionManagerHook?.scheduleRuntimeStatusReconciliation();
+        })
+        .catch((error: unknown) => {
+          log('[task-session-manager] startup subagent recovery failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
-      });
       backgroundJobBoard!.addTerminalOutcomeListener((record) => {
         // A placeholder is not delegated work; its stop is not recoverable
         // by the parent until a task launch has attributed the session.
@@ -1934,6 +1936,18 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         ...(hostFlavor !== 'v2' ? waitForUserTools : {}),
       };
     }
+    // `backgroundJobs.mode: "native"`: the managed lifecycle is off, but the
+    // native delegation surface has no model-facing status/cancel, so a lost
+    // completion notice and a stuck child have no agent-side channel. Two
+    // thin host-read controls cover exactly that; `off` registers none, and
+    // managed mode keeps its own board-backed tools.
+    const nativeTaskTools =
+      runtime.backgroundJobsMode === 'native'
+        ? createNativeTaskControlTools({
+            input: ctx,
+            isDisposed: () => instanceDisposed,
+          })
+        : {};
 
     // v2 hosts skip wait_for_user: the native `question` tool covers the
     // blocking boundary there. task_revive remains a v1-only recovery tool;
@@ -1957,6 +1971,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       : {};
     tools = {
       ...lifecycleTaskTools,
+      ...nativeTaskTools,
       ...interviewTools,
       ...acpRunTools,
       ...(shouldRegisterWebfetch && webfetch ? { webfetch } : {}),
@@ -2299,7 +2314,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     runtime.disabledTools,
     runtime.webfetch.enabled !== false,
     hostFlavor,
-    runtime.backgroundJobsEnabled,
+    runtime.backgroundJobsMode,
   );
   if (
     agentCount < minAgents ||
@@ -3910,9 +3925,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
               sessionMetadata.getModel(sessionID),
           )
         : undefined;
-      const hasImageParts = view.userMessages.some((message) =>
-        message.parts.some((part) => view.imageView(part) !== null),
-      );
+      const hasImageParts =
+        runtime.imageRouting !== 'direct' &&
+        !!turnModelRef &&
+        view.userMessages.some((message) => message.parts.some(isImagePart));
       const acceptsImages =
         turnModelRef && hasImageParts
           ? await modelAcceptsImageInput(turnModelRef, {

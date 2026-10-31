@@ -177,9 +177,22 @@ function toV1Message(m: Record<string, unknown>) {
       ...(typeof m.outcome === 'string' ? { outcome: m.outcome } : {}),
       ...(time ? { time } : {}),
       ...(m.finish !== undefined ? { finish: m.finish } : {}),
+      ...(m.rawFinish !== undefined ? { rawFinish: m.rawFinish } : {}),
       ...(m.error !== undefined ? { error: m.error } : {}),
     },
-    parts: text === undefined ? contentParts : [{ type: 'text', text }],
+    parts:
+      text === undefined
+        ? contentParts
+        : [
+            {
+              type: 'text',
+              text,
+              ...(sourceType === 'synthetic' ? { synthetic: true } : {}),
+              ...(sourceType === 'synthetic' && isRecord(m.metadata)
+                ? { metadata: m.metadata }
+                : {}),
+            },
+          ],
   };
 }
 
@@ -428,14 +441,16 @@ export function buildPluginInput(
             }),
           }
         : {}),
-      abort: s.interrupt
-        ? async (args: Record<string, unknown>) =>
-            s.interrupt?.({ sessionID: sessionIDOf(args), resume: false })
-        : async (args: Record<string, unknown>) => {
-            log('[v2][shim] session.interrupt unavailable', {
-              id: sessionIDOf(args),
-            });
-          },
+      // Same rule as `get`: expose `abort` only when the host can really
+      // interrupt. A stub that resolves after logging would let callers
+      // (native mode's task_cancel, the managed abort path, foreground
+      // fallback) report an accepted stop that never happened.
+      ...(s.interrupt
+        ? {
+            abort: async (args: Record<string, unknown>) =>
+              s.interrupt?.({ sessionID: sessionIDOf(args), resume: false }),
+          }
+        : {}),
       // `messages` is exposed only when the host provides
       // session.context — the terminal gate's transcriptSourceAbsent
       // predicate methods-presence as the capability signal, and a

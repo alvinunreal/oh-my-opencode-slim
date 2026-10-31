@@ -1,6 +1,7 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import {
   attributeHostRoundToTranscript,
+  classifyMigratedV1Round,
   classifyTerminalEvidence,
   fetchChildTranscript,
   latestInputAtOf,
@@ -31,6 +32,7 @@ export interface UntrackedEvidence {
     | Awaited<ReturnType<typeof classifyTerminalEvidence>>
     | ReturnType<typeof composeHostRound>;
   roundError?: unknown;
+  source?: 'history';
 }
 
 async function boundedRead<T>(
@@ -170,6 +172,15 @@ async function readTranscript(
       hostRoundStateOf(hostInfo),
       transcript,
     );
+    const hostTime = isRecord(hostInfo?.time) ? hostInfo.time : undefined;
+    if (
+      state.kind === 'pending' &&
+      hostTime?.busy === undefined &&
+      hostTime?.idle === undefined
+    ) {
+      const migrated = classifyMigratedV1Round(transcript);
+      if (migrated) return { live, round: migrated, source: 'history' };
+    }
     const latestInputAt = latestInputAtOf(transcript);
     const round = composeHostRound(state, latestInputAt);
     if (state.kind === 'terminal') {

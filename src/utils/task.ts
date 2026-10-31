@@ -92,7 +92,7 @@ function parseTagAttributes(tag: string): Map<string, string> | undefined {
   return attrs;
 }
 
-function parseTaskOutputHeader(output: string): TaskOutputHeader {
+export function parseTaskOutputHeader(output: string): TaskOutputHeader {
   // XML wrapper: the output opens with the host's wrapper tag. The tag
   // closes at the first `>` OUTSIDE quoted values; once an XML opening is
   // detected, any scan failure (inner '<', unterminated quote, exhausted

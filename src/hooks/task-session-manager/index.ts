@@ -771,6 +771,7 @@ export function createTaskSessionManagerHook(
   );
 
   return {
+    scheduleRuntimeStatusReconciliation: runtimeStatusReconciler.schedule,
     /**
      * v2-only extension handle (consumed by src/v2/setup.ts's executor
      * wrapper): register a delegated `subagent` launch from its STRUCTURED

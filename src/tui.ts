@@ -12,13 +12,10 @@ import { createSignal } from 'solid-js';
 import {
   ALL_AGENT_NAMES,
   DEFAULT_DISABLED_AGENTS,
+  PLUGIN_ID,
   SUBAGENT_NAMES,
 } from './config/constants';
-import { MultiplexerConfigSchema, type MultiplexerType } from './config/schema';
-import {
-  type PluginConfigSnapshot,
-  readPluginConfigSnapshot,
-} from './config/snapshot';
+import type { MultiplexerType } from './config/schema';
 import { isCommandEnabled } from './hooks/command-hook-utils';
 import {
   createOnceGate,
@@ -70,7 +67,7 @@ import {
 import type { SessionPresetState } from './v2/preset-rpc';
 import { createTeamDisplayIdentity } from './v2/team-display';
 
-const PLUGIN_NAME = 'oh-my-opencode-slim';
+const PLUGIN_NAME = PLUGIN_ID;
 const CONFIG_WARNING_COLOR = 'orange';
 /**
  * Council agents are internal orchestration surfaces: `council`,
@@ -456,6 +453,21 @@ async function hydrateRemoteModels(
  * silently to the previous (possibly empty) map on fetch failure — the
  * sidebar polls forever, so failures must never toast or throw.
  */
+/**
+ * An equal-content refetch keeps the current map, so the sidebar signal is
+ * not rewritten (and the sidebar not rebuilt) when names did not change.
+ */
+export function retainEqualModelNames(
+  fetched: ReadonlyMap<string, string>,
+  current: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string> {
+  if (fetched === current || fetched.size !== current.size) return fetched;
+  for (const [key, value] of fetched) {
+    if (current.get(key) !== value) return fetched;
+  }
+  return current;
+}
+
 export async function hydrateModelNames(
   client: unknown,
   directory: string,
@@ -1771,11 +1783,6 @@ function buildConfigStatusRow(
   );
 }
 
-function resolveMultiplexerType(value: unknown): MultiplexerType {
-  const parsed = MultiplexerConfigSchema.safeParse(value ?? {});
-  return parsed.success ? parsed.data.type : 'none';
-}
-
 /**
  * Active-preset row. With `onActivate` it behaves like the agent rows
  * (same hover/click decoration); without one it is a muted, informational
@@ -1849,179 +1856,48 @@ export function renderUpdateBadge(latest: string, color: unknown): JSX.Element {
   ]);
 }
 
-export interface SidebarConfigState {
-  configInvalid: boolean;
-  compactSidebar: boolean;
-  multiplexerType: MultiplexerType;
-  /** Active preset name (`config.preset`), undefined when unset. */
-  presetName?: string;
-}
+// Config gates live in `./tui-gates` so the v2 TUI entry can read them
+// without loading this module's render stack. Everything except pane-wiring
+// admission is re-exported unchanged; `readTuiGates` below adds that one
+// client-side field for the render path (the thin entry uses the light
+// `readTuiGatesOnly` instead and never pulls the multiplexer client).
+export {
+  configStateOfGates,
+  loadTuiGates,
+  readConfigState,
+  retainLastGoodConfigState,
+  type SidebarConfigState,
+  type TuiGatesRead,
+  type TuiGatesSnapshot,
+} from './tui-gates';
+
+import {
+  configStateOfGates,
+  probeTuiGates,
+  retainLastGoodConfigState,
+  type TuiGatesRead,
+  warningsMakeConfigInvalid,
+} from './tui-gates';
 
 /**
- * Every config-derived gate the TUI entry points need, derived from ONE
- * shared `readPluginConfigSnapshot` read. Replaces the per-concern reads
- * (`isTuiEnabled`, `isSidebarEnabled`, `disabledCommandsFor`,
- * `readConfigState`) that each parsed the whole config layer stack
- * independently.
- */
-export interface TuiGatesSnapshot extends SidebarConfigState {
-  tuiEnabled: boolean;
-  sidebarEnabled: boolean;
-  disabledCommands: ReadonlySet<string>;
-  disabledHooks: ReadonlySet<string>;
-}
-
-/**
- * Gates paired with the identity of the shared snapshot they were derived
- * from. The snapshot fingerprint is the poll-time identity: unchanged ⇒ the
- * same inputs produced the gates, so a tick re-reads cheaply
- * (discovery + stats only) and reuses the derived gates. `readFailed` marks
- * a thrown read (fail-open gates); such an outcome is never adopted as the
- * new baseline.
- */
-export interface TuiGatesRead {
-  gates: TuiGatesSnapshot;
-  /** Snapshot identity; empty for a failed/unseeded read. */
-  fingerprint: string;
-  /** Pane-wiring admission config from the same snapshot. */
-  paneConfig: LoadedPaneConfig | undefined;
-  /** True only when the shared read threw (fail-open gates were returned). */
-  readFailed: boolean;
-}
-
-/**
- * Fail-open defaults for a config read that throws: the TUI and sidebar
- * survive, and the remaining fields read as though the config layer stack
- * parsed without any effective value (matching the per-concern reads this
- * replaces).
- */
-function failOpenTuiGates(): TuiGatesSnapshot {
-  return {
-    tuiEnabled: true,
-    sidebarEnabled: true,
-    configInvalid: false,
-    compactSidebar: true,
-    multiplexerType: 'none',
-    presetName: undefined,
-    disabledCommands: new Set(),
-    disabledHooks: new Set(),
-  };
-}
-
-/**
- * Only genuinely broken configs (parse/load/schema failures) mark the
- * sidebar invalid. Benign missing-preset notices do not, otherwise a config
- * that loads fine would be shown as "Config invalid".
- */
-function warningsMakeConfigInvalid(
-  warnings: readonly { kind: string }[],
-): boolean {
-  return warnings.some(
-    (warning) =>
-      warning.kind === 'invalid-json' ||
-      warning.kind === 'invalid-schema' ||
-      warning.kind === 'read-error',
-  );
-}
-
-/** Derive every gate from one snapshot. Pure; no file access. */
-function deriveTuiGates(snapshot: PluginConfigSnapshot): TuiGatesSnapshot {
-  const config = snapshot.config;
-  return {
-    tuiEnabled: config.tui !== false,
-    sidebarEnabled: config.sidebar !== false,
-    configInvalid: warningsMakeConfigInvalid(snapshot.warnings),
-    compactSidebar: config.compactSidebar ?? true,
-    multiplexerType: resolveMultiplexerType(config.multiplexer),
-    ...(typeof config.preset === 'string' && config.preset.length > 0
-      ? { presetName: config.preset }
-      : {}),
-    disabledCommands: new Set(config.disabled_commands ?? []),
-    disabledHooks: new Set(config.disabled_hooks ?? []),
-  };
-}
-
-/** Pane-wiring admission config derived from the same snapshot. */
-function paneConfigFromSnapshot(
-  snapshot: PluginConfigSnapshot,
-): LoadedPaneConfig {
-  return paneConfigOf(
-    snapshot.config,
-    warningsMakeConfigInvalid(snapshot.warnings),
-  );
-}
-
-/**
- * Gates plus pane-wiring admission, derived from one shared snapshot read.
- * Fail-open on a thrown read: the TUI and sidebar survive, command gating
- * fails open, and the result is not adopted as the poll baseline.
+ * Full gate read for the TUI render path: the shared snapshot's gates plus
+ * pane-wiring admission derived from the same read. A failed read stays
+ * fail-open with no pane config, exactly as before the split.
  */
 export function readTuiGates(
   directory: string,
   hostFlavor?: string,
   fresh = false,
 ): TuiGatesRead {
-  try {
-    const snapshot = readPluginConfigSnapshot(directory, { hostFlavor, fresh });
-    return {
-      gates: deriveTuiGates(snapshot),
-      fingerprint: snapshot.fingerprint,
-      paneConfig: paneConfigFromSnapshot(snapshot),
-      readFailed: false,
-    };
-  } catch (err) {
-    log('[tui] tui config read failed; keeping TUI and sidebar', String(err));
-    return {
-      gates: failOpenTuiGates(),
-      fingerprint: '',
-      paneConfig: undefined,
-      readFailed: true,
-    };
-  }
-}
-
-/**
- * Load the TUI gates through the shared cached read. The snapshot module
- * dedupes unchanged reads (discovery + stats only), so repeated calls cost
- * one cheap identity revalidation instead of a full layer-stack parse.
- * Fail-open on a thrown read.
- */
-export function loadTuiGates(
-  directory: string,
-  hostFlavor?: string,
-): TuiGatesSnapshot {
-  return readTuiGates(directory, hostFlavor).gates;
-}
-
-/** Project the gates onto the sidebar runtime's config-state view. */
-function configStateOfGates(gates: TuiGatesSnapshot): SidebarConfigState {
+  const { read, snapshot } = probeTuiGates(directory, hostFlavor, fresh);
+  if (!snapshot) return read;
   return {
-    configInvalid: gates.configInvalid,
-    compactSidebar: gates.compactSidebar,
-    multiplexerType: gates.multiplexerType,
-    presetName: gates.presetName,
+    ...read,
+    paneConfig: paneConfigOf(
+      snapshot.config,
+      warningsMakeConfigInvalid(snapshot.warnings),
+    ),
   };
-}
-
-export function readConfigState(
-  directory: string,
-  hostFlavor?: string,
-): SidebarConfigState {
-  return configStateOfGates(loadTuiGates(directory, hostFlavor));
-}
-
-/**
- * Surface a broken config without replacing config-backed rows with the
- * loader's fallback defaults. Once the file is valid again, the fresh state
- * atomically replaces the retained values.
- */
-export function retainLastGoodConfigState(
-  current: SidebarConfigState,
-  next: SidebarConfigState,
-): SidebarConfigState {
-  return next.configInvalid
-    ? { ...current, configInvalid: true }
-    : { ...next, configInvalid: false };
 }
 
 const DEFAULT_SIDEBAR_SLOT_ORDER = 900;
@@ -2416,11 +2292,15 @@ function createSidebarRuntime(
       nextSnapshot,
       adapter.getSelectedRootModel?.(nextSnapshot),
     );
-    const namesBefore = modelNamesCache.names;
     await hydrateModelNames(adapter.client, currentDirectory, modelNamesCache);
     if (!isRefreshCurrent(currentDirectory, adapter.getDirectory())) {
       return;
     }
+    const namesBefore = modelNames();
+    modelNamesCache.names = retainEqualModelNames(
+      modelNamesCache.names,
+      namesBefore,
+    );
     if (modelNamesCache.names !== namesBefore) {
       setModelNames(modelNamesCache.names);
     }

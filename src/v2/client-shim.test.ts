@@ -914,6 +914,16 @@ describe('v2 client shim delegation', () => {
     expect(calls).toEqual([{ sessionID: 'ses_1', resume: false }]);
   });
 
+  test('abort is absent when the host cannot interrupt', () => {
+    const input = buildPluginInput(makeCtx({} as never));
+    const session = (input.client as { session: Record<string, unknown> })
+      .session;
+    // Method presence is the capability signal: a resolving stub would let
+    // callers claim a stop the host never performed.
+    expect(session.abort).toBeUndefined();
+    expect(session.get).toBeUndefined();
+  });
+
   test('get delegates to session.get and wraps into {data}', async () => {
     const calls: unknown[] = [];
     const input = buildPluginInput(
@@ -1863,6 +1873,34 @@ describe('v2 client shim foreground-fallback integration', () => {
   // every downstream classification degraded to pending/unknown and the
   // terminal gate starved. The 2.0.8 `idle` marker that trails every
   // finished session must map to the skippable v1 `system` role.
+
+  test('messages preserves native synthetic delivery metadata on its text part', async () => {
+    const metadata = {
+      source: 'subagent',
+      childID: 'ses_child',
+      agent: 'explorer',
+      state: 'completed',
+    };
+    const input = buildPluginInput(
+      makeCtx({
+        context: async () => [
+          {
+            id: 'msg_delivery',
+            type: 'synthetic',
+            text: '<subagent sessionID="ses_child" state="completed" description="work">\ndone\n</subagent>',
+            metadata,
+            time: { created: 2 },
+          },
+        ],
+      } as never),
+    );
+    const result = await (
+      input.client as {
+        session: { messages: (a: unknown) => Promise<{ data: unknown[] }> };
+      }
+    ).session.messages({ sessionID: 'ses_parent' });
+    expect(result.data[0]).toMatchObject({ parts: [{ metadata }] });
+  });
 
   test('messages preserves v2 terminal metadata through the v1 mapping', async () => {
     const input = buildPluginInput(

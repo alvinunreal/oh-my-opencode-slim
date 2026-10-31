@@ -5,12 +5,10 @@
     "": {
       "name": "oh-my-opencode-slim",
       "dependencies": {
-        "@ast-grep/cli": "^0.45.3",
         "@mozilla/readability": "^0.6.0",
         "@opencode-ai/plugin": "1.18.32",
         "@opencode-ai/sdk": "1.18.32",
         "gray-matter": "^4.0.3",
-        "jsdom": "^30.0.0",
         "jsonc-parser": "^3.3.1",
         "lru-cache": "^11.5.3",
         "semver": "^7.7.3",
@@ -31,8 +29,10 @@
         "typescript": "7.0",
       },
       "optionalDependencies": {
+        "@ast-grep/cli": "^0.45.3",
         "@opentui/core": "0.7.0",
         "@opentui/solid": "0.7.0",
+        "jsdom": "^30.0.0",
         "solid-js": "1.9.12",
       },
       "peerDependencies": {

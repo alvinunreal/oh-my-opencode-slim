@@ -790,7 +790,7 @@ describe('foreground fallback redo harness', () => {
     expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
 
-  test('F1: mapped v2 usage after content-filter failures preserves the chain walk', async () => {
+  test('F1: successive v2 content-filter failures walk the chain', async () => {
     createMockClient();
     const chain = [
       'anthropic/claude-opus-5-5',
@@ -812,35 +812,15 @@ describe('foreground fallback redo harness', () => {
       undefined,
       true,
     );
-    const sessionID = 'v2-content-filter-usage';
+    const sessionID = 'v2-content-filter';
     const switchModel = mock(async (_sessionID: string, _model: unknown) => {});
-    const dispatch = async (event: Record<string, unknown>) => {
-      for (const mapped of mapV2EventToV1(event)) {
-        await manager.handleEvent(mapped);
-      }
-    };
     const error = {
-      name: 'ContentFilterError',
-      data: {
-        message: "The response was blocked by the provider's content filter",
-      },
+      type: 'provider.content-filter',
+      message: "The response was blocked by the provider's content filter",
     };
 
-    for (const [index, model] of [chain[2], chain[0], chain[1]].entries()) {
+    for (const model of [chain[2], chain[0], chain[1]]) {
       await clock.advance(6_000);
-      const tokens = {
-        input: (index + 1) * 100,
-        output: (index + 1) * 10,
-        cache: { read: 0, write: 0 },
-      };
-      await dispatch({
-        type: 'session.step.failed',
-        data: { sessionID, finish: 'content-filter', error, tokens },
-      });
-      await dispatch({
-        type: 'session.usage.updated',
-        data: { sessionID, tokens },
-      });
       const [providerID, id] = model.split('/');
       await manager.handleV2Retry(
         {
@@ -848,7 +828,7 @@ describe('foreground fallback redo harness', () => {
           agent: 'orchestrator',
           model: { providerID, id },
           error,
-          decision: { retry: true },
+          decision: { retry: false },
         },
         switchModel,
       );

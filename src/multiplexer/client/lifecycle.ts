@@ -10,6 +10,7 @@
  */
 
 import type { MultiplexerLayout } from '../../config/schema';
+import { TmuxMultiplexer } from '../tmux';
 import type { Multiplexer, PaneResult, PaneSpawnOptions } from '../types';
 import {
   type DiagnosticLogger,
@@ -737,7 +738,14 @@ export class PaneLifecycle {
 
   private async applyLayout(adapter: Multiplexer): Promise<void> {
     try {
-      await adapter.applyLayout(this.config.layout, this.config.mainPaneSize);
+      if (adapter instanceof TmuxMultiplexer) {
+        await adapter.applySpawnLayout(
+          this.config.layout,
+          this.config.mainPaneSize,
+        );
+      } else {
+        await adapter.applyLayout(this.config.layout, this.config.mainPaneSize);
+      }
     } catch {
       // Layout is cosmetic; a created pane must never fail over it.
     }

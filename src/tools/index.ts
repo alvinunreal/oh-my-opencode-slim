@@ -10,6 +10,7 @@ export {
   createMarketplaceTools,
   resolveFinalizedOrchestratorIdentities,
 } from './marketplace';
+export { createNativeTaskControlTools } from './native-task-control';
 export { createWebfetchTool } from './smartfetch';
 export { createTaskMessageTool } from './task-message';
 export { createTaskReplyTool } from './task-reply';

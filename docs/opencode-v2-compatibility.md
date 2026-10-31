@@ -109,7 +109,7 @@ Three host entry builds are produced:
 |---|---|---|---|
 | `.` (main) | `dist/index.js` | `build:plugin` | zod, jsdom, @opencode-ai/*, @opentui/* (shared with v1 host) |
 | `./server` | `dist/server/index.js` + chunks | `build:v2` | jsdom, jsonc-parser (other runtime dependencies bundled) |
-| `./tui` | `dist/tui2.js` | `build:tui` | same external set as `build:plugin` (composes the v1 TUI entry; inlines zod) |
+| `./tui` | `dist/tui2.js` | `build:tui` | same external set as `build:plugin` (thin gate entry + deferred `dist/tui-impl` chunk composing the v1 TUI entry; inlines zod) |
 
 The optional `@opentui/*` dependencies provide the v2 TUI entry's rendering
 stack. The development-only `@opencode/plugin` 2.2.0 contract declares an
@@ -329,9 +329,10 @@ not an optional-degradation path.
       cache monitor's session eviction, `properties.sessionID` for the
       task-session-manager's tombstone/board teardown; no `generation` is
       fabricated, so the event-router's unproven-relaunch deletion fence
-      keeps its strength), usage telemetry
-      (`session.usage.updated`/`session.step.ended`) → a deduplicated
-      completed-assistant `message.updated` for the cache monitor, the Form
+      keeps its strength), per-request `session.step.ended` telemetry → one
+      completed-assistant `message.updated` per step, keyed by the assistant
+      message ID, for the cache monitor (cumulative `session.usage.updated`
+      is not subscribed), the Form
       flow (`form.created`/`form.replied`/`form.cancelled`) → v1
       `question.asked`/`question.replied`/`question.rejected`
       (`form.id` → the question request id; forms owned by the `"global"`
@@ -1233,6 +1234,11 @@ review — and a host without `session.get` produces no entries.
   without it — install as a package or ensure `jsdom` is resolvable to
   enable webfetch locally). AST-grep resolves its CLI independently and
   lazily downloads a binary when no package or system binary is available.
+  Both ship as `optionalDependencies`: a normal install includes them, and
+  an install that omits optional packages (or an unsupported platform)
+  only degrades the feature that needs them — webfetch HTML extraction
+  reports the missing `jsdom`, ast-grep falls back to its downloader —
+  while plugin load, agent registration, and every other tool stay intact.
 - **Companion app unverified on v2.** The companion is an independent
   desktop app; test it separately against v2 hosts.
 - **Prompt-cache rules unchanged.** The v2 bridges reuse the v1 transform

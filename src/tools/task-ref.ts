@@ -38,10 +38,11 @@ export function idParamFor(input: unknown): string {
  * returns '' when neither field is present, and each caller raises its existing
  * `<tool> requires <param>` error.
  */
-export function taskRefArgs(param: string): TaskRefArgs {
-  const native = z
-    .string()
-    .describe('Tracked task ID or its parent-scoped alias');
+export function taskRefArgs(
+  param: string,
+  nativeDescription = 'Tracked task ID or its parent-scoped alias',
+): TaskRefArgs {
+  const native = z.string().describe(nativeDescription);
   if (param === 'task_id') return { task_id: native };
   return {
     sessionID: native.optional(),

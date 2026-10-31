@@ -813,6 +813,37 @@ describe('tui-state persistence', () => {
     ).toBe(GPT.model);
   });
 
+  test('single-key no-op avoids cloning but an external replacement is respected', () => {
+    recordLuna();
+    const clone = spyOn(globalThis, 'structuredClone');
+    try {
+      recordLuna();
+      expect(clone).not.toHaveBeenCalled();
+
+      const filePath = getTuiStatePath(tempDir);
+      const external = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      external.sessionModels[GPT.sessionID].explorer = { model: GPT.model };
+      fs.writeFileSync(`${filePath}.external`, JSON.stringify(external));
+      fs.renameSync(`${filePath}.external`, filePath);
+      recordLuna();
+      expect(
+        readTuiSnapshot(tempDir).sessionModels?.[LUNA.sessionID]?.explorer
+          ?.model,
+      ).toBe(LUNA.model);
+      expect(clone).toHaveBeenCalled();
+    } finally {
+      clone.mockRestore();
+    }
+  });
+
+  test('synchronous reads retain the persisted snapshot normalization', () => {
+    updateSnapshot(tempDir, (snapshot) => {
+      snapshot.agentModels.explorer = 'model';
+      snapshot.sessionDetails.session = { alias: undefined };
+    });
+    expect(readTuiSnapshot(tempDir).sessionDetails).toEqual({});
+  });
+
   test('external snapshot changes are not masked by the memo', () => {
     recordLuna();
     const external = readTuiSnapshot(tempDir);
