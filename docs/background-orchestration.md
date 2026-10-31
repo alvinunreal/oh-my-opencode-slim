@@ -116,7 +116,10 @@ re-registers or prompts the task. One recovery channel is explicit:
 `task_revive` on a raw session ID verifies the
 session against the host (existence and parent ownership) and re-adopts an
 untracked child owned by the calling parent, then
-continues it with the new prompt.
+continues it with the new prompt. A fourth channel is implicit: an
+untracked child that reports idle or error is adopted under its recorded
+managed parent by an observation fallback (below), so its terminal outcome
+still wakes the parent.
 Recovery verifies the original agent and latest delivered round before importing
 a retained terminal row. This cache-only import does not launch or notify.
 On V2, `session.execution.interrupted` with reason `shutdown` is suspension,
@@ -293,6 +296,15 @@ child deleted while the plugin was down. A missing or idle child is surfaced as
 completion. The recovery and fencing rules are documented in
 [Background job state](opencode-v2-compatibility.md#background-job-state-rehydrate-probe-and-persistence),
 and the tools themselves in [Tools](tools.md#background-task-control).
+
+A child the board never re-adopted (for example one launched before this
+recovery existed) is also covered: when it reports idle or error with no
+board row, an observation fallback adopts it under its recorded managed
+parent and reconciles the outcome, so the owed wake still reaches the
+parent. The fallback skips children that are themselves managed, already
+delivered, or hold a deletion tombstone; an idle adoption terminalizes as
+`stopped, unreconciled` like any other child idle, and an error publishes
+the failure.
 
 Specialist outputs are inputs, not final truth. The orchestrator reconciles them
 against each other and the original user goal.
