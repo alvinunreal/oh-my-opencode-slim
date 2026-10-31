@@ -137,8 +137,9 @@ interface LooseMessage {
     outcome?: unknown;
     error?: unknown;
     finish?: unknown;
+    rawFinish?: unknown;
     summary?: unknown;
-    time?: { created?: unknown; completed?: unknown };
+    time?: { created?: unknown; completed?: unknown; streamed?: unknown };
   };
   parts?: unknown[];
 }
@@ -938,6 +939,35 @@ export function terminalTextOf(transcript: unknown): string | undefined {
   return undefined;
 }
 
+/** A v1 closure in history with no observed v2 lifecycle evidence. */
+export function classifyMigratedV1Round(
+  response: unknown,
+): CurrentRoundClassification | undefined {
+  const messages = transcriptEntries(response);
+  if (!Array.isArray(messages)) return undefined;
+  // shortcut: marker-free v2 history resembles migration; upgrade when the host exposes migration provenance.
+  if (
+    messages.some(
+      (message) =>
+        sourceTypeOf(message) === 'idle' ||
+        message.info?.rawFinish !== undefined ||
+        message.info?.time?.streamed !== undefined ||
+        message.info?.outcome !== undefined,
+    )
+  )
+    return undefined;
+  const assistant = messages.findLast(
+    (message) => message.info?.role === 'assistant',
+  );
+  if (
+    !assistant ||
+    assistantCompletedAt(assistant) === undefined ||
+    (assistant.info?.finish === undefined && assistant.info?.error == null)
+  )
+    return undefined;
+  return classifyCurrentDeliveredRound(response);
+}
+
 /**
  * Historical v2 round. The latest user or synthetic message is the input
  * boundary. Only an idle/outcome after that boundary can confirm the round.
@@ -946,11 +976,16 @@ export function terminalTextOf(transcript: unknown): string | undefined {
  */
 export function classifyV2HistoricalRound(
   response: unknown,
+  hasV2Lifecycle = false,
 ): CurrentRoundClassification {
   const messages = transcriptEntries(response);
   if (!Array.isArray(messages)) {
     return { verdict: 'unreadable', reason: messages.reason };
   }
+  const migrated = hasV2Lifecycle
+    ? undefined
+    : classifyMigratedV1Round(response);
+  if (migrated) return migrated;
   const boundary = latestInputIndexOf(messages);
   if (boundary < 0) {
     return { verdict: 'unreadable', reason: 'no delivered user round' };

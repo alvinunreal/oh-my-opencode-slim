@@ -74,7 +74,8 @@ const RUNNING_GUIDANCE =
 const COMPLETION_NOTICE_NEXT =
   'a completion notice will arrive; continue other work and do not poll task_status.';
 
-/** Uncertain-board-fallback guidance: stop polling, await the notice. */
+const GIVE_UP_NEXT =
+  'state unconfirmed; inspect task_activity, use task_cancel, or resume the task if appropriate.';
 const UNCONFIRMED_NEXT =
   'state unconfirmed; await the completion notice, do not poll task_status.';
 
@@ -217,11 +218,14 @@ export function createTaskStatusTool(options: {
         );
       if (args.diagnostic === true) {
         try {
-          const output = await readTaskDiagnostic(options, {
-            parentSessionID,
-            idParam,
-            requested,
-          });
+          const output = await readTaskDiagnostic(
+            { ...options, gate },
+            {
+              parentSessionID,
+              idParam,
+              requested,
+            },
+          );
           const tail = diagnosticTail(output, DIAGNOSTIC_MAX_BYTES);
           if (tail === output) return output;
           const marker = '[... truncated ...]\n';
@@ -350,7 +354,9 @@ export function createTaskStatusTool(options: {
         if (report.lastStatusError) {
           details.push(`last_status_error: ${report.lastStatusError}`);
         }
-        details.push(`next: ${UNCONFIRMED_NEXT}`);
+        details.push(
+          `next: ${gate.hasGivenUp(renderRecord) ? GIVE_UP_NEXT : UNCONFIRMED_NEXT}`,
+        );
       }
       if (
         waits.length === 0 &&
@@ -392,8 +398,9 @@ function runningResultRefusal(
   uncertain: boolean,
   status?: 'busy' | 'idle' | 'retry',
   tracked = true,
+  gaveUp = false,
 ): string {
-  if (status === 'idle')
+  if (status === 'idle' && !gaveUp)
     return [
       `${idParam}: ${taskID}`,
       'state: pending',
@@ -409,9 +416,13 @@ function runningResultRefusal(
       ? 'message: Live task status is uncertain; no definitive running state is available.'
       : 'message: Task is still running. Wait for its terminal result.',
     `next: ${
-      !tracked
-        ? 'retry task_status with { result: true } after the task finishes'
-        : COMPLETION_NOTICE_NEXT
+      gaveUp
+        ? GIVE_UP_NEXT
+        : uncertain
+          ? UNCONFIRMED_NEXT
+          : !tracked
+            ? 'retry task_status with { result: true } after the task finishes'
+            : COMPLETION_NOTICE_NEXT
     }`,
   ].join('\n');
 }
@@ -586,6 +597,8 @@ async function readTaskResult(
         taskID,
         current.statusUncertain,
         snapshot && runtimeSessionStatus(snapshot, taskID),
+        true,
+        gate.hasGivenUp(current),
       );
   }
 
@@ -692,6 +705,10 @@ async function readTaskResult(
   const evidence = read.round;
   if (!evidence || evidence.verdict === 'incomplete')
     return runningResultRefusal(idParam, taskID, true, undefined, false);
+  if (evidence.verdict === 'error')
+    throw new Error(
+      `Task ${requested} ended in error: ${evidence.text ?? 'no error details available'}`,
+    );
   const completedText =
     evidence.verdict === 'completed' && 'text' in evidence
       ? evidence.text
@@ -737,14 +754,18 @@ function diagnosticEvidenceLabel(runInputMessageID: string | undefined) {
 /** Longest possible attribution label, for byte budgeting. */
 const LONGEST_EVIDENCE = diagnosticEvidenceLabel(undefined);
 
-function diagnosticRefusal(taskID: string, state: string): string {
+function diagnosticRefusal(
+  taskID: string,
+  state: string,
+  gaveUp: boolean,
+): string {
   return [
     `Task ${diagnosticField(taskID)}`,
     `state: ${state}`,
     'message: Diagnostics are only for finished-but-unsuccessful children (error, cancelled, stopped).',
     state === 'completed'
       ? 'next: retry task_status with { result: true }'
-      : `next: ${UNCONFIRMED_NEXT}`,
+      : `next: ${gaveUp ? GIVE_UP_NEXT : UNCONFIRMED_NEXT}`,
   ].join('\n');
 }
 
@@ -813,6 +834,7 @@ function renderDiagnostic(
 /** Diagnostic reads deliberately bypass snapshots, the gate, and consumption. */
 async function readTaskDiagnostic(
   options: UntrackedStatusOptions & {
+    gate: BackgroundJobTerminalGate;
     resolveCanonicalTaskRef?: CanonicalTaskResolver;
   },
   ref: TaskResultReadRef,
@@ -841,7 +863,7 @@ async function readTaskDiagnostic(
       );
     const state = terminalStateOf(job);
     if (!DIAGNOSTIC_TERMINALS.has(state))
-      return diagnosticRefusal(job.taskID, state);
+      return diagnosticRefusal(job.taskID, state, options.gate.hasGivenUp(job));
     const generation = job.generation;
     const revision = job.terminalRevision;
     const runStartedAt = job.runStartedAt;
@@ -976,7 +998,8 @@ async function reportUntrackedTaskStatus(
   } else if (evidence.round) {
     evidenceLine = describeUntrackedEvidence(
       evidence.round,
-      evidence.live.status === 'v2' ? 'host state' : 'history',
+      evidence.source ??
+        (evidence.live.status === 'v2' ? 'host state' : 'history'),
     );
   } else {
     evidenceLine = `state: ${UNTRACKED_STATE} (uncertain; transcript could not be read)`;
@@ -987,7 +1010,9 @@ async function reportUntrackedTaskStatus(
   if (ownership.createdAt !== undefined)
     details.push(`created_at: ${new Date(ownership.createdAt).toISOString()}`);
   details.push(
-    "next: use task_status with { result: true } for a completed task's final text",
+    evidence.round?.verdict === 'error'
+      ? 'next: use task_status with { result: true } for this error; { diagnostic: true } requires a tracked task'
+      : "next: use task_status with { result: true } for a completed task's final text",
   );
   return details.join('\n');
 }

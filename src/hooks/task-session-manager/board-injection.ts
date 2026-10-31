@@ -24,6 +24,7 @@ import type {
 } from '../../utils';
 import {
   isInternalInitiatorPart,
+  markPersistedBackgroundChildDelivered,
   parseTaskOutputHeader,
   parseTaskStatusOutput,
   renderRunningTaskPlaceholder,
@@ -38,12 +39,7 @@ import {
 } from '../cache-safe-injection';
 import type { MessagePart, MessageWithParts } from '../types';
 import { isMessageWithParts, isUserMessageWithParts } from '../types';
-import {
-  messageCreatedAt,
-  NATIVE_DELIVERY_STATES,
-  type NativeDelivery,
-  parseNativeDelivery,
-} from './native-delivery';
+import { messageCreatedAt, parseNativeDelivery } from './native-delivery';
 import { extractTaskSummary, isLateCancelledTaskError } from './status-utils';
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -1146,22 +1142,15 @@ function reconcileExecutionBatch(
   }
 }
 
-// ── Native delivery observer (v2 boardless primary; v1 never reaches it) ─
+// ── Native delivery observer (v1 and v2) ─────────────────────────────────
 //
-// On OpenCode v2 hosts the host itself delivers each background completion
-// exactly once as a synthetic session message in the parent's history:
-// `<subagent sessionID="..." state="completed|error|cancelled">…</subagent>`
-// (host `SessionInbox` steer/queue delivery; the native notifier never
-// delivers `stopped`). Observing that delivery retires the tracked record
-// directly, replacing the prompt-shape registration bookkeeping
-// on the v2 path. On v1 the native delivery is untagged, so the plugin
-// cannot attribute it; those runs retire through the plugin's own tagged
-// push or the stale-terminal fallback instead.
-
-type ObservedNativeDelivery = NativeDelivery & {
-  /** Dedupe key: the delivery part's own message/part identity. */
-  seenKey: string;
-};
+// The host delivers each background completion as a synthetic message in
+// the parent's history: `<subagent sessionID="..." state="completed|error|
+// cancelled">…</subagent>` on v2 (host `SessionInbox` steer/queue delivery;
+// the native notifier never delivers `stopped`) and a synthetic
+// `<task id="..." state="...">` part on v1. Observing that delivery retires
+// the tracked record directly, behind the same parent, timestamp and
+// terminal-state fences on both hosts.
 
 /**
  * Skew allowance for the current-publication check: the terminal event the
@@ -1203,15 +1192,13 @@ function nativeDeliverySeenKey(
 }
 
 /**
- * Reconcile tracked records against the native v2 deliveries already
+ * Reconcile tracked records against the native host deliveries already
  * present in the parent's message history. Pairing is ONE-SHOT: a delivery
  * key is remembered on first observation and can retire at most one
  * terminal publication — the record's CURRENT terminal run at that moment,
- * and only when the delivered state equals it. Deliveries observed earlier
- * (running, reconciled, mismatched, stopped) can never pair later (Greptile
- * P1-2). Untracked sessionIDs are idempotent no-ops. `stopped` records are
- * never retired here (native never delivers stops; they retire through the
- * recovery-wake + task_revive ack flow).
+ * and only when its state matches, or v2 reports an interruption as cancelled.
+ * Deliveries observed earlier (running, reconciled, mismatched) can never pair
+ * later (Greptile P1-2). Untracked sessionIDs are idempotent no-ops.
  */
 function reconcileObservedNativeDeliveries(
   state: InjectionState,
@@ -1233,7 +1220,10 @@ function reconcileObservedNativeDeliveries(
     message.parts.forEach((part, partIndex) => {
       if (part.type !== 'text' || typeof part.text !== 'string') return;
       if (isTaggedPart(part, state.metadataKey)) return;
-      const delivery = parseNativeDelivery(part);
+      const delivery = parseNativeDelivery(
+        part,
+        state.hostFlavor === 'v2' && message.info.role === 'user',
+      );
       if (!delivery) return;
       const seenKey = nativeDeliverySeenKey(message, partIndex, part.text);
       if (seen.has(seenKey)) {
@@ -1259,8 +1249,7 @@ function reconcileObservedNativeDeliveries(
       // so lastLiveBusyAt is unset). The current publication otherwise
       // retires via its own delivery or retireStaleTerminalRecords.
       const deliveryTime = messageCreatedAt(message);
-      // Trusted metadata proves who authored the delivery, not WHICH run it
-      // reports. Without a host timestamp no causal fence can be checked.
+      // Without a host timestamp no causal fence can be checked.
       if (deliveryTime === undefined) return;
       if (!record.terminalUnreconciled) {
         if (
@@ -1311,19 +1300,18 @@ function reconcileObservedNativeDeliveries(
       ) {
         return;
       }
-      // A delivery retires only the terminal run it reports: the record's
-      // terminal state must equal the delivered state.
       const terminalState = record.terminalState ?? record.state;
-      if (terminalState !== delivery.state) return;
+      const interrupted =
+        state.hostFlavor === 'v2' &&
+        delivery.state === 'cancelled' &&
+        (terminalState === 'error' ||
+          terminalState === 'cancelled' ||
+          terminalState === 'stopped');
       if (
-        !NATIVE_DELIVERY_STATES.has(
-          record.state as ObservedNativeDelivery['state'],
-        )
-      ) {
-        // stopped: retires only through the recovery-wake + task_revive
-        // ack flow; the remembered key never pairs.
+        !interrupted &&
+        (terminalState !== delivery.state || record.state === 'stopped')
+      )
         return;
-      }
       reconcileExecutionBatch(state, parentSessionID, [
         {
           taskID: record.taskID,
@@ -1331,6 +1319,11 @@ function reconcileObservedNativeDeliveries(
           terminalRevision: record.terminalRevision,
         },
       ]);
+      markPersistedBackgroundChildDelivered(
+        record.taskID,
+        deliveryTime,
+        record.runStartedAt,
+      );
     });
   }
 }

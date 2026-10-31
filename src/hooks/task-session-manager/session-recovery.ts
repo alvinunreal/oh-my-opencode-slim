@@ -733,6 +733,7 @@ export async function recoverSubagentSessionsAtStartup(
     const epoch = ledger.deletionEpochs.get(taskID);
     let parentSessionID = candidate.parentID;
     let hostOutcome = candidate.outcome;
+    let hasV2Lifecycle = hostOutcome !== undefined;
     if (!parentSessionID || hostOutcome === undefined) {
       const response = await raceEvidenceDeadline(
         readHostSessionInfo(options.input, {
@@ -754,6 +755,13 @@ export async function recoverSubagentSessionsAtStartup(
         if (parentSessionID && hosted.parentID !== parentSessionID) continue;
         parentSessionID ??= hosted.parentID;
         hostOutcome ??= hosted.outcome;
+        const hostTime = isRecord(hosted.hostInfo.time)
+          ? hosted.hostInfo.time
+          : undefined;
+        hasV2Lifecycle ||=
+          hostOutcome !== undefined ||
+          hostTime?.busy !== undefined ||
+          hostTime?.idle !== undefined;
       } else if (
         !parentSessionID ||
         (hosted.kind === 'refused' && hosted.reasonCode === 'host-missing')
@@ -792,7 +800,12 @@ export async function recoverSubagentSessionsAtStartup(
     }
     options.registerParentSession?.(parentSessionID);
 
-    const state = await classifyStartupChild(options, taskID, hostOutcome);
+    const state = await classifyStartupChild(
+      options,
+      taskID,
+      hostOutcome,
+      hasV2Lifecycle,
+    );
     if (state.kind === 'unknown') continue;
     // A run can already have relaunched before this scan starts, while the
     // host transcript still exposes the previous terminal round. Matching
@@ -1082,6 +1095,7 @@ async function classifyStartupChild(
   options: StartupSubagentRecoveryOptions,
   taskID: string,
   outcome: string | undefined,
+  hasV2Lifecycle: boolean,
 ): Promise<StartupChildState> {
   const terminalFromOutcome = startupTerminalState(outcome);
   let round: ReturnType<typeof classifyCurrentDeliveredRound> | undefined;
@@ -1098,7 +1112,7 @@ async function classifyStartupChild(
     if (transcript === undefined) return { kind: 'unknown' };
     round =
       options.hostFlavor === 'v2'
-        ? classifyV2HistoricalRound(transcript)
+        ? classifyV2HistoricalRound(transcript, hasV2Lifecycle)
         : classifyCurrentDeliveredRound(transcript);
   } catch {
     return { kind: 'unknown' };

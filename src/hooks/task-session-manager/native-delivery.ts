@@ -1,13 +1,13 @@
 /**
- * Trusted native v2 completion delivery evidence.
+ * Trusted native host completion delivery evidence.
  *
- * The host's `sessions.synthetic` part opens with the
+ * v2: the host's `sessions.synthetic` part opens with the
  * `<subagent sessionID="..." state="...">` tag AND carries
- * `metadata: { source: 'subagent', childID, state }`. Both are required:
- * header anchoring alone would let pasted user/assistant text masquerade
- * as a delivery, so the metadata must exist and agree with the tag. A
- * result body merely quoting foreign task markup is nested, never at the
- * header, and cannot match either.
+ * `metadata: { source: 'subagent', childID, state }`. The context hook
+ * strips metadata, so its caller may use the exact native header instead,
+ * but only behind parent, timestamp and terminal-state fences.
+ * v1: the host delivers a `synthetic: true` part opening with
+ * `<task id="..." state="...">`.
  */
 import { isRecord } from '../../utils/guards';
 import {
@@ -32,8 +32,20 @@ export type NativeDelivery = {
 
 export function parseNativeDelivery(
   part: MessagePart,
+  allowContextHeader = false,
 ): NativeDelivery | undefined {
   const text = part.text;
+  if (
+    part.type === 'text' &&
+    part.synthetic === true &&
+    typeof text === 'string'
+  ) {
+    const v1 =
+      /^<task id="(ses_[A-Za-z0-9_-]+)" state="(completed|error|cancelled)">/.exec(
+        text,
+      );
+    if (v1) return { taskID: v1[1], state: v1[2] as NativeDeliveryState };
+  }
   if (typeof text !== 'string' || !/^\s*<subagent\b/i.test(text)) {
     return undefined;
   }
@@ -43,6 +55,15 @@ export function parseNativeDelivery(
     return undefined;
   }
   const meta = part.metadata;
+  if (
+    meta === undefined &&
+    allowContextHeader &&
+    /^<subagent sessionID="ses_[A-Za-z0-9_-]+" state="(?:completed|error|cancelled)"(?:>| [^>\r\n]*>)/.test(
+      text,
+    )
+  ) {
+    return { taskID, state: state as NativeDeliveryState };
+  }
   if (
     !isRecord(meta) ||
     meta.source !== 'subagent' ||

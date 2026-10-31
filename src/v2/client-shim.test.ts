@@ -1849,6 +1849,34 @@ describe('v2 client shim foreground-fallback integration', () => {
   // terminal gate starved. The 2.0.8 `idle` marker that trails every
   // finished session must map to the skippable v1 `system` role.
 
+  test('messages preserves native synthetic delivery metadata on its text part', async () => {
+    const metadata = {
+      source: 'subagent',
+      childID: 'ses_child',
+      agent: 'explorer',
+      state: 'completed',
+    };
+    const input = buildPluginInput(
+      makeCtx({
+        context: async () => [
+          {
+            id: 'msg_delivery',
+            type: 'synthetic',
+            text: '<subagent sessionID="ses_child" state="completed" description="work">\ndone\n</subagent>',
+            metadata,
+            time: { created: 2 },
+          },
+        ],
+      } as never),
+    );
+    const result = await (
+      input.client as {
+        session: { messages: (a: unknown) => Promise<{ data: unknown[] }> };
+      }
+    ).session.messages({ sessionID: 'ses_parent' });
+    expect(result.data[0]).toMatchObject({ parts: [{ metadata }] });
+  });
+
   test('messages preserves v2 terminal metadata through the v1 mapping', async () => {
     const input = buildPluginInput(
       makeCtx({
