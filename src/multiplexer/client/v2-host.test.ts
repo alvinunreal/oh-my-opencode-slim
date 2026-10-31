@@ -285,7 +285,6 @@ describe('v2 host ports', () => {
     expect(ids.size).toBe(450);
     expect(client.calls).toHaveLength(3);
     expect(client.calls[0]).toEqual({
-      directory: '/tmp/proj',
       parentID: 'ses_parent',
       order: 'asc',
       limit: 200,

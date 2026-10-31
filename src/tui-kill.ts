@@ -76,22 +76,27 @@ export async function killAllRunningSubagents(
         app?: { agents?: unknown };
         session?: {
           abort?: (args: Record<string, unknown>) => Promise<unknown>;
+          interrupt?: (args: Record<string, unknown>) => Promise<unknown>;
         };
       }
     | undefined;
   const outcomes = await Promise.all(
     targets.map(async (sessionID) => {
       try {
-        // Dual client shape: both SDK v1 and v2 expose app.agents and
-        // session.abort as members, so neither discriminates. The only
-        // exclusive signal is the `v2` accessor, which exists on the v2
-        // SDK root and not on v1. v2 takes flat { sessionID, directory }
-        // params; v1 takes nested { path } through
-        // abortSessionWithTimeout. Both share the same timeout cap and
-        // the same envelope validation: the SDKs resolve (rather than
-        // reject) rejected aborts, so the response must be inspected
-        // before counting the kill.
-        if (rec && 'v2' in rec && typeof rec.session?.abort === 'function') {
+        // The host interrupt and both SDK abort shapes share timeout and failure handling.
+        if (typeof rec?.session?.interrupt === 'function') {
+          const result = await withTimeout(
+            rec.session.interrupt({ sessionID, resume: false }),
+            SESSION_ABORT_TIMEOUT_MS,
+            `Session interrupt timed out after ${SESSION_ABORT_TIMEOUT_MS}ms`,
+          );
+          const failure = sessionAbortFailure(result);
+          if (failure) throw new Error(failure);
+        } else if (
+          rec &&
+          'v2' in rec &&
+          typeof rec.session?.abort === 'function'
+        ) {
           const result = await withTimeout(
             rec.session.abort({
               sessionID,
@@ -108,7 +113,7 @@ export async function killAllRunningSubagents(
             sessionID,
           );
         } else {
-          throw new Error('client does not expose session.abort');
+          throw new Error('client does not expose session interrupt or abort');
         }
         return true;
       } catch (error) {

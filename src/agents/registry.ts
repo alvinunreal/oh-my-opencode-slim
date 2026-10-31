@@ -1705,12 +1705,6 @@ export function buildResolvedAgentRegistry(
           definitions,
           marketplaceMetadata,
         );
-        const trackedModel = effective[definition.name]?.model;
-        const trackedVariant = effective[definition.name]?.variant;
-        tuiModels[display] = visibleModel ?? trackedModel ?? 'default';
-        const tuiVariant = visibleVariant ?? trackedVariant;
-        if (tuiVariant) tuiVariants[display] = tuiVariant;
-        else delete tuiVariants[display];
       }
     }
   }
