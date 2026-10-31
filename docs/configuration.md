@@ -357,6 +357,7 @@ and [Council](council.md) for what remains.
 | `companion.loopStyle` | string | `"classic"` | `classic` (forward loop) or `smooth` (ping-pong). See [Desktop Companion App](companion.md). |
 | `companion.speed` | number | `1` | Playback speed multiplier, `0.25`–`4`. See [Desktop Companion App](companion.md). |
 | `companion.debug` | boolean | - | Verbose native companion debug logs. See [Desktop Companion App](companion.md). |
+| `companion.hideWhenIdle` | boolean | `false` | Hide the companion window while no agent is active (companion v0.1.10+). See [Desktop Companion App](companion.md). |
 
 The plugin's `agents.<agent>.mcps` setting controls which configured plugin MCP
 servers its policy allows. It is not a host-native `agent.mcps` property and

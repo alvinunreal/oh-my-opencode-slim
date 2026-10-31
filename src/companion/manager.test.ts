@@ -125,6 +125,39 @@ describe('CompanionManager', () => {
     expect(state.sessions[0].pid).toBe(process.pid);
   });
 
+  it('hides at idle when hideWhenIdle is enabled', () => {
+    const m = make('test-session', '/home/user/myproject', {
+      enabled: true,
+      position: 'bottom-right',
+      size: 'medium',
+      hideWhenIdle: true,
+    });
+    m.onLoad();
+    const state = readState();
+    expect(state.sessions[0].active_agents).toEqual([]);
+    expect(state.sessions[0].active_agent_details).toEqual([]);
+    expect(state.sessions[0].status).toBe('idle');
+  });
+
+  it('keeps live agents and prompts visible when hideWhenIdle is enabled', () => {
+    const m = make('test-session', '/home/user/myproject', {
+      enabled: true,
+      position: 'bottom-right',
+      size: 'medium',
+      hideWhenIdle: true,
+    });
+    m.onLoad();
+    expect(readState().sessions[0].active_agents).toEqual([]);
+    m.onSessionStatus({ sessionId: 'ses_a', agent: 'fixer', status: 'busy' });
+    expect(readState().sessions[0].active_agents).toEqual(['fixer']);
+    m.onSessionStatus({ sessionId: 'ses_a', agent: 'fixer', status: 'idle' });
+    expect(readState().sessions[0].active_agents).toEqual([]);
+    m.onWaitingInput();
+    expect(readState().sessions[0].active_agents).toEqual(['input']);
+    m.onInputResolved();
+    expect(readState().sessions[0].active_agents).toEqual([]);
+  });
+
   it('normalizes all terminal lifecycle forms to idle', () => {
     expect(normalizeCompanionSessionStatus('session.idle')).toBe('idle');
     expect(normalizeCompanionSessionStatus('session.error')).toBe('idle');
@@ -1121,6 +1154,20 @@ describe('CompanionManager', () => {
     expect(readState().sessions[0].active_agents).toEqual(['intro']);
   });
 
+  it('clears a busy status left stale when its session is deleted', () => {
+    const m = make();
+    m.onLoad();
+    m.onSessionStatus({
+      sessionId: 'ses_orch',
+      agent: 'orchestrator',
+      status: 'busy',
+    });
+    expect(readState().sessions[0].status).toBe('busy');
+    m.onSessionDeleted('ses_orch');
+    expect(readState().sessions[0].status).toBe('idle');
+    expect(readState().sessions[0].active_agents).toEqual(['intro']);
+  });
+
   it('ignores status events with unknown status but tracks busy without agent', () => {
     const m = make();
     m.onLoad();
@@ -1280,6 +1327,18 @@ describe('CompanionManager', () => {
     m.onInputResolved();
     expect(readState().sessions[0].status).toBe('busy');
     expect(readState().sessions[0].active_agents).toEqual(['designer']);
+  });
+
+  it('clears a busy status when the last specialist idles after input resolves', () => {
+    const m = make();
+    m.onLoad();
+    m.onSessionStatus({ sessionId: 'ses_a', agent: 'designer', status: 'busy' });
+    m.onWaitingInput();
+    m.onInputResolved();
+    expect(readState().sessions[0].status).toBe('busy');
+    m.onSessionStatus({ sessionId: 'ses_a', agent: 'designer', status: 'idle' });
+    expect(readState().sessions[0].status).toBe('idle');
+    expect(readState().sessions[0].active_agents).toEqual(['intro']);
   });
 
   it('deduplicates by session, not by agent type', () => {

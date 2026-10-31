@@ -912,6 +912,10 @@ export const CompanionConfigSchema = z.object({
     .boolean()
     .optional()
     .describe('Enable verbose native companion debug logs.'),
+  hideWhenIdle: z
+    .boolean()
+    .optional()
+    .describe('Hides the companion window while no agent is active.'),
 });
 
 export type CompanionConfig = z.infer<typeof CompanionConfigSchema>;
