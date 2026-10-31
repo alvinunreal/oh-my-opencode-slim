@@ -5,7 +5,10 @@
  * session.idle, session.error, session.status, session.deleted) to
  * the appropriate subsystems.
  */
-import type { BackgroundJobBoard } from '../../utils/background-job-board';
+import {
+  type BackgroundJobBoard,
+  deriveTaskSessionLabel,
+} from '../../utils/background-job-board';
 import type { BackgroundJobSupervisor } from '../../utils/background-job-supervisor';
 import { structuredErrorMessage } from '../../utils/child-transcript';
 import { isRecord } from '../../utils/guards';
@@ -350,7 +353,10 @@ export async function handleEvent(
         deps.options.hostFlavor !== 'v2' &&
           info.agent &&
           title?.endsWith(v1Suffix)
-          ? title.slice(0, -v1Suffix.length)
+          ? deriveTaskSessionLabel({
+              description: title.slice(0, -v1Suffix.length),
+              agentType: info.agent,
+            })
           : title,
       );
       if (pending && !pending.resumedTaskId && !pending.earlyRegisteredTaskID) {

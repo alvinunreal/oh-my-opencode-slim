@@ -540,7 +540,8 @@ const MAX_HOST_RETRY_DELAY_MS = 30 * 60_000;
 const PROVIDER_MARK_TTL_MS = 30 * 60_000;
 /** Ceiling on host calls: a hung transport must not stall fallback. */
 const HOST_CALL_TIMEOUT_MS = 2_000;
-const REFUSAL_OUTCOME_TIMEOUT_MS = 2 * HOST_CALL_TIMEOUT_MS + 1_000;
+// Bounds event-pump claim time; recovery has its own host-call timeouts.
+const REFUSAL_OUTCOME_TIMEOUT_MS = 5_000;
 const MAX_REFUSAL_OUTCOMES = 1_024;
 /** The replay send's ack can lag after the host admitted it: wait as long as
  *  the tracker's own `promptAsync`, so a slow ack is not read as a refusal. */
@@ -718,7 +719,7 @@ export class ForegroundFallbackManager {
       epoch: number;
     }
   >();
-  private readonly v2RefusalOutcomes = new Map<
+  private readonly fallbackOutcomes = new Map<
     string,
     {
       promise: Promise<string | undefined>;
@@ -954,11 +955,11 @@ export class ForegroundFallbackManager {
    *  transcript read runs through the destroyed generation's client. */
   dispose(): void {
     this.disposed = true;
-    for (const outcome of this.v2RefusalOutcomes.values()) {
+    for (const outcome of this.fallbackOutcomes.values()) {
       clearTimeout(outcome.timer);
       outcome.resolve(undefined);
     }
-    this.v2RefusalOutcomes.clear();
+    this.fallbackOutcomes.clear();
     for (const pending of this.pendingInitialDelay.values()) {
       clearTimeout(pending.timer);
     }
@@ -1007,15 +1008,14 @@ export class ForegroundFallbackManager {
     this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
   }
 
-  private v2RefusalOutcome(sessionID: string, assistantMessageID: string) {
-    const key = `${sessionID}\0${assistantMessageID}`;
-    const current = this.v2RefusalOutcomes.get(key);
+  private fallbackOutcome(key: string, generation?: number) {
+    const current = this.fallbackOutcomes.get(key);
     if (current) return current;
-    if (this.v2RefusalOutcomes.size >= MAX_REFUSAL_OUTCOMES) {
-      const oldest = this.v2RefusalOutcomes.entries().next().value;
+    if (this.fallbackOutcomes.size >= MAX_REFUSAL_OUTCOMES) {
+      const oldest = this.fallbackOutcomes.entries().next().value;
       if (oldest) {
         oldest[1].resolve(undefined);
-        this.v2RefusalOutcomes.delete(oldest[0]);
+        this.fallbackOutcomes.delete(oldest[0]);
       }
     }
     let complete!: (model: string | undefined) => void;
@@ -1034,19 +1034,48 @@ export class ForegroundFallbackManager {
       promise,
       resolve,
       timer,
-      generation: this.readBackgroundGeneration?.(sessionID),
+      generation,
     };
-    this.v2RefusalOutcomes.set(key, outcome);
+    this.fallbackOutcomes.set(key, outcome);
     return outcome;
+  }
+
+  private v2RefusalOutcome(sessionID: string, assistantMessageID: string) {
+    return this.fallbackOutcome(
+      `${sessionID}\0${assistantMessageID}`,
+      this.readBackgroundGeneration?.(sessionID),
+    );
+  }
+
+  foregroundReplayOutcome(
+    sessionID: string,
+    generation: number,
+    agent: string,
+    completedAt?: number,
+  ): Promise<string | undefined> {
+    if (this.disposed || !this.enabled) return Promise.resolve(undefined);
+    const key = `v1\0${sessionID}\0${generation}`;
+    const existing = this.fallbackOutcomes.get(key);
+    if (existing) return existing.promise;
+    this.registerSessionAgent(sessionID, agent);
+    if (
+      !this.hasFallbackChain(sessionID) ||
+      typeof completedAt !== 'number' ||
+      !Number.isFinite(completedAt) ||
+      Date.now() - completedAt >= REFUSAL_OUTCOME_TIMEOUT_MS
+    )
+      return Promise.resolve(undefined);
+    return this.fallbackOutcome(key, generation).promise;
   }
 
   refusalOutcome(
     sessionID: string,
     assistantMessageID: string,
     expectedGeneration?: number,
+    completedAt?: number,
   ): Promise<string | undefined> {
     if (this.disposed) return Promise.resolve(undefined);
-    const existing = this.v2RefusalOutcomes.get(
+    const existing = this.fallbackOutcomes.get(
       `${sessionID}\0${assistantMessageID}`,
     );
     if (existing)
@@ -1055,11 +1084,17 @@ export class ForegroundFallbackManager {
         ? existing.promise
         : Promise.resolve(undefined);
     const step = this.v2Steps.get(sessionID);
-    if (step?.assistantMessageID !== assistantMessageID)
+    if (step?.assistantMessageID === assistantMessageID) {
+      this.registerSessionAgent(sessionID, step.agent);
+      if (!this.retryEnabledFor(sessionID) || !this.hasFallbackChain(sessionID))
+        return Promise.resolve(undefined);
+    } else if (
+      typeof completedAt !== 'number' ||
+      !Number.isFinite(completedAt) ||
+      Date.now() - completedAt >= REFUSAL_OUTCOME_TIMEOUT_MS
+    ) {
       return Promise.resolve(undefined);
-    this.registerSessionAgent(sessionID, step.agent);
-    if (!this.retryEnabledFor(sessionID) || !this.hasFallbackChain(sessionID))
-      return Promise.resolve(undefined);
+    }
     const outcome = this.v2RefusalOutcome(sessionID, assistantMessageID);
     return expectedGeneration === undefined ||
       outcome.generation === expectedGeneration
@@ -3379,8 +3414,26 @@ export class ForegroundFallbackManager {
     // points in the tryFallback* callers; a disposed generation must not
     // even read the transcript through the old client.
     if (!this.isCurrentTurn(sessionID, expectedEpoch)) return;
-    const session = getClient(this.input).session;
+    const isV2Host =
+      (this.input as PluginInput & { hostFlavor?: string }).hostFlavor === 'v2';
+    const backgroundGeneration = this.readBackgroundGeneration?.(sessionID);
+    const preparedGeneration =
+      backgroundGeneration ??
+      this.readBackgroundGeneration?.(sessionID, announce && !isV2Host);
+    const outcome =
+      announce &&
+      !isV2Host &&
+      backgroundGeneration === undefined &&
+      preparedGeneration !== undefined
+        ? this.fallbackOutcome(
+            `v1\0${sessionID}\0${preparedGeneration}`,
+            preparedGeneration,
+          )
+        : undefined;
+    if (outcome) clearTimeout(outcome.timer);
+    let admittedModel: string | undefined;
     try {
+      const session = getClient(this.input).session;
       const selection = this.selectFallbackModel(sessionID, error);
       if (!selection) return;
       if (selection === 'exhausted') {
@@ -3397,19 +3450,11 @@ export class ForegroundFallbackManager {
         (await this.ensureSessionAgent(sessionID));
       if (!agentName || !this.isCurrentTurn(sessionID, expectedEpoch)) return;
 
-      const isV2Host =
-        (this.input as PluginInput & { hostFlavor?: string }).hostFlavor ===
-        'v2';
       // Confirm there is a user turn before sending the replay reminder.
       // Fence captured BEFORE any await in the preparation: a board
       // relaunch during the transcript read or the admission await must
       // not enroll the new generation under this (stale) attempt's
       // baseline. Undefined means an unmanaged session; never a wildcard.
-      const preparedGeneration = this.readBackgroundGeneration?.(
-        sessionID,
-        announce && !isV2Host,
-      );
-
       // Read only the transcript tail: the replay needs the last replayable
       // user message and the trailing message id (handoff baseline), not the
       // whole history. Long-lived sessions serve the full listing in the
@@ -3701,7 +3746,7 @@ export class ForegroundFallbackManager {
       // probe) so the substituted run's result is observed and
       // delivered to the parent.
       if (handoffArmed) {
-        this.backgroundFallbackHandoff?.admit(
+        const admitted = this.backgroundFallbackHandoff?.admit(
           sessionID,
           preparedGeneration,
           announce
@@ -3712,6 +3757,8 @@ export class ForegroundFallbackManager {
               }
             : undefined,
         );
+        if (admitted)
+          admittedModel = deliveredWithoutSwitch ? currentModel : nextModel;
       }
       if (deliveredWithoutSwitch) return;
       log('[foreground-fallback] switched to fallback model', {
@@ -3726,6 +3773,8 @@ export class ForegroundFallbackManager {
         sessionID,
         error: stringifyError(err),
       });
+    } finally {
+      outcome?.resolve(admittedModel);
     }
   }
 

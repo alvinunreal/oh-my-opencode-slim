@@ -355,6 +355,12 @@ export function createTaskSessionManagerHook(
     /** Host flavor marker ('v2' on OpenCode v2 hosts); selects the native
      *  delegation vocabulary in model-visible tool guidance. Defaults v1. */
     hostFlavor?: string;
+    foregroundReplayOutcome?: (
+      sessionID: string,
+      generation: number,
+      agent: string,
+      completedAt?: number,
+    ) => Promise<string | undefined>;
     /** Per-instance pairing flag for the background-default flip (v2 only);
      *  see BackgroundDefaultFlipState in v2/delegation. */
     isBackgroundDefaultFlipArmed?: () => boolean;
@@ -962,6 +968,72 @@ export function createTaskSessionManagerHook(
     ): Promise<void> => {
       const messages = Array.isArray(output.messages) ? output.messages : [];
       const resolved = resolveView(view, messages);
+      // Keep native running task results byte-stable before adding recovery output.
+      stabilizeRunningTaskParts(messages);
+      if (options.hostFlavor !== 'v2' && options.foregroundReplayOutcome) {
+        for (const [index, message] of messages.entries()) {
+          if (
+            !isObjectRecord(message) ||
+            !isObjectRecord(message.info) ||
+            typeof message.info.sessionID !== 'string' ||
+            !Array.isArray(message.parts)
+          )
+            continue;
+          let parts: unknown[] | undefined;
+          for (const [partIndex, part] of message.parts.entries()) {
+            if (
+              !isObjectRecord(part) ||
+              part.type !== 'tool' ||
+              part.tool !== 'task' ||
+              !isObjectRecord(part.state) ||
+              part.state.status !== 'error' ||
+              typeof part.state.error !== 'string'
+            )
+              continue;
+            const taskID = /^Subagent failed \(task_id: ([^)]+)\):/.exec(
+              part.state.error,
+            )?.[1];
+            const record = taskID ? backgroundJobBoard.get(taskID) : undefined;
+            if (
+              !record ||
+              record.parentSessionID !== message.info.sessionID ||
+              record.background ||
+              record.provisional
+            )
+              continue;
+            const completedAt = isObjectRecord(part.state.time)
+              ? part.state.time.end
+              : undefined;
+            if (
+              typeof completedAt === 'number' &&
+              completedAt < record.runStartedAt
+            )
+              continue;
+            const model = await options.foregroundReplayOutcome(
+              record.taskID,
+              record.generation,
+              record.agent,
+              typeof completedAt === 'number' ? completedAt : undefined,
+            );
+            if (
+              !model ||
+              backgroundJobBoard.get(record.taskID)?.generation !==
+                record.generation
+            )
+              continue;
+            const state: Record<string, unknown> = {
+              ...part.state,
+              status: 'completed',
+              title: record.description,
+              output: `<task id="${record.taskID}" state="running">\nThe child switched to ${model} and continues; the result will arrive. Do not relaunch or replace it.\n</task>`,
+            };
+            delete state.error;
+            parts ??= [...message.parts];
+            parts[partIndex] = { ...part, state };
+          }
+          if (parts) messages[index] = { ...message, parts };
+        }
+      }
       if (adoptionEnabled) {
         let viewSession: unknown;
         let viewStart = Number.POSITIVE_INFINITY;
@@ -976,11 +1048,6 @@ export function createTaskSessionManagerHook(
         if (typeof viewSession === 'string' && viewStart !== Infinity)
           historyBoundaries.set(viewSession, viewStart);
       }
-
-      // Keep still-running task tool results byte-stable so a live background
-      // lane never rewrites mid-history bytes and invalidates the prompt
-      // cache. Terminal results are left untouched (they materialize once).
-      stabilizeRunningTaskParts(messages);
 
       const rehydratedTaskIDs = rehydrateHistoricalRunningTasks(
         messages,

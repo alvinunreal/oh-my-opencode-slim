@@ -2724,12 +2724,19 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
         state: 'error',
       },
     };
-    const childHistory = [
+    const childHistory: Array<{
+      id: string;
+      type: string;
+      finish: string;
+      error: { message: string };
+      time?: { completed: number };
+    }> = [
       {
         id: 'assistant-1',
         type: 'assistant',
         finish: 'content-filter',
         error: { message: 'Provider blocked the response' },
+        time: { completed: Date.now() },
       },
     ];
     const handler = createSessionContextHandler({
@@ -2743,8 +2750,8 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
           ? record.generation
           : undefined;
       },
-      refusalOutcome: (sessionID, assistantID, generation) =>
-        manager.refusalOutcome(sessionID, assistantID, generation),
+      refusalOutcome: (sessionID, assistantID, generation, completedAt) =>
+        manager.refusalOutcome(sessionID, assistantID, generation, completedAt),
     });
     const event = {
       sessionID: 'parent',
@@ -2761,13 +2768,13 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
       ],
     };
     try {
-      await manager.handleEvent(started('child-notice'));
       let finished = false;
       const request = handler(event).then(() => {
         finished = true;
       });
       await settle();
       expect(finished).toBe(false);
+      await manager.handleEvent(started('child-notice'));
       await manager.handleEvent(failed('child-notice'));
       await request;
       expect(event.messages[0]?.content[0]?.text.startsWith(prefix)).toBe(true);

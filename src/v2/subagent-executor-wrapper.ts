@@ -56,6 +56,8 @@ export interface SubagentExecutorWrapperOptions {
   refusalOutcome?: (
     sessionID: string,
     assistantMessageID: string,
+    generation?: number,
+    completedAt?: number,
   ) => Promise<string | undefined>;
 }
 
@@ -242,7 +244,15 @@ export function createSubagentExecutorWrapper(
                   last?.finish === 'content-filter' &&
                   typeof last.id === 'string' &&
                   !retried.has(last.id) &&
-                  (await options.refusalOutcome(launch.childTaskID, last.id))
+                  (await options.refusalOutcome(
+                    launch.childTaskID,
+                    last.id,
+                    undefined,
+                    isRecord(last.time) &&
+                      typeof last.time.completed === 'number'
+                      ? last.time.completed
+                      : undefined,
+                  ))
                 ) {
                   retried.add(last.id);
                   const next: Record<string, unknown> = {

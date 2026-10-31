@@ -60,7 +60,8 @@ for a content-filtered child, waits for that same bounded refusal outcome. A
 confirmed switch for the same board generation replaces the notice in that
 request with the running model, preserving any surrounding text; failed or
 timed-out outcomes leave the native error untouched. Unclaimable historical
-notices do not wait. The claim deadline stops once recovery starts, whose host
+notices do not wait; recent refusals may wait for a delayed event pump even
+before `step.started` is observed. The claim deadline stops once recovery starts, whose host
 calls have their own timeouts. Resolved outcomes remain in the bounded refusal registry so
 later parent requests also supersede the historical notice. The client shim
 maps `model-switched` markers to the skippable system role, preserving their

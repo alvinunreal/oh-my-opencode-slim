@@ -338,6 +338,7 @@ export interface V2SessionContextHandlerDeps {
     sessionID: string,
     assistantMessageID: string,
     generation?: number,
+    completedAt?: number,
   ) => Promise<string | undefined>;
   /** v1 `experimental.chat.system.transform` hook. */
   systemTransform?: (
@@ -643,6 +644,10 @@ export function createSessionContextHandler(
                   delivery.taskID,
                   assistant.id,
                   generation,
+                  isRecord(assistant.time) &&
+                    typeof assistant.time.completed === 'number'
+                    ? assistant.time.completed
+                    : undefined,
                 );
               }
             } catch (err) {
@@ -3291,6 +3296,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                 sessionID: string,
                 assistantMessageID: string,
                 generation?: number,
+                completedAt?: number,
               ) => Promise<string | undefined>)
             | undefined,
           systemTransform,
@@ -3563,6 +3569,8 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                       | ((
                           sessionID: string,
                           assistantMessageID: string,
+                          generation?: number,
+                          completedAt?: number,
                         ) => Promise<string | undefined>)
                       | undefined,
                   })

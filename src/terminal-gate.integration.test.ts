@@ -383,6 +383,7 @@ async function fallbackAssembly(
   hostFlavor?: string,
   delayMs = 2000,
   foreground = false,
+  chain = ['test/primary', 'test/fallback'],
 ) {
   jest.useFakeTimers();
   let fakeTimers = true;
@@ -397,7 +398,7 @@ async function fallbackAssembly(
     hostFlavor,
     rootConfigOverrides: {
       agents: {
-        explorer: { model: ['test/primary', 'test/fallback'] },
+        explorer: { model: chain },
       },
       fallback: { initialRetryDelayMs: delayMs },
     },
@@ -407,16 +408,18 @@ async function fallbackAssembly(
   // fires, time out afterEach, and flip the next test's timers mid-run.
   cleanups.push(restoreTimers);
   if (foreground) {
+    const description =
+      'Investigate   the complete foreground fallback path with a long task description';
     await h.hooks['tool.execute.before']?.(
       { tool: 'task', sessionID: 'parent', callID: 'native' },
-      { args: { subagent_type: 'explorer', description: 'ordinary task' } },
+      { args: { subagent_type: 'explorer', description } },
     );
     await h.event('session.created', {
       info: {
         id: 'child',
         parentID: 'parent',
         agent: 'explorer',
-        title: 'ordinary task (@explorer subagent)',
+        title: `${description} (@explorer subagent)`,
       },
     });
   } else {
@@ -755,9 +758,56 @@ test('v1 foreground child fallback delivers its replay result to the parent', as
     },
     parts: [],
   });
+  const storedPart = {
+    type: 'tool',
+    tool: 'task',
+    callID: 'native',
+    state: {
+      status: 'error',
+      input: { subagent_type: 'explorer' },
+      error: `Subagent failed (task_id: child): ${error.data.message}`,
+      metadata: { parentSessionId: 'parent', sessionId: 'child' },
+      time: { start: Date.now() - 10, end: Date.now() },
+    },
+  };
+  const request = {
+    messages: [
+      {
+        info: { id: 'parent-message', sessionID: 'parent', role: 'assistant' },
+        parts: [
+          storedPart,
+          {
+            ...storedPart,
+            state: {
+              ...storedPart.state,
+              time: { start: Date.now() - 6010, end: Date.now() - 6000 },
+            },
+          },
+        ],
+      },
+    ],
+  };
+  let transformed = false;
+  const transform = h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    request as never,
+  ).then(() => {
+    transformed = true;
+  });
+  await flush();
+  expect(transformed).toBe(false);
   await h.event('session.error', { sessionID: 'child', error });
   await h.idle();
   await h.advance(2000);
+  await transform;
+  expect(request.messages[0].parts[0].state).toMatchObject({
+    status: 'completed',
+    output: expect.stringContaining('test/fallback'),
+  });
+  expect(request.messages[0].parts[0].state).not.toHaveProperty('error');
+  expect(storedPart.state.status).toBe('error');
+  expect(storedPart.state.error).toContain('Subagent failed');
+  expect(request.messages[0].parts[1].state.status).toBe('error');
   const prompts = () =>
     h.promptAsync.mock.calls.map(
       ([call]) =>
@@ -785,6 +835,38 @@ test('v1 foreground child fallback delivers its replay result to the parent', as
   expect(h.board.get('child')?.state).toBe('completed');
   expect(prompts().filter(({ path }) => path.id === 'parent')).toHaveLength(2);
   expect(prompts()[2].body.parts[0].text).toContain('confirmed result');
+});
+
+test('v1 foreground task error stays visible when the fallback chain is exhausted', async () => {
+  const h = await fallbackAssembly(undefined, 2000, true, ['test/primary']);
+  const storedPart = {
+    type: 'tool',
+    tool: 'task',
+    callID: 'native',
+    state: {
+      status: 'error',
+      input: { subagent_type: 'explorer' },
+      error: 'Subagent failed (task_id: child): provider content filter',
+      time: { start: Date.now() - 10, end: Date.now() },
+    },
+  };
+  const request = {
+    messages: [
+      {
+        info: { id: 'parent-message', sessionID: 'parent', role: 'assistant' },
+        parts: [storedPart],
+      },
+    ],
+  };
+  const transform = h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    request as never,
+  );
+  await h.fail();
+  await h.advance(2000);
+  await transform;
+  expect(request.messages[0].parts[0]).toEqual(storedPart);
+  expect(h.promptAsync).not.toHaveBeenCalled();
 });
 
 test('v2 production wiring retires task_revive and keeps no replay notice', async () => {

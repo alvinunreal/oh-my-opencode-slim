@@ -1227,6 +1227,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
       taskSessionManagerHook = createTaskSessionManagerHook(ctx, {
         terminalGate,
+        foregroundReplayOutcome: (sessionID, generation, agent, completedAt) =>
+          foregroundFallback?.foregroundReplayOutcome(
+            sessionID,
+            generation,
+            agent,
+            completedAt,
+          ) ?? Promise.resolve(undefined),
         // Flip mechanism half reads the per-instance box declared above.
         isBackgroundDefaultFlipArmed: backgroundDefaultFlip.isArmed,
         // Host flavor marker; v1 hosts are structurally boardless (issue
@@ -2733,11 +2740,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       sessionID: string,
       assistantMessageID: string,
       generation?: number,
+      completedAt?: number,
     ) =>
       foregroundFallback?.refusalOutcome(
         sessionID,
         assistantMessageID,
         generation,
+        completedAt,
       ) ?? Promise.resolve(undefined),
     'v2.backgroundGeneration': (parentID: string, childID: string) => {
       const record = backgroundJobBoard?.get(childID);

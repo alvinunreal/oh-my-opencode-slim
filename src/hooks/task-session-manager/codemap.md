@@ -22,7 +22,8 @@ The directory follows a **Facade + Strategy** pattern where `index.ts` acts as t
 - **child-input-wait.ts**: Tracks pending child requests and formats their details/guidance for both wakes and `task_status`. V2 forms carry summaries and host-UI/wait/cancel guidance; v1 questions retain answer options.
 - **continuation-model-selection.ts**: Normalizes current-session and chat-hook model shapes before forwarding runtime model and variant choices to idle continuation prompts.
 - **pending-call-tracker.ts**: Capped `(parentSessionID, callID)` map shared by the v2 wrapper and after-hook. Records first input ids for fresh-run anchors; resumed calls bind their own observed input. Conflicting ids or multiple matching calls permanently invalidate every matching binding. V1 feeds `chat.message`; v2 captures in the awaited prompt hook before agent deferral. Amendment commits use the board's generation/revision fence only after host acceptance. See [diagnostic attribution](../../../docs/tools.md#diagnostic-attribution).
-- **v1 child titles**: Early registration removes the host's ` (@agent subagent)` suffix before matching the pending description; v2 titles remain unchanged.
+- **v1 child titles**: Early registration removes the host's ` (@agent subagent)` suffix and derives the normalized, 48-character label before matching; v2 titles remain unchanged.
+- **v1 foreground fallback**: The request transform awaits a recent failed task's replay outcome and replaces only its request copy with a running notice after the handoff is admitted. Unrecovered errors remain unchanged.
 - **admission-runtime.ts**: Re-exports the per-directory admission runtime
   lease used by plugin generations; its scheduler and pending-call tracker are
   torn down only after the final unclaimed owner release.
