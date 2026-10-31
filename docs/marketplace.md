@@ -58,6 +58,33 @@ still runs on every inspection; a desired registry projection is rebuilt from
 the current config, host and package digest facts when status is requested.
 Failed or incomplete inspections never become a cached success.
 
+## Delegate check execution to Validator
+
+`alvin/validator` is an optional test-execution specialist. Install and enable it
+from your project directory, then restart OpenCode:
+
+```sh
+bunx oh-my-opencode-slim@latest marketplace install alvin/validator@1.0.0
+bunx oh-my-opencode-slim@latest marketplace enable alvin/validator
+```
+
+Validator runs established test, lint, typecheck, and build commands, keeps full
+logs on disk, and returns exact commands, exit statuses, bounded failure evidence,
+and log paths. It reports blocked setup and results made stale by concurrent
+edits. It does not repair code, write tests, or assess coverage sufficiency.
+Proctor covers test-sufficiency review; designer and oracle retain visual and
+technical review responsibilities.
+
+Assign focused checks to implementation lanes. After reconciling writers, the
+orchestrator can delegate final checks to Validator, inspect failure evidence,
+and route repairs to the appropriate writer. Short checks can run directly when
+delegation adds no value. Later edits require revalidating affected results.
+
+The package inherits the session model by default. To use a cheaper hosted or
+local model, set `agents.validator.model` to a model configured in your OpenCode
+installation. Savings depend on log volume, model pricing, and delegation overhead;
+no extra provider is required by the package.
+
 ## Orchestrator tools
 
 The orchestrator can use `marketplace_inspect` (`list`, `show`, `verify`,
