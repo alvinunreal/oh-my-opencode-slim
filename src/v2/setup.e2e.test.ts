@@ -16,7 +16,7 @@
  * - Job-board side effects are observed through the board's public tool
  *   surface: the `task_status` v2 tool captured from the tool draft.
  * - Event-pump mapping is proven name-specifically via cache-monitor: only
- *   the SYNTHESIZED `message.updated` (from v2 `session.usage.updated`) can
+ *   the SYNTHESIZED `message.updated` (from v2 `session.step.ended`) can
  *   trip its bust warning, which is written to the plugin log
  *   (`OPENCODE_LOG_DIR` fixture + `flushLoggerForTesting`).
  */
@@ -328,15 +328,22 @@ function makeMockV2Context(
   return { ctx, calls, events };
 }
 
-/** v2 usage telemetry event (cache-monitor bust signature). */
+/** v2 per-step usage telemetry event (cache-monitor bust signature). */
+let usageSequence = 0;
 function v2UsageEvent(
   sessionID: string,
   tokens: { input: number; read: number; write?: number },
 ): Record<string, unknown> {
+  const sequence = ++usageSequence;
   return {
-    type: 'session.usage.updated',
-    properties: {
+    id: `evt_usage_${sequence}`,
+    created: sequence,
+    type: 'session.step.ended',
+    data: {
       sessionID,
+      assistantMessageID: `msg_usage_${sequence}`,
+      finish: 'stop',
+      cost: 0,
       tokens: {
         input: tokens.input,
         output: 5,
@@ -3633,7 +3640,7 @@ describe('createV2Setup e2e', () => {
 
     // Cache-monitor bust signature (see event-adapter.test.ts): only the
     // SYNTHESIZED message.updated events can trip the warning — the raw
-    // v2 session.usage.updated passthrough is inert in the v1 pipeline,
+    // v2 session.step.ended passthrough is inert in the v1 pipeline,
     // so this assertion is name-specific to the mapping layer.
     events.push(
       v2UsageEvent('ses_cache', { input: 8000, read: 0, write: 7000 }),

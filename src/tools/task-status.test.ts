@@ -875,9 +875,75 @@ describe('task_status', () => {
     expect(output).toContain('state: running (unconfirmed)');
     expect(output).toContain('status_uncertain: true');
     expect(output).toContain('last_status_error: host status read failed');
+    expect(output).toContain(
+      'next: state unconfirmed; await the completion notice, do not poll task_status.',
+    );
     expect(output).not.toContain('[guidance]: The task is still running.');
     // An uncertain board fallback must never drive an automatic nudge.
     expect(output).toContain('possibly_stuck: false');
+  });
+
+  test('a v1 gate that has finally given up offers actionable guidance for that run', async () => {
+    const board = new BackgroundJobBoard();
+    const run = board.registerLaunch({
+      taskID: 'ses_child1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      now: 0,
+    });
+    const input = {
+      directory: '/test',
+      client: {
+        session: {
+          status: mock(async () => ({ data: {} })),
+          messages: mock(async () => {
+            throw new Error('history unavailable');
+          }),
+        },
+      },
+    } as never;
+    const gate = createBackgroundJobTerminalGate({
+      input,
+      backgroundJobBoard: board,
+      maxEvidenceRetries: 0,
+      now: () => 120_000,
+    });
+    statusGates.push(gate);
+    await gate.reconcile(run);
+    const { task_status } = createTaskStatusTool({
+      input,
+      backgroundJobBoard: board,
+      terminalGate: gate,
+    });
+    const context = { sessionID: 'parent-1' } as never;
+    const next =
+      'next: state unconfirmed; inspect task_activity, use task_cancel, or resume the task if appropriate.';
+    expect(
+      await task_status.execute({ task_id: 'ses_child1' }, context),
+    ).toContain(next);
+    expect(
+      await task_status.execute(
+        { task_id: 'ses_child1', result: true },
+        context,
+      ),
+    ).toContain(next);
+    expect(
+      await task_status.execute(
+        { task_id: 'ses_child1', diagnostic: true },
+        context,
+      ),
+    ).toContain(next);
+    board.registerLaunch({
+      taskID: 'ses_child1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      now: 120_001,
+    });
+    expect(
+      await task_status.execute({ task_id: 'ses_child1' }, context),
+    ).toContain(
+      'next: state unconfirmed; await the completion notice, do not poll task_status.',
+    );
   });
 
   test('treats a malformed live status entry as uncertain', async () => {
@@ -1107,6 +1173,61 @@ describe('task_status untracked read-only fallback', () => {
     } as any);
     expect(output).toContain('state: running-or-incomplete (uncertain');
     expect(output).not.toContain('The task is still running.');
+  });
+
+  test('v2 reads the retained result of a migrated child after restart', async () => {
+    client = hostClient({ transcript: 'completed' });
+    const { task_status } = makeTool({
+      board: new BackgroundJobBoard(),
+      hostFlavor: 'v2',
+    });
+    expect(
+      await task_status.execute({ task_id: KID }, {
+        sessionID: 'parent-1',
+      } as any),
+    ).toContain('state: completed (verified from history)');
+    expect(
+      await task_status.execute({ task_id: KID, result: true }, {
+        sessionID: 'parent-1',
+      } as any),
+    ).toBe('LAB-MARKER: done');
+  });
+
+  test('an untracked migrated child reports its provider error instead of refusing partial output', async () => {
+    client = hostClient();
+    client.session.messages = mock(async () => ({
+      data: [
+        {
+          info: { id: 'msg_user', role: 'user', time: { created: 10 } },
+          parts: [{ type: 'text', text: 'ask' }],
+        },
+        {
+          info: {
+            id: 'msg_turn',
+            role: 'assistant',
+            finish: 'content-filter',
+            error: {
+              type: 'provider.content-filter',
+              message:
+                'The response was blocked by the provider’s content filter',
+            },
+            time: { created: 11, completed: 12 },
+          },
+          parts: [],
+        },
+      ],
+    }));
+    const { task_status } = makeTool({
+      board: new BackgroundJobBoard(),
+      hostFlavor: 'v2',
+    });
+    const context = { sessionID: 'parent-1' } as never;
+    await expect(
+      task_status.execute({ task_id: KID, result: true }, context),
+    ).rejects.toThrow('ended in error:');
+    const status = await task_status.execute({ task_id: KID }, context);
+    expect(status).toContain('state: error (verified from history)');
+    expect(status).toContain('diagnostic: true');
   });
 
   test('v2 status classifies from the ownership read without an extra get', async () => {
@@ -1866,31 +1987,25 @@ describe('task_status v2 terminal-outcome probe', () => {
     });
   });
 
-  test.each([
-    [{ outcome: undefined, idle: undefined }, 'no host terminal outcome'],
-    [{ outcome: 'cancelled', idle: 5 }, 'unrecognized host outcome'],
-  ])(
-    'an unattributable host read renders the unchanged uncertainty (%j)',
-    async (hostInfo) => {
-      const h = makeProbeTool(hostInfo as { outcome?: string; idle?: number });
-      const output = await h.tool.task_status.execute(
-        { task_id: 'exp-1' },
-        context,
-      );
-      expect(String(output)).toContain('Task exp-1 (ses_child1)');
-      expect(String(output)).toContain('state: running (unconfirmed)');
-      expect(String(output)).toContain('status_uncertain: true');
-      expect(String(output)).toContain(
-        'next: state unconfirmed; await the completion notice, do not poll task_status.',
-      );
-      expect(String(output)).not.toContain(
-        '[guidance]: The task is still running.',
-      );
-      expect(h.board.get('ses_child1')?.state).toBe('running');
-    },
-  );
+  test('a running v2 child without a host terminal outcome retains notice guidance', async () => {
+    const h = makeProbeTool();
+    const output = await h.tool.task_status.execute(
+      { task_id: 'exp-1' },
+      context,
+    );
+    expect(String(output)).toContain('Task exp-1 (ses_child1)');
+    expect(String(output)).toContain('state: running (unconfirmed)');
+    expect(String(output)).toContain('status_uncertain: true');
+    expect(String(output)).toContain(
+      'next: state unconfirmed; await the completion notice, do not poll task_status.',
+    );
+    expect(String(output)).not.toContain(
+      '[guidance]: The task is still running.',
+    );
+    expect(h.board.get('ses_child1')?.state).toBe('running');
+  });
 
-  test('an unattributable host read keeps the result-mode refusal with push-not-poll guidance', async () => {
+  test('a running v2 child retains notice guidance in result mode', async () => {
     const h = makeProbeTool();
     const output = await h.tool.task_status.execute(
       { task_id: 'exp-1', result: true },
@@ -1898,7 +2013,14 @@ describe('task_status v2 terminal-outcome probe', () => {
     );
     expect(String(output)).toContain('state: running (unconfirmed)');
     expect(String(output)).toContain(
-      'next: a completion notice will arrive; continue other work and do not poll task_status.',
+      'next: state unconfirmed; await the completion notice, do not poll task_status.',
+    );
+    const diagnostic = await h.tool.task_status.execute(
+      { task_id: 'exp-1', diagnostic: true },
+      context,
+    );
+    expect(String(diagnostic)).toContain(
+      'next: state unconfirmed; await the completion notice, do not poll task_status.',
     );
     expect(h.board.get('ses_child1')?.state).toBe('running');
   });

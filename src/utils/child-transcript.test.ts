@@ -888,6 +888,68 @@ describe('classifyV2HistoricalRound (startup path)', () => {
     };
   }
 
+  test('classifies a migrated v1 completion without an idle marker', () => {
+    expect(
+      classifyV2HistoricalRound({
+        data: [
+          { info: { role: 'user', time: { created: 10 } }, parts: [] },
+          {
+            info: {
+              role: 'assistant',
+              finish: 'stop',
+              time: { created: 11, completed: 12 },
+            },
+            parts: [{ type: 'text', text: 'migrated answer' }],
+          },
+        ],
+      }),
+    ).toMatchObject({ verdict: 'completed', text: 'migrated answer' });
+    expect(
+      classifyV2HistoricalRound(
+        {
+          data: [
+            { info: { role: 'user', time: { created: 10 } }, parts: [] },
+            {
+              info: {
+                role: 'assistant',
+                finish: 'stop',
+                time: { created: 11, completed: 12 },
+              },
+              parts: [{ type: 'text', text: 'not yet idle' }],
+            },
+          ],
+        },
+        true,
+      ).verdict,
+    ).toBe('incomplete');
+    expect(
+      classifyV2HistoricalRound({
+        data: [
+          v2Message({ id: 'u', sourceType: 'user', time: { created: 10 } }),
+          v2Message({
+            id: 'a',
+            sourceType: 'assistant',
+            time: { created: 11, streamed: 12, completed: 13 },
+            text: 'not yet delivered',
+          }),
+        ],
+      }).verdict,
+    ).toBe('incomplete');
+    expect(
+      classifyV2HistoricalRound({
+        data: [
+          v2Message({ id: 'u', sourceType: 'user', time: { created: 10 } }),
+          v2Message({
+            id: 'a',
+            sourceType: 'assistant',
+            time: { created: 11 },
+            text: 'partial',
+          }),
+        ],
+      }).verdict,
+    ).toBe('incomplete');
+  });
+
   test('interrupted idle is interrupted without an assistant', () => {
     expect(
       classifyV2HistoricalRound({

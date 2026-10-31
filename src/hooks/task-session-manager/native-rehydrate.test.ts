@@ -140,6 +140,54 @@ async function runTransform(
 }
 
 describe('native v2 history rehydration', () => {
+  test('v1 synthetic task delivery prevents re-adoption after restart', async () => {
+    const board = new BackgroundJobBoard();
+    const hook = createHook(board);
+    const messages = {
+      messages: [
+        {
+          info: {
+            role: 'assistant',
+            agent: 'orchestrator',
+            sessionID: PARENT,
+            time: { created: 1 },
+          },
+          parts: [
+            {
+              type: 'tool',
+              tool: 'task',
+              state: {
+                input: {
+                  background: true,
+                  subagent_type: 'explorer',
+                  description: 'find it',
+                },
+                output: 'task_id: ses_v1_child\nstate: running\n',
+              },
+            },
+          ],
+        },
+        {
+          info: {
+            id: 'delivery-v1',
+            role: 'user',
+            sessionID: PARENT,
+            time: { created: 2 },
+          },
+          parts: [
+            {
+              type: 'text',
+              synthetic: true,
+              text: '<task id="ses_v1_child" state="completed">\ndone\n</task>',
+            },
+          ],
+        },
+      ],
+    };
+    await runTransform(hook, messages);
+    expect(board.get('ses_v1_child')).toBeUndefined();
+  });
+
   test('recovers explicit and default-background subagent calls', async () => {
     const board = new BackgroundJobBoard();
     const hook = createHook(board);

@@ -14,67 +14,6 @@ import { describe, expect, test } from 'bun:test';
 import { createCacheMonitorHook } from '../hooks/cache-monitor';
 import { mapV2EventToV1 } from './event-adapter';
 
-/**
- * Deterministic timer replacement (mirrors publication-wake.test.ts):
- * callbacks fire only on advance(), so scheduler timing assertions never
- * race real-clock jitter.
- */
-function createClock() {
-  let now = 0;
-  let nextID = 1;
-  const timers = new Map<number, { at: number; callback: () => void }>();
-
-  const setTimeoutImpl = ((callback: () => void, delay?: number) => {
-    const id = nextID++;
-    timers.set(id, { at: now + (delay ?? 0), callback });
-    const handle = {
-      __id: id,
-      unref() {
-        return handle;
-      },
-    };
-    return handle as unknown as ReturnType<typeof setTimeout>;
-  }) as unknown as typeof setTimeout;
-
-  const clearTimeoutImpl = ((handle: unknown) => {
-    if (handle == null) return;
-    const id =
-      typeof handle === 'object' &&
-      handle !== null &&
-      '__id' in handle &&
-      typeof (handle as { __id: unknown }).__id === 'number'
-        ? (handle as { __id: number }).__id
-        : Number(handle);
-    timers.delete(id);
-  }) as unknown as typeof clearTimeout;
-
-  async function flushMicrotasks(times = 30): Promise<void> {
-    for (let i = 0; i < times; i++) {
-      await Promise.resolve();
-    }
-  }
-
-  return {
-    setTimeout: setTimeoutImpl,
-    clearTimeout: clearTimeoutImpl,
-    async advance(ms: number) {
-      now += ms;
-      for (let round = 0; round < 5; round++) {
-        const due = [...timers.entries()]
-          .filter(([, t]) => t.at <= now)
-          .sort((a, b) => a[1].at - b[1].at);
-        if (due.length === 0) break;
-        for (const [id, timer] of due) {
-          timers.delete(id);
-          timer.callback();
-        }
-        await flushMicrotasks();
-      }
-      await flushMicrotasks();
-    },
-  };
-}
-
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === 'object') {
     for (const key of Object.keys(value as object)) {
@@ -90,14 +29,17 @@ function v2Usage(overrides: {
   read: number;
   write?: number;
   timestamp?: number;
+  messageID?: string;
 }): Record<string, unknown> {
   return {
-    type: 'session.usage.updated',
-    properties: deepFreeze({
+    id: `evt_${overrides.messageID ?? 'msg_1'}`,
+    created: overrides.timestamp ?? 0,
+    type: 'session.step.ended',
+    data: deepFreeze({
       sessionID: 'ses_map',
-      ...(overrides.timestamp !== undefined
-        ? { timestamp: overrides.timestamp }
-        : {}),
+      assistantMessageID: overrides.messageID ?? 'msg_1',
+      finish: 'stop',
+      cost: 0,
       tokens: {
         input: overrides.input,
         output: 5,
@@ -225,14 +167,12 @@ describe('mapV2EventToV1', () => {
   test('maps usage telemetry into v1 message.updated shape for cache-monitor', () => {
     const out = mapV2EventToV1(v2Usage({ input: 10, read: 100, write: 20 }));
     expect(out).toHaveLength(2);
-    // Exact field paths parseCompletedAssistantMessage reads. The id is a
-    // deterministic fingerprint (v2 usage events carry no message id) so
-    // replays and the step.ended/usage.updated pair for one request dedup.
+    // The assistant identity deduplicates replays without merging requests.
     expect(out[1]).toEqual({
       type: 'message.updated',
       properties: {
         info: {
-          id: 'v2-usage:ses_map:10:5:100:20',
+          id: 'v2-usage:msg_1',
           role: 'assistant',
           sessionID: 'ses_map',
           time: { completed: 0 },
@@ -245,14 +185,26 @@ describe('mapV2EventToV1', () => {
         },
       },
     });
+    expect(
+      mapV2EventToV1(v2Usage({ input: 10, read: 100, write: 20 }))[1],
+    ).toEqual(out[1]);
+    expect(
+      mapV2EventToV1(
+        v2Usage({ input: 10, read: 100, write: 20, messageID: 'msg_2' }),
+      )[1],
+    ).not.toEqual(out[1]);
   });
 
   test('maps session.step.ended telemetry with timestamp passthrough', () => {
     const out = mapV2EventToV1({
+      id: 'evt_2',
+      created: 1_700_000_000,
       type: 'session.step.ended',
-      properties: {
+      data: {
         sessionID: 'ses_map',
-        timestamp: 1_700_000_000,
+        assistantMessageID: 'msg_2',
+        finish: 'stop',
+        cost: 0,
         tokens: { input: 7, output: 3, cache: { read: 40, write: 5 } },
       },
     });
@@ -260,7 +212,7 @@ describe('mapV2EventToV1', () => {
       type: 'message.updated',
       properties: {
         info: {
-          id: 'v2-usage:ses_map:7:3:40:5',
+          id: 'v2-usage:msg_2',
           role: 'assistant',
           sessionID: 'ses_map',
           time: { completed: 1_700_000_000 },
@@ -275,39 +227,25 @@ describe('mapV2EventToV1', () => {
     });
   });
 
-  test('usage telemetry with incomplete tokens synthesizes nothing', () => {
-    // Fail-open like the consumers: partial token blocks are dropped
-    // rather than mapped into a shape cache-monitor would half-read.
-    expect(
-      mapV2EventToV1({
-        type: 'session.usage.updated',
-        properties: { sessionID: 's', tokens: { input: 10 } },
-      }),
-    ).toHaveLength(1);
-    expect(
-      mapV2EventToV1({
-        type: 'session.usage.updated',
-        properties: { sessionID: 's' },
-      }),
-    ).toHaveLength(1);
-  });
-
-  test('mapped message.updated feeds the real cache-monitor (bust warning fires)', async () => {
-    const warnings: string[] = [];
+  test('mapped steps feed the real cache-monitor', async () => {
+    const warnings: Array<{ message: string; data: unknown }> = [];
     const monitor = createCacheMonitorHook({
-      logger: (message) => warnings.push(message),
+      logger: (message, data) => warnings.push({ message, data }),
     });
-    await monitor.event({
-      event: mapV2EventToV1(v2Usage({ input: 8000, read: 0, write: 7000 }))[1],
-    });
-    await monitor.event({
-      event: mapV2EventToV1(v2Usage({ input: 500, read: 9000 }))[1],
-    });
-    await monitor.event({
-      event: mapV2EventToV1(v2Usage({ input: 12000, read: 0 }))[1],
-    });
+    for (const event of [
+      v2Usage({ messageID: 'msg_1', input: 8000, read: 20082 }),
+      v2Usage({ messageID: 'msg_2', input: 8000, read: 20248 }),
+      v2Usage({ messageID: 'msg_3', input: 12000, read: 0 }),
+    ]) {
+      for (const mapped of mapV2EventToV1(event))
+        await monitor.event({ event: mapped });
+    }
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain('prompt-cache bust');
+    expect(warnings[0]?.message).toContain('prompt-cache bust');
+    expect(warnings[0]?.data).toMatchObject({
+      requestNumber: 3,
+      previousCacheRead: 20248,
+    });
   });
 
   test('raw session.status events stay passthrough-only', () => {
@@ -820,167 +758,33 @@ describe('mapV2EventToV1 live wire shape (payload under `data`)', () => {
       },
     });
   });
-
-  test('live usage.updated telemetry maps to message.updated from `data`', () => {
-    const out = mapV2EventToV1(
-      liveEvent('session.usage.updated', {
-        sessionID: 'ses_live',
-        cost: 0,
-        tokens: {
-          input: 1,
-          output: 1,
-          reasoning: 0,
-          cache: { read: 0, write: 0 },
-        },
-      }),
-    );
-    expect(out).toHaveLength(2);
-    expect(out[1]).toEqual({
-      type: 'message.updated',
-      properties: {
-        info: {
-          id: 'v2-usage:ses_live:1:1:0:0',
-          role: 'assistant',
-          sessionID: 'ses_live',
-          time: { completed: 0 },
-          tokens: {
-            input: 1,
-            output: 1,
-            reasoning: 0,
-            cache: { read: 0, write: 0 },
-          },
-        },
-      },
-    });
-  });
-
-  test('live-shape wake chain end-to-end: idle arms the real wake scheduler with a tracked child', async () => {
-    // The exact live-observed break: raw `data`-keyed events must reach
-    // the v1 consumers. Arm the real scheduler with the synthesized idle
-    // for a managed orchestrator whose child was registered from a live
-    // session.created, then advance a fake clock past the interval and
-    // require the queued v2 wake prompt.
-    const { createOrchestratorWakeScheduler } = await import(
-      '../hooks/orchestrator-wake'
-    );
-    const { resetOrchestratorWakeGateForTests } = await import(
-      '../hooks/orchestrator-wake/wake-gate'
-    );
-    // The wake gate is process-global (Symbol.for): a prior test file that
-    // tripped the two-wake no-progress cap for this session id leaks into
-    // this run. Reset it so arming state starts clean.
-    resetOrchestratorWakeGateForTests();
-    const prompted: Array<Record<string, unknown>> = [];
-    const sessionSdk = {
-      list: async (args: Record<string, unknown>) => {
-        // In-process v2 hosts expose no session.list → shim-level honest
-        // empty page; the event-tracked fallback must cover enumeration.
-        void args;
-        return { data: [] };
-      },
-      promptAsync: async (args: Record<string, unknown>) => {
-        prompted.push(args);
-        return {};
-      },
-    };
-    // Children-driven periodic wakes are a STALLED-child watchdog with a
-    // real-time staleness bound (intervalMs * CHILD_STALENESS_INTERVALS).
-    // Real setTimeout jitter made the second evaluation race that bound —
-    // deterministic only under a fake clock, where the child's evidence can
-    // never go stale mid-test. Mirrors publication-wake.test.ts's clock.
-    const realSetTimeout = globalThis.setTimeout;
-    const realClearTimeout = globalThis.clearTimeout;
-    const clock = createClock();
-    globalThis.setTimeout = clock.setTimeout;
-    globalThis.clearTimeout = clock.clearTimeout;
-    try {
-      const scheduler = createOrchestratorWakeScheduler(
-        {
-          client: { session: sessionSdk },
-          directory: '/tmp/proj',
-          hostFlavor: 'v2',
-        } as never,
-        {
-          config: {
-            enabled: true,
-            intervalMs: 10,
-            periodicWakeEnabled: true,
-            mode: 'children',
-          },
-          shouldManageSession: (id: string) => id === 'ses_parent',
-          hasInputWait: () => false,
-          intervalMs: 10,
-        },
-      );
-      // The exact mapped events feed the scheduler; the busy pair from the
-      // child's execution.started must be recorded BEFORE the parent's idle
-      // arms the periodic timer (the children fingerprint needs both).
-      for (const mapped of mapV2EventToV1(
-        liveEvent('session.created', {
-          sessionID: 'ses_child',
-          parentID: 'ses_parent',
-          slug: 's',
-          version: 'v',
-        }),
-      )) {
-        await scheduler.event({ event: mapped as never });
-      }
-      for (const mapped of mapV2EventToV1(
-        liveEvent('session.execution.started', { sessionID: 'ses_child' }),
-      )) {
-        await scheduler.event({ event: mapped as never });
-      }
-      for (const mapped of mapV2EventToV1(
-        liveEvent('session.execution.succeeded', { sessionID: 'ses_parent' }),
-      )) {
-        await scheduler.event({ event: mapped as never });
-      }
-      // First tick: the fresh child classifies as progressing, the periodic
-      // wake defers to establish its baseline, and the scheduler re-arms.
-      await clock.advance(10);
-      expect(prompted.length).toBe(0);
-      // Second tick: unchanged fingerprint → the stalled-child wake commits
-      // and fires as a queued v2 prompt.
-      await clock.advance(10);
-      expect(prompted.length).toBe(1);
-      expect(prompted[0]?.delivery).toBe('queue');
-      const body = prompted[0]?.body as {
-        parts: Array<{ type: string; text: string }>;
-      };
-      expect(body.parts[0]?.type).toBe('text');
-      expect(body.parts[0]?.text).toContain(
-        'unfinished background child sessions',
-      );
-    } finally {
-      globalThis.setTimeout = realSetTimeout;
-      globalThis.clearTimeout = realClearTimeout;
-    }
-  });
 });
 
 describe('mapV2EventToV1 form → question bridge', () => {
   test('form.created synthesizes v1 question.asked with QuestionV1 shape', () => {
     const ev = deepFreeze({
       type: 'form.created',
-      properties: {
+      data: {
         form: {
           id: 'frm_1',
           sessionID: 'ses_q',
           title: 'Pick one',
           fields: [
             {
-              key: 'flavor',
+              key: 'q0',
               type: 'string',
-              title: 'Which flavor?',
+              title: 'Flavor',
+              description: 'Which flavor should I use?',
               options: [
                 { value: 'a', label: 'Vanilla', description: 'plain' },
                 { value: 'b', label: 'Chocolate' },
               ],
             },
             {
-              key: 'extras',
+              key: 'q1',
               type: 'multiselect',
               title: 'Extras',
+              description: 'Which extras should I add?',
               options: [{ value: 'x', label: 'Sprinkles' }],
             },
           ],
@@ -1000,20 +804,20 @@ describe('mapV2EventToV1 form → question bridge', () => {
         sessionID: 'ses_q',
         questions: [
           {
-            question: 'Which flavor?',
-            header: 'Which flavor?',
+            question: 'Which flavor should I use?',
+            header: 'Flavor',
             // The form field key rides along: form replies must key
             // answers by this exact value.
-            key: 'flavor',
+            key: 'q0',
             options: [
               { label: 'Vanilla', description: 'plain' },
               { label: 'Chocolate', description: '' },
             ],
           },
           {
-            question: 'Extras',
+            question: 'Which extras should I add?',
             header: 'Extras',
-            key: 'extras',
+            key: 'q1',
             options: [{ label: 'Sprinkles', description: '' }],
             multiple: true,
           },
@@ -1474,17 +1278,5 @@ describe('mapV2EventToV1 shared payload fact (resolveV2EventPayload)', () => {
         },
       },
     ]);
-  });
-
-  test('a non-record payload under neither key synthesizes nothing extra', () => {
-    const ev = deepFreeze({
-      id: 'evt_shared_2',
-      created: 1,
-      type: 'session.usage.updated',
-      data: 'not-a-record',
-      properties: 42,
-    });
-    const out = mapV2EventToV1(ev);
-    expect(out).toEqual([ev]);
   });
 });

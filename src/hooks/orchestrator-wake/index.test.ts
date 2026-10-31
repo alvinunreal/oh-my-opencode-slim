@@ -15,7 +15,6 @@ import {
   buildChildrenWakeFingerprint,
   buildOrchestratorWakeFingerprint,
   CHILD_INPUT_WAKE_SETTLE_MS,
-  CHILD_STALENESS_INTERVALS,
   COMPLETED_JOB_OVERFLOW_TEXT,
   COMPLETED_JOB_QUEUE_CAP,
   COMPLETED_JOB_WAKE_CHUNK,
@@ -37,9 +36,7 @@ import {
   STOPPED_RECOVERY_OVERFLOW_TEXT,
   STOPPED_RECOVERY_QUEUE_CAP,
   STOPPED_RECOVERY_WAKE_CHUNK,
-  WAKE_ANTI_FORGERY_TEXT,
   WAKE_REPEAT_CORES,
-  WRITER_LANE_VERIFICATION_TEXT,
   wakeRepeatMarker,
 } from './index';
 import {
@@ -61,7 +58,6 @@ type SessionClient = {
   todo?: ReturnType<typeof mock>;
   children?: ReturnType<typeof mock>;
   status?: ReturnType<typeof mock>;
-  list?: ReturnType<typeof mock>;
   promptAsync?: ReturnType<typeof mock>;
 };
 
@@ -167,7 +163,6 @@ function createScheduler(options?: {
   isStoppedJobRecoveryCurrent?: (taskID: string, generation: number) => boolean;
   isChildInputWaitCurrent?: (taskID: string, requestID: string) => boolean;
   isCompletedJobCurrent?: (taskID: string, generation: number) => boolean;
-  isWriterLaneTask?: (taskID: string) => boolean;
   hasPendingDelegatedWork?: (id: string) => boolean;
   resolveSelection?: (sessionID: string) => Promise<{
     agent?: string;
@@ -202,33 +197,12 @@ function createScheduler(options?: {
     isStoppedJobRecoveryCurrent: options?.isStoppedJobRecoveryCurrent,
     isChildInputWaitCurrent: options?.isChildInputWaitCurrent,
     isCompletedJobCurrent: options?.isCompletedJobCurrent,
-    isWriterLaneTask: options?.isWriterLaneTask,
     hasPendingDelegatedWork: options?.hasPendingDelegatedWork,
     resolveSelection: options?.resolveSelection,
     coordinator: options?.coordinator,
   });
 
   return { scheduler, session: session as SessionClient | undefined };
-}
-
-/** v2-flavored session surface: list + promptAsync (get optional). */
-function makeV2Client(overrides?: {
-  listChildren?: Array<Record<string, unknown>>;
-  listImpl?: ReturnType<typeof mock>;
-  promptAsync?: ReturnType<typeof mock>;
-  get?: ReturnType<typeof mock>;
-  omitList?: boolean;
-}): SessionClient {
-  const client: SessionClient = {
-    promptAsync: overrides?.promptAsync ?? mock(async () => ({})),
-  };
-  if (!overrides?.omitList) {
-    client.list =
-      overrides?.listImpl ??
-      mock(async () => ({ data: overrides?.listChildren ?? [] }));
-  }
-  if (overrides?.get) client.get = overrides.get;
-  return client;
 }
 
 const originalSetTimeout = globalThis.setTimeout;
@@ -243,20 +217,51 @@ beforeEach(() => {
   globalThis.clearTimeout = clock.clearTimeout;
 });
 
-describe('child-input settling across host versions', () => {
+describe('v1 children wake mode', () => {
+  test('does not wake without active children', async () => {
+    const entries: Array<{ message: string; data: unknown }> = [];
+    const spy = spyOn(loggerModule, 'log').mockImplementation(
+      (message, data) => {
+        entries.push({ message, data });
+      },
+    );
+    const promptAsync = mock(async () => ({}));
+    const { scheduler } = createScheduler({
+      hostFlavor: 'v1',
+      mode: 'children',
+      intervalMs: 60_000,
+      sessionClient: makeClient({ promptAsync, childrenData: [] }),
+    });
+    await scheduler.event({
+      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+    });
+    await clock.advance(60_000);
+    expect(promptAsync).not.toHaveBeenCalled();
+    expect(clock.pendingCount()).toBe(0);
+    expect(entries).toContainEqual({
+      message: '[orchestrator-wake] evaluate aborted',
+      data: {
+        sessionID: 'p1',
+        trigger: 'periodic',
+        checkpoint: 'initial',
+        reason: 'no-work',
+      },
+    });
+    spy.mockRestore();
+  });
+});
+
+describe('v1 child-input settling', () => {
   test.each(
-    ['v1', 'v2'].flatMap((hostFlavor) =>
-      ['host read', 'selection'].flatMap((blockedAt) =>
-        ['duplicate', 'new ask'].map((arrival) => ({
-          hostFlavor,
-          blockedAt,
-          arrival,
-        })),
-      ),
+    ['host read', 'selection'].flatMap((blockedAt) =>
+      ['duplicate', 'new ask'].map((arrival) => ({
+        blockedAt,
+        arrival,
+      })),
     ),
   )(
-    '$hostFlavor defers a $arrival arriving during $blockedAt without a false stopped notice',
-    async ({ hostFlavor, blockedAt, arrival }) => {
+    'v1 defers a $arrival arriving during $blockedAt without a false stopped notice',
+    async ({ blockedAt, arrival }) => {
       const promptAsync = mock(async () => ({}));
       let release!: () => void;
       const pendingRead = new Promise<void>((resolve) => {
@@ -271,16 +276,9 @@ describe('child-input settling across host versions', () => {
         return { data: {} };
       });
       const { scheduler } = createScheduler({
-        hostFlavor,
+        hostFlavor: 'v1',
         periodicWakeEnabled: false,
-        sessionClient:
-          hostFlavor === 'v2'
-            ? makeV2Client({
-                promptAsync,
-                get,
-                listChildren: [{ id: 'ses_child1' }],
-              })
-            : makeClient({ promptAsync, get, todos: [] }),
+        sessionClient: makeClient({ promptAsync, get, todos: [] }),
         isChildInputWaitCurrent: () => true,
         resolveSelection: async () => {
           if (blockedAt === 'selection' && !blocked) {
@@ -326,108 +324,92 @@ describe('child-input settling across host versions', () => {
     },
   );
 
-  test.each(['v1', 'v2'])(
-    '%s discards an auto-replied ask and still delivers a later pending ask',
-    async (hostFlavor) => {
-      const promptAsync = mock(async () => ({}));
-      let current = true;
-      const { scheduler } = createScheduler({
-        hostFlavor,
-        periodicWakeEnabled: false,
-        sessionClient:
-          hostFlavor === 'v2'
-            ? makeV2Client({
-                promptAsync,
-                listChildren: [{ id: 'ses_child1' }],
-              })
-            : makeClient({ promptAsync, todos: [] }),
-        isChildInputWaitCurrent: () => current,
-      });
-      const ask = (requestID: string) =>
-        scheduler.triggerChildInputWaitWake(
-          'p1',
-          formatChildInputWaitDelta({
-            alias: 'fix-1',
-            taskID: 'ses_child1',
-            kind: 'permission',
-            requestID,
-            detail: 'permission: external_directory\npatterns: /approved/*',
-          }),
-          `ses_child1:${requestID}`,
-        );
+  test('v1 discards an auto-replied ask and still delivers a later pending ask', async () => {
+    const promptAsync = mock(async () => ({}));
+    let current = true;
+    const { scheduler } = createScheduler({
+      hostFlavor: 'v1',
+      periodicWakeEnabled: false,
+      sessionClient: makeClient({ promptAsync, todos: [] }),
+      isChildInputWaitCurrent: () => current,
+    });
+    const ask = (requestID: string) =>
+      scheduler.triggerChildInputWaitWake(
+        'p1',
+        formatChildInputWaitDelta({
+          alias: 'fix-1',
+          taskID: 'ses_child1',
+          kind: 'permission',
+          requestID,
+          detail: 'permission: external_directory\npatterns: /approved/*',
+        }),
+        `ses_child1:${requestID}`,
+      );
 
-      ask('per_auto');
-      await clock.advance(39);
-      current = false;
-      await scheduler.event({
-        event: {
-          type: 'permission.replied',
-          data: { sessionID: 'ses_child1', requestID: 'per_auto' },
-        },
-      });
-      await clock.advance(CHILD_INPUT_WAKE_SETTLE_MS);
-      expect(promptAsync).not.toHaveBeenCalled();
-      expect(clock.pendingCount()).toBe(0);
+    ask('per_auto');
+    await clock.advance(39);
+    current = false;
+    await scheduler.event({
+      event: {
+        type: 'permission.replied',
+        data: { sessionID: 'ses_child1', requestID: 'per_auto' },
+      },
+    });
+    await clock.advance(CHILD_INPUT_WAKE_SETTLE_MS);
+    expect(promptAsync).not.toHaveBeenCalled();
+    expect(clock.pendingCount()).toBe(0);
 
-      current = true;
-      ask('per_pending');
-      await clock.advance(CHILD_INPUT_WAKE_SETTLE_MS - 1);
-      expect(promptAsync).not.toHaveBeenCalled();
-      // Parent idle events must not bypass or restart the first deadline.
-      await scheduler.event({
-        event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-      });
-      await clock.advance(1);
-      expect(promptAsync).toHaveBeenCalledTimes(1);
-      const call = promptAsync.mock.calls[0]?.[0] as {
-        delivery?: string;
-        body: { parts: Array<{ text: string }> };
-      };
-      expect(call.body.parts[0]?.text).toContain('per_pending');
-      expect(call.body.parts[0]?.text).not.toContain('per_auto');
-      if (hostFlavor === 'v2') expect(call.delivery).toBe('queue');
-    },
-  );
+    current = true;
+    ask('per_pending');
+    await clock.advance(CHILD_INPUT_WAKE_SETTLE_MS - 1);
+    expect(promptAsync).not.toHaveBeenCalled();
+    // Parent idle events must not bypass or restart the first deadline.
+    await scheduler.event({
+      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+    });
+    await clock.advance(1);
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    const call = promptAsync.mock.calls[0]?.[0] as {
+      delivery?: string;
+      body: { parts: Array<{ text: string }> };
+    };
+    expect(call.body.parts[0]?.text).toContain('per_pending');
+    expect(call.body.parts[0]?.text).not.toContain('per_auto');
+  });
 });
 
-describe('overflow input requests across host versions', () => {
-  test.each(['v1', 'v2'])(
-    '%s drops resolved overflow but preserves unretained requests',
-    async (hostFlavor) => {
-      const promptAsync = mock(async () => ({}));
-      let pending = true;
-      const { scheduler } = createScheduler({
-        hostFlavor,
-        periodicWakeEnabled: false,
-        sessionClient:
-          hostFlavor === 'v2'
-            ? makeV2Client({ promptAsync })
-            : makeClient({ promptAsync, todos: [] }),
-        isChildInputWaitCurrent: () => pending,
-      });
-      // 32 inline + 64 retained overflow IDs + one unretained request.
-      for (let i = 0; i < 97; i++) {
-        scheduler.triggerChildInputWaitWake(
-          'p1',
-          `input ${i}`,
-          `ses_${i}:per_${i}`,
-        );
-      }
-      pending = false;
-      await clock.advance(CHILD_INPUT_WAKE_SETTLE_MS);
-      expect(promptAsync).toHaveBeenCalledTimes(1);
-      const text = promptAsync.mock.calls[0]?.[0]?.body.parts[0]?.text ?? '';
-      expect(text).toContain('Handle the pending request below');
-      expect(text).toContain('(+1 more overflowed entries were not retained)');
-      expect(text).not.toContain('ses_0');
-      expect(text).not.toContain('stopped without a terminal result');
-      await scheduler.event({
-        event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-      });
-      await clock.advance(CHILD_INPUT_WAKE_SETTLE_MS);
-      expect(promptAsync).toHaveBeenCalledTimes(1);
-    },
-  );
+describe('v1 overflow input requests', () => {
+  test('v1 drops resolved overflow but preserves unretained requests', async () => {
+    const promptAsync = mock(async () => ({}));
+    let pending = true;
+    const { scheduler } = createScheduler({
+      hostFlavor: 'v1',
+      periodicWakeEnabled: false,
+      sessionClient: makeClient({ promptAsync, todos: [] }),
+      isChildInputWaitCurrent: () => pending,
+    });
+    // 32 inline + 64 retained overflow IDs + one unretained request.
+    for (let i = 0; i < 97; i++) {
+      scheduler.triggerChildInputWaitWake(
+        'p1',
+        `input ${i}`,
+        `ses_${i}:per_${i}`,
+      );
+    }
+    pending = false;
+    await clock.advance(CHILD_INPUT_WAKE_SETTLE_MS);
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    const text = promptAsync.mock.calls[0]?.[0]?.body.parts[0]?.text ?? '';
+    expect(text).toContain('Handle the pending request below');
+    expect(text).toContain('(+1 more overflowed entries were not retained)');
+    expect(text).not.toContain('ses_0');
+    expect(text).not.toContain('stopped without a terminal result');
+    await scheduler.event({
+      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+    });
+    await clock.advance(CHILD_INPUT_WAKE_SETTLE_MS);
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('forced wake blocker diagnostics', () => {
@@ -447,61 +429,6 @@ describe('forced wake blocker diagnostics', () => {
         ),
     };
   }
-
-  test.each(['stopped-job-recovery', 'child-input'] as const)(
-    'G3b %s queued while busy logs exactly once when blocked at idle twice',
-    async (trigger) => {
-      const capture = captureBlockers();
-      try {
-        let inputWait = false;
-        const promptAsync = mock(async () => ({}));
-        const { scheduler } = createScheduler({
-          hostFlavor: 'v2',
-          sessionClient: makeV2Client({ promptAsync }),
-          hasInputWait: () => inputWait,
-        });
-        await scheduler.event({
-          event: {
-            type: 'session.status',
-            properties: { sessionID: 'p1', status: { type: 'busy' } },
-          },
-        });
-        if (trigger === 'stopped-job-recovery') {
-          scheduler.triggerStoppedJobRecovery(
-            'p1',
-            'stop: child-1',
-            'child-1:1',
-          );
-        } else {
-          scheduler.triggerChildInputWaitWake(
-            'p1',
-            'ask: child-1',
-            'child-1:q1',
-          );
-        }
-        await clock.advance(0);
-        inputWait = true;
-        await scheduler.event({
-          event: {
-            type: 'session.status',
-            properties: { sessionID: 'p1', status: { type: 'idle' } },
-          },
-        });
-        await scheduler.event({
-          event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-        });
-        expect(promptAsync).not.toHaveBeenCalled();
-        expect(capture.blockers()).toEqual([
-          {
-            message: '[orchestrator-wake] forced wake blocked',
-            data: { sessionID: 'p1', trigger, reason: 'input-wait' },
-          },
-        ]);
-      } finally {
-        capture.restore();
-      }
-    },
-  );
 
   test('G3c periodic and forced blockers of the same reason both log once', async () => {
     const capture = captureBlockers();
@@ -850,41 +777,32 @@ describe('orchestrator wake scheduler', () => {
     expect(secondCall?.body.parts[0]?.text).toContain('task: ses_a');
   });
 
-  test.each(['v1', 'v2'] as const)(
-    '%s failed recovery retries the pending batch on its own timer',
-    async (flavor) => {
-      let fail = true;
-      const promptAsync = mock(async () => {
-        if (fail) throw new Error('temporary refusal');
-        return {};
-      });
-      const { scheduler } = createScheduler({
-        hostFlavor: flavor,
-        sessionClient:
-          flavor === 'v2'
-            ? makeV2Client({
-                promptAsync,
-                listChildren: [{ id: 'done', outcome: 'succeeded' }],
-              })
-            : makeClient({
-                promptAsync,
-                todos: [{ id: 't1', status: 'completed' }],
-              }),
-      });
-      scheduler.triggerStoppedJobRecovery('p1', 'recovery: ses_a', 'ses_a:1');
-      await clock.advance(0);
-      expect(promptAsync).toHaveBeenCalledTimes(1);
-      fail = false;
-      await clock.advance(60_000);
-      expect(promptAsync).toHaveBeenCalledTimes(2);
-      const secondCall = (
-        promptAsync.mock.calls as unknown as Array<
-          [{ body: { parts: Array<{ text: string }> } }]
-        >
-      )[1]?.[0];
-      expect(secondCall?.body.parts[0]?.text).toContain('recovery: ses_a');
-    },
-  );
+  test('v1 failed recovery retries the pending batch on its own timer', async () => {
+    let fail = true;
+    const promptAsync = mock(async () => {
+      if (fail) throw new Error('temporary refusal');
+      return {};
+    });
+    const { scheduler } = createScheduler({
+      hostFlavor: 'v1',
+      sessionClient: makeClient({
+        promptAsync,
+        todos: [{ id: 't1', status: 'completed' }],
+      }),
+    });
+    scheduler.triggerStoppedJobRecovery('p1', 'recovery: ses_a', 'ses_a:1');
+    await clock.advance(0);
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    fail = false;
+    await clock.advance(60_000);
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+    const secondCall = (
+      promptAsync.mock.calls as unknown as Array<
+        [{ body: { parts: Array<{ text: string }> } }]
+      >
+    )[1]?.[0];
+    expect(secondCall?.body.parts[0]?.text).toContain('recovery: ses_a');
+  });
 
   test('a delivered recovery does not re-fire on the next idle', async () => {
     const promptAsync = mock(async () => ({}));
@@ -2359,37 +2277,25 @@ describe('orchestrator wake scheduler', () => {
     expect(calls).toBe(2);
   });
 
-  test.each(['v1', 'v2'] as const)(
-    '%s failed wake sends do not consume the progress cap',
-    async (flavor) => {
-      const promptAsync = mock(async () => {
-        throw new Error('transport down');
-      });
-      const { scheduler } = createScheduler({
-        hostFlavor: flavor,
-        sessionClient:
-          flavor === 'v2'
-            ? makeV2Client({
-                promptAsync,
-                listChildren: [{ id: 'child', time: { updated: Date.now() } }],
-              })
-            : makeClient({ promptAsync }),
-      });
-      await scheduler.event({
-        event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-      });
-      if (flavor === 'v2') {
-        // The first periodic evaluation only records the baseline fingerprint.
-        await clock.advance(60_000);
-      }
-      for (let i = 0; i < 4; i++) {
-        await clock.advance(60_000);
-        expect(promptAsync).toHaveBeenCalledTimes(i + 1);
-        expect(getWakeProgress('p1').stopped).toBe(false);
-      }
-      expect(getWakeProgress('p1').unchangedWakeCount).toBe(0);
-    },
-  );
+  test('v1 failed wake sends do not consume the progress cap', async () => {
+    const promptAsync = mock(async () => {
+      throw new Error('transport down');
+    });
+    const { scheduler } = createScheduler({
+      hostFlavor: 'v1',
+      sessionClient: makeClient({ promptAsync }),
+    });
+    await scheduler.event({
+      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+    });
+
+    for (let i = 0; i < 4; i++) {
+      await clock.advance(60_000);
+      expect(promptAsync).toHaveBeenCalledTimes(i + 1);
+      expect(getWakeProgress('p1').stopped).toBe(false);
+    }
+    expect(getWakeProgress('p1').unchangedWakeCount).toBe(0);
+  });
 
   test('two hook instances share process-global in-flight and progress', async () => {
     const promptAsync = mock(async () => ({}));
@@ -2564,923 +2470,21 @@ describe('session API capability probe', () => {
     }
   });
 
-  test('v2 requires only list + promptAsync; get is optional', () => {
-    expect(
-      createScheduler({
-        hostFlavor: 'v2',
-        sessionClient: makeV2Client(),
-      }).scheduler._test.hasRequiredSessionApis(),
-    ).toBe(true);
-    expect(
-      createScheduler({
-        hostFlavor: 'v2',
-        sessionClient: makeV2Client({ omitList: true }),
-      }).scheduler._test.hasRequiredSessionApis(),
-    ).toBe(false);
-    expect(
-      createScheduler({
-        hostFlavor: 'v2',
-        sessionClient: { list: mock(async () => ({ data: [] })) },
-      }).scheduler._test.hasRequiredSessionApis(),
-    ).toBe(false);
+  test('explicit todo and children modes keep their v1 selection', () => {
+    expect(resolveWakeMode('todo', { hasTodo: true })).toBe('todo');
+    expect(resolveWakeMode('children', { hasTodo: true })).toBe('children');
+    expect(resolveWakeMode(undefined, { hasTodo: true })).toBe('todo');
   });
 
-  test('v2 without todo resolves auto to children-driven mode', () => {
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      sessionClient: makeV2Client(),
-    });
-    expect(scheduler).toBeDefined();
-    expect(resolveWakeMode('auto', { flavor: 'v2', hasTodo: false })).toBe(
-      'children',
-    );
-  });
-
-  test('explicit todo mode on v2 degrades to children; children pins children', () => {
-    expect(resolveWakeMode('todo', { flavor: 'v2', hasTodo: false })).toBe(
-      'children',
-    );
-    expect(resolveWakeMode('children', { flavor: 'v2', hasTodo: false })).toBe(
-      'children',
-    );
-    // v1 with a todo API keeps explicit todo mode.
-    expect(resolveWakeMode('todo', { flavor: 'v1', hasTodo: true })).toBe(
-      'todo',
-    );
-    expect(resolveWakeMode('children', { flavor: 'v1', hasTodo: true })).toBe(
-      'children',
-    );
-    expect(resolveWakeMode(undefined, { flavor: 'v1', hasTodo: true })).toBe(
-      'todo',
-    );
-  });
-
-  test('resolveWakeMode: auto maps per flavor; todo degrades without the todo API', () => {
-    expect(resolveWakeMode('auto', { flavor: 'v1', hasTodo: true })).toBe(
-      'todo',
-    );
-    expect(resolveWakeMode('auto', { flavor: 'v2', hasTodo: false })).toBe(
-      'children',
-    );
-    expect(resolveWakeMode(undefined, { flavor: 'v1', hasTodo: true })).toBe(
-      'todo',
-    );
-    expect(resolveWakeMode('todo', { flavor: 'v1', hasTodo: false })).toBe(
-      'children',
-    );
-    expect(resolveWakeMode('children', { flavor: 'v1', hasTodo: true })).toBe(
-      'children',
-    );
+  test('resolveWakeMode: todo degrades without the todo API', () => {
+    expect(resolveWakeMode('auto', { hasTodo: true })).toBe('todo');
+    expect(resolveWakeMode(undefined, { hasTodo: true })).toBe('todo');
+    expect(resolveWakeMode('todo', { hasTodo: false })).toBe('children');
+    expect(resolveWakeMode('children', { hasTodo: true })).toBe('children');
   });
 });
 
-describe('children-driven degraded mode (v2)', () => {
-  test('wakes with active children using the children wake text and queue delivery', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler, session } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({
-        promptAsync,
-        listChildren: [
-          {
-            id: 'child-1',
-            parentID: 'p1',
-            directory: '/project',
-            time: { updated: Date.now() },
-          },
-        ],
-      }),
-    });
-
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-
-    expect(promptAsync).toHaveBeenCalledTimes(1);
-    const call = (
-      promptAsync.mock.calls as unknown as Array<[Record<string, unknown>]>
-    )[0]?.[0] as {
-      path: { id: string };
-      query: { directory: string };
-      delivery?: string;
-      body: { agent: string; parts: Array<{ text: string }> };
-    };
-    expect(call.path).toEqual({ id: 'p1' });
-    expect(call.query).toEqual({ directory: '/project' });
-    expect(call.delivery).toBe('queue');
-    expect(call.body.agent).toBe('orchestrator');
-    // C2: the v2 body closes with the static anti-forgery suffix after the
-    // template (the internal-initiator marker trails the whole part).
-    expect(call.body.parts[0]?.text).toBe(
-      `${ORCHESTRATOR_CHILDREN_WAKE_TEXT}\n${WAKE_ANTI_FORGERY_TEXT}\n<!-- SLIM_INTERNAL_INITIATOR -->`,
-    );
-    expect(session?.list).toHaveBeenCalledWith(
-      expect.objectContaining({
-        query: { parentID: 'p1', directory: '/project' },
-      }),
-    );
-  });
-  test('explicit todo mode on v2 degrades at scheduler setup and wakes via children', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      mode: 'todo',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({
-        promptAsync,
-        listChildren: [
-          {
-            id: 'child-1',
-            parentID: 'p1',
-            directory: '/project',
-            time: { updated: Date.now() },
-          },
-        ],
-      }),
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-
-    // The children wake text proves scheduler setup degraded the configured
-    // todo mode; a wiring bug would send the todo wake text instead.
-    expect(promptAsync).toHaveBeenCalledTimes(1);
-    const call = (
-      promptAsync.mock.calls as unknown as Array<[Record<string, unknown>]>
-    )[0]?.[0] as {
-      body: { agent: string; parts: Array<{ text: string }> };
-    };
-    expect(call.body.agent).toBe('orchestrator');
-    expect(call.body.parts[0]?.text).toBe(
-      `${ORCHESTRATOR_CHILDREN_WAKE_TEXT}\n${WAKE_ANTI_FORGERY_TEXT}\n<!-- SLIM_INTERNAL_INITIATOR -->`,
-    );
-  });
-
-  test('v2 children wake carries the session model variant as modelVariant', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({
-        promptAsync,
-        listChildren: [{ id: 'c1', time: { updated: Date.now() } }],
-        get: mock(async () => ({
-          data: {
-            model: { providerID: 'test', id: 'model-a', variant: 'max' },
-          },
-        })),
-      }),
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-    const call = (
-      promptAsync.mock.calls as unknown as Array<[Record<string, unknown>]>
-    )[0]?.[0] as { modelVariant?: string };
-    expect(call.modelVariant).toBe('max');
-  });
-
-  test('v2 children wake does not mix a new model with a leftover variant', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      resolveSelection: async () => ({
-        agent: 'orchestrator',
-        model: { providerID: 'test', modelID: 'model-b' },
-        provenance: 'host-persisted',
-      }),
-      sessionClient: makeV2Client({
-        promptAsync,
-        listChildren: [{ id: 'c1', time: { updated: Date.now() } }],
-        get: mock(async () => ({
-          data: {
-            model: { providerID: 'test', id: 'model-a', variant: 'high' },
-          },
-        })),
-      }),
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-    const call = (
-      promptAsync.mock.calls as unknown as Array<[Record<string, unknown>]>
-    )[0]?.[0] as {
-      modelVariant?: string;
-      body: { model?: { providerID: string; modelID: string } };
-    };
-    expect(call.body.model).toEqual({
-      providerID: 'test',
-      modelID: 'model-b',
-    });
-    expect(call.modelVariant).toBeUndefined();
-  });
-
-  test('v2 children wake omits modelVariant when the model has none', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({
-        promptAsync,
-        listChildren: [{ id: 'c1', time: { updated: Date.now() } }],
-        get: mock(async () => ({ data: {} })),
-      }),
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-    const call = (
-      promptAsync.mock.calls as unknown as Array<[Record<string, unknown>]>
-    )[0]?.[0] as { modelVariant?: string; body: { model?: unknown } };
-    expect(call.body.model).toBeUndefined();
-    expect(call.modelVariant).toBeUndefined();
-  });
-
-  test('does not wake an archived v2 session', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({
-        promptAsync,
-        listChildren: [{ id: 'c1', time: { updated: Date.now() } }],
-        get: mock(async () => ({
-          data: { time: { created: 1, updated: 1, archived: 123 } },
-        })),
-      }),
-    });
-
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-
-    expect(promptAsync).not.toHaveBeenCalled();
-    expect(clock.pendingCount()).toBe(0);
-  });
-
-  test('treats a null archive timestamp as unarchived for v2', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({
-        promptAsync,
-        listChildren: [{ id: 'c1', time: { updated: Date.now() } }],
-        get: mock(async () => ({
-          data: {
-            time: { created: 1, updated: 1, archived: null },
-          },
-        })),
-      }),
-    });
-
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-
-    expect(promptAsync).toHaveBeenCalledTimes(1);
-    const call = (
-      promptAsync.mock.calls as unknown as Array<[{ delivery?: string }]>
-    )[0]?.[0];
-    expect(call?.delivery).toBe('queue');
-  });
-
-  test('v2 without get uses observed archive state and preserves queue delivery', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({
-        promptAsync,
-        listChildren: [{ id: 'c1', time: { updated: Date.now() } }],
-      }),
-    });
-
-    await scheduler.event({
-      event: {
-        type: 'session.updated',
-        data: { sessionID: 'p1', time: { archived: 123 } },
-      },
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-    expect(promptAsync).not.toHaveBeenCalled();
-
-    await scheduler.event({
-      event: {
-        type: 'session.updated',
-        data: { sessionID: 'p1', time: { created: 1, updated: 2 } },
-      },
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    // Restore re-enters with no baseline: the first evaluation records it.
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-
-    expect(promptAsync).toHaveBeenCalledTimes(1);
-    const call = (
-      promptAsync.mock.calls as unknown as Array<[{ delivery?: string }]>
-    )[0]?.[0];
-    expect(call?.delivery).toBe('queue');
-  });
-
-  test('does not wake when every child has a terminal outcome', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({
-        promptAsync,
-        listChildren: [
-          { id: 'c1', outcome: 'succeeded', time: { updated: Date.now() } },
-          { id: 'c2', outcome: 'failed', time: { updated: Date.now() } },
-          { id: 'c3', outcome: 'interrupted', time: { updated: Date.now() } },
-        ],
-      }),
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    expect(promptAsync).not.toHaveBeenCalled();
-    expect(clock.pendingCount()).toBe(0);
-  });
-
-  test('treats a child as inactive once its update evidence is stale', async () => {
-    const promptAsync = mock(async () => ({}));
-    const stalenessMs = 60_000 * CHILD_STALENESS_INTERVALS;
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({
-        promptAsync,
-        listChildren: [
-          { id: 'c1', time: { updated: Date.now() - stalenessMs - 1 } },
-        ],
-      }),
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    expect(promptAsync).not.toHaveBeenCalled();
-    expect(clock.pendingCount()).toBe(0);
-  });
-
-  test('scopes children to the session workspace via reported directory', async () => {
-    const promptAsyncLocal = mock(async () => ({}));
-    const fresh = () => Date.now();
-    const local = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({
-        promptAsync: promptAsyncLocal,
-        listChildren: [
-          { id: 'c-local', directory: '/project', time: { updated: fresh() } },
-          {
-            id: 'c-other',
-            directory: '/elsewhere',
-            time: { updated: fresh() },
-          },
-        ],
-      }),
-    });
-    await local.scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-    expect(promptAsyncLocal).toHaveBeenCalledTimes(1); // local child qualifies
-
-    // Only a foreign-directory child: scoped out → no wake, spell ends.
-    const promptAsyncOther = mock(async () => ({}));
-    const other = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({
-        promptAsync: promptAsyncOther,
-        listChildren: [
-          {
-            id: 'c-other',
-            directory: '/elsewhere',
-            time: { updated: fresh() },
-          },
-        ],
-      }),
-    });
-    await other.scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p2' } },
-    });
-    await clock.advance(60_000);
-    expect(promptAsyncOther).not.toHaveBeenCalled();
-    expect(clock.pendingCount()).toBe(0);
-  });
-
-  test('stops after the unchanged cap when children make no progress', async () => {
-    const promptAsync = mock(async () => ({}));
-    const frozen = Date.now();
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({
-        promptAsync,
-        listChildren: [{ id: 'c1', time: { updated: frozen } }],
-      }),
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-    expect(promptAsync).toHaveBeenCalledTimes(ORCHESTRATOR_WAKE_UNCHANGED_CAP);
-    expect(getWakeProgress('p1').stopped).toBe(true);
-    await clock.advance(180_000);
-    expect(promptAsync).toHaveBeenCalledTimes(ORCHESTRATOR_WAKE_UNCHANGED_CAP);
-  });
-
-  test('defers periodic wakes while a child keeps making progress', async () => {
-    const promptAsync = mock(async () => ({}));
-    let updated = Date.now();
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({
-        promptAsync,
-        listImpl: mock(async () => ({
-          data: [{ id: 'c1', time: { updated } }],
-        })),
-      }),
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    // The first periodic evaluation only records the baseline fingerprint:
-    // the parent just dispatched the child, so there is nothing actionable.
-    await clock.advance(60_000);
-    expect(promptAsync).toHaveBeenCalledTimes(0);
-    expect(getWakeProgress('p1').lastFingerprint).toBeDefined();
-    // Baseline observation must not consume wake accounting or the busy
-    // marker, and the backstop timer stays armed for the stalled check.
-    expect(getWakeProgress('p1').unchangedWakeCount).toBe(0);
-    expect(getWakeProgress('p1').expectingWakeBusy).toBe(false);
-    expect(clock.pendingCount()).toBe(1);
-
-    updated += 5_000;
-    await clock.advance(60_000);
-    updated += 5_000;
-    await clock.advance(60_000);
-
-    expect(promptAsync).toHaveBeenCalledTimes(0);
-    expect(clock.pendingCount()).toBe(1);
-    expect(getWakeProgress('p1').stopped).toBe(false);
-    expect(getWakeProgress('p1').unchangedWakeCount).toBe(0);
-  });
-
-  test('defers when a child progresses during the latest snapshot recheck', async () => {
-    const promptAsync = mock(async () => ({}));
-    const updated = Date.now();
-    let listCalls = 0;
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({
-        promptAsync,
-        listImpl: mock(async () => {
-          listCalls += 1;
-          return {
-            data: [
-              {
-                id: 'c1',
-                time: { updated: updated + (listCalls > 2 ? 5_000 : 0) },
-              },
-            ],
-          };
-        }),
-      }),
-    });
-
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-
-    expect(listCalls).toBe(3);
-    expect(promptAsync).not.toHaveBeenCalled();
-    expect(clock.pendingCount()).toBe(1);
-    expect(getWakeProgress('p1').stopped).toBe(false);
-    expect(getWakeProgress('p1').unchangedWakeCount).toBe(0);
-  });
-
-  test('recovery wake bypasses the children condition', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({ promptAsync, listChildren: [] }),
-    });
-    scheduler.triggerStoppedJobRecovery('p1');
-    await clock.advance(0);
-    expect(promptAsync).toHaveBeenCalledTimes(1);
-    const call = (
-      promptAsync.mock.calls as unknown as Array<
-        [{ body: { parts: Array<{ text: string }> }; delivery?: string }]
-      >
-    )[0]?.[0];
-    expect(call?.body.parts[0]?.text).toBe(
-      `${ORCHESTRATOR_STOPPED_JOB_WAKE_TEXT}\n${WAKE_ANTI_FORGERY_TEXT}\n<!-- SLIM_INTERNAL_INITIATOR -->`,
-    );
-    expect(call?.delivery).toBe('queue');
-  });
-
-  test('parent-active race guard: tracked busy parent blocks the wake', async () => {
-    const promptAsync = mock(async () => ({}));
-    let managed = false;
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      shouldManageSession: (id) => managed && id === 'p1',
-      sessionClient: makeV2Client({
-        promptAsync,
-        listChildren: [{ id: 'c1', time: { updated: Date.now() } }],
-      }),
-    });
-    // Busy while unmanaged: endIdleSpell does not run, but the status is
-    // tracked (the race-guard source on hosts without a status map).
-    await scheduler.event({
-      event: {
-        type: 'session.status',
-        properties: { sessionID: 'p1', status: { type: 'busy' } },
-      },
-    });
-    managed = true;
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    expect(promptAsync).not.toHaveBeenCalled();
-    expect(clock.pendingCount()).toBe(0);
-  });
-
-  test('event-tracked busy-set marks a child active without list evidence', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({
-        promptAsync,
-        listChildren: [{ id: 'c1' }], // no time fields at all
-      }),
-    });
-    await scheduler.event({
-      event: {
-        type: 'session.status',
-        properties: { sessionID: 'c1', status: { type: 'busy' } },
-      },
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-    expect(promptAsync).toHaveBeenCalledTimes(1);
-  });
-
-  test('stale tracked busy child is bounded by the staleness window', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({
-        promptAsync,
-        listChildren: [{ id: 'c1' }],
-      }),
-    });
-    await scheduler.event({
-      event: {
-        type: 'session.status',
-        properties: { sessionID: 'c1', status: { type: 'busy' } },
-      },
-    });
-    // Backdate the tracked evidence past the staleness bound.
-    scheduler._test.lastStatusBySession.set('c1', {
-      status: 'busy',
-      at: Date.now() - 60_000 * CHILD_STALENESS_INTERVALS - 1,
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    expect(promptAsync).not.toHaveBeenCalled();
-    expect(clock.pendingCount()).toBe(0);
-  });
-});
-
-describe('children enumeration fallback (v2)', () => {
-  test('falls back to event-tracked bookkeeping when the list yields nothing', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({ promptAsync, listChildren: [] }),
-    });
-    // Synthesized v1-shape session.created carrying parentID.
-    await scheduler.event({
-      event: {
-        type: 'session.created',
-        properties: { info: { id: 'c1', parentID: 'p1' } },
-      },
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-    expect(promptAsync).toHaveBeenCalledTimes(1);
-  });
-
-  test('accepts the raw flat v2 session.created shape too', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({ promptAsync, listChildren: [] }),
-    });
-    await scheduler.event({
-      event: {
-        type: 'session.created',
-        properties: { sessionID: 'c1', parentID: 'p1' },
-      },
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-    expect(promptAsync).toHaveBeenCalledTimes(1);
-  });
-
-  test('falls back when session.list rejects', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({
-        promptAsync,
-        listImpl: mock(async () => {
-          throw new Error('list unavailable');
-        }),
-      }),
-    });
-    await scheduler.event({
-      event: {
-        type: 'session.created',
-        properties: { info: { id: 'c1', parentID: 'p1' } },
-      },
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-    expect(promptAsync).toHaveBeenCalledTimes(1);
-  });
-
-  test('event child gone stale no longer wakes', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({ promptAsync, listChildren: [] }),
-    });
-    await scheduler.event({
-      event: {
-        type: 'session.created',
-        properties: { info: { id: 'c1', parentID: 'p1' } },
-      },
-    });
-    scheduler._test.childEvidence.set(
-      'c1',
-      Date.now() - 60_000 * CHILD_STALENESS_INTERVALS - 1,
-    );
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    expect(promptAsync).not.toHaveBeenCalled();
-    expect(clock.pendingCount()).toBe(0);
-  });
-
-  test('session.deleted forgets event-tracked children', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({ promptAsync, listChildren: [] }),
-    });
-    await scheduler.event({
-      event: {
-        type: 'session.created',
-        properties: { info: { id: 'c1', parentID: 'p1' } },
-      },
-    });
-    await scheduler.event({
-      event: {
-        type: 'session.deleted',
-        properties: { info: { id: 'c1' } },
-      },
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    expect(promptAsync).not.toHaveBeenCalled();
-  });
-
-  test('terminal outcome from session.get suppresses the fallback wake', async () => {
-    const promptAsync = mock(async () => ({}));
-    const get = mock(async () => ({
-      data: { outcome: 'succeeded', time: { updated: Date.now() } },
-    }));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({ promptAsync, listChildren: [], get }),
-    });
-    await scheduler.event({
-      event: {
-        type: 'session.created',
-        properties: { info: { id: 'c1', parentID: 'p1' } },
-      },
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    expect(promptAsync).not.toHaveBeenCalled();
-    expect(clock.pendingCount()).toBe(0);
-  });
-
-  test('fallback child without an outcome still wakes on fresh evidence', async () => {
-    const promptAsync = mock(async () => ({}));
-    const updated = Date.now();
-    const get = mock(async () => ({
-      data: { time: { updated } },
-    }));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({ promptAsync, listChildren: [], get }),
-    });
-    await scheduler.event({
-      event: {
-        type: 'session.created',
-        properties: { info: { id: 'c1', parentID: 'p1' } },
-      },
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-    expect(promptAsync).toHaveBeenCalledTimes(1);
-  });
-
-  test('session.get failure keeps the evidence-based fallback verdict', async () => {
-    const promptAsync = mock(async () => ({}));
-    const get = mock(async () => {
-      throw new Error('get unavailable');
-    });
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({ promptAsync, listChildren: [], get }),
-    });
-    await scheduler.event({
-      event: {
-        type: 'session.created',
-        properties: { info: { id: 'c1', parentID: 'p1' } },
-      },
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-    expect(promptAsync).toHaveBeenCalledTimes(1);
-  });
-
-  test('session.get unavailable leaves the event-tracked fallback unchanged', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({ promptAsync, listChildren: [] }),
-    });
-    await scheduler.event({
-      event: {
-        type: 'session.created',
-        properties: { info: { id: 'c1', parentID: 'p1' } },
-      },
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-    expect(promptAsync).toHaveBeenCalledTimes(1);
-  });
-
-  test('host evidence keeps a child active despite stale local evidence', async () => {
-    const promptAsync = mock(async () => ({}));
-    const updated = Date.now();
-    const get = mock(async () => ({
-      data: { time: { updated } },
-    }));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({ promptAsync, listChildren: [], get }),
-    });
-    await scheduler.event({
-      event: {
-        type: 'session.created',
-        properties: { info: { id: 'c1', parentID: 'p1' } },
-      },
-    });
-    // The event-tracked evidence goes stale, but the child is still running
-    // and the host reports fresh time.updated — it must not drop out of the
-    // watchdog on stale local evidence alone.
-    scheduler._test.childEvidence.set(
-      'c1',
-      Date.now() - 60_000 * CHILD_STALENESS_INTERVALS - 1,
-    );
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-    expect(promptAsync).toHaveBeenCalledTimes(1);
-  });
-
-  test('mixed fallback children: terminal suppressed, running wakes, get failure is fail-soft', async () => {
-    const promptAsync = mock(async () => ({}));
-    const runningUpdated = Date.now();
-    const get = mock(async (args: { path?: { id?: string } }) => {
-      const id = args?.path?.id;
-      if (id === 'c-terminal') {
-        return {
-          data: { outcome: 'succeeded', time: { updated: 5_000 } },
-        };
-      }
-      if (id === 'c-running') {
-        return { data: { time: { updated: runningUpdated } } };
-      }
-      if (id === 'c-throws') throw new Error('get unavailable');
-      return { data: {} };
-    });
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({ promptAsync, listChildren: [], get }),
-    });
-    for (const id of ['c-terminal', 'c-running', 'c-throws']) {
-      await scheduler.event({
-        event: {
-          type: 'session.created',
-          properties: { info: { id, parentID: 'p1' } },
-        },
-      });
-    }
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-    expect(promptAsync).toHaveBeenCalledTimes(1);
-  });
-
+describe('wake selection for delegated work', () => {
   test('wakes a non-orchestrator parent in its current selection when delegated work is pending', async () => {
     const promptAsync = mock(async () => ({}));
     const { scheduler } = createScheduler({
@@ -3750,17 +2754,15 @@ describe('children-mode helpers', () => {
     expect(childUpdateEvidenceMs({ id: 'c' })).toBe(undefined);
   });
 
-  test('mapWakeChild copies id/outcome/directory/evidence and drops unknowns', () => {
+  test('mapWakeChild copies id/directory/evidence and drops unknowns', () => {
     expect(
       mapWakeChild({
         id: 'c1',
-        outcome: 'succeeded',
         directory: '/project',
         time: { updated: 10 },
       }),
     ).toEqual({
       id: 'c1',
-      outcome: 'succeeded',
       directory: '/project',
       evidenceAt: 10,
     });
@@ -3768,17 +2770,9 @@ describe('children-mode helpers', () => {
     expect(mapWakeChild({ id: '' })).toBeUndefined();
   });
 
-  test('isWakeChildActive: outcome wins, freshness bounds both branches', () => {
+  test('isWakeChildActive: freshness bounds both branches', () => {
     const now = 1_000_000;
     const staleness = 180_000;
-    expect(
-      isWakeChildActive(
-        { id: 'c', outcome: 'failed', evidenceAt: now },
-        undefined,
-        now,
-        staleness,
-      ),
-    ).toBe(false);
     expect(
       isWakeChildActive(
         { id: 'c', evidenceAt: now - staleness },
@@ -3819,115 +2813,19 @@ describe('children-mode helpers', () => {
     );
   });
 
-  test('buildChildrenWakeFingerprint includes outcome, tracked status, and evidence', () => {
+  test('buildChildrenWakeFingerprint includes tracked status and evidence', () => {
     const tracked = new Map([['c1', { status: 'busy' as const, at: 5 }]]);
     const fp = buildChildrenWakeFingerprint(
-      [
-        { id: 'c1', evidenceAt: 42 },
-        { id: 'c2', outcome: 'succeeded' },
-      ],
+      [{ id: 'c1', evidenceAt: 42 }, { id: 'c2' }],
       tracked,
     );
-    expect(fp).toContain('c1::busy:42');
-    expect(fp).toContain('c2:succeeded::');
+    expect(fp).toContain('c1:busy:42');
+    expect(fp).toContain('c2::');
     expect(buildChildrenWakeFingerprint([], tracked)).toBe('');
   });
 });
 
 describe('evaluate verdict observability (INFO logs)', () => {
-  function captureVerdictLogs() {
-    const entries: Array<{ message: string; data: unknown }> = [];
-    const spy = spyOn(loggerModule, 'log').mockImplementation(
-      (message: string, data?: unknown) => {
-        entries.push({ message, data });
-      },
-    );
-    return {
-      verdicts: () =>
-        entries.filter(
-          (entry) => entry.message === '[orchestrator-wake] evaluate verdict',
-        ),
-      restore: () => spy.mockRestore(),
-    };
-  }
-
-  test('logs the wake verdict at both checkpoints in children mode', async () => {
-    const capture = captureVerdictLogs();
-    try {
-      const promptAsync = mock(async () => ({}));
-      const { scheduler } = createScheduler({
-        hostFlavor: 'v2',
-        intervalMs: 60_000,
-        sessionClient: makeV2Client({
-          promptAsync,
-          listChildren: [
-            {
-              id: 'child-1',
-              directory: '/project',
-              time: { updated: Date.now() },
-            },
-          ],
-        }),
-      });
-      await scheduler.event({
-        event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-      });
-      // The first periodic evaluation only records the baseline fingerprint;
-      // its classification is logged but not delivered, so the captured
-      // verdicts below are the delivered wake's two checkpoints.
-      await clock.advance(60_000);
-      await clock.advance(60_000);
-      const verdicts = capture.verdicts();
-      expect(verdicts.length).toBe(3);
-      const delivered = verdicts.slice(-2);
-      expect(delivered[0]?.data).toMatchObject({
-        sessionID: 'p1',
-        verdict: 'wake',
-        mode: 'children',
-        checkpoint: 'initial',
-        recoveryWake: false,
-        childCount: 1,
-      });
-      expect(delivered[1]?.data).toMatchObject({
-        sessionID: 'p1',
-        verdict: 'wake',
-        checkpoint: 'recheck',
-      });
-      expect(promptAsync).toHaveBeenCalledTimes(1);
-    } finally {
-      capture.restore();
-    }
-  });
-
-  test('logs the no-work verdict when every child has a terminal outcome', async () => {
-    const capture = captureVerdictLogs();
-    try {
-      const { scheduler } = createScheduler({
-        hostFlavor: 'v2',
-        intervalMs: 60_000,
-        sessionClient: makeV2Client({
-          listChildren: [{ id: 'child-1', outcome: 'succeeded' }],
-        }),
-      });
-      await scheduler.event({
-        event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-      });
-      await clock.advance(60_000);
-      const verdicts = capture.verdicts();
-      expect(verdicts).toHaveLength(1);
-      expect(verdicts[0]?.data).toMatchObject({
-        sessionID: 'p1',
-        verdict: 'no-work',
-        mode: 'children',
-        checkpoint: 'initial',
-        recoveryWake: false,
-        childCount: 1,
-      });
-    } finally {
-      capture.restore();
-    }
-  });
-
   test('logs backstop armed once and not-armed reason once across double idle', async () => {
     const entries: Array<{ message: string; data: unknown }> = [];
     const spy = spyOn(loggerModule, 'log').mockImplementation(
@@ -4505,195 +3403,5 @@ describe('#1411 wake body dedupe', () => {
       ORCHESTRATOR_CHILDREN_WAKE_TEXT.length -
         wakeRepeatMarker(core ?? '', 2).length,
     ).toBeGreaterThan(0);
-  });
-});
-
-describe('C2 v2 wake anti-forgery suffix and writer-lane grading', () => {
-  /** Stable child timestamp: a per-call Date.now() would change the
-   * children fingerprint between evaluates and defer every periodic wake. */
-  const CHILD_UPDATED = Date.now();
-
-  /** Drive one v2 children-driven delta-less periodic wake. */
-  async function deliverOneV2ChildrenWake(
-    promptAsync: ReturnType<typeof mock>,
-    options?: { isWriterLaneTask?: (taskID: string) => boolean },
-  ) {
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      isWriterLaneTask: options?.isWriterLaneTask,
-      sessionClient: makeV2Client({
-        promptAsync,
-        listChildren: [{ id: 'child-1', time: { updated: CHILD_UPDATED } }],
-      }),
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-    return scheduler;
-  }
-
-  function wakeText(promptAsync: ReturnType<typeof mock>, index = 0) {
-    const call = (
-      promptAsync.mock.calls as unknown as Array<
-        [{ body: { parts: Array<{ text: string }> }; delivery?: string }]
-      >
-    )[index]?.[0];
-    return call?.body.parts[0]?.text ?? '';
-  }
-
-  test('v2 delta-less wake appends the static suffix; the repeat marker path appends it after the marker', async () => {
-    const promptAsync = mock(async () => ({}));
-    await deliverOneV2ChildrenWake(promptAsync);
-    // The scheduler re-arms after each unchanged periodic wake; the second
-    // unchanged delivery folds to the repeat marker (the two-wake cap then
-    // halts the backstop).
-    await clock.advance(60_000);
-    await clock.advance(60_000);
-
-    expect(promptAsync).toHaveBeenCalledTimes(2);
-    const core = WAKE_REPEAT_CORES.get(ORCHESTRATOR_CHILDREN_WAKE_TEXT) ?? '';
-    const marker = wakeRepeatMarker(core, 2);
-    const first = wakeText(promptAsync, 0);
-    const second = wakeText(promptAsync, 1);
-    // First: full template + suffix. Second: repeat marker + suffix.
-    expect(first).toBe(
-      `${ORCHESTRATOR_CHILDREN_WAKE_TEXT}\n${WAKE_ANTI_FORGERY_TEXT}\n<!-- SLIM_INTERNAL_INITIATOR -->`,
-    );
-    expect(second).toBe(
-      `${marker}\n${WAKE_ANTI_FORGERY_TEXT}\n<!-- SLIM_INTERNAL_INITIATOR -->`,
-    );
-    // The suffix trails the marker; the marker itself is byte-unchanged.
-    expect(second.startsWith(marker)).toBe(true);
-    expect(marker).not.toContain(WAKE_ANTI_FORGERY_TEXT);
-    // Dedupe keys stay keyed on the raw wakeText (the suffix never enters
-    // the occurrence map): the suppression counter shows the second raw
-    // template delivery was folded, and the side-state confirms the raw
-    // text has been delivered twice.
-    expect(getSuppressedDuplicateWakes('p1')).toBe(1);
-    expect(
-      reserveWakeBodyOccurrence('p1', ORCHESTRATOR_CHILDREN_WAKE_TEXT),
-    ).toMatchObject({ repeat: true, occurrence: 3 });
-  });
-
-  test('v1 delta-less wake stays byte-identical (no suffix)', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      intervalMs: 60_000,
-      sessionClient: makeClient({ promptAsync }),
-    });
-    await scheduler.event({
-      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
-    });
-    await clock.advance(60_000);
-    expect(promptAsync).toHaveBeenCalledTimes(1);
-    expect(wakeText(promptAsync, 0)).toBe(
-      `${ORCHESTRATOR_WAKE_TEXT}\n<!-- SLIM_INTERNAL_INITIATOR -->`,
-    );
-    expect(wakeText(promptAsync, 0)).not.toContain(WAKE_ANTI_FORGERY_TEXT);
-  });
-
-  test('v2 child-input wake carries the caveat template plus the suffix', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      sessionClient: makeV2Client({ promptAsync, listChildren: [] }),
-    });
-    scheduler.triggerChildInputWaitWake(
-      'p1',
-      formatChildInputWaitDelta({
-        alias: 'fix-1',
-        taskID: 'ses_child1',
-        kind: 'question',
-        requestID: 'que_1',
-        detail: 'request: que_1\nkind: question\nquestion: Which env?',
-      }),
-      'ses_child1:que_1',
-    );
-    // Upstream settle window (CHILD_INPUT_WAKE_SETTLE_MS): host/UI
-    // auto-repliers get a chance to answer the ask before the parent is
-    // woken, so the wake lands only after the window elapses.
-    await clock.advance(CHILD_INPUT_WAKE_SETTLE_MS);
-
-    expect(promptAsync).toHaveBeenCalledTimes(1);
-    const text = wakeText(promptAsync, 0);
-    expect(text).toContain(ORCHESTRATOR_CHILD_INPUT_WAKE_TEXT);
-    expect(
-      text.endsWith(
-        `${WAKE_ANTI_FORGERY_TEXT}\n<!-- SLIM_INTERNAL_INITIATOR -->`,
-      ),
-    ).toBe(true);
-    // No isWriterLaneTask injected: the scheduler defaults to writer
-    // (fail-safe) and attaches the graded verification sentence.
-    expect(text).toContain(WRITER_LANE_VERIFICATION_TEXT);
-    expect(text).not.toContain('Repeat wake #');
-  });
-
-  test('writer-lane verification sentence attaches only when a queued child is a writer (v2)', async () => {
-    const writerWake = mock(async () => ({}));
-    const { scheduler: writerScheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      isWriterLaneTask: () => true,
-      sessionClient: makeV2Client({
-        promptAsync: writerWake,
-        listChildren: [],
-      }),
-    });
-    writerScheduler.triggerStoppedJobRecovery('p1', 'delta-writer', 't1:1');
-    await clock.advance(0);
-    expect(wakeText(writerWake, 0)).toContain(WRITER_LANE_VERIFICATION_TEXT);
-
-    // Read-only lane: no sentence.
-    const readerWake = mock(async () => ({}));
-    const { scheduler: readerScheduler } = createScheduler({
-      hostFlavor: 'v2',
-      intervalMs: 60_000,
-      isWriterLaneTask: () => false,
-      sessionClient: makeV2Client({
-        promptAsync: readerWake,
-        listChildren: [],
-      }),
-    });
-    readerScheduler.triggerStoppedJobRecovery('p2', 'delta-reader', 't2:1');
-    await clock.advance(0);
-    expect(wakeText(readerWake, 0)).not.toContain(
-      WRITER_LANE_VERIFICATION_TEXT,
-    );
-  });
-
-  test('v1 wake keeps zero suffix and zero writer sentence even with a writer predicate injected', async () => {
-    const promptAsync = mock(async () => ({}));
-    const { scheduler } = createScheduler({
-      intervalMs: 60_000,
-      isWriterLaneTask: () => true,
-      sessionClient: makeClient({
-        todos: [],
-        promptAsync,
-        childrenData: [{ id: 'child-2' }],
-        statusData: { 'child-2': { type: 'busy' } },
-      }),
-    });
-    scheduler.triggerStoppedJobRecovery(
-      'p1',
-      formatStoppedJobDelta({
-        alias: 'fix-1',
-        taskID: 'ses_x',
-        generation: 3,
-        state: 'stopped',
-        reason: 'stopped without a terminal result',
-      }),
-      'ses_x:3',
-    );
-    await clock.advance(0);
-
-    expect(promptAsync).toHaveBeenCalledTimes(1);
-    const text = wakeText(promptAsync, 0);
-    expect(text).toContain(ORCHESTRATOR_STOPPED_JOB_WAKE_TEXT);
-    expect(text).not.toContain(WAKE_ANTI_FORGERY_TEXT);
-    expect(text).not.toContain(WRITER_LANE_VERIFICATION_TEXT);
   });
 });

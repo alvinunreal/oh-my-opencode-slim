@@ -23,7 +23,6 @@ import {
   type ResolvedAgentRegistry,
 } from './agents/registry';
 import type { RegistryFactoryBridge } from './agents/registry-bridge';
-import { roleHasWriteCapability } from './agents/role-definitions';
 import type { CompanionManager } from './companion/manager';
 import { normalizeCompanionSessionStatus } from './companion/status';
 import { deepMerge, type loadPluginConfig, type Preset } from './config';
@@ -1299,12 +1298,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
               isFallbackInProgress: (sessionID) =>
                 foregroundFallback?.isFallbackInProgress(sessionID) ?? false,
               resolveSelection: lifecycleSelectionResolver,
-              // C2 writer-lane predicate: the queued child's agent from the board
-              // record, graded by its role's write permission data. A missing
-              // record/agent reads as writer (fail-safe, verdict defaults to
-              // attaching the verification sentence).
-              isWriterLaneTask: (taskID) =>
-                roleHasWriteCapability(backgroundJobBoard!.get(taskID)?.agent),
               isStoppedJobRecoveryCurrent: (taskID, generation) => {
                 const record = backgroundJobBoard!.get(taskID);
                 return (
@@ -1385,11 +1378,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             )) === true
           );
         },
-      }).catch((error: unknown) => {
-        log('[task-session-manager] startup subagent recovery failed', {
-          error: error instanceof Error ? error.message : String(error),
+      })
+        .then((recovered) => {
+          if (hostFlavor !== 'v2' && recovered.length > 0)
+            taskSessionManagerHook?.scheduleRuntimeStatusReconciliation();
+        })
+        .catch((error: unknown) => {
+          log('[task-session-manager] startup subagent recovery failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
-      });
       backgroundJobBoard!.addTerminalOutcomeListener((record) => {
         // A placeholder is not delegated work; its stop is not recoverable
         // by the parent until a task launch has attributed the session.

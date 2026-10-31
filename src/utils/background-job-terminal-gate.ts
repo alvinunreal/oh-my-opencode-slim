@@ -101,6 +101,7 @@ export interface BackgroundJobTerminalGate {
   capture(run: RunRef): ObservationToken | undefined;
   observe(token: ObservationToken, runtime: RuntimeObservation): GateResult;
   reconcile(run: RunRef, signal?: TerminalSignal): Promise<GateResult>;
+  hasGivenUp(run: RunRef): boolean;
   dispose(): void;
 }
 
@@ -1385,6 +1386,26 @@ export function createBackgroundJobTerminalGate(options: {
       now() -
         Math.max(value.quiescentSince ?? now(), token.attemptStartedAt ?? 0) >=
       graceMs;
+    const v1Idle =
+      options.input !== undefined &&
+      (options.input as { hostFlavor?: string }).hostFlavor !== 'v2' &&
+      runtime?.kind === 'quiescent' &&
+      runtime.origin === 'session.status';
+    if (
+      v1Idle &&
+      stable &&
+      job.recoveredAtStartup === true &&
+      job.activityRevision === 0 &&
+      evidence.verdict === 'retry' &&
+      evidence.reason === 'pending'
+    )
+      return commit(
+        token,
+        'stopped',
+        'Background session was interrupted by a host restart before a terminal result was received.',
+        undefined,
+        'transcript',
+      );
     // Stop-family host outcomes are not failures: the host stopped the
     // run (user interrupt/abort) without a plugin-verified cancel
     // lease — the same stop policy as the absent-evidence branch below.
@@ -1438,7 +1459,7 @@ export function createBackgroundJobTerminalGate(options: {
       );
     value.retries += 1;
     if (
-      terminalOutcome === 'succeeded' &&
+      (terminalOutcome === 'succeeded' || v1Idle) &&
       stable &&
       evidence.verdict === 'retry' &&
       evidence.reason === 'textless' &&
@@ -1449,7 +1470,7 @@ export function createBackgroundJobTerminalGate(options: {
         'error',
         COMPLETED_WITHOUT_TEXT_DIAGNOSTIC,
         undefined,
-        'host-outcome',
+        v1Idle ? 'transcript' : 'host-outcome',
       );
     // A parsed completed label is not independent termination evidence.
     // Even an empty assistant placeholder remains unknown indefinitely.
@@ -1514,6 +1535,17 @@ export function createBackgroundJobTerminalGate(options: {
     capture,
     observe,
     reconcile,
+    hasGivenUp(run) {
+      const value = observations.get(run.taskID);
+      const record = board.get(run.taskID);
+      return (
+        record?.state === 'running' &&
+        record.generation === run.generation &&
+        value?.generation === run.generation &&
+        value.activityRevision === record.activityRevision &&
+        value.rearmExhaustedLogged === true
+      );
+    },
     dispose() {
       disposed = true;
       authorizedByGate.delete(gate);

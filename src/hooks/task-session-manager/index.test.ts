@@ -20,11 +20,17 @@ import {
 } from '../../utils';
 import { BackgroundJobBoard } from '../../utils/background-job-fixture';
 import {
+  configureBackgroundJobPersistence,
+  loadInitialBackgroundJobPersistence,
+  persistedBackgroundChildren,
+} from '../../utils/background-job-persistence';
+import {
   type BackgroundJobTerminalGate,
   createBackgroundJobTerminalGate,
 } from '../../utils/background-job-terminal-gate';
 import * as logger from '../../utils/logger';
 import { DEFAULT_RUNTIME_SESSION_STATUS_TIMEOUT_MS } from '../../utils/session-runtime-status';
+import { tick } from '../../utils/test-timers';
 import {
   createPhaseReminderHook,
   PHASE_REMINDER_METADATA_KEY,
@@ -1498,14 +1504,14 @@ describe('task-session-manager hook', () => {
   test('board-off retires an observed native delivery without injecting any board part', async () => {
     const board = new BackgroundJobBoard();
     board.registerLaunch({
-      taskID: 'child-1',
+      taskID: 'ses_child1',
       parentSessionID: 'parent-1',
       agent: 'explorer',
       description: 'map hooks',
       now: 500,
     });
     board.updateStatus({
-      taskID: 'child-1',
+      taskID: 'ses_child1',
       state: 'completed',
       resultSummary: 'done',
       now: 1000,
@@ -1527,11 +1533,31 @@ describe('task-session-manager hook', () => {
         message.parts.filter((part) => isBoardPartForTest(part)),
       ),
     ).toHaveLength(0);
-    expect(board.get('child-1')).toMatchObject({
+    expect(board.get('ses_child1')).toMatchObject({
       state: 'completed',
       terminalUnreconciled: true,
     });
     expect(board.hasTerminalUnreconciled('parent-1')).toBe(true);
+
+    await transformMessages(hook, {
+      messages: [
+        {
+          info: {
+            id: 'old-delivery',
+            role: 'user',
+            sessionID: 'parent-1',
+            time: { created: 400 },
+          },
+          parts: [
+            {
+              type: 'text',
+              text: '<subagent sessionID="ses_child1" state="completed" description="map hooks">\nold\n</subagent>',
+            },
+          ],
+        },
+      ],
+    });
+    expect(board.get('ses_child1')?.terminalUnreconciled).toBe(true);
 
     // The host's native delivery lands in history: the observer retires
     // the record on this transform, still with no board part placed.
@@ -1549,12 +1575,7 @@ describe('task-session-manager hook', () => {
           parts: [
             {
               type: 'text',
-              text: '<subagent sessionID="child-1" state="completed" description="map hooks">\ndone\n</subagent>',
-              metadata: {
-                source: 'subagent',
-                childID: 'child-1',
-                state: 'completed',
-              },
+              text: '<subagent sessionID="ses_child1" state="completed" description="map hooks">\ndone\n</subagent>',
             },
           ],
         },
@@ -1568,7 +1589,7 @@ describe('task-session-manager hook', () => {
         ),
       ),
     ).toHaveLength(0);
-    expect(board.get('child-1')).toMatchObject({
+    expect(board.get('ses_child1')).toMatchObject({
       state: 'reconciled',
       terminalUnreconciled: false,
     });
@@ -1576,7 +1597,7 @@ describe('task-session-manager hook', () => {
 
     // Replaying the same history is a dedupe no-op.
     await transformMessages(hook, deliveredRequest as never);
-    expect(board.get('child-1')).toMatchObject({
+    expect(board.get('ses_child1')).toMatchObject({
       state: 'reconciled',
       terminalUnreconciled: false,
     });
@@ -1634,6 +1655,159 @@ describe('task-session-manager hook', () => {
     expect(board.get('child-1')).toMatchObject({
       state: 'completed',
       terminalUnreconciled: true,
+    });
+  });
+
+  test('a live native delivery persists its run acknowledgement across restart', async () => {
+    const values = new Map<string, unknown>();
+    const storage = {
+      get: (key: string) => values.get(key),
+      set: (key: string, value: unknown) => {
+        values.set(key, value);
+      },
+      remove: (key: string) => {
+        values.delete(key);
+      },
+      scan: async ({ prefix }: { prefix: string }) => ({
+        entries: [...values]
+          .filter(([key]) => key.startsWith(prefix))
+          .map(([key, value]) => ({ key, value })),
+      }),
+    };
+    configureBackgroundJobPersistence(storage);
+    try {
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'ses_child1',
+        parentSessionID: 'parent-1',
+        agent: 'explorer',
+        background: true,
+        now: 500,
+      });
+      board.updateStatus({
+        taskID: 'ses_child1',
+        state: 'completed',
+        resultSummary: 'done',
+        now: 1000,
+      });
+      const { hook } = createHook({
+        backgroundJobBoard: board,
+        hostFlavor: 'v2',
+        idleReconcileDelayMs: 0,
+      });
+      await transformMessages(hook, {
+        messages: [
+          {
+            info: {
+              id: 'delivery-persist',
+              role: 'user',
+              sessionID: 'parent-1',
+              time: { created: 1100 },
+            },
+            parts: [
+              {
+                type: 'text',
+                text: '<subagent sessionID="ses_child1" state="completed" description="explore">\ndone\n</subagent>',
+              },
+            ],
+          },
+        ],
+      } as never);
+      expect(board.get('ses_child1')?.terminalUnreconciled).toBe(false);
+      await tick();
+      configureBackgroundJobPersistence(storage);
+      await loadInitialBackgroundJobPersistence();
+      expect(persistedBackgroundChildren().get('ses_child1')?.deliveredAt).toBe(
+        1100,
+      );
+    } finally {
+      configureBackgroundJobPersistence(undefined);
+    }
+  });
+
+  test('v2 cancelled delivery retires an interrupted step published as error', async () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_interrupted',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      now: 500,
+    });
+    board.updateStatus({
+      taskID: 'ses_interrupted',
+      state: 'error',
+      resultSummary: '{"type":"aborted","message":"Step interrupted"}',
+      now: 1000,
+    });
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      hostFlavor: 'v2',
+      idleReconcileDelayMs: 0,
+    });
+    await transformMessages(hook, {
+      messages: [
+        {
+          info: {
+            id: 'delivery-interrupted',
+            role: 'user',
+            sessionID: 'parent-1',
+            time: { created: 1100 },
+          },
+          parts: [
+            {
+              type: 'text',
+              text: '<subagent sessionID="ses_interrupted" state="cancelled" description="explore">\ninterrupted\n</subagent>',
+            },
+          ],
+        },
+      ],
+    } as never);
+    expect(board.get('ses_interrupted')).toMatchObject({
+      state: 'reconciled',
+      terminalState: 'error',
+      terminalUnreconciled: false,
+    });
+  });
+
+  test('v2 cancelled delivery retires a stopped run', async () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'ses_interrupted',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      now: 500,
+    });
+    board.updateStatus({
+      taskID: 'ses_interrupted',
+      state: 'stopped',
+      now: 1000,
+    });
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      hostFlavor: 'v2',
+      idleReconcileDelayMs: 0,
+    });
+    await transformMessages(hook, {
+      messages: [
+        {
+          info: {
+            id: 'delivery-stopped',
+            role: 'user',
+            sessionID: 'parent-1',
+            time: { created: 1100 },
+          },
+          parts: [
+            {
+              type: 'text',
+              text: '<subagent sessionID="ses_interrupted" state="cancelled" description="explore">\ninterrupted\n</subagent>',
+            },
+          ],
+        },
+      ],
+    } as never);
+    expect(board.get('ses_interrupted')).toMatchObject({
+      state: 'stopped',
+      terminalUnreconciled: false,
     });
   });
 
