@@ -987,7 +987,7 @@ function createAdapterFromFactory(
 /**
  * Default adapter factory: one instance per adapter type for the lifetime of
  * the wiring. Adapters retain placement state (herdr's agent-area pane and
- * spawn mutex, tmux's pane-to-anchor map and layout debounce, kitty's applied
+ * spawn mutex, tmux's pane-to-anchor map, kitty's applied
  * layout), so building a fresh instance per spawn/close would silently lose
  * it. A `null` (unavailable) result is not cached, so a temporarily
  * unavailable adapter can recover on a later call.

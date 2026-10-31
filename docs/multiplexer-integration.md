@@ -317,8 +317,8 @@ layout only picks the split direction at spawn time).
 
 | Layout | tmux | Zellij | Herdr | kitty | WezTerm | Orca | cmux-tui |
 |--------|------|--------|-------|-------|---------|------|------|
-| `main-vertical` | `-h` split, then `select-layout main-vertical` (+ `main-pane-width`) | `new-pane --direction right` | `pane split --direction right`; *approximate* agent column (below) | `tall` layout | `split-pane --right --percent <100 - main_pane_size>`; *approximate* agent column (below) | `terminal split --direction horizontal` from the anchor; *approximate*, unsized | ignored (no layout expression) |
-| `main-horizontal` | `-v` split, then `select-layout main-horizontal` (+ `main-pane-height`) | `new-pane --direction down` | `pane split --direction down`; *approximate* agent row (to the right) | `fat` layout | `split-pane --bottom --percent <100 - main_pane_size>`; *approximate* agent row | `terminal split --direction vertical` from the anchor; *approximate*, unsized | ignored (no layout expression) |
+| `main-vertical` | `-h` split of the anchor or `-v -b` of the next pane, then `select-layout main-vertical` (+ `main-pane-width`) | `new-pane --direction right` | `pane split --direction right`; *approximate* agent column (below) | `tall` layout | `split-pane --right --percent <100 - main_pane_size>`; *approximate* agent column (below) | `terminal split --direction horizontal` from the anchor; *approximate*, unsized | ignored (no layout expression) |
+| `main-horizontal` | `-v` split of the anchor or `-h -b` of the next pane, then `select-layout main-horizontal` (+ `main-pane-height`) | `new-pane --direction down` | `pane split --direction down`; *approximate* agent row (to the right) | `fat` layout | `split-pane --bottom --percent <100 - main_pane_size>`; *approximate* agent row | `terminal split --direction vertical` from the anchor; *approximate*, unsized | ignored (no layout expression) |
 | `even-horizontal` | `-h` split, then `select-layout even-horizontal` | no direction (Zellij's native placement) | `pane split --direction right` | `horizontal` layout | `split-pane --right` from the parent | `terminal split --direction horizontal` from the anchor | ignored (no layout expression) |
 | `even-vertical` | `-v` split, then `select-layout even-vertical` | no direction (native placement) | `pane split --direction down` | `vertical` layout | `split-pane --bottom` from the parent | `terminal split --direction vertical` from the anchor | ignored (no layout expression) |
 | `tiled` | `-h` split, then `select-layout tiled` | no direction (native placement) | `pane split --direction right` | `grid` layout | `split-pane --right` from the parent | `terminal split --direction horizontal` from the anchor | ignored (no layout expression) |
@@ -326,9 +326,11 @@ layout only picks the split direction at spawn time).
 Adapter notes:
 
 - **tmux** — `select-layout` is applied only to anchor panes this client itself
-  split into (panes it created are tracked per anchor), debounced by 150 ms so
-  concurrent child starts do not thrash the window. `main-*` layouts also set
-  `main-pane-width` / `main-pane-height` from `main_pane_size`.
+  split into (panes it created are tracked per anchor). It runs in the same
+  invocation as the split or close, or separately if the pane has already
+  exited. For `main-*`, the anchor is split if it has no next pane; otherwise,
+  the next pane is split with `-b`. These layouts also set `main-pane-width` /
+  `main-pane-height` from `main_pane_size`.
 - **Zellij** — direction is only a hint: when a tab is crowded (Zellij silently
   drops a directed split around ~4 stacked panes), the create is retried once
   without a direction and Zellij places the pane in the largest free space of
@@ -407,8 +409,8 @@ A pane is a **view**, and views belong to the viewer:
   panes still close under the normal rules. Reconciliation also checks held
   panes of other parents for lost idle or deletion signals. A rebuild requires the
   parent to be the displayed session again at that moment.
-- A displayed-session or project change triggers a debounced reconciliation;
-  the 30-second periodic pass remains a fallback.
+- A displayed-session or project change triggers reconciliation on the next
+  route poll; the 30-second periodic pass remains a fallback.
 
 If you do not want a pane on a particular client, disable panes for that
 project there (`"type": "none"`), or simply close the pane; the child session

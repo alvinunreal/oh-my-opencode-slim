@@ -239,8 +239,9 @@ has no cwd flag (the split inherits the anchor's working directory).
 - Split direction follows the layout (`-h` for main-vertical/even-horizontal/
   tiled, `-v` for main-horizontal/even-vertical), then `select-layout` plus
   `main-pane-width`/`main-pane-height` for `main-*`.
-- Layout rebalancing is scoped to anchor panes this instance split into and
-  debounced (150 ms); close sends Ctrl+C before `kill-pane`.
+- Split and layout run in one invocation. Main layouts split before the pane
+  following the anchor when available; close sends Ctrl+C before a combined
+  `kill-pane` and layout command for panes this instance created.
 
 ### Zellij Implementation
 
