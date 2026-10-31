@@ -2544,6 +2544,34 @@ describe('createV2Setup e2e', () => {
     }
   }, 20_000);
 
+  test('v2 leaves the host default agent unchanged when disabled', async () => {
+    await mkdir(path.join(projectDir, '.opencode'), { recursive: true });
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({ companion: { enabled: false }, setDefaultAgent: false }),
+    );
+    const { ctx } = makeMockV2Context(projectDir);
+    let defaultAgent = 'build';
+    ctx.agent.transform = async (callback) => {
+      callback({
+        list: () => [],
+        get: () => undefined,
+        default: (id) => {
+          defaultAgent = id ?? '';
+        },
+        update: (_id, update) => update({}),
+        remove: () => {},
+      });
+      return { dispose: () => {} };
+    };
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(defaultAgent).toBe('build');
+    } finally {
+      await cleanup();
+    }
+  });
+
   test('host-only MCP namespaces are denied in both agent and child policies', async () => {
     const { ctx, events, calls } = makeMockV2Context(projectDir);
     const setupCtx = ctx as unknown as {

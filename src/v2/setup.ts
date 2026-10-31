@@ -2492,7 +2492,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             registry.nativePolicies[name]?.rules,
           );
         }
-        if (resolvedAgents.orchestrator) {
+        if (
+          preFlightConfig.setDefaultAgent !== false &&
+          resolvedAgents.orchestrator
+        ) {
           try {
             draft.default(registry.identities.orchestrator ?? 'orchestrator');
           } catch {
