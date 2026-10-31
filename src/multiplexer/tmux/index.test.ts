@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from 'bun:test';
 import type { MultiplexerLayout } from '../../config/schema';
 import * as logger from '../../utils/logger';
 import { createTimerHarness } from '../../utils/test-timers';
@@ -48,10 +56,6 @@ async function importFreshTmux() {
   return import(`./index?test=${importCounter++}`);
 }
 
-async function wait(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function commands(): string[][] {
   return crossSpawnMock.mock.calls.map((call) => call[0] as string[]);
 }
@@ -65,6 +69,26 @@ function tmuxCommands(): string[][] {
 
 function commandContaining(name: string): string[] | undefined {
   return tmuxCommands().find((command) => command.includes(name));
+}
+
+function viewerCommand(command: string[] | undefined): string {
+  return command?.find((arg) => arg.startsWith('env OPENCODE_DISABLE_')) ?? '';
+}
+
+async function withCloseClock<T>(run: () => Promise<T>): Promise<T> {
+  const clock = createTimerHarness();
+  const timer = spyOn(globalThis, 'setTimeout').mockImplementation(((
+    callback: () => void,
+    delay: number,
+  ) => clock.setTimeout(callback, delay)) as unknown as typeof setTimeout);
+  try {
+    const result = run();
+    await clock.tick();
+    await clock.advance(250);
+    return await result;
+  } finally {
+    timer.mockRestore();
+  }
 }
 
 function expectExplicitSocket(command: string[] | undefined): void {
@@ -106,10 +130,7 @@ describe('TmuxMultiplexer', () => {
     installDefaultMock();
   });
 
-  afterEach(async () => {
-    // Let any debounced layout timer from this test fire before the next
-    // test resets the spawn mock, so commands never leak across tests.
-    if (crossSpawnMock.mock.calls.length > 0) await wait(300);
+  afterEach(() => {
     process.env.TMUX = originalTmux;
     process.env.TMUX_PANE = originalTmuxPane;
   });
@@ -132,7 +153,7 @@ describe('TmuxMultiplexer', () => {
       'http://host',
       '/repo',
     );
-    expect(commandContaining('split-window')?.at(-1)).toContain(
+    expect(viewerCommand(commandContaining('split-window'))).toContain(
       'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     );
   });
@@ -226,7 +247,7 @@ describe('TmuxMultiplexer', () => {
     expect(splitCommand).toContain('%1');
     expect(splitCommand).toContain('/usr/bin/tmux');
     expect(splitCommand).not.toContain('-e');
-    expect(splitCommand?.at(-1)).toMatch(
+    expect(viewerCommand(splitCommand)).toMatch(
       /^env OPENCODE_DISABLE_TERMINAL_TITLE=1 /,
     );
   });
@@ -244,7 +265,7 @@ describe('TmuxMultiplexer', () => {
     );
 
     const remoteSplit = commandContaining('split-window');
-    const remote = remoteSplit?.at(-1) ?? '';
+    const remote = viewerCommand(remoteSplit);
     expect(remote).toContain('--server');
     expect(remote).not.toContain('attach');
 
@@ -268,7 +289,7 @@ describe('TmuxMultiplexer', () => {
     );
 
     const sharedSplit = commandContaining('split-window');
-    const shared = sharedSplit?.at(-1) ?? '';
+    const shared = viewerCommand(sharedSplit);
     expect(shared).toContain('--session');
     expect(shared).not.toContain('--server');
     expect(shared).not.toContain('attach');
@@ -294,7 +315,7 @@ describe('TmuxMultiplexer', () => {
     const cwdIndex = split?.indexOf('-c') ?? -1;
     expect(cwdIndex).toBeGreaterThan(-1);
     expect(split?.[cwdIndex + 1]).toBe('/repo');
-    const cmd = split?.at(-1) ?? '';
+    const cmd = viewerCommand(split);
     expect(cmd).toContain("opencode mini --session 'session-mini'");
     expect(cmd).not.toContain('/repo');
   });
@@ -398,48 +419,133 @@ describe('TmuxMultiplexer', () => {
       '%2',
       '-T',
       'Attached worker',
+      ';',
+      'set-option',
+      '-p',
+      '-t',
+      '%2',
+      '@omosc',
+      'Attached worker',
     ]);
   });
 
-  test('coalesces layout application after bursty pane spawns', async () => {
+  test('splits and lays out together, then writes title and metadata together', async () => {
     const { TmuxMultiplexer } = await importFreshTmux();
     const tmux = new TmuxMultiplexer('main-vertical', 60);
+    await tmux.spawnPane('child', 'omosc:1:child', 'http://host', '/repo');
 
-    await tmux.spawnPane(
-      'session-1',
-      'First worker',
-      'http://localhost:4096',
-      '/repo',
-    );
-    await tmux.spawnPane(
-      'session-2',
-      'Second worker',
-      'http://localhost:4096',
-      '/repo',
-    );
+    const split = commandContaining('split-window') ?? [];
+    expect(split.slice(split.indexOf(';'))).toEqual([
+      ';',
+      'select-layout',
+      '-t',
+      '%1',
+      'main-vertical',
+      ';',
+      'set-window-option',
+      '-t',
+      '%1',
+      'main-pane-width',
+      '60%',
+      ';',
+      'select-layout',
+      '-t',
+      '%1',
+      'main-vertical',
+    ]);
+    expect(commandContaining('select-pane')).toEqual([
+      '/usr/bin/tmux',
+      '-S',
+      SOCKET,
+      'select-pane',
+      '-t',
+      '%2',
+      '-T',
+      'omosc:1:child',
+      ';',
+      'set-option',
+      '-p',
+      '-t',
+      '%2',
+      '@omosc',
+      'omosc:1:child',
+    ]);
+  });
 
+  test('stacks before the pane following the anchor, or splits the anchor', async () => {
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which')
+        return createSpawnResult(0, '/usr/bin/tmux\n');
+      if (command.includes('-V')) return createSpawnResult(0, 'tmux 3.6a');
+      if (command.includes('list-panes'))
+        return createSpawnResult(0, '%1\n%8\n');
+      if (command.includes('split-window')) return createSpawnResult(0, '%2\n');
+      return createSpawnResult();
+    });
+    const { TmuxMultiplexer } = await importFreshTmux();
+    const tmux = new TmuxMultiplexer('main-vertical', 60);
+    await tmux.spawnPane('child', 'child', 'http://host', '/repo');
+    const split = commandContaining('split-window') ?? [];
+    expect(split.slice(3, 11)).toEqual([
+      'split-window',
+      '-v',
+      '-b',
+      '-d',
+      '-P',
+      '-F',
+      '#{pane_id}',
+      '-t',
+    ]);
+    expect(split[11]).toBe('%8');
+  });
+
+  test('retries the anchor if the pane following it disappears before splitting', async () => {
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which')
+        return createSpawnResult(0, '/usr/bin/tmux\n');
+      if (command.includes('-V')) return createSpawnResult(0, 'tmux 3.6a');
+      if (command.includes('list-panes'))
+        return createSpawnResult(0, '%1\n%8\n');
+      if (command.includes('split-window'))
+        return command.includes('-b')
+          ? createSpawnResult(1, '', "can't find pane: %8\n")
+          : createSpawnResult(0, '%2\n');
+      return createSpawnResult();
+    });
+    const { TmuxMultiplexer } = await importFreshTmux();
+    const tmux = new TmuxMultiplexer();
     expect(
-      commands().filter((command) => command.includes('select-layout')),
-    ).toHaveLength(0);
-
-    await wait(300);
-
-    const layoutCommands = commands().filter((command) =>
-      command.includes('select-layout'),
+      await tmux.spawnPane('child', 'child', 'http://host', '/repo'),
+    ).toEqual({ success: true, paneId: '%2' });
+    const splits = tmuxCommands().filter((command) =>
+      command.includes('split-window'),
     );
-    const sizeCommands = commands().filter((command) =>
-      command.includes('set-window-option'),
+    expect(splits).toHaveLength(2);
+    expect(splits[1]).toContain('%1');
+    expect(splits[1]).not.toContain('-b');
+  });
+
+  test('keeps a pane when a later layout command fails', async () => {
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which')
+        return createSpawnResult(0, '/usr/bin/tmux\n');
+      if (command.includes('-V')) return createSpawnResult(0, 'tmux 3.6a');
+      if (command.includes('split-window'))
+        return createSpawnResult(1, '%2\n', 'layout failed');
+      return createSpawnResult();
+    });
+    const { TmuxMultiplexer } = await importFreshTmux();
+    const tmux = new TmuxMultiplexer();
+    expect(
+      await tmux.spawnPane('child', 'child', 'http://host', '/repo'),
+    ).toEqual({ success: true, paneId: '%2' });
+    expect(logMock).toHaveBeenCalledWith(
+      '[tmux] spawnPane: result',
+      expect.objectContaining({
+        exitCode: 1,
+        stderr: 'layout failed',
+      }),
     );
-
-    expect(layoutCommands).toHaveLength(2);
-    expect(sizeCommands).toHaveLength(1);
-    expect(sizeCommands[0]).toContain('main-pane-width');
-    expect(sizeCommands[0]).toContain('60%');
-
-    for (const command of [...layoutCommands, ...sizeCommands]) {
-      expectExplicitSocket(command);
-      expect(command).toContain('%1');
-    }
   });
 
   test('logs and stops layout sequence when a tmux layout command fails', async () => {
@@ -458,15 +564,23 @@ describe('TmuxMultiplexer', () => {
 
     await tmux.applyLayout('main-vertical', 60);
 
-    expect(
-      commands().filter((command) => command.includes('set-window-option')),
-    ).toHaveLength(0);
     expect(logMock).toHaveBeenCalledWith('[tmux] command failed', {
       command: 'select-layout',
       args: [
         '/usr/bin/tmux',
         '-S',
         SOCKET,
+        'select-layout',
+        '-t',
+        '%1',
+        'main-vertical',
+        ';',
+        'set-window-option',
+        '-t',
+        '%1',
+        'main-pane-width',
+        '60%',
+        ';',
         'select-layout',
         '-t',
         '%1',
@@ -479,96 +593,6 @@ describe('TmuxMultiplexer', () => {
       '[tmux] applyLayout: applied',
       expect.anything(),
     );
-  });
-
-  test('direct applyLayout cancels a pending debounced layout', async () => {
-    const { TmuxMultiplexer } = await importFreshTmux();
-    const tmux = new TmuxMultiplexer('main-vertical', 60);
-
-    await tmux.spawnPane(
-      'session-1',
-      'First worker',
-      'http://localhost:4096',
-      '/repo',
-    );
-    await tmux.applyLayout('tiled', 60);
-    await wait(300);
-
-    const layoutCommands = commands().filter((command) =>
-      command.includes('select-layout'),
-    );
-
-    expect(layoutCommands).toHaveLength(1);
-    expect(layoutCommands[0]).toContain('tiled');
-    expectExplicitSocket(layoutCommands[0]);
-  });
-
-  test('applySpawnLayout with unchanged preferences keeps one debounced layout', async () => {
-    const { TmuxMultiplexer } = await importFreshTmux();
-    const timers = createTimerHarness();
-    const tmux = new TmuxMultiplexer('main-vertical', 60, timers);
-    const layouts = () =>
-      commands().filter((command) => command.includes('select-layout'));
-
-    for (const id of ['session-1', 'session-2']) {
-      await tmux.spawnPane(id, 'Worker', 'http://localhost:4096', '/repo');
-      await tmux.applySpawnLayout('main-vertical', 60);
-    }
-
-    expect(layouts()).toHaveLength(0);
-    expect(timers.pending()).toBe(1);
-
-    await timers.advance(150);
-
-    expect(timers.pending()).toBe(0);
-    expect(layouts()).toHaveLength(2); // select-layout before and after resize
-    expect(layouts()[0]).toContain('main-vertical');
-  });
-
-  test('applySpawnLayout with changed preferences applies immediately', async () => {
-    const { TmuxMultiplexer } = await importFreshTmux();
-    const timers = createTimerHarness();
-    const tmux = new TmuxMultiplexer('main-vertical', 60, timers);
-
-    await tmux.spawnPane(
-      'session-1',
-      'Worker',
-      'http://localhost:4096',
-      '/repo',
-    );
-    await tmux.applySpawnLayout('tiled', 60);
-
-    expect(timers.pending()).toBe(0);
-    const layouts = commands().filter((command) =>
-      command.includes('select-layout'),
-    );
-    expect(layouts).toHaveLength(1);
-    expect(layouts[0]).toContain('tiled');
-  });
-
-  test('debounced layout keeps the anchor captured at spawn time', async () => {
-    const { TmuxMultiplexer } = await importFreshTmux();
-    const tmux = new TmuxMultiplexer('main-vertical', 60);
-
-    await tmux.spawnPane(
-      'session-1',
-      'First worker',
-      'http://localhost:4096',
-      '/repo',
-    );
-    // Re-displayed elsewhere before the debounce window elapses.
-    process.env.TMUX_PANE = '%9';
-
-    await wait(300);
-
-    const layoutCommands = commands().filter((command) =>
-      command.includes('select-layout'),
-    );
-    expect(layoutCommands).toHaveLength(2);
-    for (const command of layoutCommands) {
-      expect(command).toContain('%1');
-      expect(command).not.toContain('%9');
-    }
   });
 
   test('applyLayout resolves the anchor from the environment at call time', async () => {
@@ -594,10 +618,8 @@ describe('TmuxMultiplexer', () => {
       '/repo',
     );
 
-    // Drain the spawn's debounced layout before observing close commands.
-    await wait(300);
     crossSpawnMock.mockClear();
-    expect(await tmux.closePane('%2')).toBe(true);
+    expect(await withCloseClock(() => tmux.closePane('%2'))).toBe(true);
 
     const sent = tmuxCommands();
     expect(sent).toHaveLength(2);
@@ -617,6 +639,11 @@ describe('TmuxMultiplexer', () => {
       'kill-pane',
       '-t',
       '%2',
+      ';',
+      'select-layout',
+      '-t',
+      '%1',
+      'main-vertical',
     ]);
   });
 
@@ -627,6 +654,7 @@ describe('TmuxMultiplexer', () => {
       if (command[0] === 'which')
         return createSpawnResult(0, '/usr/bin/tmux\n');
       if (command.includes('-V')) return createSpawnResult(0, 'tmux 3.6a');
+      if (command.includes('split-window')) return createSpawnResult(0, '%2\n');
       if (command.includes('kill-pane'))
         return createSpawnResult(1, '', "can't find pane: %2\n");
       return createSpawnResult();
@@ -634,10 +662,12 @@ describe('TmuxMultiplexer', () => {
     const { TmuxMultiplexer } = await importFreshTmux();
     const tmux = new TmuxMultiplexer('main-vertical', 60);
 
-    expect(await tmux.closePane('%2')).toBe(true);
+    await tmux.spawnPane('child', 'child', 'http://host', '/repo');
+    crossSpawnMock.mockClear();
+    expect(await withCloseClock(() => tmux.closePane('%2'))).toBe(true);
 
     const sent = tmuxCommands();
-    expect(sent).toHaveLength(2);
+    expect(sent).toHaveLength(3);
     expect(sent[1]).toEqual([
       '/usr/bin/tmux',
       '-S',
@@ -645,7 +675,39 @@ describe('TmuxMultiplexer', () => {
       'kill-pane',
       '-t',
       '%2',
+      ';',
+      'select-layout',
+      '-t',
+      '%1',
+      'main-vertical',
     ]);
+    expect(sent[2]).toEqual([
+      '/usr/bin/tmux',
+      '-S',
+      SOCKET,
+      'select-layout',
+      '-t',
+      '%1',
+      'main-vertical',
+    ]);
+  });
+
+  test('closePane treats a missing parent pane as closed', async () => {
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which')
+        return createSpawnResult(0, '/usr/bin/tmux\n');
+      if (command.includes('-V')) return createSpawnResult(0, 'tmux 3.6a');
+      if (command.includes('split-window')) return createSpawnResult(0, '%2\n');
+      if (command.includes('kill-pane'))
+        return createSpawnResult(1, '', "can't find pane: %1\n");
+      return createSpawnResult();
+    });
+    const { TmuxMultiplexer } = await importFreshTmux();
+    const tmux = new TmuxMultiplexer();
+    await tmux.spawnPane('child', 'child', 'http://host', '/repo');
+    crossSpawnMock.mockClear();
+    expect(await withCloseClock(() => tmux.closePane('%2'))).toBe(true);
+    expect(tmuxCommands()).toHaveLength(2);
   });
 
   test('closePane keeps tracking a pane when tmux reports a transport error', async () => {
@@ -658,7 +720,9 @@ describe('TmuxMultiplexer', () => {
       return createSpawnResult();
     });
     const { TmuxMultiplexer } = await importFreshTmux();
-    expect(await new TmuxMultiplexer().closePane('%2')).toBe(false);
+    expect(
+      await withCloseClock(() => new TmuxMultiplexer().closePane('%2')),
+    ).toBe(false);
   });
 
   test('closePane fails closed when kill-pane exits with any other code', async () => {
@@ -666,7 +730,7 @@ describe('TmuxMultiplexer', () => {
     const { TmuxMultiplexer } = await importFreshTmux();
     const tmux = new TmuxMultiplexer('main-vertical', 60);
 
-    expect(await tmux.closePane('%2')).toBe(false);
+    expect(await withCloseClock(() => tmux.closePane('%2'))).toBe(false);
   });
 
   test('closePane issues no command when the tmux socket is missing', async () => {
@@ -682,8 +746,7 @@ describe('TmuxMultiplexer', () => {
     const { TmuxMultiplexer } = await importFreshTmux();
     const tmux = new TmuxMultiplexer('main-vertical', 60);
 
-    expect(await tmux.closePane('%99')).toBe(true);
-    await wait(300);
+    expect(await withCloseClock(() => tmux.closePane('%99'))).toBe(true);
 
     expect(
       commands().filter((command) => command.includes('select-layout')),
@@ -717,7 +780,7 @@ describe('TmuxMultiplexer', () => {
     expect(await tmux.listPanesWithTitles()).toEqual([
       { paneId: '%2', title: 'omosc:123:child' },
     ]);
-    expect(commandContaining('list-panes')).toContain(
+    expect(tmuxCommands().find((command) => command.includes('-a'))).toContain(
       '#{pane_id}|#{pane_title}',
     );
   });
@@ -792,11 +855,13 @@ describe('TmuxMultiplexer', () => {
     const { sweepLeftoverPanes } = await import('../client/sweep');
     const tmux = new TmuxMultiplexer('main-vertical', 60);
 
-    const stats = await sweepLeftoverPanes({
-      adapter: tmux,
-      isProcessAlive: (pid) => pid !== 999,
-      isSessionTerminal: async (child) => child === 'ses_gone',
-    });
+    const stats = await withCloseClock(() =>
+      sweepLeftoverPanes({
+        adapter: tmux,
+        isProcessAlive: (pid) => pid !== 999,
+        isSessionTerminal: async (child) => child === 'ses_gone',
+      }),
+    );
 
     expect(stats).toMatchObject({
       scanned: 4,
