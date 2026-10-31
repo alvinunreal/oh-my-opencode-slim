@@ -85,6 +85,20 @@ conservatively passes the path through. Disable with
 | `task_revive` | Resume a retained session with a new instruction (v1 only; on v2 continue with `subagent(sessionID, prompt)`) |
 | `wait_for_user` | Pause automatic orchestrator wake prompts until the next distinct external user message (v1 only; not registered on v2 — use the native `question` tool there) |
 
+With `backgroundJobs.mode: "native"` the board-backed table above is replaced
+by two host-read controls of the same name. Both take an exact child session ID
+(the v2 `sessionID` parameter, the v1 `task_id`), verify `parentID`, and expose
+no aliases, history recovery, diagnostics, or board state. `mode: "off"`
+registers neither.
+
+`task_status` reports what the host round and trailing transcript prove; on v2
+that evidence is reconstructed from history, so an unfinished round is
+`unconfirmed` rather than a live status claim. `task_cancel` sends the host's
+own atomic interrupt without a status pre-check: it is a no-op for an idle
+session, returns whether it actually interrupted anything, and leaves cleanup
+plus the terminal notification to the host. The session is never deleted and
+stays continuable.
+
 The task controls use the task ID or its parent-scoped alias for the task being
 managed. `task_status` with an unknown or placeholder ID enumerates the
 session's recent task handles, including recently finished sessions, so a

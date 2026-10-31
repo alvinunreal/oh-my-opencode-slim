@@ -13,6 +13,7 @@
  */
 
 import { ALL_AGENT_NAMES } from './config/constants';
+import type { BackgroundJobsMode } from './config/schema';
 
 /**
  * Minimum expected registrations for a healthy plugin load.
@@ -76,12 +77,25 @@ const BASELINE_TOOL_NAMES = new Set([
   'ast_grep_replace',
 ]);
 
-/** Tools that disappear together when backgroundJobs.enabled is false. */
+/** Task tools in the baseline, split by the lifecycle mode that registers them. */
+const TASK_TOOL_NAMES = new Set([
+  'task_cancel',
+  'task_revive',
+  'task_status',
+  'task_message',
+  'task_reply',
+  'wait_for_user',
+]);
+
+/** Tools that disappear together when the managed lifecycle is off. */
 const BACKGROUND_TASK_TOOL_NAMES = new Set([
   'task_cancel',
   'task_status',
   'task_reply',
 ]);
+
+/** Native mode registers only these two host-read controls. */
+const NATIVE_MODE_TASK_TOOL_NAMES = new Set(['task_cancel', 'task_status']);
 
 /** V1-only baseline tools: never registered on v2, nor without the lifecycle. */
 const V1_ONLY_BASELINE_TOOL_NAMES = new Set([
@@ -97,27 +111,37 @@ const V1_ONLY_BASELINE_TOOL_NAMES = new Set([
  *
  * @param disabledTools - User-edited config; a non-array is treated as
  *   "nothing disabled" instead of crashing plugin init.
- * @param backgroundJobsEnabled - Defaults to true so callers that predate
- *   the switch keep the old floor.
+ * @param backgroundJobsMode - Resolved lifecycle mode. Booleans are accepted
+ *   for callers that predate the mode switch (`false` → `off`).
  */
 export function minimumExpectedToolCount(
   disabledTools: readonly string[] = [],
   webfetchEnabled = true,
   hostFlavor?: string,
-  backgroundJobsEnabled = true,
+  backgroundJobsMode: BackgroundJobsMode | boolean = 'managed',
 ): number {
+  const mode: BackgroundJobsMode =
+    typeof backgroundJobsMode === 'boolean'
+      ? backgroundJobsMode
+        ? 'managed'
+        : 'off'
+      : backgroundJobsMode;
   const v2 = hostFlavor === 'v2';
   // Baseline tools this configuration never registers. One set, so the floor
   // is a single subtraction and cannot drift from the registration sites.
   const unregistered = new Set<string>();
   if (v2)
     for (const name of V1_ONLY_BASELINE_TOOL_NAMES) unregistered.add(name);
-  if (!backgroundJobsEnabled) {
+  if (mode === 'off') {
     for (const name of [
       ...BACKGROUND_TASK_TOOL_NAMES,
       ...V1_ONLY_BASELINE_TOOL_NAMES,
     ])
       unregistered.add(name);
+  } else if (mode === 'native') {
+    for (const name of TASK_TOOL_NAMES) {
+      if (!NATIVE_MODE_TASK_TOOL_NAMES.has(name)) unregistered.add(name);
+    }
   }
   // Config values come from user-edited JSON/JSONC (and can be re-derived
   // via runtime preset switches); never trust the declared type at

@@ -110,6 +110,7 @@ import {
   createAcpRunTool,
   createCancelTaskTool,
   createInterviewSubmitStateTool,
+  createNativeTaskControlTools,
   createTaskMessageTool,
   createTaskReplyTool,
   createTaskReviveTool,
@@ -930,12 +931,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       clearTuiAgentActivities(ctx.directory);
     }
 
-    // Master switch for the OMOS managed background-task lifecycle. When
-    // false, nothing board-shaped is constructed: no job board, admission
-    // lease, TUI projection, terminal gate, supervisor, revived-run
-    // tracker, session recovery, alias authority, task-session-manager
-    // hook, wake scheduler, or task_* / wait_for_user tool factories. The
-    // native OpenCode task/subagent machinery stays completely untouched.
+    // Managed lifecycle gate (`backgroundJobs.mode: "managed"`, the default;
+    // the legacy `enabled: false` resolves to `off`). When it is not managed,
+    // nothing board-shaped is constructed: no job board, admission lease, TUI
+    // projection, terminal gate, supervisor, revived-run tracker, session
+    // recovery, alias authority, task-session-manager hook, wake scheduler,
+    // or task_* / wait_for_user tool factories. Native OpenCode task/subagent
+    // delegation stays completely untouched; `native` mode separately
+    // registers the two thin host-read controls below.
     const lifecycleEnabled = runtime.backgroundJobsEnabled;
     if (lifecycleEnabled) {
       taskActivityTracker = new TaskActivityTracker();
@@ -1909,6 +1912,18 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         ...(hostFlavor !== 'v2' ? waitForUserTools : {}),
       };
     }
+    // `backgroundJobs.mode: "native"`: the managed lifecycle is off, but the
+    // native delegation surface has no model-facing status/cancel, so a lost
+    // completion notice and a stuck child have no agent-side channel. Two
+    // thin host-read controls cover exactly that; `off` registers none, and
+    // managed mode keeps its own board-backed tools.
+    const nativeTaskTools =
+      runtime.backgroundJobsMode === 'native'
+        ? createNativeTaskControlTools({
+            input: ctx,
+            isDisposed: () => instanceDisposed,
+          })
+        : {};
 
     // v2 hosts skip wait_for_user: the native `question` tool covers the
     // blocking boundary there. task_revive remains a v1-only recovery tool;
@@ -1932,6 +1947,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       : {};
     tools = {
       ...lifecycleTaskTools,
+      ...nativeTaskTools,
       ...interviewTools,
       ...acpRunTools,
       ...(shouldRegisterWebfetch && webfetch ? { webfetch } : {}),
@@ -2274,7 +2290,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     runtime.disabledTools,
     runtime.webfetch.enabled !== false,
     hostFlavor,
-    runtime.backgroundJobsEnabled,
+    runtime.backgroundJobsMode,
   );
   if (
     agentCount < minAgents ||

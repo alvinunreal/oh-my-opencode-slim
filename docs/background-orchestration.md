@@ -53,13 +53,26 @@ variable the default background workflow is unavailable: configure it through
 the installer (see [Installation](installation.md)) or use the one-shot export
 above, and confirm the release with `opencode --version`.
 
-Setting `backgroundJobs.enabled: false` turns this managed layer off entirely:
+Setting `backgroundJobs.mode: "off"` (or the legacy `backgroundJobs.enabled:
+false`) turns this managed layer off entirely:
 the `task_*` control tools and `wait_for_user` are not registered, and no job
 board, retention, terminal gate, watchdog, wake scheduler, or startup recovery
 runs. Native `task`/`subagent` delegation and host completion delivery keep
 working exactly as OpenCode provides them, so council seat assembly and
 ordinary background delegation still function — only the OMOS bookkeeping and
-control surface disappear. See [Configuration](configuration.md).
+control surface disappear. Session presets are a separate subsystem (they bind
+delegated children to the frozen inference snapshot and back `/preset`), so
+they keep applying in every mode; they are not board state. See
+[Configuration](configuration.md).
+
+`backgroundJobs.mode: "native"` keeps the managed layer off but registers the
+two thin host-read controls, because the native delegation surface has no
+model-facing status or cancel: `task_status` reads a child session's host
+state plus its trailing result (the re-fetch channel after a lost completion
+notice), and `task_cancel` interrupts a stuck child through the host's own
+interruption while retaining it for continuation (the host owns cleanup and the
+completion notice; an idle interrupt is its no-op). Both verify `parentID` from
+a bounded `session.get`; neither touches a board, lease, or ledger.
 
 There is no automatic legacy fallback: missing background-subagent support is an
 environment or version problem, not an intentional v1 mode.

@@ -899,6 +899,16 @@ describe('v2 client shim delegation', () => {
     expect(calls).toEqual([{ sessionID: 'ses_1', resume: false }]);
   });
 
+  test('abort is absent when the host cannot interrupt', () => {
+    const input = buildPluginInput(makeCtx({} as never));
+    const session = (input.client as { session: Record<string, unknown> })
+      .session;
+    // Method presence is the capability signal: a resolving stub would let
+    // callers claim a stop the host never performed.
+    expect(session.abort).toBeUndefined();
+    expect(session.get).toBeUndefined();
+  });
+
   test('get delegates to session.get and wraps into {data}', async () => {
     const calls: unknown[] = [];
     const input = buildPluginInput(

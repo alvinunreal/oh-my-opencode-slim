@@ -16,7 +16,8 @@ import {
   notifyConfigChanged,
   registerConfigChangeListener,
 } from './config-change-coordinator';
-import tui2Plugin, { runPresetFlow, type V2TuiPluginContext } from './tui';
+import tui2Plugin from './tui';
+import { runPresetFlow, type V2TuiPluginContext } from './tui-impl';
 
 function makeConfig(): PluginConfig {
   return {
@@ -665,7 +666,9 @@ describe('v2 tui preset plugin', () => {
 
     test('keeps the v1 dual contract and extends the v2 setup', () => {
       expect(tui2Plugin.id).toBe(baseTui.id);
-      expect(tui2Plugin.tui).toBe(baseTui.tui);
+      // The v1 factory is a thin delegate (the composition loads only when a
+      // v1 host calls it), so identity is asserted on the contract shape.
+      expect(typeof tui2Plugin.tui).toBe('function');
       expect(typeof tui2Plugin.setup).toBe('function');
     });
 

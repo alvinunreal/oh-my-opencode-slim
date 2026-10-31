@@ -221,6 +221,24 @@ describe('TUI feature gates', () => {
     expect(repaired.gates.tuiEnabled).toBe(true);
   });
 
+  test('render-path gate read includes pane-wiring admission from the same snapshot', () => {
+    writeUserConfig({ multiplexer: { type: 'tmux' } });
+    const full = readTuiGates(env.projectDir);
+    expect(full.paneConfig?.multiplexer.type).toBe('tmux');
+    expect(full.paneConfig?.invalid).toBe(false);
+
+    // A thrown read keeps fail-open gates and never invents pane admission.
+    const configPath = path.join(
+      process.env.OPENCODE_CONFIG_DIR as string,
+      'oh-my-opencode-slim.json',
+    );
+    fs.writeFileSync(configPath, '{ invalid');
+    const broken = readTuiGates(env.projectDir);
+    expect(broken.gates.configInvalid).toBe(true);
+    // Broken config forces pane admission off rather than guessing a type.
+    expect(broken.paneConfig?.invalid).toBe(true);
+  });
+
   test('v1 entry registers nothing when tui is false', async () => {
     writeUserConfig({});
     writeProjectConfig(env.projectDir, { tui: false });

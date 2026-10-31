@@ -150,6 +150,48 @@ describe('plugin feature gates through exported hooks', () => {
     });
   }
 
+  for (const flavor of ['v1', 'v2'] as const) {
+    test(`${flavor}: native mode registers exactly the two host-read controls`, async () => {
+      await configure({ backgroundJobs: { mode: 'native' } });
+      let hooks: PluginHooks | undefined;
+      try {
+        hooks = await createHooks(flavor);
+        expect(hooks.tool?.task_status).toBeDefined();
+        expect(hooks.tool?.task_cancel).toBeDefined();
+        for (const name of [
+          'task_reply',
+          'task_revive',
+          'task_message',
+          'wait_for_user',
+        ]) {
+          expect(hooks.tool?.[name]).toBeUndefined();
+        }
+      } finally {
+        await hooks?.dispose?.();
+      }
+    });
+
+    test(`${flavor}: mode off registers no task control tool`, async () => {
+      await configure({ backgroundJobs: { mode: 'off' } });
+      let hooks: PluginHooks | undefined;
+      try {
+        hooks = await createHooks(flavor);
+        for (const name of [
+          'task_status',
+          'task_cancel',
+          'task_reply',
+          'task_revive',
+          'task_message',
+          'wait_for_user',
+        ]) {
+          expect(hooks.tool?.[name]).toBeUndefined();
+        }
+      } finally {
+        await hooks?.dispose?.();
+      }
+    });
+  }
+
   test('foreground-fallback disabled hook does not dispatch retry steering', async () => {
     await configure({
       backgroundJobs: { enabled: false },
