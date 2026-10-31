@@ -276,6 +276,7 @@ export class RuntimeConfig {
   private runtimePresetName: string | null = null;
   private switchedModels = new Set<string>();
   private localSkillNamesCache: readonly string[] | undefined;
+  private agentsCache: Record<string, AgentOverrideConfig> | undefined;
   // Memoized disabled-* sets: computed once per instance per config
   // generation (re-seeding clears them) instead of allocating a fresh Set
   // on every hot-path read.
@@ -286,6 +287,7 @@ export class RuntimeConfig {
   private seedPlugin(pluginConfig: ResolvedPluginConfig): void {
     this.pluginConfig = deepFreeze(clonePlain(pluginConfig));
     this.localSkillNamesCache = undefined;
+    this.agentsCache = undefined;
     this.disabledAgentsCache = undefined;
     this.disabledHooksCache = undefined;
     this.disabledCommandsCache = undefined;
@@ -323,6 +325,20 @@ export class RuntimeConfig {
   agents(
     defaultSkills: Readonly<Record<string, readonly string[]>> = {},
   ): Record<string, AgentOverrideConfig> {
+    if (Object.keys(defaultSkills).length === 0) {
+      return clonePlain(this.cachedAgents());
+    }
+    return this.resolveAgents(defaultSkills);
+  }
+
+  private cachedAgents(): Record<string, AgentOverrideConfig> {
+    this.agentsCache ??= deepFreeze(this.resolveAgents({}));
+    return this.agentsCache;
+  }
+
+  private resolveAgents(
+    defaultSkills: Readonly<Record<string, readonly string[]>>,
+  ): Record<string, AgentOverrideConfig> {
     let base = mergeAgentOverrides({}, this.pluginConfig?.agents ?? {});
     const filePreset = this.pluginConfig?.preset
       ? this.resolvedPresetAgents(this.pluginConfig.preset)
@@ -346,7 +362,9 @@ export class RuntimeConfig {
    * host override > runtime override > plugin file.
    */
   agent(name: string): AgentOverrideConfig | undefined {
-    const merged = this.aliasAwareOverride(this.agents(), name);
+    const merged = clonePlain(
+      this.aliasAwareOverride(this.cachedAgents(), name),
+    );
     const hostLayer = this.hostAgent(name) ?? this.hostLegacyAgent(name);
     if (!hostLayer) {
       return merged;
@@ -548,7 +566,7 @@ export class RuntimeConfig {
   get modelArrays(): Record<string, Array<{ id: string; variant?: string }>> {
     const arrays: Record<string, Array<{ id: string; variant?: string }>> = {};
     const disabled = this.disabledAgents;
-    const agents = this.agents();
+    const agents = this.cachedAgents();
     const names = new Set<string>([
       ...ALL_AGENT_NAMES,
       ...getCustomAgentNames(this.pluginConfig),
@@ -562,7 +580,7 @@ export class RuntimeConfig {
         continue;
       }
       arrays[name] = override.model.map((entry) =>
-        typeof entry === 'string' ? { id: entry } : entry,
+        typeof entry === 'string' ? { id: entry } : { ...entry },
       );
     }
 
@@ -609,7 +627,7 @@ export class RuntimeConfig {
   combinedModelInheritanceSource(
     name: string,
   ): 'session' | 'orchestrator' | undefined {
-    const override = this.aliasAwareOverride(this.agents(), name);
+    const override = this.aliasAwareOverride(this.cachedAgents(), name);
     if (
       !Array.isArray(override?.model) ||
       override.model.length === 0 ||
@@ -685,6 +703,7 @@ export class RuntimeConfig {
    * guard, mirrors the previous config-hook reset branch).
    */
   setRuntimePreset(name: string | null): void {
+    this.agentsCache = undefined;
     const presets = this.pluginConfig?.presets;
     if (!name || !presets || !Object.hasOwn(presets, name)) {
       this.runtimePresetName = null;

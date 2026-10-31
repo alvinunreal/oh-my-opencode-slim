@@ -4304,13 +4304,13 @@ describe('pass-local derived inputs', () => {
     expect(large.definitionCount).toBe(small.definitionCount + 10);
     expect(large.checkpoints).toEqual(small.checkpoints);
     // Pin the constant budget across the three phases: one merged-override
-    // derivation in createAgents, one per MCP-projection pass, one hoist +
-    // one modelArrays derivation + one marketplace-defaults flavor inside
-    // the registry build.
+    // call in createAgents, one per MCP-projection pass, and one hoist plus
+    // one marketplace-defaults call inside the registry build. modelArrays
+    // reads the cached agent view without calling agents().
     expect(small.checkpoints).toEqual({
       definitions: { agentsCalls: 1, arraysCalls: 0 },
       sdk: { agentsCalls: 2, arraysCalls: 0 },
-      registry: { agentsCalls: 6, arraysCalls: 1 },
+      registry: { agentsCalls: 5, arraysCalls: 1 },
     });
   });
 
