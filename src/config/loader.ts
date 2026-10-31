@@ -154,6 +154,20 @@ export function interpolateEnvironmentVariables(value: string): string {
   );
 }
 
+/** Escape interpolated values inside JSON strings, preserving raw JSON tokens. */
+function interpolateJsonEnvironmentVariables(source: string): string {
+  return source.replace(/"(?:\\.|[^"\\])*"|\{env:[^}]+\}/g, (token) =>
+    token.startsWith('"')
+      ? token.replace(/\{env:[^}]+\}/g, (placeholder) =>
+          JSON.stringify(interpolateEnvironmentVariables(placeholder)).slice(
+            1,
+            -1,
+          ),
+        )
+      : interpolateEnvironmentVariables(token),
+  );
+}
+
 /**
  * Normalize disabled_* config keys in place so a non-array value does not
  * reject the whole config object during schema validation. A string value
@@ -429,7 +443,7 @@ export function loadRawPluginConfigFromPath(
     let rawConfig: unknown;
     try {
       const stripped = stripJsonComments(content);
-      const interpolated = interpolateEnvironmentVariables(stripped);
+      const interpolated = interpolateJsonEnvironmentVariables(stripped);
       rawConfig = JSON.parse(interpolated);
     } catch (error) {
       // Empty file or JSON parse error is treated as invalid-json

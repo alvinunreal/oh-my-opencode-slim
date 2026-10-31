@@ -3106,6 +3106,29 @@ describe('env variable interpolation', () => {
     expect(config.agents?.explorer?.model).toBe('bar-model');
   });
 
+  test('interpolates special characters literally without discarding the layer', () => {
+    process.env.ACP_COMMAND = 'C:\\tools\\"agent"\nlauncher';
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.jsonc'),
+      JSON.stringify({
+        acpAgents: { reviewer: { command: '{env:ACP_COMMAND}' } },
+        agents: { oracle: { prompt: 'Run {env:ACP_COMMAND} safely' } },
+        setDefaultAgent: false,
+      }),
+    );
+    for (const hostFlavor of ['v1', 'v2']) {
+      const config = loadPluginConfig(projectDir, { hostFlavor });
+      expect(config.acpAgents?.reviewer.command).toBe(process.env.ACP_COMMAND);
+      expect(config.agents?.oracle?.prompt).toBe(
+        `Run ${process.env.ACP_COMMAND} safely`,
+      );
+      expect(config.setDefaultAgent).toBe(false);
+    }
+  });
+
   test('undefined variable: {env:NONEXISTENT} resolves to empty string', () => {
     delete process.env.NONEXISTENT;
     const projectDir = path.join(tempDir, 'project');
