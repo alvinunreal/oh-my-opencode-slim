@@ -43,8 +43,7 @@ knows about the other.
   lifecycle. Only exact `ses_` child IDs resolve. One bounded deadline
   covers the whole call (default 5 s, injectable `timeoutMs` + `timers` +
   `now` for tests): per seat, one latest round read. One `session.get` verifies
-  `parentID === parentSessionID` (mismatch → missing, never a leak) and, when
-  present, agent/label agreement; then one child transcript read classifies
+  `parentID === parentSessionID` (mismatch → missing, never a leak); then one child transcript read classifies
   that child's trailing round only — text from before the latest input
   boundary is never replayed, so a re-prompted seat can only surface the
   answer to its latest prompt. A seat whose latest prompt arrives at or

@@ -318,29 +318,6 @@ describe('apply-patch/hook', () => {
     expect(args.patchText).toContain('+new-value');
   });
 
-  test('fails open without replacing frozen args', async () => {
-    const root = await createTempDir('apply-patch-hook-');
-    await writeFixture(root, 'sample.txt', 'prefix\nstale-value\nsuffix\n');
-    const hook = createHook(root);
-    const patchText = `*** Begin Patch
-*** Update File: sample.txt
-@@
- prefix
--old-value
-+new-value
- suffix
-*** End Patch`;
-    const args = Object.freeze({ patchText });
-    const output = { args };
-
-    await expect(
-      hook['tool.execute.before']({ tool: 'apply_patch' }, output),
-    ).resolves.toBeUndefined();
-
-    expect(output.args).toBe(args);
-    expect(args.patchText).toBe(patchText);
-  });
-
   test('blocks a malformed @@ at runtime before native execution', async () => {
     const root = await createTempDir('apply-patch-hook-');
     await writeFixture(root, 'sample.txt', 'alpha\nbeta\n');

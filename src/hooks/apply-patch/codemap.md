@@ -7,7 +7,7 @@ Preflights patch-tool calls before OpenCode's native tool runs: v1's `apply_patc
 ## Entry point and contract
 
 - `index.ts` exports `createApplyPatchHook(ctx)` for `tool.execute.before`. Only calls with `input.tool === 'apply_patch'` (v1) or `input.tool === 'patch'` (v2 native) and a string `output.args.patchText` are processed; the v2 tool bridge (`src/v2/setup.ts`) forwards the v2 name unchanged.
-- Rewrites mutate `output.args.patchText` on the original args object; the hook never replaces `output.args`. Frozen or read-only args pass through unchanged.
+- Rewrites mutate `output.args.patchText` on the original args object; the hook never replaces `output.args`.
 - The root is `input.directory || ctx.directory || process.cwd()`; the worktree is `ctx.worktree || root`.
 - An unchanged patch keeps the original args and bytes.
 - Only an outside-workspace `blocked` error fails open, passing the original patch to the native tool. Validation, verification, and internal errors leave args intact and throw. `errors.ts` supplies `ApplyPatchError` with stable `kind`, `code`, message, and optional cause.
