@@ -4192,6 +4192,12 @@ describe('sidebar model display names', () => {
               data: [
                 { providerID: 'openai', id: 'gpt-test', name: 'GPT Test' },
                 {
+                  providerID: 'openai',
+                  id: 'gpt-test-fast',
+                  modelID: 'gpt-test',
+                  name: 'GPT Test Fast',
+                },
+                {
                   providerID: 'other',
                   modelID: 'model-two',
                   name: 'Model Two',
@@ -4207,6 +4213,7 @@ describe('sidebar model display names', () => {
       expect(calls).toEqual([{ location: { directory: '/project' } }]);
       expect(Object.fromEntries(names)).toEqual({
         'openai/gpt-test': 'GPT Test',
+        'openai/gpt-test-fast': 'GPT Test Fast',
         'other/model-two': 'Model Two',
         'other/model-empty': 'model-empty',
       });

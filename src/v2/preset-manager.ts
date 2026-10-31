@@ -1505,11 +1505,13 @@ export function normalizeModelOption(entry: unknown): ModelOption | undefined {
   };
   const providerID =
     typeof rec.providerID === 'string' ? rec.providerID : undefined;
+  // `id` is the catalogue key that `provider/model` refs name; `modelID` is
+  // the upstream API id, which aliases such as `*-fast` share with their base.
   const modelID =
-    typeof rec.modelID === 'string'
-      ? rec.modelID
-      : typeof rec.id === 'string'
-        ? rec.id
+    typeof rec.id === 'string'
+      ? rec.id
+      : typeof rec.modelID === 'string'
+        ? rec.modelID
         : undefined;
   if (!providerID || !modelID) return undefined;
 
