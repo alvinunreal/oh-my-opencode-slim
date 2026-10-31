@@ -112,8 +112,8 @@ with one equivalent pass; the cache-safety harness mirrors this wiring.
   wires the returned handlers into the plugin's hook object.
 - **Council seats** (`council-seats/`): owns `Seats:`-line seat-result
   assembly. The managed resolver reads the parent-side job board only;
-  the native resolver reads the host sessions and is selected when
-  `backgroundJobs.enabled` is false. Neither depends on the other.
+  the native resolver reads the host sessions and is selected whenever
+  the managed lifecycle is off (`backgroundJobs.mode` is `native` or `off`). Neither depends on the other.
 - **Task-session-manager**: depends on `cache-safe-injection.ts` for all prompt
   injection and on `session-lifecycle.ts` for delete coordination.
 - **Orchestrator-wake**: gates on the task-session-manager's `hasInputWait`

@@ -51,6 +51,7 @@ OpenCode Core → Plugin Initialization (index.ts)
 | `index.ts` | Main plugin entry, orchestrates all server-side subsystems; exports dual `server`/`setup` default | Config system, agent factories, tool creators, hooks, v2 adapter |
 | `admission-runtime.ts` | Per-directory scheduler/pending-call runtime lease | Background task concurrency, task-session pending calls |
 | `tui.ts` | TUI sidebar plugin for agent model display; wires the client-side multiplexer pane lifecycle | tui-state.ts, config constants, multiplexer/client |
+| `tui-gates.ts` | Render-stack-free config gate read (`readTuiGates`/`readConfigState`); re-exported by `tui.ts`. Needed by the thin v2 entry so `tui: false` never loads OpenTUI/Solid | config/snapshot, config/schema, multiplexer/client/tui-wiring |
 | `tui-state.ts` | Persistent state management for TUI | Node.js fs/promises, os module |
 | `tui-preset.ts` | Three-level `/preset` manager (preset list → agents → agent edit) using `api.ui` dialogs | preset-switch.ts, config loader/constants |
 | `plugin-entry.ts` | Installer-managed plugin entry marker and `PluginEntry` type | none |

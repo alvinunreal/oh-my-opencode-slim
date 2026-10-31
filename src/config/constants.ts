@@ -6,6 +6,9 @@ export const AGENT_ALIASES: Record<string, string> = {
   'frontend-ui-ux-engineer': 'designer',
 };
 
+/** Package/plugin id shared by the server entry and the TUI entries. */
+export const PLUGIN_ID = 'oh-my-opencode-slim';
+
 /** OpenCode built-in subagents slim replaces; disabled at runtime (#1582). */
 export const BUILTIN_OPENCODE_SUBAGENTS_TO_DISABLE = [
   'general',

@@ -24,6 +24,7 @@ import {
   AGENT_ALIASES,
   BUILTIN_OPENCODE_SUBAGENTS_TO_DISABLE,
 } from '../config/constants';
+import { resolveBackgroundJobsMode } from '../config/runtime';
 import { InterviewConfigSchema } from '../config/schema';
 import type { PluginConfigSnapshot } from '../config/snapshot';
 import { readPluginConfigSnapshot } from '../config/snapshot';
@@ -2019,10 +2020,16 @@ export function createToolExecuteBridges(
       isDelegation &&
       resolveDelegatedModel &&
       isRecord(argsView) &&
-      typeof argsView.subagent_type === 'string'
+      // A continuation may omit the agent; it still needs the admission the
+      // session-preset wrapper consumes, or the wrapped executor throws.
+      (typeof argsView.subagent_type === 'string' ||
+        typeof argsView.task_id === 'string')
     ) {
       const model = await resolveDelegatedModel({
-        agentType: argsView.subagent_type,
+        agentType:
+          typeof argsView.subagent_type === 'string'
+            ? argsView.subagent_type
+            : '',
         parentSessionID: e.sessionID,
         callID: e.id,
         args: argsView,
@@ -2239,7 +2246,11 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       hostFlavor: 'v2',
     });
     const preFlightConfig = startupConfigSnapshot.config;
-    const lifecycleEnabled = preFlightConfig.backgroundJobs?.enabled !== false;
+    // Resolve the same mode the v1 factory will resolve: `native` and `off`
+    // must not wire board persistence or the native-subagent executor
+    // wrapper, and only `managed` may claim the lifecycle.
+    const lifecycleEnabled =
+      resolveBackgroundJobsMode(preFlightConfig.backgroundJobs) === 'managed';
     if (lifecycleEnabled) {
       try {
         const storage = ctx.storage;
@@ -3462,27 +3473,27 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                 exactCallConfirmed: boolean;
               }) => Promise<unknown>)
             | undefined;
-          if (
-            before &&
-            lifecycleEnabled &&
-            (backgroundFlip || registerStructuredLaunch)
-          ) {
+          // The preset wrapper consumes the admission the bridge captures and
+          // the preset subsystem runs in every mode, so it installs with
+          // `before`; only the board halves below stay managed-only.
+          if (before) {
             try {
-              const wrapper = registerStructuredLaunch
-                ? createSubagentExecutorWrapper({
-                    register: (launch) =>
-                      registerStructuredLaunch({
-                        ...launch,
-                        exactCallConfirmed: launch.callID !== '',
-                      }),
-                  })
-                : undefined;
+              const wrapper =
+                lifecycleEnabled && registerStructuredLaunch
+                  ? createSubagentExecutorWrapper({
+                      register: (launch) =>
+                        registerStructuredLaunch({
+                          ...launch,
+                          exactCallConfirmed: launch.callID !== '',
+                        }),
+                    })
+                  : undefined;
               const wrapped = new WeakSet<object>();
               const reg = await ctx.tool.transform((draft) => {
                 nativePresetWrapperReady = false;
                 try {
                   draft.update(DELEGATION_TOOL_V2, (tool) => {
-                    if (backgroundFlip)
+                    if (lifecycleEnabled && backgroundFlip)
                       tool.description =
                         SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION;
                     if (tool.execute && wrapped.has(tool.execute)) {
@@ -3505,7 +3516,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                       nativePresetWrapperReady = true;
                     }
                   });
-                  if (backgroundFlip) {
+                  if (lifecycleEnabled && backgroundFlip) {
                     const flipped = draft.get(DELEGATION_TOOL_V2);
                     if (
                       flipped?.description ===
