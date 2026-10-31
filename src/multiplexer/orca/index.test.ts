@@ -227,9 +227,12 @@ describe('OrcaMultiplexer', () => {
     expect(split?.slice(0, 3)).toEqual(['/usr/bin/orca', 'terminal', 'split']);
     expect(flagValue(split as string[], '--terminal')).toBe(ANCHOR);
     expect(flagValue(split as string[], '--direction')).toBe('horizontal');
-    // The viewer command is the shared builder's output, passed verbatim.
+    // The viewer command carries the marker as well as the attach arguments.
     expect(flagValue(split as string[], '--command')).toContain(
       "attach 'http://127.0.0.1:4096'",
+    );
+    expect(flagValue(split as string[], '--command')).toContain(
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
     );
     expect(split).toContain('--json');
   });

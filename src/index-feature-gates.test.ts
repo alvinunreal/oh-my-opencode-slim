@@ -529,12 +529,9 @@ describe('plugin feature gates through exported hooks', () => {
       if (sidebar) {
         expect(existsSync(statePath)).toBe(true);
         expect(existsSync(externalPath)).toBe(true);
-        expect(readTuiSnapshot(externalDir).agentModels.explorer).toBe(
-          'openai/gpt-c',
-        );
-        expect(readTuiSnapshot(externalDir).agentVariants.explorer).toBe(
-          'high',
-        );
+        expect(
+          readTuiSnapshot(externalDir).sessionModels?.ses_child?.explorer,
+        ).toEqual({ model: 'openai/gpt-c', variant: 'high' });
       } else {
         for (const state of [statePath, externalPath]) {
           expect(existsSync(state)).toBe(false);

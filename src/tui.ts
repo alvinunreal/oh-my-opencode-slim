@@ -24,6 +24,7 @@ import {
 } from './multiplexer/client/diagnostics';
 import {
   createTuiPaneWiring,
+  HOST_REPROBE_INTERVAL_MS,
   initClientLogging,
   type LoadedPaneConfig,
   paneConfigOf,
@@ -34,6 +35,7 @@ import {
   describeV2HostMode,
   detectV2HostMode,
 } from './multiplexer/client/v2-host';
+import { PANE_VIEWER_ENV } from './multiplexer/shared';
 import {
   KILL_ALL_KEYBIND,
   killAllRunningSubagents,
@@ -271,7 +273,10 @@ export function getSidebarAgentNames(snapshot: TuiSnapshot): string[] {
     : FALLBACK_SIDEBAR_AGENTS;
 }
 
-type AgentListFn = (input?: unknown) => Promise<unknown>;
+type AgentListFn = (
+  input?: unknown,
+  options?: { signal: AbortSignal },
+) => Promise<unknown>;
 
 function asFunction(value: unknown): AgentListFn | undefined {
   return typeof value === 'function' ? (value as AgentListFn) : undefined;
@@ -343,6 +348,13 @@ function modelsFromAgentList(response: unknown): Record<string, string> {
 export async function fetchRemoteAgentModels(
   client: unknown,
   directory: string,
+  scheduleTimeout: (callback: () => void, delay: number) => () => void = (
+    callback,
+    delay,
+  ) => {
+    const timer = setTimeout(callback, delay);
+    return () => clearTimeout(timer);
+  },
 ): Promise<Record<string, string>> {
   const rec = client as
     | {
@@ -353,19 +365,30 @@ export async function fetchRemoteAgentModels(
     | undefined;
   if (!rec) return {};
 
+  const v1Agents = asFunction(rec.app?.agents);
+  const v2Receiver = rec.agent ?? rec.v2?.agent;
+  const receiver = v1Agents ? rec.app : v2Receiver;
+  const list = v1Agents ?? asFunction(v2Receiver?.list);
+  if (!list) return {};
+  const controller = new AbortController();
+  let cancelTimeout: (() => void) | undefined;
   try {
-    const v1Agents = asFunction(rec.app?.agents);
-    if (v1Agents) {
-      return modelsFromAgentList(await v1Agents.call(rec.app, { directory }));
-    }
-    const v2Receiver = rec.agent ?? rec.v2?.agent;
-    const v2List = asFunction(v2Receiver?.list);
-    if (!v2List) return {};
-    return modelsFromAgentList(
-      await v2List.call(v2Receiver, { location: { directory } }),
+    const timeout = new Promise<unknown>((resolve) => {
+      cancelTimeout = scheduleTimeout(() => {
+        controller.abort();
+        resolve([]);
+      }, 2_000);
+    });
+    const request = list.call(
+      receiver,
+      v1Agents ? { directory } : { location: { directory } },
+      { signal: controller.signal },
     );
+    return modelsFromAgentList(await Promise.race([request, timeout]));
   } catch {
     return {};
+  } finally {
+    cancelTimeout?.();
   }
 }
 
@@ -453,7 +476,7 @@ export async function hydrateModelNames(
   try {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const names = await Promise.race([
-      fetchModelNameMap({ client }),
+      fetchModelNameMap({ client, directory }),
       new Promise<never>((_, reject) => {
         timer = setTimeout(
           () => reject(new Error('model names fetch timed out')),
@@ -921,10 +944,8 @@ interface AgentRowTheme {
   secondary?: unknown;
   info?: unknown;
   background?: unknown;
-  backgroundElement?: unknown;
   success?: unknown;
   warning?: unknown;
-  hover?: unknown;
 }
 
 const STATUS_ACTIVE_COLOR = '#22c55e';
@@ -979,25 +1000,20 @@ export function selectionGuard(renderer: {
 
 export function resolveHoverBackground(theme: {
   background?: unknown;
-  backgroundElement?: unknown;
   text?: unknown;
   hover?: unknown;
 }): unknown {
-  if (theme.hover !== undefined && theme.hover !== null) return theme.hover;
-  if (
-    theme.backgroundElement !== undefined &&
-    theme.backgroundElement !== null
-  ) {
-    return theme.backgroundElement;
-  }
   try {
+    if (theme.hover != null && parseColor(theme.hover as ColorInput).a > 0) {
+      return theme.hover;
+    }
     const bg = parseColor((theme.background ?? '#111111') as ColorInput);
     const fg = parseColor((theme.text ?? '#ffffff') as ColorInput);
     return RGBA.fromValues(
       bg.r * 0.82 + fg.r * 0.18,
       bg.g * 0.82 + fg.g * 0.18,
       bg.b * 0.82 + fg.b * 0.18,
-      bg.a,
+      1,
     );
   } catch {
     return '#2a2a2a';
@@ -1152,7 +1168,7 @@ interface AgentRowOptions {
   expanded: boolean;
   annotation?: string;
   onClick?: () => void;
-  hoverBackground?: unknown;
+  hoverBackground: unknown;
   hasSelectedText?: () => boolean;
   hasHistory: boolean;
 }
@@ -1251,7 +1267,7 @@ function agentRow(options: AgentRowOptions): JSX.Element {
     agentHeaderCells(options),
   );
   decorateInteractiveRow(header, {
-    hoverBackground: hoverBackground ?? resolveHoverBackground(theme),
+    hoverBackground,
     onActivate: onClick,
     hasSelectedText,
   });
@@ -1302,7 +1318,7 @@ function compactAgentRow(options: AgentRowOptions): JSX.Element {
     ],
   );
   return decorateInteractiveRow(row, {
-    hoverBackground: hoverBackground ?? resolveHoverBackground(theme),
+    hoverBackground,
     onActivate: onClick,
     hasSelectedText,
   });
@@ -1438,6 +1454,31 @@ export function getContrastForeground(
   return RGBA.fromInts(255, 255, 255);
 }
 
+function projectSidebarSessionModels(
+  snapshot: TuiSnapshot,
+  visibleSessionID?: string,
+): TuiSnapshot {
+  if (!snapshot.sessionModels) return snapshot;
+  const agentModels = { ...snapshot.agentModels };
+  const agentVariants = { ...snapshot.agentVariants };
+  const root =
+    visibleSessionID && resolveTuiSnapshotRoot(snapshot, visibleSessionID);
+  for (const [sessionID, agents] of Object.entries(snapshot.sessionModels)) {
+    if (!root || resolveTuiSnapshotRoot(snapshot, sessionID) !== root) continue;
+    if (
+      sessionID !== root &&
+      !Object.hasOwn(snapshot.activeSessions, sessionID)
+    )
+      continue;
+    for (const [agent, observation] of Object.entries(agents)) {
+      agentModels[agent] = observation.model;
+      if (observation.variant === undefined) delete agentVariants[agent];
+      else agentVariants[agent] = observation.variant;
+    }
+  }
+  return { ...snapshot, agentModels, agentVariants, sessionModels: undefined };
+}
+
 /** Window-local projection; never writes the directory-wide snapshot. */
 export function projectSidebarTeam(
   snapshot: TuiSnapshot,
@@ -1518,7 +1559,6 @@ export function renderSidebar(
     borderActive: unknown;
     text: unknown;
     textMuted: unknown;
-    backgroundElement?: unknown;
     success?: unknown;
     warning?: unknown;
     hover?: unknown;
@@ -1536,7 +1576,7 @@ export function renderSidebar(
   modelNames?: ReadonlyMap<string, string>,
 ): JSX.Element {
   const configStatusRow = buildConfigStatusRow(configInvalid, theme);
-  const presetHoverBackground = resolveHoverBackground({
+  const hoverBackground = resolveHoverBackground({
     background: theme.background,
     text: theme.text,
     hover: theme.hover,
@@ -1545,7 +1585,7 @@ export function renderSidebar(
     ? buildPresetRow(
         presetRow,
         theme,
-        presetHoverBackground,
+        hoverBackground,
         interaction?.hasSelectedText,
       )
     : null;
@@ -1565,13 +1605,6 @@ export function renderSidebar(
       : getSidebarReusableTargets(snapshot, visibleRootID);
   const expandedAgents = interaction?.expandedAgents() ?? new Set<string>();
   const sidebarOpen = interaction?.isOpen() ?? true;
-  // Sidebar rows sit on backgroundElement; using that same surface for hover
-  // produces no visible change. Resolve from the page colors, as for presets.
-  const hoverBackground = resolveHoverBackground({
-    background: theme.background,
-    text: theme.text,
-    hover: theme.hover,
-  });
   const header = box(
     {
       width: '100%',
@@ -1788,10 +1821,6 @@ export function buildPresetRow(
         ]);
   if (!clickable) return content;
   return decorateInteractiveRow(content, {
-    // Sidebar rows sit on backgroundElement, so using that color as the
-    // hover fill leaves this row visually unchanged. Use the normal hover
-    // color when the host provides one, otherwise derive a visible fill from
-    // the page background and text colors.
     hoverBackground,
     onActivate: presetRow.onActivate,
     hasSelectedText,
@@ -1929,7 +1958,11 @@ interface V2TuiThemeTokens {
       warning?: { base: unknown };
     };
   };
-  background: { base?: unknown; default?: unknown; raised?: { base: unknown } };
+  background: {
+    base?: unknown;
+    default?: unknown;
+    raised?: { base: unknown };
+  };
   border: { base?: unknown; default?: unknown };
   success?: unknown;
   warning?: unknown;
@@ -1977,7 +2010,6 @@ interface V2TuiContext extends V2PresetManagerContext {
 function v2ThemeView(theme: V2TuiThemeTokens): {
   accent: unknown;
   background: unknown;
-  backgroundElement: unknown;
   borderActive: unknown;
   text: unknown;
   textMuted: unknown;
@@ -1988,10 +2020,6 @@ function v2ThemeView(theme: V2TuiThemeTokens): {
   return {
     accent: theme.hue?.interactive[200],
     background: theme.background.base ?? theme.background.default,
-    backgroundElement:
-      theme.background.raised?.base ??
-      theme.background.base ??
-      theme.background.default,
     borderActive: theme.border.base ?? theme.border.default,
     text: theme.text.base ?? theme.text.default,
     textMuted: theme.text.muted ?? theme.text.subdued,
@@ -2033,10 +2061,11 @@ interface SidebarRuntimeAdapter {
   /** v2 hosts only: the prompt's live selected model while the visible
    * route is a root orchestrator session. Overlays the sidebar's
    * orchestrator row so the picker's choice shows before the first turn
-   * on the new model commits it to tui-state. */
-  getSelectedRootModel?: () =>
-    | { model: string; variant?: string | undefined }
-    | undefined;
+   * on the new model commits it to tui-state. Receives the snapshot being
+   * overlaid so the orchestrator's displayName identity is honored. */
+  getSelectedRootModel?: (
+    snapshot: TuiSnapshot,
+  ) => { model: string; variant?: string | undefined } | undefined;
 }
 
 /** Shape `readTuiSnapshot` returns for an empty/missing state file. */
@@ -2061,7 +2090,9 @@ const EMPTY_TUI_SNAPSHOT: TuiSnapshot = {
  * screen's selection belongs to a session that does not exist yet.
  * Gate 2 — session shape: child sessions (parentID) own their own agent
  * rows, and a root session under another primary agent is not the
- * plugin's orchestrator row.
+ * plugin's orchestrator row. The root session may carry the
+ * orchestrator's displayName identity (v2 registers it as the visible
+ * agent), so that spelling passes too.
  * Gate 3 — selection shape: the host's picker payload must carry usable
  * providerID/modelID strings.
  */
@@ -2071,6 +2102,10 @@ export function resolveSelectedRootModel(input: {
   selected?:
     | { providerID?: unknown; modelID?: unknown; variant?: unknown }
     | undefined;
+  /** Canonical ID → display name; a root session's agent may be the
+   *  orchestrator's visible displayName identity instead of the canonical
+   *  ID. */
+  agentDisplayNames?: Record<string, string> | undefined;
 }): { model: string; variant?: string | undefined } | undefined {
   const sessionID = input.route
     ? resolveRouteSessionId(input.route)
@@ -2078,7 +2113,11 @@ export function resolveSelectedRootModel(input: {
   if (!sessionID) return undefined;
   const info = input.sessionInfo;
   if (!info || info.parentID) return undefined;
-  if (typeof info.agent === 'string' && info.agent !== 'orchestrator') {
+  if (
+    typeof info.agent === 'string' &&
+    info.agent !== 'orchestrator' &&
+    info.agent !== input.agentDisplayNames?.orchestrator
+  ) {
     return undefined;
   }
   const selected = input.selected;
@@ -2145,6 +2184,7 @@ function createSidebarRuntime(
   let { configInvalid, compactSidebar, multiplexerType, presetName } =
     configStateOfGates(gatesRead.gates);
   adapter.onMultiplexerConfig?.(multiplexerType, gatesRead.paneConfig);
+  let configRenderPending = false;
   const applyConfigState = (fresh = false): boolean => {
     const read = readTuiGates(configDirectory, adapter.hostFlavor, fresh);
     if (read.readFailed) return false;
@@ -2170,6 +2210,7 @@ function createSidebarRuntime(
       compactSidebar = next.compactSidebar;
       multiplexerType = next.multiplexerType;
       presetName = next.presetName;
+      configRenderPending = true;
       adapter.onMultiplexerConfig?.(multiplexerType, gatesRead.paneConfig);
     }
     return changed;
@@ -2191,30 +2232,33 @@ function createSidebarRuntime(
   const [modelNames, setModelNames] = createSignal<ReadonlyMap<string, string>>(
     modelNamesCache.names,
   );
+  const updateConfigDirectory = (currentDirectory: string): boolean => {
+    if (currentDirectory === configDirectory) return false;
+    configDirectory = currentDirectory;
+    gatesRead = readTuiGates(configDirectory, adapter.hostFlavor);
+    ({ configInvalid, compactSidebar, multiplexerType, presetName } =
+      configStateOfGates(gatesRead.gates));
+    configRenderPending = true;
+    adapter.onMultiplexerConfig?.(multiplexerType, gatesRead.paneConfig);
+    // Never carry one project's last-good config state into another.
+    bindConfigListener();
+    return true;
+  };
   const refreshSidebar = async () => {
     if (disposed) return;
     if (!sidebarEnabled) return;
     const currentDirectory = adapter.getDirectory();
     const currentSession = adapter.getVisibleSession();
     let nextSnapshot = await readTuiSnapshotAsync(currentDirectory);
-    if (disposed) return;
-    const directoryChanged = currentDirectory !== configDirectory;
-    let stateChanged = false;
-    if (directoryChanged) {
-      configDirectory = currentDirectory;
-      gatesRead = readTuiGates(configDirectory, adapter.hostFlavor);
-      ({ configInvalid, compactSidebar, multiplexerType, presetName } =
-        configStateOfGates(gatesRead.gates));
-      adapter.onMultiplexerConfig?.(multiplexerType, gatesRead.paneConfig);
-      // Never carry one project's last-good config state into another.
-      bindConfigListener();
-      stateChanged = true;
-    }
+    if (disposed || !isRefreshCurrent(currentDirectory, adapter.getDirectory()))
+      return;
+    const directoryChanged = updateConfigDirectory(currentDirectory);
+    let stateChanged = directoryChanged || configRenderPending;
     // Revalidate config identity on every poll; unchanged files reuse the
     // shared parsed snapshot, while external edits still surface promptly.
     if (!directoryChanged) {
       try {
-        stateChanged = applyConfigState();
+        stateChanged = applyConfigState() || stateChanged;
       } catch (err) {
         log('[v2][tui] config state read failed', String(err));
       }
@@ -2231,7 +2275,7 @@ function createSidebarRuntime(
     // learns the switch when the next prompt commits it).
     nextSnapshot = overlaySelectedRootModel(
       nextSnapshot,
-      adapter.getSelectedRootModel?.(),
+      adapter.getSelectedRootModel?.(nextSnapshot),
     );
     const namesBefore = modelNamesCache.names;
     await hydrateModelNames(adapter.client, currentDirectory, modelNamesCache);
@@ -2280,9 +2324,10 @@ function createSidebarRuntime(
     if (!snapshotChanged && !stateChanged) {
       return;
     }
-    if (snapshotChanged) {
-      setSnapshot(nextSnapshot);
-    }
+    setSnapshot(
+      nextSnapshot === snapshot() ? { ...nextSnapshot } : nextSnapshot,
+    );
+    configRenderPending = false;
     if (!disposed) adapter.renderer.requestRender();
   };
   const interaction = createSidebarInteraction(
@@ -2329,7 +2374,7 @@ function createSidebarRuntime(
   // to 5s.
   const pollConfigOnly = () => {
     try {
-      applyConfigState();
+      if (!updateConfigDirectory(adapter.getDirectory())) applyConfigState();
     } catch (err) {
       log('[tui] config state read failed', String(err));
     }
@@ -2375,10 +2420,10 @@ function createSidebarRuntime(
           return renderSidebar(
             overlaySelectedRootModel(
               projectSidebarTeam(
-                currentSnapshot,
+                projectSidebarSessionModels(currentSnapshot, visible),
                 isCurrentProjection ? projection.state : undefined,
               ),
-              adapter.getSelectedRootModel?.(),
+              adapter.getSelectedRootModel?.(currentSnapshot),
             ),
             adapter.version,
             adapter.theme(),
@@ -2397,6 +2442,9 @@ function createSidebarRuntime(
   return {
     getDirectory: () => configDirectory,
     getPaneConfig: () => gatesRead.paneConfig,
+    syncConfigDirectory: () => {
+      updateConfigDirectory(adapter.getDirectory());
+    },
     getSnapshot: snapshot,
     setSnapshot,
     dispose: () => {
@@ -2414,7 +2462,7 @@ function createSidebarRuntime(
 async function setup(
   ctx: V2TuiContext,
   initial?: TuiGatesRead,
-): Promise<undefined | (() => void)> {
+): Promise<undefined | (() => Promise<void>)> {
   if (isPluginDisabledByEnv()) return;
   const gatesRead =
     initial ?? readTuiGates(ctx.location?.directory ?? process.cwd(), 'v2');
@@ -2448,6 +2496,7 @@ async function setup(
       ? describeV2HostMode(v2HostMode)
       : null;
   let paneWiring: TuiPaneWiring | null = null;
+  let paneWiringRetry: ReturnType<typeof setTimeout> | null = null;
   let paneWiringSetting: string | null = null;
   let currentPaneConfig = gatesRead.paneConfig;
   // Set by the setup teardown. A config-triggered rebuild can be waiting on
@@ -2455,6 +2504,8 @@ async function setup(
   // such a rebuild self-dispose instead of going live after teardown.
   let paneWiringClosed = false;
   const disposePaneWiring = async (): Promise<void> => {
+    if (paneWiringRetry !== null) clearTimeout(paneWiringRetry);
+    paneWiringRetry = null;
     const stale = paneWiring;
     if (stale === null) return;
     paneWiring = null;
@@ -2466,7 +2517,9 @@ async function setup(
   const createPaneWiring = async (): Promise<void> => {
     try {
       const paneHost = await buildV2PaneWiringOptions({
-        location: ctx.location,
+        get location() {
+          return ctx.location;
+        },
         client: ctx.client,
         data: ctx.data,
         ui: ctx.ui,
@@ -2476,6 +2529,10 @@ async function setup(
       if (paneHost.options !== null) {
         const wiring = await createTuiPaneWiring({
           ...paneHost.options,
+          getDirectory: () => {
+            runtime.syncConfigDirectory();
+            return ctx.location?.directory ?? process.cwd();
+          },
           client: ctx.client,
           paneConfig: currentPaneConfig,
         });
@@ -2487,6 +2544,18 @@ async function setup(
         }
         paneWiring = wiring;
         paneWiringSetting = multiplexerType;
+      } else if (paneHost.mode.mode === 'shared') {
+        if (
+          !paneWiringClosed &&
+          multiplexerType !== 'none' &&
+          paneWiringRetry === null
+        ) {
+          paneWiringRetry = setTimeout(() => {
+            paneWiringRetry = null;
+            void reconcilePaneWiring();
+          }, HOST_REPROBE_INTERVAL_MS);
+          paneWiringRetry.unref?.();
+        }
       } else {
         hostFailureDetail = describeV2HostMode(paneHost.mode);
       }
@@ -2508,7 +2577,11 @@ async function setup(
     paneWiringSync = paneWiringSync
       .then(async () => {
         if (paneWiringClosed) return;
-        if (hostFailureDetail !== null || multiplexerType === 'none') {
+        if (
+          process.env[PANE_VIEWER_ENV] === '1' ||
+          hostFailureDetail !== null ||
+          multiplexerType === 'none'
+        ) {
           await disposePaneWiring();
           return;
         }
@@ -2535,7 +2608,7 @@ async function setup(
       hostFlavor: 'v2',
       getDirectory: () => ctx.location?.directory ?? process.cwd(),
       getVisibleSession: () => resolveRouteSessionId(ctx.ui.router.current()),
-      getSelectedRootModel: () => {
+      getSelectedRootModel: (currentSnapshot) => {
         const route = ctx.ui.router.current();
         const sessionID = resolveRouteSessionId(route);
         return resolveSelectedRootModel({
@@ -2544,6 +2617,7 @@ async function setup(
             ? ctx.data?.session?.get?.(sessionID)
             : undefined,
           selected: ctx.ui.model?.current?.(),
+          agentDisplayNames: currentSnapshot.agentDisplayNames,
         });
       },
       client: ctx.client,
@@ -2592,8 +2666,9 @@ async function setup(
     // synchronously), then settle any in-flight rebuild: it self-disposes
     // when it sees `paneWiringClosed`, so a wiring created during the
     // teardown window cannot outlive the TUI.
-    void disposePaneWiring();
-    void (async () => {
+    const disposing = disposePaneWiring();
+    return (async () => {
+      await disposing;
       await paneWiringSync;
       await disposePaneWiring();
     })();
@@ -2676,7 +2751,7 @@ interface TuiDualContractModule {
   setup: (
     ctx: V2TuiContext,
     initial?: TuiGatesRead,
-  ) => Promise<undefined | (() => void)>;
+  ) => Promise<undefined | (() => Promise<void>)>;
 }
 
 const plugin: TuiDualContractModule = {

@@ -38,7 +38,7 @@ const SHELL_ARGS = [
   '/bin/bash',
   '-l',
   '-c',
-  `${BASH_PREAMBLE}${MARKER}${ATTACH_COMMAND}`,
+  `${BASH_PREAMBLE}${MARKER}env OH_MY_OPENCODE_SLIM_PANE_VIEWER=1 ${ATTACH_COMMAND}`,
 ];
 
 const BASE_ENV: CmuxEnvironment = {
@@ -564,7 +564,9 @@ describe('CmuxMultiplexer', () => {
 
     const run = calls.find((argv) => argv.includes('run')) ?? [];
     const script = run.at(-1) ?? '';
-    expect(script).toBe(ATTACH_COMMAND);
+    expect(script).toBe(
+      `set "OH_MY_OPENCODE_SLIM_PANE_VIEWER=1" && ${ATTACH_COMMAND}`,
+    );
     expect(script).not.toContain('# omosc:');
     // The display name contract is unaffected by the shell branch.
     expect(lastName(calls)).toBe(`my-tab/oracle:${CHILD_TOKEN}`);

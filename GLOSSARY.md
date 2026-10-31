@@ -80,3 +80,5 @@ Terms with genuine but non-blocking collisions or historical drift. Noted for aw
 
 - **"Presets" means two things** — A plugin *preset* is a set of agent overrides; a council *preset* is a lineup of councillor models. Same word, different JSON paths and types; no structural conflict, but easy to confuse.
 - **Config naming convention** — Config keys mix snake_case (`disabled_agents`, `main_pane_size`) with camelCase (`autoUpdate`, `backgroundJobs`) with no documented rule. Historical drift; `disabled_*` keys are uniformly snake_case while the rest is mixed even within sub-objects.
+- **"Lane" means two things** — An agent *lane* is its permission/tool/prompt scope; a worktree *lane* (worktrees skill, `.slim/worktrees.json`) is an isolated coding workspace. Different surfaces, both live.
+- **"Contract" is overloaded** — Three live senses: plugin API contracts (host interfaces), the dependency contract (import-boundary invariants enforced by tests), and `.contract.ts` registry files (module lists referenced by path string). No structural conflict; easy to confuse.

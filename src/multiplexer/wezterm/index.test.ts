@@ -462,6 +462,9 @@ describe('WeztermMultiplexer', () => {
     const { WeztermMultiplexer } = await importFreshWezterm();
     await spawnWith(new WeztermMultiplexer());
     expect(paneScript(splits()[0])).not.toContain('/proc/');
+    expect(paneScript(splits()[0])).toContain(
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
+    );
   });
 
   test('v1 with OPENCODE_SERVER_PASSWORD forwards only that variable', async () => {

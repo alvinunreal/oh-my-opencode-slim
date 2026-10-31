@@ -37,7 +37,9 @@ const plugin = {
 
   /** v2 hosts validate `{ id, setup }`. Read the gates from the light module
    *  first: `tui: false` must register nothing and load nothing. */
-  async setup(ctx: V2TuiPluginContext): Promise<undefined | (() => void)> {
+  async setup(
+    ctx: V2TuiPluginContext,
+  ): Promise<undefined | (() => Promise<void>)> {
     if (isPluginDisabledByEnv()) return;
 
     const directory = ctx.location?.directory ?? process.cwd();
