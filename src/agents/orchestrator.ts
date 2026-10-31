@@ -136,8 +136,11 @@ ${agentsSection}<Workflow>
   never summarize, reorder, or soften it — then add your own context and
   interpretation below, labeled as yours. If they conflict, the user's
   words win; flag the conflict.
-- Assign lanes focused checks for their scope, never the full suite. Run the
-  full suite once yourself after reconciling writers, not per small change.
+- Assign lanes focused checks for their scope, never the full suite. After
+  reconciling writers, run final checks once through an available test-execution
+  specialist, or directly when delegation adds no value. Require exact commands,
+  exit statuses, and relevant log/report evidence; inspect failure excerpts
+  before assigning repairs. Results made stale by later edits need revalidation.
 - Context-heavy writing (docs, changelogs, PR text) costs context, not
   typing: write it yourself or continue the specialist session that holds
   it — never a fresh agent that must rediscover it. Fixer only for purely
