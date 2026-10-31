@@ -424,14 +424,10 @@ export class CompanionManager {
   private readonly id: string;
   private readonly cwd: string;
   private status = 'idle';
-  /** sessionId → agent name, for sessions currently busy. */
-  private readonly busyAgentSessions = new Map<string, string>();
-  private readonly sessionDetails = new Map<
+  private readonly sessions = new Map<
     string,
-    { model?: string; variant?: string }
+    { busy: boolean; agent?: string; model?: string; variant?: string }
   >();
-  private orchestratorSessionId: string | undefined;
-  private orchestratorBusy = false;
   private attentionSeq = 0;
   private lastAttentionRequestId: string | undefined;
   private readonly config?: CompanionConfig;
@@ -848,38 +844,27 @@ export class CompanionManager {
     const { sessionId, agent, status, jobFinished } = input;
     if (!sessionId || (status !== 'busy' && status !== 'idle')) return;
 
-    if (agent === 'orchestrator') {
-      // A v2 start can precede agent identification for this same session.
-      this.busyAgentSessions.delete(sessionId);
-      if (status === 'idle') this.sessionDetails.delete(sessionId);
-      this.orchestratorSessionId = sessionId;
-      this.orchestratorBusy = status === 'busy';
-      // A pending input request is cleared only by its explicit reply/reject
-      // event, not by ordinary lifecycle noise from the same session.
-      if (this.status !== 'waiting-input') {
-        this.status = status;
-      }
-      this.flush();
-      return;
-    }
-
     if (status === 'busy') {
       // A busy event that trails a finished job would never be followed by
       // an idle one, leaving the specialist stuck on screen.
       if (jobFinished) return;
-      // Accept busy sessions even without a known agent name — Herdr
-      // subagents (spawned via opencode attach) often lack the agent
-      // field, and dropping the event leaves them shown as idle. Fall back
-      // to the generic busy name, never the raw session ID, which would
-      // reach the companion as an unrenderable agent name.
-      this.busyAgentSessions.set(sessionId, agent ?? 'orchestrator');
+      const previous = this.sessions.get(sessionId);
+      this.sessions.set(sessionId, {
+        ...previous,
+        agent: agent ?? previous?.agent,
+        busy: true,
+      });
     } else {
-      // Remove by session even when the agent name is unknown, so a
-      // finished specialist can never get stuck on screen.
-      this.busyAgentSessions.delete(sessionId);
-      this.sessionDetails.delete(sessionId);
+      this.sessions.delete(sessionId);
     }
+    if (this.status !== 'waiting-input') this.updateActivityStatus();
     this.flush();
+  }
+
+  private updateActivityStatus(): void {
+    this.status = [...this.sessions.values()].some((session) => session.busy)
+      ? 'busy'
+      : 'idle';
   }
 
   onSessionModelChanged(input: {
@@ -892,7 +877,7 @@ export class CompanionManager {
     const { sessionId, model, variant, variantObserved = false } = input;
     if (!sessionId || (!model && !variant)) return;
 
-    const previous = this.sessionDetails.get(sessionId);
+    const previous = this.sessions.get(sessionId);
     const nextModel = model ?? previous?.model;
     // A model change without an observed live variant must clear the previous
     // variant. For the same model, a model-only telemetry update preserves the
@@ -907,14 +892,13 @@ export class CompanionManager {
       return;
     }
 
-    this.sessionDetails.set(sessionId, {
+    this.sessions.set(sessionId, {
+      ...previous,
+      busy: previous?.busy ?? false,
       ...(nextModel ? { model: nextModel } : {}),
-      ...(nextVariant ? { variant: nextVariant } : {}),
+      variant: nextVariant,
     });
-    if (
-      this.busyAgentSessions.has(sessionId) ||
-      this.orchestratorSessionId === sessionId
-    ) {
+    if (previous?.busy) {
       this.flush();
     }
   }
@@ -922,14 +906,8 @@ export class CompanionManager {
   onSessionDeleted(sessionId: string | undefined): void {
     if (this.config?.enabled !== true) return;
     if (!sessionId) return;
-    const removed = this.busyAgentSessions.delete(sessionId);
-    this.sessionDetails.delete(sessionId);
-    const wasOrchestrator = this.orchestratorSessionId === sessionId;
-    if (wasOrchestrator) {
-      this.orchestratorSessionId = undefined;
-      this.orchestratorBusy = false;
-    }
-    if (removed || wasOrchestrator) {
+    if (this.sessions.delete(sessionId)) {
+      if (this.status !== 'waiting-input') this.updateActivityStatus();
       this.flush();
     }
   }
@@ -957,10 +935,7 @@ export class CompanionManager {
 
   onInputResolved(): void {
     if (this.config?.enabled !== true) return;
-    this.status =
-      this.busyAgentSessions.size > 0 || this.orchestratorBusy
-        ? 'busy'
-        : 'idle';
+    this.updateActivityStatus();
     this.flush();
   }
 
@@ -1026,7 +1001,7 @@ export class CompanionManager {
   }
 
   private detailFor(sessionId: string, agent: string): CompanionAgentDetail {
-    const detail = this.sessionDetails.get(sessionId);
+    const detail = this.sessions.get(sessionId);
     return {
       session_id: sessionId,
       agent,
@@ -1036,13 +1011,19 @@ export class CompanionManager {
   }
 
   private activeAgentDetails(): CompanionAgentDetail[] {
-    const details = [...this.busyAgentSessions.entries()]
+    const details = [...this.sessions.entries()]
+      .filter(([, session]) => session.busy && session.agent !== 'orchestrator')
       .slice(0, 9)
-      .map(([sessionId, agent]) => this.detailFor(sessionId, agent));
+      .map(([sessionId, session]) =>
+        this.detailFor(sessionId, session.agent ?? 'orchestrator'),
+      );
     if (details.length > 0) return details;
 
-    if (this.status === 'busy' && this.orchestratorSessionId) {
-      return [this.detailFor(this.orchestratorSessionId, 'orchestrator')];
+    const root = [...this.sessions.entries()].find(
+      ([, session]) => session.busy && session.agent === 'orchestrator',
+    );
+    if (this.status === 'busy' && root) {
+      return [this.detailFor(root[0], 'orchestrator')];
     }
 
     return [];
@@ -1050,7 +1031,9 @@ export class CompanionManager {
 
   /** One entry per running agent instance (two fixers → two cells). */
   private activeAgents(): string[] {
-    const agents = Array.from(this.busyAgentSessions.values());
+    const agents = [...this.sessions.values()]
+      .filter((session) => session.busy && session.agent !== 'orchestrator')
+      .map((session) => session.agent ?? 'orchestrator');
     if (agents.length > 0) return agents.slice(0, 9);
     if (this.status === 'waiting-input') return ['input'];
     if (this.status === 'busy') return ['orchestrator'];

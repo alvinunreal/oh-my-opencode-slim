@@ -831,6 +831,35 @@ describe('CompanionManager', () => {
     expect(readState().sessions[0].status).toBe('busy');
   });
 
+  it('keeps the remaining root and its model active when another root finishes', () => {
+    const m = make();
+    m.onLoad();
+    m.onSessionStatus({
+      sessionId: 'root-a',
+      agent: 'orchestrator',
+      status: 'busy',
+    });
+    m.onSessionModelChanged({ sessionId: 'root-a', model: 'provider/a' });
+    m.onSessionStatus({
+      sessionId: 'root-b',
+      agent: 'orchestrator',
+      status: 'busy',
+    });
+    m.onSessionModelChanged({ sessionId: 'root-b', model: 'provider/b' });
+    m.onSessionStatus({
+      sessionId: 'root-b',
+      agent: 'orchestrator',
+      status: 'idle',
+    });
+    expect(readState().sessions[0]).toMatchObject({
+      status: 'busy',
+      active_agents: ['orchestrator'],
+      active_agent_details: [
+        { session_id: 'root-a', agent: 'orchestrator', model: 'provider/a' },
+      ],
+    });
+  });
+
   it('removes a provisional v2 root after its agent is identified and it finishes', () => {
     const m = make();
     m.onLoad();
