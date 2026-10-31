@@ -4,6 +4,7 @@ import { mutateJsonFile } from '../config/json-file';
 import {
   findPluginConfigPaths,
   interpolateEnvironmentVariables,
+  isProjectConfigDisabled,
   loadPluginConfig,
   loadPluginConfigFromPath,
 } from '../config/loader';
@@ -33,6 +34,11 @@ function configWritePath(
   directory: string,
   scope: MarketplaceActivationScope,
 ): string {
+  if (scope === 'project' && isProjectConfigDisabled()) {
+    throw new MarketplaceActivationError(
+      'Cannot update project activation: OPENCODE_DISABLE_PROJECT_CONFIG disables project configuration. Unset it or use user scope.',
+    );
+  }
   const paths = findPluginConfigPaths(directory);
   if (scope === 'project') {
     return (
