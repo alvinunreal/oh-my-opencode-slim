@@ -761,7 +761,7 @@ describe('finalized existing-agent registry', () => {
     }
   });
 
-  test('stripped orchestrator keeps tracked TUI model and variant for visible alias', () => {
+  test('stripped orchestrator keeps the tracked TUI model on the canonical row only', () => {
     const runtime = runtimeFor({
       stripOrchestratorModel: true,
       agents: {
@@ -780,11 +780,15 @@ describe('finalized existing-agent registry', () => {
 
     expect(projection.orchestrator).not.toHaveProperty('model');
     expect(projection.Lead).not.toHaveProperty('model');
-    expect(registry.tuiAgentModels.Lead).toBe('provider/orchestrator');
-    expect(registry.tuiAgentVariants.Lead).toBe('high');
+    expect(registry.tuiAgentModels.orchestrator).toBe('provider/orchestrator');
+    expect(registry.tuiAgentVariants.orchestrator).toBe('high');
+    // The display alias keys no rows: the sidebar renders one row keyed by
+    // the canonical ID and labeled through agentDisplayNames.
+    expect(registry.tuiAgentModels.Lead).toBeUndefined();
+    expect(registry.tuiAgentVariants.Lead).toBeUndefined();
   });
 
-  test('stripped orchestrator keeps a visible alias effective model for the TUI', () => {
+  test('stripped orchestrator keeps a visible alias effective model on the canonical row', () => {
     const runtime = runtimeFor({
       stripOrchestratorModel: true,
       agents: {
@@ -801,8 +805,10 @@ describe('finalized existing-agent registry', () => {
 
     expect(projection.orchestrator).not.toHaveProperty('model');
     expect(projection.Lead?.model).toBe('provider/visible');
-    expect(registry.tuiAgentModels.Lead).toBe('provider/visible');
-    expect(registry.tuiAgentVariants.Lead).toBe('visible-v');
+    expect(registry.tuiAgentModels.orchestrator).toBe('provider/visible');
+    expect(registry.tuiAgentVariants.orchestrator).toBe('visible-v');
+    expect(registry.tuiAgentModels.Lead).toBeUndefined();
+    expect(registry.tuiAgentVariants.Lead).toBeUndefined();
   });
 
   test('does not publish a partial registry after construction failure', () => {
