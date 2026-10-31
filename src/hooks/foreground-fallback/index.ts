@@ -605,14 +605,13 @@ export class ForegroundFallbackManager {
   >();
   /** sessionID → last observed model string ("providerID/modelID") */
   private readonly sessionModel = new Map<string, string>();
-  /** sessionID → confirmed fallback and provider failure timestamps.
+  /** sessionID → confirmed fallback model.
    *  Kept separate from sessionModel because synthetic admissions may emit
    *  message.updated events for another model without changing the model
    *  serving the user's active turn. */
-  private readonly activeFallback = new Map<
-    string,
-    { model: string; downProviders: ReadonlyMap<string, number> }
-  >();
+  private readonly activeFallback = new Map<string, string>();
+  /** Provider failure timestamps survive internal returns to the primary. */
+  private readonly downProviders = new Map<string, Map<string, number>>();
   /** sessionID → agent name (populated from message.updated info.agent field) */
   private readonly sessionAgent = new Map<string, string>();
   /** The latest separately pinned v1 compaction and its active provenance. */
@@ -652,7 +651,7 @@ export class ForegroundFallbackManager {
    *  walk skips them; once every chain provider is listed the error
    *  surfaces. Holds at most the providers seen failing, and re-arms with
    *  the retry budget (external turn, recovery, return to primary). A
-   *  switch still records the provider in activeFallback.downProviders. */
+   *  switch still records the provider in downProviders. */
   private readonly quotaExhaustedProviders = new Map<string, Set<string>>();
   /** Process-local sessions with an active fallback switch in flight. */
   private readonly inProgress = getProcessFallbacksInProgress();
@@ -965,6 +964,7 @@ export class ForegroundFallbackManager {
     this.pendingInitialDelay.clear();
     this.observedUserMessageIds.clear();
     this.separateCompaction.clear();
+    this.downProviders.clear();
     this.v2RetryNotices.clear();
   }
 
@@ -990,11 +990,9 @@ export class ForegroundFallbackManager {
   ): void {
     if (messageID && this.observedUserMessageIds.get(sessionID)?.has(messageID))
       return;
-    if (
-      model !== undefined &&
-      this.activeFallback.get(sessionID)?.model !== model
-    ) {
+    if (model !== undefined && this.activeFallback.get(sessionID) !== model) {
       this.activeFallback.delete(sessionID);
+      this.downProviders.delete(sessionID);
       this.sessionModel.set(sessionID, model);
     }
     if (!messageID) return;
@@ -1258,6 +1256,7 @@ export class ForegroundFallbackManager {
   private forgetSession(id: string): void {
     this.sessionModel.delete(id);
     this.activeFallback.delete(id);
+    this.downProviders.delete(id);
     this.sessionAgent.delete(id);
     this.sessionTried.delete(id);
     this.sessionChains.delete(id);
@@ -1292,14 +1291,19 @@ export class ForegroundFallbackManager {
 
   /** Confirmed fallback serving this session, including unexpired provider failures. */
   getActiveFallback(sessionID: string) {
-    const active = this.activeFallback.get(sessionID);
-    if (!active) return;
+    const model = this.activeFallback.get(sessionID);
+    if (!model) return;
+    return { model, downProviders: this.getDownProviders(sessionID) };
+  }
+
+  private getDownProviders(sessionID: string): Set<string> {
     const downProviders = new Set<string>();
     const now = Date.now();
-    for (const [provider, recordedAt] of active.downProviders) {
+    for (const [provider, recordedAt] of this.downProviders.get(sessionID) ??
+      []) {
       if (now - recordedAt < PROVIDER_MARK_TTL_MS) downProviders.add(provider);
     }
-    return { model: active.model, downProviders };
+    return downProviders;
   }
 
   /** Restart the count with a new record so replies still being read are
@@ -1316,9 +1320,7 @@ export class ForegroundFallbackManager {
     model: string,
     error: unknown,
   ): void {
-    const downProviders = new Map(
-      this.activeFallback.get(sessionID)?.downProviders,
-    );
+    const downProviders = new Map(this.downProviders.get(sessionID));
     const fromProvider = from
       ? parseModelReference(from)?.providerID
       : undefined;
@@ -1327,7 +1329,8 @@ export class ForegroundFallbackManager {
     }
     const toProvider = parseModelReference(model)?.providerID;
     if (toProvider) downProviders.delete(toProvider);
-    this.activeFallback.set(sessionID, { model, downProviders });
+    this.downProviders.set(sessionID, downProviders);
+    this.activeFallback.set(sessionID, model);
     this.sessionModel.set(sessionID, model);
     this.resetUnknownFinishStreak(sessionID);
     this.onSessionModelChanged?.(sessionID, model);
@@ -1338,13 +1341,11 @@ export class ForegroundFallbackManager {
     });
   }
 
-  /** Reconcile an internal continuation that explicitly selected a model.
-   *  Returning to the configured primary ends the previous fallback episode,
-   *  while retaining the confirmed fallback keeps its delegation hint live. */
+  /** Reconcile an internal continuation without discarding provider marks. */
   observeContinuationModel(sessionID: string, model: string): void {
     const previousModel = this.sessionModel.get(sessionID);
     this.sessionModel.set(sessionID, model);
-    if (this.activeFallback.get(sessionID)?.model !== model) {
+    if (this.activeFallback.get(sessionID) !== model) {
       this.activeFallback.delete(sessionID);
     }
     if (previousModel !== model) {
@@ -1589,6 +1590,21 @@ export class ForegroundFallbackManager {
           noTools === false
         ) {
           // v2 completed-message synthesis is telemetry, not recovery evidence.
+          const created = isRecord(messageTime)
+            ? messageTime.created
+            : undefined;
+          if (
+            typeof info.providerID === 'string' &&
+            typeof created === 'number'
+          ) {
+            for (const id of [sessionID, this.sessionParent.get(sessionID)]) {
+              const marks = id ? this.downProviders.get(id) : undefined;
+              const markedAt = marks?.get(info.providerID);
+              if (markedAt !== undefined && created >= markedAt) {
+                marks?.delete(info.providerID);
+              }
+            }
+          }
           this.resetRecoveryState(sessionID);
         }
         break;
@@ -1990,7 +2006,12 @@ export class ForegroundFallbackManager {
    *  charges draw from the same sessionRetries budget. */
   private absorbHostRetry(sessionID: string, delayMs?: number): boolean {
     const hasChain = this.hasFallbackChain(sessionID);
-    if (hasChain && (delayMs ?? 0) > MAX_HOST_RETRY_DELAY_MS) return false;
+    if (
+      hasChain &&
+      (this.isV1ProviderMarkedDown(sessionID) ||
+        (delayMs ?? 0) > MAX_HOST_RETRY_DELAY_MS)
+    )
+      return false;
     // No-chain sessions only absorb to fund a same-model replay; once the
     // session is terminal or this failure episode already charged the
     // shared budget, the absorb must not charge again.
@@ -2198,10 +2219,33 @@ export class ForegroundFallbackManager {
     sessionID: string,
     error: unknown,
   ): boolean {
-    if (!isPermanentQuotaBillingError(error)) return false;
+    if (
+      !isPermanentQuotaBillingError(error) &&
+      !(
+        this.hasFallbackChain(sessionID) &&
+        this.isV1ProviderMarkedDown(sessionID)
+      )
+    )
+      return false;
     this.cancelInitialDelay(sessionID);
     this.initialDelayUsed.add(sessionID);
     return true;
+  }
+
+  private isV1ProviderMarkedDown(sessionID: string): boolean {
+    if (
+      (this.input as PluginInput & { hostFlavor?: string }).hostFlavor === 'v2'
+    )
+      return false;
+    const provider = parseModelReference(
+      this.sessionModel.get(sessionID) ?? '',
+    )?.providerID;
+    if (!provider) return false;
+    const parent = this.sessionParent.get(sessionID);
+    return Boolean(
+      this.getDownProviders(sessionID).has(provider) ||
+        (parent && this.getDownProviders(parent).has(provider)),
+    );
   }
 
   /** Defer an intervention when configured, regardless of its trigger path. */
@@ -2812,7 +2856,7 @@ export class ForegroundFallbackManager {
   private rearmIfFreshDescent(sessionID: string): void {
     const observedModel = this.sessionModel.get(sessionID);
     if (!observedModel) return;
-    if (this.activeFallback.get(sessionID)?.model === observedModel) return;
+    if (this.activeFallback.get(sessionID) === observedModel) return;
     const tried = this.sessionTried.get(sessionID);
     if (!tried || tried.size <= 1) return;
     const agentName = this.sessionAgent.get(sessionID);
@@ -2892,10 +2936,10 @@ export class ForegroundFallbackManager {
     const hasAllowance = (model: string) =>
       !quotaExhausted?.has(parseModelReference(model)?.providerID ?? '');
 
-    const downProviders = this.getActiveFallback(sessionID)?.downProviders;
+    const downProviders = this.getDownProviders(sessionID);
     const parentID = this.sessionParent.get(sessionID);
     const parentDownProviders = parentID
-      ? this.getActiveFallback(parentID)?.downProviders
+      ? this.getDownProviders(parentID)
       : undefined;
     // A failure after the sticky retry ends the descent even if switching to
     // the sticky entry cleared its provider from the exclusions.
@@ -2906,7 +2950,7 @@ export class ForegroundFallbackManager {
           return (
             !tried.has(model) &&
             hasAllowance(model) &&
-            !downProviders?.has(provider) &&
+            !downProviders.has(provider) &&
             !parentDownProviders?.has(provider)
           );
         });

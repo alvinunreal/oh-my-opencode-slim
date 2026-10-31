@@ -1621,6 +1621,409 @@ describe('foreground fallback redo: host retry budget', () => {
     });
   });
 
+  test('v1 retry-primary skips retry budget and initial delay for live down marks', async () => {
+    const { manager, mocks } = makeManager({
+      chain: ['primary/a', 'backup/b'],
+      maxRetries: 2,
+      initialRetryDelayMs: 1_000,
+    });
+    const parent = 'retry-primary-parent';
+    manager.registerSessionAgent(parent, 'orchestrator');
+    manager.noteExternalTurn(parent, 'msg_initial', 'primary/a');
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: parent,
+        error: {
+          name: 'APIError',
+          data: {
+            message: 'Rate limit exceeded',
+            statusCode: 429,
+            isRetryable: true,
+          },
+        },
+      },
+    });
+    jest.advanceTimersByTime(1_000);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(manager.getActiveFallback(parent)?.downProviders).toEqual(
+      new Set(['primary']),
+    );
+
+    manager.observeContinuationModel(parent, 'primary/a');
+    expect(manager.getActiveFallback(parent)).toBeUndefined();
+    recordInternalAdmission(parent, 'msg_wake');
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_wake',
+          sessionID: parent,
+          role: 'user',
+          agent: 'orchestrator',
+          model: { providerID: 'primary', modelID: 'a' },
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_primary',
+          sessionID: parent,
+          role: 'assistant',
+          providerID: 'primary',
+          modelID: 'a',
+          time: { created: Date.now() },
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: parent,
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'Rate limit exceeded',
+          next: Date.now() + 2_000,
+        },
+      },
+    });
+    expect(mocks.abort).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+    expect(mocks.promptAsync.mock.calls[1]?.[0]).toMatchObject({
+      path: { id: parent },
+      body: { model: { providerID: 'backup', modelID: 'b' } },
+    });
+
+    const child = 'retry-primary-child';
+    await manager.handleEvent({
+      type: 'session.created',
+      properties: { info: { id: child, parentID: parent } },
+    });
+    manager.registerSessionAgent(child, 'orchestrator');
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_child_primary',
+          sessionID: child,
+          role: 'assistant',
+          providerID: 'primary',
+          modelID: 'a',
+          time: { created: Date.now() },
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: child,
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'Rate limit exceeded',
+          next: Date.now() + 2_000,
+        },
+      },
+    });
+    expect(mocks.abort).toHaveBeenCalledTimes(2);
+    expect(mocks.promptAsync.mock.calls[2]?.[0]).toMatchObject({
+      path: { id: child },
+      body: { model: { providerID: 'backup', modelID: 'b' } },
+    });
+
+    jest.advanceTimersByTime(30 * 60 * 1_000);
+    const later = 'retry-primary-later-child';
+    await manager.handleEvent({
+      type: 'session.created',
+      properties: { info: { id: later, parentID: parent } },
+    });
+    manager.registerSessionAgent(later, 'orchestrator');
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_later_primary',
+          sessionID: later,
+          role: 'assistant',
+          providerID: 'primary',
+          modelID: 'a',
+          time: { created: Date.now() },
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: later,
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'Rate limit exceeded',
+          next: Date.now() + 2_000,
+        },
+      },
+    });
+    expect(mocks.abort).toHaveBeenCalledTimes(2);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(3);
+  });
+
+  test('v1 recovery clears only the recovered provider mark and absorbs its next retry', async () => {
+    const { manager, mocks } = makeManager({
+      chain: ['primary/a', 'backup/b', 'third/c'],
+      maxRetries: 2,
+      initialRetryDelayMs: 1_000,
+    });
+    const parent = 'recovered-primary';
+    const error = { statusCode: 429, message: 'Rate limit exceeded' };
+    manager.registerSessionAgent(parent, 'orchestrator');
+    manager.noteExternalTurn(parent, 'msg_initial', 'primary/a');
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID: parent, error },
+    });
+    jest.advanceTimersByTime(1_000);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID: parent, error },
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+    expect(manager.getActiveFallback(parent)).toEqual({
+      model: 'third/c',
+      downProviders: new Set(['primary', 'backup']),
+    });
+
+    manager.observeContinuationModel(parent, 'primary/a');
+    recordInternalAdmission(parent, 'msg_notice');
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_notice',
+          sessionID: parent,
+          role: 'user',
+          agent: 'orchestrator',
+          model: { providerID: 'primary', modelID: 'a' },
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_success',
+          sessionID: parent,
+          role: 'assistant',
+          providerID: 'primary',
+          modelID: 'a',
+          finish: 'tool-calls',
+          time: { created: Date.now(), completed: Date.now() },
+        },
+      },
+    });
+    jest.advanceTimersByTime(60_000);
+    const retry = (sessionID: string) => ({
+      type: 'session.status',
+      properties: {
+        sessionID,
+        status: { type: 'retry', attempt: 1, message: 'Rate limit exceeded' },
+      },
+    });
+    await manager.handleEvent(retry(parent));
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+    expect(manager.isFallbackInProgress(parent)).toBe(false);
+    expect((manager as any).sessionRetries.get(parent)).toBe(1);
+    expect([...(manager as any).downProviders.get(parent).keys()]).toEqual([
+      'backup',
+    ]);
+
+    const child = 'recovered-primary-child';
+    await manager.handleEvent({
+      type: 'session.created',
+      properties: { info: { id: child, parentID: parent } },
+    });
+    manager.registerSessionAgent(child, 'orchestrator');
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_child',
+          sessionID: child,
+          role: 'assistant',
+          providerID: 'primary',
+          modelID: 'a',
+          time: { created: Date.now() },
+        },
+      },
+    });
+    await manager.handleEvent(retry(child));
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+    expect(manager.isFallbackInProgress(child)).toBe(false);
+    expect((manager as any).sessionRetries.get(child)).toBe(1);
+  });
+
+  test.each(['after', 'same', 'before'] as const)(
+    'v1 child recovery created %s the parent provider mark',
+    async (timing) => {
+      const chain = ['primary/a', 'backup/b'];
+      const { mocks } = createMockClient();
+      const manager = new ForegroundFallbackManager(
+        { orchestrator: chain, explorer: chain },
+        true,
+        { directory: '/test' } as never,
+        2,
+        undefined,
+        undefined,
+        1_000,
+      );
+      const parent = `foreground-parent-${timing}`;
+      const child = `foreground-child-${timing}`;
+      manager.registerSessionAgent(parent, 'orchestrator');
+      manager.noteExternalTurn(parent, 'msg_parent', 'primary/a');
+      const startChild = async () => {
+        await manager.handleEvent({
+          type: 'session.created',
+          properties: {
+            info: { id: child, parentID: parent, agent: 'explorer' },
+          },
+        });
+        await manager.handleEvent({
+          type: 'message.updated',
+          properties: {
+            info: {
+              id: 'msg_child_user',
+              sessionID: child,
+              role: 'user',
+              agent: 'explorer',
+              model: { providerID: 'primary', modelID: 'a' },
+              time: { created: Date.now() },
+            },
+          },
+        });
+        const created = Date.now();
+        await manager.handleEvent({
+          type: 'message.updated',
+          properties: {
+            info: {
+              id: 'msg_child_step',
+              parentID: 'msg_child_user',
+              sessionID: child,
+              role: 'assistant',
+              providerID: 'primary',
+              modelID: 'a',
+              time: { created },
+            },
+          },
+        });
+        return created;
+      };
+      let created = timing === 'before' ? await startChild() : 0;
+      await manager.handleEvent({
+        type: 'session.error',
+        properties: {
+          sessionID: parent,
+          error: { statusCode: 429, message: 'Rate limit exceeded' },
+        },
+      });
+      jest.advanceTimersByTime(1_000);
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+      const marks = (manager as any).downProviders.get(parent) as Map<
+        string,
+        number
+      >;
+      const markedAt = marks.get('primary');
+      if (markedAt === undefined)
+        throw new Error('missing parent provider mark');
+      expect(markedAt).toBe(Date.now());
+
+      manager.observeContinuationModel(parent, 'primary/a');
+      recordInternalAdmission(parent, 'msg_native_notice');
+      await manager.handleEvent({
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg_native_notice',
+            sessionID: parent,
+            role: 'user',
+            agent: 'orchestrator',
+            model: { providerID: 'primary', modelID: 'a' },
+            time: { created: Date.now() },
+          },
+        },
+      });
+      await manager.handleEvent({
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg_parent_step',
+            parentID: 'msg_native_notice',
+            sessionID: parent,
+            role: 'assistant',
+            providerID: 'primary',
+            modelID: 'a',
+            time: { created: Date.now() },
+          },
+        },
+      });
+      if (timing !== 'before') {
+        if (timing === 'after') jest.advanceTimersByTime(1);
+        created = await startChild();
+      }
+      expect(Math.sign(created - markedAt)).toBe(
+        timing === 'before' ? -1 : timing === 'after' ? 1 : 0,
+      );
+      expect(marks.get('primary')).toBe(markedAt);
+      await manager.handleEvent({
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg_child_step',
+            parentID: 'msg_child_user',
+            sessionID: child,
+            role: 'assistant',
+            providerID: 'primary',
+            modelID: 'a',
+            finish: 'tool-calls',
+            time: { created, completed: Date.now() },
+          },
+        },
+      });
+      expect(marks.has('primary')).toBe(timing === 'before');
+      await manager.handleEvent({
+        type: 'session.status',
+        properties: {
+          sessionID: child,
+          status: {
+            type: 'retry',
+            attempt: 1,
+            message: 'Rate limit exceeded',
+            next: Date.now() + 2_000,
+          },
+        },
+      });
+      if (timing === 'before') {
+        expect(mocks.abort).toHaveBeenCalledTimes(1);
+        expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+        expect(mocks.promptAsync.mock.calls[1]?.[0]).toMatchObject({
+          path: { id: child },
+          body: { model: { providerID: 'backup', modelID: 'b' } },
+        });
+      } else {
+        expect(mocks.abort).not.toHaveBeenCalled();
+        expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+        expect((manager as any).sessionRetries.get(child)).toBe(1);
+        expect(manager.isFallbackInProgress(child)).toBe(false);
+      }
+    },
+  );
+
   test('a native notice with inline parts keeps recovery pending until a real external turn cancels it', async () => {
     const sid = 'native-inline';
     const { manager, mocks } = makeManager({
@@ -7766,6 +8169,7 @@ describe('ForegroundFallbackManager forgetSession cleanup', () => {
   test.each([
     'sessionModel',
     'activeFallback',
+    'downProviders',
     'sessionAgent',
     'separateCompaction',
     'sessionTried',
@@ -7826,6 +8230,25 @@ describe('ForegroundFallbackManager forgetSession cleanup', () => {
 });
 
 describe('ForegroundFallbackManager noteExternalTurn cleanup', () => {
+  test('preserves provider marks for the fallback or an unknown model, but clears them on an external return to primary', () => {
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    });
+    const marks = (mgr as any).downProviders as Map<
+      string,
+      Map<string, number>
+    >;
+    (mgr as any).activeFallback.set('session', 'backup/b');
+    marks.set('session', new Map([['primary', Date.now()]]));
+    mgr.noteExternalTurn('session', 'same', 'backup/b');
+    mgr.noteExternalTurn('session', 'unknown');
+    expect(marks.has('session')).toBe(true);
+    mgr.observeContinuationModel('session', 'primary/a');
+    expect(marks.has('session')).toBe(true);
+    mgr.noteExternalTurn('session', 'new', 'primary/a');
+    expect(marks.has('session')).toBe(false);
+  });
+
   test.each([
     'lastTrigger',
     'lastTriggerModel',
@@ -7856,19 +8279,21 @@ describe('ForegroundFallbackManager noteExternalTurn cleanup', () => {
 });
 
 describe('ForegroundFallbackManager dispose cleanup', () => {
-  test.each(['observedUserMessageIds', 'separateCompaction', 'v2RetryNotices'])(
-    '%s is cleared on dispose',
-    (mapName) => {
-      const mgr = new ForegroundFallbackManager(makeChains(), true, {
-        directory: '/test',
-      });
-      const target = (mgr as any)[mapName];
-      expect(target).toBeDefined();
-      target.set('gone', 1);
-      mgr.dispose();
-      expect(target.has('gone')).toBe(false);
-    },
-  );
+  test.each([
+    'observedUserMessageIds',
+    'separateCompaction',
+    'downProviders',
+    'v2RetryNotices',
+  ])('%s is cleared on dispose', (mapName) => {
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    });
+    const target = (mgr as any)[mapName];
+    expect(target).toBeDefined();
+    target.set('gone', 1);
+    mgr.dispose();
+    expect(target.has('gone')).toBe(false);
+  });
 });
 
 describe('ForegroundFallbackManager resetRecoveryState cleanup', () => {

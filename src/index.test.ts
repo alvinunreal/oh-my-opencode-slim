@@ -5341,6 +5341,167 @@ describe('plugin foreground fallback host gating', () => {
     }
   });
 
+  test.each(['root', 'child'] as const)(
+    'v1 native continuation retains a down-provider mark for a %s retry',
+    async (target) => {
+      await Bun.write(
+        `${projectDir}/oh-my-opencode-slim.json`,
+        JSON.stringify({
+          companion: { enabled: false },
+          fallback: {
+            enabled: true,
+            maxRetries: 2,
+            initialRetryDelayMs: 1_000,
+          },
+          agents: { orchestrator: { model: ['primary/a', 'backup/b'] } },
+        }),
+      );
+      const { client, messages, abort, promptAsync } = createFallbackClient();
+      messages.mockResolvedValue({
+        data: [
+          {
+            info: { id: 'msg_user', role: 'user' },
+            parts: [{ type: 'text', text: 'work' }],
+          },
+        ],
+      });
+      const hooks = await plugin({
+        client,
+        directory: projectDir,
+        worktree: projectDir,
+        serverUrl: new URL('http://127.0.0.1:4096'),
+      } as never);
+      const parent = `native-mark-${target}`;
+      const primary = { providerID: 'primary', modelID: 'a' };
+      try {
+        await hooks.config?.({ agent: {} });
+        jest.useFakeTimers();
+        await hooks['chat.message']?.(
+          {
+            sessionID: parent,
+            messageID: 'msg_user',
+            agent: 'orchestrator',
+            model: primary,
+          } as never,
+          {
+            message: {
+              id: 'msg_user',
+              sessionID: parent,
+              role: 'user',
+              agent: 'orchestrator',
+              model: primary,
+            },
+            parts: [],
+          } as never,
+        );
+        await hooks.event?.({
+          event: {
+            type: 'session.error',
+            properties: {
+              sessionID: parent,
+              error: { statusCode: 429, message: 'Rate limit exceeded' },
+            },
+          },
+        } as never);
+        jest.advanceTimersByTime(1_000);
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+        expect(promptAsync).toHaveBeenCalledTimes(1);
+        expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({
+          body: { model: { providerID: 'backup', modelID: 'b' } },
+        });
+
+        const notice = {
+          message: {
+            id: 'msg_notice',
+            sessionID: parent,
+            role: 'user',
+            agent: 'orchestrator',
+            model: primary,
+          },
+          parts: [
+            {
+              type: 'text',
+              synthetic: true,
+              text: '<task id="child-done" state="completed">\n<summary>Background task completed: work</summary>\n<task_result>done</task_result>\n</task>',
+            },
+          ],
+        };
+        await hooks['chat.message']?.(
+          {
+            sessionID: parent,
+            messageID: 'msg_notice',
+            agent: 'orchestrator',
+          } as never,
+          notice as never,
+        );
+        expect(notice.message.model).toEqual(primary);
+        const sessionID = target === 'root' ? parent : `${parent}-child`;
+        if (target === 'child') {
+          await hooks.event?.({
+            event: {
+              type: 'session.created',
+              properties: { info: { id: sessionID, parentID: parent } },
+            },
+          } as never);
+          await hooks['chat.message']?.(
+            {
+              sessionID,
+              messageID: 'msg_child',
+              agent: 'orchestrator',
+              model: primary,
+            } as never,
+            {
+              message: {
+                id: 'msg_child',
+                sessionID,
+                role: 'user',
+                agent: 'orchestrator',
+                model: primary,
+              },
+              parts: [],
+            } as never,
+          );
+        }
+        await hooks.event?.({
+          event: {
+            type: 'message.updated',
+            properties: {
+              info: {
+                id: 'msg_assistant',
+                sessionID,
+                role: 'assistant',
+                ...primary,
+                time: { created: Date.now() },
+              },
+            },
+          },
+        } as never);
+        await hooks.event?.({
+          event: {
+            type: 'session.status',
+            properties: {
+              sessionID,
+              status: {
+                type: 'retry',
+                attempt: 1,
+                message: 'Rate limit exceeded',
+              },
+            },
+          },
+        } as never);
+        expect(abort).toHaveBeenCalledTimes(1);
+        expect(promptAsync).toHaveBeenCalledTimes(2);
+        expect(promptAsync.mock.calls[1]?.[0]).toMatchObject({
+          path: { id: sessionID },
+          body: { model: { providerID: 'backup', modelID: 'b' } },
+        });
+      } finally {
+        jest.useRealTimers();
+        await hooks.dispose?.();
+      }
+    },
+  );
+
   test('v1 compaction telemetry does not replace the external continuation model', async () => {
     const { client, abort, promptAsync } = createFallbackClient();
     const hooks = await plugin({
