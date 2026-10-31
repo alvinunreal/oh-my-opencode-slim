@@ -55,6 +55,7 @@ export type ConfigLoadWarningKind =
   | 'read-error'
   | 'missing-preset'
   | 'normalized'
+  | 'unsupported-host'
   | 'unknown-key'
   | 'removed-key';
 
@@ -843,12 +844,19 @@ export function loadPluginConfig(
   const presetInheritancePaths = new Map<string, string>();
   let selectedPresetPath = '';
   let imageRoutingPath = '';
+  let wakeConfigPath = '';
   const recordConfigSources = (
     layer: RawPluginConfig,
     configPath: string,
   ): void => {
     if (layer.preset !== undefined) selectedPresetPath = configPath;
     if (layer.image_routing !== undefined) imageRoutingPath = configPath;
+    if (
+      layer.backgroundJobs?.orchestratorWake &&
+      Object.keys(layer.backgroundJobs.orchestratorWake).length > 0
+    ) {
+      wakeConfigPath = configPath;
+    }
     for (const [name, definition] of Object.entries(layer.presets ?? {})) {
       presetPaths.set(name, configPath);
       if (normalizePreset(definition).extends !== undefined) {
@@ -870,7 +878,7 @@ export function loadPluginConfig(
   // the native background notifier owns terminal delivery and the whole
   // backgroundJobs.orchestratorWake section is v1-only. Warn so the
   // override is never silent.
-  if (options?.hostFlavor === 'v2' && !options?.silent) {
+  if (options?.hostFlavor === 'v2') {
     const backgroundJobs = (config.backgroundJobs ?? {}) as Record<
       string,
       unknown
@@ -881,9 +889,14 @@ export function loadPluginConfig(
       typeof orchestratorWake === 'object' &&
       Object.keys(orchestratorWake as Record<string, unknown>).length > 0
     ) {
-      console.warn(
-        '[oh-my-opencode-slim] backgroundJobs.orchestratorWake is v1-only and ignored on OpenCode v2 hosts: the native background notifier owns terminal delivery. Run oh-my-opencode-slim doctor for details.',
-      );
+      const message =
+        'backgroundJobs.orchestratorWake is v1-only and ignored on OpenCode v2 hosts: the native background notifier owns terminal delivery. Run oh-my-opencode-slim doctor for details.';
+      options.onWarning?.({
+        path: wakeConfigPath || directory,
+        kind: 'unsupported-host',
+        message,
+      });
+      if (!options.silent) console.warn(`[oh-my-opencode-slim] ${message}`);
     }
   }
 
