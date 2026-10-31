@@ -24,6 +24,7 @@ import {
   findBinary,
   gracefulClosePane,
   normalizePathForShell,
+  PANE_VIEWER_ENV,
   type PaneShell,
   redactViewerSecretArgs,
 } from '../shared';
@@ -162,11 +163,14 @@ export class HerdrMultiplexer implements Multiplexer {
       // OPENCODE_PASSWORD. Inject it at split time through herdr's native
       // `--env` mechanism so it never reaches the `pane run` command text
       // (which herdr types into the pane's shell).
-      const viewerSecretArgs =
-        options?.viewerFlavor === 'v2-remote' &&
+      const viewerSecretArgs = [
+        '--env',
+        `${PANE_VIEWER_ENV}=1`,
+        ...(options?.viewerFlavor === 'v2-remote' &&
         options.viewerPassword !== undefined
           ? ['--env', `OPENCODE_PASSWORD=${options.viewerPassword}`]
-          : [];
+          : []),
+      ];
 
       let paneId: string | null = null;
       let lastRawOutput = '';

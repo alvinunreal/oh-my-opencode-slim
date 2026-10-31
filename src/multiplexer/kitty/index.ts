@@ -40,6 +40,7 @@ import {
   findBinary,
   gracefulClosePane,
   normalizePathForShell,
+  PANE_VIEWER_ENV,
   redactViewerSecretArgs,
 } from '../shared';
 import type { Multiplexer, PaneResult, PaneSpawnOptions } from '../types';
@@ -165,6 +166,8 @@ export class KittyMultiplexer implements Multiplexer {
         `--title=${description}`,
         `--cwd=${attachDir}`,
         '--keep-focus',
+        '--env',
+        `${PANE_VIEWER_ENV}=1`,
         ...viewerSecretArgs,
         '--',
         ...shellArgs,

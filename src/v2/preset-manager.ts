@@ -1494,7 +1494,7 @@ async function fetchModelOptions(run: ManagerRun): Promise<ModelOption[]> {
 
 /** Defensive normalization of one host model entry; unusable entries are
  * dropped rather than crashing the picker. */
-function normalizeModelOption(entry: unknown): ModelOption | undefined {
+export function normalizeModelOption(entry: unknown): ModelOption | undefined {
   if (!entry || typeof entry !== 'object') return undefined;
   const rec = entry as {
     providerID?: unknown;
@@ -1505,11 +1505,13 @@ function normalizeModelOption(entry: unknown): ModelOption | undefined {
   };
   const providerID =
     typeof rec.providerID === 'string' ? rec.providerID : undefined;
+  // `id` is the catalogue key that `provider/model` refs name; `modelID` is
+  // the upstream API id, which aliases such as `*-fast` share with their base.
   const modelID =
-    typeof rec.modelID === 'string'
-      ? rec.modelID
-      : typeof rec.id === 'string'
-        ? rec.id
+    typeof rec.id === 'string'
+      ? rec.id
+      : typeof rec.modelID === 'string'
+        ? rec.modelID
         : undefined;
   if (!providerID || !modelID) return undefined;
 

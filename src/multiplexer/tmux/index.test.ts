@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { MultiplexerLayout } from '../../config/schema';
+import * as logger from '../../utils/logger';
 import { createTimerHarness } from '../../utils/test-timers';
 
 type SpawnResult = {
@@ -15,6 +16,7 @@ const logMock = mock(() => {});
 const crossSpawnMock = mock((_command: string[]) => createSpawnResult());
 
 mock.module('../../utils/logger', () => ({
+  ...logger,
   log: logMock,
 }));
 
@@ -120,6 +122,87 @@ describe('TmuxMultiplexer', () => {
 
     delete process.env.TMUX_PANE;
     expect(tmux.isInsideSession()).toBe(false);
+  });
+
+  test('marks spawned viewers so they do not manage panes', async () => {
+    const { TmuxMultiplexer } = await importFreshTmux();
+    await new TmuxMultiplexer().spawnPane(
+      'child',
+      'child',
+      'http://host',
+      '/repo',
+    );
+    expect(commandContaining('split-window')?.at(-1)).toContain(
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
+    );
+  });
+
+  test('forwards v1 viewer credentials without logging either value', async () => {
+    const password = process.env.OPENCODE_SERVER_PASSWORD;
+    const username = process.env.OPENCODE_SERVER_USERNAME;
+    process.env.OPENCODE_SERVER_PASSWORD = 'test-secret';
+    process.env.OPENCODE_SERVER_USERNAME = 'test-user';
+    try {
+      crossSpawnMock.mockImplementation((command: string[]) => {
+        if (command[0] === 'which')
+          return createSpawnResult(0, '/usr/bin/tmux\n');
+        if (command.includes('-V')) return createSpawnResult(0, 'tmux 3.6a');
+        if (command.includes('split-window'))
+          return createSpawnResult(0, '%2\n', 'test-user test-secret');
+        return createSpawnResult();
+      });
+      const { TmuxMultiplexer } = await importFreshTmux();
+      await new TmuxMultiplexer().spawnPane(
+        'child',
+        'child',
+        'http://host',
+        '/repo',
+      );
+      const split = commandContaining('split-window') ?? [];
+      expect(split).toContain('OPENCODE_SERVER_PASSWORD=test-secret');
+      expect(split).toContain('OPENCODE_SERVER_USERNAME=test-user');
+      expect(JSON.stringify(logMock.mock.calls)).not.toContain('test-secret');
+      expect(JSON.stringify(logMock.mock.calls)).not.toContain('test-user');
+    } finally {
+      if (password === undefined) delete process.env.OPENCODE_SERVER_PASSWORD;
+      else process.env.OPENCODE_SERVER_PASSWORD = password;
+      if (username === undefined) delete process.env.OPENCODE_SERVER_USERNAME;
+      else process.env.OPENCODE_SERVER_USERNAME = username;
+    }
+  });
+
+  test('tmux 2.9 keeps inherited v1 credentials without unsupported split flags', async () => {
+    const password = process.env.OPENCODE_SERVER_PASSWORD;
+    const username = process.env.OPENCODE_SERVER_USERNAME;
+    process.env.OPENCODE_SERVER_PASSWORD = 'test-secret';
+    process.env.OPENCODE_SERVER_USERNAME = 'test-user';
+    try {
+      crossSpawnMock.mockImplementation((command: string[]) => {
+        if (command[0] === 'which')
+          return createSpawnResult(0, '/usr/bin/tmux\n');
+        if (command.includes('-V')) return createSpawnResult(0, 'tmux 2.9');
+        if (command.includes('split-window'))
+          return createSpawnResult(0, '%2\n');
+        return createSpawnResult();
+      });
+      const { TmuxMultiplexer } = await importFreshTmux();
+      expect(
+        await new TmuxMultiplexer().spawnPane(
+          'child',
+          'child',
+          'http://host',
+          '/repo',
+        ),
+      ).toEqual({ success: true, paneId: '%2' });
+      expect(commandContaining('split-window')).not.toContain('-e');
+      expect(JSON.stringify(logMock.mock.calls)).not.toContain('test-secret');
+      expect(JSON.stringify(logMock.mock.calls)).not.toContain('test-user');
+    } finally {
+      if (password === undefined) delete process.env.OPENCODE_SERVER_PASSWORD;
+      else process.env.OPENCODE_SERVER_PASSWORD = password;
+      if (username === undefined) delete process.env.OPENCODE_SERVER_USERNAME;
+      else process.env.OPENCODE_SERVER_USERNAME = username;
+    }
   });
 
   test('spawnPane explicitly addresses the tmux server with -S <socket>', async () => {
@@ -540,7 +623,14 @@ describe('TmuxMultiplexer', () => {
   test('closePane treats kill-pane exit 1 as closed (pane already gone)', async () => {
     // Real tmux behavior: C-c makes the pane process exit, so the backstop
     // `kill-pane` fails with "can't find pane" (exit 1). The pane is closed.
-    installMockWithKillExit(1);
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which')
+        return createSpawnResult(0, '/usr/bin/tmux\n');
+      if (command.includes('-V')) return createSpawnResult(0, 'tmux 3.6a');
+      if (command.includes('kill-pane'))
+        return createSpawnResult(1, '', "can't find pane: %2\n");
+      return createSpawnResult();
+    });
     const { TmuxMultiplexer } = await importFreshTmux();
     const tmux = new TmuxMultiplexer('main-vertical', 60);
 
@@ -556,6 +646,19 @@ describe('TmuxMultiplexer', () => {
       '-t',
       '%2',
     ]);
+  });
+
+  test('closePane keeps tracking a pane when tmux reports a transport error', async () => {
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which')
+        return createSpawnResult(0, '/usr/bin/tmux\n');
+      if (command.includes('-V')) return createSpawnResult(0, 'tmux 3.6a');
+      if (command.includes('kill-pane'))
+        return createSpawnResult(1, '', 'error connecting to socket');
+      return createSpawnResult();
+    });
+    const { TmuxMultiplexer } = await importFreshTmux();
+    expect(await new TmuxMultiplexer().closePane('%2')).toBe(false);
   });
 
   test('closePane fails closed when kill-pane exits with any other code', async () => {
@@ -595,6 +698,56 @@ describe('TmuxMultiplexer', () => {
     await tmux.spawnPane('child', encoded, 'http://localhost:4096', '/repo');
 
     expect(commandContaining('select-pane')?.at(-1)).toBe(encoded);
+  });
+
+  test('tmux 3.0 falls back to pane titles without pane options', async () => {
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which')
+        return createSpawnResult(0, '/usr/bin/tmux\n');
+      if (command.includes('-V')) return createSpawnResult(0, 'tmux 3.0');
+      if (command.includes('split-window')) return createSpawnResult(0, '%2\n');
+      if (command.includes('list-panes'))
+        return createSpawnResult(0, '%2|omosc:123:child\n');
+      return createSpawnResult();
+    });
+    const { TmuxMultiplexer } = await importFreshTmux();
+    const tmux = new TmuxMultiplexer();
+    await tmux.spawnPane('child', 'omosc:123:child', 'http://host', '/repo');
+    expect(commandContaining('set-option')).toBeUndefined();
+    expect(await tmux.listPanesWithTitles()).toEqual([
+      { paneId: '%2', title: 'omosc:123:child' },
+    ]);
+    expect(commandContaining('list-panes')).toContain(
+      '#{pane_id}|#{pane_title}',
+    );
+  });
+
+  test('tmux 3.0a sweep metadata survives a viewer changing its pane title', async () => {
+    let metadata = '';
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which')
+        return createSpawnResult(0, '/usr/bin/tmux\n');
+      if (command.includes('-V')) return createSpawnResult(0, 'tmux 3.0a');
+      if (command.includes('split-window')) return createSpawnResult(0, '%2\n');
+      if (command.includes('set-option') && command.includes('@omosc'))
+        metadata = command.at(-1) ?? '';
+      if (command.includes('list-panes')) {
+        const title =
+          command.at(-1)?.includes('@omosc') && metadata
+            ? metadata
+            : 'OC | child';
+        return createSpawnResult(0, `%1|user-title\n%2|${title}\n`);
+      }
+      return createSpawnResult();
+    });
+    const { TmuxMultiplexer } = await importFreshTmux();
+    const tmux = new TmuxMultiplexer();
+    const encoded = 'omosc:123:ses_child';
+    await tmux.spawnPane('child', encoded, 'http://localhost', '/repo');
+    expect(await tmux.listPanesWithTitles()).toEqual([
+      { paneId: '%1', title: 'user-title' },
+      { paneId: '%2', title: encoded },
+    ]);
   });
 
   test('listPanesWithTitles parses list-panes output with explicit addressing', async () => {

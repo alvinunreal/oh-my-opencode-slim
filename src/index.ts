@@ -3052,16 +3052,27 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             // sessions and idempotent when the model is unchanged.
             backgroundTaskConcurrency?.migrateTask(info.sessionID, model);
           }
-          if (typeof info?.agent === 'string' && providerID && modelID) {
+          if (
+            typeof info?.agent === 'string' &&
+            typeof info.sessionID === 'string' &&
+            providerID &&
+            modelID
+          ) {
             const agentName = resolveRuntimeAgentName(runtime, info.agent);
             const model = `${providerID}/${modelID}`;
-            const variant = resolveTuiVariantForModel(agentName, model);
+            const observedVariant = (info as { variant?: unknown }).variant;
             if (runtime.sidebarEnabled) {
               recordTuiAgentModel(
                 {
                   agentName,
                   model,
-                  variant: variant ?? null,
+                  ...(typeof observedVariant === 'string'
+                    ? { variant: observedVariant }
+                    : {
+                        fallbackVariant:
+                          resolveTuiVariantForModel(agentName, model) ?? null,
+                      }),
+                  sessionID: info.sessionID,
                 },
                 (info?.sessionID &&
                   sessionMetadata.getDirectory(info.sessionID)) ??
@@ -3722,6 +3733,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
                 agentName: agent,
                 model,
                 variant: liveVariant ?? null,
+                sessionID: input.sessionID,
               },
               tuiActivityDirectory(input.sessionID),
             );

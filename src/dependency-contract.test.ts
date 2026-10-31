@@ -70,7 +70,7 @@ describe('dependency compatibility contract', () => {
  * server that can reach adapters can create/close/locate panes, which the
  * spec forbids ("server 侧无 pane 操作路径").
  *
- * Mutation check (3.10 self-proof): adding `import './multiplexer/client/index'`
+ * Mutation check (3.10 self-proof): adding `import './multiplexer/client/lifecycle'`
  * (or any adapter import) to `src/index.ts` makes these tests fail with the
  * offending import chain; removing it restores green.
  */

@@ -18,6 +18,7 @@ import {
   buildViewCommand,
   findBinary,
   gracefulClosePane,
+  PANE_VIEWER_ENV,
   redactViewerSecretArgs,
   viewerNeedsPaneCwd,
 } from '../shared';
@@ -41,6 +42,8 @@ export class TmuxMultiplexer implements Multiplexer {
 
   private binaryPath: string | null = null;
   private hasChecked = false;
+  private supportsSplitEnv = false;
+  private supportsPaneOptions = false;
   private storedLayout: MultiplexerLayout;
   private storedMainPaneSize: number;
   private layoutTimers = new Map<string, unknown>();
@@ -61,7 +64,18 @@ export class TmuxMultiplexer implements Multiplexer {
       return this.binaryPath !== null;
     }
 
-    this.binaryPath = await findBinary('tmux', { verify: true });
+    this.binaryPath = await findBinary('tmux', {
+      verify: true,
+      onVerified: (version) => {
+        const match = /^tmux\s+(\d+)\.(\d+)([a-z]?)/i.exec(version);
+        if (!match) return;
+        const major = Number(match[1]);
+        const minor = Number(match[2]);
+        this.supportsSplitEnv = major >= 3;
+        this.supportsPaneOptions =
+          major > 3 || (major === 3 && (minor > 0 || !!match[3]));
+      },
+    });
     this.hasChecked = true;
     return this.binaryPath !== null;
   }
@@ -97,8 +111,23 @@ export class TmuxMultiplexer implements Multiplexer {
       return { success: false, error: 'unavailable' };
     }
 
+    const v1Credentials =
+      (options?.viewerFlavor ?? 'v1') === 'v1'
+        ? [
+            process.env.OPENCODE_SERVER_PASSWORD,
+            process.env.OPENCODE_SERVER_USERNAME,
+          ]
+        : [];
+    const secrets = [...v1Credentials, options?.viewerPassword].filter(
+      (value): value is string => !!value,
+    );
+    const redact = (text: string): string =>
+      secrets.reduce(
+        (result, secret) => result.replaceAll(secret, '<redacted>'),
+        text,
+      );
     try {
-      const opencodeCmd = `env OPENCODE_DISABLE_TERMINAL_TITLE=1 ${buildViewCommand(
+      const opencodeCmd = `env OPENCODE_DISABLE_TERMINAL_TITLE=1 ${PANE_VIEWER_ENV}=1 ${buildViewCommand(
         sessionId,
         serverUrl,
         directory,
@@ -112,7 +141,15 @@ export class TmuxMultiplexer implements Multiplexer {
         options?.viewerFlavor === 'v2-remote' &&
         options.viewerPassword !== undefined
           ? ['-e', `OPENCODE_PASSWORD=${options.viewerPassword}`]
-          : [];
+          : (this.supportsSplitEnv ? v1Credentials : []).flatMap(
+              (value, index) =>
+                value === undefined
+                  ? []
+                  : [
+                      '-e',
+                      `${index === 0 ? 'OPENCODE_SERVER_PASSWORD' : 'OPENCODE_SERVER_USERNAME'}=${value}`,
+                    ],
+            );
 
       const result = await this.splitPane(
         tmux,
@@ -131,7 +168,7 @@ export class TmuxMultiplexer implements Multiplexer {
         command: opencodeCmd,
         exitCode: result.exitCode,
         paneId,
-        stderr: result.stderr.trim(),
+        stderr: redact(result.stderr.trim()),
         anchor,
         socket,
       });
@@ -146,6 +183,29 @@ export class TmuxMultiplexer implements Multiplexer {
         );
         await renameProc.exited;
 
+        // Pane user options require tmux 3.0a; older servers keep the title fallback.
+        if (this.supportsPaneOptions) {
+          try {
+            const metadataProc = crossSpawn(
+              [
+                tmux,
+                '-S',
+                socket,
+                'set-option',
+                '-p',
+                '-t',
+                paneId,
+                '@omosc',
+                description,
+              ],
+              { stdout: 'ignore', stderr: 'ignore' },
+            );
+            await metadataProc.exited;
+          } catch {
+            // The pane still exists even when its metadata option cannot be set.
+          }
+        }
+
         // Rebalance panes after bursts of child sessions settle.
         this.paneTargets.set(paneId, anchor);
         this.scheduleLayout(anchor);
@@ -156,7 +216,7 @@ export class TmuxMultiplexer implements Multiplexer {
 
       return { success: false, error: 'hard' };
     } catch (err) {
-      log('[tmux] spawnPane: exception', { error: String(err) });
+      log('[tmux] spawnPane: exception', { error: redact(String(err)) });
       return { success: false, error: 'hard' };
     }
   }
@@ -184,7 +244,9 @@ export class TmuxMultiplexer implements Multiplexer {
           'list-panes',
           '-a',
           '-F',
-          '#{pane_id}|#{pane_title}',
+          this.supportsPaneOptions
+            ? '#{pane_id}|#{?@omosc,#{@omosc},#{pane_title}}'
+            : '#{pane_id}|#{pane_title}',
         ],
         { stdout: 'pipe', stderr: 'pipe' },
       );
@@ -226,13 +288,9 @@ export class TmuxMultiplexer implements Multiplexer {
     const closed = await gracefulClosePane(tmux, paneId, {
       ctrlC: ['-S', socket, 'send-keys', '-t', paneId, 'C-c'],
       close: ['-S', socket, 'kill-pane', '-t', paneId],
-      // The C-c above usually makes the pane's process exit before the
-      // backstop runs, so `kill-pane` on the already-gone pane exits 1
-      // ("can't find pane"). The pane is closed — the goal is met — so exit 1
-      // counts as success (same as the herdr/kitty/zellij adapters). Any
-      // other non-zero exit still fails closed, and an empty pane id still
-      // returns false (`emptyPaneReturnsTrue` stays default).
-      acceptExitCode1: true,
+      // Only a missing target proves the pane is gone; transport errors also exit 1.
+      isAlreadyClosed: (stderr) =>
+        stderr.trim() === `can't find pane: ${paneId}`,
     });
     if (closed) {
       const anchor = this.paneTargets.get(paneId);
