@@ -1,9 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { derive, parse } from '@opencode/util/patch';
+import { Result } from 'effect';
 
 import { parsePatch } from './codec';
 import { createApplyPatchHook } from './index';
+import { nativeDeriveUpdate } from './native-update';
 import { applyPatch, createTempDir, writeFixture } from './test-helpers';
 
 function createHook(root = '/tmp/hook-root') {
@@ -33,6 +36,132 @@ async function runHook(
 }
 
 describe('apply-patch/hook', () => {
+  test('accepts a blank line after a v2 end-of-file chunk', async () => {
+    const root = await createTempDir();
+    const text = 'x\ny\n';
+    await writeFixture(root, 'a.txt', text);
+    const patch =
+      '*** Begin Patch\n*** Update File: a.txt\n@@\n-y\n+Y\n*** End of File\n\n*** End Patch';
+    const forwarded = await runHook(root, patch, undefined, 'patch');
+    const parsed = parse(forwarded);
+    if (!Result.isSuccess(parsed) || parsed.success[0].type !== 'update')
+      throw new Error('invalid v2 patch');
+    expect(derive('a.txt', parsed.success[0].chunks, text).content).toBe(
+      'x\nY\n',
+    );
+  });
+
+  test('preserves EOF anchoring on v2 and rescues it on v1', async () => {
+    const root = await createTempDir();
+    const text = 'first\nsame\nmiddle\nsame\n';
+    await writeFixture(root, 'a.txt', text);
+    const patch =
+      '*** Begin Patch\n*** Update File: a.txt\n@@\n-same\n+last\n*** End of File\n*** End Patch';
+    const v2 = await runHook(root, patch, undefined, 'patch');
+    const parsed = parse(v2);
+    if (!Result.isSuccess(parsed) || parsed.success[0].type !== 'update')
+      throw new Error('invalid v2 patch');
+    expect(derive('a.txt', parsed.success[0].chunks, text).content).toBe(
+      'first\nsame\nmiddle\nlast\n',
+    );
+    const v1 = parsePatch(await runHook(root, patch)).hunks[0];
+    if (v1.type !== 'update') throw new Error('invalid v1 patch');
+    expect(nativeDeriveUpdate('a.txt', text, v1.chunks)).toBe(
+      'first\nsame\nmiddle\nlast\n',
+    );
+    await expect(
+      runHook(
+        root,
+        patch.replace('-same\n+last', '-middle\n+changed'),
+        undefined,
+        'patch',
+      ),
+    ).rejects.toThrow();
+  });
+
+  test('canonicalizes an unprefixed blank context for both hosts', async () => {
+    const root = await createTempDir();
+    const text = 'before\n\nafter\n';
+    await writeFixture(root, 'a.txt', text);
+    const patch =
+      '*** Begin Patch\n*** Update File: a.txt\n@@\n before\n\n-after\n+done\n*** End Patch';
+    for (const tool of ['apply_patch', 'patch']) {
+      const forwarded = await runHook(root, patch, undefined, tool);
+      const parsed = parse(forwarded);
+      if (!Result.isSuccess(parsed) || parsed.success[0].type !== 'update')
+        throw new Error('invalid patch');
+      expect(derive('a.txt', parsed.success[0].chunks, text).content).toBe(
+        'before\n\ndone\n',
+      );
+      expect(forwarded).toContain('\n \n');
+    }
+  });
+
+  test('accepts the implicit first v2 update chunk', async () => {
+    const root = await createTempDir();
+    await writeFixture(root, 'a.txt', 'before\n');
+    const forwarded = await runHook(
+      root,
+      '*** Begin Patch\n*** Update File: a.txt\n-before\n+after\n*** End Patch',
+      undefined,
+      'patch',
+    );
+    const parsed = parse(forwarded);
+    if (!Result.isSuccess(parsed) || parsed.success[0].type !== 'update')
+      throw new Error('invalid patch');
+    expect(derive('a.txt', parsed.success[0].chunks, 'before\n').content).toBe(
+      'after\n',
+    );
+  });
+
+  test('v2 appends without consuming the existing trailing blank line', async () => {
+    const root = await createTempDir();
+    const text = '# Title\n\n';
+    await writeFixture(root, 'a.txt', text);
+    const forwarded = await runHook(
+      root,
+      '*** Begin Patch\n*** Update File: a.txt\n@@\n+Paragraph\n*** End Patch',
+      undefined,
+      'patch',
+    );
+    const parsed = parse(forwarded);
+    if (!Result.isSuccess(parsed) || parsed.success[0].type !== 'update')
+      throw new Error('invalid patch');
+    expect(derive('a.txt', parsed.success[0].chunks, text).content).toBe(
+      '# Title\n\nParagraph\n',
+    );
+  });
+
+  test('v2 matches the host Unicode normalization table', async () => {
+    const root = await createTempDir();
+    const text = 'a\u202fb\nx \u2212 y\n';
+    await writeFixture(root, 'a.txt', text);
+    const forwarded = await runHook(
+      root,
+      '*** Begin Patch\n*** Update File: a.txt\n@@\n-a b\n-x - y\n+done\n*** End Patch',
+      undefined,
+      'patch',
+    );
+    const parsed = parse(forwarded);
+    if (!Result.isSuccess(parsed) || parsed.success[0].type !== 'update')
+      throw new Error('invalid patch');
+    expect(derive('a.txt', parsed.success[0].chunks, text).content).toBe(
+      'done\n',
+    );
+  });
+
+  test('v2 canonicalizes tolerated blank section separators', async () => {
+    const root = await createTempDir();
+    await writeFixture(root, 'a.txt', 'a\n');
+    const forwarded = await runHook(
+      root,
+      '*** Begin Patch\n*** Add File: n.txt\n+n\n\n*** Update File: a.txt\n@@\n-a\n+A\n*** End Patch',
+      undefined,
+      'patch',
+    );
+    expect(Result.isSuccess(parse(forwarded))).toBe(true);
+  });
+
   test('passes unrelated tools through byte-identically', async () => {
     const hook = createHook();
     const patchText = '*** Begin Patch\n*** End Patch';

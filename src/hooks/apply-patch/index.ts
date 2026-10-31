@@ -50,7 +50,12 @@ export function createApplyPatchHook(ctx: PluginInput) {
       const root = input.directory || ctx.directory || process.cwd();
       const worktree = ctx.worktree || root;
       try {
-        const result = await rewritePatch(root, patchText, worktree);
+        const result = await rewritePatch(
+          root,
+          patchText,
+          worktree,
+          input.tool === 'patch' ? 'v2' : 'v1',
+        );
 
         if (result.changed) {
           if (replacePatchArgs(args, result.patchText)) {

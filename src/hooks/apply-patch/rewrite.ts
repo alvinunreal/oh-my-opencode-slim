@@ -6,7 +6,7 @@ import { simulatePatch, stageAddedText } from './execution-context';
 import { commonEdges } from './matching';
 import { nativeDeriveUpdate } from './native-update';
 import { splitFileLines } from './resolution';
-import type { PatchHunk, UpdatePatchHunk } from './types';
+import type { PatchHostFlavor, PatchHunk, UpdatePatchHunk } from './types';
 
 export type RewritePatchResult = {
   patchText: string;
@@ -33,10 +33,11 @@ function reproduces(
   baseText: string,
   chunks: UpdatePatchHunk['chunks'],
   finalText: string,
+  flavor: PatchHostFlavor,
 ): 0 | 1 | 2 {
   // 2: exact modulo CRLF/final newline; 1: native's writer dropped one final blank line.
   try {
-    const actual = lf(nativeDeriveUpdate(filePath, baseText, chunks));
+    const actual = lf(nativeDeriveUpdate(filePath, baseText, chunks, flavor));
     const expected = lf(finalText);
     return actual === expected ? 2 : `${actual}\n` === expected ? 1 : 0;
   } catch {
@@ -49,6 +50,7 @@ function createCollapsedUpdateHunk(
   filePath: string,
   baseText: string,
   finalText: string,
+  flavor: PatchHostFlavor,
   movePath?: string,
 ): UpdatePatchHunk {
   const collapsedChunk = {
@@ -63,10 +65,10 @@ function createCollapsedUpdateHunk(
     minimizedChunk.old_lines.length === collapsedChunk.old_lines.length &&
     minimizedChunk.new_lines.length === collapsedChunk.new_lines.length
       ? collapsedChunk
-      : reproduces(filePath, baseText, [minimizedChunk], finalText)
+      : reproduces(filePath, baseText, [minimizedChunk], finalText, flavor)
         ? minimizedChunk
         : collapsedChunk;
-  if (!reproduces(filePath, baseText, [chunk], finalText)) {
+  if (!reproduces(filePath, baseText, [chunk], finalText, flavor)) {
     throw new ApplyPatchError(
       'verification',
       `Native update cannot reproduce the resolved file: ${filePath}`,
@@ -128,12 +130,14 @@ export async function rewritePatch(
   root: string,
   patchText: string,
   worktree?: string,
+  flavor: PatchHostFlavor = 'v1',
 ): Promise<RewritePatchResult> {
   try {
     const { hunks, pathsNormalized, steps } = await simulatePatch(
       root,
       patchText,
       worktree,
+      flavor,
     );
     const rewritten: PatchHunk[] = [];
     let changed = false;
@@ -244,12 +248,13 @@ export async function rewritePatch(
       if (sawCanonicalOverlap) {
         // Native matching checks this merged shape; use a whole-file chunk
         // only if it too reproduces the staged text under native semantics.
-        if (!reproduces(filePath, current.text, next, nextText)) {
+        if (!reproduces(filePath, current.text, next, nextText, flavor)) {
           next = createCollapsedUpdateHunk(
             hunk.path,
             filePath,
             current.text,
             nextText,
+            flavor,
           ).chunks;
         }
       }
@@ -259,15 +264,30 @@ export async function rewritePatch(
       let keepOriginal = false;
       if (!current.derived) {
         const rewrite = rewrittenHunk
-          ? reproduces(filePath, text, next, nextText)
+          ? reproduces(filePath, text, next, nextText, flavor)
           : 0;
         const original =
-          rewrite === 2 ? 0 : reproduces(filePath, text, hunk.chunks, nextText);
+          rewrite === 2
+            ? 0
+            : reproduces(filePath, text, hunk.chunks, nextText, flavor);
         if (!rewrite && !original) {
-          throw new ApplyPatchError(
-            'verification',
-            `Native patch tool would not reproduce the verified update: ${filePath}`,
-          );
+          if (
+            flavor !== 'v1' ||
+            !hunk.chunks.some((chunk) => chunk.is_end_of_file)
+          ) {
+            throw new ApplyPatchError(
+              'verification',
+              `Native patch tool would not reproduce the verified update: ${filePath}`,
+            );
+          }
+          next = createCollapsedUpdateHunk(
+            hunk.path,
+            filePath,
+            text,
+            nextText,
+            flavor,
+          ).chunks;
+          changed = true;
         }
         keepOriginal = original > rewrite;
         if (keepOriginal) next = hunk.chunks;
@@ -302,7 +322,9 @@ export async function rewritePatch(
               ...group.chunks.map(minimizeMergedChunk),
               ...next.map(minimizeMergedChunk),
             ];
-            if (reproduces(filePath, group.baseText, merged, nextText)) {
+            if (
+              reproduces(filePath, group.baseText, merged, nextText, flavor)
+            ) {
               chunks = merged;
             }
           }
@@ -325,6 +347,7 @@ export async function rewritePatch(
                 group.sourceFilePath,
                 group.baseText,
                 nextText,
+                flavor,
                 move,
               );
         }

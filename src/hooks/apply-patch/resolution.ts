@@ -9,7 +9,12 @@ import {
   seek,
   seekMatch,
 } from './matching';
-import type { MatchHit, PatchChunk, ResolvedChunk } from './types';
+import type {
+  MatchHit,
+  PatchChunk,
+  PatchHostFlavor,
+  ResolvedChunk,
+} from './types';
 
 type FileLines = {
   lines: string[];
@@ -103,15 +108,25 @@ export function locateChunk(
   file: string,
   chunk: PatchChunk,
   start: number,
+  flavor: PatchHostFlavor = 'v1',
 ): ResolvedChunk {
   let old_lines = chunk.old_lines;
   let new_lines = chunk.new_lines;
-  let match = seekMatch(lines, old_lines, start, chunk.is_end_of_file ?? false);
+  const find = (old: string[]) =>
+    seekMatch(
+      lines,
+      old,
+      flavor === 'v2' && chunk.is_end_of_file
+        ? Math.max(start, lines.length - old.length)
+        : start,
+      chunk.is_end_of_file ?? false,
+    );
+  let match = find(old_lines);
   let retried = false;
   if (!match && old_lines.at(-1) === '') {
     old_lines = old_lines.slice(0, -1);
     if (new_lines.at(-1) === '') new_lines = new_lines.slice(0, -1);
-    match = seekMatch(lines, old_lines, start, chunk.is_end_of_file ?? false);
+    match = find(old_lines);
     retried = !!match;
   }
 
@@ -207,6 +222,7 @@ export function resolveUpdate(
   file: string,
   text: string,
   chunks: PatchChunk[],
+  flavor: PatchHostFlavor = 'v1',
 ): {
   resolved: ResolvedChunk[];
   nextText: string;
@@ -224,7 +240,10 @@ export function resolveUpdate(
     const contextRewritten = canonicalContext !== chunk.change_context;
 
     if (chunk.old_lines.length === 0) {
-      const appendAt = lines.at(-1) === '' ? lines.length - 1 : lines.length;
+      const appendAt =
+        flavor === 'v1' && lines.at(-1) === ''
+          ? lines.length - 1
+          : lines.length;
       if (chunk.is_end_of_file || !chunk.change_context) {
         const consumesBlank = appendAt < lines.length ? 1 : 0;
         resolved.push(
@@ -295,7 +314,14 @@ export function resolveUpdate(
       continue;
     }
 
-    const found = locateChunk(lines, file, chunk, chunkStart);
+    const found = locateChunk(lines, file, chunk, chunkStart, flavor);
+    if (
+      flavor === 'v2' &&
+      chunk.is_end_of_file &&
+      !found.resolved_is_end_of_file
+    ) {
+      throw new Error(`Failed to find EOF-anchored lines in ${file}`);
+    }
     if (
       chunk.change_context &&
       !canonicalContext &&
