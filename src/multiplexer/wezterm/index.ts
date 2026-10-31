@@ -59,6 +59,7 @@ import {
   findBinary,
   gracefulClosePane,
   isPosixShell,
+  markViewerCommand,
   normalizePathForShell,
   quoteShellArg,
   withParentEnvPassword,
@@ -210,11 +211,8 @@ export class WeztermMultiplexer implements Multiplexer {
 
     try {
       const attachDir = normalizePathForShell(directory);
-      const viewerCommand = buildViewCommand(
-        sessionId,
-        serverUrl,
-        directory,
-        options,
+      const viewerCommand = markViewerCommand(
+        buildViewCommand(sessionId, serverUrl, directory, options),
       );
       const command = passwordVar
         ? withParentEnvPassword(

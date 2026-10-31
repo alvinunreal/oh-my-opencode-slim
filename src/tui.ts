@@ -27,6 +27,7 @@ import {
 } from './multiplexer/client/diagnostics';
 import {
   createTuiPaneWiring,
+  HOST_REPROBE_INTERVAL_MS,
   initClientLogging,
   type LoadedPaneConfig,
   paneConfigOf,
@@ -37,6 +38,7 @@ import {
   describeV2HostMode,
   detectV2HostMode,
 } from './multiplexer/client/v2-host';
+import { PANE_VIEWER_ENV } from './multiplexer/shared';
 import {
   KILL_ALL_KEYBIND,
   killAllRunningSubagents,
@@ -2295,6 +2297,7 @@ function createSidebarRuntime(
   let { configInvalid, compactSidebar, multiplexerType, presetName } =
     configStateOfGates(gatesRead.gates);
   adapter.onMultiplexerConfig?.(multiplexerType, gatesRead.paneConfig);
+  let configRenderPending = false;
   const applyConfigState = (fresh = false): boolean => {
     const read = readTuiGates(configDirectory, adapter.hostFlavor, fresh);
     if (read.readFailed) return false;
@@ -2320,6 +2323,7 @@ function createSidebarRuntime(
       compactSidebar = next.compactSidebar;
       multiplexerType = next.multiplexerType;
       presetName = next.presetName;
+      configRenderPending = true;
       adapter.onMultiplexerConfig?.(multiplexerType, gatesRead.paneConfig);
     }
     return changed;
@@ -2341,30 +2345,33 @@ function createSidebarRuntime(
   const [modelNames, setModelNames] = createSignal<ReadonlyMap<string, string>>(
     modelNamesCache.names,
   );
+  const updateConfigDirectory = (currentDirectory: string): boolean => {
+    if (currentDirectory === configDirectory) return false;
+    configDirectory = currentDirectory;
+    gatesRead = readTuiGates(configDirectory, adapter.hostFlavor);
+    ({ configInvalid, compactSidebar, multiplexerType, presetName } =
+      configStateOfGates(gatesRead.gates));
+    configRenderPending = true;
+    adapter.onMultiplexerConfig?.(multiplexerType, gatesRead.paneConfig);
+    // Never carry one project's last-good config state into another.
+    bindConfigListener();
+    return true;
+  };
   const refreshSidebar = async () => {
     if (disposed) return;
     if (!sidebarEnabled) return;
     const currentDirectory = adapter.getDirectory();
     const currentSession = adapter.getVisibleSession();
     let nextSnapshot = await readTuiSnapshotAsync(currentDirectory);
-    if (disposed) return;
-    const directoryChanged = currentDirectory !== configDirectory;
-    let stateChanged = false;
-    if (directoryChanged) {
-      configDirectory = currentDirectory;
-      gatesRead = readTuiGates(configDirectory, adapter.hostFlavor);
-      ({ configInvalid, compactSidebar, multiplexerType, presetName } =
-        configStateOfGates(gatesRead.gates));
-      adapter.onMultiplexerConfig?.(multiplexerType, gatesRead.paneConfig);
-      // Never carry one project's last-good config state into another.
-      bindConfigListener();
-      stateChanged = true;
-    }
+    if (disposed || !isRefreshCurrent(currentDirectory, adapter.getDirectory()))
+      return;
+    const directoryChanged = updateConfigDirectory(currentDirectory);
+    let stateChanged = directoryChanged || configRenderPending;
     // Revalidate config identity on every poll; unchanged files reuse the
     // shared parsed snapshot, while external edits still surface promptly.
     if (!directoryChanged) {
       try {
-        stateChanged = applyConfigState();
+        stateChanged = applyConfigState() || stateChanged;
       } catch (err) {
         log('[v2][tui] config state read failed', String(err));
       }
@@ -2430,9 +2437,10 @@ function createSidebarRuntime(
     if (!snapshotChanged && !stateChanged) {
       return;
     }
-    if (snapshotChanged) {
-      setSnapshot(nextSnapshot);
-    }
+    setSnapshot(
+      nextSnapshot === snapshot() ? { ...nextSnapshot } : nextSnapshot,
+    );
+    configRenderPending = false;
     if (!disposed) adapter.renderer.requestRender();
   };
   const interaction = createSidebarInteraction(
@@ -2479,7 +2487,7 @@ function createSidebarRuntime(
   // to 5s.
   const pollConfigOnly = () => {
     try {
-      applyConfigState();
+      if (!updateConfigDirectory(adapter.getDirectory())) applyConfigState();
     } catch (err) {
       log('[tui] config state read failed', String(err));
     }
@@ -2547,6 +2555,9 @@ function createSidebarRuntime(
   return {
     getDirectory: () => configDirectory,
     getPaneConfig: () => gatesRead.paneConfig,
+    syncConfigDirectory: () => {
+      updateConfigDirectory(adapter.getDirectory());
+    },
     getSnapshot: snapshot,
     setSnapshot,
     dispose: () => {
@@ -2564,7 +2575,7 @@ function createSidebarRuntime(
 async function setup(
   ctx: V2TuiContext,
   initial?: TuiGatesRead,
-): Promise<undefined | (() => void)> {
+): Promise<undefined | (() => Promise<void>)> {
   if (isPluginDisabledByEnv()) return;
   const gatesRead =
     initial ?? readTuiGates(ctx.location?.directory ?? process.cwd(), 'v2');
@@ -2598,6 +2609,7 @@ async function setup(
       ? describeV2HostMode(v2HostMode)
       : null;
   let paneWiring: TuiPaneWiring | null = null;
+  let paneWiringRetry: ReturnType<typeof setTimeout> | null = null;
   let paneWiringSetting: string | null = null;
   let currentPaneConfig = gatesRead.paneConfig;
   // Set by the setup teardown. A config-triggered rebuild can be waiting on
@@ -2605,6 +2617,8 @@ async function setup(
   // such a rebuild self-dispose instead of going live after teardown.
   let paneWiringClosed = false;
   const disposePaneWiring = async (): Promise<void> => {
+    if (paneWiringRetry !== null) clearTimeout(paneWiringRetry);
+    paneWiringRetry = null;
     const stale = paneWiring;
     if (stale === null) return;
     paneWiring = null;
@@ -2616,7 +2630,9 @@ async function setup(
   const createPaneWiring = async (): Promise<void> => {
     try {
       const paneHost = await buildV2PaneWiringOptions({
-        location: ctx.location,
+        get location() {
+          return ctx.location;
+        },
         client: ctx.client,
         data: ctx.data,
         ui: ctx.ui,
@@ -2626,6 +2642,10 @@ async function setup(
       if (paneHost.options !== null) {
         const wiring = await createTuiPaneWiring({
           ...paneHost.options,
+          getDirectory: () => {
+            runtime.syncConfigDirectory();
+            return ctx.location?.directory ?? process.cwd();
+          },
           client: ctx.client,
           paneConfig: currentPaneConfig,
         });
@@ -2637,6 +2657,18 @@ async function setup(
         }
         paneWiring = wiring;
         paneWiringSetting = multiplexerType;
+      } else if (paneHost.mode.mode === 'shared') {
+        if (
+          !paneWiringClosed &&
+          multiplexerType !== 'none' &&
+          paneWiringRetry === null
+        ) {
+          paneWiringRetry = setTimeout(() => {
+            paneWiringRetry = null;
+            void reconcilePaneWiring();
+          }, HOST_REPROBE_INTERVAL_MS);
+          paneWiringRetry.unref?.();
+        }
       } else {
         hostFailureDetail = describeV2HostMode(paneHost.mode);
       }
@@ -2658,7 +2690,11 @@ async function setup(
     paneWiringSync = paneWiringSync
       .then(async () => {
         if (paneWiringClosed) return;
-        if (hostFailureDetail !== null || multiplexerType === 'none') {
+        if (
+          process.env[PANE_VIEWER_ENV] === '1' ||
+          hostFailureDetail !== null ||
+          multiplexerType === 'none'
+        ) {
           await disposePaneWiring();
           return;
         }
@@ -2743,8 +2779,9 @@ async function setup(
     // synchronously), then settle any in-flight rebuild: it self-disposes
     // when it sees `paneWiringClosed`, so a wiring created during the
     // teardown window cannot outlive the TUI.
-    void disposePaneWiring();
-    void (async () => {
+    const disposing = disposePaneWiring();
+    return (async () => {
+      await disposing;
       await paneWiringSync;
       await disposePaneWiring();
     })();
@@ -2827,7 +2864,7 @@ interface TuiDualContractModule {
   setup: (
     ctx: V2TuiContext,
     initial?: TuiGatesRead,
-  ) => Promise<undefined | (() => void)>;
+  ) => Promise<undefined | (() => Promise<void>)>;
 }
 
 const plugin: TuiDualContractModule = {

@@ -49,6 +49,7 @@ import {
   buildViewCommand,
   findBinary,
   isPosixShell,
+  markViewerCommand,
   normalizePathForShell,
   quoteShellArg,
   shellSupportsAndChain,
@@ -191,11 +192,8 @@ export class OrcaMultiplexer implements Multiplexer {
     }
 
     try {
-      const viewerCommand = buildViewCommand(
-        sessionId,
-        serverUrl,
-        directory,
-        options,
+      const viewerCommand = markViewerCommand(
+        buildViewCommand(sessionId, serverUrl, directory, options),
       );
       // v2 mini omits the directory and `terminal split` has no cwd flag,
       // so the command changes directory itself.

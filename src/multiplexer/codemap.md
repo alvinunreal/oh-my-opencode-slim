@@ -78,7 +78,7 @@ multiplexer-specific command translation.
   extracts the `omosc:` token from the `# omosc:...` data marker in the
   spawned process's argv before handing it to the core.
 - **`diagnostics.ts`**: Structured FR-13 records (`multiplexer.no-pane`,
-  `multiplexer.pane-created`) through the plugin file logger, plus the
+  `multiplexer.pane-created`, `multiplexer.pane-closed`) through the plugin file logger, plus the
   once-per-process gate.
 - **`ports.ts`**: Injectable IO surface (clock, timers, session status/list
   readers, adapter factory, server URL resolver) used by the core and tests.
@@ -167,7 +167,7 @@ Shown for v1. On v2, `v2-host.ts` supplies the base URL, an authenticated
 4. Reconnect compensation (30 s reconcile): session.list by parentID is
    authoritative — missing children are backfilled (same eligibility/dedup
    guards), local panes whose child is gone are closed, already-held children
-   log backfill-skipped and, when quiescent, re-arm a provisional idle deadline
+   when quiescent, re-arm a provisional idle deadline
 5. FR-8 sweep (startup / unreachable → reachable): close encoded leftovers
    with a dead owner and a gone child, best-effort
 ```

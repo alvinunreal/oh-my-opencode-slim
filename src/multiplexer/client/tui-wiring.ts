@@ -32,7 +32,7 @@ import {
 import { isRecord } from '../../utils/guards';
 import { initLogger } from '../../utils/logger';
 import { getMultiplexer } from '../factory';
-import type { ViewerFlavor } from '../shared';
+import { PANE_VIEWER_ENV, type ViewerFlavor } from '../shared';
 import type { Multiplexer } from '../types';
 import {
   createOnceGate,
@@ -97,6 +97,8 @@ export const HOST_REPROBE_INTERVAL_MS = 5_000;
  * event; completed sweeps do not repeat every 30s.
  */
 export const RECONCILE_INTERVAL_MS = 30_000;
+const ROUTE_POLL_INTERVAL_MS = 250;
+const ROUTE_RECONCILE_DEBOUNCE_MS = 100;
 
 /** Raw session events the client consumes (FR-3). */
 export const SESSION_EVENT_TYPES = [
@@ -536,6 +538,11 @@ export async function createTuiPaneWiring(
 
   (options.initLogging ?? initClientLogging)();
 
+  if (env[PANE_VIEWER_ENV] === '1') {
+    logger.log('[multiplexer] pane wiring skipped in viewer');
+    return disabledWiring(decideAdmission('none', null), null);
+  }
+
   let loaded: LoadedPaneConfig;
   try {
     loaded =
@@ -730,6 +737,25 @@ export async function createTuiPaneWiring(
   const unsubscribers: Array<() => void> = [];
   /** Child ids seen in this client's directory, for directory-less events. */
   const knownDirectories = new Map<string, string>();
+  let displayedSession = options.getDisplayedSessionId?.() ?? null;
+  let displayedDirectory = getDirectory();
+  let routeReconcileHandle: ClockTimerHandle | null = null;
+  const updateDisplayed = (schedule = true): void => {
+    const session = options.getDisplayedSessionId?.() ?? null;
+    const directory = getDirectory();
+    const changed =
+      session !== displayedSession || directory !== displayedDirectory;
+    displayedSession = session;
+    displayedDirectory = directory;
+    lifecycle.setDisplayedSession(session);
+    lifecycle.setDisplayedDirectory(directory);
+    if (!changed || !schedule) return;
+    if (routeReconcileHandle !== null) clock.clearTimeout(routeReconcileHandle);
+    routeReconcileHandle = clock.setTimeout(() => {
+      routeReconcileHandle = null;
+      void runReconcile();
+    }, ROUTE_RECONCILE_DEBOUNCE_MS);
+  };
 
   const processProjectedEvent = async (
     projected: SessionLifecycleEvent,
@@ -740,8 +766,7 @@ export async function createTuiPaneWiring(
     if (event.directory === displayedDirectory) {
       rememberDirectory(knownDirectories, event.sessionId, displayedDirectory);
     }
-    lifecycle.setDisplayedSession(options.getDisplayedSessionId?.() ?? null);
-    lifecycle.setDisplayedDirectory(displayedDirectory);
+    updateDisplayed();
 
     await ensureReachable();
     if (disposed) return;
@@ -787,6 +812,8 @@ export async function createTuiPaneWiring(
   // startup and then on a low-frequency cadence. Disposal clears the tracked
   // clock, stopping the chain.
   let reconcileHandle: ClockTimerHandle | null = null;
+  let reconciling = false;
+  let reconcileAgain = false;
   const scheduleReconcile = (): void => {
     if (disposed) return;
     reconcileHandle = clock.setTimeout(() => {
@@ -796,19 +823,38 @@ export async function createTuiPaneWiring(
   };
   const runReconcile = async (): Promise<void> => {
     if (disposed) return;
-    // The route can move while the event stream is quiet; reconcile against
-    // the session this client displays *now*, not the last one an event saw.
-    lifecycle.setDisplayedSession(options.getDisplayedSessionId?.() ?? null);
-    lifecycle.setDisplayedDirectory(getDirectory());
-    await ensureReachable();
-    if (disposed) return;
-    if (hostState === 'reachable') {
-      await drainDueSweep();
-      if (disposed) return;
-      await lifecycle.onReconnect();
+    if (reconciling) {
+      reconcileAgain = true;
+      return;
     }
-    scheduleReconcile();
+    if (reconcileHandle !== null) clock.clearTimeout(reconcileHandle);
+    reconcileHandle = null;
+    reconciling = true;
+    try {
+      updateDisplayed(false);
+      await ensureReachable();
+      if (disposed) return;
+      if (hostState === 'reachable') {
+        await drainDueSweep();
+        if (disposed) return;
+        await lifecycle.onReconnect();
+      }
+    } finally {
+      reconciling = false;
+      if (!disposed) {
+        if (reconcileAgain) {
+          reconcileAgain = false;
+          void runReconcile();
+        } else scheduleReconcile();
+      }
+    }
   };
+  const pollRoute = (): void => {
+    if (disposed) return;
+    updateDisplayed();
+    clock.setTimeout(pollRoute, ROUTE_POLL_INTERVAL_MS);
+  };
+  clock.setTimeout(pollRoute, ROUTE_POLL_INTERVAL_MS);
   void runReconcile();
 
   const dispose = async (): Promise<void> => {
