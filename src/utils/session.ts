@@ -21,8 +21,8 @@ export type TimerHandle = ReturnType<typeof setTimeout> | number;
 /** Scheduling seam (see src/utils/test-timers.ts); defaults to platform
  *  timers. */
 export type TimerSeam = {
-  setTimeout?: (callback: () => void, delay: number) => TimerHandle;
-  clearTimeout?: (timer: TimerHandle) => void;
+  setTimeout: (callback: () => void, delay: number) => TimerHandle;
+  clearTimeout: (timer: TimerHandle) => void;
 };
 
 export async function withTimeout<T>(
@@ -50,7 +50,8 @@ export async function withTimeout<T>(
       }),
     ]);
   } finally {
-    clearTimer(timer);
+    // The Promise executor above runs synchronously, but TS cannot see that.
+    if (timer !== undefined) clearTimer(timer);
   }
 }
 
