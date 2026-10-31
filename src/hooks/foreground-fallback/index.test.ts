@@ -2060,6 +2060,44 @@ describe('foreground fallback redo: host retry budget', () => {
 });
 
 describe('ForegroundFallbackManager v2 retry hook', () => {
+  test('v2 transport timeout switches providers and continues the turn', async () => {
+    createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      { orchestrator: ['p1/a', 'p2/b'] },
+      false,
+      { directory: '/test', hostFlavor: 'v2' } as never,
+      0,
+      undefined,
+      undefined,
+      0,
+      0,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    const switchModel = mock(async () => {});
+    const event = {
+      sessionID: 'v2-transport',
+      agent: 'orchestrator',
+      model: { providerID: 'p1', id: 'a' },
+      error: {
+        type: 'provider.transport',
+        message: 'Timed out waiting for response headers',
+      },
+      decision: { retry: true, delay: 2_000 },
+    };
+    await mgr.handleV2Retry(event, switchModel);
+    expect(switchModel).toHaveBeenCalledWith('v2-transport', {
+      providerID: 'p2',
+      id: 'b',
+    });
+    expect(event.decision).toEqual({ retry: true, delay: 0 });
+    expect(mgr.getActiveFallback('v2-transport')?.downProviders).toEqual(
+      new Set(['p1']),
+    );
+  });
+
   test.each([{ retry: true, delay: 2000 }, { retry: false }])(
     'switches in place without abort or re-prompt (initial decision %p)',
     async (decision) => {

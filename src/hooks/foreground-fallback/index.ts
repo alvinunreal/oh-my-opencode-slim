@@ -150,6 +150,7 @@ const FAILOVER_ERROR_TYPES = new Set([
   'provider.quota',
   'provider.auth',
   'provider.internal',
+  'provider.transport',
 ]);
 // (ponytail) validated against real OpenCode error shapes
 const TRANSPORT_CODES = new Set([
