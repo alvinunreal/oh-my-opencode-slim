@@ -45,7 +45,10 @@ import { COUNCIL_INJECT_METADATA_KEY } from '../hooks/council-inject';
 import { GOAL_POINTER_METADATA_KEY } from '../hooks/deepwork-goal';
 import type { ForegroundFallbackManager } from '../hooks/foreground-fallback';
 import { PHASE_REMINDER_METADATA_KEY } from '../hooks/phase-reminder';
-import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/task-session-manager/board-injection';
+import {
+  appendRefusalCorrections,
+  BACKGROUND_JOB_BOARD_METADATA_KEY,
+} from '../hooks/task-session-manager/board-injection';
 import { OhMyOpenCodeLite } from '../index';
 import { loadMergedOpenCodeConfig } from '../marketplace/preflight';
 import type { McpConfig } from '../mcp/types';
@@ -68,6 +71,7 @@ import {
   modelExistsInCatalog,
 } from '../utils/model-image-capability';
 import { OperationTimeoutError, withTimeout } from '../utils/session';
+import { findTaskErrorNotice, parseTaskResultFromOutput } from '../utils/task';
 import {
   adaptTool,
   applyAgentToDraft,
@@ -123,7 +127,10 @@ import {
   userTextFromContent,
   type V2CommandSubmit,
 } from './session-submit';
-import { createSubagentExecutorWrapper } from './subagent-executor-wrapper';
+import {
+  createSubagentExecutorWrapper,
+  readRefusalOutcome,
+} from './subagent-executor-wrapper';
 import type {
   V2AgentDraft,
   V2Cleanup,
@@ -330,6 +337,13 @@ export interface V2SessionContextHandlerDeps {
   sessionContext?: (
     sessionID: string,
   ) => Promise<Array<Record<string, unknown>> | undefined>;
+  backgroundGeneration?: (
+    parentID: string,
+    childID: string,
+    runningOnly?: boolean,
+    refusalTime?: number,
+  ) => number | undefined;
+  refusalOutcome?: ForegroundFallbackManager['refusedChildOutcome'];
   /** v1 `experimental.chat.system.transform` hook. */
   systemTransform?: (
     input: unknown,
@@ -391,12 +405,18 @@ export function attributeAgentsByHistory(
   return attribution;
 }
 
+const MAX_REFUSAL_NOTICES = 1024;
+
 /** Build the single `ctx.session.hook("context")` handler: interview marker
  * bridge, generic command marker dispatch, chat.message agent tracking, and
  * the v1 system/messages transforms — each independently try/catch-guarded. */
 export function createSessionContextHandler(
   deps: V2SessionContextHandlerDeps,
 ): (event: V2SessionContextEvent) => Promise<void> {
+  const refusalNotices = new Map<
+    string,
+    { model: string; completedAt: number } | undefined
+  >();
   return async (event) => {
     // Interview marker bridge (transcript projection + /interview).
     try {
@@ -593,6 +613,76 @@ export function createSessionContextHandler(
             ),
           };
         });
+        const refusalCorrections: Array<{
+          taskID: string;
+          model: string;
+          completedAt: number;
+        }> = [];
+        if (
+          deps.backgroundGeneration &&
+          deps.refusalOutcome &&
+          deps.sessionContext
+        ) {
+          for (const message of v1messages) {
+            if (message.info.role !== 'user') continue;
+            for (const part of message.parts) {
+              if (part.type !== 'text' || typeof part.text !== 'string')
+                continue;
+              const notice = findTaskErrorNotice(part.text, 'subagent');
+              const block = notice?.block;
+              const childID = notice?.taskID;
+              if (!block || !childID) continue;
+              if (
+                deps.backgroundGeneration(event.sessionID, childID, true) ===
+                undefined
+              )
+                continue;
+              const text = parseTaskResultFromOutput(block);
+              if (!text) continue;
+              const noticeKey = `${message.info.id ?? ''}\0${childID}\0${text}`;
+              let recovery = refusalNotices.get(noticeKey);
+              if (!refusalNotices.has(noticeKey)) {
+                const outcome = await readRefusalOutcome(
+                  deps.sessionContext,
+                  deps.refusalOutcome,
+                  childID,
+                  text,
+                );
+                if (outcome !== null) {
+                  recovery =
+                    outcome &&
+                    typeof outcome.completedAt === 'number' &&
+                    Number.isFinite(outcome.completedAt)
+                      ? {
+                          model: outcome.model,
+                          completedAt: outcome.completedAt,
+                        }
+                      : undefined;
+                  if (refusalNotices.size >= MAX_REFUSAL_NOTICES) {
+                    const oldest = refusalNotices.keys().next().value;
+                    if (oldest !== undefined) refusalNotices.delete(oldest);
+                  }
+                  refusalNotices.set(noticeKey, recovery);
+                }
+              }
+              if (recovery) {
+                refusalCorrections.push({ taskID: childID, ...recovery });
+              }
+            }
+          }
+        }
+        appendRefusalCorrections(
+          v1messages,
+          refusalCorrections.filter(
+            ({ taskID, completedAt }) =>
+              deps.backgroundGeneration?.(
+                event.sessionID,
+                taskID,
+                true,
+                completedAt,
+              ) !== undefined,
+          ),
+        );
         await deps.messagesTransform({}, { messages: v1messages });
         event.messages = v1messages.map((m) => {
           const info = m.info as { content?: unknown; time?: unknown };
@@ -3221,6 +3311,12 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           // Per-message agent attribution source: durable agent-switched
           // markers in the stored, compaction-bounded history stream.
           sessionContext: sessionContextRead,
+          backgroundGeneration: v1Hooks[
+            'v2.backgroundGeneration'
+          ] as V2SessionContextHandlerDeps['backgroundGeneration'],
+          refusalOutcome: v1Hooks[
+            'v2.refusalOutcome'
+          ] as V2SessionContextHandlerDeps['refusalOutcome'],
           systemTransform,
           messagesTransform,
           // Captured child sessions get their frozen temperature/provider
@@ -3481,6 +3577,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
               const wrapper =
                 lifecycleEnabled && registerStructuredLaunch
                   ? createSubagentExecutorWrapper({
+                      context: sessionContextRead,
+                      refusalOutcome: v1Hooks[
+                        'v2.refusalOutcome'
+                      ] as V2SessionContextHandlerDeps['refusalOutcome'],
                       register: (launch) =>
                         registerStructuredLaunch({
                           ...launch,

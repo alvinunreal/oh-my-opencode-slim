@@ -5434,6 +5434,147 @@ describe('plugin foreground fallback host gating', () => {
     }
   });
 
+  test('v2 refusal continuation yields to an external prompt but not internal discovery', async () => {
+    const { client, promptAsync } = createFallbackClient();
+    client.session.get = mock(async () => ({
+      data: {
+        agent: 'orchestrator',
+        model: { providerID: 'openai', id: 'gpt-b' },
+      },
+    }));
+    const first = Promise.withResolvers<void>();
+    const second = Promise.withResolvers<void>();
+    const switchModel = mock((sessionID: string) =>
+      sessionID === 'epoch-internal' ? first.promise : second.promise,
+    );
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      hostFlavor: 'v2',
+      experimental_v2: { switchModel },
+    } as never);
+    jest.useFakeTimers();
+    const settle = async () => {
+      for (let i = 0; i < 40; i++) await Promise.resolve();
+    };
+    const start = async (sessionID: string) => {
+      const data = {
+        sessionID,
+        assistantMessageID: `assistant-${sessionID}`,
+        agent: 'orchestrator',
+        model: { providerID: 'openai', id: 'gpt-b' },
+      };
+      await hooks.event?.({
+        event: { type: 'session.step.started', data },
+      } as never);
+      await hooks.event?.({
+        event: {
+          type: 'session.step.failed',
+          data: {
+            ...data,
+            finish: 'content-filter',
+            error: { type: 'provider.content-filter', message: 'blocked' },
+          },
+        },
+      } as never);
+      await settle();
+    };
+    try {
+      await start('epoch-internal');
+      expect(switchModel).toHaveBeenCalledTimes(1);
+      await hooks['chat.message']?.(
+        { sessionID: 'epoch-internal', agent: 'orchestrator' } as never,
+        { parts: [createInternalAgentTextPart('internal wake')] } as never,
+      );
+      await hooks['chat.message']?.(
+        { sessionID: 'epoch-internal', agent: 'orchestrator' } as never,
+        {} as never,
+      );
+      first.resolve();
+      await settle();
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+      await start('epoch-external');
+      expect(switchModel).toHaveBeenCalledTimes(2);
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'epoch-external',
+          agent: 'orchestrator',
+          parts: [{ type: 'text', text: 'new turn' }],
+        } as never,
+        {} as never,
+      );
+      second.resolve();
+      await settle();
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+    } finally {
+      first.resolve();
+      second.resolve();
+      await hooks.dispose?.();
+    }
+  });
+
+  test('v2 retry projects the fallback model and variant without another external prompt', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: false },
+        fallback: { enabled: true, maxRetries: 0 },
+        agents: {
+          orchestrator: {
+            model: ['openai/gpt-b', { id: 'openai/gpt-c', variant: 'high' }],
+          },
+        },
+      }),
+    );
+    const hooks = await createHooks('v2');
+    try {
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'sidebar-switch',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', modelID: 'gpt-b' },
+        } as never,
+        {} as never,
+      );
+      const switchModel = mock(async () => ({}));
+      await hooks['v2.session.retry']?.(
+        {
+          sessionID: 'sidebar-switch',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', id: 'gpt-b' },
+          error: { message: 'rate limit' },
+          decision: { retry: false },
+        } as never,
+        switchModel as never,
+      );
+      expect(switchModel).toHaveBeenCalledTimes(1);
+      expect(
+        readTuiSnapshot(projectDir).sessionModels?.['sidebar-switch']
+          ?.orchestrator,
+      ).toEqual({ model: 'openai/gpt-c', variant: 'high' });
+      const { recordInternalAdmission } = await import(
+        './v2/internal-admissions'
+      );
+      recordInternalAdmission('sidebar-switch', 'internal-discovery');
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'sidebar-switch',
+          agent: 'orchestrator',
+          messageID: 'internal-discovery',
+          model: { providerID: 'openai', modelID: 'gpt-b' },
+        } as never,
+        {} as never,
+      );
+      expect(
+        readTuiSnapshot(projectDir).sessionModels?.['sidebar-switch']
+          ?.orchestrator?.model,
+      ).toBe('openai/gpt-c');
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
   test('message updates preserve the selected variant until the model or variant changes', async () => {
     const configPath = `${projectDir}/oh-my-opencode-slim.json`;
     const config = await Bun.file(configPath).json();

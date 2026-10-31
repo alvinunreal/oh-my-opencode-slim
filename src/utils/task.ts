@@ -195,6 +195,15 @@ export function parseTaskStateFromOutput(
   return parseTaskOutputHeader(output).state;
 }
 
+export function findTaskErrorNotice(text: string, tag: 'task' | 'subagent') {
+  const blocks = new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}>`, 'gi');
+  for (const [block] of text.matchAll(blocks)) {
+    const status = parseTaskStatusOutput(block);
+    if (status?.state === 'error') return { block, taskID: status.taskID };
+  }
+  return undefined;
+}
+
 /** Diagnostic applied when a terminal `completed` report carries no text. */
 export const COMPLETED_WITHOUT_TEXT_DIAGNOSTIC =
   'Task ended without a public text result; completion is not confirmed';
