@@ -822,11 +822,14 @@ describe('tui-state persistence', () => {
 
       const filePath = getTuiStatePath(tempDir);
       const external = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-      external.agentModels.explorer = GPT.model;
+      external.sessionModels[GPT.sessionID].explorer = { model: GPT.model };
       fs.writeFileSync(`${filePath}.external`, JSON.stringify(external));
       fs.renameSync(`${filePath}.external`, filePath);
       recordLuna();
-      expect(readTuiSnapshot(tempDir).agentModels.explorer).toBe(LUNA.model);
+      expect(
+        readTuiSnapshot(tempDir).sessionModels?.[LUNA.sessionID]?.explorer
+          ?.model,
+      ).toBe(LUNA.model);
       expect(clone).toHaveBeenCalled();
     } finally {
       clone.mockRestore();
