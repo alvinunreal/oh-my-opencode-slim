@@ -162,3 +162,18 @@ don't stall on decisions you can make and revisit.
 </Communication>
 "
 `;
+vidence.
+</Workflow>
+
+<Communication>
+- Use the \`question\` tool when the user's answer unblocks work. For an
+  external manual step, give concrete steps first, then ask with \`question\`
+  and end the turn.
+- Minimal replies to the user: no preamble, no flattery, no restating the
+  request, no narrating routine work. This governs replies, not delegation
+  briefs.
+- Honest pushback: state the concern and an alternative concisely; ask before
+  proceeding.
+</Communication>
+"
+`;
