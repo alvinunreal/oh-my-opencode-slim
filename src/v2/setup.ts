@@ -405,6 +405,10 @@ export function attributeAgentsByHistory(
 export function createSessionContextHandler(
   deps: V2SessionContextHandlerDeps,
 ): (event: V2SessionContextEvent) => Promise<void> {
+  const refusalNotices = new Map<
+    string,
+    Awaited<ReturnType<typeof readRefusalOutcome>>
+  >();
   return async (event) => {
     // Interview marker bridge (transcript projection + /interview).
     try {
@@ -594,12 +598,25 @@ export function createSessionContextHandler(
                 continue;
               const text = parseTaskResultFromOutput(block);
               if (!text) continue;
-              const recovery = await readRefusalOutcome(
-                deps.sessionContext,
-                deps.refusalOutcome,
-                childID,
-                text,
-              );
+              // Memoized per notice: a parent request must not re-read every
+              // failed child, and the rewrite must stay byte-stable.
+              const noticeKey = `${childID}\0${text}`;
+              let recovery = refusalNotices.get(noticeKey);
+              if (!refusalNotices.has(noticeKey)) {
+                recovery = await readRefusalOutcome(
+                  deps.sessionContext,
+                  deps.refusalOutcome,
+                  childID,
+                  text,
+                );
+                if (recovery !== null) {
+                  if (refusalNotices.size >= 1024) {
+                    const oldest = refusalNotices.keys().next().value;
+                    if (oldest !== undefined) refusalNotices.delete(oldest);
+                  }
+                  refusalNotices.set(noticeKey, recovery);
+                }
+              }
               if (!recovery) continue;
               message.content[partIndex] = {
                 ...part,

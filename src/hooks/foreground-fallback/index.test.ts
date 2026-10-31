@@ -2533,6 +2533,37 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     expect(event.messages[0].content[0].text).toBe(prefix + text);
   });
 
+  test('v2 parent reads a failed child once across requests', async () => {
+    const sessionContext = mock(async (_sessionID: string) => [
+      { id: 'assistant-1', type: 'assistant', finish: 'error' },
+    ]);
+    const handler = createSessionContextHandler({
+      interviewHandleContext: async () => {},
+      messagesTransform: async () => {},
+      sessionContext,
+      backgroundGeneration: () => 1,
+      refusalOutcome: async () => undefined,
+    });
+    const text =
+      '<subagent sessionID="child" state="error" description="inspect">\nboom\n</subagent>';
+    for (let request = 0; request < 3; request++) {
+      await handler({
+        sessionID: 'parent',
+        agent: 'orchestrator',
+        model: {},
+        system: [],
+        tools: {},
+        messages: [
+          { id: 'notice', role: 'user', content: [{ type: 'text', text }] },
+        ],
+      } as never);
+    }
+    const childReads = sessionContext.mock.calls.filter(
+      ([sessionID]) => sessionID === 'child',
+    );
+    expect(childReads).toHaveLength(1);
+  });
+
   test('v2 refusal continuation names the refused step agent', async () => {
     const { manager, mocks } = fixture();
     await manager.handleEvent(started('agent'));

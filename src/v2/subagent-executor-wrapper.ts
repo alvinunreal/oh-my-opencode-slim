@@ -90,6 +90,8 @@ export async function readRefusalOutcome(
     if (model) return { id: last.id, model };
   } catch (error) {
     log('[v2] refused child context lookup failed', String(error));
+    // null = lookup failed (retryable); undefined = definitive no recovery.
+    return null;
   }
 }
 
