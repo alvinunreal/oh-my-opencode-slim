@@ -5,6 +5,7 @@ import {
   expect,
   jest,
   mock,
+  setSystemTime,
   spyOn,
   test,
 } from 'bun:test';
@@ -7658,7 +7659,7 @@ describe('ForegroundFallbackManager deduplication', () => {
   // DEDUP_WINDOW_MS inclusivity (issue #1721): the isDeduped sweep expires
   // a recorded incident once DEDUP_WINDOW_MS elapses, inclusively, so the
   // boundary decides exactly at 5000ms. The clock is driven through
-  // jest.setSystemTime so Date.now is exact. Not reached here: the id-less
+  // setSystemTime so Date.now is exact. Not reached here: the id-less
   // correlation guards and the hasSameTurnErrorIncident sweep (a message-id
   // match returns its incidentID before the window is read); those sites
   // need their own fixtures. The three rows kill the relational flips and
@@ -7668,8 +7669,7 @@ describe('ForegroundFallbackManager deduplication', () => {
     [5_000, 2],
     [5_001, 2],
   ])('delta %dms -> %d prompts', async (delta, prompts) => {
-    jest.useFakeTimers();
-    jest.setSystemTime(1_000_000);
+    setSystemTime(new Date(1_000_000));
     try {
       const { mocks } = createMockClient();
       const mgr = new ForegroundFallbackManager(makeChains(), true, {
@@ -7682,11 +7682,11 @@ describe('ForegroundFallbackManager deduplication', () => {
       // fingerprint or window is read), so only the time boundary decides.
       const err = redoEvents.error(sid, { message: 'rate limit exceeded' });
       await mgr.handleEvent(err);
-      jest.setSystemTime(1_000_000 + delta);
+      setSystemTime(new Date(1_000_000 + delta));
       await mgr.handleEvent(err);
       expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
     } finally {
-      jest.useRealTimers();
+      setSystemTime();
     }
   });
 
@@ -7827,6 +7827,25 @@ function expectStampSplit(mgr: unknown, sid: string): void {
   ).toContain(1_001_000);
 }
 
+/** Named wrapper: the constructor's positional options are easy to
+ * misorder, and the boundary tables need zero retry delays so no timer
+ * path can race the controlled clock. Unlike makeManager above it keeps
+ * caller-supplied mocks and whole chain records. */
+const makeBoundaryManager = (
+  chains: ConstructorParameters<typeof ForegroundFallbackManager>[0],
+  maxRetries = 3,
+) =>
+  new ForegroundFallbackManager(
+    chains,
+    true,
+    { directory: '/test' } as never,
+    maxRetries,
+    undefined,
+    undefined,
+    0,
+    0,
+  );
+
 describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
   test.each([
     [4_999, 1],
@@ -7835,20 +7854,10 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
   ])(
     'incidentForMessageError correlates an id-less error at %dms -> %d prompts',
     async (delta, prompts) => {
-      jest.useFakeTimers();
-      jest.setSystemTime(1_000_000);
+      setSystemTime(new Date(1_000_000));
       try {
         const { mocks } = createMockClient();
-        const mgr = new ForegroundFallbackManager(
-          makeChains(),
-          true,
-          { directory: '/test' } as never,
-          3,
-          undefined,
-          undefined,
-          0,
-          0,
-        );
+        const mgr = makeBoundaryManager(makeChains());
         const sid = `message-error-window-${delta}`;
         // Unregistered agent: the first fallback suspends on agent
         // resolution, so the clock moves after the pending correlation is
@@ -7858,14 +7867,14 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
         const first = mgr.handleEvent(
           redoEvents.assistant(sid, 'a', RATE_LIMIT),
         );
-        jest.setSystemTime(1_001_000);
+        setSystemTime(new Date(1_001_000));
         await first;
         expectStampSplit(mgr, sid);
-        jest.setSystemTime(1_000_000 + delta);
+        setSystemTime(new Date(1_000_000 + delta));
         await mgr.handleEvent(redoEvents.idlessAssistant(sid, 'a', RATE_LIMIT));
         expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
       } finally {
-        jest.useRealTimers();
+        setSystemTime();
       }
     },
   );
@@ -7877,35 +7886,25 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
   ])(
     'incidentForSessionError correlates an id-less error at %dms -> %d prompts',
     async (delta, prompts) => {
-      jest.useFakeTimers();
-      jest.setSystemTime(1_000_000);
+      setSystemTime(new Date(1_000_000));
       try {
         // The host session's agent has no fallback chain: the first error
         // replays on the same model, so sessionModel still matches the
         // correlation's model when the id-less replay arrives.
         const { mocks } = createMockClient({ getData: { agent: 'unlisted' } });
-        const mgr = new ForegroundFallbackManager(
-          makeChains(),
-          true,
-          { directory: '/test' } as never,
-          3,
-          undefined,
-          undefined,
-          0,
-          0,
-        );
+        const mgr = makeBoundaryManager(makeChains());
         const sid = `session-error-window-${delta}`;
         await mgr.handleEvent(redoEvents.assistant(sid, 'a'));
         // Suspends on agent resolution (see the message-error case above).
         const first = mgr.handleEvent(redoEvents.idlessError(sid, RATE_LIMIT));
-        jest.setSystemTime(1_001_000);
+        setSystemTime(new Date(1_001_000));
         await first;
         expectStampSplit(mgr, sid);
-        jest.setSystemTime(1_000_000 + delta);
+        setSystemTime(new Date(1_000_000 + delta));
         await mgr.handleEvent(redoEvents.idlessError(sid, RATE_LIMIT));
         expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
       } finally {
-        jest.useRealTimers();
+        setSystemTime();
       }
     },
   );
@@ -7917,20 +7916,10 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
   ])(
     'hasSameTurnErrorIncident consumes a no-chain retry at %dms -> %d prompts',
     async (delta, prompts) => {
-      jest.useFakeTimers();
-      jest.setSystemTime(1_000_000);
+      setSystemTime(new Date(1_000_000));
       try {
         const { mocks } = createMockClient({ getData: { agent: 'unlisted' } });
-        const mgr = new ForegroundFallbackManager(
-          makeChains(),
-          true,
-          { directory: '/test' } as never,
-          3,
-          undefined,
-          undefined,
-          0,
-          0,
-        );
+        const mgr = makeBoundaryManager(makeChains());
         const sid = `same-turn-incident-window-${delta}`;
         await mgr.handleEvent(redoEvents.assistant(sid, 'a'));
         // Charges the error incident and the shared retry budget.
@@ -7944,11 +7933,11 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
             message: 'Payment Required',
           }),
         );
-        jest.setSystemTime(1_000_000 + delta);
+        setSystemTime(new Date(1_000_000 + delta));
         await mgr.handleEvent(redoEvents.retry(sid));
         expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
       } finally {
-        jest.useRealTimers();
+        setSystemTime();
       }
     },
   );
@@ -7960,19 +7949,12 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
   ])(
     'stale attempt 2 retry is skipped at %dms -> %d prompts',
     async (delta, prompts) => {
-      jest.useFakeTimers();
-      jest.setSystemTime(1_000_000);
+      setSystemTime(new Date(1_000_000));
       try {
         const { mocks } = createMockClient();
-        const mgr = new ForegroundFallbackManager(
+        const mgr = makeBoundaryManager(
           { orchestrator: ['test/a', 'test/b', 'test/c'] },
-          true,
-          { directory: '/test' } as never,
           0, // no host-retry budget: attempt 2 must reach the fallback path
-          undefined,
-          undefined,
-          0,
-          0,
         );
         const sid = `stale-retry-window-${delta}`;
         mgr.registerSessionAgent(sid, 'orchestrator');
@@ -7981,11 +7963,11 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
         // The replacement speaks: sessionModel names test/b while
         // lastTriggerModel still names the failed test/a.
         await mgr.handleEvent(redoEvents.assistant(sid, 'b'));
-        jest.setSystemTime(1_000_000 + delta);
+        setSystemTime(new Date(1_000_000 + delta));
         await mgr.handleEvent(redoEvents.retry(sid, 2));
         expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
       } finally {
-        jest.useRealTimers();
+        setSystemTime();
       }
     },
   );
@@ -7997,20 +7979,12 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
   ])(
     'recentlyHandledMessage keeps the replacement model at %dms (next fallback -> %s)',
     async (delta, target) => {
-      jest.useFakeTimers();
-      jest.setSystemTime(1_000_000);
+      setSystemTime(new Date(1_000_000));
       try {
         const { mocks } = createMockClient();
-        const mgr = new ForegroundFallbackManager(
-          { orchestrator: ['test/a', 'test/b', 'test/c'] },
-          true,
-          { directory: '/test' } as never,
-          3,
-          undefined,
-          undefined,
-          0,
-          0,
-        );
+        const mgr = makeBoundaryManager({
+          orchestrator: ['test/a', 'test/b', 'test/c'],
+        });
         const sid = `recently-handled-window-${delta}`;
         const failedID = `failed-${sid}`;
         mgr.registerSessionAgent(sid, 'orchestrator');
@@ -8021,7 +7995,7 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
         await mgr.handleEvent(
           redoEvents.assistant(sid, 'b', undefined, 'replacement'),
         );
-        jest.setSystemTime(1_000_000 + delta);
+        setSystemTime(new Date(1_000_000 + delta));
         // A late re-emit of the failed message carries its own model again.
         // Inside the window it is inert; expired it re-seeds sessionModel to
         // test/a, and the next descent returns to the configured head.
@@ -8040,7 +8014,7 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
           modelID: target,
         });
       } finally {
-        jest.useRealTimers();
+        setSystemTime();
       }
     },
   );
@@ -8052,20 +8026,10 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
   ])(
     'triggeringModel attributes a spent echo at %dms to %j',
     async (delta, providers) => {
-      jest.useFakeTimers();
-      jest.setSystemTime(1_000_000);
+      setSystemTime(new Date(1_000_000));
       try {
         const { mocks } = createMockClient();
-        const mgr = new ForegroundFallbackManager(
-          { orchestrator: ['p1/a', 'p2/b'] },
-          true,
-          { directory: '/test' } as never,
-          3,
-          undefined,
-          undefined,
-          0,
-          0,
-        );
+        const mgr = makeBoundaryManager({ orchestrator: ['p1/a', 'p2/b'] });
         const sid = `triggering-model-window-${delta}`;
         mgr.registerSessionAgent(sid, 'orchestrator');
         await mgr.handleEvent({
@@ -8081,7 +8045,7 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
         });
         // Spent quota on p1: records the switch trigger and switches to p2.
         await mgr.handleEvent(redoEvents.idlessError(sid, SPENT_QUOTA));
-        jest.setSystemTime(1_000_000 + delta);
+        setSystemTime(new Date(1_000_000 + delta));
         // A retry echo carries no message id, so surfacesSpentQuota asks
         // triggeringModel which model the error belongs to.
         await mgr.handleEvent({
@@ -8099,7 +8063,7 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
         ).toEqual(providers);
         expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
       } finally {
-        jest.useRealTimers();
+        setSystemTime();
       }
     },
   );
