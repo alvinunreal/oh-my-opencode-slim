@@ -952,6 +952,89 @@ describe('v2 tui preset plugin', () => {
       }
     });
 
+    test('sidebar overlays the picker selection on a root session under the orchestrator displayName', async () => {
+      writeUserConfig({ ...makeConfig(), compactSidebar: false });
+      process.env.XDG_DATA_HOME = path.join(configHome, 'display-identity');
+      process.env.OPENCODE_LOG_DIR = path.join(configHome, 'logs');
+      process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '60000';
+      // Static on-disk projection: the canonical orchestrator row carries
+      // the registry identity map, so a root session running the visible
+      // displayName agent ('reasoner') is still the orchestrator's row.
+      recordTuiAgentModels(
+        {
+          agentModels: { orchestrator: 'zai-coding-plan/glm-5.3' },
+          agentVariants: { orchestrator: 'medium' },
+          agentDisplayNames: { orchestrator: 'reasoner' },
+        },
+        projectDir,
+      );
+      const [route] = createSignal({
+        type: 'session',
+        sessionID: 'root-a',
+      });
+      const stub = makeSetupCtx();
+      const ui = stub.ctx.ui as {
+        router: { current: () => unknown };
+        model?: unknown;
+      };
+      ui.router.current = route;
+      ui.model = {
+        current: () => ({
+          providerID: 'opencode-go',
+          modelID: 'gemini-x',
+          variant: 'high',
+        }),
+      };
+      stub.ctx.data = {
+        session: {
+          get: (sessionID: string) =>
+            sessionID === 'root-a' ? { agent: 'reasoner' } : { agent: 'other' },
+        },
+      };
+      let notifyRendered = () => {};
+      const rendered = new Promise<void>((resolve) => {
+        notifyRendered = resolve;
+      });
+      stub.ctx.renderer = { requestRender: () => notifyRendered() };
+      stub.ctx.client = {
+        rpc: () => ({
+          read: async () => ({
+            status: 'unbound',
+            presetName: null,
+            affects: 'future-children-only',
+          }),
+        }),
+      };
+      let cleanup: (() => void) | undefined;
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      try {
+        cleanup = await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        );
+        await rendered;
+        const sidebar = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        if (!sidebar?.render) throw new Error('Sidebar slot missing');
+        screen = await testRender(() => sidebar.render?.() as never, {
+          width: 80,
+          height: 32,
+        });
+        await screen.renderOnce();
+        // The picker selection replaces the static row immediately, before
+        // any prompt commits the switch — even though the session's agent
+        // is the displayName identity, not the canonical 'orchestrator'.
+        expect(screen.captureCharFrame()).toContain('gemini-x');
+        expect(screen.captureCharFrame()).not.toContain('glm-5.3');
+        expect(screen.captureCharFrame()).toMatch(/variant\s+high/);
+        // One row, labeled by the display name.
+        expect(screen.captureCharFrame().match(/reasoner/g)?.length).toBe(1);
+      } finally {
+        cleanup?.();
+        screen?.renderer.destroy();
+      }
+    });
+
     test('setup registers the sidebar slot and the /preset layer in the app slot render', async () => {
       const stub = makeSetupCtx();
       let cleanup: (() => void) | undefined;

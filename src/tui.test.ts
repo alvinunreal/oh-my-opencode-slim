@@ -268,6 +268,38 @@ describe('resolveSelectedRootModel', () => {
     ).toBeUndefined();
   });
 
+  test('root session under the orchestrator displayName identity yields it', () => {
+    expect(
+      resolveSelectedRootModel({
+        route: { type: 'session', sessionID: 'root-a' },
+        sessionInfo: { agent: 'reasoner' },
+        selected: selection,
+        agentDisplayNames: { orchestrator: 'reasoner' },
+      }),
+    ).toEqual({ model: 'opencode-go/gemini-x', variant: 'high' });
+  });
+
+  test('root session under an unrelated displayName is not overlaid', () => {
+    expect(
+      resolveSelectedRootModel({
+        route: { type: 'session', sessionID: 'root-b' },
+        sessionInfo: { agent: 'advisor' },
+        selected: selection,
+        agentDisplayNames: { orchestrator: 'reasoner' },
+      }),
+    ).toBeUndefined();
+  });
+
+  test('without the identity map only the canonical orchestrator name passes', () => {
+    expect(
+      resolveSelectedRootModel({
+        route: { type: 'session', sessionID: 'root-a' },
+        sessionInfo: { agent: 'reasoner' },
+        selected: selection,
+      }),
+    ).toBeUndefined();
+  });
+
   test('missing optional host APIs degrade to no overlay', () => {
     expect(
       resolveSelectedRootModel({
