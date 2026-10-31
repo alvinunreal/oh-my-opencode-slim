@@ -87,7 +87,12 @@ export async function readRefusalOutcome(
     if (last?.finish !== 'content-filter' || typeof last.id !== 'string')
       return;
     const model = await outcome(sessionID, last);
-    if (model) return { id: last.id, model };
+    if (model)
+      return {
+        id: last.id,
+        model,
+        completedAt: isRecord(last.time) ? last.time.completed : undefined,
+      };
   } catch (error) {
     log('[v2] refused child context lookup failed', String(error));
     // null = lookup failed (retryable); undefined = definitive no recovery.

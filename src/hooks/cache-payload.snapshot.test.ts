@@ -22,8 +22,10 @@ import { PHASE_REMINDER } from '../config/constants';
 import {
   buildHistory,
   createPipeline,
+  refusedChildTurn,
   renderTurn,
 } from './cache-safety-harness.test';
+import type { MessageWithParts } from './types';
 
 describe('cache-impact snapshots (update deliberately — see file header)', () => {
   test('phase reminder text', () => {
@@ -47,5 +49,13 @@ describe('cache-impact snapshots (update deliberately — see file header)', () 
     const output = await renderTurn(pipeline, history, history.length - 1);
 
     expect(output.messages).toMatchSnapshot();
+  });
+
+  test('fallback continuation is a trailing volatile notice', async () => {
+    const pipeline = createPipeline({ refusalCorrection: true });
+    const history = [...buildHistory(), refusedChildTurn()];
+    const output = await renderTurn(pipeline, history, history.length - 1);
+    const notice = output.messages.at(-1) as MessageWithParts;
+    expect(notice.parts[0].text).toMatchSnapshot();
   });
 });

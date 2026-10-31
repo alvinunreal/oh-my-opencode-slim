@@ -43,6 +43,7 @@ import { isGenuineOperatorMessage } from '../orchestrator-wake/index';
 import type { SessionLifecycle } from '../session-lifecycle';
 import { isMessageWithParts } from '../types';
 import {
+  appendRefusalCorrections,
   BACKGROUND_JOB_BOARD_METADATA_KEY,
   type InjectionState,
   injectBackgroundJobBoard,
@@ -987,10 +988,15 @@ export function createTaskSessionManagerHook(
       // cache. Terminal results are left untouched (they materialize once).
       stabilizeRunningTaskParts(messages);
 
+      const refusalCorrections: Array<{
+        taskID: string;
+        generation: number;
+        model: string;
+      }> = [];
       if (options.hostFlavor !== 'v2' && options.v1ReplayOutcome) {
         for (const message of resolved.valid) {
           if (!message.info.sessionID) continue;
-          for (const [partIndex, part] of message.parts.entries()) {
+          for (const part of message.parts) {
             const state = isObjectRecord(part.state) ? part.state : undefined;
             const isTaskError =
               part.type === 'tool' &&
@@ -1038,30 +1044,15 @@ export function createTaskSessionManagerHook(
               completedAt < record.runStartedAt
             )
               continue;
-            const { taskID: id, generation, agent, description } = record;
+            const { taskID: id, generation, agent } = record;
             const model = await options.v1ReplayOutcome(
               id,
               generation,
               agent,
               completedAt,
             );
-            if (!model) continue;
-            const running = `<task id="${record.taskID}" state="running">\nThe child switched to ${model} and continues; the result will arrive. Do not relaunch or replace it.\n</task>`;
-            if (nativeNotice && typeof part.text === 'string')
-              message.parts[partIndex] = {
-                ...part,
-                text: part.text.replace(nativeNotice.block, () => running),
-              };
-            else {
-              const nextState: Record<string, unknown> = {
-                ...state,
-                status: 'completed',
-                title: description,
-                output: running,
-              };
-              delete nextState.error;
-              message.parts[partIndex] = { ...part, state: nextState };
-            }
+            if (model)
+              refusalCorrections.push({ taskID: id, generation, model });
           }
         }
       }
@@ -1115,6 +1106,17 @@ export function createTaskSessionManagerHook(
             partIndex,
           );
         }
+      }
+      if (options.hostFlavor !== 'v2') {
+        appendRefusalCorrections(
+          messages,
+          refusalCorrections.filter(({ taskID, generation }) => {
+            const record = backgroundJobBoard.get(taskID);
+            return (
+              record?.generation === generation && record.state === 'running'
+            );
+          }),
+        );
       }
     },
 

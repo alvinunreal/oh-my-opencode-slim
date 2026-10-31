@@ -45,7 +45,10 @@ import { COUNCIL_INJECT_METADATA_KEY } from '../hooks/council-inject';
 import { GOAL_POINTER_METADATA_KEY } from '../hooks/deepwork-goal';
 import type { ForegroundFallbackManager } from '../hooks/foreground-fallback';
 import { PHASE_REMINDER_METADATA_KEY } from '../hooks/phase-reminder';
-import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/task-session-manager/board-injection';
+import {
+  appendRefusalCorrections,
+  BACKGROUND_JOB_BOARD_METADATA_KEY,
+} from '../hooks/task-session-manager/board-injection';
 import { OhMyOpenCodeLite } from '../index';
 import { loadMergedOpenCodeConfig } from '../marketplace/preflight';
 import type { McpConfig } from '../mcp/types';
@@ -337,6 +340,8 @@ export interface V2SessionContextHandlerDeps {
   backgroundGeneration?: (
     parentID: string,
     childID: string,
+    runningOnly?: boolean,
+    refusalTime?: number,
   ) => number | undefined;
   refusalOutcome?: ForegroundFallbackManager['refusedChildOutcome'];
   /** v1 `experimental.chat.system.transform` hook. */
@@ -400,6 +405,8 @@ export function attributeAgentsByHistory(
   return attribution;
 }
 
+const MAX_REFUSAL_NOTICES = 1024;
+
 /** Build the single `ctx.session.hook("context")` handler: interview marker
  * bridge, generic command marker dispatch, chat.message agent tracking, and
  * the v1 system/messages transforms — each independently try/catch-guarded. */
@@ -408,7 +415,7 @@ export function createSessionContextHandler(
 ): (event: V2SessionContextEvent) => Promise<void> {
   const refusalNotices = new Map<
     string,
-    Awaited<ReturnType<typeof readRefusalOutcome>>
+    { model: string; completedAt: number } | undefined
   >();
   return async (event) => {
     // Interview marker bridge (transcript projection + /interview).
@@ -606,6 +613,76 @@ export function createSessionContextHandler(
             ),
           };
         });
+        const refusalCorrections: Array<{
+          taskID: string;
+          model: string;
+          completedAt: number;
+        }> = [];
+        if (
+          deps.backgroundGeneration &&
+          deps.refusalOutcome &&
+          deps.sessionContext
+        ) {
+          for (const message of v1messages) {
+            if (message.info.role !== 'user') continue;
+            for (const part of message.parts) {
+              if (part.type !== 'text' || typeof part.text !== 'string')
+                continue;
+              const notice = findTaskErrorNotice(part.text, 'subagent');
+              const block = notice?.block;
+              const childID = notice?.taskID;
+              if (!block || !childID) continue;
+              if (
+                deps.backgroundGeneration(event.sessionID, childID, true) ===
+                undefined
+              )
+                continue;
+              const text = parseTaskResultFromOutput(block);
+              if (!text) continue;
+              const noticeKey = `${message.info.id ?? ''}\0${childID}\0${text}`;
+              let recovery = refusalNotices.get(noticeKey);
+              if (!refusalNotices.has(noticeKey)) {
+                const outcome = await readRefusalOutcome(
+                  deps.sessionContext,
+                  deps.refusalOutcome,
+                  childID,
+                  text,
+                );
+                if (outcome !== null) {
+                  recovery =
+                    outcome &&
+                    typeof outcome.completedAt === 'number' &&
+                    Number.isFinite(outcome.completedAt)
+                      ? {
+                          model: outcome.model,
+                          completedAt: outcome.completedAt,
+                        }
+                      : undefined;
+                  if (refusalNotices.size >= MAX_REFUSAL_NOTICES) {
+                    const oldest = refusalNotices.keys().next().value;
+                    if (oldest !== undefined) refusalNotices.delete(oldest);
+                  }
+                  refusalNotices.set(noticeKey, recovery);
+                }
+              }
+              if (recovery) {
+                refusalCorrections.push({ taskID: childID, ...recovery });
+              }
+            }
+          }
+        }
+        appendRefusalCorrections(
+          v1messages,
+          refusalCorrections.filter(
+            ({ taskID, completedAt }) =>
+              deps.backgroundGeneration?.(
+                event.sessionID,
+                taskID,
+                true,
+                completedAt,
+              ) !== undefined,
+          ),
+        );
         await deps.messagesTransform({}, { messages: v1messages });
         event.messages = v1messages.map((m) => {
           const info = m.info as { content?: unknown; time?: unknown };
@@ -613,61 +690,6 @@ export function createSessionContextHandler(
           info.content = m.parts;
           return m.info;
         }) as V2SessionContextEvent['messages'];
-
-        if (
-          deps.backgroundGeneration &&
-          deps.refusalOutcome &&
-          deps.sessionContext
-        ) {
-          for (const message of event.messages) {
-            if (message.role !== 'user') continue;
-            for (const [partIndex, part] of message.content.entries()) {
-              if (part.type !== 'text' || typeof part.text !== 'string')
-                continue;
-              const notice = findTaskErrorNotice(part.text, 'subagent');
-              const block = notice?.block;
-              const childID = notice?.taskID;
-              if (
-                !block ||
-                !childID ||
-                deps.backgroundGeneration(event.sessionID, childID) ===
-                  undefined
-              )
-                continue;
-              const text = parseTaskResultFromOutput(block);
-              if (!text) continue;
-              // Memoized per notice: a parent request must not re-read every
-              // failed child, and the rewrite must stay byte-stable.
-              // Keyed by the notice message: a resumed child that is refused
-              // again produces a new notice that needs its own lookup.
-              const noticeKey = `${message.id ?? ''}\0${childID}\0${text}`;
-              let recovery = refusalNotices.get(noticeKey);
-              if (!refusalNotices.has(noticeKey)) {
-                recovery = await readRefusalOutcome(
-                  deps.sessionContext,
-                  deps.refusalOutcome,
-                  childID,
-                  text,
-                );
-                if (recovery !== null) {
-                  if (refusalNotices.size >= 1024) {
-                    const oldest = refusalNotices.keys().next().value;
-                    if (oldest !== undefined) refusalNotices.delete(oldest);
-                  }
-                  refusalNotices.set(noticeKey, recovery);
-                }
-              }
-              if (!recovery) continue;
-              message.content[partIndex] = {
-                ...part,
-                text: part.text.replace(
-                  block,
-                  `<subagent sessionID="${childID}" state="running">\nThe child switched to ${recovery.model} and continues; the result will arrive. Do not relaunch or replace it.\n</subagent>`,
-                ),
-              };
-            }
-          }
-        }
 
         // One manual breakpoint, after the shared transform: never spend
         // the host's four slots on historical reminders or a volatile board

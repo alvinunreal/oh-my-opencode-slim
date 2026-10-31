@@ -18,6 +18,7 @@ import { recordInternalAdmission } from '../../v2/internal-admissions';
 import { createSessionContextHandler } from '../../v2/setup';
 import { createSubagentExecutorWrapper } from '../../v2/subagent-executor-wrapper';
 import { SessionLifecycle } from '../session-lifecycle';
+import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../task-session-manager/board-injection';
 import { createBackgroundFallbackHandoff } from '../task-session-manager/fallback-observation-transfer';
 import type { FallbackNotice } from '../task-session-manager/revived-run-tracker';
 import { createRevivedRunTracker } from '../task-session-manager/revived-run-tracker';
@@ -2728,26 +2729,35 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     expect(outcome).toHaveBeenCalledTimes(1);
   });
 
-  function notice(result: string | undefined) {
+  function notice(
+    result: string | undefined,
+    options: { running?: boolean } = {},
+  ) {
     const text =
       '<subagent sessionID="child" state="error" description="inspect">\nProvider blocked the response\n</subagent>';
     const prefix = '\u00a742\u00a7 ';
+    const sessionContext = mock(async (_sessionID: string) => [
+      {
+        id: 'assistant-1',
+        type: 'assistant',
+        finish: 'content-filter',
+        error: {
+          type: 'provider.content-filter',
+          message: 'Provider blocked the response',
+        },
+        time: { completed: Date.now() },
+      },
+    ]);
     const handler = createSessionContextHandler({
       interviewHandleContext: async () => {},
       messagesTransform: async () => {},
-      sessionContext: async () => [
-        {
-          id: 'assistant-1',
-          type: 'assistant',
-          finish: 'content-filter',
-          error: {
-            type: 'provider.content-filter',
-            message: 'Provider blocked the response',
-          },
-        },
-      ],
-      backgroundGeneration: (parent, child) =>
-        parent === 'parent' && child === 'child' ? 1 : undefined,
+      sessionContext,
+      backgroundGeneration: (parent, child, runningOnly) =>
+        parent === 'parent' &&
+        child === 'child' &&
+        (!runningOnly || options.running !== false)
+          ? 1
+          : undefined,
       refusalOutcome: async () => result,
     });
     const event = {
@@ -2760,19 +2770,48 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
         {
           id: 'notice',
           role: 'user',
+          agent: 'orchestrator',
           content: [{ type: 'text', text: prefix + text }],
         },
       ],
     };
-    return { handler, event, text, prefix };
+    return { handler, event, text, prefix, sessionContext };
   }
 
-  test('v2 parent sees a prefixed native refusal as running', async () => {
-    const { handler, event, prefix } = notice('test/b');
+  test('v2 parent keeps a prefixed refusal and receives a trailing correction', async () => {
+    const { handler, event, prefix, text } = notice('test/b');
     await handler(event as never);
-    expect(event.messages[0].content[0].text).toStartWith(prefix);
-    expect(event.messages[0].content[0].text).toContain('state="running"');
-    expect(event.messages[0].content[0].text).not.toContain('state="error"');
+    expect(event.messages[0].content[0].text).toBe(prefix + text);
+    expect(event.messages.at(-1)?.content[0]).toMatchObject({
+      synthetic: true,
+      text: expect.stringContaining('test/b'),
+      metadata: { [BACKGROUND_JOB_BOARD_METADATA_KEY]: true },
+    });
+    expect(event.messages.at(-1)?.content[0]).not.toHaveProperty('cache');
+    expect(event.messages[0].content[0]).toHaveProperty('cache');
+  });
+
+  test('v2 reuses the refused child context across parent requests', async () => {
+    const { handler, event, sessionContext } = notice('test/b');
+    const next = structuredClone(event);
+    await handler(event as never);
+    await handler(next as never);
+    expect(event.messages.at(-1)?.content[0].text).toContain('test/b');
+    expect(next.messages.at(-1)?.content[0].text).toContain('test/b');
+    expect(
+      sessionContext.mock.calls.filter(([id]) => id === 'child'),
+    ).toHaveLength(1);
+  });
+
+  test('v2 skips refused child context reads for terminal jobs', async () => {
+    const { handler, event, sessionContext } = notice('test/b', {
+      running: false,
+    });
+    await handler(event as never);
+    expect(event.messages).toHaveLength(1);
+    expect(
+      sessionContext.mock.calls.filter(([id]) => id === 'child'),
+    ).toHaveLength(0);
   });
 
   test('v2 parent retains the native error when no continuation is admitted', async () => {
@@ -2781,35 +2820,76 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     expect(event.messages[0].content[0].text).toBe(prefix + text);
   });
 
-  test('v2 parent reads a failed child once across requests', async () => {
-    const sessionContext = mock(async (_sessionID: string) => [
-      { id: 'assistant-1', type: 'assistant', finish: 'error' },
-    ]);
+  test('v2 correction disappears after the child leaves the board', async () => {
+    const board = new BackgroundJobBoard();
+    const completedAt = Date.now();
+    board.registerLaunch({
+      taskID: 'child',
+      parentSessionID: 'parent',
+      agent: 'explorer',
+      description: 'inspect',
+      background: true,
+      now: completedAt - 1,
+    });
+    const text =
+      '<subagent sessionID="child" state="error" description="inspect">\ncontent filter\n</subagent>';
+    const refusalOutcome = mock(async () => 'test/b');
     const handler = createSessionContextHandler({
       interviewHandleContext: async () => {},
       messagesTransform: async () => {},
-      sessionContext,
-      backgroundGeneration: () => 1,
-      refusalOutcome: async () => undefined,
+      sessionContext: async () => [
+        {
+          id: 'assistant-1',
+          type: 'assistant',
+          finish: 'content-filter',
+          error: { message: 'content filter' },
+          time: { completed: completedAt },
+        },
+      ],
+      backgroundGeneration: (_parent, _child, runningOnly, refusalTime) => {
+        const record = board.get('child');
+        return record &&
+          (!runningOnly || record.state === 'running') &&
+          (refusalTime === undefined || refusalTime >= record.runStartedAt)
+          ? record.generation
+          : undefined;
+      },
+      refusalOutcome,
     });
-    const text =
-      '<subagent sessionID="child" state="error" description="inspect">\nboom\n</subagent>';
-    for (let request = 0; request < 3; request++) {
-      await handler({
-        sessionID: 'parent',
-        agent: 'orchestrator',
-        model: {},
-        system: [],
-        tools: {},
-        messages: [
-          { id: 'notice', role: 'user', content: [{ type: 'text', text }] },
-        ],
-      } as never);
-    }
-    const childReads = sessionContext.mock.calls.filter(
-      ([sessionID]) => sessionID === 'child',
-    );
-    expect(childReads).toHaveLength(1);
+    const event = () => ({
+      sessionID: 'parent',
+      agent: 'orchestrator',
+      model: {},
+      system: [],
+      tools: {},
+      messages: [
+        { id: 'notice', role: 'user', content: [{ type: 'text', text }] },
+      ],
+    });
+    const running = event();
+    await handler(running as never);
+    expect(running.messages[0].content[0].text).toBe(text);
+    expect(running.messages.at(-1)?.content[0].text).toContain('test/b');
+    expect(refusalOutcome).toHaveBeenCalledTimes(1);
+    board.registerLaunch({
+      taskID: 'child',
+      parentSessionID: 'parent',
+      agent: 'explorer',
+      description: 'inspect again',
+      background: true,
+      now: completedAt + 1,
+    });
+    const relaunched = event();
+    await handler(relaunched as never);
+    expect(relaunched.messages[0].content[0].text).toBe(text);
+    expect(relaunched.messages).toHaveLength(1);
+    expect(refusalOutcome).toHaveBeenCalledTimes(1);
+    board.drop('child');
+    expect(board.get('child')).toBeUndefined();
+    const completed = event();
+    await handler(completed as never);
+    expect(completed.messages[0].content[0].text).toBe(text);
+    expect(completed.messages).toHaveLength(1);
   });
 
   test('v2 refusal continuation names the refused step agent', async () => {

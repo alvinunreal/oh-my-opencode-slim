@@ -521,12 +521,15 @@ function foregroundFailure(error = contentFilterError.data.message) {
   };
 }
 
-test('v1 foreground replay uses its long label and returns a running part and terminal result', async () => {
+test('v1 foreground replay keeps the error part and appends a correction', async () => {
   const h = await fallbackAssembly(undefined, 2000, true);
   expect(h.board.get('child')?.background).toBe(false);
   setChildError(h);
   const part = foregroundFailure();
   const request = parentMessage(part, 'assistant');
+  request.messages.unshift(
+    parentMessage({ type: 'text', text: 'work' }).messages[0],
+  );
   const transform = h.hooks['experimental.chat.messages.transform']?.(
     {},
     request as never,
@@ -538,9 +541,11 @@ test('v1 foreground replay uses its long label and returns a running part and te
   await h.idle();
   await h.advance(2000);
   await transform;
-  expect(request.messages[0].parts[0].state).toMatchObject({
-    status: 'completed',
-    output: expect.stringContaining('state="running"'),
+  expect(request.messages[1].parts[0]).toEqual(part);
+  expect(request.messages.at(-1)?.parts[0]).toMatchObject({
+    synthetic: true,
+    text: expect.stringContaining('test/fallback'),
+    metadata: { [BACKGROUND_JOB_BOARD_METADATA_KEY]: true },
   });
   expect(part.state.status).toBe('error');
   const prompts = () =>
@@ -593,7 +598,7 @@ test('v1 foreground leaves the native failure when its chain is exhausted', asyn
   expect(h.promptAsync).not.toHaveBeenCalled();
 });
 
-test('v1 background rewrites a prefixed native refusal and sends one terminal result', async () => {
+test('v1 background keeps a prefixed refusal and sends one terminal result', async () => {
   const h = await fallbackAssembly();
   setChildError(h);
   const prefix = '\u00a742\u00a7 ';
@@ -610,8 +615,12 @@ test('v1 background rewrites a prefixed native refusal and sends one terminal re
   await h.idle();
   await h.advance(2000);
   await transform;
-  expect(request.messages[0].parts[0].text).toStartWith(prefix);
-  expect(request.messages[0].parts[0].text).toContain('state="running"');
+  expect(request.messages[0].parts[0].text).toBe(prefix + nativeRefusal);
+  expect(request.messages.at(-1)?.parts[0]).toMatchObject({
+    synthetic: true,
+    text: expect.stringContaining('test/fallback'),
+    metadata: { [BACKGROUND_JOB_BOARD_METADATA_KEY]: true },
+  });
   expect(part.text).toBe(prefix + nativeRefusal);
   const calls = () =>
     h.promptAsync.mock.calls.map(
@@ -639,6 +648,15 @@ test('v1 background rewrites a prefixed native refusal and sends one terminal re
         body.parts[0].text.includes('state="completed"'),
     ),
   ).toHaveLength(1);
+  expect(h.board.get('child')?.state).not.toBe('running');
+  const settled = parentMessage(part);
+  await h.hooks['experimental.chat.messages.transform']?.({}, settled as never);
+  expect(settled.messages[0].parts[0]).toEqual(part);
+  expect(
+    settled.messages.some((message) =>
+      isVolatileTaggedMessage(message, BACKGROUND_JOB_BOARD_METADATA_KEY),
+    ),
+  ).toBe(false);
 });
 
 test('v1 terminal error delivered by Slim is never rewritten', async () => {
@@ -702,7 +720,8 @@ test('v1 replay wait includes the configured retry delay', async () => {
   expect(finished).toBe(false);
   await h.advance(999);
   await transform;
-  expect(request.messages[0].parts[0].text).toContain('state="running"');
+  expect(request.messages[0].parts[0].text).toBe(nativeRefusal);
+  expect(request.messages.at(-1)?.parts[0].text).toContain('test/fallback');
 });
 
 test('v1 old refusal notice does not wait for replay', async () => {

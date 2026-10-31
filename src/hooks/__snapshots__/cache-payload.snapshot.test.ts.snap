@@ -338,3 +338,11 @@ Deepwork router head: \`.slim/deepwork/ses_cache_safety_fixture.md\`.
   },
 ]
 `;
+
+exports[`cache-impact snapshots (update deliberately — see file header) fallback continuation is a trailing volatile notice 1`] = `
+"<system-reminder>
+### Child task — Continuing after fallback
+- ses_refused_child: the previous error is superseded; the child continues on test/fallback.
+Do not relaunch, cancel, or replace these tasks; their results will arrive.
+</system-reminder>"
+`;

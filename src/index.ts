@@ -2737,9 +2737,17 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'v2.backgroundDefaultFlip': backgroundDefaultFlip,
     'v2.refusalOutcome':
       foregroundFallback?.refusedChildOutcome.bind(foregroundFallback),
-    'v2.backgroundGeneration': (parentID: string, childID: string) => {
+    'v2.backgroundGeneration': (
+      parentID: string,
+      childID: string,
+      runningOnly = false,
+      refusalTime?: number,
+    ) => {
       const record = backgroundJobBoard?.get(childID);
-      return record?.background && record.parentSessionID === parentID
+      return record?.background &&
+        record.parentSessionID === parentID &&
+        (!runningOnly || record.state === 'running') &&
+        (refusalTime === undefined || refusalTime >= record.runStartedAt)
         ? record.generation
         : undefined;
     },
@@ -4036,6 +4044,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'v2.backgroundGeneration': (
       parentID: string,
       childID: string,
+      runningOnly?: boolean,
+      refusalTime?: number,
     ) => number | undefined;
     'v2.foreignTaskEvent': typeof observeForeignTaskEvent;
     'v2.refreshProfiles': typeof refreshProfilesFromDisk;
