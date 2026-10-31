@@ -906,6 +906,44 @@ export class ForegroundFallbackManager {
     this.pinSessionChains(sessionID);
   }
 
+  async registerExternalSessionAgent(
+    sessionID: string,
+    agentName: string,
+  ): Promise<void> {
+    const agent = normalizeAgentHint(agentName);
+    const previous = this.sessionAgent.get(sessionID);
+    if (!agent || !previous) {
+      this.registerSessionAgent(sessionID, agentName);
+      return;
+    }
+    if (previous === agent || this.sessionParent.has(sessionID)) return;
+    const epoch = this.turnEpoch.get(sessionID) ?? 0;
+    try {
+      const result = await withTimeout(
+        getClient(this.input).session.get({ path: { id: sessionID } }),
+        HOST_CALL_TIMEOUT_MS,
+        'foreground session parent lookup timed out',
+      );
+      if (
+        responseError(result) !== undefined ||
+        !isRecord(result.data) ||
+        result.data.id !== sessionID ||
+        result.data.parentID != null ||
+        this.sessionParent.has(sessionID) ||
+        !this.isCurrentTurn(sessionID, epoch) ||
+        this.sessionAgent.get(sessionID) !== previous
+      )
+        return;
+      this.sessionAgent.set(sessionID, agent);
+      this.sessionTried.delete(sessionID);
+    } catch (error) {
+      log('[foreground-fallback] session parent lookup failed', {
+        sessionID,
+        error: stringifyError(error),
+      });
+    }
+  }
+
   /** Plugin dispose: cancel scheduled initial-delay timers and fence off
    *  in-flight fallback chains. `opencode reload` destroys this instance
    *  mid-attempt — pending timers are cancelled here, and suspension

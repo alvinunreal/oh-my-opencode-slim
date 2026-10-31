@@ -3654,7 +3654,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
 
       if (agent) {
-        foregroundFallback?.registerSessionAgent(input.sessionID, agent);
+        if (hostFlavor !== 'v2' && !internalAdmission) {
+          await foregroundFallback?.registerExternalSessionAgent(
+            input.sessionID,
+            agent,
+          );
+        } else {
+          foregroundFallback?.registerSessionAgent(input.sessionID, agent);
+        }
         if (!internalAdmission) {
           sessionMetadata.setAgent(input.sessionID, agent);
         }

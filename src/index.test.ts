@@ -5219,6 +5219,92 @@ describe('plugin foreground fallback host gating', () => {
     }
   });
 
+  test('v1 agent changes affect root replay but not child or internal admissions', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: false },
+        fallback: { enabled: true, maxRetries: 0 },
+        agents: {
+          orchestrator: { model: ['p1/a', 'p1/b'] },
+          explorer: { model: ['p2/a', 'p2/b'] },
+        },
+      }),
+    );
+    const { client, messages, promptAsync } = createFallbackClient();
+    (client.session as any).get = async ({ path }: any) => ({
+      data: {
+        id: path.id,
+        ...(path.id === 'agent-child' ? { parentID: 'agent-root' } : {}),
+      },
+    });
+    messages.mockResolvedValue({
+      data: [
+        {
+          info: { id: 'msg_user', role: 'user' },
+          parts: [{ type: 'text', text: 'work' }],
+        },
+      ],
+    });
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    const chat = async (
+      sessionID: string,
+      id: string,
+      agent: string,
+      providerID: string,
+      internal = false,
+    ) => {
+      const model = { providerID, modelID: 'a' };
+      await hooks['chat.message']?.(
+        {
+          sessionID,
+          messageID: id,
+          agent,
+          model,
+          ...(internal ? { parts: [createInternalAgentTextPart('wake')] } : {}),
+        } as never,
+        {
+          message: { id, sessionID, role: 'user', agent, model },
+          parts: [],
+        } as never,
+      );
+    };
+    try {
+      await hooks.config?.({ agent: {} });
+      for (const sessionID of ['agent-root', 'agent-child']) {
+        await chat(sessionID, `msg_first_${sessionID}`, 'orchestrator', 'p1');
+        await chat(sessionID, `msg_second_${sessionID}`, 'explorer', 'p2');
+      }
+      await chat('agent-root', 'msg_wake', 'orchestrator', 'p1', true);
+      for (const sessionID of ['agent-root', 'agent-child']) {
+        await hooks.event?.({
+          event: {
+            type: 'session.error',
+            properties: { sessionID, error: { message: 'rate limit' } },
+          },
+        } as never);
+      }
+      expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({
+        path: { id: 'agent-root' },
+        body: { agent: 'explorer', model: { providerID: 'p2', modelID: 'b' } },
+      });
+      expect(promptAsync.mock.calls[1]?.[0]).toMatchObject({
+        path: { id: 'agent-child' },
+        body: {
+          agent: 'orchestrator',
+          model: { providerID: 'p1', modelID: 'a' },
+        },
+      });
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
   test('v2 host: the replay path stays disabled', async () => {
     const captured: string[] = [];
     const capture = spyOn(loggerModule, 'log').mockImplementation(
