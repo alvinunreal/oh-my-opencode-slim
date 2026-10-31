@@ -2246,7 +2246,10 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     switchModel?: (sessionID: string, model: unknown) => Promise<unknown>;
     promptAsyncImpl?: (args: unknown) => Promise<unknown>;
     handoff?: ReturnType<typeof createBackgroundFallbackHandoff>;
-    readBackgroundGeneration?: (sessionID: string) => number | undefined;
+    readBackgroundGeneration?: (
+      sessionID: string,
+      includeForeground?: boolean,
+    ) => number | undefined;
   }) {
     const durable = { providerID: 'test', id: 'a', variant: 'source' };
     const info: { model?: typeof durable; parentID?: string; agent?: string } =
@@ -2321,6 +2324,547 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
   const settle = async () => {
     for (let i = 0; i < 30; i++) await Promise.resolve();
   };
+
+  test('v2 refusal switch confirmed after 10 seconds continues the root once', async () => {
+    const pending = deferred<void>();
+    const { manager, mocks, switchModel } = fixture({
+      switchModel: () => pending.promise,
+    });
+    try {
+      await manager.handleEvent(started('late-root'));
+      await manager.handleEvent(failed('late-root'));
+      await settle();
+      expect(switchModel).toHaveBeenCalledTimes(1);
+      jest.advanceTimersByTime(2_001);
+      await settle();
+      expect(manager.isFallbackInProgress('late-root')).toBe(true);
+      expect(mocks.promptAsync).not.toHaveBeenCalled();
+      let finished = false;
+      const outcome = manager
+        .refusalOutcome('late-root', 'assistant-1')
+        .then((model) => {
+          finished = true;
+          return model;
+        });
+      jest.advanceTimersByTime(8_000);
+      await settle();
+      expect(finished).toBe(false);
+      expect(manager.isFallbackInProgress('late-root')).toBe(true);
+      pending.resolve();
+      await settle();
+      expect(await outcome).toBe('test/b');
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+      await manager.handleEvent(failed('late-root'));
+      await settle();
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    } finally {
+      pending.resolve();
+      manager.dispose();
+    }
+  });
+
+  test('v2 refusal prompt before switch timeout releases the old recovery', async () => {
+    const earlyPromptSwitch = deferred<void>();
+    const earlyPrompt = fixture({
+      switchModel: () => earlyPromptSwitch.promise,
+    });
+    try {
+      await earlyPrompt.manager.handleEvent(started('early-new-prompt'));
+      await earlyPrompt.manager.handleEvent(failed('early-new-prompt'));
+      await settle();
+      let finished = false;
+      const outcome = earlyPrompt.manager
+        .refusalOutcome('early-new-prompt', 'assistant-1')
+        .then((model) => {
+          finished = true;
+          return model;
+        });
+      earlyPrompt.manager.noteV2Prompt('early-new-prompt');
+      jest.advanceTimersByTime(2_001);
+      await settle();
+      expect(finished).toBe(true);
+      expect(await outcome).toBeUndefined();
+      expect(earlyPrompt.manager.isFallbackInProgress('early-new-prompt')).toBe(
+        false,
+      );
+      expect(earlyPrompt.mocks.promptAsync).not.toHaveBeenCalled();
+    } finally {
+      earlyPromptSwitch.resolve();
+      earlyPrompt.manager.dispose();
+    }
+  });
+
+  test('v2 late switch after a new prompt records the selection without continuing', async () => {
+    const superseded = deferred<void>();
+    const stale = fixture({ switchModel: () => superseded.promise });
+    try {
+      await stale.manager.handleEvent(started('late-new-prompt'));
+      await stale.manager.handleEvent(failed('late-new-prompt'));
+      await settle();
+      const outcome = stale.manager.refusalOutcome(
+        'late-new-prompt',
+        'assistant-1',
+      );
+      jest.advanceTimersByTime(2_001);
+      await settle();
+      stale.manager.noteV2Prompt('late-new-prompt');
+      expect(await outcome).toBeUndefined();
+      expect(stale.manager.isFallbackInProgress('late-new-prompt')).toBe(false);
+      superseded.resolve();
+      await settle();
+      expect(stale.manager.getActiveFallback('late-new-prompt')?.model).toBe(
+        'test/b',
+      );
+      expect(stale.onChanged).toHaveBeenCalledWith(
+        'late-new-prompt',
+        'test/b',
+        expect.objectContaining({ agentName: 'orchestrator', variant: 'high' }),
+      );
+      expect(stale.mocks.promptAsync).not.toHaveBeenCalled();
+    } finally {
+      superseded.resolve();
+      stale.manager.dispose();
+    }
+  });
+
+  test('v2 late switch rejection releases the pending recovery', async () => {
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((_resolve, fail) => {
+      reject = fail;
+    });
+    const { manager, mocks } = fixture({ switchModel: () => pending });
+    try {
+      await manager.handleEvent(started('late-rejected'));
+      await manager.handleEvent(failed('late-rejected'));
+      await settle();
+      const outcome = manager.refusalOutcome('late-rejected', 'assistant-1');
+      jest.advanceTimersByTime(2_001);
+      await settle();
+      expect(manager.isFallbackInProgress('late-rejected')).toBe(true);
+      reject(new Error('host rejected switch'));
+      expect(await outcome).toBeUndefined();
+      expect(manager.isFallbackInProgress('late-rejected')).toBe(false);
+      expect(mocks.promptAsync).not.toHaveBeenCalled();
+    } finally {
+      reject(new Error('test complete'));
+      manager.dispose();
+    }
+  });
+
+  test('v2 pending recoveries are not evicted when the outcome registry is full', async () => {
+    const pending = deferred<void>();
+    const { manager } = fixture({ switchModel: () => pending.promise });
+    try {
+      for (let i = 0; i < 1_024; i++) {
+        await manager.handleEvent(started(`pending-${i}`));
+        await manager.handleEvent(failed(`pending-${i}`));
+      }
+      await settle();
+      jest.advanceTimersByTime(2_001);
+      await settle();
+      expect(manager.isFallbackInProgress('pending-0')).toBe(true);
+      let finished = false;
+      void manager.refusalOutcome('pending-0', 'assistant-1').then(() => {
+        finished = true;
+      });
+      await manager.handleEvent(started('pending-overflow'));
+      await manager.handleEvent(failed('pending-overflow'));
+      await settle();
+      expect(finished).toBe(false);
+      expect(manager.isFallbackInProgress('pending-0')).toBe(true);
+    } finally {
+      manager.dispose();
+      pending.resolve();
+      await settle();
+    }
+  });
+
+  test('deleting a session releases its pending v2 refusal recovery', async () => {
+    const pending = deferred<void>();
+    const { manager, mocks } = fixture({ switchModel: () => pending.promise });
+    try {
+      await manager.handleEvent(started('late-deleted'));
+      await manager.handleEvent(failed('late-deleted'));
+      await settle();
+      const outcome = manager.refusalOutcome('late-deleted', 'assistant-1');
+      jest.advanceTimersByTime(2_001);
+      await settle();
+      expect(manager.isFallbackInProgress('late-deleted')).toBe(true);
+      await manager.handleEvent({
+        type: 'session.deleted',
+        properties: { info: { id: 'late-deleted' } },
+      });
+      expect(await outcome).toBeUndefined();
+      pending.resolve();
+      await settle();
+      expect(manager.isFallbackInProgress('late-deleted')).toBe(false);
+      expect(manager.getActiveFallback('late-deleted')).toBeUndefined();
+      expect(mocks.promptAsync).not.toHaveBeenCalled();
+    } finally {
+      pending.resolve();
+      manager.dispose();
+    }
+  });
+
+  test('disposing the manager releases pending v2 refusal recovery', async () => {
+    const pending = deferred<void>();
+    const { manager, mocks } = fixture({ switchModel: () => pending.promise });
+    try {
+      await manager.handleEvent(started('late-disposed'));
+      await manager.handleEvent(failed('late-disposed'));
+      await settle();
+      const outcome = manager.refusalOutcome('late-disposed', 'assistant-1');
+      jest.advanceTimersByTime(2_001);
+      await settle();
+      expect(manager.isFallbackInProgress('late-disposed')).toBe(true);
+      manager.dispose();
+      expect(await outcome).toBeUndefined();
+      pending.resolve();
+      await settle();
+      expect(manager.isFallbackInProgress('late-disposed')).toBe(false);
+      expect(manager.getActiveFallback('late-disposed')).toBeUndefined();
+      expect(mocks.promptAsync).not.toHaveBeenCalled();
+    } finally {
+      pending.resolve();
+      manager.dispose();
+    }
+  });
+
+  test('v2 late refusal switch protects and hands off the background child', async () => {
+    const board = new BackgroundJobBoard();
+    const run = board.registerLaunch({
+      taskID: 'late-bg',
+      parentSessionID: 'parent',
+      agent: 'orchestrator',
+      background: true,
+    });
+    const pending = deferred<void>();
+    let manager: ForegroundFallbackManager;
+    const input = { directory: '/test', client: {} } as never;
+    const gate = createBackgroundJobTerminalGate({
+      backgroundJobBoard: board,
+      input,
+      readRuntime: async (_run, readStartedAt) => ({
+        kind: 'quiescent',
+        origin: 'v2-successor',
+        readStartedAt,
+        terminalOutcome: 'failed',
+      }),
+      baselineFor: (id, generation) => tracker.baselineFor(id, generation),
+      observationRevisionFor: (id, generation) =>
+        tracker.revisionFor(id, generation),
+      isObservationPending: (id, generation) =>
+        manager.isFallbackInProgress(id) ||
+        tracker.isObservationPending(id, generation),
+    });
+    const tracker = createRevivedRunTracker({
+      input,
+      backgroundJobBoard: board,
+      terminalGate: gate,
+    });
+    const child = fixture({
+      parentID: 'parent',
+      handoff: createBackgroundFallbackHandoff({
+        backgroundJobBoard: board,
+        revivedRunTracker: tracker,
+      }),
+      readBackgroundGeneration: () => board.get('late-bg')?.generation,
+      switchModel: () => pending.promise,
+    });
+    manager = child.manager;
+    const text =
+      '<subagent sessionID="late-bg" state="error">\nProvider blocked the response\n</subagent>';
+    const notice = {
+      id: 'notice',
+      type: 'synthetic',
+      text,
+      metadata: {
+        source: 'subagent',
+        childID: 'late-bg',
+        agent: 'orchestrator',
+        state: 'error',
+      },
+    };
+    const handler = createSessionContextHandler({
+      interviewHandleContext: async () => {},
+      messagesTransform: async () => {},
+      sessionContext: async (id) =>
+        id === 'parent'
+          ? [notice]
+          : [
+              {
+                id: 'assistant-1',
+                type: 'assistant',
+                finish: 'content-filter',
+                error: { message: 'Provider blocked the response' },
+                time: { completed: Date.now() },
+              },
+            ],
+      backgroundGeneration: () => board.get('late-bg')?.generation,
+      refusalOutcome: (sid, id, generation, completedAt) =>
+        manager.refusalOutcome(sid, id, generation, completedAt),
+    });
+    const event = {
+      sessionID: 'parent',
+      agent: 'orchestrator',
+      model: {},
+      system: [],
+      tools: {},
+      messages: [
+        { id: 'notice', role: 'user', content: [{ type: 'text', text }] },
+      ],
+    };
+    try {
+      await manager.handleEvent(started('late-bg'));
+      let finished = false;
+      const request = handler(event).then(() => {
+        finished = true;
+      });
+      await manager.handleEvent(failed('late-bg'));
+      await settle();
+      jest.advanceTimersByTime(2_001);
+      await settle();
+      expect(finished).toBe(false);
+      expect((await gate.reconcile(run)).kind).toBe('deferred');
+      expect(board.get('late-bg')?.state).toBe('running');
+      pending.resolve();
+      await request;
+      expect(event.messages[0]?.content[0]?.text).toContain('state="running"');
+      expect(event.messages[0]?.content[0]?.text).toContain('test/b');
+      expect(tracker.isTracked('late-bg', run.generation)).toBe(true);
+      expect(tracker.baselineFor('late-bg', run.generation)).toBe(
+        'assistant-1',
+      );
+      expect(
+        child.mocks.promptAsync.mock.calls.filter(
+          ([args]) => (args as { path: { id: string } }).path.id === 'late-bg',
+        ),
+      ).toHaveLength(1);
+    } finally {
+      pending.resolve();
+      child.manager.dispose();
+      tracker.dispose();
+      gate.dispose();
+    }
+  });
+
+  test('v2 late background recovery does not continue a relaunched generation', async () => {
+    const board = new BackgroundJobBoard();
+    const input = { directory: '/test', client: {} } as never;
+    let manager: ForegroundFallbackManager;
+    const gate = createBackgroundJobTerminalGate({
+      backgroundJobBoard: board,
+      input,
+      readRuntime: async (_run, readStartedAt) => ({
+        kind: 'quiescent',
+        origin: 'v2-successor',
+        readStartedAt,
+        terminalOutcome: 'failed',
+      }),
+      baselineFor: (id, generation) => tracker.baselineFor(id, generation),
+      observationRevisionFor: (id, generation) =>
+        tracker.revisionFor(id, generation),
+      isObservationPending: (id, generation) =>
+        manager.isFallbackInProgress(id) ||
+        tracker.isObservationPending(id, generation),
+    });
+    const tracker = createRevivedRunTracker({
+      input,
+      backgroundJobBoard: board,
+      terminalGate: gate,
+    });
+    const oldSwitch = deferred<void>();
+    const newSwitch = deferred<void>();
+    let stale: ReturnType<typeof fixture> | undefined;
+    try {
+      const oldRun = board.registerLaunch({
+        taskID: 'late-bg-relaunch',
+        parentSessionID: 'parent',
+        agent: 'orchestrator',
+        background: true,
+      });
+      stale = fixture({
+        parentID: 'parent',
+        handoff: createBackgroundFallbackHandoff({
+          backgroundJobBoard: board,
+          revivedRunTracker: tracker,
+        }),
+        readBackgroundGeneration: () =>
+          board.get('late-bg-relaunch')?.generation,
+        switchModel: () => oldSwitch.promise,
+      });
+      manager = stale.manager;
+      await manager.handleEvent(started('late-bg-relaunch'));
+      const oldOutcome = manager.refusalOutcome(
+        'late-bg-relaunch',
+        'assistant-1',
+        oldRun.generation,
+      );
+      await manager.handleEvent(failed('late-bg-relaunch'));
+      await settle();
+      jest.advanceTimersByTime(2_001);
+      await settle();
+      const newRun = board.registerLaunch({
+        taskID: 'late-bg-relaunch',
+        parentSessionID: 'parent',
+        agent: 'orchestrator',
+        background: true,
+      });
+      expect(newRun.generation).not.toBe(oldRun.generation);
+      expect(manager.isFallbackInProgress('late-bg-relaunch')).toBe(false);
+      stale.switchModel.mockImplementationOnce(() => newSwitch.promise);
+      await manager.handleEvent(
+        started('late-bg-relaunch', 'a', 'assistant-2'),
+      );
+      await manager.handleEvent(failed('late-bg-relaunch', 'assistant-2'));
+      await settle();
+      expect(stale.switchModel).toHaveBeenCalledTimes(2);
+      jest.advanceTimersByTime(2_001);
+      await settle();
+      newSwitch.resolve();
+      await settle();
+      expect(tracker.isTracked('late-bg-relaunch', newRun.generation)).toBe(
+        true,
+      );
+      oldSwitch.resolve();
+      expect(await oldOutcome).toBeUndefined();
+      await settle();
+      expect(
+        stale.mocks.promptAsync.mock.calls.filter(
+          ([args]) =>
+            (args as { path: { id: string } }).path.id === 'late-bg-relaunch',
+        ),
+      ).toHaveLength(1);
+    } finally {
+      oldSwitch.resolve();
+      newSwitch.resolve();
+      stale?.manager.dispose();
+      tracker.dispose();
+      gate.dispose();
+    }
+  });
+
+  test('v2 late refusal switch reattaches the foreground child exactly once', async () => {
+    const pending = deferred<void>();
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'late-fg',
+      parentSessionID: 'parent',
+      agent: 'orchestrator',
+      background: false,
+    });
+    const child = fixture({
+      parentID: 'parent',
+      switchModel: () => pending.promise,
+      readBackgroundGeneration: (_id, includeForeground) =>
+        includeForeground ? board.get('late-fg')?.generation : undefined,
+    });
+    const result = {
+      output: { sessionID: 'late-fg', status: 'completed' },
+      content:
+        '<subagent sessionID="late-fg" state="completed">CHILD_OK</subagent>',
+    };
+    const wrapper = createSubagentExecutorWrapper({
+      register: () => {},
+      context: async () => [
+        {
+          id: 'assistant-1',
+          type: 'assistant',
+          finish: 'content-filter',
+          error: {
+            type: 'provider.content-filter',
+            message: 'Provider blocked the response',
+          },
+          time: { completed: Date.now() },
+        },
+      ],
+      refusalOutcome: (sid, id, generation, completedAt) =>
+        child.manager.refusalOutcome(sid, id, generation, completedAt),
+    });
+    const execute = mock(async (_input: unknown, _context: unknown) => {
+      if (execute.mock.calls.length === 1) {
+        await child.manager.handleEvent(started('late-fg'));
+        await child.manager.handleEvent(failed('late-fg'));
+        throw new Error(
+          'Subagent failed (sessionID: late-fg): Provider blocked the response',
+        );
+      }
+      return result;
+    });
+    try {
+      let finished = false;
+      const request = wrapper
+        .wrap(execute)(
+          { agent: 'orchestrator', prompt: 'Do the work', background: false },
+          { id: 'call-late', sessionID: 'parent' },
+        )
+        .then(
+          (value) => {
+            finished = true;
+            return value;
+          },
+          (error) => {
+            finished = true;
+            return error;
+          },
+        );
+      await settle();
+      jest.advanceTimersByTime(2_001);
+      await settle();
+      expect(finished).toBe(false);
+      pending.resolve();
+      expect(await request).toBe(result);
+      expect(execute).toHaveBeenCalledTimes(2);
+      expect(execute.mock.calls[1]?.[0]).toMatchObject({
+        sessionID: 'late-fg',
+      });
+      expect(child.mocks.promptAsync).not.toHaveBeenCalled();
+    } finally {
+      pending.resolve();
+      child.manager.dispose();
+    }
+  });
+
+  test('v2 late foreground recovery does not continue a relaunched generation', async () => {
+    const board = new BackgroundJobBoard();
+    const delayed = deferred<void>();
+    board.registerLaunch({
+      taskID: 'late-fg-stale',
+      parentSessionID: 'parent',
+      agent: 'orchestrator',
+      background: false,
+    });
+    const stale = fixture({
+      parentID: 'parent',
+      switchModel: () => delayed.promise,
+      readBackgroundGeneration: (_id, includeForeground) =>
+        includeForeground ? board.get('late-fg-stale')?.generation : undefined,
+    });
+    try {
+      await stale.manager.handleEvent(started('late-fg-stale'));
+      await stale.manager.handleEvent(failed('late-fg-stale'));
+      await settle();
+      const outcome = stale.manager.refusalOutcome(
+        'late-fg-stale',
+        'assistant-1',
+      );
+      jest.advanceTimersByTime(2_001);
+      await settle();
+      board.registerLaunch({
+        taskID: 'late-fg-stale',
+        parentSessionID: 'parent',
+        agent: 'orchestrator',
+        background: false,
+      });
+      expect(stale.manager.isFallbackInProgress('late-fg-stale')).toBe(false);
+      delayed.resolve();
+      expect(await outcome).toBeUndefined();
+      expect(stale.mocks.promptAsync).not.toHaveBeenCalled();
+    } finally {
+      delayed.resolve();
+      stale.manager.dispose();
+    }
+  });
 
   test('v2 refusal continuation names the refused step agent', async () => {
     const { manager, mocks } = fixture();

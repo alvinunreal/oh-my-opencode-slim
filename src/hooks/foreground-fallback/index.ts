@@ -540,7 +540,7 @@ const MAX_HOST_RETRY_DELAY_MS = 30 * 60_000;
 const PROVIDER_MARK_TTL_MS = 30 * 60_000;
 /** Ceiling on host calls: a hung transport must not stall fallback. */
 const HOST_CALL_TIMEOUT_MS = 2_000;
-// Bounds event-pump claim time; recovery has its own host-call timeouts.
+// Bounds the event-pump claim window; other host calls have their own timeouts.
 const REFUSAL_OUTCOME_TIMEOUT_MS = 5_000;
 const MAX_REFUSAL_OUTCOMES = 1_024;
 /** The replay send's ack can lag after the host admitted it: wait as long as
@@ -727,6 +727,8 @@ export class ForegroundFallbackManager {
       timer: ReturnType<typeof setTimeout>;
       generation: number | undefined;
       claimed: boolean;
+      pendingRecovery: boolean;
+      pendingGeneration: number | undefined;
     }
   >();
   private readonly lastUserMessageID = new Map<string, string>();
@@ -802,7 +804,7 @@ export class ForegroundFallbackManager {
    *  enroll the new run under the stale attempt's baseline. */
   private readonly backgroundFallbackHandoff?: BackgroundFallbackHandoff;
   /** Synchronous board read returning the tracked generation for a
-   *  background child or, when requested, a v1 foreground child.
+   *  background child or, when requested, a foreground child.
    *  Undefined means the handoff is not applicable, never a wildcard.
    *  Captured before ANY await in the fallback preparation. */
   private readonly readBackgroundGeneration?: (
@@ -810,14 +812,24 @@ export class ForegroundFallbackManager {
     includeForeground?: boolean,
   ) => number | undefined;
 
-  /** Exposed for task-session-manager: prevents idle reconciliation
-   *  while a fallback abort/re-prompt is in flight for this session, or
-   *  while its initial retry delay is still pending — the re-prompt is
-   *  equally "coming" in both windows. */
+  /** Prevent idle reconciliation while a fallback or its confirmation is pending. */
   isFallbackInProgress(sessionID: string): boolean {
-    return (
-      this.inProgress.has(sessionID) || this.pendingInitialDelay.has(sessionID)
-    );
+    if (
+      this.inProgress.has(sessionID) ||
+      this.pendingInitialDelay.has(sessionID)
+    )
+      return true;
+    const prefix = `${sessionID}\0`;
+    const generation = this.readBackgroundGeneration?.(sessionID, true);
+    for (const [key, outcome] of this.fallbackOutcomes) {
+      if (
+        key.startsWith(prefix) &&
+        outcome.pendingRecovery &&
+        outcome.pendingGeneration === generation
+      )
+        return true;
+    }
+    return false;
   }
 
   /**
@@ -831,7 +843,7 @@ export class ForegroundFallbackManager {
    */
   willAttemptFallback(sessionID: string): boolean {
     if (!this.enabled && !this.retryEnabledFor(sessionID)) return false;
-    if (this.inProgress.has(sessionID)) return true;
+    if (this.isFallbackInProgress(sessionID)) return true;
     if ((this.chainExhaustion.get(sessionID) ?? 0) >= 2) return false;
     if (this.deterministicTerminal.has(sessionID)) return false;
     // Chain check BEFORE the child exclusion: chained background children
@@ -1006,7 +1018,17 @@ export class ForegroundFallbackManager {
   }
 
   noteV2Prompt(sessionID: string): void {
+    this.cancelPendingV2Recovery(sessionID);
     this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
+  }
+
+  private cancelPendingV2Recovery(sessionID: string): void {
+    const prefix = `${sessionID}\0`;
+    for (const [key, outcome] of this.fallbackOutcomes) {
+      if (!key.startsWith(prefix) || !outcome.pendingRecovery) continue;
+      outcome.pendingRecovery = false;
+      outcome.resolve(undefined);
+    }
   }
 
   private fallbackOutcome(
@@ -1017,10 +1039,12 @@ export class ForegroundFallbackManager {
     const current = this.fallbackOutcomes.get(key);
     if (current) return current;
     if (this.fallbackOutcomes.size >= MAX_REFUSAL_OUTCOMES) {
-      const oldest = this.fallbackOutcomes.entries().next().value;
-      if (oldest) {
-        oldest[1].resolve(undefined);
-        this.fallbackOutcomes.delete(oldest[0]);
+      // Never evict a confirmation that still owns the recovery.
+      for (const [oldKey, outcome] of this.fallbackOutcomes) {
+        if (outcome.pendingRecovery) continue;
+        outcome.resolve(undefined);
+        this.fallbackOutcomes.delete(oldKey);
+        break;
       }
     }
     let complete!: (model: string | undefined) => void;
@@ -1041,6 +1065,8 @@ export class ForegroundFallbackManager {
       timer,
       generation,
       claimed: false,
+      pendingRecovery: false,
+      pendingGeneration: generation,
     };
     this.fallbackOutcomes.set(key, outcome);
     return outcome;
@@ -1433,6 +1459,7 @@ export class ForegroundFallbackManager {
 
   /** Drop all per-session state once the session is deleted. */
   private forgetSession(id: string): void {
+    this.cancelPendingV2Recovery(id);
     this.sessionModel.delete(id);
     this.activeFallback.delete(id);
     this.sessionAgent.delete(id);
@@ -2091,7 +2118,7 @@ export class ForegroundFallbackManager {
       if (
         !this.retryEnabledFor(sessionID) ||
         this.disposed ||
-        this.inProgress.has(sessionID)
+        this.isFallbackInProgress(sessionID)
       )
         return;
       if (!failover) return;
@@ -2162,6 +2189,7 @@ export class ForegroundFallbackManager {
     from: string,
     error: unknown,
     switchModel: V2SwitchModel,
+    onPending?: (pending: Promise<string | undefined>) => void,
   ): Promise<string | undefined> {
     let picked: string | undefined;
     let switchRequest: Promise<unknown> | undefined;
@@ -2209,39 +2237,68 @@ export class ForegroundFallbackManager {
         // Late landing: the timeout cannot cancel the host call. Reconcile
         // if the observed model is still the source or already the target;
         // leave any newer, different selection untouched. The check/write
-        // run synchronously. No toast here: the next event's success path
-        // notifies; this only repairs state.
+        // run synchronously; the pending recovery may then continue.
         const target = picked;
-        void pendingSwitch
+        const reconciliation = pendingSwitch
           .then(
             () => {
               const observedModel = this.sessionModel.get(sessionID);
               if (
                 this.disposed ||
-                (observedModel !== from && observedModel !== target)
+                (observedModel !== from && observedModel !== target) ||
+                (onPending && this.inProgress.has(sessionID))
               )
                 return;
-              this.commitSwitch(sessionID, from, target, error, detail);
+              try {
+                this.commitSwitch(sessionID, from, target, error, detail);
+              } catch (lateError) {
+                log('[foreground-fallback] v2 late switch bookkeeping failed', {
+                  sessionID,
+                  error: stringifyError(lateError),
+                });
+              }
               log('[foreground-fallback] v2 reconciled a late model switch', {
                 sessionID,
                 from,
                 to: target,
               });
+              return target;
             },
-            () => {},
+            () => undefined,
           )
           .catch((lateError) => {
             log('[foreground-fallback] v2 late switch bookkeeping failed', {
               sessionID,
               error: stringifyError(lateError),
             });
+            return undefined;
           });
+        onPending?.(reconciliation);
       }
       log('[foreground-fallback] v2 model switch failed', {
         sessionID,
         error: stringifyError(err),
       });
     }
+  }
+
+  private async awaitLateV2Switch(
+    sessionID: string,
+    outcome: {
+      promise: Promise<string | undefined>;
+      pendingRecovery: boolean;
+    },
+    pending: Promise<string | undefined>,
+    isCurrent: () => boolean,
+  ): Promise<string | undefined> {
+    const nextModel = await Promise.race([
+      pending,
+      outcome.promise.then(() => undefined),
+    ]);
+    if (!nextModel || !isCurrent() || this.inProgress.has(sessionID)) return;
+    outcome.pendingRecovery = false;
+    this.inProgress.add(sessionID);
+    return nextModel;
   }
 
   private async handleV2Refusal(
@@ -2258,7 +2315,7 @@ export class ForegroundFallbackManager {
       step?.assistantMessageID !== assistantMessageID ||
       !this.retryEnabledFor(sessionID) ||
       this.disposed ||
-      this.inProgress.has(sessionID) ||
+      this.isFallbackInProgress(sessionID) ||
       !isFailoverError(error) ||
       !switchModel
     )
@@ -2274,7 +2331,10 @@ export class ForegroundFallbackManager {
     if (!this.hasFallbackChain(sessionID)) return;
     const epoch = step.epoch;
     const preparedGeneration = this.readBackgroundGeneration?.(sessionID);
+    const generation = this.readBackgroundGeneration?.(sessionID, true);
+    const outcome = this.v2RefusalOutcome(sessionID, assistantMessageID);
     this.inProgress.add(sessionID);
+    let ownsInProgress = true;
     log('[foreground-fallback] v2 refusal observed', {
       sessionID,
       agent: step.agent,
@@ -2302,23 +2362,41 @@ export class ForegroundFallbackManager {
               (step.model.variant ?? 'default')))
       )
         return;
-      if ((this.turnEpoch.get(sessionID) ?? 0) !== epoch) return;
+      const isCurrent = () =>
+        !this.disposed &&
+        (this.turnEpoch.get(sessionID) ?? 0) === epoch &&
+        this.readBackgroundGeneration?.(sessionID, true) === generation;
+      if (!isCurrent()) return;
       if (typeof data.parentID === 'string' && data.parentID) {
         this.sessionParent.set(sessionID, data.parentID);
       }
       this.sessionModel.set(sessionID, from);
-      const nextModel = await this.switchV2InPlace(
+      const pending: { switch?: Promise<string | undefined> } = {};
+      let nextModel = await this.switchV2InPlace(
         sessionID,
         from,
         error,
         switchModel,
+        (operation) => {
+          if (!isCurrent()) return;
+          pending.switch = operation;
+          outcome.pendingRecovery = true;
+          outcome.pendingGeneration = generation;
+          this.inProgress.delete(sessionID);
+          ownsInProgress = false;
+        },
       );
-      if (
-        !nextModel ||
-        this.disposed ||
-        (this.turnEpoch.get(sessionID) ?? 0) !== epoch
-      )
-        return;
+      if (!nextModel && pending.switch) {
+        nextModel = await this.awaitLateV2Switch(
+          sessionID,
+          outcome,
+          pending.switch,
+          isCurrent,
+        );
+        if (!nextModel) return;
+        ownsInProgress = true;
+      }
+      if (!nextModel || !isCurrent()) return;
       if (data.parentID && preparedGeneration === undefined) return nextModel;
       const handoffArmed =
         preparedGeneration !== undefined &&
@@ -2372,7 +2450,8 @@ export class ForegroundFallbackManager {
         error: stringifyError(err),
       });
     } finally {
-      this.inProgress.delete(sessionID);
+      outcome.pendingRecovery = false;
+      if (ownsInProgress) this.inProgress.delete(sessionID);
     }
   }
 

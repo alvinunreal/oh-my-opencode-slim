@@ -1776,9 +1776,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
                 const record = backgroundJobBoard?.get(sessionID);
                 return record &&
                   (record.background === true ||
-                    (hostFlavor !== 'v2' &&
-                      includeForeground &&
-                      record.provisional !== true))
+                    (includeForeground && record.provisional !== true))
                   ? record.generation
                   : undefined;
               }
