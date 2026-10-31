@@ -27,11 +27,9 @@ stay discoverable via `task_status` pull. The v1 code path is unchanged.
   - Tracks per-session local state (`generation` symbol, timer, continuous
     idle flag, and archive suppression) only; progress lives in the process
     gate.
-  - Capability record (`probeSessionApis`): v1 keeps exactly the historical
-    probe set (get/todo/children/status/promptAsync); v2 requires only
-    list+promptAsync (get optional). `resolveWakeMode` maps the configured
-    mode to todo/children per flavor and logs one degradation note when v2
-    lacks the todo API.
+  - Capability record (`probeSessionApis`): v1 requires the historical
+    probe set (get/todo/children/status/promptAsync). `resolveWakeMode` maps
+    the configured mode to todo/children.
   - Gates (`scheduleBlocker`): config enabled, capability gate ready, managed
     session, no input wait (`hasInputWait`), no fallback in progress, gate
     not stopped. Reports a reason when blocked, deduplicated per session/reason
@@ -50,14 +48,14 @@ stay discoverable via `task_status` pull. The v1 code path is unchanged.
     `classifyChildrenSnapshot` → `applySnapshotVerdict`): identical v1
     check order (parent-active → active-child suppression → todo
     condition); children mode uses the event-tracked parent race guard
-    (fail-open) and outcome-based child activity, then defers periodic wakes
+    (fail-open) and freshness-based child activity, then defers periodic wakes
     whenever the child fingerprint is not stable — first baseline
     observation and normal progress alike. Stable fingerprints retain the
     bounded
     stalled-child check; forced publication/recovery wakes bypass it.
   - Event bookkeeping: `lastStatusBySession` (busy-set + race guard),
     `childSessions`/`childEvidence` from `session.created` parentID links
-    (both v1-shape and flat v2 events), all bounded at 512 entries FIFO and
+    (v1 event shape), all bounded at 512 entries FIFO and
     cleared on `session.deleted`/dispose. `session.updated` archive state
     suppresses or restores the local session timer/generation.
   - Wakes via `promptAsync` with a static `<system-reminder>` text
@@ -71,22 +69,11 @@ stay discoverable via `task_status` pull. The v1 code path is unchanged.
     Retries follow the interval timer; failed publication/recovery retains its
     reason until delivery or a generation change. Pending publication facts
     restore the publication reason after parent busy transitions, even when
-    periodic wakes are disabled; deletion still discards them. v2 children mode passes
-    `delivery: 'queue'` (v1 call shape unchanged).
+    periodic wakes are disabled; deletion still discards them.
   - A delivered publication consumes the per-parent throttle inside
     `evaluate`, whether delivered directly, by timer or by one-flight
     waiter. Failed/vetoed attempts and periodic deliveries do not consume
     it; `waking` with task identity is logged only by the direct trigger.
-  - V2 publication wakes share the run-fenced publication queue (child ID,
-    generation, and optional terminal revision) per parent,
-    coalesce them into explicit `task_status` result pointers in a NEW trailing
-    volatile message built with `appendTrailingVolatileMessage`, and retire
-    only sent object identities on transport acceptance. Pointers, metadata,
-    and delivery acknowledgements use the same revalidated snapshot of at
-    most 256 executions; overflow stays pending. Failures, throttled
-    bursts, and publications arriving during a send keep their pending IDs.
-    Idle retries work with periodic wakes disabled; deletion/disposal clears
-    pending identities. Existing eligibility/no-progress gates remain intact.
   - `triggerStoppedJobRecovery`: immediate recovery wake for jobs that stopped
     without a native terminal result (separate from the periodic TODO wake;
     bypasses the wake condition, as on v1). Queued facts are revalidated by
@@ -151,14 +138,14 @@ evaluate() (one-flight via gate)
     │  children mode: list/event-tracked children + parent status)
     ├─ active status? → end idle spell
     ├─ todo mode: active child? → schedule later; no incomplete todos? → end
-    ├─ children mode: no active (outcome-less, fresh) child? → end
+    ├─ children mode: no fresh child activity? → end
     ├─ children mode: fingerprint not seen before? → record baseline, defer
     ├─ children mode: changing fingerprint? → defer to next interval
     ├─ stable fingerprint → bounded stalled-child wake, then cap
     ├─ fingerprint unchanged ≥ cap? → stop
     ├─ recheck archive state immediately before promptAsync
     ├─ commitWakeReservation
-    └─ promptAsync(internal wake reminder; v2 children mode: delivery 'queue')
+    └─ promptAsync(internal wake reminder)
        └─ on failure, roll back cap and retry on timer with original reason
     ↓
 busy (wake-initiated) → endIdleSpell(rearm=false)   [cap survives]
@@ -167,7 +154,7 @@ busy (external) / errors / user activity → rearm cap
 
 ## Integration
 
-- **Consumer**: `src/index.ts` creates the scheduler and routes `event`,
+- **Consumer**: `src/index.ts` creates the scheduler on v1 and routes `event`,
   `chat.message` (`observeChatMessage`), `wait_for_user` (`suppress`), and
   job-stopped recovery triggers to it; config comes from
   `runtime.backgroundJobs.orchestratorWake`
@@ -177,16 +164,6 @@ busy (external) / errors / user activity → rearm cap
   parameterize wake prompts.
 - **SessionLifecycle**: registers `session.deleted` cleanup via the
   coordinator.
-- **v2 adapter**: the client shim's `session.list` (parentID filter, v1
-  envelope with mapped `outcome`/`time.updated`/`directory`), the
-  children-fallback enrichment via `session.get` (authoritative
-  `outcome`/`time.updated` refreshed every evaluation; fail-soft), and
-  the `promptAsync` `delivery` ('queue' from the wake path; 'steer' default
-  for foreground-fallback) and `modelVariant` (wake model pin; the shim
-  merges it into the `switchModel` ref so the reasoning-effort variant is
-  preserved) parameters; `src/v2/setup.ts`'s cleanup invokes the v1
-  `dispose` hook, which synthesizes `server.instance.disposed` into the
-  scheduler.
 - **Dependencies**: `createInternalAgentTextPart` /
   `isInternalInitiatorPart` (`src/utils/internal-initiator.ts`), `log`,
   `isRecord`, `SessionLifecycle`, and the task-session-manager status/selection
@@ -199,10 +176,9 @@ busy (external) / errors / user activity → rearm cap
 - SDK failures during evaluation roll back the failed reservation's cap
   accounting, clear the expecting-busy marker, and log the trigger and
   serialized error (including the name of empty-message errors); the timer
-  re-arms via the finally block. Children-mode enumeration failures fall
-  back to event tracking instead of suppressing.
-- Archived sessions clear their timer and generation on `session.updated`; v2
-  hosts without `session.get()` rely on that observed archive state.
+  re-arms via the finally block. An empty children-mode listing falls back
+  to event tracking.
+- Archived sessions clear their timer and generation on `session.updated`.
 - `server.instance.disposed` clears timers, releases owners, and drops pending
   recovery + event-tracking state.
 - Model enrichment from `session.get` is fail-soft.

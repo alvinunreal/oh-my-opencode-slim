@@ -2461,53 +2461,6 @@ describe('plugin reload generation cleanup', () => {
     expect(skipLogs).toHaveLength(0);
   });
 
-  // ── C2 writer-lane predicate wiring ────────────────────────────────────
-  // The scheduler's `isWriterLaneTask` is built from the board record's
-  // agent graded through the role write-permission data; a missing record
-  // (or unknown agent) fails safe to writer so the verification sentence
-  // is attached rather than omitted.
-
-  test('C2: isWriterLaneTask grades the board record agent and fails safe to writer', async () => {
-    const createScheduler = wakeHooks.createOrchestratorWakeScheduler;
-    let captured:
-      | { isWriterLaneTask?: (taskID: string) => boolean }
-      | undefined;
-    const scheduler = spyOn(
-      wakeHooks,
-      'createOrchestratorWakeScheduler',
-    ).mockImplementation((...args: Parameters<typeof createScheduler>) => {
-      captured = args[1] as unknown as typeof captured;
-      return createScheduler(...args);
-    });
-    const getSpy = spyOn(ProductionBoard.prototype, 'get');
-    let hooks: Awaited<ReturnType<typeof plugin>> | undefined;
-    try {
-      hooks = await createHooks();
-      const predicate = captured?.isWriterLaneTask;
-      expect(typeof predicate).toBe('function');
-
-      getSpy.mockReturnValue({ agent: 'explorer' } as never);
-      expect(predicate?.('any-task')).toBe(false);
-      getSpy.mockReturnValue({ agent: 'oracle' } as never);
-      expect(predicate?.('any-task')).toBe(false);
-      getSpy.mockReturnValue({ agent: 'designer' } as never);
-      expect(predicate?.('any-task')).toBe(true);
-      getSpy.mockReturnValue({ agent: 'fixer' } as never);
-      expect(predicate?.('any-task')).toBe(true);
-      // Unknown agent / missing record / missing agent → writer (fail-safe).
-      getSpy.mockReturnValue({ agent: 'custom-unknown' } as never);
-      expect(predicate?.('any-task')).toBe(true);
-      getSpy.mockReturnValue(undefined as never);
-      expect(predicate?.('missing-task')).toBe(true);
-      getSpy.mockReturnValue({ agent: undefined } as never);
-      expect(predicate?.('agentless-task')).toBe(true);
-    } finally {
-      await hooks?.dispose?.();
-      scheduler.mockRestore();
-      getSpy.mockRestore();
-    }
-  });
-
   test('v1 dispose releases this generation companion manager', async () => {
     // Enabled with a custom (missing) binaryPath: registration and state
     // writes run, but neither the updater nor spawnIfAvailable touches
