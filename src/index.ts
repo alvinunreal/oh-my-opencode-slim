@@ -394,6 +394,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   // v1). Survives the try block so prompt-assembly hooks can use it.
   let hostFlavor: string | undefined;
   let instanceDisposed = false;
+  let companionStartupAbort: AbortController | undefined;
   // v1 task() has no model override. Prompts claim these bounded intentions
   // from host state, never from asynchronous session.created delivery.
   const MAX_PENDING_V1_DELEGATED_INTENTS = 32;
@@ -1992,26 +1993,34 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
   }
 
-  if (runtime.companion?.enabled === true) {
-    try {
-      const { ensureCompanionVersion } = await import('./companion/updater');
-      const companionResult = await ensureCompanionVersion({
-        config: runtime.companion,
-        downloadTimeoutMs: 3_000,
-        lockTimeoutMs: 500,
-      });
-      if (companionResult.status === 'installed') {
-        log('[companion] updated before startup', companionResult.version);
-      } else if (companionResult.status === 'failed') {
-        log('[companion] startup update failed', companionResult.error);
-      }
-    } catch (err) {
-      log('[companion] startup update failed', String(err));
-    }
-  }
-
   if (companionManager) {
-    companionManager.onLoad();
+    if (runtime.companion?.binaryPath?.trim()) {
+      companionManager.onLoad();
+    } else {
+      const controller = new AbortController();
+      companionStartupAbort = controller;
+      void (async () => {
+        try {
+          const { ensureCompanionVersionForStartup } = await import(
+            './companion/updater'
+          );
+          const result = await ensureCompanionVersionForStartup(
+            runtime.companion,
+            controller.signal,
+          );
+          if (result.status === 'installed') {
+            log('[companion] startup update installed', result.version);
+          } else if (result.status === 'failed') {
+            log('[companion] startup update failed', result.error);
+          }
+        } catch (err) {
+          log('[companion] startup update failed', String(err));
+        } finally {
+          companionStartupAbort = undefined;
+        }
+        if (!instanceDisposed) companionManager?.onLoad();
+      })();
+    }
   } else {
     // Disabled: no manager, but still prune this session's stale entry
     // (and any manager a previous enabled load left running).
@@ -2909,6 +2918,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       withTuiSnapshotBatch(async () => {
         if (input.event.type === 'server.instance.disposed') {
           instanceDisposed = true;
+          companionStartupAbort?.abort();
           terminalGate?.dispose();
         }
         // Token streams have no work in this fan-out. The v2 Interview
@@ -3258,6 +3268,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // Synchronous: v2 setup calls this directly and does not emit the
       // public server.instance.disposed event first.
       instanceDisposed = true;
+      companionStartupAbort?.abort();
       registryBridge.retire();
       terminalGate?.dispose();
       // Cancel pending initial-delay fallback timers so a reloaded

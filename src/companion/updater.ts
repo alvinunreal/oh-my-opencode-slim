@@ -45,6 +45,16 @@ const DOWNLOAD_TIMEOUT_MS = 30_000;
 const LOCK_TIMEOUT_MS = 2_000;
 const STALE_LOCK_MS = 5 * 60_000;
 const FIRST_METADATA_VERSION = '0.1.2';
+type StartupWait = { signal: AbortSignal; acquired: boolean };
+const startupInstalls = new Map<
+  string,
+  {
+    promise: Promise<CompanionUpdateResult>;
+    controller: AbortController;
+    wait: StartupWait;
+    consumers: number;
+  }
+>();
 
 export const COMPANION_MANIFEST: CompanionManifest = {
   version: '0.1.9',
@@ -122,14 +132,17 @@ export function loadCompanionManifestFromPackageRoot(
   return null;
 }
 
-export async function ensureCompanionVersion(options: {
-  config?: CompanionConfig;
-  manifest?: CompanionManifest;
-  dryRun?: boolean;
-  downloadTimeoutMs?: number;
-  lockTimeoutMs?: number;
-  lockStaleMs?: number;
-}): Promise<CompanionUpdateResult> {
+export async function ensureCompanionVersion(
+  options: {
+    config?: CompanionConfig;
+    manifest?: CompanionManifest;
+    dryRun?: boolean;
+    downloadTimeoutMs?: number;
+    lockTimeoutMs?: number;
+    lockStaleMs?: number;
+  },
+  startupWait?: StartupWait,
+): Promise<CompanionUpdateResult> {
   const { config, dryRun = false } = options;
   const manifest = options.manifest ?? COMPANION_MANIFEST;
   const binaryPath = getCompanionBinaryPath();
@@ -186,6 +199,7 @@ export async function ensureCompanionVersion(options: {
     options.lockTimeoutMs,
     options.lockStaleMs,
     async () => {
+      if (startupWait) startupWait.acquired = true;
       const lockedCurrent = readInstallMetadata(binaryPath);
       if (
         existsSync(binaryPath) &&
@@ -223,7 +237,57 @@ export async function ensureCompanionVersion(options: {
         options.downloadTimeoutMs ?? DOWNLOAD_TIMEOUT_MS,
       );
     },
+    startupWait?.signal,
   );
+}
+
+export function ensureCompanionVersionForStartup(
+  config: CompanionConfig | undefined,
+  signal: AbortSignal,
+): Promise<CompanionUpdateResult> {
+  const binaryPath = getCompanionBinaryPath();
+  if (signal.aborted)
+    return Promise.resolve({
+      status: 'skipped',
+      reason: 'disposed',
+      binaryPath,
+    });
+  let install = startupInstalls.get(binaryPath);
+  if (!install) {
+    const controller = new AbortController();
+    const wait: StartupWait = { signal: controller.signal, acquired: false };
+    const promise: Promise<CompanionUpdateResult> = ensureCompanionVersion(
+      {
+        config,
+        // Startup is asynchronous, so a crashed install lock can expire.
+        lockTimeoutMs: STALE_LOCK_MS + LOCK_TIMEOUT_MS,
+      },
+      wait,
+    ).finally(() => {
+      if (startupInstalls.get(binaryPath)?.promise === promise)
+        startupInstalls.delete(binaryPath);
+    });
+    install = { promise, controller, wait, consumers: 0 };
+    startupInstalls.set(binaryPath, install);
+  }
+  const current = install;
+  current.consumers++;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    signal.removeEventListener('abort', release);
+    current.consumers--;
+    // An acquired installation remains available to the next generation.
+    if (current.consumers === 0 && !current.wait.acquired) {
+      if (startupInstalls.get(binaryPath) === current)
+        startupInstalls.delete(binaryPath);
+      current.controller.abort();
+    }
+  };
+  signal.addEventListener('abort', release, { once: true });
+  void current.promise.then(release, release);
+  return current.promise;
 }
 
 async function installCompanionArchive(
@@ -390,12 +454,15 @@ async function withCompanionInstallLock(
   timeoutMs: number | undefined,
   staleMs: number | undefined,
   run: () => Promise<CompanionUpdateResult>,
+  signal?: AbortSignal,
 ): Promise<CompanionUpdateResult> {
   const lock = `${binaryPath}.lock`;
   const deadline = Date.now() + (timeoutMs ?? LOCK_TIMEOUT_MS);
   const staleAfterMs = staleMs ?? STALE_LOCK_MS;
   mkdirSync(path.dirname(binaryPath), { recursive: true });
   while (Date.now() <= deadline) {
+    if (signal?.aborted)
+      return { status: 'skipped', reason: 'disposed', binaryPath };
     try {
       mkdirSync(lock);
       try {
@@ -421,7 +488,13 @@ async function withCompanionInstallLock(
         const statCode = (statErr as NodeJS.ErrnoException).code;
         if (statCode !== 'ENOENT') throw statErr;
       }
-      await delay(25);
+      try {
+        await delay(25, undefined, { signal });
+      } catch (err) {
+        if (signal?.aborted)
+          return { status: 'skipped', reason: 'disposed', binaryPath };
+        throw err;
+      }
     }
   }
   log('[companion] install lock timed out', lock);

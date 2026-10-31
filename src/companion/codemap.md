@@ -114,6 +114,7 @@ ensureCompanionVersion() → installCompanionArchive() → extract → validate 
    - Returns early if up-to-date
 
 2. **Download and install** (if outdated or missing)
+   - Startup installs asynchronously without delaying plugin availability, then starts the manager unless its generation was disposed
    - Fetches archive from GitHub releases
    - Validates SHA-256 checksum
    - Extracts tar.gz (Unix) or zip (Windows)

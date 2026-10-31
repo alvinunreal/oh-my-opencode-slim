@@ -8,16 +8,28 @@ import {
   spyOn,
   test,
 } from 'bun:test';
-import { readdirSync, readFileSync } from 'node:fs';
+import * as childProcess from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import * as fs from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import * as os from 'node:os';
 import path from 'node:path';
+import * as promiseTimers from 'node:timers/promises';
 import { testRender } from '@opentui/solid';
 import type { RegistryFactoryBridge } from './agents/registry-bridge';
 import {
+  CompanionManager,
   companionSessionIdForDirectory,
   stateFilePath,
 } from './companion/manager';
+import * as companionUpdater from './companion/updater';
+import {
+  COMPANION_MANIFEST,
+  getCompanionBinaryPath,
+  getCompanionTarget,
+} from './companion/updater';
 import { RuntimeConfig } from './config/runtime';
 import * as wakeHooks from './hooks';
 import { isTaggedPart, stripTaggedContent } from './hooks/cache-safe-injection';
@@ -53,10 +65,12 @@ import {
   BackgroundJobBoard as ProductionBoard,
 } from './utils/background-job-board';
 import { BackgroundJobBoard } from './utils/background-job-fixture';
+import * as compat from './utils/compat';
 import { resetLiveDirectoriesForTests } from './utils/event-directory-scope';
 import { createInternalAgentTextPart } from './utils/internal-initiator';
 import * as loggerModule from './utils/logger';
 import { pendingSessionPrune } from './utils/pending-session-prunes';
+import * as zip from './utils/zip-extractor';
 
 function createPluginClient(
   noop: () => Promise<unknown>,
@@ -2495,6 +2509,227 @@ describe('plugin reload generation cleanup', () => {
     // dispose must call companionManager.onExit(): the session entry is
     // withdrawn even if the next generation fails before its own onLoad.
     expect(readSessionIds()).not.toContain(companionSessionId);
+  });
+
+  test('companion startup does not gate plugin availability on a slow download', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({ companion: { enabled: true } }),
+    );
+    const fetchOriginal = globalThis.fetch;
+    const started = Promise.withResolvers<void>();
+    const loaded = Promise.withResolvers<void>();
+    let complete!: (response: Response) => void;
+    let aborted = false;
+    globalThis.fetch = ((_url, options) =>
+      new Promise<Response>((resolve, reject) => {
+        complete = resolve;
+        options?.signal?.addEventListener('abort', () => {
+          aborted = true;
+          reject(new Error('aborted'));
+        });
+        started.resolve();
+      })) as typeof fetch;
+    const originalLoad = CompanionManager.prototype.onLoad;
+    const load = spyOn(CompanionManager.prototype, 'onLoad').mockImplementation(
+      function (this: CompanionManager) {
+        originalLoad.call(this);
+        loaded.resolve();
+      },
+    );
+    jest.useFakeTimers();
+    let hooks: Awaited<ReturnType<typeof plugin>> | undefined;
+    try {
+      const initialization = createHooks();
+      await started.promise;
+      jest.advanceTimersByTime(3_001);
+      hooks = await initialization;
+      expect(aborted).toBe(false);
+      complete(new Response('', { status: 503 }));
+      await loaded.promise;
+      expect(
+        JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions,
+      ).toHaveLength(1);
+    } finally {
+      complete?.(new Response('', { status: 503 }));
+      await hooks?.dispose?.();
+      load.mockRestore();
+      globalThis.fetch = fetchOriginal;
+      jest.useRealTimers();
+    }
+  });
+
+  test('reloaded companion starts after the retired generation finishes installing', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({ companion: { enabled: true } }),
+    );
+    const binary = getCompanionBinaryPath();
+    const target = getCompanionTarget();
+    const archive = `oh-my-opencode-slim-companion-v${COMPANION_MANIFEST.version}-${target}.${process.platform === 'win32' ? 'zip' : 'tar.gz'}`;
+    const bytes = Buffer.from('verified companion archive');
+    const checksums = COMPANION_MANIFEST.checksums;
+    COMPANION_MANIFEST.checksums = {
+      ...checksums,
+      [archive]: createHash('sha256').update(bytes).digest('hex'),
+    };
+    const download = Promise.withResolvers<Response>();
+    const started = Promise.withResolvers<void>();
+    const installed = Promise.withResolvers<void>();
+    const loaded = Promise.withResolvers<void>();
+    const joined = Promise.withResolvers<void>();
+    const attempts: Promise<unknown>[] = [];
+    const originalEnsure = companionUpdater.ensureCompanionVersionForStartup;
+    const ensure = spyOn(
+      companionUpdater,
+      'ensureCompanionVersionForStartup',
+    ).mockImplementation((...args) => {
+      const pending = originalEnsure(...args);
+      attempts.push(pending);
+      if (attempts.length === 2) joined.resolve();
+      return pending;
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => {
+      started.resolve();
+      return download.promise;
+    }) as typeof fetch;
+    const extractBinary = (destination: string) => {
+      writeFileSync(path.join(destination, path.basename(binary)), 'binary');
+    };
+    const originalCrossSpawn = compat.crossSpawn;
+    const extractTar = spyOn(compat, 'crossSpawn').mockImplementation(
+      (command, options) => {
+        if (command[0] !== 'tar') return originalCrossSpawn(command, options);
+        extractBinary(command[4]);
+        return { exited: Promise.resolve(0) } as ReturnType<
+          typeof compat.crossSpawn
+        >;
+      },
+    );
+    const extractZip = spyOn(zip, 'extractZip').mockImplementation(
+      async (_archive, destination) => extractBinary(destination),
+    );
+    const originalRename = fs.renameSync;
+    const rename = spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      originalRename(from, to);
+      if (String(to) === binary) installed.resolve();
+    });
+    const child = Object.assign(new EventEmitter(), {
+      pid: undefined,
+      unref: () => {},
+      kill: () => true,
+    });
+    const spawn = spyOn(childProcess, 'spawn').mockReturnValue(
+      child as childProcess.ChildProcess,
+    );
+    const originalLoad = CompanionManager.prototype.onLoad;
+    const load = spyOn(CompanionManager.prototype, 'onLoad').mockImplementation(
+      function (this: CompanionManager) {
+        originalLoad.call(this);
+        loaded.resolve();
+      },
+    );
+    jest.useFakeTimers();
+    let first: Awaited<ReturnType<typeof plugin>> | undefined;
+    let current: Awaited<ReturnType<typeof plugin>> | undefined;
+    try {
+      first = await createHooks();
+      await started.promise;
+      await first.dispose?.();
+      current = await createHooks();
+      await joined.promise;
+      expect(attempts[1]).toBe(attempts[0]);
+      download.resolve(new Response(bytes));
+      await installed.promise;
+      await loaded.promise;
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(spawn).toHaveBeenCalledWith(binary, [], expect.any(Object));
+    } finally {
+      await first?.dispose?.();
+      await current?.dispose?.();
+      download.resolve(new Response(bytes));
+      jest.useRealTimers();
+      await Promise.allSettled(attempts);
+      ensure.mockRestore();
+      load.mockRestore();
+      spawn.mockRestore();
+      rename.mockRestore();
+      extractZip.mockRestore();
+      extractTar.mockRestore();
+      globalThis.fetch = originalFetch;
+      COMPANION_MANIFEST.checksums = checksums;
+    }
+  });
+
+  test('disposing the last companion consumer stops waiting for another process', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({ companion: { enabled: true } }),
+    );
+    const binary = getCompanionBinaryPath();
+    const lock = `${binary}.lock`;
+    fs.mkdirSync(lock, { recursive: true });
+    writeFileSync(path.join(lock, 'owner'), 'another process');
+    const waiting = Promise.withResolvers<void>();
+    const joined = Promise.withResolvers<void>();
+    const originalDelay = promiseTimers.setTimeout;
+    const delay = spyOn(promiseTimers, 'setTimeout').mockImplementation(((
+      ...args: Parameters<typeof originalDelay>
+    ) => {
+      waiting.resolve();
+      return originalDelay(...args);
+    }) as typeof originalDelay);
+    const originalEnsure = companionUpdater.ensureCompanionVersionForStartup;
+    const attempts: ReturnType<typeof originalEnsure>[] = [];
+    const ensure = spyOn(
+      companionUpdater,
+      'ensureCompanionVersionForStartup',
+    ).mockImplementation((...args) => {
+      const pending = originalEnsure(...args);
+      attempts.push(pending);
+      if (attempts.length === 2) joined.resolve();
+      return pending;
+    });
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mock(async () => new Response('', { status: 503 }));
+    globalThis.fetch = fetchMock as typeof fetch;
+    jest.useFakeTimers();
+    let first: Awaited<ReturnType<typeof plugin>> | undefined;
+    let current: Awaited<ReturnType<typeof plugin>> | undefined;
+    try {
+      first = await createHooks({ hostFlavor: 'v2' });
+      await waiting.promise;
+      current = await createHooks({ hostFlavor: 'v2' });
+      await joined.promise;
+      expect(attempts[1]).toBe(attempts[0]);
+      const signal = delay.mock.calls[0]?.[2]?.signal;
+      expect(signal?.aborted).toBe(false);
+      await first.event?.({
+        event: { type: 'server.instance.disposed' },
+      } as never);
+      expect(signal?.aborted).toBe(false);
+      await current.dispose?.();
+      expect(signal?.aborted).toBe(true);
+      expect(readFileSync(path.join(lock, 'owner'), 'utf8')).toBe(
+        'another process',
+      );
+      fs.rmSync(lock, { recursive: true });
+      jest.advanceTimersByTime(25);
+      await attempts[0];
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(fs.existsSync(binary)).toBe(false);
+    } finally {
+      await first?.dispose?.();
+      await current?.dispose?.();
+      fs.rmSync(lock, { recursive: true, force: true });
+      jest.advanceTimersByTime(25);
+      await Promise.allSettled(attempts);
+      jest.useRealTimers();
+      globalThis.fetch = originalFetch;
+      ensure.mockRestore();
+      delay.mockRestore();
+    }
   });
 
   test('companion keeps other input requests pending when one is resolved', async () => {
