@@ -1007,6 +1007,7 @@ export class ForegroundFallbackManager {
       entry.time.completed < this.startedAt
     )
       return Promise.resolve(undefined);
+    const step = this.v2Steps.get(sessionID);
     return this.refusalOutcome(
       sessionID,
       {
@@ -1019,7 +1020,11 @@ export class ForegroundFallbackManager {
             ? { variant: entry.model.variant }
             : {}),
         },
-        epoch: this.turnEpoch.get(sessionID) ?? 0,
+        // The pump's epoch is from step start; a later prompt must win.
+        epoch:
+          step?.assistantMessageID === entry.id
+            ? step.epoch
+            : (this.turnEpoch.get(sessionID) ?? 0),
       },
       entry.error,
       entry.rawFinish,
