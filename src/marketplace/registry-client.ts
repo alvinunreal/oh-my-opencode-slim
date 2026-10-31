@@ -7,6 +7,7 @@ import {
   type MarketplaceRegistryEntryV3,
   type MarketplaceRegistryIndex,
   type MarketplaceRegistryIndexV3,
+  MarketplaceRegistryUpToDateError,
   parseMarketplaceRegistryIndex,
   parseMarketplaceRegistryIndexV3,
   parseMarketplaceRegistrySelector,
@@ -17,6 +18,7 @@ import {
 } from '../marketplace-contract/index.js';
 import { satisfiesPluginCompatibility } from './compatibility.js';
 import {
+  MarketplaceAlreadyUpToDateError,
   MarketplaceCompatibilityError,
   MarketplaceRegistryIntegrityError,
   MarketplaceRegistryNotFoundError,
@@ -285,6 +287,9 @@ export class MarketplaceRegistryClient {
             minimumVersion,
           );
     } catch (error) {
+      if (error instanceof MarketplaceRegistryUpToDateError) {
+        throw new MarketplaceAlreadyUpToDateError(error.message);
+      }
       throw new MarketplaceCompatibilityError(errorMessage(error));
     }
 

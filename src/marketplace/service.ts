@@ -12,6 +12,7 @@ import {
 } from './activation-config.js';
 import { withMarketplaceConfigReferencesRemoved } from './config-references.js';
 import {
+  MarketplaceAlreadyUpToDateError,
   MarketplaceCompatibilityError,
   MarketplaceRegistryNotFoundError,
   MarketplaceRegistryUnavailableError,
@@ -343,6 +344,7 @@ export class MarketplaceService {
     signal?: AbortSignal,
   ): Promise<MarketplaceRegistryDownload> {
     let v3CompatibilityError: MarketplaceCompatibilityError | undefined;
+    let v3UpToDateError: MarketplaceAlreadyUpToDateError | undefined;
     if (this.registryClient.downloadV3) {
       try {
         return await this.registryClient.downloadV3(
@@ -354,7 +356,8 @@ export class MarketplaceService {
         if (
           !(error instanceof MarketplaceRegistryUnavailableError) &&
           !(error instanceof MarketplaceRegistryNotFoundError) &&
-          !(error instanceof MarketplaceCompatibilityError)
+          !(error instanceof MarketplaceCompatibilityError) &&
+          !(error instanceof MarketplaceAlreadyUpToDateError)
         ) {
           throw error;
         }
@@ -362,6 +365,8 @@ export class MarketplaceService {
         if (error instanceof MarketplaceCompatibilityError) {
           v3CompatibilityError = error;
         }
+        if (error instanceof MarketplaceAlreadyUpToDateError)
+          v3UpToDateError = error;
       }
     }
     try {
@@ -374,9 +379,16 @@ export class MarketplaceService {
       if (
         v3CompatibilityError &&
         (error instanceof MarketplaceRegistryNotFoundError ||
-          error instanceof MarketplaceCompatibilityError)
+          error instanceof MarketplaceCompatibilityError ||
+          error instanceof MarketplaceAlreadyUpToDateError)
       ) {
         throw v3CompatibilityError;
+      }
+      if (
+        v3UpToDateError &&
+        error instanceof MarketplaceRegistryNotFoundError
+      ) {
+        throw v3UpToDateError;
       }
       throw error;
     }
