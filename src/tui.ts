@@ -2372,13 +2372,23 @@ function createSidebarRuntime(
       nextSnapshot,
       adapter.getSelectedRootModel?.(),
     );
-    const namesBefore = modelNamesCache.names;
     await hydrateModelNames(adapter.client, currentDirectory, modelNamesCache);
     if (!isRefreshCurrent(currentDirectory, adapter.getDirectory())) {
       return;
     }
+    const namesBefore = modelNames();
     if (modelNamesCache.names !== namesBefore) {
-      setModelNames(modelNamesCache.names);
+      if (
+        modelNamesCache.names.size !== namesBefore.size ||
+        [...modelNamesCache.names].some(
+          ([key, value]) => namesBefore.get(key) !== value,
+        )
+      ) {
+        setModelNames(modelNamesCache.names);
+      } else {
+        // Reuse the signal's map so equal refreshes skip subsequent comparisons.
+        modelNamesCache.names = namesBefore;
+      }
     }
     if (adapter.readSessionPreset && currentSession) {
       let label: string;

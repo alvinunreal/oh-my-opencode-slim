@@ -250,6 +250,18 @@ export class TmuxMultiplexer implements Multiplexer {
     await this.applyLayoutNow(layout, mainPaneSize, socket, anchor);
   }
 
+  async applySpawnLayout(
+    layout: MultiplexerLayout,
+    mainPaneSize: number,
+  ): Promise<void> {
+    if (
+      layout === this.storedLayout &&
+      mainPaneSize === this.storedMainPaneSize
+    )
+      return;
+    await this.applyLayout(layout, mainPaneSize);
+  }
+
   private scheduleLayout(targetPane: string): void {
     const pending = this.layoutTimers.get(targetPane);
     if (pending) clearTimeout(pending);

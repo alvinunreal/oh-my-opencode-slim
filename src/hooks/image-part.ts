@@ -98,25 +98,24 @@ function decodePayload(data: unknown): Buffer | null {
   return null;
 }
 
-function decodeDataUrl(url: string): { mime: string; data: Buffer } | null {
+function parseDataUrl(url: string): { mime: string; data: string } | null {
   const match = url.match(/^data:([^;]+);base64,(.+)$/);
   if (!match) return null;
-  return { mime: match[1], data: Buffer.from(match[2], 'base64') };
+  return { mime: match[1], data: match[2] };
 }
 
-export function asImagePart(part: unknown): ImagePartView | null {
-  if (!isRecord(part) || typeof part.type !== 'string') return null;
-  const filename = partFilename(part);
-
-  // Resolve the declared mime and the inline payload for each host shape.
+function imagePayload(part: Record<string, unknown>): {
+  mime: string | undefined;
+  data: unknown;
+} | null {
   let mime: string | undefined;
-  let bytes: Buffer | null;
+  let data: unknown;
   if (part.type === 'image' || part.type === 'file') {
     const url = typeof part.url === 'string' ? part.url : undefined;
-    const decoded = url ? decodeDataUrl(url) : null;
+    const decoded = url ? parseDataUrl(url) : null;
     // v1 payloads travel as data URLs, but keep accepting a base64 `data`
     // field (the pre-refactor hook did) so nothing materializable is lost.
-    bytes = decoded?.data ?? decodePayload(part.data);
+    data = decoded?.data ?? part.data;
     mime = typeof part.mime === 'string' ? part.mime : decoded?.mime;
   } else if (part.type === 'media') {
     if (isRecord(part.media)) {
@@ -132,18 +131,62 @@ export function asImagePart(part: unknown): ImagePartView | null {
           ? part.media.mediaType
           : undefined) ??
         (typeof source?.mediaType === 'string' ? source.mediaType : undefined);
-      bytes =
+      data =
         source?.type === 'base64' || source?.type === 'bytes'
-          ? decodePayload(source.data)
+          ? source.data
           : null;
     } else {
       // v2 flat `{mediaType, data}` (the dev-branch shape).
       mime = typeof part.mediaType === 'string' ? part.mediaType : undefined;
-      bytes = decodePayload(part.data);
+      data = part.data;
     }
   } else {
     return null;
   }
+  return { mime, data };
+}
+
+/** Detect image identity without materializing the entire inline payload. */
+export function hasImageIdentity(part: unknown): boolean {
+  if (!isRecord(part)) return false;
+  if (part.type !== 'image' && part.type !== 'file' && part.type !== 'media')
+    return false;
+  if (part.type === 'image' || hasImageFileExtension(partFilename(part)))
+    return true;
+  if (
+    part.type === 'file' &&
+    isImageMime(typeof part.mime === 'string' ? part.mime : undefined)
+  )
+    return true;
+
+  const payload = imagePayload(part);
+  if (!payload) return false;
+  if (isImageMime(payload.mime)) return true;
+  if (!isUnclassifiedMime(payload.mime)) return false;
+  if (payload.data instanceof Uint8Array)
+    return detectInlineImageMime(payload.data.subarray(0, 12)) !== undefined;
+  if (typeof payload.data !== 'string') return false;
+
+  let prefix = '';
+  for (let i = 0; i < payload.data.length && prefix.length < 16; i++) {
+    const char = payload.data[i];
+    if (payload.data.charCodeAt(i) > 127) {
+      const bytes = decodePayload(payload.data);
+      return bytes !== null && detectInlineImageMime(bytes) !== undefined;
+    }
+    if (char === '=') break;
+    if (/[A-Za-z0-9+/_-]/.test(char)) prefix += char;
+  }
+  return detectInlineImageMime(Buffer.from(prefix, 'base64')) !== undefined;
+}
+
+export function asImagePart(part: unknown): ImagePartView | null {
+  if (!isRecord(part) || typeof part.type !== 'string') return null;
+  const filename = partFilename(part);
+  const payload = imagePayload(part);
+  if (!payload) return null;
+  const { mime } = payload;
+  const bytes = decodePayload(payload.data);
 
   // Identity: is this part an image at all? The unclassified channel
   // (#1247 rescue — clipboard images the host failed to type) only counts

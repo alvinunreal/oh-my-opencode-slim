@@ -82,7 +82,8 @@ lifecycle lives in the TUI entry's dependency graph (`multiplexer/client/`).
 4. **Snapshot Loading**: Reads agent models, variants, and per-session activity
    from `tui-state.ts`
 5. **Live Updates**: Refreshes persisted state every 1000ms and reactively
-   advances 100ms animation frames only while agents are active
+   advances 100ms animation frames only while agents are active; identical
+   model-name refreshes do not rebuild the sidebar
 6. **Pane Lifecycle Wiring**: `createTuiPaneWiring()` resolves admission from
    the client's own environment, initializes plugin logging, reflects the
    server URL, subscribes to session events, and drives per-client pane
@@ -109,7 +110,9 @@ lifecycle lives in the TUI entry's dependency graph (`multiplexer/client/`).
 3. **Atomic Writes**: Cross-process file locking serializes read → mutate →
    atomic rename transactions. `withTuiSnapshotBatch` coalesces recorders and
    Board projections within one native event; standalone calls remain immediate.
-   A shared stat-key cache preserves reader isolation and parent insertion order.
+    A shared stat-key cache preserves reader isolation and parent insertion order;
+    verified single-key no-ops skip cloning, including within compatible batches.
+    Parent hydration reuses one stat-validated snapshot until an asynchronous host lookup.
 4. **Error Handling**: All operations are best-effort; failures don't crash plugin
 5. **Instance Cleanup**: On shutdown, each plugin instance removes only sessions
    it marked active, preserving activity owned by other running instances

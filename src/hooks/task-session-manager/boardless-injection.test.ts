@@ -13,7 +13,7 @@
  *   - a terminal run retires when its own tagged `<completed-job>` push
  *     part is observed in the parent history, and only for that exact run.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { TERMINAL_DELTA_METADATA_KEY } from '../../utils';
 import { BackgroundJobBoard } from '../../utils/background-job-fixture';
 import { isVolatileTaggedMessage } from '../cache-safe-injection';
@@ -22,6 +22,7 @@ import {
   type InjectionState,
   injectBackgroundJobBoard,
   reconcileObservedTerminalRun,
+  updateFromInjectedCompletion,
 } from './board-injection';
 
 const SESSION = 'ses_parent_1';
@@ -58,6 +59,49 @@ function createInjectionState(board: BackgroundJobBoard): InjectionState {
 }
 
 describe('boardless injection', () => {
+  test('does not parse the result body of a processed synthetic occurrence', async () => {
+    const board = new BackgroundJobBoard();
+    const state = createInjectionState(board);
+    state.syntheticTerminalOccurrences = new Map([
+      [
+        'explicit\u001fchild-1\u001fpart-1',
+        {
+          taskID: 'child-1',
+          occurrenceID: 'part-1',
+          lifecycleEpochAtObservation: 0,
+          phase: 'processed',
+        },
+      ],
+    ]);
+    const part = {
+      id: 'part-1',
+      type: 'text',
+      synthetic: true,
+      text: '<task id="child-1" state="completed"><task_result>answer</task_result></task>',
+    };
+    const originalExec = RegExp.prototype.exec;
+    let resultParses = 0;
+    const exec = spyOn(RegExp.prototype, 'exec').mockImplementation(function (
+      this: RegExp,
+      text: string,
+    ) {
+      if (this.source.startsWith('<task_(result|error)>')) resultParses++;
+      return originalExec.call(this, text);
+    });
+    try {
+      await updateFromInjectedCompletion(
+        state,
+        part as never,
+        { info: { id: 'message', sessionID: SESSION }, parts: [part] } as never,
+        0,
+        0,
+      );
+    } finally {
+      exec.mockRestore();
+    }
+    expect(resultParses).toBe(0);
+  });
+
   test('the payload never carries board bytes, whatever the board holds', async () => {
     const board = new BackgroundJobBoard();
     const state = createInjectionState(board);
