@@ -36,7 +36,7 @@ export function buildCouncillorAgents(
       cfg.model,
       undefined,
       cfg.prompt,
-      cfg.variant,
+      cfg.models[0]?.variant ?? cfg.variant,
       observerDispatchEnabled,
     );
 
