@@ -565,10 +565,11 @@ export function updateInstallerManagedVersions(
       }
       throw err;
     } finally {
+      // A successful rollback renames `.restore` away; one left behind is the
+      // only copy of the original bytes, so it is kept for recovery.
       for (const update of updates) {
         try {
           fs.rmSync(`${update.configPath}.${token}.tmp`, { force: true });
-          fs.rmSync(`${update.configPath}.${token}.restore`, { force: true });
         } catch {
           // Cleanup must not mask the update or rollback error.
         }

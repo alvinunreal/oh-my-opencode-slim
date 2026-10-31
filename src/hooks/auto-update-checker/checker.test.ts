@@ -345,6 +345,44 @@ describe('auto-update-checker/checker', () => {
         fs.rmSync(root, { recursive: true, force: true });
       }
     });
+    test('keeps the recovery copy when a rollback rename fails', async () => {
+      const root = fs.mkdtempSync(path.join(tmpdir(), 'managed-restore-'));
+      const configDir = path.join(root, '.opencode');
+      fs.mkdirSync(configDir);
+      const first = path.join(configDir, 'opencode.json');
+      const second = path.join(configDir, 'opencode.jsonc');
+      const original =
+        '{"plugin":[["oh-my-opencode-slim@1.2.3",{"__ohMyOpencodeSlimManagedByInstaller":true}]]}';
+      fs.writeFileSync(first, original);
+      fs.writeFileSync(second, original);
+      const secondRealPath = fs.realpathSync(second);
+      const rename = fs.renameSync;
+      const spy = spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+        if (String(to) === secondRealPath) throw new Error('rename failed');
+        if (String(from).endsWith('.restore')) {
+          throw new Error('restore failed');
+        }
+        return rename(from, to);
+      });
+      try {
+        const { updateInstallerManagedVersions } = await import(
+          `./checker?test=${importCounter++}`
+        );
+        expect(updateInstallerManagedVersions(root, '1.2.4').status).toBe(
+          'error',
+        );
+        const restore = fs
+          .readdirSync(configDir)
+          .filter((name) => name.endsWith('.restore'));
+        expect(restore).toHaveLength(1);
+        expect(
+          fs.readFileSync(path.join(configDir, restore[0] as string), 'utf8'),
+        ).toBe(original);
+      } finally {
+        spy.mockRestore();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
     test('updates a symlink target and refuses a dangling link', async () => {
       const root = fs.mkdtempSync(path.join(tmpdir(), 'managed-config-'));
       const configDir = path.join(root, '.opencode');
