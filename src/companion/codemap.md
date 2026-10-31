@@ -92,6 +92,7 @@ OpenCode Session → CompanionManager.onSessionStatus() → Updates state → Sp
    **Input requests** (`onWaitingInput()` / `onInputResolved()`)
    - Track permissions and questions by session, kind, and request ID
    - Keep `waiting-input` until all pending requests are resolved
+   - Drop a session's pending requests when that run terminates or is deleted
 
 3. **Session termination** (`CompanionManager.onSessionDeleted()`)
    - Removes session from active tracking

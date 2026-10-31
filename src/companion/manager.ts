@@ -861,12 +861,7 @@ export class CompanionManager {
         busy: true,
       });
     } else {
-      const previous = this.sessions.get(sessionId);
-      if (previous?.waits?.size) {
-        this.sessions.set(sessionId, { busy: false, waits: previous.waits });
-      } else {
-        this.sessions.delete(sessionId);
-      }
+      this.sessions.delete(sessionId);
     }
     this.updateActivityStatus();
     this.flush();

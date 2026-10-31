@@ -1321,7 +1321,7 @@ describe('CompanionManager', () => {
     expect(readState().sessions[0].attention_request_id).toBe('request-2');
   });
 
-  it('keeps waiting-input sticky across busy and idle lifecycle noise', () => {
+  it('keeps waiting-input across lifecycle events from another session', () => {
     const m = make();
     m.onLoad();
     m.onSessionStatus({

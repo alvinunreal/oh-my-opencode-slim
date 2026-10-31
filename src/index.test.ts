@@ -2536,6 +2536,38 @@ describe('plugin reload generation cleanup', () => {
       await hooks.dispose?.();
     }
   });
+
+  test('companion clears cancelled waits only for the terminated or deleted session', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: true, binaryPath: `${projectDir}/missing` },
+      }),
+    );
+    const hooks = await createHooks();
+    try {
+      const send = (type: string, properties: Record<string, unknown>) =>
+        hooks.event?.({ event: { type, properties } } as never);
+      await send('session.status', {
+        sessionID: 'a',
+        status: { type: 'busy' },
+      });
+      await send('session.status', {
+        sessionID: 'b',
+        status: { type: 'busy' },
+      });
+      await send('permission.asked', { sessionID: 'a', id: 'permission' });
+      await send('question.asked', { sessionID: 'b', id: 'question' });
+      await send('session.idle', { sessionID: 'a' });
+      const row = () =>
+        JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions[0];
+      expect(row().status).toBe('waiting-input');
+      await send('session.deleted', { info: { id: 'b' }, sessionID: 'b' });
+      expect(row()).toMatchObject({ status: 'idle', active_agents: ['intro'] });
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
 });
 
 describe('plugin TUI agent activity', () => {
