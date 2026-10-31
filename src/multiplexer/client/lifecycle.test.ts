@@ -1049,6 +1049,38 @@ describe('rebuild and reconnect backfill (2.4)', () => {
     expect(h.adapter.spawnCalls.at(-1)?.directory).toBe(DIRECTORY);
   });
 
+  test('rebuilds a busy watched child after its parent moves directories', async () => {
+    const h = createHarness({ config: { stableIdleMs: 5_000 } });
+    uniquePaneIds(h);
+    h.list.setSessionIds(CHILD);
+    await activatePane(h);
+    h.reader.statuses.set(CHILD, 'idle');
+    await h.lifecycle.handleEvent(lifecycleEvent('idle'));
+    h.clock.advance(5_000);
+    await flushAsync();
+    expect(h.lifecycle.getPane(CHILD)).toBeUndefined();
+    expect(h.lifecycle.directoryOf(CHILD)).toBe(DIRECTORY);
+
+    h.lifecycle.setDisplayedSession('other-parent');
+    h.lifecycle.setDisplayedDirectory('/project-b');
+    h.reader.statuses.set(CHILD, 'busy');
+    await h.lifecycle.handleEvent(lifecycleEvent('status', { status: 'busy' }));
+    expect(h.adapter.spawnCalls).toHaveLength(1);
+
+    h.lifecycle.setDisplayedSession(PARENT);
+    await h.lifecycle.onReconnect();
+    expect(h.list.calls).toContainEqual({
+      directory: '/project-b',
+      parentID: PARENT,
+    });
+    expect(h.adapter.spawnCalls).toHaveLength(2);
+    expect(h.lifecycle.getPane(CHILD)).toMatchObject({
+      parentSessionId: PARENT,
+      directory: DIRECTORY,
+      paneId: 'pane-2',
+    });
+  });
+
   test('a readiness timeout becomes a watch and a later busy edge creates the pane', async () => {
     const h = createHarness();
     const pending = h.lifecycle.handleEvent(createdEvent());

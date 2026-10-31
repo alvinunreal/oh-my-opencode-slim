@@ -355,11 +355,7 @@ export class PaneLifecycle {
         // Foreign-parent watches are not judged here: their child cannot
         // appear in this parent's list, and deleting them would permanently
         // lose the FR-11 rebuild (same rule as the removal pass above).
-        if (
-          watched.parentSessionId !== parentSessionId ||
-          watched.directory !== directory
-        )
-          continue;
+        if (watched.parentSessionId !== parentSessionId) continue;
         if (!serverChildIds.has(childSessionId)) {
           this.closedWatch.delete(childSessionId);
           continue;
