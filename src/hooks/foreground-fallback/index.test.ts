@@ -277,6 +277,199 @@ function makeManager({
 }
 
 describe('foreground fallback agent identity', () => {
+  test('v1 separate compaction model failures leave the owner chain intact', async () => {
+    const { manager, mocks } = makeManager({
+      chain: ['p1/a', 'p1/b'],
+      maxRetries: 0,
+    });
+    const sessionID = 'compaction-owner';
+    const user = (id: string, created = 1) => ({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id,
+          sessionID,
+          role: 'user',
+          agent: 'orchestrator',
+          model: { providerID: 'p1', modelID: 'a' },
+          time: { created },
+        },
+      },
+    });
+    const summary = {
+      id: 'msg_000000000003summary',
+      parentID: 'msg_000000000002compaction',
+      sessionID,
+      role: 'assistant',
+      agent: 'compaction',
+      summary: true,
+      providerID: 'p3',
+      modelID: 'summary',
+      time: { created: 3 },
+    };
+    const error = {
+      name: 'APIError',
+      data: {
+        message: 'Rate limit exceeded',
+        statusCode: 429,
+        isRetryable: true,
+      },
+    };
+    await manager.handleEvent(user('msg_000000000001user'));
+    await manager.handleEvent(user(summary.parentID, 2));
+    await manager.handleEvent({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'prt_compaction',
+          messageID: summary.parentID,
+          sessionID,
+          type: 'compaction',
+          auto: true,
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: { info: summary },
+    });
+    expect(manager.willAttemptFallback(sessionID)).toBe(false);
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID,
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'Rate limit exceeded',
+          next: Date.now() + 2_000,
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID, error },
+    });
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: { ...summary, error, time: { created: 3, completed: 4 } },
+      },
+    });
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    expect(manager.getActiveFallback(sessionID)).toBeUndefined();
+
+    await manager.handleEvent(user('msg_000000000004user', 5));
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_000000000005assistant',
+          sessionID,
+          role: 'assistant',
+          providerID: 'p1',
+          modelID: 'a',
+          time: { created: 6 },
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: { ...summary, error, time: { created: 3, completed: 4 } },
+      },
+    });
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID, error },
+    });
+    expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
+      body: {
+        agent: 'orchestrator',
+        model: { providerID: 'p1', modelID: 'b' },
+      },
+    });
+  });
+
+  test('v1 compaction using the owner model can still fall back', async () => {
+    const { manager, mocks } = makeManager({
+      chain: ['p1/a', 'p2/b'],
+      maxRetries: 0,
+    });
+    const sessionID = 'inherited-compaction';
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_000000000001user',
+          sessionID,
+          role: 'user',
+          agent: 'orchestrator',
+          model: { providerID: 'p1', modelID: 'a' },
+          time: { created: 1 },
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_000000000002compaction',
+          sessionID,
+          role: 'user',
+          agent: 'orchestrator',
+          model: { providerID: 'p1', modelID: 'a' },
+          time: { created: 2 },
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'prt_compaction',
+          messageID: 'msg_000000000002compaction',
+          sessionID,
+          type: 'compaction',
+          auto: true,
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_000000000003summary',
+          sessionID,
+          parentID: 'msg_000000000002compaction',
+          role: 'assistant',
+          agent: 'compaction',
+          summary: true,
+          providerID: 'p1',
+          modelID: 'a',
+          time: { created: 3 },
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID,
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'Rate limit exceeded',
+          next: Date.now() + 2_000,
+        },
+      },
+    });
+    expect(mocks.abort).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
+      body: { model: { providerID: 'p2', modelID: 'b' } },
+    });
+  });
+
   test('ignores assistant identities and uses the user-requested agent', async () => {
     const { mocks } = createMockClient();
     const manager = new ForegroundFallbackManager(makeChains(), true, {
@@ -7601,6 +7794,7 @@ describe('ForegroundFallbackManager forgetSession cleanup', () => {
     'sessionModel',
     'activeFallback',
     'sessionAgent',
+    'separateCompaction',
     'sessionTried',
     'sessionChains',
     'sessionRetryEnabled',
@@ -7689,7 +7883,7 @@ describe('ForegroundFallbackManager noteExternalTurn cleanup', () => {
 });
 
 describe('ForegroundFallbackManager dispose cleanup', () => {
-  test.each(['observedUserMessageIds', 'v2RetryNotices'])(
+  test.each(['observedUserMessageIds', 'separateCompaction', 'v2RetryNotices'])(
     '%s is cleared on dispose',
     (mapName) => {
       const mgr = new ForegroundFallbackManager(makeChains(), true, {

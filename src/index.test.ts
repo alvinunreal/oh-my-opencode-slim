@@ -5064,6 +5064,42 @@ describe('plugin foreground fallback host gating', () => {
       ...(hostFlavor ? { hostFlavor } : {}),
     } as never);
 
+  const publishCompactionRequest = async (
+    hooks: Awaited<ReturnType<typeof plugin>>,
+    sessionID: string,
+    model: { providerID: string; modelID: string },
+  ) => {
+    await hooks.event?.({
+      event: {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg_compaction',
+            sessionID,
+            role: 'user',
+            agent: 'orchestrator',
+            model,
+            time: { created: 2 },
+          },
+        },
+      },
+    } as never);
+    await hooks.event?.({
+      event: {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'prt_compaction',
+            messageID: 'msg_compaction',
+            sessionID,
+            type: 'compaction',
+            auto: true,
+          },
+        },
+      },
+    } as never);
+  };
+
   beforeEach(async () => {
     originalEnv = { ...process.env };
     projectDir = await mkdtemp(
@@ -5300,6 +5336,154 @@ describe('plugin foreground fallback host gating', () => {
           model: { providerID: 'p1', modelID: 'a' },
         },
       });
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test('v1 compaction telemetry does not replace the external continuation model', async () => {
+    const { client, abort, promptAsync } = createFallbackClient();
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    const sessionID = 'compaction-metadata';
+    const model = { providerID: 'openai', modelID: 'gpt-b' };
+    try {
+      await hooks.config?.({ agent: {} });
+      await hooks['chat.message']?.(
+        {
+          sessionID,
+          messageID: 'msg_original',
+          agent: 'orchestrator',
+          model,
+        } as never,
+        {
+          message: {
+            id: 'msg_original',
+            sessionID,
+            role: 'user',
+            agent: 'orchestrator',
+            model,
+          },
+          parts: [],
+        } as never,
+      );
+      await publishCompactionRequest(hooks, sessionID, model);
+      const summary = hooks.event?.({
+        event: {
+          type: 'message.updated',
+          properties: {
+            info: {
+              id: 'msg_summary',
+              parentID: 'msg_compaction',
+              sessionID,
+              role: 'assistant',
+              agent: 'compaction',
+              summary: true,
+              providerID: 'p3',
+              modelID: 'summary',
+              time: { created: 3 },
+            },
+          },
+        },
+      } as never);
+      const retry = hooks.event?.({
+        event: {
+          type: 'session.status',
+          properties: {
+            sessionID,
+            status: { type: 'retry', attempt: 1, message: 'rate limit' },
+          },
+        },
+      } as never);
+      await Promise.all([summary, retry]);
+      expect(abort).not.toHaveBeenCalled();
+      expect(promptAsync).not.toHaveBeenCalled();
+      const output = {
+        message: {
+          id: 'msg_wake',
+          sessionID,
+          role: 'user',
+          agent: 'orchestrator',
+          model,
+        },
+        parts: [createInternalAgentTextPart('wake')],
+      };
+      await hooks['chat.message']?.(
+        { sessionID, messageID: 'msg_wake' } as never,
+        output as never,
+      );
+      expect(output.message.model).toEqual(model);
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test('v1 compaction explicitly pinned to the owner model does not consume its chain', async () => {
+    const { client, abort, promptAsync } = createFallbackClient();
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    const sessionID = 'pinned-compaction';
+    const model = { providerID: 'openai', modelID: 'gpt-b' };
+    try {
+      await hooks.config?.({
+        agent: { compaction: { model: 'openai/gpt-b' } },
+      });
+      await hooks['chat.message']?.(
+        {
+          sessionID,
+          messageID: 'msg_original',
+          agent: 'orchestrator',
+          model,
+        } as never,
+        {
+          message: {
+            id: 'msg_original',
+            sessionID,
+            role: 'user',
+            agent: 'orchestrator',
+            model,
+          },
+          parts: [],
+        } as never,
+      );
+      await publishCompactionRequest(hooks, sessionID, model);
+      await hooks.event?.({
+        event: {
+          type: 'message.updated',
+          properties: {
+            info: {
+              id: 'msg_summary',
+              parentID: 'msg_compaction',
+              sessionID,
+              role: 'assistant',
+              agent: 'compaction',
+              summary: true,
+              providerID: 'openai',
+              modelID: 'gpt-b',
+              time: { created: 3 },
+            },
+          },
+        },
+      } as never);
+      await hooks.event?.({
+        event: {
+          type: 'session.status',
+          properties: {
+            sessionID,
+            status: { type: 'retry', attempt: 1, message: 'rate limit' },
+          },
+        },
+      } as never);
+      expect(abort).not.toHaveBeenCalled();
+      expect(promptAsync).not.toHaveBeenCalled();
     } finally {
       await hooks.dispose?.();
     }

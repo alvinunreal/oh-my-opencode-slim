@@ -30,6 +30,7 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
     `fallback.continuationPolicy`: retry the primary by default or retain this
     confirmed fallback for an internal continuation.
    - `sessionAgent`: Maps sessionID → agent name, accepting user and session-created hints but not assistant identities. A v1 external admission can change a confirmed root's agent; children and internal admissions keep the first identity. Cold v1 sessions resolve identity through `utils/prompt-agent.ts`; unresolved sessions are not replayed.
+  - `separateCompaction`: Retains the latest explicitly pinned or separately modeled v1 summary's ID and active provenance. Its retry, error and summary events do not consume the owner's chain or advertise a pending fallback; a new user or assistant turn clears the active provenance.
   - `sessionTried`: Maps sessionID → Set of models already attempted in the descent; earlier chain entries are not marked tried implicitly, and the sticky retry retains this set
   - `sessionRetries`: Maps sessionID → absorbed host retry count for the entire descent (not per model)
   - `chainExhaustion`: Maps sessionID → exhaustion stage; stage 2 prevents further aborts without a fresh descent

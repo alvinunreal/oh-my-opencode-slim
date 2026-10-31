@@ -615,6 +615,12 @@ export class ForegroundFallbackManager {
   >();
   /** sessionID → agent name (populated from message.updated info.agent field) */
   private readonly sessionAgent = new Map<string, string>();
+  /** The latest separately pinned v1 compaction and its active provenance. */
+  private readonly separateCompaction = new Map<
+    string,
+    { messageID: string; active: boolean }
+  >();
+  private compactionModelPinned = false;
   /** True when a SessionLifecycle coordinator owns deletion cleanup. */
   private hasCoordinator = false;
 
@@ -789,6 +795,7 @@ export class ForegroundFallbackManager {
    */
   willAttemptFallback(sessionID: string): boolean {
     if (!this.enabled && !this.retryEnabledFor(sessionID)) return false;
+    if (this.separateCompaction.get(sessionID)?.active) return false;
     if (this.inProgress.has(sessionID)) return true;
     if ((this.chainExhaustion.get(sessionID) ?? 0) >= 2) return false;
     if (this.deterministicTerminal.has(sessionID)) return false;
@@ -957,6 +964,7 @@ export class ForegroundFallbackManager {
     }
     this.pendingInitialDelay.clear();
     this.observedUserMessageIds.clear();
+    this.separateCompaction.clear();
     this.v2RetryNotices.clear();
   }
 
@@ -991,6 +999,8 @@ export class ForegroundFallbackManager {
     }
     if (!messageID) return;
     this.rememberUserMessage(sessionID, messageID);
+    const compaction = this.separateCompaction.get(sessionID);
+    if (compaction) compaction.active = false;
     this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
     this.lastTrigger.delete(sessionID);
     this.lastTriggerModel.delete(sessionID);
@@ -1268,6 +1278,7 @@ export class ForegroundFallbackManager {
     this.pendingErrorCorrelation.delete(id);
     this.turnEpoch.set(id, (this.turnEpoch.get(id) ?? 0) + 1);
     this.observedUserMessageIds.delete(id);
+    this.separateCompaction.delete(id);
     this.retryAttempt.delete(id);
     this.sessionRetries.delete(id);
     this.chainExhaustion.delete(id);
@@ -1341,6 +1352,45 @@ export class ForegroundFallbackManager {
     }
   }
 
+  setCompactionModelPinned(pinned: boolean): void {
+    this.compactionModelPinned = pinned;
+  }
+
+  /** Record v1 assistant provenance before event handlers can interleave. */
+  observeCompactionMessage(info: Record<string, unknown>): boolean {
+    if (
+      (this.input as PluginInput & { hostFlavor?: string }).hostFlavor ===
+        'v2' ||
+      info.role !== 'assistant' ||
+      typeof info.sessionID !== 'string'
+    )
+      return false;
+    const sessionID = info.sessionID;
+    const compaction = this.separateCompaction.get(sessionID);
+    const messageID = typeof info.id === 'string' ? info.id : undefined;
+    const completed =
+      isRecord(info.time) && typeof info.time.completed === 'number';
+    if (info.summary === true && messageID) {
+      const model =
+        typeof info.providerID === 'string' && typeof info.modelID === 'string'
+          ? `${info.providerID}/${info.modelID}`
+          : undefined;
+      const owner = this.sessionModel.get(sessionID);
+      if (
+        compaction?.messageID === messageID ||
+        this.compactionModelPinned ||
+        (owner && model && owner !== model)
+      ) {
+        if (compaction?.messageID !== messageID && !completed) {
+          this.separateCompaction.set(sessionID, { messageID, active: true });
+        }
+        return true;
+      }
+    }
+    if (compaction && !completed) compaction.active = false;
+    return false;
+  }
+
   /**
    * Process an OpenCode plugin event.
    * Call this from the plugin's `event` hook for every event received.
@@ -1393,6 +1443,7 @@ export class ForegroundFallbackManager {
         if (!info) break;
         const sessionID = info.sessionID as string | undefined;
         if (!sessionID) break;
+        if (this.observeCompactionMessage(info)) break;
         if (info.role === 'user') {
           const props = event.properties as { parts?: unknown[] } | undefined;
           const parts = Array.isArray(props?.parts)
@@ -1572,6 +1623,10 @@ export class ForegroundFallbackManager {
           !this.enabled ||
           !sessionID ||
           !props.error ||
+          (this.separateCompaction.get(sessionID)?.active &&
+            (!props.info?.id ||
+              props.info.id ===
+                this.separateCompaction.get(sessionID)?.messageID)) ||
           !isFailoverError(props.error)
         ) {
           break;
@@ -1619,6 +1674,7 @@ export class ForegroundFallbackManager {
         if (!props) break;
         const sessionID = eventSessionID(props);
         if (!sessionID) break;
+        if (this.separateCompaction.get(sessionID)?.active) break;
         const isFailoverRetry =
           props.status?.type === 'retry' &&
           (isFailoverError(props.error) ||

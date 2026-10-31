@@ -2886,6 +2886,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // captured only after every host/plugin merge, model pass and
       // permission pass.
       finalHostAgentConfig = opencodeConfig.agent as Record<string, unknown>;
+      const compaction = finalHostAgentConfig.compaction as
+        | { model?: unknown }
+        | undefined;
+      foregroundFallback?.setCompactionModelPinned(
+        typeof compaction?.model === 'string' && compaction.model.length > 0,
+      );
 
       registryBridge.prepareCommands(opencodeConfig);
     },
@@ -2925,6 +2931,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             info?: {
               id?: string;
               parentID?: string;
+              summary?: boolean;
               title?: string;
               agent?: string;
               providerID?: string;
@@ -2949,6 +2956,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // message id in info.id and the session id in info.sessionID. Resolve
         // by session so child activity refreshes the correct stuck timer.
         const eventSessionID = resolveEventSessionID(event);
+        if (event.type === 'message.updated' && event.properties?.info) {
+          foregroundFallback?.observeCompactionMessage(event.properties.info);
+        }
         // cache-monitor is created only when its disabled_hooks entry is
         // absent; the optional chain keeps the event path fail-open either way.
         await cacheMonitor?.event(input);
@@ -3027,7 +3037,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
                 : undefined;
           // Track each session's current model so background task admission
           // can resolve the model a model-less subagent will inherit.
-          if (typeof info?.sessionID === 'string' && providerID && modelID) {
+          if (
+            typeof info?.sessionID === 'string' &&
+            info.summary !== true &&
+            providerID &&
+            modelID
+          ) {
             const model = `${providerID}/${modelID}`;
             // Accounting/fallback follows the model actually executing.
             // External selection tracking does not: a synthetic wake's
