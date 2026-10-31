@@ -486,9 +486,20 @@ export function createSessionContextHandler(
       // wakes need their first text part re-flagged (host drops internal
       // part metadata). Idempotent across context events.
       let storedHistory: Array<Record<string, unknown>> | undefined;
+      // Also read it for untimed native deliveries: their timestamp lives
+      // only in stored history, even when the envelope already has an agent.
       if (
         event.messages.some(
-          (message) => message.role === 'user' && message.agent === undefined,
+          (message) =>
+            message.role === 'user' &&
+            (message.agent === undefined ||
+              (!('time' in message) &&
+                message.content.some(
+                  (part) =>
+                    part.type === 'text' &&
+                    typeof part.text === 'string' &&
+                    part.text.startsWith('<subagent sessionID="'),
+                ))),
         )
       ) {
         try {
