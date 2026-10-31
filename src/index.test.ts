@@ -347,6 +347,76 @@ describe('plugin tool registration', () => {
     await hooks.dispose?.();
   });
 
+  test('status and reload report a disabled marketplace against the live registry', async () => {
+    const originalEnv = { ...process.env };
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), 'marketplace-disabled-live-'),
+    );
+    const configDir = path.join(root, 'config');
+    await mkdir(configDir, { recursive: true });
+    process.env = {
+      ...originalEnv,
+      OPENCODE_CONFIG_DIR: configDir,
+      XDG_DATA_HOME: path.join(root, 'data'),
+    };
+    delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.json');
+    const config = {
+      preset: 'work',
+      presets: { work: { marketplace: { agents: ['team/live'] } } },
+    };
+    await Bun.write(configPath, JSON.stringify(config));
+    new MarketplaceStore({ pluginVersion: '3.2.0' }).install({
+      manifest: {
+        schemaVersion: 2,
+        id: 'team/live',
+        version: '1.0.0',
+        displayName: 'Live',
+        description: 'Live fixture',
+        agentName: 'live-agent',
+        prompt: 'Test.',
+        skills: [],
+        mcps: [],
+        tools: ['read'],
+        author: { name: 'Test' },
+        tags: [],
+        license: 'MIT',
+        compatibility: { plugin: '*' },
+        model: { source: 'session' },
+        routing: { description: 'Live', when: 'Testing.', keywords: [] },
+      } as never,
+    });
+    const hooks = await plugin({
+      client: createPluginClient(async () => ({})),
+      directory: root,
+      worktree: root,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    try {
+      await hooks.config?.({ agent: {} });
+      const { marketplaceService } = (
+        hooks as unknown as { registryBridge: RegistryFactoryBridge }
+      ).registryBridge;
+      expect(marketplaceService.status().reloadRequired).toBe(false);
+      await Bun.write(
+        configPath,
+        JSON.stringify({ ...config, marketplace: { enabled: false } }),
+      );
+      expect(marketplaceService.status()).toMatchObject({
+        desiredPackageIds: [],
+        reloadRequired: true,
+      });
+      expect(marketplaceService.requestReload()).toMatchObject({
+        desiredPackageIds: [],
+        reloadRequired: true,
+      });
+    } finally {
+      await hooks.dispose?.();
+      process.env = originalEnv;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test('activates only marketplace packages selected by the resolved preset at first host finalization', async () => {
     const originalEnv = { ...process.env };
     const root = await mkdtemp(

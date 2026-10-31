@@ -44,6 +44,7 @@ export function resolveDesiredMarketplacePackageIds(
   config: ResolvedPluginConfig,
   presetOverride?: string,
 ): readonly string[] {
+  if (config.marketplace?.enabled === false) return [];
   // loadPluginConfig applies a truthy environment override; runtime overrides
   // have priority but an empty one falls through exactly like startup.
   const presetName = presetOverride || config.preset;

@@ -944,9 +944,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       taskActivityTracker = new TaskActivityTracker();
     }
     const activePresetName = runtime.getRuntimePreset() ?? config.preset;
-    selectedMarketplacePackageIds = runtime.marketplaceEnabled
-      ? resolveDesiredMarketplacePackageIds(config, activePresetName)
-      : [];
+    selectedMarketplacePackageIds = resolveDesiredMarketplacePackageIds(
+      config,
+      activePresetName,
+    );
     rewriteDisplayNameMentions = createDisplayNameMentionRewriter(runtime);
     // Host flavor marker ('v2' on OpenCode v2 hosts, set by the v2 client
     // shim; absent on v1). Threads the native delegation vocabulary into
