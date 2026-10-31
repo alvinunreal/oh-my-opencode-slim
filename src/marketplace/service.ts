@@ -18,6 +18,7 @@ import {
   MarketplaceValidationError,
 } from './errors.js';
 import { normalizeMarketplacePackageId } from './ids.js';
+import { retryMarketplaceLeases } from './lease.js';
 import type { MarketplaceRegistryDownload } from './registry-client.js';
 import { MarketplaceRegistryClient } from './registry-client.js';
 import type { MarketplacePackageBundle } from './schemas.js';
@@ -179,9 +180,10 @@ export class MarketplaceService {
       signal,
     );
     this.assertNotAborted(signal, 'install');
-    return this.store.install(
-      downloaded.bundle,
-      this.registrySource(downloaded),
+    return retryMarketplaceLeases(
+      () =>
+        this.store.install(downloaded.bundle, this.registrySource(downloaded)),
+      signal,
     );
   }
 
@@ -190,16 +192,21 @@ export class MarketplaceService {
     signal?: AbortSignal,
   ): Promise<StoredMarketplacePackage> {
     const normalizedId = normalizeMarketplacePackageId(id);
-    const current = this.store.show(normalizedId);
+    const current = await retryMarketplaceLeases(
+      () => this.store.show(normalizedId),
+      signal,
+      true,
+    );
     const downloaded = await this.downloadRemoteWithV3Fallback(
       current.manifest.id,
       current.manifest.version,
       signal,
     );
     this.assertNotAborted(signal, 'update');
-    return this.store.update(
-      downloaded.bundle,
-      this.registrySource(downloaded),
+    return retryMarketplaceLeases(
+      () =>
+        this.store.update(downloaded.bundle, this.registrySource(downloaded)),
+      signal,
     );
   }
 

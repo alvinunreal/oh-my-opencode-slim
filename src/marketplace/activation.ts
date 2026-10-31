@@ -1,8 +1,12 @@
 import { DEFAULT_AGENT_MCPS } from '../config/agent-mcps.js';
 import { normalizeAgentName } from '../utils/agent-variant.js';
 import { satisfiesPluginCompatibility } from './compatibility.js';
-import { MarketplaceCompatibilityError } from './errors.js';
+import {
+  MarketplaceBusyError,
+  MarketplaceCompatibilityError,
+} from './errors.js';
 import { normalizeMarketplacePackageId } from './ids.js';
+import { hasImmediateMarketplaceLeases } from './lease.js';
 import { ambiguousMcpNamespaces } from './mcp-namespaces.js';
 import {
   type ActivatedMarketplacePackageManifest,
@@ -184,6 +188,11 @@ export function resolveMarketplaceActivation(
     try {
       loaded = options.store.loadSelected([...normalizedIds].sort());
     } catch (cause) {
+      if (
+        cause instanceof MarketplaceBusyError &&
+        hasImmediateMarketplaceLeases()
+      )
+        throw cause;
       storeLoadFailed = true;
       const message = cause instanceof Error ? cause.message : String(cause);
       diagnostics.push(

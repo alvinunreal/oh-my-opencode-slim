@@ -98,6 +98,7 @@ import type { ToolLoopGuardHook } from './hooks/tool-loop-guard/hook';
 import type { MessageWithParts } from './hooks/types';
 import type { createInterviewManager } from './interview';
 import type { collapseInterviewHistory } from './interview/history';
+import { retryMarketplaceLeases } from './marketplace/lease';
 import { discoverPreflightSkills } from './marketplace/preflight';
 import type { MarketplaceRegistryImplementation } from './marketplace/registry-runtime';
 import type { MarketplaceService } from './marketplace/service';
@@ -394,6 +395,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   // v1). Survives the try block so prompt-assembly hooks can use it.
   let hostFlavor: string | undefined;
   let instanceDisposed = false;
+  const marketplaceLeaseAbort = new AbortController();
   // v1 task() has no model override. Prompts claim these bounded intentions
   // from host state, never from asynchronous session.created delivery.
   const MAX_PENDING_V1_DELEGATED_INTENTS = 32;
@@ -2822,7 +2824,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             'Missing pre-mutation host snapshot for registry finalization',
           );
         }
-        registryBridge.finalize(preMutationHostSnapshot, {});
+        await retryMarketplaceLeases(
+          () => registryBridge.finalize(preMutationHostSnapshot, {}),
+          marketplaceLeaseAbort.signal,
+        );
       }
       const registry = registryBridge.requireRegistry();
 
@@ -2910,6 +2915,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       withTuiSnapshotBatch(async () => {
         if (input.event.type === 'server.instance.disposed') {
           instanceDisposed = true;
+          marketplaceLeaseAbort.abort();
           terminalGate?.dispose();
         }
         // Token streams have no work in this fan-out. The v2 Interview
@@ -3249,6 +3255,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // Synchronous: v2 setup calls this directly and does not emit the
       // public server.instance.disposed event first.
       instanceDisposed = true;
+      marketplaceLeaseAbort.abort();
       registryBridge.retire();
       terminalGate?.dispose();
       // Cancel pending initial-delay fallback timers so a reloaded

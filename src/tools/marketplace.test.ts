@@ -1,5 +1,17 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, jest, spyOn, test } from 'bun:test';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { z } from 'zod';
+import { acquireMarketplaceLease } from '../marketplace/lease';
+import { getMarketplacePaths } from '../marketplace/paths';
+import { MarketplaceService } from '../marketplace/service';
 import {
   createMarketplaceTools,
   resolveFinalizedOrchestratorIdentities,
@@ -52,6 +64,189 @@ function fixture() {
 }
 
 describe('marketplace tools', () => {
+  test('retries a busy store without blocking the host event loop', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-host-wait-'));
+    const service = new MarketplaceService({
+      rootDir: join(root, 'store'),
+      projectDir: root,
+      pluginVersion: '3.2.0',
+      lock: { timeoutMs: 0 },
+    });
+    const owner = acquireMarketplaceLease(service.store.paths);
+    let released = false;
+    jest.useFakeTimers();
+    try {
+      const inspect = createMarketplaceTools({ service }).marketplace_inspect;
+      let settled = false;
+      const result = inspect.execute({ action: 'status' }, {
+        agent: 'orchestrator',
+      } as never);
+      result.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      owner.release();
+      released = true;
+      jest.advanceTimersByTime(20);
+      expect(JSON.parse(await result)).toMatchObject({ desiredPackageIds: [] });
+
+      const configDir = join(root, '.opencode');
+      const configPath = join(configDir, 'oh-my-opencode-slim.json');
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          preset: 'work',
+          presets: { work: { marketplace: { agents: ['team/blocked'] } } },
+        }),
+      );
+      const configOwner = acquireMarketplaceLease(
+        getMarketplacePaths(
+          join(configDir, '.oh-my-opencode-slim.json.write-lock'),
+        ),
+      );
+      let configReleased = false;
+      try {
+        const manage = createMarketplaceTools({ service }).marketplace_manage;
+        const change = manage.execute(
+          { action: 'disable', target: 'team/blocked' },
+          { agent: 'orchestrator' } as never,
+        );
+        await Promise.resolve();
+        configOwner.assertCurrent();
+        configOwner.release();
+        configReleased = true;
+        jest.advanceTimersByTime(20);
+        expect(JSON.parse(await change)).toEqual({ enabled: false });
+        expect(readFileSync(configPath, 'utf8')).not.toContain('team/blocked');
+      } finally {
+        if (!configReleased) configOwner.release();
+      }
+
+      const secondOwner = acquireMarketplaceLease(service.store.paths);
+      try {
+        const abort = new AbortController();
+        const cancelled = inspect.execute({ action: 'status' }, {
+          agent: 'orchestrator',
+          abort: abort.signal,
+        } as never);
+        await Promise.resolve();
+        abort.abort(new Error('cancelled'));
+        await expect(cancelled).rejects.toThrow('cancelled');
+        secondOwner.assertCurrent();
+      } finally {
+        secondOwner.release();
+      }
+    } finally {
+      if (!released) owner.release();
+      jest.useRealTimers();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('retries local update leases without downloading the package again', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-remote-lease-'));
+    const bundle = (version: string) => ({
+      manifest: {
+        schemaVersion: 2,
+        id: 'team/lease',
+        version,
+        displayName: 'Lease fixture',
+        description: 'Test fixture',
+        agentName: 'lease-agent',
+        prompt: 'Test.',
+        skills: [],
+        mcps: [],
+        tools: [],
+        author: { name: 'Test' },
+        tags: [],
+        license: 'MIT',
+        compatibility: { plugin: '*' },
+        model: { source: 'session' },
+        routing: { description: 'Lease', when: 'Testing.', keywords: [] },
+      },
+    });
+    let downloadCount = 0;
+    let commitOwner: ReturnType<typeof acquireMarketplaceLease> | undefined;
+    let releaseDownload!: () => void;
+    const downloadStarted = new Promise<void>((resolve) => {
+      releaseDownload = resolve;
+    });
+    const service = new MarketplaceService({
+      rootDir: join(root, 'store'),
+      projectDir: root,
+      pluginVersion: '3.2.0',
+      registryClient: {
+        download: async () => {
+          throw new Error('unexpected v2 download');
+        },
+        downloadV3: async () => {
+          downloadCount++;
+          if (downloadCount === 1) {
+            commitOwner = acquireMarketplaceLease(service.store.paths);
+            releaseDownload();
+          }
+          return {
+            bundle: bundle('2.0.0') as never,
+            entry: {} as never,
+            indexUrl: 'https://registry.test/v3/index.json',
+            packageUrl: 'https://registry.test/v3/package.json',
+          };
+        },
+      },
+    });
+    service.install(bundle('1.0.0') as never);
+    const read = spyOn(service.store, 'show');
+    const update = spyOn(service.store, 'update');
+    const readOwner = acquireMarketplaceLease(service.store.paths);
+    let readReleased = false;
+    jest.useFakeTimers();
+    const advanceRetry = async () => {
+      for (let i = 0; i < 30 && jest.getTimerCount() === 0; i++) {
+        await Promise.resolve();
+      }
+      expect(jest.getTimerCount()).toBeGreaterThan(0);
+      jest.advanceTimersByTime(20);
+    };
+    try {
+      const manage = createMarketplaceTools({ service }).marketplace_manage;
+      const result = manage.execute(
+        { action: 'update', target: 'team/lease' },
+        { agent: 'orchestrator' } as never,
+      );
+      await advanceRetry();
+      await advanceRetry();
+      expect(read.mock.calls.length).toBeGreaterThan(1);
+      expect(downloadCount).toBe(0);
+      readOwner.release();
+      readReleased = true;
+      await advanceRetry();
+      await downloadStarted;
+      await advanceRetry();
+      await advanceRetry();
+      commitOwner?.release();
+      commitOwner = undefined;
+      await advanceRetry();
+      await result;
+      expect(service.store.show('team/lease').manifest.version).toBe('2.0.0');
+      expect(update.mock.calls.length).toBeGreaterThan(1);
+      expect(downloadCount).toBe(1);
+    } finally {
+      if (!readReleased) readOwner.release();
+      commitOwner?.release();
+      read.mockRestore();
+      update.mockRestore();
+      jest.useRealTimers();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('exposes fixed action enum schemas and orchestrator alias guard', async () => {
     const { service } = fixture();
     const tools = createMarketplaceTools({

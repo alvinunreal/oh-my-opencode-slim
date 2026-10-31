@@ -47,6 +47,11 @@ import type { ForegroundFallbackManager } from '../hooks/foreground-fallback';
 import { PHASE_REMINDER_METADATA_KEY } from '../hooks/phase-reminder';
 import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/task-session-manager/board-injection';
 import { OhMyOpenCodeLite } from '../index';
+import { MarketplaceBusyError } from '../marketplace/errors';
+import {
+  retryMarketplaceLeases,
+  withImmediateMarketplaceLeases,
+} from '../marketplace/lease';
 import { loadMergedOpenCodeConfig } from '../marketplace/preflight';
 import type { McpConfig } from '../mcp/types';
 import {
@@ -2405,6 +2410,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         resolvePermissionSnapshotReady = resolve;
       });
       let pendingAgentDraft: V2AgentDraft | undefined;
+      let pendingMarketplaceLeaseRetry: Promise<void> | undefined;
+      const marketplaceLeaseAbort = new AbortController();
+      disposers.push(() => marketplaceLeaseAbort.abort());
       // An agent pass that ended before the MCP snapshot existed: our agents
       // were added to it afterwards, missing later host transforms.
       let agentPassDeferred = false;
@@ -2449,12 +2457,48 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         }
         // Consume before applying: MCP replays must not reuse this editor.
         pendingAgentDraft = undefined;
-        const registry =
-          finalizedRegistry ??
-          registryBridge.finalize(
-            { agent: nativeAgentSnapshot.agents, mcp: hostMcpSnapshot },
-            nativeAgentSnapshot.permissions,
-          );
+        if (pendingMarketplaceLeaseRetry && !finalizedRegistry) return;
+        const agentSnapshot = nativeAgentSnapshot;
+        const mcpSnapshot = hostMcpSnapshot;
+        let registry: ReturnType<RegistryFactoryBridge['requireRegistry']>;
+        try {
+          registry =
+            finalizedRegistry ??
+            withImmediateMarketplaceLeases(() =>
+              registryBridge.finalize(
+                { agent: agentSnapshot.agents, mcp: mcpSnapshot },
+                agentSnapshot.permissions,
+              ),
+            );
+        } catch (error) {
+          if (!(error instanceof MarketplaceBusyError)) throw error;
+          agentPassDeferred = true;
+          if (typeof ctx.agent?.reload !== 'function') {
+            throw new Error(
+              'Marketplace registry needs agent reload after a busy lease',
+            );
+          }
+          pendingMarketplaceLeaseRetry = retryMarketplaceLeases(
+            () =>
+              registryBridge.finalize(
+                { agent: agentSnapshot.agents, mcp: mcpSnapshot },
+                agentSnapshot.permissions,
+              ),
+            marketplaceLeaseAbort.signal,
+          )
+            .then((result) => {
+              if (generationDisposed) return;
+              finalizedRegistry = result;
+              requestAgentRebuild();
+            })
+            .catch((cause) => {
+              if (generationDisposed) return;
+              permissionSnapshotFailure =
+                cause instanceof Error ? cause : new Error(String(cause));
+              resolvePermissionSnapshotReady();
+            });
+          return;
+        }
         finalizedRegistry = registry;
         marketplaceAgentsRequirePromptPolicy =
           registry.marketplaceAgentNames.length > 0;
@@ -2524,12 +2568,17 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         if (typeof ctx.agent?.reload !== 'function') return;
         agentRebuild = Promise.resolve()
           .then(() => (generationDisposed ? undefined : ctx.agent.reload()))
-          .catch((err) =>
+          .catch((err) => {
             log(
               '[v2] agent rebuild after deferred finalization failed',
               String(err),
-            ),
-          );
+            );
+            if (!permissionSnapshotReady && !generationDisposed) {
+              permissionSnapshotFailure =
+                err instanceof Error ? err : new Error(String(err));
+              resolvePermissionSnapshotReady();
+            }
+          });
       };
       const captureAgentDraft = (draft: V2AgentDraft) => {
         if (permissionSnapshotFailure) {
