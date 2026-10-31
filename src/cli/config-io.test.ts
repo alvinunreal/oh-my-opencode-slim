@@ -152,6 +152,58 @@ describe('config-io', () => {
     });
   });
 
+  test('config writes follow relative symlinks and preserve JSONC and backups', () => {
+    const targetDir = join(tmpDir, 'dotfiles');
+    mkdirSync(targetDir);
+    const target = join(targetDir, 'config.jsonc');
+    const link = join(tmpDir, 'config.jsonc');
+    const original = '{\n  // keep\n  "preset": "old"\n}\n';
+    writeFileSync(target, original);
+    symlinkSync('dotfiles/config.jsonc', link);
+
+    mutateJsonFile(link, (current) => ({ ...current, preset: 'new' }));
+
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(readFileSync(target, 'utf8')).toContain('// keep');
+    expect(readFileSync(target, 'utf8')).toContain('"new"');
+    expect(readFileSync(`${link}.bak`, 'utf8')).toBe(original);
+
+    writeJsonAtomic(link, { preset: 'reset' });
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(stripJsonComments(readFileSync(target, 'utf8')))).toEqual(
+      { preset: 'reset' },
+    );
+  });
+
+  test('prepared config publication and rollback preserve the symlink', () => {
+    const target = join(tmpDir, 'target.json');
+    const link = join(tmpDir, 'config.json');
+    const original = '{"preset":"old"}';
+    writeFileSync(target, original);
+    symlinkSync(target, link);
+    const prepared = prepareJsonConfigWrite(link, original, { preset: 'new' });
+
+    publishPreparedJsonConfig(prepared);
+    expect(JSON.parse(readFileSync(target, 'utf8')).preset).toBe('new');
+    restorePreparedJsonConfig(prepared);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(readFileSync(target, 'utf8')).toBe(original);
+    expect(readFileSync(`${link}.bak`, 'utf8')).toBe(original);
+  });
+
+  test('dangling config symlinks fail without replacing the link or creating a backup', () => {
+    const link = join(tmpDir, 'config.json');
+    symlinkSync('missing.json', link);
+    expect(() => writeJsonAtomic(link, { enabled: true })).toThrow(
+      'Cannot resolve config path',
+    );
+    expect(() => mutateJsonFile(link, () => ({ enabled: true }))).toThrow(
+      'Cannot resolve config path',
+    );
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(existsSync(`${link}.bak`)).toBe(false);
+  });
+
   test('mutateJsonFile backup replaces a symlink instead of overwriting its target', () => {
     const path = join(tmpDir, 'symlink-safe.jsonc');
     const victim = join(tmpDir, 'victim.txt');
@@ -416,16 +468,18 @@ describe('config-io', () => {
 
   test('serialized JSON mutations do not lose cross-process updates', async () => {
     const path = join(tmpDir, 'shared.json');
+    const link = join(tmpDir, 'shared-link.json');
     writeFileSync(path, '{"writers": 0}');
+    symlinkSync(path, link);
     const script =
       `import { mutateJsonFile } from './src/config/json-file.ts';\n` +
       `mutateJsonFile(process.env.CONFIG_PATH!, (current) => ({ ...current, writers: Number(current.writers) + 1 }));`;
 
     await Promise.all(
-      Array.from({ length: 8 }, async () => {
+      Array.from({ length: 8 }, async (_, index) => {
         const child = Bun.spawn(['bun', '-e', script], {
           cwd: process.cwd(),
-          env: { ...process.env, CONFIG_PATH: path },
+          env: { ...process.env, CONFIG_PATH: index % 2 ? link : path },
           stdout: 'pipe',
           stderr: 'pipe',
         });
@@ -437,6 +491,7 @@ describe('config-io', () => {
     );
 
     expect(JSON.parse(readFileSync(path, 'utf-8'))).toEqual({ writers: 8 });
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
   });
 
   test('failed atomic publication leaves the original config intact', () => {
@@ -980,6 +1035,31 @@ describe('config-io', () => {
     expect(saved.preset).toBe('openai');
     expect(saved.presets.openai).toBeDefined();
     expect(saved.presets['opencode-go']).toBeDefined();
+  });
+
+  test('resetting a symlinked lite config updates its target', () => {
+    paths.ensureConfigDir();
+    const link = paths.getLiteConfig();
+    const target = join(tmpDir, 'dotfiles.json');
+    const original = '{"preset":"old"}';
+    writeFileSync(target, original);
+    symlinkSync(target, link);
+    const result = writeLiteConfig({ reset: true }, link);
+    expect(result.success).toBe(true);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(target, 'utf8')).preset).toBe('openai');
+    expect(readFileSync(`${link}.bak`, 'utf8')).toBe(original);
+  });
+
+  test('broken JSONC config is selected for writes and fails clearly', async () => {
+    paths.ensureConfigDir();
+    const link = paths.getConfigJsonc();
+    symlinkSync('missing.jsonc', link);
+    const result = await addPluginToOpenCodeConfig();
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Cannot resolve config path');
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(existsSync(paths.getConfigJson())).toBe(false);
   });
 
   test('writeLiteConfig writes selected preset', () => {

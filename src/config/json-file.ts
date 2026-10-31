@@ -22,6 +22,7 @@ import { MarketplaceLockOwnershipError } from '../marketplace/errors';
 import { acquireMarketplaceLease, writeAtomic } from '../marketplace/lease';
 import { getMarketplacePaths } from '../marketplace/paths';
 import { type JsonConfig, parseJsonConfigText } from './jsonc';
+import { resolveConfigWritePath } from './write-path';
 
 const pendingConfigLeaseCleanup = new Map<
   string,
@@ -29,7 +30,7 @@ const pendingConfigLeaseCleanup = new Map<
 >();
 
 function configWriteLockPaths(configPath: string) {
-  const absolutePath = resolve(configPath);
+  const absolutePath = resolveConfigWritePath(configPath);
   const lockRoot = join(
     dirname(absolutePath),
     `.${basename(absolutePath)}.write-lock`,
@@ -82,7 +83,7 @@ export function withSerializedConfigWrites<T>(
   operation: () => T,
 ): T {
   const orderedPaths = [
-    ...new Set(configPaths.map((path) => resolve(path))),
+    ...new Set(configPaths.map(resolveConfigWritePath)),
   ].sort();
   const acquire = (index: number): T => {
     if (index === orderedPaths.length) return operation();
@@ -155,6 +156,7 @@ function publishConfig(
   config: JsonConfig,
   currentText?: string,
 ): void {
+  const targetPath = resolveConfigWritePath(configPath);
   const bakPath = `${configPath}.bak`;
   if (currentText !== undefined) writeBackupAtomic(bakPath, currentText);
 
@@ -167,7 +169,7 @@ function publishConfig(
           config,
         )}`
       : `${bom}${JSON.stringify(config, null, 2)}\n`;
-  writeAtomic(configPath, content);
+  writeAtomic(targetPath, content);
 }
 
 export interface PreparedJsonConfigWrite {
@@ -219,21 +221,24 @@ export function publishPreparedJsonConfig(
 ): void {
   if (!prepared.changed) return;
 
+  const targetPath = resolveConfigWritePath(prepared.configPath);
+
   if (prepared.originalText !== undefined) {
     writeBackupAtomic(`${prepared.configPath}.bak`, prepared.originalText);
   }
-  writeAtomic(prepared.configPath, prepared.content);
+  writeAtomic(targetPath, prepared.content);
 }
 
 /** Restore the exact pre-transaction bytes without replacing its backup. */
 export function restorePreparedJsonConfig(
   prepared: PreparedJsonConfigWrite,
 ): void {
+  const targetPath = resolveConfigWritePath(prepared.configPath);
   if (prepared.originalText === undefined) {
-    rmSync(prepared.configPath, { force: true });
+    rmSync(targetPath, { force: true });
     return;
   }
-  writeAtomic(prepared.configPath, prepared.originalText);
+  writeAtomic(targetPath, prepared.originalText);
 }
 
 function jsoncFormattingOptions(source: string) {
@@ -426,7 +431,10 @@ export function removeTopLevelJsonProperty(
     if (!removedAny) return;
     parseJsonConfigText(updated);
     writeBackupAtomic(`${configPath}.bak`, currentText);
-    writeAtomic(configPath, `${hasBom ? '\uFEFF' : ''}${updated}`);
+    writeAtomic(
+      resolveConfigWritePath(configPath),
+      `${hasBom ? '\uFEFF' : ''}${updated}`,
+    );
   });
 }
 
