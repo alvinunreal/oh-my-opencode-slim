@@ -26,7 +26,6 @@ oh-my-opencode-slim is a **lightweight harness**. Every change is reviewed again
 | `bun run format` | Format entire codebase with Biome |
 | `bun run check` | Run Biome check with auto-fix (lint + format + organize imports) |
 | `bun run check:ci` | Run Biome check without auto-fix (CI mode) |
-| `bun run knip` | Audit unused files, exports, and dependencies (knip.jsonc) |
 | `bun run dev` | Build and run with OpenCode |
 
 **Running a single test:** Use Bun's test filtering with the `-t` flag:
