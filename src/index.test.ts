@@ -2496,6 +2496,46 @@ describe('plugin reload generation cleanup', () => {
     // withdrawn even if the next generation fails before its own onLoad.
     expect(readSessionIds()).not.toContain(companionSessionId);
   });
+
+  test('companion keeps other input requests pending when one is resolved', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: true, binaryPath: `${projectDir}/missing` },
+      }),
+    );
+    const hooks = await createHooks();
+    try {
+      const send = (type: string, properties: Record<string, unknown>) =>
+        hooks.event?.({ event: { type, properties } } as never);
+      await send('session.status', {
+        sessionID: 'child-a',
+        status: { type: 'busy' },
+      });
+      await send('session.status', {
+        sessionID: 'child-b',
+        status: { type: 'busy' },
+      });
+      await send('permission.asked', { sessionID: 'child-a', id: 'a' });
+      await send('permission.asked', { sessionID: 'child-b', id: 'b' });
+      await send('permission.asked', { sessionID: 'child-b', id: 'b' });
+      await send('permission.replied', {
+        sessionID: 'child-a',
+        requestID: 'a',
+      });
+      const row = () =>
+        JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions[0];
+      expect(row().status).toBe('waiting-input');
+      expect(row().attention_seq).toBe(2);
+      await send('permission.replied', {
+        sessionID: 'child-b',
+        requestID: 'b',
+      });
+      expect(row().status).toBe('busy');
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
 });
 
 describe('plugin TUI agent activity', () => {

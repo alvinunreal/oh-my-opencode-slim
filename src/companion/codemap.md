@@ -86,9 +86,12 @@ OpenCode Session → CompanionManager.onSessionStatus() → Updates state → Sp
    - Updates internal state:
      - `busy` → adds agent to active_agents array
      - `idle` → removes agent from active_agents array
-     - `waiting-input` → sets status to waiting-input
-     - `input-resolved` → returns to busy/idle based on active agents
-   - Flushes state to JSON file
+     - Project status reflects all active sessions, with pending input taking priority
+    - Flushes state to JSON file
+
+   **Input requests** (`onWaitingInput()` / `onInputResolved()`)
+   - Track permissions and questions by session, kind, and request ID
+   - Keep `waiting-input` until all pending requests are resolved
 
 3. **Session termination** (`CompanionManager.onSessionDeleted()`)
    - Removes session from active tracking

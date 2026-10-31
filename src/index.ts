@@ -3201,7 +3201,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           event.type === 'permission.asked' ||
           event.type === 'question.asked'
         ) {
-          companionManager?.onWaitingInput(companionRequestId);
+          companionManager?.onWaitingInput({
+            sessionId: eventSessionID,
+            kind: event.type === 'permission.asked' ? 'permission' : 'question',
+            requestId: companionRequestId,
+          });
         }
 
         if (
@@ -3209,7 +3213,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           event.type === 'question.replied' ||
           event.type === 'question.rejected'
         ) {
-          companionManager?.onInputResolved();
+          companionManager?.onInputResolved({
+            sessionId: eventSessionID,
+            kind:
+              event.type === 'permission.replied' ? 'permission' : 'question',
+            requestId: companionRequestId,
+          });
         }
 
         const companionStatus = normalizeCompanionSessionStatus(

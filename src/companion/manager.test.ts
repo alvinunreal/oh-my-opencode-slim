@@ -1242,11 +1242,11 @@ describe('CompanionManager', () => {
       model: 'provider/orchestrator',
       variant: 'high',
     });
-    m.onWaitingInput();
+    m.onWaitingInput({ sessionId: 'input', kind: 'permission' });
     expect(readState().sessions[0].active_agents).toEqual(['input']);
     expect(readState().sessions[0].active_agent_details).toEqual([]);
     expect(readState().sessions[0].status).toBe('waiting-input');
-    m.onInputResolved();
+    m.onInputResolved({ sessionId: 'input', kind: 'permission' });
     expect(readState().sessions[0].status).toBe('busy');
   });
 
@@ -1254,25 +1254,45 @@ describe('CompanionManager', () => {
     const m = make();
     m.onLoad();
 
-    m.onWaitingInput('request-1');
+    m.onWaitingInput({
+      sessionId: 'input',
+      kind: 'permission',
+      requestId: 'request-1',
+    });
     expect(readState().sessions[0].attention_seq).toBe(1);
 
     // v2 permission asks are delivered raw + synthesized with the same id.
     // The additive bridge copy must not create a second native notification.
-    m.onWaitingInput('request-1');
+    m.onWaitingInput({
+      sessionId: 'input',
+      kind: 'permission',
+      requestId: 'request-1',
+    });
     expect(readState().sessions[0].attention_seq).toBe(1);
 
     // A distinct request must remain distinguishable even if a native watcher
     // never observed an intermediate resolved state.
-    m.onInputResolved();
-    m.onWaitingInput('request-2');
+    m.onInputResolved({
+      sessionId: 'input',
+      kind: 'permission',
+      requestId: 'request-1',
+    });
+    m.onWaitingInput({
+      sessionId: 'input',
+      kind: 'permission',
+      requestId: 'request-2',
+    });
     expect(readState().sessions[0].attention_seq).toBe(2);
   });
 
   it('preserves attention identity across manager replacement', () => {
     const first = make();
     first.onLoad();
-    first.onWaitingInput('request-1');
+    first.onWaitingInput({
+      sessionId: 'input',
+      kind: 'permission',
+      requestId: 'request-1',
+    });
     expect(readState().sessions[0].attention_seq).toBe(1);
 
     const replacement = make();
@@ -1280,11 +1300,23 @@ describe('CompanionManager', () => {
 
     // Re-delivery of the request that was already published must remain
     // deduplicated after the replacement manager takes ownership.
-    replacement.onWaitingInput('request-1');
+    replacement.onWaitingInput({
+      sessionId: 'input',
+      kind: 'permission',
+      requestId: 'request-1',
+    });
     expect(readState().sessions[0].attention_seq).toBe(1);
 
-    replacement.onInputResolved();
-    replacement.onWaitingInput('request-2');
+    replacement.onInputResolved({
+      sessionId: 'input',
+      kind: 'permission',
+      requestId: 'request-1',
+    });
+    replacement.onWaitingInput({
+      sessionId: 'input',
+      kind: 'permission',
+      requestId: 'request-2',
+    });
     expect(readState().sessions[0].attention_seq).toBe(2);
     expect(readState().sessions[0].attention_request_id).toBe('request-2');
   });
@@ -1297,7 +1329,7 @@ describe('CompanionManager', () => {
       agent: 'orchestrator',
       status: 'busy',
     });
-    m.onWaitingInput();
+    m.onWaitingInput({ sessionId: 'input', kind: 'permission' });
     m.onSessionStatus({
       sessionId: 'ses_orch',
       agent: 'orchestrator',
@@ -1310,7 +1342,7 @@ describe('CompanionManager', () => {
     });
     expect(readState().sessions[0].status).toBe('waiting-input');
 
-    m.onInputResolved();
+    m.onInputResolved({ sessionId: 'input', kind: 'permission' });
     expect(readState().sessions[0].status).toBe('busy');
   });
 
@@ -1322,10 +1354,10 @@ describe('CompanionManager', () => {
       agent: 'orchestrator',
       status: 'busy',
     });
-    m.onWaitingInput();
+    m.onWaitingInput({ sessionId: 'input', kind: 'permission' });
     expect(readState().sessions[0].status).toBe('waiting-input');
 
-    m.onInputResolved();
+    m.onInputResolved({ sessionId: 'input', kind: 'permission' });
     expect(readState().sessions[0].status).toBe('busy');
     expect(readState().sessions[0].active_agents).toEqual(['orchestrator']);
   });
@@ -1338,8 +1370,8 @@ describe('CompanionManager', () => {
       agent: 'designer',
       status: 'busy',
     });
-    m.onWaitingInput();
-    m.onInputResolved();
+    m.onWaitingInput({ sessionId: 'input', kind: 'permission' });
+    m.onInputResolved({ sessionId: 'input', kind: 'permission' });
     expect(readState().sessions[0].status).toBe('busy');
     expect(readState().sessions[0].active_agents).toEqual(['designer']);
   });
@@ -1569,8 +1601,8 @@ describe('CompanionManager', () => {
       agent: 'explorer',
       status: 'busy',
     });
-    m.onWaitingInput();
-    m.onInputResolved();
+    m.onWaitingInput({ sessionId: 'input', kind: 'permission' });
+    m.onInputResolved({ sessionId: 'input', kind: 'permission' });
     m.onSessionDeleted('ses_a');
     expect(() => readState()).toThrow();
   });

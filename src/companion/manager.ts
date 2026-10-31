@@ -426,7 +426,13 @@ export class CompanionManager {
   private status = 'idle';
   private readonly sessions = new Map<
     string,
-    { busy: boolean; agent?: string; model?: string; variant?: string }
+    {
+      busy: boolean;
+      agent?: string;
+      model?: string;
+      variant?: string;
+      waits?: Set<string>;
+    }
   >();
   private attentionSeq = 0;
   private lastAttentionRequestId: string | undefined;
@@ -855,16 +861,24 @@ export class CompanionManager {
         busy: true,
       });
     } else {
-      this.sessions.delete(sessionId);
+      const previous = this.sessions.get(sessionId);
+      if (previous?.waits?.size) {
+        this.sessions.set(sessionId, { busy: false, waits: previous.waits });
+      } else {
+        this.sessions.delete(sessionId);
+      }
     }
-    if (this.status !== 'waiting-input') this.updateActivityStatus();
+    this.updateActivityStatus();
     this.flush();
   }
 
   private updateActivityStatus(): void {
-    this.status = [...this.sessions.values()].some((session) => session.busy)
-      ? 'busy'
-      : 'idle';
+    const sessions = [...this.sessions.values()];
+    this.status = sessions.some((session) => session.waits?.size)
+      ? 'waiting-input'
+      : sessions.some((session) => session.busy)
+        ? 'busy'
+        : 'idle';
   }
 
   onSessionModelChanged(input: {
@@ -907,34 +921,57 @@ export class CompanionManager {
     if (this.config?.enabled !== true) return;
     if (!sessionId) return;
     if (this.sessions.delete(sessionId)) {
-      if (this.status !== 'waiting-input') this.updateActivityStatus();
+      this.updateActivityStatus();
       this.flush();
     }
   }
 
-  onWaitingInput(requestId?: string): void {
-    if (this.config?.enabled !== true) return;
+  onWaitingInput(input: {
+    sessionId?: string;
+    kind: 'permission' | 'question';
+    requestId?: string;
+  }): void {
+    if (this.config?.enabled !== true || !input.sessionId) return;
+    const { sessionId, kind, requestId } = input;
+    const previous = this.sessions.get(sessionId);
+    const waits = previous?.waits ?? new Set<string>();
+    const key = `${kind}:${requestId ?? ''}`;
     // v2 permission asks are delivered raw + synthesized with the same request
     // id. Advance only for a genuinely new request so additive bridge delivery
     // cannot produce duplicate native notifications.
     const isNewRequest =
-      requestId !== undefined
-        ? requestId !== this.lastAttentionRequestId
-        : this.status !== 'waiting-input';
+      !waits.has(key) &&
+      (this.status === 'waiting-input' ||
+        (requestId !== undefined
+          ? requestId !== this.lastAttentionRequestId
+          : true));
     if (isNewRequest) {
       this.attentionSeq += 1;
     }
     if (requestId !== undefined) {
       this.lastAttentionRequestId = requestId;
     }
-    // Waiting input is project-level UI state, not proof that the requesting
-    // session is the orchestrator. Keep orchestrator identity untouched.
-    this.status = 'waiting-input';
+    waits.add(key);
+    this.sessions.set(sessionId, {
+      ...previous,
+      busy: previous?.busy ?? false,
+      waits,
+    });
+    this.updateActivityStatus();
     this.flush();
   }
 
-  onInputResolved(): void {
-    if (this.config?.enabled !== true) return;
+  onInputResolved(input: {
+    sessionId?: string;
+    kind: 'permission' | 'question';
+    requestId?: string;
+  }): void {
+    if (this.config?.enabled !== true || !input.sessionId) return;
+    const session = this.sessions.get(input.sessionId);
+    if (!session?.waits?.delete(`${input.kind}:${input.requestId ?? ''}`))
+      return;
+    if (!session.busy && session.waits.size === 0)
+      this.sessions.delete(input.sessionId);
     this.updateActivityStatus();
     this.flush();
   }
