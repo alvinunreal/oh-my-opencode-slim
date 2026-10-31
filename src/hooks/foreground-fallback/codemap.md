@@ -31,7 +31,7 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
     confirmed fallback for an internal continuation.
    - `sessionAgent`: Maps sessionID → agent name, accepting user and session-created hints but not assistant identities. Cold v1 sessions resolve identity through `utils/prompt-agent.ts`; unresolved sessions are not replayed.
   - `sessionTried`: Maps sessionID → Set of models already attempted in the descent; earlier chain entries are not marked tried implicitly, and the sticky retry retains this set
-  - `requestRejected`: Observed models rejected for the current request remain excluded from the normal chain walk across successful steps and fresh-descent rearming; an external prompt or session deletion clears them. The existing sticky exhaustion retry is unchanged.
+  - `requestRejected`: Observed models rejected for the current request remain excluded from the normal chain walk across successful steps and fresh-descent rearming; an external prompt or session deletion clears them. Slim's foreground re-attach is not an external prompt for this exclusion. The existing sticky exhaustion retry is unchanged.
   - `sessionRetries`: Maps sessionID → absorbed host retry count for the entire descent (not per model)
   - `chainExhaustion`: Maps sessionID → exhaustion stage; stage 2 prevents further aborts without a fresh descent
   - `inProgress`: Process-global Set of sessions with active fallback in flight, shared via `globalThis` + `Symbol.for`

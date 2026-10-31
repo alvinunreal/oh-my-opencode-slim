@@ -2387,6 +2387,36 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     for (let i = 0; i < 30; i++) await Promise.resolve();
   };
 
+  test('v2 foreground re-attach keeps request rejections', async () => {
+    const { manager, switchModel } = fixture({
+      parentID: 'parent',
+      chains: { orchestrator: ['test/a', 'test/b', 'test/c'] },
+    });
+    const sessionID = 'foreground-reattach-policy';
+    await manager.handleEvent(started(sessionID));
+    await manager.handleEvent(failed(sessionID));
+    await settle();
+    manager.noteV2Prompt(sessionID);
+    await manager.handleEvent({
+      type: 'session.step.ended',
+      data: { sessionID, finish: 'tool-calls' },
+    });
+    await manager.handleV2Retry(
+      {
+        sessionID,
+        agent: 'orchestrator',
+        model: { providerID: 'test', id: 'b' },
+        error: { type: 'provider.invalid-request', message: 'cyber_policy' },
+        decision: { retry: false },
+      },
+      switchModel,
+    );
+    expect(switchModel.mock.calls.map(([, model]) => model)).toEqual([
+      { providerID: 'test', id: 'b' },
+      { providerID: 'test', id: 'c' },
+    ]);
+  });
+
   test('v2 request rejections survive a successful tool step on the fallback', async () => {
     const { manager, switchModel } = fixture({
       chains: { orchestrator: ['test/a', 'test/b', 'test/c'] },

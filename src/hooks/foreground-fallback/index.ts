@@ -671,6 +671,8 @@ export class ForegroundFallbackManager {
   private readonly sessionTried = new Map<string, Set<string>>();
   /** Request-scoped rejections remain ineligible until the next external turn. */
   private readonly requestRejected = new Map<string, Set<string>>();
+  /** A recovered foreground child's wrapper re-attach is our own prompt. */
+  private readonly reattachPending = new Set<string>();
   /** sessionID → providers whose allowance is spent (issue #966). The chain
    *  walk skips them; once every chain provider is listed the error
    *  surfaces. Holds at most the providers seen failing, and re-arms with
@@ -1135,7 +1137,8 @@ export class ForegroundFallbackManager {
   }
 
   noteV2Prompt(sessionID: string): void {
-    this.requestRejected.delete(sessionID);
+    if (!this.reattachPending.delete(sessionID))
+      this.requestRejected.delete(sessionID);
     this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
   }
 
@@ -1434,6 +1437,7 @@ export class ForegroundFallbackManager {
     this.sessionAgent.delete(id);
     this.sessionTried.delete(id);
     this.requestRejected.delete(id);
+    this.reattachPending.delete(id);
     this.sessionChains.delete(id);
     this.sessionRetryEnabled.delete(id);
     this.unknownFinishStreak.delete(id);
@@ -2305,7 +2309,10 @@ export class ForegroundFallbackManager {
         (this.turnEpoch.get(sessionID) ?? 0) !== epoch
       )
         return;
-      if (data.parentID && preparedGeneration === undefined) return nextModel;
+      if (data.parentID && preparedGeneration === undefined) {
+        this.reattachPending.add(sessionID);
+        return nextModel;
+      }
       handoffArmed =
         preparedGeneration !== undefined &&
         (this.backgroundFallbackHandoff?.prepare(
