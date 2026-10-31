@@ -216,6 +216,27 @@ const redoEvents = {
     type: 'session.error',
     properties: { sessionID, info: { id: messageID }, error },
   }),
+  /** The host can surface an error without a message id. */
+  idlessError: (
+    sessionID: string,
+    error: unknown = { message: 'rate limit' },
+  ) => ({
+    type: 'session.error',
+    properties: { sessionID, error },
+  }),
+  idlessAssistant: (sessionID: string, modelID: string, error?: unknown) => ({
+    type: 'message.updated',
+    properties: {
+      info: {
+        sessionID,
+        role: 'assistant',
+        agent: 'orchestrator',
+        providerID: 'test',
+        modelID,
+        ...(error === undefined ? {} : { error }),
+      },
+    },
+  }),
   retry: (sessionID: string, attempt = 1, next?: number) => ({
     type: 'session.status',
     properties: {
@@ -2872,6 +2893,84 @@ describe('hasDeterministic4xx status-code boundary (issue #1710)', () => {
     expect(
       isFailoverError({ data: { statusCode: status }, message: transientText }),
     ).toBe(expected);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// asHttpStatus bounds (issue #1721): pin the 100/599 accepted range in
+// asHttpStatus. A bare out-of-range status is indistinguishable through the
+// public classifiers (extractStatusCode finds no accepted candidate, so all
+// of them return false), so the fixture pairs an out-of-range outer status
+// with an accepted inner 401: in range the outer value shadows the inner,
+// out of range it falls through and the inner flips the classification.
+// Boundary rows kill the relational flips and bound shifts; 101/598 alone
+// kill `==` narrowing of either bound.
+// ---------------------------------------------------------------------------
+
+describe('asHttpStatus bounds (issue #1721)', () => {
+  // Inner 401 is always a failover (PROVIDER_STATUS_CODES). The outer value
+  // decides: out-of-range falls through to 401 (failover), in-range shadows
+  // it with a non-failover status (not in PROVIDER_STATUS_CODES).
+  const shadow = (outer: number | string) => ({
+    statusCode: outer,
+    data: { statusCode: 401 },
+  });
+
+  test.each([
+    ['99 (below lower bound) falls through to the accepted 401', 99, true],
+    ['100 (lower bound) shadows the 401, so not a failover', 100, false],
+    ['101 (just above lower bound) shadows the 401', 101, false],
+    ['598 (just below upper bound) shadows the 401', 598, false],
+    ['599 (upper bound) shadows the 401, so not a failover', 599, false],
+    ['600 (above upper bound) falls through to the accepted 401', 600, true],
+  ])('%s', (_label, status, expected) => {
+    expect(isFailoverError(shadow(status))).toBe(expected);
+    expect(isInlineFailoverError(shadow(status))).toBe(expected);
+  });
+
+  test.each([
+    [
+      '"099" (below lower bound) falls through to the accepted 401',
+      '099',
+      true,
+    ],
+    ['"100" (lower bound) shadows the 401', '100', false],
+    ['"599" (upper bound) shadows the 401', '599', false],
+    [
+      '"600" (above upper bound) falls through to the accepted 401',
+      '600',
+      true,
+    ],
+  ])('string %s', (_label, status, expected) => {
+    expect(isFailoverError(shadow(status))).toBe(expected);
+    expect(isInlineFailoverError(shadow(status))).toBe(expected);
+  });
+
+  // Shape guards: the numeric branch rejects non-integers, the string
+  // branch anything but a bare 3-digit numeral. Both rows fall through to
+  // the accepted 401; deleting either guard shadows it instead.
+  test.each([
+    ['100.5 (non-integer) falls through to the accepted 401', 100.5],
+    ['"0100" (padded numeral) falls through to the accepted 401', '0100'],
+  ])('%s', (_label, status) => {
+    expect(isFailoverError(shadow(status))).toBe(true);
+  });
+
+  // Contract pin: isPermanentQuotaBillingError follows the same outer-bound
+  // gating, so the inner 402 is permanent only when the outer bound rejects.
+  test('upper bound gates the permanent-billing 402 fallthrough', () => {
+    expect(
+      isPermanentQuotaBillingError({
+        statusCode: 599,
+        data: { statusCode: 402 },
+      }),
+    ).toBe(false);
+    expect(
+      isPermanentQuotaBillingError({
+        statusCode: 600,
+        data: { statusCode: 402 },
+      }),
+    ).toBe(true);
   });
 });
 
@@ -7556,6 +7655,41 @@ describe('ForegroundFallbackManager deduplication', () => {
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
 
+  // DEDUP_WINDOW_MS inclusivity (issue #1721): the isDeduped sweep expires
+  // a recorded incident once DEDUP_WINDOW_MS elapses, inclusively, so the
+  // boundary decides exactly at 5000ms. The clock is driven through
+  // jest.setSystemTime so Date.now is exact. Not reached here: the id-less
+  // correlation guards and the hasSameTurnErrorIncident sweep (a message-id
+  // match returns its incidentID before the window is read); those sites
+  // need their own fixtures. The three rows kill the relational flips and
+  // the `==` narrowing of the window.
+  test.each([
+    [4_999, 1],
+    [5_000, 2],
+    [5_001, 2],
+  ])('delta %dms -> %d prompts', async (delta, prompts) => {
+    jest.useFakeTimers();
+    jest.setSystemTime(1_000_000);
+    try {
+      const { mocks } = createMockClient();
+      const mgr = new ForegroundFallbackManager(makeChains(), true, {
+        directory: '/test',
+      } as never);
+      const sid = `dedup-edge-${delta}`;
+      mgr.registerSessionAgent(sid, 'orchestrator');
+      await mgr.handleEvent(redoEvents.assistant(sid));
+      // Same message id -> same incidentID (the id match returns before
+      // fingerprint or window is read), so only the time boundary decides.
+      const err = redoEvents.error(sid, { message: 'rate limit exceeded' });
+      await mgr.handleEvent(err);
+      jest.setSystemTime(1_000_000 + delta);
+      await mgr.handleEvent(err);
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   test('distinct failure incidents on the same turn and model are not time-deduped', async () => {
     const { mocks } = createMockClient({
       promptAsyncImpl: async () => ({
@@ -7660,6 +7794,315 @@ describe('ForegroundFallbackManager deduplication', () => {
       }),
     );
   });
+});
+
+// ---------------------------------------------------------------------------
+// DEDUP_WINDOW_MS boundaries (issue #1721)
+//
+// The isDeduped sweep and every DEDUP_WINDOW_MS guard compare against the
+// same window, so a fixture that stamps a correlation and its incident at
+// the same Date.now() instant cannot observe the guard: at the boundary the
+// sweep expires the incident anyway. The fixtures below separate the two
+// stamps where the guard needs to win, and each row states the outcome the
+// boundary decides (4999 keeps the episode, 5000/5001 start a new one).
+// ---------------------------------------------------------------------------
+
+const RATE_LIMIT = { message: 'rate limit exceeded' };
+const SPENT_QUOTA = {
+  message: 'AI_APICallError: The usage limit has been reached',
+};
+
+/** Fixture precondition for the id-less correlation tables: the pending
+ * correlation stamps at the pre-jump clock and the incident after it. If
+ * agent resolution stops suspending, the stamps collide and those tables
+ * silently lose their kill power, so assert the split. */
+function expectStampSplit(mgr: unknown, sid: string): void {
+  const internals = mgr as any;
+  expect(internals.pendingErrorCorrelation.get(sid)?.time).toBe(1_000_000);
+  const record = internals.triggerIncidents.get(sid) as
+    | Map<string, { time: number }>
+    | undefined;
+  expect(
+    [...(record?.values() ?? [])].map((incident) => incident.time),
+  ).toContain(1_001_000);
+}
+
+describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
+  test.each([
+    [4_999, 1],
+    [5_000, 2],
+    [5_001, 2],
+  ])(
+    'incidentForMessageError correlates an id-less error at %dms -> %d prompts',
+    async (delta, prompts) => {
+      jest.useFakeTimers();
+      jest.setSystemTime(1_000_000);
+      try {
+        const { mocks } = createMockClient();
+        const mgr = new ForegroundFallbackManager(
+          makeChains(),
+          true,
+          { directory: '/test' } as never,
+          3,
+          undefined,
+          undefined,
+          0,
+          0,
+        );
+        const sid = `message-error-window-${delta}`;
+        // Unregistered agent: the first fallback suspends on agent
+        // resolution, so the clock moves after the pending correlation is
+        // stamped and the incident lands later than it. A message-id match
+        // would return before the window is read; the id-less replay is what
+        // consults incidentForMessageError's time guard.
+        const first = mgr.handleEvent(
+          redoEvents.assistant(sid, 'a', RATE_LIMIT),
+        );
+        jest.setSystemTime(1_001_000);
+        await first;
+        expectStampSplit(mgr, sid);
+        jest.setSystemTime(1_000_000 + delta);
+        await mgr.handleEvent(redoEvents.idlessAssistant(sid, 'a', RATE_LIMIT));
+        expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
+      } finally {
+        jest.useRealTimers();
+      }
+    },
+  );
+
+  test.each([
+    [4_999, 1],
+    [5_000, 2],
+    [5_001, 2],
+  ])(
+    'incidentForSessionError correlates an id-less error at %dms -> %d prompts',
+    async (delta, prompts) => {
+      jest.useFakeTimers();
+      jest.setSystemTime(1_000_000);
+      try {
+        // The host session's agent has no fallback chain: the first error
+        // replays on the same model, so sessionModel still matches the
+        // correlation's model when the id-less replay arrives.
+        const { mocks } = createMockClient({ getData: { agent: 'unlisted' } });
+        const mgr = new ForegroundFallbackManager(
+          makeChains(),
+          true,
+          { directory: '/test' } as never,
+          3,
+          undefined,
+          undefined,
+          0,
+          0,
+        );
+        const sid = `session-error-window-${delta}`;
+        await mgr.handleEvent(redoEvents.assistant(sid, 'a'));
+        // Suspends on agent resolution (see the message-error case above).
+        const first = mgr.handleEvent(redoEvents.idlessError(sid, RATE_LIMIT));
+        jest.setSystemTime(1_001_000);
+        await first;
+        expectStampSplit(mgr, sid);
+        jest.setSystemTime(1_000_000 + delta);
+        await mgr.handleEvent(redoEvents.idlessError(sid, RATE_LIMIT));
+        expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
+      } finally {
+        jest.useRealTimers();
+      }
+    },
+  );
+
+  test.each([
+    [4_999, 1],
+    [5_000, 2],
+    [5_001, 2],
+  ])(
+    'hasSameTurnErrorIncident consumes a no-chain retry at %dms -> %d prompts',
+    async (delta, prompts) => {
+      jest.useFakeTimers();
+      jest.setSystemTime(1_000_000);
+      try {
+        const { mocks } = createMockClient({ getData: { agent: 'unlisted' } });
+        const mgr = new ForegroundFallbackManager(
+          makeChains(),
+          true,
+          { directory: '/test' } as never,
+          3,
+          undefined,
+          undefined,
+          0,
+          0,
+        );
+        const sid = `same-turn-incident-window-${delta}`;
+        await mgr.handleEvent(redoEvents.assistant(sid, 'a'));
+        // Charges the error incident and the shared retry budget.
+        await mgr.handleEvent(redoEvents.idlessError(sid, RATE_LIMIT));
+        // Deterministic terminal: no prompt, no charge, and no second error
+        // incident. It leaves absorbHostRetry unable to absorb the retry, so
+        // an expired incident lets the retry reach the replay path.
+        await mgr.handleEvent(
+          redoEvents.idlessError(sid, {
+            statusCode: 402,
+            message: 'Payment Required',
+          }),
+        );
+        jest.setSystemTime(1_000_000 + delta);
+        await mgr.handleEvent(redoEvents.retry(sid));
+        expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
+      } finally {
+        jest.useRealTimers();
+      }
+    },
+  );
+
+  test.each([
+    [4_999, 1],
+    [5_000, 2],
+    [5_001, 2],
+  ])(
+    'stale attempt 2 retry is skipped at %dms -> %d prompts',
+    async (delta, prompts) => {
+      jest.useFakeTimers();
+      jest.setSystemTime(1_000_000);
+      try {
+        const { mocks } = createMockClient();
+        const mgr = new ForegroundFallbackManager(
+          { orchestrator: ['test/a', 'test/b', 'test/c'] },
+          true,
+          { directory: '/test' } as never,
+          0, // no host-retry budget: attempt 2 must reach the fallback path
+          undefined,
+          undefined,
+          0,
+          0,
+        );
+        const sid = `stale-retry-window-${delta}`;
+        mgr.registerSessionAgent(sid, 'orchestrator');
+        await mgr.handleEvent(redoEvents.assistant(sid, 'a'));
+        await mgr.handleEvent(redoEvents.idlessError(sid, RATE_LIMIT));
+        // The replacement speaks: sessionModel names test/b while
+        // lastTriggerModel still names the failed test/a.
+        await mgr.handleEvent(redoEvents.assistant(sid, 'b'));
+        jest.setSystemTime(1_000_000 + delta);
+        await mgr.handleEvent(redoEvents.retry(sid, 2));
+        expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
+      } finally {
+        jest.useRealTimers();
+      }
+    },
+  );
+
+  test.each([
+    [4_999, 'c'],
+    [5_000, 'b'],
+    [5_001, 'b'],
+  ])(
+    'recentlyHandledMessage keeps the replacement model at %dms (next fallback -> %s)',
+    async (delta, target) => {
+      jest.useFakeTimers();
+      jest.setSystemTime(1_000_000);
+      try {
+        const { mocks } = createMockClient();
+        const mgr = new ForegroundFallbackManager(
+          { orchestrator: ['test/a', 'test/b', 'test/c'] },
+          true,
+          { directory: '/test' } as never,
+          3,
+          undefined,
+          undefined,
+          0,
+          0,
+        );
+        const sid = `recently-handled-window-${delta}`;
+        const failedID = `failed-${sid}`;
+        mgr.registerSessionAgent(sid, 'orchestrator');
+        await mgr.handleEvent(
+          redoEvents.assistant(sid, 'a', RATE_LIMIT, failedID),
+        );
+        // The replacement speaks on its own message.
+        await mgr.handleEvent(
+          redoEvents.assistant(sid, 'b', undefined, 'replacement'),
+        );
+        jest.setSystemTime(1_000_000 + delta);
+        // A late re-emit of the failed message carries its own model again.
+        // Inside the window it is inert; expired it re-seeds sessionModel to
+        // test/a, and the next descent returns to the configured head.
+        await mgr.handleEvent(
+          redoEvents.assistant(sid, 'a', undefined, failedID),
+        );
+        await mgr.handleEvent(
+          redoEvents.idlessError(sid, {
+            statusCode: 500,
+            message: 'Internal Server Error',
+          }),
+        );
+        expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+        expect((mocks.promptAsync.mock.calls[1][0] as any).body.model).toEqual({
+          providerID: 'test',
+          modelID: target,
+        });
+      } finally {
+        jest.useRealTimers();
+      }
+    },
+  );
+
+  test.each([
+    [4_999, ['p1']],
+    [5_000, ['p1', 'p2']],
+    [5_001, ['p1', 'p2']],
+  ])(
+    'triggeringModel attributes a spent echo at %dms to %j',
+    async (delta, providers) => {
+      jest.useFakeTimers();
+      jest.setSystemTime(1_000_000);
+      try {
+        const { mocks } = createMockClient();
+        const mgr = new ForegroundFallbackManager(
+          { orchestrator: ['p1/a', 'p2/b'] },
+          true,
+          { directory: '/test' } as never,
+          3,
+          undefined,
+          undefined,
+          0,
+          0,
+        );
+        const sid = `triggering-model-window-${delta}`;
+        mgr.registerSessionAgent(sid, 'orchestrator');
+        await mgr.handleEvent({
+          type: 'message.updated',
+          properties: {
+            info: {
+              sessionID: sid,
+              role: 'assistant',
+              providerID: 'p1',
+              modelID: 'a',
+            },
+          },
+        });
+        // Spent quota on p1: records the switch trigger and switches to p2.
+        await mgr.handleEvent(redoEvents.idlessError(sid, SPENT_QUOTA));
+        jest.setSystemTime(1_000_000 + delta);
+        // A retry echo carries no message id, so surfacesSpentQuota asks
+        // triggeringModel which model the error belongs to.
+        await mgr.handleEvent({
+          type: 'session.status',
+          properties: {
+            sessionID: sid,
+            status: { type: 'retry', attempt: 1 },
+            error: SPENT_QUOTA,
+          },
+        });
+        expect(
+          [
+            ...((mgr as any).quotaExhaustedProviders.get(sid) as Set<string>),
+          ].sort(),
+        ).toEqual(providers);
+        expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
