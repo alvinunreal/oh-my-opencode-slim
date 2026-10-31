@@ -49,6 +49,9 @@ Implements the `Multiplexer` interface contract defined in `src/multiplexer/type
    ├─ Applies stored layout via tmux -S <socket> select-layout -t <anchor>
    ├─ For main-* layouts: sets main-pane-width/height percentage
    └─ Reapplies layout to use new size
+
+The lifecycle's post-spawn layout check leaves this timer intact when the
+preferences match. Explicit `applyLayout` calls still apply immediately.
 ```
 
 ### Pane Termination Flow

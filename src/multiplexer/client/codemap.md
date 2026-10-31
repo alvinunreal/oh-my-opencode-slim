@@ -109,6 +109,7 @@ Shown for v1. On v2, `v2-host.ts` supplies the base URL, an authenticated
    │  └─ Timeout → readiness-timeout, no pane
    ├─ Adapter.spawnPane() → split client's own parent pane
    ├─ Record in in-process map + log pane created (identity fields)
+   ├─ Apply layout; tmux retains its pending debounce for unchanged preferences
    └─ Deletion racing spawn closes pane right after registration
 
 3. Adapter failure → adapter-not-found / adapter-hard / adapter-unavailable

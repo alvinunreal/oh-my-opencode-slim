@@ -25,8 +25,7 @@ import type {
 import {
   isInternalInitiatorPart,
   markPersistedBackgroundChildDelivered,
-  parseTaskIdFromTaskOutput,
-  parseTaskStateFromOutput,
+  parseTaskOutputHeader,
   parseTaskStatusOutput,
   renderRunningTaskPlaceholder,
   TERMINAL_DELTA_METADATA_KEY,
@@ -50,6 +49,7 @@ export const BACKGROUND_JOB_BOARD_METADATA_KEY =
 
 const BACKGROUND_COMPLETION_COMPLETED = /^Background task completed: /;
 const BACKGROUND_COMPLETION_FAILED = /^Background task failed: /;
+const loggedMissingTaskStatus = new Set<string>();
 
 // ── State shape ────────────────────────────────────────────────────────
 
@@ -753,7 +753,8 @@ export function stabilizeRunningTaskParts(messages: unknown[]): void {
 
       // Only running task results are volatile. Terminal results (completed,
       // error, cancelled) are materialized exactly once and must stay intact.
-      const status = parseTaskStatusOutput(state.output);
+      const header = parseTaskOutputHeader(state.output);
+      const status = header.taskID && header.state ? header : undefined;
       const runningByStatus = status?.state === 'running';
       const runningByField =
         state.status === 'running' && (status === undefined || runningByStatus);
@@ -773,7 +774,7 @@ export async function updateFromInjectedCompletion(
   state: InjectionState,
   part: MessagePart,
   message: MessageWithParts,
-  _messageIndex: number,
+  messageIndex: number,
   partIndex: number,
 ): Promise<BackgroundJobRecord | undefined> {
   if (part.type !== 'text' || typeof part.text !== 'string') {
@@ -782,21 +783,57 @@ export async function updateFromInjectedCompletion(
 
   if (part.synthetic !== true) return undefined;
 
-  const status = parseTaskStatusOutput(part.text);
-  if (!status) {
+  const header = parseTaskOutputHeader(part.text);
+  if (!header.taskID || !header.state) {
     // Only flag text shaped like task-status output that failed to parse.
     // Native delegation prompts (e.g. OpenCode's "@agent" expansion) are
     // synthetic but never task-status shaped — skip silently.
-    if (
-      parseTaskIdFromTaskOutput(part.text) ||
-      parseTaskStateFromOutput(part.text)
-    ) {
-      log('[task-session-manager] synthetic part missing task status', {
-        textPreview: part.text.slice(0, 120),
-      });
+    if (header.taskID || header.state) {
+      const key = JSON.stringify([
+        message.info.sessionID,
+        part.id ?? [message.info.id ?? messageIndex, partIndex],
+      ]);
+      if (!loggedMissingTaskStatus.has(key)) {
+        if (loggedMissingTaskStatus.size >= 1024)
+          loggedMissingTaskStatus.delete(
+            loggedMissingTaskStatus.values().next().value as string,
+          );
+        loggedMissingTaskStatus.add(key);
+        log('[task-session-manager] synthetic part missing task status', {
+          textPreview: part.text.slice(0, 120),
+        });
+      }
     }
     return undefined;
   }
+
+  // A processed match is a no-op; ambiguous weak provenance must still fail closed.
+  if (state.syntheticTerminalOccurrences?.size) {
+    const explicitId = getExplicitOccurrenceID(part);
+    const messageId = getCanonicalHostMessageID(part, message);
+    const occurrenceId =
+      explicitId ??
+      (messageId &&
+        hostMessageOccurrenceID(messageId, header.taskID, part.text));
+    if (occurrenceId) {
+      const existing = state.backgroundJobBoard.get(header.taskID);
+      const lookup = findSyntheticTerminalOccurrence(
+        state,
+        header.taskID,
+        occurrenceId,
+        explicitId ? 'explicit' : 'host-message',
+        !!explicitId,
+        existing?.generation,
+        existing?.taskGeneration,
+        state.getDeletionEpoch?.(header.taskID),
+      );
+      if (lookup?.kind === 'matched' && lookup.origin.phase === 'processed')
+        return undefined;
+    }
+  }
+
+  const status = parseTaskStatusOutput(part.text);
+  if (!status) return undefined;
   if (!isProcessableSyntheticTerminal(part.text, status)) {
     return undefined;
   }

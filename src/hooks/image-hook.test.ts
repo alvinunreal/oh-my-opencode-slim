@@ -13,7 +13,7 @@ import {
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { resolveImageRouting } from '../config/constants';
-import { processImageAttachments } from './image-hook';
+import { isImagePart, processImageAttachments } from './image-hook';
 import { createMessageTransformView } from './message-transform-view';
 import type { MessageWithParts } from './types';
 
@@ -93,6 +93,25 @@ afterAll(() => {
 });
 
 describe('processImageAttachments routing', () => {
+  it('recognizes inline and untyped images without decoding the full payload', () => {
+    const bytes = Buffer.concat([IMG_BYTES, Buffer.alloc(2048)]);
+    const data = bytes.toString('base64');
+    const from = spyOn(Buffer, 'from');
+    try {
+      expect(isImagePart({ type: 'file', mime: 'image/png', data })).toBe(true);
+      expect(
+        isImagePart({
+          type: 'media',
+          mediaType: 'application/octet-stream',
+          data,
+        }),
+      ).toBe(true);
+      expect(from.mock.calls.some(([input]) => input === data)).toBe(false);
+    } finally {
+      from.mockRestore();
+    }
+  });
+
   it('leaves image parts untouched in direct mode without filesystem work', () => {
     const workDir = path.join(TEST_DIR, 'direct');
     const message = makeUserMsg([IMG]);

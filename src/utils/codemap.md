@@ -24,7 +24,7 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 - **Session Info Read** (`session-info-read.ts`): Single-flight raw `session.get` per client session domain and task id, shared by the probe, the ownership gate, and the gate's rehydration observer; a consumer deadline releases only its waiter, never the underlying read, and a differing identity is refused while the read is open (`raceEvidenceDeadline` bounds waits deterministically).
 - **Session Metadata** (`session-metadata.ts`): Bounded session → agent/directory map with LRU eviction and active orchestrator protection
 - **Session Selection** (`session-selection.ts`): Session selection resolution with provenance tracking (host-persisted, observed-external, unknown)
-- **Child Transcript** (`child-transcript.ts`): Child session transcript evidence extraction and terminal evidence classification; the startup historical idle classifier complements on-demand host-outcome attribution. A marker-free migrated v1 history retains its v1 closure for startup and untracked reads; v2 lifecycle markers keep the idle boundary mandatory. Shared latest-input/text helpers reject malformed history rather than skipping it.
+- **Child Transcript** (`child-transcript.ts`): Child session transcript evidence extraction and terminal evidence classification; the startup historical idle classifier complements on-demand host-outcome attribution. A marker-free migrated v1 history retains its v1 closure for startup and untracked reads; v2 lifecycle markers keep the idle boundary mandatory. Shared latest-input/text helpers reject malformed history rather than skipping it. Diagnostic tails enforce UTF-8 budgets in one pass.
 - **Host Transcript Attribution** (`child-transcript.ts`, `attributeHostRoundToTranscript`): Validates parsed host terminal evidence against assistant creation/completion after the latest delivered input; newer activity stays pending and unreadable timestamps stay unknown. Recovery and untracked reads retain the shared host-round parser/composer.
 - **BackgroundJobTerminalGate** (`background-job-terminal-gate.ts`): Terminal evidence verification with host outcome attribution, reading leases, and a bounded two-tier evidence re-arm (fast `graceMs` retries, then exponential slow re-arms) that is armed only on hosts where no polling reconciler owns recovery
 - **BackgroundJobPersistence** (`background-job-persistence.ts`): Persistence layer for lifecycle state with tombstone and epoch tracking across host restarts
@@ -49,7 +49,7 @@ comparison without merging callers' distinct parsing/update policies.
 
 - **Session** (`session.ts`): Timeout handling, session abort coordination, and model reference parsing
 - **Prompt Agent** (`prompt-agent.ts`): Resolves explicit v1 prompt identity from safe hints, session records, or a bounded user-message tail; rejects internal system agents and suppresses unresolved targets. `withAgent` never constructs an agent-less body; the adjacent test scans v1 prompt call sites.
-- **Task** (`task.ts`): XML-inspired task output parsing for extracting task IDs, states, and results from tool output strings
+- **Task** (`task.ts`): XML-inspired task output parsing for extracting task IDs, states, and results; header-only parsing avoids reading result bodies when only identity and state are needed
 - **Agent Variant** (`agent-variant.ts`): Agent name normalization (trim/@ prefix) and display name rewriting utilities
 
 ### Infrastructure & Security Utilities

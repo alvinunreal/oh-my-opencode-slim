@@ -456,6 +456,21 @@ async function hydrateRemoteModels(
  * silently to the previous (possibly empty) map on fetch failure — the
  * sidebar polls forever, so failures must never toast or throw.
  */
+/**
+ * An equal-content refetch keeps the current map, so the sidebar signal is
+ * not rewritten (and the sidebar not rebuilt) when names did not change.
+ */
+export function retainEqualModelNames(
+  fetched: ReadonlyMap<string, string>,
+  current: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string> {
+  if (fetched === current || fetched.size !== current.size) return fetched;
+  for (const [key, value] of fetched) {
+    if (current.get(key) !== value) return fetched;
+  }
+  return current;
+}
+
 export async function hydrateModelNames(
   client: unknown,
   directory: string,
@@ -2416,11 +2431,15 @@ function createSidebarRuntime(
       nextSnapshot,
       adapter.getSelectedRootModel?.(nextSnapshot),
     );
-    const namesBefore = modelNamesCache.names;
     await hydrateModelNames(adapter.client, currentDirectory, modelNamesCache);
     if (!isRefreshCurrent(currentDirectory, adapter.getDirectory())) {
       return;
     }
+    const namesBefore = modelNames();
+    modelNamesCache.names = retainEqualModelNames(
+      modelNamesCache.names,
+      namesBefore,
+    );
     if (modelNamesCache.names !== namesBefore) {
       setModelNames(modelNamesCache.names);
     }

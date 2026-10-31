@@ -183,11 +183,33 @@ function diagnosticErrorText(error: unknown) {
 /** UTF-8-safe tail trimming, without allocating a copy of an unbounded string. */
 export function diagnosticTail(text: string, maxBytes: number): string {
   if (maxBytes <= 0) return '';
-  let tail = diagnosticSlice(text, -maxBytes);
-  while (new TextEncoder().encode(tail).byteLength > maxBytes) {
-    tail = diagnosticSlice(tail, 1);
+  const tail = diagnosticSlice(text, -maxBytes);
+  // Bun's Buffer.byteLength undercounts lone surrogates; encode once instead.
+  let bytes = new TextEncoder().encode(tail).byteLength;
+  let start = 0;
+  let end = tail.length;
+  while (bytes > maxBytes) {
+    const code = tail.charCodeAt(start++);
+    const next = start < end ? tail.charCodeAt(start) : NaN;
+    const dropsLow = next >= 0xdc00 && next <= 0xdfff;
+    // Each cut also removes a leading low and a trailing high, if present.
+    if (code >= 0xd800 && code <= 0xdbff && dropsLow) {
+      bytes -= 4;
+      start++;
+    } else {
+      bytes -= code <= 0x7f ? 1 : code <= 0x7ff ? 2 : 3;
+      if (dropsLow) {
+        bytes -= 3;
+        start++;
+      }
+    }
+    const last = tail.charCodeAt(end - 1);
+    if (start < end && last >= 0xd800 && last <= 0xdbff) {
+      end--;
+      bytes -= 3;
+    }
   }
-  return tail;
+  return tail.slice(start, end);
 }
 
 /** Select before validation: even malformed older entries must not cause an

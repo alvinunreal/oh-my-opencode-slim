@@ -76,7 +76,7 @@ import { isCommandEnabled } from './hooks/command-hook-utils';
 import { createCouncilSeatHook } from './hooks/council-seats';
 import { createManagedSeatResolver } from './hooks/council-seats/managed';
 import { createNativeSeatResolver } from './hooks/council-seats/native';
-import { processImageAttachments } from './hooks/image-hook';
+import { isImagePart, processImageAttachments } from './hooks/image-hook';
 import { createMessageTransformView } from './hooks/message-transform-view';
 import { clearAllWakeSessions } from './hooks/orchestrator-wake/wake-gate';
 import { PHASE_REMINDER_METADATA_KEY } from './hooks/phase-reminder';
@@ -126,7 +126,7 @@ import {
   clearTuiSessionAlias,
   collectAgentDisplayNames,
   flushTuiSnapshotBatch,
-  readTuiSnapshot,
+  readTuiSessionParents,
   recordTuiAgentActivity,
   recordTuiAgentModel,
   recordTuiAgentModels,
@@ -527,11 +527,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       query: { directory: string };
     }) => Promise<{ data?: unknown; error?: unknown; parentID?: unknown }>;
     const visited = new Set<string>();
+    let parents = readTuiSessionParents(directory);
     let current = startSessionID;
     while (!visited.has(current)) {
       visited.add(current);
-      const snapshot = readTuiSnapshot(directory);
-      const known = snapshot.sessionParents[current];
+      const known = parents[current];
       if (known !== undefined) {
         current = known; // Persisted link; keep walking toward the root.
         continue;
@@ -568,6 +568,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         recordTuiSessionParent(current, parentID, directory);
         hydratedTuiParents.delete(current);
         current = parentID;
+        parents = readTuiSessionParents(directory);
         continue;
       }
       if (parentID !== undefined && parentID !== null) {
@@ -3882,9 +3883,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
               sessionMetadata.getModel(sessionID),
           )
         : undefined;
-      const hasImageParts = view.userMessages.some((message) =>
-        message.parts.some((part) => view.imageView(part) !== null),
-      );
+      const hasImageParts =
+        runtime.imageRouting !== 'direct' &&
+        !!turnModelRef &&
+        view.userMessages.some((message) => message.parts.some(isImagePart));
       const acceptsImages =
         turnModelRef && hasImageParts
           ? await modelAcceptsImageInput(turnModelRef, {
