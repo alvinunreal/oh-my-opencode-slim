@@ -18,9 +18,11 @@ import {
   stripRemovedDisabledValues,
 } from './removed-keys';
 import {
+  AcpAgentsConfigSchema,
   BackgroundJobsConfigSchema,
   DISABLED_COMMANDS_VALUES,
   DISABLED_HOOKS_VALUES,
+  FailoverConfigSchema,
   InterviewConfigSchema,
   type MarketplaceActivation,
   MarketplaceConfigSchema,
@@ -502,6 +504,26 @@ export function loadRawPluginConfigFromPath(
     let layerConfig = retainExplicitInterviewFields(result.data, rawConfig);
     layerConfig = retainExplicitBackgroundJobsFields(layerConfig, rawConfig);
     layerConfig = retainExplicitMultiplexerFields(layerConfig, rawConfig);
+    if (isPlainRecord(rawConfig)) {
+      if (layerConfig.fallback && isPlainRecord(rawConfig.fallback)) {
+        layerConfig.fallback = retainSanitizedValues(
+          layerConfig.fallback,
+          rawConfig.fallback,
+        ) as RawPluginConfig['fallback'];
+      }
+      if (layerConfig.council && isPlainRecord(rawConfig.council)) {
+        if (!Object.hasOwn(rawConfig.council, 'default_preset')) {
+          delete (layerConfig.council as Partial<typeof layerConfig.council>)
+            .default_preset;
+        }
+      }
+      if (layerConfig.acpAgents && isPlainRecord(rawConfig.acpAgents)) {
+        layerConfig.acpAgents = retainSanitizedValues(
+          layerConfig.acpAgents,
+          rawConfig.acpAgents,
+        ) as RawPluginConfig['acpAgents'];
+      }
+    }
     // marketplace.enabled carries no Zod default, so nothing parsed at this
     // layer can masquerade as an explicit override; the merged marketplace
     // config is normalized to the switch shape after all layers are merged.
@@ -871,6 +893,15 @@ export function loadPluginConfig(
     // (see retainExplicitMultiplexerFields), so defaults apply once here,
     // after all layers are merged.
     config.multiplexer = MultiplexerConfigSchema.parse(config.multiplexer);
+  }
+  if (config.fallback) {
+    config.fallback = FailoverConfigSchema.parse(config.fallback);
+  }
+  if (config.council) {
+    config.council.default_preset ??= 'default';
+  }
+  if (config.acpAgents) {
+    config.acpAgents = AcpAgentsConfigSchema.parse(config.acpAgents);
   }
 
   // Override preset from environment variable if set
