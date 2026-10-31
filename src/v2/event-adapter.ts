@@ -165,7 +165,10 @@ function formFieldToQuestion(
       }))
     : [];
   const question: Record<string, unknown> = {
-    question: title,
+    question:
+      typeof field.description === 'string' && field.description
+        ? field.description
+        : title,
     // v1 QuestionV1 caps the header at 30 chars.
     header: title.slice(0, 30),
     // The form field key travels with the question: the host requires form

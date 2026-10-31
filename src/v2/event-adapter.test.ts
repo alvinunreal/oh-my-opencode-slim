@@ -798,25 +798,27 @@ describe('mapV2EventToV1 form → question bridge', () => {
   test('form.created synthesizes v1 question.asked with QuestionV1 shape', () => {
     const ev = deepFreeze({
       type: 'form.created',
-      properties: {
+      data: {
         form: {
           id: 'frm_1',
           sessionID: 'ses_q',
           title: 'Pick one',
           fields: [
             {
-              key: 'flavor',
+              key: 'q0',
               type: 'string',
-              title: 'Which flavor?',
+              title: 'Flavor',
+              description: 'Which flavor should I use?',
               options: [
                 { value: 'a', label: 'Vanilla', description: 'plain' },
                 { value: 'b', label: 'Chocolate' },
               ],
             },
             {
-              key: 'extras',
+              key: 'q1',
               type: 'multiselect',
               title: 'Extras',
+              description: 'Which extras should I add?',
               options: [{ value: 'x', label: 'Sprinkles' }],
             },
           ],
@@ -836,20 +838,20 @@ describe('mapV2EventToV1 form → question bridge', () => {
         sessionID: 'ses_q',
         questions: [
           {
-            question: 'Which flavor?',
-            header: 'Which flavor?',
+            question: 'Which flavor should I use?',
+            header: 'Flavor',
             // The form field key rides along: form replies must key
             // answers by this exact value.
-            key: 'flavor',
+            key: 'q0',
             options: [
               { label: 'Vanilla', description: 'plain' },
               { label: 'Chocolate', description: '' },
             ],
           },
           {
-            question: 'Extras',
+            question: 'Which extras should I add?',
             header: 'Extras',
-            key: 'extras',
+            key: 'q1',
             options: [{ label: 'Sprinkles', description: '' }],
             multiple: true,
           },
