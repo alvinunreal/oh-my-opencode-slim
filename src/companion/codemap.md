@@ -97,6 +97,7 @@ OpenCode Session → CompanionManager.onSessionStatus() → Updates state → Sp
 3. **Session termination** (`CompanionManager.onSessionDeleted()`)
    - Removes session from active tracking
    - Updates companion display
+   - Logical manager disposal retries a contended state removal before returning; process-exit cleanup remains synchronous and best effort
 
 4. **State persistence** (`CompanionManager.flush()`)
    - Writes to `companion-state.json` with atomic rename

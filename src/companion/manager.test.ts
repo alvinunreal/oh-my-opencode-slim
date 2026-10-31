@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, jest } from 'bun:test';
 import {
   chmodSync,
   existsSync,
@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { acquirePidFileLock } from '../utils/pid-file-lock';
 import { mapV2EventToV1 } from '../v2/event-adapter';
 import {
   CompanionManager,
@@ -112,6 +113,64 @@ function companionStateLock(): string {
 }
 
 describe('CompanionManager', () => {
+  it('retries state removal during logical disposal when a live writer holds the lock', async () => {
+    const m = make();
+    m.onLoad();
+    const release = acquirePidFileLock(stateFilePath());
+    expect(release).not.toBeNull();
+    jest.useFakeTimers();
+    try {
+      const disposal = (
+        m as unknown as { dispose?: () => Promise<void> }
+      ).dispose?.();
+      release?.();
+      jest.advanceTimersByTime(25);
+      await disposal;
+      expect(readState().sessions).toHaveLength(0);
+    } finally {
+      release?.();
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not remove a replacement generation while retrying disposal', async () => {
+    const old = make();
+    old.onLoad();
+    const release = acquirePidFileLock(stateFilePath());
+    jest.useFakeTimers();
+    try {
+      const disposal = old.dispose();
+      const replacement = make();
+      replacement.onLoad();
+      release?.();
+      jest.advanceTimersByTime(25);
+      await disposal;
+      expect(readState().sessions).toHaveLength(1);
+      replacement.onSessionStatus({
+        sessionId: 'new',
+        agent: 'fixer',
+        status: 'busy',
+      });
+      expect(readState().sessions[0].active_agents).toEqual(['fixer']);
+    } finally {
+      release?.();
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not remove a replacement when an unstarted generation is disposed', async () => {
+    const pending = make();
+    const replacement = make();
+    replacement.onLoad();
+    replacement.onSessionStatus({
+      sessionId: 'new',
+      agent: 'fixer',
+      status: 'busy',
+    });
+    await pending.dispose();
+    expect(readState().sessions[0].active_agents).toEqual(['fixer']);
+  });
+
   it('writes an intro entry on load', () => {
     const m = make();
     m.onLoad();

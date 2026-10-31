@@ -3296,7 +3296,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // onLoad, and if it fails before that the detached companion would
       // survive until process exit. Idempotent (registerActiveManager's
       // replacement path and the process-exit listener tolerate repeats).
-      companionManager?.onExit();
+      await companionManager?.dispose();
       // Release only this generation's ownership. The admission runtime
       // defers final scheduler/tracker teardown by one macrotask so an
       // immediate config-update re-init can retain active and queued calls.

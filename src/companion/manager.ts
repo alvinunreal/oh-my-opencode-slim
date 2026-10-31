@@ -45,6 +45,8 @@ const MAX_KNOWN_COMPANION_PROJECTS = 64;
 const PRESET_REFRESH_EVERY_TICKS = 4;
 const POLL_INTERVAL_MS = 250;
 const STATE_PUBLISH_RETRY_MS = 250;
+const STATE_REMOVE_RETRY_MS = 25;
+const STATE_REMOVE_RETRIES = 20;
 const HARD_PRESET_REFRESH_WARNING_KINDS: ReadonlySet<ConfigLoadWarningKind> =
   new Set(['invalid-json', 'invalid-schema', 'read-error']);
 
@@ -437,6 +439,7 @@ export class CompanionManager {
   private attentionSeq = 0;
   private lastAttentionRequestId: string | undefined;
   private readonly config?: CompanionConfig;
+  private retired = false;
   private companionProcess: ChildProcess | null = null;
   private spawnChecked = false;
   private wasSpawner = false;
@@ -820,6 +823,7 @@ export class CompanionManager {
   }
 
   private disposeForReplacement(): void {
+    this.retired = true;
     if (this.presetPoller) {
       clearInterval(this.presetPoller);
       this.presetPoller = null;
@@ -840,8 +844,8 @@ export class CompanionManager {
 
   /**
    * Feed every session.status event here, with the agent name resolved
-   * from sessionAgentMap. Orchestrator sessions drive overall status;
-   * specialist sessions drive the per-agent GIF grid.
+   * from sessionAgentMap. All active sessions contribute to project status;
+   * specialists take priority over orchestrators in the per-agent GIF grid.
    */
   onSessionStatus(input: {
     sessionId?: string;
@@ -975,7 +979,9 @@ export class CompanionManager {
     this.flush();
   }
 
-  onExit(): void {
+  onExit(): boolean {
+    if (this.retired) return true;
+    this.retired = true;
     if (this.presetPoller) {
       clearInterval(this.presetPoller);
       this.presetPoller = null;
@@ -993,14 +999,10 @@ export class CompanionManager {
       }
       activeExitListener = null;
     }
-    if (this.config?.enabled !== true) return;
-    writeState((state) => {
-      state.sessions = state.sessions.filter((s) => s.session_id !== this.id);
-      state.preset_requests = (state.preset_requests ?? []).filter(
-        (request) => request.session_id !== this.id,
-      );
-      if (state.preset_requests.length === 0) delete state.preset_requests;
-    });
+    if (this.config?.enabled !== true) return true;
+    if ([...activeManagers].some((manager) => manager.id === this.id))
+      return true;
+    const removed = this.removeSessionState();
     if (this.wasSpawner && this.removeOwnedPidFileIfNoSessionsRemain()) {
       if (this.companionProcess) {
         try {
@@ -1011,6 +1013,31 @@ export class CompanionManager {
       }
     }
     this.companionProcess = null;
+    return removed;
+  }
+
+  async dispose(): Promise<void> {
+    if (this.onExit()) return;
+    for (let attempt = 0; attempt < STATE_REMOVE_RETRIES; attempt++) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, STATE_REMOVE_RETRY_MS),
+      );
+      if ([...activeManagers].some((manager) => manager.id === this.id)) return;
+      if (this.removeSessionState()) return;
+    }
+    log('[companion] state removal failed during disposal', {
+      sessionId: this.id,
+    });
+  }
+
+  private removeSessionState(): boolean {
+    return writeState((state) => {
+      state.sessions = state.sessions.filter((s) => s.session_id !== this.id);
+      state.preset_requests = (state.preset_requests ?? []).filter(
+        (request) => request.session_id !== this.id,
+      );
+      if (state.preset_requests.length === 0) delete state.preset_requests;
+    });
   }
 
   private removeOwnedPidFileIfNoSessionsRemain(): boolean {
@@ -1077,7 +1104,8 @@ export class CompanionManager {
   }
 
   private flush(): boolean {
-    if (this.config?.enabled !== true) return false;
+    if (this.config?.enabled !== true || !activeManagers.has(this))
+      return false;
     try {
       const entry: CompanionSession = {
         session_id: this.id,
