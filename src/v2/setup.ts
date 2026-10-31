@@ -582,7 +582,7 @@ export function createSessionContextHandler(
               (part) =>
                 part.type === 'text' &&
                 typeof part.text === 'string' &&
-                /^\s*<subagent\b/i.test(part.text),
+                part.text.includes('<subagent'),
             ),
           )
         ) {
@@ -591,17 +591,25 @@ export function createSessionContextHandler(
           const byID = new Map(history?.map((entry) => [entry.id, entry]));
           for (const [index, message] of event.messages.entries()) {
             const stored = byID.get(message.id);
-            if (message.role !== 'user' || stored?.type !== 'synthetic')
+            if (
+              message.role !== 'user' ||
+              stored?.type !== 'synthetic' ||
+              typeof stored.text !== 'string'
+            )
               continue;
+            const text = stored.text;
             const delivery = parseNativeDelivery({
               type: 'text',
-              text: typeof stored.text === 'string' ? stored.text : undefined,
+              text,
               metadata: stored.metadata,
             });
             if (
               delivery?.state !== 'error' ||
               !message.content.some(
-                (part) => part.type === 'text' && part.text === stored.text,
+                (part) =>
+                  part.type === 'text' &&
+                  typeof part.text === 'string' &&
+                  part.text.includes(text),
               )
             )
               continue;
@@ -623,11 +631,10 @@ export function createSessionContextHandler(
                   entry.finish === 'content-filter' &&
                   isRecord(entry.error) &&
                   typeof entry.error.message === 'string' &&
-                  typeof stored.text === 'string' &&
-                  stored.text
+                  text
                     .slice(
-                      stored.text.indexOf('>') + 1,
-                      stored.text.lastIndexOf('</subagent>'),
+                      text.indexOf('>') + 1,
+                      text.lastIndexOf('</subagent>'),
                     )
                     .trim() === entry.error.message,
               );
@@ -650,10 +657,15 @@ export function createSessionContextHandler(
             event.messages[index] = {
               ...message,
               content: message.content.map((part) =>
-                part.type === 'text' && part.text === stored.text
+                part.type === 'text' &&
+                typeof part.text === 'string' &&
+                part.text.includes(text)
                   ? {
                       ...part,
-                      text: `<subagent sessionID="${delivery.taskID}" state="running">\nThe child hit a provider refusal, switched to ${model} and continues; the result will arrive. Do not relaunch or replace it.\n</subagent>`,
+                      text: part.text.replace(
+                        text,
+                        `<subagent sessionID="${delivery.taskID}" state="running">\nThe child hit a provider refusal, switched to ${model} and continues; the result will arrive. Do not relaunch or replace it.\n</subagent>`,
+                      ),
                     }
                   : part,
               ),

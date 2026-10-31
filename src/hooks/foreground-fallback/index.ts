@@ -800,12 +800,12 @@ export class ForegroundFallbackManager {
    *  enroll the new run under the stale attempt's baseline. */
   private readonly backgroundFallbackHandoff?: BackgroundFallbackHandoff;
   /** Synchronous board read returning the tracked generation for a
-   *  confirmed BACKGROUND child only — undefined for foreground or
-   *  unmanaged sessions (that undefined means "handoff not
-   *  applicable", never a wildcard). Captured before ANY await in the
-   *  fallback preparation. */
+   *  background child or, when requested, a v1 foreground child.
+   *  Undefined means the handoff is not applicable, never a wildcard.
+   *  Captured before ANY await in the fallback preparation. */
   private readonly readBackgroundGeneration?: (
     sessionID: string,
+    includeForeground?: boolean,
   ) => number | undefined;
 
   /** Exposed for task-session-manager: prevents idle reconciliation
@@ -1023,7 +1023,6 @@ export class ForegroundFallbackManager {
       complete = done;
     });
     const timer = setTimeout(() => {
-      this.v2RefusalOutcomes.delete(key);
       complete(undefined);
     }, REFUSAL_OUTCOME_TIMEOUT_MS);
     // Retain resolved outcomes for late parent notices; cap the registry above.
@@ -1056,11 +1055,11 @@ export class ForegroundFallbackManager {
         ? existing.promise
         : Promise.resolve(undefined);
     const step = this.v2Steps.get(sessionID);
-    if (step?.assistantMessageID === assistantMessageID) {
-      this.registerSessionAgent(sessionID, step.agent);
-      if (!this.retryEnabledFor(sessionID) || !this.hasFallbackChain(sessionID))
-        return Promise.resolve(undefined);
-    }
+    if (step?.assistantMessageID !== assistantMessageID)
+      return Promise.resolve(undefined);
+    this.registerSessionAgent(sessionID, step.agent);
+    if (!this.retryEnabledFor(sessionID) || !this.hasFallbackChain(sessionID))
+      return Promise.resolve(undefined);
     const outcome = this.v2RefusalOutcome(sessionID, assistantMessageID);
     return expectedGeneration === undefined ||
       outcome.generation === expectedGeneration
@@ -1321,17 +1320,18 @@ export class ForegroundFallbackManager {
     private readonly initialRetryDelayMs: number = 0,
     /** Delay between consecutive fallback attempts. */
     private readonly retryDelayMs: number = 500,
-    /** Terminal-observation handoff for background children: prepare()
+    /** Terminal-observation handoff for tracked children: prepare()
      *  arms the stop-gate deferral BEFORE the admission await (with the
      *  baseline from the same transcript read that produced the replay);
      *  admit() converts it into a tracked run once the host accepts the
      *  re-prompt; reject() withdraws it on any non-admitted outcome. */
     backgroundFallbackHandoff?: BackgroundFallbackHandoff,
-    /** Synchronous board read returning the tracked generation for a
-     *  confirmed BACKGROUND child only (undefined = foreground or
-     *  unmanaged — the handoff is not applicable, never a wildcard).
-     *  Captured before ANY await in the fallback preparation. */
-    readBackgroundGeneration?: (sessionID: string) => number | undefined,
+    /** Synchronous generation read for a background child or, on request,
+     *  a v1 foreground child. Undefined is never a wildcard. */
+    readBackgroundGeneration?: (
+      sessionID: string,
+      includeForeground?: boolean,
+    ) => number | undefined,
     /** Synchronous check for running background children OF this session. */
     private readonly hasRunningChildren?: (sessionID: string) => boolean,
     /** v2 retry-hook steering enablement. Independent of `enabled` (the
@@ -1538,6 +1538,7 @@ export class ForegroundFallbackManager {
               props.sessionID,
               props.assistantMessageID,
             );
+            clearTimeout(outcome.timer);
             void this.handleV2Refusal(
               props.sessionID,
               props.assistantMessageID,
@@ -3396,14 +3397,18 @@ export class ForegroundFallbackManager {
         (await this.ensureSessionAgent(sessionID));
       if (!agentName || !this.isCurrentTurn(sessionID, expectedEpoch)) return;
 
+      const isV2Host =
+        (this.input as PluginInput & { hostFlavor?: string }).hostFlavor ===
+        'v2';
       // Confirm there is a user turn before sending the replay reminder.
       // Fence captured BEFORE any await in the preparation: a board
       // relaunch during the transcript read or the admission await must
       // not enroll the new generation under this (stale) attempt's
-      // baseline. undefined = not a tracked background child
-      // (foreground/untracked) → the handoff is a no-op, never a
-      // wildcard.
-      const preparedGeneration = this.readBackgroundGeneration?.(sessionID);
+      // baseline. Undefined means an unmanaged session; never a wildcard.
+      const preparedGeneration = this.readBackgroundGeneration?.(
+        sessionID,
+        announce && !isV2Host,
+      );
 
       // Read only the transcript tail: the replay needs the last replayable
       // user message and the trailing message id (handoff baseline), not the
@@ -3489,9 +3494,6 @@ export class ForegroundFallbackManager {
       // the fallback TARGET, so a v2 host without session.switchModel must
       // reject the replay (typed error) instead of silently replaying on
       // the model that just failed. v1 call bytes stay untouched.
-      const isV2Host =
-        (this.input as PluginInput & { hostFlavor?: string }).hostFlavor ===
-        'v2';
       const promptBody = {
         path: { id: sessionID },
         body: {
@@ -3533,9 +3535,8 @@ export class ForegroundFallbackManager {
           preparedGeneration,
           baselineMessageID?.info?.id,
         ) ?? false;
-      // Distinguish "not applicable" (foreground or unmanaged session —
-      // preparedGeneration undefined, the fallback proceeds) from "was
-      // a confirmed background child whose preparation lost validity"
+      // Distinguish "not applicable" (unmanaged session) from a tracked
+      // child whose preparation lost validity
       // (generation changed during the transcript read): the replay
       // prompt and baseline are stale for an execution that no longer
       // exists — do NOT send them.

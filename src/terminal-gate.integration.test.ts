@@ -379,7 +379,11 @@ for (const state of ['completed', 'error'] as const) {
   }
 }
 
-async function fallbackAssembly(hostFlavor?: string, delayMs = 2000) {
+async function fallbackAssembly(
+  hostFlavor?: string,
+  delayMs = 2000,
+  foreground = false,
+) {
   jest.useFakeTimers();
   let fakeTimers = true;
   const restoreTimers = async () => {
@@ -402,8 +406,23 @@ async function fallbackAssembly(hostFlavor?: string, delayMs = 2000) {
   // disposal. Disposing under fake timers can wait on a timer that never
   // fires, time out afterEach, and flip the next test's timers mid-run.
   cleanups.push(restoreTimers);
-  await h.begin();
-  await h.after('running');
+  if (foreground) {
+    await h.hooks['tool.execute.before']?.(
+      { tool: 'task', sessionID: 'parent', callID: 'native' },
+      { args: { subagent_type: 'explorer', description: 'ordinary task' } },
+    );
+    await h.event('session.created', {
+      info: {
+        id: 'child',
+        parentID: 'parent',
+        agent: 'explorer',
+        title: 'ordinary task (@explorer subagent)',
+      },
+    });
+  } else {
+    await h.begin();
+    await h.after('running');
+  }
   await h.hooks['chat.message']?.(
     {
       sessionID: 'child',
@@ -714,6 +733,58 @@ test('production fallback wiring fences polling and announces the admitted repla
   await h.runtime.reconcile();
   await flush();
   expect(parentParts()).toHaveLength(2);
+});
+
+test('v1 foreground child fallback delivers its replay result to the parent', async () => {
+  const h = await fallbackAssembly(undefined, 2000, true);
+  expect(h.board.get('child')?.background).toBe(false);
+  const error = {
+    name: 'ContentFilterError',
+    data: {
+      message: "The response was blocked by the provider's content filter",
+    },
+  };
+  h.history.pop();
+  h.history.push({
+    info: {
+      id: 'filtered',
+      role: 'assistant',
+      finish: 'content-filter',
+      error,
+      time: { completed: Date.now() },
+    },
+    parts: [],
+  });
+  await h.event('session.error', { sessionID: 'child', error });
+  await h.idle();
+  await h.advance(2000);
+  const prompts = () =>
+    h.promptAsync.mock.calls.map(
+      ([call]) =>
+        call as {
+          path: { id: string };
+          body: { messageID: string; parts: { text: string }[] };
+        },
+    );
+  expect(prompts().map(({ path }) => path.id)).toEqual(['child', 'parent']);
+  expect(prompts()[1].body.parts[0].text).toContain('state="running"');
+  expect(
+    h.revivedTracker?.isTracked('child', h.board.get('child')?.generation ?? 0),
+  ).toBe(true);
+  const replay = prompts()[0].body;
+  h.setBusy(true);
+  await h.busySignal();
+  h.history.push(
+    { info: { id: replay.messageID, role: 'user' }, parts: replay.parts },
+    ...transcript().data,
+  );
+  h.setBusy(false);
+  await h.idle();
+  await h.runtime.reconcile();
+  await flush();
+  expect(h.board.get('child')?.state).toBe('completed');
+  expect(prompts().filter(({ path }) => path.id === 'parent')).toHaveLength(2);
+  expect(prompts()[2].body.parts[0].text).toContain('confirmed result');
 });
 
 test('v2 production wiring retires task_revive and keeps no replay notice', async () => {

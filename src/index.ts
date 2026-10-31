@@ -1688,7 +1688,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // Agents without a chain (e.g. councillor, owned by CouncilManager) are
     // left alone — FG only aborts/re-prompts when it has a model to switch to.
     // The observation handoff brackets the re-prompt admission for
-    // BACKGROUND children (false-stop incident): prepare() defers the stop
+    // background children and v1 foreground failures: prepare() defers the stop
     // gate before the await, admit() enrolls the run tracker after host
     // acceptance, reject() withdraws on failure; see
     // fallback-observation-transfer.ts.
@@ -1700,6 +1700,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ? createBackgroundFallbackHandoff({
           backgroundJobBoard: backgroundJobBoard!,
           revivedRunTracker: revivedRunTracker!,
+          allowForeground: hostFlavor !== 'v2',
         })
       : undefined;
     // The current v2 host interface has no per-turn/atomic conditional
@@ -1761,14 +1762,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           runtime.fallback.initialRetryDelayMs,
           runtime.fallback.retryDelayMs,
           backgroundFallbackHandoff,
-          // Identify confirmed background children even after cancellation or
-          // termination, so handoff preparation rejects a delayed stale replay.
-          // Undefined remains exclusive to foreground/unmanaged sessions, and
-          // is the honest value when no board exists.
+          // Identify tracked children even after cancellation or termination,
+          // so handoff preparation rejects a delayed stale replay.
           lifecycleEnabled
-            ? (sessionID) => {
+            ? (sessionID, includeForeground) => {
                 const record = backgroundJobBoard?.get(sessionID);
-                return record?.background === true
+                return record &&
+                  (record.background === true ||
+                    (hostFlavor !== 'v2' &&
+                      includeForeground &&
+                      record.provisional !== true))
                   ? record.generation
                   : undefined;
               }

@@ -2622,6 +2622,68 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     }
   });
 
+  test('v2 claimed refusal waits for all bounded background recovery calls', async () => {
+    const board = new BackgroundJobBoard();
+    const run = board.registerLaunch({
+      taskID: 'slow-child',
+      parentSessionID: 'parent',
+      agent: 'orchestrator',
+      background: true,
+    });
+    const tracker = createRevivedRunTracker({
+      input: { directory: '/test', client: {} } as never,
+      backgroundJobBoard: board,
+      terminalGate: {
+        reconcile: async () => ({ kind: 'deferred', record: run }),
+      } as never,
+    });
+    const lookup = deferred<unknown>();
+    const switched = deferred<void>();
+    const admission = deferred<unknown>();
+    const child = fixture({
+      parentID: 'parent',
+      handoff: createBackgroundFallbackHandoff({
+        backgroundJobBoard: board,
+        revivedRunTracker: tracker,
+      }),
+      readBackgroundGeneration: () => run.generation,
+      switchModel: () => switched.promise,
+      promptAsyncImpl: () => admission.promise,
+    });
+    spyOn(currentMockSession as any, 'get').mockImplementation(
+      () => lookup.promise,
+    );
+    try {
+      await child.manager.handleEvent(started('slow-child'));
+      let finished = false;
+      const outcome = child.manager
+        .refusalOutcome('slow-child', 'assistant-1', run.generation)
+        .then((model) => {
+          finished = true;
+          return model;
+        });
+      await child.manager.handleEvent(failed('slow-child'));
+      await settle();
+      jest.advanceTimersByTime(1_900);
+      lookup.resolve({ data: child.info });
+      await settle();
+      jest.advanceTimersByTime(1_900);
+      switched.resolve();
+      await settle();
+      jest.advanceTimersByTime(1_900);
+      await settle();
+      expect(finished).toBe(false);
+      admission.resolve({});
+      expect(await outcome).toBe('test/b');
+    } finally {
+      lookup.resolve({ data: child.info });
+      switched.resolve();
+      admission.resolve({});
+      child.manager.dispose();
+      tracker.dispose();
+    }
+  });
+
   test('v2 native refusal notice waits for the child switch before the first parent request', async () => {
     const board = new BackgroundJobBoard();
     const run = board.registerLaunch({
@@ -2650,6 +2712,7 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     });
     const text =
       '<subagent sessionID="child-notice" state="error" description="inspect">\nProvider blocked the response\n</subagent>';
+    const prefix = '\u00a742\u00a7 ';
     const notice = {
       id: 'msg_notice',
       type: 'synthetic',
@@ -2690,7 +2753,11 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
       system: [],
       tools: {},
       messages: [
-        { id: 'msg_notice', role: 'user', content: [{ type: 'text', text }] },
+        {
+          id: 'msg_notice',
+          role: 'user',
+          content: [{ type: 'text', text: prefix + text }],
+        },
       ],
     };
     try {
@@ -2703,6 +2770,7 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
       expect(finished).toBe(false);
       await manager.handleEvent(failed('child-notice'));
       await request;
+      expect(event.messages[0]?.content[0]?.text.startsWith(prefix)).toBe(true);
       expect(event.messages[0]?.content[0]?.text).toContain('state="running"');
       expect(event.messages[0]?.content[0]?.text).toContain(
         'switched to test/b',
@@ -2765,10 +2833,33 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
           { id: 'msg_notice', role: 'user', content: [{ type: 'text', text }] },
         ],
       };
-      const timeoutRequest = handler(timedOut);
+      let unobservedFinished = false;
+      const timeoutRequest = handler(timedOut).then(() => {
+        unobservedFinished = true;
+      });
       await settle();
-      jest.advanceTimersByTime(5_001);
+      expect(unobservedFinished).toBe(true);
       await timeoutRequest;
+      expect(timedOut.messages[0]?.content[0]?.text).toBe(text);
+
+      await manager.handleEvent(
+        started('child-notice', 'a', 'assistant-unobserved'),
+      );
+      let pendingFinished = false;
+      const pendingRequest = handler(timedOut).then(() => {
+        pendingFinished = true;
+      });
+      await settle();
+      expect(pendingFinished).toBe(false);
+      jest.advanceTimersByTime(5_001);
+      await pendingRequest;
+      let repeatedFinished = false;
+      const repeatedRequest = handler(timedOut).then(() => {
+        repeatedFinished = true;
+      });
+      await settle();
+      expect(repeatedFinished).toBe(true);
+      await repeatedRequest;
       expect(timedOut.messages[0]?.content[0]?.text).toBe(text);
     } finally {
       manager.dispose();

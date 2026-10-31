@@ -251,6 +251,7 @@ export async function handleEvent(
       isFallbackInProgress?: (sessionID: string) => boolean;
       /** True when foreground fallback could still recover the session. */
       willAttemptFallback?: (sessionID: string) => boolean;
+      hostFlavor?: string;
       /** Test seam; production uses event-arrival wall-clock time. */
       now?: () => number;
     };
@@ -341,10 +342,16 @@ export async function handleEvent(
       // parallel council reviewers), `info.agent` on the child session
       // identifies which subagent started it; prefer the matching
       // pending call so we don't attribute the child to the wrong agent.
+      const title = typeof info.title === 'string' ? info.title : undefined;
+      const v1Suffix = ` (@${info.agent} subagent)`;
       const pending = deps.pendingCallTracker.peekByParentAndAgent(
         info.parentID,
         info.agent,
-        typeof info.title === 'string' ? info.title : undefined,
+        deps.options.hostFlavor !== 'v2' &&
+          info.agent &&
+          title?.endsWith(v1Suffix)
+          ? title.slice(0, -v1Suffix.length)
+          : title,
       );
       if (pending && !pending.resumedTaskId && !pending.earlyRegisteredTaskID) {
         if (deps.backgroundJobBoard.get(info.id)) {

@@ -31,8 +31,8 @@ import type { FallbackNotice, RevivedRunTracker } from './revived-run-tracker';
  *   dropped. The gate fence lifts after one more expiry window if
  *   admit/reject never arrive; the owner stays.
  *
- * Guards: only confirmed BACKGROUND jobs (`background === true`,
- * `state === 'running'`) participate; the generation is REQUIRED (never
+ * Guards: only running background jobs, or opted-in v1 foreground children,
+ * participate; the generation is REQUIRED (never
  * a wildcard) and must still match the board record at prepare time.
  * Expiry does not drop a pending preparation — it converts it into the
  * owning run, so a late admission finds delivery already owned.
@@ -40,6 +40,7 @@ import type { FallbackNotice, RevivedRunTracker } from './revived-run-tracker';
 export function createBackgroundFallbackHandoff(options: {
   backgroundJobBoard: BackgroundJobBoard;
   revivedRunTracker: RevivedRunTracker;
+  allowForeground?: boolean;
 }): {
   isEligible: (sessionID: string, generation: number | undefined) => boolean;
   prepare: (
@@ -71,7 +72,8 @@ export function createBackgroundFallbackHandoff(options: {
     const record = options.backgroundJobBoard.get(sessionID);
     if (
       record?.state !== 'running' ||
-      record.background !== true ||
+      (record.background !== true &&
+        (!options.allowForeground || record.provisional === true)) ||
       record.generation !== preparedGeneration
     ) {
       return undefined;
@@ -91,6 +93,7 @@ export function createBackgroundFallbackHandoff(options: {
         parentSessionID: record.parentSessionID,
         baselineMessageID,
         description: record.description,
+        ...(record.background ? {} : { allowForeground: true }),
       });
     },
     admit: (sessionID, preparedGeneration, notice) => {
