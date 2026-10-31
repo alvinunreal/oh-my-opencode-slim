@@ -20,9 +20,14 @@ import {
 function fixture() {
   const calls: unknown[][] = [];
   const committed: string[] = [];
+  const stored = {
+    manifest: { id: 'x', version: '1.0.0', displayName: 'Example' },
+    source: { kind: 'in-memory', label: 'test' },
+    digest: 'digest',
+  };
   const service = {
     projectDir: '/workspace',
-    list: () => [{ id: 'x' }],
+    list: () => [stored],
     show: (id: string) => ({ id }),
     verify: (id?: string) => [{ id, valid: true }],
     status: () => ({
@@ -35,21 +40,21 @@ function fixture() {
       calls.push(['install', target, signal]);
       if (signal?.aborted) throw new Error('install aborted before commit');
       committed.push(`install:${target}`);
-      return {};
+      return stored;
     },
     importFile: (path: string) => {
       calls.push(['import', path]);
-      return {};
+      return stored;
     },
     updateRemote: async (target: string, signal?: AbortSignal) => {
       calls.push(['update', target, signal]);
       if (signal?.aborted) throw new Error('update aborted before commit');
       committed.push(`update:${target}`);
-      return {};
+      return stored;
     },
     updateFile: (path: string) => {
       calls.push(['update_file', path]);
-      return {};
+      return stored;
     },
     uninstallGlobal: (target: string, acknowledge: boolean) => {
       calls.push(['uninstall', target, acknowledge]);
@@ -64,6 +69,76 @@ function fixture() {
 }
 
 describe('marketplace tools', () => {
+  test('list and mutation results omit prompts while show retains them', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-tool-summary-'));
+    const service = new MarketplaceService({
+      rootDir: join(root, 'store'),
+      projectDir: root,
+      pluginVersion: '3.2.0',
+    });
+    const makeBundle = (version: string) => ({
+      manifest: {
+        schemaVersion: 2,
+        id: 'team/summary',
+        version,
+        displayName: 'Summary agent',
+        description: 'Test fixture',
+        agentName: 'summary-agent',
+        prompt: 'PRIVATE FULL PROMPT',
+        skills: [],
+        mcps: [],
+        tools: [],
+        author: { name: 'Test' },
+        tags: [],
+        license: 'MIT',
+        compatibility: { plugin: '*' },
+        model: { source: 'session' },
+        routing: { description: 'Summary', when: 'Testing.', keywords: [] },
+      },
+    });
+    try {
+      const file = join(root, 'bundle.json');
+      writeFileSync(file, JSON.stringify(makeBundle('1.0.0')));
+      const tools = createMarketplaceTools({ service });
+      const context = { agent: 'orchestrator' } as never;
+      const imported = await tools.marketplace_manage.execute(
+        { action: 'import', target: file },
+        context,
+      );
+      expect(imported).not.toContain('PRIVATE FULL PROMPT');
+      expect(JSON.parse(imported)).toMatchObject({
+        id: 'team/summary',
+        version: '1.0.0',
+        name: 'Summary agent',
+      });
+      const listed = await tools.marketplace_inspect.execute(
+        { action: 'list' },
+        context,
+      );
+      expect(listed).not.toContain('PRIVATE FULL PROMPT');
+      expect(JSON.parse(listed)).toMatchObject([
+        { id: 'team/summary', version: '1.0.0' },
+      ]);
+      const shown = await tools.marketplace_inspect.execute(
+        { action: 'show', target: 'team/summary' },
+        context,
+      );
+      expect(JSON.parse(shown).manifest.prompt).toBe('PRIVATE FULL PROMPT');
+      writeFileSync(file, JSON.stringify(makeBundle('1.1.0')));
+      const updated = await tools.marketplace_manage.execute(
+        { action: 'update_file', target: file },
+        context,
+      );
+      expect(updated).not.toContain('PRIVATE FULL PROMPT');
+      expect(JSON.parse(updated)).toMatchObject({
+        id: 'team/summary',
+        version: '1.1.0',
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('retries a busy store without blocking the host event loop', async () => {
     const root = mkdtempSync(join(tmpdir(), 'marketplace-host-wait-'));
     const service = new MarketplaceService({
@@ -283,7 +358,7 @@ describe('marketplace tools', () => {
           { agent: 'workflow-lead' } as never,
         ),
       ),
-    ).toEqual([{ id: 'x' }]);
+    ).toMatchObject([{ id: 'x', version: '1.0.0', name: 'Example' }]);
   });
 
   test('uses live finalized identity and rejects calls before registry readiness', async () => {
@@ -312,7 +387,7 @@ describe('marketplace tools', () => {
           { agent: 'host-lead' } as never,
         ),
       ),
-    ).toEqual([{ id: 'x' }]);
+    ).toMatchObject([{ id: 'x', version: '1.0.0', name: 'Example' }]);
   });
 
   test('rejects a shared orchestrator/fixer display alias but keeps canonical access', async () => {
@@ -339,7 +414,7 @@ describe('marketplace tools', () => {
           { agent: 'orchestrator' } as never,
         ),
       ),
-    ).toEqual([{ id: 'x' }]);
+    ).toMatchObject([{ id: 'x', version: '1.0.0', name: 'Example' }]);
   });
 
   test('does not treat orchestrator as canonical when a specialist owns that visible name', async () => {
@@ -369,7 +444,7 @@ describe('marketplace tools', () => {
           { agent: 'Lead' } as never,
         ),
       ),
-    ).toEqual([{ id: 'x' }]);
+    ).toMatchObject([{ id: 'x', version: '1.0.0', name: 'Example' }]);
   });
 
   test('management adapters resolve files against cwd and never claim reload', async () => {

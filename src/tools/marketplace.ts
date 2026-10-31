@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 import { type ToolDefinition, tool } from '@opencode-ai/plugin';
 import { retryMarketplaceLeases } from '../marketplace/lease';
 import type { MarketplaceService } from '../marketplace/service';
+import type { StoredMarketplacePackage } from '../marketplace/store';
 import { normalizeAgentName } from '../utils/agent-variant';
 
 const z = tool.schema;
@@ -21,6 +22,16 @@ const MANAGE_ACTIONS = [
   'enable',
   'disable',
 ] as const;
+
+function summarizePackage(stored: StoredMarketplacePackage) {
+  return {
+    id: stored.manifest.id,
+    version: stored.manifest.version,
+    name: stored.manifest.displayName,
+    source: stored.source,
+    digest: stored.digest,
+  };
+}
 
 export interface MarketplaceToolOptions {
   readonly service: MarketplaceService;
@@ -120,7 +131,11 @@ export function createMarketplaceTools(options: MarketplaceToolOptions): {
       return retryMarketplaceLeases(() => {
         switch (args.action) {
           case 'list':
-            return JSON.stringify(options.service.list(), null, 2);
+            return JSON.stringify(
+              options.service.list().map(summarizePackage),
+              null,
+              2,
+            );
           case 'show':
             return JSON.stringify(
               options.service.show(args.target?.trim() ?? ''),
@@ -179,16 +194,24 @@ export function createMarketplaceTools(options: MarketplaceToolOptions): {
         let result: unknown;
         switch (args.action) {
           case 'install':
-            result = await options.service.installRemote(target, context?.abort);
+            result = summarizePackage(
+              await options.service.installRemote(target, context?.abort),
+            );
             break;
           case 'import':
-            result = options.service.importFile(resolve(cwd, target));
+            result = summarizePackage(
+              options.service.importFile(resolve(cwd, target)),
+            );
             break;
           case 'update':
-            result = await options.service.updateRemote(target, context?.abort);
+            result = summarizePackage(
+              await options.service.updateRemote(target, context?.abort),
+            );
             break;
           case 'update_file':
-            result = options.service.updateFile(resolve(cwd, target));
+            result = summarizePackage(
+              options.service.updateFile(resolve(cwd, target)),
+            );
             break;
           case 'uninstall':
             if (args.acknowledge_other_projects !== true) {
