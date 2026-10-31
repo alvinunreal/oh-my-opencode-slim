@@ -305,10 +305,14 @@ function makeManager({
   };
 }
 
+/** Shared clock base so the boundary fixtures and expectStampSplit cannot
+ *  drift apart. */
+const TEST_CLOCK_BASE = 1_000_000;
+
 /** Split time control: scheduling through the harness, observation through
  *  an independent clock so jumps fire nothing (the jest.setSystemTime /
  *  advanceTimersByTime distinction). */
-function createTestClock(start = 1_000_000) {
+function createTestClock(start = TEST_CLOCK_BASE) {
   const harness = createTimerHarness();
   let now = start;
 
@@ -2367,31 +2371,26 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
     { kind: 'reconciles B', advance: false, calls: ['test/B'] },
     { kind: 'does not roll C back to B', advance: true, calls: ['test/C'] },
   ])('late-landing switch $kind', async ({ advance, calls }) => {
-    try {
-      const observed: string[] = [];
-      const mgr = retryMgr(
-        ['A', 'B', 'C'],
-        (_sid, model) => void observed.push(model),
-      );
-      const sid = 'retry-late-landing';
-      const { promise: switchRequest, resolve: resolveSwitch } =
-        Promise.withResolvers<void>();
-      const pending = mgr.handleV2Retry(
-        retryEvent(sid, 'A'),
-        () => switchRequest,
-      );
-      await clock.advance(2_500);
-      await pending;
-      expect(observed).toEqual([]);
-      if (advance)
-        await mgr.handleV2Retry(retryEvent(sid, 'B'), async () => {});
-      // A late B must reconcile only if no later retry has advanced to C.
-      resolveSwitch();
-      for (let i = 0; i < 10; i++) await Promise.resolve();
-      expect(observed).toEqual(calls);
-    } finally {
-      // Per-test clock; nothing to reset.
-    }
+    const observed: string[] = [];
+    const mgr = retryMgr(
+      ['A', 'B', 'C'],
+      (_sid, model) => void observed.push(model),
+    );
+    const sid = 'retry-late-landing';
+    const { promise: switchRequest, resolve: resolveSwitch } =
+      Promise.withResolvers<void>();
+    const pending = mgr.handleV2Retry(
+      retryEvent(sid, 'A'),
+      () => switchRequest,
+    );
+    await clock.advance(2_500);
+    await pending;
+    expect(observed).toEqual([]);
+    if (advance) await mgr.handleV2Retry(retryEvent(sid, 'B'), async () => {});
+    // A late B must reconcile only if no later retry has advanced to C.
+    resolveSwitch();
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(observed).toEqual(calls);
   });
 });
 
@@ -4384,7 +4383,6 @@ describe('ForegroundFallbackManager session.error', () => {
     } finally {
       mgr.dispose();
       admit.mockRestore();
-      // Per-test clock; nothing to reset.
     }
   });
 
@@ -7686,36 +7684,32 @@ describe('ForegroundFallbackManager deduplication', () => {
   // DEDUP_WINDOW_MS inclusivity (issue #1721): the isDeduped sweep expires
   // a recorded incident once DEDUP_WINDOW_MS elapses, inclusively, so the
   // boundary decides exactly at 5000ms. The clock is driven through
-  // clock.set so Date.now is exact. Not
-  // reached here: the id-less
+  // clock.set so Date.now is exact. Not reached here: the id-less
   // correlation guards and the hasSameTurnErrorIncident sweep (a message-id
   // match returns its incidentID before the window is read); those sites
-  // need their own fixtures. The three rows kill the relational flips and
-  // the `==` narrowing of the window.
+  // have their own fixtures in the DEDUP_WINDOW_MS boundaries describe
+  // below. The three rows kill the relational flips and the `==` narrowing
+  // of the window.
   test.each([
     [4_999, 1],
     [5_000, 2],
     [5_001, 2],
   ])('delta %dms -> %d prompts', async (delta, prompts) => {
-    clock.set(1_000_000);
-    try {
-      const { mocks } = createMockClient();
-      const mgr = timedManager(makeChains(), true, {
-        directory: '/test',
-      } as never);
-      const sid = `dedup-edge-${delta}`;
-      mgr.registerSessionAgent(sid, 'orchestrator');
-      await mgr.handleEvent(redoEvents.assistant(sid));
-      // Same message id -> same incidentID (the id match returns before
-      // fingerprint or window is read), so only the time boundary decides.
-      const err = redoEvents.error(sid, { message: 'rate limit exceeded' });
-      await mgr.handleEvent(err);
-      clock.set(1_000_000 + delta);
-      await mgr.handleEvent(err);
-      expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
-    } finally {
-      // Per-test clock; nothing to reset.
-    }
+    clock.set(TEST_CLOCK_BASE);
+    const { mocks } = createMockClient();
+    const mgr = timedManager(makeChains(), true, {
+      directory: '/test',
+    } as never);
+    const sid = `dedup-edge-${delta}`;
+    mgr.registerSessionAgent(sid, 'orchestrator');
+    await mgr.handleEvent(redoEvents.assistant(sid));
+    // Same message id -> same incidentID (the id match returns before
+    // fingerprint or window is read), so only the time boundary decides.
+    const err = redoEvents.error(sid, { message: 'rate limit exceeded' });
+    await mgr.handleEvent(err);
+    clock.set(TEST_CLOCK_BASE + delta);
+    await mgr.handleEvent(err);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
   });
 
   test('distinct failure incidents on the same turn and model are not time-deduped', async () => {
@@ -7846,13 +7840,15 @@ const SPENT_QUOTA = {
  * silently lose their kill power, so assert the split. */
 function expectStampSplit(mgr: unknown, sid: string): void {
   const internals = mgr as any;
-  expect(internals.pendingErrorCorrelation.get(sid)?.time).toBe(1_000_000);
+  expect(internals.pendingErrorCorrelation.get(sid)?.time).toBe(
+    TEST_CLOCK_BASE,
+  );
   const record = internals.triggerIncidents.get(sid) as
     | Map<string, { time: number }>
     | undefined;
   expect(
     [...(record?.values() ?? [])].map((incident) => incident.time),
-  ).toContain(1_001_000);
+  ).toContain(TEST_CLOCK_BASE + 1_000);
 }
 
 /** Named wrapper: the constructor's positional options are easy to
@@ -7888,28 +7884,22 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
   ])(
     'incidentForMessageError correlates an id-less error at %dms -> %d prompts',
     async (delta, prompts) => {
-      clock.set(1_000_000);
-      try {
-        const { mocks } = createMockClient();
-        const mgr = makeBoundaryManager(makeChains());
-        const sid = `message-error-window-${delta}`;
-        // Unregistered agent: the first fallback suspends on agent
-        // resolution, so the clock moves after the pending correlation is
-        // stamped and the incident lands later than it. A message-id match
-        // would return before the window is read; the id-less replay is what
-        // consults incidentForMessageError's time guard.
-        const first = mgr.handleEvent(
-          redoEvents.assistant(sid, 'a', RATE_LIMIT),
-        );
-        clock.set(1_001_000);
-        await first;
-        expectStampSplit(mgr, sid);
-        clock.set(1_000_000 + delta);
-        await mgr.handleEvent(redoEvents.idlessAssistant(sid, 'a', RATE_LIMIT));
-        expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
-      } finally {
-        // Per-test clock; nothing to reset.
-      }
+      clock.set(TEST_CLOCK_BASE);
+      const { mocks } = createMockClient();
+      const mgr = makeBoundaryManager(makeChains());
+      const sid = `message-error-window-${delta}`;
+      // Unregistered agent: the first fallback suspends on agent
+      // resolution, so the clock moves after the pending correlation is
+      // stamped and the incident lands later than it. A message-id match
+      // would return before the window is read; the id-less replay is what
+      // consults incidentForMessageError's time guard.
+      const first = mgr.handleEvent(redoEvents.assistant(sid, 'a', RATE_LIMIT));
+      clock.set(TEST_CLOCK_BASE + 1_000);
+      await first;
+      expectStampSplit(mgr, sid);
+      clock.set(TEST_CLOCK_BASE + delta);
+      await mgr.handleEvent(redoEvents.idlessAssistant(sid, 'a', RATE_LIMIT));
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
     },
   );
 
@@ -7920,26 +7910,22 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
   ])(
     'incidentForSessionError correlates an id-less error at %dms -> %d prompts',
     async (delta, prompts) => {
-      clock.set(1_000_000);
-      try {
-        // The host session's agent has no fallback chain: the first error
-        // replays on the same model, so sessionModel still matches the
-        // correlation's model when the id-less replay arrives.
-        const { mocks } = createMockClient({ getData: { agent: 'unlisted' } });
-        const mgr = makeBoundaryManager(makeChains());
-        const sid = `session-error-window-${delta}`;
-        await mgr.handleEvent(redoEvents.assistant(sid, 'a'));
-        // Suspends on agent resolution (see the message-error case above).
-        const first = mgr.handleEvent(redoEvents.idlessError(sid, RATE_LIMIT));
-        clock.set(1_001_000);
-        await first;
-        expectStampSplit(mgr, sid);
-        clock.set(1_000_000 + delta);
-        await mgr.handleEvent(redoEvents.idlessError(sid, RATE_LIMIT));
-        expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
-      } finally {
-        // Per-test clock; nothing to reset.
-      }
+      clock.set(TEST_CLOCK_BASE);
+      // The host session's agent has no fallback chain: the first error
+      // replays on the same model, so sessionModel still matches the
+      // correlation's model when the id-less replay arrives.
+      const { mocks } = createMockClient({ getData: { agent: 'unlisted' } });
+      const mgr = makeBoundaryManager(makeChains());
+      const sid = `session-error-window-${delta}`;
+      await mgr.handleEvent(redoEvents.assistant(sid, 'a'));
+      // Suspends on agent resolution (see the message-error case above).
+      const first = mgr.handleEvent(redoEvents.idlessError(sid, RATE_LIMIT));
+      clock.set(TEST_CLOCK_BASE + 1_000);
+      await first;
+      expectStampSplit(mgr, sid);
+      clock.set(TEST_CLOCK_BASE + delta);
+      await mgr.handleEvent(redoEvents.idlessError(sid, RATE_LIMIT));
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
     },
   );
 
@@ -7950,29 +7936,25 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
   ])(
     'hasSameTurnErrorIncident consumes a no-chain retry at %dms -> %d prompts',
     async (delta, prompts) => {
-      clock.set(1_000_000);
-      try {
-        const { mocks } = createMockClient({ getData: { agent: 'unlisted' } });
-        const mgr = makeBoundaryManager(makeChains());
-        const sid = `same-turn-incident-window-${delta}`;
-        await mgr.handleEvent(redoEvents.assistant(sid, 'a'));
-        // Charges the error incident and the shared retry budget.
-        await mgr.handleEvent(redoEvents.idlessError(sid, RATE_LIMIT));
-        // Deterministic terminal: no prompt, no charge, and no second error
-        // incident. It leaves absorbHostRetry unable to absorb the retry, so
-        // an expired incident lets the retry reach the replay path.
-        await mgr.handleEvent(
-          redoEvents.idlessError(sid, {
-            statusCode: 402,
-            message: 'Payment Required',
-          }),
-        );
-        clock.set(1_000_000 + delta);
-        await mgr.handleEvent(redoEvents.retry(sid));
-        expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
-      } finally {
-        // Per-test clock; nothing to reset.
-      }
+      clock.set(TEST_CLOCK_BASE);
+      const { mocks } = createMockClient({ getData: { agent: 'unlisted' } });
+      const mgr = makeBoundaryManager(makeChains());
+      const sid = `same-turn-incident-window-${delta}`;
+      await mgr.handleEvent(redoEvents.assistant(sid, 'a'));
+      // Charges the error incident and the shared retry budget.
+      await mgr.handleEvent(redoEvents.idlessError(sid, RATE_LIMIT));
+      // Deterministic terminal: no prompt, no charge, and no second error
+      // incident. It leaves absorbHostRetry unable to absorb the retry, so
+      // an expired incident lets the retry reach the replay path.
+      await mgr.handleEvent(
+        redoEvents.idlessError(sid, {
+          statusCode: 402,
+          message: 'Payment Required',
+        }),
+      );
+      clock.set(TEST_CLOCK_BASE + delta);
+      await mgr.handleEvent(redoEvents.retry(sid));
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
     },
   );
 
@@ -7983,26 +7965,22 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
   ])(
     'stale attempt 2 retry is skipped at %dms -> %d prompts',
     async (delta, prompts) => {
-      clock.set(1_000_000);
-      try {
-        const { mocks } = createMockClient();
-        const mgr = makeBoundaryManager(
-          { orchestrator: ['test/a', 'test/b', 'test/c'] },
-          0, // no host-retry budget: attempt 2 must reach the fallback path
-        );
-        const sid = `stale-retry-window-${delta}`;
-        mgr.registerSessionAgent(sid, 'orchestrator');
-        await mgr.handleEvent(redoEvents.assistant(sid, 'a'));
-        await mgr.handleEvent(redoEvents.idlessError(sid, RATE_LIMIT));
-        // The replacement speaks: sessionModel names test/b while
-        // lastTriggerModel still names the failed test/a.
-        await mgr.handleEvent(redoEvents.assistant(sid, 'b'));
-        clock.set(1_000_000 + delta);
-        await mgr.handleEvent(redoEvents.retry(sid, 2));
-        expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
-      } finally {
-        // Per-test clock; nothing to reset.
-      }
+      clock.set(TEST_CLOCK_BASE);
+      const { mocks } = createMockClient();
+      const mgr = makeBoundaryManager(
+        { orchestrator: ['test/a', 'test/b', 'test/c'] },
+        0, // no host-retry budget: attempt 2 must reach the fallback path
+      );
+      const sid = `stale-retry-window-${delta}`;
+      mgr.registerSessionAgent(sid, 'orchestrator');
+      await mgr.handleEvent(redoEvents.assistant(sid, 'a'));
+      await mgr.handleEvent(redoEvents.idlessError(sid, RATE_LIMIT));
+      // The replacement speaks: sessionModel names test/b while
+      // lastTriggerModel still names the failed test/a.
+      await mgr.handleEvent(redoEvents.assistant(sid, 'b'));
+      clock.set(TEST_CLOCK_BASE + delta);
+      await mgr.handleEvent(redoEvents.retry(sid, 2));
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(prompts);
     },
   );
 
@@ -8013,43 +7991,39 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
   ])(
     'recentlyHandledMessage keeps the replacement model at %dms (next fallback -> %s)',
     async (delta, target) => {
-      clock.set(1_000_000);
-      try {
-        const { mocks } = createMockClient();
-        const mgr = makeBoundaryManager({
-          orchestrator: ['test/a', 'test/b', 'test/c'],
-        });
-        const sid = `recently-handled-window-${delta}`;
-        const failedID = `failed-${sid}`;
-        mgr.registerSessionAgent(sid, 'orchestrator');
-        await mgr.handleEvent(
-          redoEvents.assistant(sid, 'a', RATE_LIMIT, failedID),
-        );
-        // The replacement speaks on its own message.
-        await mgr.handleEvent(
-          redoEvents.assistant(sid, 'b', undefined, 'replacement'),
-        );
-        clock.set(1_000_000 + delta);
-        // A late re-emit of the failed message carries its own model again.
-        // Inside the window it is inert; expired it re-seeds sessionModel to
-        // test/a, and the next descent returns to the configured head.
-        await mgr.handleEvent(
-          redoEvents.assistant(sid, 'a', undefined, failedID),
-        );
-        await mgr.handleEvent(
-          redoEvents.idlessError(sid, {
-            statusCode: 500,
-            message: 'Internal Server Error',
-          }),
-        );
-        expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
-        expect((mocks.promptAsync.mock.calls[1][0] as any).body.model).toEqual({
-          providerID: 'test',
-          modelID: target,
-        });
-      } finally {
-        // Per-test clock; nothing to reset.
-      }
+      clock.set(TEST_CLOCK_BASE);
+      const { mocks } = createMockClient();
+      const mgr = makeBoundaryManager({
+        orchestrator: ['test/a', 'test/b', 'test/c'],
+      });
+      const sid = `recently-handled-window-${delta}`;
+      const failedID = `failed-${sid}`;
+      mgr.registerSessionAgent(sid, 'orchestrator');
+      await mgr.handleEvent(
+        redoEvents.assistant(sid, 'a', RATE_LIMIT, failedID),
+      );
+      // The replacement speaks on its own message.
+      await mgr.handleEvent(
+        redoEvents.assistant(sid, 'b', undefined, 'replacement'),
+      );
+      clock.set(TEST_CLOCK_BASE + delta);
+      // A late re-emit of the failed message carries its own model again.
+      // Inside the window it is inert; expired it re-seeds sessionModel to
+      // test/a, and the next descent returns to the configured head.
+      await mgr.handleEvent(
+        redoEvents.assistant(sid, 'a', undefined, failedID),
+      );
+      await mgr.handleEvent(
+        redoEvents.idlessError(sid, {
+          statusCode: 500,
+          message: 'Internal Server Error',
+        }),
+      );
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+      expect((mocks.promptAsync.mock.calls[1][0] as any).body.model).toEqual({
+        providerID: 'test',
+        modelID: target,
+      });
     },
   );
 
@@ -8060,45 +8034,41 @@ describe('DEDUP_WINDOW_MS boundaries (issue #1721)', () => {
   ])(
     'triggeringModel attributes a spent echo at %dms to %j',
     async (delta, providers) => {
-      clock.set(1_000_000);
-      try {
-        const { mocks } = createMockClient();
-        const mgr = makeBoundaryManager({ orchestrator: ['p1/a', 'p2/b'] });
-        const sid = `triggering-model-window-${delta}`;
-        mgr.registerSessionAgent(sid, 'orchestrator');
-        await mgr.handleEvent({
-          type: 'message.updated',
-          properties: {
-            info: {
-              sessionID: sid,
-              role: 'assistant',
-              providerID: 'p1',
-              modelID: 'a',
-            },
-          },
-        });
-        // Spent quota on p1: records the switch trigger and switches to p2.
-        await mgr.handleEvent(redoEvents.idlessError(sid, SPENT_QUOTA));
-        clock.set(1_000_000 + delta);
-        // A retry echo carries no message id, so surfacesSpentQuota asks
-        // triggeringModel which model the error belongs to.
-        await mgr.handleEvent({
-          type: 'session.status',
-          properties: {
+      clock.set(TEST_CLOCK_BASE);
+      const { mocks } = createMockClient();
+      const mgr = makeBoundaryManager({ orchestrator: ['p1/a', 'p2/b'] });
+      const sid = `triggering-model-window-${delta}`;
+      mgr.registerSessionAgent(sid, 'orchestrator');
+      await mgr.handleEvent({
+        type: 'message.updated',
+        properties: {
+          info: {
             sessionID: sid,
-            status: { type: 'retry', attempt: 1 },
-            error: SPENT_QUOTA,
+            role: 'assistant',
+            providerID: 'p1',
+            modelID: 'a',
           },
-        });
-        expect(
-          [
-            ...((mgr as any).quotaExhaustedProviders.get(sid) as Set<string>),
-          ].sort(),
-        ).toEqual(providers);
-        expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-      } finally {
-        // Per-test clock; nothing to reset.
-      }
+        },
+      });
+      // Spent quota on p1: records the switch trigger and switches to p2.
+      await mgr.handleEvent(redoEvents.idlessError(sid, SPENT_QUOTA));
+      clock.set(TEST_CLOCK_BASE + delta);
+      // A retry echo carries no message id, so surfacesSpentQuota asks
+      // triggeringModel which model the error belongs to.
+      await mgr.handleEvent({
+        type: 'session.status',
+        properties: {
+          sessionID: sid,
+          status: { type: 'retry', attempt: 1 },
+          error: SPENT_QUOTA,
+        },
+      });
+      expect(
+        [
+          ...((mgr as any).quotaExhaustedProviders.get(sid) as Set<string>),
+        ].sort(),
+      ).toEqual(providers);
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
     },
   );
 });
@@ -9579,64 +9549,60 @@ describe('ForegroundFallbackManager dispose', () => {
   });
 
   test('dispose during retry backoff abandons the attempt with zero further client calls', async () => {
-    // Fake timers (bun:test's jest-compat layer) drive the whole backoff
-    // window so no real wall-clock is awaited. The former real ~500ms
+    // The injected timer harness drives the whole backoff window so no real
+    // wall-clock is awaited. The former real ~500ms
     // backoff sleep held the event loop open, and concurrently scheduled
     // test files could poll the shared getClient mock during that window,
     // polluting the call-count assertions below (the full-suite flake;
     // the test always passed in isolation).
-    try {
-      const { mocks } = createMockClient();
-      const mgr = timedManager(
-        { orchestrator: ['openai/gpt-b', 'openai/gpt-c'] },
-        true,
-        { directory: '/test' } as any,
-        3, // maxRetries
-        undefined, // coordinator
-        undefined, // onSessionModelChanged
-        0, // initialRetryDelayMs — intervene immediately
-        6_500, // retryDelayMs — backoff outlives the dedup spacing below
-      );
+    const { mocks } = createMockClient();
+    const mgr = timedManager(
+      { orchestrator: ['openai/gpt-b', 'openai/gpt-c'] },
+      true,
+      { directory: '/test' } as any,
+      3, // maxRetries
+      undefined, // coordinator
+      undefined, // onSessionModelChanged
+      0, // initialRetryDelayMs — intervene immediately
+      6_500, // retryDelayMs — backoff outlives the dedup spacing below
+    );
 
-      // First fallback completes normally: one transcript read + replay.
-      // (Pure microtasks — this path arms no timer.)
-      await mgr.handleEvent({
-        type: 'session.error',
-        properties: {
-          sessionID: 'sess-backoff-dispose',
-          error: { message: 'Rate limit exceeded' },
-        },
-      });
-      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    // First fallback completes normally: one transcript read + replay.
+    // (Pure microtasks — this path arms no timer.)
+    await mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-backoff-dispose',
+        error: { message: 'Rate limit exceeded' },
+      },
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
 
-      // Second trigger: beyond the 5s dedup window but inside the
-      // retryDelayMs backoff, so tryFallback sleeps before
-      // execFallback. Advance the faked clock (moves the mocked
-      // Date.now() past the dedup window without firing any timer),
-      // then run the trigger synchronously into the faked backoff sleep.
-      clock.set(clock.now() + 6_000);
-      const pending = mgr.handleEvent({
-        type: 'session.error',
-        properties: {
-          sessionID: 'sess-backoff-dispose',
-          error: { message: 'Rate limit exceeded' },
-        },
-      });
+    // Second trigger: beyond the 5s dedup window but inside the
+    // retryDelayMs backoff, so tryFallback sleeps before
+    // execFallback. Advance the harness clock (moves Date.now()
+    // past the dedup window without firing any timer), then run the
+    // trigger synchronously into the harness backoff sleep.
+    clock.set(clock.now() + 6_000);
+    const pending = mgr.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: 'sess-backoff-dispose',
+        error: { message: 'Rate limit exceeded' },
+      },
+    });
 
-      // Reload during the backoff sleep, then fire the faked timer:
-      // the computed delay is retryDelayMs 6_500 − 6_000 elapsed =
-      // 500ms; advance past it so the sleep settles synchronously.
-      mgr.dispose();
-      await clock.advance(1_000);
-      await pending;
+    // Reload during the backoff sleep, then fire the harness timer:
+    // the computed delay is retryDelayMs 6_500 − 6_000 elapsed =
+    // 500ms; advance past it so the sleep settles synchronously.
+    mgr.dispose();
+    await clock.advance(1_000);
+    await pending;
 
-      expect(mocks.messages).toHaveBeenCalledTimes(1); // no second read
-      expect(mocks.promptAsync).toHaveBeenCalledTimes(1); // no second replay
-      expect(mocks.abort).not.toHaveBeenCalled();
-      expect(mgr.isFallbackInProgress('sess-backoff-dispose')).toBe(false);
-    } finally {
-      // Per-test clock; nothing to reset.
-    }
+    expect(mocks.messages).toHaveBeenCalledTimes(1); // no second read
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1); // no second replay
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mgr.isFallbackInProgress('sess-backoff-dispose')).toBe(false);
   });
 });
 
