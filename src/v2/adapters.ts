@@ -252,6 +252,7 @@ export function applyAgentToDraft(
       (v1.mode as string) ?? (name === 'orchestrator' ? 'primary' : 'subagent');
     agent.hidden = v1.hidden === true;
     if (typeof v1.description === 'string') agent.description = v1.description;
+    if (typeof v1.color === 'string') agent.color = v1.color;
     if (typeof v1.prompt === 'string') agent.system = v1.prompt;
     if (model) {
       agent.model = {
@@ -326,6 +327,7 @@ export function snapshotNativeAgentForRegistry(
 
   if (typeof agent.description === 'string')
     config.description = agent.description;
+  if (typeof agent.color === 'string') config.color = agent.color;
   if (typeof agent.system === 'string') config.prompt = agent.system;
   if (typeof agent.mode === 'string') config.mode = agent.mode;
   if (typeof agent.hidden === 'boolean') config.hidden = agent.hidden;
