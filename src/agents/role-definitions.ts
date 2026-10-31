@@ -63,33 +63,6 @@ export const ROLE_DEFINITIONS: Readonly<
   }),
 });
 
-/**
- * Write-capability verdict for a specialist role (C2 wake grading).
- *
- * A hand-written table, not a live derivation from the routing prose —
- * `roleHasWriteCapability` is called on every wake-grading path and must
- * not re-parse anything per call. A drift-guard test
- * (role-definitions.test.ts) cross-checks this table against the routing
- * role set on every run so it cannot silently drift.
- * No agent names are hardcoded beyond this table: an unknown agent, or a
- * missing/undeterminable name, fails safe to writer (an extra
- * verification sentence costs less than a missing one).
- */
-export const ROLE_WRITE_CAPABILITY: Readonly<Record<string, boolean>> =
-  Object.freeze({
-    explorer: false,
-    oracle: false,
-    designer: true,
-    fixer: true,
-    council: false,
-    observer: false,
-  });
-
-export function roleHasWriteCapability(agent: string | undefined): boolean {
-  if (!agent) return true;
-  return ROLE_WRITE_CAPABILITY[agent] ?? true;
-}
-
 export function createRoleAgent(
   role: SpecialistRoleDefinition,
   model: string,

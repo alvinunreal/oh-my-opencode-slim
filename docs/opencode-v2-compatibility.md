@@ -329,9 +329,10 @@ not an optional-degradation path.
       cache monitor's session eviction, `properties.sessionID` for the
       task-session-manager's tombstone/board teardown; no `generation` is
       fabricated, so the event-router's unproven-relaunch deletion fence
-      keeps its strength), usage telemetry
-      (`session.usage.updated`/`session.step.ended`) → a deduplicated
-      completed-assistant `message.updated` for the cache monitor, the Form
+      keeps its strength), per-request `session.step.ended` telemetry → one
+      completed-assistant `message.updated` per step, keyed by the assistant
+      message ID, for the cache monitor (cumulative `session.usage.updated`
+      is not subscribed), the Form
       flow (`form.created`/`form.replied`/`form.cancelled`) → v1
       `question.asked`/`question.replied`/`question.rejected`
       (`form.id` → the question request id; forms owned by the `"global"`

@@ -3212,7 +3212,7 @@ test('revived generation stays silent after a tracker-delivered terminal and a l
 // cache-safe trailing zone, so a revival turn that busts the provider
 // prefix is a regression. This pin automates the automatable core: the
 // REAL plugin factory (cache-monitor, tracker all wired
-// by src/index.ts), the REAL v2 event mapping (session.usage.updated →
+// by src/index.ts), the REAL v2 event mapping (session.step.ended →
 // message.updated through mapV2EventToV1, production pump order), and
 // realistic per-turn usage telemetry for the parent (turn 1 cold
 // cache.read=0 with a prefix write, every later turn cache.read>0 and
@@ -3247,18 +3247,24 @@ test('runbook §3-D: zero cache-monitor warnings across a full revival/notificat
     if (!tracker) {
       throw new Error('assembly did not expose the revived-run tracker');
     }
-    // Parent usage telemetry (session.usage.updated, live wire shape):
+    // Parent usage telemetry (session.step.ended, live wire shape):
     // one completed assistant request per turn, keyed like the host
     // reports it. Pumped through the REAL event hook chain.
+    let parentStep = 0;
     const parentTurn = (tokens: {
       input: number;
       read: number;
       write?: number;
     }) =>
       pump({
-        type: 'session.usage.updated',
+        id: `evt_parent_${++parentStep}`,
+        created: parentStep,
+        type: 'session.step.ended',
         data: {
           sessionID: 'parent',
+          assistantMessageID: `msg_parent_${parentStep}`,
+          finish: 'stop',
+          cost: 0,
           tokens: {
             input: tokens.input,
             output: 5,
@@ -3429,9 +3435,14 @@ test('runbook §3-D: zero cache-monitor warnings across a full revival/notificat
     // proven bust signature for a separate session DOES warn, proving
     // the monitor was armed across the window above.
     await pump({
-      type: 'session.usage.updated',
+      id: 'evt_control_1',
+      created: 1,
+      type: 'session.step.ended',
       data: {
         sessionID: 'ses_control',
+        assistantMessageID: 'msg_control_1',
+        finish: 'stop',
+        cost: 0,
         tokens: {
           input: 8_000,
           output: 5,
@@ -3441,9 +3452,14 @@ test('runbook §3-D: zero cache-monitor warnings across a full revival/notificat
       },
     });
     await pump({
-      type: 'session.usage.updated',
+      id: 'evt_control_2',
+      created: 2,
+      type: 'session.step.ended',
       data: {
         sessionID: 'ses_control',
+        assistantMessageID: 'msg_control_2',
+        finish: 'stop',
+        cost: 0,
         tokens: {
           input: 500,
           output: 5,
@@ -3453,9 +3469,14 @@ test('runbook §3-D: zero cache-monitor warnings across a full revival/notificat
       },
     });
     await pump({
-      type: 'session.usage.updated',
+      id: 'evt_control_3',
+      created: 3,
+      type: 'session.step.ended',
       data: {
         sessionID: 'ses_control',
+        assistantMessageID: 'msg_control_3',
+        finish: 'stop',
+        cost: 0,
         tokens: {
           input: 12_000,
           output: 5,

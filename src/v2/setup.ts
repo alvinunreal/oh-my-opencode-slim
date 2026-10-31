@@ -486,9 +486,20 @@ export function createSessionContextHandler(
       // wakes need their first text part re-flagged (host drops internal
       // part metadata). Idempotent across context events.
       let storedHistory: Array<Record<string, unknown>> | undefined;
+      // Also read it for untimed native deliveries: their timestamp lives
+      // only in stored history, even when the envelope already has an agent.
       if (
         event.messages.some(
-          (message) => message.role === 'user' && message.agent === undefined,
+          (message) =>
+            message.role === 'user' &&
+            (message.agent === undefined ||
+              (!('time' in message) &&
+                message.content.some(
+                  (part) =>
+                    part.type === 'text' &&
+                    typeof part.text === 'string' &&
+                    part.text.startsWith('<subagent sessionID="'),
+                ))),
         )
       ) {
         try {
@@ -544,21 +555,47 @@ export function createSessionContextHandler(
         }
       }
       try {
-        const v1messages = event.messages.map((m) => ({
-          info: m,
-          parts: m.content.map((part) =>
-            ((part.type === 'tool-call' || part.type === 'tool-result') &&
-              part.toolName === 'interview_submit_state') ||
-            (part.type === 'text' &&
-              typeof part.text === 'string' &&
-              part.text.includes('<interview_state'))
-              ? { ...part }
-              : part,
-          ),
-        }));
+        const syntheticDeliveries = new Map(
+          storedHistory
+            ?.filter(
+              (entry) =>
+                entry.type === 'synthetic' &&
+                typeof entry.id === 'string' &&
+                typeof entry.text === 'string' &&
+                entry.text.startsWith('<subagent sessionID="') &&
+                entry.time !== undefined,
+            )
+            .map((entry) => [entry.id, entry]) ?? [],
+        );
+        const projectedTimes = new WeakSet<object>();
+        const v1messages = event.messages.map((m) => {
+          const stored = syntheticDeliveries.get(m.id);
+          const matches =
+            m.role === 'user' &&
+            !('time' in m) &&
+            stored &&
+            m.content.some(
+              (part) => part.type === 'text' && part.text === stored.text,
+            );
+          const info = matches ? { ...m, time: stored.time } : m;
+          if (matches) projectedTimes.add(info);
+          return {
+            info,
+            parts: m.content.map((part) =>
+              ((part.type === 'tool-call' || part.type === 'tool-result') &&
+                part.toolName === 'interview_submit_state') ||
+              (part.type === 'text' &&
+                typeof part.text === 'string' &&
+                part.text.includes('<interview_state'))
+                ? { ...part }
+                : part,
+            ),
+          };
+        });
         await deps.messagesTransform({}, { messages: v1messages });
         event.messages = v1messages.map((m) => {
-          const info = m.info as { content?: unknown };
+          const info = m.info as { content?: unknown; time?: unknown };
+          if (projectedTimes.has(info)) delete info.time;
           info.content = m.parts;
           return m.info;
         }) as V2SessionContextEvent['messages'];
