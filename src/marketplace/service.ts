@@ -232,6 +232,7 @@ export class MarketplaceService {
     const presetOverride = this.getPresetOverride?.();
     return {
       directory: this.projectDir,
+      hostFlavor: this.hostFlavor,
       store: this.store,
       inspection,
       ...(presetOverride === undefined ? {} : { presetOverride }),
