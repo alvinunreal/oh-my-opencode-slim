@@ -16,9 +16,7 @@ export interface CustomSkill {
 
 /**
  * Registry of custom skills bundled in this repository — the single gate for
- * in-process skill registration. Note: `src/skills/loop-engineering` is
- * deliberately NOT registered; the `/loop` command hook drives that workflow
- * inline and the directory is reference material only.
+ * in-process skill registration.
  */
 export const CUSTOM_SKILLS: CustomSkill[] = [
   {

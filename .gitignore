@@ -38,11 +38,9 @@ reports/
 tmp/
 temp/
 local
-.loop-history-*.md
 
 # Eval results (must survive git clean between suite runs)
 src/evals/results/
-.opencode/loop-history/
 
 .sisyphus/
 .hive/

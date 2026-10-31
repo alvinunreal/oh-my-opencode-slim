@@ -57,7 +57,6 @@ import {
   createDeepworkGoalHook,
   createDeepworkHeadGate,
   createJsonErrorRecoveryHook,
-  createLoopCommandHook,
   createOrchestratorWakeScheduler,
   createPhaseReminderHook,
   createReflectCommandHook,
@@ -619,7 +618,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let reflectCommandHook:
     | ReturnType<typeof createReflectCommandHook>
     | undefined;
-  let loopCommandHook: ReturnType<typeof createLoopCommandHook> | undefined;
   let taskSessionManagerHook:
     | ReturnType<typeof createTaskSessionManagerHook>
     | undefined;
@@ -963,9 +961,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     }
     if (isCommandEnabled('reflect', commandOptions)) {
       reflectCommandHook = createReflectCommandHook();
-    }
-    if (isCommandEnabled('loop', commandOptions)) {
-      loopCommandHook = createLoopCommandHook();
     }
     agentDefs = createAgents(runtime, {
       projectDirectory: ctx.directory,
@@ -2243,9 +2238,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       if (isCommandEnabled('reflect', commandGate)) {
         reflectCommandHook?.registerCommand(opencodeConfig);
       }
-      if (isCommandEnabled('loop', commandGate)) {
-        loopCommandHook?.registerCommand(opencodeConfig);
-      }
     },
     retire() {
       registryRetired = true;
@@ -3362,17 +3354,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
       if (commandEnabled('reflect')) {
         await reflectCommandHook?.handleCommandExecuteBefore(
-          input as {
-            command: string;
-            sessionID: string;
-            arguments: string;
-          },
-          output as { parts: Array<{ type: string; text?: string }> },
-        );
-      }
-
-      if (commandEnabled('loop')) {
-        await loopCommandHook?.handleCommandExecuteBefore(
           input as {
             command: string;
             sessionID: string;

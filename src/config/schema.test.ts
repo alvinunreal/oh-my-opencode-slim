@@ -281,7 +281,6 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
         'implement',
         'deepwork',
         'reflect',
-        'loop',
         'preset',
       ],
     });
@@ -297,7 +296,6 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
         'implement',
         'deepwork',
         'reflect',
-        'loop',
         'preset',
       ]);
     }
@@ -333,7 +331,6 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
       'interview',
       'deepwork',
       'reflect',
-      'loop',
       'preset',
       'killall',
       'subagent',

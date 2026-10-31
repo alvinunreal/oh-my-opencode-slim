@@ -1000,7 +1000,6 @@ export const DISABLED_COMMANDS_VALUES = [
   'interview',
   'deepwork',
   'reflect',
-  'loop',
   'preset',
   'killall',
   'subagent',

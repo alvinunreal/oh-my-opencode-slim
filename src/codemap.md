@@ -150,7 +150,7 @@ Key event flows:
    - `experimental.chat.messages.transform` → phase reminders, skill filtering, image attachment processing
 
 5. **Command Execution**:
-   - `command.execute.before` → interview, deepwork, reflect, and loop command hooks (preset switching moved to the TUI)
+   - `command.execute.before` → interview, deepwork, and reflect command hooks (preset switching moved to the TUI)
 
 6. **Cache Telemetry**:
    - `message.updated` (completed assistant requests) → cache monitor observes `tokens.cache.read/write` and logs prompt-cache bust/plateau warnings

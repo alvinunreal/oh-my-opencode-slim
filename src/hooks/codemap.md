@@ -30,7 +30,7 @@ from `index.ts`) that returns the hook points OpenCode invokes.
   Never mutates/reorders earlier messages and never injects unmarked parts —
   enforced by the cache-safety property/snapshot/tripwire tests.
 - **Command hook helper** (`command-hook-utils.ts`): `registerCommandHook`
-  shared by command-style hooks (deepwork, reflect, loop).
+  shared by command-style hooks (deepwork, reflect).
 - **Message types** (`types.ts`): `MessageInfo`, `MessagePart`,
   `MessageWithParts`, plus replay helpers used by foreground-fallback.
 
@@ -42,7 +42,7 @@ from `index.ts`) that returns the hook points OpenCode invokes.
 | Tool interception | `createApplyPatchHook` (tool), `createSearchPathGuardHook`, `createCouncilSeatHook`, task-session-manager | `tool.execute.before` / `tool.execute.after` |
 | Error recovery | `createJsonErrorRecoveryHook`, `createAutoUpdateCheckerHook` | message transform, tool-execute after |
 | Lifecycle/event | task-session-manager, `createCacheMonitorHook`, `createOrchestratorWakeScheduler` | `event` |
-| Runtime commands | `createDeepworkCommandHook`, `createReflectCommandHook`, `createLoopCommandHook` | `command.execute.before` |
+| Runtime commands | `createDeepworkCommandHook`, `createReflectCommandHook` | `command.execute.before` |
 | Model fallback | `ForegroundFallbackManager` | event-driven (message.updated/session.error/session.status) |
 
 ## Flow
@@ -134,7 +134,6 @@ with one equivalent pass; the cache-safety harness mirrors this wiring.
 | `deepwork/` | `/deepwork` runtime command |
 | `foreground-fallback/` | Interactive-session model fallback on rate-limit/errors |
 | `json-error-recovery/` | Malformed JSON/tool-output recovery helpers |
-| `loop-command/` | `/loop` iterative retry command |
 | `orchestrator-wake/` | Periodic orchestrator wake scheduler + process-global gate |
 | `phase-reminder/` | Message-transform reminder enforcing orchestrator workflow phases |
 | `reflect/` | `/reflect` runtime command |

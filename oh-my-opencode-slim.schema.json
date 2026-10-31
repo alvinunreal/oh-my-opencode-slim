@@ -1291,7 +1291,7 @@
       }
     },
     "disabled_commands": {
-      "description": "Slash-command names to disable completely. Valid values: implement, interview, deepwork, reflect, loop, preset, killall, subagent. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. The /reflect command is also disabled when \"reflect\" is listed in disabled_skills. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer's list still applies.",
+      "description": "Slash-command names to disable completely. Valid values: implement, interview, deepwork, reflect, preset, killall, subagent. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. The /reflect command is also disabled when \"reflect\" is listed in disabled_skills. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer's list still applies.",
       "type": "array",
       "items": {
         "type": "string",
@@ -1300,7 +1300,6 @@
           "interview",
           "deepwork",
           "reflect",
-          "loop",
           "preset",
           "killall",
           "subagent"

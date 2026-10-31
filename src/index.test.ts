@@ -5741,15 +5741,13 @@ describe('plugin command registration gating', () => {
       'deepwork',
       'implement',
       'interview',
-      'loop',
       'reflect',
     ]);
   });
 
   test('skips disabled_commands entries and keeps the rest', async () => {
-    await writeConfig({ disabled_commands: ['interview', 'loop'] });
+    await writeConfig({ disabled_commands: ['interview', 'deepwork'] });
     expect(Object.keys(await prepareCommands()).sort()).toEqual([
-      'deepwork',
       'implement',
       'reflect',
     ]);
@@ -5760,7 +5758,6 @@ describe('plugin command registration gating', () => {
     expect(Object.keys(await prepareCommands()).sort()).toEqual([
       'deepwork',
       'interview',
-      'loop',
       'reflect',
     ]);
   });
@@ -5771,7 +5768,6 @@ describe('plugin command registration gating', () => {
       'deepwork',
       'implement',
       'interview',
-      'loop',
     ]);
   });
 
@@ -5779,6 +5775,12 @@ describe('plugin command registration gating', () => {
     await writeConfig({ disabled_commands: ['deepwork'] });
     const hooks = await createHooks();
     try {
+      // Mirror the host order: the config hook registers commands before
+      // any command executes, so an enabled command is armed.
+      (
+        hooks as unknown as { registryBridge: RegistryFactoryBridge }
+      ).registryBridge.prepareCommands({ agent: {}, mcp: {} });
+
       // A user-defined command with the same name must not be rewritten by
       // the disabled omos workflow (the twin of the registration gate).
       const userOwnedOutput = {
@@ -5802,7 +5804,7 @@ describe('plugin command registration gating', () => {
       };
       await hooks['command.execute.before']?.(
         {
-          command: 'loop',
+          command: 'reflect',
           sessionID: 'sess-command-gate',
           arguments: '',
         } as never,

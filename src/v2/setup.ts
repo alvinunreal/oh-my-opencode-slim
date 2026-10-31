@@ -403,7 +403,7 @@ export function createSessionContextHandler(
     } catch (err) {
       log('[v2] interview context bridge failed', String(err));
     }
-    // Generic command marker dispatch (deepwork / reflect / loop).
+    // Generic command marker dispatch (deepwork / reflect).
     if (deps.commandBefore) {
       try {
         await applyCommandMarkerToContext(event, deps.commandBefore);
@@ -2821,7 +2821,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
 
       log('[v2] mcp servers registered', { count: Object.keys(mcps).length });
 
-      // ── Commands (deepwork / reflect / loop slash commands) ──
+      // ── Commands (deepwork / reflect slash commands) ──
       try {
         const entries = Object.entries(synthCommands ?? {});
         if (entries.length > 0) {
@@ -2964,7 +2964,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
 
       // ── Session context hook: command markers + system/messages transforms ──
       // One registration handles: the interview marker bridge, generic command
-      // marker dispatch (deepwork/reflect/loop), chat.message agent tracking
+      // marker dispatch (deepwork/reflect), chat.message agent tracking
       // (or agent/model discovery when the native prompt hook is active), and
       // the v1 system/messages transforms.
       const commandBefore = v1Hooks['command.execute.before'] as

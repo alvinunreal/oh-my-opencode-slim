@@ -236,7 +236,7 @@ not an optional-degradation path.
      `draft.add({name, description, execute})`. `execute` submits a
      `<omos-cmd-command data-name="...">` marker as a user prompt; the
      session context hook recovers it and dispatches to the v1
-     `command.execute.before` hook (deepwork/reflect/loop)
+     `command.execute.before` hook (deepwork/reflect)
     - a single `ctx.session.hook("context")` handles the system/messages
       transforms (SystemPart[]/Message.content shape conversion),
       `chat.message` agent tracking, and interview + generic command marker
@@ -473,7 +473,7 @@ side cannot be observed.
 | Orchestrator + specialist agents, prompts & permission mapping | ✅ | ✅ `ctx.agent.transform` | — |
 | Delegation + background job board + `task_*` tools | ✅ `task` tool | ✅ host `subagent` (auto-bridged: name/args normalization in `src/v2/delegation.ts`, output parsing in the execute bridges) | On v2 the model-visible identifier parameter is `sessionID` for both the host `subagent` resume arg and the plugin's `task_*` tools; `task_id` is accepted only as a deprecated alias (never emitted). Prompt text must use the host's vocabulary directly — no v1→v2 delegation-vocabulary rewriting is applied (display-name substitution separately rewrites `@<internalName>` mentions to the agent's `displayName` throughout the final orchestrator prompt — inline, file, and append orchestrator prompts — and in `orchestratorPrompt`/ACP routing snippets) — so an instructed resume continues the child instead of forking a new one. `backgroundJobs.enabled: false` removes the managed board and every `task_*` tool on both hosts while leaving native `subagent` delegation, completion delivery, and `sessionID` continuation untouched; council seat assembly switches to the native resolver |
 | Tools (ast-grep, webfetch, task_status/task_cancel/task_reply, acp_run; `task_revive`, `task_message` and `wait_for_user` are v1-only — v2 continues retained sessions through native `subagent(sessionID, prompt)` and uses the native `question` tool as the blocking boundary) | ✅ | ✅ `ctx.tool.transform` | v2 requires `options: {codemode: false}` on each registration (CodeMode split): without it a tool registers cleanly but is confined to the `execute` tool's JS runtime and session catalogs yield `Unknown tool: <name>`. The plugin stamps it on every adapted tool (`adaptTool` in `src/v2/adapters.ts`; additive field, older hosts ignore it). ast-grep needs its CLI binary (package, system, or lazy download); webfetch needs `jsdom` resolvable |
-| Slash commands `/deepwork` `/reflect` `/loop` | ✅ | ✅ marker round-trip | — |
+| Slash commands `/deepwork` `/reflect` | ✅ | ✅ marker round-trip | — |
 | `/interview` | ✅ | ✅ marker command + trailing-message context bridge | `interview.enabled: false` removes the command, the v1 manager, and the v2 bridge entirely |
 | Message transforms (phase reminder, skills filter, image routing, display-name rewrite) | ✅ | ✅ via the single context hook | — |
 | Event handling (session tracking, lifecycle, cache telemetry) | ✅ | ✅ event pump + additive v2→v1 synthesis | The synthesized usage `message.updated` carries no agent/model fields, so live session-model observation (sidebar model projection + `sessionMetadata` tracking) rides the prompt-bridge `chat.message` deliveries (agent + model + variant together; unchanged writes are short-circuited by the tui-state memo); the v2 TUI additionally overlays the picker's live selection on root orchestrator rows until the next prompt commits it. The static projection is republished on `config()` re-invocations |
@@ -493,6 +493,12 @@ side cannot be observed.
 
 Behaviors of v2 itself that plugin authors should know about — none
 currently break this plugin:
+
+- **`/goal` is host-owned and always on (v2.2.1+).** The host's internal
+  goal plugin registers `/goal <objective>` and drives continuation from the
+  `experimental.idle` hook with its own reviewer, round/stall limits,
+  background-work awareness, and compaction reminder. This plugin ships no
+  loop command: use `/goal` on v2, or a plain prompt on v1.
 
 - **The `subagent` tool description grows a native roster.** On every
   context/compaction/generate build the host appends `Available subagents:`
