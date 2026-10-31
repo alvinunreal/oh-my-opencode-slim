@@ -479,6 +479,18 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   // reads, no parent hydration, no state-file writes from this process.
   // (Pane wiring lives in the TUI entry and never reads these files.)
   const tuiWritesEnabled = (): boolean => runtime.sidebarEnabled;
+  const projectLiveAgentModel = (
+    sessionID: string,
+    agentName: string,
+    model: string,
+    variant?: string,
+  ): void => {
+    if (!tuiWritesEnabled()) return;
+    recordTuiAgentModel(
+      { agentName, model, variant: variant ?? null },
+      tuiActivityDirectory(sessionID),
+    );
+  };
   // Busy/retry arrived before the session's agent was known. chat.message
   // latches the agent and flushes these so the spinner still starts. The
   // observed status is kept so the flushed activation records the right
@@ -1209,6 +1221,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       });
 
       taskSessionManagerHook = createTaskSessionManagerHook(ctx, {
+        v1ReplayOutcome: (...args) =>
+          foregroundFallback?.v1ReplayOutcome(...args) ??
+          Promise.resolve(undefined),
         terminalGate,
         // Flip mechanism half reads the per-instance box declared above.
         isBackgroundDefaultFlipArmed: backgroundDefaultFlip.isArmed,
@@ -1683,6 +1698,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ? createBackgroundFallbackHandoff({
           backgroundJobBoard: backgroundJobBoard!,
           revivedRunTracker: revivedRunTracker!,
+          allowForeground: hostFlavor !== 'v2',
         })
       : undefined;
     // The current v2 host interface has no per-turn/atomic conditional
@@ -1729,11 +1745,18 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           // A managed background-task session switching models mid-flight must
           // move its admission accounting (provider/model caps) to the new
           // model. No-op for unknown/non-task sessions; idempotent per model.
-          // Undefined when the lifecycle is off: no admission runtime exists.
-          lifecycleEnabled
-            ? (sessionID, model) =>
-                backgroundTaskConcurrency?.migrateTask(sessionID, model)
-            : undefined,
+          (sessionID, model, detail) => {
+            if (lifecycleEnabled)
+              backgroundTaskConcurrency?.migrateTask(sessionID, model);
+            if (hostFlavor === 'v2' && detail?.agentName) {
+              projectLiveAgentModel(
+                sessionID,
+                resolveRuntimeAgentName(runtime, detail.agentName),
+                model,
+                detail.variant,
+              );
+            }
+          },
           runtime.fallback.initialRetryDelayMs,
           runtime.fallback.retryDelayMs,
           backgroundFallbackHandoff,
@@ -1742,9 +1765,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           // Undefined remains exclusive to foreground/unmanaged sessions, and
           // is the honest value when no board exists.
           lifecycleEnabled
-            ? (sessionID) => {
+            ? (sessionID, includeForeground) => {
                 const record = backgroundJobBoard?.get(sessionID);
-                return record?.background === true
+                return record &&
+                  (record.background === true ||
+                    (includeForeground && record.provisional !== true))
                   ? record.generation
                   : undefined;
               }
@@ -2695,6 +2720,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // Per-instance background-default flip handle: v2 setup arms it after
     // its description rewrite verifies and disarms it with its teardown.
     'v2.backgroundDefaultFlip': backgroundDefaultFlip,
+    'v2.refusalOutcome':
+      foregroundFallback?.refusedChildOutcome.bind(foregroundFallback),
+    'v2.backgroundGeneration': (parentID: string, childID: string) => {
+      const record = backgroundJobBoard?.get(childID);
+      return record?.background && record.parentSessionID === parentID
+        ? record.generation
+        : undefined;
+    },
     'v2.session.retry': fallbackRetryHookEnabled
       ? (input: never, switchModel: never) =>
           foregroundFallback?.handleV2Retry(input, switchModel)
@@ -3466,6 +3499,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         (typeof messageID === 'string' &&
           isInternalAdmission(input.sessionID, messageID));
       if (!internalAdmission) {
+        if (hostFlavor === 'v2' && (inputParts.length || outputParts.length)) {
+          foregroundFallback?.noteV2Prompt(input.sessionID);
+        }
         const model = input.model ?? output?.message?.model;
         foregroundFallback?.observeExternalTurn(
           input.sessionID,
@@ -3705,26 +3741,17 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             ...(liveVariant ? { variant: liveVariant } : {}),
             variantObserved: true,
           });
-          // Sidebar live-model projection. On v2 the prompt bridge
-          // (createSessionPromptBridge) is the only event-sourced carrier of
-          // agent+model+variant together — the usage-synthesized
-          // message.updated has none of them — so the projection rides this
-          // hook. A missing variant is the live choice too (model default):
+          // Sidebar live-model projection. On v2 the prompt bridge and
+          // confirmed fallback commits carry agent+model+variant together;
+          // the usage-synthesized message.updated has none of them.
+          // A missing variant is the live choice too (model default):
           // no policy fallback, or a variant-only re-selection could never
           // clear the row. No caller-side dedupe: updateSnapshot short-
           // circuits unchanged writes through its memo, which also keeps
           // this path in step with recordTuiAgentModels bulk replacement
           // and retries after a failed write.
-          if (runtime.sidebarEnabled && agent) {
-            recordTuiAgentModel(
-              {
-                agentName: agent,
-                model,
-                variant: liveVariant ?? null,
-              },
-              tuiActivityDirectory(input.sessionID),
-            );
-          }
+          if (agent)
+            projectLiveAgentModel(input.sessionID, agent, model, liveVariant);
         }
         backgroundTaskConcurrency?.migrateTask(input.sessionID, model);
       }
@@ -3976,6 +4003,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       if (taskSessionManagerHook) await taskSessionManagerAfter(input, output);
     },
   } as Hooks & {
+    'v2.refusalOutcome':
+      | ForegroundFallbackManager['refusedChildOutcome']
+      | undefined;
+    'v2.backgroundGeneration': (
+      parentID: string,
+      childID: string,
+    ) => number | undefined;
     'v2.foreignTaskEvent': typeof observeForeignTaskEvent;
     'v2.refreshProfiles': typeof refreshProfilesFromDisk;
     'v2.resolveDelegatedModel': typeof resolveV2DelegatedModel;

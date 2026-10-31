@@ -67,6 +67,7 @@ import {
   modelExistsInCatalog,
 } from '../utils/model-image-capability';
 import { OperationTimeoutError, withTimeout } from '../utils/session';
+import { findTaskErrorNotice, parseTaskResultFromOutput } from '../utils/task';
 import {
   adaptTool,
   applyAgentToDraft,
@@ -122,7 +123,10 @@ import {
   userTextFromContent,
   type V2CommandSubmit,
 } from './session-submit';
-import { createSubagentExecutorWrapper } from './subagent-executor-wrapper';
+import {
+  createSubagentExecutorWrapper,
+  readRefusalOutcome,
+} from './subagent-executor-wrapper';
 import type {
   V2AgentDraft,
   V2Cleanup,
@@ -329,6 +333,11 @@ export interface V2SessionContextHandlerDeps {
   sessionContext?: (
     sessionID: string,
   ) => Promise<Array<Record<string, unknown>> | undefined>;
+  backgroundGeneration?: (
+    parentID: string,
+    childID: string,
+  ) => number | undefined;
+  refusalOutcome?: ForegroundFallbackManager['refusedChildOutcome'];
   /** v1 `experimental.chat.system.transform` hook. */
   systemTransform?: (
     input: unknown,
@@ -562,6 +571,46 @@ export function createSessionContextHandler(
           info.content = m.parts;
           return m.info;
         }) as V2SessionContextEvent['messages'];
+
+        if (
+          deps.backgroundGeneration &&
+          deps.refusalOutcome &&
+          deps.sessionContext
+        ) {
+          for (const message of event.messages) {
+            if (message.role !== 'user') continue;
+            for (const [partIndex, part] of message.content.entries()) {
+              if (part.type !== 'text' || typeof part.text !== 'string')
+                continue;
+              const notice = findTaskErrorNotice(part.text, 'subagent');
+              const block = notice?.block;
+              const childID = notice?.taskID;
+              if (
+                !block ||
+                !childID ||
+                deps.backgroundGeneration(event.sessionID, childID) ===
+                  undefined
+              )
+                continue;
+              const text = parseTaskResultFromOutput(block);
+              if (!text) continue;
+              const recovery = await readRefusalOutcome(
+                deps.sessionContext,
+                deps.refusalOutcome,
+                childID,
+                text,
+              );
+              if (!recovery) continue;
+              message.content[partIndex] = {
+                ...part,
+                text: part.text.replace(
+                  block,
+                  `<subagent sessionID="${childID}" state="running">\nThe child switched to ${recovery.model} and continues; the result will arrive. Do not relaunch or replace it.\n</subagent>`,
+                ),
+              };
+            }
+          }
+        }
 
         // One manual breakpoint, after the shared transform: never spend
         // the host's four slots on historical reminders or a volatile board
@@ -3173,6 +3222,12 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           // Per-message agent attribution source: durable agent-switched
           // markers in the stored, compaction-bounded history stream.
           sessionContext: sessionContextRead,
+          backgroundGeneration: v1Hooks[
+            'v2.backgroundGeneration'
+          ] as V2SessionContextHandlerDeps['backgroundGeneration'],
+          refusalOutcome: v1Hooks[
+            'v2.refusalOutcome'
+          ] as V2SessionContextHandlerDeps['refusalOutcome'],
           systemTransform,
           messagesTransform,
           // Captured child sessions get their frozen temperature/provider
@@ -3433,6 +3488,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             try {
               const wrapper = registerStructuredLaunch
                 ? createSubagentExecutorWrapper({
+                    context: sessionContextRead,
+                    refusalOutcome: v1Hooks[
+                      'v2.refusalOutcome'
+                    ] as V2SessionContextHandlerDeps['refusalOutcome'],
                     register: (launch) =>
                       registerStructuredLaunch({
                         ...launch,

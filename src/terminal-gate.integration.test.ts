@@ -24,7 +24,7 @@ import * as gateFactories from './utils/background-job-terminal-gate';
 import { BackgroundTaskConcurrency } from './utils/background-task-concurrency';
 import { createEventDirectoryScope } from './utils/event-directory-scope';
 import {
-  type createInternalAgentTextPart,
+  createInternalAgentTextPart,
   isInternalInitiatorPart,
   isNativeBackgroundTaskNotification,
 } from './utils/internal-initiator';
@@ -379,7 +379,12 @@ for (const state of ['completed', 'error'] as const) {
   }
 }
 
-async function fallbackAssembly(hostFlavor?: string, delayMs = 2000) {
+async function fallbackAssembly(
+  hostFlavor?: string,
+  delayMs = 2000,
+  foreground = false,
+  chain = ['test/primary', 'test/fallback'],
+) {
   jest.useFakeTimers();
   let fakeTimers = true;
   const restoreTimers = async () => {
@@ -393,7 +398,7 @@ async function fallbackAssembly(hostFlavor?: string, delayMs = 2000) {
     hostFlavor,
     rootConfigOverrides: {
       agents: {
-        explorer: { model: ['test/primary', 'test/fallback'] },
+        explorer: { model: chain },
       },
       fallback: { initialRetryDelayMs: delayMs },
     },
@@ -402,8 +407,25 @@ async function fallbackAssembly(hostFlavor?: string, delayMs = 2000) {
   // disposal. Disposing under fake timers can wait on a timer that never
   // fires, time out afterEach, and flip the next test's timers mid-run.
   cleanups.push(restoreTimers);
-  await h.begin();
-  await h.after('running');
+  if (foreground) {
+    const description =
+      'Investigate   the complete foreground fallback path with a long task description';
+    await h.hooks['tool.execute.before']?.(
+      { tool: 'task', sessionID: 'parent', callID: 'native' },
+      { args: { subagent_type: 'explorer', description } },
+    );
+    await h.event('session.created', {
+      info: {
+        id: 'child',
+        parentID: 'parent',
+        agent: 'explorer',
+        title: `${description} (@explorer subagent)`,
+      },
+    });
+  } else {
+    await h.begin();
+    await h.after('running');
+  }
   await h.hooks['chat.message']?.(
     {
       sessionID: 'child',
@@ -443,6 +465,262 @@ async function fallbackAssembly(hostFlavor?: string, delayMs = 2000) {
     },
   };
 }
+
+const contentFilterError = {
+  name: 'ContentFilterError',
+  data: {
+    message: "The response was blocked by the provider's content filter",
+  },
+};
+const nativeRefusal =
+  '<task id="child" state="error">\n<summary>Background task failed: ordinary task</summary>\n<task_error>\nSubagent failed (task_id: child): The response was blocked by the provider\'s content filter\n</task_error>\n</task>';
+
+function setChildError(
+  h: Awaited<ReturnType<typeof fallbackAssembly>>,
+  error = contentFilterError,
+) {
+  h.history.pop();
+  h.history.push({
+    info: {
+      id: 'filtered',
+      role: 'assistant',
+      finish: 'content-filter',
+      error,
+      time: { completed: Date.now() },
+    },
+    parts: [],
+  });
+}
+
+function parentMessage(
+  part: Record<string, unknown>,
+  role = 'user',
+  created = Date.now(),
+) {
+  return {
+    messages: [
+      {
+        info: { id: 'notice', sessionID: 'parent', role, time: { created } },
+        parts: [part],
+      },
+    ],
+  };
+}
+
+function foregroundFailure(error = contentFilterError.data.message) {
+  return {
+    type: 'tool',
+    tool: 'task',
+    callID: 'native',
+    state: {
+      status: 'error',
+      input: { subagent_type: 'explorer' },
+      error: `Subagent failed (task_id: child): ${error}`,
+      time: { start: Date.now() - 10, end: Date.now() },
+    },
+  };
+}
+
+test('v1 foreground replay uses its long label and returns a running part and terminal result', async () => {
+  const h = await fallbackAssembly(undefined, 2000, true);
+  expect(h.board.get('child')?.background).toBe(false);
+  setChildError(h);
+  const part = foregroundFailure();
+  const request = parentMessage(part, 'assistant');
+  const transform = h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    request as never,
+  );
+  await h.event('session.error', {
+    sessionID: 'child',
+    error: contentFilterError,
+  });
+  await h.idle();
+  await h.advance(2000);
+  await transform;
+  expect(request.messages[0].parts[0].state).toMatchObject({
+    status: 'completed',
+    output: expect.stringContaining('state="running"'),
+  });
+  expect(part.state.status).toBe('error');
+  const prompts = () =>
+    h.promptAsync.mock.calls.map(
+      ([call]) =>
+        call as {
+          path: { id: string };
+          body: { messageID: string; parts: { text: string }[] };
+        },
+    );
+  expect(
+    h.revivedTracker?.isTracked('child', h.board.get('child')?.generation ?? 0),
+  ).toBe(true);
+  h.setBusy(true);
+  await h.busySignal();
+  h.history.push(
+    {
+      info: { id: prompts()[0].body.messageID, role: 'user' },
+      parts: prompts()[0].body.parts,
+    },
+    ...transcript().data,
+  );
+  h.setBusy(false);
+  await h.idle();
+  await h.runtime.reconcile();
+  await flush();
+  expect(
+    prompts()
+      .filter(({ path }) => path.id === 'parent')
+      .at(-1)?.body.parts[0].text,
+  ).toContain('confirmed result');
+});
+
+test('v1 foreground leaves the native failure when its chain is exhausted', async () => {
+  const h = await fallbackAssembly(undefined, 2000, true, ['test/primary']);
+  setChildError(h);
+  const part = foregroundFailure();
+  const request = parentMessage(part, 'assistant');
+  const transform = h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    request as never,
+  );
+  await h.event('session.error', {
+    sessionID: 'child',
+    error: contentFilterError,
+  });
+  await h.advance(2000);
+  await transform;
+  expect(request.messages[0].parts[0]).toEqual(part);
+  expect(h.promptAsync).not.toHaveBeenCalled();
+});
+
+test('v1 background rewrites a prefixed native refusal and sends one terminal result', async () => {
+  const h = await fallbackAssembly();
+  setChildError(h);
+  const prefix = '\u00a742\u00a7 ';
+  const part = { type: 'text', synthetic: true, text: prefix + nativeRefusal };
+  const request = parentMessage(part);
+  const transform = h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    request as never,
+  );
+  await h.event('session.error', {
+    sessionID: 'child',
+    error: contentFilterError,
+  });
+  await h.idle();
+  await h.advance(2000);
+  await transform;
+  expect(request.messages[0].parts[0].text).toStartWith(prefix);
+  expect(request.messages[0].parts[0].text).toContain('state="running"');
+  expect(part.text).toBe(prefix + nativeRefusal);
+  const calls = () =>
+    h.promptAsync.mock.calls.map(
+      ([call]) =>
+        call as {
+          path: { id: string };
+          body: { messageID: string; parts: { text: string }[] };
+        },
+    );
+  h.setBusy(true);
+  await h.busySignal();
+  const replay = calls().find(({ path }) => path.id === 'child')?.body;
+  h.history.push(
+    { info: { id: replay?.messageID, role: 'user' }, parts: replay?.parts },
+    ...transcript().data,
+  );
+  h.setBusy(false);
+  await h.idle();
+  await h.runtime.reconcile();
+  await flush();
+  expect(
+    calls().filter(
+      ({ path, body }) =>
+        path.id === 'parent' &&
+        body.parts[0].text.includes('state="completed"'),
+    ),
+  ).toHaveLength(1);
+});
+
+test('v1 terminal error delivered by Slim is never rewritten', async () => {
+  const h = await fallbackAssembly();
+  const part = createInternalAgentTextPart(nativeRefusal);
+  const request = parentMessage(part);
+  await h.hooks['experimental.chat.messages.transform']?.({}, request as never);
+  expect(request.messages[0].parts[0]).toEqual(part);
+});
+
+test('v1 non-failover child error does not wait for replay', async () => {
+  const h = await fallbackAssembly(undefined, 2000, true);
+  h.history.pop();
+  h.history.push({
+    info: {
+      id: 'bad',
+      role: 'assistant',
+      error: {
+        name: 'APIError',
+        data: { statusCode: 400, message: 'invalid request' },
+      },
+      time: { completed: Date.now() },
+    },
+    parts: [],
+  });
+  const part = foregroundFailure('invalid request');
+  const request = parentMessage(part, 'assistant');
+  let finished = false;
+  const transform = h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    request as never,
+  ).then(() => {
+    finished = true;
+  });
+  await flush();
+  expect(finished).toBe(true);
+  await transform;
+  expect(request.messages[0].parts[0]).toEqual(part);
+});
+
+test('v1 replay wait includes the configured retry delay', async () => {
+  const h = await fallbackAssembly(undefined, 6000);
+  setChildError(h);
+  const request = parentMessage({
+    type: 'text',
+    synthetic: true,
+    text: nativeRefusal,
+  });
+  let finished = false;
+  const transform = h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    request as never,
+  ).then(() => {
+    finished = true;
+  });
+  await h.event('session.error', {
+    sessionID: 'child',
+    error: contentFilterError,
+  });
+  await h.advance(5001);
+  expect(finished).toBe(false);
+  await h.advance(999);
+  await transform;
+  expect(request.messages[0].parts[0].text).toContain('state="running"');
+});
+
+test('v1 old refusal notice does not wait for replay', async () => {
+  const h = await fallbackAssembly();
+  const part = { type: 'text', synthetic: true, text: nativeRefusal };
+  const request = parentMessage(part, 'user', Date.now() - 10_000);
+  let finished = false;
+  const transform = h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    request as never,
+  ).then(() => {
+    finished = true;
+  });
+  await flush();
+  expect(finished).toBe(true);
+  await transform;
+  expect(request.messages[0].parts[0]).toEqual(part);
+});
 
 test('fallback initial delay cannot replay a cancelled background child', async () => {
   const h = await fallbackAssembly();

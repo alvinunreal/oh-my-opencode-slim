@@ -47,7 +47,14 @@ from one binding transaction. `admission-view.ts` supplies profile facts to the
 existing capture seam without a second binding read. Later admissions still
 check directory/parent/storage. Attributed messages skip stored-history reads.
 
-`event-subscription.ts` freezes the native type union for enabled consumers.
+`event-subscription.ts` freezes the native type union for enabled consumers,
+including correlated `session.step.started`/`session.step.failed` refusal
+signals for foreground fallback. The client shim exposes the real optional
+`session.switchModel` capability for that path.
+The foreground subagent wrapper rejoins a refused child after the shared fallback
+outcome; the context hook presents an admitted background refusal as running
+without changing the host's stored notice. The client shim treats `idle` and
+`model-switched` markers as system entries when inspecting child results.
 Interview receives `session.text.*` with `assistantMessageID`; its v2 bridge is
 the only Interview owner on this host. Event payload extraction is shared, but
 recovery/permission/profile owners remain distinct. One native-event batch

@@ -40,6 +40,7 @@ import type { FallbackNotice, RevivedRunTracker } from './revived-run-tracker';
 export function createBackgroundFallbackHandoff(options: {
   backgroundJobBoard: BackgroundJobBoard;
   revivedRunTracker: RevivedRunTracker;
+  allowForeground?: boolean;
 }): {
   isEligible: (sessionID: string, generation: number | undefined) => boolean;
   prepare: (
@@ -51,7 +52,7 @@ export function createBackgroundFallbackHandoff(options: {
     sessionID: string,
     preparedGeneration: number | undefined,
     notice?: FallbackNotice,
-  ) => void;
+  ) => boolean;
   /** Explicit host refusal (error envelope / typed capability
    * rejection): nothing was admitted, ownership is released. */
   reject: (sessionID: string, preparedGeneration: number | undefined) => void;
@@ -71,7 +72,8 @@ export function createBackgroundFallbackHandoff(options: {
     const record = options.backgroundJobBoard.get(sessionID);
     if (
       record?.state !== 'running' ||
-      record.background !== true ||
+      (record.background !== true &&
+        (!options.allowForeground || record.provisional === true)) ||
       record.generation !== preparedGeneration
     ) {
       return undefined;
@@ -91,17 +93,18 @@ export function createBackgroundFallbackHandoff(options: {
         parentSessionID: record.parentSessionID,
         baselineMessageID,
         description: record.description,
+        ...(record.background ? {} : { allowForeground: true }),
       });
     },
     admit: (sessionID, preparedGeneration, notice) => {
-      if (preparedGeneration === undefined) return;
+      if (preparedGeneration === undefined) return false;
       // Resolve the preparation for the SAME generation idempotently
       // even when the board record already left 'running' — a promoted
       // owner may have found and delivered the result BEFORE this ack
       // arrived; the entry must still be cleaned (no reinstall, no
       // notification reset — that is the tracker's promoted-admit
       // contract).
-      options.revivedRunTracker.admitObservation(
+      return options.revivedRunTracker.admitObservation(
         sessionID,
         preparedGeneration,
         notice,

@@ -6,9 +6,11 @@ import {
   clearBackgroundJobSuppression,
   deriveFullObjective,
   deriveTaskSessionLabel,
+  findTaskErrorNotice,
   getBackgroundJobLifecycleLedger,
   isInternalInitiatorPart,
   isNativeBackgroundLaunchOutput,
+  isNativeBackgroundTaskNotification,
   log,
   markPersistedBackgroundChildDelivered,
   parseTaskIdFromTaskOutput,
@@ -32,6 +34,7 @@ import {
   DEFAULT_RUNTIME_SESSION_STATUS_TIMEOUT_MS,
   readLiveSession,
 } from '../../utils/session-runtime-status';
+import type { ForegroundFallbackManager } from '../foreground-fallback';
 import {
   type MessageTransformView,
   resolveView,
@@ -355,6 +358,7 @@ export function createTaskSessionManagerHook(
     /** Host flavor marker ('v2' on OpenCode v2 hosts); selects the native
      *  delegation vocabulary in model-visible tool guidance. Defaults v1. */
     hostFlavor?: string;
+    v1ReplayOutcome?: ForegroundFallbackManager['v1ReplayOutcome'];
     /** Per-instance pairing flag for the background-default flip (v2 only);
      *  see BackgroundDefaultFlipState in v2/delegation. */
     isBackgroundDefaultFlipArmed?: () => boolean;
@@ -981,6 +985,85 @@ export function createTaskSessionManagerHook(
       // lane never rewrites mid-history bytes and invalidates the prompt
       // cache. Terminal results are left untouched (they materialize once).
       stabilizeRunningTaskParts(messages);
+
+      if (options.hostFlavor !== 'v2' && options.v1ReplayOutcome) {
+        for (const message of resolved.valid) {
+          if (!message.info.sessionID) continue;
+          for (const [partIndex, part] of message.parts.entries()) {
+            const state = isObjectRecord(part.state) ? part.state : undefined;
+            const isTaskError =
+              part.type === 'tool' &&
+              part.tool === 'task' &&
+              state?.status === 'error';
+            const foregroundError =
+              isTaskError && typeof state?.error === 'string'
+                ? state.error
+                : '';
+            const isNative =
+              part.type === 'text' &&
+              message.info.role === 'user' &&
+              part.synthetic === true &&
+              !isInternalInitiatorPart(part);
+            const nativeNotice =
+              isNative && typeof part.text === 'string'
+                ? findTaskErrorNotice(part.text, 'task')
+                : undefined;
+            if (
+              nativeNotice &&
+              !isNativeBackgroundTaskNotification({
+                ...part,
+                text: nativeNotice.block,
+              })
+            )
+              continue;
+            const taskID = nativeNotice
+              ? nativeNotice.taskID
+              : /^Subagent failed \(task_id: ([^)]+)\):/.exec(
+                  foregroundError ?? '',
+                )?.[1];
+            const record = taskID ? backgroundJobBoard.get(taskID) : undefined;
+            if (!record || record.parentSessionID !== message.info.sessionID)
+              continue;
+            if (record.background !== !!nativeNotice || record.provisional)
+              continue;
+            const completedAt = nativeNotice
+              ? messageCreatedAt(message)
+              : isObjectRecord(state?.time)
+                ? state.time.end
+                : undefined;
+            if (
+              typeof completedAt !== 'number' ||
+              !Number.isFinite(completedAt) ||
+              completedAt < record.runStartedAt
+            )
+              continue;
+            const { taskID: id, generation, agent, description } = record;
+            const model = await options.v1ReplayOutcome(
+              id,
+              generation,
+              agent,
+              completedAt,
+            );
+            if (!model) continue;
+            const running = `<task id="${record.taskID}" state="running">\nThe child switched to ${model} and continues; the result will arrive. Do not relaunch or replace it.\n</task>`;
+            if (nativeNotice && typeof part.text === 'string')
+              message.parts[partIndex] = {
+                ...part,
+                text: part.text.replace(nativeNotice.block, () => running),
+              };
+            else {
+              const nextState: Record<string, unknown> = {
+                ...state,
+                status: 'completed',
+                title: description,
+                output: running,
+              };
+              delete nextState.error;
+              message.parts[partIndex] = { ...part, state: nextState };
+            }
+          }
+        }
+      }
 
       const rehydratedTaskIDs = rehydrateHistoricalRunningTasks(
         messages,

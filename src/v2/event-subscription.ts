@@ -12,6 +12,8 @@ const BASE_TYPES = [
   'session.status',
   'session.idle',
   'session.usage.updated',
+  'session.step.started',
+  'session.step.failed',
   'session.step.ended',
   'form.created',
   'form.replied',
