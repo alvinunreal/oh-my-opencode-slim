@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from 'bun:test';
 import * as fs from 'node:fs/promises';
+import { Error as NativeToolError } from '@opencode/schema/tool';
 import {
   appendTaggedSyntheticPart,
   appendTrailingVolatileMessage,
@@ -2010,26 +2011,66 @@ describe('tool execute bridge status discrimination', () => {
     // Hook saw the error text; the stale content was never surfaced.
   });
 
-  test('error status with an Error-like payload uses message', async () => {
-    const seen: unknown[] = [];
+  test('error status delivers loop warnings through the underlying cause', async () => {
+    class BlockedError extends Error {
+      readonly _tag = 'Permission.BlockedError';
+      reason = 'permission denied';
+      override get message() {
+        return this.reason;
+      }
+    }
+    const guard = createToolLoopGuardHook();
     const { afterBridge } = createToolExecuteBridges(
       undefined,
-      async (_i, o: { output: unknown }) => {
-        seen.push(o.output);
-      },
+      guard['tool.execute.after'],
     );
+    let cause: BlockedError | undefined;
+    let visible = '';
+    for (let i = 0; i < 3; i += 1) {
+      const callID = `call-${i}`;
+      await guard['tool.execute.before'](
+        { tool: 'read', sessionID: 's', callID },
+        { args: { filePath: 'a.txt' } },
+      );
+      cause = new BlockedError();
+      const inner = new NativeToolError({ message: 'inner', error: cause });
+      const error = new NativeToolError({
+        message: 'read failed',
+        error: inner,
+      });
+      await afterBridge({
+        tool: 'read',
+        sessionID: 's',
+        id: callID,
+        input: { filePath: 'a.txt' },
+        status: 'error',
+        error,
+      });
+      if (i === 2) {
+        expect(error.error).toBeInstanceOf(Error);
+        const wrapped = error.error as Error;
+        expect(wrapped.cause).toBe(inner);
+        visible = wrapped.message;
+      } else expect(error.error).toBe(inner);
+      expect(inner.error).toBe(cause);
+    }
+    expect(visible).toContain('permission denied');
+    expect(visible).toContain(LOOP_GUARD_WARNING);
+
+    await guard['tool.execute.before'](
+      { tool: 'read', sessionID: 's', callID: 'call-3' },
+      { args: { filePath: 'a.txt' } },
+    );
+    const noCause = new NativeToolError({ message: 'permission denied' });
     await afterBridge({
       tool: 'read',
       sessionID: 's',
-      agent: 'a',
-      messageID: 'm',
-      id: 'c',
-      input: {},
+      id: 'call-3',
+      input: { filePath: 'a.txt' },
       status: 'error',
-      error: { message: 'file not found' },
-      result: undefined,
+      error: noCause,
     });
-    expect(seen).toEqual(['file not found']);
+    expect(noCause.message).toContain(LOOP_GUARD_WARNING);
   });
 
   test('v2 tool failures do not trigger the v1 JSON reminder', async () => {

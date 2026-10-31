@@ -1952,12 +1952,21 @@ function renderOutput(value: unknown): string {
   }
 }
 
-/** Formatted error text from a v2 execute.after `error` payload (string,
- * Error-like `{message}`, or structured record). Empty string when the
- * host provided nothing. */
+function causeTextOf(error: Record<string, unknown>): string {
+  if (error._tag !== 'Tool.Error' || error.error === undefined) return '';
+  return error.error instanceof Error
+    ? errorTextOf(error.error)
+    : String(error.error);
+}
+
+/** Model-visible text from a v2 execute.after error, unwrapping tool causes. */
 function errorTextOf(error: unknown): string {
+  if (isRecord(error)) {
+    const cause = causeTextOf(error);
+    if (cause) return cause;
+  }
   if (typeof error === 'string') return error;
-  if (isRecord(error) && typeof error.message === 'string' && error.message) {
+  if (isRecord(error) && typeof error.message === 'string') {
     return error.message;
   }
   return renderOutput(error);
@@ -2076,15 +2085,11 @@ export function createToolExecuteBridges(
     // v2 execute.after is status-discriminated: `completed` → mutable
     // result; `error` → `error` payload (result may be absent or stale).
     // Absent status (defensive null-safety) keeps the completed path.
-    // On error the v1 output is synthesized from the error text — that
-    // is exactly the v1 shape, where a failed tool's model-visible
-    // output WAS the error message — so error-recovery consumers
-    // (json-error-recovery appends its reminder to output.output) still
-    // run meaningfully. An errored call never presents its result
-    // content as a successful output.
+    // On error, synthesize v1 output from the failure message and return
+    // after-hook changes through the failure, not a stale result.
     const errored = e.status === 'error';
     // Map v2 Tool.Result.content (string | Content[]) -> v1 output.output
-    // string; the v1 after-hooks (jsonErrorRecovery, taskSessionManagerAfter)
+    // string; the v1 after-hooks (tool-loop-guard, taskSessionManagerAfter)
     // read output.output to decide recovery and task state.
     const result = e.result as
       | {
@@ -2129,20 +2134,21 @@ export function createToolExecuteBridges(
       output,
     );
 
+    const updatedText =
+      typeof output.output === 'string'
+        ? output.output
+        : renderOutput(output.output);
+    if (errored) {
+      if (updatedText !== content && isRecord(e.error)) {
+        if (causeTextOf(e.error))
+          e.error.error = new Error(updatedText, { cause: e.error.error });
+        else e.error.message = updatedText;
+      }
+      return;
+    }
     if (result) {
-      const updatedText =
-        typeof output.output === 'string'
-          ? output.output
-          : renderOutput(output.output);
       if (updatedText !== content) {
-        if (errored) {
-          // Errored call: the model-visible content is the synthesized
-          // error text plus whatever the hook appended (e.g. the
-          // json-error-recovery reminder). Written as plain string
-          // content — never keep a stale/empty result content looking
-          // like a successful output.
-          result.content = updatedText;
-        } else if (hasRenderableContent) {
+        if (hasRenderableContent) {
           result.content = updateToolResultContent(
             rawContent,
             content,
