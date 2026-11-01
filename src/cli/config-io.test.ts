@@ -47,17 +47,20 @@ import {
 
 describe('config-io', () => {
   let tmpDir: string;
+  let children: Promise<void>[] = [];
   const originalEnv = { ...process.env };
   const originalArgv = [...process.argv];
 
   beforeEach(() => {
+    children = [];
     tmpDir = mkdtempSync(join(tmpdir(), 'opencode-io-test-'));
     delete process.env.OPENCODE_CONFIG_DIR;
     delete process.env.OPENCODE_TUI_CONFIG;
     process.env.XDG_CONFIG_HOME = tmpDir;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await Promise.allSettled(children);
     for (const key of Object.keys(process.env)) {
       if (!(key in originalEnv)) delete process.env[key];
     }
@@ -483,20 +486,25 @@ describe('config-io', () => {
       `import { mutateJsonFile } from './src/config/json-file.ts';\n` +
       `mutateJsonFile(process.env.CONFIG_PATH!, (current) => ({ ...current, writers: Number(current.writers) + 1 }));`;
 
-    await Promise.all(
-      Array.from({ length: 8 }, async (_, index) => {
-        const child = Bun.spawn(['bun', '-e', script], {
-          cwd: process.cwd(),
-          env: { ...process.env, CONFIG_PATH: index % 2 ? link : path },
-          stdout: 'pipe',
-          stderr: 'pipe',
-        });
-        const exitCode = await child.exited;
-        if (exitCode !== 0) {
-          throw new Error(await new Response(child.stderr).text());
-        }
-      }),
-    );
+    for (let index = 0; index < 8; index++) {
+      children.push(
+        (async () => {
+          const child = Bun.spawn(['bun', '-e', script], {
+            cwd: process.cwd(),
+            env: { ...process.env, CONFIG_PATH: index % 2 ? link : path },
+            stdout: 'pipe',
+            stderr: 'pipe',
+          });
+          const exitCode = await child.exited;
+          if (exitCode !== 0) {
+            throw new Error(await new Response(child.stderr).text());
+          }
+        })(),
+      );
+    }
+    const results = await Promise.allSettled(children);
+    const failure = results.find((result) => result.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
 
     expect(JSON.parse(readFileSync(path, 'utf-8'))).toEqual({ writers: 8 });
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
