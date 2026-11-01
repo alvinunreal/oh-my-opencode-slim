@@ -36,6 +36,13 @@ describe('background subagents helpers', () => {
 
   test('detects shell startup targets including fish XDG config', () => {
     expect(
+      detectBackgroundSubagentsTarget({
+        SHELL: '/bin/zsh',
+        HOME: '/home/test',
+        ZDOTDIR: '/home/test/dotfiles',
+      }),
+    ).toBe('/home/test/dotfiles/.zshrc');
+    expect(
       detectBackgroundSubagentsTarget({ SHELL: '/bin/zsh' })?.endsWith(
         '/.zshrc',
       ),

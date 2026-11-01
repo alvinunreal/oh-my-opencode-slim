@@ -56,7 +56,7 @@ After the installer updates a shell startup file, restart your terminal or sourc
 the file before launching OpenCode. Examples:
 
 ```bash
-source ~/.zshrc
+source "${ZDOTDIR:-$HOME}/.zshrc"
 # or
 source ~/.bashrc
 ```
@@ -332,7 +332,7 @@ See the [Multiplexer Integration Guide](multiplexer-integration.md) for more det
 4. Remove the environment variable:
 
    The installer may have added an export to your shell startup file. Remove the `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` line from your shell config:
-   - `~/.zshrc` (Zsh)
+   - `${ZDOTDIR:-$HOME}/.zshrc` (Zsh)
    - `~/.bashrc` (Bash)
    - `~/.config/fish/conf.d/opencode-background-subagents.fish` (Fish) — also remove `set -gx OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS true`
 
