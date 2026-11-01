@@ -243,6 +243,10 @@ async function adoptOrphanedChildRow(
     }
   }
   if (!parentID || !shouldManageSession(parentID)) return undefined;
+  // A row may have appeared while the host lookup was pending (startup
+  // recovery, a task result, or another lifecycle event). Adopting now
+  // would replace that newer state, so leave it alone.
+  if (board.get(sessionID)) return undefined;
   // Deleted or evicted children stay dead; registerLaunch would clear the
   // tombstone that fences their revive payload.
   if (getBackgroundJobLifecycleLedger(board).tombstones.has(sessionID)) {
