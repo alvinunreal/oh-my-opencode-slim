@@ -48,6 +48,7 @@ describe('host-aware project discovery', () => {
     worktree = path.join(repository, '.slim', 'worktrees', 'feature');
     globalDirectory = path.join(root, 'user-config', 'opencode');
     delete process.env.OPENCODE_DISABLE_PROJECT_CONFIG;
+    delete process.env.OPENCODE_CONFIG_PROJECT_DISABLE;
     delete process.env.OPENCODE_CONFIG_DIR;
     delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
     process.env.XDG_CONFIG_HOME = path.dirname(globalDirectory);
@@ -157,6 +158,37 @@ describe('host-aware project discovery', () => {
     expect(RuntimeConfig.get(worktree).agents().oracle?.skills).toContain(
       'shared',
     );
+  });
+
+  test('v2 project-disable flag controls discovery and writes with host precedence', () => {
+    process.env.OPENCODE_CONFIG_PROJECT_DISABLE = 'true';
+    process.env.OPENCODE_DISABLE_PROJECT_CONFIG = 'false';
+    const config = loadPluginConfig(worktree, { hostFlavor: 'v2' });
+    expect(config.agents?.oracle?.model).toBe('test/global');
+    expect(
+      loadAgentPrompt('oracle', {
+        projectDirectory: worktree,
+        hostFlavor: 'v2',
+      }).prompt,
+    ).toBe('global prompt');
+    expect(discoverProjectLocalSkillNames(worktree, 'v2')).toEqual([]);
+    expect(
+      switchPresetOnDisk(worktree, 'shared', config, {
+        scope: 'project',
+        hostFlavor: 'v2',
+      }).ok,
+    ).toBe(false);
+    expect(clearProjectPresetOnDisk(worktree, 'v2').ok).toBe(false);
+    expect(
+      loadPluginConfig(worktree, { hostFlavor: 'v1' }).agents?.oracle,
+    ).toMatchObject({ variant: 'high' });
+
+    process.env.OPENCODE_CONFIG_PROJECT_DISABLE = 'false';
+    process.env.OPENCODE_DISABLE_PROJECT_CONFIG = 'true';
+    expect(
+      loadPluginConfig(worktree, { hostFlavor: 'v2' }).agents?.oracle,
+    ).toMatchObject({ model: 'test/home', variant: 'high' });
+    expect(getProjectConfigDirectories(worktree, 'v1')).toEqual([]);
   });
 
   for (const flag of ['true', 'TRUE', '1']) {

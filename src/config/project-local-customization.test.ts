@@ -183,6 +183,36 @@ describe('Project-local customization - 15 core cases', () => {
     });
   });
 
+  test('local legacy prompt files take precedence over global canonical files', () => {
+    const userDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');
+    const projectDir = path.join(tempDir, 'project');
+    const localDir = path.join(projectDir, '.opencode', 'oh-my-opencode-slim');
+    fs.mkdirSync(userDir, { recursive: true });
+    fs.mkdirSync(localDir, { recursive: true });
+    fs.writeFileSync(path.join(userDir, 'explorer.md'), 'global prompt');
+    fs.writeFileSync(path.join(userDir, 'explorer_append.md'), 'global append');
+    fs.writeFileSync(path.join(localDir, 'librarian.md'), 'local prompt');
+    fs.writeFileSync(
+      path.join(localDir, 'librarian_append.md'),
+      'local append',
+    );
+    for (const hostFlavor of ['v1', 'v2']) {
+      expect(
+        loadAgentPrompt('explorer', {
+          projectDirectory: projectDir,
+          hostFlavor,
+        }),
+      ).toEqual({ prompt: 'local prompt', appendPrompt: 'local append' });
+    }
+    fs.unlinkSync(path.join(localDir, 'librarian_append.md'));
+    expect(
+      loadAgentPrompt('explorer', { projectDirectory: projectDir }),
+    ).toEqual({
+      prompt: 'local prompt',
+      appendPrompt: 'global append',
+    });
+  });
+
   // Test Case 1: Project prompt root beats user prompt root
   test('1. Project prompt root beats user prompt root', () => {
     const userDir = path.join(tempDir, 'opencode', 'oh-my-opencode-slim');

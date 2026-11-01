@@ -252,6 +252,7 @@ export function applyAgentToDraft(
       (v1.mode as string) ?? (name === 'orchestrator' ? 'primary' : 'subagent');
     agent.hidden = v1.hidden === true;
     if (typeof v1.description === 'string') agent.description = v1.description;
+    if (typeof v1.color === 'string') agent.color = v1.color;
     if (typeof v1.prompt === 'string') agent.system = v1.prompt;
     if (model) {
       agent.model = {
@@ -277,9 +278,8 @@ export function applyAgentToDraft(
     if (typeof v1.temperature === 'number') {
       settings.temperature = v1.temperature;
     }
-    // v1 `options` are provider-specific request options; the v2 host merges
-    // `request.body` into the outgoing provider request body. Dropping them
-    // here would silently lose configured thinking/reasoning options on v2.
+    // Keep provider options on the native agent projection. The context hook
+    // separately applies inference options to actual requests.
     if (
       v1.options &&
       typeof v1.options === 'object' &&
@@ -326,6 +326,7 @@ export function snapshotNativeAgentForRegistry(
 
   if (typeof agent.description === 'string')
     config.description = agent.description;
+  if (typeof agent.color === 'string') config.color = agent.color;
   if (typeof agent.system === 'string') config.prompt = agent.system;
   if (typeof agent.mode === 'string') config.mode = agent.mode;
   if (typeof agent.hidden === 'boolean') config.hidden = agent.hidden;

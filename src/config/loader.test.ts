@@ -2008,6 +2008,63 @@ describe('deepMerge behavior', () => {
     expect(config.fallback?.enabled).toBe(false);
   });
 
+  test('preserves inherited fallback, council and ACP values across config layers', () => {
+    const userOpencodeDir = path.join(userConfigDir, 'opencode');
+    fs.mkdirSync(userOpencodeDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userOpencodeDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        fallback: { enabled: false, maxRetries: 7 },
+        council: {
+          default_preset: 'review',
+          presets: { review: { alpha: { model: 'openai/gpt-6' } } },
+        },
+        acpAgents: {
+          reviewer: {
+            command: 'old-acp',
+            args: ['--acp'],
+            timeoutMs: 1200,
+            permissionMode: 'allow',
+          },
+        },
+      }),
+    );
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        fallback: { retryDelayMs: 200 },
+        council: {
+          presets: { extra: { beta: { model: 'google/gemini-3-pro' } } },
+        },
+        acpAgents: { reviewer: { command: 'new-acp' } },
+      }),
+    );
+
+    for (const hostFlavor of ['v1', 'v2']) {
+      const config = loadPluginConfig(projectDir, { hostFlavor });
+      expect(config.fallback).toMatchObject({
+        enabled: false,
+        maxRetries: 7,
+        retryDelayMs: 200,
+        initialRetryDelayMs: 0,
+      });
+      expect(config.council?.default_preset).toBe('review');
+      expect(config.council?.presets.review.alpha.models).toEqual([
+        { id: 'openai/gpt-6' },
+      ]);
+      expect(config.acpAgents?.reviewer).toMatchObject({
+        command: 'new-acp',
+        args: ['--acp'],
+        env: {},
+        timeoutMs: 1200,
+        permissionMode: 'allow',
+      });
+    }
+  });
+
   test('fallback delay keys alone produce no deprecation warning', () => {
     const userOpencodeDir = path.join(userConfigDir, 'opencode');
     fs.mkdirSync(userOpencodeDir, { recursive: true });
@@ -3047,6 +3104,29 @@ describe('env variable interpolation', () => {
     const config = loadPluginConfig(projectDir);
     expect(config.agents?.oracle?.model).toBe('foo-model');
     expect(config.agents?.explorer?.model).toBe('bar-model');
+  });
+
+  test('interpolates special characters literally without discarding the layer', () => {
+    process.env.ACP_COMMAND = 'C:\\tools\\"agent"\nlauncher';
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.jsonc'),
+      JSON.stringify({
+        acpAgents: { reviewer: { command: '{env:ACP_COMMAND}' } },
+        agents: { oracle: { prompt: 'Run {env:ACP_COMMAND} safely' } },
+        setDefaultAgent: false,
+      }),
+    );
+    for (const hostFlavor of ['v1', 'v2']) {
+      const config = loadPluginConfig(projectDir, { hostFlavor });
+      expect(config.acpAgents?.reviewer.command).toBe(process.env.ACP_COMMAND);
+      expect(config.agents?.oracle?.prompt).toBe(
+        `Run ${process.env.ACP_COMMAND} safely`,
+      );
+      expect(config.setDefaultAgent).toBe(false);
+    }
   });
 
   test('undefined variable: {env:NONEXISTENT} resolves to empty string', () => {

@@ -6,6 +6,7 @@ import {
 import {
   type AgentModelProjection,
   type AgentRuntimeProfiles,
+  createAgentInferenceViews,
   createAgents,
   getAgentConfigsFromDefinitions,
   isSubagent,
@@ -648,6 +649,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let backgroundJobSupervisor: BackgroundJobSupervisor | undefined;
   let backgroundTaskConcurrency: BackgroundTaskConcurrency | undefined;
   let admissionRuntimeLease: AdmissionRuntimeLease | undefined;
+  let releaseRuntimeConfig: (() => void) | undefined;
   let finalHostAgentConfig: Record<string, unknown> | undefined;
   let interviewManager: ReturnType<typeof createInterviewManager> | undefined;
   let collapseActiveInterviewHistory:
@@ -889,13 +891,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // config. The runtime preset reapplication below mutates `config` for
     // legacy consumers; RuntimeConfig keeps the pre-mutation snapshot and
     // derives preset/runtime state through its own getters.
-    RuntimeConfig.init(ctx.directory, config, hostFlavor);
+    const runtimeConfig = RuntimeConfig.init(ctx.directory, config, hostFlavor);
+    releaseRuntimeConfig = runtimeConfig.acquire();
 
     // Safety net: instance disposal reruns the plugin factory and rebuilds
     // factory-local state, while module-level runtime preset state may persist.
     // Reapply that persisted preset so each fresh generation creates agents
     // with the correct models.
-    const runtimeConfig = RuntimeConfig.get(ctx.directory);
     const previousRuntimePreset = runtimeConfig.getRuntimePreset();
     const runtimePreset = runtimeConfig.resolveRuntimePreset(config);
     if (runtimePreset) {
@@ -1962,6 +1964,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   } catch (err) {
     terminalGate?.dispose();
     admissionRuntimeLease?.release();
+    releaseRuntimeConfig?.();
     // The scope claim must not outlive a failed init: a leaked live-directory
     // entry would keep other instances from ever reclaiming this location and
     // would block the last-instance wake reset.
@@ -2326,7 +2329,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
    * surfaces (agent definitions, prompts, tools, permissions, skills, MCPs)
    * are never rebuilt and the host agent registry is never reloaded. The
    * running generation state (`config`, `runtime`, `agentDefs`, `agents`,
-   * `finalHostAgentConfig`) is untouched — a throwaway `RuntimeConfig.create`
+   * `finalHostAgentConfig`) is untouched — a throwaway `RuntimeConfig.createDetached`
    * view resolves the fresh file against the captured host layer. On success
    * the refresh republishes the complete next chain generation (config +
    * marketplace-merged, see buildChainGeneration) beside the sidebar write,
@@ -2414,13 +2417,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         freshRuntime.setRuntimePreset(runtimePresetName);
         runtimePreset = freshConfig.presets[runtimePresetName] as Preset;
       }
-      const freshAgentDefs = createAgents(freshRuntime, {
+      const freshAgentViews = createAgentInferenceViews(freshRuntime, {
         projectDirectory: ctx.directory,
         hostFlavor,
       });
       const freshAgents = getAgentConfigsFromDefinitions(
         freshRuntime,
-        freshAgentDefs,
+        freshAgentViews,
       );
       // Keep the finalized roster (including marketplace agents), but resolve
       // only inference overrides. No package/resource activation occurs here.
@@ -2518,7 +2521,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
       const { profiles, projection } = projectAgentRuntimeState({
         runtime: freshRuntime,
-        agentDefs: freshAgentDefs,
+        agentDefs: freshAgentViews,
         agentConfigs: mergedAgents,
         runtimePreset,
       });
@@ -2530,7 +2533,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         : undefined;
       const chains = buildChainGeneration(
         freshRuntime,
-        freshAgentDefs,
+        freshAgentViews,
         freshCandidates,
       );
       const inheritance: SessionTeamBundle['inheritance'] = {};
@@ -2582,7 +2585,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // refreshed (the caller swaps only on an ok result).
       //
       // The refresh resolves inference fields for the core agent set only:
-      // `createAgents()` is marketplace-unaware, while the finalized registry
+      // The inference view is marketplace-unaware, while the finalized registry
       // is the authoritative roster and already includes marketplace agents.
       // Union the fresh projection over the registry projection so a startup
       // or watcher refresh cannot shrink the roster and drop marketplace
@@ -3253,33 +3256,37 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // Cancel pending initial-delay fallback timers so a reloaded
       // generation cannot observe one stale fallback call.
       foregroundFallback?.dispose();
-      await taskSessionManagerHook?.event({
-        event: { type: 'server.instance.disposed' },
-      });
-      await orchestratorWakeScheduler?.event({
-        event: { type: 'server.instance.disposed' },
-      });
-      // The wake gate is process-global (globalThis + Symbol.for) and survives
-      // module re-entry, so a reloaded generation would otherwise inherit the
-      // previous generation's no-progress caps. Clear it only when this was the
-      // last live instance: disposing one of several locations must not wipe
-      // the other locations' wake state.
-      if (!hasLiveInstances()) clearAllWakeSessions();
-      v1InternalSelectionOverrides.clear();
-      v1DelegatedIntents.length = 0;
-      await interviewManager?.dispose();
-      clearTuiActivities();
-      tuiReusableProjection?.dispose();
-      // Explicitly release this generation's companion ownership: a
-      // reloaded generation only replaces the active manager at its own
-      // onLoad, and if it fails before that the detached companion would
-      // survive until process exit. Idempotent (registerActiveManager's
-      // replacement path and the process-exit listener tolerate repeats).
-      companionManager?.onExit();
-      // Release only this generation's ownership. The admission runtime
-      // defers final scheduler/tracker teardown by one macrotask so an
-      // immediate config-update re-init can retain active and queued calls.
-      admissionRuntimeLease?.release();
+      try {
+        await taskSessionManagerHook?.event({
+          event: { type: 'server.instance.disposed' },
+        });
+        await orchestratorWakeScheduler?.event({
+          event: { type: 'server.instance.disposed' },
+        });
+        // The wake gate is process-global (globalThis + Symbol.for) and survives
+        // module re-entry, so a reloaded generation would otherwise inherit the
+        // previous generation's no-progress caps. Clear it only when this was the
+        // last live instance: disposing one of several locations must not wipe
+        // the other locations' wake state.
+        if (!hasLiveInstances()) clearAllWakeSessions();
+        v1InternalSelectionOverrides.clear();
+        v1DelegatedIntents.length = 0;
+        await interviewManager?.dispose();
+        clearTuiActivities();
+        tuiReusableProjection?.dispose();
+        // Explicitly release this generation's companion ownership: a
+        // reloaded generation only replaces the active manager at its own
+        // onLoad, and if it fails before that the detached companion would
+        // survive until process exit. Idempotent (registerActiveManager's
+        // replacement path and the process-exit listener tolerate repeats).
+        companionManager?.onExit();
+        // Release only this generation's ownership. The admission runtime
+        // defers final scheduler/tracker teardown by one macrotask so an
+        // immediate config-update re-init can retain active and queued calls.
+      } finally {
+        admissionRuntimeLease?.release();
+        releaseRuntimeConfig?.();
+      }
     },
 
     'tool.execute.before': async (input, output) => {

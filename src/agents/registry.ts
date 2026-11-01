@@ -34,6 +34,7 @@ import {
   applyModelInheritanceToConfig,
   createAgents,
   getAgentConfigsFromDefinitions,
+  resolveAgentInference,
 } from './index';
 import { type AgentDefinition, resolvePrompt } from './orchestrator';
 import { mergeTaskStance } from './permissions';
@@ -1216,7 +1217,7 @@ export function buildResolvedAgentRegistry(
       hostEntries[name] ??
       hostEntries[displayName] ??
       hostLegacyAgent(hostEntries, name);
-    const entry = sdk[name] as
+    let entry = sdk[name] as
       | (SDKAgentConfig & Record<string, unknown>)
       | undefined;
     if (!entry) throw new Error(`Missing SDK projection for agent '${name}'`);
@@ -1258,34 +1259,12 @@ export function buildResolvedAgentRegistry(
     ) {
       options.onHostModelSelected?.(name);
     }
-    if (configured.length > 0 && entry.model === undefined) {
-      entry.model = configured[0].id;
-      if (configured[0].variant) entry.variant = configured[0].variant;
-    }
-
     const override = presetForAgent(preset, name);
-    if (override) {
-      if (typeof override.model === 'string') entry.model = override.model;
-      else if (Array.isArray(override.model) && override.model.length > 0) {
-        const first = override.model[0];
-        entry.model = typeof first === 'string' ? first : first.id;
-        if (typeof first !== 'string' && first.variant)
-          entry.variant = first.variant;
-      }
-      if (typeof override.variant === 'string')
-        entry.variant = override.variant;
-      else if ('variant' in override) delete entry.variant;
-      if (typeof override.temperature === 'number')
-        entry.temperature = override.temperature;
-      else if ('temperature' in override) delete entry.temperature;
-      if (
-        override.options &&
-        typeof override.options === 'object' &&
-        !Array.isArray(override.options)
-      )
-        entry.options = clone(override.options);
-      else if ('options' in override) delete entry.options;
-    }
+    entry = resolveAgentInference(
+      entry,
+      configured,
+      override && clone(override),
+    );
     const packageMetadata = marketplaceMetadata.get(name);
     if (packageMetadata?.modelPolicy.source === 'orchestrator') {
       const orchestratorDefinition = definitions.find(

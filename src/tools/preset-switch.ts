@@ -152,12 +152,12 @@ export function switchPresetOnDisk(
   options: PresetSwitchOptions = {},
 ): PresetSwitchResult {
   const scope = options.scope ?? 'user';
-  if (scope === 'project' && isProjectConfigDisabled()) {
+  if (scope === 'project' && isProjectConfigDisabled(options.hostFlavor)) {
     return {
       ok: false,
       presetName,
       message:
-        'Cannot save a project preset: OPENCODE_DISABLE_PROJECT_CONFIG disables project configuration. Unset it or use Global scope.',
+        'Cannot save a project preset: OPENCODE_CONFIG_PROJECT_DISABLE or OPENCODE_DISABLE_PROJECT_CONFIG disables project configuration. Unset it or use Global scope.',
       summary: [],
     };
   }
@@ -300,12 +300,12 @@ export function clearProjectPresetOnDisk(
   directory: string,
   hostFlavor?: string,
 ): PresetSwitchResult {
-  if (isProjectConfigDisabled()) {
+  if (isProjectConfigDisabled(hostFlavor)) {
     return {
       ok: false,
       presetName: '',
       message:
-        'Cannot change project preset inheritance: OPENCODE_DISABLE_PROJECT_CONFIG disables project configuration. Unset it or use Global scope.',
+        'Cannot change project preset inheritance: OPENCODE_CONFIG_PROJECT_DISABLE or OPENCODE_DISABLE_PROJECT_CONFIG disables project configuration. Unset it or use Global scope.',
       summary: [],
     };
   }

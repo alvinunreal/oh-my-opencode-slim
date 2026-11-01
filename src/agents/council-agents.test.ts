@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { PluginConfig } from '../config';
+import { CouncilConfigSchema, type PluginConfig } from '../config';
 import { RuntimeConfig } from '../config/runtime';
 import { buildCouncillorAgents } from './council-agents';
 
@@ -91,6 +91,23 @@ describe('buildCouncillorAgents', () => {
     expect(agent.name).toBe('councillor-beta');
     expect(agent.config.model).toBe('google/gemini-3-pro');
     expect(agent.config.variant).toBe('high');
+    expect(agent._modelArray).toBeUndefined();
+  });
+
+  test('single-entry model chain keeps its inline variant', () => {
+    const council = CouncilConfigSchema.parse({
+      presets: {
+        default: {
+          beta: {
+            model: [{ id: 'openai/gpt-6', variant: 'max' }],
+            variant: 'high',
+          },
+        },
+      },
+    });
+    const [agent] = buildCouncillorAgents(runtimeFor({ council }), new Set());
+    expect(agent.config.model).toBe('openai/gpt-6');
+    expect(agent.config.variant).toBe('max');
     expect(agent._modelArray).toBeUndefined();
   });
 

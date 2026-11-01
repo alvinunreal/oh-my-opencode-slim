@@ -47,6 +47,23 @@ afterEach(() => {
 });
 
 describe('readPluginConfigSnapshot', () => {
+  test('reports ignored v1 wake configuration on v2 without invalidating it', () => {
+    const configPath = writeUserConfig({
+      backgroundJobs: { orchestratorWake: { intervalMs: 60000 } },
+    });
+    const v2 = readPluginConfigSnapshot(projectDir, { hostFlavor: 'v2' });
+    expect(v2.warnings).toEqual([
+      expect.objectContaining({
+        path: configPath,
+        kind: 'unsupported-host',
+        message: expect.stringContaining('orchestratorWake is v1-only'),
+      }),
+    ]);
+    expect(
+      readPluginConfigSnapshot(projectDir, { hostFlavor: 'v1' }).warnings,
+    ).toEqual([]);
+  });
+
   test('returns config, paths, warnings and a fingerprint', () => {
     writeUserConfig({ agents: { oracle: { model: 'test/model' } } });
     const snapshot = readPluginConfigSnapshot(projectDir);

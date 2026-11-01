@@ -2516,6 +2516,35 @@ describe('createAgents with malformed disabled_tools', () => {
 });
 
 describe('observer dispatch instruction injection', () => {
+  test('v2 denies nested delegation when observer is disabled', () => {
+    const config: PluginConfig = {
+      disabled_agents: ['observer'],
+      agents: { reviewer: { model: 'openai/gpt-5.5' } },
+      council: councilConfig(),
+    };
+    const agents = createAgents(runtimeFor(config), { hostFlavor: 'v2' });
+    for (const name of [
+      'oracle',
+      'explorer',
+      'designer',
+      'fixer',
+      'reviewer',
+    ]) {
+      expect(
+        agents.find((agent) => agent.name === name)?.config.permission,
+      ).toMatchObject({ task: { '*': 'deny' } });
+    }
+    const councillor = agents.find(
+      (agent) => agent.name === 'councillor-alpha',
+    );
+    expect(councillor?.config.permission).toMatchObject({ task: 'deny' });
+    const v1 = createAgents(runtimeFor(config), { hostFlavor: 'v1' });
+    const v1Permission = v1.find((agent) => agent.name === 'oracle')?.config
+      .permission;
+    expect(v1Permission).toBeDefined();
+    expect(v1Permission).not.toHaveProperty('task');
+  });
+
   test('advisory prompts gain the dispatch line only on v2 with observer enabled', () => {
     const enabled = createAgents(runtimeFor({ disabled_agents: [] }), {
       hostFlavor: 'v2',
