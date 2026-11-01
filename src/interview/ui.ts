@@ -1684,7 +1684,11 @@ export function renderInterviewPage(
       });
 
       function renderQuestions(questions) {
-        const sig = JSON.stringify([questions, state.data?.mode]);
+        const sig = JSON.stringify([
+          questions,
+          state.data?.mode,
+          ...(!questions.length ? [state.data?.isBusy, state.data?.document, state.data?.blocks] : []),
+        ]);
         const container = document.getElementById('questions');
         const previousActiveQuestionId =
           state.lastQuestionIds[state.activeQuestionIndex];
