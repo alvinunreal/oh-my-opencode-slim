@@ -9861,4 +9861,323 @@ describe('ForegroundFallbackManager same-model retry hardening', () => {
       }
     });
   });
+
+  describe('Antigravity 412 and quota-reset recognition on v2', () => {
+    test('handleV2Retry switches immediately on Antigravity 412 account pool unavailable without status field', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5', variant: 'medium' },
+            { id: 'opencode-go/deepseek-v4.1-flash', variant: 'high' },
+            { id: 'google/antigravity-gemini-3.8-flash', variant: 'high' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+        3,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string; variant?: string };
+      }> = [];
+      const event = {
+        sessionID: 'ses-ag-pool-412',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error: {
+          message:
+            'Antigravity account pool has no account available within the configured wait limit. Add accounts with `opencode auth login` or wait for account availability. Quota resets in 142h 40m 46s.',
+        },
+        decision: { retry: false },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toEqual([
+        {
+          sessionID: 'ses-ag-pool-412',
+          model: {
+            providerID: 'opencode-go',
+            id: 'deepseek-v4.1-flash',
+            variant: 'high',
+          },
+        },
+      ]);
+      expect(event.decision.retry).toBe(true);
+    });
+
+    test('handleV2Retry switches immediately on Antigravity HTTP 412 account pool error with top-level status and active retry decision', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5', variant: 'medium' },
+            { id: 'opencode-go/deepseek-v4.1-flash', variant: 'high' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+        3,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string; variant?: string };
+      }> = [];
+      const event = {
+        sessionID: 'ses-ag-412-status',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error: {
+          status: 412,
+          message:
+            'Precondition Failed: Antigravity account pool is unavailable',
+        },
+        decision: { retry: true, delay: 1000 },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toEqual([
+        {
+          sessionID: 'ses-ag-412-status',
+          model: {
+            providerID: 'opencode-go',
+            id: 'deepseek-v4.1-flash',
+            variant: 'high',
+          },
+        },
+      ]);
+      expect(event.decision.retry).toBe(true);
+      expect((mgr as any).sessionRetries.get('ses-ag-412-status') ?? 0).toBe(0);
+    });
+
+    test('handleV2Retry switches immediately on Antigravity Quota resets in ... error with nested body error code', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5' },
+            { id: 'opencode-go/deepseek-v4.1-flash' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string };
+      }> = [];
+      const event = {
+        sessionID: 'ses-ag-quota-reset',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error: {
+          data: {
+            body: {
+              error: {
+                code: 412,
+                message: 'Quota resets in 10h 30m. Please try again later.',
+              },
+            },
+          },
+        },
+        decision: { retry: false },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toEqual([
+        {
+          sessionID: 'ses-ag-quota-reset',
+          model: {
+            providerID: 'opencode-go',
+            id: 'deepseek-v4.1-flash',
+          },
+        },
+      ]);
+      expect(event.decision.retry).toBe(true);
+    });
+
+    test('handleV2Retry switches immediately on FAILED_PRECONDITION error without top-level status field', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5' },
+            { id: 'opencode-go/deepseek-v4.1-flash' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string };
+      }> = [];
+      const event = {
+        sessionID: 'ses-ag-failed-precondition',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error: {
+          message:
+            'FAILED_PRECONDITION: requested Antigravity model is not available to the configured accounts',
+        },
+        decision: { retry: true, delay: 500 },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toEqual([
+        {
+          sessionID: 'ses-ag-failed-precondition',
+          model: {
+            providerID: 'opencode-go',
+            id: 'deepseek-v4.1-flash',
+          },
+        },
+      ]);
+      expect(event.decision.retry).toBe(true);
+    });
+
+    test('handleV2Retry switches immediately on bare FAILED_PRECONDITION error with status 412', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5' },
+            { id: 'opencode-go/deepseek-v4.1-flash' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string };
+      }> = [];
+      const event = {
+        sessionID: 'ses-bare-412-precondition',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error: {
+          status: 412,
+          message: 'FAILED_PRECONDITION',
+        },
+        decision: { retry: false },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toEqual([
+        {
+          sessionID: 'ses-bare-412-precondition',
+          model: {
+            providerID: 'opencode-go',
+            id: 'deepseek-v4.1-flash',
+          },
+        },
+      ]);
+      expect(event.decision.retry).toBe(true);
+    });
+
+    test('handleV2Retry does not switch on generic 412 without Antigravity pool or precondition text', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5' },
+            { id: 'opencode-go/deepseek-v4.1-flash' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string };
+      }> = [];
+      const event = {
+        sessionID: 'ses-generic-412',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error: {
+          status: 412,
+          message: 'If-Match header validation failed',
+        },
+        decision: { retry: false },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toHaveLength(0);
+      expect(event.decision.retry).toBe(false);
+    });
+
+    test('handleV2Retry absorbs host retry for HTTP 412 with short-horizon quota reset instead of switching immediately', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5' },
+            { id: 'opencode-go/deepseek-v4.1-flash' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+        3,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string };
+      }> = [];
+      const error = {
+        status: 412,
+        message: 'Rate limited, quota resets in 30s',
+      };
+      expect(isPermanentQuotaBillingError(error)).toBe(false);
+
+      const event = {
+        sessionID: 'ses-412-short-reset',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error,
+        decision: { retry: true, delay: 1000 },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toHaveLength(0);
+      expect(event.decision.retry).toBe(true);
+      expect((mgr as any).sessionRetries.get('ses-412-short-reset')).toBe(1);
+    });
+
+    test('isSpentQuotaError keeps whole JSON responseBody together and does not classify retry-eligible bodies as spent', () => {
+      const error = {
+        data: {
+          responseBody: JSON.stringify({
+            error: {
+              message: 'Quota exceeded',
+              details: 'Please retry after 30s',
+            },
+          }),
+        },
+      };
+      expect(isSpentQuotaError(error)).toBe(false);
+    });
+  });
 });
