@@ -1,8 +1,10 @@
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -255,17 +257,6 @@ function writeOpenCodePluginCacheManifest(
   }
 }
 
-function removeOpenCodePluginCacheArtifacts(cacheDir: string): void {
-  rmSync(join(cacheDir, 'node_modules', PACKAGE_NAME), {
-    recursive: true,
-    force: true,
-  });
-  rmSync(join(cacheDir, 'bun.lock'), { force: true });
-  rmSync(join(cacheDir, 'bun.lockb'), { force: true });
-  rmSync(join(cacheDir, 'package-lock.json'), { force: true });
-  rmSync(join(cacheDir, 'node_modules', '.package-lock.json'), { force: true });
-}
-
 function verifyOpenCodePluginCache(cacheDir: string): ConfigMergeResult | null {
   const pluginPackageJsonPath = join(
     cacheDir,
@@ -335,27 +326,17 @@ export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | nul
     };
   }
 
+  let staging: string | undefined;
   try {
-    mkdirSync(cacheDir, { recursive: true });
-  } catch (err) {
-    return {
-      success: false,
-      configPath: cacheDir,
-      error: `Failed to create OpenCode cache directory: ${err}`,
-    };
-  }
-
-  const manifestError = writeOpenCodePluginCacheManifest(
-    cacheDir,
-    cacheVersion,
-  );
-  if (manifestError) return manifestError;
-
-  removeOpenCodePluginCacheArtifacts(cacheDir);
-
-  try {
+    mkdirSync(dirname(cacheDir), { recursive: true });
+    staging = mkdtempSync(`${cacheDir}.staging-`);
+    const manifestError = writeOpenCodePluginCacheManifest(
+      staging,
+      cacheVersion,
+    );
+    if (manifestError) return { ...manifestError, configPath: cacheDir };
     const proc = crossSpawn(install.command, {
-      cwd: cacheDir,
+      cwd: staging,
       stdout: 'pipe',
       stderr: 'pipe',
       env: install.env,
@@ -373,8 +354,15 @@ export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | nul
       };
     }
 
-    const verificationError = verifyOpenCodePluginCache(cacheDir);
-    if (verificationError) return verificationError;
+    const verificationError = verifyOpenCodePluginCache(staging);
+    if (verificationError)
+      return { ...verificationError, configPath: cacheDir };
+
+    const backup = `${staging}.previous`;
+    const hadCache = existsSync(cacheDir);
+    if (hadCache) renameSync(cacheDir, backup);
+    renameSync(staging, cacheDir);
+    if (hadCache) rmSync(backup, { recursive: true, force: true });
 
     return { success: true, configPath: cacheDir };
   } catch (err) {
@@ -383,6 +371,12 @@ export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | nul
       configPath: cacheDir,
       error: `Failed to warm OpenCode cache: ${err}`,
     };
+  } finally {
+    if (staging) {
+      try {
+        rmSync(staging, { recursive: true, force: true });
+      } catch {}
+    }
   }
 }
 

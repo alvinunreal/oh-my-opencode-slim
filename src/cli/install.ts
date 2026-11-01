@@ -310,7 +310,8 @@ async function runInstall(config: InstallConfig): Promise<number> {
     if (cacheResult === null) {
       printInfo('Local development install - cache warm-up not required');
     } else if (!cacheResult.success) {
-      printInfo(`Skipped cache warm-up: ${cacheResult.error}`);
+      printError(`Failed cache warm-up: ${cacheResult.error}`);
+      return 1;
     } else {
       handleStepResult(cacheResult, 'OpenCode cache warmed');
     }
