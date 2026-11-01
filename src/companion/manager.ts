@@ -858,15 +858,22 @@ export class CompanionManager {
     const { sessionId, agent, status, jobFinished } = input;
     if (!sessionId || (status !== 'busy' && status !== 'idle')) return;
 
+    const previous = this.sessions.get(sessionId);
     if (status === 'busy') {
       // A busy event that trails a finished job would never be followed by
       // an idle one, leaving the specialist stuck on screen.
       if (jobFinished) return;
-      const previous = this.sessions.get(sessionId);
       this.sessions.set(sessionId, {
         ...previous,
         agent: agent ?? previous?.agent,
         busy: true,
+      });
+    } else if ((agent ?? previous?.agent) === 'orchestrator') {
+      this.sessions.set(sessionId, {
+        agent: 'orchestrator',
+        model: previous?.model,
+        variant: previous?.variant,
+        busy: false,
       });
     } else {
       this.sessions.delete(sessionId);
@@ -973,8 +980,10 @@ export class CompanionManager {
     const session = this.sessions.get(input.sessionId);
     if (!session?.waits?.delete(`${input.kind}:${input.requestId ?? ''}`))
       return;
-    if (!session.busy && session.waits.size === 0)
-      this.sessions.delete(input.sessionId);
+    if (!session.busy && session.waits.size === 0) {
+      if (session.agent === 'orchestrator') delete session.waits;
+      else this.sessions.delete(input.sessionId);
+    }
     this.updateActivityStatus();
     this.flush();
   }
