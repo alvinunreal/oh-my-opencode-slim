@@ -484,11 +484,15 @@ function acquireMarketplaceLeaseInternal(
 ): MarketplaceLease {
   const options = normalizeLockOptions(partialOptions);
   retryPendingLeaseCleanup(paths.lockDir);
-  fs.mkdirSync(paths.rootDir, { recursive: true });
-  fs.mkdirSync(paths.lockDir, { recursive: true });
   const deadline = Date.now() + options.timeoutMs;
   while (Date.now() <= deadline) {
-    const lease = acquireOnce(paths.lockDir, options);
+    let lease: LockEntry | undefined;
+    try {
+      fs.mkdirSync(paths.lockDir, { recursive: true });
+      lease = acquireOnce(paths.lockDir, options);
+    } catch (error) {
+      if (errnoCode(error) !== 'ENOENT') throw error;
+    }
     if (lease) return createLease(paths.lockDir, lease);
     if (Date.now() + options.retryMs > deadline) break;
     sleepSync(options.retryMs);

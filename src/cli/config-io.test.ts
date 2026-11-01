@@ -142,6 +142,14 @@ describe('config-io', () => {
     });
   });
 
+  test('removes empty configuration write-lock directories after writing', () => {
+    const file = join(tmpDir, 'opencode', 'opencode.json');
+    writeJsonAtomic(file, { plugin: [] });
+    expect(
+      existsSync(join(tmpDir, 'opencode', '.opencode.json.write-lock')),
+    ).toBe(false);
+  });
+
   test('config and backup retain restrictive file permissions', () => {
     const configPath = join(tmpDir, 'private.json');
     writeFileSync(configPath, '{"secret":"key"}', { mode: 0o600 });

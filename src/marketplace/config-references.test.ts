@@ -277,7 +277,9 @@ describe('marketplace config reference cleanup', () => {
           () => {},
         );
         expect(
-          readdirSync(lockDir).filter((name) => name.endsWith('.lease')),
+          existsSync(lockDir)
+            ? readdirSync(lockDir).filter((name) => name.endsWith('.lease'))
+            : [],
         ).toEqual([]);
       } finally {
         unlinkSpy.mockRestore();

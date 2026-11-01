@@ -8,6 +8,7 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -71,6 +72,13 @@ function withConfigWriteLease<T>(configPath: string, operation: () => T): T {
 
   try {
     lease.release();
+    for (const directory of [paths.lockDir, paths.rootDir]) {
+      try {
+        rmdirSync(directory);
+      } catch {
+        // A concurrent writer or a cleanup failure leaves the directory intact.
+      }
+    }
   } catch (releaseError) {
     pendingConfigLeaseCleanup.set(resolve(paths.lockDir), lease);
     if (!operationFailed) throw releaseError;
