@@ -2,6 +2,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -19,6 +20,8 @@ import {
   getLiteConfig,
 } from '../config/paths';
 import {
+  getPluginSpec,
+  getPlugins,
   INSTALLER_MANAGED_PLUGIN_OPTION,
   type PluginEntry,
 } from '../plugin-entry';
@@ -49,26 +52,6 @@ function getModelIds(model: unknown): string[] {
     }
     return [];
   });
-}
-
-/** opencode2 hosts read `plugins` natively and migrate the legacy
- * singular `plugin` key (packages/core/src/config/normalize.ts merges
- * both), so user files carry either key. Read plural-first; writers
- * keep whichever key the file already uses. */
-function getPlugins(config: OpenCodeConfig): unknown[] {
-  return Array.isArray(config.plugins)
-    ? config.plugins
-    : Array.isArray(config.plugin)
-      ? config.plugin
-      : [];
-}
-
-function getPluginSpec(entry: unknown): string | undefined {
-  if (isString(entry)) return entry;
-  if (!Array.isArray(entry)) return undefined;
-
-  const spec = entry[0];
-  return isString(spec) ? spec : undefined;
 }
 
 function normalizePathForMatch(path: string): string {
@@ -144,8 +127,18 @@ function isMatchingPluginEntry(entry: unknown): boolean {
   return spec ? isPluginEntry(spec) : false;
 }
 
+function getCliEntryPath(): string | undefined {
+  const entry = process.argv[1];
+  if (!entry) return undefined;
+  try {
+    return realpathSync(entry);
+  } catch {
+    return entry;
+  }
+}
+
 function getPluginEntry(): PluginEntry {
-  const cliEntryPath = process.argv[1];
+  const cliEntryPath = getCliEntryPath();
 
   if (!cliEntryPath) {
     return PACKAGE_NAME;
@@ -326,7 +319,7 @@ function verifyOpenCodePluginCache(cacheDir: string): ConfigMergeResult | null {
 }
 
 export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | null> {
-  const cliEntryPath = process.argv[1];
+  const cliEntryPath = getCliEntryPath();
   if (!cliEntryPath) {
     return null;
   }
@@ -462,13 +455,17 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
     const pluginEntry = getPluginEntry();
     mutateJsonFile(configPath, (current) => {
       const config = current as OpenCodeConfig;
-      const plugins = getPlugins(config);
-      const filteredPlugins = plugins.filter(
-        (plugin) => !isMatchingPluginEntry(plugin),
-      );
-      filteredPlugins.push(pluginEntry);
-      if (Array.isArray(config.plugins)) config.plugins = filteredPlugins;
-      else config.plugin = filteredPlugins;
+      if (Array.isArray(config.plugin)) {
+        config.plugin = config.plugin.filter(
+          (entry) => !isMatchingPluginEntry(entry),
+        );
+      }
+      if (Array.isArray(config.plugins)) {
+        config.plugins = config.plugins.filter(
+          (entry) => !isMatchingPluginEntry(entry),
+        );
+      }
+      config.plugin = [...(config.plugin ?? []), pluginEntry];
       return config;
     });
     return { success: true, configPath };

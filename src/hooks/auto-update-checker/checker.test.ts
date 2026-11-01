@@ -217,7 +217,7 @@ describe('auto-update-checker/checker', () => {
       );
       const readSpy = spyOn(fs, 'readFileSync').mockReturnValue(
         JSON.stringify({
-          plugins: ['oh-my-opencode-slim@latest'],
+          plugins: [{ package: 'oh-my-opencode-slim@latest' }],
         }),
       );
 
@@ -271,6 +271,7 @@ describe('auto-update-checker/checker', () => {
               { __ohMyOpencodeSlimManagedByInstaller: true },
             ],
           ],
+          plugins: ['other-native-plugin'],
         }),
       );
       const { findPluginEntry } = await import(
@@ -283,7 +284,8 @@ describe('auto-update-checker/checker', () => {
 
       const managedReadSpy = spyOn(fs, 'readFileSync').mockReturnValue(
         JSON.stringify({
-          plugin: [
+          plugin: ['other-legacy-plugin'],
+          plugins: [
             [
               'oh-my-opencode-slim@1.2.3',
               { __ohMyOpencodeSlimManagedByInstaller: true },
@@ -390,7 +392,7 @@ describe('auto-update-checker/checker', () => {
       const target = path.join(root, 'dotfiles.json');
       const link = path.join(configDir, 'opencode.json');
       const original =
-        '{ "plugin": [["oh-my-opencode-slim@1.2.3", { "__ohMyOpencodeSlimManagedByInstaller": true }]] }';
+        '{ "plugin": [["oh-my-opencode-slim@1.2.3", { "__ohMyOpencodeSlimManagedByInstaller": true }]], "plugins": [["oh-my-opencode-slim@1.2.3", { "__ohMyOpencodeSlimManagedByInstaller": true }]] }';
       fs.writeFileSync(target, original);
       fs.symlinkSync('../dotfiles.json', link);
       try {
@@ -401,9 +403,9 @@ describe('auto-update-checker/checker', () => {
           status: 'changed',
         });
         expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
-        expect(fs.readFileSync(target, 'utf8')).toContain(
-          'oh-my-opencode-slim@1.2.4',
-        );
+        const updated = JSON.parse(fs.readFileSync(target, 'utf8'));
+        expect(updated.plugin[0][0]).toBe('oh-my-opencode-slim@1.2.4');
+        expect(updated.plugins[0][0]).toBe('oh-my-opencode-slim@1.2.4');
         fs.rmSync(target);
         expect(updateInstallerManagedVersions(root, '1.2.5').status).toBe(
           'error',

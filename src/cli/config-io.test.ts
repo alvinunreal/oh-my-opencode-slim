@@ -684,10 +684,46 @@ describe('config-io', () => {
     expect(result.success).toBe(true);
 
     const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
-    // The file's own key is preserved; the legacy singular key stays untouched.
-    expect(saved.plugins).toContain('oh-my-opencode-slim');
+    expect(saved.plugins).toEqual(['other']);
     expect(saved.plugins).not.toContain('oh-my-opencode-slim@1.0.0');
-    expect(saved.plugin).toBeUndefined();
+    expect(saved.plugin).toEqual(['oh-my-opencode-slim']);
+  });
+
+  test('installs a pinned bunx symlink in plugin without duplicates across keys', async () => {
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    const modules = join(
+      tmpDir,
+      'bunx-1000-oh-my-opencode-slim@beta',
+      'node_modules',
+    );
+    const packageRoot = join(modules, 'oh-my-opencode-slim');
+    const entry = join(packageRoot, 'dist', 'cli', 'index.js');
+    mkdirSync(join(packageRoot, 'dist', 'cli'), { recursive: true });
+    mkdirSync(join(modules, '.bin'), { recursive: true });
+    writePackageJson(packageRoot, '1.2.3');
+    writeFileSync(entry, '');
+    const link = join(modules, '.bin', 'oh-my-opencode-slim');
+    symlinkSync(entry, link);
+    paths.ensureConfigDir();
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        plugin: ['other-legacy', 'oh-my-opencode-slim@1.0.0'],
+        plugins: [{ package: 'oh-my-opencode-slim@1.1.0' }, 'other-native'],
+      }),
+    );
+    process.argv[1] = link;
+
+    expect((await addPluginToOpenCodeConfig()).success).toBe(true);
+    const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(saved.plugin).toEqual([
+      'other-legacy',
+      [
+        'oh-my-opencode-slim@1.2.3',
+        { __ohMyOpencodeSlimManagedByInstaller: true },
+      ],
+    ]);
+    expect(saved.plugins).toEqual(['other-native']);
   });
 
   test('addPluginToOpenCodeConfig respects OPENCODE_CONFIG_DIR', async () => {

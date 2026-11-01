@@ -34,6 +34,10 @@ Common options: `--preset=<openai|opencode-go>` (default `openai`),
 `--background-subagents=ask|yes|no`, `--background-subagents-target=<path>`,
 `--no-tui`, `--dry-run`, `--reset`.
 
+When invoked through `bunx` with a tag other than `latest` or an exact version,
+the installer pins the resolved package version in OpenCode's configuration.
+`npx` does not expose that request in its cache path, so its entry is unpinned.
+
 ### Background Subagents Environment Setup
 
 Background orchestration is the default workflow. It depends on OpenCode's
