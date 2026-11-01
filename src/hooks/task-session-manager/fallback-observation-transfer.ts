@@ -42,7 +42,6 @@ export function createBackgroundFallbackHandoff(options: {
   revivedRunTracker: RevivedRunTracker;
   allowForeground?: boolean;
 }): {
-  isEligible: (sessionID: string, generation: number | undefined) => boolean;
   prepare: (
     sessionID: string,
     preparedGeneration: number | undefined,
@@ -82,8 +81,6 @@ export function createBackgroundFallbackHandoff(options: {
   };
 
   return {
-    isEligible: (sessionID, generation) =>
-      resolveEligibleRecord(sessionID, generation) !== undefined,
     prepare: (sessionID, preparedGeneration, baselineMessageID) => {
       const record = resolveEligibleRecord(sessionID, preparedGeneration);
       if (!record) return false;

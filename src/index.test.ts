@@ -5020,6 +5020,42 @@ describe('plugin foreground fallback host gating', () => {
       ...(hostFlavor ? { hostFlavor } : {}),
     } as never);
 
+  const publishCompactionRequest = async (
+    hooks: Awaited<ReturnType<typeof plugin>>,
+    sessionID: string,
+    model: { providerID: string; modelID: string },
+  ) => {
+    await hooks.event?.({
+      event: {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg_compaction',
+            sessionID,
+            role: 'user',
+            agent: 'orchestrator',
+            model,
+            time: { created: 2 },
+          },
+        },
+      },
+    } as never);
+    await hooks.event?.({
+      event: {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'prt_compaction',
+            messageID: 'msg_compaction',
+            sessionID,
+            type: 'compaction',
+            auto: true,
+          },
+        },
+      },
+    } as never);
+  };
+
   beforeEach(async () => {
     originalEnv = { ...process.env };
     projectDir = await mkdtemp(
@@ -5050,6 +5086,524 @@ describe('plugin foreground fallback host gating', () => {
     jest.useRealTimers();
     process.env = originalEnv;
     await rm(projectDir, { recursive: true, force: true });
+  });
+
+  test('v1 external admission fences a pending fallback before message.updated', async () => {
+    const { client, messages, abort, promptAsync } = createFallbackClient();
+    const promotion = Promise.withResolvers<unknown>();
+    const started = Promise.withResolvers<void>();
+    (client as any)._client = {
+      post: () => {
+        started.resolve();
+        return promotion.promise;
+      },
+    };
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    const sessionID = 'admission-race';
+    const model = { providerID: 'openai', modelID: 'gpt-b' };
+    try {
+      await hooks.config?.({ agent: {} });
+      await hooks.event?.({
+        event: {
+          type: 'session.created',
+          properties: { info: { id: sessionID, parentID: 'parent' } },
+        },
+      } as never);
+      await hooks['chat.message']?.(
+        {
+          sessionID,
+          messageID: 'msg_old',
+          agent: 'orchestrator',
+          model,
+        } as never,
+        {
+          message: { id: 'msg_old', sessionID, role: 'user', model },
+          parts: [],
+        } as never,
+      );
+      const pending = hooks.event?.({
+        event: {
+          type: 'session.status',
+          properties: {
+            sessionID,
+            status: { type: 'retry', attempt: 1, message: 'rate limit' },
+          },
+        },
+      } as never);
+      await started.promise;
+      await hooks['chat.message']?.(
+        {
+          sessionID,
+          messageID: 'msg_new',
+          agent: 'orchestrator',
+          model,
+        } as never,
+        {
+          message: { id: 'msg_new', sessionID, role: 'user', model },
+          parts: [],
+        } as never,
+      );
+      promotion.resolve({});
+      await pending;
+      await hooks.event?.({
+        event: {
+          type: 'message.updated',
+          properties: {
+            info: { id: 'msg_new', sessionID, role: 'user', model },
+          },
+        },
+      } as never);
+
+      expect(abort).not.toHaveBeenCalled();
+      expect(promptAsync).not.toHaveBeenCalled();
+      expect(messages).not.toHaveBeenCalled();
+    } finally {
+      promotion.resolve({});
+      await hooks.dispose?.();
+    }
+  });
+
+  test('v2 external admission preserves the host retry budget', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: false },
+        fallback: { enabled: true, maxRetries: 1 },
+        agents: { orchestrator: { model: ['openai/gpt-b', 'openai/gpt-c'] } },
+      }),
+    );
+    const hooks = await createHooks('v2');
+    const switchModel = mock(async () => ({}));
+    const sessionID = 'v2-retry-admission';
+    const model = { providerID: 'openai', modelID: 'gpt-b' };
+    const retry = () => ({
+      sessionID,
+      agent: 'orchestrator',
+      model: { providerID: 'openai', id: 'gpt-b' },
+      error: { message: 'rate limit' },
+      decision: { retry: true, delay: 2_000 },
+    });
+    try {
+      await hooks.config?.({ agent: {} });
+      await hooks['v2.session.retry']?.(retry() as never, switchModel as never);
+      expect(switchModel).not.toHaveBeenCalled();
+      await hooks['chat.message']?.(
+        {
+          sessionID,
+          messageID: 'msg_new',
+          agent: 'orchestrator',
+          model,
+        } as never,
+        {
+          message: { id: 'msg_new', sessionID, role: 'user', model },
+          parts: [],
+        } as never,
+      );
+      await hooks['v2.session.retry']?.(retry() as never, switchModel as never);
+      expect(switchModel).toHaveBeenCalledTimes(1);
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test('v1 agent changes affect root replay but not child or internal admissions', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: false },
+        fallback: { enabled: true, maxRetries: 0 },
+        agents: {
+          orchestrator: { model: ['p1/a', 'p1/b'] },
+          explorer: { model: ['p2/a', 'p2/b'] },
+        },
+      }),
+    );
+    const { client, messages, promptAsync } = createFallbackClient();
+    (client.session as any).get = async ({ path }: any) => ({
+      data: {
+        id: path.id,
+        ...(path.id === 'agent-child' ? { parentID: 'agent-root' } : {}),
+      },
+    });
+    messages.mockResolvedValue({
+      data: [
+        {
+          info: { id: 'msg_user', role: 'user' },
+          parts: [{ type: 'text', text: 'work' }],
+        },
+      ],
+    });
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    const chat = async (
+      sessionID: string,
+      id: string,
+      agent: string,
+      providerID: string,
+      internal = false,
+    ) => {
+      const model = { providerID, modelID: 'a' };
+      await hooks['chat.message']?.(
+        {
+          sessionID,
+          messageID: id,
+          agent,
+          model,
+          ...(internal ? { parts: [createInternalAgentTextPart('wake')] } : {}),
+        } as never,
+        {
+          message: { id, sessionID, role: 'user', agent, model },
+          parts: [],
+        } as never,
+      );
+    };
+    try {
+      await hooks.config?.({ agent: {} });
+      for (const sessionID of ['agent-root', 'agent-child']) {
+        await chat(sessionID, `msg_first_${sessionID}`, 'orchestrator', 'p1');
+        await chat(sessionID, `msg_second_${sessionID}`, 'explorer', 'p2');
+      }
+      await chat('agent-root', 'msg_wake', 'orchestrator', 'p1', true);
+      for (const sessionID of ['agent-root', 'agent-child']) {
+        await hooks.event?.({
+          event: {
+            type: 'session.error',
+            properties: { sessionID, error: { message: 'rate limit' } },
+          },
+        } as never);
+      }
+      expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({
+        path: { id: 'agent-root' },
+        body: { agent: 'explorer', model: { providerID: 'p2', modelID: 'b' } },
+      });
+      expect(promptAsync.mock.calls[1]?.[0]).toMatchObject({
+        path: { id: 'agent-child' },
+        body: {
+          agent: 'orchestrator',
+          model: { providerID: 'p1', modelID: 'a' },
+        },
+      });
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test.each(['root', 'child'] as const)(
+    'v1 native continuation retains a down-provider mark for a %s retry',
+    async (target) => {
+      await Bun.write(
+        `${projectDir}/oh-my-opencode-slim.json`,
+        JSON.stringify({
+          companion: { enabled: false },
+          fallback: {
+            enabled: true,
+            maxRetries: 2,
+            initialRetryDelayMs: 1_000,
+          },
+          agents: { orchestrator: { model: ['primary/a', 'backup/b'] } },
+        }),
+      );
+      const { client, messages, abort, promptAsync } = createFallbackClient();
+      messages.mockResolvedValue({
+        data: [
+          {
+            info: { id: 'msg_user', role: 'user' },
+            parts: [{ type: 'text', text: 'work' }],
+          },
+        ],
+      });
+      const hooks = await plugin({
+        client,
+        directory: projectDir,
+        worktree: projectDir,
+        serverUrl: new URL('http://127.0.0.1:4096'),
+      } as never);
+      const parent = `native-mark-${target}`;
+      const primary = { providerID: 'primary', modelID: 'a' };
+      try {
+        await hooks.config?.({ agent: {} });
+        jest.useFakeTimers();
+        await hooks['chat.message']?.(
+          {
+            sessionID: parent,
+            messageID: 'msg_user',
+            agent: 'orchestrator',
+            model: primary,
+          } as never,
+          {
+            message: {
+              id: 'msg_user',
+              sessionID: parent,
+              role: 'user',
+              agent: 'orchestrator',
+              model: primary,
+            },
+            parts: [],
+          } as never,
+        );
+        await hooks.event?.({
+          event: {
+            type: 'session.error',
+            properties: {
+              sessionID: parent,
+              error: { statusCode: 429, message: 'Rate limit exceeded' },
+            },
+          },
+        } as never);
+        jest.advanceTimersByTime(1_000);
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+        expect(promptAsync).toHaveBeenCalledTimes(1);
+        expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({
+          body: { model: { providerID: 'backup', modelID: 'b' } },
+        });
+
+        const notice = {
+          message: {
+            id: 'msg_notice',
+            sessionID: parent,
+            role: 'user',
+            agent: 'orchestrator',
+            model: primary,
+          },
+          parts: [
+            {
+              type: 'text',
+              synthetic: true,
+              text: '<task id="child-done" state="completed">\n<summary>Background task completed: work</summary>\n<task_result>done</task_result>\n</task>',
+            },
+          ],
+        };
+        await hooks['chat.message']?.(
+          {
+            sessionID: parent,
+            messageID: 'msg_notice',
+            agent: 'orchestrator',
+          } as never,
+          notice as never,
+        );
+        expect(notice.message.model).toEqual(primary);
+        const sessionID = target === 'root' ? parent : `${parent}-child`;
+        if (target === 'child') {
+          await hooks.event?.({
+            event: {
+              type: 'session.created',
+              properties: { info: { id: sessionID, parentID: parent } },
+            },
+          } as never);
+          await hooks['chat.message']?.(
+            {
+              sessionID,
+              messageID: 'msg_child',
+              agent: 'orchestrator',
+              model: primary,
+            } as never,
+            {
+              message: {
+                id: 'msg_child',
+                sessionID,
+                role: 'user',
+                agent: 'orchestrator',
+                model: primary,
+              },
+              parts: [],
+            } as never,
+          );
+        }
+        await hooks.event?.({
+          event: {
+            type: 'message.updated',
+            properties: {
+              info: {
+                id: 'msg_assistant',
+                sessionID,
+                role: 'assistant',
+                ...primary,
+                time: { created: Date.now() },
+              },
+            },
+          },
+        } as never);
+        await hooks.event?.({
+          event: {
+            type: 'session.status',
+            properties: {
+              sessionID,
+              status: {
+                type: 'retry',
+                attempt: 1,
+                message: 'Rate limit exceeded',
+              },
+            },
+          },
+        } as never);
+        expect(abort).toHaveBeenCalledTimes(1);
+        expect(promptAsync).toHaveBeenCalledTimes(2);
+        expect(promptAsync.mock.calls[1]?.[0]).toMatchObject({
+          path: { id: sessionID },
+          body: { model: { providerID: 'backup', modelID: 'b' } },
+        });
+      } finally {
+        jest.useRealTimers();
+        await hooks.dispose?.();
+      }
+    },
+  );
+
+  test('v1 compaction telemetry does not replace the external continuation model', async () => {
+    const { client, abort, promptAsync } = createFallbackClient();
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    const sessionID = 'compaction-metadata';
+    const model = { providerID: 'openai', modelID: 'gpt-b' };
+    try {
+      await hooks.config?.({ agent: {} });
+      await hooks['chat.message']?.(
+        {
+          sessionID,
+          messageID: 'msg_original',
+          agent: 'orchestrator',
+          model,
+        } as never,
+        {
+          message: {
+            id: 'msg_original',
+            sessionID,
+            role: 'user',
+            agent: 'orchestrator',
+            model,
+          },
+          parts: [],
+        } as never,
+      );
+      await publishCompactionRequest(hooks, sessionID, model);
+      const summary = hooks.event?.({
+        event: {
+          type: 'message.updated',
+          properties: {
+            info: {
+              id: 'msg_summary',
+              parentID: 'msg_compaction',
+              sessionID,
+              role: 'assistant',
+              agent: 'compaction',
+              summary: true,
+              providerID: 'p3',
+              modelID: 'summary',
+              time: { created: 3 },
+            },
+          },
+        },
+      } as never);
+      const retry = hooks.event?.({
+        event: {
+          type: 'session.status',
+          properties: {
+            sessionID,
+            status: { type: 'retry', attempt: 1, message: 'rate limit' },
+          },
+        },
+      } as never);
+      await Promise.all([summary, retry]);
+      expect(abort).not.toHaveBeenCalled();
+      expect(promptAsync).not.toHaveBeenCalled();
+      const output = {
+        message: {
+          id: 'msg_wake',
+          sessionID,
+          role: 'user',
+          agent: 'orchestrator',
+          model,
+        },
+        parts: [createInternalAgentTextPart('wake')],
+      };
+      await hooks['chat.message']?.(
+        { sessionID, messageID: 'msg_wake' } as never,
+        output as never,
+      );
+      expect(output.message.model).toEqual(model);
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test('v1 compaction explicitly pinned to the owner model does not consume its chain', async () => {
+    const { client, abort, promptAsync } = createFallbackClient();
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    const sessionID = 'pinned-compaction';
+    const model = { providerID: 'openai', modelID: 'gpt-b' };
+    try {
+      await hooks.config?.({
+        agent: { compaction: { model: 'openai/gpt-b' } },
+      });
+      await hooks['chat.message']?.(
+        {
+          sessionID,
+          messageID: 'msg_original',
+          agent: 'orchestrator',
+          model,
+        } as never,
+        {
+          message: {
+            id: 'msg_original',
+            sessionID,
+            role: 'user',
+            agent: 'orchestrator',
+            model,
+          },
+          parts: [],
+        } as never,
+      );
+      await publishCompactionRequest(hooks, sessionID, model);
+      await hooks.event?.({
+        event: {
+          type: 'message.updated',
+          properties: {
+            info: {
+              id: 'msg_summary',
+              parentID: 'msg_compaction',
+              sessionID,
+              role: 'assistant',
+              agent: 'compaction',
+              summary: true,
+              providerID: 'openai',
+              modelID: 'gpt-b',
+              time: { created: 3 },
+            },
+          },
+        },
+      } as never);
+      await hooks.event?.({
+        event: {
+          type: 'session.status',
+          properties: {
+            sessionID,
+            status: { type: 'retry', attempt: 1, message: 'rate limit' },
+          },
+        },
+      } as never);
+      expect(abort).not.toHaveBeenCalled();
+      expect(promptAsync).not.toHaveBeenCalled();
+    } finally {
+      await hooks.dispose?.();
+    }
   });
 
   test('v2 host: the replay path stays disabled', async () => {

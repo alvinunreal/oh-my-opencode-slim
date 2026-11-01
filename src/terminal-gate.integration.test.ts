@@ -778,21 +778,28 @@ test('a hung fallback replay transcript read publishes the unrecovered error', a
   );
 });
 
-test('task_cancel during fallback resend backoff prevents a second replay', async () => {
+test('task_cancel retains an uncertain fallback observation until its bounded expiry', async () => {
   const h = await fallbackAssembly();
   let childSends = 0;
   h.promptAsync.mockImplementation(async (call: unknown) => {
     const { path } = call as { path: { id: string } };
     if (path.id === 'child') {
-      if (childSends++ === 0) throw new Error('socket hang up');
-      h.setBusy(true);
-      await h.busySignal();
+      childSends++;
+      throw new Error('socket hang up');
     }
     return {};
   });
   await h.fail();
   await h.idle();
   await h.advance(2000);
+  const generation = h.board.get('child')?.generation ?? 0;
+  expect(childSends).toBe(1);
+  expect(h.abort).not.toHaveBeenCalled();
+  expect(h.revivedTracker?.isTracked('child', generation)).toBe(true);
+  expect(h.revivedTracker?.isObservationPending('child', generation)).toBe(
+    true,
+  );
+
   const cancellation = h.hooks.tool?.task_cancel.execute(
     { task_id: 'child' },
     h.context,
@@ -801,15 +808,18 @@ test('task_cancel during fallback resend backoff prevents a second replay', asyn
   await h.advance(300);
   await cancellation;
   expect(h.board.get('child')?.state).toBe('cancelled');
-  await h.advance(300);
+  expect(h.abort).toHaveBeenCalledTimes(1);
+  expect(h.revivedTracker?.isObservationPending('child', generation)).toBe(
+    true,
+  );
+
+  await h.advance(30_000);
   expect(childSends).toBe(1);
   expect(h.board.get('child')?.state).toBe('cancelled');
-  expect(
-    h.revivedTracker?.isObservationPending(
-      'child',
-      h.board.get('child')?.generation ?? 0,
-    ),
-  ).toBe(false);
+  expect(h.revivedTracker?.isObservationPending('child', generation)).toBe(
+    false,
+  );
+  expect(h.revivedTracker?.isTracked('child', generation)).toBe(true);
 });
 
 test('a timed-out fallback replay retains its owner without aborting or resending', async () => {
