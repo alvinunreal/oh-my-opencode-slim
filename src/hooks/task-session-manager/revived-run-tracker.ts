@@ -357,7 +357,6 @@ export function createRevivedRunTracker(options: {
         // replacing its sticky model selection with the resolve snapshot.
         delivery: 'queue',
         modelSelection: 'inherit',
-        ...(selection?.variant ? { modelVariant: selection.variant } : {}),
         body: {
           agent: selection?.agent ?? 'orchestrator',
           ...(selection?.model ? { model: selection.model } : {}),

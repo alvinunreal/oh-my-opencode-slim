@@ -2579,14 +2579,16 @@ describe('wake selection for delegated work', () => {
     const call = (
       promptAsync.mock.calls as unknown as Array<[Record<string, unknown>]>
     )[0]?.[0] as {
-      modelVariant?: string;
-      body: { model?: { providerID: string; modelID: string } };
+      body: {
+        model?: { providerID: string; modelID: string };
+        variant?: string;
+      };
     };
     expect(call.body.model).toEqual({
       providerID: 'test',
       modelID: 'model-b',
     });
-    expect(call.modelVariant).toBeUndefined();
+    expect(call.body.variant).toBeUndefined();
   });
 
   test('aborts the wake when an external message arrives during selection resolve', async () => {
@@ -2709,13 +2711,9 @@ describe('children mode on v1 (explicit opt-in)', () => {
       promptAsync.mock.calls as unknown as Array<[Record<string, unknown>]>
     )[0]?.[0] as {
       delivery?: string;
-      modelVariant?: string;
       body: { parts: Array<{ text: string }> };
     };
     expect(call.delivery).toBeUndefined(); // v1 call shape unchanged
-    // The default makeClient get reports a 'high' variant; v1 must still
-    // never receive the v2-only modelVariant argument.
-    expect(call.modelVariant).toBeUndefined();
     expect(call.body.parts[0]?.text).toBe(
       `${ORCHESTRATOR_CHILDREN_WAKE_TEXT}\n<!-- SLIM_INTERNAL_INITIATOR -->`,
     );

@@ -2740,48 +2740,19 @@ describe('foreground fallback redo: host retry budget', () => {
     expect(inert.willAttemptFallback('v2-wa')).toBe(false);
   });
 
-  test('T7: mapped v2 failed execution prompts once without charging host retries', async () => {
-    const sid = 'v2-failed-execution';
-    const { manager, mocks } = makeManager({ maxRetries: 2 });
+  test('T8: v1 replay carries the fallback entry variant', async () => {
+    const sid = 'variant-replay-v1';
+    const { manager, mocks } = makeManager({
+      chain: ['test/a', { id: 'test/b', variant: 'fast' }],
+    });
     manager.registerSessionAgent(sid, 'orchestrator');
     await manager.handleEvent(redoEvents.assistant(sid));
-    for (const mapped of mapV2EventToV1({
-      type: 'session.execution.failed',
-      data: { sessionID: sid, error: { message: 'rate limit' } },
-    }))
-      await manager.handleEvent(mapped);
+    await manager.handleEvent(redoEvents.error(sid));
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
     expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
-      body: { model: { providerID: 'test', modelID: 'b' } },
+      body: { model: { providerID: 'test', modelID: 'b' }, variant: 'fast' },
     });
-    const switchModel = mock(async () => {});
-    const host = retryEvent(sid, 'b', { retry: true, delay: 77 });
-    await manager.handleV2Retry(host, switchModel);
-    expect(switchModel).not.toHaveBeenCalled();
-    expect(host.decision).toEqual({ retry: true, delay: 77 });
   });
-
-  test.each([
-    ['v1', undefined],
-    ['v2', 'v2'],
-  ] as const)(
-    'T8: %s replay carries the fallback entry variant',
-    async (label, hostFlavor) => {
-      const sid = `variant-replay-${label}`;
-      const { manager, mocks } = makeManager({
-        chain: ['test/a', { id: 'test/b', variant: 'fast' }],
-        hostFlavor,
-      });
-      manager.registerSessionAgent(sid, 'orchestrator');
-      await manager.handleEvent(redoEvents.assistant(sid));
-      await manager.handleEvent(redoEvents.error(sid));
-      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-      expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
-        body: { model: { providerID: 'test', modelID: 'b' }, variant: 'fast' },
-        ...(hostFlavor ? { modelVariant: 'fast' } : {}),
-      });
-    },
-  );
 
   test('T9: v2 retry hook switches with the fallback entry variant', async () => {
     const { manager } = makeManager({
@@ -2800,21 +2771,14 @@ describe('foreground fallback redo: host retry budget', () => {
   });
 
   test('T10: entries without a variant add no replay or switch keys', async () => {
-    for (const hostFlavor of [undefined, 'v2'] as const) {
-      const sid = `no-variant-${hostFlavor ?? 'v1'}`;
-      const { manager, mocks } = makeManager({
-        chain: ['test/a', 'test/b'],
-        hostFlavor,
-      });
-      manager.registerSessionAgent(sid, 'orchestrator');
-      await manager.handleEvent(redoEvents.assistant(sid));
-      await manager.handleEvent(redoEvents.error(sid));
-      const call = mocks.promptAsync.mock.calls[0]?.[0] as {
-        body: Record<string, unknown>;
-      };
-      expect(Object.hasOwn(call.body, 'variant')).toBe(false);
-      expect(Object.hasOwn(call, 'modelVariant')).toBe(false);
-    }
+    const replay = makeManager({ chain: ['test/a', 'test/b'] });
+    replay.manager.registerSessionAgent('no-variant-v1', 'orchestrator');
+    await replay.manager.handleEvent(redoEvents.assistant('no-variant-v1'));
+    await replay.manager.handleEvent(redoEvents.error('no-variant-v1'));
+    const call = replay.mocks.promptAsync.mock.calls[0]?.[0] as {
+      body: Record<string, unknown>;
+    };
+    expect(Object.hasOwn(call.body, 'variant')).toBe(false);
     const { manager } = makeManager({ chain: ['test/a', 'test/b'] });
     const refs: Array<{ providerID: string; id: string; variant?: string }> =
       [];
@@ -2847,8 +2811,6 @@ describe('foreground fallback redo: host retry budget', () => {
     await v1.manager.handleEvent(redoEvents.error(sid));
 
     const v2 = makeManager({ chain, hostFlavor: 'v2' });
-    await v2.manager.handleEvent(assistant);
-    await v2.manager.handleEvent(redoEvents.error(sid));
     const refs: Array<{ providerID: string; id: string; variant?: string }> =
       [];
     await v2.manager.handleV2Retry(
@@ -2864,18 +2826,12 @@ describe('foreground fallback redo: host retry budget', () => {
     );
 
     expect(v1.mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(v2.mocks.promptAsync).toHaveBeenCalledTimes(1);
     expect({
       v1: v1.mocks.promptAsync.mock.calls[0]?.[0],
-      v2: v2.mocks.promptAsync.mock.calls[0]?.[0],
       refs,
     }).toMatchObject({
       v1: {
         body: { model: { providerID: 'test', modelID: 'b' }, variant: 'fast' },
-      },
-      v2: {
-        body: { model: { providerID: 'test', modelID: 'b' }, variant: 'fast' },
-        modelVariant: 'fast',
       },
       refs: [{ providerID: 'test', id: 'b', variant: 'fast' }],
     });
@@ -5998,7 +5954,6 @@ describe('ForegroundFallbackManager session.error', () => {
     mgr = new ForegroundFallbackManager(makeChains(), true, {
       directory: '/test',
     } as any);
-
     await mgr.handleEvent({
       type: 'message.updated',
       properties: {
@@ -6096,18 +6051,16 @@ describe('ForegroundFallbackManager session.error', () => {
   }
 
   /** Common handoff-scenario runner: builds the mock client, the
-   * manager (with optional handoff/reader/modelChanged) and fires the
+   * manager (with optional handoff/reader) and fires the
    * message.updated → session.error sequence that triggers a fallback
    * attempt on 'sess-1'. */
   async function runFallbackScenario(options?: {
-    v2?: boolean;
     promptAsyncImpl?: () => Promise<unknown>;
     abortImpl?: () => Promise<unknown>;
     messagesData?: unknown[];
     messageData?: unknown;
     handoff?: ReturnType<typeof handoffMock>['handoff'];
     readBackgroundGeneration?: (sessionID: string) => number | undefined;
-    modelChanged?: () => void;
   }) {
     ({ mocks } = createMockClient({
       promptAsyncImpl: options?.promptAsyncImpl,
@@ -6118,10 +6071,10 @@ describe('ForegroundFallbackManager session.error', () => {
     mgr = new ForegroundFallbackManager(
       makeChains(),
       true,
-      { directory: '/test', hostFlavor: options?.v2 ? 'v2' : undefined } as any,
+      { directory: '/test' } as any,
       3,
       undefined,
-      options?.modelChanged,
+      undefined,
       0,
       500,
       options?.handoff,
@@ -6267,28 +6220,6 @@ describe('ForegroundFallbackManager session.error', () => {
     expect(mocks.post).not.toHaveBeenCalled();
   });
 
-  test('switched:false still delivers — the handoff is admitted without the switch claim', async () => {
-    // The v2 shim runs s.prompt even when switchModel fails;
-    // `switched: false` means the replay WAS delivered on the current
-    // model. Admission and switch confirmation are different facts:
-    // the delivery keeps its owner; only sessionModel stays.
-    const { calls, handoff } = handoffMock();
-    const modelChanged = mock(() => {});
-    const mocks = await runFallbackScenario({
-      handoff,
-      modelChanged,
-      messagesData: taskPrompt,
-      promptAsyncImpl: async () => ({ switched: false }),
-    });
-
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(calls.admit).toHaveLength(1);
-    expect(calls.reject).toEqual([]);
-    expect(calls.settleUnresolved).toEqual([]);
-    // The switch claim is suppressed: no model migration.
-    expect(modelChanged).not.toHaveBeenCalled();
-  });
-
   test('a stale background generation during the transcript read aborts the replay', async () => {
     // The reader confirmed a BACKGROUND child, but the preparation lost
     // validity (generation changed during the read) — sending the stale
@@ -6335,52 +6266,6 @@ describe('ForegroundFallbackManager session.error', () => {
     expect(calls.prepare).toEqual([['sess-1', 7, 'm1']]);
     expect(calls.admit).toEqual([['sess-1', 7]]);
     expect(generation).toBe(8);
-  });
-
-  test('replays after a v2-shaped user message in session.messages data', async () => {
-    // OpenCode 1.18+ session.messages() returns v2 SessionMessage objects
-    // ({ type, text }) instead of the v1 { info, parts } shape. The fallback
-    // must still recognize the v2 user turn even when an assistant message
-    // appears after it.
-    ({ mocks } = createMockClient({
-      messagesData: [
-        { id: 'm1', type: 'user', text: 'v2 prompt' },
-        {
-          id: 'm2',
-          type: 'assistant',
-          parts: [{ type: 'text', text: 'reply' }],
-        },
-      ],
-    }));
-    mgr = new ForegroundFallbackManager(makeChains(), true, {
-      directory: '/test',
-    } as any);
-
-    await mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID: 'sess-1',
-          providerID: 'anthropic',
-          modelID: 'claude-opus-4-5',
-          role: 'assistant',
-        },
-      },
-    });
-
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 'sess-1',
-        error: { message: 'Rate limit exceeded' },
-      },
-    });
-
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    const call = mocks.promptAsync.mock.calls[0] as [
-      { parts: Array<{ text?: string }> },
-    ];
-    expect(call[0].body.parts).toHaveLength(1);
   });
 
   test('does nothing when error is not a rate limit', async () => {
@@ -6469,10 +6354,7 @@ describe('ForegroundFallbackManager session.error', () => {
     );
   });
 
-  test('v1 promptBody carries no v2 modelSwitch flag and still claims the switch', async () => {
-    // v1 byte-identity: the shim-only `modelSwitch` arg must appear ONLY
-    // on v2 hosts, and a v1-shaped result (no `switched` key) keeps the
-    // model-switch bookkeeping.
+  test('v1 replay records the selected model', async () => {
     const { mocks } = createMockClient();
     const onModelChanged = mock();
     const mgr = new ForegroundFallbackManager(
@@ -6504,168 +6386,9 @@ describe('ForegroundFallbackManager session.error', () => {
     });
 
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    const call = mocks.promptAsync.mock.calls[0] as [Record<string, unknown>];
-    expect('modelSwitch' in call[0]).toBe(false);
     expect(onModelChanged).toHaveBeenCalledTimes(1);
     expect(onModelChanged).toHaveBeenCalledWith('sess-1', 'openai/gpt-4o');
   });
-
-  test('v2 host promptBody requests a required model switch', async () => {
-    const { mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, {
-      directory: '/test',
-      hostFlavor: 'v2',
-    } as any);
-
-    await mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID: 'sess-v2',
-          providerID: 'anthropic',
-          modelID: 'claude-opus-4-5',
-          role: 'assistant',
-        },
-      },
-    });
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 'sess-v2',
-        error: { message: 'Rate limit exceeded' },
-      },
-    });
-
-    const call = mocks.promptAsync.mock.calls[0] as [Record<string, unknown>];
-    expect(call[0].modelSwitch).toBe('required');
-  });
-
-  test('v2 same-model replay sends no modelSwitch flag', async () => {
-    const { mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager({}, true, {
-      directory: '/test',
-      hostFlavor: 'v2',
-    } as any);
-    mgr.registerSessionAgent('sess-no-chain', 'orchestrator');
-    mgr.registerSessionAgent('sess-no-chain', 'orchestrator');
-    await mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID: 'sess-no-chain',
-          agent: 'orchestrator',
-          providerID: 'anthropic',
-          modelID: 'claude-opus-4-5',
-          role: 'assistant',
-        },
-      },
-    });
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 'sess-no-chain',
-        error: { message: 'Rate limit exceeded' },
-      },
-    });
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    const call = mocks.promptAsync.mock.calls[0] as [Record<string, unknown>];
-    expect('modelSwitch' in call[0]).toBe(false);
-  });
-
-  test('switched:false result (v2 switch failure) skips the switch claim', async () => {
-    // The v2 shim degrades a failed switchModel into a prompt delivered on
-    // the CURRENT model; the manager must not record a model switch that
-    // did not happen (sessionModel feeds chain descent, the callback
-    // migrates provider accounting, the toast claims a switch).
-    const { mocks } = createMockClient({
-      promptAsyncImpl: async () => ({ switched: false }),
-    });
-    const onModelChanged = mock();
-    const showToast = mock(async () => ({}));
-    const mgr = new ForegroundFallbackManager(
-      makeChains(),
-      true,
-      { directory: '/test', hostFlavor: 'v2', client: { tui: { showToast } } },
-      3,
-      undefined,
-      onModelChanged,
-    );
-
-    await mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID: 'sess-degrade',
-          providerID: 'anthropic',
-          modelID: 'claude-opus-4-5',
-          role: 'assistant',
-        },
-      },
-    });
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 'sess-degrade',
-        error: { message: 'Rate limit exceeded' },
-      },
-    });
-
-    // The prompt was delivered exactly once — no busy-session abort dance.
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(mocks.abort).not.toHaveBeenCalled();
-    expect(onModelChanged).not.toHaveBeenCalled();
-    expect(showToast).not.toHaveBeenCalled();
-  });
-
-  const noSwitch = Object.assign(
-    new Error(
-      '[v2] host provides no session.switchModel; cannot switch model for fallback prompt',
-    ),
-    { name: 'V2SwitchModelUnavailableError' },
-  );
-  const conflict = Object.assign(new Error(''), {
-    name: 'Session.SyntheticConflictError',
-    _tag: 'Session.SyntheticConflictError',
-    inputID: 'msg_omos_existing',
-  });
-  test.each([
-    ['missing switchModel', noSwitch, /host provides no session\.switchModel/],
-    [
-      'synthetic id conflict',
-      conflict,
-      /"_tag":"Session\.SyntheticConflictError","inputID":"msg_omos_existing"/,
-    ],
-  ])(
-    'v2 %s rejection is final and reports its cause',
-    async (_kind, error, detail) => {
-      const { calls, handoff } = handoffMock();
-      const onModelChanged = mock();
-      const logSpy = spyOn(logger, 'log').mockImplementation(() => {});
-      try {
-        const mocks = await runFallbackScenario({
-          v2: true,
-          handoff,
-          modelChanged: onModelChanged,
-          messagesData: taskPrompt,
-          promptAsyncImpl: async () => {
-            throw error;
-          },
-        });
-
-        expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-        expect(mocks.abort).not.toHaveBeenCalled();
-        expect(onModelChanged).not.toHaveBeenCalled();
-        expect(calls.reject).toEqual([['sess-1', undefined]]);
-        expect(calls.settleUnresolved).toEqual([]);
-        expect(logSpy).toHaveBeenCalledWith(
-          '[foreground-fallback] fallback attempt failed',
-          expect.objectContaining({ error: expect.stringMatching(detail) }),
-        );
-      } finally {
-        logSpy.mockRestore();
-      }
-    },
-  );
 
   test('shows a toast when fallback switches models on a transient error', async () => {
     const { mocks } = createMockClient();
@@ -7281,7 +7004,6 @@ describe('ForegroundFallbackManager v1 abort protection for live children', () =
     return live.has(id);
   };
   const manager = (
-    hostFlavor?: string,
     chain = makeChains(),
     handoff?: ConstructorParameters<typeof ForegroundFallbackManager>[8],
     readGeneration?: (id: string) => number | undefined,
@@ -7289,7 +7011,7 @@ describe('ForegroundFallbackManager v1 abort protection for live children', () =
     new ForegroundFallbackManager(
       chain,
       true,
-      { directory: '/test', hostFlavor } as any,
+      { directory: '/test' } as any,
       0, // Exercise abort/handoff guards on the first host retry.
       undefined,
       undefined,
@@ -7367,7 +7089,7 @@ describe('ForegroundFallbackManager v1 abort protection for live children', () =
 
   test('T4: exhausted chain stops intervening without aborting live children', async () => {
     const { mocks } = createMockClient();
-    const mgr = manager(undefined, { orchestrator: ['openai/model-y'] });
+    const mgr = manager({ orchestrator: ['openai/model-y'] });
     live.add('sess-exhaust');
     mgr.registerSessionAgent('sess-exhaust', 'orchestrator');
     await mgr.handleEvent({
@@ -7389,7 +7111,7 @@ describe('ForegroundFallbackManager v1 abort protection for live children', () =
 
   test('T4b: second exhaustion stops intervening without aborting live children', async () => {
     const { mocks } = createMockClient();
-    const mgr = manager(undefined, {
+    const mgr = manager({
       orchestrator: ['openai/gpt-b', 'openai/gpt-c'],
     });
     mgr.registerSessionAgent('sess-loop', 'orchestrator');
@@ -7442,16 +7164,6 @@ describe('ForegroundFallbackManager v1 abort protection for live children', () =
     expect(checked.every((id) => id === 'sess-child')).toBe(true);
     expect(mocks.post).toHaveBeenCalledTimes(1);
     expect(mocks.abort).toHaveBeenCalledTimes(1);
-  });
-
-  test('T7: v2 keeps aborting on retry even when children are live', async () => {
-    const { mocks } = createMockClient();
-    const mgr = manager('v2');
-    live.add('sess-parent');
-    await seed(mgr, 'sess-parent');
-    await mgr.handleEvent(retry('sess-parent'));
-    expect(mocks.abort).toHaveBeenCalledTimes(1);
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
 
   test('T8: children appearing during waiter promotion prevent the retry abort', async () => {
@@ -11356,21 +11068,6 @@ describe('ForegroundFallbackManager same-model retry hardening', () => {
     expect(
       isFailoverError({ statusCode: 429, message: 'upstream error: 429' }),
     ).toBe(true);
-  });
-
-  test('v2 same-model replay does not require a model switch', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, {
-      client,
-      directory: '/test',
-      hostFlavor: 'v2',
-    } as any);
-    await seed(mgr, 'v2-nc');
-    await mgr.handleEvent(streamError('v2-nc', 'e1'));
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(mocks.promptAsync.mock.calls[0]?.[0]).not.toHaveProperty(
-      'modelSwitch',
-    );
   });
 
   test('a host retry status paired with a replayed error sends no second prompt', async () => {

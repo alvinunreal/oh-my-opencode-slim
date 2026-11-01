@@ -58,30 +58,3 @@ export function findLatestUserMessage(
   }
   return undefined;
 }
-
-/**
- * A user turn that a fallback replay can follow up on.
- *
- * Accepts both the v1 transform shape (`{ info: { role: 'user' }, parts }`)
- * and the v2 `session.messages()` shape (`{ type: 'user', text }`) returned
- * by the plugin SDK's HTTP API since OpenCode 1.18.
- */
-export type ReplayableUserMessage =
-  | MessageWithParts
-  | {
-      type: 'user';
-      text?: string;
-    };
-
-export function isReplayableUserMessage(
-  message: unknown,
-): message is ReplayableUserMessage {
-  if (isUserMessageWithParts(message)) {
-    return true;
-  }
-  if (!message || typeof message !== 'object') {
-    return false;
-  }
-  const candidate = message as { type?: unknown };
-  return candidate.type === 'user';
-}

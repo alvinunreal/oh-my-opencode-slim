@@ -67,7 +67,7 @@ import {
 } from '../../v2/terminal-fallback';
 import type { SessionLifecycle } from '../session-lifecycle';
 import type { createBackgroundFallbackHandoff } from '../task-session-manager/fallback-observation-transfer';
-import { isReplayableUserMessage } from '../types';
+import { isUserMessageWithParts } from '../types';
 
 /** Timer port for deterministic test control (see `src/utils/test-timers.ts`):
  *  `now` is observation time (dedup windows, incident clocks); scheduling
@@ -1399,12 +1399,7 @@ export class ForegroundFallbackManager {
   }
 
   private withholdsAbortForLiveChildren(sessionID: string): boolean {
-    if (
-      (this.input as PluginInput & { hostFlavor?: string }).hostFlavor ===
-        'v2' ||
-      !this.hasRunningChildren?.(sessionID)
-    )
-      return false;
+    if (!this.hasRunningChildren?.(sessionID)) return false;
     log('[foreground-fallback] abort withheld for live background children', {
       sessionID,
     });
@@ -2996,9 +2991,8 @@ export class ForegroundFallbackManager {
     const session = getClient(this.input).session;
     // Tail read mirroring execFallback: the replay needs the last
     // replayable user message plus the trailing message id (handoff
-    // baseline). A tail without a user message is
-    // one long turn: read its latest parent user message (v1 `parentID`);
-    // shapes without that id read it all. Empty/error tails stop here.
+    // baseline). A tail without a user message reads its latest parent user
+    // message (v1 `parentID`); empty, failed or parentless tails stop here.
     // Both reads are bounded like execFallback's: a hung host call must
     // not pin inProgress forever. A failed read sent nothing, so refund.
     let tailResult: { data?: unknown; error?: unknown };
@@ -3020,20 +3014,27 @@ export class ForegroundFallbackManager {
     let requestError: unknown = tailResult.error ?? undefined;
     let lastUser =
       requestError === undefined
-        ? messages.findLast(isReplayableUserMessage)
+        ? messages.findLast(isUserMessageWithParts)
         : undefined;
     if (!lastUser && messages.length > 0 && requestError === undefined) {
       const parentID = nestedField(
         nestedField(messages.at(-1), 'info'),
         'parentID',
       );
+      if (typeof parentID !== 'string') {
+        log('[foreground-fallback] no user message found', {
+          sessionID,
+          messageCount: messages.length,
+          requestError,
+        });
+        if (opts.charged) this.refundSessionRetry(sessionID, opts.epoch);
+        return false;
+      }
       let deepResult: { data?: unknown; error?: unknown };
       try {
         deepResult = await readForReplay<{ data?: unknown; error?: unknown }>(
           sessionID,
-          typeof parentID === 'string'
-            ? session.message({ path: { id: sessionID, messageID: parentID } })
-            : session.messages({ path: { id: sessionID } }),
+          session.message({ path: { id: sessionID, messageID: parentID } }),
           'same-model replay transcript read timed out',
           this.timerSeam,
         );
@@ -3043,7 +3044,7 @@ export class ForegroundFallbackManager {
       if (!this.isCurrentTurn(sessionID, opts.epoch)) return false;
       lastUser = [deepResult.data ?? []]
         .flat()
-        .findLast(isReplayableUserMessage);
+        .findLast(isUserMessageWithParts);
       requestError = deepResult.error ?? undefined;
     }
     if (!lastUser) {
@@ -3066,12 +3067,6 @@ export class ForegroundFallbackManager {
       args: Record<string, unknown>,
     ) => Promise<unknown>;
 
-    // No `modelSwitch: 'required'`: the replay targets the session's
-    // CURRENT model, so the v2 shim may skip the switch (preserving the
-    // host-side variant) and hosts without session.switchModel can still
-    // deliver it. v1 call bytes stay untouched.
-    const isV2Host =
-      (this.input as PluginInput & { hostFlavor?: string }).hostFlavor === 'v2';
     const promptBody = {
       path: { id: sessionID },
       body: {
@@ -3082,7 +3077,6 @@ export class ForegroundFallbackManager {
         ...(opts.variant ? { variant: opts.variant } : {}),
         agent: opts.agentName,
       },
-      ...(isV2Host && opts.variant ? { modelVariant: opts.variant } : {}),
     };
     const sendReplayPrompt = (): Promise<unknown> => {
       this.rememberUserMessage(sessionID, promptBody.body.messageID);
@@ -3695,14 +3689,12 @@ export class ForegroundFallbackManager {
     // points in the tryFallback* callers; a disposed generation must not
     // even read the transcript through the old client.
     if (!this.isCurrentTurn(sessionID, expectedEpoch)) return;
-    const isV2Host =
-      (this.input as PluginInput & { hostFlavor?: string }).hostFlavor === 'v2';
     const preparedGeneration = this.readBackgroundGeneration?.(
       sessionID,
-      announce && !isV2Host,
+      announce,
     );
     const outcomeKey =
-      announce && !isV2Host && preparedGeneration !== undefined
+      announce && preparedGeneration !== undefined
         ? `v1\0${sessionID}\0${preparedGeneration}`
         : undefined;
     if (outcomeKey) this.createV1Outcome(outcomeKey, V1_OUTCOME_TIMEOUT_MS);
@@ -3739,9 +3731,8 @@ export class ForegroundFallbackManager {
       // hundreds of megabytes (measured 463 MB / 11.7 s on a live
       // months-old orchestrator session), which delayed every failover by
       // ~20 s. The `limit` query keeps the hot path O(tail). A tail without a
-      // user message is one long turn: read its latest parent user message
-      // (v1 `parentID`); shapes without that id read it all. Empty/error
-      // tails stop here.
+      // user message reads its latest parent (v1 `parentID`); empty, failed
+      // or parentless tails stop here.
       const tailResult = await readForReplay(
         sessionID,
         session.messages({
@@ -3756,34 +3747,38 @@ export class ForegroundFallbackManager {
       // run through the destroyed generation's client. Abandon before
       // arming anything; the tryFallback* finally releases inProgress.
       if (!this.isCurrentTurn(sessionID, expectedEpoch)) return;
-      // v2 messages carry `type`/`text` instead of `info`/`parts`, so guard
-      // each entry instead of dereferencing a fixed shape.
       const messages = (tailResult.data ?? []) as unknown[];
       let requestError: unknown = tailResult.error ?? undefined;
       let lastUser =
         requestError === undefined
-          ? messages.findLast(isReplayableUserMessage)
+          ? messages.findLast(isUserMessageWithParts)
           : undefined;
       if (!lastUser && messages.length > 0 && requestError === undefined) {
         const parentID = nestedField(
           nestedField(messages.at(-1), 'info'),
           'parentID',
         );
+        if (typeof parentID !== 'string') {
+          log('[foreground-fallback] no user message found', {
+            sessionID,
+            messageCount: messages.length,
+            requestError,
+          });
+          return;
+        }
         const deepResult = await readForReplay<{
           data?: unknown;
           error?: unknown;
         }>(
           sessionID,
-          typeof parentID === 'string'
-            ? session.message({ path: { id: sessionID, messageID: parentID } })
-            : session.messages({ path: { id: sessionID } }),
+          session.message({ path: { id: sessionID, messageID: parentID } }),
           'fallback replay user message read timed out',
           this.timerSeam,
         );
         if (!this.isCurrentTurn(sessionID, expectedEpoch)) return;
         lastUser = [deepResult.data ?? []]
           .flat()
-          .findLast(isReplayableUserMessage);
+          .findLast(isUserMessageWithParts);
         requestError = deepResult.error ?? undefined;
       }
       if (!lastUser) {
@@ -3802,20 +3797,14 @@ export class ForegroundFallbackManager {
         log('[foreground-fallback] promptAsync unavailable', { sessionID });
         return;
       }
-      // Loose alias: the v2 client shim accepts extra top-level args
-      // (`modelSwitch`) the way orchestrator-wake passes `delivery`.
       // Bound: the SDK's promptAsync reads `this._client`, so calling the
       // extracted function unbound throws `undefined is not an object
       // (evaluating 'this._client')` on the real client (same binding the
       // revived-run tracker already applies).
       const promptAsync = sessionClient.promptAsync.bind(sessionClient) as (
-        args: Record<string, unknown> & { modelSwitch?: 'required' },
+        args: Record<string, unknown>,
       ) => Promise<unknown>;
 
-      // v2-only flag (consumed by the client shim): the replay's model is
-      // the fallback TARGET, so a v2 host without session.switchModel must
-      // reject the replay (typed error) instead of silently replaying on
-      // the model that just failed. v1 call bytes stay untouched.
       const promptBody = {
         path: { id: sessionID },
         body: {
@@ -3833,8 +3822,6 @@ export class ForegroundFallbackManager {
           ...(variant ? { variant } : {}),
           agent: agentName,
         },
-        ...(isV2Host ? { modelSwitch: 'required' as const } : {}),
-        ...(isV2Host && variant ? { modelVariant: variant } : {}),
       };
 
       let promptResult: unknown;
@@ -3895,12 +3882,8 @@ export class ForegroundFallbackManager {
       try {
         promptResult = await sendReplayPrompt();
       } catch (promptErr) {
-        if (isV2Host && !(promptErr instanceof OperationTimeoutError)) {
-          withdrawHandoff();
-        } else {
-          // A transport failure cannot prove the host refused the replay.
-          settleUnresolvedHandoff();
-        }
+        // A transport failure cannot prove the host refused the replay.
+        settleUnresolvedHandoff();
         throw promptErr;
       }
 
@@ -3930,24 +3913,8 @@ export class ForegroundFallbackManager {
         return;
       }
 
-      // v2 shim: `switched: false` means the replay WAS DELIVERED on
-      // the current model — the work is admitted, so the observation
-      // handoff is kept (delivery needs an owner); only the model-switch
-      // CLAIM is suppressed (sessionModel feeds chain descent and
-      // onSessionModelChanged migrates provider accounting; both would
-      // lie). Prompt admission and switch confirmation are two
-      // different facts.
-      const deliveredWithoutSwitch =
-        isRecord(promptResult) && promptResult.switched === false;
-      if (deliveredWithoutSwitch) {
-        log(
-          '[foreground-fallback] fallback prompt delivered on the current model (model switch failed)',
-          { sessionID, agentName, from: currentModel, intended: nextModel },
-        );
-      } else {
-        this.commitSwitch(sessionID, currentModel, nextModel, error);
-      }
-      // Admission accepted (with or without the switch): convert the
+      this.commitSwitch(sessionID, currentModel, nextModel, error);
+      // Admission accepted: convert the
       // prepared handoff into a tracked run (register + immediate
       // probe) so the substituted run's result is observed and
       // delivered to the parent.
@@ -3958,15 +3925,13 @@ export class ForegroundFallbackManager {
           announce
             ? {
                 from: currentModel,
-                to: deliveredWithoutSwitch ? currentModel : nextModel,
+                to: nextModel,
                 error: structuredErrorMessage(error) ?? 'Session error',
               }
             : undefined,
         );
-        if (admitted)
-          admittedModel = deliveredWithoutSwitch ? currentModel : nextModel;
+        if (admitted) admittedModel = nextModel;
       }
-      if (deliveredWithoutSwitch) return;
       log('[foreground-fallback] switched to fallback model', {
         sessionID,
         agentName,

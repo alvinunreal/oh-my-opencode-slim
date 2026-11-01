@@ -426,7 +426,7 @@ describe('revived run tracker', () => {
     });
   });
 
-  test('forwards the resolved notification variant in the v1 body and v2 modelVariant', async () => {
+  test('forwards the resolved notification variant in the v1 body', async () => {
     jest.useFakeTimers();
     let probe = false;
     const harness = createHarness(
@@ -456,7 +456,6 @@ describe('revived run tracker', () => {
 
     expect(harness.prompt.mock.calls[0]?.[0]).toMatchObject({
       delivery: 'queue',
-      modelVariant: 'max',
       body: {
         agent: 'plan',
         model: { providerID: 'test', modelID: 'plan-model' },
