@@ -14,7 +14,10 @@ import type { BackgroundJobSupervisor } from '../../utils/background-job-supervi
 import { structuredErrorMessage } from '../../utils/child-transcript';
 import { isRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
-import { raceEvidenceDeadline, readHostSessionInfo } from '../../utils/session-info-read';
+import {
+  raceEvidenceDeadline,
+  readHostSessionInfo,
+} from '../../utils/session-info-read';
 import {
   isFailoverError,
   isInlineFailoverError,
