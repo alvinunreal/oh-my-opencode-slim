@@ -34,6 +34,9 @@ yarn-error.log*
 coverage/
 reports/
 
+# Stryker scratch
+.stryker-tmp/
+
 # Temporary files
 tmp/
 temp/
