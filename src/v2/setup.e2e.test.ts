@@ -2627,6 +2627,116 @@ describe('createV2Setup e2e', () => {
     }
   });
 
+  test('tracks child agent switches without reusing another agent profile', async () => {
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    const model = { providerID: 'openai', id: 'gpt-5.2', variant: 'high' };
+    const frozen = {
+      presetName: 'frozen',
+      fallbackEnabled: false,
+      profiles: {
+        explorer: {
+          model,
+          temperature: 0.1,
+          sidebarModel: 'openai/gpt-5.2',
+        },
+        fixer: {
+          model,
+          temperature: 0.8,
+          providerOptions: { reasoningEffort: 'low', serviceTier: 'priority' },
+          sidebarModel: 'openai/gpt-5.2',
+        },
+      },
+      chains: {},
+      inheritance: {},
+    };
+    await ctx.storage?.set('session-preset/v1/child', {
+      schemaVersion: 1,
+      parentID: 'root',
+      execution: frozen,
+      bundle: {
+        ...frozen,
+        profiles: {
+          ...frozen.profiles,
+          fixer: { ...frozen.profiles.fixer, temperature: 0.2 },
+        },
+      },
+      preserveModel: true,
+    });
+    let agent = 'explorer';
+    const switches: unknown[] = [];
+    ctx.session.get = async ({ sessionID }) => ({
+      id: sessionID,
+      directory: projectDir,
+      ...(sessionID === 'child' ? { parentID: 'root', agent, model } : {}),
+    });
+    Object.assign(ctx.session, {
+      switchModel: async (input: unknown) => switches.push(input),
+    });
+    Object.assign(ctx, {
+      model: {
+        list: async () => ({
+          data: [
+            {
+              providerID: model.providerID,
+              id: model.id,
+              variants: [{ id: 'high', settings: { reasoningEffort: 'high' } }],
+            },
+          ],
+        }),
+      },
+    });
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      const admit = () =>
+        calls.promptHookCb?.({
+          sessionID: 'child',
+          messageID: 'message',
+          prompt: { text: 'hello' },
+        });
+      const context = (currentAgent: string) => ({
+        sessionID: 'child',
+        agent: currentAgent,
+        model: { ...model },
+        options: { maxTokens: 32000 },
+        system: [],
+        messages: [],
+        tools: {},
+      });
+
+      await admit();
+      const explorer = context('explorer');
+      await calls.contextHookCb?.(explorer);
+      expect(explorer.options).toEqual({ maxTokens: 32000, temperature: 0.1 });
+
+      agent = 'fixer';
+      const fixer = context(agent);
+      await calls.contextHookCb?.(fixer);
+      expect(fixer.options).toEqual({
+        maxTokens: 32000,
+        temperature: 0.8,
+        serviceTier: 'priority',
+      });
+      expect(fixer.model).toEqual(model);
+      expect(switches).toEqual([]);
+
+      agent = 'build';
+      const foreign = context(agent);
+      await calls.contextHookCb?.(foreign);
+      expect(foreign.options).toEqual({ maxTokens: 32000 });
+      await admit();
+      await calls.contextHookCb?.(foreign);
+      expect(foreign.options).toEqual({ maxTokens: 32000 });
+
+      agent = 'explorer';
+      await admit();
+      const resumed = context(agent);
+      await calls.contextHookCb?.(resumed);
+      expect(resumed.options).toEqual({ maxTokens: 32000, temperature: 0.1 });
+    } finally {
+      await cleanup();
+    }
+  });
+
   test('a child request preserves the explicitly selected variant settings', async () => {
     await mkdir(path.join(projectDir, '.opencode'), { recursive: true });
     await Bun.write(

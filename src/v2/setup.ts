@@ -3564,10 +3564,19 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           messagesTransform,
           // Primaries use the startup registry; child profiles stay session-frozen.
           applyRuntimeProfile: async (event) => {
-            const profile = sessionProfileBridge.profileForSession(
-              event.sessionID,
-            );
             const binding = sessionPresets.peek(event.sessionID);
+            const profile =
+              sessionProfileBridge.profileForSession(
+                event.sessionID,
+                event.agent,
+              ) ??
+              (binding?.parentID && pluginAgents.has(event.agent)
+                ? sessionAdmissionProfiles(
+                    binding,
+                    currentProfiles,
+                    registeredProfiles,
+                  )[event.agent]
+                : undefined);
             if (profile) {
               const providerOptions = await variantCompatibleOptions(
                 profile.providerOptions ?? {},

@@ -15,8 +15,8 @@
  *   `options` record for that captured session only (never system/messages/
  *   tools — prompt bytes and tool catalogs stay untouched).
  *
- * Existing/resumed child sessions keep the profile captured when they were
- * first seen; parents and foreign-agent sessions are never touched.
+ * Existing/resumed child sessions keep their captured profile while the agent
+ * stays the same; parents and foreign-agent sessions are never touched.
  */
 import type { ModelRef, V2Context, V2SessionContextEvent } from './types';
 
@@ -36,7 +36,7 @@ export interface V2AgentRuntimeProfile {
 export type V2AgentRuntimeProfiles = Record<string, V2AgentRuntimeProfile>;
 
 /** Per-session frozen profile (`null` = frozen with no applicable profile). */
-type FrozenProfile = V2AgentRuntimeProfile | null;
+type FrozenProfile = { agent: string; profile: V2AgentRuntimeProfile | null };
 
 /** Cap on per-session bookkeeping (FIFO eviction, mirrors the other v2 maps). */
 const MAX_PROFILE_SESSIONS = 1024;
@@ -187,7 +187,8 @@ export interface SessionProfileBridge {
    * KV lookup total. For an identified plugin child, model
    * switching is fully awaited and a failed switch rejects the admission;
    * unknown identity remains untouched because it may be a root or foreign
-   * session. Once captured (or proven root/foreign) the call is O(1).
+   * session. Captures and foreign-agent exclusions are reconciled against the
+   * authoritative agent on later admissions; unchanged identities are O(1).
    */
   ensureSessionProfile(
     sessionID: string,
@@ -195,7 +196,10 @@ export interface SessionProfileBridge {
     capture?: SessionProfileCapture,
   ): Promise<void>;
   /** Frozen profile for a session (undefined when not captured). */
-  profileForSession(sessionID: string): V2AgentRuntimeProfile | undefined;
+  profileForSession(
+    sessionID: string,
+    agent?: string,
+  ): V2AgentRuntimeProfile | undefined;
   /** Captured session count (bounded; test seam). */
   size(): number;
 }
@@ -213,15 +217,15 @@ export interface SessionProfileBridge {
  *   cleanup. It never determines the outcome on its own; a session already
  *   captured here is a no-op.
  *
- * Sessions proven to be roots or foreign-agent children are latched as
- * ignored so the request path does not re-query the host on every prompt.
+ * Roots and foreign-agent children are ignored until an admission identifies
+ * a different agent for a foreign child.
  */
 export function createSessionProfileBridge(
   options: SessionProfileBridgeOptions,
 ): SessionProfileBridge {
   const captured = new Map<string, FrozenProfile>();
-  /** Sessions proven to never qualify (root / foreign / non-plugin agent). */
-  const ignored = new Set<string>();
+  /** Roots have no agent; foreign children retain the identity that was ignored. */
+  const ignored = new Map<string, string | undefined>();
   /** Deleted ids stay inert until a fresh session.created proves reuse. */
   const deleted = new Set<string>();
   /** In-flight captures, so concurrent callers share one switch. */
@@ -235,7 +239,7 @@ export function createSessionProfileBridge(
       captured.delete(oldest);
     }
     while (ignored.size > MAX_PROFILE_SESSIONS) {
-      const oldest = ignored.values().next().value as string | undefined;
+      const oldest = ignored.keys().next().value as string | undefined;
       if (oldest === undefined) break;
       ignored.delete(oldest);
     }
@@ -319,16 +323,29 @@ export function createSessionProfileBridge(
     identity?: SessionProfileIdentity,
     capture?: SessionProfileCapture,
   ): Promise<void> {
-    if (
-      captured.has(sessionID) ||
-      ignored.has(sessionID) ||
-      deleted.has(sessionID)
-    ) {
-      return;
+    if (deleted.has(sessionID)) return;
+    const frozen = captured.get(sessionID);
+    if (frozen) {
+      if (!identity?.agent || frozen.agent === identity.agent) return;
+      captured.delete(sessionID);
+    }
+    if (ignored.has(sessionID)) {
+      const agent = ignored.get(sessionID);
+      if (!agent || !identity?.agent || agent === identity.agent) return;
+      ignored.delete(sessionID);
     }
     const inFlight = pending.get(sessionID);
     if (inFlight) {
       await inFlight;
+      const capturedAgent = captured.get(sessionID)?.agent;
+      const ignoredAgent = ignored.get(sessionID);
+      if (
+        identity?.agent &&
+        ((capturedAgent && capturedAgent !== identity.agent) ||
+          (ignoredAgent && ignoredAgent !== identity.agent))
+      ) {
+        await ensure(sessionID, identity, capture);
+      }
       return;
     }
     const task = (async () => {
@@ -336,7 +353,7 @@ export function createSessionProfileBridge(
       if (!resolved.parentID) {
         if (resolved.authoritative) {
           // Proven root session: never profile it.
-          ignored.add(sessionID);
+          ignored.set(sessionID, undefined);
           prune();
           return;
         }
@@ -351,7 +368,7 @@ export function createSessionProfileBridge(
       }
       if (!options.pluginAgents.has(resolved.agent)) {
         // Foreign-agent child: its sessions are never touched.
-        ignored.add(sessionID);
+        ignored.set(sessionID, resolved.agent);
         prune();
         return;
       }
@@ -372,7 +389,7 @@ export function createSessionProfileBridge(
         // is built from createAgents, which has no marketplace handling).
         // Freeze null so admission proceeds on the host-registered model
         // with no temperature/options applied — never reject the prompt hook.
-        captured.set(sessionID, null);
+        captured.set(sessionID, { agent: resolved.agent, profile: null });
         options.onSessionCaptured?.(sessionID);
         prune();
         emitLog('[v2][profile] child session captured without a profile', {
@@ -414,7 +431,7 @@ export function createSessionProfileBridge(
         keepPerCallModel
       ) {
         // Nothing to switch, or the host already runs a per-call model.
-        captured.set(sessionID, profile);
+        captured.set(sessionID, { agent: resolved.agent, profile });
         options.onSessionCaptured?.(sessionID);
         prune();
         emitLog('[v2][profile] child session captured without a model switch', {
@@ -463,7 +480,10 @@ export function createSessionProfileBridge(
         options.onSessionCaptureFailed?.(sessionID);
         throw err;
       }
-      captured.set(sessionID, appliedProfile);
+      captured.set(sessionID, {
+        agent: resolved.agent,
+        profile: appliedProfile,
+      });
       prune();
       emitLog('[v2][profile] applied model to child session', {
         sessionID,
@@ -521,8 +541,11 @@ export function createSessionProfileBridge(
       await ensure(sessionID, identity, capture);
     },
 
-    profileForSession(sessionID) {
-      return captured.get(sessionID) ?? undefined;
+    profileForSession(sessionID, agent) {
+      const frozen = captured.get(sessionID);
+      return frozen && (!agent || frozen.agent === agent)
+        ? (frozen.profile ?? undefined)
+        : undefined;
     },
 
     size() {
