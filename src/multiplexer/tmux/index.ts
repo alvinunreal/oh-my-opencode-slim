@@ -424,10 +424,8 @@ export class TmuxMultiplexer implements Multiplexer {
       return { exitCode, stdout, stderr };
     };
     const result = await run(stackOn);
-    // A neighbour can disappear between list-panes and split-window.
-    return !PANE_ID.test(result.stdout.trim()) &&
-      stackOn &&
-      result.stderr.trim() === `can't find pane: ${stackOn}`
+    // No pane from the neighbour (gone or too small): split the anchor.
+    return stackOn && !PANE_ID.test(result.stdout.trim())
       ? run(undefined)
       : result;
   }

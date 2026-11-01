@@ -499,7 +499,7 @@ describe('TmuxMultiplexer', () => {
     expect(split[11]).toBe('%8');
   });
 
-  test('retries the anchor if the pane following it disappears before splitting', async () => {
+  test('retries the anchor when the pane following it cannot be split', async () => {
     crossSpawnMock.mockImplementation((command: string[]) => {
       if (command[0] === 'which')
         return createSpawnResult(0, '/usr/bin/tmux\n');
@@ -508,7 +508,7 @@ describe('TmuxMultiplexer', () => {
         return createSpawnResult(0, '%1\n%8\n');
       if (command.includes('split-window'))
         return command.includes('-b')
-          ? createSpawnResult(1, '', "can't find pane: %8\n")
+          ? createSpawnResult(1, '', 'no space for a new pane\n')
           : createSpawnResult(0, '%2\n');
       return createSpawnResult();
     });
