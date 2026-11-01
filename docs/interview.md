@@ -290,7 +290,8 @@ It also refuses while the latest spec update is in an error or pending-repair
 state, even when the last accepted spec has no open questions.
 `/implement` tells the agent to read the selected completed interview markdown
 and implement its `Current spec` without reprinting it. With a live interview it
-refuses while questions remain open. With no argument and no active interview it
+refuses while questions remain open; after an accepted round with zero questions,
+it can run without pressing **Complete**. With no argument and no active interview it
 falls back to the newest file whose frontmatter has `status: complete`; a path
 or basename can be supplied explicitly, but an explicit path is accepted only
 when its frontmatter has `status: complete`.

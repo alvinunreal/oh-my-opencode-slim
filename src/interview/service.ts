@@ -2122,7 +2122,8 @@ export function createInterviewService(
       }
       const body = extractSummarySection(state.document);
       if (
-        state.mode !== 'completed' ||
+        // The implement command itself marks the session busy on v2.
+        (state.mode !== 'completed' && !state.isBusy) ||
         !body ||
         body === 'Waiting for interview answers.'
       ) {

@@ -5,7 +5,8 @@
 - `patch.ts` rejects unanchored replacements and applies unified diffs to the current spec body; `history.ts`
   collapses the older kickoff copy for active interviews.
 - `service.ts` handles quiet state turns, consumed-state dedupe, one patch repair
-  prompt, turn status notices, and `/implement` with newest-complete fallback.
+  prompt, turn status notices, and `/implement` with newest-complete fallback;
+  the command's own busy event does not reject a zero-question active spec.
 - `../tools/interview-submit-state.ts` is the static quiet submission tool;
   primary agents may use it and subagents are denied by permission projection.
 
