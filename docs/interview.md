@@ -337,7 +337,8 @@ ssh -L <port>:127.0.0.1:<port> your-server
 - runtime interview state is in-memory; the markdown file is the durable artifact
 - the flow depends on the assistant returning valid state, either through the
   `interview_submit_state` tool or the v1 text-block fallback
-- dashboard mode answer delivery has a few seconds of latency (session polls the dashboard)
+- dashboard-owned sessions receive queued actions when idle; other sessions
+  poll the dashboard every 10 seconds
 
 ## Related
 

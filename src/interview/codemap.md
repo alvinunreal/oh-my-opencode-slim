@@ -49,8 +49,8 @@
     `tryBecomeDashboard(...)` to elect one process as dashboard,
     non-dashboard processes read auth token via `readDashboardAuthFile(port)`,
     registers/unregisters sessions over HTTP, and pushes state back via
-    `/api/interviews/{id}/state`; 10-second fallback polling keeps
-    answer/nudge delivery active if needed.
+    `/api/interviews/{id}/state`; local queued actions are delivered as soon
+    as their owning session is idle, while clients also poll every 10 seconds.
 
 - `createInterviewService` (`service.ts`)
   - Manages interview domain maps:
@@ -99,7 +99,7 @@
   - In-memory state/cache contracts:
     - `sessions` registry,
     - `stateCache` keyed by interview ID,
-    - pending answers and nudge actions with consume-on-read semantics.
+    - pending answers, nudges, comments and chat with claim/ack semantics.
   - Recovery/scan:
     - periodic `rebuildFromFiles()` from markdown frontmatter,
     - session directory discovery via SDK + manual folders,

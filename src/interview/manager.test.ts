@@ -624,6 +624,68 @@ describe('interview manager - session registration', () => {
 });
 
 describe('interview manager - edge cases', () => {
+  test('delivers dashboard answers submitted after the session becomes idle', async () => {
+    const directory = await makeTempDir();
+    const { port, server } = await bindFreePort();
+    heldServers.add(server);
+    let delivered!: (args: any) => void;
+    const continuation = new Promise<any>((resolve) => {
+      delivered = resolve;
+    });
+    const ctx = createMockContext({
+      directory,
+      messagesData: [
+        {
+          info: { role: 'assistant' },
+          parts: [{ type: 'text', text: 'Done.' }],
+        },
+      ],
+      promptImpl: async (args) => {
+        if (!args.body.noReply) delivered(args);
+        return {};
+      },
+    });
+    const manager = createInterviewManager(
+      ctx,
+      createTestConfig({ port, dashboard: true }),
+      { server },
+    );
+    const sessionID = 'session-idle-delivery';
+    await manager.handleCommandExecuteBefore(
+      { command: 'interview', sessionID, arguments: 'Idle delivery' },
+      { parts: [] },
+    );
+    await manager.handleEvent({
+      event: {
+        type: 'session.status',
+        properties: { sessionID, status: { type: 'busy' } },
+      },
+    });
+    await manager.service.submitState(sessionID, {
+      summary: 'Draft',
+      questions: [{ id: 'q-1', question: 'What?', options: ['A'] }],
+    });
+    await manager.handleEvent({
+      event: {
+        type: 'session.status',
+        properties: { sessionID, status: { type: 'idle' } },
+      },
+    });
+    const interviewId = manager.service.getActiveInterviewId(sessionID);
+    const auth = await readDashboardAuthFile(port);
+    const response = await fetch(
+      `http://127.0.0.1:${port}/api/interviews/${interviewId}/answers?token=${auth?.token}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ answers: [{ questionId: 'q-1', answer: 'A' }] }),
+      },
+    );
+    expect(response.status).toBe(202);
+    const sent = await continuation;
+    expect(sent.body.parts[0].text).toContain('A');
+  });
+
   test('does not roll back a claim during an overlapping in-process delivery', async () => {
     const tempDir = await makeTempDir();
     const ctx = createMockContext({ directory: tempDir });

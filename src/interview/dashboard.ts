@@ -165,6 +165,7 @@ export interface DashboardConfig {
   sessionClient?: Pick<PluginInput['client']['session'], 'list'>;
   /** Already-listening server to adopt instead of binding `port`. */
   server?: Server;
+  onQueued?: (interviewId: string) => void;
 }
 
 // ─── Dashboard Server ─────────────────────────────────────────────────
@@ -1190,6 +1191,7 @@ export function createDashboardServer(config: DashboardConfig): {
       entry.mode = 'awaiting-agent';
       entry.lastUpdatedAt = Date.now();
       sendJson(response, 202, { status: 'queued' });
+      config.onQueued?.(interviewId);
       return;
     }
 
@@ -1246,6 +1248,7 @@ export function createDashboardServer(config: DashboardConfig): {
       entry.mode = 'awaiting-agent';
       entry.lastUpdatedAt = Date.now();
       sendJson(response, 202, { status: 'queued' });
+      config.onQueued?.(interviewId);
       return;
     }
 
@@ -1332,6 +1335,7 @@ export function createDashboardServer(config: DashboardConfig): {
       entry.mode = 'awaiting-agent';
       entry.lastUpdatedAt = Date.now();
       sendJson(response, 202, { status: 'queued' });
+      config.onQueued?.(interviewId);
       return;
     }
 
@@ -1455,6 +1459,7 @@ export function createDashboardServer(config: DashboardConfig): {
       entry.mode = 'awaiting-agent';
       entry.lastUpdatedAt = Date.now();
       sendJson(response, 202, { status: 'queued' });
+      config.onQueued?.(interviewId);
       return;
     }
 

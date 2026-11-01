@@ -194,6 +194,7 @@ export function createInterviewService(
     callback: (interview: InterviewRecord) => void,
   ) => void;
   getActiveInterviewId: (sessionID: string) => string | null;
+  isSessionIdle: (sessionID: string) => boolean;
   registerCommand: (
     config: Record<string, unknown>,
     enabled?: { interview?: boolean; implement?: boolean },
@@ -2122,6 +2123,7 @@ export function createInterviewService(
     setStatePushCallback,
     setOnInterviewCreated,
     getActiveInterviewId,
+    isSessionIdle: (sessionID) => sessionBusy.get(sessionID) === false,
     registerCommand,
     handleCommandExecuteBefore,
     handleEvent,
