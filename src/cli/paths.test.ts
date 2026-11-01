@@ -9,6 +9,8 @@ import {
   getConfigJson,
   getConfigJsonc,
   getExistingConfigPath,
+  getExistingLiteConfigPath,
+  getExistingTuiConfigPath,
   getLiteConfig,
   getOpenCodeConfigPaths,
 } from '../config/paths';
@@ -64,6 +66,28 @@ describe('paths', () => {
   test('getLiteConfig() respects OPENCODE_CONFIG_DIR', () => {
     process.env.OPENCODE_CONFIG_DIR = '/custom/directory';
     expect(getLiteConfig()).toBe('/custom/directory/oh-my-opencode-slim.json');
+  });
+
+  test('selects the last OpenCode file defining plugin and prefers JSONC otherwise', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'opencode-paths-'));
+    process.env.OPENCODE_CONFIG_DIR = dir;
+    delete process.env.OPENCODE_TUI_CONFIG;
+    for (const name of ['opencode', 'tui', 'oh-my-opencode-slim']) {
+      writeFileSync(join(dir, `${name}.json`), '{}');
+      writeFileSync(join(dir, `${name}.jsonc`), '{}');
+    }
+    writeFileSync(join(dir, 'opencode.json'), '{"plugin":["user-a"]}');
+    expect(getExistingConfigPath()).toBe(join(dir, 'opencode.json'));
+    writeFileSync(join(dir, 'opencode.jsonc'), '{"plugin":["user-b"]}');
+    expect(getExistingConfigPath()).toBe(join(dir, 'opencode.jsonc'));
+    writeFileSync(join(dir, 'opencode.json'), '{}');
+    writeFileSync(join(dir, 'opencode.jsonc'), '{}');
+    expect(getExistingConfigPath()).toBe(join(dir, 'opencode.jsonc'));
+    expect(getExistingTuiConfigPath()).toBe(join(dir, 'tui.jsonc'));
+    expect(getExistingLiteConfigPath()).toBe(
+      join(dir, 'oh-my-opencode-slim.jsonc'),
+    );
+    rmSync(dir, { recursive: true, force: true });
   });
 
   describe('getExistingConfigPath()', () => {

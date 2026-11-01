@@ -77,9 +77,9 @@ the plugin itself (#1582); the installer no longer writes config entries.
    - XDG_CONFIG_HOME/opencode
    - ~/.config/opencode (default)
 2. Resolve file paths:
-   - opencode.json → opencode.jsonc → fallback to opencode.json
-   - oh-my-opencode-slim.json → oh-my-opencode-slim.jsonc → fallback
-   - tui.json → tui.jsonc → fallback
+   - Last opencode.jsonc/opencode.json defining `plugin`; otherwise prefer .jsonc
+   - oh-my-opencode-slim.jsonc → oh-my-opencode-slim.json (fallback)
+   - tui.jsonc → tui.json (fallback)
 ```
 
 ### Configuration Generation Flow (providers.ts)

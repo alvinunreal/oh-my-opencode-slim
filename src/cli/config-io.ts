@@ -127,6 +127,17 @@ function isMatchingPluginEntry(entry: unknown): boolean {
   return spec ? isPluginEntry(spec) : false;
 }
 
+function removePluginEntries(config: OpenCodeConfig): OpenCodeConfig {
+  for (const key of ['plugin', 'plugins'] as const) {
+    if (Array.isArray(config[key])) {
+      config[key] = config[key].filter(
+        (entry) => !isMatchingPluginEntry(entry),
+      );
+    }
+  }
+  return config;
+}
+
 function getCliEntryPath(): string | undefined {
   const entry = process.argv[1];
   if (!entry) return undefined;
@@ -454,20 +465,23 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
   try {
     const pluginEntry = getPluginEntry();
     mutateJsonFile(configPath, (current) => {
-      const config = current as OpenCodeConfig;
-      if (Array.isArray(config.plugin)) {
-        config.plugin = config.plugin.filter(
-          (entry) => !isMatchingPluginEntry(entry),
-        );
-      }
-      if (Array.isArray(config.plugins)) {
-        config.plugins = config.plugins.filter(
-          (entry) => !isMatchingPluginEntry(entry),
-        );
-      }
+      const config = removePluginEntries(current as OpenCodeConfig);
       config.plugin = [...(config.plugin ?? []), pluginEntry];
       return config;
     });
+    const otherPath = configPath.endsWith('.jsonc')
+      ? configPath.slice(0, -1)
+      : `${configPath}c`;
+    const otherConfig = parseConfigFile(otherPath).config;
+    if (
+      otherConfig &&
+      getPlugins(otherConfig).some(isMatchingPluginEntry) &&
+      realpathSync(otherPath) !== realpathSync(configPath)
+    ) {
+      mutateJsonFile(otherPath, (current) =>
+        removePluginEntries(current as OpenCodeConfig),
+      );
+    }
     return { success: true, configPath };
   } catch (err) {
     return {
