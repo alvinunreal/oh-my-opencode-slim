@@ -61,11 +61,15 @@ function writeAuthFile(port: number, token: string): void {
   );
 }
 
-function removeAuthFile(port: number): void {
+function removeAuthFile(port: number, token: string): void {
   try {
-    fsSync.unlinkSync(getAuthFilePath(port));
+    const filePath = getAuthFilePath(port);
+    const credentials = JSON.parse(fsSync.readFileSync(filePath, 'utf8')) as {
+      token?: string;
+    };
+    if (credentials.token === token) fsSync.unlinkSync(filePath);
   } catch {
-    // File doesn't exist, ignore
+    // Missing or unreadable credentials do not belong to this server.
   }
 }
 
@@ -1656,7 +1660,7 @@ export function createDashboardServer(config: DashboardConfig): {
     sseClients.clear();
     pendingClaims.clear();
 
-    removeAuthFile(config.port);
+    removeAuthFile(config.port, authToken);
 
     const server = activeServer ?? pendingServer;
     activeServer = null;

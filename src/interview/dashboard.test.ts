@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises';
 import { get } from 'node:http';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { createDashboardServer } from './dashboard';
+import { createDashboardServer, readDashboardAuthFile } from './dashboard';
 import { bindFreePort } from './test-port';
 
 // Helper to start a dashboard on a held port (bindFreePort keeps the
@@ -115,6 +115,25 @@ async function openSseConnection(
 }
 
 describe('dashboard server', () => {
+  test('a failed bind does not remove the active dashboard credentials', async () => {
+    const { port, server } = await bindFreePort();
+    const winner = createDashboardServer({
+      port,
+      outputFolder: 'interview',
+      server,
+    });
+    const loser = createDashboardServer({ port, outputFolder: 'interview' });
+    try {
+      await winner.start();
+      await expect(loser.start()).rejects.toThrow('already in use');
+      loser.close();
+      expect((await readDashboardAuthFile(port))?.token).toBe(winner.authToken);
+    } finally {
+      loser.close();
+      winner.close();
+    }
+  });
+
   test('uses each manual folder project outputFolder', async () => {
     const originalEnv = { ...process.env };
     const tempDir = await fs.mkdtemp(path.join(tmpdir(), 'dashboard-project-'));
