@@ -14,13 +14,13 @@ export function parseArgs(args: string[]): InstallArgs {
   for (const arg of args) {
     if (arg === '--no-tui') {
       result.tui = false;
-    } else if (arg.startsWith('--companion')) {
+    } else if (arg === '--companion' || arg.startsWith('--companion=')) {
       console.warn(
         'The --companion option was removed from install. ' +
           'Run "bunx oh-my-opencode-slim companion install" instead.',
       );
     } else if (arg.startsWith('--preset=')) {
-      const preset = arg.split('=')[1];
+      const preset = arg.slice('--preset='.length);
       if (!isGeneratedPresetName(preset)) {
         console.error(
           `Unsupported preset: ${preset}. Available presets: ${getGeneratedPresetNames().join(', ')}`,
@@ -29,7 +29,9 @@ export function parseArgs(args: string[]): InstallArgs {
       }
       result.preset = preset;
     } else if (arg.startsWith('--background-subagents=')) {
-      const mode = arg.split('=')[1] as BackgroundSubagentsArg;
+      const mode = arg.slice(
+        '--background-subagents='.length,
+      ) as BackgroundSubagentsArg;
       if (!['ask', 'yes', 'no'].includes(mode)) {
         console.error(
           'Unsupported --background-subagents value: use ask, yes, or no',
@@ -38,7 +40,9 @@ export function parseArgs(args: string[]): InstallArgs {
       }
       result.backgroundSubagents = mode;
     } else if (arg.startsWith('--background-subagents-target=')) {
-      result.backgroundSubagentsTarget = arg.split('=')[1];
+      result.backgroundSubagentsTarget = arg.slice(
+        '--background-subagents-target='.length,
+      );
     } else if (arg === '--dry-run') {
       result.dryRun = true;
     } else if (arg === '--reset') {
@@ -46,6 +50,9 @@ export function parseArgs(args: string[]): InstallArgs {
     } else if (arg === '-h' || arg === '--help') {
       printHelp();
       process.exit(0);
+    } else {
+      console.error(`Unknown install option: ${arg}`);
+      process.exit(1);
     }
   }
 

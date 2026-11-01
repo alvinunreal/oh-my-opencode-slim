@@ -1,6 +1,7 @@
 /// <reference types="bun-types" />
 
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -151,6 +152,25 @@ describe('parseArgs background subagents', () => {
       backgroundSubagents: 'yes',
       backgroundSubagentsTarget: '/tmp/profile',
     });
+  });
+
+  test('rejects unknown install options and retains equals signs in values', () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(import.meta.dir, 'index.ts'),
+        'install',
+        '--background-subagent=no',
+        '--dry-run',
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Unknown install option');
+    expect(
+      parseArgs(['--background-subagents-target=/tmp/a=b'])
+        .backgroundSubagentsTarget,
+    ).toBe('/tmp/a=b');
   });
 });
 

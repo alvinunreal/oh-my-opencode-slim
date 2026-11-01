@@ -544,11 +544,6 @@ Skillها مجموعه‌ای از دستورهای مبتنی بر Prompt هس�
 auto-updateهای Plugin آن‌ها را به‌روز نگه می‌دارد؛ customizationهای محلی حفظ می‌شوند.
 </p>
 
-> [!TIP]
-> برای کنارگذاشتن customizationهای محلی Skillهای همراه و دریافت updateهای package، اجرا کنید:
-> `bunx oh-my-opencode-slim install --skills=force`. این دستور عمداً Skillهای همراه نصب‌شده را
-> با نسخه‌های موجود در package جایگزین می‌کند.
-
 <table>
   <tr>
     <th>Skill</th>
