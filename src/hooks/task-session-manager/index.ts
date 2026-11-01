@@ -1075,6 +1075,7 @@ export function createTaskSessionManagerHook(
         if (!options.terminalGate) terminalGate.dispose();
       }
       return handleEvent(input, {
+        input: _ctx,
         inputWaits,
         idleSessionTokens,
         options,

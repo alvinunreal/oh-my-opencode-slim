@@ -453,4 +453,67 @@ describe('orphaned-child observation fallback (#1560)', () => {
     expect(deferredInlineErrors.get(CHILD)).toBe('quota exceeded');
     expect(reconcile).not.toHaveBeenCalled();
   });
+  test('adopts an orphan from a bounded host read when the event carries only sessionID', async () => {
+    const get = mock(async () => ({
+      data: { parentID: PARENT, agent: 'explorer', title: 'delegated work' },
+    }));
+    const input = {
+      client: { session: { get } },
+      directory: '/proj',
+    } as never;
+    const board = new BackgroundJobBoard();
+    const { deps, scheduleChildIdleReconciliation } = createDeps(
+      board,
+      managed,
+    );
+    (deps as { input?: unknown }).input = input;
+
+    await handleEvent(
+      {
+        event: {
+          type: 'session.idle',
+          properties: { sessionID: CHILD },
+        },
+      },
+      deps,
+    );
+
+    expect(board.get(CHILD)).toMatchObject({
+      parentSessionID: PARENT,
+      agent: 'explorer',
+      description: 'delegated work',
+      recoveredAtStartup: true,
+    });
+    expect(scheduleChildIdleReconciliation).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith({
+      path: { id: CHILD },
+      query: { directory: '/proj' },
+    });
+  });
+
+  test('terminal flavor: adopts an orphan from a bounded host read on a sessionID-only error', async () => {
+    const get = mock(async () => ({
+      data: { parentID: PARENT, agent: 'explorer', title: 'delegated work' },
+    }));
+    const input = {
+      client: { session: { get } },
+      directory: '/proj',
+    } as never;
+    const board = new BackgroundJobBoard();
+    const { deps, reconcile } = createDeps(board, managed);
+    (deps as { input?: unknown }).input = input;
+
+    await handleEvent(
+      {
+        event: {
+          type: 'session.error',
+          properties: { sessionID: CHILD, error: { name: 'Error' } },
+        },
+      },
+      deps,
+    );
+
+    expect(board.get(CHILD)?.parentSessionID).toBe(PARENT);
+    expect(reconcile).toHaveBeenCalledTimes(1);
+  });
 });

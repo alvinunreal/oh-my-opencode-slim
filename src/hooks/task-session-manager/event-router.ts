@@ -5,6 +5,8 @@
  * session.idle, session.error, session.status, session.deleted) to
  * the appropriate subsystems.
  */
+
+import type { PluginInput } from '@opencode-ai/plugin';
 import type { BackgroundJobBoard } from '../../utils/background-job-board';
 import { getBackgroundJobLifecycleLedger } from '../../utils/background-job-board';
 import { getPersistedBackgroundChild } from '../../utils/background-job-persistence';
@@ -12,6 +14,7 @@ import type { BackgroundJobSupervisor } from '../../utils/background-job-supervi
 import { structuredErrorMessage } from '../../utils/child-transcript';
 import { isRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
+import { readHostSessionInfo } from '../../utils/session-info-read';
 import {
   isFailoverError,
   isInlineFailoverError,
@@ -205,15 +208,37 @@ function isCurrentSessionObservation(
  *  under its recorded parent and let the normal reconciliation publish its
  *  terminal outcome; that publication is the one-shot wake (v1; v2 creates no
  *  wake scheduler and keeps terminal delivery with the host's notifier). */
-function adoptOrphanedChildRow(
+async function adoptOrphanedChildRow(
   board: BackgroundJobBoard,
   shouldManageSession: (sessionID: string) => boolean,
   sessionID: string,
   info: { parentID?: string; agent?: string; title?: string } | undefined,
-): BackgroundJobRecord | undefined {
+  input?: PluginInput,
+): Promise<BackgroundJobRecord | undefined> {
   if (shouldManageSession(sessionID)) return undefined;
   const persisted = getPersistedBackgroundChild(sessionID);
-  const parentID = info?.parentID ?? persisted?.parentSessionID;
+  let parentID = info?.parentID ?? persisted?.parentSessionID;
+  let hostAgent: string | undefined;
+  let hostTitle: string | undefined;
+  // A terminal event can carry only the child's session id. When nothing
+  // was persisted (pre-persistence launch or a host restart that dropped
+  // the row), read the child once from the host to recover its parent.
+  if (!parentID && input) {
+    const response = await readHostSessionInfo(input, {
+      taskID: sessionID,
+      identity: 'orphan-parent',
+    });
+    const data =
+      isRecord(response) && isRecord(response.data) ? response.data : undefined;
+    const resolvedParent =
+      typeof data?.parentID === 'string' ? data.parentID : undefined;
+    if (resolvedParent) {
+      parentID = resolvedParent;
+      hostAgent =
+        typeof data?.agent === 'string' ? data.agent.trim() : undefined;
+      hostTitle = typeof data?.title === 'string' ? data.title : undefined;
+    }
+  }
   if (!parentID || !shouldManageSession(parentID)) return undefined;
   // Deleted or evicted children stay dead; registerLaunch would clear the
   // tombstone that fences their revive payload.
@@ -227,8 +252,8 @@ function adoptOrphanedChildRow(
     adopted = board.registerLaunch({
       taskID: sessionID,
       parentSessionID: parentID,
-      agent: info?.agent ?? persisted?.agent ?? 'unknown',
-      description: info?.title ?? persisted?.description,
+      agent: info?.agent ?? hostAgent ?? persisted?.agent ?? 'unknown',
+      description: info?.title ?? hostTitle ?? persisted?.description,
       // shortcut: event info carries no launch kind and persistence stores
       // only background rows, so a foreground-task orphan adopts as background.
       background: true,
@@ -310,6 +335,8 @@ export async function handleEvent(
       willAttemptFallback?: (sessionID: string) => boolean;
       /** Test seam; production uses event-arrival wall-clock time. */
       now?: () => number;
+      /** Plugin host input (test seam). */
+      input?: PluginInput;
     };
     idleReconciler: {
       scheduleChildIdleReconciliation(
@@ -335,6 +362,9 @@ export async function handleEvent(
     deferredInlineErrors: Map<string, string>;
     withFallbackReason: (sessionID: string, text: string) => string;
     backgroundJobBoard: BackgroundJobBoard;
+    /** Plugin host input; used for bounded host reads when a child has no
+     *  persisted identity. */
+    input?: PluginInput;
     terminalGate: import('../../utils/background-job-terminal-gate').BackgroundJobTerminalGate;
     pendingCallTracker: {
       peekByParentAndAgent(
@@ -591,11 +621,12 @@ export async function handleEvent(
     } else if (sessionId && !job) {
       // #1560: no board row claims this completion, so re-adopt the orphan
       // and reuse the reconciliation above's publication wake.
-      const adopted = adoptOrphanedChildRow(
+      const adopted = await adoptOrphanedChildRow(
         deps.backgroundJobBoard,
         deps.options.shouldManageSession,
         sessionId,
         input.event.properties?.info,
+        deps.input ?? deps.options?.input,
       );
       if (adopted) {
         deps.idleReconciler.scheduleChildIdleReconciliation(
@@ -748,11 +779,12 @@ export async function handleEvent(
         // #1560 orphan fallback, terminal flavor: adopt the lost child and
         // publish its error so the parent's wake carries the failure (v1; v2
         // records it for the pull channel).
-        const adopted = adoptOrphanedChildRow(
+        const adopted = await adoptOrphanedChildRow(
           deps.backgroundJobBoard,
           deps.options.shouldManageSession,
           sessionId,
           input.event.properties?.info,
+          deps.input ?? deps.options?.input,
         );
         if (adopted) {
           const message =
