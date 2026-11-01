@@ -90,6 +90,7 @@
   - HTML/JS renderers for interview pages (list/detail), shared
     client-side helpers (clipboard, polling), and the dashboard brand UI;
     uses `escapeHtml` from `src/utils/escape-html.ts`.
+  - Questions without options start in free-text mode.
 
 - `dashboard.ts`
   - Implements a shared dashboard server and state cache.

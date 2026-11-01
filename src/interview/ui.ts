@@ -1730,6 +1730,7 @@ export function renderInterviewPage(
           wrapper.appendChild(title);
 
           const predefined = question.options || [];
+          if (!predefined.length) state.customMode[question.id] = true;
           if (predefined.length) {
             const hint = document.createElement('div');
             hint.className = 'question-hint';

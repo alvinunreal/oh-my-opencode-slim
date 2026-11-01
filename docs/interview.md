@@ -93,7 +93,7 @@ visible (legacy behavior). See [Options](#options).
 - focused question flow instead of open-ended chat
 - suggested answers, clearly marked as recommended
 - keyboard-driven selection for the active question
-- custom freeform answers when needed
+- custom freeform answers when needed; questions without options show a text field directly
 - visible path to the markdown interview file
 - larger, more readable interview UI
 
