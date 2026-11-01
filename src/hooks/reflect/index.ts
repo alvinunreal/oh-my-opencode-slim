@@ -79,11 +79,13 @@ export function createReflectCommandHook(): {
         .replace(/--last\s+\d+/g, '')
         .trim();
 
+      const attachments = output.parts.filter((part) => part.type !== 'text');
       output.parts.length = 0;
       output.parts.push({
         type: 'text',
         text: activationPrompt(focus, isSessionMode, last),
       });
+      output.parts.push(...attachments);
     },
   };
 }

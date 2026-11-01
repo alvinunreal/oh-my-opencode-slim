@@ -120,6 +120,22 @@ describe('search-path-guard hook', () => {
     );
   });
 
+  test('v2 follows host home expansion and glob placeholder defaults', async () => {
+    const v2 = createHook(tempRoot, 'v2');
+    await expect(runHook(v2, 'grep', { path: '~' })).resolves.toBeUndefined();
+    await expect(runHook(v2, 'glob', { path: '~/' })).resolves.toBeUndefined();
+    await expect(
+      runHook(v2, 'glob', { path: 'undefined' }),
+    ).resolves.toBeUndefined();
+    await expect(
+      runHook(v2, 'glob', { path: 'null' }),
+    ).resolves.toBeUndefined();
+    await expect(runHook(v2, 'grep', { path: 'undefined' })).rejects.toThrow();
+    await expect(
+      runHook(createHook(tempRoot, 'v1'), 'glob', { path: 'null' }),
+    ).rejects.toThrow();
+  });
+
   test('preserves significant whitespace when resolving and blocking', async () => {
     const hook = createHook(tempRoot);
     const raw = '  padded-missing-dir  ';

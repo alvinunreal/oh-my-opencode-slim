@@ -316,9 +316,6 @@ const accepted: Accepted[] = [
     { 'a.txt': 'A\r\nb\r\nc\r\nD\r\n' },
     { 'a.txt': 'A\nb\r\nc\r\nD\n' },
   ],
-];
-
-const blocked: Blocked[] = [
   [
     'T1 repeated closing brace EOF',
     {
@@ -333,8 +330,28 @@ const blocked: Blocked[] = [
       '+export { a, b };',
       '*** End of File',
     ),
-    'patch verification failed:',
+    {
+      'a.ts':
+        'function a() {\n  return 1;\n}\n\nfunction b() {\n  return 2;\n}\n\nexport { a, b };\n',
+    },
   ],
+  [
+    'N6 mid-chunk empty line is canonicalized',
+    { 'a.py': 'def foo():\n    x = 1\n    y = 2\n\n    return x\n' },
+    patch(
+      '*** Update File: a.py',
+      '@@ def foo():',
+      '     x = 1',
+      '-    y = 2',
+      '+    y = 3',
+      '',
+      '     return x',
+    ),
+    { 'a.py': 'def foo():\n    x = 1\n    y = 3\n\n    return x\n' },
+  ],
+];
+
+const blocked: Blocked[] = [
   [
     'T10 unbounded prefix/suffix deletion',
     { 'a.txt': 'start\nold\nx1\nx2\nx3\nx4\nx5\nx6\nx7\nx8\nend\n' },
@@ -346,20 +363,6 @@ const blocked: Blocked[] = [
     {},
     patch('*** Add File: n.txt', '+a', '*** Delete File: n.txt'),
     'patch verification failed:',
-  ],
-  [
-    'N6 mid-chunk empty line is rejected',
-    { 'a.py': 'def foo():\n    x = 1\n    y = 2\n\n    return x\n' },
-    patch(
-      '*** Update File: a.py',
-      '@@ def foo():',
-      '     x = 1',
-      '-    y = 2',
-      '+    y = 3',
-      '',
-      '     return x',
-    ),
-    'patch validation failed:',
   ],
   [
     'N8 indented @@ would edit wrong native occurrence',

@@ -62,7 +62,12 @@ describe('reflect command hook', () => {
   test('expands arguments into focused reflect activation prompt', async () => {
     const hook = createReflectCommandHook();
     hook.registerCommand({});
-    const output = { parts: [{ type: 'text', text: 'template' }] };
+    const file = {
+      type: 'file',
+      mime: 'image/png',
+      url: 'data:image/png;base64,AA==',
+    };
+    const output = { parts: [{ type: 'text', text: 'template' }, file] };
 
     await hook.handleCommandExecuteBefore(
       {
@@ -73,7 +78,8 @@ describe('reflect command hook', () => {
       output,
     );
 
-    expect(output.parts).toHaveLength(1);
+    expect(output.parts).toHaveLength(2);
+    expect(output.parts[1]).toBe(file);
     expect(output.parts[0].text).toContain('Use the reflect skill');
     expect(output.parts[0].text).toContain(
       'Focus:\nrelease workflow and checks',

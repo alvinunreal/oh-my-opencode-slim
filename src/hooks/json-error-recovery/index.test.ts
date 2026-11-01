@@ -4,7 +4,6 @@ import {
   createJsonErrorRecoveryHook,
   JSON_ERROR_PATTERNS,
   JSON_ERROR_REMINDER,
-  JSON_ERROR_TOOL_EXCLUDE_LIST,
 } from './hook';
 
 describe('json-error-recovery hook', () => {
@@ -27,7 +26,7 @@ describe('json-error-recovery hook', () => {
     hook = createJsonErrorRecoveryHook(createMockPluginInput());
   });
 
-  const createInput = (tool = 'Edit'): ToolExecuteAfterInput => ({
+  const createInput = (tool = 'invalid'): ToolExecuteAfterInput => ({
     tool,
     sessionID: 'test-session',
     callID: 'test-call-id',
@@ -145,16 +144,5 @@ describe('json-error-recovery hook', () => {
       pattern.test(output),
     );
     expect(isMatched).toBe(true);
-  });
-
-  test('exclude list contains content-heavy tools', () => {
-    const expectedExcludedTools: Array<
-      (typeof JSON_ERROR_TOOL_EXCLUDE_LIST)[number]
-    > = ['read', 'bash', 'shell', 'grep', 'ast_grep_search', 'webfetch'];
-
-    const allExpectedToolsIncluded = expectedExcludedTools.every((toolName) =>
-      JSON_ERROR_TOOL_EXCLUDE_LIST.includes(toolName),
-    );
-    expect(allExpectedToolsIncluded).toBe(true);
   });
 });

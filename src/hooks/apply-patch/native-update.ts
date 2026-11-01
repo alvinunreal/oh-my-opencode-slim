@@ -1,13 +1,14 @@
 import { seek } from './matching';
-import type { PatchChunk } from './types';
+import type { PatchChunk, PatchHostFlavor } from './types';
 
 // Model the native apply_patch update executor, not the hook's rescue rules.
 // Native resolves every hit against the original file, then applies them back
-// to front. Its EOF marker is discarded by the native parser.
+// to front. v1's parser discards the EOF marker; v2 anchors it.
 export function nativeDeriveUpdate(
   file: string,
   text: string,
   chunks: PatchChunk[],
+  flavor: PatchHostFlavor = 'v1',
 ): string {
   const lines = text.split('\n');
   if (lines.at(-1) === '') lines.pop();
@@ -26,18 +27,28 @@ export function nativeDeriveUpdate(
     }
 
     if (chunk.old_lines.length === 0) {
-      const at = lines.at(-1) === '' ? lines.length - 1 : lines.length;
+      const at =
+        flavor === 'v1' && lines.at(-1) === ''
+          ? lines.length - 1
+          : lines.length;
       hits.push({ start: at, del: 0, add: chunk.new_lines });
       continue;
     }
 
     let old = chunk.old_lines;
     let next = chunk.new_lines;
-    let at = seek(lines, old, cursor);
+    const find = (pattern: string[]) => {
+      const start =
+        flavor === 'v2' && chunk.is_end_of_file
+          ? Math.max(cursor, lines.length - pattern.length)
+          : cursor;
+      return seek(lines, pattern, start);
+    };
+    let at = find(old);
     if (at < 0 && old.at(-1) === '') {
       old = old.slice(0, -1);
       if (next.at(-1) === '') next = next.slice(0, -1);
-      at = seek(lines, old, cursor);
+      at = find(old);
     }
     if (at < 0) {
       throw new Error(

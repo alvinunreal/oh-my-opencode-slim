@@ -27,8 +27,8 @@ const UNICODE_MAP: Record<string, string> = {
 
 export function normalizeUnicode(text: string): string {
   return text.replace(
-    /[\u00A0\u2010-\u2015\u2018-\u201F\u2026]/g,
-    (char) => UNICODE_MAP[char],
+    /[\u00A0\u2002-\u200A\u2010-\u2015\u2018-\u201F\u2026\u202F\u205F\u2212\u3000]/g,
+    (char) => UNICODE_MAP[char] ?? (char === '\u2212' ? '-' : ' '),
   );
 }
 

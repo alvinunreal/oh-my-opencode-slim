@@ -1,17 +1,5 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 
-export const JSON_ERROR_TOOL_EXCLUDE_LIST = [
-  'bash',
-  'shell',
-  'read',
-  'glob',
-  'webfetch',
-  'task_status',
-  'gh_grep_searchgithub',
-  'grep',
-  'ast_grep_search',
-] as const;
-
 export const JSON_ERROR_PATTERNS = [
   /json parse error/i,
   /failed to parse json/i,
@@ -25,7 +13,6 @@ export const JSON_ERROR_PATTERNS = [
 
 const JSON_ERROR_REMINDER_MARKER =
   '[JSON PARSE ERROR - IMMEDIATE ACTION REQUIRED]';
-const JSON_ERROR_EXCLUDED_TOOLS = new Set<string>(JSON_ERROR_TOOL_EXCLUDE_LIST);
 
 export const JSON_ERROR_REMINDER = `
 [JSON PARSE ERROR - IMMEDIATE ACTION REQUIRED]
@@ -58,7 +45,7 @@ export function createJsonErrorRecoveryHook(_ctx: PluginInput) {
       input: ToolExecuteAfterInput,
       output: ToolExecuteAfterOutput,
     ): Promise<void> => {
-      if (JSON_ERROR_EXCLUDED_TOOLS.has(input.tool.toLowerCase())) return;
+      if (input.tool !== 'invalid') return;
       if (typeof output.output !== 'string') return;
       if (output.output.includes(JSON_ERROR_REMINDER_MARKER)) return;
 
