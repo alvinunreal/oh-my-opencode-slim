@@ -40,7 +40,7 @@ the installer pins the resolved package version in OpenCode's configuration.
 
 ### Background Subagents Environment Setup
 
-Background orchestration is the default workflow. It depends on OpenCode's
+On OpenCode v1, background orchestration is the default workflow. It depends on OpenCode's
 native background subagents, enabled by two exports the installer offers to add
 to your shell startup file (the prompt defaults to yes):
 
@@ -50,7 +50,9 @@ OPENCODE_ENABLE_EXA=1
 ```
 
 The Exa flag enables OpenCode's built-in `websearch` tool without an API key.
-Pass `--background-subagents=no` to skip the exports.
+Pass `--background-subagents=no` to skip the exports. `--no-tui` skips them
+unless `--background-subagents=yes` or `ask` is explicitly supplied. OpenCode v2
+does not need these installer-managed exports.
 
 After the installer updates a shell startup file, restart your terminal or source
 the file before launching OpenCode. Examples:
@@ -103,6 +105,8 @@ opencode auth login
 ```bash
 opencode models --refresh
 ```
+
+On OpenCode v2, use `opencode models` instead.
 
 Open your generated config at `~/.config/opencode/oh-my-opencode-slim.json`
 and adjust models if needed.
@@ -166,7 +170,7 @@ The installer automatically:
   `$OPENCODE_CONFIG_DIR` when set, otherwise `~/.config/opencode`
 - Disables default OpenCode agents
 - Enables OpenCode LSP integration when no explicit `lsp` setting exists
-- Configures `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` when approved
+- On v1, configures `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` when approved
 - Generates agent model mappings in the same OpenCode config directory as
   `oh-my-opencode-slim.json` (or `.jsonc`)
 
@@ -184,10 +188,10 @@ opencode auth login
 Ask the user to:
 
 1. Authenticate: `opencode auth login`
-2. Refresh models: `opencode models --refresh`
-3. Restart the terminal or source the shell file updated by the installer
-   (`source ~/.zshrc` or `source ~/.bashrc`), then start OpenCode: `opencode`
-   - One-shot alternative: `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode`
+2. Refresh models: `opencode models --refresh` on v1, `opencode models` on v2
+3. On v1, restart the terminal or source the shell file updated by the installer
+   (`source "${ZDOTDIR:-$HOME}/.zshrc"` or `source ~/.bashrc`), then start OpenCode: `opencode`
+   - On v1, a one-shot alternative is `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode`
 4. Run: `ping all agents`
 
 Verify all agents respond successfully.
@@ -239,8 +243,9 @@ If the installer reports that the configuration already exists, you have two opt
 
 ### Missing Background Task Tools
 
-If background tasks never
-return task IDs, or delegation behaves like a blocking foreground call:
+If background tasks never return task IDs, or delegation behaves like a
+blocking foreground call, check your OpenCode version. The steps below apply to
+v1; v2 does not use this environment variable.
 
 1. Confirm OpenCode was launched with the environment variable:
    ```bash

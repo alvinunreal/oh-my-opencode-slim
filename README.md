@@ -183,6 +183,7 @@ Then:
    ```bash
    opencode models --refresh
    ```
+   On OpenCode v2, use `opencode models` instead.
 3. **Open your plugin config** at `~/.config/opencode/oh-my-opencode-slim.json`
 
 4. **Update the models you want for each agent**

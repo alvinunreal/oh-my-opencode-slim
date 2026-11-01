@@ -57,9 +57,9 @@ The CLI follows a command pattern with two primary commands:
 1. Parse install arguments (preset, background subagents, etc.)
 2. Check OpenCode installation
 3. Add plugin and default LSP setting to OpenCode configuration
-4. Add TUI version badge (tui.json/tui.jsonc)
-5. Warm OpenCode plugin cache (for package manager installations)
-6. Configure background subagents (shell integration)
+4. On v1, add the TUI badge (tui.json/tui.jsonc)
+5. On v1, warm the plugin cache for package manager installations
+6. On v1, configure background subagents (shell integration)
 7. Write oh-my-opencode-slim configuration
 ```
 
