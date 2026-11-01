@@ -32,7 +32,7 @@ import {
   restorePreparedJsonConfig,
   writeJsonAtomic,
 } from '../config/json-file';
-import { stripJsonComments } from '../config/jsonc';
+import { parseJsonConfigText } from '../config/jsonc';
 import * as paths from '../config/paths';
 import * as marketplaceLease from '../marketplace/lease';
 import {
@@ -82,17 +82,6 @@ describe('config-io', () => {
       }),
     );
   }
-
-  test('stripJsonComments strips comments and trailing commas', () => {
-    const jsonc = `{
-      // comment
-      "a": 1, /* multi
-      line */
-      "b": [2,],
-    }`;
-    const stripped = stripJsonComments(jsonc);
-    expect(JSON.parse(stripped)).toEqual({ a: 1, b: [2] });
-  });
 
   test('parseConfigFile parses valid JSON', () => {
     const path = join(tmpDir, 'test.json');
@@ -181,9 +170,9 @@ describe('config-io', () => {
 
     writeJsonAtomic(link, { preset: 'reset' });
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
-    expect(JSON.parse(stripJsonComments(readFileSync(target, 'utf8')))).toEqual(
-      { preset: 'reset' },
-    );
+    expect(parseJsonConfigText(readFileSync(target, 'utf8'))).toEqual({
+      preset: 'reset',
+    });
   });
 
   test('prepared config publication and rollback preserve the symlink', () => {
@@ -247,7 +236,7 @@ describe('config-io', () => {
 
     const savedText = readFileSync(path, 'utf-8');
     expect(savedText).toContain('// keep this explanation');
-    expect(JSON.parse(stripJsonComments(savedText))).toEqual({
+    expect(parseJsonConfigText(savedText)).toEqual({
       companion: { enabled: true },
     });
     expect(readFileSync(`${path}.bak`, 'utf-8')).toContain('"preset": "local"');
@@ -275,7 +264,7 @@ describe('config-io', () => {
     expect(savedText.match(/"preset"\s*:/g) ?? []).toHaveLength(0);
     expect(savedText).toContain('// keep companion comment');
     expect(savedText).toContain('// keep unrelated comment');
-    expect(JSON.parse(stripJsonComments(savedText))).toEqual({
+    expect(parseJsonConfigText(savedText)).toEqual({
       companion: { enabled: true },
       unrelated: 42,
     });
@@ -297,7 +286,7 @@ describe('config-io', () => {
 
     const savedText = readFileSync(path, 'utf-8');
     expect(savedText.match(/"preset"\s*:/g) ?? []).toHaveLength(0);
-    expect(JSON.parse(stripJsonComments(savedText))).toEqual({});
+    expect(parseJsonConfigText(savedText)).toEqual({});
   });
 
   test('mutateJsonFile preserves JSONC comments and unrelated keys', () => {
@@ -311,7 +300,7 @@ describe('config-io', () => {
 
     const savedText = readFileSync(path, 'utf-8');
     expect(savedText).toContain('// Keep this explanation');
-    expect(JSON.parse(stripJsonComments(savedText))).toEqual({
+    expect(parseJsonConfigText(savedText)).toEqual({
       unrelated: { enabled: true },
       preset: 'new',
     });
@@ -353,7 +342,7 @@ describe('config-io', () => {
 
     const savedText = readFileSync(path, 'utf-8');
     expect(savedText).toContain('// Preserve this comment\n  "neighbor": 1');
-    expect(JSON.parse(stripJsonComments(savedText))).toEqual({
+    expect(parseJsonConfigText(savedText)).toEqual({
       neighbor: 1,
       added: true,
     });
@@ -372,9 +361,7 @@ describe('config-io', () => {
     expect(savedText).toContain('\r\n  // Keep this CRLF comment\r\n');
     expect(savedText).toContain('"untouched": [1, 2]');
     expect(savedText.replaceAll('\r\n', '')).not.toContain('\n');
-    expect(
-      JSON.parse(stripJsonComments(savedText.replace(/^\uFEFF/, ''))),
-    ).toEqual({
+    expect(parseJsonConfigText(savedText.replace(/^\uFEFF/, ''))).toEqual({
       untouched: [1, 2],
       value: 2,
     });
@@ -418,9 +405,7 @@ describe('config-io', () => {
     const savedText = readFileSync(path, 'utf-8');
     expect(savedText.startsWith('\uFEFF')).toBe(true);
     expect(savedText).toContain('// Keep this explanation');
-    expect(
-      JSON.parse(stripJsonComments(savedText.replace(/^\uFEFF/, ''))),
-    ).toEqual({
+    expect(parseJsonConfigText(savedText.replace(/^\uFEFF/, ''))).toEqual({
       unrelated: true,
       value: 2,
     });
@@ -550,12 +535,12 @@ describe('config-io', () => {
     expect(readFileSync(secondPath, 'utf-8')).toBe(secondOriginal);
 
     for (const write of prepared) publishPreparedJsonConfig(write);
-    expect(
-      JSON.parse(stripJsonComments(readFileSync(firstPath, 'utf-8'))),
-    ).toEqual({ value: 10 });
-    expect(
-      JSON.parse(stripJsonComments(readFileSync(secondPath, 'utf-8'))),
-    ).toEqual({ value: 20 });
+    expect(parseJsonConfigText(readFileSync(firstPath, 'utf-8'))).toEqual({
+      value: 10,
+    });
+    expect(parseJsonConfigText(readFileSync(secondPath, 'utf-8'))).toEqual({
+      value: 20,
+    });
   });
 
   test('prepared no-op keeps original bytes and does not create a backup', () => {
@@ -698,7 +683,7 @@ describe('config-io', () => {
     const saved = readFileSync(configPath, 'utf8');
     expect(saved).toContain('// user comment');
     expect(saved).toContain('/* more */');
-    expect(JSON.parse(stripJsonComments(saved)).lsp).toBe(true);
+    expect(parseJsonConfigText(saved).lsp).toBe(true);
     expect(readFileSync(`${configPath}.bak`, 'utf8')).toBe(original);
   });
 

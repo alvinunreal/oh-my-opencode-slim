@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getNodeValue, type Node, parseTree } from 'jsonc-parser';
-import { stripJsonComments } from '../../config/jsonc';
+import { parseJsonConfigText } from '../../config/jsonc';
 import {
   getOpenCodeConfigPaths,
   getTuiConfig,
@@ -216,7 +216,7 @@ function getLocalDevPath(directory: string): string | null {
       const content = fs
         .readFileSync(configPath, 'utf-8')
         .replace(/^\uFEFF/, '');
-      const config = JSON.parse(stripJsonComments(content)) as OpencodeConfig;
+      const config = parseJsonConfigText(content) as OpencodeConfig;
       const plugins = getPlugins(config);
 
       for (const entry of plugins) {
@@ -290,7 +290,7 @@ export function findPluginEntry(directory: string): PluginEntryInfo | null {
       const content = fs
         .readFileSync(configPath, 'utf-8')
         .replace(/^\uFEFF/, '');
-      const config = JSON.parse(stripJsonComments(content)) as OpencodeConfig;
+      const config = parseJsonConfigText(content) as OpencodeConfig;
       const plugins = getPlugins(config);
 
       for (const rawEntry of plugins) {

@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import { z } from 'zod';
-import { stripJsonComments } from '../config/jsonc';
+import { parseJsonConfigText } from '../config/jsonc';
 import {
   findPluginConfigPaths,
   mergePluginConfigs,
@@ -128,7 +128,7 @@ function checkConfigFile(
     // Strip a UTF-8 BOM so a BOM-prefixed config is not misdiagnosed as
     // invalid JSON (matches the loader's behavior).
     const content = fs.readFileSync(configPath, 'utf-8').replace(/^\uFEFF/, '');
-    const rawConfig = JSON.parse(stripJsonComments(content));
+    const rawConfig = parseJsonConfigText(content);
     // Normalize disabled_* keys exactly like the loader does before schema
     // validation, so a string value (e.g. "explorer") is not diagnosed as a
     // false invalid-schema error. Report each normalization to the user.

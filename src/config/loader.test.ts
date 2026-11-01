@@ -2615,6 +2615,19 @@ describe('JSONC config support', () => {
     expect(config.agents?.oracle?.model).toBe('test/model');
   });
 
+  test('loads JSONC comments after a string ending in an escaped backslash', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.jsonc'),
+      '{"companion":{"binaryPath":"C:\\\\tools\\\\"}, // comment\n"agents":{"oracle":{"model":"test/model"}}}',
+    );
+    expect(loadPluginConfig(projectDir).agents?.oracle?.model).toBe(
+      'test/model',
+    );
+  });
+
   test('loads .jsonc file with multi-line comments', () => {
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');

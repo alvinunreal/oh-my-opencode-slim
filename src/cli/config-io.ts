@@ -9,8 +9,8 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { parse as parseJsonc } from 'jsonc-parser';
 import { mutateJsonFile, writeJsonAtomic } from '../config/json-file';
+import { parseJsonConfigText } from '../config/jsonc';
 import {
   ensureConfigDir,
   ensureOpenCodeConfigDir,
@@ -419,10 +419,7 @@ export function parseConfigFile(path: string): {
     // Strip a UTF-8 BOM (RFC 8259 permits one) so JSON.parse does not choke.
     const content = readFileSync(path, 'utf-8').replace(/^\uFEFF/, '');
     if (content.trim().length === 0) return { config: null };
-    const errors: Parameters<typeof parseJsonc>[1] = [];
-    const parsed = parseJsonc(content, errors, { allowTrailingComma: true });
-    if (errors.length > 0) throw new Error('Invalid JSONC config');
-    return { config: parsed as OpenCodeConfig };
+    return { config: parseJsonConfigText(content) as OpenCodeConfig };
   } catch (err) {
     return { config: null, error: String(err) };
   }
