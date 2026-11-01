@@ -115,6 +115,37 @@ async function openSseConnection(
 }
 
 describe('dashboard server', () => {
+  test('authorizes SSE with the interview page cookie and rejects anonymous requests', async () => {
+    const { baseUrl, dashboard, cleanup } = await startDashboard();
+    try {
+      dashboard.pushState({
+        interviewId: 'sse-cookie',
+        sessionID: 'session-sse',
+        idea: 'SSE',
+        mode: 'awaiting-user',
+        summary: 'Draft',
+        title: 'SSE',
+        questions: [],
+        pendingAnswers: null,
+        lastUpdatedAt: Date.now(),
+        filePath: 'spec.md',
+        nudgeAction: null,
+        pendingBlockComment: null,
+        pendingChatMessage: null,
+      });
+      const url = `${baseUrl}/api/interviews/sse-cookie/events`;
+      expect((await fetch(url)).status).toBe(401);
+      const page = await fetch(`${baseUrl}/interview/sse-cookie`);
+      const cookie = page.headers.get('set-cookie')?.split(';')[0] ?? '';
+      const stream = await fetch(url, { headers: { cookie } });
+      expect(stream.status).toBe(200);
+      expect(stream.headers.get('access-control-allow-origin')).toBeNull();
+      await stream.body?.cancel();
+    } finally {
+      cleanup();
+    }
+  });
+
   test('a failed bind does not remove the active dashboard credentials', async () => {
     const { port, server } = await bindFreePort();
     const winner = createDashboardServer({

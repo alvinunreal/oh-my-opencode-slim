@@ -901,6 +901,10 @@ export function createDashboardServer(config: DashboardConfig): {
       pathname.startsWith('/api/interviews/') &&
       pathname.endsWith('/events')
     ) {
+      if (!isAuthenticated(request)) {
+        sendJson(response, 401, { error: 'Unauthorized' });
+        return;
+      }
       const interviewId = pathname
         .replace('/api/interviews/', '')
         .replace('/events', '');
@@ -918,7 +922,6 @@ export function createDashboardServer(config: DashboardConfig): {
         'content-type': 'text/event-stream',
         'cache-control': 'no-cache',
         connection: 'keep-alive',
-        'access-control-allow-origin': '*',
       });
 
       // Register this client
