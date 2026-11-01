@@ -135,6 +135,7 @@ describe('providers', () => {
 
     // Oracle should have bundled simplify
     expect(agents.oracle.skills).toContain('simplify');
+    expect(agents.oracle.skills).toContain('requesting-code-review');
 
     // Orchestrator should implicitly cover bundled codemap via '*'
     expect(agents.orchestrator.skills).toContain('*');

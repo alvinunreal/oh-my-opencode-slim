@@ -1,4 +1,4 @@
-import { CUSTOM_SKILLS } from './custom-skills';
+import { getDefaultGrantedSkillNames } from './skills';
 import type { InstallConfig } from './types';
 
 const SCHEMA_URL =
@@ -90,13 +90,7 @@ export function generateLiteConfig(
 
     const skills = isOrchestrator
       ? ['*']
-      : [
-          ...CUSTOM_SKILLS.filter(
-            (s) =>
-              s.allowedAgents.includes('*') ||
-              s.allowedAgents.includes(agentName),
-          ).map((s) => s.name),
-        ];
+      : getDefaultGrantedSkillNames(agentName);
 
     return {
       model: modelInfo.model,
