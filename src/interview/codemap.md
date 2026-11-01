@@ -181,9 +181,8 @@
 - The interview-only `runtime.ts` boundary owns message reads, notifications,
   orchestrator continuation, and session rename operations. The v2 bridge uses
   this boundary instead of expanding the global client shim.
-- After `confirm-complete`, the next clean assistant response is persisted with
-  `rewriteInterviewDocumentWithFinalSpec` only after an idle/text-ended
-  completion event; a stream prefix cannot overwrite the final markdown.
+- `confirm-complete` marks the accepted document complete without requesting
+  another model turn.
 - Dashboard clients register at `/api/register`, unregister at
   `/api/unregister`, and receive `202 {"status":"queued"}` for deferred
   browser submissions. Session polling claims each queued value and must

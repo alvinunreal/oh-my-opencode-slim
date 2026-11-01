@@ -546,42 +546,6 @@ function updateInterviewStatus(
   return `${updatedFrontmatter}${document.slice(frontmatter.length)}`;
 }
 
-/**
- * Replace only the current specification with a clean completion response.
- * The response is deliberately not passed through the interview-state parser:
- * a previous structured response must never win over the final markdown.
- */
-export async function rewriteInterviewDocumentWithFinalSpec(
-  record: InterviewRecord,
-  finalMarkdown: string,
-): Promise<string> {
-  const existing = await readInterviewDocument(record);
-  const history = extractHistorySection(existing);
-  const frontmatter = existing.match(/^---[\s\S]*?---\s*/)?.[0] ?? '';
-  const withoutFrontmatter = finalMarkdown
-    .trim()
-    .replace(/^---[\s\S]*?---\s*/i, '')
-    .trim();
-  const summary =
-    extractSummarySection(withoutFrontmatter) || withoutFrontmatter;
-  const title = extractTitle(existing) || record.idea;
-  const next = [
-    frontmatter,
-    `# ${title}`,
-    '',
-    '## Current spec',
-    '',
-    summary.trim() || 'Specification completed.',
-    '',
-    '## Q&A history',
-    '',
-    history || 'No answers yet.',
-    '',
-  ].join('\n');
-  await fs.writeFile(record.markdownPath, next, 'utf8');
-  return next;
-}
-
 export async function appendInterviewAnswers(
   record: InterviewRecord,
   questions: InterviewQuestion[],

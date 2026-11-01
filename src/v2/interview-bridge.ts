@@ -381,9 +381,6 @@ export function createV2InterviewBridge(
       activeText.delete(sessionID);
       activeMessageIDs.delete(sessionID);
       appendText(sessionID, text, messageID);
-      await (dashboardManager ?? service).handleEvent({
-        event: { type, properties },
-      });
       return;
     }
     if (type === 'session.deleted') {

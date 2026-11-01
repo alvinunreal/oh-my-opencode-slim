@@ -32,7 +32,6 @@ import {
   relativeInterviewPath,
   resolveExistingInterviewPath,
   rewriteInterviewDocument,
-  rewriteInterviewDocumentWithFinalSpec,
   withInterviewDocumentLock,
 } from './document';
 import {
@@ -265,8 +264,6 @@ export function createInterviewService(
     | null = null;
   let onInterviewCreated: ((interview: InterviewRecord) => void) | null = null;
   let abandonedOrderCounter = 0;
-  const finalizationPending = new Set<string>();
-  const finalizationReady = new Set<string>();
   type InterviewMemory = {
     lastAppliedState?: {
       state: InterviewAssistantState;
@@ -420,8 +417,6 @@ export function createInterviewService(
       .forEach((record) => {
         interviewsById.delete(record.id);
         interviewMemory.delete(record.id);
-        finalizationPending.delete(record.id);
-        finalizationReady.delete(record.id);
         browserOpened.delete(record.id);
       });
   }
@@ -757,17 +752,10 @@ export function createInterviewService(
     const latestAssistant = [...interviewMessages]
       .reverse()
       .find((message) => message.info?.role === 'assistant');
-    const latestAssistantText = latestAssistant
-      ? flattenMessage(latestAssistant)
-      : '';
     const latestAssistantId =
       typeof latestAssistant?.info?.id === 'string'
         ? latestAssistant.info.id
         : undefined;
-    const isCleanFinalResponse =
-      finalizationPending.has(interview.id) &&
-      finalizationReady.has(interview.id) &&
-      latestAssistantText.length > 0;
     const remembered = memoryFor(interview.id).lastAppliedState;
     const toolMessageID = turnFor(interview.sessionID).toolMessageID;
     // The assistant message the current state was applied for: the tool path
@@ -806,9 +794,10 @@ export function createInterviewService(
       return hasInterviewStateBlock(flattenMessage(message));
     });
 
-    const parsed = isCleanFinalResponse
-      ? { state: null, latestAssistantError: undefined }
-      : findLatestAssistantState(newerAssistantMessages, maxQuestions);
+    const parsed = findLatestAssistantState(
+      newerAssistantMessages,
+      maxQuestions,
+    );
 
     const rememberedForLatest =
       remembered && !hasNewerStateBearingText ? remembered : undefined;
@@ -863,14 +852,7 @@ export function createInterviewService(
 
     let document: string;
 
-    if (isCleanFinalResponse) {
-      document = await withInterviewDocumentLock(interview.markdownPath, () =>
-        rewriteInterviewDocumentWithFinalSpec(interview, latestAssistantText),
-      );
-      finalizationPending.delete(interview.id);
-      delete memoryFor(interview.id).lastAppliedState;
-      delete turnFor(interview.sessionID).pendingNotice;
-    } else if (stateFromText) {
+    if (stateFromText) {
       const outcome = await applyStateToDocument(interview, stateFromText);
       document = outcome.document;
       patchError = outcome.patchError;
@@ -1699,9 +1681,6 @@ export function createInterviewService(
           const state = turnState.get(sessionID);
           if (state) state.turnOpen = false;
           if (interviewId) {
-            if (finalizationPending.has(interviewId)) {
-              finalizationReady.add(interviewId);
-            }
             await notifyTurnStatus(sessionID);
           }
         }
@@ -1719,26 +1698,8 @@ export function createInterviewService(
         const state = turnState.get(sessionID);
         if (state) state.turnOpen = false;
         const interviewId = activeInterviewIds.get(sessionID);
-        if (interviewId && finalizationPending.has(interviewId)) {
-          finalizationReady.add(interviewId);
-        }
         if (interviewId) {
           await notifyTurnStatus(sessionID);
-        }
-      }
-      return;
-    }
-
-    if (event.type === 'session.text.ended') {
-      // Not a turn-end boundary: never post the notice here.
-      const sessionID =
-        (properties.sessionID as string | undefined) ??
-        (properties.info as { id?: string } | undefined)?.id ??
-        undefined;
-      if (sessionID) {
-        const interviewId = activeInterviewIds.get(sessionID);
-        if (interviewId && finalizationPending.has(interviewId)) {
-          finalizationReady.add(interviewId);
         }
       }
       return;
@@ -1779,9 +1740,6 @@ export function createInterviewService(
       if (!interviewId) {
         return;
       }
-      finalizationReady.delete(interviewId);
-      finalizationPending.delete(interviewId);
-
       const interview = interviewsById.get(interviewId);
       if (!interview) {
         return;
@@ -1946,7 +1904,6 @@ export function createInterviewService(
 
     await runServiceTurn(interview, async (state) => {
       const prompt = buildNudgePrompt(
-        action,
         maxQuestions,
         specContext(interview.markdownPath, state.document),
         printState,

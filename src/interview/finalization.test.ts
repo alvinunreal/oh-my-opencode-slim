@@ -24,7 +24,7 @@ describe('interview finalization', () => {
     return dir;
   }
 
-  test('persists clean completion markdown without using stale interview state', async () => {
+  test('preserves the accepted specification and answers when completing', async () => {
     const directory = await createTempDir(
       path.join(os.tmpdir(), 'interview-finalization-'),
     );
@@ -32,7 +32,6 @@ describe('interview finalization', () => {
     const continued: string[] = [];
     const runtime: InterviewSessionRuntime = {
       messages: async () => messages,
-      create: async () => 'side-final',
       notify: async () => {},
       continue: async (_sessionID, text) => {
         continued.push(text);
@@ -116,7 +115,6 @@ describe('interview finalization', () => {
         const messages: InterviewMessage[] = [];
         const runtime: InterviewSessionRuntime = {
           messages: async () => messages,
-          create: async () => `side-${label}`,
           notify: async () => {},
           continue: async () => {},
           rename: async () => {},
@@ -239,8 +237,9 @@ describe('interview finalization', () => {
     const service = createInterviewService({ directory } as never, undefined, {
       runtime: {
         messages: async () => messages,
-        create: async () => 'side-race',
-        notify: async (_sessionID, text) => notices.push(text),
+        notify: async (_sessionID, text) => {
+          notices.push(text);
+        },
         continue: async () => {},
         rename: async () => {},
       },
@@ -286,7 +285,6 @@ describe('interview finalization', () => {
       {
         runtime: {
           messages: async () => firstMessages,
-          create: async () => 'side-one',
           notify: async () => {},
           continue: async () => {},
           rename: async () => {},
@@ -323,7 +321,6 @@ describe('interview finalization', () => {
       {
         runtime: {
           messages: async () => [],
-          create: async () => 'side-two',
           notify: async () => {},
           continue: async () => {},
           rename: async () => {},
@@ -364,7 +361,6 @@ describe('interview finalization', () => {
       createInterviewService({ directory } as never, undefined, {
         runtime: {
           messages: async () => [],
-          create: async () => 'side-owner',
           notify: async () => {},
           continue: async () => {},
           rename: async () => {},
