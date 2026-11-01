@@ -3112,7 +3112,15 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                 // registration (CodeMode opt-out) — without it v2's
                 // Tool.snapshot() confines the tool to the `execute` tool's
                 // JS runtime instead of the model-visible tool catalog.
-                draft.add(adaptTool(name, def, directory, schemaFor(def)));
+                draft.add(
+                  adaptTool(
+                    name,
+                    def,
+                    directory,
+                    schemaFor(def),
+                    ctx.permission,
+                  ),
+                );
               } catch (err) {
                 log('[v2] tool adapt failed', { name, err: String(err) });
               }
