@@ -189,6 +189,8 @@
   back without clearing the answer, chat message, block comment, or nudge.
 - Cross-process state pushes omit derived blocks and allow a bounded 4 MiB
   request; other JSON requests retain the 64 KiB limit.
+- A disconnected dashboard client falls back to its local server and notifies
+  the session; inputs held only by the lost dashboard must be resubmitted.
 - Markdown documents persist their owning `sessionID` in frontmatter. A
   different session cannot resume or mutate an owned document, while the
   original session can resume it across plugin processes. Deleting the owner

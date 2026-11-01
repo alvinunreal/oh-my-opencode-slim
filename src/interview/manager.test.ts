@@ -312,6 +312,61 @@ describe('interview manager - per-session mode', () => {
   });
 });
 
+test('falls back to a local server after the dashboard stops', async () => {
+  const { port, server } = await bindFreePort();
+  heldServers.add(server);
+  const config = createTestConfig({ dashboard: true, port });
+  const owner = createInterviewManager(
+    createMockContext({ directory: await makeTempDir() }),
+    config,
+    { server },
+  );
+  await owner.handleCommandExecuteBefore(
+    { command: 'interview', sessionID: 'dashboard-owner', arguments: 'Owner' },
+    { parts: [] },
+  );
+  const notifications: string[] = [];
+  const client = createInterviewManager(
+    createMockContext({ directory: await makeTempDir() }),
+    config,
+    {
+      runtime: {
+        messages: async () => [],
+        continue: async () => {},
+        rename: async () => {},
+        notify: async (_sessionID, text) => {
+          notifications.push(text);
+        },
+      },
+    },
+  );
+  await client.handleCommandExecuteBefore(
+    {
+      command: 'interview',
+      sessionID: 'dashboard-client',
+      arguments: 'Client',
+    },
+    { parts: [] },
+  );
+  const id = client.service.getActiveInterviewId('dashboard-client') as string;
+  const previousUrl = (await client.service.getInterviewState(id)).url;
+  await owner.dispose();
+  await client.handleEvent({
+    event: {
+      type: 'session.idle',
+      properties: { sessionID: 'dashboard-client' },
+    },
+  });
+  const newUrl = (await client.service.getInterviewState(id)).url;
+  expect(newUrl).not.toBe(previousUrl);
+  expect((await fetch(newUrl)).status).toBe(200);
+  expect(
+    notifications.some(
+      (text) => text.includes(newUrl) && text.includes('resubmit'),
+    ),
+  ).toBe(true);
+});
+
 describe('interview manager - state push callback wiring', () => {
   test('in dashboard mode, state push callback is wired', async () => {
     const tempDir = await makeTempDir();

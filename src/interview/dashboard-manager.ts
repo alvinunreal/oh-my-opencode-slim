@@ -11,7 +11,10 @@ import {
   tryBecomeDashboard,
 } from './dashboard';
 import { interviewOwnerSessionID } from './document';
-import type { InterviewSessionRuntime } from './runtime';
+import {
+  createV1InterviewSessionRuntime,
+  type InterviewSessionRuntime,
+} from './runtime';
 import { createInterviewServer, createInterviewServerDeps } from './server';
 import { createInterviewService } from './service';
 import type {
@@ -49,11 +52,8 @@ export function createDashboardManager(
   dispose: () => Promise<void>;
 } {
   const interviewConfig = config.interview;
-  const service = createInterviewService(
-    ctx,
-    interviewConfig,
-    options.runtime ? { runtime: options.runtime } : undefined,
-  );
+  const runtime = options.runtime ?? createV1InterviewSessionRuntime(ctx);
+  const service = createInterviewService(ctx, interviewConfig, { runtime });
 
   // Async init - resolves once we know our role (dashboard or session)
   let initDone = false;
@@ -236,6 +236,56 @@ export function createDashboardManager(
     fallbackTimer?.unref();
   };
 
+  function useLocalServer() {
+    stopFallbackTimer();
+    isDashboard = false;
+    dashboardBaseUrl = '';
+    authToken = '';
+    fallbackServer ??= createInterviewServer(
+      createInterviewServerDeps(
+        service,
+        path.join(ctx.directory, outputFolder),
+        0,
+      ),
+    );
+    service.setBaseUrlResolver(
+      () =>
+        fallbackServer?.ensureStarted() ??
+        Promise.reject(new Error('Interview manager is disposed.')),
+    );
+    service.setStatePushCallback(() => {});
+    service.setOnInterviewCreated(() => {});
+    return fallbackServer;
+  }
+
+  let failoverPromise: Promise<void> | null = null;
+  function failover(): Promise<void> {
+    if (failoverPromise) return failoverPromise;
+    if (disposed || isDashboard || !dashboardBaseUrl) return Promise.resolve();
+    failoverPromise = (async () => {
+      if (
+        ((await probeDashboard(dashboardPort)).alive &&
+          (await readDashboardAuthFile(dashboardPort))?.token === authToken) ||
+        disposed
+      )
+        return;
+      const server = useLocalServer();
+      const baseUrl = await server.ensureStarted();
+      if (disposed) return;
+      for (const sessionID of registeredSessions) {
+        const interviewId = service.getActiveInterviewId(sessionID);
+        if (!interviewId) continue;
+        await runtime.notify(
+          sessionID,
+          `⎔ Dashboard disconnected. Local interview: ${baseUrl}/interview/${interviewId}. Please resubmit any pending dashboard input. [system status: continue without acknowledging this notification]`,
+        );
+      }
+    })().finally(() => {
+      failoverPromise = null;
+    });
+    return failoverPromise;
+  }
+
   const initPromise = (async () => {
     try {
       dashboard = await tryBecomeDashboard({
@@ -356,6 +406,11 @@ export function createDashboardManager(
                 log('[interview] failed to push state to dashboard:', {
                   error: err instanceof Error ? err.message : String(err),
                 });
+                void failover().catch((error) =>
+                  log('[interview] dashboard failover failed', {
+                    error: String(error),
+                  }),
+                );
               },
             );
           }
@@ -373,6 +428,11 @@ export function createDashboardManager(
               log('[interview] failed to register interview with dashboard:', {
                 error: err instanceof Error ? err.message : String(err),
               });
+              void failover().catch((error) =>
+                log('[interview] dashboard failover failed', {
+                  error: String(error),
+                }),
+              );
             });
           }
         });
@@ -388,17 +448,7 @@ export function createDashboardManager(
       );
       // Fallback: wire up a local per-session server for the manager's
       // service, exactly like the non-dashboard mode would.
-      isDashboard = false;
-      const resolvedOutputPath = path.join(ctx.directory, outputFolder);
-      fallbackServer = createInterviewServer(
-        createInterviewServerDeps(service, resolvedOutputPath, 0),
-      );
-      service.setBaseUrlResolver(
-        () =>
-          fallbackServer?.ensureStarted() ??
-          Promise.reject(new Error('Interview manager is disposed.')),
-      );
-      service.setStatePushCallback(() => {}); // no-op on fallback
+      useLocalServer();
     } finally {
       initDone = true;
     }
@@ -408,6 +458,7 @@ export function createDashboardManager(
     if (!initDone) {
       await initPromise;
     }
+    await failoverPromise;
   }
 
   let disposePromise: Promise<void> | null = null;
@@ -431,6 +482,7 @@ export function createDashboardManager(
 
     disposePromise = (async () => {
       await initPromise;
+      await failoverPromise?.catch(() => {});
       await waitForActiveInProcessEvents();
       pendingInProcessAcks.clear();
       inFlightDeliveries.clear();
@@ -527,9 +579,11 @@ export function createDashboardManager(
             signal: AbortSignal.timeout(3000),
           },
         );
+        if (!response.ok)
+          throw new Error(`dashboard queue poll failed (${response.status})`);
         const body = (await response.json()) as DeliveryPayload;
         const deliver = queue.prepare(interviewId, body);
-        if (response.ok && body.claimId && deliver) {
+        if (body.claimId && deliver) {
           await deliverHttpClaim(
             interviewId,
             queue.endpoint,
@@ -542,6 +596,8 @@ export function createDashboardManager(
           kind: queue.endpoint,
           error: error instanceof Error ? error.message : String(error),
         });
+        await failover();
+        if (!dashboardBaseUrl) break;
       }
     }
   }

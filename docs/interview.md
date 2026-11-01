@@ -58,6 +58,10 @@ Resumed documents must contain the interview's `## Current spec` and
 When an owning OpenCode session is deleted, its interview documents are released
 for another session to resume.
 
+If the shared dashboard stops, a session falls back to a local interview URL and
+asks you to resubmit any pending dashboard input. Inputs held only in the stopped
+dashboard's memory cannot be recovered.
+
 ## What the TUI shows
 
 By default the interview does not print the spec or the patch diff. The
