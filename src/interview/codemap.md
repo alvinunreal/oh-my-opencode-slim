@@ -193,3 +193,5 @@
   different session cannot resume or mutate an owned document, while the
   original session can resume it across plugin processes. Deleting the owner
   releases its documents under the document lock.
+- New documents retain a hash of their original idea so the owning session can
+  find them after a restart even if the displayed title changed.

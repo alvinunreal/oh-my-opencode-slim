@@ -168,6 +168,7 @@ function buildInterviewFrontmatter(
   tags = ['spec', 'diagnostic'],
   consumedState?: string,
   status?: string,
+  ideaHash?: string,
 ): string {
   const now = new Date();
   const dateStr = now.toISOString().split('T')[0];
@@ -182,6 +183,7 @@ function buildInterviewFrontmatter(
     `tags: [${tags.join(', ')}]`,
     ...(consumedState ? [`consumedState: ${consumedState}`] : []),
     ...(status ? [`status: ${status}`] : []),
+    ...(ideaHash ? [`ideaHash: ${ideaHash}`] : []),
     '---',
     '',
   ].join('\n');
@@ -420,6 +422,7 @@ export function buildInterviewDocument(
     tags?: string[];
     consumedState?: string;
     status?: string;
+    ideaHash?: string;
   },
 ): string {
   const normalizedSummary = summary.trim() || 'Waiting for interview answers.';
@@ -436,6 +439,7 @@ export function buildInterviewDocument(
         tags,
         meta.consumedState,
         meta.status,
+        meta.ideaHash,
       )
     : '';
 
@@ -467,6 +471,7 @@ export async function ensureInterviewFile(
       buildInterviewDocument(record.idea, '', '', {
         sessionID: interviewOwnerSessionID(record),
         baseMessageCount: record.baseMessageCount,
+        ideaHash: createHash('sha256').update(record.idea).digest('hex'),
       }),
       { encoding: 'utf8', flag: 'wx' },
     );
@@ -533,6 +538,7 @@ export async function rewriteInterviewDocument(
       baseMessageCount: record.baseMessageCount,
       consumedState: consumedState ?? parseFrontmatter(existing)?.consumedState,
       status: parseFrontmatter(existing)?.status,
+      ideaHash: parseFrontmatter(existing)?.ideaHash,
     },
   );
   await fs.writeFile(record.markdownPath, next, 'utf8');
@@ -609,6 +615,7 @@ export async function appendInterviewAnswers(
         baseMessageCount: record.baseMessageCount,
         consumedState: parseFrontmatter(existing)?.consumedState,
         status: parseFrontmatter(existing)?.status,
+        ideaHash: parseFrontmatter(existing)?.ideaHash,
       },
     ),
     'utf8',

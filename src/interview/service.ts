@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { PluginInput } from '@opencode-ai/plugin';
@@ -1587,11 +1587,37 @@ export function createInterviewService(
       return;
     }
 
-    const resumePath = resolveExistingInterviewPath(
+    let resumePath = resolveExistingInterviewPath(
       ctx.directory,
       outputFolder,
       idea,
     );
+    if (!resumePath) {
+      const outputDir = createInterviewDirectoryPath(
+        ctx.directory,
+        outputFolder,
+      );
+      const ideaHash = createHash('sha256').update(idea).digest('hex');
+      try {
+        for (const entry of await fs.readdir(outputDir)) {
+          if (!entry.endsWith('.md')) continue;
+          const candidate = path.join(outputDir, entry);
+          const document = await fs.readFile(candidate, 'utf8');
+          const frontmatter = parseFrontmatter(document);
+          // shortcut: renamed legacy files have no idea hash, upgrade after metadata migration.
+          if (
+            frontmatter?.sessionID === input.sessionID &&
+            (frontmatter.ideaHash === ideaHash ||
+              (!frontmatter.ideaHash && extractTitle(document) === idea))
+          ) {
+            resumePath = candidate;
+            break;
+          }
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
     if (resumePath) {
       let interview: InterviewRecord;
       try {

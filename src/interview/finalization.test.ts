@@ -24,6 +24,59 @@ describe('interview finalization', () => {
     return dir;
   }
 
+  test('resumes the same session and idea after a service restart', async () => {
+    const directory = await createTempDir(
+      path.join(os.tmpdir(), 'interview-restart-'),
+    );
+    const runtime: InterviewSessionRuntime = {
+      messages: async () => [],
+      notify: async () => {},
+      continue: async () => {},
+      rename: async () => {},
+    };
+    const start = () => {
+      const service = createInterviewService(
+        { directory } as never,
+        undefined,
+        { runtime, openBrowser: () => {} },
+      );
+      service.setBaseUrlResolver(async () => 'http://127.0.0.1:43211');
+      return service;
+    };
+    const first = start();
+    await first.handleCommandExecuteBefore(
+      {
+        command: 'interview',
+        sessionID: 'ses-restart',
+        arguments: 'Ideas: notes + tasks',
+      },
+      { parts: [] },
+    );
+    const firstId = first.getActiveInterviewId('ses-restart') as string;
+    await first.submitState('ses-restart', {
+      summary: 'Notes and tasks spec',
+      title: 'Changed title',
+      questions: [],
+    });
+    const filePath = (await first.getInterviewState(firstId)).interview
+      .markdownPath;
+    const second = start();
+    const output = { parts: [] as Array<{ type: string; text?: string }> };
+    await second.handleCommandExecuteBefore(
+      {
+        command: 'interview',
+        sessionID: 'ses-restart',
+        arguments: 'Ideas: notes + tasks',
+      },
+      output,
+    );
+    const secondId = second.getActiveInterviewId('ses-restart') as string;
+    expect(
+      (await second.getInterviewState(secondId)).interview.markdownPath,
+    ).toBe(filePath);
+    expect(output.parts[0]?.text).toContain('Resume the interview');
+  });
+
   test('preserves the accepted specification and answers when completing', async () => {
     const directory = await createTempDir(
       path.join(os.tmpdir(), 'interview-finalization-'),

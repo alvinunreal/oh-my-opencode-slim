@@ -267,7 +267,9 @@ A second failed patch in one service turn does not trigger another repair.
 
 Repeating `/interview` with the same idea resumes an existing non-placeholder
 specification, including after the process restarts, and uses the patch-based
-resume prompt instead of restarting the kickoff.
+resume prompt instead of restarting the kickoff. For older documents without an
+idea hash, automatic matching requires the original title; otherwise resume by
+path.
 
  The `interview_submit_state` tool is the quiet submission path. Its object
 argument is omitted from the generic TUI row, which is followed by one
