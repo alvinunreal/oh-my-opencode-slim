@@ -151,6 +151,7 @@ type HookOptions = {
   idleReconcileDelayMs?: number;
   runtimeStatusReconcileDelayMs?: number;
   isFallbackInProgress?: (sessionID: string) => boolean;
+  isPrimaryAgentName?: (agent: string) => boolean;
   willAttemptFallback?: (sessionID: string) => boolean;
   fallbackFailureReason?: (sessionID: string) => string;
   coordinator?: SessionLifecycle;
@@ -231,6 +232,7 @@ function createHook(options?: HookOptions) {
       getModelForAgent: options?.getModelForAgent,
       shouldManageSession: options?.shouldManageSession ?? (() => true),
       registerSessionAsOrchestrator: options?.registerSessionAsOrchestrator,
+      isPrimaryAgentName: options?.isPrimaryAgentName,
       isFallbackInProgress: options?.isFallbackInProgress,
       willAttemptFallback: options?.willAttemptFallback,
       fallbackFailureReason: options?.fallbackFailureReason,
@@ -9421,6 +9423,27 @@ describe('task-session-manager hook', () => {
     await transformMessages(hook, messages as never);
     expect(registerSessionAsOrchestrator).not.toHaveBeenCalled();
     expect(board.get('historical-child')).toBeUndefined();
+  });
+
+  test('declared primary history registers its parent session', async () => {
+    const board = new BackgroundJobBoard();
+    const registerSessionAsOrchestrator = mock(() => {});
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      shouldManageSession: () => false,
+      registerSessionAsOrchestrator,
+      isPrimaryAgentName: (agent) => agent === 'coworker',
+    });
+    const messages = {
+      messages: [
+        {
+          info: { role: 'user', sessionID: 'parent-1', agent: 'coworker' },
+          parts: [{ type: 'text', text: 'continue working' }],
+        },
+      ],
+    };
+    await transformMessages(hook, messages as never);
+    expect(registerSessionAsOrchestrator).toHaveBeenCalledWith('parent-1');
   });
 
   test('recovers stale orchestrator mapping in messages.transform', async () => {

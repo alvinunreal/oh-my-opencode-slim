@@ -1,5 +1,5 @@
 import type { AgentConfig } from '@opencode-ai/sdk/v2';
-import { renderRoutingLines } from './role-routing';
+import { renderRoutingLines, renderScopedAgentsBlock } from './role-routing';
 
 export interface AgentDefinition {
   name: string;
@@ -47,6 +47,12 @@ export interface OrchestratorPromptOptions {
   disabledAgents?: ReadonlySet<string>;
   /** Agent names whose routing lines are omitted (e.g. council without councillors). */
   excludeDescriptions?: readonly string[];
+  /** Delegation scope (issue #1591): when set, the <Agents> block lists
+   *  exactly these agents. */
+  onlyAgents?: readonly string[];
+  /** Descriptions for in-scope custom specialists (issue #1591); built-in
+   *  names keep their slim routing lines. */
+  customDescriptions?: Readonly<Record<string, string | undefined>>;
   /** v1 only: `wait_for_user` is registered. v2 never registers it. */
   waitForUser?: boolean;
   /** `backgroundJobs.orchestratorWake.enabled`. Ignored on v2: no scheduler exists there. */
@@ -68,6 +74,8 @@ export interface OrchestratorPromptOptions {
 export function buildOrchestratorPrompt({
   disabledAgents,
   excludeDescriptions,
+  onlyAgents,
+  customDescriptions,
   waitForUser = true,
   wakeScheduler = true,
   hostFlavor,
@@ -75,13 +83,30 @@ export function buildOrchestratorPrompt({
 }: OrchestratorPromptOptions = {}): string {
   const v2 = hostFlavor === 'v2';
 
-  const agentsSection = routingBlock
-    ? `<Agents>
-${renderRoutingLines(disabledAgents, excludeDescriptions)}
+  // A scope renders through the scoped-catalog renderer so in-scope custom
+  // specialists appear with their description fallback; the unscoped path
+  // keeps the built-in slim routing lines.
+  const scoped = onlyAgents?.filter(
+    (name) =>
+      !disabledAgents?.has(name) && !excludeDescriptions?.includes(name),
+  );
+  const agentsBlock = scoped
+    ? renderScopedAgentsBlock(scoped, customDescriptions)
+    : renderRoutingLines(disabledAgents, excludeDescriptions);
+  // An empty scope renders no catalog: a bare `<Agents>` shell would read
+  // as "no specialists to route to" without saying so.
+  // renderScopedAgentsBlock already returns the complete `<Agents>` block.
+  const agentsSection = !routingBlock
+    ? ''
+    : scoped === undefined
+      ? `<Agents>
+${agentsBlock}
 </Agents>
 
 `
-    : '';
+      : scoped.length > 0
+        ? `${agentsBlock}\n`
+        : '';
 
   // v2 never builds a wake scheduler: the native background notifier owns
   // terminal delivery, so promising a scheduler there names a resume channel

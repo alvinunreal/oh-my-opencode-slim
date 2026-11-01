@@ -8,6 +8,7 @@
  * It does not scan at startup, send a prompt, or keep a recovery claim.
  */
 import type { PluginInput } from '@opencode-ai/plugin';
+import { isBuiltInPrimaryAgent } from '../../utils/agent-variant';
 import {
   type BackgroundJobBoard,
   clearBackgroundJobSuppression,
@@ -547,6 +548,8 @@ export interface StartupSubagentRecoveryOptions {
   input: PluginInput;
   backgroundJobBoard: BackgroundJobBoard;
   shouldManageSession: (sessionID: string) => boolean;
+  /** Primary classification (issue #1591); defaults to built-in only. */
+  isPrimaryAgentName?: (agent: string) => boolean;
   hostFlavor?: string;
   isDisposed?: () => boolean;
   /** Per-read startup deadline, independent of transcript observation time. */
@@ -790,9 +793,11 @@ export async function recoverSubagentSessionsAtStartup(
       const parentAgent =
         rowsByID.get(parentSessionID)?.agent ??
         latestTranscriptAgent(transcript);
+      const isPrimaryAgentName =
+        options.isPrimaryAgentName ?? isBuiltInPrimaryAgent;
       if (
         !options.shouldManageSession(parentSessionID) &&
-        parentAgent !== 'orchestrator'
+        (typeof parentAgent !== 'string' || !isPrimaryAgentName(parentAgent))
       ) {
         continue;
       }

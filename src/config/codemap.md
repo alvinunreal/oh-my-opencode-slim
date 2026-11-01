@@ -202,6 +202,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `displayName`: Custom display name for the agent
 - `color`: Agent display color as a six-digit hex value or OpenCode theme color
 - `primary`: Declare a custom agent as a peer primary orchestrator (SDK mode `primary`; ignored on built-in names)
+- `subagents`: Primary agents only — delegation scope allowlist compiled into the `task` permission stance (`{"*": "deny", "<name>": "allow"}`); an explicit `permission.task` entry wins and skips the scoped `<Agents>` catalog. `'*'` is reserved
 
 ### CouncilConfig
 - `presets`: Named council presets (map of councillor name → CouncillorConfig)
