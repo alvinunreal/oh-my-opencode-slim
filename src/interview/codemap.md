@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-- `patch.ts` applies unified diffs to the current spec body; `history.ts`
+- `patch.ts` rejects unanchored replacements and applies unified diffs to the current spec body; `history.ts`
   collapses the older kickoff copy for active interviews.
 - `service.ts` handles quiet state turns, consumed-state dedupe, one patch repair
   prompt, turn status notices, and `/implement` with newest-complete fallback.
