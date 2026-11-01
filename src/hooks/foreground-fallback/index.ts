@@ -94,6 +94,8 @@ const QUOTA_BILLING_PATTERNS = [
   /\bindividual quota reached\b/i,
   /\bupgrade your subscription to increase your limits\b/i,
   /\baccount pool (?:has no account available|is unavailable)\b/i,
+  /\bquota resets? in\s+\d+(?:\.\d+)?\s*[dhms]\b/i,
+  /\brequested Antigravity model is not available to the configured accounts\b/i,
 ];
 
 const PROVIDER_ERROR_PATTERNS = [
@@ -323,17 +325,45 @@ function nestedField(source: unknown, key: string): unknown {
 function extractStatusCode(error: unknown): number | undefined {
   if (!isRecord(error)) return undefined;
   const { data, cause, response } = error;
+  const dataObj = isRecord(data) ? data : undefined;
+  const causeObj = isRecord(cause) ? cause : undefined;
+  const responseObj = isRecord(response) ? response : undefined;
+
+  const body =
+    nestedField(dataObj, 'body') ??
+    nestedField(responseObj, 'body') ??
+    nestedField(causeObj, 'body') ??
+    error.body;
+  let bodyObj = isRecord(body) ? body : undefined;
+  if (!bodyObj) {
+    const rawBody =
+      nestedField(dataObj, 'responseBody') ??
+      nestedField(causeObj, 'responseBody') ??
+      error.responseBody;
+    if (typeof rawBody === 'string') {
+      try {
+        const parsed = JSON.parse(rawBody);
+        if (isRecord(parsed)) bodyObj = parsed;
+      } catch {
+        // ignore
+      }
+    }
+  }
+  const bodyError = isRecord(bodyObj?.error) ? bodyObj.error : undefined;
+
   const candidates = [
     error.statusCode,
-    nestedField(data, 'statusCode'),
-    nestedField(cause, 'statusCode'),
+    nestedField(dataObj, 'statusCode'),
+    nestedField(causeObj, 'statusCode'),
     error.status,
-    nestedField(response, 'status'),
-    nestedField(response, 'statusCode'),
-    nestedField(data, 'status'),
-    nestedField(nestedField(data, 'response'), 'status'),
-    nestedField(cause, 'status'),
-    nestedField(nestedField(cause, 'response'), 'status'),
+    nestedField(responseObj, 'status'),
+    nestedField(responseObj, 'statusCode'),
+    nestedField(dataObj, 'status'),
+    nestedField(nestedField(dataObj, 'response'), 'status'),
+    nestedField(causeObj, 'status'),
+    nestedField(nestedField(causeObj, 'response'), 'status'),
+    nestedField(bodyError, 'code'),
+    nestedField(bodyObj, 'code'),
   ];
   return candidates.map(asHttpStatus).find((status) => status !== undefined);
 }
@@ -409,19 +439,83 @@ function spentQuotaSignature(error: unknown): string {
 
 function errorMessages(error: unknown): string[] {
   if (typeof error === 'string') return [error];
+  if (!isRecord(error)) return [];
+  const { data, cause, response } = error;
+  const dataObj = isRecord(data) ? data : undefined;
+  const causeObj = isRecord(cause) ? cause : undefined;
+  const responseObj = isRecord(response) ? response : undefined;
+
+  const body =
+    nestedField(dataObj, 'body') ??
+    nestedField(responseObj, 'body') ??
+    nestedField(causeObj, 'body') ??
+    error.body;
+  let bodyObj = isRecord(body) ? body : undefined;
+  const rawBody =
+    nestedField(dataObj, 'responseBody') ??
+    nestedField(causeObj, 'responseBody') ??
+    error.responseBody;
+  if (!bodyObj && typeof rawBody === 'string') {
+    try {
+      const parsed = JSON.parse(rawBody);
+      if (isRecord(parsed)) bodyObj = parsed;
+    } catch {
+      // ignore
+    }
+  }
+  const bodyError = isRecord(bodyObj?.error) ? bodyObj.error : undefined;
+
   return [
-    nestedField(error, 'message'),
-    nestedField(nestedField(error, 'data'), 'message'),
-    nestedField(nestedField(error, 'data'), 'responseBody'),
-    nestedField(nestedField(error, 'cause'), 'message'),
-    nestedField(error, 'responseBody'),
+    error.message,
+    nestedField(dataObj, 'message'),
+    typeof rawBody === 'string' ? rawBody : undefined,
+    nestedField(causeObj, 'message'),
+    nestedField(nestedField(causeObj, 'data'), 'message'),
+    typeof error.status === 'string' ? error.status : undefined,
+    typeof nestedField(dataObj, 'status') === 'string'
+      ? (nestedField(dataObj, 'status') as string)
+      : undefined,
+    nestedField(bodyObj, 'message'),
+    nestedField(bodyError, 'message'),
+    typeof nestedField(bodyObj, 'status') === 'string'
+      ? (nestedField(bodyObj, 'status') as string)
+      : undefined,
+    typeof nestedField(bodyError, 'status') === 'string'
+      ? (nestedField(bodyError, 'status') as string)
+      : undefined,
   ].map((value) => (typeof value === 'string' ? value : ''));
+}
+
+const ANTIGRAVITY_412_PATTERNS = [
+  /\baccount pool (?:has no account available|is unavailable)\b/i,
+  /\brequested Antigravity model is not available to the configured accounts\b/i,
+  /\bAntigravity did not begin a response within the pre-response time limit\b/i,
+  /\bFAILED_PRECONDITION\b/,
+  /\bquota resets? in\s+\d+(?:\.\d+)?\s*[dhms]\b/i,
+];
+
+function isAntigravity412Error(text: string, statusCode?: number): boolean {
+  if (ANTIGRAVITY_412_PATTERNS.some((pattern) => pattern.test(text))) {
+    return true;
+  }
+  if (
+    statusCode === 412 &&
+    (/\bprecondition\b/i.test(text) ||
+      /\baccount pool\b/i.test(text) ||
+      /\bquota\b/i.test(text))
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function failoverScope(error: unknown): 'provider' | 'request' | undefined {
   const messages = errorMessages(error);
   const text = messages.join(' ');
   const statusCode = extractStatusCode(error);
+  if (isAntigravity412Error(text, statusCode)) {
+    return 'provider';
+  }
   // Recognizable failover bodies count under HTTP 400; other 400s stay hard.
   // OpenRouter can wrap policy rejections in HTTP 403. The request-specific
   // reason must win over provider status/type/transport signals. 421 and 451
@@ -474,6 +568,7 @@ const PERMANENT_QUOTA_BILLING_PATTERNS = [
   /\bfree usage exceeded\b/i,
   /\bsubscribe to go\b/i,
   /\b(?:1113|1308|1309|1310)\b/,
+  /\bFAILED_PRECONDITION\b/,
   // Spent-allowance wording stays out: it keeps the configured initial
   // delay (a recovery window for intercepting plugins).
 ];
@@ -483,20 +578,18 @@ const PERMANENT_QUOTA_BILLING_PATTERNS = [
  * Spent-allowance wording is excluded and keeps the configured initial delay.
  */
 export function isPermanentQuotaBillingError(error: unknown): boolean {
-  if (extractStatusCode(error) === 402) return true;
+  const statusCode = extractStatusCode(error);
+  if (statusCode === 402) return true;
+  const messages = errorMessages(error);
   const text =
     typeof error === 'string'
       ? error
       : isRecord(error)
         ? [
             error.code,
-            error.message,
             nestedField(error.data, 'code'),
-            nestedField(error.data, 'message'),
-            nestedField(error.data, 'responseBody'),
             nestedField(error.cause, 'code'),
-            nestedField(error.cause, 'message'),
-            error.responseBody,
+            ...messages,
           ]
             .filter(
               (value): value is string | number =>
@@ -505,6 +598,29 @@ export function isPermanentQuotaBillingError(error: unknown): boolean {
             .map(String)
             .join(' ')
         : '';
+  // Short-horizon quota resets (e.g. "Rate limited, quota resets in 30s") are
+  // transient rate limits, not permanent exhaustion.
+  if (
+    /\bquota resets? in\s+\d+(?:\.\d+)?\s*s\b/i.test(text) &&
+    !/\bquota resets? in\s+\d+(?:\.\d+)?\s*[dhm]\b/i.test(text) &&
+    !/\baccount pool (?:has no account available|is unavailable)\b/i.test(
+      text,
+    ) &&
+    !/\bindividual quota reached\b/i.test(text) &&
+    !/\brequested Antigravity model is not available to the configured accounts\b/i.test(
+      text,
+    )
+  ) {
+    return false;
+  }
+  if (
+    statusCode === 412 &&
+    (/\bprecondition\b/i.test(text) ||
+      /\bFAILED_PRECONDITION\b/.test(text) ||
+      ANTIGRAVITY_412_PATTERNS.some((pattern) => pattern.test(text)))
+  ) {
+    return true;
+  }
   return PERMANENT_QUOTA_BILLING_PATTERNS.some((pattern) => pattern.test(text));
 }
 
