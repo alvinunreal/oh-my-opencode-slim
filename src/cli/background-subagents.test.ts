@@ -136,9 +136,9 @@ describe('background subagents writing', () => {
 });
 
 describe('parseArgs background subagents', () => {
-  test('defaults background subagents to ask', () => {
+  test('does not request background setup for non-interactive installs', () => {
     expect(parseArgs([]).backgroundSubagents).toBe('ask');
-    expect(parseArgs(['--no-tui']).backgroundSubagents).toBe('ask');
+    expect(parseArgs(['--no-tui']).backgroundSubagents).toBe('no');
   });
 
   test('parses mode and target override', () => {

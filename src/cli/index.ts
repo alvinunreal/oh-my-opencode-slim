@@ -49,7 +49,7 @@ export function parseArgs(args: string[]): InstallArgs {
     }
   }
 
-  result.backgroundSubagents ??= 'ask';
+  result.backgroundSubagents ??= result.tui ? 'ask' : 'no';
 
   return result;
 }

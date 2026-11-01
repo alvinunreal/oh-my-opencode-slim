@@ -404,7 +404,7 @@ export async function install(args: InstallArgs): Promise<number> {
     promptForStar: args.tui,
     dryRun: args.dryRun,
     reset: args.reset ?? false,
-    backgroundSubagents: args.backgroundSubagents ?? 'ask',
+    backgroundSubagents: args.backgroundSubagents ?? (args.tui ? 'ask' : 'no'),
     backgroundSubagentsTarget: args.backgroundSubagentsTarget,
   };
 
