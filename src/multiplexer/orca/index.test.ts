@@ -383,16 +383,4 @@ describe('OrcaMultiplexer', () => {
     // A failed close keeps the pane tracked instead of forgetting a viewer.
     expect(await new Failing().closePane('split-100')).toBe(false);
   });
-
-  test('applyLayout is a no-op and never changes the spawn direction', async () => {
-    const { OrcaMultiplexer } = await importFreshOrca();
-    const orca = new OrcaMultiplexer('main-vertical');
-
-    await orca.applyLayout('even-vertical', 40);
-
-    await spawnWith(orca);
-    expect(flagValue(splits()[0] as string[], '--direction')).toBe(
-      'horizontal',
-    );
-  });
 });

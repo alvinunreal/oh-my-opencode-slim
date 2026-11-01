@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test';
-import type { MultiplexerLayout } from '../../config/schema';
 import type { Multiplexer, PaneResult } from '../types';
 import {
   DIAGNOSTIC_EVENT_NO_PANE,
@@ -141,10 +140,6 @@ class FakeAdapter implements Multiplexer {
   readonly type: AdapterType;
   readonly spawnCalls: SpawnCall[] = [];
   readonly closeCalls: string[] = [];
-  readonly layoutCalls: Array<{
-    layout: MultiplexerLayout;
-    mainPaneSize: number;
-  }> = [];
   spawnResult: PaneResult = { success: true, paneId: 'pane-1' };
   spawnError: Error | null = null;
   spawnBarrier: Promise<void> | null = null;
@@ -187,13 +182,6 @@ class FakeAdapter implements Multiplexer {
     this.closeCalls.push(paneId);
     if (this.closeBarrier) await this.closeBarrier;
     return this.closeResult;
-  }
-
-  async applyLayout(
-    layout: MultiplexerLayout,
-    mainPaneSize: number,
-  ): Promise<void> {
-    this.layoutCalls.push({ layout, mainPaneSize });
   }
 }
 
@@ -270,8 +258,6 @@ function createHarness(options: HarnessOptions = {}): Harness {
     directory: DIRECTORY,
     displayedSessionId: PARENT,
     adapter: 'tmux',
-    layout: 'main-vertical',
-    mainPaneSize: 60,
     stableIdleMs: STABLE_IDLE_MS,
     readiness: { maxAttempts: 3, retryDelayMs: RETRY_DELAY_MS },
     ...options.config,
@@ -424,9 +410,6 @@ describe('event filtering and readiness (2.2)', () => {
       paneId: 'pane-1',
       anchoredTarget: '%0',
     });
-    expect(h.adapter.layoutCalls).toEqual([
-      { layout: 'main-vertical', mainPaneSize: 60 },
-    ]);
   });
 
   test('threads the created event subagent type into the spawn options (3.3)', async () => {
@@ -1009,6 +992,67 @@ describe('dedup and stable-idle close (2.3)', () => {
 });
 
 describe('rebuild and reconnect backfill (2.4)', () => {
+  test('reconciles the displayed parent in parallel before other held parents', async () => {
+    const h = createHarness();
+    await activatePane(h);
+    h.lifecycle.setDisplayedSession('parent-2');
+    h.reader.statuses.set('child-2', 'busy');
+    const visible = createDeferred();
+    const other = createDeferred();
+    const calls: string[] = [];
+    h.list.listSessions = async (_directory, parentID) => {
+      calls.push(parentID);
+      await (parentID === PARENT ? other.promise : visible.promise);
+      return {
+        sessions: [{ sessionId: parentID === PARENT ? CHILD : 'child-2' }],
+      };
+    };
+    h.reader.calls.length = 0;
+    const reconnect = h.lifecycle.onReconnect();
+    try {
+      await flushAsync();
+      expect(calls).toEqual(['parent-2']);
+      expect(h.reader.calls).toEqual([DIRECTORY]);
+      visible.resolve();
+      await flushAsync();
+      expect(h.adapter.spawnCalls.map((call) => call.sessionId)).toEqual([
+        CHILD,
+        'child-2',
+      ]);
+      expect(calls).toEqual(['parent-2', PARENT]);
+    } finally {
+      visible.resolve();
+      other.resolve();
+      await reconnect;
+    }
+  });
+
+  test('stops before the next held-parent group when the displayed route changes', async () => {
+    const h = createHarness();
+    await activatePane(h);
+    h.lifecycle.setDisplayedSession('parent-2');
+    h.reader.statuses.set('child-2', 'busy');
+    await h.lifecycle.handleEvent(
+      createdEvent({ sessionId: 'child-2', parentSessionId: 'parent-2' }),
+    );
+    h.lifecycle.setDisplayedSession('parent-3');
+    const other = createDeferred();
+    const calls: string[] = [];
+    h.list.listSessions = async (_directory, parentID) => {
+      calls.push(parentID);
+      if (parentID === PARENT) await other.promise;
+      return {
+        sessions: [{ sessionId: parentID === PARENT ? CHILD : 'child-2' }],
+      };
+    };
+    const reconnect = h.lifecycle.onReconnect();
+    await flushAsync();
+    h.lifecycle.setDisplayedSession('parent-4');
+    other.resolve();
+    await reconnect;
+    expect(calls).not.toContain('parent-2');
+  });
+
   test('keeps a child pane after the child moves to another directory', async () => {
     const child = { id: CHILD, parentID: PARENT, directory: DIRECTORY };
     const list = createV2SessionListReader({

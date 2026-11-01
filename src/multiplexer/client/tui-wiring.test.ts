@@ -201,8 +201,6 @@ class FakeAdapter implements Multiplexer {
     this.closes.push(paneId);
     return true;
   }
-
-  async applyLayout(): Promise<void> {}
 }
 
 type FakeSessionGetResult = 'found' | 'notfound' | 'error';
@@ -372,7 +370,7 @@ function idleEvent(sessionId = CHILD) {
 /** Lets queued async event handling settle. */
 async function flush(): Promise<void> {
   for (let i = 0; i < 4; i += 1) await Promise.resolve();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setImmediate(resolve));
   for (let i = 0; i < 4; i += 1) await Promise.resolve();
 }
 
@@ -1608,7 +1606,7 @@ describe('default adapter factory', () => {
 });
 
 describe('FR-7 reconcile trigger', () => {
-  test('route changes debounce backfill without waiting for the periodic tick', async () => {
+  test('route changes backfill on the route poll without another delay', async () => {
     let displayed = 'other-parent';
     const state = createClientState({
       sessions: [{ id: CHILD, parentID: PARENT }],
@@ -1621,9 +1619,6 @@ describe('FR-7 reconcile trigger', () => {
     expect(h.adapters.get('tmux')?.spawns).toHaveLength(0);
     displayed = PARENT;
     h.clock.advance(250);
-    h.clock.advance(99);
-    expect(h.adapters.get('tmux')?.spawns).toHaveLength(0);
-    h.clock.advance(1);
     for (let i = 0; i < 50; i += 1) await Promise.resolve();
     expect(
       h.adapters.get('tmux')?.spawns.map((spawn) => spawn.sessionId),
@@ -1827,6 +1822,35 @@ describe('FR-7 reconcile trigger', () => {
 });
 
 describe('FR-8 leftover sweep', () => {
+  test('startup backfill is not blocked by a pending leftover sweep', async () => {
+    let releaseSweep: () => void = () => {};
+    const sweepAdapter: SweepAdapter = {
+      async listPanesWithTitles() {
+        await new Promise<void>((resolve) => {
+          releaseSweep = resolve;
+        });
+        return [];
+      },
+      async closePane() {
+        return true;
+      },
+    };
+    const state = createClientState({
+      sessions: [{ id: CHILD, parentID: PARENT }],
+    });
+    const h = await createHarness({ state, sweepAdapter });
+    try {
+      await flush();
+      expect(
+        h.adapters.get('tmux')?.spawns.map((spawn) => spawn.sessionId),
+      ).toEqual([CHILD]);
+    } finally {
+      releaseSweep();
+      await flush();
+      await h.wiring.dispose();
+    }
+  });
+
   test('a pending recovery sweep cannot reorder created then deleted into a ghost pane', async () => {
     let reachable = false;
     let releaseSweep: () => void = () => {};

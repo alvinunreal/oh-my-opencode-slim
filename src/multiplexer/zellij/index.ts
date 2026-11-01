@@ -375,15 +375,6 @@ export class ZellijMultiplexer implements Multiplexer {
     });
   }
 
-  async applyLayout(
-    _layout: MultiplexerLayout,
-    _mainPaneSize: number,
-  ): Promise<void> {
-    // No-op for zellij after panes are spawned. Zellij does not support tmux-like
-    // exact main pane sizing/rebalancing; layout is applied to future pane
-    // creation by mapping configured layouts to pane directions.
-  }
-
   private directionArgs(): string[] {
     return this.paneDirection ? ['--direction', this.paneDirection] : [];
   }

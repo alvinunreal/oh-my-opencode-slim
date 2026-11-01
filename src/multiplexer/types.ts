@@ -5,7 +5,7 @@
  * herdr, etc.) to spawn and manage panes for child agent sessions.
  */
 
-import type { MultiplexerLayout, MultiplexerViewer } from '../config/schema';
+import type { MultiplexerViewer } from '../config/schema';
 import type { ViewerFlavor } from './shared';
 
 export interface PaneResult {
@@ -96,11 +96,4 @@ export interface Multiplexer {
    * @returns true if successfully closed
    */
   closePane(paneId: string): Promise<boolean>;
-
-  /**
-   * Apply layout to rebalance panes
-   * @param layout - The layout type to apply
-   * @param mainPaneSize - Percentage for main pane (for main-* layouts)
-   */
-  applyLayout(layout: MultiplexerLayout, mainPaneSize: number): Promise<void>;
 }

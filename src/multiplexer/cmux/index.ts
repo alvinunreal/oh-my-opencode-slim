@@ -442,15 +442,6 @@ export class CmuxMultiplexer implements Multiplexer {
     return true;
   }
 
-  async applyLayout(
-    _layout: MultiplexerLayout,
-    _mainPaneSize: number,
-  ): Promise<void> {
-    // cmux has no layout expression: the child view is a sibling tab inside
-    // the parent pane and never participates in the pane layout, so layout
-    // and main-pane-size produce no command at all.
-  }
-
   private resolveTarget(): CmuxTarget | null {
     return resolveCmuxTarget(this.env, this.sessionName);
   }

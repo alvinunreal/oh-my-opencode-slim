@@ -24,19 +24,6 @@ import {
 } from '../shared';
 import type { Multiplexer, PaneResult, PaneSpawnOptions } from '../types';
 
-const TMUX_LAYOUT_DEBOUNCE_MS = 150;
-
-/** Scheduling seam; tests inject a deterministic timer harness. */
-interface LayoutTimers {
-  setTimeout(callback: () => void, delay: number): unknown;
-  clearTimeout(timer: unknown): void;
-}
-
-const REAL_TIMERS: LayoutTimers = {
-  setTimeout: (callback, delay) => setTimeout(callback, delay),
-  clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
-};
-
 export class TmuxMultiplexer implements Multiplexer {
   readonly type = 'tmux' as const;
 
@@ -46,15 +33,10 @@ export class TmuxMultiplexer implements Multiplexer {
   private supportsPaneOptions = false;
   private storedLayout: MultiplexerLayout;
   private storedMainPaneSize: number;
-  private layoutTimers = new Map<string, unknown>();
-  /** Panes created by this instance, mapped to the anchor they were split from. */
+  /** Panes created by this instance (creation order), mapped to their anchor. */
   private paneTargets = new Map<string, string>();
 
-  constructor(
-    layout: MultiplexerLayout = 'main-vertical',
-    mainPaneSize = 60,
-    private readonly timers: LayoutTimers = REAL_TIMERS,
-  ) {
+  constructor(layout: MultiplexerLayout = 'main-vertical', mainPaneSize = 60) {
     this.storedLayout = layout;
     this.storedMainPaneSize = mainPaneSize;
   }
@@ -155,7 +137,6 @@ export class TmuxMultiplexer implements Multiplexer {
         tmux,
         socket,
         anchor,
-        this.storedLayout,
         opencodeCmd,
         viewerSecretArgs,
         // v2 mini commands omit the directory, so the split pins the child
@@ -164,53 +145,39 @@ export class TmuxMultiplexer implements Multiplexer {
       );
       const paneId = result.stdout.trim();
 
-      log('[tmux] spawnPane: result', {
-        command: opencodeCmd,
-        exitCode: result.exitCode,
-        paneId,
-        stderr: redact(result.stderr.trim()),
-        anchor,
-        socket,
-      });
+      if (result.exitCode !== 0 || !PANE_ID.test(paneId)) {
+        log('[tmux] spawnPane: result', {
+          command: opencodeCmd,
+          exitCode: result.exitCode,
+          paneId,
+          stderr: redact(result.stderr.trim()),
+          anchor,
+          socket,
+        });
+      }
 
-      if (result.exitCode === 0 && paneId) {
-        // Rename the pane for visibility. The description is the FR-8
-        // metadata (owner pid + child session id) and must survive intact,
-        // so it is never truncated here.
-        const renameProc = crossSpawn(
-          [tmux, '-S', socket, 'select-pane', '-t', paneId, '-T', description],
-          { stdout: 'ignore', stderr: 'ignore' },
-        );
-        await renameProc.exited;
-
-        // Pane user options require tmux 3.0a; older servers keep the title fallback.
-        if (this.supportsPaneOptions) {
-          try {
-            const metadataProc = crossSpawn(
-              [
-                tmux,
-                '-S',
-                socket,
-                'set-option',
-                '-p',
-                '-t',
-                paneId,
-                '@omosc',
-                description,
-              ],
-              { stdout: 'ignore', stderr: 'ignore' },
-            );
-            await metadataProc.exited;
-          } catch {
-            // The pane still exists even when its metadata option cannot be set.
-          }
+      if (PANE_ID.test(paneId)) {
+        // FR-8 metadata and title in one invocation. The description must
+        // survive intact, so it is never truncated. Pane user options need
+        // tmux 3.0a; older servers keep the title fallback.
+        this.paneTargets.set(paneId, anchor);
+        try {
+          await this.runTmux(tmux, socket, [
+            'select-pane',
+            '-t',
+            paneId,
+            '-T',
+            description,
+            ...(this.supportsPaneOptions
+              ? [';', 'set-option', '-p', '-t', paneId, '@omosc', description]
+              : []),
+          ]);
+        } catch (err) {
+          log('[tmux] spawnPane: metadata exception', {
+            error: redact(String(err)),
+          });
         }
 
-        // Rebalance panes after bursts of child sessions settle.
-        this.paneTargets.set(paneId, anchor);
-        this.scheduleLayout(anchor);
-
-        log('[tmux] spawnPane: SUCCESS', { paneId });
         return { success: true, paneId };
       }
 
@@ -285,120 +252,92 @@ export class TmuxMultiplexer implements Multiplexer {
     }
 
     const tmux = await this.getBinary();
+    // Layout scope: only windows this instance split into are rebalanced.
+    const anchor = this.paneTargets.get(paneId);
+    const layout = anchor
+      ? ['select-layout', '-t', anchor, this.storedLayout]
+      : [];
+    let alreadyClosed = false;
     const closed = await gracefulClosePane(tmux, paneId, {
       ctrlC: ['-S', socket, 'send-keys', '-t', paneId, 'C-c'],
-      close: ['-S', socket, 'kill-pane', '-t', paneId],
-      // Only a missing target proves the pane is gone; transport errors also exit 1.
-      isAlreadyClosed: (stderr) =>
-        stderr.trim() === `can't find pane: ${paneId}`,
+      // Kill and rebalance in one invocation: each pane is resized once.
+      close: [
+        '-S',
+        socket,
+        'kill-pane',
+        '-t',
+        paneId,
+        ...(anchor ? [';', ...layout] : []),
+      ],
+      // tmux stops at the first failing command and names the missing target.
+      isAlreadyClosed: (stderr) => {
+        const error = stderr.trim();
+        alreadyClosed = error === `can't find pane: ${paneId}`;
+        return (
+          alreadyClosed ||
+          error === 'no current target' ||
+          (anchor !== undefined && error === `can't find pane: ${anchor}`)
+        );
+      },
     });
     if (closed) {
-      const anchor = this.paneTargets.get(paneId);
       this.paneTargets.delete(paneId);
-      // Layout scope: only windows this instance split into are rebalanced.
-      if (anchor) this.scheduleLayout(anchor);
+      // The pane was already gone, so the chained layout never ran.
+      if (anchor && alreadyClosed && tmux) {
+        try {
+          await this.runTmux(tmux, socket, layout);
+        } catch (err) {
+          log('[tmux] closePane: layout exception', { error: String(err) });
+        }
+      }
     }
     return closed;
   }
 
-  async applyLayout(
-    layout: MultiplexerLayout,
-    mainPaneSize: number,
-  ): Promise<void> {
-    for (const timer of this.layoutTimers.values())
-      this.timers.clearTimeout(timer);
-    this.layoutTimers.clear();
-    this.storedLayout = layout;
-    this.storedMainPaneSize = mainPaneSize;
-
-    const socket = this.resolveSocket();
-    const anchor = this.resolveAnchor();
-    if (!socket || !anchor) {
-      log('[tmux] applyLayout: no tmux target resolved; skipping', {
-        hasSocket: !!socket,
-        hasAnchor: !!anchor,
-      });
-      return;
-    }
-
-    await this.applyLayoutNow(layout, mainPaneSize, socket, anchor);
+  /**
+   * The configured layout as one command sequence. tmux runs a sequence in
+   * one pass and resizes each pane once for its final geometry. The leading
+   * `select-layout` still applies when the size option is rejected.
+   */
+  private layoutArgs(target: string): string[] {
+    const layout = this.storedLayout;
+    const select = ['select-layout', '-t', target, layout];
+    if (!isMainLayout(layout)) return select;
+    const option =
+      layout === 'main-horizontal' ? 'main-pane-height' : 'main-pane-width';
+    return [
+      ...select,
+      ';',
+      'set-window-option',
+      '-t',
+      target,
+      option,
+      `${this.storedMainPaneSize}%`,
+      ';',
+      ...select,
+    ];
   }
 
-  async applySpawnLayout(
-    layout: MultiplexerLayout,
-    mainPaneSize: number,
-  ): Promise<void> {
-    if (
-      layout === this.storedLayout &&
-      mainPaneSize === this.storedMainPaneSize
-    )
-      return;
-    await this.applyLayout(layout, mainPaneSize);
-  }
-
-  private scheduleLayout(targetPane: string): void {
-    const pending = this.layoutTimers.get(targetPane);
-    if (pending) this.timers.clearTimeout(pending);
-
-    const timer = this.timers.setTimeout(() => {
-      this.layoutTimers.delete(targetPane);
-      const socket = this.resolveSocket();
-      if (!socket) return;
-      void this.applyLayoutNow(
-        this.storedLayout,
-        this.storedMainPaneSize,
-        socket,
-        targetPane,
-      );
-    }, TMUX_LAYOUT_DEBOUNCE_MS);
-    this.layoutTimers.set(targetPane, timer);
-    (timer as { unref?: () => void }).unref?.();
-  }
-
-  private async applyLayoutNow(
-    layout: MultiplexerLayout,
-    mainPaneSize: number,
+  /**
+   * The pane that follows `anchor` in its window. Splitting it with `-b`
+   * inserts the new pane at the same position as splitting the anchor, but
+   * leaves the anchor's size untouched.
+   */
+  private async paneAfter(
+    tmux: string,
     socket: string,
-    targetPane: string,
-  ): Promise<void> {
-    const tmux = await this.getBinary();
-    if (!tmux) return;
-
-    try {
-      // Apply the layout
-      const layoutResult = await this.runTmux(tmux, socket, [
-        'select-layout',
-        ...this.targetArgs(targetPane),
-        layout,
-      ]);
-      if (layoutResult !== 0) return;
-
-      // For main-* layouts, set the main pane size
-      if (layout === 'main-horizontal' || layout === 'main-vertical') {
-        const sizeOption =
-          layout === 'main-horizontal' ? 'main-pane-height' : 'main-pane-width';
-
-        const sizeResult = await this.runTmux(tmux, socket, [
-          'set-window-option',
-          ...this.targetArgs(targetPane),
-          sizeOption,
-          `${mainPaneSize}%`,
-        ]);
-        if (sizeResult !== 0) return;
-
-        // Reapply layout to use the new size
-        const reapplyResult = await this.runTmux(tmux, socket, [
-          'select-layout',
-          ...this.targetArgs(targetPane),
-          layout,
-        ]);
-        if (reapplyResult !== 0) return;
-      }
-
-      log('[tmux] applyLayout: applied', { layout, mainPaneSize });
-    } catch (err) {
-      log('[tmux] applyLayout: exception', { error: String(err) });
-    }
+    anchor: string,
+  ): Promise<string | undefined> {
+    const proc = crossSpawn(
+      [tmux, '-S', socket, 'list-panes', '-t', anchor, '-F', '#{pane_id}'],
+      { stdout: 'pipe', stderr: 'pipe' },
+    );
+    const [exitCode, stdout] = await Promise.all([proc.exited, proc.stdout()]);
+    if (exitCode !== 0) return undefined;
+    const panes = stdout.split('\n');
+    const index = panes.indexOf(anchor);
+    const next = index === -1 ? undefined : panes[index + 1];
+    return next && PANE_ID.test(next) ? next : undefined;
   }
 
   private async runTmux(
@@ -433,44 +372,62 @@ export class TmuxMultiplexer implements Multiplexer {
     return this.binaryPath;
   }
 
+  /**
+   * Splits and rebalances in one invocation. Main layouts stack each new
+   * pane before the newest child (same order as splitting the anchor), so
+   * the parent pane keeps its size; a gone child falls back to the anchor.
+   */
   private async splitPane(
     tmux: string,
     socket: string,
-    targetPane: string,
-    layout: MultiplexerLayout,
+    anchor: string,
     opencodeCmd: string,
     viewerSecretArgs: string[] = [],
     miniCwdArgs: string[] = [],
   ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-    const args = [
-      '-S',
-      socket,
-      'split-window',
-      getSplitDirection(layout),
-      '-d',
-      '-P',
-      '-F',
-      '#{pane_id}',
-      ...this.targetArgs(targetPane),
-      ...viewerSecretArgs,
-      ...miniCwdArgs,
-      opencodeCmd,
-    ];
-    log('[tmux] spawnPane: executing', {
-      tmux,
-      args: redactViewerSecretArgs(args),
-    });
-
-    const proc = crossSpawn([tmux, ...args], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    const [exitCode, stdout, stderr] = await Promise.all([
-      proc.exited,
-      proc.stdout(),
-      proc.stderr(),
-    ]);
-    return { exitCode, stdout, stderr };
+    const layout = this.storedLayout;
+    const stackOn = isMainLayout(layout)
+      ? await this.paneAfter(tmux, socket, anchor)
+      : undefined;
+    const run = async (target: string | undefined) => {
+      const args = [
+        '-S',
+        socket,
+        'split-window',
+        ...(target
+          ? [getStackDirection(layout), '-b']
+          : [getSplitDirection(layout)]),
+        '-d',
+        '-P',
+        '-F',
+        '#{pane_id}',
+        ...this.targetArgs(target ?? anchor),
+        ...viewerSecretArgs,
+        ...miniCwdArgs,
+        opencodeCmd,
+        ';',
+        ...this.layoutArgs(anchor),
+      ];
+      log('[tmux] spawnPane: executing', {
+        tmux,
+        args: redactViewerSecretArgs(args),
+      });
+      const proc = crossSpawn([tmux, ...args], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        proc.exited,
+        proc.stdout(),
+        proc.stderr(),
+      ]);
+      return { exitCode, stdout, stderr };
+    };
+    const result = await run(stackOn);
+    // No pane from the neighbour (gone or too small): split the anchor.
+    return stackOn && !PANE_ID.test(result.stdout.trim())
+      ? run(undefined)
+      : result;
   }
 
   private targetArgs(targetPane: string): string[] {
@@ -503,6 +460,17 @@ export class TmuxMultiplexer implements Multiplexer {
  * (new pane below). `select-layout` re-tiles afterwards, so this only fixes
  * the initial placement of each new pane.
  */
+const PANE_ID = /^%\d+$/;
+
+function isMainLayout(layout: MultiplexerLayout): boolean {
+  return layout === 'main-horizontal' || layout === 'main-vertical';
+}
+
+/** Direction that stacks children inside the agent area of a main layout. */
+function getStackDirection(layout: MultiplexerLayout): '-h' | '-v' {
+  return layout === 'main-horizontal' ? '-h' : '-v';
+}
+
 function getSplitDirection(layout: MultiplexerLayout): '-h' | '-v' {
   switch (layout) {
     case 'main-horizontal':
