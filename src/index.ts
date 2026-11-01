@@ -3104,15 +3104,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           marketplaceLeaseAbort.abort();
           terminalGate?.dispose();
         }
-        // Token streams have no work in this fan-out. The v2 Interview
-        // bridge consumes text deltas independently before dispatching here.
+        // V1 token streams have no work in this fan-out.
         const streamEventType = (input.event as { type?: string } | undefined)
           ?.type;
-        if (
-          streamEventType === 'message.part.delta' ||
-          streamEventType === 'session.text.delta' ||
-          streamEventType === 'session.reasoning.delta'
-        ) {
+        if (streamEventType === 'message.part.delta') {
           return;
         }
 

@@ -106,10 +106,7 @@ import {
   v1ArgsToSubagent,
 } from './delegation';
 import { mapV2EventToV1 } from './event-adapter';
-import {
-  buildV2EventSubscriptionTypes,
-  isV2StreamDeltaType,
-} from './event-subscription';
+import { buildV2EventSubscriptionTypes } from './event-subscription';
 import {
   INTERNAL_SYNTHETIC_MESSAGE_PREFIX,
   isInternalAdmission,
@@ -3935,46 +3932,34 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                 while (!eventStopped) {
                   const next = await eventIterator.next();
                   if (next.done) break;
-                  // Token-stream deltas: the interview bridge already gates to
-                  // managed sessions. Skip permission rules and v1 synthesis;
-                  // still deliver the raw event so the multiplexer heartbeat in
-                  // the v1 event hook can run. Deltas are not location-scoped
-                  // and fire per token, so they skip the directory scope too.
                   const rawType =
                     typeof next.value?.type === 'string' ? next.value.type : '';
-                  const isStreamDelta = isV2StreamDeltaType(rawType);
-                  if (!isStreamDelta) {
-                    // Keep directory-local bridges scoped, while allowing the
-                    // task owner to observe children moved to live locations.
-                    eventDirectoryScope.note(next.value);
-                    if (eventDirectoryScope.isForeign(next.value)) {
-                      // Moved children retain their task owner in the parent's
-                      // location. Forward observation only, not permission or
-                      // profile handling from this foreign location.
-                      const foreignTaskEvent = v1Hooks['v2.foreignTaskEvent'] as
-                        | ((input: { event: unknown }) => Promise<void>)
-                        | undefined;
-                      if (foreignTaskEvent) {
-                        try {
-                          await withTuiSnapshotBatch(async () => {
-                            for (const ev of mapV2EventToV1(next.value)) {
-                              await foreignTaskEvent({ event: ev });
-                            }
-                          });
-                        } catch (err) {
-                          log('[v2] foreign task event failed', String(err));
-                        }
+                  // Keep directory-local bridges scoped, while allowing the
+                  // task owner to observe children moved to live locations.
+                  eventDirectoryScope.note(next.value);
+                  if (eventDirectoryScope.isForeign(next.value)) {
+                    // Moved children retain their task owner in the parent's
+                    // location. Forward observation only, not permission or
+                    // profile handling from this foreign location.
+                    const foreignTaskEvent = v1Hooks['v2.foreignTaskEvent'] as
+                      | ((input: { event: unknown }) => Promise<void>)
+                      | undefined;
+                    if (foreignTaskEvent) {
+                      try {
+                        await withTuiSnapshotBatch(async () => {
+                          for (const ev of mapV2EventToV1(next.value)) {
+                            await foreignTaskEvent({ event: ev });
+                          }
+                        });
+                      } catch (err) {
+                        log('[v2] foreign task event failed', String(err));
                       }
-                      continue;
                     }
+                    continue;
                   }
                   try {
                     await withTuiSnapshotBatch(async () => {
                       await interviewBridge?.handleEvent(next.value);
-                      if (isStreamDelta) {
-                        if (eventHook) await eventHook({ event: next.value });
-                        return;
-                      }
                       // Only reduced hosts retain legacy created prewarming.
                       // With persistence, native progress must bind before the
                       // first capture; a created event may precede that barrier.

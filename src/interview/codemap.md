@@ -156,9 +156,8 @@
 
 - v1 loads `manager.ts`; v2 loads only its Interview bridge. Both reuse the
   same Interview Implementation rather than constructing two owners on v2.
-- Native v2 text observations use `session.text.started/delta/ended` and the
-  host's `assistantMessageID`; full text-ended values remain distinct from
-  lifecycle idle boundaries.
+- Native v2 text observations use complete `session.text.ended` values keyed
+  by the host's `assistantMessageID` and ordinal, distinct from idle boundaries.
 - The v2 bridge replays command expansions for each context rebuild without
   re-running interview side effects; uncached historical markers lose their tags.
 - v2 service turns use tracked synthetic admissions and retain the session's

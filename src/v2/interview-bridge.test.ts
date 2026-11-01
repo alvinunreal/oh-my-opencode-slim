@@ -512,10 +512,6 @@ describe('v2 interview bridge', () => {
     expect(bridge.service.getActiveInterviewId('ses_exec')).not.toBeNull();
 
     await bridge.handleEvent({
-      type: 'session.text.started',
-      data: { sessionID: 'ses_exec', assistantMessageID: 'msg-1', ordinal: 0 },
-    });
-    await bridge.handleEvent({
       type: 'session.text.ended',
       data: {
         sessionID: 'ses_exec',
@@ -574,20 +570,44 @@ describe('v2 interview bridge', () => {
       ],
     });
     await bridge.handleEvent({
-      type: 'session.text.started',
-      properties: { sessionID: 'ses_text' },
+      type: 'session.text.ended',
+      properties: {
+        sessionID: 'ses_text',
+        assistantMessageID: 'msg-1',
+        ordinal: 0,
+        text: 'one',
+      },
     });
     await bridge.handleEvent({
-      type: 'session.text.delta',
-      properties: { sessionID: 'ses_text', delta: 'one' },
+      type: 'session.text.ended',
+      properties: {
+        sessionID: 'ses_text',
+        assistantMessageID: 'msg-1',
+        ordinal: 1,
+        text: ' two',
+      },
     });
     await bridge.handleEvent({
-      type: 'session.text.delta',
-      properties: { sessionID: 'ses_text', delta: ' two' },
+      type: 'session.text.ended',
+      properties: {
+        sessionID: 'ses_text',
+        assistantMessageID: 'msg-2',
+        ordinal: 0,
+        text: 'next',
+      },
     });
-    expect(bridge.getTranscript('ses_text').at(-1)?.parts?.[0]?.text).toBe(
-      'one two',
-    );
+    expect(
+      bridge
+        .getTranscript('ses_text')
+        .slice(-2)
+        .map((message) => message.parts),
+    ).toEqual([
+      [
+        { type: 'text', text: 'one' },
+        { type: 'text', text: ' two' },
+      ],
+      [{ type: 'text', text: 'next' }],
+    ]);
 
     await bridge.handleEvent({
       type: 'session.deleted',
@@ -623,12 +643,13 @@ describe('v2 interview bridge', () => {
       ],
     });
     await bridge.handleEvent({
-      type: 'session.text.started',
-      data: { sessionID: 'ses_live' },
-    });
-    await bridge.handleEvent({
-      type: 'session.text.delta',
-      data: { sessionID: 'ses_live', delta: 'from data' },
+      type: 'session.text.ended',
+      data: {
+        sessionID: 'ses_live',
+        assistantMessageID: 'msg-live',
+        ordinal: 0,
+        text: 'from data',
+      },
     });
     expect(bridge.getTranscript('ses_live').at(-1)?.parts?.[0]?.text).toBe(
       'from data',
@@ -663,12 +684,13 @@ describe('v2 interview bridge', () => {
       ],
     });
     await bridge.handleEvent({
-      type: 'session.text.started',
-      properties: { sessionID: 'ses_plain' },
-    });
-    await bridge.handleEvent({
-      type: 'session.text.delta',
-      properties: { sessionID: 'ses_plain', delta: 'ignored' },
+      type: 'session.text.ended',
+      properties: {
+        sessionID: 'ses_plain',
+        assistantMessageID: 'msg-plain',
+        ordinal: 0,
+        text: 'ignored',
+      },
     });
     expect(bridge.getTranscript('ses_plain')).toEqual([]);
     bridge.dispose();

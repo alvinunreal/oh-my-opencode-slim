@@ -85,8 +85,6 @@ export function createV2InterviewBridge(
   } = {},
 ): V2InterviewBridge {
   const transcripts = new Map<string, InterviewMessage[]>();
-  const activeText = new Map<string, string>();
-  const activeMessageIDs = new Map<string, string>();
   const commandContexts = new Set<string>();
   const pendingNotices = new Map<string, string[]>();
   // Reduced hosts may omit the session domain entirely.
@@ -298,46 +296,6 @@ export function createV2InterviewBridge(
     }
   }
 
-  function appendText(
-    sessionID: string,
-    text: string,
-    messageID?: string,
-  ): void {
-    const messages = transcripts.get(sessionID) ?? [];
-    const last = messages.at(-1);
-    if (last?.info?.role === 'assistant') {
-      if (messageID) last.info = { ...last.info, id: messageID };
-      const part = last.parts?.find((item) => item.type === 'text');
-      if (part) {
-        part.text = text;
-      } else {
-        last.parts = [{ type: 'text', text }];
-      }
-    } else {
-      messages.push({
-        info: { role: 'assistant', ...(messageID ? { id: messageID } : {}) },
-        parts: [{ type: 'text', text }],
-      });
-    }
-    transcripts.set(sessionID, messages);
-  }
-
-  function beginText(sessionID: string, messageID?: string): void {
-    const messages = transcripts.get(sessionID) ?? [];
-    messages.push({
-      info: { role: 'assistant', ...(messageID ? { id: messageID } : {}) },
-      parts: [{ type: 'text', text: '' }],
-    });
-    transcripts.set(sessionID, messages);
-  }
-
-  function textMessageID(
-    properties: Record<string, unknown>,
-  ): string | undefined {
-    const id = properties.assistantMessageID;
-    return typeof id === 'string' && id ? id : undefined;
-  }
-
   async function handleEvent(event: Record<string, unknown>): Promise<void> {
     const type = typeof event.type === 'string' ? event.type : '';
     // Data-first: live v2 hosts key the event payload under `data` (the
@@ -351,41 +309,36 @@ export function createV2InterviewBridge(
     if (!sessionID) return;
 
     const managed = isManagedInterviewSession(sessionID);
-    if (type === 'session.text.started') {
-      if (!managed) return;
-      const messageID = textMessageID(properties);
-      activeText.set(sessionID, '');
-      if (messageID) activeMessageIDs.set(sessionID, messageID);
-      beginText(sessionID, messageID);
-      return;
-    }
-    if (type === 'session.text.delta') {
-      if (!managed) return;
-      const text = `${activeText.get(sessionID) ?? ''}${typeof properties.delta === 'string' ? properties.delta : ''}`;
-      activeText.set(sessionID, text);
-      appendText(
-        sessionID,
-        text,
-        textMessageID(properties) ?? activeMessageIDs.get(sessionID),
-      );
-      return;
-    }
     if (type === 'session.text.ended') {
       if (!managed) return;
-      const text =
-        typeof properties.text === 'string'
-          ? properties.text
-          : (activeText.get(sessionID) ?? '');
-      const messageID =
-        textMessageID(properties) ?? activeMessageIDs.get(sessionID);
-      activeText.delete(sessionID);
-      activeMessageIDs.delete(sessionID);
-      appendText(sessionID, text, messageID);
+      const { assistantMessageID, ordinal, text } = properties;
+      if (
+        typeof assistantMessageID !== 'string' ||
+        typeof ordinal !== 'number' ||
+        !Number.isInteger(ordinal) ||
+        ordinal < 0 ||
+        typeof text !== 'string'
+      )
+        return;
+      const messages = transcripts.get(sessionID) ?? [];
+      let message = messages.find(
+        (item) =>
+          item.info?.role === 'assistant' &&
+          item.info.id === assistantMessageID,
+      );
+      if (!message) {
+        message = {
+          info: { role: 'assistant', id: assistantMessageID },
+          parts: [],
+        };
+        messages.push(message);
+      }
+      message.parts ??= [];
+      message.parts[ordinal] = { type: 'text', text };
+      transcripts.set(sessionID, messages);
       return;
     }
     if (type === 'session.deleted') {
-      activeText.delete(sessionID);
-      activeMessageIDs.delete(sessionID);
       transcripts.delete(sessionID);
       pendingNotices.delete(sessionID);
       await (dashboardManager ?? service).handleEvent({
@@ -436,8 +389,6 @@ export function createV2InterviewBridge(
     dispose: async () => {
       if (dashboardManager) await dashboardManager.dispose();
       server?.close();
-      activeText.clear();
-      activeMessageIDs.clear();
       commandContexts.clear();
       pendingNotices.clear();
       transcripts.clear();
