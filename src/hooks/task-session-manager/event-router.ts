@@ -14,7 +14,7 @@ import type { BackgroundJobSupervisor } from '../../utils/background-job-supervi
 import { structuredErrorMessage } from '../../utils/child-transcript';
 import { isRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
-import { readHostSessionInfo } from '../../utils/session-info-read';
+import { raceEvidenceDeadline, readHostSessionInfo } from '../../utils/session-info-read';
 import {
   isFailoverError,
   isInlineFailoverError,
@@ -224,10 +224,13 @@ async function adoptOrphanedChildRow(
   // was persisted (pre-persistence launch or a host restart that dropped
   // the row), read the child once from the host to recover its parent.
   if (!parentID && input) {
-    const response = await readHostSessionInfo(input, {
-      taskID: sessionID,
-      identity: 'orphan-parent',
-    });
+    const response = await raceEvidenceDeadline(
+      readHostSessionInfo(input, {
+        taskID: sessionID,
+        identity: 'orphan-parent',
+      }),
+      250,
+    );
     const data =
       isRecord(response) && isRecord(response.data) ? response.data : undefined;
     const resolvedParent =
