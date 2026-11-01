@@ -60,6 +60,11 @@ import {
 } from '../../utils/session';
 import type { ExperimentalV2, V2GenerateModelRef } from '../../v2/client-shim';
 import { isInternalAdmission } from '../../v2/internal-admissions';
+import {
+  isNoRouteAnchor,
+  noRouteModel,
+  noRouteOutcomeID,
+} from '../../v2/terminal-fallback';
 import type { SessionLifecycle } from '../session-lifecycle';
 import type { createBackgroundFallbackHandoff } from '../task-session-manager/fallback-observation-transfer';
 import { isReplayableUserMessage } from '../types';
@@ -84,8 +89,9 @@ type V2SwitchModel = NonNullable<ExperimentalV2['switchModel']>;
 type ChildOutcome = Promise<string | undefined>;
 type V2RefusalStep = {
   assistantMessageID: string;
+  baselineMessageID?: string;
   agent: string;
-  model: V2GenerateModelRef;
+  model: V2GenerateModelRef | undefined;
   epoch: number;
 };
 
@@ -437,6 +443,7 @@ function failoverScope(error: unknown): 'provider' | 'request' | undefined {
   // are request rejections (content filter / legal), not provider outages.
   if (
     nestedField(error, 'type') === 'provider.content-filter' ||
+    nestedField(error, 'type') === 'provider.no-route' ||
     statusCode === 410 ||
     statusCode === 421 ||
     statusCode === 451 ||
@@ -554,6 +561,8 @@ const HOST_CALL_TIMEOUT_MS = 2_000;
 const V1_OUTCOME_TIMEOUT_MS = 5_000;
 export const REFUSAL_CONTINUATION =
   "The previous response was stopped by the provider's content filter. Continue from where it stopped without repeating completed content.";
+export const NO_ROUTE_CONTINUATION =
+  'The selected model was unavailable. Continue the previous request using the fallback model.';
 /** The replay send's ack can lag after the host admitted it: wait as long as
  *  the tracker's own `promptAsync`, so a slow ack is not read as a refusal. */
 const REPLAY_SEND_TIMEOUT_MS = 10_000;
@@ -1056,6 +1065,9 @@ export class ForegroundFallbackManager {
     if (typeof entry.id !== 'string') return Promise.resolve(undefined);
     const existing = this.childOutcomes.get(`${sessionID}\0${entry.id}`);
     if (existing) return existing;
+    if (entry.type === 'no-route' && isRecord(entry.error)) {
+      return this.handleV2NoRoute(sessionID, entry.error, entry, true);
+    }
     if (
       entry.type !== 'assistant' ||
       entry.finish !== 'content-filter' ||
@@ -1649,6 +1661,22 @@ export class ForegroundFallbackManager {
       (this.input as PluginInput & { hostFlavor?: string }).hostFlavor === 'v2';
 
     switch (event.type) {
+      case 'session.execution.failed': {
+        if (!isV2Host) break;
+        const props = isRecord(event.data) ? event.data : event.properties;
+        if (
+          isRecord(props) &&
+          typeof props.sessionID === 'string' &&
+          isRecord(props.error) &&
+          props.error.type === 'provider.no-route' &&
+          typeof (rawEvent as { created?: unknown }).created === 'number'
+        ) {
+          await this.handleV2NoRoute(props.sessionID, props.error, {
+            time: { completed: (rawEvent as { created: number }).created },
+          });
+        }
+        break;
+      }
       case 'session.step.started': {
         if (!isV2Host) break;
         const props = isRecord(event.data) ? event.data : event.properties;
@@ -2237,7 +2265,7 @@ export class ForegroundFallbackManager {
 
   private async switchV2InPlace(
     sessionID: string,
-    from: string,
+    from: string | undefined,
     error: unknown,
     switchModel: V2SwitchModel,
   ): Promise<string | undefined> {
@@ -2323,6 +2351,153 @@ export class ForegroundFallbackManager {
     }
   }
 
+  private async handleV2NoRoute(
+    sessionID: string,
+    error: Record<string, unknown>,
+    entry: Record<string, unknown>,
+    fromWaiter = false,
+  ): Promise<string | undefined> {
+    if (
+      !this.retryEnabledFor(sessionID) ||
+      this.disposed ||
+      error.type !== 'provider.no-route' ||
+      typeof error.message !== 'string' ||
+      !isRecord(entry.time) ||
+      typeof entry.time.completed !== 'number' ||
+      !Number.isFinite(entry.time.completed) ||
+      entry.time.completed < this.startedAt
+    )
+      return;
+    const failedAt = entry.time.completed;
+    const epoch = this.turnEpoch.get(sessionID) ?? 0;
+    const background = this.readBackgroundGeneration?.(sessionID);
+    if (
+      !fromWaiter &&
+      this.sessionParent.has(sessionID) &&
+      background === undefined
+    )
+      return;
+    try {
+      const session = getClient(this.input).session;
+      const result = await withTimeout(
+        session.get({ path: { id: sessionID } }),
+        HOST_CALL_TIMEOUT_MS,
+        'foreground no-route session lookup timed out',
+      );
+      const data: unknown = result.data;
+      if (responseError(result) !== undefined || !isRecord(data)) return;
+      if (typeof data.parentID === 'string' && data.parentID) {
+        this.sessionParent.set(sessionID, data.parentID);
+        if (!fromWaiter && background === undefined) return;
+      }
+      let anchor = entry;
+      if (typeof anchor.id !== 'string') {
+        let history: { data?: unknown; error?: unknown };
+        try {
+          history = await withTimeout(
+            session.messages({ path: { id: sessionID } }),
+            HOST_CALL_TIMEOUT_MS,
+            'foreground no-route context lookup timed out',
+          );
+          if (
+            responseError(history) !== undefined ||
+            !Array.isArray(history.data)
+          )
+            throw new Error('foreground no-route context unavailable');
+        } catch (error) {
+          if (data.parentID) throw error;
+          history = await withTimeout(
+            session.messages({
+              path: { id: sessionID },
+              query: { limit: FALLBACK_REPLAY_TAIL_MESSAGES },
+            }),
+            HOST_CALL_TIMEOUT_MS,
+            'foreground no-route tail lookup timed out',
+          );
+        }
+        if (
+          responseError(history) !== undefined ||
+          !Array.isArray(history.data)
+        )
+          return;
+        const input = history.data.findLast(
+          (message: unknown) =>
+            isRecord(message) &&
+            isRecord(message.info) &&
+            isNoRouteAnchor(message.info.role, message.info.status),
+        );
+        if (!isRecord(input) || !isRecord(input.info)) return;
+        anchor = {
+          ...input.info,
+          baselineMessageID: input.info.id,
+          id:
+            typeof input.info.id === 'string'
+              ? noRouteOutcomeID(input.info.id, error.message)
+              : undefined,
+        };
+      }
+      if (
+        typeof anchor.id !== 'string' ||
+        !isRecord(anchor.time) ||
+        typeof anchor.time.created !== 'number' ||
+        anchor.time.created > failedAt ||
+        !this.isCurrentTurn(sessionID, epoch)
+      )
+        return;
+      const agent =
+        this.v2AgentName(
+          sessionID,
+          typeof data.agent === 'string'
+            ? data.agent
+            : typeof anchor.agent === 'string'
+              ? anchor.agent
+              : undefined,
+        ) ??
+        (await resolveSessionAgent(getClient(this.input), sessionID, {
+          directory: this.input.directory,
+        }));
+      if (!agent || !this.isCurrentTurn(sessionID, epoch)) return;
+      const current = isRecord(data.model) ? data.model : undefined;
+      const failure =
+        noRouteModel(error.message) ??
+        (typeof current?.providerID === 'string' &&
+        typeof current.id === 'string'
+          ? `${current.providerID}/${current.id}`
+          : this.sessionModel.get(sessionID));
+      const ref = failure ? parseModelReference(failure) : undefined;
+      const model = ref
+        ? {
+            providerID: ref.providerID,
+            id: ref.modelID,
+            ...(current?.providerID === ref.providerID &&
+            current.id === ref.modelID &&
+            typeof current.variant === 'string'
+              ? { variant: current.variant }
+              : {}),
+          }
+        : undefined;
+      return this.refusalOutcome(
+        sessionID,
+        {
+          assistantMessageID: anchor.id,
+          ...(typeof anchor.baselineMessageID === 'string'
+            ? { baselineMessageID: anchor.baselineMessageID }
+            : {}),
+          agent,
+          model,
+          epoch,
+        },
+        error,
+        undefined,
+      );
+    } catch (error) {
+      log('[foreground-fallback] v2 no-route lookup failed', {
+        sessionID,
+        error: stringifyError(error),
+      });
+    }
+  }
+
   private async handleV2Refusal(
     sessionID: string,
     step: V2RefusalStep,
@@ -2340,8 +2515,11 @@ export class ForegroundFallbackManager {
       !switchModel
     )
       return;
-    const from = `${step.model.providerID}/${step.model.id}`;
+    const from = step.model
+      ? `${step.model.providerID}/${step.model.id}`
+      : undefined;
     if (
+      from &&
       this.sessionTried.get(sessionID)?.has(from) &&
       this.sessionModel.get(sessionID) !== from
     )
@@ -2373,6 +2551,7 @@ export class ForegroundFallbackManager {
       if (
         (typeof data.agent === 'string' && data.agent !== step.agent) ||
         (current !== undefined &&
+          step.model !== undefined &&
           (!isRecord(current) ||
             current.providerID !== step.model.providerID ||
             current.id !== step.model.id ||
@@ -2385,7 +2564,19 @@ export class ForegroundFallbackManager {
         this.sessionParent.set(sessionID, data.parentID);
       }
       if (agent) this.sessionAgent.set(sessionID, agent);
-      this.sessionModel.set(sessionID, from);
+      if (from) this.sessionModel.set(sessionID, from);
+      if (
+        nestedField(error, 'type') === 'provider.no-route' &&
+        preparedGeneration !== undefined
+      ) {
+        handoffArmed =
+          this.backgroundFallbackHandoff?.prepare(
+            sessionID,
+            preparedGeneration,
+            step.baselineMessageID ?? step.assistantMessageID,
+          ) ?? false;
+        if (!handoffArmed) return;
+      }
       const nextModel = await this.switchV2InPlace(
         sessionID,
         from,
@@ -2396,18 +2587,21 @@ export class ForegroundFallbackManager {
         !nextModel ||
         this.disposed ||
         (this.turnEpoch.get(sessionID) ?? 0) !== epoch
-      )
+      ) {
+        if (handoffArmed)
+          this.backgroundFallbackHandoff?.reject(sessionID, preparedGeneration);
         return;
+      }
       if (data.parentID && preparedGeneration === undefined) {
         this.reattachPending.add(sessionID);
         return nextModel;
       }
-      handoffArmed =
+      handoffArmed ||=
         preparedGeneration !== undefined &&
         (this.backgroundFallbackHandoff?.prepare(
           sessionID,
           preparedGeneration,
-          step.assistantMessageID,
+          step.baselineMessageID ?? step.assistantMessageID,
         ) ??
           false);
       if (preparedGeneration !== undefined && !handoffArmed) return;
@@ -2416,7 +2610,13 @@ export class ForegroundFallbackManager {
           path: { id: sessionID },
           body: {
             agent: step.agent,
-            parts: [createInternalAgentTextPart(REFUSAL_CONTINUATION)],
+            parts: [
+              createInternalAgentTextPart(
+                nestedField(error, 'type') === 'provider.no-route'
+                  ? NO_ROUTE_CONTINUATION
+                  : REFUSAL_CONTINUATION,
+              ),
+            ],
           },
         }),
         HOST_CALL_TIMEOUT_MS,

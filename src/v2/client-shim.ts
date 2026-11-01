@@ -175,6 +175,7 @@ function toV1Message(m: Record<string, unknown>) {
       ...(typeof m.agent === 'string' ? { agent: m.agent } : {}),
       ...(typeof m.parentID === 'string' ? { parentID: m.parentID } : {}),
       ...(typeof m.outcome === 'string' ? { outcome: m.outcome } : {}),
+      ...(typeof m.status === 'string' ? { status: m.status } : {}),
       ...(time ? { time } : {}),
       ...(m.finish !== undefined ? { finish: m.finish } : {}),
       ...(m.rawFinish !== undefined ? { rawFinish: m.rawFinish } : {}),

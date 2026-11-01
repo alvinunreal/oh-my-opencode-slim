@@ -16,12 +16,18 @@
 
 import {
   type ForegroundFallbackManager,
+  NO_ROUTE_CONTINUATION,
   REFUSAL_CONTINUATION,
 } from '../hooks/foreground-fallback';
 import { isRecord } from '../utils/guards';
 import { log } from '../utils/logger';
 import { withTimeout } from '../utils/session';
 import { parseTaskResultFromOutput } from '../utils/task';
+import {
+  isNoRouteAnchor,
+  isNoRouteFailureMessage,
+  noRouteOutcomeID,
+} from './terminal-fallback';
 
 export type SubagentStructuredState =
   | 'running'
@@ -67,6 +73,7 @@ export async function readRefusalOutcome(
   outcome: NonNullable<SubagentExecutorWrapperOptions['refusalOutcome']>,
   sessionID: string,
   text?: string,
+  observedAt = Date.now(),
 ) {
   try {
     const history = await withTimeout(
@@ -74,6 +81,24 @@ export async function readRefusalOutcome(
       2_000,
       '[v2] refused child context lookup timed out',
     );
+    if (text && isNoRouteFailureMessage(text)) {
+      const input = Array.isArray(history)
+        ? history.findLast((entry) => isNoRouteAnchor(entry.type, entry.status))
+        : undefined;
+      if (!input || typeof input.id !== 'string') return;
+      const created = isRecord(input.time) ? input.time.created : input.time;
+      const entry = {
+        id: noRouteOutcomeID(input.id, text),
+        baselineMessageID: input.id,
+        type: 'no-route',
+        agent: input.agent,
+        error: { type: 'provider.no-route', message: text },
+        time: { created, completed: observedAt },
+      };
+      const model = await outcome(sessionID, entry);
+      if (model) return { id: entry.id, model, completedAt: observedAt };
+      return;
+    }
     const last = Array.isArray(history)
       ? history.findLast(
           (entry) =>
@@ -269,17 +294,24 @@ export function createSubagentExecutorWrapper(
               options.context &&
               options.refusalOutcome
             ) {
+              const failure = launch.result
+                ?.replace(HOST_FAILURE_MESSAGE_PATTERN, '')
+                .replace(/^:\s*/, '');
+              const noRoute = failure && isNoRouteFailureMessage(failure);
               const recovery = await readRefusalOutcome(
                 options.context,
                 options.refusalOutcome,
                 launch.childTaskID,
+                noRoute ? failure : undefined,
               );
               if (recovery && !retried.has(recovery.id)) {
                 retried.add(recovery.id);
                 const next: Record<string, unknown> = {
                   ...currentInput,
                   sessionID: launch.childTaskID,
-                  prompt: REFUSAL_CONTINUATION,
+                  prompt: noRoute
+                    ? NO_ROUTE_CONTINUATION
+                    : REFUSAL_CONTINUATION,
                 };
                 delete next.model;
                 currentInput = next;

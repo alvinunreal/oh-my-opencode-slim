@@ -647,6 +647,11 @@ export function createSessionContextHandler(
                   deps.refusalOutcome,
                   childID,
                   text,
+                  'time' in message.info &&
+                    isRecord(message.info.time) &&
+                    typeof message.info.time.created === 'number'
+                    ? message.info.time.created
+                    : undefined,
                 );
                 if (outcome !== null) {
                   recovery =

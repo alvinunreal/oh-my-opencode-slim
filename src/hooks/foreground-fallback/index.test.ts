@@ -13,6 +13,7 @@ import { BackgroundJobBoard } from '../../utils/background-job-board';
 import { createBackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
 import * as logger from '../../utils/logger';
 import { createTimerHarness } from '../../utils/test-timers';
+import { buildPluginInput } from '../../v2/client-shim';
 import { mapV2EventToV1 } from '../../v2/event-adapter';
 import { recordInternalAdmission } from '../../v2/internal-admissions';
 import { createSessionContextHandler } from '../../v2/setup';
@@ -2978,6 +2979,326 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
   const settle = async () => {
     for (let i = 0; i < 30; i++) await Promise.resolve();
   };
+
+  const noRoute = (sessionID: string, model = 'test/a') => ({
+    type: 'session.execution.failed',
+    created: Date.now(),
+    data: {
+      sessionID,
+      error: {
+        type: 'provider.no-route',
+        message: `Model unavailable: ${model}`,
+      },
+    },
+  });
+  function installV2History(history: Array<Record<string, unknown>>) {
+    const context = mock(async () => history);
+    const messages = mock(async ({ limit }: { limit: number }) => ({
+      data: history.slice(-limit).reverse(),
+    }));
+    const input = buildPluginInput({ session: { context, messages } } as never);
+    if (!currentMockSession) throw new Error('fixture session missing');
+    currentMockSession.messages = (
+      input.client as { session: { messages: unknown } }
+    ).session.messages;
+    return { context, messages };
+  }
+
+  test('v2 no-route continues a root after a long compacted turn', async () => {
+    const created = Date.now() - 60_000;
+    const history = [
+      {
+        id: 'compact',
+        type: 'compaction',
+        status: 'completed',
+        time: { created },
+      },
+      ...Array.from({ length: 50 }, (_, i) => ({
+        id: `step-${i}`,
+        type: 'assistant',
+        time: { created: created + i + 1 },
+      })),
+    ];
+    const { manager, mocks, switchModel } = fixture();
+    const host = installV2History(history);
+    for (const event of mapV2EventToV1(noRoute('root-no-route')))
+      await manager.handleEvent(event);
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
+      body: {
+        parts: [
+          expect.objectContaining({
+            text: expect.stringContaining('model was unavailable'),
+          }),
+        ],
+      },
+    });
+    expect(host.context).toHaveBeenCalled();
+    expect(host.messages).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  test('v2 root no-route falls back to the bounded tail if context fails', async () => {
+    const { manager, mocks, switchModel } = fixture();
+    const host = installV2History([
+      { id: 'user', type: 'user', time: { created: Date.now() - 1 } },
+    ]);
+    host.context.mockImplementationOnce(async () => {
+      throw new Error('context unavailable');
+    });
+    for (const event of mapV2EventToV1(noRoute('root-tail')))
+      await manager.handleEvent(event);
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(host.messages).toHaveBeenCalledWith({
+      sessionID: 'root-tail',
+      limit: 50,
+      order: 'desc',
+    });
+    manager.dispose();
+  });
+
+  test('v2 foreground reattaches after a retry selects an unavailable route', async () => {
+    const childID = 'child-no-route';
+    const created = Date.now() - 60_000;
+    const history = [
+      {
+        id: 'compact-child',
+        type: 'compaction',
+        status: 'completed',
+        time: { created },
+      },
+      ...Array.from({ length: 50 }, (_, i) => ({
+        id: `step-${i}`,
+        type: 'assistant',
+        time: { created: created + i + 1 },
+      })),
+    ];
+    const { manager, mocks, switchModel, durable } = fixture({
+      parentID: 'parent',
+      chains: { orchestrator: ['test/a', 'test/b', 'test/c'] },
+    });
+    const host = installV2History(history);
+    switchModel.mockImplementation(async (_id, model) => {
+      durable.id = (model as { id: string }).id;
+      durable.variant = 'default';
+    });
+    await manager.handleEvent({
+      type: 'session.created',
+      properties: { info: { id: childID, parentID: 'parent' } },
+    });
+    await manager.handleV2Retry(
+      retryEvent(childID, 'a', { retry: true, delay: 2_000 }),
+      switchModel,
+    );
+    const result = {
+      output: { sessionID: childID, status: 'completed' },
+      content: 'CHILD_OK',
+    };
+    const execute = mock(async () => {
+      if (execute.mock.calls.length === 1) {
+        for (const event of mapV2EventToV1(noRoute(childID, 'test/b')))
+          await manager.handleEvent(event);
+        throw new Error(
+          `Subagent failed (sessionID: ${childID}): Model unavailable: test/b`,
+        );
+      }
+      return result;
+    });
+    const wrapper = createSubagentExecutorWrapper({
+      register: () => {},
+      context: host.context,
+      refusalOutcome: (...args) => manager.refusedChildOutcome(...args),
+    });
+    expect(
+      await wrapper.wrap(execute)(
+        { agent: 'orchestrator', model: 'test/a' },
+        { id: 'call', sessionID: 'parent' },
+      ),
+    ).toBe(result);
+    expect(switchModel).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute.mock.calls[1]?.[0]).toMatchObject({
+      sessionID: childID,
+      prompt: expect.stringContaining('model was unavailable'),
+    });
+    expect(execute.mock.calls[1]?.[0]).not.toHaveProperty('model');
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  test('v2 no-route falls back when the session has no selected model', async () => {
+    const { manager, mocks, switchModel, info } = fixture();
+    info.model = undefined;
+    installV2History([
+      {
+        id: 'user',
+        type: 'user',
+        agent: 'orchestrator',
+        time: { created: Date.now() - 1 },
+      },
+    ]);
+    const event = noRoute('no-selected-model');
+    event.data.error.message =
+      'No model is available for session no-selected-model';
+    for (const mapped of mapV2EventToV1(event))
+      await manager.handleEvent(mapped);
+    expect(switchModel).toHaveBeenCalledWith('no-selected-model', {
+      providerID: 'test',
+      id: 'b',
+      variant: 'high',
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    manager.dispose();
+  });
+
+  test('v2 unmanaged child no-route does not switch or continue', async () => {
+    const { manager, mocks, switchModel } = fixture({ parentID: 'parent' });
+    installV2History([
+      { id: 'user', type: 'user', time: { created: Date.now() } },
+    ]);
+    await manager.handleEvent({
+      type: 'session.created',
+      properties: { info: { id: 'unmanaged', parentID: 'parent' } },
+    });
+    for (const event of mapV2EventToV1(noRoute('unmanaged')))
+      await manager.handleEvent(event);
+    await settle();
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  test('v2 foreground leaves no-route untouched when the wrapper cannot read context', async () => {
+    const childID = 'child-context-failed';
+    const { manager, switchModel } = fixture({ parentID: 'parent' });
+    await manager.handleEvent({
+      type: 'session.created',
+      properties: { info: { id: childID, parentID: 'parent' } },
+    });
+    const failure = new Error(
+      `Subagent failed (sessionID: ${childID}): Model unavailable: test/a`,
+    );
+    const wrapper = createSubagentExecutorWrapper({
+      register: () => {},
+      context: async () => {
+        throw new Error('context unavailable');
+      },
+      refusalOutcome: (...args) => manager.refusedChildOutcome(...args),
+    });
+    const execute = wrapper.wrap(async () => {
+      for (const event of mapV2EventToV1(noRoute(childID)))
+        await manager.handleEvent(event);
+      throw failure;
+    });
+    await expect(execute({}, { id: 'call', sessionID: 'parent' })).rejects.toBe(
+      failure,
+    );
+    expect(switchModel).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  test('v2 background no-route keeps the handoff and corrects its notice', async () => {
+    const childID = 'background-no-route';
+    const created = Date.now() - 1_000;
+    const board = new BackgroundJobBoard();
+    const run = board.registerLaunch({
+      taskID: childID,
+      parentSessionID: 'parent',
+      agent: 'orchestrator',
+      background: true,
+    });
+    const tracker = createRevivedRunTracker({
+      input: { directory: '/test', client: {} } as never,
+      backgroundJobBoard: board,
+      terminalGate: {
+        reconcile: async () => ({ kind: 'deferred', record: run }),
+      } as never,
+    });
+    const prepare = spyOn(tracker, 'prepareObservation');
+    const { manager, mocks, switchModel } = fixture({
+      parentID: 'parent',
+      handoff: createBackgroundFallbackHandoff({
+        backgroundJobBoard: board,
+        revivedRunTracker: tracker,
+      }),
+      readBackgroundGeneration: () => run.generation,
+    });
+    const host = installV2History([
+      {
+        id: 'compact-background',
+        type: 'compaction',
+        status: 'completed',
+        time: { created },
+      },
+    ]);
+    const text = `<subagent sessionID="${childID}" state="error">\nModel unavailable: test/a\n</subagent>`;
+    const notice = {
+      id: 'notice',
+      type: 'synthetic',
+      text,
+      time: { created: Date.now() },
+    };
+    const handler = createSessionContextHandler({
+      interviewHandleContext: async () => {},
+      messagesTransform: async () => {},
+      sessionContext: async (id) =>
+        id === 'parent' ? [notice] : host.context(),
+      backgroundGeneration: () => run.generation,
+      refusalOutcome: (...args) => manager.refusedChildOutcome(...args),
+    });
+    const event = {
+      sessionID: 'parent',
+      agent: 'orchestrator',
+      model: {},
+      system: [],
+      tools: {},
+      messages: [
+        { id: notice.id, role: 'user', content: [{ type: 'text', text }] },
+      ],
+    };
+    for (const mapped of mapV2EventToV1(noRoute(childID)))
+      await manager.handleEvent(mapped);
+    await handler(event as never);
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.promptAsync.mock.calls.filter(
+        ([args]) => (args as { path: { id: string } }).path.id === childID,
+      ),
+    ).toHaveLength(1);
+    expect(tracker.isTracked(childID, run.generation)).toBe(true);
+    expect(prepare).toHaveBeenCalledWith(
+      expect.objectContaining({ baselineMessageID: 'compact-background' }),
+    );
+    expect(event.messages[0].content[0].text).toBe(text);
+    expect(event.messages.at(-1)?.content[0].text).toContain('test/b');
+    manager.dispose();
+  });
+
+  test('v2 background no-route does not switch without an armed handoff', async () => {
+    const handoff = {
+      prepare: mock(() => false),
+      admit: mock(() => false),
+      reject: mock(() => {}),
+      settleUnresolved: mock(() => {}),
+    };
+    const { manager, mocks, switchModel } = fixture({
+      parentID: 'parent',
+      handoff,
+      readBackgroundGeneration: () => 1,
+    });
+    installV2History([
+      { id: 'user', type: 'user', time: { created: Date.now() - 1 } },
+    ]);
+    for (const mapped of mapV2EventToV1(noRoute('background-unarmed')))
+      await manager.handleEvent(mapped);
+    expect(handoff.prepare).toHaveBeenCalledTimes(1);
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    manager.dispose();
+  });
 
   test('v2 foreground re-attach keeps request rejections', async () => {
     const { manager, switchModel } = fixture({
