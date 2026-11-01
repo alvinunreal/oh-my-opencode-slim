@@ -2627,6 +2627,77 @@ describe('createV2Setup e2e', () => {
     }
   });
 
+  test('a child request preserves the explicitly selected variant settings', async () => {
+    await mkdir(path.join(projectDir, '.opencode'), { recursive: true });
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        preset: 'team',
+        presets: {
+          team: {
+            explorer: {
+              model: 'openai/gpt-5.2',
+              variant: 'low',
+              temperature: 0.1,
+              options: { reasoningEffort: 'low', serviceTier: 'priority' },
+            },
+          },
+        },
+      }),
+    );
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    ctx.session.get = async ({ sessionID }) => ({
+      id: sessionID,
+      directory: projectDir,
+      ...(sessionID === 'child'
+        ? {
+            parentID: 'root',
+            agent: 'explorer',
+            model: { providerID: 'openai', id: 'gpt-5.2', variant: 'high' },
+          }
+        : { agent: 'orchestrator' }),
+    });
+    Object.assign(ctx, {
+      model: {
+        list: async () => ({
+          data: [
+            {
+              providerID: 'openai',
+              id: 'gpt-5.2',
+              variants: [{ id: 'high', settings: { reasoningEffort: 'high' } }],
+            },
+          ],
+        }),
+      },
+    });
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      await calls.promptHookCb?.({
+        sessionID: 'child',
+        messageID: 'message',
+        prompt: { text: 'hello' },
+      });
+      const event = {
+        sessionID: 'child',
+        agent: 'explorer',
+        model: { providerID: 'openai', id: 'gpt-5.2', variant: 'high' },
+        options: { maxTokens: 32000 },
+        system: [],
+        messages: [],
+        tools: {},
+      };
+      await calls.contextHookCb?.(event);
+      expect(event.options).toEqual({
+        maxTokens: 32000,
+        temperature: 0.1,
+        serviceTier: 'priority',
+      });
+    } finally {
+      await cleanup();
+    }
+  });
+
   test('v2 primary requests receive startup inference settings', async () => {
     await mkdir(path.join(projectDir, '.opencode'), { recursive: true });
     await Bun.write(

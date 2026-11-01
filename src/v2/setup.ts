@@ -3472,6 +3472,68 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         const sessionContextRead = contextRead
           ? (sessionID: string) => contextRead({ sessionID })
           : undefined;
+        const variantCompatibleOptions = async (
+          options: Record<string, unknown>,
+          modelRef: V2SessionContextEvent['model'],
+          owner: 'primary' | 'child',
+        ): Promise<Record<string, unknown>> => {
+          const { providerID, id, variant } = modelRef;
+          if (
+            !Object.keys(options).length ||
+            !variant ||
+            variant === 'default'
+          ) {
+            return options;
+          }
+          try {
+            const catalog = ctx.model?.list
+              ? await withTimeout(
+                  ctx.model.list(),
+                  2_000,
+                  'Model variant lookup timed out',
+                )
+              : undefined;
+            const models =
+              isRecord(catalog) && Array.isArray(catalog.data)
+                ? catalog.data
+                : [];
+            const model = models.find(
+              (entry) =>
+                isRecord(entry) &&
+                entry.providerID === providerID &&
+                entry.id === id,
+            );
+            const selected =
+              isRecord(model) && Array.isArray(model.variants)
+                ? model.variants.find(
+                    (entry: unknown) => isRecord(entry) && entry.id === variant,
+                  )
+                : undefined;
+            if (isRecord(selected) && selected.settings === undefined) {
+              return options;
+            }
+            if (
+              isRecord(selected) &&
+              isRecord(selected.settings) &&
+              !Array.isArray(selected.settings)
+            ) {
+              return withoutVariantSettings(options, selected.settings);
+            }
+            log(`[v2] ${owner} options omitted: model variant unavailable`, {
+              providerID,
+              modelID: id,
+              variant,
+            });
+          } catch (err) {
+            log(`[v2] ${owner} options omitted: model variant lookup failed`, {
+              providerID,
+              modelID: id,
+              variant,
+              error: String(err),
+            });
+          }
+          return {};
+        };
         const handler = createSessionContextHandler({
           // Interview marker bridge (transcript projection + /interview);
           // a no-op when the interview subsystem is disabled by config.
@@ -3507,67 +3569,24 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             );
             const binding = sessionPresets.peek(event.sessionID);
             if (profile) {
-              applyRuntimeProfileOptions(event, profile, binding);
+              const providerOptions = await variantCompatibleOptions(
+                profile.providerOptions ?? {},
+                event.model,
+                'child',
+              );
+              applyRuntimeProfileOptions(
+                event,
+                { ...profile, providerOptions },
+                binding,
+              );
             } else if (!binding?.parentID && isRecord(event.options)) {
               const primary = primaryRequestOptions.get(event.agent);
               if (!primary) return;
-              let options = primary.options;
-              const { providerID, id, variant } = event.model;
-              if (
-                Object.keys(options).length > 0 &&
-                variant &&
-                variant !== 'default'
-              ) {
-                options = {};
-                try {
-                  const catalog = ctx.model?.list
-                    ? await withTimeout(
-                        ctx.model.list(),
-                        2_000,
-                        'Model variant lookup timed out',
-                      )
-                    : undefined;
-                  const models =
-                    isRecord(catalog) && Array.isArray(catalog.data)
-                      ? catalog.data
-                      : [];
-                  const model = models.find(
-                    (entry) =>
-                      isRecord(entry) &&
-                      entry.providerID === providerID &&
-                      entry.id === id,
-                  );
-                  const selected =
-                    isRecord(model) && Array.isArray(model.variants)
-                      ? model.variants.find(
-                          (entry: unknown) =>
-                            isRecord(entry) && entry.id === variant,
-                        )
-                      : undefined;
-                  if (isRecord(selected) && selected.settings === undefined) {
-                    options = primary.options;
-                  } else if (
-                    isRecord(selected) &&
-                    isRecord(selected.settings) &&
-                    !Array.isArray(selected.settings)
-                  ) {
-                    options = withoutVariantSettings(
-                      primary.options,
-                      selected.settings,
-                    );
-                  } else {
-                    log(
-                      '[v2] primary options omitted: model variant unavailable',
-                      { providerID, modelID: id, variant },
-                    );
-                  }
-                } catch (err) {
-                  log(
-                    '[v2] primary options omitted: model variant lookup failed',
-                    { providerID, modelID: id, variant, error: String(err) },
-                  );
-                }
-              }
+              const options = await variantCompatibleOptions(
+                primary.options,
+                event.model,
+                'primary',
+              );
               Object.assign(event.options, options);
               if (primary.temperature !== undefined) {
                 event.options.temperature = primary.temperature;
