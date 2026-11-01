@@ -32,7 +32,7 @@ async function makeTempDir(prefix = 'interview-test-'): Promise<string> {
 function createMockContext(overrides?: {
   directory?: string;
   messagesData?: Array<{
-    info?: { role: string };
+    info?: { role: string; id?: string };
     parts?: Array<{ type: string; text?: string }>;
   }>;
   promptImpl?: (args: any) => Promise<unknown>;
@@ -156,6 +156,47 @@ function createRuntimeEnv(
 }
 
 describe('interview service', () => {
+  test('reads new state after older messages are compacted', async () => {
+    const tempDir = await makeTempDir();
+    const id = (counter: string) => `msg_00000000000${counter}AAAAAAAAAAAAAA`;
+    const messages = ['1', '2', '3'].map((counter) => ({
+      info: { role: 'user', id: id(counter) },
+      parts: [{ type: 'text', text: 'Earlier message' }],
+    }));
+    try {
+      const service = createInterviewService(
+        createMockContext({ directory: tempDir, messagesData: messages }),
+        { printState: true },
+      );
+      service.setBaseUrlResolver(async () => 'http://localhost:9999');
+      await service.handleCommandExecuteBefore(
+        {
+          command: 'interview',
+          sessionID: 'ses-compacted',
+          arguments: 'Compacted interview',
+        },
+        { parts: [] },
+      );
+      messages.splice(0, 2);
+      messages.push({
+        info: { role: 'assistant', id: id('4') },
+        parts: [
+          {
+            type: 'text',
+            text: '<interview_state>{"summary":"New specification","questions":[{"id":"q-1","question":"Which platform?","options":[]}]}</interview_state>',
+          },
+        ],
+      });
+      const interviewId = service.getActiveInterviewId(
+        'ses-compacted',
+      ) as string;
+      expect(
+        (await service.getInterviewState(interviewId)).questions[0]?.question,
+      ).toBe('Which platform?');
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
   describe('/interview <idea> command', () => {
     test('creates interview and sends kickoff prompt with UI notification', async () => {
       const tempDir = await makeTempDir();

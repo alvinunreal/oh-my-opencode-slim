@@ -178,6 +178,17 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function lastHostMessageID(messages: InterviewMessage[]): string | undefined {
+  // Both supported hosts generate ascending msg_ IDs; synthetic IDs use another prefix.
+  return [...messages]
+    .reverse()
+    .map((message) => message.info?.id)
+    .find(
+      (id): id is string =>
+        typeof id === 'string' && /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(id),
+    );
+}
+
 export function createInterviewService(
   ctx: PluginInput,
   config?: InterviewConfig,
@@ -461,6 +472,7 @@ export function createInterviewService(
       createdAt: nowIso(),
       status: 'active',
       baseMessageCount: messages.length,
+      baseMessageID: lastHostMessageID(messages),
     };
 
     await withInterviewDocumentLock(record.markdownPath, () =>
@@ -509,6 +521,7 @@ export function createInterviewService(
       status: 'active',
       completed: frontmatter?.status === 'complete',
       baseMessageCount: messages.length,
+      baseMessageID: lastHostMessageID(messages),
     };
 
     if (record.completed) {
@@ -748,9 +761,21 @@ export function createInterviewService(
       };
     }
     const allMessages = await loadMessages(interview.sessionID);
-    const interviewMessages = allMessages
-      .slice(interview.baseMessageCount)
-      .filter(isUserVisibleMessage);
+    const baseMessageID = interview.baseMessageID;
+    const baseIndex = baseMessageID
+      ? allMessages.findIndex((message) => message.info?.id === baseMessageID)
+      : -1;
+    const interviewMessages = (
+      baseIndex >= 0
+        ? allMessages.slice(baseIndex + 1)
+        : baseMessageID
+          ? allMessages.filter(
+              (message) =>
+                typeof message.info?.id === 'string' &&
+                message.info.id > baseMessageID,
+            )
+          : allMessages.slice(interview.baseMessageCount)
+    ).filter(isUserVisibleMessage);
     const latestAssistant = [...interviewMessages]
       .reverse()
       .find((message) => message.info?.role === 'assistant');

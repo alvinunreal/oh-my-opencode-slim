@@ -195,3 +195,5 @@
   releases its documents under the document lock.
 - New documents retain a hash of their original idea so the owning session can
   find them after a restart even if the displayed title changed.
+- Transcript boundaries use the last host-generated ascending message ID;
+  the previous message count remains a fallback when IDs are unavailable.
