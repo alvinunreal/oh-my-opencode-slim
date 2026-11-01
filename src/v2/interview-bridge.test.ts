@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { bindFreePort } from '../interview/test-port';
+import { isInternalAdmission } from './internal-admissions';
 import { createV2InterviewBridge, markerText } from './interview-bridge';
 
 function createContext(overrides?: {
@@ -109,28 +110,17 @@ describe('v2 interview bridge', () => {
     restarted.dispose();
   });
 
-  test('propagates v2 prompt failures through interview continuation', async () => {
-    const prompt = mock(async () => {
-      throw new Error('prompt rejected');
+  test('propagates v2 synthetic failures through interview continuation', async () => {
+    const synthetic = mock(async () => {
+      throw new Error('synthetic rejected');
     });
-    const bridge = createV2InterviewBridge(createContext({ prompt }), {
+    const bridge = createV2InterviewBridge(createContext({ synthetic }), {
       outputFolder: `.tmp-v2-prompt-error-${Date.now()}`,
     } as never);
 
     await expect(
       bridge.runtime.continue('ses_prompt_error', 'Continue.'),
-    ).rejects.toThrow('prompt rejected');
-    bridge.dispose();
-  });
-
-  test('rejects continuation when v2 prompt is unavailable', async () => {
-    const bridge = createV2InterviewBridge(createContext(), {
-      outputFolder: `.tmp-v2-prompt-missing-${Date.now()}`,
-    } as never);
-
-    await expect(
-      bridge.runtime.continue('ses_prompt_missing', 'Continue.'),
-    ).rejects.toThrow('session.prompt is unavailable');
+    ).rejects.toThrow('synthetic rejected');
     bridge.dispose();
   });
 
@@ -352,7 +342,7 @@ describe('v2 interview bridge', () => {
     bridge.dispose();
   });
 
-  test('continue preserves the session live agent instead of forcing orchestrator', async () => {
+  test('continue admits a tracked synthetic update without switching agents', async () => {
     const calls: Array<{ method: string; input: Record<string, unknown> }> = [];
     const track =
       (method: string) =>
@@ -364,15 +354,27 @@ describe('v2 interview bridge', () => {
       session: {
         get: async () => ({ agent: 'coworker' }),
         prompt: track('prompt'),
+        synthetic: track('synthetic'),
         switchAgent: track('switchAgent'),
       },
     } as never);
 
     await bridge.runtime.continue('ses_c', 'go on');
-    expect(calls).toContainEqual({
-      method: 'switchAgent',
-      input: { sessionID: 'ses_c', agent: 'coworker' },
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({
+      method: 'synthetic',
+      input: {
+        sessionID: 'ses_c',
+        id: expect.any(String),
+        text: 'go on',
+        description: 'Interview update',
+        resume: true,
+      },
     });
+    expect(isInternalAdmission('ses_c', calls[0].input.id as string)).toBe(
+      true,
+    );
+    bridge.dispose();
   });
 
   test('runtime methods probe the v2 session domain with flat inputs', async () => {
@@ -398,16 +400,6 @@ describe('v2 interview bridge', () => {
       // resume:false = admit the interview URL without waking the session
       // (v1's noReply prompt equivalent; no agent turn, no double-send).
       input: { sessionID: 'ses_n', text: 'ready', resume: false },
-    });
-
-    await bridge.runtime.continue('ses_c', 'go on');
-    expect(calls).toContainEqual({
-      method: 'switchAgent',
-      input: { sessionID: 'ses_c', agent: 'orchestrator' },
-    });
-    expect(calls).toContainEqual({
-      method: 'prompt',
-      input: { sessionID: 'ses_c', text: 'go on' },
     });
 
     await bridge.runtime.rename('ses_r', 'Interview: x');

@@ -161,6 +161,8 @@
   lifecycle idle boundaries.
 - The v2 bridge replays command expansions for each context rebuild without
   re-running interview side effects; uncached historical markers lose their tags.
+- v2 service turns use tracked synthetic admissions and retain the session's
+  current agent without emitting an agent-switch event.
 - Uses OpenCode SDK session APIs for messages, prompts, and status events.
 - Uses local HTTP server contracts for:
   - dashboard browsing,

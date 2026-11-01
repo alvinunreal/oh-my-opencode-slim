@@ -7,11 +7,11 @@ import { createInterviewServer } from '../interview/server';
 import { createInterviewService } from '../interview/service';
 import type { InterviewMessage } from '../interview/types';
 import { log } from '../utils/logger';
-import {
-  type OpencodeClient,
-  resolveSessionAgent,
-} from '../utils/prompt-agent';
 import { createSessionListShim, resolveV2Directory } from './client-shim';
+import {
+  createInternalSyntheticMessageID,
+  recordInternalAdmission,
+} from './internal-admissions';
 import { resolveV2EventPayload } from './runtime-profiles';
 import {
   createSessionSubmit,
@@ -111,30 +111,18 @@ export function createV2InterviewBridge(
       }
     },
     continue: async (sessionID, text) => {
-      // Keep the session's live agent so a declared primary's interview is
-      // not re-homed to the orchestrator (same resolution rule as the v1
-      // runtime: session identity probe, orchestrator when unknown).
-      const probeClient = {
-        session: {
-          get: (args: { path: { id: string } }) =>
-            methods.get?.({ sessionID: args.path.id }),
-        },
-      } as unknown as OpencodeClient;
-      const agent =
-        (await resolveSessionAgent(probeClient, sessionID)) ?? 'orchestrator';
-      // Best-effort switch to the session's agent, then a flat prompt.
-      try {
-        await methods.switchAgent?.({ sessionID, agent });
-      } catch (err) {
-        log('[v2][interview] switchAgent failed (best-effort)', {
-          sessionID,
-          err: String(err),
-        });
+      if (typeof methods.synthetic !== 'function') {
+        throw new Error('session.synthetic is unavailable');
       }
-      if (typeof methods.prompt !== 'function') {
-        throw new Error('session.prompt is unavailable');
-      }
-      await methods.prompt({ sessionID, text });
+      const id = createInternalSyntheticMessageID();
+      recordInternalAdmission(sessionID, id);
+      await methods.synthetic({
+        sessionID,
+        id,
+        text,
+        description: 'Interview update',
+        resume: true,
+      });
     },
     rename: async (sessionID, title) => {
       // Renames go through session.update({sessionID, title}).
