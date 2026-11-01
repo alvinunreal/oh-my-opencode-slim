@@ -360,22 +360,6 @@ export function createInterviewService(
     return sessionRuntime.messages(sessionID);
   }
 
-  async function loadMessagesWithRetry(
-    sessionID: string,
-  ): Promise<InterviewMessage[]> {
-    for (let i = 0; i < 8; i++) {
-      const messages = await loadMessages(sessionID);
-      if (messages.length > 0) {
-        const last = messages[messages.length - 1];
-        if (last?.info?.role === 'assistant') {
-          return messages;
-        }
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-    return loadMessages(sessionID);
-  }
-
   function isUserVisibleMessage(message: InterviewMessage): boolean {
     return !(message.parts ?? []).some((part) => isInternalInitiatorPart(part));
   }
@@ -541,16 +525,13 @@ export function createInterviewService(
     return record;
   }
 
-  function syncInterview(
-    interview: InterviewRecord,
-    retryMessages = true,
-  ): Promise<InterviewState> {
+  function syncInterview(interview: InterviewRecord): Promise<InterviewState> {
     const existing = activeSyncs.get(interview.id);
     if (existing) {
       return existing;
     }
 
-    const sync = performSyncInterview(interview, retryMessages).finally(() => {
+    const sync = performSyncInterview(interview).finally(() => {
       activeSyncs.delete(interview.id);
     });
     activeSyncs.set(interview.id, sync);
@@ -750,7 +731,6 @@ export function createInterviewService(
 
   async function performSyncInterview(
     interview: InterviewRecord,
-    retryMessages = true,
   ): Promise<InterviewState> {
     if (interview.status !== 'active') {
       const document = await readInterviewDocument(interview);
@@ -770,9 +750,7 @@ export function createInterviewService(
         blocks: parseSpecBlocks(document),
       };
     }
-    const allMessages = retryMessages
-      ? await loadMessagesWithRetry(interview.sessionID)
-      : await loadMessages(interview.sessionID);
+    const allMessages = await loadMessages(interview.sessionID);
     const interviewMessages = allMessages
       .slice(interview.baseMessageCount)
       .filter(isUserVisibleMessage);
@@ -1106,11 +1084,10 @@ export function createInterviewService(
 
     // Apply any state still present in stored text (printState mode, a missed
     // text.complete hook, or the v2 fallback) before choosing the notice.
-    // Non-retrying: the turn is over, so a missing assistant message is real.
     const turn = turnFor(sessionID);
     if (!turn.noticeHandled) {
       try {
-        await syncInterview(interview, false);
+        await syncInterview(interview);
       } catch (error) {
         log('[interview] turn-end sync failed', {
           interviewId: interview.id,

@@ -89,8 +89,7 @@ async function startInterview(
   );
   const interviewId = harness.service.getActiveInterviewId(sessionID);
   expect(interviewId).not.toBeNull();
-  // A stored assistant message keeps loadMessagesWithRetry from spinning in
-  // tests; it carries no <interview_state> block on purpose.
+  // The assistant message carries no <interview_state> block on purpose.
   harness.messages.push({
     info: { role: 'assistant' },
     parts: [{ type: 'text', text: 'Working on it.' }],
