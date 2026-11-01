@@ -19,6 +19,7 @@ import type {
   MarketplaceAgentMetadata,
   MarketplaceRegistryImplementation,
 } from '../marketplace/registry-runtime';
+import type { MarketplaceSkillRequirements } from '../marketplace/skills';
 import { normalizeAgentName } from '../utils/agent-variant';
 import { adaptPermissions, v1PermKeyToV2 } from '../v2/adapters';
 import {
@@ -43,6 +44,7 @@ export interface ResolvedAgentRegistry {
   readonly agentNames: readonly string[];
   readonly marketplaceAgentNames: readonly string[];
   readonly marketplacePackages: readonly MarketplaceLivePackage[];
+  readonly marketplaceRequiredSkills: readonly MarketplaceSkillRequirements[];
   readonly identities: Readonly<Record<string, string>>;
   readonly modelCandidates: Readonly<
     Record<string, readonly { id: string; variant?: string }[]>
@@ -121,7 +123,7 @@ export interface RegistryBuildOptions {
     readonly selectedPackageIds: readonly string[];
     readonly store: MarketplaceActivationStore;
     readonly pluginVersion: string;
-    readonly availableSkillNames: readonly string[];
+    readonly availableSkillNames?: readonly string[];
   };
 }
 
@@ -234,6 +236,45 @@ function normalizePermission(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function nativeEditPermission(
+  existing: Record<string, unknown>,
+  tools: readonly string[],
+): unknown {
+  const rules = [
+    existing.edit,
+    ...tools
+      .filter((tool) => tool === 'write' || tool === 'apply_patch')
+      .map((tool) => existing[tool]),
+  ].filter((rule) => rule !== undefined);
+  if (rules.length === 0) return permissionEffect(existing, 'edit');
+  if (rules.some((rule) => rule === 'deny')) return 'deny';
+  const maps = rules.filter(
+    (rule): rule is Record<string, unknown> =>
+      !!rule && typeof rule === 'object' && !Array.isArray(rule),
+  );
+  // Distinct path maps cannot be safely intersected as one native edit rule.
+  if (
+    rules.some(
+      (rule) =>
+        rule !== 'allow' &&
+        rule !== 'ask' &&
+        !maps.includes(rule as Record<string, unknown>),
+    ) ||
+    maps.some((rule) => JSON.stringify(rule) !== JSON.stringify(maps[0]))
+  ) {
+    return 'deny';
+  }
+  if (maps.length > 0) {
+    return Object.fromEntries(
+      Object.entries(maps[0]).map(([pattern, effect]) => [
+        pattern,
+        rules.includes('ask') && effect === 'allow' ? 'ask' : effect,
+      ]),
+    );
+  }
+  return rules.includes('ask') ? 'ask' : 'allow';
+}
+
 function projectMarketplacePermission(
   existing: Record<string, unknown>,
   tools: readonly string[],
@@ -249,6 +290,9 @@ function projectMarketplacePermission(
     if (existingRule && typeof existingRule === 'object') {
       projected[tool] = clone(existingRule);
     }
+  }
+  if (tools.some((tool) => tool === 'write' || tool === 'apply_patch')) {
+    projected.edit = nativeEditPermission(existing, tools);
   }
   // `external_directory` is a native safety guard, not a manifest tool
   // capability: it is never in `tools`, never inferred from a tool grant or
@@ -339,6 +383,7 @@ function marketplacePermissionCeilings(
     external_directory: 'allow',
   };
   for (const tool of tools) {
+    if (tool === 'write' || tool === 'apply_patch') actions.edit = 'allow';
     if (tool === 'bash') {
       for (const { action } of v1PermKeyToV2(tool)) actions[action] = 'allow';
     } else if ((MARKETPLACE_TOOL_NAMES as readonly string[]).includes(tool)) {
@@ -948,6 +993,7 @@ export function buildResolvedAgentRegistry(
   const marketplaceMetadata = new Map<string, MarketplaceAgentMetadata>();
   let marketplaceSkillDefaults: Record<string, readonly string[]> = {};
   let marketplacePackages: MarketplaceLivePackage[] = [];
+  let marketplaceRequiredSkills: MarketplaceSkillRequirements[] = [];
   if (options.marketplace?.selectedPackageIds.length) {
     const customOwnerNames = new Set(runtime.customAgentNames);
     const reservedAgentNames = new Set<string>([
@@ -981,6 +1027,10 @@ export function buildResolvedAgentRegistry(
         disabledMcpNames: runtime.disabledMcps,
         reservedAgentNames,
       });
+    marketplaceRequiredSkills = plan.agents.map((admission) => ({
+      packageId: admission.packageId,
+      skills: [...admission.requiredSkills],
+    }));
     marketplacePackages = plan.agents.map((admission) => ({
       id: admission.packageId,
       runtimeName: admission.agentName,
@@ -1762,6 +1812,7 @@ export function buildResolvedAgentRegistry(
     agentNames: Object.freeze(definitions.map((definition) => definition.name)),
     marketplaceAgentNames: Object.freeze([...marketplaceMetadata.keys()]),
     marketplacePackages: freeze(clone(frozenMarketplacePackages)),
+    marketplaceRequiredSkills: freeze(clone(marketplaceRequiredSkills)),
     identities: frozenIdentities,
     modelCandidates: frozenCandidates,
     marketplaceManifestChains: freeze(marketplaceManifestChains),

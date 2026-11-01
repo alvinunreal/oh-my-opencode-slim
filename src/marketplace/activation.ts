@@ -1,8 +1,12 @@
 import { DEFAULT_AGENT_MCPS } from '../config/agent-mcps.js';
 import { normalizeAgentName } from '../utils/agent-variant.js';
 import { satisfiesPluginCompatibility } from './compatibility.js';
-import { MarketplaceCompatibilityError } from './errors.js';
+import {
+  MarketplaceBusyError,
+  MarketplaceCompatibilityError,
+} from './errors.js';
 import { normalizeMarketplacePackageId } from './ids.js';
+import { hasImmediateMarketplaceLeases } from './lease.js';
 import { ambiguousMcpNamespaces } from './mcp-namespaces.js';
 import {
   type ActivatedMarketplacePackageManifest,
@@ -10,8 +14,6 @@ import {
   type MarketplacePackageManifest,
 } from './schemas.js';
 import type { StoredMarketplacePackage } from './store.js';
-
-export { ambiguousMcpNamespaces } from './mcp-namespaces.js';
 
 export type MarketplaceDiagnosticCode =
   | 'invalid-selection'
@@ -63,7 +65,7 @@ export interface ResolveMarketplaceActivationOptions {
   readonly selectedPackageIds: readonly string[];
   readonly store: MarketplaceActivationStore;
   readonly pluginVersion: string;
-  readonly availableSkillNames: readonly string[];
+  readonly availableSkillNames?: readonly string[];
   readonly availableMcpNames: readonly string[];
   readonly disabledSkillNames?: readonly string[];
   readonly disabledMcpNames?: readonly string[];
@@ -184,6 +186,11 @@ export function resolveMarketplaceActivation(
     try {
       loaded = options.store.loadSelected([...normalizedIds].sort());
     } catch (cause) {
+      if (
+        cause instanceof MarketplaceBusyError &&
+        hasImmediateMarketplaceLeases()
+      )
+        throw cause;
       storeLoadFailed = true;
       const message = cause instanceof Error ? cause.message : String(cause);
       diagnostics.push(
@@ -192,7 +199,7 @@ export function resolveMarketplaceActivation(
     }
   }
   const skills = new Set(
-    options.availableSkillNames.filter(
+    (options.availableSkillNames ?? []).filter(
       (name) => !options.disabledSkillNames?.includes(name),
     ),
   );
@@ -267,7 +274,11 @@ export function resolveMarketplaceActivation(
       : [];
     const requiredMcps = [...new Set([...inheritedMcps, ...manifest.mcps])];
     const inheritedMcpSet = new Set(inheritedMcps);
-    const missingSkills = manifest.skills.filter((name) => !skills.has(name));
+    const missingSkills = manifest.skills.filter(
+      (name) =>
+        options.disabledSkillNames?.includes(name) ||
+        (options.availableSkillNames !== undefined && !skills.has(name)),
+    );
     const missingMcps = requiredMcps.filter((name) => !mcps.has(name));
     if (missingSkills.length || missingMcps.length) {
       diagnostics.push(

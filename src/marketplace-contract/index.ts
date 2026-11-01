@@ -510,6 +510,19 @@ export interface MarketplaceRegistrySelector {
   version?: string;
 }
 
+export class MarketplaceRegistryUpToDateError extends Error {}
+
+function upToDateRegistryPackageError(
+  selector: MarketplaceRegistrySelector,
+  minimumVersion: string | undefined,
+): MarketplaceRegistryUpToDateError | undefined {
+  return minimumVersion === undefined
+    ? undefined
+    : new MarketplaceRegistryUpToDateError(
+        `Marketplace package ${selector.id}@${minimumVersion} is already up to date`,
+      );
+}
+
 function incompatibleRegistryPackageError(
   selector: MarketplaceRegistrySelector,
   entries: readonly {
@@ -600,6 +613,17 @@ export function resolveMarketplaceRegistryEntry(
       minimumVersion,
     );
     if (incompatible) throw incompatible;
+    const upToDate = upToDateRegistryPackageError(selector, minimumVersion);
+    if (
+      upToDate &&
+      index.entries.some(
+        (entry) =>
+          entry.id === selector.id &&
+          (selector.version === undefined ||
+            entry.version === selector.version),
+      )
+    )
+      throw upToDate;
     throw new Error(
       `No compatible marketplace package found for ${selector.id}${selector.version ? `@${selector.version}` : ''}`,
     );
@@ -636,6 +660,17 @@ export function resolveMarketplaceRegistryEntryV3(
       minimumVersion,
     );
     if (incompatible) throw incompatible;
+    const upToDate = upToDateRegistryPackageError(selector, minimumVersion);
+    if (
+      upToDate &&
+      index.entries.some(
+        (entry) =>
+          entry.id === selector.id &&
+          (selector.version === undefined ||
+            entry.version === selector.version),
+      )
+    )
+      throw upToDate;
     throw new Error(
       `No compatible marketplace v3 package found for ${selector.id}${selector.version ? `@${selector.version}` : ''}`,
     );

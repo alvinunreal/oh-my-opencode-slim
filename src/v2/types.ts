@@ -262,6 +262,7 @@ export interface V2Context {
     readonly list?: (input?: unknown) => Promise<unknown>;
   };
   skill?: {
+    list?: () => Promise<unknown>;
     transform(
       cb: (draft: {
         add(skill: unknown): void;

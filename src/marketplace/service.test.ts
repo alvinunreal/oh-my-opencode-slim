@@ -22,6 +22,10 @@ import type { MarketplaceRegistryDownload } from './registry-client.js';
 import type { MarketplacePackageBundle } from './schemas.js';
 import { MarketplaceService } from './service.js';
 
+function readStoredLockfile(store: MarketplaceService['store']) {
+  return JSON.parse(readFileSync(store.paths.lockfilePath, 'utf8'));
+}
+
 const tempDirs: string[] = [];
 const originalConfigHome = process.env.XDG_CONFIG_HOME;
 
@@ -701,9 +705,9 @@ describe('MarketplaceService', () => {
       } finally {
         unlink.mockRestore();
       }
-      expect(service.store.getLockfile().packages['community/example']).toBe(
-        undefined,
-      );
+      expect(
+        readStoredLockfile(service.store).packages['community/example'],
+      ).toBe(undefined);
       expect(
         existsSync(
           join(service.store.paths.packagesDir, 'community', 'example'),
@@ -770,7 +774,7 @@ describe('MarketplaceService', () => {
           'community/example',
         );
         expect(
-          service.store.getLockfile().packages['community/example'],
+          readStoredLockfile(service.store).packages['community/example'],
         ).toBeUndefined();
         expect(
           existsSync(
@@ -792,6 +796,54 @@ describe('MarketplaceService', () => {
       else process.env.XDG_CONFIG_HOME = previousConfigHome;
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test('uninstall removes inherited project selections from a nested directory', () => {
+    const root = tempRoot();
+    const project = join(root, 'project');
+    const nested = join(project, 'packages', 'app');
+    const ancestorConfig = join(
+      project,
+      '.opencode',
+      'oh-my-opencode-slim.json',
+    );
+    const localConfig = join(nested, '.opencode', 'oh-my-opencode-slim.json');
+    process.env.XDG_CONFIG_HOME = join(root, 'config');
+    mkdirSync(join(project, '.git'), { recursive: true });
+    mkdirSync(join(project, '.opencode'), { recursive: true });
+    mkdirSync(join(nested, '.opencode'), { recursive: true });
+    writeFileSync(
+      ancestorConfig,
+      JSON.stringify({
+        preset: 'work',
+        presets: { work: { marketplace: { agents: ['community/example'] } } },
+      }),
+    );
+    writeFileSync(
+      localConfig,
+      JSON.stringify({
+        presets: {
+          work: { marketplace: { agents_add: ['community/example'] } },
+        },
+      }),
+    );
+    const service = new MarketplaceService({
+      rootDir: join(root, 'store'),
+      projectDir: nested,
+      pluginVersion: '3.5.0',
+    });
+    service.install(bundle());
+    expect(service.status().desiredPackageIds).toEqual(['community/example']);
+
+    service.uninstallGlobal('community/example', true);
+
+    expect(service.status().desiredPackageIds).toEqual([]);
+    expect(readFileSync(ancestorConfig, 'utf8')).not.toContain(
+      'community/example',
+    );
+    expect(readFileSync(localConfig, 'utf8')).not.toContain(
+      'community/example',
+    );
   });
 
   test('cleans references for a package that is already absent', () => {

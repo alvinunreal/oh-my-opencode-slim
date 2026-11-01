@@ -240,10 +240,6 @@ export class MarketplaceStore {
     this.paths = getMarketplacePaths(options.rootDir);
   }
 
-  getLockfile(): MarketplaceLockfile {
-    return this.withLease(() => this.readLockfile());
-  }
-
   install(
     input: MarketplacePackageBundle,
     source: MarketplaceSource = { kind: 'in-memory', label: 'programmatic' },

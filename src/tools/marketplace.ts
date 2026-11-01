@@ -1,6 +1,8 @@
 import { resolve } from 'node:path';
 import { type ToolDefinition, tool } from '@opencode-ai/plugin';
+import { retryMarketplaceLeases } from '../marketplace/lease';
 import type { MarketplaceService } from '../marketplace/service';
+import type { StoredMarketplacePackage } from '../marketplace/store';
 import { normalizeAgentName } from '../utils/agent-variant';
 
 const z = tool.schema;
@@ -21,11 +23,22 @@ const MANAGE_ACTIONS = [
   'disable',
 ] as const;
 
+function summarizePackage(stored: StoredMarketplacePackage) {
+  return {
+    id: stored.manifest.id,
+    version: stored.manifest.version,
+    name: stored.manifest.displayName,
+    source: stored.source,
+    digest: stored.digest,
+  };
+}
+
 export interface MarketplaceToolOptions {
   readonly service: MarketplaceService;
   readonly orchestratorIdentities?: ReadonlySet<string>;
   readonly getOrchestratorIdentities?: () => ReadonlySet<string>;
   readonly cwd?: string;
+  readonly readSkillIds?: () => Promise<readonly string[]>;
 }
 
 export function resolveFinalizedOrchestratorIdentities(input: {
@@ -116,26 +129,48 @@ export function createMarketplaceTools(options: MarketplaceToolOptions): {
       ) {
         throw new Error(`${args.action} does not accept a target`);
       }
-      switch (args.action) {
-        case 'list':
-          return JSON.stringify(options.service.list(), null, 2);
-        case 'show':
-          return JSON.stringify(
-            options.service.show(args.target?.trim() ?? ''),
-            null,
-            2,
-          );
-        case 'verify':
-          return JSON.stringify(
-            options.service.verify(args.target?.trim()),
-            null,
-            2,
-          );
-        case 'status':
-          return JSON.stringify(options.service.status(), null, 2);
-        case 'request_reload':
-          return JSON.stringify(options.service.requestReload(), null, 2);
+      let availableSkillNames: readonly string[] | undefined;
+      if (args.action === 'status' || args.action === 'request_reload') {
+        try {
+          availableSkillNames = await options.readSkillIds?.();
+        } catch {
+          // An unavailable inventory remains unknown, not an empty catalog.
+        }
       }
+      return retryMarketplaceLeases(() => {
+        switch (args.action) {
+          case 'list':
+            return JSON.stringify(
+              options.service.list().map(summarizePackage),
+              null,
+              2,
+            );
+          case 'show':
+            return JSON.stringify(
+              options.service.show(args.target?.trim() ?? ''),
+              null,
+              2,
+            );
+          case 'verify':
+            return JSON.stringify(
+              options.service.verify(args.target?.trim()),
+              null,
+              2,
+            );
+          case 'status':
+            return JSON.stringify(
+              options.service.status(availableSkillNames),
+              null,
+              2,
+            );
+          case 'request_reload':
+            return JSON.stringify(
+              options.service.requestReload(availableSkillNames),
+              null,
+              2,
+            );
+        }
+      }, context?.abort);
     },
   });
 
@@ -172,41 +207,54 @@ export function createMarketplaceTools(options: MarketplaceToolOptions): {
       ) {
         throw new Error('scope is only supported by enable and disable');
       }
-      let result: unknown;
-      switch (args.action) {
-        case 'install':
-          result = await options.service.installRemote(target, context?.abort);
-          break;
-        case 'import':
-          result = options.service.importFile(resolve(cwd, target));
-          break;
-        case 'update':
-          result = await options.service.updateRemote(target, context?.abort);
-          break;
-        case 'update_file':
-          result = options.service.updateFile(resolve(cwd, target));
-          break;
-        case 'uninstall':
-          if (args.acknowledge_other_projects !== true) {
-            throw new Error(
-              'uninstall requires acknowledge_other_projects: true because other projects are not inspected',
+      const executeAction = async () => {
+        let result: unknown;
+        switch (args.action) {
+          case 'install':
+            result = summarizePackage(
+              await options.service.installRemote(target, context?.abort),
             );
-          }
-          result = options.service.uninstallGlobal(
-            target,
-            args.acknowledge_other_projects,
-          );
-          break;
-        case 'enable':
-          options.service.enable(target, args.scope ?? 'project');
-          result = { enabled: true };
-          break;
-        case 'disable':
-          options.service.disable(target, args.scope ?? 'project');
-          result = { enabled: false };
-          break;
-      }
-      return JSON.stringify(result, null, 2);
+            break;
+          case 'import':
+            result = summarizePackage(
+              options.service.importFile(resolve(cwd, target)),
+            );
+            break;
+          case 'update':
+            result = summarizePackage(
+              await options.service.updateRemote(target, context?.abort),
+            );
+            break;
+          case 'update_file':
+            result = summarizePackage(
+              options.service.updateFile(resolve(cwd, target)),
+            );
+            break;
+          case 'uninstall':
+            if (args.acknowledge_other_projects !== true) {
+              throw new Error(
+                'uninstall requires acknowledge_other_projects: true because other projects are not inspected',
+              );
+            }
+            result = options.service.uninstallGlobal(
+              target,
+              args.acknowledge_other_projects,
+            );
+            break;
+          case 'enable':
+            options.service.enable(target, args.scope ?? 'project');
+            result = { enabled: true };
+            break;
+          case 'disable':
+            options.service.disable(target, args.scope ?? 'project');
+            result = { enabled: false };
+            break;
+        }
+        return JSON.stringify(result, null, 2);
+      };
+      return args.action === 'install' || args.action === 'update'
+        ? executeAction()
+        : retryMarketplaceLeases(executeAction, context?.abort);
     },
   });
   return { marketplace_inspect, marketplace_manage };
