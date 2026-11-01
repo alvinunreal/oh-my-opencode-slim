@@ -45,6 +45,8 @@ const MAX_KNOWN_COMPANION_PROJECTS = 64;
 const PRESET_REFRESH_EVERY_TICKS = 4;
 const POLL_INTERVAL_MS = 250;
 const STATE_PUBLISH_RETRY_MS = 250;
+const STATE_REMOVE_RETRY_MS = 25;
+const STATE_REMOVE_RETRIES = 20;
 const HARD_PRESET_REFRESH_WARNING_KINDS: ReadonlySet<ConfigLoadWarningKind> =
   new Set(['invalid-json', 'invalid-schema', 'read-error']);
 
@@ -424,17 +426,20 @@ export class CompanionManager {
   private readonly id: string;
   private readonly cwd: string;
   private status = 'idle';
-  /** sessionId → agent name, for sessions currently busy. */
-  private readonly busyAgentSessions = new Map<string, string>();
-  private readonly sessionDetails = new Map<
+  private readonly sessions = new Map<
     string,
-    { model?: string; variant?: string }
+    {
+      busy: boolean;
+      agent?: string;
+      model?: string;
+      variant?: string;
+      waits?: Set<string>;
+    }
   >();
-  private orchestratorSessionId: string | undefined;
-  private orchestratorBusy = false;
   private attentionSeq = 0;
   private lastAttentionRequestId: string | undefined;
   private readonly config?: CompanionConfig;
+  private retired = false;
   private companionProcess: ChildProcess | null = null;
   private spawnChecked = false;
   private wasSpawner = false;
@@ -736,13 +741,17 @@ export class CompanionManager {
           // The frozen snapshot handed out above may have been consumed by
           // the switch; the memoized known-project row is persisted JSON, so
           // clone the derived objects to keep the cache private.
-          current: cloneConfigValue(next?.effective ?? known.preset?.current),
+          current: cloneConfigValue(
+            next ? next.effective : known.preset?.current,
+          ),
           available: next?.projectAvailable ?? known.preset?.available ?? [],
           effective: cloneConfigValue(
-            next?.effective ?? known.preset?.effective,
+            next ? next.effective : known.preset?.effective,
           ),
-          project: cloneConfigValue(next?.project ?? known.preset?.project),
-          global: cloneConfigValue(next?.global ?? known.preset?.global),
+          project: cloneConfigValue(
+            next ? next.project : known.preset?.project,
+          ),
+          global: cloneConfigValue(next ? next.global : known.preset?.global),
           project_available:
             next?.projectAvailable ?? known.preset?.project_available ?? [],
           global_available:
@@ -814,6 +823,7 @@ export class CompanionManager {
   }
 
   private disposeForReplacement(): void {
+    this.retired = true;
     if (this.presetPoller) {
       clearInterval(this.presetPoller);
       this.presetPoller = null;
@@ -834,8 +844,8 @@ export class CompanionManager {
 
   /**
    * Feed every session.status event here, with the agent name resolved
-   * from sessionAgentMap. Orchestrator sessions drive overall status;
-   * specialist sessions drive the per-agent GIF grid.
+   * from sessionAgentMap. All active sessions contribute to project status;
+   * specialists take priority over orchestrators in the per-agent GIF grid.
    */
   onSessionStatus(input: {
     sessionId?: string;
@@ -848,35 +858,37 @@ export class CompanionManager {
     const { sessionId, agent, status, jobFinished } = input;
     if (!sessionId || (status !== 'busy' && status !== 'idle')) return;
 
-    if (agent === 'orchestrator') {
-      this.orchestratorSessionId = sessionId;
-      this.orchestratorBusy = status === 'busy';
-      // A pending input request is cleared only by its explicit reply/reject
-      // event, not by ordinary lifecycle noise from the same session.
-      if (this.status !== 'waiting-input') {
-        this.status = status;
-      }
-      this.flush();
-      return;
-    }
-
+    const previous = this.sessions.get(sessionId);
     if (status === 'busy') {
       // A busy event that trails a finished job would never be followed by
       // an idle one, leaving the specialist stuck on screen.
       if (jobFinished) return;
-      // Accept busy sessions even without a known agent name — Herdr
-      // subagents (spawned via opencode attach) often lack the agent
-      // field, and dropping the event leaves them shown as idle. Fall back
-      // to the generic busy name, never the raw session ID, which would
-      // reach the companion as an unrenderable agent name.
-      this.busyAgentSessions.set(sessionId, agent ?? 'orchestrator');
+      this.sessions.set(sessionId, {
+        ...previous,
+        agent: agent ?? previous?.agent,
+        busy: true,
+      });
+    } else if ((agent ?? previous?.agent) === 'orchestrator') {
+      this.sessions.set(sessionId, {
+        agent: 'orchestrator',
+        model: previous?.model,
+        variant: previous?.variant,
+        busy: false,
+      });
     } else {
-      // Remove by session even when the agent name is unknown, so a
-      // finished specialist can never get stuck on screen.
-      this.busyAgentSessions.delete(sessionId);
-      this.sessionDetails.delete(sessionId);
+      this.sessions.delete(sessionId);
     }
+    this.updateActivityStatus();
     this.flush();
+  }
+
+  private updateActivityStatus(): void {
+    const sessions = [...this.sessions.values()];
+    this.status = sessions.some((session) => session.waits?.size)
+      ? 'waiting-input'
+      : sessions.some((session) => session.busy)
+        ? 'busy'
+        : 'idle';
   }
 
   onSessionModelChanged(input: {
@@ -889,7 +901,7 @@ export class CompanionManager {
     const { sessionId, model, variant, variantObserved = false } = input;
     if (!sessionId || (!model && !variant)) return;
 
-    const previous = this.sessionDetails.get(sessionId);
+    const previous = this.sessions.get(sessionId);
     const nextModel = model ?? previous?.model;
     // A model change without an observed live variant must clear the previous
     // variant. For the same model, a model-only telemetry update preserves the
@@ -904,14 +916,13 @@ export class CompanionManager {
       return;
     }
 
-    this.sessionDetails.set(sessionId, {
+    this.sessions.set(sessionId, {
+      ...previous,
+      busy: previous?.busy ?? false,
       ...(nextModel ? { model: nextModel } : {}),
-      ...(nextVariant ? { variant: nextVariant } : {}),
+      variant: nextVariant,
     });
-    if (
-      this.busyAgentSessions.has(sessionId) ||
-      this.orchestratorSessionId === sessionId
-    ) {
+    if (previous?.busy) {
       this.flush();
     }
   }
@@ -919,49 +930,67 @@ export class CompanionManager {
   onSessionDeleted(sessionId: string | undefined): void {
     if (this.config?.enabled !== true) return;
     if (!sessionId) return;
-    const removed = this.busyAgentSessions.delete(sessionId);
-    this.sessionDetails.delete(sessionId);
-    const wasOrchestrator = this.orchestratorSessionId === sessionId;
-    if (wasOrchestrator) {
-      this.orchestratorSessionId = undefined;
-      this.orchestratorBusy = false;
-    }
-    if (removed || wasOrchestrator) {
+    if (this.sessions.delete(sessionId)) {
+      this.updateActivityStatus();
       this.flush();
     }
   }
 
-  onWaitingInput(requestId?: string): void {
-    if (this.config?.enabled !== true) return;
+  onWaitingInput(input: {
+    sessionId?: string;
+    kind: 'permission' | 'question';
+    requestId?: string;
+  }): void {
+    if (this.config?.enabled !== true || !input.sessionId) return;
+    const { sessionId, kind, requestId } = input;
+    const previous = this.sessions.get(sessionId);
+    const waits = previous?.waits ?? new Set<string>();
+    const key = `${kind}:${requestId ?? ''}`;
     // v2 permission asks are delivered raw + synthesized with the same request
     // id. Advance only for a genuinely new request so additive bridge delivery
     // cannot produce duplicate native notifications.
     const isNewRequest =
-      requestId !== undefined
-        ? requestId !== this.lastAttentionRequestId
-        : this.status !== 'waiting-input';
+      !waits.has(key) &&
+      (this.status === 'waiting-input' ||
+        (requestId !== undefined
+          ? requestId !== this.lastAttentionRequestId
+          : true));
     if (isNewRequest) {
       this.attentionSeq += 1;
     }
     if (requestId !== undefined) {
       this.lastAttentionRequestId = requestId;
     }
-    // Waiting input is project-level UI state, not proof that the requesting
-    // session is the orchestrator. Keep orchestrator identity untouched.
-    this.status = 'waiting-input';
+    waits.add(key);
+    this.sessions.set(sessionId, {
+      ...previous,
+      busy: previous?.busy ?? false,
+      waits,
+    });
+    this.updateActivityStatus();
     this.flush();
   }
 
-  onInputResolved(): void {
-    if (this.config?.enabled !== true) return;
-    this.status =
-      this.busyAgentSessions.size > 0 || this.orchestratorBusy
-        ? 'busy'
-        : 'idle';
+  onInputResolved(input: {
+    sessionId?: string;
+    kind: 'permission' | 'question';
+    requestId?: string;
+  }): void {
+    if (this.config?.enabled !== true || !input.sessionId) return;
+    const session = this.sessions.get(input.sessionId);
+    if (!session?.waits?.delete(`${input.kind}:${input.requestId ?? ''}`))
+      return;
+    if (!session.busy && session.waits.size === 0) {
+      if (session.agent === 'orchestrator') delete session.waits;
+      else this.sessions.delete(input.sessionId);
+    }
+    this.updateActivityStatus();
     this.flush();
   }
 
-  onExit(): void {
+  onExit(): boolean {
+    if (this.retired) return true;
+    this.retired = true;
     if (this.presetPoller) {
       clearInterval(this.presetPoller);
       this.presetPoller = null;
@@ -979,14 +1008,10 @@ export class CompanionManager {
       }
       activeExitListener = null;
     }
-    if (this.config?.enabled !== true) return;
-    writeState((state) => {
-      state.sessions = state.sessions.filter((s) => s.session_id !== this.id);
-      state.preset_requests = (state.preset_requests ?? []).filter(
-        (request) => request.session_id !== this.id,
-      );
-      if (state.preset_requests.length === 0) delete state.preset_requests;
-    });
+    if (this.config?.enabled !== true) return true;
+    if ([...activeManagers].some((manager) => manager.id === this.id))
+      return true;
+    const removed = this.removeSessionState();
     if (this.wasSpawner && this.removeOwnedPidFileIfNoSessionsRemain()) {
       if (this.companionProcess) {
         try {
@@ -997,6 +1022,31 @@ export class CompanionManager {
       }
     }
     this.companionProcess = null;
+    return removed;
+  }
+
+  async dispose(): Promise<void> {
+    if (this.onExit()) return;
+    for (let attempt = 0; attempt < STATE_REMOVE_RETRIES; attempt++) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, STATE_REMOVE_RETRY_MS),
+      );
+      if ([...activeManagers].some((manager) => manager.id === this.id)) return;
+      if (this.removeSessionState()) return;
+    }
+    log('[companion] state removal failed during disposal', {
+      sessionId: this.id,
+    });
+  }
+
+  private removeSessionState(): boolean {
+    return writeState((state) => {
+      state.sessions = state.sessions.filter((s) => s.session_id !== this.id);
+      state.preset_requests = (state.preset_requests ?? []).filter(
+        (request) => request.session_id !== this.id,
+      );
+      if (state.preset_requests.length === 0) delete state.preset_requests;
+    });
   }
 
   private removeOwnedPidFileIfNoSessionsRemain(): boolean {
@@ -1023,7 +1073,7 @@ export class CompanionManager {
   }
 
   private detailFor(sessionId: string, agent: string): CompanionAgentDetail {
-    const detail = this.sessionDetails.get(sessionId);
+    const detail = this.sessions.get(sessionId);
     return {
       session_id: sessionId,
       agent,
@@ -1033,13 +1083,19 @@ export class CompanionManager {
   }
 
   private activeAgentDetails(): CompanionAgentDetail[] {
-    const details = [...this.busyAgentSessions.entries()]
+    const details = [...this.sessions.entries()]
+      .filter(([, session]) => session.busy && session.agent !== 'orchestrator')
       .slice(0, 9)
-      .map(([sessionId, agent]) => this.detailFor(sessionId, agent));
+      .map(([sessionId, session]) =>
+        this.detailFor(sessionId, session.agent ?? 'orchestrator'),
+      );
     if (details.length > 0) return details;
 
-    if (this.status === 'busy' && this.orchestratorSessionId) {
-      return [this.detailFor(this.orchestratorSessionId, 'orchestrator')];
+    const root = [...this.sessions.entries()].find(
+      ([, session]) => session.busy && session.agent === 'orchestrator',
+    );
+    if (this.status === 'busy' && root) {
+      return [this.detailFor(root[0], 'orchestrator')];
     }
 
     return [];
@@ -1047,7 +1103,9 @@ export class CompanionManager {
 
   /** One entry per running agent instance (two fixers → two cells). */
   private activeAgents(): string[] {
-    const agents = Array.from(this.busyAgentSessions.values());
+    const agents = [...this.sessions.values()]
+      .filter((session) => session.busy && session.agent !== 'orchestrator')
+      .map((session) => session.agent ?? 'orchestrator');
     if (agents.length > 0) return agents.slice(0, 9);
     if (this.status === 'waiting-input') return ['input'];
     if (this.status === 'busy') return ['orchestrator'];
@@ -1055,7 +1113,8 @@ export class CompanionManager {
   }
 
   private flush(): boolean {
-    if (this.config?.enabled !== true) return false;
+    if (this.config?.enabled !== true || !activeManagers.has(this))
+      return false;
     try {
       const entry: CompanionSession = {
         session_id: this.id,

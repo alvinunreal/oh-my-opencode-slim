@@ -86,13 +86,18 @@ OpenCode Session → CompanionManager.onSessionStatus() → Updates state → Sp
    - Updates internal state:
      - `busy` → adds agent to active_agents array
      - `idle` → removes agent from active_agents array
-     - `waiting-input` → sets status to waiting-input
-     - `input-resolved` → returns to busy/idle based on active agents
-   - Flushes state to JSON file
+     - Project status reflects all active sessions, with pending input taking priority
+    - Flushes state to JSON file
+
+   **Input requests** (`onWaitingInput()` / `onInputResolved()`)
+   - Track permissions and questions by session, kind, and request ID
+   - Keep `waiting-input` until all pending requests are resolved
+   - Drop a session's pending requests when that run terminates or is deleted
 
 3. **Session termination** (`CompanionManager.onSessionDeleted()`)
    - Removes session from active tracking
    - Updates companion display
+   - Logical manager disposal retries a contended state removal before returning; process-exit cleanup remains synchronous and best effort
 
 4. **State persistence** (`CompanionManager.flush()`)
    - Writes to `companion-state.json` with atomic rename
@@ -110,10 +115,12 @@ ensureCompanionVersion() → installCompanionArchive() → extract → validate 
    - Returns early if up-to-date
 
 2. **Download and install** (if outdated or missing)
+   - Startup installs asynchronously without delaying plugin availability, then starts the manager unless its generation was disposed
    - Fetches archive from GitHub releases
    - Validates SHA-256 checksum
    - Extracts tar.gz (Unix) or zip (Windows)
    - Copies binary to installation directory
+   - On Windows, moves the previous executable aside before replacement and retries old-image cleanup on later starts
    - Writes installation metadata
 
 3. **Error handling**

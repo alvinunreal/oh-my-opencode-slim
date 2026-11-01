@@ -394,6 +394,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   // v1). Survives the try block so prompt-assembly hooks can use it.
   let hostFlavor: string | undefined;
   let instanceDisposed = false;
+  let companionStartupAbort: AbortController | undefined;
   // v1 task() has no model override. Prompts claim these bounded intentions
   // from host state, never from asynchronous session.created delivery.
   const MAX_PENDING_V1_DELEGATED_INTENTS = 32;
@@ -1992,26 +1993,34 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
   }
 
-  if (runtime.companion?.enabled === true) {
-    try {
-      const { ensureCompanionVersion } = await import('./companion/updater');
-      const companionResult = await ensureCompanionVersion({
-        config: runtime.companion,
-        downloadTimeoutMs: 3_000,
-        lockTimeoutMs: 500,
-      });
-      if (companionResult.status === 'installed') {
-        log('[companion] updated before startup', companionResult.version);
-      } else if (companionResult.status === 'failed') {
-        log('[companion] startup update failed', companionResult.error);
-      }
-    } catch (err) {
-      log('[companion] startup update failed', String(err));
-    }
-  }
-
   if (companionManager) {
-    companionManager.onLoad();
+    if (runtime.companion?.binaryPath?.trim()) {
+      companionManager.onLoad();
+    } else {
+      const controller = new AbortController();
+      companionStartupAbort = controller;
+      void (async () => {
+        try {
+          const { ensureCompanionVersionForStartup } = await import(
+            './companion/updater'
+          );
+          const result = await ensureCompanionVersionForStartup(
+            runtime.companion,
+            controller.signal,
+          );
+          if (result.status === 'installed') {
+            log('[companion] startup update installed', result.version);
+          } else if (result.status === 'failed') {
+            log('[companion] startup update failed', result.error);
+          }
+        } catch (err) {
+          log('[companion] startup update failed', String(err));
+        } finally {
+          companionStartupAbort = undefined;
+        }
+        if (!instanceDisposed) companionManager?.onLoad();
+      })();
+    }
   } else {
     // Disabled: no manager, but still prune this session's stale entry
     // (and any manager a previous enabled load left running).
@@ -2909,6 +2918,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       withTuiSnapshotBatch(async () => {
         if (input.event.type === 'server.instance.disposed') {
           instanceDisposed = true;
+          companionStartupAbort?.abort();
           terminalGate?.dispose();
         }
         // Token streams have no work in this fan-out. The v2 Interview
@@ -2964,9 +2974,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // message id in info.id and the session id in info.sessionID. Resolve
         // by session so child activity refreshes the correct stuck timer.
         const eventSessionID = resolveEventSessionID(event);
-        // cache-monitor is created only when its disabled_hooks entry is
-        // absent; the optional chain keeps the event path fail-open either way.
-        await cacheMonitor?.event(input);
         const rawStatus = event.properties?.status;
         const statusType =
           typeof rawStatus === 'string'
@@ -2977,6 +2984,63 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
                 typeof (rawStatus as { type?: unknown }).type === 'string'
               ? (rawStatus as { type: string }).type
               : undefined;
+        // Publish before any awaited consumer can admit a newer run.
+        const companionProperties = event.properties;
+        const companionData = (
+          input.event as { data?: Record<string, unknown> }
+        ).data;
+        const companionRequestId =
+          typeof companionProperties?.id === 'string'
+            ? companionProperties.id
+            : typeof companionProperties?.requestID === 'string'
+              ? companionProperties.requestID
+              : typeof companionData?.id === 'string'
+                ? companionData.id
+                : typeof companionData?.requestID === 'string'
+                  ? companionData.requestID
+                  : undefined;
+
+        if (
+          event.type === 'permission.asked' ||
+          event.type === 'question.asked'
+        ) {
+          companionManager?.onWaitingInput({
+            sessionId: eventSessionID,
+            kind: event.type === 'permission.asked' ? 'permission' : 'question',
+            requestId: companionRequestId,
+          });
+        }
+
+        if (
+          event.type === 'permission.replied' ||
+          event.type === 'question.replied' ||
+          event.type === 'question.rejected'
+        ) {
+          companionManager?.onInputResolved({
+            sessionId: eventSessionID,
+            kind:
+              event.type === 'permission.replied' ? 'permission' : 'question',
+            requestId: companionRequestId,
+          });
+        }
+
+        const companionStatus = normalizeCompanionSessionStatus(
+          event.type,
+          statusType,
+        );
+        if (eventSessionID && companionStatus) {
+          const job = backgroundJobBoard?.get(eventSessionID);
+          companionManager?.onSessionStatus({
+            sessionId: eventSessionID,
+            agent: sessionMetadata.getAgent(eventSessionID),
+            status: companionStatus,
+            jobFinished: job !== undefined && job.state !== 'running',
+          });
+        }
+
+        // cache-monitor is created only when its disabled_hooks entry is
+        // absent; the optional chain keeps the event path fail-open either way.
+        await cacheMonitor?.event(input);
         if (
           eventSessionID &&
           sessionMetadata.getAgent(eventSessionID) === 'orchestrator' &&
@@ -3182,50 +3246,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           },
         );
 
-        const companionProperties = event.properties;
-        const companionData = (
-          input.event as { data?: Record<string, unknown> }
-        ).data;
-        const companionRequestId =
-          typeof companionProperties?.id === 'string'
-            ? companionProperties.id
-            : typeof companionProperties?.requestID === 'string'
-              ? companionProperties.requestID
-              : typeof companionData?.id === 'string'
-                ? companionData.id
-                : typeof companionData?.requestID === 'string'
-                  ? companionData.requestID
-                  : undefined;
-
-        if (
-          event.type === 'permission.asked' ||
-          event.type === 'question.asked'
-        ) {
-          companionManager?.onWaitingInput(companionRequestId);
-        }
-
-        if (
-          event.type === 'permission.replied' ||
-          event.type === 'question.replied' ||
-          event.type === 'question.rejected'
-        ) {
-          companionManager?.onInputResolved();
-        }
-
-        const companionStatus = normalizeCompanionSessionStatus(
-          event.type,
-          statusType,
-        );
-        if (eventSessionID && companionStatus) {
-          const job = backgroundJobBoard?.get(eventSessionID);
-          companionManager?.onSessionStatus({
-            sessionId: eventSessionID,
-            agent: sessionMetadata.getAgent(eventSessionID),
-            status: companionStatus,
-            jobFinished: job !== undefined && job.state !== 'running',
-          });
-        }
-
         if (input.event.type === 'session.deleted') {
           const props = input.event.properties as
             | { info?: { id?: string }; sessionID?: string }
@@ -3248,6 +3268,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // Synchronous: v2 setup calls this directly and does not emit the
       // public server.instance.disposed event first.
       instanceDisposed = true;
+      companionStartupAbort?.abort();
       registryBridge.retire();
       terminalGate?.dispose();
       // Cancel pending initial-delay fallback timers so a reloaded
@@ -3275,7 +3296,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // onLoad, and if it fails before that the detached companion would
       // survive until process exit. Idempotent (registerActiveManager's
       // replacement path and the process-exit listener tolerate repeats).
-      companionManager?.onExit();
+      await companionManager?.dispose();
       // Release only this generation's ownership. The admission runtime
       // defers final scheduler/tracker teardown by one macrotask so an
       // immediate config-update re-init can retain active and queued calls.
