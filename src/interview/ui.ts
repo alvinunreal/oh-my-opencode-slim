@@ -150,17 +150,8 @@ export function renderDashboardPage(
           })
           .join('\n');
 
-  // Dedup: skip files whose sessionID matches an active/recovered interview.
-  // These are already visible in the "Interviews" section above.
-  const activeSessionIDs = new Set(
-    interviews
-      .map((i) => i.sessionID)
-      .filter((sid): sid is string => typeof sid === 'string'),
-  );
-  const unrecoveredFiles = files.filter((f) => {
-    if (f.sessionID && activeSessionIDs.has(f.sessionID)) return false;
-    return true;
-  });
+  // Files with an owning session belong to that session, not the unowned list.
+  const unrecoveredFiles = files.filter((f) => !f.sessionID);
 
   const filesHtml =
     unrecoveredFiles.length === 0

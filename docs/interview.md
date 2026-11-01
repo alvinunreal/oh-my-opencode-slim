@@ -55,6 +55,8 @@ You can also resume by basename if it exists in the configured output folder:
 
 Resumed documents must contain the interview's `## Current spec` and
 `## Q&A history` sections; unrelated Markdown files are not modified.
+When an owning OpenCode session is deleted, its interview documents are released
+for another session to resume.
 
 ## What the TUI shows
 

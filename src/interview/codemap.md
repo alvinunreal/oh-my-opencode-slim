@@ -191,4 +191,5 @@
   request; other JSON requests retain the 64 KiB limit.
 - Markdown documents persist their owning `sessionID` in frontmatter. A
   different session cannot resume or mutate an owned document, while the
-  original session can resume it across plugin processes.
+  original session can resume it across plugin processes. Deleting the owner
+  releases its documents under the document lock.

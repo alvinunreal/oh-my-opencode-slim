@@ -31,6 +31,7 @@ import {
   parseSpecBlocks,
   readInterviewDocument,
   relativeInterviewPath,
+  releaseInterviewDocument,
   resolveExistingInterviewPath,
   rewriteInterviewDocument,
   withInterviewDocumentLock,
@@ -1741,6 +1742,38 @@ export function createInterviewService(
       sessionBusy.delete(deletedSessionId);
       sessionModel.delete(deletedSessionId);
       turnState.delete(deletedSessionId);
+      const outputDir = createInterviewDirectoryPath(
+        ctx.directory,
+        outputFolder,
+      );
+      const paths = new Set(
+        [...interviewsById.values()]
+          .filter((record) => record.sessionID === deletedSessionId)
+          .map((record) => record.markdownPath),
+      );
+      try {
+        for (const entry of await fs.readdir(outputDir)) {
+          if (entry.endsWith('.md')) paths.add(path.join(outputDir, entry));
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+          log('[interview] failed to scan deleted session documents', {
+            error: String(error),
+          });
+      }
+      for (const filePath of paths) {
+        try {
+          const content = await fs.readFile(filePath, 'utf8');
+          if (parseFrontmatter(content)?.sessionID === deletedSessionId)
+            await releaseInterviewDocument(filePath, deletedSessionId);
+        } catch (error) {
+          log('[interview] failed to release deleted session document', {
+            filePath,
+            error: String(error),
+          });
+        }
+      }
+      fileCache = null;
       const interviewId = activeInterviewIds.get(deletedSessionId);
       if (!interviewId) {
         return;
@@ -1794,6 +1827,7 @@ export function createInterviewService(
       } catch {
         continue;
       }
+      if (parseFrontmatter(content)?.sessionID) continue;
 
       const title = extractTitle(content) || entry.replace(/\.md$/, '');
       const summary = extractSummarySection(content) || '';

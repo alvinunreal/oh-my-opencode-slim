@@ -346,6 +346,19 @@ describe('interview finalization', () => {
     expect(await fs.readFile(documentPath, 'utf8')).toBe(ownedDocument);
     expect(await fs.readdir(path.dirname(documentPath))).toEqual(['shared.md']);
 
+    await firstService.handleEvent({
+      event: { type: 'session.deleted', properties: { sessionID: 'ses_one' } },
+    });
+    await secondService.handleCommandExecuteBefore(
+      { command: 'interview', sessionID: 'ses_two', arguments: documentPath },
+      { parts: [] },
+    );
+    expect(secondService.getActiveInterviewId('ses_two')).not.toBeNull();
+    expect(await fs.readFile(documentPath, 'utf8')).toContain(
+      'sessionID: ses_two',
+    );
+    expect(await fs.readFile(documentPath, 'utf8')).toContain('Draft.');
+
     await fs.rm(directory, { recursive: true, force: true });
   });
 

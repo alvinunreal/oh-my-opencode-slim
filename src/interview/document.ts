@@ -257,6 +257,25 @@ export async function claimInterviewDocument(
   });
 }
 
+export async function releaseInterviewDocument(
+  markdownPath: string,
+  sessionID: string,
+): Promise<void> {
+  await withInterviewDocumentLock(markdownPath, async () => {
+    const document = await fs.readFile(markdownPath, 'utf8');
+    if (parseFrontmatter(document)?.sessionID !== sessionID) return;
+    const next = document.replace(
+      /^---\r?\n[\s\S]*?\r?\n---\r?\n?/,
+      (frontmatter) =>
+        frontmatter.replace(
+          /^(?:sessionID|baseMessageCount):[^\r\n]*(?:\r?\n|$)/gm,
+          '',
+        ),
+    );
+    await fs.writeFile(markdownPath, next, 'utf8');
+  });
+}
+
 export function normalizeOutputFolder(outputFolder: string): string {
   const normalized = outputFolder.trim().replace(/^\/+|\/+$/g, '');
   return normalized || DEFAULT_OUTPUT_FOLDER;
