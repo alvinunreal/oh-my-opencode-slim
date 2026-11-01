@@ -15,7 +15,6 @@
  */
 
 import path from 'node:path';
-import { LRUCache } from 'lru-cache';
 import type { RegistryFactoryBridge } from '../agents/registry-bridge';
 import {
   buildBundledSkillInfos,
@@ -134,7 +133,8 @@ import {
 } from './session-presets';
 import {
   createSessionSubmit,
-  userTextFromContent,
+  replayMarkerExpansions,
+  type V1CommandBeforeHook,
   type V2CommandSubmit,
 } from './session-submit';
 import {
@@ -155,27 +155,6 @@ import type {
   V2ToolAfterEvent,
   V2ToolBeforeEvent,
 } from './types';
-
-/** v1 `command.execute.before` hook shape (see src/index.ts wiring). */
-export type V1CommandBeforeHook = (
-  input: { command: string; sessionID: string; arguments: string },
-  output: {
-    parts: Array<{
-      type: string;
-      text?: string;
-      synthetic?: boolean;
-      metadata?: Record<string, unknown>;
-    }>;
-  },
-) => Promise<void>;
-
-/** v1 command hook part shape. */
-type V1CommandPart = {
-  type: string;
-  text?: string;
-  synthetic?: boolean;
-  metadata?: Record<string, unknown>;
-};
 
 /** Wrap slash-command arguments in the generic v2 command marker. v2 command
  * drafts are add-only (no `template`), so `execute` submits this marker as a
@@ -202,16 +181,6 @@ export function parseCommandMarker(
   const match = text.match(COMMAND_MARKER_PATTERN);
   if (!match) return undefined;
   return { name: match[1], args: match[2] };
-}
-
-/** Strip the marker tags from marker-only `text`, leaving the raw args. */
-export function stripCommandMarker(text: string): string {
-  // Function replacer: a string replacer would interpret `$`-sequences in
-  // the captured args. Group 1 is the command name; group 2 the args.
-  return text.replace(
-    COMMAND_MARKER_PATTERN,
-    (_match, _name: string, args: string) => args,
-  );
 }
 
 /** Register one v1 synth command on a v2 command draft. Uses `add` when
@@ -268,65 +237,12 @@ export function registerSynthCommands(
   }
 }
 
-const commandExpansions = new WeakMap<
-  V1CommandBeforeHook,
-  LRUCache<string, Promise<V1CommandPart[]>>
->();
-
 /** Replay the same expansion whenever the host rebuilds its message history. */
 export async function applyCommandMarkerToContext(
   event: V2SessionContextEvent,
   commandBefore: V1CommandBeforeHook,
 ): Promise<void> {
-  for (const trailing of event.messages) {
-    if (trailing.role !== 'user') continue;
-    const markerIndex = trailing.content.findIndex(
-      (part) => part.type === 'text' && part.synthetic !== true,
-    );
-    const marker = trailing.content[markerIndex];
-    const text = typeof marker?.text === 'string' ? marker.text : '';
-    const parsed = parseCommandMarker(text);
-    if (!parsed) continue;
-
-    let cache = commandExpansions.get(commandBefore);
-    if (!cache) {
-      cache = new LRUCache({ max: 512 });
-      commandExpansions.set(commandBefore, cache);
-    }
-    const key =
-      trailing.id && JSON.stringify([event.sessionID, trailing.id, text]);
-    let expansion = key ? cache.get(key) : undefined;
-    if (!expansion) {
-      const output = { parts: [] as V1CommandPart[] };
-      expansion = commandBefore(
-        {
-          command: parsed.name,
-          sessionID: event.sessionID,
-          arguments: parsed.args.trim(),
-        },
-        output,
-      ).then(() => output.parts);
-      if (key) cache.set(key, expansion);
-    }
-    const parts = await expansion.catch((error) => {
-      if (key) cache.delete(key);
-      throw error;
-    });
-
-    const otherParts = trailing.content.filter(
-      (_, index) => index !== markerIndex,
-    );
-
-    if (parts.length > 0) {
-      trailing.content = [...parts.map((part) => ({ ...part })), ...otherParts];
-      continue;
-    }
-    // Hook produced nothing: strip the marker and leave the raw args text.
-    trailing.content = [
-      { type: 'text', text: stripCommandMarker(text) },
-      ...otherParts,
-    ];
-  }
+  await replayMarkerExpansions(event, commandBefore, parseCommandMarker);
 }
 
 /** Payload the v1 `chat.message` bridge feeds its consumers (a subset of

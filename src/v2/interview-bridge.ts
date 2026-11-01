@@ -13,7 +13,11 @@ import {
 } from '../utils/prompt-agent';
 import { createSessionListShim, resolveV2Directory } from './client-shim';
 import { resolveV2EventPayload } from './runtime-profiles';
-import { createSessionSubmit, userTextFromContent } from './session-submit';
+import {
+  createSessionSubmit,
+  replayMarkerExpansions,
+  type V1CommandBeforeHook,
+} from './session-submit';
 import type {
   V2CommandDraft,
   V2Context,
@@ -66,37 +70,6 @@ export interface V2InterviewBridge {
   handleEvent(event: Record<string, unknown>): Promise<void>;
   getTranscript(sessionID: string): InterviewMessage[];
   dispose(): void;
-}
-
-/** Mutate the trailing command message from hook-produced parts. When the
- * hook produced nothing, strip the marker and leave the raw args text.
- * Only the trailing message is mutated; earlier messages are left
- * byte-for-byte untouched so provider prompt prefixes remain cacheable. */
-export function applyInterviewCommandParts(
-  trailing: { role: string; content: Array<Record<string, unknown>> },
-  text: string,
-  parts: Array<Record<string, unknown>>,
-): void {
-  const syntheticParts = trailing.content.filter(
-    (part) => part.synthetic === true,
-  );
-  if (parts.length > 0) {
-    trailing.content = [
-      ...parts.map((part) => ({ ...part })),
-      ...syntheticParts,
-    ];
-    return;
-  }
-  trailing.content = [
-    {
-      type: 'text',
-      // Function replacer: a string replacer would interpret `$`-sequences.
-      text: text
-        .replace(INTERVIEW_MARKER_PATTERN, (_match, args: string) => args)
-        .replace(IMPLEMENT_MARKER_PATTERN, (_match, args: string) => args),
-    },
-    ...syntheticParts,
-  ];
 }
 
 export function createV2InterviewBridge(
@@ -278,42 +251,39 @@ export function createV2InterviewBridge(
     );
   }
 
-  async function handleContext(event: V2SessionContextEvent): Promise<void> {
-    const trailing = event.messages.at(-1);
-    const text =
-      trailing?.role === 'user' ? userTextFromContent(trailing.content) : '';
-    const interviewMatch = text.match(INTERVIEW_MARKER_PATTERN);
-    const implementMatch = text.match(IMPLEMENT_MARKER_PATTERN);
-    if (interviewMatch && options.commandEnabled === false) return;
-    if (implementMatch && options.implementEnabled === false) return;
-    const match = interviewMatch ?? implementMatch;
-    const managed = isManagedInterviewSession(event.sessionID);
-    if (!match && !managed) return;
-
-    // Capture the current view before executing /interview so resume and
-    // creation can read the history. Ordinary sessions never enter here.
-    transcripts.set(event.sessionID, toInterviewMessages(event));
-    if (!match || trailing?.role !== 'user') return;
-
-    const output = {
-      parts: [] as Array<{
-        type: string;
-        text?: string;
-        synthetic?: boolean;
-        metadata?: Record<string, unknown>;
-      }>,
-    };
+  const commandBefore: V1CommandBeforeHook = async (input, output) => {
     await (dashboardManager ?? service).handleCommandExecuteBefore(
-      {
-        command: interviewMatch ? 'interview' : 'implement',
-        sessionID: event.sessionID,
-        arguments: match[1].trim(),
-      },
+      input,
       output,
     );
+  };
 
-    applyInterviewCommandParts(trailing, text, output.parts);
-    transcripts.set(event.sessionID, toInterviewMessages(event));
+  async function handleContext(event: V2SessionContextEvent): Promise<void> {
+    await replayMarkerExpansions(
+      event,
+      commandBefore,
+      (text) => {
+        const interview = text.match(INTERVIEW_MARKER_PATTERN);
+        if (interview && options.commandEnabled !== false) {
+          return { name: 'interview', args: interview[1] };
+        }
+        const implement = text.match(IMPLEMENT_MARKER_PATTERN);
+        if (implement && options.implementEnabled !== false) {
+          return { name: 'implement', args: implement[1] };
+        }
+      },
+      (index) =>
+        !event.messages
+          .slice(index + 1)
+          .some(
+            (message) =>
+              message.role === 'assistant' || message.role === 'tool',
+          ),
+      () => transcripts.set(event.sessionID, toInterviewMessages(event)),
+    );
+    if (isManagedInterviewSession(event.sessionID)) {
+      transcripts.set(event.sessionID, toInterviewMessages(event));
+    }
   }
 
   function appendText(

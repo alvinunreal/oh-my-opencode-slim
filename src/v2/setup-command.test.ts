@@ -38,7 +38,10 @@ import {
 } from '../utils/internal-initiator';
 import { isInternalAdmission } from './internal-admissions';
 import { createV2InterviewBridge, markerText } from './interview-bridge';
-import { createSessionSubmit } from './session-submit';
+import {
+  createSessionSubmit,
+  type V1CommandBeforeHook,
+} from './session-submit';
 import {
   applyCommandMarkerToContext,
   attributeAgentsByHistory,
@@ -48,8 +51,6 @@ import {
   createToolExecuteBridges,
   parseCommandMarker,
   registerSynthCommands,
-  stripCommandMarker,
-  type V1CommandBeforeHook,
   wrapCommandMarker,
 } from './setup';
 import type {
@@ -205,16 +206,6 @@ describe('command marker wrap/parse', () => {
   test('returns undefined without a marker', () => {
     expect(parseCommandMarker('plain user text')).toBeUndefined();
     expect(parseCommandMarker(markerText('x'))).toBeUndefined();
-  });
-
-  test('stripCommandMarker leaves the raw args on marker-only text', () => {
-    expect(stripCommandMarker(wrapCommandMarker('deepwork', 'focus 25m'))).toBe(
-      'focus 25m',
-    );
-    // Only runs on marker-only text (anchored pattern): other text is a no-op.
-    expect(
-      stripCommandMarker(`pre ${wrapCommandMarker('deepwork', 'x')} post`),
-    ).toBe(`pre ${wrapCommandMarker('deepwork', 'x')} post`);
   });
 });
 

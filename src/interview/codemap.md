@@ -158,6 +158,8 @@
 - Native v2 text observations use `session.text.started/delta/ended` and the
   host's `assistantMessageID`; full text-ended values remain distinct from
   lifecycle idle boundaries.
+- The v2 bridge replays command expansions for each context rebuild without
+  re-running interview side effects; uncached historical markers lose their tags.
 - Uses OpenCode SDK session APIs for messages, prompts, and status events.
 - Uses local HTTP server contracts for:
   - dashboard browsing,

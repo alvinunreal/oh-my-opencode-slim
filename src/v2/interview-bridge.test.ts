@@ -3,11 +3,7 @@ import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { bindFreePort } from '../interview/test-port';
-import {
-  applyInterviewCommandParts,
-  createV2InterviewBridge,
-  markerText,
-} from './interview-bridge';
+import { createV2InterviewBridge, markerText } from './interview-bridge';
 
 function createContext(overrides?: {
   synthetic?: (input: Record<string, unknown>) => Promise<unknown>;
@@ -51,6 +47,68 @@ describe('markerText', () => {
 });
 
 describe('v2 interview bridge', () => {
+  test('replays a command across retries and tool steps without repeating its handler', async () => {
+    const bridge = createV2InterviewBridge(createContext());
+    const handler = mock(async (_input: any, output: any) => {
+      output.parts.push({ type: 'text', text: 'expanded interview' });
+    });
+    bridge.service.handleCommandExecuteBefore = handler;
+    const marker = {
+      id: 'command',
+      role: 'user',
+      content: [{ type: 'text', text: markerText('idea') }],
+    };
+    const event = (messages: any[]) => ({
+      sessionID: 'ses_replay',
+      agent: 'orchestrator',
+      model: {},
+      system: [],
+      tools: {},
+      messages,
+    });
+    const first = event([structuredClone(marker)]);
+    const retry = event([structuredClone(marker)]);
+    const next = event([
+      structuredClone(marker),
+      {
+        id: 'assistant',
+        role: 'assistant',
+        content: [{ type: 'tool-call', id: 'call', name: 'read', input: {} }],
+      },
+      {
+        id: 'tool',
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            id: 'call',
+            name: 'read',
+            result: { type: 'text', value: 'ok' },
+          },
+        ],
+      },
+    ]);
+
+    await bridge.handleContext(first);
+    await bridge.handleContext(retry);
+    await bridge.handleContext(next);
+    expect(retry.messages[0].content).toEqual(first.messages[0].content);
+    expect(next.messages[0].content).toEqual(first.messages[0].content);
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    const restarted = createV2InterviewBridge(createContext());
+    const historic = event(
+      next.messages.map((message) => structuredClone(message)),
+    );
+    historic.messages[0] = structuredClone(marker);
+    await restarted.handleContext(historic);
+    expect(historic.messages[0].content).toEqual([
+      { type: 'text', text: 'idea' },
+    ]);
+    bridge.dispose();
+    restarted.dispose();
+  });
+
   test('propagates v2 prompt failures through interview continuation', async () => {
     const prompt = mock(async () => {
       throw new Error('prompt rejected');
@@ -381,32 +439,6 @@ describe('v2 interview bridge', () => {
     ).resolves.toBeUndefined();
     expect(prompt).not.toHaveBeenCalled();
     bridge.dispose();
-  });
-
-  test('applyInterviewCommandParts: empty parts strip the marker, keep args', () => {
-    const trailing = {
-      role: 'user',
-      content: [{ type: 'text', text: markerText('standup notes') }],
-    };
-    applyInterviewCommandParts(
-      trailing,
-      trailing.content[0].text as string,
-      [],
-    );
-    expect(trailing.content).toEqual([{ type: 'text', text: 'standup notes' }]);
-  });
-
-  test('applyInterviewCommandParts: non-empty parts replace the content', () => {
-    const trailing = {
-      role: 'user',
-      content: [{ type: 'text', text: markerText('idea') }],
-    };
-    applyInterviewCommandParts(trailing, trailing.content[0].text as string, [
-      { type: 'text', text: 'EXPANDED', synthetic: true },
-    ]);
-    expect(trailing.content).toEqual([
-      { type: 'text', text: 'EXPANDED', synthetic: true },
-    ]);
   });
 
   test('snapshots transcript before downstream part injection', async () => {
