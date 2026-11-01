@@ -355,7 +355,11 @@ describe('interview finalization', () => {
     );
     const documentPath = path.join(directory, 'interview', 'owned.md');
     await fs.mkdir(path.dirname(documentPath), { recursive: true });
-    await fs.writeFile(documentPath, '# Owned\n\nDraft.', 'utf8');
+    await fs.writeFile(
+      documentPath,
+      '# Owned\n\n## Current spec\n\nDraft.\n\n## Q&A history\n',
+      'utf8',
+    );
 
     const createService = () =>
       createInterviewService({ directory } as never, undefined, {

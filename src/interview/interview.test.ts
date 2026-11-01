@@ -1221,6 +1221,35 @@ describe('interview service', () => {
   });
 
   describe('resuming with existing markdown file', () => {
+    test('does not claim an unrelated markdown file', async () => {
+      const tempDir = await makeTempDir();
+      const documentPath = path.join(tempDir, 'README.md');
+      const original = '# Project\n\nProject documentation.\n';
+      await fs.writeFile(documentPath, original);
+      try {
+        const service = createInterviewService(
+          createMockContext({ directory: tempDir }),
+        );
+        service.setBaseUrlResolver(async () => 'http://localhost:9999');
+        const output = { parts: [] as Array<{ type: string; text?: string }> };
+        await service.handleCommandExecuteBefore(
+          {
+            command: 'interview',
+            sessionID: 'session-readme',
+            arguments: 'README.md',
+          },
+          output,
+        );
+        expect(await fs.readFile(documentPath, 'utf8')).toBe(original);
+        expect(service.getActiveInterviewId('session-readme')).toBeNull();
+        expect(extractOutputText(output)).toContain(
+          'not an interview document',
+        );
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
     test('resumes existing file and sends resume prompt instead of kickoff', async () => {
       const tempDir = await makeTempDir();
       const ctx = createMockContext({ directory: tempDir });

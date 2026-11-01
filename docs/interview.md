@@ -53,6 +53,9 @@ You can also resume by basename if it exists in the configured output folder:
 /interview kanban-design-tool
 ```
 
+Resumed documents must contain the interview's `## Current spec` and
+`## Q&A history` sections; unrelated Markdown files are not modified.
+
 ## What the TUI shows
 
 By default the interview does not print the spec or the patch diff. The

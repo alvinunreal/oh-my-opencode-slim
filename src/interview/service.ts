@@ -21,6 +21,7 @@ import {
   extractSummarySection,
   extractTitle,
   hashInterviewState,
+  InterviewDocumentFormatError,
   InterviewDocumentOwnershipError,
   InterviewPatchApplyError,
   markInterviewDocumentComplete,
@@ -1595,6 +1596,10 @@ export function createInterviewService(
       try {
         interview = await resumeInterview(input.sessionID, resumePath);
       } catch (error) {
+        if (error instanceof InterviewDocumentFormatError) {
+          output.parts.push(createInternalAgentTextPart(error.message));
+          return;
+        }
         if (error instanceof InterviewDocumentOwnershipError) {
           output.parts.push(
             createInternalAgentTextPart(

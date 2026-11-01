@@ -39,6 +39,8 @@ export class InterviewDocumentOwnershipError extends Error {
   }
 }
 
+export class InterviewDocumentFormatError extends Error {}
+
 export class InterviewPatchRequiredError extends InterviewPatchApplyError {
   constructor() {
     super('', '');
@@ -215,6 +217,14 @@ export async function claimInterviewDocument(
 ): Promise<string> {
   return withInterviewDocumentLock(markdownPath, async () => {
     const document = await fs.readFile(markdownPath, 'utf8');
+    if (
+      !/^## Current spec\s*$/im.test(document) ||
+      !/^## Q&A history\s*$/im.test(document)
+    ) {
+      throw new InterviewDocumentFormatError(
+        'This is not an interview document.',
+      );
+    }
     const frontmatter = sharedParseFrontmatter(document);
     const owner = frontmatter?.sessionID;
     if (owner && owner !== sessionID) {
