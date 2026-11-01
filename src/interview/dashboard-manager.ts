@@ -680,11 +680,16 @@ export function createDashboardManager(
             // onStateChange. Runs AFTER nudge/answer processing so
             // sessionBusy is accurate.
             if (interviewId) {
-              service.getInterviewState(interviewId).catch((err) => {
-                log('[interview] failed to refresh state', {
-                  error: err instanceof Error ? err.message : String(err),
+              const refresh = service
+                .getInterviewState(interviewId)
+                .then(() => {})
+                .catch((err) => {
+                  log('[interview] failed to refresh state', {
+                    error: err instanceof Error ? err.message : String(err),
+                  });
                 });
-              });
+              activeInProcessEvents.add(refresh);
+              void refresh.finally(() => activeInProcessEvents.delete(refresh));
             }
           }
         }

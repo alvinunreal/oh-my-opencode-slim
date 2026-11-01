@@ -87,6 +87,8 @@ export function createV2InterviewBridge(
   const transcripts = new Map<string, InterviewMessage[]>();
   const activeText = new Map<string, string>();
   const activeMessageIDs = new Map<string, string>();
+  const commandContexts = new Set<string>();
+  const pendingNotices = new Map<string, string[]>();
   // Reduced hosts may omit the session domain entirely.
   const methods = (ctx.session ?? {}) as V2Session;
   const submitUserText = createSessionSubmit(ctx);
@@ -94,6 +96,12 @@ export function createV2InterviewBridge(
   const runtime: InterviewSessionRuntime = {
     messages: async (sessionID) => transcripts.get(sessionID) ?? [],
     notify: async (sessionID, text) => {
+      if (commandContexts.has(sessionID)) {
+        const notices = pendingNotices.get(sessionID) ?? [];
+        notices.push(text);
+        pendingNotices.set(sessionID, notices);
+        return;
+      }
       // synthetic only — no prompt fallback: `resume: false` admits the
       // input WITHOUT waking the session, mirroring the v1 noReply prompt
       // (a prompt fallback would double-send and wake the loop).
@@ -108,7 +116,12 @@ export function createV2InterviewBridge(
           .map((line) => line.trim())
           .filter(Boolean)
           .join(' · ');
-        await methods.synthetic({ sessionID, text, description, resume: false });
+        await methods.synthetic({
+          sessionID,
+          text,
+          description,
+          resume: false,
+        });
       } catch (err) {
         log('[v2][interview] synthetic notify failed', {
           sessionID,
@@ -246,10 +259,15 @@ export function createV2InterviewBridge(
   }
 
   const commandBefore: V1CommandBeforeHook = async (input, output) => {
-    await (dashboardManager ?? service).handleCommandExecuteBefore(
-      input,
-      output,
-    );
+    commandContexts.add(input.sessionID);
+    try {
+      await (dashboardManager ?? service).handleCommandExecuteBefore(
+        input,
+        output,
+      );
+    } finally {
+      commandContexts.delete(input.sessionID);
+    }
   };
 
   async function handleContext(event: V2SessionContextEvent): Promise<void> {
@@ -372,6 +390,7 @@ export function createV2InterviewBridge(
       activeText.delete(sessionID);
       activeMessageIDs.delete(sessionID);
       transcripts.delete(sessionID);
+      pendingNotices.delete(sessionID);
       await (dashboardManager ?? service).handleEvent({
         event: { type: 'session.deleted', properties: { sessionID } },
       });
@@ -389,6 +408,11 @@ export function createV2InterviewBridge(
       // event-adapter.ts). The bridge receives the RAW event, so without this
       // mapping the v2 service never sees a turn end and never posts notices.
       const statusType = type === 'session.execution.started' ? 'busy' : 'idle';
+      if (statusType === 'idle') {
+        const notices = pendingNotices.get(sessionID) ?? [];
+        pendingNotices.delete(sessionID);
+        for (const text of notices) await runtime.notify(sessionID, text);
+      }
       await (dashboardManager ?? service).handleEvent({
         event: {
           type: 'session.status',
@@ -417,6 +441,8 @@ export function createV2InterviewBridge(
       server?.close();
       activeText.clear();
       activeMessageIDs.clear();
+      commandContexts.clear();
+      pendingNotices.clear();
       transcripts.clear();
       log('[v2][interview] bridge disposed');
     },

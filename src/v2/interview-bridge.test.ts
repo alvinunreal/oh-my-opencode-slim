@@ -182,6 +182,11 @@ describe('v2 interview bridge', () => {
     expect(earlier).toEqual(earlierBefore);
     expect(event.messages[1].content[0].text).toContain('build a notes app');
     expect(event.messages[1].content[0].text).toContain('<interview_state>');
+    expect(synthetic).not.toHaveBeenCalled();
+    await bridge.handleEvent({
+      type: 'session.execution.succeeded',
+      data: { sessionID: 'ses_v2' },
+    });
     expect(synthetic).toHaveBeenCalled();
     expect(update).toHaveBeenCalledWith({
       sessionID: 'ses_v2',
@@ -715,13 +720,25 @@ describe('v2 interview bridge', () => {
       const event2 = createEvent('v2-session-2', 'second dashboard idea');
       await bridge1.handleContext(event1);
       await bridge2.handleContext(event2);
+      await bridge1.handleEvent({
+        type: 'session.execution.succeeded',
+        data: { sessionID: 'v2-session-1' },
+      });
+      await bridge2.handleEvent({
+        type: 'session.execution.succeeded',
+        data: { sessionID: 'v2-session-2' },
+      });
 
-      expect(synthetic1.mock.calls[0]?.[0].text).toContain(
-        `http://127.0.0.1:${port}/interview/`,
-      );
-      expect(synthetic2.mock.calls[0]?.[0].text).toContain(
-        `http://127.0.0.1:${port}/interview/`,
-      );
+      expect(
+        synthetic1.mock.calls.some(([notice]) =>
+          notice.text.includes(`http://127.0.0.1:${port}/interview/`),
+        ),
+      ).toBe(true);
+      expect(
+        synthetic2.mock.calls.some(([notice]) =>
+          notice.text.includes(`http://127.0.0.1:${port}/interview/`),
+        ),
+      ).toBe(true);
     } finally {
       await bridge1.dispose();
       await bridge2.dispose();

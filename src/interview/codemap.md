@@ -163,6 +163,8 @@
   re-running interview side effects; uncached historical markers lose their tags.
 - v2 service turns use tracked synthetic admissions and retain the session's
   current agent without emitting an agent-switch event.
+- Notices produced inside a v2 command context are sent after execution ends,
+  rather than being promoted as steer input during the active model turn.
 - Uses OpenCode SDK session APIs for messages, prompts, and status events.
 - Uses local HTTP server contracts for:
   - dashboard browsing,
