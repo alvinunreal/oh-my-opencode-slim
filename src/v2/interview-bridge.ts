@@ -1,10 +1,8 @@
 import type { Server } from 'node:http';
 import type { InterviewConfig, PluginConfig } from '../config';
-import { createDashboardManager } from '../interview/dashboard-manager';
-import { computeInterviewMode } from '../interview/manager';
+import { createInterviewManager } from '../interview/manager';
 import type { InterviewSessionRuntime } from '../interview/runtime';
-import { createInterviewServer } from '../interview/server';
-import { createInterviewService } from '../interview/service';
+import type { createInterviewService } from '../interview/service';
 import type { InterviewMessage } from '../interview/types';
 import { log } from '../utils/logger';
 import { createSessionListShim, resolveV2Directory } from './client-shim';
@@ -158,49 +156,18 @@ export function createV2InterviewBridge(
     },
   };
 
-  const { dashboardEnabled, outputFolder, dashboardPort } =
-    computeInterviewMode(config);
   const pluginContext = { directory: resolveV2Directory(ctx) } as never;
-  const dashboardManager = dashboardEnabled
-    ? createDashboardManager(
-        pluginContext,
-        { interview: config } as PluginConfig,
-        dashboardPort,
-        outputFolder,
-        {
-          runtime,
-          // v1-shaped list over v2 session.list (directory discovery for
-          // the dashboard's session scan); empty page when the host lacks
-          // the method.
-          sessionClient: {
-            list: createSessionListShim(methods),
-          } as never,
-          server: options.server,
-          hostFlavor: 'v2',
-        },
-      )
-    : null;
-  const service =
-    dashboardManager?.service ??
-    createInterviewService(pluginContext, config, { runtime });
-  const server = dashboardManager
-    ? null
-    : createInterviewServer({
-        getState: (interviewID) => service.getInterviewState(interviewID),
-        listInterviewFiles: () => service.listInterviewFiles(),
-        listInterviews: () => service.listInterviews(),
-        submitAnswers: (interviewID, answers) =>
-          service.submitAnswers(interviewID, answers),
-        submitBlockComment: (interviewID, section, comment) =>
-          service.submitBlockComment(interviewID, section, comment),
-        submitChat: (interviewID, message) =>
-          service.submitChat(interviewID, message),
-        handleNudgeAction: (interviewID, action) =>
-          service.handleNudgeAction(interviewID, action),
-        outputFolder,
-        port: 0,
-      });
-  if (server) service.setBaseUrlResolver(() => server.ensureStarted());
+  const manager = createInterviewManager(
+    pluginContext,
+    { interview: config } as PluginConfig,
+    {
+      runtime,
+      sessionClient: { list: createSessionListShim(methods) } as never,
+      server: options.server,
+      hostFlavor: 'v2',
+    },
+  );
+  const { service } = manager;
 
   function registerCommand(draft: V2CommandDraft): void {
     // v2 command drafts are add-only. `/interview` renders its marker as a
@@ -250,19 +217,14 @@ export function createV2InterviewBridge(
   function isManagedInterviewSession(sessionID: string): boolean {
     return (
       transcripts.has(sessionID) ||
-      Boolean(
-        (dashboardManager?.service ?? service).getActiveInterviewId(sessionID),
-      )
+      Boolean(service.getActiveInterviewId(sessionID))
     );
   }
 
   const commandBefore: V1CommandBeforeHook = async (input, output) => {
     commandContexts.add(input.sessionID);
     try {
-      await (dashboardManager ?? service).handleCommandExecuteBefore(
-        input,
-        output,
-      );
+      await manager.handleCommandExecuteBefore(input, output);
     } finally {
       commandContexts.delete(input.sessionID);
     }
@@ -341,7 +303,7 @@ export function createV2InterviewBridge(
     if (type === 'session.deleted') {
       transcripts.delete(sessionID);
       pendingNotices.delete(sessionID);
-      await (dashboardManager ?? service).handleEvent({
+      await manager.handleEvent({
         event: { type: 'session.deleted', properties: { sessionID } },
       });
       return;
@@ -363,7 +325,7 @@ export function createV2InterviewBridge(
         pendingNotices.delete(sessionID);
         for (const text of notices) await runtime.notify(sessionID, text);
       }
-      await (dashboardManager ?? service).handleEvent({
+      await manager.handleEvent({
         event: {
           type: 'session.status',
           properties: { sessionID, status: { type: statusType } },
@@ -373,7 +335,7 @@ export function createV2InterviewBridge(
     }
 
     if (type === 'session.status') {
-      await (dashboardManager ?? service).handleEvent({
+      await manager.handleEvent({
         event: { type, properties },
       });
     }
@@ -387,8 +349,7 @@ export function createV2InterviewBridge(
     handleEvent,
     getTranscript: (sessionID) => transcripts.get(sessionID) ?? [],
     dispose: async () => {
-      if (dashboardManager) await dashboardManager.dispose();
-      server?.close();
+      await manager.dispose();
       commandContexts.clear();
       pendingNotices.clear();
       transcripts.clear();

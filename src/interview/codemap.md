@@ -32,8 +32,8 @@
   implementation without expanding the global client shim.
 
 - `manager.ts` (composition root)
-  - Chooses mode via the shared pure `computeInterviewMode` (also used by the
-    v2 interview bridge): `interview.dashboard === true || interview.port > 0`:
+  - Chooses mode via `computeInterviewMode` for both v1 and v2:
+    `interview.dashboard === true || interview.port > 0`:
     - per-session mode → `createPerSessionInterviewServer` (`session-server.ts`)
     - dashboard mode → `createDashboardManager` (`dashboard-manager.ts`)
   - Returns event hooks:
