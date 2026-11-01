@@ -187,6 +187,8 @@
   browser submissions. Session polling claims each queued value and must
   acknowledge it after service delivery; rejected deliveries roll the claim
   back without clearing the answer, chat message, block comment, or nudge.
+- Cross-process state pushes omit derived blocks and allow a bounded 4 MiB
+  request; other JSON requests retain the 64 KiB limit.
 - Markdown documents persist their owning `sessionID` in frontmatter. A
   different session cannot resume or mutate an owned document, while the
   original session can resume it across plugin processes.

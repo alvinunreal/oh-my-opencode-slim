@@ -812,6 +812,39 @@ describe('dashboard server', () => {
   });
 
   describe('state push/merge (POST /api/interviews/:id/state)', () => {
+    test('accepts a large document and derives its specification blocks', async () => {
+      const { baseUrl, authToken, dashboard, cleanup } = await startDashboard();
+      try {
+        const document = `# Large\n\n## Current spec\n\n## 1. Requirements\n\n${'A'.repeat(90000)}\n\n## Q&A history\n\nNo answers yet.\n`;
+        const response = await fetch(
+          `${baseUrl}/api/interviews/large-spec/state?token=${authToken}`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              interviewId: 'large-spec',
+              sessionID: 'session-large',
+              idea: 'Large',
+              mode: 'completed',
+              summary: 'Done',
+              title: 'Large',
+              questions: [],
+              filePath: 'large.md',
+              document,
+            }),
+          },
+        );
+        expect(response.status).toBe(200);
+        expect(
+          dashboard
+            .getState('large-spec')
+            ?.blocks?.find((block) => block.id === 'section-1')?.content,
+        ).toContain('A'.repeat(90000));
+      } finally {
+        cleanup();
+      }
+    });
+
     test('creates new entry when not in cache', async () => {
       const { baseUrl, authToken, dashboard, cleanup } = await startDashboard();
       try {

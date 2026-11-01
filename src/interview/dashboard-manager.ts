@@ -782,7 +782,7 @@ async function pushStateViaHttp(
         ...authHeaders(token),
         'content-type': 'application/json',
       },
-      body: JSON.stringify(entry),
+      body: JSON.stringify({ ...entry, blocks: undefined }),
       signal: AbortSignal.timeout(5000),
     },
   );

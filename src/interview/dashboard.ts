@@ -970,7 +970,7 @@ export function createDashboardServer(config: DashboardConfig): {
 
       let body: unknown;
       try {
-        body = await readJsonBody(request);
+        body = await readJsonBody(request, 4 * 1024 * 1024);
       } catch {
         sendJson(response, 400, { error: 'Invalid JSON' });
         return;
@@ -986,7 +986,9 @@ export function createDashboardServer(config: DashboardConfig): {
         if (state.questions) existing.questions = state.questions;
         if (state.filePath) existing.filePath = state.filePath;
         if (state.document !== undefined) existing.document = state.document;
-        if (state.blocks !== undefined) existing.blocks = state.blocks;
+        if (state.document !== undefined)
+          existing.blocks = state.blocks ?? parseSpecBlocks(state.document);
+        else if (state.blocks !== undefined) existing.blocks = state.blocks;
         existing.lastUpdatedAt = Date.now();
         dedupRecovered(interviewId, stateCache);
         broadcastSse(interviewId, existing);
@@ -1007,7 +1009,11 @@ export function createDashboardServer(config: DashboardConfig): {
           pendingBlockComment: state.pendingBlockComment ?? null,
           pendingChatMessage: state.pendingChatMessage ?? null,
           document: state.document,
-          blocks: state.blocks,
+          blocks:
+            state.blocks ??
+            (state.document !== undefined
+              ? parseSpecBlocks(state.document)
+              : undefined),
         };
         stateCache.set(interviewId, entry);
         broadcastSse(interviewId, entry);
