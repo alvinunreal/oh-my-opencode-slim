@@ -31,7 +31,7 @@ The CLI follows a command pattern with two primary commands:
 
 ### Permission and Skill Management
 
-- **custom-skills.ts**: Registry of custom skills bundled with the plugin and their installation logic
+- **custom-skills.ts**: Bundled skill discovery and safe cleanup of legacy copies
 - **skills.ts**: Agent permission management for skills (allow/ask/deny rules, includes PERMISSION_ONLY_SKILLS for externally managed skills)
 
 ### Integration Management

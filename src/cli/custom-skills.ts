@@ -8,8 +8,10 @@ import {
   renameSync,
   rmSync,
 } from 'node:fs';
-import { basename, join, relative } from 'node:path';
-import { getConfigDir } from '../config/paths';
+import { homedir } from 'node:os';
+import { basename, dirname, join, relative } from 'node:path';
+import { getProjectConfigDirectories } from '../config/loader';
+import { getConfigDir, getConfigSearchDirs } from '../config/paths';
 import { CUSTOM_SKILLS, type CustomSkill } from './custom-skills-registry';
 
 export { CUSTOM_SKILLS, type CustomSkill };
@@ -75,6 +77,25 @@ export function buildBundledSkillInfos(
     }
   }
   return infos;
+}
+
+/** Paths for v1's disk scanner, excluding names already supplied by the user. */
+export function getV1BundledSkillPaths(
+  packageRoot: string,
+  directory: string,
+  disabled: readonly string[],
+): string[] {
+  const roots = [
+    ...getConfigSearchDirs(),
+    join(homedir(), '.opencode'),
+    ...getProjectConfigDirectories(directory),
+  ].flatMap((dir) => [join(dir, 'skill'), join(dir, 'skills')]);
+  return buildBundledSkillInfos(packageRoot, disabled)
+    .filter(
+      (skill) =>
+        !roots.some((root) => existsSync(join(root, skill.name, 'SKILL.md'))),
+    )
+    .map((skill) => dirname(skill.path));
 }
 
 export interface LegacySkillCleanupResult {

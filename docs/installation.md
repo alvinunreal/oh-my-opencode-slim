@@ -89,8 +89,9 @@ bunx oh-my-opencode-slim@latest install --reset
 
 The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default (using variant-aware GPT-6 models, including `gpt-6.1-sol` at `medium` for Orchestrator, `high` for Oracle, and `low` for Fixer, and `gpt-6-luna` variants for Explorer and Designer). To make OpenCode Go active during install, run `bunx oh-my-opencode-slim@latest install --preset=opencode-go`. That preset uses Minimax-M3 for Orchestrator, so the installer also enables Observer with `opencode-go/mimo-v2.5` for visual analysis. To switch providers later or build a mixed setup, use **[Configuration Reference](configuration.md)** for the full option reference and the preset docs for copyable examples.
 
-Bundled skills are registered in-process at plugin load — nothing is copied to
-disk, and plugin updates apply on the next OpenCode restart. Skills listed in
+Bundled skills are registered at plugin load — v1 scans their package paths,
+while v2 registers them in-process. Nothing is copied to the user skill directory,
+and plugin updates apply on the next OpenCode restart. Skills listed in
 `disabled_skills` are not registered. A same-named skill directory under
 `~/.config/opencode/skills/` overrides the bundled version (directory sources
 take precedence over plugin registrations).

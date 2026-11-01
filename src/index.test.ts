@@ -3652,6 +3652,50 @@ describe('plugin config model inheritance', () => {
     } as never);
   }
 
+  test('v1 exposes enabled bundled skills without overriding user skills', async () => {
+    const hooks = await loadConfiguredPlugin({ disabled_skills: ['reflect'] });
+    const configDir = lastConfigDir as string;
+    const userSkill = path.join(configDir, 'skills', 'codemap');
+    await mkdir(userSkill, { recursive: true });
+    await Bun.write(
+      path.join(userSkill, 'SKILL.md'),
+      '---\nname: codemap\ndescription: user skill\n---\nuser content',
+    );
+    const disabledClaudeSkill = path.join(
+      configDir,
+      '.claude',
+      'skills',
+      'deepwork',
+    );
+    await mkdir(disabledClaudeSkill, { recursive: true });
+    await Bun.write(
+      path.join(disabledClaudeSkill, 'SKILL.md'),
+      '---\nname: deepwork\ndescription: disabled external skill\n---\n',
+    );
+    process.env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS = '1';
+    const hostConfig = { skills: { paths: [] as string[] } };
+    try {
+      await hooks.config?.(hostConfig as never);
+      expect(
+        hostConfig.skills.paths.some((item) =>
+          item.endsWith('/src/skills/deepwork'),
+        ),
+      ).toBe(true);
+      expect(
+        hostConfig.skills.paths.some((item) =>
+          item.endsWith('/src/skills/codemap'),
+        ),
+      ).toBe(false);
+      expect(
+        hostConfig.skills.paths.some((item) =>
+          item.endsWith('/src/skills/reflect'),
+        ),
+      ).toBe(false);
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
   async function selectParent(
     hooks: Awaited<ReturnType<typeof loadConfiguredPlugin>>,
     model: { providerID: string; modelID: string },
