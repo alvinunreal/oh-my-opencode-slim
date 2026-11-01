@@ -165,14 +165,13 @@ function publishConfig(
   if (currentText !== undefined) writeBackupAtomic(configPath, currentText);
 
   const bom = currentText?.startsWith('\uFEFF') ? '\uFEFF' : '';
-  const content =
-    configPath.endsWith('.jsonc') && currentText
-      ? `${bom}${jsoncDiff(
-          currentText.replace(/^\uFEFF/, ''),
-          parseJsonConfigText(currentText),
-          config,
-        )}`
-      : `${bom}${JSON.stringify(config, null, 2)}\n`;
+  const content = currentText
+    ? `${bom}${jsoncDiff(
+        currentText.replace(/^\uFEFF/, ''),
+        parseJsonConfigText(currentText),
+        config,
+      )}`
+    : `${bom}${JSON.stringify(config, null, 2)}\n`;
   writeAtomic(targetPath, content);
 }
 
@@ -199,14 +198,9 @@ export function prepareJsonConfigWrite(
     };
   }
   const bom = currentText?.startsWith('\uFEFF') ? '\uFEFF' : '';
-  const content =
-    configPath.endsWith('.jsonc') && currentText
-      ? `${bom}${jsoncDiff(
-          currentText.replace(/^\uFEFF/, ''),
-          current,
-          config,
-        )}`
-      : `${bom}${JSON.stringify(config, null, 2)}\n`;
+  const content = currentText
+    ? `${bom}${jsoncDiff(currentText.replace(/^\uFEFF/, ''), current, config)}`
+    : `${bom}${JSON.stringify(config, null, 2)}\n`;
 
   return {
     configPath,
@@ -454,10 +448,6 @@ export function mutateJsonFile(
     const originalSnapshot = JSON.parse(JSON.stringify(current)) as JsonConfig;
     const updated = mutate(current);
     if (JSON.stringify(updated) === JSON.stringify(originalSnapshot)) return;
-    if (currentText && configPath.endsWith('.jsonc')) {
-      publishConfig(configPath, updated, currentText);
-      return;
-    }
     publishConfig(configPath, updated, currentText);
   });
 }

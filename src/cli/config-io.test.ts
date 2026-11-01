@@ -39,7 +39,6 @@ import {
   addPluginToOpenCodeConfig,
   addPluginToOpenCodeTuiConfig,
   detectCurrentConfig,
-  enableLspByDefault,
   parseConfig,
   parseConfigFile,
   writeConfig,
@@ -680,6 +679,21 @@ describe('config-io', () => {
     expect(saved.plugin.length).toBe(2);
   });
 
+  test('installation preserves JSON comments and backs up the original before enabling LSP', async () => {
+    paths.ensureConfigDir();
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    const original =
+      '{\n  // user comment\n  "plugin": [],\n  /* more */ "theme": "dark"\n}\n';
+    writeFileSync(configPath, original);
+    process.argv[1] = '';
+    expect((await addPluginToOpenCodeConfig()).success).toBe(true);
+    const saved = readFileSync(configPath, 'utf8');
+    expect(saved).toContain('// user comment');
+    expect(saved).toContain('/* more */');
+    expect(JSON.parse(stripJsonComments(saved)).lsp).toBe(true);
+    expect(readFileSync(`${configPath}.bak`, 'utf8')).toBe(original);
+  });
+
   test('addPluginToOpenCodeConfig reads and preserves a plural-key config', async () => {
     const configPath = join(tmpDir, 'opencode', 'opencode.json');
     paths.ensureConfigDir();
@@ -1131,40 +1145,16 @@ describe('config-io', () => {
     expect(saved.presets['opencode-go'].observer.variant).toBeUndefined();
   });
 
-  test('enableLspByDefault sets lsp true when missing', () => {
-    const configPath = join(tmpDir, 'opencode', 'opencode.json');
-    paths.ensureConfigDir();
-    writeFileSync(configPath, JSON.stringify({ plugin: ['other'] }));
-
-    const result = enableLspByDefault();
-    expect(result.success).toBe(true);
-
-    const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
-    expect(saved.lsp).toBe(true);
-    expect(saved.plugin).toEqual(['other']);
-  });
-
-  test('enableLspByDefault preserves explicit lsp config', () => {
+  test('installation preserves explicit lsp config', async () => {
     const configPath = join(tmpDir, 'opencode', 'opencode.json');
     paths.ensureConfigDir();
     writeFileSync(configPath, JSON.stringify({ lsp: false }));
 
-    const result = enableLspByDefault();
+    const result = await addPluginToOpenCodeConfig();
     expect(result.success).toBe(true);
 
     const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
     expect(saved.lsp).toBe(false);
-  });
-
-  test('enableLspByDefault does not write when lsp exists', () => {
-    const configPath = join(tmpDir, 'opencode', 'opencode.json');
-    paths.ensureConfigDir();
-    writeFileSync(configPath, JSON.stringify({ lsp: false }));
-
-    const result = enableLspByDefault();
-    expect(result.success).toBe(true);
-
-    expect(existsSync(`${configPath}.bak`)).toBe(false);
   });
 
   test('detectCurrentConfig detects installed status', () => {

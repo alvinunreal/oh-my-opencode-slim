@@ -467,6 +467,7 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
     mutateJsonFile(configPath, (current) => {
       const config = removePluginEntries(current as OpenCodeConfig);
       config.plugin = [...(config.plugin ?? []), pluginEntry];
+      if (config.lsp === undefined) config.lsp = true;
       return config;
     });
     const otherPath = configPath.endsWith('.jsonc')
@@ -546,28 +547,6 @@ export function writeLiteConfig(
       success: false,
       configPath,
       error: `Failed to write lite config: ${err}`,
-    };
-  }
-}
-
-export function enableLspByDefault(): ConfigMergeResult {
-  const configPath = getExistingConfigPath();
-
-  try {
-    ensureOpenCodeConfigDir();
-    mutateJsonFile(configPath, (current) => {
-      const config = current as OpenCodeConfig;
-      if (config.lsp !== undefined) return current;
-      config.lsp = true;
-      return config;
-    });
-
-    return { success: true, configPath };
-  } catch (err) {
-    return {
-      success: false,
-      configPath,
-      error: `Failed to enable LSP: ${err}`,
     };
   }
 }

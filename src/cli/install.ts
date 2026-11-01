@@ -13,7 +13,6 @@ import {
   addPluginToOpenCodeConfig,
   addPluginToOpenCodeTuiConfig,
   detectCurrentConfig,
-  enableLspByDefault,
   generateLiteConfig,
   getOpenCodePath,
   getOpenCodeVersion,
@@ -262,7 +261,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
 
   printHeader(isUpdate);
 
-  const totalSteps = 7;
+  const totalSteps = 6;
 
   let step = 1;
 
@@ -305,14 +304,6 @@ async function runInstall(config: InstallConfig): Promise<number> {
     } else {
       handleStepResult(cacheResult, 'OpenCode cache warmed');
     }
-  }
-
-  printStep(step++, totalSteps, 'Enabling OpenCode LSP integration...');
-  if (config.dryRun) {
-    printInfo('Dry run mode - skipping LSP configuration');
-  } else {
-    const lspResult = enableLspByDefault();
-    if (!handleStepResult(lspResult, 'LSP enabled')) return 1;
   }
 
   printStep(step++, totalSteps, 'Configuring OpenCode background subagents...');
