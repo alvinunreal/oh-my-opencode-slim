@@ -804,17 +804,21 @@ describe('createSessionContextHandler (merged context hook seam)', () => {
   test('context bridge collapses v2 tool parts without mutating them', async () => {
     const kickoff = {
       type: 'tool-call',
-      toolName: 'interview_submit_state',
+      id: 'call-1',
+      name: 'interview_submit_state',
       input: {
-        summary: '# Full specification\n\nDetailed requirements.',
-        title: 'spec',
-        questions: [],
+        state: {
+          summary: '# Full specification\n\nDetailed requirements.',
+          title: 'spec',
+          questions: [],
+        },
       },
     };
     const status = {
       type: 'tool-call',
-      toolName: 'interview_submit_state',
-      input: { summary: 'status', patch: 'x', questions: [] },
+      id: 'call-2',
+      name: 'interview_submit_state',
+      input: { state: { summary: 'status', patch: 'x', questions: [] } },
     };
     const originalKickoff = structuredClone(kickoff);
     const event = makeEvent([
@@ -831,8 +835,11 @@ describe('createSessionContextHandler (merged context hook seam)', () => {
 
     expect(kickoff).toEqual(originalKickoff);
     expect(
-      (event.messages[0].content[0] as { input: { summary: string } }).input
-        .summary,
+      (
+        event.messages[0].content[0] as {
+          input: { state: { summary: string } };
+        }
+      ).input.state.summary,
     ).toBe(INTERVIEW_SUMMARY_STUB);
   });
 

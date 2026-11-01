@@ -572,7 +572,7 @@ export function createSessionContextHandler(
             info,
             parts: m.content.map((part) =>
               ((part.type === 'tool-call' || part.type === 'tool-result') &&
-                part.toolName === 'interview_submit_state') ||
+                (part.toolName ?? part.name) === 'interview_submit_state') ||
               (part.type === 'text' &&
                 typeof part.text === 'string' &&
                 part.text.includes('<interview_state'))
