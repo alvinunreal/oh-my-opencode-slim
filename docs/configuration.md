@@ -15,6 +15,10 @@ Complete reference for all configuration files and options in oh-my-opencode-sli
 
 > **💡 JSONC recommended:** Use the `.jsonc` extension to add comments and trailing commas. If both `.jsonc` and `.json` exist, `.jsonc` takes precedence.
 
+Config edits follow existing symbolic links and update their targets while
+preserving the links. A dangling or unresolvable link causes the write to fail;
+repair the link before retrying. Backups are written beside the config path.
+
 Project configuration discovery searches the current directory and every
 ancestor within the host's discovery boundary. V2 walks through the filesystem
 root, including above Git repository and worktree roots. V1 stops at the Git
@@ -201,7 +205,7 @@ council-and-observer-only setup turns off the rest:
 
 ```jsonc
 {
-  "backgroundJobs": { "enabled": false },
+  "backgroundJobs": { "mode": "off" },
   "interview": { "enabled": false },
   "marketplace": { "enabled": false },
   "tui": false,
@@ -235,7 +239,8 @@ council-and-observer-only setup turns off the rest:
 }
 ```
 
-`tui: false` gates the TUI client process only; the server-side council,
+`tui: false` gates the TUI client process only (the entry also skips loading the
+TUI render stack); the server-side council,
 observer, agents, and hooks keep working. Remove it (and optionally set
 `sidebar: false` instead) when you want the OMOS sidebar and commands without
 the rest. `interview.enabled: false` also disables `/implement`, because
@@ -244,7 +249,11 @@ the rest. `interview.enabled: false` also disables `/implement`, because
 A disabled subsystem is not constructed at all: no tools, listeners, timers,
 state files, or servers. With the managed lifecycle off, native OpenCode
 delegation, completion delivery, session continuation, and council seat
-assembly keep working. See [Background Orchestration](background-orchestration.md)
+assembly keep working. `backgroundJobs.mode: "native"` is the middle ground:
+it skips every board-shaped component but keeps two thin host-read controls
+(`task_status` reads a child's state and trailing result; `task_cancel` aborts
+a stuck child), which is what a native-delegation setup otherwise loses. See
+[Background Orchestration](background-orchestration.md)
 and [Council](council.md) for what remains.
 
 ---
@@ -256,7 +265,7 @@ and [Council](council.md) for what remains.
 | `preset` | string | - | Active preset name (e.g. `"openai"`, `"best"`) |
 | `setDefaultAgent` | boolean | `true` | When `true`, sets OpenCode's `default_agent` to the orchestrator if unset or pointing at a subagent; `false` leaves it untouched |
 | `sidebar` | boolean | `true` | Master switch for the OMOS TUI sidebar surface (the agent list it renders and its state file). When `false`, the plugin never registers or renders the sidebar and writes no sidebar state; the native host sidebar is untouched, and pane management keeps following `multiplexer` config changes |
-| `tui` | boolean | `true` | Master switch for all OMOS TUI surfaces: the sidebar, `/preset`, `/killall`, `/subagent`, and the update notice. When `false`, the TUI entry registers nothing; server-side agents, council, observer, hooks, and tools are untouched. Stronger than `sidebar: false`. |
+| `tui` | boolean | `true` | Master switch for all OMOS TUI surfaces: the sidebar, `/preset`, `/killall`, `/subagent`, and the update notice. When `false`, the TUI entry registers nothing and never loads the TUI render stack (the heavy implementation is imported only after this gate); server-side agents, council, observer, hooks, and tools are untouched. Stronger than `sidebar: false`. |
 | `liveConfigRefresh` | boolean | `true` | v2 only: master switch for the live config-file watcher that reloads runtime model/preset profiles when `oh-my-opencode-slim.json(c)` changes on disk. When `false`, v2 does not watch config files and file edits apply only after a restart; explicit `/preset` writes still refresh the current generation where applicable |
 | `stripOrchestratorModel` | boolean | `false` | Preserve a runtime `/model` selection for the orchestrator after subagent dispatch by omitting its configured model from the SDK config. A selected preset's explicit `orchestrator.model` is retained. Without a runtime selection, this opt-in delegates the initial orchestrator choice to OpenCode's session default. |
 | `routingBlock` | boolean | `true` | When false, removes the `<Agents>` routing block from the built-in orchestrator prompt. The host's native delegation-tool roster still lists every enabled agent with its one-line description, but it carries no Delegate/Don't routing criteria — the block's routing guidance (~300 tokens) has no roster equivalent, so `false` trades routing quality for tokens, or drops stock routing claims that drift against custom agent prompts (`agents.<name>.prompt`). Applies on v1 and v2 hosts. No effect when an orchestrator.md override already replaces the whole prompt. |
@@ -305,7 +314,8 @@ and [Council](council.md) for what remains.
 | `multiplexer.viewer` | string | `"tui"` on v1, `"mini"` on v2 | Subagent pane surface: `"tui"` (full interface) or `"mini"` (lightweight interface). Explicit values override the host default. On v1, `"mini"` requires OpenCode >= 1.17.10 and runs `attach ... --dir <dir> --mini`; on v2 it runs `opencode mini` without a positional directory. Changes take effect on the next opencode start. See [Multiplexer Integration](multiplexer-integration.md). |
 | `multiplexer.zellij_pane_mode` | — | — | Removed: ignored with a warning. See [Removed config keys](#removed-config-keys). |
 | `tmux` (top-level) | — | — | Removed: ignored with a warning. Use `multiplexer.*`. See [Removed config keys](#removed-config-keys). |
-| `backgroundJobs.enabled` | boolean | `true` | Master switch for the OMOS managed background-task lifecycle (job board, retention, wake scheduler, wall-clock watchdog, terminal gate, and the `task_cancel`/`task_message`/`task_status`/`task_reply` tools; `task_message` is v1-only). When `false`, none of that runs and the native OpenCode task/subagent machinery is left completely untouched; every other `backgroundJobs.*` key stays accepted but inert. The `/interview`-style foreground flows are unaffected See [Background Job Management](#background-job-management). |
+| `backgroundJobs.mode` | string | `"managed"` | Background-task lifecycle mode. `"managed"` runs the OMOS job board, retention, wake scheduler, wall-clock watchdog, terminal gate, and the `task_cancel`/`task_status`/`task_reply` tools. `"native"` skips every board-shaped component and registers only two thin host-read controls: `task_status` (parent-scoped `session.get` plus the trailing result) and `task_cancel` (`session.abort`, session retained). `"off"` registers no OMOS task tool and leaves native OpenCode delegation completely untouched (session presets still bind delegated children; they are not board state). The legacy `enabled` key maps to `"off"`; an explicit `mode` wins when both are set. See [Background Job Management](#background-job-management). |
+| `backgroundJobs.enabled` | boolean | `true` | Legacy alias for the lifecycle switch: `false` is equivalent to `mode: "off"`, and an explicit `mode` wins when both are set. Prefer `mode`. When the lifecycle is off, every other `backgroundJobs.*` key stays accepted but inert, and the `/interview`-style foreground flows are unaffected. See [Background Job Management](#background-job-management). |
 | `backgroundJobs.maxSessionsPerAgent` | integer | `2` | Maximum completed/reconciled reusable child sessions per specialist type in the current orchestrator session (1–10) See [Background Job Management](#background-job-management). |
 | `backgroundJobs.maxRetainedSnapshots` | — | — | Removed: ignored with a warning. See [Removed config keys](#removed-config-keys). |
 | `backgroundJobs.strategy` | — | — | Removed: board placement is change-only. See [Removed config keys](#removed-config-keys). |
@@ -625,6 +635,14 @@ default-on orchestrator wake interval. The job board itself is never rendered
 into a prompt on any host, so there is no injection switch. For glossary
 definitions of background-job terms, see
 [GLOSSARY.md — Background Jobs](../GLOSSARY.md#background-jobs).
+
+**Choosing a lifecycle mode.** `backgroundJobs.mode: "managed"` (default) is
+the full layer described here. `"native"` keeps native OpenCode delegation and
+registers only `task_status` (host read of a child's state and trailing result)
+and `task_cancel` (host interruption, session retained) — no board, lease,
+retention, watchdog, wake scheduler, v2 board persistence, or structured-launch
+wrapper. `"off"` (also reachable through the legacy `enabled: false`) registers
+no OMOS task tool at all.
 
 **What gates reusability.** A completed child session enters the reusable pool
 when it reached a canonical terminal state, has been reconciled, and its status
@@ -1290,7 +1308,7 @@ Guards such as `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, a
 
 Notes:
 
-- Injection surfaces that have dedicated switches are not listed here: wake prompts (`backgroundJobs.orchestratorWake.enabled`, `backgroundJobs.childInputWake`), the whole managed background-task lifecycle (`backgroundJobs.enabled`), the interview subsystem (`interview.enabled`), the TUI sidebar (`sidebar`), and image routing (`image_routing`). `autoUpdate` controls automatic installation of updates; use the `auto-update-checker` hook name to stop update checking too.
+- Injection surfaces that have dedicated switches are not listed here: wake prompts (`backgroundJobs.orchestratorWake.enabled`, `backgroundJobs.childInputWake`), the whole managed background-task lifecycle (`backgroundJobs.mode`), the interview subsystem (`interview.enabled`), the TUI sidebar (`sidebar`), and image routing (`image_routing`). `autoUpdate` controls automatic installation of updates; use the `auto-update-checker` hook name to stop update checking too.
 - Invalid entries are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies.
 
 ### Slash Commands

@@ -23,6 +23,7 @@ export const PLUGIN_LOG_SINK: DiagnosticLogger = {
 
 export const DIAGNOSTIC_EVENT_NO_PANE = 'multiplexer.no-pane';
 export const DIAGNOSTIC_EVENT_PANE_CREATED = 'multiplexer.pane-created';
+export const DIAGNOSTIC_EVENT_PANE_CLOSED = 'multiplexer.pane-closed';
 export const DIAGNOSTIC_EVENT_HOST_UNSUPPORTED = 'multiplexer.host-unsupported';
 
 /** Optional context attached to a diagnostic record. */
@@ -57,6 +58,18 @@ export function logPaneCreated(
   logger.log(`[multiplexer] pane created: ${pane.paneId}`, {
     event: DIAGNOSTIC_EVENT_PANE_CREATED,
     ...pane,
+  });
+}
+
+export function logPaneClosed(
+  logger: DiagnosticLogger,
+  pane: PaneIdentity,
+  reason: 'stable-idle' | 'deleted' | 'backfill-gone' | 'dispose',
+): void {
+  logger.log(`[multiplexer] pane closed: ${pane.paneId}`, {
+    event: DIAGNOSTIC_EVENT_PANE_CLOSED,
+    ...pane,
+    reason,
   });
 }
 

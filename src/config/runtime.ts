@@ -39,6 +39,7 @@ import {
   type AcpAgentsConfig,
   type AgentOverrideConfig,
   type BackgroundJobsConfig,
+  type BackgroundJobsMode,
   type CompanionConfig,
   type FailoverConfig,
   type MultiplexerConfig,
@@ -74,10 +75,30 @@ export interface HostConfigSnapshot {
 /** Per-directory registry backing the singleton instances. */
 const registry = new Map<string, RuntimeConfig>();
 
+/**
+ * Resolve the lifecycle mode from a raw/parsed `backgroundJobs` block.
+ *
+ * Shared by `RuntimeConfig` (the v1 factory) and the v2 setup pre-flight,
+ * which reads the same snapshot before the v1 factory runs — both must agree,
+ * otherwise `native`/`off` would still wire v2 board persistence and the
+ * native-subagent executor wrapper.
+ */
+export function resolveBackgroundJobsMode(backgroundJobs?: {
+  mode?: unknown;
+  enabled?: unknown;
+}): BackgroundJobsMode {
+  const explicit = backgroundJobs?.mode;
+  if (explicit === 'managed' || explicit === 'native' || explicit === 'off') {
+    return explicit;
+  }
+  return backgroundJobs?.enabled === false ? 'off' : 'managed';
+}
+
 const DEFAULT_MULTIPLEXER: MultiplexerConfig =
   MultiplexerConfigStrictSchema.parse({});
 
 const DEFAULT_BACKGROUND_JOBS: BackgroundJobsConfig = {
+  mode: 'managed',
   enabled: true,
   maxSessionsPerAgent: DEFAULT_MAX_SESSIONS_PER_AGENT,
   orchestratorWake: {
@@ -392,9 +413,12 @@ export class RuntimeConfig {
   }
 
   get backgroundJobs(): BackgroundJobsConfig {
-    return this.resolveChildInputWake(
-      this.pluginConfig?.backgroundJobs ?? DEFAULT_BACKGROUND_JOBS,
-    );
+    return {
+      ...this.resolveChildInputWake(
+        this.pluginConfig?.backgroundJobs ?? DEFAULT_BACKGROUND_JOBS,
+      ),
+      mode: this.backgroundJobsMode,
+    };
   }
 
   private resolveChildInputWake(
@@ -436,8 +460,20 @@ export class RuntimeConfig {
     return this.pluginConfig?.autoUpdate ?? true;
   }
 
+  /** Resolved background-task lifecycle mode.
+   *
+   * An explicit `mode` wins; the legacy `enabled: false` maps to `off` so
+   * existing configs keep their exact no-op behavior. Only `managed`
+   * constructs the board-shaped lifecycle; `native` registers the two thin
+   * host-read control tools; `off` registers none.
+   */
+  get backgroundJobsMode(): BackgroundJobsMode {
+    return resolveBackgroundJobsMode(this.pluginConfig?.backgroundJobs);
+  }
+
+  /** True only for the managed lifecycle (`mode: "managed"`). */
   get backgroundJobsEnabled(): boolean {
-    return this.pluginConfig?.backgroundJobs?.enabled !== false;
+    return this.backgroundJobsMode === 'managed';
   }
 
   get interviewEnabled(): boolean {

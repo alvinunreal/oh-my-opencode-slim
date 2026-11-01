@@ -29,7 +29,7 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 
 | Tool Family | Purpose | Key Components |
 |------------|---------|----------------|
-| **Task Management** | Background task cancellation, status, results, revival, and HITL continuation control | `cancel-task.ts`, `task-status.ts`, `task-revive.ts`, `wait-for-user.ts`; v1-only `task-message.ts` (v2 steers natively) uses the board's shared amendment fence. See [diagnostic attribution](../../docs/tools.md#diagnostic-attribution). |
+| **Task Management** | Background task cancellation, status, results, revival, and HITL continuation control | `cancel-task.ts`, `task-status.ts`, `task-revive.ts`, `wait-for-user.ts`; v1-only `task-message.ts` (v2 steers natively) uses the board's shared amendment fence. `native-task-control.ts` is the boardless `backgroundJobs.mode: "native"` pair (`task_status` over `session.get` + the untracked verdicts; `task_cancel` over the host interrupt, reporting only the host's own answer) built on the shared untracked-task primitives. See [diagnostic attribution](../../docs/tools.md#diagnostic-attribution). |
 | **Task Policy & Activity** | Shared live-status policy and activity tracking consumed by `task_status` and event wiring | `task-policy.ts` (`summarizeTaskStatus`), `task-activity.ts` (`TaskActivityTracker`) |
 | **Retained Adoption** | Shared resolve-or-adopt seam for untracked host sessions, consumed by `task_revive` and the v2 subagent continuation bridge | `retained-adoption.ts` (`resolveOrAdoptUntrackedTask`) |
 | **ACP Integration** | External agent protocol execution with live progress streaming to the parent TUI (`ctx.metadata`) | `acp-run.ts`, ACP client implementation |
@@ -228,6 +228,7 @@ Tools Layer → Web Layer
 export { createAcpRunTool } from './acp-run';
 export { ast_grep_replace, ast_grep_search } from './ast-grep';
 export { createCancelTaskTool } from './cancel-task';
+export { createNativeTaskControlTools } from './native-task-control';
 export { createWebfetchTool } from './smartfetch';
 export { createTaskReviveTool } from './task-revive';
 export { createTaskStatusTool } from './task-status';

@@ -109,7 +109,7 @@ Three host entry builds are produced:
 |---|---|---|---|
 | `.` (main) | `dist/index.js` | `build:plugin` | zod, jsdom, @opencode-ai/*, @opentui/* (shared with v1 host) |
 | `./server` | `dist/server/index.js` + chunks | `build:v2` | jsdom, jsonc-parser (other runtime dependencies bundled) |
-| `./tui` | `dist/tui2.js` | `build:tui` | same external set as `build:plugin` (composes the v1 TUI entry; inlines zod) |
+| `./tui` | `dist/tui2.js` | `build:tui` | same external set as `build:plugin` (thin gate entry + deferred `dist/tui-impl` chunk composing the v1 TUI entry; inlines zod) |
 
 The optional `@opentui/*` dependencies provide the v2 TUI entry's rendering
 stack. The development-only `@opencode/plugin` 2.2.0 contract declares an
@@ -329,9 +329,10 @@ not an optional-degradation path.
       cache monitor's session eviction, `properties.sessionID` for the
       task-session-manager's tombstone/board teardown; no `generation` is
       fabricated, so the event-router's unproven-relaunch deletion fence
-      keeps its strength), usage telemetry
-      (`session.usage.updated`/`session.step.ended`) → a deduplicated
-      completed-assistant `message.updated` for the cache monitor, the Form
+      keeps its strength), per-request `session.step.ended` telemetry → one
+      completed-assistant `message.updated` per step, keyed by the assistant
+      message ID, for the cache monitor (cumulative `session.usage.updated`
+      is not subscribed), the Form
       flow (`form.created`/`form.replied`/`form.cancelled`) → v1
       `question.asked`/`question.replied`/`question.rejected`
       (`form.id` → the question request id; forms owned by the `"global"`
@@ -476,7 +477,7 @@ side cannot be observed.
 | Slash commands `/deepwork` `/reflect` | ✅ | ✅ marker round-trip | — |
 | `/interview` | ✅ | ✅ marker command + trailing-message context bridge | `interview.enabled: false` removes the command, the v1 manager, and the v2 bridge entirely |
 | Message transforms (phase reminder, skills filter, image routing, display-name rewrite) | ✅ | ✅ via the single context hook | — |
-| Event handling (session tracking, lifecycle, cache telemetry) | ✅ | ✅ event pump + additive v2→v1 synthesis | The synthesized usage `message.updated` carries no agent/model fields, so live session-model observation (sidebar model projection + `sessionMetadata` tracking) rides the prompt-bridge `chat.message` deliveries (agent + model + variant together; unchanged writes are short-circuited by the tui-state memo); the v2 TUI additionally overlays the picker's live selection on root orchestrator rows until the next prompt commits it. The static projection is republished on `config()` re-invocations |
+| Event handling (session tracking, lifecycle, cache telemetry) | ✅ | ✅ event pump + additive v2→v1 synthesis | The synthesized usage `message.updated` carries no agent/model fields, so live session-model observation (sidebar model projection + `sessionMetadata` tracking) rides the prompt-bridge `chat.message` deliveries (agent + model + variant together; unchanged writes are short-circuited by the tui-state memo); the v2 TUI additionally overlays the picker's live selection on root orchestrator rows (including a root session running the orchestrator's displayName identity) until the next prompt commits it. The static projection is republished on `config()` re-invocations |
 | Tool execute hooks (apply-patch recovery, task-session, json-recovery) | ✅ | ✅ `createToolExecuteBridges` with subagent→task normalization | — |
 | Built-in MCPs (context7, gh_grep) auto-registered | ✅ | ✅ `ctx.mcp.transform` | `ctx.mcp.transform` is present in all v2.0.x stable hosts; the runtime capability probe is belt-and-suspenders |
 | Background-job state persistence (tombstones, deletion epochs) | ➖ process-local | ✅ via `ctx.storage` | optional domain; absent → pure in-memory fallback, zero behavior change (see [Background job state](#background-job-state-rehydrate-probe-and-persistence)) |
@@ -1233,6 +1234,11 @@ review — and a host without `session.get` produces no entries.
   without it — install as a package or ensure `jsdom` is resolvable to
   enable webfetch locally). AST-grep resolves its CLI independently and
   lazily downloads a binary when no package or system binary is available.
+  Both ship as `optionalDependencies`: a normal install includes them, and
+  an install that omits optional packages (or an unsupported platform)
+  only degrades the feature that needs them — webfetch HTML extraction
+  reports the missing `jsdom`, ast-grep falls back to its downloader —
+  while plugin load, agent registration, and every other tool stay intact.
 - **Companion app unverified on v2.** The companion is an independent
   desktop app; test it separately against v2 hosts.
 - **Prompt-cache rules unchanged.** The v2 bridges reuse the v1 transform

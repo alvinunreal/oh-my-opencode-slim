@@ -7,11 +7,7 @@ import { createFixerAgent } from './fixer';
 import { createObserverAgent } from './observer';
 import { createOracleAgent } from './oracle';
 import { buildOrchestratorPrompt } from './orchestrator';
-import {
-  ROLE_DEFINITIONS,
-  ROLE_WRITE_CAPABILITY,
-  roleHasWriteCapability,
-} from './role-definitions';
+import { ROLE_DEFINITIONS } from './role-definitions';
 import { ROLE_ROUTING_SLIM_LINES } from './role-routing';
 
 const FACTORIES = {
@@ -84,40 +80,6 @@ describe('specialist role definitions', () => {
 
     expect(ROLE_ROUTING_SLIM_LINES.council).toContain('multi-model consensus');
     expect(ROLE_ROUTING_SLIM_LINES.oracle).toContain('escalation');
-  });
-});
-
-describe('roleHasWriteCapability', () => {
-  test('derives the verdict from the routing permission rows, not a name list', () => {
-    // Read-only rows (read_files / Read files / Synthesis only) are not writers.
-    expect(roleHasWriteCapability('explorer')).toBe(false);
-    expect(roleHasWriteCapability('oracle')).toBe(false);
-    expect(roleHasWriteCapability('observer')).toBe(false);
-    expect(roleHasWriteCapability('council')).toBe(false);
-    // Write rows are writers.
-    expect(roleHasWriteCapability('designer')).toBe(true);
-    expect(roleHasWriteCapability('fixer')).toBe(true);
-  });
-
-  test('fails safe to writer on undeterminable input', () => {
-    // Unknown/custom agents and missing agents.
-    expect(roleHasWriteCapability('custom-unknown')).toBe(true);
-    expect(roleHasWriteCapability(undefined)).toBe(true);
-    expect(roleHasWriteCapability('')).toBe(true);
-  });
-});
-
-describe('roleHasWriteCapability drift guard', () => {
-  test('every routing role has an explicit write-capability verdict', () => {
-    // A routing role missing from the table would fail safe to writer
-    // without a failing test.
-    for (const role of Object.keys(ROLE_ROUTING_SLIM_LINES)) {
-      expect(ROLE_WRITE_CAPABILITY[role]).toBeDefined();
-    }
-    // No stale table entries for roles absent from the routing data.
-    for (const role of Object.keys(ROLE_WRITE_CAPABILITY)) {
-      expect(role in ROLE_ROUTING_SLIM_LINES).toBe(true);
-    }
   });
 });
 

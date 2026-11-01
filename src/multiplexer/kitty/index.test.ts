@@ -214,8 +214,9 @@ describe('KittyMultiplexer', () => {
 
     // The secret travels as a spawn-time launch environment entry (`--env`,
     // before the `--` argv separator), never in the shell command.
-    const envIndex = remoteLaunch?.indexOf('--env') ?? -1;
+    const envIndex = (remoteLaunch?.indexOf('OPENCODE_PASSWORD=pw') ?? 0) - 1;
     expect(envIndex).toBeGreaterThan(-1);
+    expect(remoteLaunch?.[envIndex]).toBe('--env');
     expect(remoteLaunch?.[envIndex + 1]).toBe('OPENCODE_PASSWORD=pw');
     expect(envIndex).toBeLessThan(remoteLaunch?.indexOf('--') ?? -1);
     expect((remoteLaunch ?? []).filter((arg) => arg.includes('pw'))).toEqual([
@@ -233,8 +234,9 @@ describe('KittyMultiplexer', () => {
 
     // No password environment is injected outside v2-remote.
     const sharedLaunch = commandContaining('launch');
-    expect(sharedLaunch).not.toContain('--env');
-    expect(sharedLaunch).not.toContain('OPENCODE_PASSWORD');
+    expect(
+      sharedLaunch?.filter((_, index) => sharedLaunch[index - 1] === '--env'),
+    ).toEqual(['OH_MY_OPENCODE_SLIM_PANE_VIEWER=1']);
 
     const shared = sharedLaunch?.at(-1) ?? '';
     expect(shared).toContain('--session');

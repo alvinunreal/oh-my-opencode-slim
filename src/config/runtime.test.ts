@@ -195,6 +195,7 @@ describe('RuntimeConfig', () => {
     expect(runtime.compactSidebar).toBe(true);
     expect(runtime.sidebarEnabled).toBe(true);
     expect(runtime.backgroundJobsEnabled).toBe(true);
+    expect(runtime.backgroundJobsMode).toBe('managed');
     expect(runtime.interviewEnabled).toBe(true);
     expect(runtime.liveConfigRefresh).toBe(true);
     expect(runtime.imageRouting).toBe('direct');
@@ -210,6 +211,7 @@ describe('RuntimeConfig', () => {
       sidebar: false,
     });
     expect(off.backgroundJobsEnabled).toBe(false);
+    expect(off.backgroundJobsMode).toBe('off');
     expect(off.interviewEnabled).toBe(false);
     expect(off.sidebarEnabled).toBe(false);
     // Sibling backgroundJobs keys stay readable (parsed; inert at runtime).
@@ -235,6 +237,36 @@ describe('RuntimeConfig', () => {
     // own refresh path (host-side), so the derived boolean stays a pure
     // projection of the config layer and carries no preset state.
     expect(RuntimeConfig.get(DIRECTORY).liveConfigRefresh).toBe(false);
+  });
+
+  test('backgroundJobs.mode resolves the lifecycle and outranks the legacy enabled key', () => {
+    resetRegistry();
+    const native = RuntimeConfig.init(DIRECTORY, {
+      backgroundJobs: { mode: 'native' },
+    });
+    expect(native.backgroundJobsMode).toBe('native');
+    // Only the managed mode constructs the board-shaped lifecycle.
+    expect(native.backgroundJobsEnabled).toBe(false);
+
+    RuntimeConfig.reset(DIRECTORY);
+    const nativeWithLegacyOff = RuntimeConfig.init(DIRECTORY, {
+      backgroundJobs: { mode: 'native', enabled: false },
+    });
+    expect(nativeWithLegacyOff.backgroundJobsMode).toBe('native');
+
+    RuntimeConfig.reset(DIRECTORY);
+    const explicitOff = RuntimeConfig.init(DIRECTORY, {
+      backgroundJobs: { mode: 'off', enabled: true },
+    });
+    expect(explicitOff.backgroundJobsMode).toBe('off');
+    expect(explicitOff.backgroundJobsEnabled).toBe(false);
+
+    RuntimeConfig.reset(DIRECTORY);
+    const managed = RuntimeConfig.init(DIRECTORY, {
+      backgroundJobs: { mode: 'managed' },
+    });
+    expect(managed.backgroundJobsMode).toBe('managed');
+    expect(managed.backgroundJobsEnabled).toBe(true);
   });
 
   test('marketplaceEnabled defaults on and reads an explicit root kill switch', () => {

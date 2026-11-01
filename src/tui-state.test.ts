@@ -40,18 +40,60 @@ afterEach(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
-const LUNA = { agentName: 'explorer', model: 'openai/gpt-6-luna' } as const;
-const GPT = { agentName: 'explorer', model: 'openai/gpt-6' } as const;
+const LUNA = {
+  sessionID: 'model-session',
+  agentName: 'explorer',
+  model: 'openai/gpt-6-luna',
+} as const;
+const GPT = {
+  sessionID: 'model-session',
+  agentName: 'explorer',
+  model: 'openai/gpt-6',
+} as const;
 
 function recordLuna(): void {
   recordTuiAgentModel(LUNA, tempDir);
 }
 
 describe('tui-state persistence', () => {
+  test('bounds session observations while retaining active sessions', () => {
+    updateSnapshot(tempDir, (snapshot) => {
+      snapshot.sessionModels = Object.fromEntries(
+        Array.from({ length: TUI_SESSION_PARENTS_MAX }, (_, i) => [
+          `session-${i}`,
+          { explorer: { model: `model-${i}` } },
+        ]),
+      );
+      snapshot.activeSessions['session-0'] = 'explorer';
+      snapshot.activityPids['session-0'] = process.pid;
+    });
+    recordTuiAgentModel(
+      { sessionID: 'new', agentName: 'explorer', model: 'new-model' },
+      tempDir,
+    );
+    const sessions = readTuiSnapshot(tempDir).sessionModels ?? {};
+    expect(Object.keys(sessions)).toHaveLength(TUI_SESSION_PARENTS_MAX);
+    expect(sessions['session-0']?.explorer?.model).toBe('model-0');
+    expect(sessions['session-1']).toBeUndefined();
+    expect(sessions.new?.explorer?.model).toBe('new-model');
+
+    recordTuiAgentActivity({ sessionID: 'session-0', active: false }, tempDir);
+    recordTuiAgentModel(
+      { sessionID: 'newer', agentName: 'explorer', model: 'newer-model' },
+      tempDir,
+    );
+    const afterIdle = readTuiSnapshot(tempDir).sessionModels ?? {};
+    expect(Object.keys(afterIdle)).toHaveLength(TUI_SESSION_PARENTS_MAX);
+    expect(afterIdle['session-0']).toBeUndefined();
+    expect(afterIdle.newer?.explorer?.model).toBe('newer-model');
+  });
+
   test('readTuiSnapshotAsync caches by stat and invalidates on write', async () => {
     recordTuiAgentModel(LUNA, tempDir);
     const first = await readTuiSnapshotAsync(tempDir);
-    expect(first.agentModels.explorer).toBe(LUNA.model);
+    expect(first.sessionModels?.['model-session']?.explorer?.model).toBe(
+      LUNA.model,
+    );
 
     // Same stat (dev:ino:mtimeMs:size) → cached snapshot object identity.
     const second = await readTuiSnapshotAsync(tempDir);
@@ -62,13 +104,17 @@ describe('tui-state persistence', () => {
     recordTuiAgentModel(GPT, tempDir);
     const third = await readTuiSnapshotAsync(tempDir);
     expect(third).not.toBe(first);
-    expect(third.agentModels.explorer).toBe(GPT.model);
+    expect(third.sessionModels?.['model-session']?.explorer?.model).toBe(
+      GPT.model,
+    );
   });
 
   test('readTuiSnapshotAsync cache is bounded (LRU eviction)', async () => {
     recordTuiAgentModel(LUNA, tempDir);
     const first = await readTuiSnapshotAsync(tempDir);
-    expect(first.agentModels.explorer).toBe(LUNA.model);
+    expect(first.sessionModels?.['model-session']?.explorer?.model).toBe(
+      LUNA.model,
+    );
 
     // Poll 8 other projects: the first entry must be evicted even though
     // its file is unchanged (a fresh read returns a new object identity).
@@ -79,7 +125,9 @@ describe('tui-state persistence', () => {
     }
 
     const reRead = await readTuiSnapshotAsync(tempDir);
-    expect(reRead.agentModels.explorer).toBe(LUNA.model);
+    expect(reRead.sessionModels?.['model-session']?.explorer?.model).toBe(
+      LUNA.model,
+    );
     expect(reRead).not.toBe(first);
   });
 
@@ -148,6 +196,7 @@ describe('tui-state persistence', () => {
 
     recordTuiAgentModel(
       {
+        sessionID: 'model-session',
         agentName: 'orchestrator',
         model: 'openai/gpt-6',
       },
@@ -155,9 +204,12 @@ describe('tui-state persistence', () => {
     );
 
     expect(readTuiSnapshot(tempDir).agentModels).toEqual({
-      orchestrator: 'openai/gpt-6',
+      orchestrator: 'default',
       explorer: 'openai/gpt-6-luna',
     });
+    expect(
+      readTuiSnapshot(tempDir).sessionModels?.['model-session']?.orchestrator,
+    ).toEqual({ model: 'openai/gpt-6' });
   });
 
   test('updates a single live agent variant without dropping others', () => {
@@ -176,6 +228,7 @@ describe('tui-state persistence', () => {
 
     recordTuiAgentModel(
       {
+        sessionID: 'model-session',
         agentName: 'orchestrator',
         model: 'openai/gpt-6',
         variant: 'high',
@@ -184,9 +237,11 @@ describe('tui-state persistence', () => {
     );
 
     expect(readTuiSnapshot(tempDir).agentVariants).toEqual({
-      orchestrator: 'high',
       explorer: 'low',
     });
+    expect(
+      readTuiSnapshot(tempDir).sessionModels?.['model-session']?.orchestrator,
+    ).toEqual({ model: 'openai/gpt-6', variant: 'high' });
   });
 
   test('tracks concurrent activity by session without clearing the agent early', () => {
@@ -329,14 +384,12 @@ describe('tui-state persistence', () => {
     const staleTime = new Date('2000-01-01T00:00:00Z');
     fs.utimesSync(lockPath, staleTime, staleTime);
 
-    recordTuiAgentModel(
-      { agentName: 'explorer', model: 'openai/gpt-6-luna' },
-      tempDir,
-    );
+    recordTuiAgentModel(LUNA, tempDir);
 
-    expect(readTuiSnapshot(tempDir).agentModels.explorer).toBe(
-      'openai/gpt-6-luna',
-    );
+    expect(
+      readTuiSnapshot(tempDir).sessionModels?.['model-session']?.explorer
+        ?.model,
+    ).toBe('openai/gpt-6-luna');
     expect(fs.existsSync(lockPath)).toBe(false);
   });
 
@@ -349,7 +402,10 @@ describe('tui-state persistence', () => {
 
     recordLuna();
 
-    expect(readTuiSnapshot(tempDir).agentModels.explorer).toBe(LUNA.model);
+    expect(
+      readTuiSnapshot(tempDir).sessionModels?.['model-session']?.explorer
+        ?.model,
+    ).toBe(LUNA.model);
     expect(fs.existsSync(lockPath)).toBe(false);
   });
 
@@ -751,7 +807,41 @@ describe('tui-state persistence', () => {
     recordLuna();
     recordLuna();
     recordTuiAgentModel(GPT, tempDir);
-    expect(readTuiSnapshot(tempDir).agentModels.explorer).toBe(GPT.model);
+    expect(
+      readTuiSnapshot(tempDir).sessionModels?.['model-session']?.explorer
+        ?.model,
+    ).toBe(GPT.model);
+  });
+
+  test('single-key no-op avoids cloning but an external replacement is respected', () => {
+    recordLuna();
+    const clone = spyOn(globalThis, 'structuredClone');
+    try {
+      recordLuna();
+      expect(clone).not.toHaveBeenCalled();
+
+      const filePath = getTuiStatePath(tempDir);
+      const external = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      external.sessionModels[GPT.sessionID].explorer = { model: GPT.model };
+      fs.writeFileSync(`${filePath}.external`, JSON.stringify(external));
+      fs.renameSync(`${filePath}.external`, filePath);
+      recordLuna();
+      expect(
+        readTuiSnapshot(tempDir).sessionModels?.[LUNA.sessionID]?.explorer
+          ?.model,
+      ).toBe(LUNA.model);
+      expect(clone).toHaveBeenCalled();
+    } finally {
+      clone.mockRestore();
+    }
+  });
+
+  test('synchronous reads retain the persisted snapshot normalization', () => {
+    updateSnapshot(tempDir, (snapshot) => {
+      snapshot.agentModels.explorer = 'model';
+      snapshot.sessionDetails.session = { alias: undefined };
+    });
+    expect(readTuiSnapshot(tempDir).sessionDetails).toEqual({});
   });
 
   test('external snapshot changes are not masked by the memo', () => {
@@ -760,12 +850,18 @@ describe('tui-state persistence', () => {
     external.agentModels.builder = GPT.model;
     fs.writeFileSync(getTuiStatePath(tempDir), `${JSON.stringify(external)}\n`);
     recordTuiAgentModel(
-      { agentName: 'build', model: 'anthropic/claude-x' },
+      {
+        sessionID: 'model-session',
+        agentName: 'build',
+        model: 'anthropic/claude-x',
+      },
       tempDir,
     );
     const snapshot = readTuiSnapshot(tempDir);
     expect(snapshot.agentModels.builder).toBe(GPT.model);
-    expect(snapshot.agentModels.build).toBe('anthropic/claude-x');
+    expect(snapshot.sessionModels?.['model-session']?.build?.model).toBe(
+      'anthropic/claude-x',
+    );
   });
 
   test('a failed persistence is retried, not swallowed by the memo', async () => {
@@ -780,25 +876,42 @@ describe('tui-state persistence', () => {
       renameSpy.mockRestore();
     }
     recordTuiAgentModel(GPT, tempDir);
-    expect(readTuiSnapshot(tempDir).agentModels.explorer).toBe(GPT.model);
+    expect(
+      readTuiSnapshot(tempDir).sessionModels?.['model-session']?.explorer
+        ?.model,
+    ).toBe(GPT.model);
   });
 
   test('external atomic replacement invalidates the memo even with identical mtime and size', () => {
-    recordTuiAgentModel({ agentName: 'explorer', model: 'model-x' }, tempDir);
+    recordTuiAgentModel(
+      { sessionID: 'model-session', agentName: 'explorer', model: 'model-x' },
+      tempDir,
+    );
     const filePath = getTuiStatePath(tempDir);
     const external = readTuiSnapshot(tempDir);
-    external.agentModels.explorer = 'model-y';
+    external.sessionModels = {
+      'model-session': { explorer: { model: 'model-y' } },
+    };
     const tmpPath = `${filePath}.external.tmp`;
     fs.writeFileSync(tmpPath, `${JSON.stringify(external)}\n`);
     const stat = fs.statSync(filePath);
     fs.renameSync(tmpPath, filePath);
     fs.utimesSync(filePath, stat.atime, stat.mtime);
-    recordTuiAgentModel({ agentName: 'explorer', model: 'model-x' }, tempDir);
-    expect(readTuiSnapshot(tempDir).agentModels.explorer).toBe('model-x');
+    recordTuiAgentModel(
+      { sessionID: 'model-session', agentName: 'explorer', model: 'model-x' },
+      tempDir,
+    );
+    expect(
+      readTuiSnapshot(tempDir).sessionModels?.['model-session']?.explorer
+        ?.model,
+    ).toBe('model-x');
   });
 
   test('in-place rewrite preserving mtime is caught by ctime', () => {
-    recordTuiAgentModel({ agentName: 'explorer', model: 'model-x' }, tempDir);
+    recordTuiAgentModel(
+      { sessionID: 'model-session', agentName: 'explorer', model: 'model-x' },
+      tempDir,
+    );
     const filePath = getTuiStatePath(tempDir);
 
     // Pin mtime to a whole-millisecond date (utimes cannot restore
@@ -806,7 +919,10 @@ describe('tui-state persistence', () => {
     // stat snapshot of this exact state.
     const pinned = new Date('2000-01-01T00:00:00Z');
     fs.utimesSync(filePath, pinned, pinned);
-    recordTuiAgentModel({ agentName: 'explorer', model: 'model-x' }, tempDir);
+    recordTuiAgentModel(
+      { sessionID: 'model-session', agentName: 'explorer', model: 'model-x' },
+      tempDir,
+    );
     const statBefore = fs.statSync(filePath);
 
     // In-place rewrite (same inode, same length): mtime restored via
@@ -815,7 +931,9 @@ describe('tui-state persistence', () => {
     const sleeper = new Int32Array(new SharedArrayBuffer(4));
     Atomics.wait(sleeper, 0, 0, 10);
     const external = readTuiSnapshot(tempDir);
-    external.agentModels.explorer = 'model-y';
+    external.sessionModels = {
+      'model-session': { explorer: { model: 'model-y' } },
+    };
     const fd = fs.openSync(filePath, 'w');
     fs.writeSync(fd, `${JSON.stringify(external)}\n`);
     fs.closeSync(fd);
@@ -824,8 +942,14 @@ describe('tui-state persistence', () => {
     expect(statAfter.ino).toBe(statBefore.ino);
     expect(statAfter.mtimeMs).toBe(statBefore.mtimeMs);
 
-    recordTuiAgentModel({ agentName: 'explorer', model: 'model-x' }, tempDir);
-    expect(readTuiSnapshot(tempDir).agentModels.explorer).toBe('model-x');
+    recordTuiAgentModel(
+      { sessionID: 'model-session', agentName: 'explorer', model: 'model-x' },
+      tempDir,
+    );
+    expect(
+      readTuiSnapshot(tempDir).sessionModels?.['model-session']?.explorer
+        ?.model,
+    ).toBe('model-x');
   });
 
   test('a transient read failure does not seed the memo with an empty snapshot', async () => {
@@ -856,10 +980,7 @@ describe('tui-state persistence', () => {
   });
 
   test('keeps the final file intact when the atomic rename fails', async () => {
-    recordTuiAgentModel(
-      { agentName: 'explorer', model: 'openai/gpt-6-luna' },
-      tempDir,
-    );
+    recordTuiAgentModel(LUNA, tempDir);
 
     const fsModule = await import('node:fs');
     const renameSpy = spyOn(fsModule, 'renameSync').mockImplementation(() => {
@@ -867,17 +988,14 @@ describe('tui-state persistence', () => {
     });
 
     try {
-      recordTuiAgentModel(
-        { agentName: 'explorer', model: 'openai/gpt-6' },
-        tempDir,
-      );
+      recordTuiAgentModel(GPT, tempDir);
     } finally {
       renameSpy.mockRestore();
     }
 
     // The previously written state must still be readable in full.
-    expect(readTuiSnapshot(tempDir).agentModels).toEqual({
-      explorer: 'openai/gpt-6-luna',
+    expect(readTuiSnapshot(tempDir).sessionModels?.['model-session']).toEqual({
+      explorer: { model: 'openai/gpt-6-luna' },
     });
 
     const stateDir = path.dirname(getTuiStatePath(tempDir));
@@ -887,10 +1005,7 @@ describe('tui-state persistence', () => {
   });
 
   test('leaves no temp files behind on the happy path', () => {
-    recordTuiAgentModel(
-      { agentName: 'explorer', model: 'openai/gpt-6-luna' },
-      tempDir,
-    );
+    recordTuiAgentModel(LUNA, tempDir);
 
     const stateDir = path.dirname(getTuiStatePath(tempDir));
     expect(
@@ -1095,7 +1210,9 @@ describe('unified snapshot cache (writer memo + async reader)', () => {
       // The shared cache holds the writer's post-write snapshot at the
       // post-write stat: a hit never touches the file.
       const snapshot = await readTuiSnapshotAsync(tempDir);
-      expect(snapshot.agentModels.explorer).toBe(LUNA.model);
+      expect(snapshot.sessionModels?.['model-session']?.explorer?.model).toBe(
+        LUNA.model,
+      );
       expect(readSpy).not.toHaveBeenCalled();
     } finally {
       readSpy.mockRestore();
@@ -1108,7 +1225,9 @@ describe('unified snapshot cache (writer memo + async reader)', () => {
     // First replacement: the writer's cache entry no longer matches, so
     // the raced read below takes the miss path.
     const mid = readTuiSnapshot(tempDir);
-    mid.agentModels.explorer = 'model-mid';
+    mid.sessionModels = {
+      'model-session': { explorer: { model: 'model-mid' } },
+    };
     const midTmp = `${statePath}.race-mid.tmp`;
     fs.writeFileSync(midTmp, `${JSON.stringify(mid)}\n`);
     fs.renameSync(midTmp, statePath);
@@ -1127,11 +1246,15 @@ describe('unified snapshot cache (writer memo + async reader)', () => {
     try {
       const raced = await readTuiSnapshotAsync(tempDir);
       // The read returns what it actually read...
-      expect(raced.agentModels.explorer).toBe('model-mid');
+      expect(raced.sessionModels?.['model-session']?.explorer?.model).toBe(
+        'model-mid',
+      );
       // ...but the stat moved during the read, so nothing was published:
       // the next poll must observe the replaced file, not stale bytes.
       const next = await readTuiSnapshotAsync(tempDir);
-      expect(next.agentModels.explorer).toBe(GPT.model);
+      expect(next.sessionModels?.['model-session']?.explorer?.model).toBe(
+        GPT.model,
+      );
     } finally {
       readSpy.mockRestore();
     }
@@ -1175,15 +1298,24 @@ describe('unified snapshot cache (writer memo + async reader)', () => {
 describe('withTuiSnapshotBatch (native event fan-out scope)', () => {
   test('a recorder outside any batch writes immediately', () => {
     recordTuiAgentModel(LUNA, tempDir);
-    expect(readTuiSnapshot(tempDir).agentModels.explorer).toBe(LUNA.model);
+    expect(
+      readTuiSnapshot(tempDir).sessionModels?.['model-session']?.explorer
+        ?.model,
+    ).toBe(LUNA.model);
   });
 
   test('staged writes are invisible until the commit', async () => {
     await withTuiSnapshotBatch(async () => {
       recordTuiAgentModel(LUNA, tempDir);
-      expect(readTuiSnapshot(tempDir).agentModels.explorer).toBeUndefined();
+      expect(
+        readTuiSnapshot(tempDir).sessionModels?.['model-session']?.explorer
+          ?.model,
+      ).toBeUndefined();
     });
-    expect(readTuiSnapshot(tempDir).agentModels.explorer).toBe(LUNA.model);
+    expect(
+      readTuiSnapshot(tempDir).sessionModels?.['model-session']?.explorer
+        ?.model,
+    ).toBe(LUNA.model);
   });
 
   test('the finally commits staged writes even when the fan-out throws', async () => {
@@ -1199,7 +1331,9 @@ describe('withTuiSnapshotBatch (native event fan-out scope)', () => {
     ).rejects.toThrow('event failed');
 
     const snapshot = readTuiSnapshot(tempDir);
-    expect(snapshot.agentModels.explorer).toBe(LUNA.model);
+    expect(snapshot.sessionModels?.['model-session']?.explorer?.model).toBe(
+      LUNA.model,
+    );
     expect(snapshot.activeSessions.s1).toBe('oracle');
   });
 
@@ -1211,7 +1345,10 @@ describe('withTuiSnapshotBatch (native event fan-out scope)', () => {
     const first = withTuiSnapshotBatch(async () => {
       recordTuiAgentModel(LUNA, tempDir);
       await firstBlocked;
-      recordTuiAgentModel({ agentName: 'oracle', model: 'model-o' }, tempDir);
+      recordTuiAgentModel(
+        { sessionID: 'model-session', agentName: 'oracle', model: 'model-o' },
+        tempDir,
+      );
     });
     // The first wrapper is suspended inside its batch; a second wrapper
     // commits its own staged writes independently.
@@ -1220,16 +1357,16 @@ describe('withTuiSnapshotBatch (native event fan-out scope)', () => {
     });
     await second;
 
-    expect(readTuiSnapshot(tempDir).agentModels).toEqual({
-      explorer: GPT.model,
+    expect(readTuiSnapshot(tempDir).sessionModels?.['model-session']).toEqual({
+      explorer: { model: GPT.model },
     });
 
     releaseFirst();
     await first;
 
-    expect(readTuiSnapshot(tempDir).agentModels).toEqual({
-      explorer: LUNA.model,
-      oracle: 'model-o',
+    expect(readTuiSnapshot(tempDir).sessionModels?.['model-session']).toEqual({
+      explorer: { model: LUNA.model },
+      oracle: { model: 'model-o' },
     });
   });
 
@@ -1237,14 +1374,17 @@ describe('withTuiSnapshotBatch (native event fan-out scope)', () => {
     await withTuiSnapshotBatch(async () => {
       recordTuiAgentModel(LUNA, tempDir);
       await withTuiSnapshotBatch(async () => {
-        recordTuiAgentModel({ agentName: 'oracle', model: 'model-o' }, tempDir);
+        recordTuiAgentModel(
+          { sessionID: 'model-session', agentName: 'oracle', model: 'model-o' },
+          tempDir,
+        );
       });
       // The nested call staged rather than committing its own write.
-      expect(readTuiSnapshot(tempDir).agentModels).toEqual({});
+      expect(readTuiSnapshot(tempDir).sessionModels ?? {}).toEqual({});
     });
-    expect(readTuiSnapshot(tempDir).agentModels).toEqual({
-      explorer: LUNA.model,
-      oracle: 'model-o',
+    expect(readTuiSnapshot(tempDir).sessionModels?.['model-session']).toEqual({
+      explorer: { model: LUNA.model },
+      oracle: { model: 'model-o' },
     });
   });
 
@@ -1263,7 +1403,9 @@ describe('withTuiSnapshotBatch (native event fan-out scope)', () => {
     });
 
     const snapshot = readTuiSnapshot(tempDir);
-    expect(snapshot.agentModels.explorer).toBe(LUNA.model);
+    expect(snapshot.sessionModels?.['model-session']?.explorer?.model).toBe(
+      LUNA.model,
+    );
     expect(snapshot.agentModels.builder).toBe('foreign-model');
   });
 
@@ -1302,6 +1444,9 @@ describe('withTuiSnapshotBatch (native event fan-out scope)', () => {
       await Promise.resolve();
     });
     recordTuiAgentModel(LUNA, tempDir);
-    expect(readTuiSnapshot(tempDir).agentModels.explorer).toBe(LUNA.model);
+    expect(
+      readTuiSnapshot(tempDir).sessionModels?.['model-session']?.explorer
+        ?.model,
+    ).toBe(LUNA.model);
   });
 });

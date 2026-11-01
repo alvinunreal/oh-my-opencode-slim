@@ -10,10 +10,12 @@
  */
 
 import type { MultiplexerLayout } from '../../config/schema';
+import { TmuxMultiplexer } from '../tmux';
 import type { Multiplexer, PaneResult, PaneSpawnOptions } from '../types';
 import {
   type DiagnosticLogger,
   logNoPane,
+  logPaneClosed,
   logPaneCreated,
   PLUGIN_LOG_SINK,
 } from './diagnostics';
@@ -76,8 +78,8 @@ const MAX_CLOSE_ATTEMPTS = 4;
 export class PaneLifecycle {
   /** The in-process uniqueness store (FR-6), keyed by child session id. */
   private readonly panes = new Map<string, PaneRecord>();
-  /** Children whose spawn is in flight; the dedup marker for FR-6. */
-  private readonly spawnsInFlight = new Set<string>();
+  /** Dedup markers for FR-6; the promise tracks an actual adapter spawn. */
+  private readonly spawnsInFlight = new Map<string, Promise<void> | null>();
   /** Bounded tombstones: a deleted session must never spawn or rebuild. */
   private readonly deletedSessions = new Set<string>();
   /** Idle edges observed while the child's spawn is in flight. */
@@ -118,6 +120,7 @@ export class PaneLifecycle {
   private displayedDirectory: string;
   /** Set by `dispose()`: no pane is registered after this point. */
   private disposed = false;
+  private disposal: Promise<void> | null = null;
 
   constructor(
     private readonly ports: ClientPorts,
@@ -151,6 +154,7 @@ export class PaneLifecycle {
    * registering it, so disposal can never leave a late pane behind.
    */
   async dispose(): Promise<void> {
+    if (this.disposal) return this.disposal;
     this.disposed = true;
     for (const timer of this.idleTimers.values()) {
       this.ports.clock.clearTimeout(timer.handle);
@@ -163,16 +167,21 @@ export class PaneLifecycle {
     this.pendingDelays.clear();
     const records = [...this.panes.values()];
     this.panes.clear();
-    await Promise.allSettled(
-      records.map(async (record) => {
+    this.disposal = Promise.allSettled([
+      ...[...this.spawnsInFlight.values()].filter(
+        (spawn): spawn is Promise<void> => spawn !== null,
+      ),
+      ...records.map(async (record) => {
         try {
           const adapter = this.ports.adapterFactory.create(record.adapter);
-          await adapter?.closePane(record.paneId);
+          if (await adapter?.closePane(record.paneId))
+            logPaneClosed(this.logger, record, 'dispose');
         } catch {
           // Fail-soft: a leftover pane is handled by the FR-8 sweep.
         }
       }),
-    );
+    ]).then(() => {});
+    await this.disposal;
   }
 
   /** The client-local pane for a child session, if one is tracked. */
@@ -285,8 +294,14 @@ export class PaneLifecycle {
    */
   async onReconnect(): Promise<void> {
     const parentSessionId = this.displayedSessionId;
-    if (parentSessionId === null || this.config.adapter === null) return;
     const directory = this.displayedDirectory;
+    if (this.config.adapter === null) return;
+    await this.reconcileOtherHeldPanes(parentSessionId, directory);
+    if (
+      parentSessionId === null ||
+      !this.isDisplayed(parentSessionId, directory)
+    )
+      return;
     const heldAtStart = new Set(this.panes.keys());
 
     const list = await this.listSessions(directory, parentSessionId);
@@ -311,7 +326,11 @@ export class PaneLifecycle {
     // a pane for a previously displayed session stays tracked (FR-3) and must
     // not be closed just because this parent's child list does not name it.
     for (const [childSessionId, record] of [...this.panes]) {
-      if (record.parentSessionId !== parentSessionId) continue;
+      if (
+        record.parentSessionId !== parentSessionId ||
+        record.directory !== directory
+      )
+        continue;
       if (!heldAtStart.has(childSessionId)) continue;
       if (!serverChildIds.has(childSessionId)) {
         await this.closePane(childSessionId, record, 'backfill-gone');
@@ -326,11 +345,6 @@ export class PaneLifecycle {
       const live = statuses?.get(childSessionId);
       if (statuses && live !== 'busy' && live !== 'retry')
         this.scheduleStableIdleClose(childSessionId, record, true);
-      logNoPane(this.logger, 'backfill-skipped', {
-        childSessionId,
-        parentSessionId,
-        adapter: this.config.adapter,
-      });
     }
 
     // Closed-but-watched children: drop the ones the server no longer has,
@@ -384,6 +398,56 @@ export class PaneLifecycle {
         directory,
         live,
       );
+    }
+  }
+
+  /** Recheck held panes without backfilling conversations that are not visible. */
+  private async reconcileOtherHeldPanes(
+    parent: string | null,
+    directory: string,
+  ): Promise<void> {
+    const groups = new Map<
+      string,
+      { records: Array<{ record: PaneRecord; epoch: number }> }
+    >();
+    for (const record of this.panes.values()) {
+      if (record.parentSessionId === parent && record.directory === directory)
+        continue;
+      const key = JSON.stringify([record.directory, record.parentSessionId]);
+      const group = groups.get(key) ?? { records: [] };
+      group.records.push({
+        record,
+        epoch: this.activityEpoch.get(record.childSessionId) ?? 0,
+      });
+      groups.set(key, group);
+    }
+    for (const { records } of groups.values()) {
+      const first = records[0]?.record;
+      if (!first || this.disposed) continue;
+      const list = await this.listSessions(
+        first.directory,
+        first.parentSessionId,
+      );
+      if (list.error) continue;
+      const statuses = await this.readStatus(first.directory);
+      const children = new Set(list.sessions.map((entry) => entry.sessionId));
+      for (const { record, epoch } of records) {
+        const id = record.childSessionId;
+        if (
+          this.disposed ||
+          this.panes.get(id) !== record ||
+          (this.activityEpoch.get(id) ?? 0) !== epoch
+        )
+          continue;
+        if (!children.has(id))
+          await this.closePane(id, record, 'backfill-gone');
+        else if (
+          !statuses.error &&
+          statuses.statuses.get(id) !== 'busy' &&
+          statuses.statuses.get(id) !== 'retry'
+        )
+          this.scheduleStableIdleClose(id, record, true);
+      }
     }
   }
 
@@ -492,6 +556,7 @@ export class PaneLifecycle {
     if (adapterType === null) return;
     // Every creation path shares this in-process FR-6 dedup gate.
     if (
+      this.disposed ||
       this.panes.has(childSessionId) ||
       this.spawnsInFlight.has(childSessionId) ||
       this.deletedSessions.has(childSessionId)
@@ -501,7 +566,8 @@ export class PaneLifecycle {
     // Creation supersedes any pending rebuild watch for this child; the watch
     // is dropped only once the pane exists, so a failed attempt (readiness
     // timeout, adapter failure) stays eligible for a later busy edge.
-    this.spawnsInFlight.add(childSessionId);
+    let finishSpawn = () => {};
+    this.spawnsInFlight.set(childSessionId, null);
     try {
       // Host reachability first: embedded mode (no listener) must stay
       // distinguishable from a readiness timeout (D3/FR-13).
@@ -542,6 +608,10 @@ export class PaneLifecycle {
       // Deleted while waiting for readiness: never create the pane (FR-10).
       if (this.deletedSessions.has(childSessionId)) return;
 
+      const spawnFinished = new Promise<void>((resolve) => {
+        finishSpawn = resolve;
+      });
+      this.spawnsInFlight.set(childSessionId, spawnFinished);
       const result = await this.spawn(
         adapter,
         childSessionId,
@@ -563,7 +633,19 @@ export class PaneLifecycle {
       // registering it, so disposal cannot leak a late pane.
       if (this.disposed) {
         try {
-          await adapter.closePane(result.paneId);
+          if (await adapter.closePane(result.paneId)) {
+            logPaneClosed(
+              this.logger,
+              {
+                childSessionId,
+                parentSessionId,
+                paneId: result.paneId,
+                adapter: adapterType,
+                anchoredTarget: this.resolveAnchoredTarget(),
+              },
+              'dispose',
+            );
+          }
         } catch {
           // Fail-soft: the FR-8 sweep is the documented fallback.
         }
@@ -602,6 +684,8 @@ export class PaneLifecycle {
         this.scheduleStableIdleClose(childSessionId, record, true);
       }
 
+      this.spawnsInFlight.set(childSessionId, null);
+      finishSpawn();
       await this.applyLayout(adapter);
     } finally {
       this.spawnsInFlight.delete(childSessionId);
@@ -618,6 +702,7 @@ export class PaneLifecycle {
         );
       }
       this.idleWhileSpawning.delete(childSessionId);
+      finishSpawn();
     }
   }
 
@@ -653,7 +738,14 @@ export class PaneLifecycle {
 
   private async applyLayout(adapter: Multiplexer): Promise<void> {
     try {
-      await adapter.applyLayout(this.config.layout, this.config.mainPaneSize);
+      if (adapter instanceof TmuxMultiplexer) {
+        await adapter.applySpawnLayout(
+          this.config.layout,
+          this.config.mainPaneSize,
+        );
+      } else {
+        await adapter.applyLayout(this.config.layout, this.config.mainPaneSize);
+      }
     } catch {
       // Layout is cosmetic; a created pane must never fail over it.
     }
@@ -817,6 +909,11 @@ export class PaneLifecycle {
     }
 
     if (closed) {
+      logPaneClosed(
+        this.logger,
+        record,
+        reason === 'idle' ? 'stable-idle' : reason,
+      );
       this.panes.delete(childSessionId);
       this.activityEpoch.delete(childSessionId);
       this.closeAttempts.delete(childSessionId);
@@ -860,7 +957,15 @@ export class PaneLifecycle {
     if (this.disposed || this.panes.get(childSessionId) !== record) return;
     const attempts = (this.closeAttempts.get(childSessionId) ?? 0) + 1;
     this.closeAttempts.set(childSessionId, attempts);
-    if (attempts >= MAX_CLOSE_ATTEMPTS) return;
+    if (attempts >= MAX_CLOSE_ATTEMPTS) {
+      this.logger.log('[multiplexer] pane close retries exhausted', {
+        event: 'multiplexer.pane-close-failed',
+        ...record,
+        reason: 'retries-exhausted',
+        closeReason: reason,
+      });
+      return;
+    }
     const handle = this.ports.clock.setTimeout(() => {
       this.idleTimers.delete(childSessionId);
       if (this.panes.get(childSessionId) !== record) return;

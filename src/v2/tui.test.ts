@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, jest, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -6,9 +6,11 @@ import { RGBA } from '@opentui/core';
 import { testRender } from '@opentui/solid';
 import { createSignal } from 'solid-js';
 import type { PluginConfig } from '../config';
+import { TmuxMultiplexer } from '../multiplexer/tmux';
 import baseTui, { readTuiGates } from '../tui';
 import {
   recordTuiAgentActivity,
+  recordTuiAgentModel,
   recordTuiAgentModels,
   recordTuiSessionParent,
 } from '../tui-state';
@@ -16,7 +18,8 @@ import {
   notifyConfigChanged,
   registerConfigChangeListener,
 } from './config-change-coordinator';
-import tui2Plugin, { runPresetFlow, type V2TuiPluginContext } from './tui';
+import tui2Plugin from './tui';
+import { runPresetFlow, type V2TuiPluginContext } from './tui-impl';
 
 function makeConfig(): PluginConfig {
   return {
@@ -665,8 +668,48 @@ describe('v2 tui preset plugin', () => {
 
     test('keeps the v1 dual contract and extends the v2 setup', () => {
       expect(tui2Plugin.id).toBe(baseTui.id);
-      expect(tui2Plugin.tui).toBe(baseTui.tui);
+      // The v1 factory is a thin delegate (the composition loads only when a
+      // v1 host calls it), so identity is asserted on the contract shape.
+      expect(typeof tui2Plugin.tui).toBe('function');
       expect(typeof tui2Plugin.setup).toBe('function');
+    });
+
+    test('viewer TUI does not check for updates', async () => {
+      writeUserConfig({ sidebar: false });
+      process.env.OH_MY_OPENCODE_SLIM_PANE_VIEWER = '1';
+      const originalFetch = globalThis.fetch;
+      let requests = 0;
+      globalThis.fetch = (async () => {
+        requests += 1;
+        return new Response('{"version":"1.0.0"}');
+      }) as typeof fetch;
+      jest.useFakeTimers();
+      let cleanup: (() => void) | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          makeSetupCtx().ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        jest.advanceTimersByTime(1_500);
+        for (let i = 0; i < 30; i += 1) await Promise.resolve();
+        expect(requests).toBe(0);
+      } finally {
+        cleanup?.();
+        jest.useRealTimers();
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    test('v2 cleanup returns a promise to the host', async () => {
+      writeUserConfig({
+        sidebar: false,
+        disabled_hooks: ['auto-update-checker'],
+      });
+      const cleanup = await tui2Plugin.setup(
+        makeSetupCtx().ctx as unknown as V2TuiPluginContext,
+      );
+      const done = cleanup?.();
+      expect(done).toBeInstanceOf(Promise);
+      await done;
     });
 
     test('sidebar separates default from session snapshot and rejects stale route/workspace responses', async () => {
@@ -798,6 +841,95 @@ describe('v2 tui preset plugin', () => {
           presetName: null,
           affects: 'future-children-only',
         });
+        cleanup?.();
+        screen?.renderer.destroy();
+      }
+    });
+
+    test('sidebar projects session observations before the session team', async () => {
+      writeUserConfig({ ...makeConfig(), compactSidebar: false });
+      process.env.XDG_DATA_HOME = path.join(configHome, 'session-team-data');
+      process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '60000';
+      recordTuiAgentModels(
+        {
+          agentModels: {
+            orchestrator: 'global/root',
+            explorer: 'global/child',
+          },
+        },
+        projectDir,
+      );
+      recordTuiSessionParent('child-a', 'root-a', projectDir);
+      recordTuiAgentActivity(
+        { sessionID: 'child-a', agentName: 'explorer', active: true },
+        projectDir,
+      );
+      recordTuiAgentModel(
+        {
+          sessionID: 'root-a',
+          agentName: 'orchestrator',
+          model: 'live/root-observed',
+          variant: 'high',
+        },
+        projectDir,
+      );
+      recordTuiAgentModel(
+        {
+          sessionID: 'child-a',
+          agentName: 'explorer',
+          model: 'live/child-observed',
+        },
+        projectDir,
+      );
+      const stub = makeSetupCtx();
+      (stub.ctx.ui as { router: { current: () => unknown } }).router.current =
+        () => ({ type: 'session', sessionID: 'root-a' });
+      let notifyRendered = () => {};
+      const rendered = new Promise<void>((resolve) => {
+        notifyRendered = resolve;
+      });
+      stub.ctx.renderer = { requestRender: notifyRendered };
+      stub.ctx.client = {
+        rpc: () => ({
+          read: async () => ({
+            sessionID: 'root-a',
+            status: 'bound',
+            presetName: 'balanced',
+            affects: 'future-children-only',
+            team: {
+              agentModels: {
+                orchestrator: 'saved/preset-root',
+                explorer: 'saved/team-child',
+              },
+              agentVariants: {},
+              inheritance: {},
+            },
+          }),
+        }),
+      };
+      let cleanup: (() => void) | undefined;
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      try {
+        cleanup = await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        );
+        await rendered;
+        const sidebar = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        if (!sidebar?.render) throw new Error('Sidebar slot missing');
+        screen = await testRender(() => sidebar.render?.() as never, {
+          width: 80,
+          height: 32,
+        });
+        await screen.renderOnce();
+        const frame = screen.captureCharFrame();
+        expect(frame).toContain('root-observed');
+        expect(frame).toMatch(/variant\s+high/);
+        expect(frame).toContain('team-child');
+        expect(frame).not.toContain('child-observed');
+        expect(frame).not.toContain('preset-root');
+      } finally {
         cleanup?.();
         screen?.renderer.destroy();
       }
@@ -946,6 +1078,89 @@ describe('v2 tui preset plugin', () => {
           'gemini-x',
           'medium',
         );
+      } finally {
+        cleanup?.();
+        screen?.renderer.destroy();
+      }
+    });
+
+    test('sidebar overlays the picker selection on a root session under the orchestrator displayName', async () => {
+      writeUserConfig({ ...makeConfig(), compactSidebar: false });
+      process.env.XDG_DATA_HOME = path.join(configHome, 'display-identity');
+      process.env.OPENCODE_LOG_DIR = path.join(configHome, 'logs');
+      process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '60000';
+      // Static on-disk projection: the canonical orchestrator row carries
+      // the registry identity map, so a root session running the visible
+      // displayName agent ('reasoner') is still the orchestrator's row.
+      recordTuiAgentModels(
+        {
+          agentModels: { orchestrator: 'zai-coding-plan/glm-5.3' },
+          agentVariants: { orchestrator: 'medium' },
+          agentDisplayNames: { orchestrator: 'reasoner' },
+        },
+        projectDir,
+      );
+      const [route] = createSignal({
+        type: 'session',
+        sessionID: 'root-a',
+      });
+      const stub = makeSetupCtx();
+      const ui = stub.ctx.ui as {
+        router: { current: () => unknown };
+        model?: unknown;
+      };
+      ui.router.current = route;
+      ui.model = {
+        current: () => ({
+          providerID: 'opencode-go',
+          modelID: 'gemini-x',
+          variant: 'high',
+        }),
+      };
+      stub.ctx.data = {
+        session: {
+          get: (sessionID: string) =>
+            sessionID === 'root-a' ? { agent: 'reasoner' } : { agent: 'other' },
+        },
+      };
+      let notifyRendered = () => {};
+      const rendered = new Promise<void>((resolve) => {
+        notifyRendered = resolve;
+      });
+      stub.ctx.renderer = { requestRender: () => notifyRendered() };
+      stub.ctx.client = {
+        rpc: () => ({
+          read: async () => ({
+            status: 'unbound',
+            presetName: null,
+            affects: 'future-children-only',
+          }),
+        }),
+      };
+      let cleanup: (() => void) | undefined;
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      try {
+        cleanup = await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        );
+        await rendered;
+        const sidebar = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        if (!sidebar?.render) throw new Error('Sidebar slot missing');
+        screen = await testRender(() => sidebar.render?.() as never, {
+          width: 80,
+          height: 32,
+        });
+        await screen.renderOnce();
+        // The picker selection replaces the static row immediately, before
+        // any prompt commits the switch — even though the session's agent
+        // is the displayName identity, not the canonical 'orchestrator'.
+        expect(screen.captureCharFrame()).toContain('gemini-x');
+        expect(screen.captureCharFrame()).not.toContain('glm-5.3');
+        expect(screen.captureCharFrame()).toMatch(/variant\s+high/);
+        // One row, labeled by the display name.
+        expect(screen.captureCharFrame().match(/reasoner/g)?.length).toBe(1);
       } finally {
         cleanup?.();
         screen?.renderer.destroy();
@@ -1631,6 +1846,457 @@ describe('v2 tui preset plugin', () => {
       expect([...unsubscribed].sort()).toEqual(expectedEvents);
     });
 
+    async function assertProjectPaneAdmission(sidebar: boolean) {
+      writeUserConfig({
+        sidebar,
+        disabled_hooks: ['auto-update-checker'],
+      });
+      const projectB = path.join(projectDir, 'project-b');
+      for (const [directory, type] of [
+        [projectDir, 'tmux'],
+        [projectB, 'none'],
+      ]) {
+        const configDir = path.join(directory, '.opencode');
+        fs.mkdirSync(configDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(configDir, 'oh-my-opencode-slim.json'),
+          JSON.stringify({ multiplexer: { type } }),
+        );
+      }
+      process.env.TMUX_PANE = '%test';
+      const originalArgv = process.argv;
+      process.argv = ['opencode'];
+      const spawn = jest
+        .spyOn(TmuxMultiplexer.prototype, 'spawnPane')
+        .mockResolvedValue({ success: true, paneId: '%test-child' });
+      const close = jest
+        .spyOn(TmuxMultiplexer.prototype, 'closePane')
+        .mockResolvedValue(true);
+      const layout = jest
+        .spyOn(TmuxMultiplexer.prototype, 'applyLayout')
+        .mockResolvedValue();
+      const sweep = jest
+        .spyOn(TmuxMultiplexer.prototype, 'listPanesWithTitles')
+        .mockResolvedValue([]);
+      const stub = makeSetupCtx();
+      let directory = projectDir;
+      let parent = 'parent-a';
+      Object.defineProperty(stub.ctx, 'location', {
+        get: () => ({ directory }),
+      });
+      (stub.ctx.ui as { router: { current: () => unknown } }).router.current =
+        () => ({ type: 'session', sessionID: parent });
+      const handlers = new Map<string, (event: unknown) => void>();
+      stub.ctx.data = {
+        on: (type: string, handler: (event: unknown) => void) => {
+          handlers.set(type, handler);
+          return () => handlers.delete(type);
+        },
+      };
+      stub.ctx.client = {
+        server: { info: async () => ({ urls: ['http://127.0.0.1:1'] }) },
+        session: {
+          list: async () => [],
+          active: async () => ({ 'child-a': {}, 'child-b': {} }),
+        },
+      };
+      jest.useFakeTimers();
+      let cleanup: (() => Promise<void>) | undefined;
+      try {
+        expect(readTuiGates(projectB, 'v2').gates.multiplexerType).toBe('none');
+        cleanup = await baseTui.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        );
+        handlers.get('session.created')?.({
+          data: {
+            sessionID: 'child-a',
+            parentID: parent,
+            location: { directory },
+          },
+        });
+        for (let i = 0; i < 40; i += 1) await Promise.resolve();
+        expect(spawn).toHaveBeenCalledTimes(1);
+        directory = projectB;
+        parent = 'parent-b';
+        handlers.get('session.created')?.({
+          data: {
+            sessionID: 'child-b',
+            parentID: parent,
+            location: { directory },
+          },
+        });
+        for (let i = 0; i < 40; i += 1) await Promise.resolve();
+        expect(spawn).toHaveBeenCalledTimes(1);
+        jest.advanceTimersByTime(5_000);
+        for (let i = 0; i < 40; i += 1) await Promise.resolve();
+        handlers.get('session.created')?.({
+          data: {
+            sessionID: 'child-b',
+            parentID: parent,
+            location: { directory },
+          },
+        });
+        for (let i = 0; i < 40; i += 1) await Promise.resolve();
+        expect(spawn).toHaveBeenCalledTimes(1);
+      } finally {
+        await cleanup?.();
+        jest.useRealTimers();
+        process.argv = originalArgv;
+        spawn.mockRestore();
+        close.mockRestore();
+        layout.mockRestore();
+        sweep.mockRestore();
+      }
+    }
+
+    test('sidebar-off project changes apply the new pane admission', () =>
+      assertProjectPaneAdmission(false));
+
+    test('sidebar-on project changes apply the new pane admission', () =>
+      assertProjectPaneAdmission(true));
+
+    test('sidebar refresh renders project config already synced by pane wiring', async () => {
+      writeUserConfig({
+        ...makeConfig(),
+        sidebar: true,
+        disabled_hooks: ['auto-update-checker'],
+      });
+      process.env.XDG_DATA_HOME = path.join(configHome, 'sidebar-project-data');
+      process.env.TMUX_PANE = '%test';
+      delete process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS;
+      delete process.env.OH_MY_OPENCODE_SLIM_PANE_VIEWER;
+      const originalArgv = process.argv;
+      process.argv = ['opencode'];
+      const projectB = path.join(projectDir, 'project-b');
+      for (const [directory, type, preset] of [
+        [projectDir, 'tmux', 'balanced'],
+        [projectB, 'none', 'cheap'],
+      ]) {
+        const configDir = path.join(directory, '.opencode');
+        fs.mkdirSync(configDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(configDir, 'oh-my-opencode-slim.json'),
+          JSON.stringify({
+            multiplexer: { type },
+            preset,
+            compactSidebar: type !== 'none',
+          }),
+        );
+      }
+      const sweep = jest
+        .spyOn(TmuxMultiplexer.prototype, 'listPanesWithTitles')
+        .mockResolvedValue([]);
+      const spawn = jest
+        .spyOn(TmuxMultiplexer.prototype, 'spawnPane')
+        .mockResolvedValue({ success: true, paneId: '%test-child' });
+      const close = jest
+        .spyOn(TmuxMultiplexer.prototype, 'closePane')
+        .mockResolvedValue(true);
+      const layout = jest
+        .spyOn(TmuxMultiplexer.prototype, 'applyLayout')
+        .mockResolvedValue();
+      const stub = makeSetupCtx();
+      let directory = projectDir;
+      (stub.ctx.ui as { router: { current: () => unknown } }).router.current =
+        () => ({
+          type: 'session',
+          sessionID: directory === projectDir ? 'parent-a' : 'parent-b',
+        });
+      Object.defineProperty(stub.ctx, 'location', {
+        get: () => ({ directory }),
+      });
+      const handlers = new Map<string, (event: unknown) => void>();
+      stub.ctx.data = {
+        on: (type: string, handler: (event: unknown) => void) => {
+          handlers.set(type, handler);
+          return () => handlers.delete(type);
+        },
+      };
+      stub.ctx.client = {
+        server: { info: async () => ({ urls: ['http://127.0.0.1:1'] }) },
+        session: { list: async () => [], active: async () => ({}) },
+        rpc: () => ({
+          read: async (input: { sessionID: string }) => ({
+            sessionID: input.sessionID,
+            status: 'unbound',
+            presetName: null,
+            affects: 'future-children-only',
+          }),
+        }),
+      };
+      let notifyRender = () => {};
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      stub.ctx.renderer = {
+        requestRender: () => {
+          notifyRender();
+          screen?.renderer.requestRender();
+        },
+      };
+      jest.useFakeTimers();
+      let cleanup: (() => Promise<void>) | undefined;
+      try {
+        let rendered = new Promise<void>((resolve) => {
+          notifyRender = resolve;
+        });
+        cleanup = await baseTui.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        );
+        await rendered;
+        for (let i = 0; i < 5; i += 1) await Promise.resolve();
+        const sidebar = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        if (!sidebar?.render) throw new Error('Sidebar slot missing');
+        screen = await testRender(() => sidebar.render?.() as never, {
+          width: 80,
+          height: 24,
+        });
+        await screen.renderOnce();
+        expect(screen.captureCharFrame()).toContain('Default balanced');
+        directory = projectB;
+        handlers.get('session.created')?.({
+          data: {
+            sessionID: 'child-b',
+            parentID: 'parent-b',
+            location: { directory },
+          },
+        });
+        rendered = new Promise<void>((resolve) => {
+          notifyRender = resolve;
+        });
+        jest.advanceTimersByTime(1_000);
+        await rendered;
+        await screen.renderOnce();
+        expect(screen.captureCharFrame()).toContain('Default cheap');
+        for (let i = 0; i < 5; i += 1) await Promise.resolve();
+        rendered = new Promise<void>((resolve) => {
+          notifyRender = resolve;
+        });
+        recordTuiAgentModels(
+          { agentModels: { oracle: 'r2-provider/r2-model' } },
+          projectB,
+        );
+        jest.advanceTimersByTime(1_000);
+        await rendered;
+        await screen.renderOnce();
+        expect(screen.captureCharFrame()).toContain('r2-model');
+        expect(screen.captureCharFrame()).toContain('r2-provider');
+      } finally {
+        await cleanup?.();
+        jest.useRealTimers();
+        process.argv = originalArgv;
+        sweep.mockRestore();
+        spawn.mockRestore();
+        close.mockRestore();
+        layout.mockRestore();
+        screen?.renderer.destroy();
+      }
+    });
+
+    test('sidebar updates the default preset changed in the preset manager', async () => {
+      writeUserConfig({
+        ...makeConfig(),
+        disabled_hooks: ['auto-update-checker'],
+        multiplexer: { type: 'none' },
+      });
+      process.env.XDG_DATA_HOME = path.join(configHome, 'preset-sidebar-data');
+      delete process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS;
+      delete process.env.OH_MY_OPENCODE_SLIM_PANE_VIEWER;
+      const stub = makeSetupCtx();
+      const ui = stub.ctx.ui as {
+        router: { current: () => unknown };
+        dialog?: unknown;
+      };
+      ui.router.current = () => ({ type: 'session', sessionID: 'root' });
+      const selections = ['cheap', 'apply', 'global'];
+      ui.dialog = {
+        select: async () => selections.shift(),
+        prompt: async () => undefined,
+        confirm: async () => true,
+      };
+      let notifyRead = () => {};
+      stub.ctx.client = {
+        rpc: () => ({
+          read: async () => {
+            notifyRead();
+            return {
+              sessionID: 'root',
+              status: 'bound',
+              presetName: 'session-team',
+              affects: 'future-children-only',
+              team: {
+                agentModels: { oracle: 'provider/model' },
+                agentVariants: {},
+                inheritance: {},
+              },
+            };
+          },
+        }),
+      };
+      let notifyRender = () => {};
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      stub.ctx.renderer = {
+        requestRender: () => {
+          notifyRender();
+          screen?.renderer.requestRender();
+        },
+      };
+      jest.useFakeTimers();
+      let cleanup: (() => Promise<void>) | undefined;
+      try {
+        let rendered = new Promise<void>((resolve) => {
+          notifyRender = resolve;
+        });
+        cleanup = await baseTui.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        );
+        await rendered;
+        for (let i = 0; i < 5; i += 1) await Promise.resolve();
+        rendered = new Promise<void>((resolve) => {
+          notifyRender = resolve;
+        });
+        recordTuiAgentModels(
+          { agentModels: { oracle: 'provider/model' } },
+          projectDir,
+        );
+        jest.advanceTimersByTime(1_000);
+        await rendered;
+        const sidebar = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        if (!sidebar?.render) throw new Error('Sidebar slot missing');
+        screen = await testRender(() => sidebar.render?.() as never, {
+          width: 80,
+          height: 24,
+        });
+        await screen.renderOnce();
+        expect(screen.captureCharFrame()).toContain('Default balanced');
+        expect(screen.captureCharFrame()).toContain(
+          'Session team snapshot: session-team',
+        );
+
+        await runPresetFlow(stub.ctx as unknown as V2TuiPluginContext);
+        expect(readUserConfig().preset).toBe('cheap');
+        const refreshed = new Promise<void>((resolve) => {
+          notifyRead = resolve;
+        });
+        jest.advanceTimersByTime(1_000);
+        await refreshed;
+        await screen.renderOnce();
+        expect(screen.captureCharFrame()).toContain('Default cheap');
+        expect(screen.captureCharFrame()).toContain(
+          'Session team snapshot: session-team',
+        );
+      } finally {
+        await cleanup?.();
+        jest.useRealTimers();
+        screen?.renderer.destroy();
+      }
+    });
+
+    test('pane wiring follows the live v2 project location', async () => {
+      writeUserConfig({ sidebar: false, multiplexer: { type: 'tmux' } });
+      process.env.TMUX_PANE = '%1';
+      delete process.env.TMUX;
+      const originalArgv = process.argv;
+      process.argv = ['opencode'];
+      const stub = makeSetupCtx();
+      let directory = projectDir;
+      Object.defineProperty(stub.ctx, 'location', {
+        get: () => ({ directory }),
+      });
+      const ui = stub.ctx.ui as { router: { current: () => unknown } };
+      ui.router.current = () => ({ type: 'session', sessionID: 'parent' });
+      const handlers = new Map<string, (event: unknown) => void>();
+      stub.ctx.data = {
+        on: (type: string, handler: (event: unknown) => void) => {
+          handlers.set(type, handler);
+          return () => handlers.delete(type);
+        },
+      };
+      const reads: string[] = [];
+      stub.ctx.client = {
+        server: { info: async () => ({ urls: ['http://127.0.0.1:1'] }) },
+        session: {
+          list: async (input: { directory: string; parentID?: string }) => {
+            if (!input.parentID) reads.push(input.directory);
+            return [];
+          },
+          active: async () => [],
+        },
+      };
+      let cleanup: (() => void) | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
+        reads.length = 0;
+        directory = `${projectDir}-new`;
+        handlers.get('session.created')?.({
+          data: {
+            sessionID: 'child',
+            parentID: 'parent',
+            location: { directory },
+          },
+        });
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
+        expect(reads).toContain(directory);
+      } finally {
+        cleanup?.();
+        process.argv = originalArgv;
+      }
+    });
+
+    test('pane wiring retries a transient initial shared server failure', async () => {
+      writeUserConfig({
+        sidebar: false,
+        disabled_hooks: ['auto-update-checker'],
+        multiplexer: { type: 'tmux' },
+      });
+      process.env.TMUX_PANE = '%1';
+      delete process.env.TMUX;
+      const originalArgv = process.argv;
+      process.argv = ['opencode'];
+      const stub = makeSetupCtx();
+      const subscriptions: string[] = [];
+      stub.ctx.data = {
+        on: (type: string) => {
+          subscriptions.push(type);
+          return () => {};
+        },
+      };
+      let available = false;
+      let calls = 0;
+      stub.ctx.client = {
+        server: {
+          info: async () => {
+            calls += 1;
+            if (!available) throw new Error('temporary');
+            return { urls: ['http://127.0.0.1:1'] };
+          },
+        },
+      };
+      jest.useFakeTimers();
+      let cleanup: (() => void) | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        expect(calls).toBe(1);
+        expect(subscriptions).toEqual([]);
+        available = true;
+        jest.advanceTimersByTime(5_000);
+        for (let i = 0; i < 30; i += 1) await Promise.resolve();
+        expect(calls).toBeGreaterThan(1);
+        expect(subscriptions).toContain('session.created');
+      } finally {
+        cleanup?.();
+        jest.useRealTimers();
+        process.argv = originalArgv;
+      }
+    });
+
     test('does not wire panes when the v2 server URL cannot be resolved', async () => {
       const stub = makeSetupCtx();
       const projectConfigDir = path.join(projectDir, '.opencode');
@@ -1939,11 +2605,11 @@ describe('v2 tui preset plugin', () => {
         'session.idle',
       ];
 
-      let cleanup: (() => void) | undefined;
+      let cleanup: (() => Promise<void>) | undefined;
       try {
         cleanup = (await tui2Plugin.setup(
           stub.ctx as unknown as V2TuiPluginContext,
-        )) as (() => void) | undefined;
+        )) as (() => Promise<void>) | undefined;
         expect(subscriptions.size).toBe(0);
 
         // Start a rebuild, let it park on the host probe, then tear down
@@ -1957,14 +2623,21 @@ describe('v2 tui preset plugin', () => {
           'pane-rebuild-test',
         );
         expect(notified.ok).toBe(true);
-        await waitFor(() => infoCalls >= 1);
-        cleanup();
+        for (let i = 0; i < 30; i += 1) await Promise.resolve();
+        expect(infoCalls).toBeGreaterThan(0);
+        const done = cleanup();
+        let completed = false;
+        void done.then(() => {
+          completed = true;
+        });
+        await Promise.resolve();
+        expect(completed).toBe(false);
         cleanup = undefined;
         releaseResolve?.({ urls: ['http://127.0.0.1:1'] });
 
         // The late wiring must dispose itself instead of staying subscribed
         // (and creating panes) for a closed TUI.
-        await waitFor(() => unsubscribed.length >= expectedEvents.length);
+        await done;
         expect([...unsubscribed].sort()).toEqual(expectedEvents);
       } finally {
         cleanup?.();

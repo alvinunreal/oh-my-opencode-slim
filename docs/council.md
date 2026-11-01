@@ -382,8 +382,9 @@ agent synthesizes the report.
 
 Which resolver attaches them depends on configuration, and the prompt does
 not change: with the managed lifecycle on, seat text comes from the parent's
-job board (aliases or session IDs both resolve); with
-`backgroundJobs.enabled: false`, it comes from the host sessions directly —
+job board (aliases or session IDs both resolve); with the managed lifecycle
+off (`backgroundJobs.mode: "native"` or `"off"`, or the legacy
+`backgroundJobs.enabled: false`), it comes from the host sessions directly —
 only exact `ses_` IDs resolve, each child must still report this parent, and
 the seat body is the child's latest answer. Text from an earlier round is
 never replayed: a seat still working on its newest prompt reports

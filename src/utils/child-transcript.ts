@@ -137,8 +137,9 @@ interface LooseMessage {
     outcome?: unknown;
     error?: unknown;
     finish?: unknown;
+    rawFinish?: unknown;
     summary?: unknown;
-    time?: { created?: unknown; completed?: unknown };
+    time?: { created?: unknown; completed?: unknown; streamed?: unknown };
   };
   parts?: unknown[];
 }
@@ -182,11 +183,33 @@ function diagnosticErrorText(error: unknown) {
 /** UTF-8-safe tail trimming, without allocating a copy of an unbounded string. */
 export function diagnosticTail(text: string, maxBytes: number): string {
   if (maxBytes <= 0) return '';
-  let tail = diagnosticSlice(text, -maxBytes);
-  while (new TextEncoder().encode(tail).byteLength > maxBytes) {
-    tail = diagnosticSlice(tail, 1);
+  const tail = diagnosticSlice(text, -maxBytes);
+  // Bun's Buffer.byteLength undercounts lone surrogates; encode once instead.
+  let bytes = new TextEncoder().encode(tail).byteLength;
+  let start = 0;
+  let end = tail.length;
+  while (bytes > maxBytes) {
+    const code = tail.charCodeAt(start++);
+    const next = start < end ? tail.charCodeAt(start) : NaN;
+    const dropsLow = next >= 0xdc00 && next <= 0xdfff;
+    // Each cut also removes a leading low and a trailing high, if present.
+    if (code >= 0xd800 && code <= 0xdbff && dropsLow) {
+      bytes -= 4;
+      start++;
+    } else {
+      bytes -= code <= 0x7f ? 1 : code <= 0x7ff ? 2 : 3;
+      if (dropsLow) {
+        bytes -= 3;
+        start++;
+      }
+    }
+    const last = tail.charCodeAt(end - 1);
+    if (start < end && last >= 0xd800 && last <= 0xdbff) {
+      end--;
+      bytes -= 3;
+    }
   }
-  return tail;
+  return tail.slice(start, end);
 }
 
 /** Select before validation: even malformed older entries must not cause an
@@ -916,6 +939,35 @@ export function terminalTextOf(transcript: unknown): string | undefined {
   return undefined;
 }
 
+/** A v1 closure in history with no observed v2 lifecycle evidence. */
+export function classifyMigratedV1Round(
+  response: unknown,
+): CurrentRoundClassification | undefined {
+  const messages = transcriptEntries(response);
+  if (!Array.isArray(messages)) return undefined;
+  // shortcut: marker-free v2 history resembles migration; upgrade when the host exposes migration provenance.
+  if (
+    messages.some(
+      (message) =>
+        sourceTypeOf(message) === 'idle' ||
+        message.info?.rawFinish !== undefined ||
+        message.info?.time?.streamed !== undefined ||
+        message.info?.outcome !== undefined,
+    )
+  )
+    return undefined;
+  const assistant = messages.findLast(
+    (message) => message.info?.role === 'assistant',
+  );
+  if (
+    !assistant ||
+    assistantCompletedAt(assistant) === undefined ||
+    (assistant.info?.finish === undefined && assistant.info?.error == null)
+  )
+    return undefined;
+  return classifyCurrentDeliveredRound(response);
+}
+
 /**
  * Historical v2 round. The latest user or synthetic message is the input
  * boundary. Only an idle/outcome after that boundary can confirm the round.
@@ -924,11 +976,16 @@ export function terminalTextOf(transcript: unknown): string | undefined {
  */
 export function classifyV2HistoricalRound(
   response: unknown,
+  hasV2Lifecycle = false,
 ): CurrentRoundClassification {
   const messages = transcriptEntries(response);
   if (!Array.isArray(messages)) {
     return { verdict: 'unreadable', reason: messages.reason };
   }
+  const migrated = hasV2Lifecycle
+    ? undefined
+    : classifyMigratedV1Round(response);
+  if (migrated) return migrated;
   const boundary = latestInputIndexOf(messages);
   if (boundary < 0) {
     return { verdict: 'unreadable', reason: 'no delivered user round' };

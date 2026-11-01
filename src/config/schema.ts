@@ -552,11 +552,17 @@ export const BackgroundJobsConfigStrictSchema = z.object({
         'backgroundJobs.strategy was removed; board placement is change-only with frozen replay',
     })
     .optional(),
+  mode: z
+    .enum(['managed', 'native', 'off'])
+    .optional()
+    .describe(
+      'Background-task lifecycle mode. "managed" (default) runs the OMOS managed lifecycle and its task_cancel/task_status/task_reply tools. "native" skips every board-shaped component and registers only two thin host-read tools — task_status (parent-checked host read plus trailing result) and task_cancel (the host atomic interruption) — for agents driving native subagent/task delegation. "off" registers no OMOS task tool at all and leaves native OpenCode delegation completely untouched. An explicit mode wins over the legacy `enabled` key.',
+    ),
   enabled: z
     .boolean()
     .default(true)
     .describe(
-      'Master switch for the OMOS managed background-task lifecycle (job board, retention, wake scheduler, wall-clock watchdog, terminal gate, and the task_cancel/task_status/task_reply tools). When false, none of that runs and the native OpenCode task/subagent machinery is left completely untouched; every other backgroundJobs key stays accepted but inert. Default true.',
+      'Legacy master switch for the OMOS managed background-task lifecycle (job board, retention, wake scheduler, wall-clock watchdog, terminal gate, and the task_cancel/task_status/task_reply tools). Prefer `mode`: `enabled: false` is equivalent to `mode: "off"`, and an explicit `mode` wins when both are set. When the lifecycle is off, every other backgroundJobs key stays accepted but inert. Default true.',
     ),
   maxSessionsPerAgent: z.number().int().min(1).max(10).default(2),
   maxContextLines: z
@@ -823,6 +829,9 @@ export const BackgroundJobsConfigSchema = z.preprocess(
 );
 
 export type BackgroundJobsConfig = z.infer<typeof BackgroundJobsConfigSchema>;
+
+/** Resolved background-task lifecycle mode. `enabled: false` maps to `off`. */
+export type BackgroundJobsMode = 'managed' | 'native' | 'off';
 
 export const FailoverConfigSchema = z
   .object({

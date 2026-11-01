@@ -51,6 +51,7 @@ OpenCode Core → Plugin Initialization (index.ts)
 | `index.ts` | Main plugin entry, orchestrates all server-side subsystems; exports dual `server`/`setup` default | Config system, agent factories, tool creators, hooks, v2 adapter |
 | `admission-runtime.ts` | Per-directory scheduler/pending-call runtime lease | Background task concurrency, task-session pending calls |
 | `tui.ts` | TUI sidebar plugin for agent model display; wires the client-side multiplexer pane lifecycle | tui-state.ts, config constants, multiplexer/client |
+| `tui-gates.ts` | Render-stack-free config gate read (`readTuiGates`/`readConfigState`); re-exported by `tui.ts`. Needed by the thin v2 entry so `tui: false` never loads OpenTUI/Solid | config/snapshot, config/schema, multiplexer/client/tui-wiring |
 | `tui-state.ts` | Persistent state management for TUI | Node.js fs/promises, os module |
 | `tui-preset.ts` | Three-level `/preset` manager (preset list → agents → agent edit) using `api.ui` dialogs | preset-switch.ts, config loader/constants |
 | `plugin-entry.ts` | Installer-managed plugin entry marker and `PluginEntry` type | none |
@@ -82,7 +83,8 @@ lifecycle lives in the TUI entry's dependency graph (`multiplexer/client/`).
 4. **Snapshot Loading**: Reads agent models, variants, and per-session activity
    from `tui-state.ts`
 5. **Live Updates**: Refreshes persisted state every 1000ms and reactively
-   advances 100ms animation frames only while agents are active
+   advances 100ms animation frames only while agents are active; identical
+   model-name refreshes do not rebuild the sidebar
 6. **Pane Lifecycle Wiring**: `createTuiPaneWiring()` resolves admission from
    the client's own environment, initializes plugin logging, reflects the
    server URL, subscribes to session events, and drives per-client pane
@@ -102,14 +104,19 @@ lifecycle lives in the TUI entry's dependency graph (`multiplexer/client/`).
    - `readTuiSnapshot()`: Reads and parses state file (returns empty snapshot on error)
    - `readTuiSnapshotAsync()`: Async variant for TUI rendering
    - `recordTuiAgentModels()`: Updates both agent models and variants atomically
-   - `recordTuiAgentModel()`: Updates single agent's model/variant
+   - `recordTuiAgentModel()`: Records session-scoped model/variant observations;
+     the sidebar projects the root and active children of the visible conversation,
+     falling back to configured defaults; pruning retains active sessions
    - `recordTuiAgentActivity()`: Tracks active agents by session so concurrent
      runs of the same agent remain visible until all runs finish
    - `clearTuiAgentActivities()`: Removes stale activity during startup
 3. **Atomic Writes**: Cross-process file locking serializes read → mutate →
    atomic rename transactions. `withTuiSnapshotBatch` coalesces recorders and
    Board projections within one native event; standalone calls remain immediate.
-   A shared stat-key cache preserves reader isolation and parent insertion order.
+   A shared stat-key cache preserves reader isolation and parent insertion order;
+   verified single-key no-ops skip cloning, including within compatible batches.
+   Parent hydration reuses one stat-validated snapshot until an asynchronous host lookup.
+   Pruning keeps ancestry for active sessions and reusable destinations.
 4. **Error Handling**: All operations are best-effort; failures don't crash plugin
 5. **Instance Cleanup**: On shutdown, each plugin instance removes only sessions
    it marked active, preserving activity owned by other running instances

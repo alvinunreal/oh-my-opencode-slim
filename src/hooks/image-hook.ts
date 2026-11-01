@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { basename, extname, join } from 'node:path';
-import { asImagePart, type ImagePartView } from './image-part';
+import { hasImageIdentity, type ImagePartView } from './image-part';
 import {
   type MessageTransformView,
   resolveView,
@@ -106,7 +106,7 @@ function ensureImagesGitignore(
 }
 
 export function isImagePart(p: unknown): boolean {
-  return asImagePart(p) !== null;
+  return hasImageIdentity(p);
 }
 function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -218,9 +218,7 @@ export function processImageAttachments(args: {
   // debounced warning toast; this hook must never destroy user data.
   if (disabledAgents.has('observer')) {
     const latestUserMessage = view.latestUser;
-    if (
-      latestUserMessage?.parts.some((part) => view.imageView(part) !== null)
-    ) {
+    if (latestUserMessage?.parts.some(isImagePart)) {
       log(
         '[image-hook] images retained inline; observer disabled — enable observer or set image_routing "direct"',
       );

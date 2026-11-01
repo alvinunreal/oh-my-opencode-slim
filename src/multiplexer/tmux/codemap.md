@@ -40,7 +40,7 @@ Implements the `Multiplexer` interface contract defined in `src/multiplexer/type
    ├─ Re-resolves socket (TMUX) and anchor (TMUX_PANE); either missing → fail closed
    ├─ Executes: tmux -S <socket> split-window -h -d -P -F '#{pane_id}' -t <anchor> <opencode-cmd>
    ├─ Captures stdout to extract pane_id
-   ├─ Renames pane with description via select-pane -T (FR-8 metadata kept intact)
+   ├─ Sets FR-8 metadata as the title and, on tmux 3.0a+, the `@omosc` pane option
    └─ Schedules layout rebalance via scheduleLayout(anchor)
 
 3. scheduleLayout(anchor) → applyLayoutNow() (debounced 150ms per anchor pane)
@@ -49,6 +49,9 @@ Implements the `Multiplexer` interface contract defined in `src/multiplexer/type
    ├─ Applies stored layout via tmux -S <socket> select-layout -t <anchor>
    ├─ For main-* layouts: sets main-pane-width/height percentage
    └─ Reapplies layout to use new size
+
+The lifecycle's post-spawn layout check leaves this timer intact when the
+preferences match. Explicit `applyLayout` calls still apply immediately.
 ```
 
 ### Pane Termination Flow

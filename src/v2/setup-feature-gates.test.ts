@@ -27,6 +27,7 @@ import {
   recordSuppression,
 } from '../utils/background-job-persistence';
 import * as configWatch from './config-watch';
+import { SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION } from './delegation';
 import { createV2Setup } from './setup';
 import type { V2Context, V2SessionContextEvent } from './types';
 
@@ -130,7 +131,9 @@ function makeCtx(
   },
 ) {
   const commandAdds: Array<{ name: string }> = [];
-  const toolUpdates: Array<{ id: string }> = [];
+  const toolUpdates: Array<{ id: string; description?: unknown }> = [];
+  const beforeHooks: Array<(event: never) => Promise<void>> = [];
+  const subagentTools: Array<Record<string, unknown>> = [];
   const hooks: string[] = [];
   const skillCallbacks = new Set<(draft: unknown) => void>();
   const contextHooks: Array<(event: never) => Promise<void>> = [];
@@ -194,23 +197,36 @@ function makeCtx(
     },
     tool: {
       transform: async (cb: (draft: unknown) => void) => {
+        // One live `subagent` tool per replay so `update` and `get` observe
+        // the same object: the setup reads the description back after the
+        // rewrite to arm its background-default flip.
+        const subagentTool: Record<string, unknown> = {
+          description: 'native',
+          execute: async () => ({}),
+        };
+        subagentTools.push(subagentTool);
         cb({
-          // The native subagent executor is what the structured-launch
-          // wrapper wraps; record the wrap attempt by observing update().
+          // The native subagent executor is what the wrapper(s) wrap; record
+          // each update plus the description the rewrite left behind, so the
+          // managed-only description flip stays observable.
           update: (id: string, update: (tool: unknown) => void) => {
-            toolUpdates.push({ id });
-            update({ execute: async () => ({}) });
+            const tool = id === 'subagent' ? subagentTool : {};
+            update(tool);
+            toolUpdates.push({
+              id,
+              description: (tool as { description?: unknown }).description,
+            });
           },
-          get: (id: string) =>
-            id === 'subagent'
-              ? { description: 'native', execute: async () => ({}) }
-              : undefined,
+          get: (id: string) => (id === 'subagent' ? subagentTool : undefined),
           add: () => {},
         });
         return reg('tool.transform');
       },
-      hook: async (name: string) => {
+      hook: async (name: string, cb?: (event: never) => Promise<void>) => {
         hooks.push(`tool:${name}`);
+        if (name === 'execute.before' && typeof cb === 'function') {
+          beforeHooks.push(cb);
+        }
         return reg(`tool.hook:${name}`);
       },
     },
@@ -293,6 +309,8 @@ function makeCtx(
     ctx,
     commandAdds,
     toolUpdates,
+    beforeHooks,
+    subagentTools,
     hooks,
     contextHooks,
     storageCalls,
@@ -302,6 +320,28 @@ function makeCtx(
 
 const INTERVIEW_MARKER =
   '<omos-interview-command>do it</omos-interview-command>';
+
+/** The preset wrapper still wraps `subagent`; the board-only description flip
+ * must not run with the lifecycle off. */
+function expectPresetOnlyWrap(
+  updates: Array<{ id: string; description?: unknown }>,
+) {
+  const subagent = updates.filter((u) => u.id === 'subagent');
+  expect(subagent.length).toBeGreaterThan(0);
+  expect(subagent.every((u) => u.description === 'native')).toBe(true);
+}
+
+/** A v2 delegation the `execute.before` bridge must admit (or reject). */
+function delegationEvent() {
+  return {
+    tool: 'subagent',
+    sessionID: 'ses_gate_parent',
+    agent: 'orchestrator',
+    messageID: 'msg_gate',
+    id: 'call_gate_delegate',
+    input: { agent: 'explorer', description: 'probe', prompt: 'Work' },
+  };
+}
 
 describe('v2 setup feature gates', () => {
   let originalEnv: typeof process.env;
@@ -382,12 +422,7 @@ describe('v2 setup feature gates', () => {
     const { ctx, toolUpdates } = makeCtx(projectDir);
     const cleanup = await createV2Setup()(ctx);
     try {
-      // The structured delegated-launch consumer wraps the native subagent
-      // executor via `draft.update(DELEGATION_TOOL_V2, …)`. With the
-      // lifecycle off that wrap must not happen; the only remaining tool
-      // transform is the plugin tool registration pass (its `add()` calls
-      // are unobservable here, and `update` is the wrapper signal).
-      expect(toolUpdates.map((u) => u.id)).not.toContain('subagent');
+      expectPresetOnlyWrap(toolUpdates);
       // No persisted board state was seeded for this project directory.
       const stateDir = path.join(
         fixtureRoot,
@@ -398,6 +433,122 @@ describe('v2 setup feature gates', () => {
         'storage',
       );
       expect(fs.existsSync(stateDir)).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  for (const mode of ['native', 'off'] as const) {
+    test(`backgroundJobs.mode "${mode}": no persistence and no structured-launch wrapper`, async () => {
+      await writeProjectConfig({
+        companion: { enabled: false },
+        backgroundJobs: { mode },
+      });
+      const { ctx, toolUpdates } = makeCtx(projectDir);
+      const cleanup = await createV2Setup()(ctx);
+      try {
+        expectPresetOnlyWrap(toolUpdates);
+        const stateDir = path.join(
+          fixtureRoot,
+          'xdg-data',
+          'opencode',
+          'plugins',
+          'oh-my-opencode-slim',
+          'storage',
+        );
+        expect(fs.existsSync(stateDir)).toBe(false);
+      } finally {
+        await cleanup();
+      }
+    }, 20_000);
+  }
+
+  // Regression: the bridge's fail-closed guard requires the session-preset
+  // wrapper that consumes its admission. Gating that wrapper with the managed
+  // lifecycle left the guard armed in `native`/`off`, so every `subagent` call
+  // was rejected with 'Native subagent session preset wrapper unavailable'.
+  for (const [label, backgroundJobs] of [
+    ['enabled: false', { enabled: false }],
+    ['mode "native"', { mode: 'native' }],
+    ['mode "off"', { mode: 'off' }],
+  ] as const) {
+    test(`lifecycle off (${label}): delegation is not rejected by the preset guard`, async () => {
+      await writeProjectConfig({
+        companion: { enabled: false },
+        backgroundJobs: backgroundJobs as Record<string, unknown>,
+      });
+      const { ctx, beforeHooks } = makeCtx(projectDir);
+      const cleanup = await createV2Setup()(ctx);
+      try {
+        const hook = beforeHooks[0];
+        if (!hook) throw new Error('tool:execute.before not captured');
+        await expect(hook(delegationEvent() as never)).resolves.toBeUndefined();
+      } finally {
+        await cleanup();
+      }
+    }, 20_000);
+  }
+
+  // Regression: a continuation (`sessionID` without `agent`) must reach the
+  // host. The preset wrapper consumes an admission for EVERY call, so the
+  // bridge must capture one for resumes too, not only for `agent` launches.
+  for (const [label, backgroundJobs] of [
+    ['mode "native"', { mode: 'native' }],
+    ['mode "off"', { mode: 'off' }],
+  ] as const) {
+    test(`${label}: a resume without agent runs the wrapped executor`, async () => {
+      await writeProjectConfig({
+        companion: { enabled: false },
+        backgroundJobs: backgroundJobs as Record<string, unknown>,
+      });
+      const { ctx, beforeHooks, subagentTools } = makeCtx(projectDir);
+      const cleanup = await createV2Setup()(ctx);
+      try {
+        const hook = beforeHooks[0];
+        const subagent = subagentTools.at(-1);
+        if (!hook || !subagent) throw new Error('subagent wiring not captured');
+        const event = {
+          ...delegationEvent(),
+          id: 'call_gate_resume',
+          input: { sessionID: 'ses_gate_child', prompt: 'Continue' },
+        };
+        await hook(event as never);
+        const execute = subagent.execute as (
+          input: unknown,
+          context: unknown,
+        ) => Promise<unknown>;
+        await expect(
+          execute(event.input, {
+            sessionID: event.sessionID,
+            id: event.id,
+            signal: new AbortController().signal,
+            progress: async () => {},
+          }),
+        ).resolves.toEqual({});
+      } finally {
+        await cleanup();
+      }
+    }, 20_000);
+  }
+
+  test('managed: a resume without agent is refused by the explicit-agent guard', async () => {
+    await writeProjectConfig({
+      companion: { enabled: false },
+      backgroundJobs: { mode: 'managed' },
+    });
+    const { ctx, beforeHooks } = makeCtx(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      const hook = beforeHooks[0];
+      if (!hook) throw new Error('tool:execute.before not captured');
+      const event = {
+        ...delegationEvent(),
+        id: 'call_gate_resume_managed',
+        input: { sessionID: 'ses_gate_child', prompt: 'Continue' },
+      };
+      await expect(hook(event as never)).rejects.toThrow(
+        'requires a valid agent',
+      );
     } finally {
       await cleanup();
     }
@@ -461,7 +612,12 @@ describe('v2 setup feature gates', () => {
     const { ctx, toolUpdates } = makeCtx(projectDir);
     const cleanup = await createV2Setup()(ctx);
     try {
-      expect(toolUpdates.map((u) => u.id)).toContain('subagent');
+      const flipped = toolUpdates.filter(
+        (u) =>
+          u.id === 'subagent' &&
+          u.description === SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION,
+      );
+      expect(flipped.length).toBeGreaterThan(0);
     } finally {
       await cleanup();
     }

@@ -22,6 +22,7 @@ import {
   type InjectionState,
   injectBackgroundJobBoard,
   reconcileObservedTerminalRun,
+  updateFromInjectedCompletion,
 } from './board-injection';
 
 const SESSION = 'ses_parent_1';
@@ -58,6 +59,41 @@ function createInjectionState(board: BackgroundJobBoard): InjectionState {
 }
 
 describe('boardless injection', () => {
+  test('does not parse the result body of a processed synthetic occurrence', async () => {
+    const board = new BackgroundJobBoard();
+    const state = createInjectionState(board);
+    state.syntheticTerminalOccurrences = new Map([
+      [
+        'explicit\u001fchild-1\u001fpart-1',
+        {
+          taskID: 'child-1',
+          occurrenceID: 'part-1',
+          lifecycleEpochAtObservation: 0,
+          phase: 'processed',
+        },
+      ],
+    ]);
+    const part = {
+      id: 'part-1',
+      type: 'text',
+      synthetic: true,
+      text: '<task id="child-1" state="completed"><task_result>answer</task_result></task>',
+    };
+    // Spying on RegExp.prototype.exec would knock the engine off its regex
+    // fast path for the rest of the process, so pin the outcome instead: a
+    // processed occurrence returns early and leaves the board untouched.
+    const before = board.list();
+    const result = await updateFromInjectedCompletion(
+      state,
+      part as never,
+      { info: { id: 'message', sessionID: SESSION }, parts: [part] } as never,
+      0,
+      0,
+    );
+    expect(result).toBeUndefined();
+    expect(board.list()).toEqual(before);
+  });
+
   test('the payload never carries board bytes, whatever the board holds', async () => {
     const board = new BackgroundJobBoard();
     const state = createInjectionState(board);

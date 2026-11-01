@@ -87,6 +87,7 @@
     "check": "biome check --write .",
     "check:ci": "biome check .",
     "mutation": "bun install --cwd tools/mutation --frozen-lockfile && bun tools/mutation/node_modules/@stryker-mutator/core/bin/stryker.js run",
+    "knip": "knip",
     "eval": "bun run src/cli/eval.ts",
     "eval:smoke": "bun run src/cli/eval.ts --smoke",
     "ci:eval": "bun run eval --suite orchestrator-direct-execution --outputs-file /tmp/eval-outputs.json",
@@ -101,12 +102,10 @@
     "release:beta:next": "npm version prerelease --preid beta && git push --follow-tags && npm publish --tag beta"
   },
   "dependencies": {
-    "@ast-grep/cli": "^0.45.3",
     "@mozilla/readability": "^0.6.0",
     "@opencode-ai/plugin": "1.18.32",
     "@opencode-ai/sdk": "1.18.32",
     "gray-matter": "^4.0.3",
-    "jsdom": "^30.0.0",
     "jsonc-parser": "^3.3.1",
     "lru-cache": "^11.5.3",
     "semver": "^7.7.3",
@@ -114,12 +113,15 @@
     "zod": "^4.6.5"
   },
   "optionalDependencies": {
+    "@ast-grep/cli": "^0.45.3",
     "@opentui/core": "0.7.0",
     "@opentui/solid": "0.7.0",
+    "jsdom": "^30.0.0",
     "solid-js": "1.9.12"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
+    "@opencode/client": "2.2.0",
     "@opencode/plugin": "2.2.0",
     "@types/jsdom": "30",
     "@types/node": "^26.6.2",
@@ -127,6 +129,7 @@
     "@types/turndown": "^5.0.6",
     "all-contributors-cli": "^6.26.1",
     "bun-types": "^1.4.2",
+    "knip": "^6.44.0",
     "typescript": "7.0"
   },
   "peerDependencies": {

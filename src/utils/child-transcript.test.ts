@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import type { PluginInput } from '@opencode-ai/plugin';
 import { buildPluginInput } from '../v2/client-shim';
 import type { V2Context } from '../v2/types';
@@ -8,6 +8,7 @@ import {
   classifyTerminalEvidence,
   classifyV2HistoricalRound,
   diagnosticExcerptOf,
+  diagnosticTail,
   fetchChildTranscript,
   latestInputAtOf,
   stringifyError,
@@ -16,6 +17,20 @@ import {
 import { composeHostRound, hostRoundStateOf } from './session-runtime-status';
 
 describe('diagnostic excerpts', () => {
+  test('trims a multibyte tail once without splitting surrogate pairs', () => {
+    const encode = spyOn(TextEncoder.prototype, 'encode');
+    try {
+      const tail = diagnosticTail(`${'界'.repeat(3000)}😀x`, 1024);
+      expect(tail).toBe(`${'界'.repeat(339)}😀x`);
+      expect(encode.mock.calls.length).toBeLessThanOrEqual(1);
+      expect(diagnosticTail('\ud800x\udc00y', 7)).toBe('x\udc00y');
+      expect(diagnosticTail('a\udc00\udc00b', 5)).toBe('\udc00b');
+      expect(diagnosticTail('abc\ud800\ud800', 5)).toBe('bc');
+    } finally {
+      encode.mockRestore();
+    }
+  });
+
   test('a full text part followed by ignored tool output is not character-truncated', () => {
     const text = 'x'.repeat(2000);
     const result = diagnosticExcerptOf({
@@ -887,6 +902,68 @@ describe('classifyV2HistoricalRound (startup path)', () => {
           : [],
     };
   }
+
+  test('classifies a migrated v1 completion without an idle marker', () => {
+    expect(
+      classifyV2HistoricalRound({
+        data: [
+          { info: { role: 'user', time: { created: 10 } }, parts: [] },
+          {
+            info: {
+              role: 'assistant',
+              finish: 'stop',
+              time: { created: 11, completed: 12 },
+            },
+            parts: [{ type: 'text', text: 'migrated answer' }],
+          },
+        ],
+      }),
+    ).toMatchObject({ verdict: 'completed', text: 'migrated answer' });
+    expect(
+      classifyV2HistoricalRound(
+        {
+          data: [
+            { info: { role: 'user', time: { created: 10 } }, parts: [] },
+            {
+              info: {
+                role: 'assistant',
+                finish: 'stop',
+                time: { created: 11, completed: 12 },
+              },
+              parts: [{ type: 'text', text: 'not yet idle' }],
+            },
+          ],
+        },
+        true,
+      ).verdict,
+    ).toBe('incomplete');
+    expect(
+      classifyV2HistoricalRound({
+        data: [
+          v2Message({ id: 'u', sourceType: 'user', time: { created: 10 } }),
+          v2Message({
+            id: 'a',
+            sourceType: 'assistant',
+            time: { created: 11, streamed: 12, completed: 13 },
+            text: 'not yet delivered',
+          }),
+        ],
+      }).verdict,
+    ).toBe('incomplete');
+    expect(
+      classifyV2HistoricalRound({
+        data: [
+          v2Message({ id: 'u', sourceType: 'user', time: { created: 10 } }),
+          v2Message({
+            id: 'a',
+            sourceType: 'assistant',
+            time: { created: 11 },
+            text: 'partial',
+          }),
+        ],
+      }).verdict,
+    ).toBe('incomplete');
+  });
 
   test('interrupted idle is interrupted without an assistant', () => {
     expect(

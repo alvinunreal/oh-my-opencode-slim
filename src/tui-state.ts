@@ -35,6 +35,11 @@ export interface TuiSnapshot {
   updatedAt: number;
   agentModels: Record<string, string>;
   agentVariants: Record<string, string>;
+  /** Effective observations by session, separate from configured defaults. */
+  sessionModels?: Record<
+    string,
+    Record<string, { model: string; variant?: string }>
+  >;
   /**
    * Canonical agent ID → visible display name, for the sidebar label only.
    * Keyed by the same canonical ID as `agentModels`/`activeSessions` so model
@@ -140,6 +145,32 @@ function parsePidRecord(value: unknown): Record<string, number> {
   return out;
 }
 
+function parseSessionModels(
+  value: unknown,
+): NonNullable<TuiSnapshot['sessionModels']> {
+  if (!value || typeof value !== 'object') return {};
+  const sessions: NonNullable<TuiSnapshot['sessionModels']> = {};
+  for (const [sessionID, agents] of Object.entries(value)) {
+    if (!agents || typeof agents !== 'object') continue;
+    const parsed: Record<string, { model: string; variant?: string }> = {};
+    for (const [agent, observation] of Object.entries(agents)) {
+      if (!observation || typeof observation !== 'object') continue;
+      const { model, variant } = observation as {
+        model?: unknown;
+        variant?: unknown;
+      };
+      if (typeof model === 'string') {
+        parsed[agent] = {
+          model,
+          ...(typeof variant === 'string' ? { variant } : {}),
+        };
+      }
+    }
+    if (Object.keys(parsed).length) sessions[sessionID] = parsed;
+  }
+  return sessions;
+}
+
 function parseSessionDetails(
   value: unknown,
 ): Record<string, TuiSessionDetails> {
@@ -230,6 +261,7 @@ function parseSnapshot(value: string): TuiSnapshot {
       typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now(),
     agentModels: parsed.agentModels ?? {},
     agentVariants: parsed.agentVariants ?? {},
+    sessionModels: parseSessionModels(parsed.sessionModels),
     agentDisplayNames: parseStringRecord(parsed.agentDisplayNames),
     activeSessions: parsed.activeSessions ?? {},
     activityPids: parsePidRecord(parsed.activityPids),
@@ -248,6 +280,15 @@ export function readTuiSnapshot(projectDir: string): TuiSnapshot {
   } catch {
     return emptySnapshot();
   }
+}
+
+export function readTuiSessionParents(
+  projectDir: string,
+): Record<string, string> {
+  const memo = memoFor(getTuiStatePath(projectDir));
+  return memo
+    ? parseStringRecord(memo.sessionParents)
+    : readTuiSnapshot(projectDir).sessionParents;
 }
 
 // Locked-path reader: ENOENT is a first write; any other error must not
@@ -290,7 +331,7 @@ interface SnapshotCacheEntry {
    * reader-side mutations stay visible across polls of one entry (the
    * pre-merge reader behavior).
    */
-  readerSnapshot: TuiSnapshot;
+  readerSnapshot?: TuiSnapshot;
 }
 
 const snapshotCache = new Map<string, SnapshotCacheEntry>();
@@ -324,7 +365,6 @@ function cacheSnapshot(
   const entry: SnapshotCacheEntry = {
     stat,
     snapshot,
-    readerSnapshot: cloneSnapshot(snapshot),
   };
   snapshotCache.delete(statePath);
   snapshotCache.set(statePath, entry);
@@ -352,6 +392,7 @@ export async function readTuiSnapshotAsync(
     const cached = snapshotCache.get(statePath);
     if (cached && sameSnapshotStat(cached.stat, snapshotStatOf(stat))) {
       touchSnapshot(statePath, cached); // LRU refresh
+      cached.readerSnapshot ??= cloneSnapshot(cached.snapshot);
       return cached.readerSnapshot;
     }
     const snapshot = parseSnapshot(
@@ -366,8 +407,9 @@ export async function readTuiSnapshotAsync(
     try {
       const after = await fs.promises.stat(statePath);
       if (sameSnapshotStat(snapshotStatOf(stat), snapshotStatOf(after))) {
-        return cacheSnapshot(statePath, snapshot, snapshotStatOf(after))
-          .readerSnapshot;
+        const entry = cacheSnapshot(statePath, snapshot, snapshotStatOf(after));
+        entry.readerSnapshot = cloneSnapshot(entry.snapshot);
+        return entry.readerSnapshot;
       }
     } catch {
       // Publication only; the read itself succeeded.
@@ -384,7 +426,6 @@ export async function readTuiSnapshotAsync(
 function writeTuiSnapshot(snapshot: TuiSnapshot, projectDir: string): boolean {
   try {
     const filePath = getTuiStatePath(projectDir);
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
     const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
     try {
       fs.writeFileSync(tmpPath, `${JSON.stringify(snapshot)}\n`);
@@ -505,6 +546,7 @@ export function snapshotSectionsEqual(a: TuiSnapshot, b: TuiSnapshot): boolean {
       {
         agentModels: a.agentModels,
         agentVariants: a.agentVariants,
+        sessionModels: a.sessionModels ?? {},
         agentDisplayNames: a.agentDisplayNames,
         activeSessions: a.activeSessions,
         activityPids: a.activityPids,
@@ -516,6 +558,7 @@ export function snapshotSectionsEqual(a: TuiSnapshot, b: TuiSnapshot): boolean {
       {
         agentModels: b.agentModels,
         agentVariants: b.agentVariants,
+        sessionModels: b.sessionModels ?? {},
         agentDisplayNames: b.agentDisplayNames,
         activeSessions: b.activeSessions,
         activityPids: b.activityPids,
@@ -532,12 +575,15 @@ export function snapshotSectionsEqual(a: TuiSnapshot, b: TuiSnapshot): boolean {
   // entries are deep-equal: the parent cap prunes the oldest-inserted
   // links and a re-registered link moves to the end, so a pure reorder
   // must still count as a change.
-  return sameSessionParentOrder(a.sessionParents, b.sessionParents);
+  return (
+    sameSessionParentOrder(a.sessionParents, b.sessionParents) &&
+    sameSessionParentOrder(a.sessionModels ?? {}, b.sessionModels ?? {})
+  );
 }
 
 function sameSessionParentOrder(
-  a: Record<string, string>,
-  b: Record<string, string>,
+  a: Record<string, unknown>,
+  b: Record<string, unknown>,
 ): boolean {
   const aKeys = Object.keys(a);
   const bKeys = Object.keys(b);
@@ -571,11 +617,13 @@ function memoFor(statePath: string): TuiSnapshot | undefined {
 export function updateSnapshot(
   projectDir: string,
   mutator: (snapshot: TuiSnapshot) => void,
+  isCurrent?: (snapshot: TuiSnapshot) => boolean,
 ): boolean {
   const statePath = getTuiStatePath(projectDir);
 
   const memo = memoFor(statePath);
   if (memo) {
+    if (isCurrent?.(memo)) return true;
     const candidate = cloneSnapshot(memo);
     mutator(candidate);
     if (snapshotSectionsEqual(candidate, memo)) return true; // no-op update
@@ -598,11 +646,31 @@ export function updateSnapshot(
       rememberSnapshot(statePath, snapshot);
       return true;
     }
+    const sessions = snapshot.sessionModels ?? {};
+    let excess = Object.keys(sessions).length - TUI_SESSION_PARENTS_MAX;
+    for (const id of Object.keys(sessions)) {
+      if (excess <= 0) break;
+      if (Object.hasOwn(snapshot.activeSessions, id)) continue;
+      delete sessions[id];
+      excess--;
+    }
     snapshot.updatedAt = Date.now();
-    // Any write drops the oldest links past the cap but keeps active chains.
-    const { sessionParents: parents, activeSessions } = snapshot;
+    // Keep active chains and every destination still offered by the sidebar.
+    const {
+      sessionParents: parents,
+      activeSessions,
+      reusableByAgent,
+    } = snapshot;
     const keep = new Set<string>();
-    for (let id of Object.keys(activeSessions))
+    const destinations = Object.entries(reusableByAgent).flatMap(
+      ([parentID, agents]) => [
+        parentID,
+        ...Object.values(agents).flatMap((sessions) =>
+          sessions.map((session) => session.taskID),
+        ),
+      ],
+    );
+    for (let id of [...Object.keys(activeSessions), ...destinations])
       for (; parents[id] && !keep.has(id); id = parents[id]) keep.add(id);
     for (const key of Object.keys(parents).slice(0, -TUI_SESSION_PARENTS_MAX))
       if (!keep.has(key)) delete parents[key];
@@ -634,6 +702,7 @@ interface TuiSnapshotBatch {
     Array<{
       mutator: (snapshot: TuiSnapshot) => void;
       onCommit?: (applied: boolean) => void;
+      isCurrent?: (snapshot: TuiSnapshot) => boolean;
     }>
   >;
   /** Deferred projections keyed by their coalescing key (one per key). */
@@ -695,9 +764,15 @@ function commitTuiSnapshotBatch(batch: TuiSnapshotBatch): void {
   for (const [projectDir, pending] of mutations) {
     let applied = false;
     try {
-      applied = updateSnapshot(projectDir, (snapshot) => {
-        for (const { mutator } of pending) mutator(snapshot);
-      });
+      applied = updateSnapshot(
+        projectDir,
+        (snapshot) => {
+          for (const { mutator } of pending) mutator(snapshot);
+        },
+        pending.every((entry) => entry.isCurrent)
+          ? (snapshot) => pending.every((entry) => entry.isCurrent?.(snapshot))
+          : undefined,
+      );
     } catch {
       // A failed projection is not a committed ownership update.
     }
@@ -730,15 +805,16 @@ function recordSnapshotUpdate(
   projectDir: string,
   mutator: (snapshot: TuiSnapshot) => void,
   onCommit?: (applied: boolean) => void,
+  isCurrent?: (snapshot: TuiSnapshot) => boolean,
 ): void {
   const batch = tuiSnapshotBatch.getStore();
   if (batch?.open) {
     const pending = batch.mutations.get(projectDir);
-    if (pending) pending.push({ mutator, onCommit });
-    else batch.mutations.set(projectDir, [{ mutator, onCommit }]);
+    if (pending) pending.push({ mutator, onCommit, isCurrent });
+    else batch.mutations.set(projectDir, [{ mutator, onCommit, isCurrent }]);
     return;
   }
-  const applied = updateSnapshot(projectDir, mutator);
+  const applied = updateSnapshot(projectDir, mutator, isCurrent);
   onCommit?.(applied);
 }
 
@@ -825,19 +901,44 @@ export function recordTuiAgentModel(
     agentName: string;
     model: string;
     variant?: string | null;
+    fallbackVariant?: string | null;
+    sessionID: string;
   },
   projectDir: string,
 ): void {
-  recordSnapshotUpdate(projectDir, (snapshot) => {
-    snapshot.agentModels[input.agentName] = input.model;
-    if (input.variant !== undefined) {
-      if (input.variant === null) {
-        delete snapshot.agentVariants[input.agentName];
-      } else {
-        snapshot.agentVariants[input.agentName] = input.variant;
-      }
-    }
-  });
+  const nextVariant = (
+    previous: { model: string; variant?: string } | undefined,
+  ): string | null | undefined =>
+    input.variant !== undefined
+      ? input.variant
+      : previous?.model === input.model
+        ? previous.variant
+        : input.fallbackVariant;
+  const isCurrent = (
+    previous: { model: string; variant?: string } | undefined,
+  ): boolean =>
+    previous?.model === input.model &&
+    previous.variant === (nextVariant(previous) ?? undefined);
+  recordSnapshotUpdate(
+    projectDir,
+    (snapshot) => {
+      const sessions = snapshot.sessionModels ?? {};
+      snapshot.sessionModels = sessions;
+      const agents = sessions[input.sessionID] ?? {};
+      const previous = agents[input.agentName];
+      if (isCurrent(previous)) return;
+      const variant = nextVariant(previous);
+      agents[input.agentName] = {
+        model: input.model,
+        ...(variant ? { variant } : {}),
+      };
+      delete sessions[input.sessionID];
+      sessions[input.sessionID] = agents;
+    },
+    undefined,
+    (snapshot) =>
+      isCurrent(snapshot.sessionModels?.[input.sessionID]?.[input.agentName]),
+  );
 }
 
 export function recordTuiAgentActivity(
@@ -851,23 +952,43 @@ export function recordTuiAgentActivity(
     | { sessionID: string; active: false },
   projectDir: string,
 ): void {
-  recordSnapshotUpdate(projectDir, (snapshot) => {
-    if (input.active) {
-      snapshot.activeSessions[input.sessionID] = input.agentName;
-      snapshot.activityPids[input.sessionID] = process.pid;
-      if (input.details && Object.keys(input.details).length > 0) {
-        const current = snapshot.sessionDetails[input.sessionID] ?? {};
-        snapshot.sessionDetails[input.sessionID] = {
-          ...current,
-          ...input.details,
-        };
+  recordSnapshotUpdate(
+    projectDir,
+    (snapshot) => {
+      if (input.active) {
+        snapshot.activeSessions[input.sessionID] = input.agentName;
+        snapshot.activityPids[input.sessionID] = process.pid;
+        if (input.details && Object.keys(input.details).length > 0) {
+          const current = snapshot.sessionDetails[input.sessionID] ?? {};
+          snapshot.sessionDetails[input.sessionID] = {
+            ...current,
+            ...input.details,
+          };
+        }
+      } else {
+        delete snapshot.activeSessions[input.sessionID];
+        delete snapshot.activityPids[input.sessionID];
+        delete snapshot.sessionDetails[input.sessionID];
       }
-    } else {
-      delete snapshot.activeSessions[input.sessionID];
-      delete snapshot.activityPids[input.sessionID];
-      delete snapshot.sessionDetails[input.sessionID];
-    }
-  });
+    },
+    undefined,
+    (snapshot) => {
+      if (!input.active)
+        return (
+          !Object.hasOwn(snapshot.activeSessions, input.sessionID) &&
+          !Object.hasOwn(snapshot.activityPids, input.sessionID) &&
+          !Object.hasOwn(snapshot.sessionDetails, input.sessionID)
+        );
+      const current = snapshot.sessionDetails[input.sessionID];
+      return (
+        snapshot.activeSessions[input.sessionID] === input.agentName &&
+        snapshot.activityPids[input.sessionID] === process.pid &&
+        (!input.details ||
+          Object.keys(input.details).length === 0 ||
+          isDeepStrictEqual(current, { ...current, ...input.details }))
+      );
+    },
+  );
 }
 
 /**
@@ -949,10 +1070,17 @@ export function recordTuiSessionParent(
   parentID: string,
   projectDir: string,
 ): void {
-  recordSnapshotUpdate(projectDir, (snapshot) => {
-    delete snapshot.sessionParents[sessionID]; // Re-registered link is newest.
-    snapshot.sessionParents[sessionID] = parentID;
-  });
+  recordSnapshotUpdate(
+    projectDir,
+    (snapshot) => {
+      delete snapshot.sessionParents[sessionID]; // Re-registered link is newest.
+      snapshot.sessionParents[sessionID] = parentID;
+    },
+    undefined,
+    (snapshot) =>
+      snapshot.sessionParents[sessionID] === parentID &&
+      Object.keys(snapshot.sessionParents).at(-1) === sessionID,
+  );
 }
 
 /**

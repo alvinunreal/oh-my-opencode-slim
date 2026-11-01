@@ -158,7 +158,7 @@ describe('child input-wait wake', () => {
         formatChildInputWaitDelta({
           alias: 'fix-1',
           ...wait,
-          detail: formatChildInputWaitDetail(wait, 'v2'),
+          detail: formatChildInputWaitDetail(wait, 'v1'),
         }),
         `${wait.taskID}:${wait.requestID}`,
       );
@@ -169,13 +169,8 @@ describe('child input-wait wake', () => {
       expect(text.match(/\nrequest:/g)).toHaveLength(1);
       expect(text.match(/\nkind:/g)).toHaveLength(1);
       expect(text).not.toContain('Do not respond');
-      if (kind === 'question') {
-        expect(text).toContain('task_reply cannot answer v2 forms');
-        expect(text).toContain('host UI');
-      } else {
-        expect(text).toContain('next: task_reply');
-        expect(text).not.toContain('forms');
-      }
+      expect(text).toContain('next: task_reply');
+      expect(text).not.toContain('v2 forms');
     },
   );
 
@@ -621,7 +616,7 @@ describe('child input-wait wake', () => {
               taskID,
               kind,
               requestID,
-              detail: formatChildInputWaitDetail(wait, 'v2'),
+              detail: formatChildInputWaitDetail(wait, 'v1'),
             }),
             `${taskID}:${requestID}`,
           );
