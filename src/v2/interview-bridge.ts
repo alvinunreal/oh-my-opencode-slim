@@ -102,7 +102,13 @@ export function createV2InterviewBridge(
         return;
       }
       try {
-        await methods.synthetic({ sessionID, text, resume: false });
+        const description = text
+          .replace(/\s*\[system status:[^\]]*\]\s*$/, '')
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .join(' · ');
+        await methods.synthetic({ sessionID, text, description, resume: false });
       } catch (err) {
         log('[v2][interview] synthetic notify failed', {
           sessionID,

@@ -394,12 +394,21 @@ describe('v2 interview bridge', () => {
       },
     } as never);
 
-    await bridge.runtime.notify('ses_n', 'ready');
+    await bridge.runtime.notify(
+      'ses_n',
+      '⎔ Interview UI ready\n\nOpen: http://127.0.0.1:43211/interview/id\n\n[system status: continue without acknowledging this notification]',
+    );
     expect(calls).toContainEqual({
       method: 'synthetic',
       // resume:false = admit the interview URL without waking the session
       // (v1's noReply prompt equivalent; no agent turn, no double-send).
-      input: { sessionID: 'ses_n', text: 'ready', resume: false },
+      input: {
+        sessionID: 'ses_n',
+        text: '⎔ Interview UI ready\n\nOpen: http://127.0.0.1:43211/interview/id\n\n[system status: continue without acknowledging this notification]',
+        description:
+          '⎔ Interview UI ready · Open: http://127.0.0.1:43211/interview/id',
+        resume: false,
+      },
     });
 
     await bridge.runtime.rename('ses_r', 'Interview: x');
