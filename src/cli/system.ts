@@ -1,9 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { statSync } from 'node:fs';
 
 const VERSION_COMMAND_TIMEOUT_MS = 2000;
-
-let cachedOpenCodePath: string | null = null;
 
 function resolvePathCommand(
   command: string,
@@ -50,27 +47,6 @@ function resolvePathCommand(
   }
 }
 
-function canExecute(
-  command: string,
-  args: string[],
-  environment: NodeJS.ProcessEnv = process.env,
-): boolean {
-  try {
-    const isWindows = process.platform === 'win32';
-    const result = spawnSync(command, args, {
-      stdio: 'ignore',
-      env: environment,
-      // Required on Windows to execute .cmd/.bat shims produced by npm/pnpm/yarn
-      // (Node's CVE-2024-27980 patch blocks them without a shell).
-      shell: isWindows && !/\.exe$/i.test(command),
-      timeout: VERSION_COMMAND_TIMEOUT_MS,
-    });
-    return result.status === 0;
-  } catch {
-    return false;
-  }
-}
-
 function getOpenCodePaths(
   environment: NodeJS.ProcessEnv = process.env,
 ): string[] {
@@ -99,8 +75,6 @@ function getOpenCodePaths(
     : [];
 
   return [
-    // PATH (try this first)
-    'opencode',
     ...windowsPaths,
     // User local installations (Linux & macOS)
     `${home}/.local/bin/opencode`,
@@ -127,14 +101,12 @@ function getOpenCodePaths(
     '/var/lib/flatpak/exports/bin/ai.opencode.OpenCode',
     `${home}/.local/share/flatpak/exports/bin/ai.opencode.OpenCode`,
     // Nix (Linux/macOS)
-    '/nix/store/opencode/bin/opencode',
     `${home}/.nix-profile/bin/opencode`,
     '/run/current-system/sw/bin/opencode',
     // Cargo (Rust toolchain)
     `${home}/.cargo/bin/opencode`,
     // npm/npx global
     `${home}/.npm-global/bin/opencode`,
-    '/usr/local/lib/node_modules/opencode/bin/opencode',
     // Yarn global
     `${home}/.yarn/bin/opencode`,
     // PNPM
@@ -142,118 +114,30 @@ function getOpenCodePaths(
   ];
 }
 
-export function resolveOpenCodePath(
+export function findOpenCode(
   environment: NodeJS.ProcessEnv = process.env,
-): string {
-  const useCache = environment === process.env;
-  if (useCache && cachedOpenCodePath) {
-    return cachedOpenCodePath;
-  }
-
-  const pathOpenCodePath = resolvePathCommand('opencode', environment);
-  if (pathOpenCodePath) {
-    if (useCache) {
-      cachedOpenCodePath = pathOpenCodePath;
-    }
-    return pathOpenCodePath;
-  }
-
-  const paths = getOpenCodePaths(environment);
-
-  for (const opencodePath of paths) {
-    if (opencodePath === 'opencode') continue;
+): { path: string; version: string; hostFlavor: 'v1' | 'v2' } | null {
+  const paths = [
+    resolvePathCommand('opencode', environment) ?? 'opencode',
+    ...getOpenCodePaths(environment),
+  ];
+  for (const path of new Set(paths)) {
     try {
-      const stat = statSync(opencodePath);
-      if (stat.isFile()) {
-        if (useCache) {
-          cachedOpenCodePath = opencodePath;
-        }
-        return opencodePath;
+      const result = spawnSync(path, ['--version'], {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        env: environment,
+        shell: process.platform === 'win32' && !/\.exe$/i.test(path),
+        timeout: VERSION_COMMAND_TIMEOUT_MS,
+      });
+      if (result.status === 0) {
+        const version = result.stdout.trim();
+        const major = version.match(/(?:^|\s)v?(\d+)\./)?.[1];
+        return { path, version, hostFlavor: Number(major) >= 2 ? 'v2' : 'v1' };
       }
     } catch {
-      // Try next path
+      // Try the next location.
     }
-  }
-
-  // Fallback to 'opencode' and hope it's in PATH
-  return 'opencode';
-}
-
-export async function isOpenCodeInstalled(
-  environment: NodeJS.ProcessEnv = process.env,
-): Promise<boolean> {
-  const useCache = environment === process.env;
-  const pathOpenCodePath = resolvePathCommand('opencode', environment);
-
-  if (
-    pathOpenCodePath &&
-    canExecute(pathOpenCodePath, ['--version'], environment)
-  ) {
-    if (useCache) {
-      cachedOpenCodePath = pathOpenCodePath;
-    }
-    return true;
-  }
-
-  const paths = getOpenCodePaths(environment);
-
-  for (const opencodePath of paths) {
-    if (opencodePath === 'opencode') continue;
-    if (canExecute(opencodePath, ['--version'], environment)) {
-      if (useCache) {
-        cachedOpenCodePath = opencodePath;
-      }
-      return true;
-    }
-  }
-  return false;
-}
-
-export async function isTmuxInstalled(): Promise<boolean> {
-  try {
-    const result = spawnSync('tmux', ['-V'], {
-      stdio: 'ignore',
-      timeout: VERSION_COMMAND_TIMEOUT_MS,
-    });
-    return result.status === 0;
-  } catch {
-    return false;
-  }
-}
-
-export async function getOpenCodeVersion(): Promise<string | null> {
-  const opencodePath = resolveOpenCodePath();
-  try {
-    const isWindows = process.platform === 'win32';
-    const result = spawnSync(opencodePath, ['--version'], {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      shell: isWindows && !/\.exe$/i.test(opencodePath),
-      timeout: VERSION_COMMAND_TIMEOUT_MS,
-    });
-    if (result.status === 0) {
-      return result.stdout.trim();
-    }
-  } catch {
-    // Failed
   }
   return null;
-}
-
-export function getOpenCodePath(): string | null {
-  const path = resolveOpenCodePath();
-  return path === 'opencode' ? null : path;
-}
-
-export async function fetchLatestVersion(
-  packageName: string,
-): Promise<string | null> {
-  try {
-    const res = await fetch(`https://registry.npmjs.org/${packageName}/latest`);
-    if (!res.ok) return null;
-    const data = (await res.json()) as { version: string };
-    return data.version;
-  } catch {
-    return null;
-  }
 }

@@ -12,14 +12,12 @@ import {
 import {
   addPluginToOpenCodeConfig,
   addPluginToOpenCodeTuiConfig,
-  detectCurrentConfig,
-  generateLiteConfig,
-  getOpenCodePath,
-  getOpenCodeVersion,
-  isOpenCodeInstalled,
+  isPluginConfigured,
   warmOpenCodePluginCache,
   writeLiteConfig,
-} from './config-manager';
+} from './config-io';
+import { generateLiteConfig } from './providers';
+import { findOpenCode } from './system';
 import type { ConfigMergeResult, InstallArgs, InstallConfig } from './types';
 
 // Colors
@@ -113,9 +111,10 @@ async function checkOpenCodeInstalled(): Promise<{
   ok: boolean;
   version?: string;
   path?: string;
+  hostFlavor?: 'v1' | 'v2';
 }> {
-  const installed = await isOpenCodeInstalled();
-  if (!installed) {
+  const host = findOpenCode();
+  if (!host) {
     const isWindows = process.platform === 'win32';
     printError('OpenCode is not installed on this system.');
     printInfo('Install it with:');
@@ -144,12 +143,9 @@ async function checkOpenCodeInstalled(): Promise<{
     }
     return { ok: false };
   }
-  const version = await getOpenCodeVersion();
-  const path = getOpenCodePath();
-  const detectedVersion = version ?? '';
-  const pathInfo = path ? ` (${DIM}${path}${RESET})` : '';
-  printSuccess(`OpenCode ${detectedVersion} detected${pathInfo}`);
-  return { ok: true, version: version ?? undefined, path: path ?? undefined };
+  const pathInfo = ` (${DIM}${host.path}${RESET})`;
+  printSuccess(`OpenCode ${host.version} detected${pathInfo}`);
+  return { ok: true, ...host };
 }
 
 export async function configureBackgroundSubagents(
@@ -256,8 +252,7 @@ function handleStepResult(
 }
 
 async function runInstall(config: InstallConfig): Promise<number> {
-  const detected = detectCurrentConfig();
-  const isUpdate = detected.isInstalled;
+  const isUpdate = isPluginConfigured();
 
   printHeader(isUpdate);
 

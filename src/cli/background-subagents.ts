@@ -61,8 +61,7 @@ export function manualBackgroundSubagentsInstructions(options?: {
 }): string {
   const shell =
     options?.shell ??
-    (options?.targetPath?.endsWith('.fish') ? 'fish' : undefined) ??
-    detectShellKind(options?.targetPath);
+    (options?.targetPath?.endsWith('.fish') ? 'fish' : undefined);
   const bashZshSnippet = `export ${ENV_NAME}=true`;
   const fishSnippet = `set -gx ${ENV_NAME} true`;
   const bashZshExaSnippet = `export ${EXA_ENV_NAME}=1`;

@@ -6,13 +6,7 @@ import { generateLiteConfig, MODEL_MAPPINGS } from './providers';
 describe('providers', () => {
   test('MODEL_MAPPINGS includes supported providers', () => {
     const keys = Object.keys(MODEL_MAPPINGS);
-    expect(keys.sort()).toEqual([
-      'copilot',
-      'kimi',
-      'openai',
-      'opencode-go',
-      'zai-plan',
-    ]);
+    expect(keys.sort()).toEqual(['openai', 'opencode-go']);
   });
 
   test('generateLiteConfig defaults to openai and includes generated presets', () => {

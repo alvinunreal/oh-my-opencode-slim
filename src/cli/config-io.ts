@@ -28,31 +28,9 @@ import {
 import { crossSpawn } from '../utils/compat';
 import { resolvePackageInstallCommand } from '../utils/package-manager';
 import { generateLiteConfig } from './providers';
-import type {
-  ConfigMergeResult,
-  DetectedConfig,
-  InstallConfig,
-  OpenCodeConfig,
-} from './types';
+import type { ConfigMergeResult, InstallConfig, OpenCodeConfig } from './types';
 
 const PACKAGE_NAME = 'oh-my-opencode-slim';
-
-function isString(value: unknown): value is string {
-  return typeof value === 'string';
-}
-
-function getModelIds(model: unknown): string[] {
-  if (isString(model)) return [model];
-  if (!Array.isArray(model)) return [];
-
-  return model.flatMap((entry) => {
-    if (isString(entry)) return [entry];
-    if (entry && typeof entry === 'object' && isString(entry.id)) {
-      return [entry.id];
-    }
-    return [];
-  });
-}
 
 function normalizePathForMatch(path: string): string {
   return path.replaceAll('\\', '/');
@@ -439,13 +417,6 @@ export function parseConfig(path: string): {
   return { config: null };
 }
 
-/**
- * Write config to file atomically.
- */
-export function writeConfig(configPath: string, config: OpenCodeConfig): void {
-  writeJsonAtomic(configPath, config);
-}
-
 export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
   const configPath = getExistingConfigPath();
 
@@ -536,7 +507,7 @@ export function writeLiteConfig(
   try {
     ensureConfigDir();
     const config = generateLiteConfig(installConfig);
-    writeConfig(configPath, config as OpenCodeConfig);
+    writeJsonAtomic(configPath, config);
 
     return { success: true, configPath };
   } catch (err) {
@@ -550,67 +521,7 @@ export function writeLiteConfig(
 
 // Antigravity, Google provider, and Chutes provider functions removed in simplification refactor.
 
-export function detectCurrentConfig(): DetectedConfig {
-  const result: DetectedConfig = {
-    isInstalled: false,
-    hasKimi: false,
-    hasOpenAI: false,
-    hasAnthropic: false,
-    hasCopilot: false,
-    hasZaiPlan: false,
-    hasAntigravity: false,
-    hasChutes: false,
-    hasOpencodeZen: false,
-  };
-
+export function isPluginConfigured(): boolean {
   const { config } = parseConfig(getExistingConfigPath());
-  if (!config) return result;
-
-  const plugins = getPlugins(config);
-  result.isInstalled = plugins.some((p) => isMatchingPluginEntry(p));
-  result.hasAntigravity = plugins.some((p) => {
-    const spec = getPluginSpec(p);
-    return spec?.startsWith('opencode-antigravity-auth') ?? false;
-  });
-
-  // Check for providers
-  const providers = config.provider as Record<string, unknown> | undefined;
-  result.hasKimi = !!providers?.kimi;
-  result.hasAnthropic = !!providers?.anthropic;
-  result.hasCopilot = !!providers?.['github-copilot'];
-  result.hasZaiPlan = !!providers?.['zai-coding-plan'];
-  result.hasChutes = !!providers?.chutes;
-  if (providers?.google) result.hasAntigravity = true;
-
-  // Try to detect from lite config
-  const { config: liteConfig } = parseConfig(getLiteConfig());
-  if (liteConfig && typeof liteConfig === 'object') {
-    const configObj = liteConfig as Record<string, unknown>;
-    const presetName = configObj.preset as string;
-    const presets = configObj.presets as Record<string, unknown>;
-    const agents = presets?.[presetName] as
-      | Record<string, { model?: unknown }>
-      | undefined;
-
-    if (agents && typeof agents === 'object') {
-      const models = Object.values(agents)
-        .filter((a) => a && typeof a === 'object')
-        .flatMap((a) => getModelIds(a.model));
-      result.hasOpenAI ||= models.some((m) => m.startsWith('openai/'));
-      result.hasAnthropic ||= models.some((m) => m.startsWith('anthropic/'));
-      result.hasCopilot ||= models.some((m) => m.startsWith('github-copilot/'));
-      result.hasZaiPlan ||= models.some((m) =>
-        m.startsWith('zai-coding-plan/'),
-      );
-      result.hasOpencodeZen ||= models.some((m) => m.startsWith('opencode/'));
-      if (models.some((m) => m.startsWith('google/'))) {
-        result.hasAntigravity = true;
-      }
-      if (models.some((m) => m.startsWith('chutes/'))) {
-        result.hasChutes = true;
-      }
-    }
-  }
-
-  return result;
+  return !!config && getPlugins(config).some(isMatchingPluginEntry);
 }

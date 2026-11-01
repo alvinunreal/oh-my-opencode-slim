@@ -15,30 +15,6 @@ export const MODEL_MAPPINGS = {
     designer: { model: 'openai/gpt-6-luna', variant: 'medium' },
     fixer: { model: 'openai/gpt-6.1-sol', variant: 'low' },
   },
-  kimi: {
-    orchestrator: { model: 'kimi-for-coding/k2p5', variant: 'max' },
-    oracle: { model: 'kimi-for-coding/k2p5', variant: 'high' },
-    explorer: { model: 'kimi-for-coding/k2p5', variant: 'low' },
-    designer: { model: 'kimi-for-coding/k2p5', variant: 'medium' },
-    fixer: { model: 'kimi-for-coding/k2p5', variant: 'low' },
-  },
-  copilot: {
-    orchestrator: { model: 'github-copilot/claude-opus-4.6', variant: 'max' },
-    oracle: { model: 'github-copilot/claude-opus-4.6', variant: 'high' },
-    explorer: { model: 'github-copilot/grok-code-fast-1', variant: 'low' },
-    designer: {
-      model: 'github-copilot/gemini-3.1-pro-preview',
-      variant: 'medium',
-    },
-    fixer: { model: 'github-copilot/claude-sonnet-4.6', variant: 'low' },
-  },
-  'zai-plan': {
-    orchestrator: { model: 'zai-coding-plan/glm-5', variant: 'max' },
-    oracle: { model: 'zai-coding-plan/glm-5', variant: 'high' },
-    explorer: { model: 'zai-coding-plan/glm-5', variant: 'low' },
-    designer: { model: 'zai-coding-plan/glm-5', variant: 'medium' },
-    fixer: { model: 'zai-coding-plan/glm-5', variant: 'low' },
-  },
   'opencode-go': {
     orchestrator: { model: 'opencode-go/minimax-m3', variant: 'thinking' },
     oracle: { model: 'opencode-go/qwen3.7-max', variant: 'max' },
@@ -49,7 +25,6 @@ export const MODEL_MAPPINGS = {
   },
 } as const;
 
-export type PresetName = keyof typeof MODEL_MAPPINGS;
 export type GeneratedPresetName = (typeof GENERATED_PRESETS)[number];
 
 export function isGeneratedPresetName(
@@ -99,7 +74,7 @@ export function generateLiteConfig(
     };
   };
 
-  const buildPreset = (mappingName: PresetName) => {
+  const buildPreset = (mappingName: GeneratedPresetName) => {
     const mapping = MODEL_MAPPINGS[mappingName];
     return Object.fromEntries(
       Object.entries(mapping).map(([agentName, modelInfo]) => [

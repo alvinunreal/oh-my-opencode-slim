@@ -38,10 +38,9 @@ import * as marketplaceLease from '../marketplace/lease';
 import {
   addPluginToOpenCodeConfig,
   addPluginToOpenCodeTuiConfig,
-  detectCurrentConfig,
+  isPluginConfigured,
   parseConfig,
   parseConfigFile,
-  writeConfig,
   writeLiteConfig,
 } from './config-io';
 
@@ -131,11 +130,11 @@ describe('config-io', () => {
     expect(result.config).toEqual({ a: 1 } as any);
   });
 
-  test('writeConfig writes JSON and creates backup', () => {
+  test('writeJsonAtomic writes JSON and creates backup', () => {
     const path = join(tmpDir, 'test.json');
     writeFileSync(path, '{"old": true}');
 
-    writeConfig(path, { new: true } as any);
+    writeJsonAtomic(path, { new: true } as any);
 
     expect(JSON.parse(readFileSync(path, 'utf-8'))).toEqual({ new: true });
     expect(JSON.parse(readFileSync(`${path}.bak`, 'utf-8'))).toEqual({
@@ -1150,46 +1149,6 @@ describe('config-io', () => {
     expect(saved.lsp).toBe(false);
   });
 
-  test('detectCurrentConfig detects installed status', () => {
-    const configPath = join(tmpDir, 'opencode', 'opencode.json');
-    const litePath = join(tmpDir, 'opencode', 'oh-my-opencode-slim.json');
-    paths.ensureConfigDir();
-
-    writeFileSync(
-      configPath,
-      JSON.stringify({
-        plugin: ['oh-my-opencode-slim'],
-        provider: {
-          kimi: {
-            npm: '@ai-sdk/openai-compatible',
-          },
-        },
-      }),
-    );
-    writeFileSync(
-      litePath,
-      JSON.stringify({
-        preset: 'openai',
-        presets: {
-          openai: {
-            orchestrator: { model: 'openai/gpt-4' },
-            oracle: { model: 'anthropic/claude-opus-4-6' },
-            explorer: { model: 'github-copilot/grok-code-fast-1' },
-            designer: { model: 'zai-coding-plan/glm-4.7' },
-          },
-        },
-      }),
-    );
-
-    const detected = detectCurrentConfig();
-    expect(detected.isInstalled).toBe(true);
-    expect(detected.hasKimi).toBe(true);
-    expect(detected.hasOpenAI).toBe(true);
-    expect(detected.hasAnthropic).toBe(true);
-    expect(detected.hasCopilot).toBe(true);
-    expect(detected.hasZaiPlan).toBe(true);
-  });
-
   test('detectCurrentConfig detects installed status for installer-managed tuple', () => {
     const configPath = join(tmpDir, 'opencode', 'opencode.json');
     paths.ensureConfigDir();
@@ -1206,36 +1165,7 @@ describe('config-io', () => {
       }),
     );
 
-    const detected = detectCurrentConfig();
-    expect(detected.isInstalled).toBe(true);
-  });
-
-  test('detectCurrentConfig detects provider models in arrays', () => {
-    const configPath = join(tmpDir, 'opencode', 'opencode.json');
-    const litePath = join(tmpDir, 'opencode', 'oh-my-opencode-slim.json');
-    paths.ensureConfigDir();
-
-    writeFileSync(
-      configPath,
-      JSON.stringify({ plugin: ['oh-my-opencode-slim'] }),
-    );
-    writeFileSync(
-      litePath,
-      JSON.stringify({
-        preset: 'dev',
-        presets: {
-          dev: {
-            orchestrator: {
-              model: ['openai/gpt-6-luna', { id: 'anthropic/claude-opus-4-6' }],
-            },
-          },
-        },
-      }),
-    );
-
-    const detected = detectCurrentConfig();
-    expect(detected.hasOpenAI).toBe(true);
-    expect(detected.hasAnthropic).toBe(true);
+    expect(isPluginConfigured()).toBe(true);
   });
 
   test('detectCurrentConfig treats local repo path entries as installed', () => {
@@ -1245,8 +1175,6 @@ describe('config-io', () => {
     writePackageJson(packageRoot);
     writeFileSync(configPath, JSON.stringify({ plugin: [packageRoot] }));
 
-    const detected = detectCurrentConfig();
-
-    expect(detected.isInstalled).toBe(true);
+    expect(isPluginConfigured()).toBe(true);
   });
 });

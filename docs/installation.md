@@ -351,7 +351,7 @@ See the [Multiplexer Integration Guide](multiplexer-integration.md) for more det
    rm -f ~/.config/opencode/oh-my-opencode-slim.json.bak
    ```
 
-7. Bundled skills are registered in-process by the plugin — removing the plugin entry (previous step) removes them. If a legacy install copied skills under `~/.config/opencode/skills/`, the plugin removes its manifest-tracked copies automatically on next load; user-authored skills are never touched.
+7. Bundled skills are provided by the plugin and disappear when it is removed. For legacy copies under `~/.config/opencode/skills/`, review the files and remove only those you no longer need; removing the plugin prevents its migration cleanup from running.
 
 8. Remove the desktop companion binary (if installed):
 

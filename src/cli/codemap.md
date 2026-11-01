@@ -16,7 +16,7 @@ The CLI follows a command pattern with two primary commands:
 - **index.ts**: Routes CLI arguments to appropriate command handlers (install/doctor)
 - **install.ts**: Orchestrates multi-step installation workflow
 - **doctor.ts**: Validates configuration and environment (includes multiplexer validation)
-- **types.ts**: Shared CLI argument types (`InstallArgs`, `BooleanArg`, `SkillsArg`, `OpenCodeConfig`, `InstallConfig`)
+- **types.ts**: Shared CLI argument and configuration types
 - **eval.ts**: Source-checkout eval entry point (run, offline scoring, diff,
   precheck, manual collection). Uses `src/evals/suite-runner.ts`,
   `auto-collect.ts`, `eval-server.ts`, and `git-lifecycle.ts`; not an installed
@@ -24,7 +24,6 @@ The CLI follows a command pattern with two primary commands:
 
 ### Configuration Management Pattern
 
-- **config-manager.ts**: Barrel for installer-facing `config-io`, `providers` and `system`
 - **config-io.ts**: Installer/config generation workflows; shared JSONC parsing and locked atomic writes are imported from `src/config/`
 - **../config/paths.ts**: Canonical user/project config path lookup used by both CLI and runtime; no CLI forwarding path Module
 - **providers.ts**: Generates configuration presets and manages model mappings for different providers
@@ -57,13 +56,11 @@ The CLI follows a command pattern with two primary commands:
 ```
 1. Parse install arguments (preset, background subagents, etc.)
 2. Check OpenCode installation
-3. Add plugin to OpenCode configuration (opencode.json/opencode.jsonc)
+3. Add plugin and default LSP setting to OpenCode configuration
 4. Add TUI version badge (tui.json/tui.jsonc)
 5. Warm OpenCode plugin cache (for package manager installations)
-6. Enable LSP integration by default
-7. Configure background subagents (shell integration)
-8. Write oh-my-opencode-slim configuration (oh-my-opencode-slim.json)
-9. Install custom skills (if requested)
+6. Configure background subagents (shell integration)
+7. Write oh-my-opencode-slim configuration
 ```
 
 OpenCode's built-in `general`/`explore` subagents are disabled at runtime by
@@ -88,9 +85,6 @@ the plugin itself (#1582); the installer no longer writes config entries.
 1. Generate configuration presets for supported providers:
    - openai (default)
    - opencode-go
-   - kimi
-   - copilot
-   - zai-plan
 2. Map agents to models with variants:
    - orchestrator → high-capacity model
    - oracle → high variant
@@ -106,7 +100,7 @@ the plugin itself (#1582); the installer no longer writes config entries.
 ```
 1. Detect shell type (bash/zsh/fish)
 2. Determine target file:
-   - bash/zsh: ~/.bashrc or ~/.zshrc
+   - bash/zsh: ~/.bashrc or ${ZDOTDIR:-$HOME}/.zshrc
    - fish: ~/.config/fish/conf.d/opencode-background-subagents.fish
 3. Write environment variable export:
    - export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true
@@ -183,7 +177,6 @@ bunx oh-my-opencode-slim install [OPTIONS]
 ```
 
 **Options:**
-- `--skills=yes|no`: Install bundled skills (default: yes)
 - `--preset=<name>`: Select configuration preset (default: openai)
 - `--background-subagents=ask|yes|no`: Configure background subagents (default: ask)
 - `--background-subagents-target=<path>`: Specify shell startup file
@@ -192,7 +185,7 @@ bunx oh-my-opencode-slim install [OPTIONS]
 - `--reset`: Force overwrite existing configuration
 - `-h, --help`: Show help
 
-**Available presets:** openai, opencode-go, kimi, copilot, zai-plan
+**Available presets:** openai, opencode-go
 
 ### `doctor` Command
 
