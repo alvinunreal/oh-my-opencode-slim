@@ -418,7 +418,9 @@ export function updateInstallerManagedVersions(
     const committed: typeof updates = [];
     try {
       for (const update of updates)
-        fs.writeFileSync(`${update.configPath}.${token}.tmp`, update.updated);
+        fs.writeFileSync(`${update.configPath}.${token}.tmp`, update.updated, {
+          mode: fs.statSync(update.configPath).mode & 0o7777,
+        });
       for (const update of updates) {
         fs.renameSync(`${update.configPath}.${token}.tmp`, update.configPath);
         committed.push(update);
@@ -426,7 +428,9 @@ export function updateInstallerManagedVersions(
     } catch (err) {
       for (const update of committed) {
         const restorePath = `${update.configPath}.${token}.restore`;
-        fs.writeFileSync(restorePath, update.content);
+        fs.writeFileSync(restorePath, update.content, {
+          mode: fs.statSync(update.configPath).mode & 0o7777,
+        });
         fs.renameSync(restorePath, update.configPath);
       }
       throw err;

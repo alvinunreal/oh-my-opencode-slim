@@ -152,6 +152,15 @@ describe('config-io', () => {
     });
   });
 
+  test('config and backup retain restrictive file permissions', () => {
+    const configPath = join(tmpDir, 'private.json');
+    writeFileSync(configPath, '{"secret":"key"}', { mode: 0o600 });
+    fs.chmodSync(configPath, 0o600);
+    mutateJsonFile(configPath, (current) => ({ ...current, enabled: true }));
+    expect(statSync(configPath).mode & 0o777).toBe(0o600);
+    expect(statSync(`${configPath}.bak`).mode & 0o777).toBe(0o600);
+  });
+
   test('config writes follow relative symlinks and preserve JSONC and backups', () => {
     const targetDir = join(tmpDir, 'dotfiles');
     mkdirSync(targetDir);

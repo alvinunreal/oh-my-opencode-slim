@@ -449,6 +449,9 @@ describe('auto-update-checker/checker', () => {
       const existsSpy = spyOn(fs, 'existsSync').mockImplementation((path) =>
         files.has(String(path)),
       );
+      const statSpy = spyOn(fs, 'statSync').mockReturnValue({
+        mode: 0o600,
+      } as fs.Stats);
       const readSpy = spyOn(fs, 'readFileSync').mockImplementation(
         (path) => files.get(String(path)) ?? '',
       );
@@ -509,6 +512,7 @@ describe('auto-update-checker/checker', () => {
       }
 
       existsSpy.mockRestore();
+      statSpy.mockRestore();
       readSpy.mockRestore();
       writeSpy.mockRestore();
       renameSpy.mockRestore();
