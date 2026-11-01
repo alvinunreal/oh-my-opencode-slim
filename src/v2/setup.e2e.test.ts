@@ -37,6 +37,7 @@ import * as path from 'node:path';
 import type { BundledSkillInfo } from '../cli/custom-skills';
 import { stateFilePath } from '../companion/manager';
 import { RuntimeConfig } from '../config/runtime';
+import { acquireMarketplaceLease } from '../marketplace/lease';
 import { MarketplaceStore } from '../marketplace/store';
 import { createEventDirectoryScope } from '../utils/event-directory-scope';
 import { flushLoggerForTesting } from '../utils/logger';
@@ -2788,6 +2789,114 @@ describe('createV2Setup e2e', () => {
       await cleanup();
     }
   });
+
+  test('publishes marketplace agents after the startup store lease is released', async () => {
+    const store = new MarketplaceStore({ pluginVersion: '2.2.25' });
+    store.install({
+      manifest: {
+        schemaVersion: 2,
+        id: 'team/startup-busy',
+        version: '1.0.0',
+        displayName: 'Startup agent',
+        description: 'Startup lease fixture',
+        agentName: 'startup-busy-agent',
+        prompt: 'Use the package capabilities.',
+        skills: [],
+        mcps: [],
+        tools: ['read'],
+        author: { name: 'Test' },
+        tags: [],
+        license: 'MIT',
+        compatibility: { plugin: '>=2.0.0' },
+        model: { source: 'explicit', candidates: ['provider/model'] },
+        routing: {
+          description: 'Startup agent',
+          when: 'Testing startup',
+          keywords: ['startup'],
+        },
+      } as never,
+    });
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        disabled_hooks: ['chat-headers'],
+        preset: 'marketplace-test',
+        presets: {
+          'marketplace-test': {
+            marketplace: { agents: ['team/startup-busy'] },
+          },
+        },
+      }),
+    );
+
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    ctx.session.update = async () => {};
+    const transforms = new Set<Parameters<typeof ctx.agent.transform>[0]>();
+    let roster = new Map<string, Record<string, unknown>>();
+    const rebuild = () => {
+      const agents = new Map<string, Record<string, unknown>>([
+        ['build', { id: 'build', mode: 'primary', permissions: [] }],
+      ]);
+      const draft = {
+        list: () => [...agents.values()],
+        get: (id: string) => agents.get(id),
+        default: () => {},
+        update: (
+          id: string,
+          update: (agent: Record<string, unknown>) => void,
+        ) => {
+          const agent = agents.get(id) ?? { id, permissions: [] };
+          update(agent);
+          agents.set(id, agent);
+        },
+        remove: (id: string) => {
+          agents.delete(id);
+        },
+      };
+      for (const transform of transforms) transform(draft);
+      roster = agents;
+    };
+    let resolveRebuild!: () => void;
+    const rebuilt = new Promise<void>((resolve) => {
+      resolveRebuild = resolve;
+    });
+    ctx.agent.transform = async (transform) => {
+      transforms.add(transform);
+      rebuild();
+      return { dispose: () => transforms.delete(transform) };
+    };
+    ctx.agent.reload = async () => {
+      rebuild();
+      resolveRebuild();
+    };
+
+    let lease: ReturnType<typeof acquireMarketplaceLease> | undefined =
+      acquireMarketplaceLease(store.paths);
+    let cleanup: (() => Promise<void>) | undefined;
+    try {
+      cleanup = await createV2Setup()(ctx);
+      expect(roster.has('startup-busy-agent')).toBe(false);
+      expect(calls.modelRequestHookCb).toBeDefined();
+      lease.release();
+      lease = undefined;
+      const request = calls.modelRequestHookCb?.({
+        sessionID: 'ses_startup_busy',
+        agent: 'orchestrator',
+        model: { id: 'model', providerID: 'provider' },
+        kind: 'primary',
+        headers: {},
+        body: {},
+      });
+      await Promise.all([rebuilt, request]);
+      expect([...roster.keys()]).toContain('startup-busy-agent');
+      expect([...roster.keys()]).toContain('orchestrator');
+      await expect(request).resolves.toBeUndefined();
+    } finally {
+      lease?.release();
+      await cleanup?.();
+    }
+  }, 10_000);
 
   test('reactivation publishes the roster and serves preset RPC before any prompt', async () => {
     new MarketplaceStore({ pluginVersion: '2.2.25' }).install({
