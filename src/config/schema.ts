@@ -622,13 +622,13 @@ export const BackgroundJobsConfigStrictSchema = z.object({
         .enum(['auto', 'todo', 'children'])
         .default('auto')
         .describe(
-          'Wake-condition source (v1 hosts only). "auto" uses todo-gating; "todo" or "children" pin one mode, degrading to children when the host lacks the todo API. On OpenCode v2 hosts the whole section is ignored: the native background notifier owns terminal delivery. Default "auto".',
+          'Wake-condition source (v1 hosts only). "auto" uses todo-gating; "todo" or "children" pin one mode, degrading to children when the host lacks the todo API. On OpenCode v2 hosts the whole section is ignored. Default "auto".',
         ),
       periodicWakeEnabled: z
         .boolean()
         .default(true)
         .describe(
-          'When false, the periodic idle evaluation never runs; only event-driven wakes (stopped-job recovery, terminal-publication rev>1, child-input) still deliver. Failed event wakes keep their timer-based retry path. v1 hosts only; v2 hosts run no plugin wake machinery at all. Default enabled.',
+          'When false, the periodic idle evaluation never runs; only event-driven wakes (stopped-job recovery, terminal-publication rev>1, child-input) still deliver. Failed event wakes keep their timer-based retry path. v1 hosts only; v2 hosts create no wake scheduler. Default enabled.',
         ),
       wakeOnTerminalPublication: z
         .boolean()
@@ -655,7 +655,7 @@ export const BackgroundJobsConfigStrictSchema = z.object({
       publicationWakeMinIntervalMs: 30_000,
     })
     .describe(
-      'Periodic orchestrator wake scheduler for idle sessions (v1 hosts only; ignored on OpenCode v2 hosts, where the native background notifier owns terminal delivery). Requires host session APIs (session.get, todo, children, status, promptAsync) and wakes while incomplete todos remain. Default enabled at a 5-minute interval.',
+      'Periodic orchestrator wake scheduler for idle sessions (v1 hosts only; ignored on OpenCode v2 hosts). Requires host session APIs (session.get, todo, children, status, promptAsync) and wakes while incomplete todos remain. Default enabled at a 5-minute interval.',
     ),
   wallClockTimeoutMs: z
     .union([z.literal(0), z.number().int().min(60_000).max(2_147_483_647)])

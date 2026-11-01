@@ -100,6 +100,8 @@ export interface BackgroundJobRecord {
    * anchor when a new generation starts.
    */
   amendmentInputMessageID?: string;
+  /** Steers whose host jobs cover this run's next terminal publication. */
+  hostSteerCount?: number;
   lastLiveBusyAt?: number;
   completedAt?: number;
   resultSummary?: string;
@@ -712,6 +714,7 @@ export class BackgroundJobBoard {
         // amendment id dies with the old generation for the same reason.
         runInputMessageID: input.runInputMessageID,
         amendmentInputMessageID: undefined,
+        hostSteerCount: undefined,
         lastLiveBusyAt: now,
         lastUsedAt: now,
       } satisfies BackgroundJobRecord;
@@ -998,7 +1001,11 @@ export class BackgroundJobBoard {
       // amendment id belongs to the previous generation for the same reason.
       ...(existing.state === 'running'
         ? {}
-        : { runInputMessageID: undefined, amendmentInputMessageID: undefined }),
+        : {
+            runInputMessageID: undefined,
+            amendmentInputMessageID: undefined,
+            hostSteerCount: undefined,
+          }),
       lastLiveBusyAt: now,
       activityRevision: existing.activityRevision + 1,
       timedOut: false,

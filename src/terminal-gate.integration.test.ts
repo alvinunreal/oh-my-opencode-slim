@@ -31,6 +31,8 @@ import {
 import * as loggerModule from './utils/logger';
 import { buildPluginInput } from './v2/client-shim';
 import { mapV2EventToV1 } from './v2/event-adapter';
+import { createToolExecuteBridges } from './v2/setup';
+import { createSubagentExecutorWrapper } from './v2/subagent-executor-wrapper';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -318,7 +320,7 @@ async function pullTaskStatus(
 
 for (const state of ['completed', 'error'] as const) {
   for (const provisional of [true, false]) {
-    test(`v2 publication injects nothing, pull-only: ${state}, provisional=${provisional}`, async () => {
+    test(`v2 later publication delivers when attributed: ${state}, provisional=${provisional}`, async () => {
       resetOrchestratorWakeGateForTests();
       const promptAsync = mock(async () => ({}));
       const probe = v2ShimClient({
@@ -365,19 +367,147 @@ for (const state of ['completed', 'error'] as const) {
       expect(h.board.get('child')?.state).toBe(state);
       expect(h.board.get('child')?.provisional === true).toBe(provisional);
       expect(h.board.get('child')?.terminalRevision).toBeGreaterThan(1);
-      // v2 has no wake machinery (council 2026-10-23): neither a later
-      // publication nor provisional promotion injects a prompt. The parent
-      // can still inspect the terminal through task_status.
-      expect(promptAsync).not.toHaveBeenCalled();
+      // Provisional records wait for attribution; managed records deliver.
+      expect(promptAsync).toHaveBeenCalledTimes(provisional ? 0 : 1);
       expect(await pullTaskStatus(h, 'child')).toContain(`state: ${state}`);
       if (provisional) {
         h.board.promoteProvisional('child', 'parent');
         await flush();
-        expect(promptAsync).not.toHaveBeenCalled();
+        expect(promptAsync).toHaveBeenCalledTimes(1);
       }
     });
   }
 }
+
+test('v2 steer of a woken child leaves its final delivery to the host job', async () => {
+  const promptAsync = mock(async () => ({}));
+  const probe = v2ShimClient({
+    outcome: 'succeeded',
+    wakeSurface: { promptAsync },
+  });
+  const h = await assembly(undefined, {
+    client: probe.client,
+    hostFlavor: 'v2',
+  });
+  await h.hooks['chat.message']?.(
+    { sessionID: 'parent', agent: 'orchestrator' } as never,
+    { parts: [] } as never,
+  );
+  const now = Date.now();
+  const run = h.board.registerLaunch({
+    taskID: 'child',
+    parentSessionID: 'parent',
+    agent: 'explorer',
+    description: 'background task',
+    background: true,
+    now: now - 300,
+  });
+  const publish = () =>
+    h.gate.reconcile(run, {
+      kind: 'output',
+      status: {
+        taskID: 'child',
+        state: 'completed',
+        timedOut: false,
+        result: 'result',
+      },
+      origin: {
+        kind: 'native',
+        callID: 'host-result',
+        callIDConfirmed: true,
+        run,
+      },
+    });
+  probe.commitTerminalOutcome(now - 200);
+  await publish();
+  expect(h.board.get('child')?.terminalRevision).toBe(1);
+  h.board.markRunningFromLiveSession('child', now - 100, run.generation, 1);
+  expect(h.board.get('child')?.terminalRevision).toBe(2);
+
+  const bridges = createToolExecuteBridges(
+    h.hooks['tool.execute.before'] as never,
+    h.hooks['tool.execute.after'] as never,
+  );
+  const steer = {
+    tool: 'subagent',
+    sessionID: 'parent',
+    id: 'steer',
+    input: {
+      agent: 'explorer',
+      sessionID: 'child',
+      prompt: 'continue',
+      background: true,
+    },
+  };
+  const wrapper = createSubagentExecutorWrapper({
+    register: (launch) =>
+      h.hooks['v2.registerDelegatedLaunchFromStructured']({
+        ...launch,
+        exactCallConfirmed: true,
+      }),
+  });
+  const rejected = { ...steer, id: 'rejected' };
+  await bridges.beforeBridge(rejected);
+  expect(h.board.get('child')?.hostSteerCount).toBe(1);
+  const reject = wrapper.wrap(async () => {
+    throw new Error('Failed to prompt subagent: child');
+  });
+  await expect(
+    reject(rejected.input, { id: rejected.id, sessionID: 'parent' }),
+  ).rejects.toThrow();
+  await bridges.afterBridge({
+    ...rejected,
+    status: 'error',
+    error: 'Failed to prompt subagent: child',
+  });
+  expect(h.board.get('child')?.hostSteerCount).toBe(0);
+
+  const execute = wrapper.wrap(async () => ({
+    output: { sessionID: 'child', status: 'running' },
+    content: 'The subagent is working in the background (sessionID: child).',
+  }));
+  await bridges.beforeBridge(steer);
+  const result = await execute(steer.input, {
+    id: steer.id,
+    sessionID: 'parent',
+  });
+  await bridges.afterBridge({
+    ...steer,
+    status: 'completed',
+    result,
+  });
+  probe.commitTerminalOutcome(now - 50);
+  await publish();
+  await flush();
+  expect(h.board.get('child')?.terminalRevision).toBe(3);
+  expect(promptAsync).not.toHaveBeenCalled();
+
+  h.board.markRunningFromLiveSession('child', now - 30, run.generation, 3);
+  h.revivedTracker?.register({
+    taskID: 'child',
+    generation: run.generation,
+    parentSessionID: 'parent',
+    description: 'tracked recovery',
+    attemptStartedAt: now - 20,
+  });
+  const trackedSteer = { ...steer, id: 'tracked-steer' };
+  await bridges.beforeBridge(trackedSteer);
+  const trackedResult = await execute(trackedSteer.input, {
+    id: trackedSteer.id,
+    sessionID: 'parent',
+  });
+  await bridges.afterBridge({
+    ...trackedSteer,
+    status: 'completed',
+    result: trackedResult,
+  });
+  probe.commitTerminalOutcome(now - 10);
+  await publish();
+  await flush();
+  expect(h.board.get('child')?.terminalRevision).toBe(5);
+  expect(promptAsync).not.toHaveBeenCalled();
+  expect(h.revivedTracker?.isTracked('child', run.generation)).toBe(false);
+});
 
 async function fallbackAssembly(
   hostFlavor?: string,
@@ -2189,9 +2319,8 @@ test('probe: late-attributable outcome after exhaustion terminalizes the strande
 // carries the host envelope `created` timestamp, so the gate's
 // ambiguous-event demotion cannot pass vacuously), the parent's real
 // request cycle (`experimental.chat.messages.transform`) performing the
-// injection-time reconcile and the Task 6 reopen corrective notice. On v2
-// the parent pulls a later terminal result via task_status; council
-// 2026-10-23 removed plugin wake machinery from that host path.
+// injection-time reconcile and the Task 6 reopen corrective notice. The
+// tracker queues the later terminal result to the parent on v2.
 
 /** Interactive v2 driver: the SAME production pump order as
  * `driveV2Lifecycle` (host outcome committed before terminal execution
@@ -2387,7 +2516,7 @@ test('v2 hosts are structurally boardless and still retire consumed terminal job
   }
 });
 
-test('reopen-after-reconcile: child self-continuation republishes without a plugin wake and corrects the parent', async () => {
+test('reopen-after-reconcile: child continuation notifies and corrects the parent', async () => {
   resetOrchestratorWakeGateForTests();
   const capture = captureGateLogs();
   try {
@@ -2548,9 +2677,7 @@ test('reopen-after-reconcile: child self-continuation republishes without a plug
       ),
     ).toHaveLength(0);
 
-    // Run 2 completes again: a second terminal publication for the SAME
-    // generation (new attempt, advanced terminalRevision). The parent can
-    // pull this result from task_status; no plugin prompt is injected.
+    // Run 2 completes again in the same generation and advances its revision.
     hostChildren = [
       {
         id: 'child',
@@ -2572,11 +2699,10 @@ test('reopen-after-reconcile: child self-continuation republishes without a plug
       capture.of('[terminal-gate] terminal published', 'child'),
     ).toHaveLength(2);
 
-    // v2 injects no wake for later publications either (council
-    // 2026-10-23). The terminal remains on the task_status pull surface.
+    // The tracker queues exactly one result; no scheduler wake is created.
     await flush();
     expect(wakingPublicationWakes()).toHaveLength(0);
-    expect(promptAsync).not.toHaveBeenCalled();
+    expect(promptAsync).toHaveBeenCalledTimes(1);
     expect(await pullTaskStatus(h, 'child')).toContain('state: completed');
   } finally {
     capture.restore();
@@ -2947,7 +3073,7 @@ test('revived-run tracker exhaustion sends no further prompt; result is pull-onl
   }
 });
 
-test('regression: publications of the same v2 lineage inject nothing; results are pull-only', async () => {
+test('later publications of the same v2 lineage reach the parent once', async () => {
   resetOrchestratorWakeGateForTests();
   const capture = captureGateLogs();
   try {
@@ -2967,7 +3093,6 @@ test('regression: publications of the same v2 lineage inject nothing; results ar
     });
 
     // A plain background task completes, resumes, and completes again.
-    // Neither publication injects a plugin wake on v2 (council 2026-10-23).
     await h.requestTask('native', 'v2 publication-wake regression probe');
     await pump({
       type: 'session.created',
@@ -3017,8 +3142,7 @@ test('regression: publications of the same v2 lineage inject nothing; results ar
     ).toHaveLength(0);
     expect(await pullTaskStatus(h, 'child')).toContain('state: completed');
 
-    // The child resumes and finishes again; its later publication is
-    // also pull-only on v2, with no throttle wait or plugin prompt.
+    // The child resumes and finishes again; the tracker delivers that result.
     hostChildren = [
       { id: 'child', parentID: 'parent', time: { updated: Date.now() } },
     ];
@@ -3043,7 +3167,7 @@ test('regression: publications of the same v2 lineage inject nothing; results ar
     await flush();
     expect(second).toMatchObject({ state: 'completed' });
     expect(waking()).toHaveLength(0);
-    expect(promptAsync).not.toHaveBeenCalled();
+    expect(promptAsync).toHaveBeenCalledTimes(1);
     expect(await pullTaskStatus(h, 'child')).toContain('state: completed');
   } finally {
     capture.restore();
@@ -3059,10 +3183,9 @@ test('regression: publications of the same v2 lineage inject nothing; results ar
 // host `subagent` tool call that arms the native background notifier — a
 // relaunch re-arms it with a fresh `started_at`, defeating the notify
 // dedupe — so even an UNOWNED second generation's first publication is
-// natively delivered. On v2 the plugin injects NO wake for any of them:
-// all of these terminals are pull-only (council 2026-10-23).
+// natively delivered. The tracker only delivers later revisions.
 
-test('first publication of an unowned second generation delivers nothing (pull-only)', async () => {
+test('first publication of an unowned second generation remains native-owned', async () => {
   resetOrchestratorWakeGateForTests();
   const capture = captureGateLogs();
   try {

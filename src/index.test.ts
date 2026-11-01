@@ -2165,7 +2165,7 @@ describe('plugin reload generation cleanup', () => {
   // OMOS publishes NOTHING for it. A later publication (rev>1) has no native
   // notifier: v1 pushes ONE self-contained `<completed-job>` delta through
   // the bounded delta queue (never the drop-prone publication wake); v2
-  // creates no wake scheduler, so it pushes nothing.
+  // delivers later untracked publications through the revived-run tracker.
 
   async function emitTerminalPublication(record: {
     pluginConfig?: Record<string, unknown>;
@@ -2434,7 +2434,7 @@ describe('plugin reload generation cleanup', () => {
     expect(skipLogs).toHaveLength(0);
   });
 
-  test('C3: v2 later publication after a direct prompt injects nothing (pull-only)', async () => {
+  test('C3: v2 later stop after a direct prompt injects nothing', async () => {
     const { wake, skipLogs, scheduler } = await emitStoppedRecovery({
       resultSummary: HOST_INTERRUPTED_SUMMARY,
       pluginConfig: { hostFlavor: 'v2' },

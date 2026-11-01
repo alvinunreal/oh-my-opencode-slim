@@ -83,9 +83,7 @@ ${renderRoutingLines(disabledAgents, excludeDescriptions)}
 `
     : '';
 
-  // v2 never builds a wake scheduler: the native background notifier owns
-  // terminal delivery, so promising a scheduler there names a resume channel
-  // that cannot exist.
+  // v2 has completion notifications but does not build a wake scheduler.
   const resumeChannel =
     !v2 && wakeScheduler
       ? 'completion notifications and the wake scheduler resume you'

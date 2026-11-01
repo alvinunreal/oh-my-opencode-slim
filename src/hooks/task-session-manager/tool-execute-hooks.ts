@@ -99,6 +99,22 @@ function isSteeredCall(pending: {
   );
 }
 
+function releaseSteerCoverage(
+  pending: PendingTaskCall,
+  board: BackgroundJobBoard,
+): void {
+  const fence = pending.steerAmendment;
+  if (!fence) return;
+  const record = board.get(fence.taskID);
+  if (
+    record?.generation === fence.generation &&
+    (record.terminalRevision === fence.terminalRevision ||
+      record.terminalRevision === fence.terminalRevision + 1)
+  ) {
+    record.hostSteerCount = Math.max(0, (record.hostSteerCount ?? 0) - 1);
+  }
+}
+
 function refuseKnownTaskResume(
   requested: string,
   job: ResumeRefusalJob,
@@ -533,6 +549,7 @@ export async function handleToolExecuteBefore(
           generation: remembered.generation,
           terminalRevision: remembered.terminalRevision,
         };
+        remembered.hostSteerCount = (remembered.hostSteerCount ?? 0) + 1;
       }
       if (!steered) {
         const relaunchLease = deps.backgroundJobBoard.acquireLease(
@@ -855,6 +872,9 @@ export async function handleToolExecuteAfter(
   });
 
   if (!pending) return;
+
+  if (!pending.registeredByWrapper)
+    releaseSteerCoverage(pending, deps.backgroundJobBoard);
 
   try {
     // v2 gate: the executor wrapper registered this call's delegated
@@ -1357,12 +1377,13 @@ export async function registerDelegatedLaunchFromStructured(
     if (
       input.handledByWrapper === true &&
       input.exactCallConfirmed &&
-      !input.pending.identityUnresolved &&
       input.pending.steerAmendment &&
       input.pending.steerAmendment.taskID === input.childTaskID &&
       input.pending.resumedTaskId === input.childTaskID
     ) {
-      noteSteerAmendment(input.pending, deps);
+      if (!input.pending.identityUnresolved)
+        noteSteerAmendment(input.pending, deps);
+      input.pending.registeredByWrapper = true;
     }
     if (input.background && !input.pending.background) {
       adoptHostConfirmedBackground(input.pending, deps);

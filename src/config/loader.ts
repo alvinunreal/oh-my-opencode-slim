@@ -827,10 +827,8 @@ export function loadPluginConfig(
     }
   }
 
-  // v2 hosts have no plugin wake machinery at all (council 2026-10-23):
-  // the native background notifier owns terminal delivery and the whole
-  // backgroundJobs.orchestratorWake section is v1-only. Warn so the
-  // override is never silent.
+  // v2 hosts have no wake scheduler; the whole backgroundJobs.orchestratorWake
+  // section is v1-only. Warn so the override is never silent.
   if (options?.hostFlavor === 'v2' && !options?.silent) {
     const backgroundJobs = (config.backgroundJobs ?? {}) as Record<
       string,
@@ -843,7 +841,7 @@ export function loadPluginConfig(
       Object.keys(orchestratorWake as Record<string, unknown>).length > 0
     ) {
       console.warn(
-        '[oh-my-opencode-slim] backgroundJobs.orchestratorWake is v1-only and ignored on OpenCode v2 hosts: the native background notifier owns terminal delivery. Run oh-my-opencode-slim doctor for details.',
+        '[oh-my-opencode-slim] backgroundJobs.orchestratorWake is v1-only and ignored on OpenCode v2 hosts, which have no wake scheduler. Run oh-my-opencode-slim doctor for details.',
       );
     }
   }

@@ -51,6 +51,7 @@ type RevivedRun = {
   readonly attemptStartedAt: number;
   description: string;
   fallback?: true;
+  onlyTerminalRevision?: number;
   fallbackNotice?: Promise<void>;
   /** Monotonic observation identity: incremented on every
    * registration so evidence consumers can fence a snapshot against a
@@ -101,6 +102,7 @@ export interface RevivedRunTracker {
   attemptStartedAtFor(taskID: string, generation: number): number | undefined;
   probe(taskID: string, generation: number): Promise<boolean>;
   onTerminal(record: BackgroundJobRecord): void;
+  deliverContinuation(record: BackgroundJobRecord): void;
   /** Delivery ownership for a tracked run's terminal outcome: true when
    * THIS tracker has delivered, is delivering, or still owes a delivery
    * attempt for the exact (taskID, generation) — the ownership state
@@ -240,6 +242,14 @@ export function createRevivedRunTracker(options: {
       current.state === 'running'
     )
       return;
+    if (
+      run.onlyTerminalRevision !== undefined &&
+      run.onlyTerminalRevision !== record.terminalRevision
+    ) {
+      discardRun(run);
+      options.onSettled?.(run.taskID);
+      return;
+    }
     if (record.state === 'cancelled') {
       settleRun(run, record);
       options.backgroundJobSupervisor?.onTerminal(record);
@@ -254,8 +264,41 @@ export function createRevivedRunTracker(options: {
       options.backgroundJobBoard.releaseLease(run.admissionLease);
       run.admissionLease = undefined;
     }
+    if ((record.hostSteerCount ?? 0) > 0) {
+      settleRun(run, record);
+      options.backgroundJobSupervisor?.onTerminal(record);
+      discardRun(run);
+      return;
+    }
     finish(run, record);
   };
+
+  function deliverContinuation(record: BackgroundJobRecord): void {
+    if (
+      disposed ||
+      record.provisional === true ||
+      record.terminalRevision <= 1 ||
+      (record.hostSteerCount ?? 0) > 0 ||
+      (record.state !== 'completed' && record.state !== 'error') ||
+      isTracked(record.taskID, record.generation)
+    )
+      return;
+    const current = options.backgroundJobBoard.get(record.taskID);
+    if (
+      current?.generation !== record.generation ||
+      current.terminalRevision !== record.terminalRevision ||
+      current.state !== record.state
+    )
+      return;
+    installRun({
+      taskID: record.taskID,
+      generation: record.generation,
+      parentSessionID: record.parentSessionID,
+      description: record.description,
+      onlyTerminalRevision: record.terminalRevision,
+    });
+    onTerminal(current);
+  }
 
   const dispose = (): void => {
     disposed = true;
@@ -521,6 +564,7 @@ export function createRevivedRunTracker(options: {
             clearTimeout(notification.retryTimer);
             notification.retryTimer = undefined;
           }
+          if (run.onlyTerminalRevision !== undefined) discardRun(run);
         },
       );
     } catch (error) {
@@ -694,6 +738,7 @@ export function createRevivedRunTracker(options: {
     attemptStartedAt?: number;
     description: string;
     fallback?: true;
+    onlyTerminalRevision?: number;
   }): RevivedRun {
     const old = runs.get(input.taskID);
     if (old?.notification.retryTimer) clearTimeout(old.notification.retryTimer);
@@ -912,6 +957,7 @@ export function createRevivedRunTracker(options: {
     attemptStartedAtFor,
     probe,
     onTerminal,
+    deliverContinuation,
     willNotifyParent,
     prepareObservation,
     admitObservation,

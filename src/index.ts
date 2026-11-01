@@ -1287,15 +1287,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       getRevivedContextFiles = taskSessionManagerHook!.contextFilesForTask;
       pruneRevivedContext = taskSessionManagerHook!.pruneTaskContext;
 
-      // v2: the host's native background notifier owns terminal delivery —
-      // steer reaches a busy parent at its next step boundary, restart
-      // recovery re-delivers from the durable KV job marker, and the inbox
-      // dedupes by message ID — and child permission/question asks are a
-      // host UI boundary the host does not route to the parent agent. No
-      // plugin wake machinery exists on v2 (council 2026-10-23): no
-      // scheduler is created, so every trigger call no-ops through the
-      // undefined optional chain, and asks stay in the sidecar for
-      // task_status pull. v1 keeps the scheduler.
+      // v2 has no wake scheduler; later child executions without a host job
+      // are delivered by the tracker. Child asks remain available via task_status.
       orchestratorWakeScheduler =
         hostFlavor === 'v2'
           ? undefined
@@ -1416,7 +1409,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // task_status must not show it after a restart. Runs on both hosts —
         // the ask store has no run-generation fence of its own.
         clearChildInputWaitsForSession(record.taskID);
-        // v2 has no wake machinery (no scheduler): native delivery owns
+        // v2 has no wake scheduler: native delivery owns
         // stops for job-backed runs, and the plugin does not push one for
         // a non-job run (council 2026-10-23).
         if (hostFlavor === 'v2') return;
@@ -1504,9 +1497,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // double-notify.
       backgroundJobBoard!.addTerminalOutcomeListener((record) => {
         revivedRunTracker!.onTerminal(record);
-        // tool relaunch re-arms the native observer, and a direct-prompt
-        // rev>1 run is out of plugin scope (council 2026-10-23).
-        if (hostFlavor === 'v2') return;
+        if (hostFlavor === 'v2') {
+          revivedRunTracker!.deliverContinuation(record);
+          return;
+        }
         // Unattributed child sessions are not delegated work, just as in
         // stopped-job recovery; their owner controls parent notifications.
         if (record.provisional === true) return;

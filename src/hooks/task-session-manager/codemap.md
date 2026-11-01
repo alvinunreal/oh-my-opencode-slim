@@ -14,7 +14,7 @@ The directory follows a **Facade + Strategy** pattern where `index.ts` acts as t
   Orchestrator turns and does not promote unmanaged Build/custom parents.
 - **session-recovery.ts**: On-demand recovery of untracked host children: verifies parent/agent, triages v2 rounds by the `session.get` outcome/idleAt projection (successful rounds require readable answer text per incident 1115; textless failures and interruptions retain their host-proven terminal state, rounds without a terminal outcome are refused unless an explicit queued continuation adopts identity, partial or unverifiable evidence fails closed, and no round is imported as stopped on a guess), and imports terminal rows into the board.
 - **Startup recovery** (`session-recovery.ts`): Restores persisted owned children independently of parent activity, with trusted delivery markers, run-fenced terminal correction, and explicit admission-slot release. Persisted idles pass the shared host parser/assistant attribution; assistant completion cannot extend the idle boundary. Delivery markers require a correlated terminal latest round, never just a later notification timestamp. Listing, shared single-flight session-info reads, and parent/child transcript waits have per-read deadlines (5s by default), so stalled candidates cannot block the rest or become terminal on timeout.
-- **revived-run-tracker.ts**: Logs terminal notification transport acceptance and failure with the captured transport-attempt number (including late acceptance after a timeout), lease deferral, and once-only ownership release to the fallback publication wake.
+- **revived-run-tracker.ts**: Delivers later v2 terminal publications of managed children to the parent, scoped to one revision, unless a native steer created a host job for that run. The same host-coverage mark suppresses tracked-run delivery. Logs notification acceptance and failure, lease deferral, and once-only ownership release to the fallback publication wake.
 - **Host transcript attribution**: Recovery and untracked status/result reads share `attributeHostRoundToTranscript` from `../../utils/child-transcript.ts`; newer assistant creation/completion invalidates an older host idle outcome, missing assistant timestamps fail closed, and explicit queued continuation can adopt a newer incomplete round without importing a terminal row. `hostRoundStateOf` and `composeHostRound` remain the parser/composer.
 - **../../utils/background-job-terminal-gate.ts**: Shared execution/observation gate for every terminal publication. Runtime quiescence and attributable result evidence authorize one board commit; busy withdraws terminal publications. Grace, bounded retries and single-open reads are shared across adapters.
 - **runtime-status-reconciliation.ts**: Observes retained rows for busy reopen, but inspects transcripts only for running rows or queued replies.
@@ -114,8 +114,8 @@ All modules depend on `BackgroundJobBoard` from `src/utils/background-job-board.
 ```
 User task call → tool.execute.before → PendingTaskCall created → task ID resolved/reused
 → tool.execute.after → BackgroundJobBoard.registerLaunch() → context validated/added
-→ terminal publication → one-shot push (rev>1 on v1: a <completed-job> delta;
-  rev-1: the host's native notifier)
+→ terminal publication → one-shot push (rev>1: a <completed-job> delta on v1,
+  a <task> notification on v2; rev-1: the host's native notifier)
 → Message transform → observed delivery (native / tagged push / revived notice)
   → BackgroundJobBoard.markReconciled()
 → opt-in continuation evaluator (same idle cycle, existing guards)
