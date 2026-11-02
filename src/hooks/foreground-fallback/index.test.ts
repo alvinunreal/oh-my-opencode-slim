@@ -2603,46 +2603,63 @@ describe('foreground fallback redo: host retry budget', () => {
     expect(event.decision).toEqual({ retry: true, delay: 77 });
   });
 
-  test('v2 retry hook logs a one-shot delivery notice per session and model', async () => {
-    const captured: string[] = [];
+  test('v2 retry hook logs every failure and its final decision', async () => {
+    const captured: Array<{ message: string; data: unknown }> = [];
     const capture = spyOn(logger, 'log').mockImplementation(
-      (message: string) => {
-        captured.push(message);
+      (message: string, data?: unknown) => {
+        captured.push({ message, data });
       },
     );
     try {
-      const mgr = timedManager(
-        makeChains({ orchestrator: ['test/a', 'test/b', 'test/c'] }),
-        false,
-        { directory: '/test', hostFlavor: 'v2' } as never,
-        0,
-        undefined,
-        undefined,
-        0,
-        0,
-        undefined,
-        undefined,
-        undefined,
-        false,
-      );
+      const { manager: mgr } = makeManager({ hostFlavor: 'v2', maxRetries: 2 });
       const switchModel = mock(async () => ({}));
+      const secret = 'sk-secret0123456789abcdefghijklmnopqrstuv';
+      const event = {
+        ...retryEvent('v2-notice', 'a', { retry: true, delay: 77 }),
+        error: {
+          type: 'provider.rate-limit',
+          status: 429,
+          message: `${'rate limit '.repeat(26)}Bearer ${secret}`,
+          retryAfterMs: 1_250,
+        },
+      };
+      await mgr.handleV2Retry(event, switchModel);
+      await mgr.handleV2Retry(event, switchModel);
       await mgr.handleV2Retry(
-        retryEvent('v2-notice', 'a', { retry: true }),
+        {
+          ...retryEvent('v2-notice', 'a', { retry: false }),
+          error: { type: 'provider.auth', status: 403, message: 'Forbidden' },
+        },
         switchModel,
       );
+      (mgr as any).sessionRetryEnabled.set('v2-disabled-notice', false);
       await mgr.handleV2Retry(
-        retryEvent('v2-notice', 'a', { retry: true }),
-        switchModel,
-      );
-      // Same session, different failing model: a second notice.
-      await mgr.handleV2Retry(
-        retryEvent('v2-notice', 'b', { retry: true }),
+        { ...event, sessionID: 'v2-disabled-notice' },
         switchModel,
       );
       const notices = captured.filter(
-        (message) => message === '[foreground-fallback] v2 retry hook observed',
+        ({ message }) =>
+          message === '[foreground-fallback] v2 retry hook observed',
       );
-      expect(notices).toHaveLength(2);
+      expect(notices).toHaveLength(4);
+      expect(notices[0]?.data).toMatchObject({
+        type: 'provider.rate-limit',
+        status: 429,
+        retryAfterMs: 1_250,
+        decision: { retry: true, delay: 77 },
+      });
+      const loggedMessage = (
+        notices[0]?.data as { message: string } | undefined
+      )?.message;
+      expect(loggedMessage?.length).toBeLessThanOrEqual(300);
+      expect(loggedMessage).not.toContain(secret.slice(0, 11));
+      expect(notices[2]?.data).toMatchObject({
+        type: 'provider.auth',
+        status: 403,
+        message: 'Forbidden',
+        decision: { retry: true, delay: 0 },
+      });
+      expect(notices[3]?.data).toMatchObject({ steering: false });
     } finally {
       capture.mockRestore();
     }
@@ -4113,8 +4130,8 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
     },
   );
 
-  test('permanent quota error skips the host retry budget', async () => {
-    const { manager } = makeManager({ maxRetries: 3 });
+  test('v2 401 gets one grace retry while quota and 403 still switch', async () => {
+    const { manager } = makeManager({ hostFlavor: 'v2', maxRetries: 3 });
     const switchModel = mock(async () => {});
     const event = {
       sessionID: 'v2-permanent',
@@ -4125,6 +4142,67 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
     };
     await manager.handleV2Retry(event, switchModel);
     expect(switchModel).toHaveBeenCalledWith('v2-permanent', {
+      providerID: 'test',
+      id: 'b',
+    });
+
+    const auth = (sessionID: string, status: number, retry = false) => ({
+      sessionID,
+      agent: 'orchestrator',
+      model: { providerID: 'test', id: 'a' },
+      error: { type: 'provider.auth', status, message: 'Unauthorized' },
+      decision: (retry ? { retry: true, delay: 0 } : { retry: false }) as {
+        retry: boolean;
+        delay?: number;
+      },
+    });
+    const first = auth('v2-auth', 401);
+    await manager.handleV2Retry(first, switchModel);
+    expect(first.decision).toEqual({ retry: true, delay: 0 });
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(manager.getActiveFallback('v2-auth')).toBeUndefined();
+    expect((manager as any).downProviders.has('v2-auth')).toBe(false);
+    await manager.handleV2Retry(auth('v2-auth', 401), switchModel);
+    expect(switchModel).toHaveBeenCalledTimes(2);
+    expect(manager.getActiveFallback('v2-auth')?.model).toBe('test/b');
+
+    // Another auth plugin may already have changed the host decision.
+    const preapproved = auth('v2-auth-plugin-first', 401, true);
+    await manager.handleV2Retry(preapproved, switchModel);
+    expect(preapproved.decision).toEqual({ retry: true, delay: 0 });
+    expect(switchModel).toHaveBeenCalledTimes(2);
+    await manager.handleV2Retry(
+      auth('v2-auth-plugin-first', 401, true),
+      switchModel,
+    );
+    expect(switchModel).toHaveBeenCalledTimes(3);
+
+    manager.noteV2Prompt('v2-auth');
+    const nextTurn = {
+      ...auth('v2-auth', 401),
+      model: { providerID: 'test', id: 'b' },
+    };
+    await manager.handleV2Retry(nextTurn, switchModel);
+    expect(nextTurn.decision).toEqual({ retry: true, delay: 0 });
+    expect(switchModel).toHaveBeenCalledTimes(3);
+
+    await manager.handleV2Retry(auth('v2-forbidden', 403), switchModel);
+    expect(switchModel).toHaveBeenCalledWith('v2-forbidden', {
+      providerID: 'test',
+      id: 'b',
+    });
+    await manager.handleV2Retry(
+      {
+        ...auth('v2-transport-401', 401),
+        error: {
+          type: 'provider.transport',
+          status: 401,
+          message: 'Unauthorized',
+        },
+      },
+      switchModel,
+    );
+    expect(switchModel).toHaveBeenCalledWith('v2-transport-401', {
       providerID: 'test',
       id: 'b',
     });
@@ -7984,6 +8062,7 @@ describe('ForegroundFallbackManager session.status', () => {
   });
 
   test('triggers fallback on retry status with rate limit message', async () => {
+    const capture = spyOn(logger, 'log');
     const { mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(
       makeChains(),
@@ -8003,15 +8082,31 @@ describe('ForegroundFallbackManager session.status', () => {
       },
     });
 
-    await mgr.handleEvent({
-      type: 'session.status',
-      properties: {
-        sessionID: 'sess-4',
-        status: { type: 'retry', message: 'usage limit reached, retrying...' },
-      },
-    });
+    try {
+      await mgr.handleEvent({
+        type: 'session.status',
+        properties: {
+          sessionID: 'sess-4',
+          status: {
+            type: 'retry',
+            message: 'usage limit reached, retrying...',
+            attempt: 4,
+          },
+        },
+      });
 
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+      expect(capture).toHaveBeenCalledWith(
+        '[foreground-fallback] v1 retry observed',
+        expect.objectContaining({
+          sessionID: 'sess-4',
+          message: 'usage limit reached, retrying...',
+          attempt: 4,
+        }),
+      );
+    } finally {
+      capture.mockRestore();
+    }
   });
 
   test('triggers fallback on retry status with insufficient balance message', async () => {
@@ -10065,7 +10160,7 @@ describe('ForegroundFallbackManager forgetSession cleanup', () => {
     'sessionChains',
     'sessionRetryEnabled',
     'unknownFinishStreak',
-    'v2RetryNotices',
+    'authGrace',
     'lastTrigger',
     'lastTriggerModel',
     'lastSwitchTrigger',
@@ -10152,7 +10247,7 @@ describe('ForegroundFallbackManager noteExternalTurn cleanup', () => {
     'retryAttempt',
     'chainExhaustion',
     'deterministicTerminal',
-    'v2RetryNotices',
+    'authGrace',
   ])('%s entry is removed on an external turn', (mapName) => {
     const mgr = new ForegroundFallbackManager(makeChains(), true, {
       directory: '/test',
@@ -10172,7 +10267,7 @@ describe('ForegroundFallbackManager dispose cleanup', () => {
     'observedUserMessageIds',
     'separateCompaction',
     'downProviders',
-    'v2RetryNotices',
+    'authGrace',
   ])('%s is cleared on dispose', (mapName) => {
     const mgr = new ForegroundFallbackManager(makeChains(), true, {
       directory: '/test',
@@ -10190,7 +10285,7 @@ describe('ForegroundFallbackManager resetRecoveryState cleanup', () => {
     'lastFallbackTime',
     'initialDelayUsed',
     'retryAttempt',
-    'v2RetryNotices',
+    'authGrace',
     'sessionRetries',
     'chainExhaustion',
     'deterministicTerminal',

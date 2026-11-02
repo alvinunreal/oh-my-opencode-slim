@@ -50,6 +50,7 @@ import {
   normalizeAgentHint,
   resolveSessionAgent,
 } from '../../utils/prompt-agent';
+import { redactSecretsForLog } from '../../utils/redact';
 import {
   abortSessionWithTimeout,
   OperationTimeoutError,
@@ -794,10 +795,8 @@ export class ForegroundFallbackManager {
   private readonly quotaExhaustedProviders = new Map<string, Set<string>>();
   /** Process-local sessions with an active fallback switch in flight. */
   private readonly inProgress = getProcessFallbacksInProgress();
-  /** One-shot v2 retry-hook delivery notices, keyed by sessionID and the
-   *  failing model ("providerID/modelID"). Proves hook delivery per
-   *  session/model episode without per-event log noise. */
-  private readonly v2RetryNotices = new Map<string, Set<string>>();
+  /** The turn in which a session used its one v2 authentication grace retry. */
+  private readonly authGrace = new Map<string, number>();
   /** sessionID → timestamp of last trigger (stale retry guard only) */
   private readonly lastTrigger = new Map<string, number>();
   /** sessionID → model in use when lastTrigger was set; a model change starts
@@ -1129,7 +1128,7 @@ export class ForegroundFallbackManager {
     this.observedUserMessageIds.clear();
     this.separateCompaction.clear();
     this.downProviders.clear();
-    this.v2RetryNotices.clear();
+    this.authGrace.clear();
   }
 
   private rememberOutcome(key: string, outcome: ChildOutcome) {
@@ -1320,7 +1319,7 @@ export class ForegroundFallbackManager {
     this.retryAttempt.delete(sessionID);
     this.chainExhaustion.delete(sessionID);
     this.deterministicTerminal.delete(sessionID);
-    this.v2RetryNotices.delete(sessionID);
+    this.authGrace.delete(sessionID);
     this.cancelInitialDelay(sessionID);
   }
 
@@ -1610,7 +1609,7 @@ export class ForegroundFallbackManager {
     this.sessionChains.delete(id);
     this.sessionRetryEnabled.delete(id);
     this.unknownFinishStreak.delete(id);
-    this.v2RetryNotices.delete(id);
+    this.authGrace.delete(id);
     this.v2Steps.delete(id);
     // NOTE: inProgress is intentionally NOT cleared here —
     // the finally blocks in tryFallback() and tryFallbackWithAbort()
@@ -2113,6 +2112,13 @@ export class ForegroundFallbackManager {
             (props.status.message !== undefined &&
               isFailoverError({ message: props.status.message })));
         if (isFailoverRetry && this.enabled) {
+          log('[foreground-fallback] v1 retry observed', {
+            sessionID,
+            message: props.status?.message
+              ? redactSecretsForLog(props.status.message).slice(0, 300)
+              : undefined,
+            attempt: props.status?.attempt,
+          });
           // Guard: stale retry event from a previous model's retry loop.
           // After a fallback, lastTriggerModel holds the OLD model (set by
           // isDeduped before the fallback), while sessionModel holds the NEW
@@ -2281,29 +2287,10 @@ export class ForegroundFallbackManager {
     const { sessionID } = event;
     const epoch = this.turnEpoch.get(sessionID) ?? 0;
     const from = `${event.model.providerID}/${event.model.id}`;
+    let failover = false;
     try {
-      // One-shot deterministic delivery notice (evidence gate): proves the
-      // host invokes this hook for this session, and how the error was
-      // classified, independent of steering enablement. One line per
-      // session and failing model, so a disabled steering path can never
-      // masquerade as a working hook (a3ac0bee postmortem).
       const scope = failoverScope(event.error);
-      const failover = scope !== undefined;
-      let notices = this.v2RetryNotices.get(sessionID);
-      if (!notices) {
-        notices = new Set();
-        this.v2RetryNotices.set(sessionID, notices);
-      }
-      if (!notices.has(from)) {
-        notices.add(from);
-        log('[foreground-fallback] v2 retry hook observed', {
-          sessionID,
-          agent: event.agent,
-          from,
-          failover,
-          steering: this.retryEnabledFor(sessionID),
-        });
-      }
+      failover = scope !== undefined;
       if (
         !this.retryEnabledFor(sessionID) ||
         this.disposed ||
@@ -2341,11 +2328,21 @@ export class ForegroundFallbackManager {
       // direct: no echo heuristic on this path (an old model's late retry
       // was already dropped by the tried-model check above).
       if (this.surfacesSpentQuota(sessionID, event.error, from)) return;
+      const auth401 =
+        isRecord(event.error) &&
+        event.error.type === 'provider.auth' &&
+        event.error.status === 401;
+      if (auth401 && this.authGrace.get(sessionID) !== epoch) {
+        this.authGrace.set(sessionID, epoch);
+        event.decision = { retry: true, delay: 0 };
+        return;
+      }
       if (event.decision?.retry === true) {
         this.rearmIfFreshDescent(sessionID);
         // Request rejections and spent allowance cannot recover by retrying
         // this model, so steer without charging the host-retry budget.
         if (
+          !auth401 &&
           !isPermanentQuotaBillingError(event.error) &&
           !isSpentQuotaError(event.error) &&
           scope !== 'request' &&
@@ -2372,6 +2369,26 @@ export class ForegroundFallbackManager {
         '[foreground-fallback] retry hook switch failed; host decision unchanged',
         { sessionID: event?.sessionID, error: stringifyError(err) },
       );
+    } finally {
+      const error = isRecord(event.error) ? event.error : undefined;
+      log('[foreground-fallback] v2 retry hook observed', {
+        sessionID,
+        agent: event.agent,
+        from,
+        failover,
+        steering: this.retryEnabledFor(sessionID),
+        type: typeof error?.type === 'string' ? error.type : undefined,
+        status: typeof error?.status === 'number' ? error.status : undefined,
+        message:
+          typeof error?.message === 'string'
+            ? redactSecretsForLog(error.message).slice(0, 300)
+            : undefined,
+        retryAfterMs:
+          typeof error?.retryAfterMs === 'number'
+            ? error.retryAfterMs
+            : undefined,
+        decision: event.decision,
+      });
     }
   }
 
@@ -2857,7 +2874,7 @@ export class ForegroundFallbackManager {
     this.deterministicTerminal.delete(sessionID);
     this.lastFallbackTime.delete(sessionID);
     this.initialDelayUsed.delete(sessionID);
-    this.v2RetryNotices.delete(sessionID);
+    this.authGrace.delete(sessionID);
     this.sessionTried.delete(sessionID);
     this.quotaExhaustedProviders.delete(sessionID);
     this.cancelInitialDelay(sessionID);
