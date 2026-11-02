@@ -1319,7 +1319,6 @@ export class ForegroundFallbackManager {
     this.retryAttempt.delete(sessionID);
     this.chainExhaustion.delete(sessionID);
     this.deterministicTerminal.delete(sessionID);
-    this.authGrace.delete(sessionID);
     this.cancelInitialDelay(sessionID);
   }
 

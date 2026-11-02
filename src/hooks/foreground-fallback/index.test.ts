@@ -10247,7 +10247,6 @@ describe('ForegroundFallbackManager noteExternalTurn cleanup', () => {
     'retryAttempt',
     'chainExhaustion',
     'deterministicTerminal',
-    'authGrace',
   ])('%s entry is removed on an external turn', (mapName) => {
     const mgr = new ForegroundFallbackManager(makeChains(), true, {
       directory: '/test',
