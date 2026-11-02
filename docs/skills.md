@@ -139,9 +139,12 @@ Start it directly with:
 **State** (kept small; for resuming after compaction, not activity logging):
 - Router head `.slim/deepwork/<session-id>.md`: `status:` and `slug:` only.
 - Progress file `.slim/deepwork/<task-slug>/progress.md`: ~40 lines of current
-  state — pass, goal, next step, decisions, running lanes, ranked known
-  issues, and concise References to project files (add a sha when its revision
-  matters). No activity log.
+  state. YAML front matter holds `pass:`, `goal:`, `next:` and the ranked
+  `issues:` list (the explorer reads these); prose below holds decisions,
+  running lanes, and concise References to project files (add a sha when its
+  revision matters). No activity log.
+- Gate delegations use `Pass N gate — attempt X of Y` as their task
+  description, so each gate's pass and attempt are known exactly.
 - Deepwork-owned process files stop at head and progress. Durable verdicts,
   research, and decisions go to the project's existing tracked documentation;
   generated assets stay where their producing script or path contract requires.
@@ -162,8 +165,10 @@ It shows the pass track, each lane's agent and status, oracle design reviews and
 gates with their full text, upcoming steps, the `progress.md` next step and
 known issues, and a scrubbable timeline. It only reads `.slim/deepwork/` and the
 background job board: no state is written and nothing is added to any prompt.
-Lanes and oracle results come from the job board, so the view is richest with
-`backgroundJobs` in managed mode. Configure or turn it off with
+Each lane is placed in the pass that `progress.md` named when the lane launched
+(lanes from before a plugin restart sit in the current pass). Lanes and oracle
+results come from the job board, so the view is richest with `backgroundJobs`
+in managed mode. Configure or turn it off with
 [`deepworkExplorer`](configuration.md#full-option-reference).
 
 **When to use:** Large-scale refactoring, multi-file architectural changes, complex feature development spanning modules.

@@ -10,20 +10,17 @@ import type {
 
 /** Mirror of the plugin's ExplorerSnapshot (src/deepwork-explorer/snapshot.ts). */
 export interface ExplorerSnapshot {
-  version: 1;
+  version: 2;
   sessionID: string;
   slug?: string;
   status: 'active' | 'completed' | 'unknown';
   now: number;
-  startedAt: number;
   progress: {
     pass?: number;
     goal?: string;
     next?: string;
-    decision?: string;
     issues: string[];
   };
-  passStarts: { pass: number; at: number }[];
   jobs: {
     id: string;
     alias: string;
@@ -33,6 +30,8 @@ export interface ExplorerSnapshot {
     startedAt: number;
     endedAt?: number;
     result?: string;
+    pass?: number;
+    gate?: { attempt: number; max: number };
   }[];
 }
 
@@ -109,30 +108,38 @@ function verdictFrom(text: string | undefined, at: number): Verdict {
 
 /**
  * Project a live snapshot onto the explorer's RunDef. Times become minutes
- * since the run started. Jobs fall into passes by when each pass was first
- * seen in progress.md; inside a pass, jobs that overlap in time run in the
- * same wave and each wave follows the previous one.
+ * since the first job started. Each job sits in the pass it was tagged with
+ * at launch (untagged jobs, e.g. from before a plugin restart, sit in the
+ * current pass). Inside a pass, jobs that overlap in time share a wave and
+ * each wave follows the previous one.
  */
 export function fromSnapshot(s: ExplorerSnapshot): RunDef {
-  const min = (ms: number) => Math.max(0, (ms - s.startedAt) / 60000);
+  const origin = Math.min(s.now, ...s.jobs.map((j) => j.startedAt));
+  const min = (ms: number) => Math.max(0, (ms - origin) / 60000);
   const head = min(s.now);
-  const current = Math.max(1, s.progress.pass ?? 1);
   const done = s.status === 'completed';
+  const current = Math.max(
+    1,
+    s.progress.pass ?? 1,
+    ...s.jobs.map((j) => j.pass ?? 1),
+  );
+  const passOf = (j: ExplorerSnapshot['jobs'][number]) => j.pass ?? current;
 
-  const seen = new Map(s.passStarts.map((p) => [p.pass, min(p.at)]));
+  // A pass starts with its first job; passes without jobs start where the
+  // previous one did. Starts never run backwards.
   const passes: PassDef[] = [];
   for (let n = 1; n <= current + (done ? 0 : 1); n++) {
     const planned = n > current;
-    const known = seen.get(n);
     const prev = passes[n - 2]?.startAt ?? 0;
-    // Without a sighting of the previous pass there is no boundary to
-    // split on: the current pass owns everything observed.
-    const blind = n === current && n > 1 && !seen.has(n - 1);
+    const firstJob = Math.min(
+      ...s.jobs.filter((j) => passOf(j) === n).map((j) => min(j.startedAt)),
+    );
     const startAt = planned
       ? NEVER
-      : blind
-        ? 0
-        : (known ?? (n === 1 ? 0 : prev));
+      : Math.max(
+          prev,
+          Number.isFinite(firstJob) ? firstJob : n === current ? head : prev,
+        );
     passes.push({
       id: `p${n}`,
       index: n,
@@ -142,7 +149,7 @@ export function fromSnapshot(s: ExplorerSnapshot): RunDef {
           ? (s.progress.goal ?? 'Goal not recorded in progress.md yet.')
           : planned
             ? ''
-            : 'Shipped before this view opened.',
+            : 'Shipped earlier in this run.',
       goalAt: planned ? NEVER : startAt,
       startAt,
     });
@@ -152,15 +159,9 @@ export function fromSnapshot(s: ExplorerSnapshot): RunDef {
       passes[i].endAt = passes[i + 1].startAt;
   if (done) passes[passes.length - 1].endAt = head;
 
-  const passFor = (at: number) => {
-    let id = passes[0].id;
-    for (const p of passes) if (p.startAt <= at) id = p.id;
-    return id;
-  };
-
   const nodes: WorkNode[] = [];
   for (const pass of passes.filter((p) => p.startAt !== NEVER)) {
-    const jobs = s.jobs.filter((j) => passFor(min(j.startedAt)) === pass.id);
+    const jobs = s.jobs.filter((j) => passOf(j) === pass.index);
     let wave: string[] = [];
     let prevWave: string[] = [];
     let waveEnd = -1;
@@ -179,12 +180,11 @@ export function fromSnapshot(s: ExplorerSnapshot): RunDef {
       waveEnd = Math.max(waveEnd, endAt);
 
       const agent = agentOf(job.agent);
-      const isOracle = agent === 'oracle';
-      const kind: NodeKind = isOracle
-        ? /gate/i.test(job.description)
-          ? 'gate'
-          : 'review'
-        : 'lane';
+      const kind: NodeKind = job.gate
+        ? 'gate'
+        : agent === 'oracle'
+          ? 'review'
+          : 'lane';
       if (kind === 'gate') gates++;
       nodes.push({
         id: job.id,
@@ -192,7 +192,7 @@ export function fromSnapshot(s: ExplorerSnapshot): RunDef {
         kind,
         agent,
         alias: job.alias,
-        title: job.description,
+        title: job.gate ? `Pass ${pass.index} gate` : job.description,
         subtitle:
           job.state === 'error' || job.state === 'cancelled'
             ? `Ended: ${job.state}`
@@ -201,16 +201,19 @@ export function fromSnapshot(s: ExplorerSnapshot): RunDef {
         startAt,
         endAt,
         after: [...prevWave],
-        attempt: kind === 'gate' ? { n: gates, max: 3 } : undefined,
+        attempt: job.gate
+          ? { n: job.gate.attempt, max: job.gate.max }
+          : undefined,
         verdict:
-          isOracle && !running ? verdictFrom(job.result, endAt) : undefined,
+          agent === 'oracle' && !running
+            ? verdictFrom(job.result, endAt)
+            : undefined,
         resultText: job.result,
       });
     }
 
     // What the pass still has ahead, from the skill's fixed shape.
-    const isCurrent = pass.index === current && !done;
-    if (isCurrent) {
+    if (pass.index === current && !done) {
       const ahead: [string, NodeKind, AgentId, string][] = gates
         ? [
             [
@@ -243,10 +246,7 @@ export function fromSnapshot(s: ExplorerSnapshot): RunDef {
           kind,
           agent,
           title,
-          subtitle:
-            kind === 'step' && id.endsWith('validate')
-              ? 'broad suite once'
-              : undefined,
+          subtitle: id.endsWith('validate') ? 'broad suite once' : undefined,
           visibleAt: pass.startAt,
           startAt: NEVER,
           endAt: NEVER,
@@ -279,7 +279,6 @@ export function fromSnapshot(s: ExplorerSnapshot): RunDef {
       {
         at: 0,
         next: s.progress.next ?? 'Waiting for the next progress.md update.',
-        decision: s.progress.decision,
       },
     ],
   };

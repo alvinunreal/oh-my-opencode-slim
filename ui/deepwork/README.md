@@ -19,7 +19,7 @@ Stack: React, React Flow (`@xyflow/react`), ELK layout, Motion, Tailwind.
 
 The UI renders a `RunDef` (`src/data/types.ts`) sampled at time `t`. Live
 runs poll `/api/s/<session-id>` every 2 s for a snapshot built from the router
-head, `progress.md` (pass, goal, next step, decision, known issues) and the
+head, the `progress.md` front matter (pass, goal, next step, known issues), the
 background job board (lanes, agents, timing, result text including oracle
-verdicts); `src/data/live.ts` maps it to a `RunDef`. Observation only: no
+verdicts) and each lane's pass recorded at launch; `src/data/live.ts` maps it to a `RunDef`. Observation only: no
 prompt bytes, no cache impact.

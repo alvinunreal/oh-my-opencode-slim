@@ -1046,6 +1046,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             }
           : {}),
       });
+      // Deepwork explorer: tag each launch with the run's current pass.
+      backgroundJobBoard.addLaunchIdentityListener((event) => {
+        if (event.kind === 'registered')
+          void deepworkExplorer?.noteLaunch(
+            event.parentSessionID,
+            event.taskID,
+          );
+      });
       recoverRetainedSession = createSessionRecovery({
         input: ctx,
         backgroundJobBoard: backgroundJobBoard!,

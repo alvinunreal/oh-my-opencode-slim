@@ -8,14 +8,15 @@ import type { BackgroundJobRecord } from '../utils/background-job-board';
 import { createDeepworkExplorer, type DeepworkExplorer } from './index';
 import { parseProgress, projectJobs } from './snapshot';
 
-const PROGRESS = `status: active
-Pass 2 (Structure). Goal: real seat model and Stripe subscriptions.
-Next step: dispatch fix-2, fix-3 and des-2.
-Decision: webhooks get their own lane.
-
-Known issues:
-1. Invite tokens never expire
-2. Dunning emails missing
+const PROGRESS = `---
+pass: 2
+goal: Real seat model and Stripe subscriptions
+next: "Dispatch fix-2, fix-3 and des-2"
+issues:
+  - Invite tokens never expire
+  - Dunning emails missing
+---
+Decisions: webhooks get their own lane. Pass 1 is done; next: ignored prose.
 
 References: src/billing/webhooks.ts`;
 
@@ -47,23 +48,20 @@ function record(over: Partial<BackgroundJobRecord>): BackgroundJobRecord {
 }
 
 describe('parseProgress', () => {
-  test('reads pass, goal, next step, decision and ranked issues', () => {
+  test('reads the front matter keys only', () => {
     expect(parseProgress(PROGRESS)).toEqual({
       pass: 2,
-      goal: 'real seat model and Stripe subscriptions.',
-      next: 'dispatch fix-2, fix-3 and des-2.',
-      decision: 'webhooks get their own lane.',
+      goal: 'Real seat model and Stripe subscriptions',
+      next: 'Dispatch fix-2, fix-3 and des-2',
       issues: ['Invite tokens never expire', 'Dunning emails missing'],
     });
   });
 
-  test('maps pass names and tolerates missing fields', () => {
-    expect(parseProgress('Current pass: Detail').pass).toBe(3);
-    expect(parseProgress('nothing structured here')).toEqual({
-      pass: undefined,
-      goal: undefined,
-      next: undefined,
-      decision: undefined,
+  test('ignores prose without front matter and malformed values', () => {
+    expect(parseProgress('Pass 3. Next step: ship it.')).toEqual({
+      issues: [],
+    });
+    expect(parseProgress('---\npass: two\nissues: []\n---\n')).toEqual({
       issues: [],
     });
   });
@@ -87,6 +85,26 @@ describe('projectJobs', () => {
     expect(jobs.map((j) => [j.id, j.state, j.endedAt, j.result])).toEqual([
       ['a', 'completed', 2500, 'Approved.'],
       ['b', 'running', undefined, undefined],
+    ]);
+  });
+
+  test('takes pass and attempt from the gate description, else the launch tag', () => {
+    const jobs = projectJobs(
+      [
+        record({
+          taskID: 'g',
+          agent: 'oracle',
+          description: 'Pass 2 gate — attempt 2 of 3',
+        }),
+        record({ taskID: 'l', runStartedAt: 2000, description: 'Seat model' }),
+        record({ taskID: 'u', runStartedAt: 3000, description: 'Untagged' }),
+      ],
+      (id) => (id === 'l' ? 1 : undefined),
+    );
+    expect(jobs.map((j) => [j.id, j.pass, j.gate])).toEqual([
+      ['g', 2, { attempt: 2, max: 3 }],
+      ['l', 1, undefined],
+      ['u', undefined, undefined],
     ]);
   });
 });
@@ -158,6 +176,7 @@ describe('deepwork explorer server', () => {
     expect(api.status).toBe(200);
     const snap = JSON.parse(api.body);
     expect(snap).toMatchObject({
+      version: 2,
       sessionID: 'ses_parent',
       slug: 'team-billing',
       status: 'active',
@@ -166,9 +185,16 @@ describe('deepwork explorer server', () => {
         pass: 2,
         issues: ['Invite tokens never expire', 'Dunning emails missing'],
       },
-      passStarts: [{ pass: 2, at: 5000 }],
       jobs: [{ alias: 'fix-1', agent: 'fixer', state: 'running' }],
     });
+  });
+
+  test('tags launches with the pass from progress.md, only for active runs', async () => {
+    setup();
+    await explorer?.noteLaunch('ses_parent', 'ses_child');
+    await explorer?.noteLaunch('ses_other', 'ses_x');
+    const snap = await explorer?.snapshot('ses_parent');
+    expect(snap?.jobs.map((j) => [j.id, j.pass])).toEqual([['ses_child', 2]]);
   });
 
   test('rejects non-loopback Host headers and bad session ids', async () => {

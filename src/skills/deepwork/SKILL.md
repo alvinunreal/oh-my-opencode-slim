@@ -84,8 +84,9 @@ At the end of each pass:
 2. Request one @oracle gate scoped to this pass: is the whole picture right at
    this fidelity? Findings that belong to a later pass go to the known-issues
    list, not into a fix loop. Fix blockers in one bounded pass; at most two
-   re-reviews, each only for materially changed risks. State the attempt in
-   every gate prompt, e.g. `Pass 2 gate — attempt 2 of 3`.
+   re-reviews, each only for materially changed risks. State the attempt as
+   every gate's task description and in its prompt, e.g.
+   `Pass 2 gate — attempt 2 of 3`.
 3. Commit the pass.
 4. Step back: run the product as a whole, look at it, and re-plan the next
    pass from what you see rather than from the original plan. Review the code
@@ -105,11 +106,11 @@ resume after compaction, not to log activity.
   prompt and reused on re-run: `status: active` (or `status: completed`) and
   `slug:` — nothing else. Never modify another session's head.
 - **Progress file** `.slim/deepwork/<task-slug>/progress.md`, rewritten in
-  place, at most about 40 lines of plain prose: status, pass and its goal,
-  next step, constraints and decisions, running lanes (one line each), a concise
-  References list of project files (with an optional `sha`), and the ranked
-  known-issues list. No activity log; durable decisions live at referenced
-  project paths.
+  place, at most about 40 lines. It opens with YAML front matter: `pass:`
+  (number), `goal:`, `next:` and `issues:` (the ranked known-issues list).
+  Below it, plain prose: constraints and decisions, running lanes (one line
+  each), and a concise References list of project files (with an optional
+  `sha`). No activity log; durable decisions live at referenced project paths.
 - Other Deepwork process files do not belong under `.slim/deepwork`. Durable
   verdicts, research, and decisions go to the project's existing tracked
   documentation paths. Generated assets stay where their producing script or

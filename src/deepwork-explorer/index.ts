@@ -29,6 +29,7 @@ import {
 export const DEFAULT_EXPLORER_PORT = 43212;
 const HTML_FILE = 'deepwork-explorer.html';
 const MAX_TRACKED_SESSIONS = 32;
+const MAX_TAGGED_JOBS = 2000;
 
 export interface DeepworkExplorerOptions {
   directory: string;
@@ -45,6 +46,9 @@ export interface DeepworkExplorerOptions {
 export interface DeepworkExplorer {
   /** Start (once) and return the session's explorer URL. */
   activate(sessionID: string): Promise<string | undefined>;
+  /** A job launched under `parentSessionID`: record the deepwork pass
+   * from progress.md front matter, if that session runs deepwork. */
+  noteLaunch(parentSessionID: string, taskID: string): Promise<void>;
   snapshot(sessionID: string): Promise<ExplorerSnapshot>;
   close(): void;
 }
@@ -66,8 +70,10 @@ export function createDeepworkExplorer(
   const now = options.now ?? Date.now;
   const opener = options.open ?? openBrowser;
   const autoOpen = options.autoOpenBrowser ?? true;
-  // sessionID → first pass sightings; insertion order doubles as recency.
-  const sessions = new Map<string, Map<number, number>>();
+  // Recently activated sessions, oldest first (`/` opens the newest).
+  const sessions = new Set<string>();
+  // taskID → deepwork pass at launch, oldest first.
+  const passAtLaunch = new Map<string, number>();
   // Activation can replay (v2 re-dispatches command markers per context
   // event): open the browser once per session.
   const opened = new Set<string>();
@@ -75,46 +81,38 @@ export function createDeepworkExplorer(
   let server: Server | undefined;
   let baseUrl: Promise<string> | undefined;
 
-  function track(sessionID: string): Map<number, number> {
-    let passes = sessions.get(sessionID);
-    if (passes) {
-      sessions.delete(sessionID);
-    } else {
-      passes = new Map();
-      if (sessions.size >= MAX_TRACKED_SESSIONS) {
-        const oldest = sessions.keys().next().value;
-        if (oldest !== undefined) sessions.delete(oldest);
-      }
+  function track(sessionID: string) {
+    sessions.delete(sessionID);
+    if (sessions.size >= MAX_TRACKED_SESSIONS) {
+      const oldest = sessions.values().next().value;
+      if (oldest !== undefined) sessions.delete(oldest);
     }
-    sessions.set(sessionID, passes);
-    return passes;
+    sessions.add(sessionID);
+  }
+
+  async function noteLaunch(parentSessionID: string, taskID: string) {
+    const files = await readDeepworkFiles(options.directory, parentSessionID);
+    const pass = files.progress.pass;
+    if (files.status !== 'active' || pass === undefined) return;
+    if (passAtLaunch.size >= MAX_TAGGED_JOBS) {
+      const oldest = passAtLaunch.keys().next().value;
+      if (oldest !== undefined) passAtLaunch.delete(oldest);
+    }
+    passAtLaunch.set(taskID, pass);
   }
 
   async function snapshot(sessionID: string): Promise<ExplorerSnapshot> {
     const files = await readDeepworkFiles(options.directory, sessionID);
-    const jobs = projectJobs(options.listJobs?.(sessionID) ?? []);
-    const at = now();
-    const passes = sessions.get(sessionID) ?? track(sessionID);
-    // A newly seen pass started no later than the progress rewrite that
-    // announced it.
-    if (files.progress.pass !== undefined && !passes.has(files.progress.pass))
-      passes.set(
-        files.progress.pass,
-        Math.min(at, files.progressWrittenAt ?? at),
-      );
-
-    const starts = [files.headCreatedAt, jobs[0]?.startedAt].filter(
-      (v): v is number => typeof v === 'number' && v > 0,
+    const jobs = projectJobs(options.listJobs?.(sessionID) ?? [], (id) =>
+      passAtLaunch.get(id),
     );
     return {
-      version: 1,
+      version: 2,
       sessionID,
       slug: files.slug,
       status: files.status,
-      now: at,
-      startedAt: starts.length ? Math.min(...starts) : at,
+      now: now(),
       progress: files.progress,
-      passStarts: [...passes].map(([pass, seen]) => ({ pass, at: seen })),
       jobs,
     };
   }
@@ -147,7 +145,7 @@ export function createDeepworkExplorer(
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
 
     if (url.pathname === '/') {
-      const latest = [...sessions.keys()].pop();
+      const latest = [...sessions].pop();
       response.writeHead(latest ? 302 : 404, {
         location: latest ? `/s/${encodeURIComponent(latest)}` : '',
         'content-type': 'text/plain',
@@ -227,6 +225,8 @@ export function createDeepworkExplorer(
         return undefined;
       }
     },
+    noteLaunch: (parentSessionID, taskID) =>
+      noteLaunch(parentSessionID, taskID).catch(() => undefined),
     snapshot,
     close() {
       server?.close();
