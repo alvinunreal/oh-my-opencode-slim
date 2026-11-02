@@ -1276,7 +1276,7 @@ describe('v2 tui preset plugin', () => {
       expect(cleanup).toBeUndefined();
     });
 
-    test('renders agent labels and models in categorical colors and the brand in the interactive hue', async () => {
+    test('renders only configured agent colors and the brand in the interactive hue', async () => {
       const stub = makeSetupCtx();
       writeUserConfig(makeConfig() as unknown as Record<string, unknown>);
       recordTuiSessionParent('oracle-live', 'root', projectDir);
@@ -1296,6 +1296,7 @@ describe('v2 tui preset plugin', () => {
             explorer: 'anthropic/claude-haiku',
           },
           agentDisplayNames: { oracle: 'Oracle' },
+          agentColors: { explorer: '#ff0000' },
         },
         projectDir,
       );
@@ -1344,9 +1345,12 @@ describe('v2 tui preset plugin', () => {
         expect(brand).toBeDefined();
         expect(activeIndicator).toBeDefined();
         expect(mutedText).toBeDefined();
-        expect(namedAgent?.fg.r).toBeCloseTo(210 / 255);
-        expect(secondAgent?.fg.r).toBeCloseTo(80 / 255);
-        expect(model?.fg).toEqual(namedAgent?.fg);
+        // Unconfigured agents stay muted even though the host ships a
+        // categorical palette; a configured color tints label and model.
+        expect(namedAgent?.fg).toEqual(mutedText?.fg);
+        expect(model?.fg).toEqual(mutedText?.fg);
+        expect(secondAgent?.fg.r).toBeCloseTo(1);
+        expect(secondAgent?.fg.g).toBeCloseTo(0);
         expect(secondModel?.fg).toEqual(secondAgent?.fg);
         expect(brand?.bg.b).toBeCloseTo(210 / 255);
         expect(brand?.fg.r).toBeCloseTo(240 / 255);

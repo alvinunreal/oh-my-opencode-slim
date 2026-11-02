@@ -1081,6 +1081,11 @@ Theme colors adapt to the active OpenCode theme. Dynamic councillors inherit
 the configured `council` color unless `agents.councillor.color` overrides it.
 `color` works in top-level `agents` overrides and inside `presets`.
 
+The OMO-Slim sidebar uses the same setting: an agent with a configured `color`
+shows its name and model in that color, and agents without one stay in muted
+text. Hex values work on every host; theme colors fall back to muted text when
+the active host theme does not expose that token.
+
 ### Per-preset agent configuration
 
 To get per-preset behavior for any agent, built-in (`council`, `oracle`,
