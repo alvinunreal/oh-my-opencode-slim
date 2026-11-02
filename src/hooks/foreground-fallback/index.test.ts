@@ -8,10 +8,15 @@ import {
   test,
 } from 'bun:test';
 import { isInternalInitiatorPart } from '../../utils';
+import {
+  INTERNAL_INITIATOR_METADATA_KEY,
+  SLIM_INTERNAL_INITIATOR_MARKER,
+} from '../../utils/internal-initiator';
 import * as logger from '../../utils/logger';
 import { createTimerHarness } from '../../utils/test-timers';
 import { mapV2EventToV1 } from '../../v2/event-adapter';
 import { recordInternalAdmission } from '../../v2/internal-admissions';
+import { createSessionPromptBridge } from '../../v2/setup';
 import { SessionLifecycle } from '../session-lifecycle';
 import type { FallbackNotice } from '../task-session-manager/revived-run-tracker';
 import {
@@ -2386,6 +2391,695 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
     resolveSwitch();
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(observed).toEqual(calls);
+  });
+
+  describe('v2 retry turn-epoch and late-landing race guards', () => {
+    function promptBridgeFor(mgr: ForegroundFallbackManager) {
+      return createSessionPromptBridge(
+        async () => {},
+        undefined,
+        (sid, msgId) => mgr.observeExternalPromptIntent(sid, msgId),
+      );
+    }
+
+    test('normal current epoch switch succeeds and mutates decision', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const sid = 'retry-epoch-normal-success';
+      const switchModel = mock(async () => {});
+      const decision = { retry: false };
+      const event = retryEvent(sid, 'A', decision);
+
+      await mgr.handleV2Retry(event, switchModel);
+
+      expect(switchModel).toHaveBeenCalledWith(sid, {
+        providerID: 'test',
+        id: 'B',
+      });
+      expect(event.decision).toEqual({ retry: true, delay: 500 });
+      expect(observed).toEqual(['test/B']);
+      expect(mgr.getActiveFallback(sid)).toEqual({
+        model: 'test/B',
+        downProviders: expect.any(Set),
+      });
+    });
+
+    test('new user prompt intent arriving before normal switch resolution suppresses stale decision and bookkeeping', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid = 'retry-epoch-normal-new-turn';
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const switchModel = mock(() => switchRequest);
+      const decision = { retry: false };
+      const event = retryEvent(sid, 'A', decision);
+
+      const pending = mgr.handleV2Retry(event, switchModel);
+      expect(switchModel).toHaveBeenCalledTimes(1);
+
+      // New genuine user prompt intent arrives through the prompt bridge
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-new-intent',
+        prompt: { text: 'new prompt' },
+      });
+
+      // Switch resolves normally before timeout
+      resolveSwitch();
+      await pending;
+
+      // Decision must NOT be mutated to retry
+      expect(event.decision).toEqual({ retry: false });
+      // Callback must NOT be invoked
+      expect(observed).toEqual([]);
+      // Active fallback must NOT be committed
+      expect(mgr.getActiveFallback(sid)).toBeUndefined();
+      // Host dispatch was called exactly once
+      expect(switchModel).toHaveBeenCalledTimes(1);
+    });
+
+    test('timed-out switch settling late is suppressed when a new user prompt intent arrived on the same from model', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid = 'retry-epoch-late-new-turn';
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const decision = { retry: false };
+      const event = retryEvent(sid, 'A', decision);
+
+      const pending = mgr.handleV2Retry(event, () => switchRequest);
+
+      // Timeout fires on the old turn
+      await clock.advance(2_500);
+      await pending;
+      expect(observed).toEqual([]);
+      expect(event.decision).toEqual({ retry: false });
+
+      // New genuine user prompt intent arrives on the same model A
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-new-intent-late',
+        prompt: { text: 'new prompt' },
+      });
+
+      // Old switch resolves late
+      resolveSwitch();
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+
+      // Reconcile must be suppressed by epoch check even though session model is still 'test/A'
+      expect(observed).toEqual([]);
+      expect(mgr.getActiveFallback(sid)).toBeUndefined();
+    });
+
+    test('current epoch late-landing switch control successfully reconciles when no intent arrived', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const sid = 'retry-epoch-late-control';
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const decision = { retry: false };
+      const event = retryEvent(sid, 'A', decision);
+
+      const pending = mgr.handleV2Retry(event, () => switchRequest);
+      await clock.advance(2_500);
+      await pending;
+      expect(observed).toEqual([]);
+
+      // Turn is still current (no intent arrived); resolve late switch
+      resolveSwitch();
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+
+      // In current epoch without newer selection, late B must reconcile
+      expect(observed).toEqual(['test/B']);
+      expect(mgr.getActiveFallback(sid)?.model).toBe('test/B');
+    });
+
+    test('dedup trap: duplicate prepared ID does not suppress switch started after first intent, committed update clears budgets without invalidating switch, next new ID supersedes', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B', 'C'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid = 'retry-dedup-trap';
+
+      // 1. First intent arrives for msg-1 -> advances turnEpoch from 0 to 1
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-1',
+        prompt: { text: 'turn 1' },
+      });
+
+      // 2. A switch starts on turn 1 (captures epoch = 1)
+      const { promise: switchReq1, resolve: resolveSwitch1 } =
+        Promise.withResolvers<void>();
+      const event1 = retryEvent(sid, 'A', { retry: false });
+      const pending1 = mgr.handleV2Retry(event1, () => switchReq1);
+
+      // 3. Duplicate prepared ID arrives with same msg-1 -> MUST NOT bump epoch again
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-1',
+        prompt: { text: 'turn 1 duplicate' },
+      });
+
+      // 4. Committed update message.updated arrives with same msg-1 -> clears budgets but does NOT advance epoch again
+      await mgr.handleEvent(redoEvents.user(sid, 'msg-1', 'A'));
+
+      // 5. Switch 1 resolves -> must SUCCEED because turn 1 is still current
+      resolveSwitch1();
+      await pending1;
+
+      expect(event1.decision).toEqual({ retry: true, delay: 500 });
+      expect(observed).toEqual(['test/B']);
+      expect(mgr.getActiveFallback(sid)?.model).toBe('test/B');
+
+      // 6. Next switch starts on model B (still turn 1)
+      const { promise: switchReq2, resolve: resolveSwitch2 } =
+        Promise.withResolvers<void>();
+      const event2 = retryEvent(sid, 'B', { retry: false });
+      const pending2 = mgr.handleV2Retry(event2, () => switchReq2);
+
+      // 7. Next NEW ID intent arrives: msg-2 -> advances turnEpoch to 2
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-2',
+        prompt: { text: 'turn 2' },
+      });
+
+      // 8. Switch 2 resolves -> must be SUPERSEDED by turn 2
+      resolveSwitch2();
+      await pending2;
+
+      expect(event2.decision).toEqual({ retry: false });
+      expect(observed).toEqual(['test/B']); // did not add test/C
+    });
+
+    test('m1 intent -> m2 intent -> held m2 switch then stale m1 user update: breaks entire event, does not touch model/agent/budget/epoch, and m2 switch succeeds', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid = 'retry-m1-m2-stale-m1-update';
+
+      // 1. m1 intent arrives
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-m1',
+        prompt: { text: 'turn 1' },
+      });
+
+      // 2. m2 intent arrives (supersedes m1)
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-m2',
+        prompt: { text: 'turn 2' },
+      });
+
+      // Charge a retry budget on turn 2 to verify stale m1 does not clear it
+      (mgr as any).sessionRetries.set(sid, 3);
+      (mgr as any).sessionModel.set(sid, 'test/A');
+      (mgr as any).sessionAgent.set(sid, 'orchestrator');
+      const epochBefore = (mgr as any).turnEpoch.get(sid);
+
+      // 3. m2 switch starts and is held in flight
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const eventM2 = retryEvent(sid, 'A', { retry: false });
+      const pendingM2 = mgr.handleV2Retry(eventM2, () => switchRequest);
+
+      // 4. Stale m1 user update arrives with wrong old model and old agent
+      await mgr.handleEvent({
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg-m1',
+            sessionID: sid,
+            role: 'user',
+            agent: 'stale-wrong-agent',
+            model: { providerID: 'test', id: 'wrong-old-model' },
+            parts: [{ type: 'text', text: 'stale m1 text' }],
+          },
+        },
+      });
+
+      // Assert m1 update broke ENTIRE event:
+      // - Old agent was NOT registered
+      expect((mgr as any).sessionAgent.get(sid)).toBe('orchestrator');
+      // - Old model was NOT set
+      expect((mgr as any).sessionModel.get(sid)).toBe('test/A');
+      // - Charged budget was NOT reset
+      expect((mgr as any).sessionRetries.get(sid)).toBe(3);
+      // - turnEpoch did NOT advance
+      expect((mgr as any).turnEpoch.get(sid)).toBe(epochBefore);
+      // - Pending marker still points to msg-m2
+      expect((mgr as any).lastExternalPromptIntentID.get(sid)).toBe('msg-m2');
+
+      // 5. m2 switch resolves -> must succeed because turn 2 is still current
+      resolveSwitch();
+      await pendingM2;
+
+      expect(eventM2.decision).toEqual({ retry: true, delay: 500 });
+      expect(observed).toEqual(['test/B']);
+      expect(mgr.getActiveFallback(sid)?.model).toBe('test/B');
+
+      // Variant: earlier committed m1 re-emitted after m2
+      const sidCommitted = 'retry-m1-committed-reemit';
+      const mgrCommitted = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridgeCommitted = promptBridgeFor(mgrCommitted);
+
+      // m1 intent + committed update
+      bridgeCommitted.observePromptIntent({
+        sessionID: sidCommitted,
+        messageID: 'msg-c1',
+        prompt: { text: 'c1' },
+      });
+      await mgrCommitted.handleEvent(
+        redoEvents.user(sidCommitted, 'msg-c1', 'A'),
+      );
+
+      // m2 intent
+      bridgeCommitted.observePromptIntent({
+        sessionID: sidCommitted,
+        messageID: 'msg-c2',
+        prompt: { text: 'c2' },
+      });
+
+      // Duplicate old m1 intent arrives after m2 intent -> noop
+      bridgeCommitted.observePromptIntent({
+        sessionID: sidCommitted,
+        messageID: 'msg-c1',
+        prompt: { text: 'c1 duplicate' },
+      });
+      expect(
+        (mgrCommitted as any).lastExternalPromptIntentID.get(sidCommitted),
+      ).toBe('msg-c2');
+
+      // Re-emitted m1 update arrives after m2 -> breaks entire event
+      await mgrCommitted.handleEvent({
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg-c1',
+            sessionID: sidCommitted,
+            role: 'user',
+            agent: 'old-c1-agent',
+            model: { providerID: 'test', id: 'old-c1-model' },
+          },
+        },
+      });
+      expect((mgrCommitted as any).sessionAgent.get(sidCommitted)).not.toBe(
+        'old-c1-agent',
+      );
+      expect((mgrCommitted as any).sessionModel.get(sidCommitted)).not.toBe(
+        'test/old-c1-model',
+      );
+    });
+
+    test('m2 OWN committed update resets charged budgets EXACT ONCE without 2nd epoch, and later duplicate m2 does not reset newly charged budget', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid = 'retry-m2-own-commit';
+
+      // Charge a budget prior to m2
+      (mgr as any).sessionRetries.set(sid, 2);
+
+      // 1. m2 intent arrives -> bumps epoch from 0 to 1
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-m2',
+        prompt: { text: 'turn m2' },
+      });
+      expect((mgr as any).turnEpoch.get(sid)).toBe(1);
+
+      // 2. m2 switch starts on epoch 1
+      const { promise: switchReq, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const event = retryEvent(sid, 'A', { retry: false });
+      const pending = mgr.handleV2Retry(event, () => switchReq);
+
+      // 3. m2 OWN committed update arrives -> clears budgets and does NOT advance epoch
+      await mgr.handleEvent(redoEvents.user(sid, 'msg-m2', 'A'));
+      expect((mgr as any).sessionRetries.get(sid)).toBeUndefined();
+      expect((mgr as any).turnEpoch.get(sid)).toBe(1);
+
+      // 4. m2 switch resolves -> must succeed because epoch is still 1
+      resolveSwitch();
+      await pending;
+      expect(event.decision).toEqual({ retry: true, delay: 500 });
+      expect(observed).toEqual(['test/B']);
+
+      // 5. Charge a new budget during turn 2
+      (mgr as any).sessionRetries.set(sid, 1);
+
+      // 6. Later duplicate m2 message.updated arrives -> MUST NOT reset newly charged budget
+      await mgr.handleEvent(redoEvents.user(sid, 'msg-m2', 'A'));
+      expect((mgr as any).sessionRetries.get(sid)).toBe(1);
+      expect((mgr as any).turnEpoch.get(sid)).toBe(1);
+
+      // 7. Unknown legacy new ID control: unseen message.updated without early intent advances epoch and clears budget
+      await mgr.handleEvent(redoEvents.user(sid, 'msg-legacy-3', 'A'));
+      expect((mgr as any).sessionRetries.get(sid)).toBeUndefined();
+      expect((mgr as any).turnEpoch.get(sid)).toBe(2);
+    });
+
+    test('deletion ABA: held info-only m1 probe race across deletion and same ID reuse does not register old agent, advance epoch, or disrupt m2 switch', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid = 'retry-deletion-aba';
+
+      const { promise: readBegun, resolve: notifyReadBegun } =
+        Promise.withResolvers<void>();
+      const { promise: readRelease, resolve: releaseRead } =
+        Promise.withResolvers<any>();
+
+      createMockClient({
+        messagesImpl: async () => {
+          notifyReadBegun();
+          return await readRelease;
+        },
+      });
+
+      // 1. Info-only user update for msg-1 arrives with missing parts, triggering async transcript probe
+      const probePromise = mgr.handleEvent({
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg-1',
+            sessionID: sid,
+            role: 'user',
+            agent: 'stale-aba-agent',
+            model: { providerID: 'test', id: 'stale-aba-model' },
+          },
+        },
+      });
+
+      // Ensure probe has actively called session.messages and is suspended in await
+      await readBegun;
+
+      // 2. Session is deleted (forgetSession clears session, increments epoch, and increments sequence monotonically)
+      await mgr.handleEvent({
+        type: 'session.deleted',
+        properties: { sessionID: sid },
+      });
+
+      // 3. Same session ID is reused, new prompt intent msg-2 arrives
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-2',
+        prompt: { text: 'turn 2 intent' },
+      });
+
+      // 4. m2 retry switch starts on current epoch
+      const { promise: switchReq, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const eventM2 = retryEvent(sid, 'A', { retry: false });
+      const pendingM2 = mgr.handleV2Retry(eventM2, () => switchReq);
+
+      // 5. Now release the old probe with external transcript
+      releaseRead({
+        data: [
+          {
+            id: 'msg-1',
+            info: { id: 'msg-1', role: 'user' },
+            parts: [{ type: 'text', text: 'external content' }],
+          },
+        ],
+      });
+      await probePromise;
+
+      // Assert stale probe did NOT register old agent or set old model
+      expect((mgr as any).sessionAgent.get(sid)).not.toBe('stale-aba-agent');
+      expect((mgr as any).sessionModel.get(sid)).not.toBe(
+        'test/stale-aba-model',
+      );
+      expect((mgr as any).sessionAgent.get(sid)).toBe('orchestrator');
+
+      // 6. Release m2 switch -> must succeed
+      resolveSwitch();
+      await pendingM2;
+
+      expect(eventM2.decision).toEqual({ retry: true, delay: 500 });
+      expect(observed).toEqual(['test/B']);
+      expect(mgr.getActiveFallback(sid)?.model).toBe('test/B');
+    });
+
+    test('admission failure leaves old switch superseded without granting new fallback budget', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid = 'retry-admission-failure';
+
+      // Set up an existing consumed retry count on turn 0
+      (mgr as any).sessionRetries.set(sid, 2);
+
+      // Old switch is in flight
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const event = retryEvent(sid, 'A', { retry: false });
+      const pending = mgr.handleV2Retry(event, () => switchRequest);
+
+      // New prompt intent arrives, but admission will fail (e.g. permission check rejects)
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-admit-fail',
+        prompt: { text: 'prompt that fails admission' },
+      });
+
+      // Admission fails: message.updated is NEVER emitted for msg-admit-fail
+      // Now old switch finishes
+      resolveSwitch();
+      await pending;
+
+      // Old switch was superseded
+      expect(event.decision).toEqual({ retry: false });
+      expect(observed).toEqual([]);
+      expect(mgr.getActiveFallback(sid)).toBeUndefined();
+
+      // But fallback budget was NOT granted/cleared (still 2)
+      expect((mgr as any).sessionRetries.get(sid)).toBe(2);
+    });
+
+    test('internal prompt intent with metadata, text marker, or existing internal admission does not bump epoch', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid = 'retry-internal-intent';
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const decision = { retry: false };
+      const event = retryEvent(sid, 'A', decision);
+
+      const pending = mgr.handleV2Retry(event, () => switchRequest);
+
+      // 1. Internal metadata prompt intent
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-meta',
+        metadata: { [INTERNAL_INITIATOR_METADATA_KEY]: true },
+        prompt: { text: 'wake queue' },
+      });
+
+      // 2. Text marker prompt intent
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-marker',
+        prompt: { text: `wake ${SLIM_INTERNAL_INITIATOR_MARKER}` },
+      });
+
+      // 3. Pre-recorded internal admission
+      recordInternalAdmission(sid, 'msg-pre-recorded');
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-pre-recorded',
+        prompt: { text: 'normal text' },
+      });
+
+      // Switch resolves
+      resolveSwitch();
+      await pending;
+
+      // None of the internal prompts bumped epoch, so switch succeeds
+      expect(event.decision).toEqual({ retry: true, delay: 500 });
+      expect(observed).toEqual(['test/B']);
+      expect(mgr.getActiveFallback(sid)?.model).toBe('test/B');
+    });
+
+    test('other-session prompt intent does not suppress the in-flight switch of this session', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid1 = 'retry-session-1';
+      const sid2 = 'retry-session-2';
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const decision = { retry: false };
+      const event1 = retryEvent(sid1, 'A', decision);
+
+      const pending = mgr.handleV2Retry(event1, () => switchRequest);
+
+      // Another session has a prompt intent
+      bridge.observePromptIntent({
+        sessionID: sid2,
+        messageID: 'msg-session-2',
+        prompt: { text: 'prompt for sid2' },
+      });
+
+      // Session 1 resolves
+      resolveSwitch();
+      await pending;
+
+      // Session 1 must succeed normally
+      expect(event1.decision).toEqual({ retry: true, delay: 500 });
+      expect(observed).toEqual(['test/B']);
+      expect(mgr.getActiveFallback(sid1)?.model).toBe('test/B');
+    });
+
+    test('disposing manager suppresses in-flight normal resolution and in-flight late reconciliation', async () => {
+      // Normal in-flight disposal
+      const observedNormal: string[] = [];
+      const mgrNormal = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observedNormal.push(model),
+      );
+      const sidNormal = 'retry-dispose-normal';
+      const { promise: switchReq1, resolve: resolve1 } =
+        Promise.withResolvers<void>();
+      const decision1 = { retry: false };
+      const event1 = retryEvent(sidNormal, 'A', decision1);
+
+      const pendingNormal = mgrNormal.handleV2Retry(event1, () => switchReq1);
+      mgrNormal.dispose();
+      resolve1();
+      await pendingNormal;
+      expect(event1.decision).toEqual({ retry: false });
+      expect(observedNormal).toEqual([]);
+      expect(mgrNormal.getActiveFallback(sidNormal)).toBeUndefined();
+
+      // Late in-flight disposal
+      const observedLate: string[] = [];
+      const mgrLate = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observedLate.push(model),
+      );
+      const sidLate = 'retry-dispose-late';
+      const { promise: switchReq2, resolve: resolve2 } =
+        Promise.withResolvers<void>();
+      const event2 = retryEvent(sidLate, 'A');
+
+      const pendingLate = mgrLate.handleV2Retry(event2, () => switchReq2);
+      await clock.advance(2_500);
+      await pendingLate;
+
+      mgrLate.dispose();
+      resolve2();
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(observedLate).toEqual([]);
+      expect(mgrLate.getActiveFallback(sidLate)).toBeUndefined();
+    });
+
+    test('late rejection after a new user turn does not alter fresh tried state', async () => {
+      const mgr = retryMgr(['A', 'B', 'C']);
+      const sid = 'retry-late-rejection';
+      const { promise: switchRequest, reject: rejectSwitch } =
+        Promise.withResolvers<void>();
+      const pending = mgr.handleV2Retry(
+        retryEvent(sid, 'A'),
+        () => switchRequest,
+      );
+
+      await clock.advance(2_500);
+      await pending;
+
+      // Advance to a fresh turn
+      await mgr.handleEvent(redoEvents.user(sid, 'msg-turn-2', 'A'));
+
+      // In turn 2, a descent tries B
+      const triedSet = (mgr as any).sessionTried.get(sid) as Set<string>;
+      expect(triedSet).toBeDefined();
+      triedSet.add('test/B');
+
+      // Late rejection arrives from turn 1
+      rejectSwitch(new Error('late host error'));
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+
+      // Fresh tried state for B must remain intact
+      expect(triedSet.has('test/B')).toBe(true);
+    });
+
+    test('internal replay continuation does not advance turnEpoch and allows in-flight switch to succeed', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const sid = 'retry-internal-continuation';
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const decision = { retry: false };
+      const event = retryEvent(sid, 'A', decision);
+
+      const pending = mgr.handleV2Retry(event, () => switchRequest);
+
+      // Internal replay message arrived (marked with internal initiator text)
+      await mgr.handleEvent({
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'internal-replay-msg',
+            sessionID: sid,
+            role: 'user',
+            model: { providerID: 'test', modelID: 'A' },
+            parts: [{ text: '<!-- SLIM_INTERNAL_INITIATOR -->' }],
+          },
+        },
+      });
+
+      // Switch resolves
+      resolveSwitch();
+      await pending;
+
+      // Because this was internal continuation, turnEpoch did not advance, so switch succeeds
+      expect(event.decision).toEqual({ retry: true, delay: 500 });
+      expect(observed).toEqual(['test/B']);
+      expect(mgr.getActiveFallback(sid)?.model).toBe('test/B');
+    });
   });
 });
 
@@ -8301,8 +8995,8 @@ describe('ForegroundFallbackManager forgetSession cleanup', () => {
     'lastSwitchTrigger',
     'triggerIncidents',
     'pendingErrorCorrelation',
-    'lastUserMessageID',
-    'userEventSequence',
+    'seenExternalUserMessageIDs',
+    'lastExternalPromptIntentID',
     'replayMessageIds',
     'retryAttempt',
     'sessionRetries',
@@ -8327,6 +9021,20 @@ describe('ForegroundFallbackManager forgetSession cleanup', () => {
     coordinator.dispatchSessionDeleted('gone');
     expect(target.has('gone')).toBe(false);
     expect(target.has('keep')).toBe(true);
+  });
+
+  test('userEventSequence is incremented monotonically on session.deleted', () => {
+    const coordinator = new SessionLifecycle(() => {});
+    const mgr = new ForegroundFallbackManager(
+      makeChains(),
+      true,
+      { directory: '/test' } as never,
+      3,
+      coordinator,
+    );
+    (mgr as any).userEventSequence.set('s1', 5);
+    coordinator.dispatchSessionDeleted('s1');
+    expect((mgr as any).userEventSequence.get('s1')).toBe(6);
   });
 
   test('teardown closes the idle gate for a disabled manager', async () => {

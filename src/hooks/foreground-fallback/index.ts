@@ -720,7 +720,9 @@ export class ForegroundFallbackManager {
   private incidentSequence = 0;
   /** Confirmed external user-turn generations fence suspended work. */
   private readonly turnEpoch = new Map<string, number>();
-  private readonly lastUserMessageID = new Map<string, string>();
+  /** External user message IDs seen during the session lifetime (never evicted by turn resets). */
+  private readonly seenExternalUserMessageIDs = new Map<string, Set<string>>();
+  private readonly lastExternalPromptIntentID = new Map<string, string>();
   /** Arrival order fences stale asynchronous transcript identity probes. */
   private readonly userEventSequence = new Map<string, number>();
   private readonly replayMessageIds = new Map<string, Set<string>>();
@@ -953,6 +955,8 @@ export class ForegroundFallbackManager {
     this.replayMessageIds.clear();
     this.userEventSequence.clear();
     this.v2RetryNotices.clear();
+    this.lastExternalPromptIntentID.clear();
+    this.seenExternalUserMessageIDs.clear();
   }
 
   /** Dispose fence for fallback chains: true when this generation was
@@ -970,8 +974,18 @@ export class ForegroundFallbackManager {
   }
 
   private noteExternalTurn(sessionID: string, messageID: string): void {
-    this.lastUserMessageID.set(sessionID, messageID);
-    this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
+    let seen = this.seenExternalUserMessageIDs.get(sessionID);
+    if (!seen) {
+      seen = new Set();
+      this.seenExternalUserMessageIDs.set(sessionID, seen);
+    }
+    seen.add(messageID);
+    const alreadyFenced =
+      this.lastExternalPromptIntentID.get(sessionID) === messageID;
+    this.lastExternalPromptIntentID.delete(sessionID);
+    if (!alreadyFenced) {
+      this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
+    }
     this.lastTrigger.delete(sessionID);
     this.lastTriggerModel.delete(sessionID);
     this.lastTriggerTurn.delete(sessionID);
@@ -988,6 +1002,25 @@ export class ForegroundFallbackManager {
     this.deterministicTerminal.delete(sessionID);
     this.v2RetryNotices.delete(sessionID);
     this.cancelInitialDelay(sessionID);
+  }
+
+  /** Early synchronous external-prompt intent observer. Runs on the first line
+   *  of the registered v2 `prompt` hook before any permission or profile awaits.
+   *  Bumps turnEpoch and userEventSequence to fence out in-flight or late-landing
+   *  retry model switches from earlier turns, without resetting fallback budgets. */
+  observeExternalPromptIntent(sessionID: string, messageID: string): void {
+    if (this.disposed || !sessionID || !messageID) return;
+    let seen = this.seenExternalUserMessageIDs.get(sessionID);
+    if (!seen) {
+      seen = new Set();
+      this.seenExternalUserMessageIDs.set(sessionID, seen);
+    }
+    if (seen.has(messageID)) return;
+    seen.add(messageID);
+    this.lastExternalPromptIntentID.set(sessionID, messageID);
+    this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
+    this.nextUserEventSequence(sessionID);
+    this.pendingErrorCorrelation.delete(sessionID);
   }
 
   private nextUserEventSequence(sessionID: string): number {
@@ -1312,8 +1345,9 @@ export class ForegroundFallbackManager {
     this.triggerIncidents.delete(id);
     this.pendingErrorCorrelation.delete(id);
     this.turnEpoch.set(id, (this.turnEpoch.get(id) ?? 0) + 1);
-    this.lastUserMessageID.delete(id);
-    this.userEventSequence.delete(id);
+    this.seenExternalUserMessageIDs.delete(id);
+    this.lastExternalPromptIntentID.delete(id);
+    this.userEventSequence.set(id, (this.userEventSequence.get(id) ?? 0) + 1);
     this.replayMessageIds.delete(id);
     this.retryAttempt.delete(id);
     this.sessionRetries.delete(id);
@@ -1456,40 +1490,51 @@ export class ForegroundFallbackManager {
             : Array.isArray(info.parts)
               ? info.parts
               : [];
-          if (
-            typeof info.id === 'string' &&
-            !this.isKnownInternalReplayUserMessage(sessionID, info.id, parts)
-          ) {
-            // A re-emitted update of the observed turn (v1: one per step
-            // finish) is inert: no transcript probe, no model re-seed (fallback
-            // may have advanced it), no sequence bump superseding a newer turn.
-            if (this.lastUserMessageID.get(sessionID) === info.id) break;
-            const eventSequence = this.nextUserEventSequence(sessionID);
-            const isInternal = await this.isInternalReplayUserMessage(
-              sessionID,
-              info.id,
-              parts,
-              Array.isArray(props?.parts) || Array.isArray(info.parts),
-            );
-            if (this.userEventSequence.get(sessionID) !== eventSequence) {
+          if (typeof info.id === 'string') {
+            const isSeen = this.seenExternalUserMessageIDs
+              .get(sessionID)
+              ?.has(info.id);
+            const isPending =
+              this.lastExternalPromptIntentID.get(sessionID) === info.id;
+            if (isSeen && !isPending) {
+              // Old m1 already fenced/committed superseded under m2: break entire event
+              // so no probe, sequence bump, agent/model tracking, or budget reset runs.
               break;
             }
-            if (!isInternal) this.noteExternalTurn(sessionID, info.id);
-            if (!isInternal && isRecord(info.model)) {
-              const providerID = info.model.providerID;
-              const modelID = info.model.modelID ?? info.model.id;
+            if (
+              !this.isKnownInternalReplayUserMessage(sessionID, info.id, parts)
+            ) {
+              const probeEpoch = this.turnEpoch.get(sessionID) ?? 0;
+              const eventSequence = this.nextUserEventSequence(sessionID);
+              const isInternal = await this.isInternalReplayUserMessage(
+                sessionID,
+                info.id,
+                parts,
+                Array.isArray(props?.parts) || Array.isArray(info.parts),
+              );
               if (
-                typeof providerID === 'string' &&
-                typeof modelID === 'string'
+                !this.isCurrentTurn(sessionID, probeEpoch) ||
+                this.userEventSequence.get(sessionID) !== eventSequence
               ) {
-                this.sessionModel.set(sessionID, `${providerID}/${modelID}`);
+                break;
+              }
+              if (!isInternal) this.noteExternalTurn(sessionID, info.id);
+              if (!isInternal && isRecord(info.model)) {
+                const providerID = info.model.providerID;
+                const modelID = info.model.modelID ?? info.model.id;
+                if (
+                  typeof providerID === 'string' &&
+                  typeof modelID === 'string'
+                ) {
+                  this.sessionModel.set(sessionID, `${providerID}/${modelID}`);
+                }
               }
             }
           }
-        }
-        // Assistant identity may belong to compaction or a stale agent turn.
-        if (info.role === 'user' && typeof info.agent === 'string') {
-          this.registerSessionAgent(sessionID, info.agent);
+          if (typeof info.agent === 'string') {
+            this.registerSessionAgent(sessionID, info.agent);
+          }
+          break;
         }
         // Track the model currently serving this session
         const messageID = typeof info.id === 'string' ? info.id : undefined;
@@ -1843,9 +1888,9 @@ export class ForegroundFallbackManager {
    *  mutable `decision` the host will honor. Steering absorbs host retries
    *  up to `maxRetries`, then switches the model in place via
    *  `session.switchModel` and mutates `decision` so the host retries the
-   *  CURRENT turn on the new model — no transcript replay, so the a3ac0bee
-   *  per-turn race cannot occur. Guarded by `v2RetryEnabled`, independent
-   *  of the replay path's `enabled`. */
+   *  CURRENT turn on the new model — no transcript replay; per-turn races
+   *  with new user turns are guarded by epoch validation. Guarded by
+   *  `v2RetryEnabled`, independent of the replay path's `enabled`. */
   async handleV2Retry(
     event: {
       sessionID: string;
@@ -1861,9 +1906,10 @@ export class ForegroundFallbackManager {
   ): Promise<void> {
     let picked: string | undefined;
     let switchRequest: Promise<unknown> | undefined;
+    const { sessionID } = event;
+    const epoch = this.turnEpoch.get(sessionID) ?? 0;
     const from = `${event.model.providerID}/${event.model.id}`;
     try {
-      const { sessionID } = event;
       // One-shot deterministic delivery notice (evidence gate): proves the
       // host invokes this hook for this session, and how the error was
       // classified, independent of steering enablement. One line per
@@ -1948,7 +1994,7 @@ export class ForegroundFallbackManager {
         'foreground retry model switch timed out',
         this.timerSeam,
       );
-      if (this.disposed) return;
+      if (!this.isCurrentTurn(sessionID, epoch)) return;
       event.decision = { retry: true, delay: this.retryDelayMs };
       this.commitSwitch(sessionID, from, nextModel, event.error);
       this.showFallbackToast(agentName, nextModel, event.error);
@@ -1958,22 +2004,25 @@ export class ForegroundFallbackManager {
         to: nextModel,
       });
     } catch (err) {
-      // Unconfirmed switch: keep the target selectable (a timed-out switch
-      // may still land; the next event's model is the host truth).
-      if (picked) this.sessionTried.get(event.sessionID)?.delete(picked);
+      // Unconfirmed switch: keep the target selectable on the current turn.
+      // A stale turn's timeout must not delete picked from a fresh descent's tried set.
+      if (picked && this.isCurrentTurn(event.sessionID, epoch)) {
+        this.sessionTried.get(event.sessionID)?.delete(picked);
+      }
       const pendingSwitch = switchRequest;
       if (err instanceof OperationTimeoutError && picked && pendingSwitch) {
         // Late landing: the timeout cannot cancel the host call. Reconcile
-        // if the observed model is still the source or already the target;
-        // leave any newer, different selection untouched. The check/write
-        // run synchronously. No toast here: the next event's success path
-        // notifies; this only repairs state.
+        // only if this turn is still current and the observed model is still
+        // the source or already the target; leave any newer, different
+        // selection untouched. A new user turn suppresses late reconciliation.
+        // The check/write run synchronously. No toast here: the next event's
+        // success path notifies; this only repairs state.
         const target = picked;
         void pendingSwitch.then(
           () => {
             const observedModel = this.sessionModel.get(event.sessionID);
             if (
-              this.disposed ||
+              !this.isCurrentTurn(event.sessionID, epoch) ||
               (observedModel !== from && observedModel !== target)
             )
               return;
