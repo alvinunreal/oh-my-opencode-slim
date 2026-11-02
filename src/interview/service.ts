@@ -565,8 +565,14 @@ export function createInterviewService(
     return withInterviewDocumentLock(interview.markdownPath, async () => {
       const existingDocument = await readInterviewDocument(interview);
       const turnHash = hashInterviewState(state);
-      const consumed = parseFrontmatter(existingDocument)?.consumedState;
-      if (consumed === turnHash) {
+      const frontmatter = parseFrontmatter(existingDocument);
+      // Re-check under the lock: a deleted owner's release may have won it.
+      if (frontmatter?.sessionID !== interview.sessionID)
+        throw new InterviewDocumentOwnershipError(
+          interview.markdownPath,
+          frontmatter?.sessionID ?? '',
+        );
+      if (frontmatter?.consumedState === turnHash) {
         return {
           document: existingDocument,
           patchError: null,
