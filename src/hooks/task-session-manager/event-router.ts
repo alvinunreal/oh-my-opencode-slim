@@ -32,6 +32,7 @@ import type {
   PendingTaskCall,
 } from './pending-call-tracker';
 import type { RevivedRunTracker } from './revived-run-tracker';
+import type { UndeliveredBackgroundChild } from './session-recovery';
 
 type BackgroundJobRecord = NonNullable<ReturnType<BackgroundJobBoard['get']>>;
 
@@ -210,32 +211,40 @@ function isCurrentSessionObservation(
  * and its history shows an undelivered background delegation — then let the
  * normal reconciliation publish the terminal outcome; that publication is the
  * one-shot wake. Children with a persisted identity are startup recovery's
- * business, and v2 wires no prover because the host owns delivery there.
+ * business, and v2 wires no resolver because the host owns delivery there.
  */
 async function adoptUndeliveredBackgroundChild(args: {
   board: BackgroundJobBoard;
   shouldManageSession: (sessionID: string) => boolean;
-  proveUndelivered?: (
-    parentSessionID: string,
-    taskID: string,
-  ) => Promise<boolean>;
+  resolve?: (observation: {
+    taskID: string;
+    parentSessionID?: string;
+    agent?: string;
+    title?: string;
+  }) => Promise<UndeliveredBackgroundChild | undefined>;
   sessionID: string;
   info?: { parentID?: string; agent?: string; title?: string };
 }): Promise<BackgroundJobRecord | undefined> {
-  const { board, sessionID, info, proveUndelivered } = args;
-  if (!proveUndelivered) return undefined;
+  const { board, sessionID, info, resolve } = args;
+  if (!resolve) return undefined;
   if (args.shouldManageSession(sessionID)) return undefined;
   // A persisted identity means startup recovery already judged this child.
   if (getPersistedBackgroundChild(sessionID)) return undefined;
-  const parentID = info?.parentID;
-  if (!parentID || !args.shouldManageSession(parentID)) return undefined;
   if (
     board.get(sessionID) ||
     getBackgroundJobLifecycleLedger(board).tombstones.has(sessionID)
   ) {
     return undefined;
   }
-  if (!(await proveUndelivered(parentID, sessionID))) return undefined;
+  const proven = await resolve({
+    taskID: sessionID,
+    ...(info?.parentID ? { parentSessionID: info.parentID } : {}),
+    ...(info?.agent ? { agent: info.agent } : {}),
+    ...(info?.title ? { title: info.title } : {}),
+  });
+  if (!proven || !args.shouldManageSession(proven.parentSessionID)) {
+    return undefined;
+  }
   // The proof read is asynchronous: a row may have appeared or been deleted
   // meanwhile, and adopting now would replace that newer state.
   if (
@@ -248,9 +257,9 @@ async function adoptUndeliveredBackgroundChild(args: {
   try {
     adopted = board.registerLaunch({
       taskID: sessionID,
-      parentSessionID: parentID,
-      agent: info?.agent ?? 'unknown',
-      description: info?.title,
+      parentSessionID: proven.parentSessionID,
+      agent: proven.agent ?? info?.agent ?? 'unknown',
+      description: proven.title ?? info?.title,
       background: true,
       adopted: true,
       // The run predates this process; 0 keeps its terminal evidence in window.
@@ -259,7 +268,7 @@ async function adoptUndeliveredBackgroundChild(args: {
   } catch (error) {
     log('[task-session-manager] orphan adoption refused', {
       taskID: sessionID,
-      parentSessionID: parentID,
+      parentSessionID: proven.parentSessionID,
       error: String(error),
     });
     return undefined;
@@ -269,7 +278,7 @@ async function adoptUndeliveredBackgroundChild(args: {
   adopted.recoveredAtStartup = true;
   log('[task-session-manager] adopted undelivered background child', {
     taskID: sessionID,
-    parentSessionID: parentID,
+    parentSessionID: proven.parentSessionID,
   });
   return adopted;
 }
@@ -329,13 +338,16 @@ export async function handleEvent(
       /** True when foreground fallback could still recover the session. */
       willAttemptFallback?: (sessionID: string) => boolean;
       hostFlavor?: string;
-      /** Observation-time oracle for #1560 adoption: proves the parent's
-       *  history holds an undelivered background delegation for the child.
-       *  Wired on v1 only — v2 delivery belongs to the host. */
-      proveUndeliveredBackgroundChild?: (
-        parentSessionID: string,
-        taskID: string,
-      ) => Promise<boolean>;
+      /** Observation-time oracle for #1560 adoption: resolves the child's
+       *  parent and proves its history holds an undelivered background
+       *  delegation for that child. Wired on v1 only — v2 delivery belongs to
+       *  the host. */
+      resolveUndeliveredBackgroundChild?: (observation: {
+        taskID: string;
+        parentSessionID?: string;
+        agent?: string;
+        title?: string;
+      }) => Promise<UndeliveredBackgroundChild | undefined>;
       /** Test seam; production uses event-arrival wall-clock time. */
       now?: () => number;
     };
@@ -631,7 +643,7 @@ export async function handleEvent(
       const adopted = await adoptUndeliveredBackgroundChild({
         board: deps.backgroundJobBoard,
         shouldManageSession: deps.options.shouldManageSession,
-        proveUndelivered: deps.options.proveUndeliveredBackgroundChild,
+        resolve: deps.options.resolveUndeliveredBackgroundChild,
         sessionID: sessionId,
         info: input.event.properties?.info,
       });
@@ -792,7 +804,7 @@ export async function handleEvent(
         const adopted = await adoptUndeliveredBackgroundChild({
           board: deps.backgroundJobBoard,
           shouldManageSession: deps.options.shouldManageSession,
-          proveUndelivered: deps.options.proveUndeliveredBackgroundChild,
+          resolve: deps.options.resolveUndeliveredBackgroundChild,
           sessionID: sessionId,
           info: input.event.properties?.info,
         });

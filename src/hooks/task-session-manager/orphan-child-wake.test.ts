@@ -6,7 +6,7 @@ import {
   recordPersistedBackgroundChild,
 } from '../../utils/background-job-persistence';
 import { handleEvent } from './event-router';
-import { proveUndeliveredBackgroundChild } from './session-recovery';
+import { resolveUndeliveredBackgroundChild } from './session-recovery';
 
 const PARENT = 'ses_parent';
 const CHILD = 'ses_orphan_child';
@@ -43,7 +43,7 @@ function createDeps(
   board: BackgroundJobBoard,
   managed: (sessionID: string) => boolean,
   options?: {
-    prove?: (parentSessionID: string, taskID: string) => Promise<boolean>;
+    resolve?: typeof resolveUndeliveredBackgroundChild;
     willAttemptFallback?: (sessionID: string) => boolean;
   },
 ) {
@@ -65,8 +65,8 @@ function createDeps(
       shouldManageSession: managed,
       now: () => 1000,
       willAttemptFallback: options?.willAttemptFallback,
-      ...(options?.prove
-        ? { proveUndeliveredBackgroundChild: options.prove }
+      ...(options?.resolve
+        ? { resolveUndeliveredBackgroundChild: options.resolve }
         : {}),
     },
     idleReconciler: {
@@ -102,7 +102,9 @@ function createDeps(
 
 // PARENT is managed; every child id is unmanaged.
 const managed = (sessionID: string) => sessionID === PARENT;
-const proven = async () => true;
+const proven: typeof resolveUndeliveredBackgroundChild = async () => ({
+  parentSessionID: PARENT,
+});
 
 function memoryStorage() {
   const values = new Map<string, unknown>();
@@ -132,7 +134,7 @@ describe('orphaned-child observation fallback (#1560)', () => {
     const { deps, scheduleChildIdleReconciliation } = createDeps(
       board,
       managed,
-      { prove: proven },
+      { resolve: proven },
     );
 
     await handleEvent(
@@ -161,9 +163,34 @@ describe('orphaned-child observation fallback (#1560)', () => {
     );
   });
 
+  test('adopts a native v1 event that names only the child session', async () => {
+    const board = new BackgroundJobBoard();
+    const resolve = mock(async () => ({ parentSessionID: PARENT }));
+    const { deps, scheduleChildIdleReconciliation } = createDeps(
+      board,
+      managed,
+      { resolve },
+    );
+
+    // v1 terminal events carry the session id, not the parent object.
+    await handleEvent(
+      {
+        event: { type: 'session.idle', properties: { sessionID: CHILD } },
+      } as never,
+      deps,
+    );
+
+    expect(resolve).toHaveBeenCalledWith({ taskID: CHILD });
+    expect(board.get(CHILD)).toMatchObject({
+      parentSessionID: PARENT,
+      recoveredAtStartup: true,
+    });
+    expect(scheduleChildIdleReconciliation).toHaveBeenCalledTimes(1);
+  });
+
   test('does not adopt twice', async () => {
     const board = new BackgroundJobBoard();
-    const { deps } = createDeps(board, managed, { prove: proven });
+    const { deps } = createDeps(board, managed, { resolve: proven });
 
     await handleEvent(idleEvent(CHILD, { parentID: PARENT }), deps);
     const first = board.get(CHILD);
@@ -180,7 +207,7 @@ describe('orphaned-child observation fallback (#1560)', () => {
     const { deps, scheduleChildIdleReconciliation } = createDeps(
       board,
       managed,
-      { prove: async () => false },
+      { resolve: async () => undefined },
     );
 
     await handleEvent(idleEvent(CHILD, { parentID: PARENT }), deps);
@@ -192,7 +219,7 @@ describe('orphaned-child observation fallback (#1560)', () => {
   test('treats a failed proof read as no evidence', async () => {
     const board = new BackgroundJobBoard();
     const { deps } = createDeps(board, managed, {
-      prove: async () => {
+      resolve: async () => {
         throw new Error('transcript read timed out');
       },
     });
@@ -227,30 +254,34 @@ describe('orphaned-child observation fallback (#1560)', () => {
       launchedAt: 5,
       background: true,
     });
-    const prove = mock(proven);
-    const { deps } = createDeps(board, managed, { prove });
+    const resolve = mock(proven);
+    const { deps } = createDeps(board, managed, { resolve });
 
     await handleEvent(idleEvent(CHILD, { parentID: PARENT }), deps);
 
     expect(board.get(CHILD)).toBeUndefined();
-    expect(prove).not.toHaveBeenCalled();
+    expect(resolve).not.toHaveBeenCalled();
   });
 
-  test('skips with no recorded parent and with an unmanaged parent', async () => {
+  test('skips when the resolved parent is not managed', async () => {
     const board = new BackgroundJobBoard();
-    const prove = mock(proven);
-    const { deps } = createDeps(board, managed, { prove });
+    const resolve = mock(async () => ({ parentSessionID: 'ses_other' }));
+    const { deps, scheduleChildIdleReconciliation } = createDeps(
+      board,
+      managed,
+      { resolve },
+    );
 
     await handleEvent(idleEvent(CHILD), deps);
-    await handleEvent(idleEvent(CHILD, { parentID: 'ses_other' }), deps);
 
     expect(board.get(CHILD)).toBeUndefined();
-    expect(prove).not.toHaveBeenCalled();
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(scheduleChildIdleReconciliation).not.toHaveBeenCalled();
   });
 
   test('never adopts a managed child or a tombstoned one', async () => {
     const board = new BackgroundJobBoard();
-    const { deps } = createDeps(board, () => true, { prove: proven });
+    const { deps } = createDeps(board, () => true, { resolve: proven });
 
     await handleEvent(idleEvent(CHILD, { parentID: PARENT }), deps);
     expect(board.get(CHILD)).toBeUndefined();
@@ -258,7 +289,7 @@ describe('orphaned-child observation fallback (#1560)', () => {
     const suppressed = new BackgroundJobBoard();
     recordBackgroundJobSuppression(suppressed, CHILD);
     const { deps: suppressedDeps } = createDeps(suppressed, managed, {
-      prove: proven,
+      resolve: proven,
     });
     await handleEvent(idleEvent(CHILD, { parentID: PARENT }), suppressedDeps);
     expect(suppressed.get(CHILD)).toBeUndefined();
@@ -276,7 +307,7 @@ describe('orphaned-child observation fallback (#1560)', () => {
     const { deps, scheduleChildIdleReconciliation } = createDeps(
       board,
       managed,
-      { prove: proven },
+      { resolve: proven },
     );
 
     await handleEvent(idleEvent(CHILD, { parentID: PARENT }), deps);
@@ -289,7 +320,7 @@ describe('orphaned-child observation fallback (#1560)', () => {
   test('terminal flavor: adopts a proven orphan error and publishes it', async () => {
     const board = new BackgroundJobBoard();
     const { deps, reconcile } = createDeps(board, managed, {
-      prove: proven,
+      resolve: proven,
     });
 
     await handleEvent(
@@ -312,7 +343,7 @@ describe('orphaned-child observation fallback (#1560)', () => {
   test('terminal flavor: defers a failover error while a fallback is armed', async () => {
     const board = new BackgroundJobBoard();
     const { deps, reconcile } = createDeps(board, managed, {
-      prove: proven,
+      resolve: proven,
       willAttemptFallback: () => true,
     });
     const failoverEvent = errorEvent(CHILD, { parentID: PARENT });
@@ -328,7 +359,7 @@ describe('orphaned-child observation fallback (#1560)', () => {
   });
 });
 
-describe('proveUndeliveredBackgroundChild (#1560)', () => {
+describe('resolveUndeliveredBackgroundChild (#1560)', () => {
   function launchText(taskID: string): string {
     return (
       `The subagent is working in the background (sessionID: ${taskID}). ` +
@@ -411,13 +442,29 @@ describe('proveUndeliveredBackgroundChild (#1560)', () => {
     };
   }
 
-  function proverInput(transcript: unknown, options: { fail?: boolean } = {}) {
+  function proverInput(
+    transcript: unknown,
+    options: { fail?: boolean; hostParentID?: string | null } = {},
+  ) {
     return {
       input: {
         directory: '/tmp',
         worktree: '/tmp',
         client: {
           session: {
+            get: mock(async ({ path }: { path: { id: string } }) => ({
+              data:
+                path.id === CHILD
+                  ? {
+                      id: CHILD,
+                      ...(options.hostParentID === null
+                        ? {}
+                        : { parentID: options.hostParentID ?? PARENT }),
+                      agent: 'explorer',
+                      title: 'delegated work',
+                    }
+                  : { id: path.id },
+            })),
             messages: mock(async () => {
               if (options.fail) throw new Error('host unavailable');
               return transcript;
@@ -436,9 +483,9 @@ describe('proveUndeliveredBackgroundChild (#1560)', () => {
       data: delegationMessage(CHILD, 10, { background: true }),
     };
 
-    expect(await proveUndeliveredBackgroundChild(proverInput(transcript))).toBe(
-      true,
-    );
+    expect(
+      await resolveUndeliveredBackgroundChild(proverInput(transcript)),
+    ).toMatchObject({ parentSessionID: PARENT });
   });
 
   test('refuses a launch the parent already saw delivered', async () => {
@@ -449,9 +496,9 @@ describe('proveUndeliveredBackgroundChild (#1560)', () => {
       ],
     };
 
-    expect(await proveUndeliveredBackgroundChild(proverInput(transcript))).toBe(
-      false,
-    );
+    expect(
+      await resolveUndeliveredBackgroundChild(proverInput(transcript)),
+    ).toBeUndefined();
   });
 
   test('refuses a foreground delegation — the parent awaits the tool result', async () => {
@@ -459,9 +506,9 @@ describe('proveUndeliveredBackgroundChild (#1560)', () => {
       data: delegationMessage(CHILD, 10, { output: foregroundText(CHILD) }),
     };
 
-    expect(await proveUndeliveredBackgroundChild(proverInput(transcript))).toBe(
-      false,
-    );
+    expect(
+      await resolveUndeliveredBackgroundChild(proverInput(transcript)),
+    ).toBeUndefined();
   });
 
   test('refuses a delegation with no launch time — delivery cannot be fenced', async () => {
@@ -472,17 +519,43 @@ describe('proveUndeliveredBackgroundChild (#1560)', () => {
       }),
     };
 
-    expect(await proveUndeliveredBackgroundChild(proverInput(transcript))).toBe(
-      false,
+    expect(
+      await resolveUndeliveredBackgroundChild(proverInput(transcript)),
+    ).toBeUndefined();
+  });
+
+  test('resolves the parent from the host when the event names none', async () => {
+    const transcript = {
+      data: delegationMessage(CHILD, 10, { background: true }),
+    };
+    const { parentSessionID: _named, ...observation } = proverInput(transcript);
+
+    expect(await resolveUndeliveredBackgroundChild(observation)).toMatchObject({
+      parentSessionID: PARENT,
+      agent: 'explorer',
+    });
+  });
+
+  test('refuses when the host reports no parent for the child', async () => {
+    const transcript = {
+      data: delegationMessage(CHILD, 10, { background: true }),
+    };
+    const { parentSessionID: _named, ...observation } = proverInput(
+      transcript,
+      { hostParentID: null },
     );
+
+    expect(
+      await resolveUndeliveredBackgroundChild(observation),
+    ).toBeUndefined();
   });
 
   test('treats an unreadable transcript as no evidence', async () => {
     expect(
-      await proveUndeliveredBackgroundChild(
+      await resolveUndeliveredBackgroundChild(
         proverInput({ data: [] }, { fail: true }),
       ),
-    ).toBe(false);
+    ).toBeUndefined();
   });
 
   test('rejects identifiers the host could not have issued', async () => {
@@ -491,10 +564,10 @@ describe('proveUndeliveredBackgroundChild (#1560)', () => {
     };
 
     expect(
-      await proveUndeliveredBackgroundChild({
+      await resolveUndeliveredBackgroundChild({
         ...proverInput(transcript),
         taskID: 'not a session id',
       }),
-    ).toBe(false);
+    ).toBeUndefined();
   });
 });

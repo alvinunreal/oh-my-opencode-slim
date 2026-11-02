@@ -381,13 +381,17 @@ export function createTaskSessionManagerHook(
     ) => Promise<import('./session-recovery').CanonicalTaskReference>;
     isDisposed?: () => boolean;
     shouldManageSession: (sessionID: string) => boolean;
-    /** Observation-time proof for #1560 orphan adoption: only children whose
-     *  parent history shows an undelivered background delegation qualify.
-     *  Wired on v1 only — v2 delivery belongs to the host. */
-    proveUndeliveredBackgroundChild?: (
-      parentSessionID: string,
-      taskID: string,
-    ) => Promise<boolean>;
+    /** Observation-time proof for #1560 orphan adoption: resolves the child's
+     *  parent and requires an undelivered background delegation in that
+     *  parent's history. Wired on v1 only — v2 delivery belongs to the host. */
+    resolveUndeliveredBackgroundChild?: (observation: {
+      taskID: string;
+      parentSessionID?: string;
+      agent?: string;
+      title?: string;
+    }) => Promise<
+      import('./session-recovery').UndeliveredBackgroundChild | undefined
+    >;
     /** Register a session as orchestrator when the transform hook detects
      *  an orchestrator message but the session isn't in the agent map yet. */
     registerSessionAsOrchestrator?: (sessionID: string) => void;
