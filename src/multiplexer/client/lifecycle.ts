@@ -9,8 +9,6 @@
  * It never reads the environment or performs IO itself.
  */
 
-import type { MultiplexerLayout } from '../../config/schema';
-import { TmuxMultiplexer } from '../tmux';
 import type { Multiplexer, PaneResult, PaneSpawnOptions } from '../types';
 import {
   type DiagnosticLogger,
@@ -49,8 +47,6 @@ export interface PaneLifecycleConfig {
   displayedSessionId: string | null;
   /** Admitted adapter (FR-9 condition ③); null when admission failed. */
   adapter: AdapterType | null;
-  layout: MultiplexerLayout;
-  mainPaneSize: number;
   /** Stable-idle debounce window in ms (FR-10; OQ-1 fixes the value). */
   stableIdleMs: number;
   readiness: ReadinessPolicy;
@@ -296,20 +292,25 @@ export class PaneLifecycle {
     const parentSessionId = this.displayedSessionId;
     const directory = this.displayedDirectory;
     if (this.config.adapter === null) return;
+    // The visible conversation first: its panes are what the user waits for.
+    if (parentSessionId !== null)
+      await this.reconcileDisplayed(parentSessionId, directory);
     await this.reconcileOtherHeldPanes(parentSessionId, directory);
-    if (
-      parentSessionId === null ||
-      !this.isDisplayed(parentSessionId, directory)
-    )
-      return;
+  }
+
+  private async reconcileDisplayed(
+    parentSessionId: string,
+    directory: string,
+  ): Promise<void> {
     const heldAtStart = new Set(this.panes.keys());
 
-    const list = await this.listSessions(directory, parentSessionId);
+    const [list, read] = await Promise.all([
+      this.listSessions(directory, parentSessionId),
+      this.readStatus(directory),
+    ]);
     if (list.error) return; // unverifiable: keep local state (fail-closed)
-    // The route can move while the read is in flight; acting on the previous
+    // The route can move while the reads are in flight; acting on the previous
     // parent would backfill panes for a conversation the user already left.
-    if (!this.isDisplayed(parentSessionId, directory)) return;
-    const read = await this.readStatus(directory);
     if (!this.isDisplayed(parentSessionId, directory)) return;
     const statuses = read.error ? null : read.statuses;
     const serverChildIds = new Set<string>();
@@ -422,8 +423,15 @@ export class PaneLifecycle {
       groups.set(key, group);
     }
     for (const { records } of groups.values()) {
+      // A route change makes this grouping stale; the queued pass redoes it.
+      if (
+        this.disposed ||
+        this.displayedSessionId !== parent ||
+        this.displayedDirectory !== directory
+      )
+        return;
       const first = records[0]?.record;
-      if (!first || this.disposed) continue;
+      if (!first) continue;
       const list = await this.listSessions(
         first.directory,
         first.parentSessionId,
@@ -686,7 +694,6 @@ export class PaneLifecycle {
 
       this.spawnsInFlight.set(childSessionId, null);
       finishSpawn();
-      await this.applyLayout(adapter);
     } finally {
       this.spawnsInFlight.delete(childSessionId);
       if (
@@ -733,21 +740,6 @@ export class PaneLifecycle {
       );
     } catch {
       return { success: false, error: 'hard' };
-    }
-  }
-
-  private async applyLayout(adapter: Multiplexer): Promise<void> {
-    try {
-      if (adapter instanceof TmuxMultiplexer) {
-        await adapter.applySpawnLayout(
-          this.config.layout,
-          this.config.mainPaneSize,
-        );
-      } else {
-        await adapter.applyLayout(this.config.layout, this.config.mainPaneSize);
-      }
-    } catch {
-      // Layout is cosmetic; a created pane must never fail over it.
     }
   }
 

@@ -29,6 +29,7 @@ import {
   isNativeBackgroundTaskNotification,
 } from './utils/internal-initiator';
 import * as loggerModule from './utils/logger';
+import { createTimerHarness } from './utils/test-timers';
 import { buildPluginInput } from './v2/client-shim';
 import { mapV2EventToV1 } from './v2/event-adapter';
 
@@ -793,6 +794,135 @@ function expectReopened(h: Assembly, publication: BackgroundJobRecord) {
     resultSummary: undefined,
   });
 }
+
+test('regression: unconfirmed native call with evidence timeout must remain unconfirmed until attributable evidence arrives', async () => {
+  const timers = createTimerHarness();
+  const h = await assembly(undefined, {
+    configOverrides: { concurrency: { defaultConcurrency: 5 } },
+    gateOptions: {
+      readTimeoutMs: 10,
+      graceMs: 0,
+      setTimeout: timers.setTimeout,
+      clearTimeout: timers.clearTimeout,
+    },
+  });
+  await h.requestTask('call-1', 'task one');
+  await h.requestTask('call-2', 'task two');
+
+  await h.event('session.created', {
+    info: {
+      id: 'child-1',
+      parentID: 'parent',
+      agent: 'explorer',
+      title: 'task one',
+    },
+  });
+
+  const readBegun = Promise.withResolvers<void>();
+  const heldTranscript = Promise.withResolvers<unknown>();
+  h.messages.mockImplementation(() => {
+    readBegun.resolve();
+    return heldTranscript.promise;
+  });
+
+  // Real tool.execute.after arrives without exact tool call ID match:
+  // identity-recovery path takes pending by taskID, supplying callIDConfirmed: false.
+  const afterHook = h.hooks['tool.execute.after']?.(
+    {
+      tool: 'task',
+      sessionID: 'parent',
+      callID: undefined as unknown as string,
+    },
+    {
+      output:
+        'task_id: child-1\nstate: completed\n<task_result>foreign stale text</task_result>',
+    },
+  );
+
+  // Deterministically wait for read to begin, then advance timer harness past readTimeoutMs
+  await readBegun.promise;
+  await timers.advance(10);
+  await timers.tick();
+  await afterHook;
+
+  await h.idle();
+  await flush();
+
+  // Unconfirmed native output must NOT publish before attributable host/transcript evidence arrives.
+  expect(h.board.get('child-1')?.state).toBe('running');
+  expect(h.board.get('child-1')?.resultSummary).not.toBe('foreign stale text');
+
+  // Attributable transcript evidence arrives
+  heldTranscript.resolve({
+    data: [
+      { info: { id: 'msg-u', role: 'user' }, parts: [] },
+      {
+        info: {
+          id: 'msg-a',
+          role: 'assistant',
+          time: { completed: Date.now() },
+          finish: 'stop',
+        },
+        parts: [{ type: 'text', text: 'attributable transcript result' }],
+      },
+    ],
+  });
+  const record = h.board.get('child-1');
+  if (record) {
+    await h.gate.reconcile(record);
+  }
+  await flush();
+
+  expect(h.board.get('child-1')?.state).toBe('completed');
+  expect(h.board.get('child-1')?.resultSummary).toBe(
+    'attributable transcript result',
+  );
+});
+
+test('positive control: confirmed native call with evidence timeout publishes confirmed result', async () => {
+  const timers = createTimerHarness();
+  const h = await assembly(undefined, {
+    gateOptions: {
+      readTimeoutMs: 10,
+      graceMs: 0,
+      setTimeout: timers.setTimeout,
+      clearTimeout: timers.clearTimeout,
+    },
+  });
+  await h.requestTask('confirmed-call', 'confirmed task');
+  await h.event('session.created', {
+    info: { id: 'child-confirmed', parentID: 'parent', agent: 'explorer' },
+  });
+
+  const readBegun = Promise.withResolvers<void>();
+  const heldTranscript = Promise.withResolvers<unknown>();
+  h.messages.mockImplementation(() => {
+    readBegun.resolve();
+    return heldTranscript.promise;
+  });
+
+  const afterHook = h.hooks['tool.execute.after']?.(
+    { tool: 'task', sessionID: 'parent', callID: 'confirmed-call' },
+    {
+      output:
+        'task_id: child-confirmed\nstate: completed\n<task_result>confirmed native text</task_result>',
+    },
+  );
+
+  await readBegun.promise;
+  await timers.advance(10);
+  await timers.tick();
+  await afterHook;
+
+  await h.idle();
+  await flush();
+
+  expect(h.board.get('child-confirmed')?.state).toBe('completed');
+  expect(h.board.get('child-confirmed')?.resultSummary).toBe(
+    'confirmed native text',
+  );
+  heldTranscript.resolve({ data: [] });
+});
 
 test('regression: idle-with-busy-host must query status and publish nothing', async () => {
   const h = await assembly();

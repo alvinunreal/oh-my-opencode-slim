@@ -1,5 +1,10 @@
 import { commonEdges } from './matching';
-import type { ParsedPatch, PatchChunk, PatchHunk } from './types';
+import type {
+  ParsedPatch,
+  PatchChunk,
+  PatchHostFlavor,
+  PatchHunk,
+} from './types';
 
 export function normalizeLineEndings(text: string): string {
   return text.replace(/\r\n?/g, '\n');
@@ -60,24 +65,36 @@ function isPatchBoundary(line: string, marker: string): boolean {
   return line.trimEnd() === marker;
 }
 
-function parseChunks(lines: string[], index: number) {
+function parseChunks(
+  lines: string[],
+  index: number,
+  flavor: PatchHostFlavor,
+  state: { canonicalized: boolean },
+) {
   const chunks: PatchChunk[] = [];
   let at = index;
 
   while (at < lines.length && !lines[at].startsWith('***')) {
-    if (lines[at] === '') {
+    if (
+      lines[at].trimEnd() === '' &&
+      (flavor === 'v1' || chunks.at(-1)?.is_end_of_file)
+    ) {
       at += 1;
       continue;
     }
-    if (!lines[at].startsWith('@@')) {
+    const implicit =
+      flavor === 'v2' &&
+      chunks.length === 0 &&
+      (lines[at] === '' || /^[ +-]/.test(lines[at]));
+    if (!lines[at].startsWith('@@') && !implicit) {
       unexpectedPatchLine('in update body', lines[at]);
     }
     if (chunks[chunks.length - 1]?.is_end_of_file) {
       throw new Error('Invalid patch format: chunk follows End of File');
     }
 
-    const context = parseChangeContext(lines[at]);
-    at += 1;
+    const context = implicit ? undefined : parseChangeContext(lines[at]);
+    if (!implicit) at += 1;
 
     const old_lines: string[] = [];
     const new_lines: string[] = [];
@@ -93,10 +110,15 @@ function parseChunks(lines: string[], index: number) {
       if (line === '') {
         let next = at;
         while (lines[next] === '') next += 1;
-        if (!/^[ +-]/.test(lines[next] ?? '')) {
+        if (flavor === 'v1' && !/^[ +-]/.test(lines[next] ?? '')) {
           at = next;
           continue;
         }
+        old_lines.push('');
+        new_lines.push('');
+        state.canonicalized = true;
+        at += 1;
+        continue;
       }
 
       if (line === '*** End of File') {
@@ -164,7 +186,10 @@ function parseAdd(lines: string[], index: number) {
   };
 }
 
-export function parsePatch(patchText: string): ParsedPatch {
+export function parsePatch(
+  patchText: string,
+  flavor: PatchHostFlavor = 'v1',
+): ParsedPatch {
   const clean = normalizePatchText(patchText);
   const lines = clean.split('\n');
   const begin = lines.findIndex((line) =>
@@ -179,12 +204,14 @@ export function parsePatch(patchText: string): ParsedPatch {
   }
 
   const hunks: PatchHunk[] = [];
+  const state = { canonicalized: false };
   let index = begin + 1;
 
   while (index < end) {
     const header = parseHeader(lines, index);
 
     if (!header && lines[index] === '') {
+      if (flavor === 'v2') state.canonicalized = true;
       index += 1;
       continue;
     }
@@ -209,7 +236,7 @@ export function parsePatch(patchText: string): ParsedPatch {
       continue;
     }
 
-    const next = parseChunks(lines, header.next);
+    const next = parseChunks(lines, header.next, flavor, state);
     if (next.chunks.length === 0 && !header.move) {
       throw new Error(
         `Invalid patch format: Update File is missing @@ chunk body: ${header.file}`,
@@ -225,7 +252,7 @@ export function parsePatch(patchText: string): ParsedPatch {
     index = next.next;
   }
 
-  return { hunks };
+  return state.canonicalized ? { hunks, canonicalized: true } : { hunks };
 }
 
 function renderChunk(chunk: PatchChunk): string[] {
