@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { runMarketplaceCommand } from './marketplace';
 
 function fakeService() {
@@ -41,6 +44,96 @@ function fakeService() {
 }
 
 describe('marketplace CLI', () => {
+  test('v2 status and disable use inherited config above the git root', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'marketplace-cli-v2-'));
+    const project = join(root, 'repo', 'app');
+    const previousData = process.env.XDG_DATA_HOME;
+    const previousConfig = process.env.XDG_CONFIG_HOME;
+    try {
+      process.env.XDG_DATA_HOME = join(root, 'data');
+      process.env.XDG_CONFIG_HOME = join(root, 'config');
+      mkdirSync(join(root, '.opencode'), { recursive: true });
+      mkdirSync(join(root, 'repo', '.git'), { recursive: true });
+      mkdirSync(project, { recursive: true });
+      writeFileSync(
+        join(root, '.opencode', 'oh-my-opencode-slim.json'),
+        JSON.stringify({
+          preset: 'work',
+          presets: { work: { marketplace: { agents: ['team/cli'] } } },
+        }),
+      );
+      const bundlePath = join(root, 'bundle.json');
+      writeFileSync(
+        bundlePath,
+        JSON.stringify({
+          manifest: {
+            schemaVersion: 2,
+            id: 'team/cli',
+            version: '1.0.0',
+            displayName: 'CLI',
+            description: 'CLI fixture',
+            agentName: 'cli-agent',
+            prompt: 'Test.',
+            skills: [],
+            mcps: [],
+            tools: [],
+            author: { name: 'Test' },
+            tags: [],
+            license: 'MIT',
+            compatibility: { plugin: '*' },
+            model: { source: 'session' },
+            routing: { description: 'CLI', when: 'Testing.', keywords: [] },
+          },
+        }),
+      );
+      const output: string[] = [];
+      const errors: string[] = [];
+      const io = {
+        cwd: project,
+        stdout: (value: string) => output.push(value),
+        stderr: (value: string) => errors.push(value),
+      };
+      expect(await runMarketplaceCommand(['import', bundlePath], io)).toBe(0);
+      expect(await runMarketplaceCommand(['status'], io)).toBe(0);
+      expect(JSON.parse(output.at(-1) ?? '{}').desiredPackageIds).toEqual([]);
+      expect(
+        await runMarketplaceCommand(['status', '--host-flavor', 'v2'], io),
+      ).toBe(0);
+      expect(JSON.parse(output.at(-1) ?? '{}').desiredPackageIds).toEqual([
+        'team/cli',
+      ]);
+      expect(
+        await runMarketplaceCommand(
+          ['disable', 'team/cli', '--host-flavor', 'v2'],
+          io,
+        ),
+      ).toBe(0);
+      expect(
+        await runMarketplaceCommand(['status', '--host-flavor', 'v2'], io),
+      ).toBe(0);
+      expect(JSON.parse(output.at(-1) ?? '{}').desiredPackageIds).toEqual([]);
+      expect(
+        await runMarketplaceCommand(
+          ['enable', 'team/cli', '--host-flavor', 'v2'],
+          io,
+        ),
+      ).toBe(0);
+      expect(
+        await runMarketplaceCommand(['status', '--host-flavor', 'v2'], io),
+      ).toBe(0);
+      expect(JSON.parse(output.at(-1) ?? '{}').desiredPackageIds).toEqual([
+        'team/cli',
+      ]);
+      expect(errors).toEqual([]);
+    } finally {
+      if (previousData === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = previousData;
+      if (previousConfig === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = previousConfig;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('resolves bundle paths relative to cwd and routes subcommands', async () => {
     const { calls, service } = fakeService();
     const out: string[] = [];
@@ -81,9 +174,12 @@ describe('marketplace CLI', () => {
     expect(await runMarketplaceCommand(['list', 'extra'], io)).toBe(1);
     expect(await runMarketplaceCommand(['install'], io)).toBe(1);
     expect(
+      await runMarketplaceCommand(['status', '--host-flavor', 'v3'], io),
+    ).toBe(1);
+    expect(
       await runMarketplaceCommand(['install', 'author/package', '--user'], io),
     ).toBe(1);
-    expect(errors).toHaveLength(5);
+    expect(errors).toHaveLength(6);
   });
 
   test('standalone status preserves unavailable live registry state', async () => {

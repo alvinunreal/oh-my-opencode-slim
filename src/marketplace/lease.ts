@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -26,6 +27,51 @@ const DEFAULT_LOCK_OPTIONS: MarketplaceLockOptions = {
   timeoutMs: 300_000,
   retryMs: 20,
 };
+const immediateLeaseAttempt = new AsyncLocalStorage<boolean>();
+
+export function hasImmediateMarketplaceLeases(): boolean {
+  return immediateLeaseAttempt.getStore() === true;
+}
+
+export function withImmediateMarketplaceLeases<T>(operation: () => T): T {
+  return immediateLeaseAttempt.run(true, operation);
+}
+
+export async function retryMarketplaceLeases<T>(
+  operation: () => T | Promise<T>,
+  signal?: AbortSignal,
+  passInitialAbort = false,
+): Promise<T> {
+  let deadline: number | undefined;
+  let firstAttempt = true;
+  for (;;) {
+    if (!firstAttempt || !passInitialAbort) signal?.throwIfAborted();
+    firstAttempt = false;
+    try {
+      return await withImmediateMarketplaceLeases(operation);
+    } catch (error) {
+      if (!(error instanceof MarketplaceBusyError)) throw error;
+      deadline ??= Date.now() + DEFAULT_LOCK_OPTIONS.timeoutMs;
+      if (Date.now() + DEFAULT_LOCK_OPTIONS.retryMs > deadline) {
+        throw error;
+      }
+      signal?.throwIfAborted();
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          signal?.removeEventListener('abort', abort);
+          resolve();
+        }, DEFAULT_LOCK_OPTIONS.retryMs);
+        const abort = () => {
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', abort);
+          reject(signal?.reason ?? new Error('Marketplace operation aborted'));
+        };
+        if (signal?.aborted) abort();
+        else signal?.addEventListener('abort', abort, { once: true });
+      });
+    }
+  }
+}
 
 const UUID_PATTERN =
   '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
@@ -480,12 +526,16 @@ function acquireMarketplaceLeaseInternal(
   fs.mkdirSync(paths.rootDir, { recursive: true });
   fs.mkdirSync(paths.lockDir, { recursive: true });
   const deadline = Date.now() + options.timeoutMs;
-  while (Date.now() <= deadline) {
+  do {
     const lease = acquireOnce(paths.lockDir, options);
     if (lease) return createLease(paths.lockDir, lease);
-    if (Date.now() + options.retryMs > deadline) break;
+    if (
+      hasImmediateMarketplaceLeases() ||
+      Date.now() + options.retryMs > deadline
+    )
+      break;
     sleepSync(options.retryMs);
-  }
+  } while (Date.now() <= deadline);
   throw new MarketplaceBusyError('Timed out waiting for marketplace lock');
 }
 

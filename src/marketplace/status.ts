@@ -34,8 +34,9 @@ function textOrder(left: string, right: string): number {
 export function readDesiredMarketplacePackageIds(
   directory: string,
   presetOverride?: string,
+  hostFlavor?: string,
 ): readonly string[] {
-  const config = loadPluginConfig(directory, { silent: true });
+  const config = loadPluginConfig(directory, { silent: true, hostFlavor });
   return resolveDesiredMarketplacePackageIds(config, presetOverride);
 }
 
@@ -43,6 +44,7 @@ export function resolveDesiredMarketplacePackageIds(
   config: ResolvedPluginConfig,
   presetOverride?: string,
 ): readonly string[] {
+  if (config.marketplace?.enabled === false) return [];
   // loadPluginConfig applies a truthy environment override; runtime overrides
   // have priority but an empty one falls through exactly like startup.
   const presetName = presetOverride || config.preset;
@@ -55,6 +57,7 @@ export function resolveDesiredMarketplacePackageIds(
 /** Read desired config and package verification without changing marketplace state. */
 export function readMarketplaceRuntimeStatus(input: {
   readonly directory: string;
+  readonly hostFlavor?: string;
   readonly store: Pick<MarketplaceStore, 'inspectAll'>;
   /** Reuse the service's single lease-consistent inspection when provided. */
   readonly inspection?: MarketplaceStoreInspection;
@@ -68,7 +71,11 @@ export function readMarketplaceRuntimeStatus(input: {
 }): MarketplaceRuntimeStatus {
   const desiredPackageIds =
     input.desiredPackageIds ??
-    readDesiredMarketplacePackageIds(input.directory, input.presetOverride);
+    readDesiredMarketplacePackageIds(
+      input.directory,
+      input.presetOverride,
+      input.hostFlavor,
+    );
   const inspection = input.inspection ?? input.store.inspectAll();
   const wanted = new Set(desiredPackageIds);
   const observedVerifications = new Map(

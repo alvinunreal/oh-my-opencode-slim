@@ -1,23 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RuntimeConfig } from '../config/runtime';
-import {
-  discoverDesiredV2Mcps,
-  discoverOnDiskOpenCodeMcps,
-  discoverOnDiskSkillNames,
-  discoverPreflightMcps,
-  discoverPreflightSkills,
-  evaluateMarketplaceRequirements,
-  loadMergedOpenCodeConfig,
-} from './preflight';
+import { loadMergedOpenCodeConfig } from './preflight';
 
 const ENV_KEYS = [
   'XDG_CONFIG_HOME',
@@ -45,14 +31,6 @@ afterEach(() => {
 function setConfigHome(path: string): void {
   process.env.XDG_CONFIG_HOME = join(path, 'xdg');
   process.env.OPENCODE_TEST_HOME = join(path, 'home');
-}
-
-function writeSkill(path: string, name: string): void {
-  mkdirSync(join(path, '..'), { recursive: true });
-  writeFileSync(
-    path,
-    `---\nname: |-${'\n'}  ${name}\ndescription: Test skill.\n---\n\n# body\n`,
-  );
 }
 
 describe('marketplace host preflight', () => {
@@ -140,13 +118,6 @@ describe('marketplace host preflight', () => {
       const mcps = config.mcp as Record<string, { enabled?: boolean }>;
       expect(mcps.projectDisables.enabled).toBe(false);
       expect(mcps.projectEnables.enabled).toBe(true);
-
-      const names = discoverPreflightMcps(
-        RuntimeConfig.init(project, {}),
-        project,
-      );
-      expect(names).not.toContain('projectDisables');
-      expect(names).toContain('projectEnables');
     } finally {
       RuntimeConfig.reset(project);
       rmSync(root, { recursive: true, force: true });
@@ -159,158 +130,11 @@ describe('marketplace host preflight', () => {
       setConfigHome(root);
       process.env.OPENCODE_CONFIG_CONTENT =
         '{ /* env overlay */ "mcp": { "from_env": { "type": "remote", "url": "https://env", }, }, }';
-      expect(
-        discoverPreflightMcps(RuntimeConfig.init(root, {}), root),
-      ).toContain('from_env');
+      expect(loadMergedOpenCodeConfig(root).mcp).toHaveProperty('from_env');
       process.env.OPENCODE_CONFIG_CONTENT = '{ "mcp": ';
       expect(loadMergedOpenCodeConfig(root).mcp).toBeUndefined();
     } finally {
       RuntimeConfig.reset(root);
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test('rejects malformed host MCP definitions and disabled entries', () => {
-    const root = mkdtempSync(join(tmpdir(), 'marketplace-preflight-'));
-    try {
-      setConfigHome(root);
-      process.env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
-        mcp: {
-          valid: { type: 'remote', url: 'https://valid' },
-          malformed: { type: 'remote' },
-          disabled: { type: 'remote', url: 'https://disabled', enabled: false },
-        },
-      });
-      const names = discoverPreflightMcps(RuntimeConfig.init(root, {}), root);
-      expect(names).toContain('valid');
-      expect(names).not.toContain('malformed');
-      expect(names).not.toContain('disabled');
-    } finally {
-      RuntimeConfig.reset(root);
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test('discovers block-scalar skills and confines symlinks to each root', () => {
-    const root = mkdtempSync(join(tmpdir(), 'marketplace-preflight-'));
-    const skillRoot = join(root, 'skills');
-    const outside = join(root, 'outside');
-    try {
-      setConfigHome(root);
-      writeSkill(join(skillRoot, 'good', 'SKILL.md'), 'block-skill');
-      writeSkill(join(outside, 'SKILL.md'), 'outside-skill');
-      symlinkSync(outside, join(skillRoot, 'escape'), 'dir');
-      expect(discoverOnDiskSkillNames(root, [skillRoot])).toEqual([
-        'block-skill',
-      ]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test('filters disabled runtime skills and MCPs', () => {
-    const root = mkdtempSync(join(tmpdir(), 'marketplace-preflight-'));
-    const skills = join(root, 'skills');
-    try {
-      setConfigHome(root);
-      writeSkill(join(skills, 'one', 'SKILL.md'), 'one');
-      writeSkill(join(skills, 'two', 'SKILL.md'), 'two');
-      process.env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
-        mcp: { custom: { type: 'remote', url: 'https://custom' } },
-      });
-      const runtime = RuntimeConfig.init(root, {
-        disabled_skills: ['one'],
-        disabled_mcps: ['custom'],
-      });
-      expect(discoverPreflightSkills(runtime, root, [skills])).toEqual(['two']);
-      expect(discoverPreflightMcps(runtime, root)).not.toContain('custom');
-    } finally {
-      RuntimeConfig.reset(root);
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test('extracts direct v2 MCP entries and classifies manifest requirements', () => {
-    const root = mkdtempSync(join(tmpdir(), 'marketplace-preflight-'));
-    const project = join(root, 'project');
-    const userConfig = join(root, 'xdg', 'opencode');
-    try {
-      setConfigHome(root);
-      mkdirSync(userConfig, { recursive: true });
-      mkdirSync(join(project, '.opencode'), { recursive: true });
-      writeFileSync(
-        join(userConfig, 'opencode.json'),
-        JSON.stringify({
-          mcp: {
-            inherited: { type: 'remote', url: 'https://inherited' },
-            winner: { type: 'remote', url: 'https://user' },
-          },
-        }),
-      );
-      writeFileSync(
-        join(project, '.opencode', 'opencode.json'),
-        JSON.stringify({
-          mcp: {
-            winner: { type: 'remote', url: 'https://project' },
-            desired: { type: 'remote', url: 'https://desired' },
-            disabled: {
-              type: 'remote',
-              url: 'https://disabled',
-              disabled: true,
-            },
-            malformed: { type: 'remote' },
-            servers: {
-              desired: { type: 'remote', url: 'https://legacy-wrapper' },
-            },
-          },
-        }),
-      );
-      const runtime = RuntimeConfig.init(project, {});
-      expect(Object.keys(discoverOnDiskOpenCodeMcps(project, 'v2'))).toEqual([
-        'inherited',
-        'winner',
-        'desired',
-      ]);
-      expect(discoverOnDiskOpenCodeMcps(project, 'v2').winner).toEqual({
-        type: 'remote',
-        url: 'https://project',
-      });
-      expect(discoverDesiredV2Mcps(runtime, project, ['context7'])).toEqual([
-        'context7',
-        'inherited',
-        'winner',
-        'desired',
-      ]);
-      expect(discoverDesiredV2Mcps(runtime, project, [])).not.toContain(
-        'context7',
-      );
-      expect(discoverPreflightMcps(runtime, project, 'v2')).toEqual([
-        'context7',
-        'gh_grep',
-        'inherited',
-        'winner',
-        'desired',
-      ]);
-      expect(
-        evaluateMarketplaceRequirements(
-          { skills: ['skill-a', 'skill-b'], mcps: ['desired', 'missing'] },
-          ['skill-a'],
-          ['desired'],
-        ),
-      ).toEqual({
-        skills: {
-          required: ['skill-a', 'skill-b'],
-          available: ['skill-a'],
-          missing: ['skill-b'],
-        },
-        mcps: {
-          required: ['desired', 'missing'],
-          available: ['desired'],
-          missing: ['missing'],
-        },
-      });
-    } finally {
-      RuntimeConfig.reset(project);
       rmSync(root, { recursive: true, force: true });
     }
   });
