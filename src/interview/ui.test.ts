@@ -12,23 +12,25 @@ function createInterviewDom() {
   const script = window.document.querySelector('script')?.textContent ?? '';
   const initialization = script.lastIndexOf('      refresh().catch(');
   expect(initialization).toBeGreaterThan(0);
-  window.eval(`${script.slice(0, initialization)}\nsseConnected = true;`);
-  return dom;
+  // Return render from a closure: Bun 1.3's node:vm drops top-level
+  // declarations from window.eval, so they can't be read in a later call.
+  const render = window.eval(
+    `(() => {${script.slice(0, initialization)}\nsseConnected = true;\nreturn render;})()`,
+  ) as (state: unknown) => void;
+  return { dom, render };
 }
 
 test('allows answering a question without options', () => {
-  const dom = createInterviewDom();
+  const { dom, render } = createInterviewDom();
   try {
     const { window } = dom;
-    window.eval(
-      `render(${JSON.stringify({
-        interview: { id: 'interview-id', idea: 'Idea' },
-        mode: 'awaiting-user',
-        isBusy: false,
-        summary: 'Draft',
-        questions: [{ id: 'q-free', question: 'What?', options: [] }],
-      })});`,
-    );
+    render({
+      interview: { id: 'interview-id', idea: 'Idea' },
+      mode: 'awaiting-user',
+      isBusy: false,
+      summary: 'Draft',
+      questions: [{ id: 'q-free', question: 'What?', options: [] }],
+    });
     const textarea = window.document.getElementById(
       'answer-q-free',
     ) as HTMLTextAreaElement;
@@ -45,7 +47,7 @@ test('allows answering a question without options', () => {
 });
 
 test('refreshes a completed view when its specification changes', () => {
-  const dom = createInterviewDom();
+  const { dom, render } = createInterviewDom();
   try {
     const { window } = dom;
     const state = (content: string) => ({
@@ -57,8 +59,8 @@ test('refreshes a completed view when its specification changes', () => {
       document: `# Idea\n\n## Current spec\n${content}\n\n## Q&A history\n`,
       blocks: [{ title: 'Requirements', content }],
     });
-    window.eval(`render(${JSON.stringify(state('OLD_REQUIREMENT'))});`);
-    window.eval(`render(${JSON.stringify(state('NEW_REQUIREMENT'))});`);
+    render(state('OLD_REQUIREMENT'));
+    render(state('NEW_REQUIREMENT'));
     const rendered = window.document.getElementById('questions')?.textContent;
     expect(rendered).toContain('NEW_REQUIREMENT');
     expect(rendered).not.toContain('OLD_REQUIREMENT');
