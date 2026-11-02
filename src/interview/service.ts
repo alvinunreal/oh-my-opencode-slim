@@ -661,6 +661,16 @@ export function createInterviewService(
     delete turn.patchError;
   }
 
+  function openTurn(sessionID: string): void {
+    if (turnFor(sessionID).turnOpen === true) return;
+    resetTurnNoticeState(sessionID);
+    const interviewID = activeInterviewIds.get(sessionID);
+    if (interviewID && memoryFor(interviewID).patchRepairSent === true) {
+      turnFor(sessionID).repairTurnStarted = true;
+    }
+    turnFor(sessionID).turnOpen = true;
+  }
+
   async function retryPendingAnswerHistory(
     interview: InterviewRecord,
   ): Promise<void> {
@@ -1596,6 +1606,7 @@ export function createInterviewService(
         interview.completed = false;
       }
       await notifyInterviewUrl(input.sessionID, interview);
+      openTurn(input.sessionID);
       turnFor(input.sessionID).serviceInitiated = true;
       const document = await readInterviewDocument(interview);
       const preface =
@@ -1664,6 +1675,7 @@ export function createInterviewService(
       }
       const document = await fs.readFile(interview.markdownPath, 'utf8');
       await notifyInterviewUrl(input.sessionID, interview);
+      openTurn(input.sessionID);
       turnFor(input.sessionID).serviceInitiated = true;
       output.parts.push(
         createInternalAgentTextPart(
@@ -1684,6 +1696,7 @@ export function createInterviewService(
       existingSummary !== '' &&
       existingSummary !== 'Waiting for interview answers.';
     await notifyInterviewUrl(input.sessionID, interview);
+    openTurn(input.sessionID);
     turnFor(input.sessionID).serviceInitiated = true;
     output.parts.push(
       createInternalAgentTextPart(
@@ -1720,17 +1733,7 @@ export function createInterviewService(
           // emit busy once per loop step; resetting on every busy would wipe a
           // mid-turn tool submit. `sessionBusy` is deliberately not used as
           // the gate (submitAnswers sets it before the host emits busy).
-          if (turnFor(sessionID).turnOpen !== true) {
-            resetTurnNoticeState(sessionID);
-            const interviewID = activeInterviewIds.get(sessionID);
-            if (
-              interviewID &&
-              memoryFor(interviewID).patchRepairSent === true
-            ) {
-              turnFor(sessionID).repairTurnStarted = true;
-            }
-            turnFor(sessionID).turnOpen = true;
-          }
+          openTurn(sessionID);
         }
         sessionBusy.set(sessionID, isBusy);
         const interviewId = activeInterviewIds.get(sessionID);

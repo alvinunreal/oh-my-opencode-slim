@@ -2477,6 +2477,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         interviewBridge = createV2InterviewBridge(ctx, interviewConfig, {
           commandEnabled: interviewCommandEnabled,
           implementEnabled: implementCommandEnabled,
+          refusalOutcome: v1Hooks[
+            'v2.pendingRefusalOutcome'
+          ] as ForegroundFallbackManager['pendingRefusalOutcome'],
         });
       }
       if (interviewBridge) disposers.push(() => interviewBridge.dispose());

@@ -291,6 +291,12 @@ describe('interview text.complete fallback', () => {
     await harness.service.handleEvent({
       event: {
         type: 'session.status',
+        properties: { sessionID: 'ses-submit', status: { type: 'idle' } },
+      },
+    });
+    await harness.service.handleEvent({
+      event: {
+        type: 'session.status',
         properties: { sessionID: 'ses-submit', status: { type: 'busy' } },
       },
     });

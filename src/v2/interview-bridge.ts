@@ -1,5 +1,6 @@
 import type { Server } from 'node:http';
 import type { InterviewConfig, PluginConfig } from '../config';
+import type { ForegroundFallbackManager } from '../hooks/foreground-fallback';
 import { createInterviewManager } from '../interview/manager';
 import type { InterviewSessionRuntime } from '../interview/runtime';
 import type { createInterviewService } from '../interview/service';
@@ -80,11 +81,14 @@ export function createV2InterviewBridge(
     implementEnabled?: boolean;
     /** Already-listening server for the dashboard role to adopt. */
     server?: Server;
+    refusalOutcome?: ForegroundFallbackManager['pendingRefusalOutcome'];
   } = {},
 ): V2InterviewBridge {
   const transcripts = new Map<string, InterviewMessage[]>();
   const commandContexts = new Set<string>();
   const pendingNotices = new Map<string, string[]>();
+  const refusedMessages = new Map<string, string>();
+  let disposed = false;
   // Reduced hosts may omit the session domain entirely.
   const methods = (ctx.session ?? {}) as V2Session;
   const submitUserText = createSessionSubmit(ctx);
@@ -303,9 +307,20 @@ export function createV2InterviewBridge(
     if (type === 'session.deleted') {
       transcripts.delete(sessionID);
       pendingNotices.delete(sessionID);
+      refusedMessages.delete(sessionID);
       await manager.handleEvent({
         event: { type: 'session.deleted', properties: { sessionID } },
       });
+      return;
+    }
+
+    if (
+      managed &&
+      type === 'session.step.failed' &&
+      properties.finish === 'content-filter' &&
+      typeof properties.assistantMessageID === 'string'
+    ) {
+      refusedMessages.set(sessionID, properties.assistantMessageID);
       return;
     }
 
@@ -320,17 +335,40 @@ export function createV2InterviewBridge(
       // event-adapter.ts). The bridge receives the RAW event, so without this
       // mapping the v2 service never sees a turn end and never posts notices.
       const statusType = type === 'session.execution.started' ? 'busy' : 'idle';
-      if (statusType === 'idle') {
-        const notices = pendingNotices.get(sessionID) ?? [];
-        pendingNotices.delete(sessionID);
-        for (const text of notices) await runtime.notify(sessionID, text);
+      const messageID = refusedMessages.get(sessionID);
+      const deliver = async () => {
+        if (disposed) return;
+        if (statusType === 'idle') {
+          const notices = pendingNotices.get(sessionID) ?? [];
+          pendingNotices.delete(sessionID);
+          for (const text of notices) await runtime.notify(sessionID, text);
+        }
+        await manager.handleEvent({
+          event: {
+            type: 'session.status',
+            properties: { sessionID, status: { type: statusType } },
+          },
+        });
+      };
+      const outcome =
+        type === 'session.execution.failed' && messageID
+          ? options.refusalOutcome?.(sessionID, messageID)
+          : undefined;
+      if (outcome) {
+        void outcome
+          .catch(() => undefined)
+          .then((model) => {
+            if (refusedMessages.get(sessionID) !== messageID) return;
+            refusedMessages.delete(sessionID);
+            if (!model) return deliver();
+          })
+          .catch((err) =>
+            log('[v2][interview] deferred idle failed', String(err)),
+          );
+      } else {
+        refusedMessages.delete(sessionID);
+        await deliver();
       }
-      await manager.handleEvent({
-        event: {
-          type: 'session.status',
-          properties: { sessionID, status: { type: statusType } },
-        },
-      });
       return;
     }
 
@@ -349,9 +387,11 @@ export function createV2InterviewBridge(
     handleEvent,
     getTranscript: (sessionID) => transcripts.get(sessionID) ?? [],
     dispose: async () => {
+      disposed = true;
       await manager.dispose();
       commandContexts.clear();
       pendingNotices.clear();
+      refusedMessages.clear();
       transcripts.clear();
       log('[v2][interview] bridge disposed');
     },
