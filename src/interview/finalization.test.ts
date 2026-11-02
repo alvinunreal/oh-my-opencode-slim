@@ -24,7 +24,60 @@ describe('interview finalization', () => {
     return dir;
   }
 
-  test('persists clean completion markdown without using stale interview state', async () => {
+  test('resumes the same session and idea after a service restart', async () => {
+    const directory = await createTempDir(
+      path.join(os.tmpdir(), 'interview-restart-'),
+    );
+    const runtime: InterviewSessionRuntime = {
+      messages: async () => [],
+      notify: async () => {},
+      continue: async () => {},
+      rename: async () => {},
+    };
+    const start = () => {
+      const service = createInterviewService(
+        { directory } as never,
+        undefined,
+        { runtime, openBrowser: () => {} },
+      );
+      service.setBaseUrlResolver(async () => 'http://127.0.0.1:43211');
+      return service;
+    };
+    const first = start();
+    await first.handleCommandExecuteBefore(
+      {
+        command: 'interview',
+        sessionID: 'ses-restart',
+        arguments: 'Ideas: notes + tasks',
+      },
+      { parts: [] },
+    );
+    const firstId = first.getActiveInterviewId('ses-restart') as string;
+    await first.submitState('ses-restart', {
+      summary: 'Notes and tasks spec',
+      title: 'Changed title',
+      questions: [],
+    });
+    const filePath = (await first.getInterviewState(firstId)).interview
+      .markdownPath;
+    const second = start();
+    const output = { parts: [] as Array<{ type: string; text?: string }> };
+    await second.handleCommandExecuteBefore(
+      {
+        command: 'interview',
+        sessionID: 'ses-restart',
+        arguments: 'Ideas: notes + tasks',
+      },
+      output,
+    );
+    const secondId = second.getActiveInterviewId('ses-restart') as string;
+    expect(
+      (await second.getInterviewState(secondId)).interview.markdownPath,
+    ).toBe(filePath);
+    expect(output.parts[0]?.text).toContain('Resume the interview');
+  });
+
+  test('preserves the accepted specification and answers when completing', async () => {
     const directory = await createTempDir(
       path.join(os.tmpdir(), 'interview-finalization-'),
     );
@@ -32,7 +85,6 @@ describe('interview finalization', () => {
     const continued: string[] = [];
     const runtime: InterviewSessionRuntime = {
       messages: async () => messages,
-      create: async () => 'side-final',
       notify: async () => {},
       continue: async (_sessionID, text) => {
         continued.push(text);
@@ -116,7 +168,6 @@ describe('interview finalization', () => {
         const messages: InterviewMessage[] = [];
         const runtime: InterviewSessionRuntime = {
           messages: async () => messages,
-          create: async () => `side-${label}`,
           notify: async () => {},
           continue: async () => {},
           rename: async () => {},
@@ -239,8 +290,9 @@ describe('interview finalization', () => {
     const service = createInterviewService({ directory } as never, undefined, {
       runtime: {
         messages: async () => messages,
-        create: async () => 'side-race',
-        notify: async (_sessionID, text) => notices.push(text),
+        notify: async (_sessionID, text) => {
+          notices.push(text);
+        },
         continue: async () => {},
         rename: async () => {},
       },
@@ -286,7 +338,6 @@ describe('interview finalization', () => {
       {
         runtime: {
           messages: async () => firstMessages,
-          create: async () => 'side-one',
           notify: async () => {},
           continue: async () => {},
           rename: async () => {},
@@ -323,7 +374,6 @@ describe('interview finalization', () => {
       {
         runtime: {
           messages: async () => [],
-          create: async () => 'side-two',
           notify: async () => {},
           continue: async () => {},
           rename: async () => {},
@@ -349,6 +399,19 @@ describe('interview finalization', () => {
     expect(await fs.readFile(documentPath, 'utf8')).toBe(ownedDocument);
     expect(await fs.readdir(path.dirname(documentPath))).toEqual(['shared.md']);
 
+    await firstService.handleEvent({
+      event: { type: 'session.deleted', properties: { sessionID: 'ses_one' } },
+    });
+    await secondService.handleCommandExecuteBefore(
+      { command: 'interview', sessionID: 'ses_two', arguments: documentPath },
+      { parts: [] },
+    );
+    expect(secondService.getActiveInterviewId('ses_two')).not.toBeNull();
+    expect(await fs.readFile(documentPath, 'utf8')).toContain(
+      'sessionID: ses_two',
+    );
+    expect(await fs.readFile(documentPath, 'utf8')).toContain('Draft.');
+
     await fs.rm(directory, { recursive: true, force: true });
   });
 
@@ -358,13 +421,16 @@ describe('interview finalization', () => {
     );
     const documentPath = path.join(directory, 'interview', 'owned.md');
     await fs.mkdir(path.dirname(documentPath), { recursive: true });
-    await fs.writeFile(documentPath, '# Owned\n\nDraft.', 'utf8');
+    await fs.writeFile(
+      documentPath,
+      '# Owned\n\n## Current spec\n\nDraft.\n\n## Q&A history\n',
+      'utf8',
+    );
 
     const createService = () =>
       createInterviewService({ directory } as never, undefined, {
         runtime: {
           messages: async () => [],
-          create: async () => 'side-owner',
           notify: async () => {},
           continue: async () => {},
           rename: async () => {},

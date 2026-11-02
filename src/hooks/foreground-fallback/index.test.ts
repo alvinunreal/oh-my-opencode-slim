@@ -8,6 +8,9 @@ import {
   spyOn,
   test,
 } from 'bun:test';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { isInternalInitiatorPart } from '../../utils';
 import { BackgroundJobBoard } from '../../utils/background-job-board';
 import { createBackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
@@ -20,6 +23,7 @@ import { createTimerHarness } from '../../utils/test-timers';
 import { buildPluginInput } from '../../v2/client-shim';
 import { mapV2EventToV1 } from '../../v2/event-adapter';
 import { recordInternalAdmission } from '../../v2/internal-admissions';
+import { createV2InterviewBridge, markerText } from '../../v2/interview-bridge';
 import {
   createSessionContextHandler,
   createSessionPromptBridge,
@@ -3278,6 +3282,84 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     expect(switchModel).not.toHaveBeenCalled();
     expect(mocks.promptAsync).not.toHaveBeenCalled();
     manager.dispose();
+  });
+
+  test('a recovered interview refusal reports only the continued turn', async () => {
+    jest.useRealTimers();
+    const directory = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'interview-refusal-'),
+    );
+    const { manager, mocks } = fixture();
+    const synthetic = mock(async (_input: Record<string, unknown>) => ({}));
+    const bridge = createV2InterviewBridge(
+      { location: { directory }, session: { synthetic } } as never,
+      { outputFolder: 'interview', autoOpenBrowser: false } as never,
+      {
+        refusalOutcome: (id, messageID) =>
+          manager.pendingRefusalOutcome(id, messageID),
+      },
+    );
+    const sessionID = 'interview-refusal';
+    try {
+      await bridge.handleEvent({
+        type: 'session.execution.started',
+        data: { sessionID },
+      });
+      await bridge.handleContext({
+        sessionID,
+        agent: 'orchestrator',
+        model: {},
+        system: [],
+        tools: {},
+        messages: [
+          {
+            id: 'user-1',
+            role: 'user',
+            content: [{ type: 'text', text: markerText('Test idea') }],
+          },
+        ],
+      });
+      await manager.handleEvent(started(sessionID));
+      await bridge.handleEvent(failed(sessionID));
+      await manager.handleEvent(failed(sessionID));
+      await bridge.handleEvent({
+        type: 'session.execution.failed',
+        data: { sessionID },
+      });
+      expect(
+        await manager.pendingRefusalOutcome(sessionID, 'assistant-1'),
+      ).toBe('test/b');
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+      await bridge.handleEvent({
+        type: 'session.execution.started',
+        data: { sessionID },
+      });
+      expect(
+        (
+          await bridge.service.submitState(sessionID, {
+            summary: 'Spec',
+            questions: [],
+          })
+        ).ok,
+      ).toBe(true);
+      await bridge.handleEvent({
+        type: 'session.execution.succeeded',
+        data: { sessionID },
+      });
+      const notices = synthetic.mock.calls.map(([input]) =>
+        String(input.text ?? ''),
+      );
+      expect(
+        notices.filter((text) => text.includes('Interview update failed')),
+      ).toEqual([]);
+      expect(
+        notices.filter((text) => text.includes('Spec updated')),
+      ).toHaveLength(1);
+    } finally {
+      await bridge.dispose();
+      manager.dispose();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
   });
 
   test('v2 foreground re-attach keeps request rejections', async () => {

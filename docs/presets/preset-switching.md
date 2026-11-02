@@ -43,6 +43,12 @@ Inherited models retain their saved variant, and each agent appears once
 under its display name. In root sessions, the main-agent model row follows
 the native model picker.
 
+The sidebar's single `Preset` row shows the preset the displayed session
+uses. When the session is bound to a different preset than the global
+default, the default follows in muted text: `Preset cheap · default
+balanced`. Unbound sessions, and sessions whose binding is still loading,
+show the default alone.
+
 The `/preset` list marks the current session's bound preset separately from
 the global default. A preset can carry both markers. The bound name remains
 visible even if its preset definition has since been removed.

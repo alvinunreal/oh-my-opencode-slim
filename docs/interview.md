@@ -53,6 +53,15 @@ You can also resume by basename if it exists in the configured output folder:
 /interview kanban-design-tool
 ```
 
+Resumed documents must contain the interview's `## Current spec` and
+`## Q&A history` sections; unrelated Markdown files are not modified.
+When an owning OpenCode session is deleted, its interview documents are released
+for another session to resume.
+
+If the shared dashboard stops, a session falls back to a local interview URL and
+asks you to resubmit any pending dashboard input. Inputs held only in the stopped
+dashboard's memory cannot be recovered.
+
 ## What the TUI shows
 
 By default the interview does not print the spec or the patch diff. The
@@ -93,7 +102,7 @@ visible (legacy behavior). See [Options](#options).
 - focused question flow instead of open-ended chat
 - suggested answers, clearly marked as recommended
 - keyboard-driven selection for the active question
-- custom freeform answers when needed
+- custom freeform answers when needed; questions without options show a text field directly
 - visible path to the markdown interview file
 - larger, more readable interview UI
 
@@ -262,7 +271,9 @@ A second failed patch in one service turn does not trigger another repair.
 
 Repeating `/interview` with the same idea resumes an existing non-placeholder
 specification, including after the process restarts, and uses the patch-based
-resume prompt instead of restarting the kickoff.
+resume prompt instead of restarting the kickoff. For older documents without an
+idea hash, automatic matching requires the original title; otherwise resume by
+path.
 
  The `interview_submit_state` tool is the quiet submission path. Its object
 argument is omitted from the generic TUI row, which is followed by one
@@ -279,7 +290,8 @@ It also refuses while the latest spec update is in an error or pending-repair
 state, even when the last accepted spec has no open questions.
 `/implement` tells the agent to read the selected completed interview markdown
 and implement its `Current spec` without reprinting it. With a live interview it
-refuses while questions remain open. With no argument and no active interview it
+refuses while questions remain open; after an accepted round with zero questions,
+it can run without pressing **Complete**. With no argument and no active interview it
 falls back to the newest file whose frontmatter has `status: complete`; a path
 or basename can be supplied explicitly, but an explicit path is accepted only
 when its frontmatter has `status: complete`.
@@ -337,7 +349,8 @@ ssh -L <port>:127.0.0.1:<port> your-server
 - runtime interview state is in-memory; the markdown file is the durable artifact
 - the flow depends on the assistant returning valid state, either through the
   `interview_submit_state` tool or the v1 text-block fallback
-- dashboard mode answer delivery has a few seconds of latency (session polls the dashboard)
+- dashboard-owned sessions receive queued actions when idle; other sessions
+  poll the dashboard every 10 seconds
 
 ## Related
 

@@ -38,7 +38,10 @@ import {
 } from '../utils/internal-initiator';
 import { isInternalAdmission } from './internal-admissions';
 import { createV2InterviewBridge, markerText } from './interview-bridge';
-import { createSessionSubmit } from './session-submit';
+import {
+  createSessionSubmit,
+  type V1CommandBeforeHook,
+} from './session-submit';
 import {
   applyCommandMarkerToContext,
   attributeAgentsByHistory,
@@ -48,8 +51,6 @@ import {
   createToolExecuteBridges,
   parseCommandMarker,
   registerSynthCommands,
-  stripCommandMarker,
-  type V1CommandBeforeHook,
   wrapCommandMarker,
 } from './setup';
 import type {
@@ -205,16 +206,6 @@ describe('command marker wrap/parse', () => {
   test('returns undefined without a marker', () => {
     expect(parseCommandMarker('plain user text')).toBeUndefined();
     expect(parseCommandMarker(markerText('x'))).toBeUndefined();
-  });
-
-  test('stripCommandMarker leaves the raw args on marker-only text', () => {
-    expect(stripCommandMarker(wrapCommandMarker('deepwork', 'focus 25m'))).toBe(
-      'focus 25m',
-    );
-    // Only runs on marker-only text (anchored pattern): other text is a no-op.
-    expect(
-      stripCommandMarker(`pre ${wrapCommandMarker('deepwork', 'x')} post`),
-    ).toBe(`pre ${wrapCommandMarker('deepwork', 'x')} post`);
   });
 });
 
@@ -813,17 +804,21 @@ describe('createSessionContextHandler (merged context hook seam)', () => {
   test('context bridge collapses v2 tool parts without mutating them', async () => {
     const kickoff = {
       type: 'tool-call',
-      toolName: 'interview_submit_state',
+      id: 'call-1',
+      name: 'interview_submit_state',
       input: {
-        summary: '# Full specification\n\nDetailed requirements.',
-        title: 'spec',
-        questions: [],
+        state: {
+          summary: '# Full specification\n\nDetailed requirements.',
+          title: 'spec',
+          questions: [],
+        },
       },
     };
     const status = {
       type: 'tool-call',
-      toolName: 'interview_submit_state',
-      input: { summary: 'status', patch: 'x', questions: [] },
+      id: 'call-2',
+      name: 'interview_submit_state',
+      input: { state: { summary: 'status', patch: 'x', questions: [] } },
     };
     const originalKickoff = structuredClone(kickoff);
     const event = makeEvent([
@@ -840,8 +835,11 @@ describe('createSessionContextHandler (merged context hook seam)', () => {
 
     expect(kickoff).toEqual(originalKickoff);
     expect(
-      (event.messages[0].content[0] as { input: { summary: string } }).input
-        .summary,
+      (
+        event.messages[0].content[0] as {
+          input: { state: { summary: string } };
+        }
+      ).input.state.summary,
     ).toBe(INTERVIEW_SUMMARY_STUB);
   });
 

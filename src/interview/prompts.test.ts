@@ -44,7 +44,7 @@ function toolModePrompts(): Record<string, string> {
       CONTEXT,
     ),
     chat: buildChatPrompt('Add a section', 2, CONTEXT),
-    nudge: buildNudgePrompt('more-questions', 2, CONTEXT),
+    nudge: buildNudgePrompt(2, CONTEXT),
     patchRepair: buildPatchRepairPrompt('-old', '+new', 2),
   };
 }
@@ -68,7 +68,7 @@ function printStatePrompts(): Record<string, string> {
       true,
     ),
     chat: buildChatPrompt('Add a section', 2, CONTEXT, true),
-    nudge: buildNudgePrompt('more-questions', 2, CONTEXT, true),
+    nudge: buildNudgePrompt(2, CONTEXT, true),
     patchRepair: buildPatchRepairPrompt('-old', '+new', 2, true),
   };
 }

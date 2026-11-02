@@ -60,7 +60,6 @@ import {
   canOpenPresetManagerV2,
   openPresetManagerV2,
   readSessionPreset,
-  sessionPresetLabel,
   type V2PresetManagerContext,
   type V2PresetUiSurface,
 } from './v2/preset-manager';
@@ -875,9 +874,11 @@ export interface SidebarInteraction {
  * the preset manager (v2 dialogs); without it the row is informational-only.
  */
 export interface SidebarPresetRow {
+  /** Global default preset. */
   name: string;
-  /** V2-only: server-owned inference binding for future children, not a model. */
-  sessionLabel?: string;
+  /** V2-only: the session's bound preset, set only when it differs from
+   *  `name`; the row then shows it with the default as a muted suffix. */
+  sessionPreset?: string;
   onActivate?: () => void;
 }
 
@@ -1804,13 +1805,7 @@ export function buildPresetRow(
       ...(clickable ? { shouldFill: true } : {}),
     },
     [
-      text(
-        {
-          fg: theme.textMuted,
-          width: presetRow.sessionLabel === undefined ? 6 : 7,
-        },
-        [presetRow.sessionLabel === undefined ? 'Preset' : 'Default'],
-      ),
+      text({ fg: theme.textMuted, width: 6 }, ['Preset']),
       text(
         {
           fg: clickable ? theme.text : theme.textMuted,
@@ -1818,24 +1813,28 @@ export function buildPresetRow(
           truncate: true,
           flexShrink: 1,
         },
-        [presetRow.name],
+        [presetRow.sessionPreset ?? presetRow.name],
       ),
+      ...(presetRow.sessionPreset !== undefined
+        ? [
+            text(
+              {
+                fg: theme.textMuted,
+                wrapMode: 'none',
+                truncate: true,
+                flexShrink: 1,
+              },
+              [`· default ${presetRow.name}`],
+            ),
+          ]
+        : []),
       ...(clickable
         ? [text({ fg: theme.textMuted, flexShrink: 0 }, ['▸'])]
         : []),
     ],
   );
-  const content =
-    presetRow.sessionLabel === undefined
-      ? row
-      : box({ width: '100%', flexDirection: 'column' }, [
-          row,
-          text({ fg: theme.textMuted, wrapMode: 'none', truncate: true }, [
-            `Session team snapshot: ${presetRow.sessionLabel}`,
-          ]),
-        ]);
-  if (!clickable) return content;
-  return decorateInteractiveRow(content, {
+  if (!clickable) return row;
+  return decorateInteractiveRow(row, {
     hoverBackground,
     onActivate: presetRow.onActivate,
     hasSelectedText,
@@ -2061,7 +2060,7 @@ interface SidebarRuntimeAdapter {
   getPresetRow?: (
     directory: string,
     presetName?: string,
-    sessionLabel?: string,
+    sessionPreset?: string,
   ) => SidebarPresetRow | undefined;
   readSessionPreset?: (
     directory: string,
@@ -2237,7 +2236,6 @@ function createSidebarRuntime(
   const [sessionPreset, setSessionPreset] = createSignal<{
     directory: string;
     sessionID: string;
-    label: string;
     state?: SessionPresetState;
   }>();
   let disposed = false;
@@ -2305,16 +2303,14 @@ function createSidebarRuntime(
       setModelNames(modelNamesCache.names);
     }
     if (adapter.readSessionPreset && currentSession) {
-      let label: string;
       let state: SessionPresetState | undefined;
       try {
         state = await adapter.readSessionPreset(
           currentDirectory,
           currentSession,
         );
-        label = sessionPresetLabel(state);
       } catch {
-        label = 'Unavailable';
+        // Unreadable binding: the row falls back to the global default.
       }
       if (
         disposed ||
@@ -2326,13 +2322,11 @@ function createSidebarRuntime(
       if (
         previous?.directory !== currentDirectory ||
         previous?.sessionID !== currentSession ||
-        previous?.label !== label ||
         JSON.stringify(previous?.state) !== JSON.stringify(state)
       ) {
         setSessionPreset({
           directory: currentDirectory,
           sessionID: currentSession,
-          label,
           state,
         });
         stateChanged = true;
@@ -2423,13 +2417,14 @@ function createSidebarRuntime(
           const isCurrentProjection =
             projection?.directory === adapter.getDirectory() &&
             projection.sessionID === visible;
-          const sessionLabel = !adapter.readSessionPreset
-            ? undefined
-            : visible === undefined
-              ? 'No session displayed'
-              : isCurrentProjection
-                ? projection.label
-                : 'Loading…';
+          // Only a settled binding that differs from the default is shown;
+          // unbound, loading, or unreadable sessions show the default alone.
+          const boundPreset =
+            isCurrentProjection && projection.state?.status === 'bound'
+              ? (projection.state.presetName ?? 'custom')
+              : undefined;
+          const sessionOverride =
+            boundPreset !== presetName ? boundPreset : undefined;
           interaction.syncScope(
             configDirectory,
             visible === undefined
@@ -2451,7 +2446,11 @@ function createSidebarRuntime(
             animationNow,
             visible,
             interaction,
-            adapter.getPresetRow?.(configDirectory, presetName, sessionLabel),
+            adapter.getPresetRow?.(
+              configDirectory,
+              presetName,
+              sessionOverride,
+            ),
             modelNames(),
           );
         }),
@@ -2655,12 +2654,12 @@ async function setup(
       },
       readSessionPreset: (directory, sessionID) =>
         readSessionPreset(ctx, sessionID, directory),
-      getPresetRow: (directory, presetName, sessionLabel) => {
+      getPresetRow: (directory, presetName, sessionPreset) => {
         const name = presetName ?? '(none)';
-        if (!canOpenPresetManagerV2(ctx)) return { name, sessionLabel };
+        if (!canOpenPresetManagerV2(ctx)) return { name, sessionPreset };
         return {
           name,
-          sessionLabel,
+          sessionPreset,
           onActivate: () => {
             const currentDirectory = ctx.location?.directory ?? directory;
             void openPresetManagerV2(

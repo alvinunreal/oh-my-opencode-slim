@@ -846,6 +846,7 @@ export class ForegroundFallbackManager {
   private readonly v2Steps = new Map<string, V2RefusalStep>();
   private readonly childOutcomes = new Map<string, ChildOutcome>();
   private readonly v1Waiters = new Map<string, (model?: string) => void>();
+  private readonly v1InterviewRefusals = new Map<string, string>();
   /** Seen user IDs keep old host re-emissions from rewinding a newer turn. */
   private readonly observedUserMessageIds = new Map<string, Set<string>>();
   /** Last host retry attempt charged for each turn/model episode. */
@@ -1120,6 +1121,7 @@ export class ForegroundFallbackManager {
     this.disposed = true;
     for (const finish of this.v1Waiters.values()) finish();
     this.v1Waiters.clear();
+    this.v1InterviewRefusals.clear();
     this.childOutcomes.clear();
     for (const pending of this.pendingInitialDelay.values()) {
       this.clearTimer(pending.timer);
@@ -1153,6 +1155,36 @@ export class ForegroundFallbackManager {
       key,
       this.handleV2Refusal(sessionID, step, error, rawFinish),
     );
+  }
+
+  pendingRefusalOutcome(sessionID: string, assistantMessageID: string) {
+    return this.childOutcomes.get(`${sessionID}\0${assistantMessageID}`);
+  }
+
+  v1InterviewRefusal(sessionID: string, messageID: string) {
+    if (!this.enabled || !this.hasFallbackChain(sessionID)) return;
+    const key = `interview\0${sessionID}\0${messageID}`;
+    this.v1InterviewRefusals.set(sessionID, key);
+    return this.createV1Outcome(
+      key,
+      V1_OUTCOME_TIMEOUT_MS +
+        REPLAY_SEND_TIMEOUT_MS * 2 +
+        HOST_CALL_TIMEOUT_MS * 4 +
+        this.initialRetryDelayMs +
+        this.retryDelayMs,
+    ).finally(() => {
+      if (this.v1InterviewRefusals.get(sessionID) === key)
+        this.v1InterviewRefusals.delete(sessionID);
+    });
+  }
+
+  private finishV1InterviewRefusal(sessionID: string, model?: string) {
+    const key = this.v1InterviewRefusals.get(sessionID);
+    if (!key) return;
+    this.v1InterviewRefusals.delete(sessionID);
+    const finish = this.v1Waiters.get(key);
+    this.v1Waiters.delete(key);
+    finish?.(model);
   }
 
   refusedChildOutcome(
@@ -2021,6 +2053,13 @@ export class ForegroundFallbackManager {
           }
           this.resetRecoveryState(sessionID);
         }
+        if (
+          !isV2Host &&
+          info.finish === 'content-filter' &&
+          !this.isFallbackInProgress(sessionID)
+        ) {
+          this.finishV1InterviewRefusal(sessionID);
+        }
         break;
       }
 
@@ -2863,6 +2902,7 @@ export class ForegroundFallbackManager {
     if (!pending) return;
     this.clearTimer(pending.timer);
     this.pendingInitialDelay.delete(sessionID);
+    this.finishV1InterviewRefusal(sessionID);
   }
 
   /** A confirmed recovery starts a new descent, including inherit+chain agents. */
@@ -3846,6 +3886,11 @@ export class ForegroundFallbackManager {
     if (outcomeKey) this.createV1Outcome(outcomeKey, V1_OUTCOME_TIMEOUT_MS);
     const waiter = outcomeKey ? this.v1Waiters.get(outcomeKey) : undefined;
     if (outcomeKey) this.v1Waiters.delete(outcomeKey);
+    const interviewKey = this.v1InterviewRefusals.get(sessionID);
+    const interviewWaiter = interviewKey
+      ? this.v1Waiters.get(interviewKey)
+      : undefined;
+    let interviewModel: string | undefined;
     let admittedModel: string | undefined;
     const session = getClient(this.input).session;
     try {
@@ -4058,6 +4103,7 @@ export class ForegroundFallbackManager {
         withdrawHandoff();
         return;
       }
+      interviewModel = nextModel;
 
       this.commitSwitch(sessionID, currentModel, nextModel, error);
       // Admission accepted: convert the
@@ -4092,6 +4138,13 @@ export class ForegroundFallbackManager {
       });
     } finally {
       waiter?.(admittedModel);
+      if (
+        interviewKey &&
+        this.v1Waiters.get(interviewKey) === interviewWaiter
+      ) {
+        this.v1Waiters.delete(interviewKey);
+        interviewWaiter?.(interviewModel);
+      }
     }
   }
 
