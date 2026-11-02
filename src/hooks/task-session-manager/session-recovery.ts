@@ -648,9 +648,11 @@ function latestFence(...values: Array<number | undefined>): number | undefined {
   return chosen;
 }
 
-/** A proven orphan: the parent plus the identity the observation supplied. */
+/** A proven orphan: its parent, its launch fence, and the observation identity. */
 export interface UndeliveredBackgroundChild {
   parentSessionID: string;
+  /** Time of the parent's own delegation evidence; fences the adoption. */
+  launchedAt: number;
   agent?: string;
   title?: string;
 }
@@ -743,6 +745,7 @@ export async function resolveUndeliveredBackgroundChild(options: {
   }
   return {
     parentSessionID,
+    launchedAt: delegation.at,
     ...(agent ? { agent } : {}),
     ...(title ? { title } : {}),
   };

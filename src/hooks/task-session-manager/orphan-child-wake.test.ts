@@ -224,9 +224,8 @@ describe('orphaned-child observation fallback (#1560)', () => {
       },
     });
 
-    await expect(
-      handleEvent(idleEvent(CHILD, { parentID: PARENT }), deps),
-    ).rejects.toThrow('transcript read timed out');
+    // A throwing resolver is a failed read, not a failed event.
+    await handleEvent(idleEvent(CHILD, { parentID: PARENT }), deps);
     expect(board.get(CHILD)).toBeUndefined();
   });
 

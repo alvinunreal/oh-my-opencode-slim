@@ -211,7 +211,8 @@ function isCurrentSessionObservation(
  * and its history shows an undelivered background delegation — then let the
  * normal reconciliation publish the terminal outcome; that publication is the
  * one-shot wake. Children with a persisted identity are startup recovery's
- * business, and v2 wires no resolver because the host owns delivery there.
+ * business. On v2 the host owns delivery, so no resolver is wired and adoption
+ * never races the host's own wake.
  */
 async function adoptUndeliveredBackgroundChild(args: {
   board: BackgroundJobBoard;
@@ -236,12 +237,22 @@ async function adoptUndeliveredBackgroundChild(args: {
   ) {
     return undefined;
   }
-  const proven = await resolve({
-    taskID: sessionID,
-    ...(info?.parentID ? { parentSessionID: info.parentID } : {}),
-    ...(info?.agent ? { agent: info.agent } : {}),
-    ...(info?.title ? { title: info.title } : {}),
-  });
+  let proven: UndeliveredBackgroundChild | undefined;
+  try {
+    proven = await resolve({
+      taskID: sessionID,
+      ...(info?.parentID ? { parentSessionID: info.parentID } : {}),
+      ...(info?.agent ? { agent: info.agent } : {}),
+      ...(info?.title ? { title: info.title } : {}),
+    });
+  } catch (error) {
+    // A failed read is no evidence, never a failed event.
+    log('[task-session-manager] orphan proof read failed', {
+      taskID: sessionID,
+      error: String(error),
+    });
+    return undefined;
+  }
   if (!proven || !args.shouldManageSession(proven.parentSessionID)) {
     return undefined;
   }
@@ -262,8 +273,9 @@ async function adoptUndeliveredBackgroundChild(args: {
       description: proven.title ?? info?.title,
       background: true,
       adopted: true,
-      // The run predates this process; 0 keeps its terminal evidence in window.
-      now: 0,
+      // The run predates this process; its own delegation evidence fences
+      // which host outcomes can be attributed to it.
+      now: proven.launchedAt,
     });
   } catch (error) {
     log('[task-session-manager] orphan adoption refused', {

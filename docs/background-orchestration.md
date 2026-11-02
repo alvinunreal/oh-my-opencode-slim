@@ -138,7 +138,8 @@ the terminal outcome, which carries the parent wake. This runs on v1 only and
 under startup recovery's own proofs: the parent's history must show a background
 delegation for that child, that run must have no trusted native delivery yet, and
 the child must have no persisted identity (those belong to startup recovery). On
-v2 the host owns completion delivery, so the plugin does not adopt there.
+v2 the host owns completion delivery through its native subagent push, and the
+plugin forgoes observation-time adoption there rather than race that wake.
 On V2, `session.execution.interrupted` with reason `shutdown` is suspension,
 not a terminal idle transition. OMO preserves the raw event without synthesizing
 idle/status events; the host retains execution and first-notification ownership.
