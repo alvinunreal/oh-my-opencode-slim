@@ -158,11 +158,6 @@ export function createNativeSeatResolver(
         const agent =
           typeof info.agent === 'string' ? info.agent.trim() : undefined;
         const label = agent || undefined;
-        // When the seat carries a display label distinct from the child ID,
-        // the host's agent must agree with it.
-        if (agent && seat.seat !== childID && agent !== seat.seat) {
-          return ambiguous('agent does not match the seat label', label);
-        }
 
         const transcript = await boundedRead(
           () => fetchChildTranscript(client, childID, directory),

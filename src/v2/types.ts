@@ -68,7 +68,7 @@ export interface V2CommandDefinition {
     sessionID: string;
     prompt: {
       text: string;
-      files?: unknown[];
+      files?: Array<{ uri: string; name?: string }>;
       agents?: unknown[];
       skills?: unknown[];
     };

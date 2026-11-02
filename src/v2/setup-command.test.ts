@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from 'bun:test';
 import * as fs from 'node:fs/promises';
+import { Error as NativeToolError } from '@opencode/schema/tool';
 import {
   appendTaggedSyntheticPart,
   appendTrailingVolatileMessage,
@@ -12,6 +13,7 @@ import {
   SESSION_ID,
   userTurn,
 } from '../hooks/cache-safety-harness.test';
+import { createDeepworkCommandHook } from '../hooks/deepwork';
 import { createJsonErrorRecoveryHook } from '../hooks/json-error-recovery/hook';
 import {
   createPhaseReminderHook,
@@ -216,6 +218,73 @@ describe('command marker wrap/parse', () => {
 });
 
 describe('createCommandRegistration', () => {
+  test('preserves deepwork attachments through v1 and the v2 command flow', async () => {
+    const deepwork = createDeepworkCommandHook();
+    const filePart = {
+      type: 'file',
+      mime: 'text/plain',
+      url: 'file:///task.txt',
+    };
+    const v1 = { parts: [{ type: 'text', text: 'template' }, filePart] };
+    await deepwork.handleCommandExecuteBefore(
+      { command: 'deepwork', sessionID: 'ses_v1', arguments: 'Update it' },
+      v1,
+    );
+    expect(v1.parts).toContainEqual(filePart);
+    expect(v1.parts[0].text).toContain('# Deepwork');
+
+    const files = [{ uri: 'file:///task.txt', name: 'task.txt' }];
+    const prompt = mock(async () => ({}));
+    const added: V2CommandDefinition[] = [];
+    createCommandRegistration(
+      { add: (def) => added.push(def) },
+      'deepwork',
+      {},
+      createSessionSubmit({ session: { prompt } } as never),
+    );
+    await added[0].execute({
+      sessionID: 'ses_v2',
+      prompt: { text: 'Update it', files },
+    });
+    expect(prompt).toHaveBeenCalledWith({
+      sessionID: 'ses_v2',
+      text: wrapCommandMarker('deepwork', 'Update it'),
+      files,
+    });
+    const textAttachment = {
+      type: 'text',
+      text: '\n\nAttached file: task.txt\n\ncontents',
+      metadata: { attachment: { name: 'task.txt' } },
+    };
+    const imageLocation = {
+      type: 'text',
+      text: 'Attached file: /tmp/picture.png',
+    };
+    const image = { type: 'media', media: 'image bytes' };
+    const event = makeEvent([
+      {
+        id: 'm',
+        role: 'user',
+        content: [
+          { type: 'text', text: wrapCommandMarker('deepwork', 'Update it') },
+          textAttachment,
+          imageLocation,
+          image,
+        ],
+      },
+    ]);
+    await applyCommandMarkerToContext(
+      event,
+      deepwork.handleCommandExecuteBefore,
+    );
+    expect(event.messages[0].content.slice(1)).toEqual([
+      textAttachment,
+      imageLocation,
+      image,
+    ]);
+    expect(event.messages[0].content[0].text).toContain('# Deepwork');
+  });
+
   test('add-only draft registers via add and execute submits the marker', async () => {
     const added: V2CommandDefinition[] = [];
     const submit = mock(async () => {});
@@ -395,6 +464,33 @@ describe('interview registerCommand (add-only draft)', () => {
 });
 
 describe('applyCommandMarkerToContext', () => {
+  test('replays the same deepwork expansion after tool calls and later turns', async () => {
+    const hook = createDeepworkCommandHook();
+    const commandBefore = mock(hook.handleCommandExecuteBefore);
+    const user = {
+      id: 'msg_deepwork',
+      role: 'user',
+      content: [
+        { type: 'text', text: wrapCommandMarker('deepwork', 'Build it') },
+      ],
+    };
+    const first = makeEvent([structuredClone(user)]);
+    const next = makeEvent([
+      structuredClone(user),
+      {
+        id: 'a',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Working' }],
+      },
+      { id: 'u2', role: 'user', content: [{ type: 'text', text: 'Continue' }] },
+    ]);
+    await applyCommandMarkerToContext(first, commandBefore);
+    await applyCommandMarkerToContext(next, commandBefore);
+    expect(first.messages[0].content[0].text).toContain('# Deepwork');
+    expect(next.messages[0].content).toEqual(first.messages[0].content);
+    expect(commandBefore).toHaveBeenCalledTimes(1);
+  });
+
   test('replaces the trailing marker with hook parts; other messages untouched', async () => {
     const earlier = {
       id: 'm1',
@@ -1861,6 +1957,37 @@ describe('tool execute bridge normalization', () => {
 });
 
 describe('tool execute bridge status discrimination', () => {
+  test('only diagnoses v1 invalid-tool results', async () => {
+    const recovery = createJsonErrorRecoveryHook({} as never);
+    const text = 'Diagnosis: invalid JSON in a configuration file';
+    const successful = { title: '', output: text, metadata: {} };
+    await recovery['tool.execute.after'](
+      { tool: 'task', sessionID: 's', callID: 'c' },
+      successful,
+    );
+    expect(successful.output).toBe(text);
+    const invalid = { title: '', output: text, metadata: {} };
+    await recovery['tool.execute.after'](
+      { tool: 'invalid', sessionID: 's', callID: 'c' },
+      invalid,
+    );
+    expect(invalid.output).toContain('invalid JSON arguments');
+    const bridge = createToolExecuteBridges(
+      undefined,
+      recovery['tool.execute.after'],
+    );
+    const event = {
+      tool: 'subagent',
+      sessionID: 's',
+      id: 'c',
+      input: {},
+      status: 'completed',
+      result: { content: text },
+    };
+    await bridge.afterBridge(event);
+    expect(event.result.content).toBe(text);
+  });
+
   test('error status synthesizes the v1 output from the error text', async () => {
     const seen: Array<{ tool: string; output: unknown }> = [];
     const after = async (_i: unknown, o: { output: unknown }) => {
@@ -1884,29 +2011,69 @@ describe('tool execute bridge status discrimination', () => {
     // Hook saw the error text; the stale content was never surfaced.
   });
 
-  test('error status with an Error-like payload uses message', async () => {
-    const seen: unknown[] = [];
+  test('error status delivers loop warnings through the underlying cause', async () => {
+    class BlockedError extends Error {
+      readonly _tag = 'Permission.BlockedError';
+      reason = 'permission denied';
+      override get message() {
+        return this.reason;
+      }
+    }
+    const guard = createToolLoopGuardHook();
     const { afterBridge } = createToolExecuteBridges(
       undefined,
-      async (_i, o: { output: unknown }) => {
-        seen.push(o.output);
-      },
+      guard['tool.execute.after'],
     );
+    let cause: BlockedError | undefined;
+    let visible = '';
+    for (let i = 0; i < 3; i += 1) {
+      const callID = `call-${i}`;
+      await guard['tool.execute.before'](
+        { tool: 'read', sessionID: 's', callID },
+        { args: { filePath: 'a.txt' } },
+      );
+      cause = new BlockedError();
+      const inner = new NativeToolError({ message: 'inner', error: cause });
+      const error = new NativeToolError({
+        message: 'read failed',
+        error: inner,
+      });
+      await afterBridge({
+        tool: 'read',
+        sessionID: 's',
+        id: callID,
+        input: { filePath: 'a.txt' },
+        status: 'error',
+        error,
+      });
+      if (i === 2) {
+        expect(error.error).toBeInstanceOf(Error);
+        const wrapped = error.error as Error;
+        expect(wrapped.cause).toBe(inner);
+        visible = wrapped.message;
+      } else expect(error.error).toBe(inner);
+      expect(inner.error).toBe(cause);
+    }
+    expect(visible).toContain('permission denied');
+    expect(visible).toContain(LOOP_GUARD_WARNING);
+
+    await guard['tool.execute.before'](
+      { tool: 'read', sessionID: 's', callID: 'call-3' },
+      { args: { filePath: 'a.txt' } },
+    );
+    const noCause = new NativeToolError({ message: 'permission denied' });
     await afterBridge({
       tool: 'read',
       sessionID: 's',
-      agent: 'a',
-      messageID: 'm',
-      id: 'c',
-      input: {},
+      id: 'call-3',
+      input: { filePath: 'a.txt' },
       status: 'error',
-      error: { message: 'file not found' },
-      result: undefined,
+      error: noCause,
     });
-    expect(seen).toEqual(['file not found']);
+    expect(noCause.message).toContain(LOOP_GUARD_WARNING);
   });
 
-  test('errored output still feeds json-error-recovery (reminder appended)', async () => {
+  test('v2 tool failures do not trigger the v1 JSON reminder', async () => {
     const recovery = createJsonErrorRecoveryHook({} as never);
     const event = {
       tool: 'task',
@@ -1917,17 +2084,16 @@ describe('tool execute bridge status discrimination', () => {
       input: {},
       status: 'error' as const,
       error: 'SyntaxError: Unexpected token in JSON',
-      result: {},
+      result: { content: 'stale result' },
     };
     const { afterBridge } = createToolExecuteBridges(
       undefined,
       recovery['tool.execute.after'],
     );
     await afterBridge(event);
-    // The reminder the recovery hook appended to output.output must land
-    // in the model-visible content field of the errored result.
-    expect(event.result.content).toContain('invalid JSON arguments');
-    expect(event.result.content).toContain('SyntaxError');
+    expect(event.status).toBe('error');
+    expect(event.error).toBe('SyntaxError: Unexpected token in JSON');
+    expect(event.result.content).toBe('stale result');
   });
 
   test('error status with no error field never presents result content as success', async () => {
