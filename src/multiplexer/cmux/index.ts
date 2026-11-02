@@ -442,15 +442,6 @@ export class CmuxMultiplexer implements Multiplexer {
     return true;
   }
 
-  async applyLayout(
-    _layout: MultiplexerLayout,
-    _mainPaneSize: number,
-  ): Promise<void> {
-    // cmux has no layout expression: the child view is a sibling tab inside
-    // the parent pane and never participates in the pane layout, so layout
-    // and main-pane-size produce no command at all.
-  }
-
   private resolveTarget(): CmuxTarget | null {
     return resolveCmuxTarget(this.env, this.sessionName);
   }
@@ -590,6 +581,7 @@ export class CmuxMultiplexer implements Multiplexer {
   }
 }
 
+/** @public knip: test-only export via cache-busted dynamic import. */
 export class SpawnCommandRunner implements CommandRunner {
   constructor(
     private readonly timeoutMs = 5_000,
@@ -628,6 +620,7 @@ export class SpawnCommandRunner implements CommandRunner {
   }
 }
 
+/** @public knip: test-only export via cache-busted dynamic import. */
 export class CliCmuxClient implements CmuxClient {
   private binary: string | null;
 
@@ -903,6 +896,8 @@ export class CliCmuxClient implements CmuxClient {
 /**
  * True when the command carries a shell argv payload (the attach script,
  * separated by `--`), whose stderr may echo it. Such stderr is redacted.
+ *
+ * @public knip: test-only export via cache-busted dynamic import.
  */
 export function commandCarriesArgv(args: string[]): boolean {
   return args.includes('--');
@@ -917,6 +912,7 @@ export function commandCarriesArgv(args: string[]): boolean {
 const ARGV_MARKER_PATTERN =
   /(?:^|\n)# (omosc:\d{1,10}:[A-Za-z0-9_-]{1,64})(?=\n|$)/;
 
+/** @public knip: test-only export via cache-busted dynamic import. */
 export function extractArgvMarker(argv: string[]): string | null {
   for (const arg of argv) {
     const match = ARGV_MARKER_PATTERN.exec(arg);
@@ -930,7 +926,7 @@ export function extractArgvMarker(argv: string[]): string | null {
  * socket wins over the legacy name; an explicit session name is only used
  * when no socket path exists (the CLI gives `--socket` precedence anyway).
  */
-export function resolveCmuxTarget(
+function resolveCmuxTarget(
   env: CmuxEnvironment,
   sessionName?: string,
 ): CmuxTarget | null {

@@ -177,6 +177,7 @@ function isSafeDisplayName(displayName: string): boolean {
 function applyOverrides(
   agent: AgentDefinition,
   override: AgentOverrideConfig,
+  inferenceOnly = false,
 ): void {
   if (override.model) {
     if (Array.isArray(override.model)) {
@@ -221,7 +222,7 @@ function applyOverrides(
   if (override.variant) agent.config.variant = override.variant;
   if (override.temperature !== undefined)
     agent.config.temperature = override.temperature;
-  if (override.color) agent.config.color = override.color;
+  if (!inferenceOnly && override.color) agent.config.color = override.color;
   if (override.options) {
     agent.config.options = {
       ...agent.config.options,
@@ -231,10 +232,10 @@ function applyOverrides(
   if (override.displayName) {
     agent.displayName = override.displayName;
   }
-  if (override.description) {
+  if (!inferenceOnly && override.description) {
     agent.description = override.description;
   }
-  if (override.permission) {
+  if (!inferenceOnly && override.permission) {
     // Keep the factory's nested-dispatch stance when the override doesn't
     // address `task` (shared with the host-entry and marketplace sites).
     agent.config.permission = mergeTaskStance(
@@ -417,6 +418,41 @@ function entryModelString(
   return typeof entry?.model === 'string' ? entry.model : undefined;
 }
 
+/** Resolve the chain head and runtime preset without changing the input. */
+export function resolveAgentInference<T extends Record<string, unknown>>(
+  entry: T,
+  models: readonly { id: string; variant?: string }[] = [],
+  override?: AgentOverrideConfig,
+): T {
+  const result: Record<string, unknown> = { ...entry };
+  if (models[0] && result.model === undefined) {
+    result.model = models[0].id;
+    if (models[0].variant) result.variant = models[0].variant;
+  }
+  if (override) {
+    if (typeof override.model === 'string') result.model = override.model;
+    else if (Array.isArray(override.model) && override.model.length > 0) {
+      const first = override.model[0];
+      result.model = typeof first === 'string' ? first : first.id;
+      if (typeof first !== 'string' && first.variant)
+        result.variant = first.variant;
+    }
+    if (typeof override.variant === 'string') result.variant = override.variant;
+    else if ('variant' in override) delete result.variant;
+    if (typeof override.temperature === 'number')
+      result.temperature = override.temperature;
+    else if ('temperature' in override) delete result.temperature;
+    if (
+      override.options &&
+      typeof override.options === 'object' &&
+      !Array.isArray(override.options)
+    )
+      result.options = override.options;
+    else if ('options' in override) delete result.options;
+  }
+  return result as T;
+}
+
 /**
  * Project the runtime state for a set of resolved agent definitions:
  *
@@ -452,23 +488,10 @@ export function projectAgentRuntimeState(input: {
   if (Object.keys(modelArrays).length > 0) {
     for (const [agentName, models] of Object.entries(modelArrays)) {
       if (models.length === 0) continue;
-      const chosen = models[0];
       const entry = agentConfigs[agentName];
-      if (entry) {
-        // A user-selected model (host layer) takes precedence over the
-        // config's fallback chain.
-        if (entry.model === undefined) {
-          entry.model = chosen.id;
-          if (chosen.variant) {
-            entry.variant = chosen.variant;
-          }
-        }
-      } else {
-        agentConfigs[agentName] = {
-          model: chosen.id,
-          ...(chosen.variant ? { variant: chosen.variant } : {}),
-        };
-      }
+      const resolved = resolveAgentInference(entry ?? {}, models);
+      if (entry) Object.assign(entry, resolved);
+      else agentConfigs[agentName] = resolved;
     }
   }
 
@@ -479,36 +502,10 @@ export function projectAgentRuntimeState(input: {
       const entry = agentConfigs[resolvedName];
       if (!entry) continue;
 
-      if (typeof override.model === 'string') {
-        entry.model = override.model;
-      } else if (Array.isArray(override.model) && override.model.length > 0) {
-        const first = override.model[0];
-        entry.model = typeof first === 'string' ? first : first.id;
-        if (typeof first !== 'string' && first.variant) {
-          entry.variant = first.variant;
-        }
-      }
-      // Explicitly set or clear scalar fields so switching from Preset A
-      // (which sets a field) to Preset B (which doesn't) leaves no stale
-      // values behind.
-      if (typeof override.variant === 'string') {
-        entry.variant = override.variant;
-      } else if ('variant' in override) {
-        delete entry.variant;
-      }
-      if (typeof override.temperature === 'number') {
-        entry.temperature = override.temperature;
-      } else if ('temperature' in override) {
-        delete entry.temperature;
-      }
-      if (
-        override.options &&
-        typeof override.options === 'object' &&
-        !Array.isArray(override.options)
-      ) {
-        entry.options = override.options;
-      } else if ('options' in override) {
-        delete entry.options;
+      const resolved = resolveAgentInference(entry, [], override);
+      for (const field of ['model', 'variant', 'temperature', 'options']) {
+        if (field in resolved) entry[field] = resolved[field];
+        else delete entry[field];
       }
     }
   }
@@ -747,24 +744,6 @@ function buildCustomAgentDefinition(
   } as AgentDefinition;
 }
 
-function injectDisplayNames(
-  orchestrator: AgentDefinition,
-  nameMap: Map<string, string>,
-): void {
-  if (nameMap.size === 0) return;
-  let prompt = orchestrator.config.prompt;
-  if (!prompt) return;
-
-  for (const [internalName, displayName] of nameMap) {
-    prompt = prompt.replace(
-      new RegExp(`@${escapeRegExp(internalName)}\\b`, 'g'),
-      `@${normalizeAgentName(displayName)}`,
-    );
-  }
-
-  orchestrator.config.prompt = prompt;
-}
-
 /**
  * Apply default permissions to an agent.
  * Includes skill permission presets. If configuredSkills is provided, it
@@ -781,7 +760,6 @@ function applyDefaultPermissions(
   agent: AgentDefinition,
   configuredSkills?: readonly string[],
   disabledSkills?: readonly string[],
-  nestedDispatchEnabled = false,
   hostFlavor?: string,
   isPrimary = false,
   subagentScope?: readonly string[],
@@ -862,7 +840,7 @@ function applyDefaultPermissions(
             subagentScope.map((name) => [name, 'allow'] as const),
           ),
         }
-      : nestedDispatchEnabled && !isPrimary
+      : hostFlavor === 'v2' && !isPrimary
         ? { ...TASK_NO_NESTED_DISPATCH }
         : undefined);
 
@@ -872,9 +850,9 @@ function applyDefaultPermissions(
     // compiled scope, then the nested-dispatch deny for non-primaries —
     // the compiled v2 permission base allows every unmatched action, so an
     // absent entry would let any child spawn once the host depth limit is
-    // raised. Only the nested-dispatch deny is gated on the v2 + observer
-    // condition; the compiled scope is emitted on every host flavor (v1 and
-    // v2 both evaluate per-name `task` maps).
+    // raised. The nested-dispatch deny applies to v2 non-primaries only
+    // (v1 stays untouched); the compiled scope is emitted on every host
+    // flavor (v1 and v2 both evaluate per-name `task` maps).
     ...(taskStance !== undefined ? { task: taskStance } : {}),
     question: questionPerm,
     ...orchestratorDefaultPermissions,
@@ -964,6 +942,24 @@ export function createAgents(
   runtime: RuntimeConfig,
   options?: { projectDirectory?: string; hostFlavor?: string },
 ): AgentDefinition[] {
+  return createAgentViews(runtime, options, false);
+}
+
+/** Resolve the same roster and inference fields without constructing prompts. */
+export function createAgentInferenceViews(
+  runtime: RuntimeConfig,
+  options?: { projectDirectory?: string; hostFlavor?: string },
+): Array<
+  Pick<AgentDefinition, 'name' | 'displayName' | 'config' | '_modelArray'>
+> {
+  return createAgentViews(runtime, options, true);
+}
+
+function createAgentViews(
+  runtime: RuntimeConfig,
+  options: { projectDirectory?: string; hostFlavor?: string } | undefined,
+  inferenceOnly: boolean,
+): AgentDefinition[] {
   // Native delegation vocabulary for the host flavor ('v2' → subagent/agent,
   // v1/default → task/subagent_type). Construction-time constant — cache-safe.
   const vocab = delegationVocabulary(options?.hostFlavor);
@@ -974,9 +970,8 @@ export function createAgents(
     // The bare councillor is only meaningful as part of configured Council Mode.
     disabled.add('councillor');
   }
-  // Nested dispatch ships only where it is live: v2 hosts (the only flavor
-  // with a depth limit) and an enabled observer. The v1 host enables a
-  // child's task tool whenever its permission carries ANY task rule — with
+  // Observer dispatch requires a v2 host and an enabled observer. The v1 host
+  // enables a child's task tool whenever its permission carries ANY task rule — with
   // no depth limit — so emitting stances there would change every advisor's
   // toolset for nothing.
   const nestedDispatchEnabled =
@@ -1036,10 +1031,12 @@ export function createAgents(
     .filter(([name]) => !disabled.has(name))
     .map(([name, factory]) => {
       // Get base agent definition using the subagent factory with undefined prompts
-      const agent = factory(getModelForAgent(name), undefined, undefined);
-      if (!nestedDispatchEnabled) {
-        // Drop only the pattern stances this branch adds (object-shaped
-        // task entries); pre-existing blanket-deny strings stay untouched.
+      const model = getModelForAgent(name);
+      const agent: AgentDefinition = inferenceOnly
+        ? { name, config: { model } }
+        : factory(model, undefined, undefined);
+      if (!inferenceOnly && !nestedDispatchEnabled) {
+        // v1 omits object stances; v2 denies dispatch without an observer.
         const permission = agent.config.permission as
           | Record<string, unknown>
           | undefined;
@@ -1049,7 +1046,11 @@ export function createAgents(
           typeof permission.task === 'object'
         ) {
           const rest = { ...permission };
-          delete rest.task;
+          if (options?.hostFlavor === 'v2') {
+            rest.task = { ...TASK_NO_NESTED_DISPATCH };
+          } else {
+            delete rest.task;
+          }
           agent.config.permission = rest as typeof agent.config.permission;
         }
       }
@@ -1062,6 +1063,13 @@ export function createAgents(
 
       const override = getOverrideFromAgents(mergedAgents, name);
       const inlinePrompt = override?.prompt;
+      if (inferenceOnly) {
+        // Keep the existing inline-versus-file diagnostic without rendering.
+        if (inlinePrompt !== undefined && customPrompts.prompt !== undefined) {
+          resolvePrompt(name, inlinePrompt, customPrompts.prompt, '');
+        }
+        return agent;
+      }
       const defaultPrompt = appendTaskRejectionInstruction(
         appendObserverDispatchInstruction(
           agent.config.prompt ?? '',
@@ -1173,6 +1181,27 @@ export function createAgents(
       hostFlavor: options?.hostFlavor,
     });
 
+    const fallbackModel =
+      override.inheritModelFrom === 'orchestrator'
+        ? configuredOrchestratorModel
+        : primaryModel;
+    if (inferenceOnly) {
+      if (override.prompt !== undefined && customPrompts.prompt !== undefined) {
+        resolvePrompt(name, override.prompt, customPrompts.prompt, '');
+      }
+      return [
+        {
+          name,
+          config: {
+            model:
+              getPrimaryModelFromOverride(override) ??
+              fallbackModel ??
+              DEFAULT_MODELS.oracle,
+          },
+        },
+      ];
+    }
+
     const scope = customPrimaryScopes.get(name);
     // An explicit `permission.task` entry wins over the compiled stance, so
     // a catalog naming the scope could advertise delegates the host denies.
@@ -1194,9 +1223,7 @@ export function createAgents(
         override,
         customPrompts.prompt,
         customPrompts.appendPrompt,
-        override.inheritModelFrom === 'orchestrator'
-          ? configuredOrchestratorModel
-          : primaryModel,
+        fallbackModel,
         scope && !explicitTask
           ? renderScopedAgentsBlock(
               scope,
@@ -1239,52 +1266,62 @@ export function createAgents(
   const protoAcpAgents = acpAgentNames.map((name) => {
     const acp = runtime.acpAgents[name];
     if (!acp) throw new Error(`ACP agent '${name}' is missing config`);
-    return buildAcpAgentDefinition(name, acp, primaryModel);
+    return inferenceOnly
+      ? {
+          name,
+          config: {
+            model: acp.wrapperModel ?? primaryModel ?? DEFAULT_MODELS.oracle,
+          },
+        }
+      : buildAcpAgentDefinition(name, acp, primaryModel);
   });
 
   // 2. Apply overrides and default permissions to built-in subagents
   const builtInSubAgents = protoSubAgents.map((agent) => {
     const override = getOverrideFromAgents(mergedAgents, agent.name);
     if (override) {
-      applyOverrides(agent, override);
+      applyOverrides(agent, override, inferenceOnly);
     }
     applyModelInheritance(agent, override);
-    applyDefaultPermissions(
-      agent,
-      override?.skills,
-      runtime.disabledSkills,
-      nestedDispatchEnabled,
-      options?.hostFlavor,
-    );
+    if (!inferenceOnly) {
+      applyDefaultPermissions(
+        agent,
+        override?.skills,
+        runtime.disabledSkills,
+        options?.hostFlavor,
+      );
+    }
     return agent;
   });
 
   const customSubAgents = protoCustomAgents.map((agent) => {
     const override = getOverrideFromAgents(mergedAgents, agent.name);
     if (override) {
-      applyOverrides(agent, override);
+      applyOverrides(agent, override, inferenceOnly);
     }
     applyModelInheritance(agent, override);
-    applyDefaultPermissions(
-      agent,
-      override?.skills,
-      runtime.disabledSkills,
-      nestedDispatchEnabled,
-      options?.hostFlavor,
-      override?.primary === true,
-      customPrimaryScopes.get(agent.name),
-    );
+    if (!inferenceOnly) {
+      applyDefaultPermissions(
+        agent,
+        override?.skills,
+        runtime.disabledSkills,
+        options?.hostFlavor,
+        override?.primary === true,
+        customPrimaryScopes.get(agent.name),
+      );
+    }
     return agent;
   });
 
   const acpSubAgents = protoAcpAgents.map((agent) => {
-    applyDefaultPermissions(
-      agent,
-      undefined,
-      runtime.disabledSkills,
-      nestedDispatchEnabled,
-      options?.hostFlavor,
-    );
+    if (!inferenceOnly) {
+      applyDefaultPermissions(
+        agent,
+        undefined,
+        runtime.disabledSkills,
+        options?.hostFlavor,
+      );
+    }
     return agent;
   });
 
@@ -1302,15 +1339,17 @@ export function createAgents(
     runtime,
     disabled,
     nestedDispatchEnabled,
+    inferenceOnly,
   ).map((agent) => {
-    if (councillorColor) agent.config.color ??= councillorColor;
-    applyDefaultPermissions(
-      agent,
-      undefined,
-      runtime.disabledSkills,
-      nestedDispatchEnabled,
-      options?.hostFlavor,
-    );
+    if (!inferenceOnly) {
+      if (councillorColor) agent.config.color ??= councillorColor;
+      applyDefaultPermissions(
+        agent,
+        undefined,
+        runtime.disabledSkills,
+        options?.hostFlavor,
+      );
+    }
     return agent;
   });
 
@@ -1321,13 +1360,15 @@ export function createAgents(
     ...councillorAgents,
   ];
 
-  for (const agent of [...acpSubAgents, ...councillorAgents]) {
-    agent.config.prompt = appendTaskRejectionInstruction(
-      appendObserverDispatchInstruction(
-        agent.config.prompt ?? '',
-        nestedDispatchEnabled && agent.name.startsWith('councillor-'),
-      ),
-    );
+  if (!inferenceOnly) {
+    for (const agent of [...acpSubAgents, ...councillorAgents]) {
+      agent.config.prompt = appendTaskRejectionInstruction(
+        appendObserverDispatchInstruction(
+          agent.config.prompt ?? '',
+          nestedDispatchEnabled && agent.name.startsWith('councillor-'),
+        ),
+      );
+    }
   }
 
   // 3. Create Orchestrator (with its own overrides and custom prompts)
@@ -1361,57 +1402,71 @@ export function createAgents(
       `[oh-my-opencode-slim] agents.orchestrator.subagents catalog not rendered: an explicit permission.task entry overrides the delegation scope.`,
     );
   }
-  const orchestrator = createOrchestratorAgent(
-    orchestratorModel,
-    undefined,
-    undefined,
-    {
-      disabledAgents: disabled,
-      excludeDescriptions:
-        councillorAgents.length > 0 ? ['council'] : undefined,
-      onlyAgents: orchestratorScope,
-      customDescriptions: orchestratorScope
-        ? Object.fromEntries(
-            orchestratorScope.map((n) => [n, mergedAgents[n]?.description]),
-          )
-        : undefined,
-      waitForUser:
-        runtime.backgroundJobsEnabled &&
-        !runtime.disabledTools.includes('wait_for_user'),
-      wakeScheduler:
-        runtime.backgroundJobsEnabled &&
-        runtime.backgroundJobs.orchestratorWake.enabled,
-      hostFlavor: options?.hostFlavor,
-      routingBlock:
-        runtime.routingBlock &&
-        !(orchestratorScope && orchestratorExplicitTask),
-    },
-  );
+  const orchestrator: AgentDefinition = inferenceOnly
+    ? {
+        name: 'orchestrator',
+        config:
+          typeof orchestratorModel === 'string' && orchestratorModel
+            ? { model: orchestratorModel }
+            : {},
+      }
+    : createOrchestratorAgent(orchestratorModel, undefined, undefined, {
+        disabledAgents: disabled,
+        excludeDescriptions:
+          councillorAgents.length > 0 ? ['council'] : undefined,
+        onlyAgents: orchestratorScope,
+        customDescriptions: orchestratorScope
+          ? Object.fromEntries(
+              orchestratorScope.map((n) => [n, mergedAgents[n]?.description]),
+            )
+          : undefined,
+        waitForUser:
+          runtime.backgroundJobsEnabled &&
+          !runtime.disabledTools.includes('wait_for_user'),
+        wakeScheduler:
+          runtime.backgroundJobsEnabled &&
+          runtime.backgroundJobs.orchestratorWake.enabled,
+        hostFlavor: options?.hostFlavor,
+        routingBlock:
+          runtime.routingBlock &&
+          !(orchestratorScope && orchestratorExplicitTask),
+      });
 
   const inlineOrchestratorPrompt = orchestratorOverride?.prompt;
-  const defaultOrchestratorPrompt = orchestrator.config.prompt ?? '';
-
-  orchestrator.config.prompt = resolvePrompt(
-    'orchestrator',
-    inlineOrchestratorPrompt,
-    orchestratorPrompts.prompt,
-    defaultOrchestratorPrompt,
-    orchestratorPrompts.appendPrompt,
-  );
+  if (!inferenceOnly) {
+    orchestrator.config.prompt = resolvePrompt(
+      'orchestrator',
+      inlineOrchestratorPrompt,
+      orchestratorPrompts.prompt,
+      orchestrator.config.prompt ?? '',
+      orchestratorPrompts.appendPrompt,
+    );
+  } else if (
+    inlineOrchestratorPrompt !== undefined &&
+    orchestratorPrompts.prompt !== undefined
+  ) {
+    resolvePrompt(
+      'orchestrator',
+      inlineOrchestratorPrompt,
+      orchestratorPrompts.prompt,
+      '',
+    );
+  }
 
   if (orchestratorOverride) {
-    applyOverrides(orchestrator, orchestratorOverride);
+    applyOverrides(orchestrator, orchestratorOverride, inferenceOnly);
   }
   applyModelInheritance(orchestrator, orchestratorOverride);
-  applyDefaultPermissions(
-    orchestrator,
-    orchestratorOverride?.skills,
-    runtime.disabledSkills,
-    nestedDispatchEnabled,
-    options?.hostFlavor,
-    true,
-    orchestratorScope,
-  );
+  if (!inferenceOnly) {
+    applyDefaultPermissions(
+      orchestrator,
+      orchestratorOverride?.skills,
+      runtime.disabledSkills,
+      options?.hostFlavor,
+      true,
+      orchestratorScope,
+    );
+  }
 
   // Collect all display names from orchestrator and all subagents
   const displayNameMap = new Map<string, string>();
@@ -1430,7 +1485,9 @@ export function createAgents(
   // host's task stance.
   const inScope = (agentName: string) =>
     orchestratorScope === undefined || orchestratorScope.includes(agentName);
-  const extraOrchestratorPromptsList = [...builtInSubAgents, ...customSubAgents]
+  const extraOrchestratorPromptsList = (
+    inferenceOnly ? [] : [...builtInSubAgents, ...customSubAgents]
+  )
     .filter((agent) => inScope(agent.name))
     .map((agent) => {
       const override = getOverrideFromAgents(mergedAgents, agent.name);
@@ -1438,7 +1495,7 @@ export function createAgents(
     })
     .filter((prompt): prompt is string => Boolean(prompt));
 
-  const acpOrchestratorPrompts = acpSubAgents
+  const acpOrchestratorPrompts = (inferenceOnly ? [] : acpSubAgents)
     .filter((agent) => inScope(agent.name))
     .map((agent) => {
       const acp = runtime.acpAgents[agent.name];
@@ -1486,6 +1543,8 @@ export function createAgents(
     }
   }
 
+  if (inferenceOnly) return [orchestrator, ...allSubAgents];
+
   // A scoped catalog advertises display names, so the compiled stance must
   // admit them as dispatch identities too (issue #1591).
   if (orchestratorScope && !orchestratorExplicitTask) {
@@ -1494,15 +1553,6 @@ export function createAgents(
   for (const agent of customSubAgents) {
     const scope = compiledScopeStances.get(agent.name);
     if (scope) allowScopedDisplayNames(agent, scope, displayNameMap);
-  }
-
-  // Inject display names into orchestrator prompt (complete map)
-  injectDisplayNames(orchestrator, displayNameMap);
-  // Declared primaries render @-mentions in their scoped catalogs too.
-  for (const definition of allSubAgents) {
-    if (definition.primary === true) {
-      injectDisplayNames(definition, displayNameMap);
-    }
   }
 
   const rewritePrompt = (promptText: string) => {
@@ -1515,6 +1565,16 @@ export function createAgents(
     }
     return text;
   };
+
+  if (orchestrator.config.prompt) {
+    orchestrator.config.prompt = rewritePrompt(orchestrator.config.prompt);
+  }
+  // Declared primaries render @-mentions in their scoped catalogs too.
+  for (const definition of allSubAgents) {
+    if (definition.primary === true && definition.config.prompt) {
+      definition.config.prompt = rewritePrompt(definition.config.prompt);
+    }
+  }
 
   const rewrittenOverrides = extraOrchestratorPromptsList.map(rewritePrompt);
   const rewrittenAcps = acpOrchestratorPrompts.map(rewritePrompt);
