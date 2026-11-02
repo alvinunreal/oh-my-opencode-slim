@@ -453,13 +453,6 @@ export class TmuxMultiplexer implements Multiplexer {
   }
 }
 
-/**
- * Split direction implied by the configured layout.
- *
- * `-h` splits side by side (new pane to the right), `-v` splits top/bottom
- * (new pane below). `select-layout` re-tiles afterwards, so this only fixes
- * the initial placement of each new pane.
- */
 const PANE_ID = /^%\d+$/;
 
 function isMainLayout(layout: MultiplexerLayout): boolean {
@@ -471,6 +464,13 @@ function getStackDirection(layout: MultiplexerLayout): '-h' | '-v' {
   return layout === 'main-horizontal' ? '-h' : '-v';
 }
 
+/**
+ * Split direction implied by the configured layout.
+ *
+ * `-h` splits side by side (new pane to the right), `-v` splits top/bottom
+ * (new pane below). `select-layout` re-tiles afterwards, so this only fixes
+ * the initial placement of each new pane.
+ */
 function getSplitDirection(layout: MultiplexerLayout): '-h' | '-v' {
   switch (layout) {
     case 'main-horizontal':
