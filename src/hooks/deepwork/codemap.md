@@ -21,7 +21,7 @@ The hook follows the OpenCode plugin hook pattern, exposing a factory function `
 
 ### State Management
 - Uses OpenCode's internal agent text part system (`createInternalAgentTextPart`) for output
-- Clears existing output parts before injecting deepwork prompt
+- Replaces activation text while retaining non-text attachments
 - Validates task presence before activation
 
 ### Integration Points
@@ -47,7 +47,7 @@ The hook follows the OpenCode plugin hook pattern, exposing a factory function `
    - Outputs error message via `createInternalAgentTextPart()`
    - Prompts user: "What task should deepwork manage? Run `/deepwork <task>`."
 5. If task provided:
-   - Clears existing output parts (`output.parts.length = 0`)
+    - Replaces activation text while retaining attachments
    - Generates activation prompt via `activationPrompt(task, sessionID)`
    - Injects activation prompt into output parts
    - Prompt = bundled SKILL.md body (single contract source, build-time text
@@ -85,7 +85,7 @@ The hook follows the OpenCode plugin hook pattern, exposing a factory function `
    - Outputs error message via `createInternalAgentTextPart()`
    - Prompts user: "What task should deepwork manage? Run `/deepwork <task>`."
 5. If task provided:
-   - Clears existing output parts (`output.parts.length = 0`)
+    - Replaces activation text while retaining attachments
    - Generates activation prompt via `activationPrompt(task, sessionID)`
    - Injects activation prompt into output parts
    - Prompt = bundled SKILL.md body (single contract source, build-time text

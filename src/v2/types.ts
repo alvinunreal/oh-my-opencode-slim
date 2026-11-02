@@ -68,7 +68,7 @@ export interface V2CommandDefinition {
     sessionID: string;
     prompt: {
       text: string;
-      files?: unknown[];
+      files?: Array<{ uri: string; name?: string }>;
       agents?: unknown[];
       skills?: unknown[];
     };
@@ -262,6 +262,7 @@ export interface V2Context {
     readonly list?: (input?: unknown) => Promise<unknown>;
   };
   skill?: {
+    list?: () => Promise<unknown>;
     transform(
       cb: (draft: {
         add(skill: unknown): void;

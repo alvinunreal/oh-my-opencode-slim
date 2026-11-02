@@ -1,5 +1,6 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { DEFAULT_CHILD_INPUT_WAKE_KINDS } from './constants';
+import * as effectiveOverrides from './effective-agent-overrides';
 import { RuntimeConfig } from './runtime';
 import type { PluginConfig } from './schema';
 
@@ -10,6 +11,55 @@ function resetRegistry(): void {
 }
 
 describe('RuntimeConfig', () => {
+  test('reuses agent resolution until a preset switch or reseed', () => {
+    resetRegistry();
+    const runtime = RuntimeConfig.init(DIRECTORY, {
+      agents: {
+        explorer: {
+          model: ['provider/first', 'provider/next'],
+          inheritModelFrom: 'session',
+        },
+        oracle: { skills_add: ['project-skill'] },
+      },
+      presets: {
+        fast: { explorer: { model: ['provider/fast', 'provider/backup'] } },
+      },
+    });
+    const resolve = spyOn(effectiveOverrides, 'resolveEffectiveAgentOverrides');
+    try {
+      expect(runtime.agent('explorer')?.model).toEqual([
+        'provider/first',
+        'provider/next',
+      ]);
+      expect(runtime.combinedModelInheritanceSource('explorer')).toBe(
+        'session',
+      );
+      expect(runtime.modelArrays.explorer[0].id).toBe('provider/first');
+      expect(resolve).toHaveBeenCalledTimes(1);
+
+      const snapshot = runtime.agents();
+      snapshot.explorer.model = 'provider/changed-by-caller';
+      expect(runtime.agent('explorer')?.model).toEqual([
+        'provider/first',
+        'provider/next',
+      ]);
+      expect(
+        runtime.agents({ oracle: ['marketplace-skill'] }).oracle.skills,
+      ).toContain('marketplace-skill');
+      expect(runtime.agents().oracle.skills).not.toContain('marketplace-skill');
+      runtime.setRuntimePreset('fast');
+      expect(runtime.agent('explorer')?.model).toEqual([
+        'provider/fast',
+        'provider/backup',
+      ]);
+      RuntimeConfig.init(DIRECTORY, {
+        agents: { explorer: { model: 'provider/reseeded' } },
+      });
+      expect(runtime.agent('explorer')?.model).toBe('provider/reseeded');
+    } finally {
+      resolve.mockRestore();
+    }
+  });
   test('init seeds a frozen plugin snapshot and get returns it', () => {
     resetRegistry();
     const plugin: PluginConfig = {

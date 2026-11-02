@@ -8,19 +8,32 @@ import {
   spyOn,
   test,
 } from 'bun:test';
-import { readdirSync, readFileSync } from 'node:fs';
+import * as childProcess from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import * as fs from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import * as os from 'node:os';
 import path from 'node:path';
+import * as promiseTimers from 'node:timers/promises';
 import { testRender } from '@opentui/solid';
 import type { RegistryFactoryBridge } from './agents/registry-bridge';
 import {
+  CompanionManager,
   companionSessionIdForDirectory,
   stateFilePath,
 } from './companion/manager';
+import * as companionUpdater from './companion/updater';
+import {
+  COMPANION_MANIFEST,
+  getCompanionBinaryPath,
+  getCompanionTarget,
+} from './companion/updater';
 import { RuntimeConfig } from './config/runtime';
 import * as wakeHooks from './hooks';
 import { isTaggedPart, stripTaggedContent } from './hooks/cache-safe-injection';
+import { COUNCIL_INJECT_METADATA_KEY } from './hooks/council-inject';
 import { JSON_ERROR_REMINDER } from './hooks/json-error-recovery/hook';
 import {
   getWakeProgress,
@@ -53,10 +66,12 @@ import {
   BackgroundJobBoard as ProductionBoard,
 } from './utils/background-job-board';
 import { BackgroundJobBoard } from './utils/background-job-fixture';
+import * as compat from './utils/compat';
 import { resetLiveDirectoriesForTests } from './utils/event-directory-scope';
 import { createInternalAgentTextPart } from './utils/internal-initiator';
 import * as loggerModule from './utils/logger';
 import { pendingSessionPrune } from './utils/pending-session-prunes';
+import * as zip from './utils/zip-extractor';
 
 function createPluginClient(
   noop: () => Promise<unknown>,
@@ -345,6 +360,158 @@ describe('plugin tool registration', () => {
     expect(hooks.dispose).toBeFunction();
     await hooks.dispose?.();
     await hooks.dispose?.();
+  });
+
+  test('v1 checks the project native skill inventory at chat.params, not config time', async () => {
+    const originalEnv = { ...process.env };
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), 'marketplace-v1-skills-'),
+    );
+    const configDir = path.join(root, 'config');
+    await mkdir(configDir, { recursive: true });
+    process.env = {
+      ...originalEnv,
+      OPENCODE_CONFIG_DIR: configDir,
+      XDG_CONFIG_HOME: path.join(root, 'xdg'),
+      XDG_DATA_HOME: path.join(root, 'data'),
+    };
+    await Bun.write(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        preset: 'work',
+        presets: { work: { marketplace: { agents: ['team/skill-user'] } } },
+      }),
+    );
+    new MarketplaceStore({ pluginVersion: '3.2.0' }).install({
+      manifest: {
+        schemaVersion: 2,
+        id: 'team/skill-user',
+        version: '1.0.0',
+        displayName: 'Skill user',
+        description: 'Skill fixture',
+        agentName: 'skill-user',
+        prompt: 'Use the skill.',
+        skills: ['native-skill'],
+        mcps: [],
+        tools: ['read'],
+        author: { name: 'Test' },
+        tags: [],
+        license: 'MIT',
+        compatibility: { plugin: '*' },
+        model: { source: 'session' },
+        routing: { description: 'Skill', when: 'Testing', keywords: [] },
+      } as never,
+    });
+    let inventory = [
+      {
+        name: 'native-skill',
+        location: '/skills/native-skill/SKILL.md',
+        content: 'Native skill.',
+      },
+    ];
+    const requests: unknown[] = [];
+    const client = createPluginClient(async () => ({}));
+    Object.assign(client, {
+      _client: {
+        get: async (options: unknown) => {
+          requests.push(options);
+          return { data: inventory };
+        },
+      },
+    });
+    const hooks = await plugin({
+      client,
+      directory: root,
+      worktree: root,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    try {
+      await hooks.config?.({ agent: {} });
+      expect(requests).toHaveLength(0);
+      await hooks['chat.params']?.({} as never, {} as never);
+      expect(requests).toEqual([
+        expect.objectContaining({ url: '/skill', query: { directory: root } }),
+      ]);
+      inventory = [];
+      await expect(
+        hooks['chat.params']?.({} as never, {} as never),
+      ).rejects.toThrow('team/skill-user');
+    } finally {
+      await hooks.dispose?.();
+      process.env = originalEnv;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test('status and reload report a disabled marketplace against the live registry', async () => {
+    const originalEnv = { ...process.env };
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), 'marketplace-disabled-live-'),
+    );
+    const configDir = path.join(root, 'config');
+    await mkdir(configDir, { recursive: true });
+    process.env = {
+      ...originalEnv,
+      OPENCODE_CONFIG_DIR: configDir,
+      XDG_DATA_HOME: path.join(root, 'data'),
+    };
+    delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.json');
+    const config = {
+      preset: 'work',
+      presets: { work: { marketplace: { agents: ['team/live'] } } },
+    };
+    await Bun.write(configPath, JSON.stringify(config));
+    new MarketplaceStore({ pluginVersion: '3.2.0' }).install({
+      manifest: {
+        schemaVersion: 2,
+        id: 'team/live',
+        version: '1.0.0',
+        displayName: 'Live',
+        description: 'Live fixture',
+        agentName: 'live-agent',
+        prompt: 'Test.',
+        skills: [],
+        mcps: [],
+        tools: ['read'],
+        author: { name: 'Test' },
+        tags: [],
+        license: 'MIT',
+        compatibility: { plugin: '*' },
+        model: { source: 'session' },
+        routing: { description: 'Live', when: 'Testing.', keywords: [] },
+      } as never,
+    });
+    const hooks = await plugin({
+      client: createPluginClient(async () => ({})),
+      directory: root,
+      worktree: root,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    try {
+      await hooks.config?.({ agent: {} });
+      const { marketplaceService } = (
+        hooks as unknown as { registryBridge: RegistryFactoryBridge }
+      ).registryBridge;
+      expect(marketplaceService.status().reloadRequired).toBe(false);
+      await Bun.write(
+        configPath,
+        JSON.stringify({ ...config, marketplace: { enabled: false } }),
+      );
+      expect(marketplaceService.status()).toMatchObject({
+        desiredPackageIds: [],
+        reloadRequired: true,
+      });
+      expect(marketplaceService.requestReload()).toMatchObject({
+        desiredPackageIds: [],
+        reloadRequired: true,
+      });
+    } finally {
+      await hooks.dispose?.();
+      process.env = originalEnv;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test('activates only marketplace packages selected by the resolved preset at first host finalization', async () => {
@@ -1851,7 +2018,7 @@ describe('plugin reload generation cleanup', () => {
         metadata: {},
       };
       await hooks['tool.execute.after']?.(
-        { tool: 'Edit', sessionID: 'guards-on', callID: 'c-7' } as never,
+        { tool: 'invalid', sessionID: 'guards-on', callID: 'c-7' } as never,
         jsonOutput as never,
       );
       expect(String(jsonOutput.output)).toContain(JSON_ERROR_REMINDER);
@@ -2495,6 +2662,299 @@ describe('plugin reload generation cleanup', () => {
     // dispose must call companionManager.onExit(): the session entry is
     // withdrawn even if the next generation fails before its own onLoad.
     expect(readSessionIds()).not.toContain(companionSessionId);
+  });
+
+  test('companion startup does not gate plugin availability on a slow download', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({ companion: { enabled: true } }),
+    );
+    const fetchOriginal = globalThis.fetch;
+    const started = Promise.withResolvers<void>();
+    const loaded = Promise.withResolvers<void>();
+    let complete!: (response: Response) => void;
+    let aborted = false;
+    globalThis.fetch = ((_url, options) =>
+      new Promise<Response>((resolve, reject) => {
+        complete = resolve;
+        options?.signal?.addEventListener('abort', () => {
+          aborted = true;
+          reject(new Error('aborted'));
+        });
+        started.resolve();
+      })) as typeof fetch;
+    const originalLoad = CompanionManager.prototype.onLoad;
+    const load = spyOn(CompanionManager.prototype, 'onLoad').mockImplementation(
+      function (this: CompanionManager) {
+        originalLoad.call(this);
+        loaded.resolve();
+      },
+    );
+    jest.useFakeTimers();
+    let hooks: Awaited<ReturnType<typeof plugin>> | undefined;
+    try {
+      const initialization = createHooks();
+      await started.promise;
+      jest.advanceTimersByTime(3_001);
+      hooks = await initialization;
+      expect(aborted).toBe(false);
+      complete(new Response('', { status: 503 }));
+      await loaded.promise;
+      expect(
+        JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions,
+      ).toHaveLength(1);
+    } finally {
+      complete?.(new Response('', { status: 503 }));
+      await hooks?.dispose?.();
+      load.mockRestore();
+      globalThis.fetch = fetchOriginal;
+      jest.useRealTimers();
+    }
+  });
+
+  test('reloaded companion starts after the retired generation finishes installing', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({ companion: { enabled: true } }),
+    );
+    const binary = getCompanionBinaryPath();
+    const target = getCompanionTarget();
+    const archive = `oh-my-opencode-slim-companion-v${COMPANION_MANIFEST.version}-${target}.${process.platform === 'win32' ? 'zip' : 'tar.gz'}`;
+    const bytes = Buffer.from('verified companion archive');
+    const checksums = COMPANION_MANIFEST.checksums;
+    COMPANION_MANIFEST.checksums = {
+      ...checksums,
+      [archive]: createHash('sha256').update(bytes).digest('hex'),
+    };
+    const download = Promise.withResolvers<Response>();
+    const started = Promise.withResolvers<void>();
+    const installed = Promise.withResolvers<void>();
+    const loaded = Promise.withResolvers<void>();
+    const joined = Promise.withResolvers<void>();
+    const attempts: Promise<unknown>[] = [];
+    const originalEnsure = companionUpdater.ensureCompanionVersionForStartup;
+    const ensure = spyOn(
+      companionUpdater,
+      'ensureCompanionVersionForStartup',
+    ).mockImplementation((...args) => {
+      const pending = originalEnsure(...args);
+      attempts.push(pending);
+      if (attempts.length === 2) joined.resolve();
+      return pending;
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => {
+      started.resolve();
+      return download.promise;
+    }) as typeof fetch;
+    const extractBinary = (destination: string) => {
+      writeFileSync(path.join(destination, path.basename(binary)), 'binary');
+    };
+    const originalCrossSpawn = compat.crossSpawn;
+    const extractTar = spyOn(compat, 'crossSpawn').mockImplementation(
+      (command, options) => {
+        if (command[0] !== 'tar') return originalCrossSpawn(command, options);
+        extractBinary(command[4]);
+        return { exited: Promise.resolve(0) } as ReturnType<
+          typeof compat.crossSpawn
+        >;
+      },
+    );
+    const extractZip = spyOn(zip, 'extractZip').mockImplementation(
+      async (_archive, destination) => extractBinary(destination),
+    );
+    const originalRename = fs.renameSync;
+    const rename = spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      originalRename(from, to);
+      if (String(to) === binary) installed.resolve();
+    });
+    const child = Object.assign(new EventEmitter(), {
+      pid: undefined,
+      unref: () => {},
+      kill: () => true,
+    });
+    const spawn = spyOn(childProcess, 'spawn').mockReturnValue(
+      child as childProcess.ChildProcess,
+    );
+    const originalLoad = CompanionManager.prototype.onLoad;
+    const load = spyOn(CompanionManager.prototype, 'onLoad').mockImplementation(
+      function (this: CompanionManager) {
+        originalLoad.call(this);
+        loaded.resolve();
+      },
+    );
+    jest.useFakeTimers();
+    let first: Awaited<ReturnType<typeof plugin>> | undefined;
+    let current: Awaited<ReturnType<typeof plugin>> | undefined;
+    try {
+      first = await createHooks();
+      await started.promise;
+      await first.dispose?.();
+      current = await createHooks();
+      await joined.promise;
+      expect(attempts[1]).toBe(attempts[0]);
+      download.resolve(new Response(bytes));
+      await installed.promise;
+      await loaded.promise;
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(spawn).toHaveBeenCalledWith(binary, [], expect.any(Object));
+    } finally {
+      await first?.dispose?.();
+      await current?.dispose?.();
+      download.resolve(new Response(bytes));
+      jest.useRealTimers();
+      await Promise.allSettled(attempts);
+      ensure.mockRestore();
+      load.mockRestore();
+      spawn.mockRestore();
+      rename.mockRestore();
+      extractZip.mockRestore();
+      extractTar.mockRestore();
+      globalThis.fetch = originalFetch;
+      COMPANION_MANIFEST.checksums = checksums;
+    }
+  });
+
+  test('disposing the last companion consumer stops waiting for another process', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({ companion: { enabled: true } }),
+    );
+    const binary = getCompanionBinaryPath();
+    const lock = `${binary}.lock`;
+    fs.mkdirSync(lock, { recursive: true });
+    writeFileSync(path.join(lock, 'owner'), 'another process');
+    const waiting = Promise.withResolvers<void>();
+    const joined = Promise.withResolvers<void>();
+    const originalDelay = promiseTimers.setTimeout;
+    const delay = spyOn(promiseTimers, 'setTimeout').mockImplementation(((
+      ...args: Parameters<typeof originalDelay>
+    ) => {
+      waiting.resolve();
+      return originalDelay(...args);
+    }) as typeof originalDelay);
+    const originalEnsure = companionUpdater.ensureCompanionVersionForStartup;
+    const attempts: ReturnType<typeof originalEnsure>[] = [];
+    const ensure = spyOn(
+      companionUpdater,
+      'ensureCompanionVersionForStartup',
+    ).mockImplementation((...args) => {
+      const pending = originalEnsure(...args);
+      attempts.push(pending);
+      if (attempts.length === 2) joined.resolve();
+      return pending;
+    });
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mock(async () => new Response('', { status: 503 }));
+    globalThis.fetch = fetchMock as typeof fetch;
+    jest.useFakeTimers();
+    let first: Awaited<ReturnType<typeof plugin>> | undefined;
+    let current: Awaited<ReturnType<typeof plugin>> | undefined;
+    try {
+      first = await createHooks({ hostFlavor: 'v2' });
+      await waiting.promise;
+      current = await createHooks({ hostFlavor: 'v2' });
+      await joined.promise;
+      expect(attempts[1]).toBe(attempts[0]);
+      const signal = delay.mock.calls[0]?.[2]?.signal;
+      expect(signal?.aborted).toBe(false);
+      await first.event?.({
+        event: { type: 'server.instance.disposed' },
+      } as never);
+      expect(signal?.aborted).toBe(false);
+      await current.dispose?.();
+      expect(signal?.aborted).toBe(true);
+      expect(readFileSync(path.join(lock, 'owner'), 'utf8')).toBe(
+        'another process',
+      );
+      fs.rmSync(lock, { recursive: true });
+      jest.advanceTimersByTime(25);
+      await attempts[0];
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(fs.existsSync(binary)).toBe(false);
+    } finally {
+      await first?.dispose?.();
+      await current?.dispose?.();
+      fs.rmSync(lock, { recursive: true, force: true });
+      jest.advanceTimersByTime(25);
+      await Promise.allSettled(attempts);
+      jest.useRealTimers();
+      globalThis.fetch = originalFetch;
+      ensure.mockRestore();
+      delay.mockRestore();
+    }
+  });
+
+  test('companion keeps other input requests pending when one is resolved', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: true, binaryPath: `${projectDir}/missing` },
+      }),
+    );
+    const hooks = await createHooks();
+    try {
+      const send = (type: string, properties: Record<string, unknown>) =>
+        hooks.event?.({ event: { type, properties } } as never);
+      await send('session.status', {
+        sessionID: 'child-a',
+        status: { type: 'busy' },
+      });
+      await send('session.status', {
+        sessionID: 'child-b',
+        status: { type: 'busy' },
+      });
+      await send('permission.asked', { sessionID: 'child-a', id: 'a' });
+      await send('permission.asked', { sessionID: 'child-b', id: 'b' });
+      await send('permission.asked', { sessionID: 'child-b', id: 'b' });
+      await send('permission.replied', {
+        sessionID: 'child-a',
+        requestID: 'a',
+      });
+      const row = () =>
+        JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions[0];
+      expect(row().status).toBe('waiting-input');
+      expect(row().attention_seq).toBe(2);
+      await send('permission.replied', {
+        sessionID: 'child-b',
+        requestID: 'b',
+      });
+      expect(row().status).toBe('busy');
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test('companion clears cancelled waits only for the terminated or deleted session', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: true, binaryPath: `${projectDir}/missing` },
+      }),
+    );
+    const hooks = await createHooks();
+    try {
+      const send = (type: string, properties: Record<string, unknown>) =>
+        hooks.event?.({ event: { type, properties } } as never);
+      await send('session.status', {
+        sessionID: 'a',
+        status: { type: 'busy' },
+      });
+      await send('session.status', {
+        sessionID: 'b',
+        status: { type: 'busy' },
+      });
+      await send('permission.asked', { sessionID: 'a', id: 'permission' });
+      await send('question.asked', { sessionID: 'b', id: 'question' });
+      await send('session.idle', { sessionID: 'a' });
+      const row = () =>
+        JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions[0];
+      expect(row().status).toBe('waiting-input');
+      await send('session.deleted', { info: { id: 'b' }, sessionID: 'b' });
+      expect(row()).toMatchObject({ status: 'idle', active_agents: ['intro'] });
+    } finally {
+      await hooks.dispose?.();
+    }
   });
 });
 
@@ -3652,6 +4112,50 @@ describe('plugin config model inheritance', () => {
     } as never);
   }
 
+  test('v1 exposes enabled bundled skills without overriding user skills', async () => {
+    const hooks = await loadConfiguredPlugin({ disabled_skills: ['reflect'] });
+    const configDir = lastConfigDir as string;
+    const userSkill = path.join(configDir, 'skills', 'codemap');
+    await mkdir(userSkill, { recursive: true });
+    await Bun.write(
+      path.join(userSkill, 'SKILL.md'),
+      '---\nname: codemap\ndescription: user skill\n---\nuser content',
+    );
+    const disabledClaudeSkill = path.join(
+      configDir,
+      '.claude',
+      'skills',
+      'deepwork',
+    );
+    await mkdir(disabledClaudeSkill, { recursive: true });
+    await Bun.write(
+      path.join(disabledClaudeSkill, 'SKILL.md'),
+      '---\nname: deepwork\ndescription: disabled external skill\n---\n',
+    );
+    process.env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS = '1';
+    const hostConfig = { skills: { paths: [] as string[] } };
+    try {
+      await hooks.config?.(hostConfig as never);
+      expect(
+        hostConfig.skills.paths.some((item) =>
+          item.endsWith('/src/skills/deepwork'),
+        ),
+      ).toBe(true);
+      expect(
+        hostConfig.skills.paths.some((item) =>
+          item.endsWith('/src/skills/codemap'),
+        ),
+      ).toBe(false);
+      expect(
+        hostConfig.skills.paths.some((item) =>
+          item.endsWith('/src/skills/reflect'),
+        ),
+      ).toBe(false);
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
   async function selectParent(
     hooks: Awaited<ReturnType<typeof loadConfiguredPlugin>>,
     model: { providerID: string; modelID: string },
@@ -4487,6 +4991,45 @@ describe('plugin config model inheritance', () => {
     }
   });
 
+  test.each([
+    [undefined, true],
+    [['explorer', 'councillor-alpha'], false],
+  ])(
+    'council-inject follows the orchestrator seat pointer (scope %p)',
+    async (subagents, expected) => {
+      const hooks = await loadConfiguredPlugin({
+        council: {
+          presets: { default: { alpha: { model: 'test/councillor' } } },
+        },
+        agents: subagents ? { orchestrator: { subagents } } : {},
+      });
+      const transcript = {
+        messages: [
+          {
+            info: {
+              sessionID: 'council-scope',
+              role: 'user',
+              agent: 'orchestrator',
+            },
+            parts: [{ type: 'text', text: 'get a consensus on this' }],
+          },
+        ],
+      };
+      try {
+        await hooks['experimental.chat.messages.transform']?.(
+          {},
+          transcript as never,
+        );
+        const injected = transcript.messages[0].parts.some((part) =>
+          isTaggedPart(part as never, COUNCIL_INJECT_METADATA_KEY),
+        );
+        expect(injected).toBe(expected);
+      } finally {
+        await hooks.dispose?.();
+      }
+    },
+  );
+
   test('config() keeps compaction exception after host council prompt override', async () => {
     const hooks = await loadConfiguredPlugin({
       council: {
@@ -4680,6 +5223,49 @@ describe('plugin config model inheritance', () => {
     } finally {
       await hooks.dispose?.();
       disableChain.mockRestore();
+    }
+  });
+
+  test('releases runtime snapshots after the last generation and keeps reload state', async () => {
+    const config = {
+      presets: { runtime: { explorer: { temperature: 0.4 } } },
+      agents: { explorer: { model: ['provider/first', 'provider/next'] } },
+    };
+    for (const hostFlavor of [undefined, 'v2'] as const) {
+      const first = await loadConfiguredPlugin(config, undefined, hostFlavor);
+      const directory = lastConfigDir as string;
+      let second: Awaited<ReturnType<typeof loadConfiguredPlugin>> | undefined;
+      let reloaded:
+        | Awaited<ReturnType<typeof loadConfiguredPlugin>>
+        | undefined;
+      try {
+        await first.config?.({
+          agent: { explorer: { model: 'provider/selected' } },
+        });
+        const runtime = RuntimeConfig.get(directory);
+        runtime.setRuntimePreset('runtime');
+        expect(runtime.hasModelSwitched('explorer')).toBe(true);
+        second = await loadConfiguredPlugin(config, directory, hostFlavor);
+        await first.dispose?.();
+        await first.dispose?.();
+        expect(RuntimeConfig.get(directory)).toBe(runtime);
+        expect(runtime.plugin).toBeDefined();
+        await second.dispose?.();
+        const afterDispose = RuntimeConfig.get(directory);
+        expect(afterDispose).not.toBe(runtime);
+        expect(afterDispose.plugin).toBeUndefined();
+        expect(afterDispose.host()).toBeUndefined();
+        reloaded = await loadConfiguredPlugin(config, directory, hostFlavor);
+        expect(RuntimeConfig.get(directory).getRuntimePreset()).toBe('runtime');
+        expect(RuntimeConfig.get(directory).hasModelSwitched('explorer')).toBe(
+          true,
+        );
+      } finally {
+        await first.dispose?.();
+        await second?.dispose?.();
+        await reloaded?.dispose?.();
+        RuntimeConfig.reset(directory);
+      }
     }
   });
 
@@ -5086,6 +5672,81 @@ describe('plugin foreground fallback host gating', () => {
     jest.useRealTimers();
     process.env = originalEnv;
     await rm(projectDir, { recursive: true, force: true });
+  });
+
+  test('companion preserves replay busy when an older error starts fallback', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: true, binaryPath: `${projectDir}/missing` },
+        fallback: { enabled: true, maxRetries: 0 },
+        agents: { orchestrator: { model: ['openai/gpt-b', 'openai/gpt-c'] } },
+      }),
+    );
+    const { client, messages, promptAsync } = createFallbackClient();
+    messages.mockResolvedValue({
+      data: [
+        {
+          info: { id: 'user', role: 'user' },
+          parts: [{ type: 'text', text: 'hello' }],
+        },
+      ],
+    });
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    const busy = () =>
+      hooks.event?.({
+        event: {
+          type: 'session.status',
+          properties: { sessionID: 'root', status: { type: 'busy' } },
+        },
+      } as never);
+    promptAsync.mockImplementation(async () => {
+      await busy();
+      return {};
+    });
+    try {
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'root',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', modelID: 'gpt-b' },
+        } as never,
+        {} as never,
+      );
+      await hooks.event?.({
+        event: {
+          type: 'message.updated',
+          properties: {
+            info: {
+              id: 'assistant',
+              sessionID: 'root',
+              role: 'assistant',
+              agent: 'orchestrator',
+              providerID: 'openai',
+              modelID: 'gpt-b',
+            },
+          },
+        },
+      } as never);
+      await busy();
+      await hooks.event?.({
+        event: {
+          type: 'session.error',
+          properties: { sessionID: 'root', error: { message: 'rate limit' } },
+        },
+      } as never);
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+      expect(
+        JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions[0],
+      ).toMatchObject({ status: 'busy', active_agents: ['orchestrator'] });
+    } finally {
+      await hooks.dispose?.();
+    }
   });
 
   test('v1 external admission fences a pending fallback before message.updated', async () => {

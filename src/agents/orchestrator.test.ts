@@ -56,6 +56,34 @@ describe('orchestrator prompt: host vocabulary', () => {
   });
 });
 
+describe('orchestrator prompt: scoped catalog', () => {
+  const count = (prompt: string, token: string) =>
+    prompt.split(token).length - 1;
+
+  test('a scoped catalog is wrapped exactly once', () => {
+    const prompt = v2({ onlyAgents: ['fixer'] });
+    expect(count(prompt, '<Agents>')).toBe(1);
+    expect(count(prompt, '</Agents>')).toBe(1);
+  });
+
+  test('the unscoped catalog keeps its single wrapping', () => {
+    const prompt = v1();
+    expect(count(prompt, '<Agents>')).toBe(1);
+    expect(count(prompt, '</Agents>')).toBe(1);
+  });
+
+  test('out-of-scope @mentions are scrubbed from a reused routing line', () => {
+    const prompt = v2({ onlyAgents: ['designer'] });
+    expect(prompt).toContain('@designer — owns all UI/UX');
+    expect(prompt).not.toContain('@fixer');
+  });
+
+  test('a fully in-scope built-in line stays byte-identical', () => {
+    const prompt = v2({ onlyAgents: ['fixer'] });
+    expect(prompt).toContain(ROLE_ROUTING_SLIM_LINES.fixer);
+  });
+});
+
 describe('orchestrator prompt: blocking on the user', () => {
   test('v1 with wait_for_user enabled ends manual steps with wait_for_user', () => {
     const prompt = v1();

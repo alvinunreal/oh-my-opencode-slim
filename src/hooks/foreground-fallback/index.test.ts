@@ -11,12 +11,19 @@ import {
 import { isInternalInitiatorPart } from '../../utils';
 import { BackgroundJobBoard } from '../../utils/background-job-board';
 import { createBackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
+import {
+  INTERNAL_INITIATOR_METADATA_KEY,
+  SLIM_INTERNAL_INITIATOR_MARKER,
+} from '../../utils/internal-initiator';
 import * as logger from '../../utils/logger';
 import { createTimerHarness } from '../../utils/test-timers';
 import { buildPluginInput } from '../../v2/client-shim';
 import { mapV2EventToV1 } from '../../v2/event-adapter';
 import { recordInternalAdmission } from '../../v2/internal-admissions';
-import { createSessionContextHandler } from '../../v2/setup';
+import {
+  createSessionContextHandler,
+  createSessionPromptBridge,
+} from '../../v2/setup';
 import { createSubagentExecutorWrapper } from '../../v2/subagent-executor-wrapper';
 import { SessionLifecycle } from '../session-lifecycle';
 import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../task-session-manager/board-injection';
@@ -4174,6 +4181,396 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(observed).toEqual(calls);
   });
+
+  describe('v2 retry turn-epoch and late-landing race guards', () => {
+    function promptBridgeFor(mgr: ForegroundFallbackManager) {
+      return createSessionPromptBridge(
+        async () => {},
+        undefined,
+        (sid, msgId) => mgr.observeExternalPromptIntent(sid, msgId),
+      );
+    }
+
+    test('normal current epoch switch succeeds and mutates decision', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const sid = 'retry-epoch-normal-success';
+      const switchModel = mock(async () => {});
+      const decision = { retry: false };
+      const event = retryEvent(sid, 'A', decision);
+
+      await mgr.handleV2Retry(event, switchModel);
+
+      expect(switchModel).toHaveBeenCalledWith(sid, {
+        providerID: 'test',
+        id: 'B',
+      });
+      expect(event.decision).toEqual({ retry: true, delay: 500 });
+      expect(observed).toEqual(['test/B']);
+      expect(mgr.getActiveFallback(sid)).toEqual({
+        model: 'test/B',
+        downProviders: expect.any(Set),
+      });
+    });
+
+    test('new user prompt intent arriving before normal switch resolution suppresses stale decision and bookkeeping', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid = 'retry-epoch-normal-new-turn';
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const switchModel = mock(() => switchRequest);
+      const decision = { retry: false };
+      const event = retryEvent(sid, 'A', decision);
+
+      const pending = mgr.handleV2Retry(event, switchModel);
+      expect(switchModel).toHaveBeenCalledTimes(1);
+
+      // New genuine user prompt intent arrives through the prompt bridge
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-new-intent',
+        prompt: { text: 'new prompt' },
+      });
+
+      // Switch resolves normally before timeout
+      resolveSwitch();
+      await pending;
+
+      // Decision must NOT be mutated to retry
+      expect(event.decision).toEqual({ retry: false });
+      // Callback must NOT be invoked
+      expect(observed).toEqual([]);
+      // Active fallback must NOT be committed
+      expect(mgr.getActiveFallback(sid)).toBeUndefined();
+      // Host dispatch was called exactly once
+      expect(switchModel).toHaveBeenCalledTimes(1);
+    });
+
+    test('timed-out switch settling late is suppressed when a new user prompt intent arrived on the same from model', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid = 'retry-epoch-late-new-turn';
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const decision = { retry: false };
+      const event = retryEvent(sid, 'A', decision);
+
+      const pending = mgr.handleV2Retry(event, () => switchRequest);
+
+      // Timeout fires on the old turn
+      await clock.advance(2_500);
+      await pending;
+      expect(observed).toEqual([]);
+      expect(event.decision).toEqual({ retry: false });
+
+      // New genuine user prompt intent arrives on the same model A
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-new-intent-late',
+        prompt: { text: 'new prompt' },
+      });
+
+      // Old switch resolves late
+      resolveSwitch();
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+
+      // Reconcile must be suppressed by epoch check even though session model is still 'test/A'
+      expect(observed).toEqual([]);
+      expect(mgr.getActiveFallback(sid)).toBeUndefined();
+    });
+
+    test('current epoch late-landing switch control successfully reconciles when no intent arrived', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const sid = 'retry-epoch-late-control';
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const decision = { retry: false };
+      const event = retryEvent(sid, 'A', decision);
+
+      const pending = mgr.handleV2Retry(event, () => switchRequest);
+      await clock.advance(2_500);
+      await pending;
+      expect(observed).toEqual([]);
+
+      // Turn is still current (no intent arrived); resolve late switch
+      resolveSwitch();
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+
+      // In current epoch without newer selection, late B must reconcile
+      expect(observed).toEqual(['test/B']);
+      expect(mgr.getActiveFallback(sid)?.model).toBe('test/B');
+    });
+
+    test('dedup trap: a duplicate prompt intent does not suppress the switch started after the first intent; the next new ID supersedes', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B', 'C'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid = 'retry-dedup-trap';
+
+      // 1. First intent arrives for msg-1 -> advances turnEpoch from 0 to 1
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-1',
+        prompt: { text: 'turn 1' },
+      });
+
+      // 2. A switch starts on turn 1 (captures epoch = 1)
+      const { promise: switchReq1, resolve: resolveSwitch1 } =
+        Promise.withResolvers<void>();
+      const event1 = retryEvent(sid, 'A', { retry: false });
+      const pending1 = mgr.handleV2Retry(event1, () => switchReq1);
+
+      // 3. Duplicate prepared ID arrives with same msg-1 -> MUST NOT bump epoch again
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-1',
+        prompt: { text: 'turn 1 duplicate' },
+      });
+
+      // 4. Switch 1 resolves -> must SUCCEED because turn 1 is still current
+      resolveSwitch1();
+      await pending1;
+
+      expect(event1.decision).toEqual({ retry: true, delay: 500 });
+      expect(observed).toEqual(['test/B']);
+      expect(mgr.getActiveFallback(sid)?.model).toBe('test/B');
+
+      // 5. Next switch starts on model B (still turn 1)
+      const { promise: switchReq2, resolve: resolveSwitch2 } =
+        Promise.withResolvers<void>();
+      const event2 = retryEvent(sid, 'B', { retry: false });
+      const pending2 = mgr.handleV2Retry(event2, () => switchReq2);
+
+      // 6. Next NEW ID intent arrives: msg-2 -> advances turnEpoch to 2
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-2',
+        prompt: { text: 'turn 2' },
+      });
+
+      // 7. Switch 2 resolves -> must be SUPERSEDED by turn 2
+      resolveSwitch2();
+      await pending2;
+
+      expect(event2.decision).toEqual({ retry: false });
+      expect(observed).toEqual(['test/B']); // did not add test/C
+    });
+
+    test('admission failure leaves old switch superseded without granting new fallback budget', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid = 'retry-admission-failure';
+
+      // Set up an existing consumed retry count on turn 0
+      (mgr as any).sessionRetries.set(sid, 2);
+
+      // Old switch is in flight
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const event = retryEvent(sid, 'A', { retry: false });
+      const pending = mgr.handleV2Retry(event, () => switchRequest);
+
+      // New prompt intent arrives, but admission will fail (e.g. permission check rejects)
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-admit-fail',
+        prompt: { text: 'prompt that fails admission' },
+      });
+
+      // Admission fails: message.updated is NEVER emitted for msg-admit-fail
+      // Now old switch finishes
+      resolveSwitch();
+      await pending;
+
+      // Old switch was superseded
+      expect(event.decision).toEqual({ retry: false });
+      expect(observed).toEqual([]);
+      expect(mgr.getActiveFallback(sid)).toBeUndefined();
+
+      // But fallback budget was NOT granted/cleared (still 2)
+      expect((mgr as any).sessionRetries.get(sid)).toBe(2);
+    });
+
+    test('internal prompt intent with metadata, text marker, or existing internal admission does not bump epoch', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid = 'retry-internal-intent';
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const decision = { retry: false };
+      const event = retryEvent(sid, 'A', decision);
+
+      const pending = mgr.handleV2Retry(event, () => switchRequest);
+
+      // 1. Internal metadata prompt intent
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-meta',
+        metadata: { [INTERNAL_INITIATOR_METADATA_KEY]: true },
+        prompt: { text: 'wake queue' },
+      });
+
+      // 2. Text marker prompt intent
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-marker',
+        prompt: { text: `wake ${SLIM_INTERNAL_INITIATOR_MARKER}` },
+      });
+
+      // 3. Pre-recorded internal admission
+      recordInternalAdmission(sid, 'msg-pre-recorded');
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-pre-recorded',
+        prompt: { text: 'normal text' },
+      });
+
+      // Switch resolves
+      resolveSwitch();
+      await pending;
+
+      // None of the internal prompts bumped epoch, so switch succeeds
+      expect(event.decision).toEqual({ retry: true, delay: 500 });
+      expect(observed).toEqual(['test/B']);
+      expect(mgr.getActiveFallback(sid)?.model).toBe('test/B');
+    });
+
+    test('other-session prompt intent does not suppress the in-flight switch of this session', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid1 = 'retry-session-1';
+      const sid2 = 'retry-session-2';
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const decision = { retry: false };
+      const event1 = retryEvent(sid1, 'A', decision);
+
+      const pending = mgr.handleV2Retry(event1, () => switchRequest);
+
+      // Another session has a prompt intent
+      bridge.observePromptIntent({
+        sessionID: sid2,
+        messageID: 'msg-session-2',
+        prompt: { text: 'prompt for sid2' },
+      });
+
+      // Session 1 resolves
+      resolveSwitch();
+      await pending;
+
+      // Session 1 must succeed normally
+      expect(event1.decision).toEqual({ retry: true, delay: 500 });
+      expect(observed).toEqual(['test/B']);
+      expect(mgr.getActiveFallback(sid1)?.model).toBe('test/B');
+    });
+
+    test('disposing manager suppresses in-flight normal resolution and in-flight late reconciliation', async () => {
+      // Normal in-flight disposal
+      const observedNormal: string[] = [];
+      const mgrNormal = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observedNormal.push(model),
+      );
+      const sidNormal = 'retry-dispose-normal';
+      const { promise: switchReq1, resolve: resolve1 } =
+        Promise.withResolvers<void>();
+      const decision1 = { retry: false };
+      const event1 = retryEvent(sidNormal, 'A', decision1);
+
+      const pendingNormal = mgrNormal.handleV2Retry(event1, () => switchReq1);
+      mgrNormal.dispose();
+      resolve1();
+      await pendingNormal;
+      expect(event1.decision).toEqual({ retry: false });
+      expect(observedNormal).toEqual([]);
+      expect(mgrNormal.getActiveFallback(sidNormal)).toBeUndefined();
+
+      // Late in-flight disposal
+      const observedLate: string[] = [];
+      const mgrLate = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observedLate.push(model),
+      );
+      const sidLate = 'retry-dispose-late';
+      const { promise: switchReq2, resolve: resolve2 } =
+        Promise.withResolvers<void>();
+      const event2 = retryEvent(sidLate, 'A');
+
+      const pendingLate = mgrLate.handleV2Retry(event2, () => switchReq2);
+      await clock.advance(2_500);
+      await pendingLate;
+
+      mgrLate.dispose();
+      resolve2();
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(observedLate).toEqual([]);
+      expect(mgrLate.getActiveFallback(sidLate)).toBeUndefined();
+    });
+
+    test('late rejection after a new user turn does not alter fresh tried state', async () => {
+      const mgr = retryMgr(['A', 'B', 'C']);
+      const sid = 'retry-late-rejection';
+      const { promise: switchRequest, reject: rejectSwitch } =
+        Promise.withResolvers<void>();
+      const pending = mgr.handleV2Retry(
+        retryEvent(sid, 'A'),
+        () => switchRequest,
+      );
+
+      await clock.advance(2_500);
+      await pending;
+
+      // Advance to a fresh turn
+      promptBridgeFor(mgr).observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-turn-2',
+        prompt: { text: 'turn 2' },
+      });
+
+      // In turn 2, a descent tries B
+      const triedSet = (mgr as any).sessionTried.get(sid) as Set<string>;
+      expect(triedSet).toBeDefined();
+      triedSet.add('test/B');
+
+      // Late rejection arrives from turn 1
+      rejectSwitch(new Error('late host error'));
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+
+      // Fresh tried state for B must remain intact
+      expect(triedSet.has('test/B')).toBe(true);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -5424,6 +5821,14 @@ describe('isPermanentQuotaBillingError', () => {
     };
     expect(isFailoverError(poolError)).toBe(true);
     expect(isPermanentQuotaBillingError(poolError)).toBe(true);
+    // A generic HTTP 412 is a request rejection: no Antigravity signal, no
+    // failover, and the host's own verdict stands.
+    const genericPrecondition = {
+      status: 412,
+      message: 'Precondition Failed',
+    };
+    expect(isFailoverError(genericPrecondition)).toBe(false);
+    expect(isPermanentQuotaBillingError(genericPrecondition)).toBe(false);
     expect(
       isFailoverError({
         cause: {
@@ -11222,5 +11627,349 @@ describe('ForegroundFallbackManager same-model retry hardening', () => {
         logSpy.mockRestore();
       }
     });
+  });
+
+  describe('Antigravity 412 and quota-reset recognition on v2', () => {
+    test('handleV2Retry switches immediately on Antigravity 412 account pool unavailable without status field', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5', variant: 'medium' },
+            { id: 'opencode-go/deepseek-v4.1-flash', variant: 'high' },
+            { id: 'google/antigravity-gemini-3.8-flash', variant: 'high' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+        3,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string; variant?: string };
+      }> = [];
+      const event = {
+        sessionID: 'ses-ag-pool-412',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error: {
+          message:
+            'Antigravity account pool has no account available within the configured wait limit. Add accounts with `opencode auth login` or wait for account availability. Quota resets in 142h 40m 46s.',
+        },
+        decision: { retry: false },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toEqual([
+        {
+          sessionID: 'ses-ag-pool-412',
+          model: {
+            providerID: 'opencode-go',
+            id: 'deepseek-v4.1-flash',
+            variant: 'high',
+          },
+        },
+      ]);
+      expect(event.decision.retry).toBe(true);
+    });
+
+    test('handleV2Retry switches immediately on Antigravity HTTP 412 account pool error with top-level status and active retry decision', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5', variant: 'medium' },
+            { id: 'opencode-go/deepseek-v4.1-flash', variant: 'high' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+        3,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string; variant?: string };
+      }> = [];
+      const event = {
+        sessionID: 'ses-ag-412-status',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error: {
+          status: 412,
+          message:
+            'Precondition Failed: Antigravity account pool is unavailable',
+        },
+        decision: { retry: true, delay: 1000 },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toEqual([
+        {
+          sessionID: 'ses-ag-412-status',
+          model: {
+            providerID: 'opencode-go',
+            id: 'deepseek-v4.1-flash',
+            variant: 'high',
+          },
+        },
+      ]);
+      expect(event.decision.retry).toBe(true);
+      expect((mgr as any).sessionRetries.get('ses-ag-412-status') ?? 0).toBe(0);
+    });
+
+    test('handleV2Retry switches immediately on Antigravity Quota resets in ... error with nested body error code', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5' },
+            { id: 'opencode-go/deepseek-v4.1-flash' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string };
+      }> = [];
+      const event = {
+        sessionID: 'ses-ag-quota-reset',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error: {
+          data: {
+            body: {
+              error: {
+                code: 412,
+                message: 'Quota resets in 10h 30m. Please try again later.',
+              },
+            },
+          },
+        },
+        decision: { retry: false },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toEqual([
+        {
+          sessionID: 'ses-ag-quota-reset',
+          model: {
+            providerID: 'opencode-go',
+            id: 'deepseek-v4.1-flash',
+          },
+        },
+      ]);
+      expect(event.decision.retry).toBe(true);
+    });
+
+    test('handleV2Retry switches immediately on FAILED_PRECONDITION error without top-level status field', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5' },
+            { id: 'opencode-go/deepseek-v4.1-flash' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string };
+      }> = [];
+      const event = {
+        sessionID: 'ses-ag-failed-precondition',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error: {
+          message:
+            'FAILED_PRECONDITION: requested Antigravity model is not available to the configured accounts',
+        },
+        decision: { retry: true, delay: 500 },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toEqual([
+        {
+          sessionID: 'ses-ag-failed-precondition',
+          model: {
+            providerID: 'opencode-go',
+            id: 'deepseek-v4.1-flash',
+          },
+        },
+      ]);
+      expect(event.decision.retry).toBe(true);
+    });
+
+    test('handleV2Retry switches immediately on bare FAILED_PRECONDITION error with status 412', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5' },
+            { id: 'opencode-go/deepseek-v4.1-flash' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string };
+      }> = [];
+      const event = {
+        sessionID: 'ses-bare-412-precondition',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error: {
+          status: 412,
+          message: 'FAILED_PRECONDITION',
+        },
+        decision: { retry: false },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toEqual([
+        {
+          sessionID: 'ses-bare-412-precondition',
+          model: {
+            providerID: 'opencode-go',
+            id: 'deepseek-v4.1-flash',
+          },
+        },
+      ]);
+      expect(event.decision.retry).toBe(true);
+    });
+
+    test('handleV2Retry does not switch on generic 412 without Antigravity pool or precondition text', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5' },
+            { id: 'opencode-go/deepseek-v4.1-flash' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string };
+      }> = [];
+      const event = {
+        sessionID: 'ses-generic-412',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error: {
+          status: 412,
+          message: 'If-Match header validation failed',
+        },
+        decision: { retry: false },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toHaveLength(0);
+      expect(event.decision.retry).toBe(false);
+    });
+
+    test('handleV2Retry absorbs host retry for HTTP 412 with short-horizon quota reset instead of switching immediately', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5' },
+            { id: 'opencode-go/deepseek-v4.1-flash' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+        3,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string };
+      }> = [];
+      const error = {
+        status: 412,
+        message: 'Rate limited, quota resets in 30s',
+      };
+      expect(isPermanentQuotaBillingError(error)).toBe(false);
+
+      const event = {
+        sessionID: 'ses-412-short-reset',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error,
+        decision: { retry: true, delay: 1000 },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toHaveLength(0);
+      expect(event.decision.retry).toBe(true);
+      expect((mgr as any).sessionRetries.get('ses-412-short-reset')).toBe(1);
+    });
+
+    test('isSpentQuotaError keeps whole JSON responseBody together and does not classify retry-eligible bodies as spent', () => {
+      const error = {
+        data: {
+          responseBody: JSON.stringify({
+            error: {
+              message: 'Quota exceeded',
+              details: 'Please retry after 30s',
+            },
+          }),
+        },
+      };
+      expect(isSpentQuotaError(error)).toBe(false);
+    });
+  });
+});
+
+describe('ForegroundFallbackManager v1 replay outcome', () => {
+  test('the outcome wait is scheduled on the injected timers', async () => {
+    const { manager } = makeManager();
+    createMockClient({
+      messagesData: [
+        {
+          info: { id: 'refused', role: 'assistant', finish: 'content-filter' },
+          parts: [],
+        },
+      ],
+    });
+    let settled = false;
+    const outcome = manager
+      .v1ReplayOutcome('child', 1, 'orchestrator', clock.now())
+      .finally(() => {
+        settled = true;
+      });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(settled).toBe(false);
+    await clock.advance(5_000);
+    expect(await outcome).toBeUndefined();
+    expect(clock.pending()).toBe(0);
   });
 });

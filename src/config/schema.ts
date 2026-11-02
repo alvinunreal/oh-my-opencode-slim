@@ -113,6 +113,22 @@ export const AgentOverrideConfigSchema = z
       .describe(
         'When true, treat this custom agent as a primary orchestrator: SDK mode `primary` plus the orchestration tool and permission set. Built-in agents are unaffected.',
       ),
+    subagents: z
+      .array(z.string().min(1))
+      .refine((names) => names.every((name) => name.trim().length > 0), {
+        message: 'specialist names must not be empty or whitespace-only',
+      })
+      .refine(
+        (names) => names.every((name) => name.trim().replace(/^@/, '') !== '*'),
+        {
+          message:
+            "'*' is reserved for the delegation-scope wildcard and is not a specialist name",
+        },
+      )
+      .optional()
+      .describe(
+        "Primary agents only: allowed specialist names for this agent's delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
+      ),
     permission: PermissionConfigSchema.optional(), // tool-level permission rules enforced by the SDK
   })
   .strict();

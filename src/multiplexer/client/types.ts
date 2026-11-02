@@ -88,7 +88,6 @@ export const NO_PANE_REASONS = [
   'adapter-unavailable',
   'adapter-not-found',
   'adapter-hard',
-  'backfill-skipped',
 ] as const;
 
 export type NoPaneReason = (typeof NO_PANE_REASONS)[number];

@@ -12,12 +12,14 @@ import {
 } from './activation-config.js';
 import { withMarketplaceConfigReferencesRemoved } from './config-references.js';
 import {
+  MarketplaceAlreadyUpToDateError,
   MarketplaceCompatibilityError,
   MarketplaceRegistryNotFoundError,
   MarketplaceRegistryUnavailableError,
   MarketplaceValidationError,
 } from './errors.js';
 import { normalizeMarketplacePackageId } from './ids.js';
+import { retryMarketplaceLeases } from './lease.js';
 import type { MarketplaceRegistryDownload } from './registry-client.js';
 import { MarketplaceRegistryClient } from './registry-client.js';
 import type { MarketplacePackageBundle } from './schemas.js';
@@ -45,6 +47,7 @@ export interface MarketplaceServiceOptions
   getLivePackages?: () => readonly MarketplaceLivePackage[] | undefined;
   getDesiredState?: (
     inspection: MarketplaceStoreInspection,
+    availableSkillNames?: readonly string[],
   ) => MarketplaceDesiredState;
   getPresetOverride?: () => string | undefined;
 }
@@ -140,15 +143,11 @@ export class MarketplaceService {
     return this.store.install(parseBundle(input), source);
   }
 
-  installFile(filePath: string): StoredMarketplacePackage {
+  importFile(filePath: string): StoredMarketplacePackage {
     return this.install(
       parseBundleFromFile(filePath),
       sourceForImport(filePath),
     );
-  }
-
-  importFile(filePath: string): StoredMarketplacePackage {
-    return this.installFile(filePath);
   }
 
   update(
@@ -165,10 +164,6 @@ export class MarketplaceService {
     );
   }
 
-  importFileUpdate(filePath: string): StoredMarketplacePackage {
-    return this.updateFile(filePath);
-  }
-
   async installRemote(
     selector: string,
     signal?: AbortSignal,
@@ -179,9 +174,10 @@ export class MarketplaceService {
       signal,
     );
     this.assertNotAborted(signal, 'install');
-    return this.store.install(
-      downloaded.bundle,
-      this.registrySource(downloaded),
+    return retryMarketplaceLeases(
+      () =>
+        this.store.install(downloaded.bundle, this.registrySource(downloaded)),
+      signal,
     );
   }
 
@@ -190,16 +186,21 @@ export class MarketplaceService {
     signal?: AbortSignal,
   ): Promise<StoredMarketplacePackage> {
     const normalizedId = normalizeMarketplacePackageId(id);
-    const current = this.store.show(normalizedId);
+    const current = await retryMarketplaceLeases(
+      () => this.store.show(normalizedId),
+      signal,
+      true,
+    );
     const downloaded = await this.downloadRemoteWithV3Fallback(
       current.manifest.id,
       current.manifest.version,
       signal,
     );
     this.assertNotAborted(signal, 'update');
-    return this.store.update(
-      downloaded.bundle,
-      this.registrySource(downloaded),
+    return retryMarketplaceLeases(
+      () =>
+        this.store.update(downloaded.bundle, this.registrySource(downloaded)),
+      signal,
     );
   }
 
@@ -217,21 +218,26 @@ export class MarketplaceService {
       : this.store.verifyAll();
   }
 
-  status(): MarketplaceRuntimeStatus {
-    return readMarketplaceRuntimeStatus(this.statusInput());
+  status(availableSkillNames?: readonly string[]): MarketplaceRuntimeStatus {
+    return readMarketplaceRuntimeStatus(this.statusInput(availableSkillNames));
   }
 
-  requestReload(): MarketplaceReloadRequest {
-    return requestMarketplaceReload(this.statusInput());
+  requestReload(
+    availableSkillNames?: readonly string[],
+  ): MarketplaceReloadRequest {
+    return requestMarketplaceReload(this.statusInput(availableSkillNames));
   }
 
-  private statusInput(): Parameters<typeof readMarketplaceRuntimeStatus>[0] {
+  private statusInput(
+    availableSkillNames?: readonly string[],
+  ): Parameters<typeof readMarketplaceRuntimeStatus>[0] {
     const livePackages = this.getLivePackages?.();
     const inspection = this.store.inspectAll();
-    const desired = this.readDesiredPackages(inspection);
+    const desired = this.readDesiredPackages(inspection, availableSkillNames);
     const presetOverride = this.getPresetOverride?.();
     return {
       directory: this.projectDir,
+      hostFlavor: this.hostFlavor,
       store: this.store,
       inspection,
       ...(presetOverride === undefined ? {} : { presetOverride }),
@@ -250,10 +256,11 @@ export class MarketplaceService {
 
   private readDesiredPackages(
     inspection: MarketplaceStoreInspection,
+    availableSkillNames?: readonly string[],
   ): MarketplaceDesiredState | undefined {
     if (!this.getDesiredState) return undefined;
     try {
-      return this.getDesiredState(inspection);
+      return this.getDesiredState(inspection, availableSkillNames);
     } catch (error) {
       return {
         packageIds: [],
@@ -276,6 +283,7 @@ export class MarketplaceService {
       this.projectDir,
       normalizedId,
       (onCommitted) => this.store.remove(normalizedId, { onCommitted }),
+      this.hostFlavor,
     );
     return {
       packageId: normalizedId,
@@ -334,6 +342,7 @@ export class MarketplaceService {
     signal?: AbortSignal,
   ): Promise<MarketplaceRegistryDownload> {
     let v3CompatibilityError: MarketplaceCompatibilityError | undefined;
+    let v3UpToDateError: MarketplaceAlreadyUpToDateError | undefined;
     if (this.registryClient.downloadV3) {
       try {
         return await this.registryClient.downloadV3(
@@ -345,7 +354,8 @@ export class MarketplaceService {
         if (
           !(error instanceof MarketplaceRegistryUnavailableError) &&
           !(error instanceof MarketplaceRegistryNotFoundError) &&
-          !(error instanceof MarketplaceCompatibilityError)
+          !(error instanceof MarketplaceCompatibilityError) &&
+          !(error instanceof MarketplaceAlreadyUpToDateError)
         ) {
           throw error;
         }
@@ -353,6 +363,8 @@ export class MarketplaceService {
         if (error instanceof MarketplaceCompatibilityError) {
           v3CompatibilityError = error;
         }
+        if (error instanceof MarketplaceAlreadyUpToDateError)
+          v3UpToDateError = error;
       }
     }
     try {
@@ -365,9 +377,16 @@ export class MarketplaceService {
       if (
         v3CompatibilityError &&
         (error instanceof MarketplaceRegistryNotFoundError ||
-          error instanceof MarketplaceCompatibilityError)
+          error instanceof MarketplaceCompatibilityError ||
+          error instanceof MarketplaceAlreadyUpToDateError)
       ) {
         throw v3CompatibilityError;
+      }
+      if (
+        v3UpToDateError &&
+        error instanceof MarketplaceRegistryNotFoundError
+      ) {
+        throw v3UpToDateError;
       }
       throw error;
     }

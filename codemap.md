@@ -141,7 +141,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 - `AGENTS.md`: agent operating conventions for this repository.
 - `biome.json`: formatting/lint policy.
 - `tsconfig.json`: TypeScript compiler settings.
-- `knip.jsonc`: dead-code audit config (entries cover files the import graph cannot see); run via `bun run knip`.
+- `knip.jsonc`: dead-code audit config (entries cover files the import graph cannot see); run via `bun run knip`; deliberate export keeps carry `@public knip:` tags with inline reasons.
 - `.slim/codemap.json`: codemap change-detection state for this repository.
 - `scripts/verify-release-artifact.ts`: release artifact validation script.
 - `src/health-check.ts`: plugin init health-check thresholds (`HEALTH_CHECK`) and `minimumExpectedToolCount` (accounts for disabled baseline tools); kept internal — never re-exported from the package root — so the legacy plugin loader cannot mis-invoke helpers as plugin factories (issue #894).

@@ -25,7 +25,8 @@ export const ROLE_ROUTING_SLIM_LINES: Readonly<Record<string, string>> =
     observer: `@observer — analyzes images/PDFs/diagrams, keeping media bytes out of your context. Always pass the full file path. Don't: plain-text files.`,
   });
 
-/** Routing lines for every agent not disabled or excluded, blank-line separated. */
+/** Routing lines for every agent not disabled or excluded, blank-line
+ * separated. */
 export function renderRoutingLines(
   disabledAgents?: ReadonlySet<string>,
   excludeDescriptions?: readonly string[],
@@ -35,4 +36,60 @@ export function renderRoutingLines(
     .filter(([name]) => !excludeDescriptions?.includes(name))
     .map(([, line]) => line)
     .join('\n\n');
+}
+
+const AGENT_MENTION_RE = /@([a-z][a-z0-9_-]*)/gi;
+
+function mentionsOutOfScope(line: string, names: ReadonlySet<string>): boolean {
+  for (const match of line.matchAll(AGENT_MENTION_RE)) {
+    if (!names.has(match[1].toLowerCase())) return true;
+  }
+  return false;
+}
+
+/**
+ * One routing line for a scoped primary: a built-in line is reused verbatim
+ * while every @mention in it is in scope. Sentences naming an out-of-scope
+ * agent would advertise a delegate the stance denies, so they are dropped;
+ * a line left with nothing falls back to the generic description.
+ * shortcut: sentence split on '. ' only; the lines are hand-written prose.
+ */
+function scopedRoutingLine(
+  name: string,
+  description: string | undefined,
+  names: ReadonlySet<string>,
+): string {
+  const fallback = `@${name} — ${description ?? 'specialist'}`;
+  const line = ROLE_ROUTING_SLIM_LINES[name];
+  if (line === undefined || !mentionsOutOfScope(line, names)) {
+    return line ?? fallback;
+  }
+  const kept = line
+    .split('. ')
+    .filter((sentence) => !mentionsOutOfScope(sentence, names))
+    .join('. ');
+  if (!kept) return fallback;
+  return kept.endsWith('.') ? kept : `${kept}.`;
+}
+
+/**
+ * `<Agents>` catalog for a declared primary (issue #1591): exactly its
+ * scoped specialists, one routing line each. Built-in roles reuse the slim
+ * lines; custom specialists fall back to their configured description.
+ * shortcut: no display-name rewriting here — the caller runs
+ * injectDisplayNames over the assembled prompt afterwards.
+ */
+export function renderScopedAgentsBlock(
+  names: readonly string[],
+  customDescriptions?: Readonly<Record<string, string | undefined>>,
+  disabledAgents?: ReadonlySet<string>,
+): string {
+  const inScope = new Set(names.map((name) => name.toLowerCase()));
+  const lines = names
+    .filter((name) => !disabledAgents?.has(name))
+    .map((name) =>
+      scopedRoutingLine(name, customDescriptions?.[name], inScope),
+    );
+  if (lines.length === 0) return '';
+  return `<Agents>\n${lines.join('\n\n')}\n</Agents>\n`;
 }

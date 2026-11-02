@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, jest } from 'bun:test';
 import {
   chmodSync,
   existsSync,
@@ -10,6 +10,8 @@ import {
 } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { acquirePidFileLock } from '../utils/pid-file-lock';
+import { mapV2EventToV1 } from '../v2/event-adapter';
 import {
   CompanionManager,
   companionSessionIdForDirectory,
@@ -111,6 +113,64 @@ function companionStateLock(): string {
 }
 
 describe('CompanionManager', () => {
+  it('retries state removal during logical disposal when a live writer holds the lock', async () => {
+    const m = make();
+    m.onLoad();
+    const release = acquirePidFileLock(stateFilePath());
+    expect(release).not.toBeNull();
+    jest.useFakeTimers();
+    try {
+      const disposal = (
+        m as unknown as { dispose?: () => Promise<void> }
+      ).dispose?.();
+      release?.();
+      jest.advanceTimersByTime(25);
+      await disposal;
+      expect(readState().sessions).toHaveLength(0);
+    } finally {
+      release?.();
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not remove a replacement generation while retrying disposal', async () => {
+    const old = make();
+    old.onLoad();
+    const release = acquirePidFileLock(stateFilePath());
+    jest.useFakeTimers();
+    try {
+      const disposal = old.dispose();
+      const replacement = make();
+      replacement.onLoad();
+      release?.();
+      jest.advanceTimersByTime(25);
+      await disposal;
+      expect(readState().sessions).toHaveLength(1);
+      replacement.onSessionStatus({
+        sessionId: 'new',
+        agent: 'fixer',
+        status: 'busy',
+      });
+      expect(readState().sessions[0].active_agents).toEqual(['fixer']);
+    } finally {
+      release?.();
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not remove a replacement when an unstarted generation is disposed', async () => {
+    const pending = make();
+    const replacement = make();
+    replacement.onLoad();
+    replacement.onSessionStatus({
+      sessionId: 'new',
+      agent: 'fixer',
+      status: 'busy',
+    });
+    await pending.dispose();
+    expect(readState().sessions[0].active_agents).toEqual(['fixer']);
+  });
+
   it('writes an intro entry on load', () => {
     const m = make();
     m.onLoad();
@@ -830,6 +890,67 @@ describe('CompanionManager', () => {
     expect(readState().sessions[0].status).toBe('busy');
   });
 
+  it('keeps the remaining root and its model active when another root finishes', () => {
+    const m = make();
+    m.onLoad();
+    m.onSessionStatus({
+      sessionId: 'root-a',
+      agent: 'orchestrator',
+      status: 'busy',
+    });
+    m.onSessionModelChanged({ sessionId: 'root-a', model: 'provider/a' });
+    m.onSessionStatus({
+      sessionId: 'root-b',
+      agent: 'orchestrator',
+      status: 'busy',
+    });
+    m.onSessionModelChanged({ sessionId: 'root-b', model: 'provider/b' });
+    m.onSessionStatus({
+      sessionId: 'root-b',
+      agent: 'orchestrator',
+      status: 'idle',
+    });
+    expect(readState().sessions[0]).toMatchObject({
+      status: 'busy',
+      active_agents: ['orchestrator'],
+      active_agent_details: [
+        { session_id: 'root-a', agent: 'orchestrator', model: 'provider/a' },
+      ],
+    });
+  });
+
+  it('removes a provisional v2 root after its agent is identified and it finishes', () => {
+    const m = make();
+    m.onLoad();
+    const project = (type: string, agent?: string) => {
+      for (const event of mapV2EventToV1({
+        type,
+        data: { sessionID: 'root' },
+      })) {
+        if (event.type === 'session.status') {
+          m.onSessionStatus({
+            sessionId: 'root',
+            agent,
+            status: (event.properties as { status: { type: string } }).status
+              .type,
+          });
+        }
+      }
+    };
+    project('session.execution.started');
+    m.onSessionStatus({
+      sessionId: 'root',
+      agent: 'orchestrator',
+      status: 'busy',
+    });
+    project('session.execution.succeeded', 'orchestrator');
+    expect(readState().sessions[0]).toMatchObject({
+      status: 'idle',
+      active_agents: ['intro'],
+      active_agent_details: [],
+    });
+  });
+
   it('shows a specialist while its session is busy', () => {
     const m = make();
     m.onLoad();
@@ -1180,11 +1301,11 @@ describe('CompanionManager', () => {
       model: 'provider/orchestrator',
       variant: 'high',
     });
-    m.onWaitingInput();
+    m.onWaitingInput({ sessionId: 'input', kind: 'permission' });
     expect(readState().sessions[0].active_agents).toEqual(['input']);
     expect(readState().sessions[0].active_agent_details).toEqual([]);
     expect(readState().sessions[0].status).toBe('waiting-input');
-    m.onInputResolved();
+    m.onInputResolved({ sessionId: 'input', kind: 'permission' });
     expect(readState().sessions[0].status).toBe('busy');
   });
 
@@ -1192,25 +1313,45 @@ describe('CompanionManager', () => {
     const m = make();
     m.onLoad();
 
-    m.onWaitingInput('request-1');
+    m.onWaitingInput({
+      sessionId: 'input',
+      kind: 'permission',
+      requestId: 'request-1',
+    });
     expect(readState().sessions[0].attention_seq).toBe(1);
 
     // v2 permission asks are delivered raw + synthesized with the same id.
     // The additive bridge copy must not create a second native notification.
-    m.onWaitingInput('request-1');
+    m.onWaitingInput({
+      sessionId: 'input',
+      kind: 'permission',
+      requestId: 'request-1',
+    });
     expect(readState().sessions[0].attention_seq).toBe(1);
 
     // A distinct request must remain distinguishable even if a native watcher
     // never observed an intermediate resolved state.
-    m.onInputResolved();
-    m.onWaitingInput('request-2');
+    m.onInputResolved({
+      sessionId: 'input',
+      kind: 'permission',
+      requestId: 'request-1',
+    });
+    m.onWaitingInput({
+      sessionId: 'input',
+      kind: 'permission',
+      requestId: 'request-2',
+    });
     expect(readState().sessions[0].attention_seq).toBe(2);
   });
 
   it('preserves attention identity across manager replacement', () => {
     const first = make();
     first.onLoad();
-    first.onWaitingInput('request-1');
+    first.onWaitingInput({
+      sessionId: 'input',
+      kind: 'permission',
+      requestId: 'request-1',
+    });
     expect(readState().sessions[0].attention_seq).toBe(1);
 
     const replacement = make();
@@ -1218,16 +1359,28 @@ describe('CompanionManager', () => {
 
     // Re-delivery of the request that was already published must remain
     // deduplicated after the replacement manager takes ownership.
-    replacement.onWaitingInput('request-1');
+    replacement.onWaitingInput({
+      sessionId: 'input',
+      kind: 'permission',
+      requestId: 'request-1',
+    });
     expect(readState().sessions[0].attention_seq).toBe(1);
 
-    replacement.onInputResolved();
-    replacement.onWaitingInput('request-2');
+    replacement.onInputResolved({
+      sessionId: 'input',
+      kind: 'permission',
+      requestId: 'request-1',
+    });
+    replacement.onWaitingInput({
+      sessionId: 'input',
+      kind: 'permission',
+      requestId: 'request-2',
+    });
     expect(readState().sessions[0].attention_seq).toBe(2);
     expect(readState().sessions[0].attention_request_id).toBe('request-2');
   });
 
-  it('keeps waiting-input sticky across busy and idle lifecycle noise', () => {
+  it('keeps waiting-input across lifecycle events from another session', () => {
     const m = make();
     m.onLoad();
     m.onSessionStatus({
@@ -1235,7 +1388,7 @@ describe('CompanionManager', () => {
       agent: 'orchestrator',
       status: 'busy',
     });
-    m.onWaitingInput();
+    m.onWaitingInput({ sessionId: 'input', kind: 'permission' });
     m.onSessionStatus({
       sessionId: 'ses_orch',
       agent: 'orchestrator',
@@ -1248,7 +1401,7 @@ describe('CompanionManager', () => {
     });
     expect(readState().sessions[0].status).toBe('waiting-input');
 
-    m.onInputResolved();
+    m.onInputResolved({ sessionId: 'input', kind: 'permission' });
     expect(readState().sessions[0].status).toBe('busy');
   });
 
@@ -1260,10 +1413,10 @@ describe('CompanionManager', () => {
       agent: 'orchestrator',
       status: 'busy',
     });
-    m.onWaitingInput();
+    m.onWaitingInput({ sessionId: 'input', kind: 'permission' });
     expect(readState().sessions[0].status).toBe('waiting-input');
 
-    m.onInputResolved();
+    m.onInputResolved({ sessionId: 'input', kind: 'permission' });
     expect(readState().sessions[0].status).toBe('busy');
     expect(readState().sessions[0].active_agents).toEqual(['orchestrator']);
   });
@@ -1276,8 +1429,8 @@ describe('CompanionManager', () => {
       agent: 'designer',
       status: 'busy',
     });
-    m.onWaitingInput();
-    m.onInputResolved();
+    m.onWaitingInput({ sessionId: 'input', kind: 'permission' });
+    m.onInputResolved({ sessionId: 'input', kind: 'permission' });
     expect(readState().sessions[0].status).toBe('busy');
     expect(readState().sessions[0].active_agents).toEqual(['designer']);
   });
@@ -1507,8 +1660,8 @@ describe('CompanionManager', () => {
       agent: 'explorer',
       status: 'busy',
     });
-    m.onWaitingInput();
-    m.onInputResolved();
+    m.onWaitingInput({ sessionId: 'input', kind: 'permission' });
+    m.onInputResolved({ sessionId: 'input', kind: 'permission' });
     m.onSessionDeleted('ses_a');
     expect(() => readState()).toThrow();
   });
@@ -1873,6 +2026,52 @@ describe('CompanionManager', () => {
       last_request_id: 'offline-1',
       result_ok: true,
     });
+  });
+
+  it('publishes the inherited selection after clearing an offline project override', () => {
+    const closedDir = path.join(TEST_DIR, 'closed');
+    mkdirSync(path.join(closedDir, '.opencode'), { recursive: true });
+    const configFile = path.join(
+      closedDir,
+      '.opencode',
+      'oh-my-opencode-slim.jsonc',
+    );
+    writeFileSync(configFile, '{ "preset": "local" }');
+    writeFileSync(
+      path.join(TEST_DIR, 'config', 'opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        preset: 'global',
+        presets: {
+          global: { fixer: { model: 'p/g' } },
+          local: { fixer: { model: 'p/l' } },
+        },
+      }),
+    );
+    const closed = make('closed', closedDir);
+    closed.onLoad();
+    closed.onExit();
+    const relay = make('relay');
+    relay.onLoad();
+    const state = readState();
+    state.preset_requests = [
+      {
+        request_id: 'inherit',
+        session_id: 'relay',
+        target_cwd: closedDir,
+        scope: 'project',
+        inherit: true,
+      },
+    ];
+    writeFileSync(stateFilePath(), JSON.stringify(state));
+    (
+      relay as unknown as { consumePresetRequest: () => boolean }
+    ).consumePresetRequest();
+    const preset = readState().known_projects.find(
+      (p: { cwd: string }) => p.cwd === closedDir,
+    ).preset;
+    expect(preset.project).toBeUndefined();
+    expect(preset.effective).toBe('global');
+    expect(readFileSync(configFile, 'utf8')).not.toContain('local');
   });
 
   it('rejects unregistered offline target without modifying its JSONC', () => {

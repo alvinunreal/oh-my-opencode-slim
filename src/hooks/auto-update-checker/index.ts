@@ -434,6 +434,7 @@ function showSkippedUpdateToast(
   );
 }
 
+/** @public knip: test-only export via cache-busted dynamic import. */
 export function getAutoUpdateInstallDir(): string {
   return resolveInstallContext()?.installDir ?? CACHE_DIR;
 }

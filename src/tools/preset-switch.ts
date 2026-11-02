@@ -15,7 +15,7 @@ import {
   mutateJsonFile,
   removeTopLevelJsonProperty,
 } from '../config/json-file';
-import { stripJsonComments } from '../config/jsonc';
+import { parseJsonConfigText } from '../config/jsonc';
 import {
   findPluginConfigPaths,
   isProjectConfigDisabled,
@@ -152,12 +152,12 @@ export function switchPresetOnDisk(
   options: PresetSwitchOptions = {},
 ): PresetSwitchResult {
   const scope = options.scope ?? 'user';
-  if (scope === 'project' && isProjectConfigDisabled()) {
+  if (scope === 'project' && isProjectConfigDisabled(options.hostFlavor)) {
     return {
       ok: false,
       presetName,
       message:
-        'Cannot save a project preset: OPENCODE_DISABLE_PROJECT_CONFIG disables project configuration. Unset it or use Global scope.',
+        'Cannot save a project preset: OPENCODE_CONFIG_PROJECT_DISABLE or OPENCODE_DISABLE_PROJECT_CONFIG disables project configuration. Unset it or use Global scope.',
       summary: [],
     };
   }
@@ -300,12 +300,12 @@ export function clearProjectPresetOnDisk(
   directory: string,
   hostFlavor?: string,
 ): PresetSwitchResult {
-  if (isProjectConfigDisabled()) {
+  if (isProjectConfigDisabled(hostFlavor)) {
     return {
       ok: false,
       presetName: '',
       message:
-        'Cannot change project preset inheritance: OPENCODE_DISABLE_PROJECT_CONFIG disables project configuration. Unset it or use Global scope.',
+        'Cannot change project preset inheritance: OPENCODE_CONFIG_PROJECT_DISABLE or OPENCODE_DISABLE_PROJECT_CONFIG disables project configuration. Unset it or use Global scope.',
       summary: [],
     };
   }
@@ -611,7 +611,7 @@ export function readUserConfig(
     // Strip a UTF-8 BOM (RFC 8259 permits one); JSON.parse would otherwise
     // fail with "Unrecognized token" and the preset name would be lost.
     const raw = fs.readFileSync(userConfigPath, 'utf-8').replace(/^\uFEFF/, '');
-    return JSON.parse(stripJsonComments(raw)) as Record<string, unknown>;
+    return parseJsonConfigText(raw);
   } catch {
     return null;
   }

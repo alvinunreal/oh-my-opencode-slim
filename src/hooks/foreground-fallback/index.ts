@@ -114,6 +114,8 @@ const QUOTA_BILLING_PATTERNS = [
   /\bindividual quota reached\b/i,
   /\bupgrade your subscription to increase your limits\b/i,
   /\baccount pool (?:has no account available|is unavailable)\b/i,
+  /\bquota resets? in\s+\d+(?:\.\d+)?\s*[dhms]\b/i,
+  /\brequested Antigravity model is not available to the configured accounts\b/i,
 ];
 
 const PROVIDER_ERROR_PATTERNS = [
@@ -335,20 +337,58 @@ function nestedField(source: unknown, key: string): unknown {
   return isRecord(source) ? source[key] : undefined;
 }
 
+/** Structured provider body (v2 wraps it in `data.body` or a raw JSON
+ *  `responseBody`), plus the raw string for whole-carrier matching. */
+function errorBody(error: Record<string, unknown>): {
+  rawBody: string | undefined;
+  bodyObj: Record<string, unknown> | undefined;
+  bodyError: Record<string, unknown> | undefined;
+} {
+  const { data, cause, response } = error;
+  const body =
+    nestedField(data, 'body') ??
+    nestedField(response, 'body') ??
+    nestedField(cause, 'body') ??
+    error.body;
+  const raw =
+    nestedField(data, 'responseBody') ??
+    nestedField(cause, 'responseBody') ??
+    error.responseBody;
+  const rawBody = typeof raw === 'string' ? raw : undefined;
+  let bodyObj = isRecord(body) ? body : undefined;
+  if (!bodyObj && rawBody !== undefined) {
+    try {
+      const parsed = JSON.parse(rawBody);
+      if (isRecord(parsed)) bodyObj = parsed;
+    } catch {
+      // Not JSON: the raw string still reaches errorMessages.
+    }
+  }
+  const bodyError = isRecord(bodyObj?.error) ? bodyObj.error : undefined;
+  return { rawBody, bodyObj, bodyError };
+}
+
 function extractStatusCode(error: unknown): number | undefined {
   if (!isRecord(error)) return undefined;
   const { data, cause, response } = error;
+  const dataObj = isRecord(data) ? data : undefined;
+  const causeObj = isRecord(cause) ? cause : undefined;
+  const responseObj = isRecord(response) ? response : undefined;
+  const { bodyObj, bodyError } = errorBody(error);
+
   const candidates = [
     error.statusCode,
-    nestedField(data, 'statusCode'),
-    nestedField(cause, 'statusCode'),
+    nestedField(dataObj, 'statusCode'),
+    nestedField(causeObj, 'statusCode'),
     error.status,
-    nestedField(response, 'status'),
-    nestedField(response, 'statusCode'),
-    nestedField(data, 'status'),
-    nestedField(nestedField(data, 'response'), 'status'),
-    nestedField(cause, 'status'),
-    nestedField(nestedField(cause, 'response'), 'status'),
+    nestedField(responseObj, 'status'),
+    nestedField(responseObj, 'statusCode'),
+    nestedField(dataObj, 'status'),
+    nestedField(nestedField(dataObj, 'response'), 'status'),
+    nestedField(causeObj, 'status'),
+    nestedField(nestedField(causeObj, 'response'), 'status'),
+    nestedField(bodyError, 'code'),
+    nestedField(bodyObj, 'code'),
   ];
   return candidates.map(asHttpStatus).find((status) => status !== undefined);
 }
@@ -424,13 +464,53 @@ function spentQuotaSignature(error: unknown): string {
 
 function errorMessages(error: unknown): string[] {
   if (typeof error === 'string') return [error];
+  if (!isRecord(error)) return [];
+  const { data, cause } = error;
+  const dataObj = isRecord(data) ? data : undefined;
+  const causeObj = isRecord(cause) ? cause : undefined;
+  const { rawBody, bodyObj, bodyError } = errorBody(error);
+
   return [
-    nestedField(error, 'message'),
-    nestedField(nestedField(error, 'data'), 'message'),
-    nestedField(nestedField(error, 'data'), 'responseBody'),
-    nestedField(nestedField(error, 'cause'), 'message'),
-    nestedField(error, 'responseBody'),
+    error.message,
+    nestedField(dataObj, 'message'),
+    rawBody,
+    nestedField(causeObj, 'message'),
+    nestedField(nestedField(causeObj, 'data'), 'message'),
+    typeof error.status === 'string' ? error.status : undefined,
+    typeof nestedField(dataObj, 'status') === 'string'
+      ? (nestedField(dataObj, 'status') as string)
+      : undefined,
+    nestedField(bodyObj, 'message'),
+    nestedField(bodyError, 'message'),
+    typeof nestedField(bodyObj, 'status') === 'string'
+      ? (nestedField(bodyObj, 'status') as string)
+      : undefined,
+    typeof nestedField(bodyError, 'status') === 'string'
+      ? (nestedField(bodyError, 'status') as string)
+      : undefined,
   ].map((value) => (typeof value === 'string' ? value : ''));
+}
+
+const ANTIGRAVITY_412_PATTERNS = [
+  /\baccount pool (?:has no account available|is unavailable)\b/i,
+  /\brequested Antigravity model is not available to the configured accounts\b/i,
+  /\bAntigravity did not begin a response within the pre-response time limit\b/i,
+  /\bFAILED_PRECONDITION\b/,
+  /\bquota resets? in\s+\d+(?:\.\d+)?\s*[dhms]\b/i,
+];
+
+function isAntigravity412Error(text: string, statusCode?: number): boolean {
+  if (ANTIGRAVITY_412_PATTERNS.some((pattern) => pattern.test(text))) {
+    return true;
+  }
+  // A bare "Precondition Failed" 412 is a request rejection (e.g. If-Match):
+  // require an Antigravity, pool, or quota signal.
+  return (
+    statusCode === 412 &&
+    (/\bantigravity\b/i.test(text) ||
+      /\baccount pool\b/i.test(text) ||
+      /\bquota\b/i.test(text))
+  );
 }
 
 function failoverScope(error: unknown): 'provider' | 'request' | undefined {
@@ -452,6 +532,7 @@ function failoverScope(error: unknown): 'provider' | 'request' | undefined {
     return 'request';
   }
   if (
+    isAntigravity412Error(text, statusCode) ||
     PROVIDER_ERROR_PATTERNS.some((pattern) => pattern.test(text)) ||
     PROVIDER_OUTAGE_PATTERNS.some((pattern) => pattern.test(text)) ||
     messages.some((message) =>
@@ -490,6 +571,7 @@ const PERMANENT_QUOTA_BILLING_PATTERNS = [
   /\bfree usage exceeded\b/i,
   /\bsubscribe to go\b/i,
   /\b(?:1113|1308|1309|1310)\b/,
+  /\bFAILED_PRECONDITION\b/,
   // Spent-allowance wording stays out: it keeps the configured initial
   // delay (a recovery window for intercepting plugins).
 ];
@@ -499,20 +581,18 @@ const PERMANENT_QUOTA_BILLING_PATTERNS = [
  * Spent-allowance wording is excluded and keeps the configured initial delay.
  */
 export function isPermanentQuotaBillingError(error: unknown): boolean {
-  if (extractStatusCode(error) === 402) return true;
+  const statusCode = extractStatusCode(error);
+  if (statusCode === 402) return true;
+  const messages = errorMessages(error);
   const text =
     typeof error === 'string'
       ? error
       : isRecord(error)
         ? [
             error.code,
-            error.message,
             nestedField(error.data, 'code'),
-            nestedField(error.data, 'message'),
-            nestedField(error.data, 'responseBody'),
             nestedField(error.cause, 'code'),
-            nestedField(error.cause, 'message'),
-            error.responseBody,
+            ...messages,
           ]
             .filter(
               (value): value is string | number =>
@@ -521,6 +601,24 @@ export function isPermanentQuotaBillingError(error: unknown): boolean {
             .map(String)
             .join(' ')
         : '';
+  // Short-horizon quota resets (e.g. "Rate limited, quota resets in 30s") are
+  // transient rate limits, not permanent exhaustion.
+  if (
+    /\bquota resets? in\s+\d+(?:\.\d+)?\s*s\b/i.test(text) &&
+    !/\bquota resets? in\s+\d+(?:\.\d+)?\s*[dhm]\b/i.test(text) &&
+    !/\baccount pool (?:has no account available|is unavailable)\b/i.test(
+      text,
+    ) &&
+    !/\bindividual quota reached\b/i.test(text) &&
+    !/\brequested Antigravity model is not available to the configured accounts\b/i.test(
+      text,
+    )
+  ) {
+    return false;
+  }
+  if (statusCode === 412 && isAntigravity412Error(text, statusCode)) {
+    return true;
+  }
   return PERMANENT_QUOTA_BILLING_PATTERNS.some((pattern) => pattern.test(text));
 }
 
@@ -745,7 +843,7 @@ export class ForegroundFallbackManager {
   private incidentSequence = 0;
   /** Confirmed external user-turn generations fence suspended work. */
   private readonly turnEpoch = new Map<string, number>();
-  private readonly startedAt = Date.now();
+  private readonly startedAt: number;
   private readonly v2Steps = new Map<string, V2RefusalStep>();
   private readonly childOutcomes = new Map<string, ChildOutcome>();
   private readonly v1Waiters = new Map<string, (model?: string) => void>();
@@ -1111,14 +1209,17 @@ export class ForegroundFallbackManager {
     const existing = this.childOutcomes.get(key);
     if (existing) return existing;
     const { promise, resolve } = Promise.withResolvers<string | undefined>();
-    const timer = setTimeout(() => {
-      if (this.v1Waiters.get(key) === resolve) {
+    const finish = (model?: string) => {
+      this.clearTimer(timer);
+      resolve(model);
+    };
+    const timer = this.setTimer(() => {
+      if (this.v1Waiters.get(key) === finish) {
         this.v1Waiters.delete(key);
         resolve(undefined);
       }
     }, timeout);
-    timer.unref?.();
-    this.v1Waiters.set(key, resolve);
+    this.v1Waiters.set(key, finish);
     return this.rememberOutcome(key, promise);
   }
 
@@ -1139,7 +1240,7 @@ export class ForegroundFallbackManager {
     if (typeof completedAt !== 'number' || !Number.isFinite(completedAt))
       return;
     if (!this.hasFallbackChain(sessionID)) return;
-    if (Date.now() - completedAt >= timeout) return;
+    if (this.now() - completedAt >= timeout) return;
     try {
       const path = { id: sessionID };
       const query = { limit: FALLBACK_REPLAY_TAIL_MESSAGES };
@@ -1226,6 +1327,19 @@ export class ForegroundFallbackManager {
   noteV2Prompt(sessionID: string): void {
     if (!this.reattachPending.delete(sessionID))
       this.requestRejected.delete(sessionID);
+    this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
+  }
+
+  /** v2 `session.prompt` fence, observed before the hook's awaits: a new
+   *  external prompt supersedes in-flight retry switches of the previous turn.
+   *  Budgets stay (v2); the shared registry ignores repeated intents. */
+  observeExternalPromptIntent(sessionID: string, messageID: string): void {
+    if (
+      this.disposed ||
+      this.observedUserMessageIds.get(sessionID)?.has(messageID)
+    )
+      return;
+    this.rememberUserMessage(sessionID, messageID);
     this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
   }
 
@@ -1472,6 +1586,7 @@ export class ForegroundFallbackManager {
     this.setTimer =
       timers?.setTimeout ?? ((callback, delay) => setTimeout(callback, delay));
     this.clearTimer = timers?.clearTimeout ?? ((timer) => clearTimeout(timer));
+    this.startedAt = this.now();
     this.timerSeam = {
       setTimeout: this.setTimer,
       clearTimeout: this.clearTimer,
@@ -1770,10 +1885,10 @@ export class ForegroundFallbackManager {
             }
             this.noteExternalTurn(sessionID, info.id, model);
           }
-        }
-        // Assistant identity may belong to compaction or a stale agent turn.
-        if (info.role === 'user' && typeof info.agent === 'string') {
-          this.registerSessionAgent(sessionID, info.agent);
+          if (typeof info.agent === 'string') {
+            this.registerSessionAgent(sessionID, info.agent);
+          }
+          break;
         }
         // Track the model currently serving this session
         const messageID = typeof info.id === 'string' ? info.id : undefined;
@@ -2147,9 +2262,9 @@ export class ForegroundFallbackManager {
    *  mutable `decision` the host will honor. Steering absorbs host retries
    *  up to `maxRetries`, then switches the model in place via
    *  `session.switchModel` and mutates `decision` so the host retries the
-   *  CURRENT turn on the new model — no transcript replay, so the a3ac0bee
-   *  per-turn race cannot occur. Guarded by `v2RetryEnabled`, independent
-   *  of the replay path's `enabled`. */
+   *  CURRENT turn on the new model — no transcript replay; per-turn races
+   *  with new user turns are guarded by epoch validation. Guarded by
+   *  `v2RetryEnabled`, independent of the replay path's `enabled`. */
   async handleV2Retry(
     event: {
       sessionID: string;
@@ -2163,9 +2278,10 @@ export class ForegroundFallbackManager {
       model: { providerID: string; id: string },
     ) => Promise<unknown>,
   ): Promise<void> {
+    const { sessionID } = event;
+    const epoch = this.turnEpoch.get(sessionID) ?? 0;
     const from = `${event.model.providerID}/${event.model.id}`;
     try {
-      const { sessionID } = event;
       // One-shot deterministic delivery notice (evidence gate): proves the
       // host invokes this hook for this session, and how the error was
       // classified, independent of steering enablement. One line per
@@ -2244,6 +2360,7 @@ export class ForegroundFallbackManager {
           from,
           event.error,
           switchModel,
+          epoch,
         );
         if (nextModel)
           event.decision = { retry: true, delay: this.retryDelayMs };
@@ -2263,7 +2380,15 @@ export class ForegroundFallbackManager {
     from: string | undefined,
     error: unknown,
     switchModel: V2SwitchModel,
+    /** Retry-hook turn fence. The refusal path omits it: its switch is a
+     *  durable selection change that a newer prompt still runs on, so only
+     *  its continuation is epoch-fenced (by the caller). */
+    epoch?: number,
   ): Promise<string | undefined> {
+    const live = () =>
+      epoch === undefined
+        ? !this.disposed
+        : this.isCurrentTurn(sessionID, epoch);
     let picked: string | undefined;
     let switchRequest: Promise<unknown> | undefined;
     let detail: V2SwitchDetail | undefined;
@@ -2285,7 +2410,7 @@ export class ForegroundFallbackManager {
         'foreground retry model switch timed out',
         this.timerSeam,
       );
-      if (this.disposed) return;
+      if (!live()) return;
       confirmed = true;
       this.commitSwitch(sessionID, from, nextModel, error, detail);
       this.showFallbackToast(agentName, nextModel, error);
@@ -2303,23 +2428,28 @@ export class ForegroundFallbackManager {
         });
         return picked;
       }
-      // Unconfirmed switch: keep the target selectable (a timed-out switch
-      // may still land; the next event's model is the host truth).
-      if (picked) this.sessionTried.get(sessionID)?.delete(picked);
+      // Unconfirmed switch: keep the target selectable on the current turn
+      // (a timed-out switch may still land; the next event's model is the
+      // host truth). A stale turn's timeout must not delete picked from a
+      // fresh descent's tried set.
+      if (picked && live()) {
+        this.sessionTried.get(sessionID)?.delete(picked);
+      }
       const pendingSwitch = switchRequest;
       if (err instanceof OperationTimeoutError && picked && pendingSwitch) {
         // Late landing: the timeout cannot cancel the host call. Reconcile
-        // if the observed model is still the source or already the target;
-        // leave any newer, different selection untouched. The check/write
-        // run synchronously. No toast here: the next event's success path
-        // notifies; this only repairs state.
+        // only if this turn is still current and the observed model is still
+        // the source or already the target; leave any newer, different
+        // selection untouched. A new user turn suppresses late reconciliation.
+        // The check/write run synchronously. No toast here: the next event's
+        // success path notifies; this only repairs state.
         const target = picked;
         void pendingSwitch
           .then(
             () => {
               const observedModel = this.sessionModel.get(sessionID);
               if (
-                this.disposed ||
+                !live() ||
                 (observedModel !== from && observedModel !== target)
               )
                 return;
