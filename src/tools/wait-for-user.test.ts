@@ -44,6 +44,32 @@ describe('wait_for_user tool', () => {
     expect(beginUserWait).toHaveBeenCalledWith('parent-1');
   });
 
+  test('admits a declared primary through the classification seam', async () => {
+    const beginUserWait = mock((_sessionID: string) => {});
+    const waitForUser = createWaitForUserTool({
+      shouldManageSession: () => true,
+      isPrimaryAgentName: (agent) =>
+        agent === 'orchestrator' || agent === 'coworker',
+      beginUserWait,
+    }).wait_for_user;
+
+    const output = await waitForUser.execute({ reason: 'External approval.' }, {
+      sessionID: 'parent-1',
+      agent: 'coworker',
+    } as never);
+
+    expect(beginUserWait).toHaveBeenCalledWith('parent-1');
+    expect(String(output)).toContain('state: waiting_for_user');
+
+    // Non-primaries stay rejected.
+    await expect(
+      waitForUser.execute({ reason: 'wait' }, {
+        sessionID: 'parent-2',
+        agent: 'fixer',
+      } as never),
+    ).rejects.toThrow('primary orchestrators');
+  });
+
   test('does not arm rejected invocations', async () => {
     const beginUserWait = mock((_sessionID: string) => {});
     const unmanaged = createWaitForUserTool({

@@ -41,10 +41,17 @@ export interface MarketplaceToolOptions {
   readonly readSkillIds?: () => Promise<readonly string[]>;
 }
 
-export function resolveFinalizedOrchestratorIdentities(input: {
-  readonly agentNames: readonly string[];
-  readonly identities: Readonly<Record<string, string>>;
-}): ReadonlySet<string> {
+export function resolveFinalizedOrchestratorIdentities(
+  input: {
+    readonly agentNames: readonly string[];
+    readonly identities: Readonly<Record<string, string>>;
+  },
+  /** Primary agent names (issue #1591); defaults to the built-in
+   *  orchestrator. An identity qualifies when exactly one agent owns it and
+   *  that owner is a primary. */
+  primaryNames?: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const primaryOwners = primaryNames ?? new Set(['orchestrator']);
   const ownersByIdentity = new Map<string, Set<string>>();
   const addOwner = (identity: string, owner: string) => {
     const normalizedIdentity = normalizeAgentName(identity);
@@ -62,7 +69,12 @@ export function resolveFinalizedOrchestratorIdentities(input: {
 
   return new Set(
     [...ownersByIdentity]
-      .filter(([, owners]) => owners.size === 1 && owners.has('orchestrator'))
+      .filter(([, owners]) => {
+        const [owner] = owners;
+        return (
+          owners.size === 1 && owner !== undefined && primaryOwners.has(owner)
+        );
+      })
       .map(([identity]) => identity),
   );
 }
@@ -83,7 +95,9 @@ function assertOrchestrator(
     );
   }
   if (!agent || !allowedIdentities.has(normalizeAgentName(agent))) {
-    throw new Error('Marketplace tools are available only to the orchestrator');
+    throw new Error(
+      'Marketplace tools are available only to primary orchestrators',
+    );
   }
 }
 

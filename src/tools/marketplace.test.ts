@@ -350,7 +350,7 @@ describe('marketplace tools', () => {
     };
     await expect(
       inspect.execute({ action: 'list' } as never, { agent: 'fixer' } as never),
-    ).rejects.toThrow('only to the orchestrator');
+    ).rejects.toThrow('only to primary orchestrators');
     expect(
       JSON.parse(
         await inspect.execute(
@@ -406,7 +406,7 @@ describe('marketplace tools', () => {
     };
     await expect(
       inspect.execute({ action: 'list' } as never, { agent: 'Lead' } as never),
-    ).rejects.toThrow('only to the orchestrator');
+    ).rejects.toThrow('only to primary orchestrators');
     expect(
       JSON.parse(
         await inspect.execute(
@@ -436,7 +436,7 @@ describe('marketplace tools', () => {
         { action: 'list' } as never,
         { agent: 'orchestrator' } as never,
       ),
-    ).rejects.toThrow('only to the orchestrator');
+    ).rejects.toThrow('only to primary orchestrators');
     expect(
       JSON.parse(
         await inspect.execute(
@@ -445,6 +445,17 @@ describe('marketplace tools', () => {
         ),
       ),
     ).toMatchObject([{ id: 'x', version: '1.0.0', name: 'Example' }]);
+  });
+
+  test('declared primary identities join the allow-list', () => {
+    const identities = resolveFinalizedOrchestratorIdentities(
+      {
+        agentNames: ['orchestrator', 'coworker', 'fixer'],
+        identities: {},
+      },
+      new Set(['orchestrator', 'coworker']),
+    );
+    expect(identities).toEqual(new Set(['orchestrator', 'coworker']));
   });
 
   test('management adapters resolve files against cwd and never claim reload', async () => {

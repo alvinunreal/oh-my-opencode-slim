@@ -18,6 +18,7 @@ import {
   persistedBackgroundChildren,
   recordBackgroundJobSuppression,
 } from '../../utils';
+import { isBuiltInPrimaryAgent } from '../../utils/agent-variant';
 import {
   type BackgroundJobTerminalGate,
   createBackgroundJobTerminalGate,
@@ -99,6 +100,7 @@ function rehydrateHistoricalRunningTasks(
     agentType: string,
     parentSessionID?: string,
   ) => string | undefined,
+  isPrimaryAgentName: (agent: string) => boolean = isBuiltInPrimaryAgent,
 ): string[] {
   const rehydrated: string[] = [];
   const managedSessionIDs = new Set<string>();
@@ -108,7 +110,12 @@ function rehydrateHistoricalRunningTasks(
     const parentSessionID = message.info.sessionID;
     if (!parentSessionID) continue;
     if (!shouldManageSession(parentSessionID)) {
-      if (message.info.agent !== 'orchestrator') continue;
+      if (
+        typeof message.info.agent !== 'string' ||
+        !isPrimaryAgentName(message.info.agent)
+      ) {
+        continue;
+      }
       registerSessionAsOrchestrator?.(parentSessionID);
       if (!shouldManageSession(parentSessionID)) continue;
     }
@@ -377,6 +384,8 @@ export function createTaskSessionManagerHook(
     /** Register a session as orchestrator when the transform hook detects
      *  an orchestrator message but the session isn't in the agent map yet. */
     registerSessionAsOrchestrator?: (sessionID: string) => void;
+    /** Primary classification (issue #1591); defaults to built-in only. */
+    isPrimaryAgentName?: (agent: string) => boolean;
     /** Optional guard: when provided, idle events for a session that is
      *  currently undergoing a foreground-fallback abort/re-prompt cycle
      *  will NOT trigger idle reconciliation. prevents marking a still-
@@ -1065,6 +1074,7 @@ export function createTaskSessionManagerHook(
         rehydrateTombstones,
         options.backgroundTaskConcurrency,
         options.getModelForAgent,
+        options.isPrimaryAgentName,
       );
       for (const taskID of rehydratedTaskIDs) {
         probeRehydratedTaskSession(taskID);
@@ -1085,7 +1095,12 @@ export function createTaskSessionManagerHook(
         }
         if (!options.shouldManageSession(message.info.sessionID)) {
           const sessionID = message.info.sessionID;
-          if (message.info.agent !== 'orchestrator') {
+          const isPrimaryAgentName =
+            options.isPrimaryAgentName ?? isBuiltInPrimaryAgent;
+          if (
+            typeof message.info.agent !== 'string' ||
+            !isPrimaryAgentName(message.info.agent)
+          ) {
             continue;
           }
           options.registerSessionAsOrchestrator?.(sessionID);
