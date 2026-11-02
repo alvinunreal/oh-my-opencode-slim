@@ -61,7 +61,10 @@ import {
 import { isPluginDisabledByEnv } from '../utils/env';
 import { createEventDirectoryScope } from '../utils/event-directory-scope';
 import { isRecord } from '../utils/guards';
-import { INTERNAL_INITIATOR_METADATA_KEY } from '../utils/internal-initiator';
+import {
+  INTERNAL_INITIATOR_METADATA_KEY,
+  SLIM_INTERNAL_INITIATOR_MARKER,
+} from '../utils/internal-initiator';
 import { initLogger, log } from '../utils/logger';
 import {
   type ModelImageCapabilityCache,
@@ -686,6 +689,9 @@ export interface V2SessionPromptBridge {
    * The raw admission feed (when wired) still fires immediately, before
    * that deferral. */
   handlePrompt(event: V2SessionPromptEvent): Promise<void>;
+  /** Early synchronous external-prompt intent observer. Runs on the first line
+   *  of the registered `prompt` callback before any permission or profile awaits. */
+  observePromptIntent(event: V2SessionPromptEvent): void;
   /** Record per-session agent/model from context events; forward NEWLY
    * learned state to the v1 chat.message hook, flushing any deferred
    * first admission with the agent attached. */
@@ -1724,6 +1730,7 @@ export function createPermissionRulesBridge(
 export function createSessionPromptBridge(
   chatMessage: (input: V1ChatMessageInput, output: unknown) => Promise<void>,
   notePromptAdmission?: (sessionID: string, messageID: string) => void,
+  noteExternalPromptIntent?: (sessionID: string, messageID: string) => void,
 ): V2SessionPromptBridge {
   /** Last admitted messageID per session (once-per-admission dedupe). */
   const seenAdmissions = new Map<string, string>();
@@ -1751,6 +1758,40 @@ export function createSessionPromptBridge(
   }
 
   return {
+    observePromptIntent(event: V2SessionPromptEvent): void {
+      if (!event || typeof event !== 'object') return;
+      const sessionID = event.sessionID;
+      const messageID = event.messageID;
+      if (typeof sessionID !== 'string' || !sessionID) return;
+      if (typeof messageID !== 'string' || !messageID) return;
+
+      const internalMetadata =
+        isRecord(event.metadata) &&
+        event.metadata[INTERNAL_INITIATOR_METADATA_KEY] === true;
+      const promptText =
+        isRecord(event.prompt) && typeof event.prompt.text === 'string'
+          ? event.prompt.text
+          : '';
+      const internalMarker = promptText.includes(
+        SLIM_INTERNAL_INITIATOR_MARKER,
+      );
+
+      if (internalMetadata || internalMarker) {
+        recordInternalAdmission(sessionID, messageID);
+        return;
+      }
+
+      if (isInternalAdmission(sessionID, messageID)) {
+        return;
+      }
+
+      try {
+        noteExternalPromptIntent?.(sessionID, messageID);
+      } catch (err) {
+        log('[v2] external prompt intent observer failed', String(err));
+      }
+    },
+
     async handlePrompt(event) {
       if (!event || typeof event !== 'object') return;
       const sessionID = event.sessionID;
@@ -3132,12 +3173,17 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           const notePromptAdmission = v1Hooks['v2.notePromptAdmission'] as
             | ((sessionID: string, messageID: string) => void)
             | undefined;
+          const noteExternalPromptIntent = v1Hooks[
+            'v2.noteExternalPromptIntent'
+          ] as ((sessionID: string, messageID: string) => void) | undefined;
           const bridge = createSessionPromptBridge(
             chatMessage,
             notePromptAdmission,
+            noteExternalPromptIntent,
           );
           promptBridge = bridge;
           const promptReg = await ctx.session.hook('prompt', async (event) => {
+            bridge.observePromptIntent(event);
             if (!permissionSnapshotReady) {
               await withTimeout(
                 permissionSnapshotReadiness,
