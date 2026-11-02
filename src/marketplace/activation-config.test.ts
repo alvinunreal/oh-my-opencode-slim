@@ -17,6 +17,7 @@ import {
 } from './activation-config';
 import { acquireMarketplaceLease } from './lease';
 import { getMarketplacePaths } from './paths';
+import { MarketplaceService } from './service';
 import { readDesiredMarketplacePackageIds } from './status';
 import { MarketplaceStore } from './store';
 
@@ -116,6 +117,38 @@ function resolveStoredPreset(
 }
 
 describe('marketplace activation persistence', () => {
+  test('refuses project activation when the host disables project config', () => {
+    const fixture = setup();
+    const previous = process.env.OPENCODE_DISABLE_PROJECT_CONFIG;
+    try {
+      const config = JSON.stringify({ preset: 'work', presets: { work: {} } });
+      writeFileSync(fixture.userConfig, config);
+      writeFileSync(fixture.projectConfig, config);
+      fixture.store.install(bundle(PACKAGE_A, 'docsresearcher'));
+      const service = new MarketplaceService({
+        rootDir: join(fixture.root, 'store'),
+        projectDir: fixture.project,
+        pluginVersion: '3.2.0',
+      });
+      process.env.OPENCODE_DISABLE_PROJECT_CONFIG = '1';
+
+      expect(() => service.enable(PACKAGE_A)).toThrow(
+        'OPENCODE_DISABLE_PROJECT_CONFIG',
+      );
+      expect(() => service.disable(PACKAGE_A)).toThrow(
+        'OPENCODE_DISABLE_PROJECT_CONFIG',
+      );
+      expect(readFileSync(fixture.projectConfig, 'utf8')).toBe(config);
+      service.enable(PACKAGE_A, 'user');
+      expect(readFileSync(fixture.userConfig, 'utf8')).toContain(PACKAGE_A);
+    } finally {
+      if (previous === undefined)
+        delete process.env.OPENCODE_DISABLE_PROJECT_CONFIG;
+      else process.env.OPENCODE_DISABLE_PROJECT_CONFIG = previous;
+      fixture.cleanup();
+    }
+  });
+
   test('masks ancestor activation locally without editing the ancestor', () => {
     const fixture = setup();
     try {
