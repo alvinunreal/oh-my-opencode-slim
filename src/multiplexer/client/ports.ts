@@ -2,7 +2,8 @@
  * Injected IO surface of the client-side pane lifecycle core (NFR-3).
  *
  * Nothing in this module touches the environment, the network, or real
- * timers: the wiring layer supplies every port.
+ * timers at runtime: the wiring layer supplies every port. The clock's handle
+ * type is shared from `utils/timer-seam`; that is a type-only edge.
  */
 
 import type { TimerHandle, TimerSeam } from '../../utils/timer-seam';

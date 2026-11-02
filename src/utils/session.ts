@@ -3,6 +3,7 @@
  */
 
 import type { OpencodeClient } from '@opencode-ai/sdk';
+import type { TimerHandle, TimerSeam } from './timer-seam';
 
 export const SESSION_ABORT_TIMEOUT_MS = 1_000;
 
@@ -14,8 +15,6 @@ export class OperationTimeoutError extends Error {
     this.name = 'OperationTimeoutError';
   }
 }
-
-import type { TimerHandle, TimerSeam } from './timer-seam';
 
 export async function withTimeout<T>(
   operation: Promise<T>,
