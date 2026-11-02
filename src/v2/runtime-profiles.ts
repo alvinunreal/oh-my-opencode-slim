@@ -325,9 +325,12 @@ export function createSessionProfileBridge(
   ): Promise<void> {
     if (deleted.has(sessionID)) return;
     const frozen = captured.get(sessionID);
-    if (frozen) {
-      if (!identity?.agent || frozen.agent === identity.agent) return;
-      captured.delete(sessionID);
+    if (
+      frozen &&
+      (!identity?.agent || frozen.agent === identity.agent) &&
+      !pending.has(sessionID)
+    ) {
+      return;
     }
     if (ignored.has(sessionID)) {
       const agent = ignored.get(sessionID);
@@ -353,6 +356,7 @@ export function createSessionProfileBridge(
       if (!resolved.parentID) {
         if (resolved.authoritative) {
           // Proven root session: never profile it.
+          captured.delete(sessionID);
           ignored.set(sessionID, undefined);
           prune();
           return;
@@ -368,6 +372,7 @@ export function createSessionProfileBridge(
       }
       if (!options.pluginAgents.has(resolved.agent)) {
         // Foreign-agent child: its sessions are never touched.
+        captured.delete(sessionID);
         ignored.set(sessionID, resolved.agent);
         prune();
         return;
@@ -404,7 +409,8 @@ export function createSessionProfileBridge(
       // only ever switches away from a provably retired model. The cheap
       // guards fold in first so a discarded decision never pays the lookup.
       const perCallCandidate = Boolean(
-        profile.model &&
+        !frozen &&
+          profile.model &&
           !options.preserveSessionModel?.(sessionID) &&
           options.registeredProfiles &&
           resolved.model &&
@@ -426,6 +432,7 @@ export function createSessionProfileBridge(
         keepPerCallModel = live !== false;
       }
       if (
+        frozen ||
         !profile.model ||
         options.preserveSessionModel?.(sessionID) ||
         keepPerCallModel

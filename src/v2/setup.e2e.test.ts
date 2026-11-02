@@ -2628,6 +2628,16 @@ describe('createV2Setup e2e', () => {
   });
 
   test('tracks child agent switches without reusing another agent profile', async () => {
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        agents: {
+          explorer: { model: 'openai/gpt-5.2', variant: 'high' },
+          fixer: { model: 'openai/gpt-5.2', variant: 'high' },
+        },
+      }),
+    );
     const { ctx, calls } = makeMockV2Context(projectDir);
     const model = { providerID: 'openai', id: 'gpt-5.2', variant: 'high' };
     const frozen = {
@@ -2640,7 +2650,7 @@ describe('createV2Setup e2e', () => {
           sidebarModel: 'openai/gpt-5.2',
         },
         fixer: {
-          model,
+          model: { ...model, id: 'team-gpt-5.2' },
           temperature: 0.8,
           providerOptions: { reasoningEffort: 'low', serviceTier: 'priority' },
           sidebarModel: 'openai/gpt-5.2',
@@ -2660,7 +2670,7 @@ describe('createV2Setup e2e', () => {
           fixer: { ...frozen.profiles.fixer, temperature: 0.2 },
         },
       },
-      preserveModel: true,
+      explicitModel: false,
     });
     let agent = 'explorer';
     const switches: unknown[] = [];
@@ -2704,6 +2714,7 @@ describe('createV2Setup e2e', () => {
       });
 
       await admit();
+      expect(switches).toEqual([{ sessionID: 'child', model }]);
       const explorer = context('explorer');
       await calls.contextHookCb?.(explorer);
       expect(explorer.options).toEqual({ maxTokens: 32000, temperature: 0.1 });
@@ -2717,7 +2728,11 @@ describe('createV2Setup e2e', () => {
         serviceTier: 'priority',
       });
       expect(fixer.model).toEqual(model);
-      expect(switches).toEqual([]);
+      await admit();
+      expect(switches).toEqual([{ sessionID: 'child', model }]);
+      const admittedFixer = context(agent);
+      await calls.contextHookCb?.(admittedFixer);
+      expect(admittedFixer.options).toEqual(fixer.options);
 
       agent = 'build';
       const foreign = context(agent);
