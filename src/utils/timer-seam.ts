@@ -12,7 +12,8 @@ export type TimerSeam = {
   clearTimeout(timer: TimerHandle): void;
 };
 
-/** Option-bag form: every member is optional and resolved by the consumer. */
+/** Option-bag form: every member is optional and omitted members default to
+ *  the platform timers. */
 export type TimerSeamOptions = {
   setTimeout?(callback: () => void, delay: number): TimerHandle;
   clearTimeout?(timer: TimerHandle): void;

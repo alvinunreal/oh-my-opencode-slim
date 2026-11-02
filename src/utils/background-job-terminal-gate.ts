@@ -370,52 +370,50 @@ export function readSessionInfoForObservation(
   });
 }
 
-export function createBackgroundJobTerminalGate(
-  options: {
-    backgroundJobBoard: BackgroundJobBoard;
-    input?: PluginInput;
-    readRuntime?: (
-      run: RunRef,
-      startedAt: number,
-    ) => Promise<RuntimeObservation>;
-    readTerminalEvidence?: (
-      taskID: string,
-      historyBoundary?: string,
-    ) => Promise<unknown>;
-    baselineFor?: (taskID: string, generation: number) => string | undefined;
-    promptMessageIDFor?: (
-      taskID: string,
-      generation: number,
-    ) => string | undefined;
-    attemptStartedAtFor?: (
-      taskID: string,
-      generation: number,
-    ) => number | undefined;
-    /** Explicit integration contract; never inferred from host flavor/capabilities. */
-    hostOutcomeClock?: 'shared-unix-ms';
-    observationRevisionFor?: (
-      taskID: string,
-      generation: number,
-    ) => number | undefined;
-    isObservationPending?: (taskID: string, generation: number) => boolean;
-    onRunning?: (record: BackgroundJobRecord) => void;
-    /**
-     * Final give-up only: the gate can never establish a terminal outcome for
-     * this task (no evidence source left to poll). The task stays `running` on
-     * the board, so anything it holds must be released here — otherwise a host
-     * that cannot read terminal evidence leaks one resource per such task.
-     */
-    onGiveUp?: (taskID: string, generation: number) => void;
-    graceMs?: number;
-    readTimeoutMs?: number;
-    maxEvidenceRetries?: number;
-    /** Slow-tier base delay for the bounded evidence re-arm (#1561). */
-    evidenceRearmMs?: number;
-    /** Slow-tier arm budget per observation episode (#1561). */
-    maxEvidenceRearms?: number;
-    now?: () => number;
-  } & TimerSeamOptions,
-): BackgroundJobTerminalGate {
+export function createBackgroundJobTerminalGate(options: {
+  backgroundJobBoard: BackgroundJobBoard;
+  input?: PluginInput;
+  readRuntime?: (run: RunRef, startedAt: number) => Promise<RuntimeObservation>;
+  readTerminalEvidence?: (
+    taskID: string,
+    historyBoundary?: string,
+  ) => Promise<unknown>;
+  baselineFor?: (taskID: string, generation: number) => string | undefined;
+  promptMessageIDFor?: (
+    taskID: string,
+    generation: number,
+  ) => string | undefined;
+  attemptStartedAtFor?: (
+    taskID: string,
+    generation: number,
+  ) => number | undefined;
+  /** Explicit integration contract; never inferred from host flavor/capabilities. */
+  hostOutcomeClock?: 'shared-unix-ms';
+  observationRevisionFor?: (
+    taskID: string,
+    generation: number,
+  ) => number | undefined;
+  isObservationPending?: (taskID: string, generation: number) => boolean;
+  onRunning?: (record: BackgroundJobRecord) => void;
+  /**
+   * Final give-up only: the gate can never establish a terminal outcome for
+   * this task (no evidence source left to poll). The task stays `running` on
+   * the board, so anything it holds must be released here — otherwise a host
+   * that cannot read terminal evidence leaks one resource per such task.
+   */
+  onGiveUp?: (taskID: string, generation: number) => void;
+  graceMs?: number;
+  readTimeoutMs?: number;
+  maxEvidenceRetries?: number;
+  /** Slow-tier base delay for the bounded evidence re-arm (#1561). */
+  evidenceRearmMs?: number;
+  /** Slow-tier arm budget per observation episode (#1561). */
+  maxEvidenceRearms?: number;
+  now?: () => number;
+  /** Test seam: defaults to the platform timers. */
+  setTimeout?: TimerSeamOptions['setTimeout'];
+  clearTimeout?: TimerSeamOptions['clearTimeout'];
+}): BackgroundJobTerminalGate {
   const board = options.backgroundJobBoard;
   const now = options.now ?? Date.now;
   const setTimer =
@@ -452,7 +450,7 @@ export function createBackgroundJobTerminalGate(
       observations.set(run.taskID, value);
     }
     if (value.activityRevision !== record.activityRevision) {
-      if (value.timer) clearTimer(value.timer);
+      if (value.timer !== undefined) clearTimer(value.timer);
       value = {
         generation: run.generation,
         activityRevision: record.activityRevision,
@@ -574,7 +572,7 @@ export function createBackgroundJobTerminalGate(
     if (board.get(run.taskID)?.state !== 'running') return 'not-running';
     // Guard 4: one timer slot per observation. A pending timer means recovery
     // is ALREADY scheduled — not that the budget is spent.
-    if (value.timer) return 'timer-pending';
+    if (value.timer !== undefined) return 'timer-pending';
     // Guard 5: bounded.
     const max = options.maxEvidenceRearms ?? DEFAULT_MAX_EVIDENCE_REARMS;
     if (value.rearms >= max) return 'budget-exhausted';
@@ -593,7 +591,7 @@ export function createBackgroundJobTerminalGate(
       },
       Math.max(1, delay),
     );
-    if (typeof value.timer !== 'number') value.timer.unref?.();
+    if (typeof value.timer !== 'number') value.timer.unref();
     return 'armed';
   }
 
@@ -607,7 +605,7 @@ export function createBackgroundJobTerminalGate(
     const value = observation(run);
     if (!value) return { kind: 'stale' };
     if (
-      !value.timer &&
+      value.timer === undefined &&
       value.retries <= (options.maxEvidenceRetries ?? 3) &&
       board.get(run.taskID)?.state === 'running'
     ) {
@@ -623,7 +621,7 @@ export function createBackgroundJobTerminalGate(
         },
         Math.max(1, graceMs),
       );
-      if (typeof value.timer !== 'number') value.timer.unref?.();
+      if (typeof value.timer !== 'number') value.timer.unref();
     }
     if (diagnostic === EVIDENCE_UNAVAILABLE_DIAGNOSTIC) {
       // Give-up branch: the fast evidence budget is exhausted. Hand the
@@ -742,7 +740,7 @@ export function createBackgroundJobTerminalGate(
       latest.state === 'running'
     )
       return { kind: 'stale' };
-    if (value.timer) clearTimer(value.timer);
+    if (value.timer !== undefined) clearTimer(value.timer);
     value.timer = undefined;
     value.candidate = undefined;
     // Log-only corroboration: when a window-attributed host outcome is in
@@ -824,7 +822,7 @@ export function createBackgroundJobTerminalGate(
       // Ambiguous busy/retry is live activity: drop held candidates.
       value.candidate = undefined;
       value.idleCandidate = undefined;
-      if (value.timer) clearTimer(value.timer);
+      if (value.timer !== undefined) clearTimer(value.timer);
       value.timer = undefined;
       return deferred(token);
     }
@@ -859,7 +857,7 @@ export function createBackgroundJobTerminalGate(
       value.rearmExhaustedLogged = false;
       value.candidate = undefined;
       value.idleCandidate = undefined;
-      if (value.timer) clearTimer(value.timer);
+      if (value.timer !== undefined) clearTimer(value.timer);
       value.timer = undefined;
       value.runtime = runtime;
       const record = board.markRunningFromLiveSession(
@@ -893,7 +891,7 @@ export function createBackgroundJobTerminalGate(
       // Unknown invalidates open evidence, but never replenishes retries.
       // inspect accounts for the failed attempt, including missing APIs.
       value.quiescentSince = undefined;
-      if (value.timer) clearTimer(value.timer);
+      if (value.timer !== undefined) clearTimer(value.timer);
       value.timer = undefined;
       return deferred(
         token,
@@ -1584,7 +1582,7 @@ export function createBackgroundJobTerminalGate(
       disposed = true;
       authorizedByGate.delete(gate);
       for (const value of observations.values())
-        if (value.timer) clearTimer(value.timer);
+        if (value.timer !== undefined) clearTimer(value.timer);
       observations.clear();
       inFlight.clear();
     },

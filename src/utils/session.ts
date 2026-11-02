@@ -17,8 +17,6 @@ export class OperationTimeoutError extends Error {
 
 import type { TimerHandle, TimerSeam } from './timer-seam';
 
-export type { TimerHandle, TimerSeam } from './timer-seam';
-
 export async function withTimeout<T>(
   operation: Promise<T>,
   timeoutMs: number,
@@ -30,8 +28,7 @@ export async function withTimeout<T>(
   const setTimer =
     timers?.setTimeout ?? ((callback, delay) => setTimeout(callback, delay));
   const clearTimer =
-    timers?.clearTimeout ??
-    ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>));
+    timers?.clearTimeout ?? ((timer: TimerHandle) => clearTimeout(timer));
 
   let timer: TimerHandle | undefined;
   try {

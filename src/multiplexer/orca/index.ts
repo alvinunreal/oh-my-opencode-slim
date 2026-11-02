@@ -67,9 +67,6 @@ const STATUS_TIMEOUT_MS = 2_000;
 /** Bound for `orca terminal close`. */
 const CLOSE_TIMEOUT_MS = 5_000;
 
-/** Timer port for the bounded CLI calls; tests inject the harness timers. */
-export type OrcaMultiplexerOptions = TimerSeamOptions;
-
 /** Outcome of one bounded CLI call. */
 interface CliRun {
   exitCode: number | null;
@@ -95,7 +92,7 @@ export class OrcaMultiplexer implements Multiplexer {
 
   constructor(
     layout: MultiplexerLayout = 'main-vertical',
-    options: OrcaMultiplexerOptions = {},
+    options: TimerSeamOptions = {},
   ) {
     this.layout = layout;
     this.setTimer =

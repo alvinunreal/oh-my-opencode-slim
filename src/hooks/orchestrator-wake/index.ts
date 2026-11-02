@@ -969,9 +969,7 @@ export function createOrchestratorWakeScheduler(
   const directory = ctx.directory;
   const sessionSdk = (ctx.client as OpencodeClient).session;
   const scheduleTimeout: TimerSeam['setTimeout'] =
-    options.setTimeout ??
-    ((callback, delay) =>
-      setTimeout(callback, delay) as ReturnType<typeof setTimeout>);
+    options.setTimeout ?? ((callback, delay) => setTimeout(callback, delay));
   const cancelTimeout: TimerSeam['clearTimeout'] =
     options.clearTimeout ?? ((timer) => clearTimeout(timer));
 
@@ -1449,7 +1447,7 @@ export function createOrchestratorWakeScheduler(
       if (reason === 'periodic' && !periodicWakeEnabled) return;
       void evaluate(sessionID, generation, reason);
     }, delayMs);
-    if (typeof timer !== 'number') timer.unref?.();
+    if (typeof timer !== 'number') timer.unref();
     state.timer = timer;
     log('[orchestrator-wake] backstop armed', { sessionID, intervalMs });
     reportedScheduleBlockers.delete(sessionID);
@@ -2645,7 +2643,7 @@ export function createOrchestratorWakeScheduler(
         triggerDeltaWake(queue, sessionID);
       }, settleDelayMs);
       childInputTimers.set(sessionID, timer);
-      if (typeof timer !== 'number') timer.unref?.();
+      if (typeof timer !== 'number') timer.unref();
       return;
     }
     if (queue === completedJobQueue) {
@@ -2674,7 +2672,7 @@ export function createOrchestratorWakeScheduler(
           triggerDeltaWake(queue, sessionID);
         }, remaining);
         completedSpacingTimers.set(sessionID, timer);
-        if (typeof timer !== 'number') timer.unref?.();
+        if (typeof timer !== 'number') timer.unref();
         return;
       }
     }

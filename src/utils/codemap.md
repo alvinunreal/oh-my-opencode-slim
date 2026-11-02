@@ -169,6 +169,7 @@ Session metadata, the opencode client accessor, and the type-only call-shape con
 | `background-job-terminal-gate.ts` | Terminal evidence verification and attribution; bounded two-tier evidence re-arm for late-attributable host outcomes (shim hosts only — `runtime-status-reconciliation.ts` owns recovery where `session.status` exists) |
 | `background-job-fixture.ts` | Test-only board fixtures for adapter/state-machine tests |
 | `test-timers.ts` | Test-only deterministic timer harness for seam-wired timer code |
+| `timer-seam.ts` | Single timer-seam contract (`TimerHandle`, `TimerSeam`, `TimerSeamOptions`) shared by every scheduling seam |
 | `tui-reusable-projection.ts` | Board → tui-state projection for sidebar reusable dots |
 | `session.ts` | Session timeout, abort, and model-reference utilities |
 | `session-metadata.ts` | Bounded session → agent/directory store |

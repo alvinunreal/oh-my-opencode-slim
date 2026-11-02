@@ -10,12 +10,6 @@ export const DEFAULT_RUNTIME_SESSION_STATUS_TIMEOUT_MS = 5_000;
 /** Default bound for the one host-info classification read (v2 hosts). */
 const DEFAULT_LIVE_SESSION_CLASSIFY_TIMEOUT_MS = 1_500;
 
-/**
- * Injectable timer seam for the bounded reads in this module. Tests wire
- * `src/utils/test-timers.ts` here instead of binding to real time.
- */
-type RuntimeStatusTimers = TimerSeam;
-
 const openStatusReads = new WeakMap<object, Promise<void>>();
 
 export interface RuntimeSessionStatusSnapshot {
@@ -230,7 +224,7 @@ export async function classifyLiveSession(
   sessionID: string,
   options: {
     timeoutMs?: number;
-    timers?: RuntimeStatusTimers;
+    timers?: TimerSeam;
     /** Reuse a status-map read already performed for this query. */
     snapshot?: RuntimeSessionStatusSnapshot;
     /** Reuse a session-info read already performed for this query. */
@@ -403,7 +397,7 @@ export function composeHostRound(
 async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
-  timers?: RuntimeStatusTimers,
+  timers?: TimerSeam,
 ): Promise<T> {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw new Error('Session status lookup timed out');
@@ -412,18 +406,17 @@ async function withTimeout<T>(
     timers?.setTimeout ??
     ((callback: () => void, delay: number) => setTimeout(callback, delay));
   const clearTimer =
-    timers?.clearTimeout ??
-    ((timer: TimerHandle) =>
-      clearTimeout(timer as ReturnType<typeof setTimeout>));
+    timers?.clearTimeout ?? ((timer: TimerHandle) => clearTimeout(timer));
   let timer: TimerHandle | undefined;
   try {
     return await Promise.race([
       promise,
       new Promise<T>((_, reject) => {
-        timer = setTimer(() => {
+        const scheduled = setTimer(() => {
           reject(new Error('Session status lookup timed out'));
         }, timeoutMs);
-        if (typeof timer !== 'number') timer.unref?.();
+        timer = scheduled;
+        if (typeof scheduled !== 'number') scheduled.unref();
       }),
     ]);
   } finally {

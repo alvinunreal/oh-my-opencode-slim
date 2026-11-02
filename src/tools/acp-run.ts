@@ -415,18 +415,15 @@ class AcpClient {
   }
 }
 
-/** Timer seam so tests can drive the invocation timeout deterministically. */
-export type AcpRunTimers = TimerSeam;
-
-const DEFAULT_TIMERS: AcpRunTimers = {
+const DEFAULT_TIMERS: TimerSeam = {
   setTimeout: (callback, ms) => setTimeout(callback, ms),
-  clearTimeout: (handle) =>
-    clearTimeout(handle as ReturnType<typeof setTimeout>),
+  clearTimeout: (handle) => clearTimeout(handle),
 };
 
+/** Timer seam so tests can drive the invocation timeout deterministically. */
 export function createAcpRunTool(
   agents: AcpAgentsConfig = {},
-  timers: AcpRunTimers = DEFAULT_TIMERS,
+  timers: TimerSeam = DEFAULT_TIMERS,
 ): ToolDefinition {
   return tool({
     description:
