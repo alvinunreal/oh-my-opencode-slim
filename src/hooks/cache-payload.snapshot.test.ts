@@ -33,10 +33,15 @@ describe('cache-impact snapshots (update deliberately — see file header)', () 
   });
 
   test('orchestrator system prompt', () => {
-    const prompt = buildOrchestratorPrompt({ disabledAgents: new Set() });
+    // Default skill grants: only oracle ships with skills.
+    const options = {
+      disabledAgents: new Set<string>(),
+      agentSkills: { oracle: 'simplify, requesting-code-review' },
+    };
+    const prompt = buildOrchestratorPrompt(options);
     // Deterministic across invocations — a mismatch here means something
     // volatile (time, randomness, environment) leaked into the prompt.
-    expect(buildOrchestratorPrompt({ disabledAgents: new Set() })).toBe(prompt);
+    expect(buildOrchestratorPrompt(options)).toBe(prompt);
     expect(prompt).toMatchSnapshot();
   });
 

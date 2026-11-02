@@ -1,5 +1,10 @@
 import type { AgentConfig } from '@opencode-ai/sdk/v2';
-import { renderRoutingLines, renderScopedAgentsBlock } from './role-routing';
+import {
+  AGENT_SKILLS_NOTE,
+  type AgentSkillGrants,
+  renderRoutingLines,
+  renderScopedAgentsBlock,
+} from './role-routing';
 
 export interface AgentDefinition {
   name: string;
@@ -53,6 +58,9 @@ export interface OrchestratorPromptOptions {
   /** Descriptions for in-scope custom specialists (issue #1591); built-in
    *  names keep their slim routing lines. */
   customDescriptions?: Readonly<Record<string, string | undefined>>;
+  /** Per-agent skill grant summaries; when set, each routing line names the
+   *  skills that agent can load and the block closes with a short note. */
+  agentSkills?: AgentSkillGrants;
   /** v1 only: `wait_for_user` is registered. v2 never registers it. */
   waitForUser?: boolean;
   /** `backgroundJobs.orchestratorWake.enabled`. Ignored on v2: no scheduler exists there. */
@@ -76,6 +84,7 @@ export function buildOrchestratorPrompt({
   excludeDescriptions,
   onlyAgents,
   customDescriptions,
+  agentSkills,
   waitForUser = true,
   wakeScheduler = true,
   hostFlavor,
@@ -91,8 +100,13 @@ export function buildOrchestratorPrompt({
       !disabledAgents?.has(name) && !excludeDescriptions?.includes(name),
   );
   const agentsBlock = scoped
-    ? renderScopedAgentsBlock(scoped, customDescriptions)
-    : renderRoutingLines(disabledAgents, excludeDescriptions);
+    ? renderScopedAgentsBlock(
+        scoped,
+        customDescriptions,
+        undefined,
+        agentSkills,
+      )
+    : renderRoutingLines(disabledAgents, excludeDescriptions, agentSkills);
   // An empty scope renders no catalog: a bare `<Agents>` shell would read
   // as "no specialists to route to" without saying so.
   // renderScopedAgentsBlock already returns the complete `<Agents>` block.
@@ -100,7 +114,7 @@ export function buildOrchestratorPrompt({
     ? ''
     : scoped === undefined
       ? `<Agents>
-${agentsBlock}
+${agentsBlock}${agentSkills ? `\n\n${AGENT_SKILLS_NOTE}` : ''}
 </Agents>
 
 `

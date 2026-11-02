@@ -102,6 +102,35 @@ export function getSkillPermissionsForAgent(
 }
 
 /**
+ * Short, model-facing summary of an agent's skill grants, derived from the
+ * same permission record the host enforces: `''` (none), `'all'`,
+ * `'all except a, b'`, or `'a, b'`.
+ */
+export function summarizeSkillGrants(
+  agentName: string,
+  skillList?: readonly string[],
+  disabledSkillNames?: readonly string[],
+): string {
+  const permissions = getSkillPermissionsForAgent(
+    agentName,
+    skillList,
+    disabledSkillNames,
+  );
+  const disabled = new Set(disabledSkillNames ?? []);
+  const named = Object.entries(permissions).filter(([name]) => name !== '*');
+  if (permissions['*'] === 'allow') {
+    const denied = named
+      .filter(([name, rule]) => rule === 'deny' && !disabled.has(name))
+      .map(([name]) => name);
+    return denied.length > 0 ? `all except ${denied.join(', ')}` : 'all';
+  }
+  return named
+    .filter(([, rule]) => rule === 'allow')
+    .map(([name]) => name)
+    .join(', ');
+}
+
+/**
  * Fold per-agent skill directives into an effective skills list.
  *
  * 1. Without a base `skills` list the working base is the agent's default

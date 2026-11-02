@@ -1,5 +1,8 @@
 import type { AgentConfig as SDKAgentConfig } from '@opencode-ai/sdk/v2';
-import { getSkillPermissionsForAgent } from '../cli/skills';
+import {
+  getSkillPermissionsForAgent,
+  summarizeSkillGrants,
+} from '../cli/skills';
 import {
   AGENT_ALIASES,
   type AgentOverrideConfig,
@@ -40,7 +43,7 @@ import {
   resolvePrompt,
 } from './orchestrator';
 import { mergeTaskStance, TASK_NO_NESTED_DISPATCH } from './permissions';
-import { renderScopedAgentsBlock } from './role-routing';
+import { type AgentSkillGrants, renderScopedAgentsBlock } from './role-routing';
 import {
   appendObserverDispatchInstruction,
   appendTaskRejectionInstruction,
@@ -965,6 +968,26 @@ function createAgentViews(
   const vocab = delegationVocabulary(options?.hostFlavor);
   const mergedAgents = runtime.agents();
   const disabled = new Set(runtime.disabledAgents);
+  // Skill grants as the routing block shows them: same resolver as the
+  // enforced permissions, so the orchestrator never briefs a skill the
+  // delegate cannot load. String-shorthand permissions bypass the resolver.
+  const skillGrants = (names: readonly string[]): AgentSkillGrants =>
+    Object.fromEntries(
+      names.flatMap((name) => {
+        const override = getOverrideFromAgents(mergedAgents, name);
+        if (typeof override?.permission === 'string') return [];
+        return [
+          [
+            name,
+            summarizeSkillGrants(
+              name,
+              override?.skills,
+              runtime.disabledSkills,
+            ),
+          ],
+        ];
+      }),
+    );
   if (!runtime.council) {
     disabled.add('council');
     // The bare councillor is only meaningful as part of configured Council Mode.
@@ -1231,6 +1254,7 @@ function createAgentViews(
                 scope.map((n) => [n, mergedAgents[n]?.description]),
               ),
               disabled,
+              skillGrants(scope),
             )
           : undefined,
       ),
@@ -1420,6 +1444,9 @@ function createAgentViews(
               orchestratorScope.map((n) => [n, mergedAgents[n]?.description]),
             )
           : undefined,
+        agentSkills: skillGrants(
+          orchestratorScope ?? allSubAgents.map((agent) => agent.name),
+        ),
         waitForUser:
           runtime.backgroundJobsEnabled &&
           !runtime.disabledTools.includes('wait_for_user'),

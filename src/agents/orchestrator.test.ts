@@ -275,6 +275,17 @@ describe('createAgents orchestrator prompt gates', () => {
     expect(prompt).not.toContain('task_message');
   });
 
+  test("routing lines name each specialist's configured skills", () => {
+    const prompt = createAgents(
+      runtimeFor({ agents: { fixer: { skills: ['simplify'] } } }),
+    ).find((a) => a.name === 'orchestrator')?.config.prompt as string;
+    const fixerLine = prompt
+      .split('\n')
+      .find((line) => line.startsWith('@fixer'));
+    expect(fixerLine).toEndWith(' Skills: simplify.');
+    expect(prompt).toContain('A specialist can load only the skills');
+  });
+
   test('defaults keep the registered-tool prompt bytes unchanged', () => {
     // No cold-gate is set: the default render must lead to the same bytes
     // the snapshot-pinned builder produces with the same option defaults.
@@ -288,6 +299,7 @@ describe('createAgents orchestrator prompt gates', () => {
       expect(prompt).toBe(
         buildOrchestratorPrompt({
           disabledAgents: new Set(['observer', 'council', 'councillor']),
+          agentSkills: { oracle: 'simplify, requesting-code-review' },
           hostFlavor,
         }),
       );

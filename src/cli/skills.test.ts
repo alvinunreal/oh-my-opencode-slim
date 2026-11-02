@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { getSkillPermissionsForAgent } from './skills';
+import { getSkillPermissionsForAgent, summarizeSkillGrants } from './skills';
 
 describe('skills permissions', () => {
   it('should allow all skills for orchestrator by default', () => {
@@ -85,5 +85,24 @@ describe('getSkillPermissionsForAgent with malformed disabledSkillNames', () => 
       invalid: 'object',
     } as any);
     expect(perms['*']).toBe('allow');
+  });
+});
+
+describe('summarizeSkillGrants', () => {
+  it('lists default grants and reports none as empty', () => {
+    expect(summarizeSkillGrants('oracle')).toBe(
+      'simplify, requesting-code-review',
+    );
+    expect(summarizeSkillGrants('fixer')).toBe('');
+  });
+
+  it('honors explicit lists, wildcards, exclusions and disabled skills', () => {
+    expect(summarizeSkillGrants('fixer', ['simplify', 'gone'], ['gone'])).toBe(
+      'simplify',
+    );
+    expect(summarizeSkillGrants('fixer', ['*'], ['gone'])).toBe('all');
+    expect(summarizeSkillGrants('fixer', ['*', '!deepwork'])).toBe(
+      'all except deepwork',
+    );
   });
 });
