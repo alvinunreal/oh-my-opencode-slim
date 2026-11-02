@@ -1198,7 +1198,9 @@ Notes:
   contention (v1-only channels where registered: `task_revive`, `task_message`,
   `wait_for_user`, and the wake scheduler)
 - Role-specific helpers beyond delegation (deepwork-goal, phase reminders,
-  council injection) stay tied to the built-in orchestrator
+  council injection) stay tied to the built-in orchestrator; a scoped
+  orchestrator gets the council roster and Council Mode only when `council`
+  is in its scope
 - `primary` only applies to custom agents: on a built-in name it logs a warning
   and does nothing. A primary with a `model` chain gets re-stamped on plugin
   re-init, so prefer a scalar `model` when relying on `/model`

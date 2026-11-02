@@ -21,6 +21,7 @@ import {
 import { RuntimeConfig } from './config/runtime';
 import * as wakeHooks from './hooks';
 import { isTaggedPart, stripTaggedContent } from './hooks/cache-safe-injection';
+import { COUNCIL_INJECT_METADATA_KEY } from './hooks/council-inject';
 import { JSON_ERROR_REMINDER } from './hooks/json-error-recovery/hook';
 import {
   getWakeProgress,
@@ -4486,6 +4487,45 @@ describe('plugin config model inheritance', () => {
       await hooks.dispose?.();
     }
   });
+
+  test.each([
+    [undefined, true],
+    [['explorer', 'councillor-alpha'], false],
+  ])(
+    'council-inject follows the orchestrator seat pointer (scope %p)',
+    async (subagents, expected) => {
+      const hooks = await loadConfiguredPlugin({
+        council: {
+          presets: { default: { alpha: { model: 'test/councillor' } } },
+        },
+        agents: subagents ? { orchestrator: { subagents } } : {},
+      });
+      const transcript = {
+        messages: [
+          {
+            info: {
+              sessionID: 'council-scope',
+              role: 'user',
+              agent: 'orchestrator',
+            },
+            parts: [{ type: 'text', text: 'get a consensus on this' }],
+          },
+        ],
+      };
+      try {
+        await hooks['experimental.chat.messages.transform']?.(
+          {},
+          transcript as never,
+        );
+        const injected = transcript.messages[0].parts.some((part) =>
+          isTaggedPart(part as never, COUNCIL_INJECT_METADATA_KEY),
+        );
+        expect(injected).toBe(expected);
+      } finally {
+        await hooks.dispose?.();
+      }
+    },
+  );
 
   test('config() keeps compaction exception after host council prompt override', async () => {
     const hooks = await loadConfiguredPlugin({

@@ -1666,7 +1666,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       const councilSeats = agentDefs
         .filter((a) => a.name.startsWith('councillor-'))
         .map((a) => a.name);
-      if (councilSeats.length > 0) {
+      // The block dispatches the seats in the orchestrator's `## Council`
+      // roster; a delegation scope without `council` drops that roster, so
+      // the procedure would target denied agents (issue #1591).
+      const orchestratorPrompt = agentDefs.find(
+        (a) => a.name === 'orchestrator',
+      )?.config.prompt;
+      if (
+        councilSeats.length > 0 &&
+        orchestratorPrompt?.includes('\n## Council\nSeats: ')
+      ) {
         councilInject = createCouncilInjectHook({ wording: delegation });
       }
     }
