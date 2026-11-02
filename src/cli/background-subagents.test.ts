@@ -1,7 +1,15 @@
 /// <reference types="bun-types" />
 
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -35,6 +43,13 @@ describe('background subagents helpers', () => {
   });
 
   test('detects shell startup targets including fish XDG config', () => {
+    expect(
+      detectBackgroundSubagentsTarget({
+        SHELL: '/bin/zsh',
+        HOME: '/home/test',
+        ZDOTDIR: '/home/test/dotfiles',
+      }),
+    ).toBe('/home/test/dotfiles/.zshrc');
     expect(
       detectBackgroundSubagentsTarget({ SHELL: '/bin/zsh' })?.endsWith(
         '/.zshrc',
@@ -129,9 +144,9 @@ describe('background subagents writing', () => {
 });
 
 describe('parseArgs background subagents', () => {
-  test('defaults background subagents to ask', () => {
+  test('does not request background setup for non-interactive installs', () => {
     expect(parseArgs([]).backgroundSubagents).toBe('ask');
-    expect(parseArgs(['--no-tui']).backgroundSubagents).toBe('ask');
+    expect(parseArgs(['--no-tui']).backgroundSubagents).toBe('no');
   });
 
   test('parses mode and target override', () => {
@@ -144,6 +159,68 @@ describe('parseArgs background subagents', () => {
       backgroundSubagents: 'yes',
       backgroundSubagentsTarget: '/tmp/profile',
     });
+  });
+
+  test('rejects unknown install options and retains equals signs in values', () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(import.meta.dir, 'index.ts'),
+        'install',
+        '--background-subagent=no',
+        '--dry-run',
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Unknown install option');
+    expect(
+      parseArgs(['--background-subagents-target=/tmp/a=b'])
+        .backgroundSubagentsTarget,
+    ).toBe('/tmp/a=b');
+  });
+
+  test('v2 installation skips v1-only shell, TUI, and model refresh steps', () => {
+    const root = mkdtempSync(join(tmpdir(), 'omoo-v2-install-'));
+    try {
+      const bin = join(root, 'bin');
+      const config = join(root, 'config');
+      mkdirSync(bin);
+      writeFileSync(
+        join(bin, 'opencode'),
+        '#!/bin/sh\necho opencode v2.2.4\n',
+        { mode: 0o755 },
+      );
+      const result = spawnSync(
+        process.execPath,
+        [
+          join(import.meta.dir, 'index.ts'),
+          'install',
+          '--no-tui',
+          '--background-subagents=yes',
+        ],
+        {
+          cwd: root,
+          env: {
+            ...process.env,
+            HOME: root,
+            XDG_CONFIG_HOME: config,
+            XDG_CACHE_HOME: join(root, 'cache'),
+            OPENCODE_CONFIG_DIR: config,
+            PATH: `${bin}:/usr/bin:/bin`,
+            SHELL: '/bin/bash',
+          },
+          encoding: 'utf8',
+        },
+      );
+      expect(result.status).toBe(0);
+      expect(existsSync(join(root, '.bashrc'))).toBe(false);
+      expect(existsSync(join(config, 'tui.json'))).toBe(false);
+      expect(result.stdout).not.toContain('opencode models --refresh');
+      expect(result.stdout).toContain('opencode models');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -166,6 +243,7 @@ describe('configureBackgroundSubagents', () => {
   const originalBackgroundEnv =
     process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS;
   const originalExaEnv = process.env.OPENCODE_ENABLE_EXA;
+  const originalExperimental = process.env.OPENCODE_EXPERIMENTAL;
 
   afterEach(() => {
     if (tempDir) rmSync(tempDir, { recursive: true, force: true });
@@ -181,6 +259,24 @@ describe('configureBackgroundSubagents', () => {
     } else {
       process.env.OPENCODE_ENABLE_EXA = originalExaEnv;
     }
+    if (originalExperimental === undefined)
+      delete process.env.OPENCODE_EXPERIMENTAL;
+    else process.env.OPENCODE_EXPERIMENTAL = originalExperimental;
+  });
+
+  test('recognizes the v1 global experimental flag', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'omoo-bg-'));
+    const target = join(tempDir, '.zshrc');
+    process.env.OPENCODE_EXPERIMENTAL = 'true';
+    delete process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS;
+    delete process.env.OPENCODE_ENABLE_EXA;
+    const result = await configureBackgroundSubagents({
+      reset: false,
+      backgroundSubagents: 'yes',
+      backgroundSubagentsTarget: target,
+    });
+    expect(result.enabledNow).toBe(true);
+    expect(() => readFileSync(target)).toThrow();
   });
 
   test.each(['true', '1', 'TRUE'])(

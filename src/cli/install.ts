@@ -12,15 +12,12 @@ import {
 import {
   addPluginToOpenCodeConfig,
   addPluginToOpenCodeTuiConfig,
-  detectCurrentConfig,
-  enableLspByDefault,
-  generateLiteConfig,
-  getOpenCodePath,
-  getOpenCodeVersion,
-  isOpenCodeInstalled,
+  isPluginConfigured,
   warmOpenCodePluginCache,
   writeLiteConfig,
-} from './config-manager';
+} from './config-io';
+import { generateLiteConfig } from './providers';
+import { findOpenCode } from './system';
 import type { ConfigMergeResult, InstallArgs, InstallConfig } from './types';
 
 // Colors
@@ -110,13 +107,15 @@ async function askToStarRepo(config: InstallConfig): Promise<void> {
   }
 }
 
-async function checkOpenCodeInstalled(): Promise<{
+async function checkOpenCodeInstalled(
+  host: ReturnType<typeof findOpenCode>,
+): Promise<{
   ok: boolean;
   version?: string;
   path?: string;
+  hostFlavor?: 'v1' | 'v2';
 }> {
-  const installed = await isOpenCodeInstalled();
-  if (!installed) {
+  if (!host) {
     const isWindows = process.platform === 'win32';
     printError('OpenCode is not installed on this system.');
     printInfo('Install it with:');
@@ -145,23 +144,28 @@ async function checkOpenCodeInstalled(): Promise<{
     }
     return { ok: false };
   }
-  const version = await getOpenCodeVersion();
-  const path = getOpenCodePath();
-  const detectedVersion = version ?? '';
-  const pathInfo = path ? ` (${DIM}${path}${RESET})` : '';
-  printSuccess(`OpenCode ${detectedVersion} detected${pathInfo}`);
-  return { ok: true, version: version ?? undefined, path: path ?? undefined };
+  const pathInfo = ` (${DIM}${host.path}${RESET})`;
+  printSuccess(
+    `OpenCode ${host.version.replace(/^opencode\s+/i, '')} detected${pathInfo}`,
+  );
+  return { ok: true, ...host };
 }
 
 export async function configureBackgroundSubagents(
   config: InstallConfig,
 ): Promise<{ enabledNow: boolean; configuredTarget?: string }> {
+  const experimental = isBackgroundSubagentsEnabled(
+    process.env.OPENCODE_EXPERIMENTAL,
+  );
   const backgroundSubagentsEnabled = isBackgroundSubagentsEnabled(
-    process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS,
+    process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS ??
+      process.env.OPENCODE_EXPERIMENTAL,
   );
-  const exaEnabled = ['true', '1'].includes(
-    process.env.OPENCODE_ENABLE_EXA?.toLowerCase() ?? '',
-  );
+  const exaEnabled =
+    experimental ||
+    ['true', '1'].includes(
+      process.env.OPENCODE_ENABLE_EXA?.toLowerCase() ?? '',
+    );
   if (backgroundSubagentsEnabled && exaEnabled) {
     printSuccess(
       'OpenCode background subagents and Exa websearch already enabled in environment',
@@ -208,7 +212,7 @@ export async function configureBackgroundSubagents(
 
     console.log();
     printInfo(
-      'V2 requires OpenCode background subagents for default orchestration.',
+      'OpenCode v1 requires background subagents for default orchestration.',
     );
     printInfo(
       `The installer can add the required environment exports to ${target}.`,
@@ -257,12 +261,13 @@ function handleStepResult(
 }
 
 async function runInstall(config: InstallConfig): Promise<number> {
-  const detected = detectCurrentConfig();
-  const isUpdate = detected.isInstalled;
+  const isUpdate = isPluginConfigured();
+  const host = findOpenCode();
+  const isV2 = host?.hostFlavor === 'v2';
 
   printHeader(isUpdate);
 
-  const totalSteps = 7;
+  const totalSteps = 6;
 
   let step = 1;
 
@@ -270,7 +275,7 @@ async function runInstall(config: InstallConfig): Promise<number> {
   if (config.dryRun) {
     printInfo('Dry run mode - skipping OpenCode check');
   } else {
-    const { ok } = await checkOpenCodeInstalled();
+    const { ok } = await checkOpenCodeInstalled(host);
     if (!ok) return 1;
   }
   printStep(step++, totalSteps, 'Adding oh-my-opencode-slim plugin...');
@@ -282,7 +287,9 @@ async function runInstall(config: InstallConfig): Promise<number> {
   }
 
   printStep(step++, totalSteps, 'Adding TUI version badge...');
-  if (config.dryRun) {
+  if (isV2) {
+    printInfo('OpenCode v2 loads the TUI plugin from the server plugin.');
+  } else if (config.dryRun) {
     printInfo('Dry run mode - skipping TUI plugin installation');
   } else {
     const tuiResult = await addPluginToOpenCodeTuiConfig();
@@ -294,29 +301,27 @@ async function runInstall(config: InstallConfig): Promise<number> {
   }
 
   printStep(step++, totalSteps, 'Warming OpenCode plugin cache...');
-  if (config.dryRun) {
+  if (isV2) {
+    printInfo('OpenCode v2 manages its own plugin cache.');
+  } else if (config.dryRun) {
     printInfo('Dry run mode - skipping cache warm-up');
   } else {
     const cacheResult = await warmOpenCodePluginCache();
     if (cacheResult === null) {
       printInfo('Local development install - cache warm-up not required');
     } else if (!cacheResult.success) {
-      printInfo(`Skipped cache warm-up: ${cacheResult.error}`);
+      printError(`Failed cache warm-up: ${cacheResult.error}`);
+      return 1;
     } else {
       handleStepResult(cacheResult, 'OpenCode cache warmed');
     }
   }
 
-  printStep(step++, totalSteps, 'Enabling OpenCode LSP integration...');
-  if (config.dryRun) {
-    printInfo('Dry run mode - skipping LSP configuration');
-  } else {
-    const lspResult = enableLspByDefault();
-    if (!handleStepResult(lspResult, 'LSP enabled')) return 1;
-  }
-
   printStep(step++, totalSteps, 'Configuring OpenCode background subagents...');
-  const backgroundSubagents = await configureBackgroundSubagents(config);
+  if (isV2) printInfo('OpenCode v2 provides background subagents natively.');
+  const backgroundSubagents = isV2
+    ? { enabledNow: true }
+    : await configureBackgroundSubagents(config);
 
   printStep(step++, totalSteps, 'Writing oh-my-opencode-slim configuration...');
   if (config.dryRun) {
@@ -358,7 +363,9 @@ async function runInstall(config: InstallConfig): Promise<number> {
   console.log(`     ${BLUE}$ opencode auth login${RESET}`);
   console.log();
   console.log('  2. Refresh the models OpenCode can see:');
-  console.log(`     ${BLUE}$ opencode models --refresh${RESET}`);
+  console.log(
+    `     ${BLUE}$ opencode models${isV2 ? '' : ' --refresh'}${RESET}`,
+  );
   console.log();
   console.log('  3. Review your generated config:');
   console.log(`     ${BLUE}${configPath}${RESET}`);
@@ -413,7 +420,7 @@ export async function install(args: InstallArgs): Promise<number> {
     promptForStar: args.tui,
     dryRun: args.dryRun,
     reset: args.reset ?? false,
-    backgroundSubagents: args.backgroundSubagents ?? 'ask',
+    backgroundSubagents: args.backgroundSubagents ?? (args.tui ? 'ask' : 'no'),
     backgroundSubagentsTarget: args.backgroundSubagentsTarget,
   };
 

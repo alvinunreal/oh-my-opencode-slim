@@ -5,11 +5,16 @@ Unlike MCPs (which are running servers), skills are **prompt-based instructions*
 injected into an agent's system prompt to guide decisions, workflows, and, when
 relevant, tool use.
 
-Bundled skills are registered in-process by the plugin at load (never copied to
-disk); plugin updates apply on the next OpenCode restart. Skills listed in
+Bundled skills are registered by the plugin at load (never copied to the user
+skill directory): v1 scans the package paths and v2 registers them in-process.
+Plugin updates apply on the next OpenCode restart. Skills listed in
 `disabled_skills` are not registered. To override a bundled skill, create a
 same-named directory under `~/.config/opencode/skills/` — directory skills take
 precedence over the bundled registration.
+
+Legacy managed copies are removed only if their content still matches the last
+managed version. Edited copies are kept; disabled edited copies are moved to
+`~/.config/opencode/.oh-my-opencode-slim-skill-backups/` outside the skill scan.
 
 ---
 

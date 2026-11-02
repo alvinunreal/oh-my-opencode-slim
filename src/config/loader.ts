@@ -1,8 +1,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { stripComments } from 'jsonc-parser';
 import { DEFAULT_DISABLED_AGENTS } from './constants';
 import { COUNCIL_CONFIG_KEYS } from './council-schema';
-import { stripJsonComments } from './jsonc';
+import { parseJsonConfigText } from './jsonc';
 import { getConfigSearchDirs } from './paths';
 import type { ResolvedPresetMap } from './presets';
 import {
@@ -423,12 +424,11 @@ export function loadRawPluginConfigFromPath(
     // Strip a UTF-8 BOM (RFC 8259 permits one); JSON.parse would otherwise
     // fail with "Unrecognized token" and silently drop the whole config.
     const content = fs.readFileSync(configPath, 'utf-8').replace(/^\uFEFF/, '');
-    // Use stripJsonComments to support JSONC format (comments and trailing commas)
     let rawConfig: unknown;
     try {
-      const stripped = stripJsonComments(content);
+      const stripped = stripComments(content);
       const interpolated = interpolateEnvironmentVariables(stripped);
-      rawConfig = JSON.parse(interpolated);
+      rawConfig = parseJsonConfigText(interpolated);
     } catch (error) {
       // Empty file or JSON parse error is treated as invalid-json
       const message = error instanceof Error ? error.message : String(error);

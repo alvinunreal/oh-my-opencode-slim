@@ -1,6 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
+import { resolveConfigWritePath } from '../config/write-path';
+import { writeAtomic } from '../marketplace/lease';
 
 export type ShellKind = 'bash' | 'fish' | 'zsh';
 
@@ -30,7 +32,7 @@ export function detectBackgroundSubagentsTarget(
 ): string | undefined {
   const shell = detectShellKind(env.SHELL);
   const home = env.HOME || homedir();
-  if (shell === 'zsh') return join(home, '.zshrc');
+  if (shell === 'zsh') return join(env.ZDOTDIR || home, '.zshrc');
   if (shell === 'bash') return join(home, '.bashrc');
   if (shell === 'fish') {
     const configHome = env.XDG_CONFIG_HOME || join(home, '.config');
@@ -59,8 +61,7 @@ export function manualBackgroundSubagentsInstructions(options?: {
 }): string {
   const shell =
     options?.shell ??
-    (options?.targetPath?.endsWith('.fish') ? 'fish' : undefined) ??
-    detectShellKind(options?.targetPath);
+    (options?.targetPath?.endsWith('.fish') ? 'fish' : undefined);
   const bashZshSnippet = `export ${ENV_NAME}=true`;
   const fishSnippet = `set -gx ${ENV_NAME} true`;
   const bashZshExaSnippet = `export ${EXA_ENV_NAME}=1`;
@@ -107,6 +108,5 @@ export function writeBackgroundSubagentsBlock(targetPath: string): void {
     ? readFileSync(targetPath, 'utf8')
     : '';
   const nextContent = upsertBackgroundSubagentsBlock(content, block);
-  mkdirSync(dirname(targetPath), { recursive: true });
-  writeFileSync(targetPath, nextContent);
+  writeAtomic(resolveConfigWritePath(targetPath), nextContent);
 }

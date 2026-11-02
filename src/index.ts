@@ -1,3 +1,5 @@
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Hooks, Plugin, ToolDefinition } from '@opencode-ai/plugin';
 import {
   type AdmissionRuntimeLease,
@@ -23,6 +25,10 @@ import {
   type ResolvedAgentRegistry,
 } from './agents/registry';
 import type { RegistryFactoryBridge } from './agents/registry-bridge';
+import {
+  getV1BundledSkillPaths,
+  removeLegacySkillSyncState,
+} from './cli/custom-skills';
 import type { CompanionManager } from './companion/manager';
 import { normalizeCompanionSessionStatus } from './companion/status';
 import { deepMerge, type loadPluginConfig, type Preset } from './config';
@@ -173,6 +179,7 @@ import {
   type ModelImageCapabilityDeps,
   modelAcceptsImageInput,
 } from './utils/model-image-capability';
+import { findOwnedPackageJson } from './utils/package-root';
 import { registerPendingSessionPrune } from './utils/pending-session-prunes';
 import { parseModelReference, withTimeout } from './utils/session';
 import { SessionMetadataStore } from './utils/session-metadata';
@@ -2786,6 +2793,32 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         RuntimeConfig.get(ctx.directory).captureHostConfig(
           preMutationHostSnapshot,
         );
+      }
+      if (hostFlavor !== 'v2') {
+        try {
+          const packageJson = findOwnedPackageJson(
+            fileURLToPath(import.meta.url),
+            'oh-my-opencode-slim',
+          )?.path;
+          if (packageJson) {
+            const skills =
+              opencodeConfig.skills && typeof opencodeConfig.skills === 'object'
+                ? (opencodeConfig.skills as { paths?: string[] })
+                : {};
+            removeLegacySkillSyncState(undefined, runtime.disabledSkills);
+            skills.paths = [
+              ...(Array.isArray(skills.paths) ? skills.paths : []),
+              ...getV1BundledSkillPaths(
+                dirname(packageJson),
+                ctx.directory,
+                runtime.disabledSkills,
+              ),
+            ];
+            opencodeConfig.skills = skills;
+          }
+        } catch (error) {
+          log('[plugin] bundled v1 skill registration failed', String(error));
+        }
       }
       // Force default_agent to the orchestrator's visible entry when unset,
       // and also when the user pointed it at an omos subagent name (opencode

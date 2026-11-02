@@ -1,6 +1,17 @@
-import { existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
-import { basename, join } from 'node:path';
-import { getConfigDir } from '../config/paths';
+import { createHash } from 'node:crypto';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+} from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, dirname, join, relative } from 'node:path';
+import { getProjectConfigDirectories } from '../config/loader';
+import { getConfigDir, getConfigSearchDirs } from '../config/paths';
 import { CUSTOM_SKILLS, type CustomSkill } from './custom-skills-registry';
 
 export { CUSTOM_SKILLS, type CustomSkill };
@@ -68,13 +79,74 @@ export function buildBundledSkillInfos(
   return infos;
 }
 
+/** Paths for v1's disk scanner, excluding names already supplied by the user. */
+export function getV1BundledSkillPaths(
+  packageRoot: string,
+  directory: string,
+  disabled: readonly string[],
+): string[] {
+  const roots = [
+    ...getConfigSearchDirs(),
+    join(homedir(), '.opencode'),
+    ...getProjectConfigDirectories(directory),
+  ].flatMap((dir) => [join(dir, 'skill'), join(dir, 'skills')]);
+  return buildBundledSkillInfos(packageRoot, disabled)
+    .filter(
+      (skill) =>
+        !roots.some((root) => existsSync(join(root, skill.name, 'SKILL.md'))),
+    )
+    .map((skill) => dirname(skill.path));
+}
+
 export interface LegacySkillCleanupResult {
   /** Customized/conflict copies kept — they shadow the in-process registration. */
   kept: string[];
-  /** Disabled customized/conflict copies renamed aside as <name>.omos-backup. */
+  /** Disabled customized/conflict copies moved outside the host skill scan. */
   backedUp: string[];
   /** Legacy state dir existed but the manifest was unreadable. */
   manifestUnreadable: boolean;
+}
+
+function legacySkillHash(dir: string): string {
+  const entries: {
+    path: string;
+    relativePath: string;
+    kind: string;
+    mode: number;
+  }[] = [];
+  function visit(current: string): void {
+    for (const name of readdirSync(current)) {
+      const path = join(current, name);
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink())
+        throw new Error('Cannot safely hash a symlink');
+      if (!stat.isDirectory() && !stat.isFile())
+        throw new Error('Unsupported skill entry');
+      entries.push({
+        path,
+        relativePath: relative(dir, path),
+        kind: stat.isDirectory() ? 'directory' : 'file',
+        mode: stat.mode,
+      });
+      if (stat.isDirectory()) visit(path);
+    }
+  }
+  visit(dir);
+  const hash = createHash('sha256');
+  entries.sort((a, b) =>
+    a.relativePath < b.relativePath
+      ? -1
+      : a.relativePath > b.relativePath
+        ? 1
+        : 0,
+  );
+  for (const entry of entries) {
+    hash.update(
+      `${entry.kind}\0${entry.relativePath}\0${entry.mode & 0o7777}\0`,
+    );
+    if (entry.kind === 'file') hash.update(readFileSync(entry.path));
+  }
+  return hash.digest('hex');
 }
 
 /**
@@ -98,10 +170,11 @@ export function removeLegacySkillSyncState(
   const legacyDir = join(configDir, '.oh-my-opencode-slim');
   if (!existsSync(legacyDir)) return result;
   const manifestPath = join(legacyDir, 'skills-manifest.json');
-  let entries: Record<string, { status?: string }> = {};
+  let entries: Record<string, { status?: string; lastManagedHash?: string }> =
+    {};
   try {
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as {
-      skills?: Record<string, { status?: string }>;
+      skills?: Record<string, { status?: string; lastManagedHash?: string }>;
     };
     entries = manifest.skills ?? {};
   } catch {
@@ -116,15 +189,27 @@ export function removeLegacySkillSyncState(
       continue;
     }
     const dir = join(skillsDir, name);
-    const customized =
-      entry?.status === 'customized' || entry?.status === 'conflict';
+    if (!existsSync(dir)) continue;
+    let customized = true;
+    try {
+      customized =
+        entry?.status !== 'managed' ||
+        !entry.lastManagedHash ||
+        !lstatSync(dir).isDirectory() ||
+        legacySkillHash(dir) !== entry.lastManagedHash;
+    } catch {
+      // Never remove a skill whose contents cannot be verified.
+    }
     if (customized && disabledSet.has(name)) {
-      // Disabled + user-edited: preserve the data, stop the shadow.
       try {
-        renameSync(dir, `${dir}.omos-backup`);
+        const backupDir = join(configDir, '.oh-my-opencode-slim-skill-backups');
+        const backup = join(backupDir, name);
+        mkdirSync(backupDir, { recursive: true });
+        if (existsSync(backup)) throw new Error('Skill backup already exists');
+        renameSync(dir, backup);
         result.backedUp.push(name);
       } catch {
-        // Best effort.
+        result.kept.push(name);
       }
       continue;
     }

@@ -2,12 +2,15 @@ import { randomUUID } from 'node:crypto';
 import {
   closeSync,
   existsSync,
+  fchmodSync,
   fsyncSync,
   mkdirSync,
   openSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -69,6 +72,13 @@ function withConfigWriteLease<T>(configPath: string, operation: () => T): T {
 
   try {
     lease.release();
+    for (const directory of [paths.lockDir, paths.rootDir]) {
+      try {
+        rmdirSync(directory);
+      } catch {
+        // A concurrent writer or a cleanup failure leaves the directory intact.
+      }
+    }
   } catch (releaseError) {
     pendingConfigLeaseCleanup.set(resolve(paths.lockDir), lease);
     if (!operationFailed) throw releaseError;
@@ -129,13 +139,16 @@ function hasSameJsonValue(left: unknown, right: unknown): boolean {
   );
 }
 
-function writeBackupAtomic(backupPath: string, content: string): void {
+function writeBackupAtomic(configPath: string, content: string): void {
+  const backupPath = `${configPath}.bak`;
   const parent = dirname(backupPath);
   mkdirSync(parent, { recursive: true });
   const temporaryPath = `${backupPath}.${process.pid}.${randomUUID()}.tmp`;
+  const mode = statSync(configPath).mode & 0o7777;
   try {
-    const fd = openSync(temporaryPath, 'wx');
+    const fd = openSync(temporaryPath, 'wx', 0o600);
     try {
+      fchmodSync(fd, mode);
       writeFileSync(fd, content, 'utf8');
       fsyncSync(fd);
     } finally {
@@ -157,18 +170,16 @@ function publishConfig(
   currentText?: string,
 ): void {
   const targetPath = resolveConfigWritePath(configPath);
-  const bakPath = `${configPath}.bak`;
-  if (currentText !== undefined) writeBackupAtomic(bakPath, currentText);
+  if (currentText !== undefined) writeBackupAtomic(configPath, currentText);
 
   const bom = currentText?.startsWith('\uFEFF') ? '\uFEFF' : '';
-  const content =
-    configPath.endsWith('.jsonc') && currentText
-      ? `${bom}${jsoncDiff(
-          currentText.replace(/^\uFEFF/, ''),
-          parseJsonConfigText(currentText),
-          config,
-        )}`
-      : `${bom}${JSON.stringify(config, null, 2)}\n`;
+  const content = currentText
+    ? `${bom}${jsoncDiff(
+        currentText.replace(/^\uFEFF/, ''),
+        parseJsonConfigText(currentText),
+        config,
+      )}`
+    : `${bom}${JSON.stringify(config, null, 2)}\n`;
   writeAtomic(targetPath, content);
 }
 
@@ -195,14 +206,9 @@ export function prepareJsonConfigWrite(
     };
   }
   const bom = currentText?.startsWith('\uFEFF') ? '\uFEFF' : '';
-  const content =
-    configPath.endsWith('.jsonc') && currentText
-      ? `${bom}${jsoncDiff(
-          currentText.replace(/^\uFEFF/, ''),
-          current,
-          config,
-        )}`
-      : `${bom}${JSON.stringify(config, null, 2)}\n`;
+  const content = currentText
+    ? `${bom}${jsoncDiff(currentText.replace(/^\uFEFF/, ''), current, config)}`
+    : `${bom}${JSON.stringify(config, null, 2)}\n`;
 
   return {
     configPath,
@@ -224,7 +230,7 @@ export function publishPreparedJsonConfig(
   const targetPath = resolveConfigWritePath(prepared.configPath);
 
   if (prepared.originalText !== undefined) {
-    writeBackupAtomic(`${prepared.configPath}.bak`, prepared.originalText);
+    writeBackupAtomic(prepared.configPath, prepared.originalText);
   }
   writeAtomic(targetPath, prepared.content);
 }
@@ -430,7 +436,7 @@ export function removeTopLevelJsonProperty(
 
     if (!removedAny) return;
     parseJsonConfigText(updated);
-    writeBackupAtomic(`${configPath}.bak`, currentText);
+    writeBackupAtomic(configPath, currentText);
     writeAtomic(
       resolveConfigWritePath(configPath),
       `${hasBom ? '\uFEFF' : ''}${updated}`,
@@ -450,10 +456,6 @@ export function mutateJsonFile(
     const originalSnapshot = JSON.parse(JSON.stringify(current)) as JsonConfig;
     const updated = mutate(current);
     if (JSON.stringify(updated) === JSON.stringify(originalSnapshot)) return;
-    if (currentText && configPath.endsWith('.jsonc')) {
-      publishConfig(configPath, updated, currentText);
-      return;
-    }
     publishConfig(configPath, updated, currentText);
   });
 }

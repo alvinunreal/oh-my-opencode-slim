@@ -1,12 +1,15 @@
 import * as fs from 'node:fs';
+import { stripComments } from 'jsonc-parser';
 import { z } from 'zod';
-import { stripJsonComments } from '../config/jsonc';
+import { parseJsonConfigText } from '../config/jsonc';
 import {
   findPluginConfigPaths,
+  interpolateEnvironmentVariables,
   mergePluginConfigs,
   normalizeDisabledArrayKeys,
   reportUnknownCouncilKeys,
 } from '../config/loader';
+import { resolvePresetDefinition } from '../config/presets';
 import {
   stripRemovedConfigKeys,
   stripRemovedDisabledValues,
@@ -16,6 +19,7 @@ import {
   type PluginConfig,
   PluginConfigSchema,
 } from '../config/schema';
+import { findOpenCode } from './system';
 
 export type DoctorArgs = {
   json?: boolean;
@@ -45,6 +49,7 @@ export type ConfigCheckResult = {
   exists: boolean;
   ok: boolean;
   config?: PluginConfig;
+  warnings?: string[];
   error?: {
     kind: 'invalid-json' | 'invalid-schema' | 'read-error';
     message: string;
@@ -55,7 +60,7 @@ export type ConfigCheckResult = {
 export type PresetCheckResult = {
   preset: string;
   ok: boolean;
-  error?: { kind: 'missing-preset'; message: string };
+  error?: { kind: 'missing-preset' | 'invalid-preset'; message: string };
 };
 
 export type DoctorResult = {
@@ -128,24 +133,20 @@ function checkConfigFile(
     // Strip a UTF-8 BOM so a BOM-prefixed config is not misdiagnosed as
     // invalid JSON (matches the loader's behavior).
     const content = fs.readFileSync(configPath, 'utf-8').replace(/^\uFEFF/, '');
-    const rawConfig = JSON.parse(stripJsonComments(content));
+    const rawConfig = parseJsonConfigText(
+      interpolateEnvironmentVariables(stripComments(content)),
+    );
     // Normalize disabled_* keys exactly like the loader does before schema
     // validation, so a string value (e.g. "explorer") is not diagnosed as a
     // false invalid-schema error. Report each normalization to the user.
     // Removed keys are dropped with a warning, exactly like the loader, so a
     // stale key is not diagnosed as an invalid config.
-    stripRemovedConfigKeys(rawConfig, (message) => {
-      console.warn(`[oh-my-opencode-slim] ${message}`);
-    });
-    stripRemovedDisabledValues(rawConfig, (message) => {
-      console.warn(`[oh-my-opencode-slim] ${message}`);
-    });
-    normalizeDisabledArrayKeys(rawConfig, (message) => {
-      console.warn(`[oh-my-opencode-slim] ${message}`);
-    });
-    reportUnknownCouncilKeys(rawConfig, (message) => {
-      console.warn(`[oh-my-opencode-slim] ${message}`);
-    });
+    const warnings: string[] = [];
+    const warn = (message: string) => warnings.push(message);
+    stripRemovedConfigKeys(rawConfig, warn);
+    stripRemovedDisabledValues(rawConfig, warn);
+    normalizeDisabledArrayKeys(rawConfig, warn);
+    reportUnknownCouncilKeys(rawConfig, warn);
     const parseResult = PluginConfigSchema.safeParse(rawConfig);
     // The runtime schema sanitizes invalid multiplexer values into
     // `type: "none"`, hiding them from the main parse. Merge what the
@@ -164,6 +165,7 @@ function checkConfigFile(
         path: configPath,
         exists: true,
         ok: false,
+        ...(warnings.length ? { warnings } : {}),
         error: {
           kind: 'invalid-schema',
           message: z.prettifyError(error),
@@ -178,6 +180,7 @@ function checkConfigFile(
       exists: true,
       ok: true,
       config: parseResult.data,
+      ...(warnings.length ? { warnings } : {}),
     };
   } catch (err) {
     if (err instanceof SyntaxError) {
@@ -231,7 +234,10 @@ function checkPreset(
     return undefined;
   }
 
-  if (!mergedConfig.presets?.[presetName]) {
+  if (
+    !mergedConfig.presets ||
+    !Object.hasOwn(mergedConfig.presets, presetName)
+  ) {
     return {
       preset: presetName,
       ok: false,
@@ -242,11 +248,26 @@ function checkPreset(
     };
   }
 
+  try {
+    resolvePresetDefinition(presetName, mergedConfig.presets);
+  } catch (error) {
+    return {
+      preset: presetName,
+      ok: false,
+      error: {
+        kind: 'invalid-preset',
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
   return { preset: presetName, ok: true };
 }
 
 export function runDoctorCheck(cwd: string): DoctorResult {
-  const { userConfigPath, projectConfigPaths } = findPluginConfigPaths(cwd);
+  const { userConfigPath, projectConfigPaths } = findPluginConfigPaths(
+    cwd,
+    findOpenCode()?.hostFlavor,
+  );
 
   const userCheck = checkConfigFile('user', userConfigPath);
   const projectChecks = (
@@ -288,6 +309,8 @@ export function formatHumanDoctorResult(result: DoctorResult): string {
     } else {
       const status = config.ok ? '✓' : '✗';
       lines.push(`[${config.scope}] ${config.path} ${status}`);
+      for (const warning of config.warnings ?? [])
+        lines.push(`  Warning: ${warning}`);
 
       if (!config.ok && config.error) {
         if (config.error.kind === 'invalid-json') {

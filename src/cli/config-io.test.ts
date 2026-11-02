@@ -32,33 +32,34 @@ import {
   restorePreparedJsonConfig,
   writeJsonAtomic,
 } from '../config/json-file';
-import { stripJsonComments } from '../config/jsonc';
+import { parseJsonConfigText } from '../config/jsonc';
 import * as paths from '../config/paths';
 import * as marketplaceLease from '../marketplace/lease';
 import {
   addPluginToOpenCodeConfig,
   addPluginToOpenCodeTuiConfig,
-  detectCurrentConfig,
-  enableLspByDefault,
+  isPluginConfigured,
   parseConfig,
   parseConfigFile,
-  writeConfig,
   writeLiteConfig,
 } from './config-io';
 
 describe('config-io', () => {
   let tmpDir: string;
+  let children: Promise<void>[] = [];
   const originalEnv = { ...process.env };
   const originalArgv = [...process.argv];
 
   beforeEach(() => {
+    children = [];
     tmpDir = mkdtempSync(join(tmpdir(), 'opencode-io-test-'));
     delete process.env.OPENCODE_CONFIG_DIR;
     delete process.env.OPENCODE_TUI_CONFIG;
     process.env.XDG_CONFIG_HOME = tmpDir;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await Promise.allSettled(children);
     for (const key of Object.keys(process.env)) {
       if (!(key in originalEnv)) delete process.env[key];
     }
@@ -80,17 +81,6 @@ describe('config-io', () => {
       }),
     );
   }
-
-  test('stripJsonComments strips comments and trailing commas', () => {
-    const jsonc = `{
-      // comment
-      "a": 1, /* multi
-      line */
-      "b": [2,],
-    }`;
-    const stripped = stripJsonComments(jsonc);
-    expect(JSON.parse(stripped)).toEqual({ a: 1, b: [2] });
-  });
 
   test('parseConfigFile parses valid JSON', () => {
     const path = join(tmpDir, 'test.json');
@@ -140,16 +130,33 @@ describe('config-io', () => {
     expect(result.config).toEqual({ a: 1 } as any);
   });
 
-  test('writeConfig writes JSON and creates backup', () => {
+  test('writeJsonAtomic writes JSON and creates backup', () => {
     const path = join(tmpDir, 'test.json');
     writeFileSync(path, '{"old": true}');
 
-    writeConfig(path, { new: true } as any);
+    writeJsonAtomic(path, { new: true } as any);
 
     expect(JSON.parse(readFileSync(path, 'utf-8'))).toEqual({ new: true });
     expect(JSON.parse(readFileSync(`${path}.bak`, 'utf-8'))).toEqual({
       old: true,
     });
+  });
+
+  test('removes empty configuration write-lock directories after writing', () => {
+    const file = join(tmpDir, 'opencode', 'opencode.json');
+    writeJsonAtomic(file, { plugin: [] });
+    expect(
+      existsSync(join(tmpDir, 'opencode', '.opencode.json.write-lock')),
+    ).toBe(false);
+  });
+
+  test('config and backup retain restrictive file permissions', () => {
+    const configPath = join(tmpDir, 'private.json');
+    writeFileSync(configPath, '{"secret":"key"}', { mode: 0o600 });
+    fs.chmodSync(configPath, 0o600);
+    mutateJsonFile(configPath, (current) => ({ ...current, enabled: true }));
+    expect(statSync(configPath).mode & 0o777).toBe(0o600);
+    expect(statSync(`${configPath}.bak`).mode & 0o777).toBe(0o600);
   });
 
   test('config writes follow relative symlinks and preserve JSONC and backups', () => {
@@ -170,9 +177,9 @@ describe('config-io', () => {
 
     writeJsonAtomic(link, { preset: 'reset' });
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
-    expect(JSON.parse(stripJsonComments(readFileSync(target, 'utf8')))).toEqual(
-      { preset: 'reset' },
-    );
+    expect(parseJsonConfigText(readFileSync(target, 'utf8'))).toEqual({
+      preset: 'reset',
+    });
   });
 
   test('prepared config publication and rollback preserve the symlink', () => {
@@ -236,7 +243,7 @@ describe('config-io', () => {
 
     const savedText = readFileSync(path, 'utf-8');
     expect(savedText).toContain('// keep this explanation');
-    expect(JSON.parse(stripJsonComments(savedText))).toEqual({
+    expect(parseJsonConfigText(savedText)).toEqual({
       companion: { enabled: true },
     });
     expect(readFileSync(`${path}.bak`, 'utf-8')).toContain('"preset": "local"');
@@ -264,7 +271,7 @@ describe('config-io', () => {
     expect(savedText.match(/"preset"\s*:/g) ?? []).toHaveLength(0);
     expect(savedText).toContain('// keep companion comment');
     expect(savedText).toContain('// keep unrelated comment');
-    expect(JSON.parse(stripJsonComments(savedText))).toEqual({
+    expect(parseJsonConfigText(savedText)).toEqual({
       companion: { enabled: true },
       unrelated: 42,
     });
@@ -286,7 +293,7 @@ describe('config-io', () => {
 
     const savedText = readFileSync(path, 'utf-8');
     expect(savedText.match(/"preset"\s*:/g) ?? []).toHaveLength(0);
-    expect(JSON.parse(stripJsonComments(savedText))).toEqual({});
+    expect(parseJsonConfigText(savedText)).toEqual({});
   });
 
   test('mutateJsonFile preserves JSONC comments and unrelated keys', () => {
@@ -300,7 +307,7 @@ describe('config-io', () => {
 
     const savedText = readFileSync(path, 'utf-8');
     expect(savedText).toContain('// Keep this explanation');
-    expect(JSON.parse(stripJsonComments(savedText))).toEqual({
+    expect(parseJsonConfigText(savedText)).toEqual({
       unrelated: { enabled: true },
       preset: 'new',
     });
@@ -342,7 +349,7 @@ describe('config-io', () => {
 
     const savedText = readFileSync(path, 'utf-8');
     expect(savedText).toContain('// Preserve this comment\n  "neighbor": 1');
-    expect(JSON.parse(stripJsonComments(savedText))).toEqual({
+    expect(parseJsonConfigText(savedText)).toEqual({
       neighbor: 1,
       added: true,
     });
@@ -361,9 +368,7 @@ describe('config-io', () => {
     expect(savedText).toContain('\r\n  // Keep this CRLF comment\r\n');
     expect(savedText).toContain('"untouched": [1, 2]');
     expect(savedText.replaceAll('\r\n', '')).not.toContain('\n');
-    expect(
-      JSON.parse(stripJsonComments(savedText.replace(/^\uFEFF/, ''))),
-    ).toEqual({
+    expect(parseJsonConfigText(savedText.replace(/^\uFEFF/, ''))).toEqual({
       untouched: [1, 2],
       value: 2,
     });
@@ -407,9 +412,7 @@ describe('config-io', () => {
     const savedText = readFileSync(path, 'utf-8');
     expect(savedText.startsWith('\uFEFF')).toBe(true);
     expect(savedText).toContain('// Keep this explanation');
-    expect(
-      JSON.parse(stripJsonComments(savedText.replace(/^\uFEFF/, ''))),
-    ).toEqual({
+    expect(parseJsonConfigText(savedText.replace(/^\uFEFF/, ''))).toEqual({
       unrelated: true,
       value: 2,
     });
@@ -475,20 +478,25 @@ describe('config-io', () => {
       `import { mutateJsonFile } from './src/config/json-file.ts';\n` +
       `mutateJsonFile(process.env.CONFIG_PATH!, (current) => ({ ...current, writers: Number(current.writers) + 1 }));`;
 
-    await Promise.all(
-      Array.from({ length: 8 }, async (_, index) => {
-        const child = Bun.spawn(['bun', '-e', script], {
-          cwd: process.cwd(),
-          env: { ...process.env, CONFIG_PATH: index % 2 ? link : path },
-          stdout: 'pipe',
-          stderr: 'pipe',
-        });
-        const exitCode = await child.exited;
-        if (exitCode !== 0) {
-          throw new Error(await new Response(child.stderr).text());
-        }
-      }),
-    );
+    for (let index = 0; index < 8; index++) {
+      children.push(
+        (async () => {
+          const child = Bun.spawn(['bun', '-e', script], {
+            cwd: process.cwd(),
+            env: { ...process.env, CONFIG_PATH: index % 2 ? link : path },
+            stdout: 'pipe',
+            stderr: 'pipe',
+          });
+          const exitCode = await child.exited;
+          if (exitCode !== 0) {
+            throw new Error(await new Response(child.stderr).text());
+          }
+        })(),
+      );
+    }
+    const results = await Promise.allSettled(children);
+    const failure = results.find((result) => result.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
 
     expect(JSON.parse(readFileSync(path, 'utf-8'))).toEqual({ writers: 8 });
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
@@ -534,12 +542,12 @@ describe('config-io', () => {
     expect(readFileSync(secondPath, 'utf-8')).toBe(secondOriginal);
 
     for (const write of prepared) publishPreparedJsonConfig(write);
-    expect(
-      JSON.parse(stripJsonComments(readFileSync(firstPath, 'utf-8'))),
-    ).toEqual({ value: 10 });
-    expect(
-      JSON.parse(stripJsonComments(readFileSync(secondPath, 'utf-8'))),
-    ).toEqual({ value: 20 });
+    expect(parseJsonConfigText(readFileSync(firstPath, 'utf-8'))).toEqual({
+      value: 10,
+    });
+    expect(parseJsonConfigText(readFileSync(secondPath, 'utf-8'))).toEqual({
+      value: 20,
+    });
   });
 
   test('prepared no-op keeps original bytes and does not create a backup', () => {
@@ -671,6 +679,21 @@ describe('config-io', () => {
     expect(saved.plugin.length).toBe(2);
   });
 
+  test('installation preserves JSON comments and backs up the original before enabling LSP', async () => {
+    paths.ensureConfigDir();
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    const original =
+      '{\n  // user comment\n  "plugin": [],\n  /* more */ "theme": "dark"\n}\n';
+    writeFileSync(configPath, original);
+    process.argv[1] = '';
+    expect((await addPluginToOpenCodeConfig()).success).toBe(true);
+    const saved = readFileSync(configPath, 'utf8');
+    expect(saved).toContain('// user comment');
+    expect(saved).toContain('/* more */');
+    expect(parseJsonConfigText(saved).lsp).toBe(true);
+    expect(readFileSync(`${configPath}.bak`, 'utf8')).toBe(original);
+  });
+
   test('addPluginToOpenCodeConfig reads and preserves a plural-key config', async () => {
     const configPath = join(tmpDir, 'opencode', 'opencode.json');
     paths.ensureConfigDir();
@@ -684,10 +707,46 @@ describe('config-io', () => {
     expect(result.success).toBe(true);
 
     const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
-    // The file's own key is preserved; the legacy singular key stays untouched.
-    expect(saved.plugins).toContain('oh-my-opencode-slim');
+    expect(saved.plugins).toEqual(['other']);
     expect(saved.plugins).not.toContain('oh-my-opencode-slim@1.0.0');
-    expect(saved.plugin).toBeUndefined();
+    expect(saved.plugin).toEqual(['oh-my-opencode-slim']);
+  });
+
+  test('installs a pinned bunx symlink in plugin without duplicates across keys', async () => {
+    const configPath = join(tmpDir, 'opencode', 'opencode.json');
+    const modules = join(
+      tmpDir,
+      'bunx-1000-oh-my-opencode-slim@beta',
+      'node_modules',
+    );
+    const packageRoot = join(modules, 'oh-my-opencode-slim');
+    const entry = join(packageRoot, 'dist', 'cli', 'index.js');
+    mkdirSync(join(packageRoot, 'dist', 'cli'), { recursive: true });
+    mkdirSync(join(modules, '.bin'), { recursive: true });
+    writePackageJson(packageRoot, '1.2.3');
+    writeFileSync(entry, '');
+    const link = join(modules, '.bin', 'oh-my-opencode-slim');
+    symlinkSync(entry, link);
+    paths.ensureConfigDir();
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        plugin: ['other-legacy', 'oh-my-opencode-slim@1.0.0'],
+        plugins: [{ package: 'oh-my-opencode-slim@1.1.0' }, 'other-native'],
+      }),
+    );
+    process.argv[1] = link;
+
+    expect((await addPluginToOpenCodeConfig()).success).toBe(true);
+    const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(saved.plugin).toEqual([
+      'other-legacy',
+      [
+        'oh-my-opencode-slim@1.2.3',
+        { __ohMyOpencodeSlimManagedByInstaller: true },
+      ],
+    ]);
+    expect(saved.plugins).toEqual(['other-native']);
   });
 
   test('addPluginToOpenCodeConfig respects OPENCODE_CONFIG_DIR', async () => {
@@ -1086,80 +1145,23 @@ describe('config-io', () => {
     expect(saved.presets['opencode-go'].observer.variant).toBeUndefined();
   });
 
-  test('enableLspByDefault sets lsp true when missing', () => {
-    const configPath = join(tmpDir, 'opencode', 'opencode.json');
-    paths.ensureConfigDir();
-    writeFileSync(configPath, JSON.stringify({ plugin: ['other'] }));
-
-    const result = enableLspByDefault();
-    expect(result.success).toBe(true);
-
-    const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
-    expect(saved.lsp).toBe(true);
-    expect(saved.plugin).toEqual(['other']);
-  });
-
-  test('enableLspByDefault preserves explicit lsp config', () => {
+  test('installation preserves explicit lsp config', async () => {
     const configPath = join(tmpDir, 'opencode', 'opencode.json');
     paths.ensureConfigDir();
     writeFileSync(configPath, JSON.stringify({ lsp: false }));
 
-    const result = enableLspByDefault();
+    const result = await addPluginToOpenCodeConfig();
     expect(result.success).toBe(true);
 
     const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
     expect(saved.lsp).toBe(false);
-  });
 
-  test('enableLspByDefault does not write when lsp exists', () => {
-    const configPath = join(tmpDir, 'opencode', 'opencode.json');
-    paths.ensureConfigDir();
-    writeFileSync(configPath, JSON.stringify({ lsp: false }));
-
-    const result = enableLspByDefault();
-    expect(result.success).toBe(true);
-
-    expect(existsSync(`${configPath}.bak`)).toBe(false);
-  });
-
-  test('detectCurrentConfig detects installed status', () => {
-    const configPath = join(tmpDir, 'opencode', 'opencode.json');
-    const litePath = join(tmpDir, 'opencode', 'oh-my-opencode-slim.json');
-    paths.ensureConfigDir();
-
-    writeFileSync(
-      configPath,
-      JSON.stringify({
-        plugin: ['oh-my-opencode-slim'],
-        provider: {
-          kimi: {
-            npm: '@ai-sdk/openai-compatible',
-          },
-        },
-      }),
-    );
-    writeFileSync(
-      litePath,
-      JSON.stringify({
-        preset: 'openai',
-        presets: {
-          openai: {
-            orchestrator: { model: 'openai/gpt-4' },
-            oracle: { model: 'anthropic/claude-opus-4-6' },
-            explorer: { model: 'github-copilot/grok-code-fast-1' },
-            designer: { model: 'zai-coding-plan/glm-4.7' },
-          },
-        },
-      }),
-    );
-
-    const detected = detectCurrentConfig();
-    expect(detected.isInstalled).toBe(true);
-    expect(detected.hasKimi).toBe(true);
-    expect(detected.hasOpenAI).toBe(true);
-    expect(detected.hasAnthropic).toBe(true);
-    expect(detected.hasCopilot).toBe(true);
-    expect(detected.hasZaiPlan).toBe(true);
+    const jsoncPath = join(tmpDir, 'opencode', 'opencode.jsonc');
+    writeFileSync(jsoncPath, JSON.stringify({ plugin: ['user-a'] }));
+    const jsoncResult = await addPluginToOpenCodeConfig();
+    expect(jsoncResult.success).toBe(true);
+    expect(jsoncResult.configPath).toBe(jsoncPath);
+    expect(JSON.parse(readFileSync(jsoncPath, 'utf-8')).lsp).toBeUndefined();
   });
 
   test('detectCurrentConfig detects installed status for installer-managed tuple', () => {
@@ -1178,36 +1180,7 @@ describe('config-io', () => {
       }),
     );
 
-    const detected = detectCurrentConfig();
-    expect(detected.isInstalled).toBe(true);
-  });
-
-  test('detectCurrentConfig detects provider models in arrays', () => {
-    const configPath = join(tmpDir, 'opencode', 'opencode.json');
-    const litePath = join(tmpDir, 'opencode', 'oh-my-opencode-slim.json');
-    paths.ensureConfigDir();
-
-    writeFileSync(
-      configPath,
-      JSON.stringify({ plugin: ['oh-my-opencode-slim'] }),
-    );
-    writeFileSync(
-      litePath,
-      JSON.stringify({
-        preset: 'dev',
-        presets: {
-          dev: {
-            orchestrator: {
-              model: ['openai/gpt-6-luna', { id: 'anthropic/claude-opus-4-6' }],
-            },
-          },
-        },
-      }),
-    );
-
-    const detected = detectCurrentConfig();
-    expect(detected.hasOpenAI).toBe(true);
-    expect(detected.hasAnthropic).toBe(true);
+    expect(isPluginConfigured()).toBe(true);
   });
 
   test('detectCurrentConfig treats local repo path entries as installed', () => {
@@ -1217,8 +1190,6 @@ describe('config-io', () => {
     writePackageJson(packageRoot);
     writeFileSync(configPath, JSON.stringify({ plugin: [packageRoot] }));
 
-    const detected = detectCurrentConfig();
-
-    expect(detected.isInstalled).toBe(true);
+    expect(isPluginConfigured()).toBe(true);
   });
 });
