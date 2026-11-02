@@ -1155,6 +1155,13 @@ describe('config-io', () => {
 
     const saved = JSON.parse(readFileSync(configPath, 'utf-8'));
     expect(saved.lsp).toBe(false);
+
+    const jsoncPath = join(tmpDir, 'opencode', 'opencode.jsonc');
+    writeFileSync(jsoncPath, JSON.stringify({ plugin: ['user-a'] }));
+    const jsoncResult = await addPluginToOpenCodeConfig();
+    expect(jsoncResult.success).toBe(true);
+    expect(jsoncResult.configPath).toBe(jsoncPath);
+    expect(JSON.parse(readFileSync(jsoncPath, 'utf-8')).lsp).toBeUndefined();
   });
 
   test('detectCurrentConfig detects installed status for installer-managed tuple', () => {

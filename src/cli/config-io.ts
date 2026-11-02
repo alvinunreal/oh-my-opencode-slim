@@ -327,6 +327,7 @@ export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | nul
   }
 
   let staging: string | undefined;
+  let backup: string | undefined;
   try {
     mkdirSync(dirname(cacheDir), { recursive: true });
     staging = mkdtempSync(`${cacheDir}.staging-`);
@@ -358,7 +359,7 @@ export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | nul
     if (verificationError)
       return { ...verificationError, configPath: cacheDir };
 
-    const backup = `${staging}.previous`;
+    backup = `${staging}.previous`;
     const hadCache = existsSync(cacheDir);
     if (hadCache) renameSync(cacheDir, backup);
     renameSync(staging, cacheDir);
@@ -366,6 +367,8 @@ export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | nul
 
     return { success: true, configPath: cacheDir };
   } catch (err) {
+    if (backup && existsSync(backup) && !existsSync(cacheDir))
+      renameSync(backup, cacheDir);
     return {
       success: false,
       configPath: cacheDir,
@@ -426,16 +429,17 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
 
   try {
     const pluginEntry = getPluginEntry();
-    mutateJsonFile(configPath, (current) => {
-      const config = removePluginEntries(current as OpenCodeConfig);
-      config.plugin = [...(config.plugin ?? []), pluginEntry];
-      if (config.lsp === undefined) config.lsp = true;
-      return config;
-    });
     const otherPath = configPath.endsWith('.jsonc')
       ? configPath.slice(0, -1)
       : `${configPath}c`;
     const otherConfig = parseConfigFile(otherPath).config;
+    mutateJsonFile(configPath, (current) => {
+      const config = removePluginEntries(current as OpenCodeConfig);
+      config.plugin = [...(config.plugin ?? []), pluginEntry];
+      if (config.lsp === undefined && otherConfig?.lsp === undefined)
+        config.lsp = true;
+      return config;
+    });
     if (
       otherConfig &&
       getPlugins(otherConfig).some(isMatchingPluginEntry) &&

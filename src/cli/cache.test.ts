@@ -433,6 +433,57 @@ describe('warmOpenCodePluginCache', () => {
     }
   });
 
+  test('restores the previous cache when publishing the staged cache fails', async () => {
+    const tmpDir = mkdirTemp();
+    const cacheHome = join(tmpDir, 'cache');
+    process.env.XDG_CACHE_HOME = cacheHome;
+    const packageRoot = join(
+      tmpDir,
+      'bunx-1000-oh-my-opencode-slim@latest',
+      'node_modules',
+      'oh-my-opencode-slim',
+    );
+    mkdirSync(join(packageRoot, 'dist', 'cli'), { recursive: true });
+    writeFileSync(
+      join(packageRoot, 'package.json'),
+      JSON.stringify({ name: 'oh-my-opencode-slim' }),
+    );
+    process.argv[1] = join(packageRoot, 'dist', 'cli', 'index.js');
+    const packagesDir = join(cacheHome, 'opencode', 'packages');
+    const cacheDir = join(packagesDir, 'oh-my-opencode-slim@latest');
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(join(cacheDir, 'old-cache'), 'original');
+
+    const fs = await import('node:fs');
+    const originalRenameSync = fs.renameSync;
+    const renameSpy = spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (
+        String(from).startsWith(`${cacheDir}.staging-`) &&
+        !String(from).endsWith('.previous') &&
+        String(to) === cacheDir
+      ) {
+        throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+      }
+      return originalRenameSync(from, to);
+    });
+    try {
+      const { warmOpenCodePluginCache } = await importFreshConfigIo();
+      const result = await warmOpenCodePluginCache();
+      expect(result?.success).toBe(false);
+      expect(result?.error).toContain('EPERM');
+      expect(renameSpy).toHaveBeenCalledTimes(3);
+      expect(readFileSync(join(cacheDir, 'old-cache'), 'utf8')).toBe(
+        'original',
+      );
+      expect(fs.readdirSync(packagesDir)).toEqual([
+        'oh-my-opencode-slim@latest',
+      ]);
+    } finally {
+      renameSpy.mockRestore();
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test('skips cache warm-up for local repo installs', async () => {
     const tmpDir = mkdirTemp();
     const packageRoot = join(tmpDir, 'repo');
