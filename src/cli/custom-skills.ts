@@ -85,10 +85,27 @@ export function getV1BundledSkillPaths(
   directory: string,
   disabled: readonly string[],
 ): string[] {
+  const projectDirs = getProjectConfigDirectories(directory);
+  // v1 scans .claude/.agents skills before skills.paths, and a later
+  // duplicate name wins, so those user skills must be excluded too.
+  const flag = (name: string) =>
+    ['1', 'true', 'yes', 'on', 'y'].includes(
+      process.env[name]?.toLowerCase() ?? '',
+    );
+  const externalNames = flag('OPENCODE_DISABLE_EXTERNAL_SKILLS')
+    ? []
+    : flag('OPENCODE_DISABLE_CLAUDE_CODE') ||
+        flag('OPENCODE_DISABLE_CLAUDE_CODE_SKILLS')
+      ? ['.agents']
+      : ['.claude', '.agents'];
+  const external = [homedir(), ...projectDirs.map(dirname)].flatMap((dir) =>
+    externalNames.map((name) => join(dir, name)),
+  );
   const roots = [
     ...getConfigSearchDirs(),
     join(homedir(), '.opencode'),
-    ...getProjectConfigDirectories(directory),
+    ...projectDirs,
+    ...external,
   ].flatMap((dir) => [join(dir, 'skill'), join(dir, 'skills')]);
   return buildBundledSkillInfos(packageRoot, disabled)
     .filter(

@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   buildBundledSkillInfos,
+  getV1BundledSkillPaths,
   removeLegacySkillSyncState,
 } from './custom-skills';
 
@@ -21,6 +22,54 @@ function writeSkill(root: string, name: string, skillMd: string): void {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'SKILL.md'), skillMd);
 }
+
+describe('getV1BundledSkillPaths', () => {
+  const originalEnv = { ...process.env };
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  function setup(): { root: string; project: string } {
+    const root = tmpDir();
+    const project = tmpDir();
+    fs.mkdirSync(path.join(project, '.git'));
+    for (const name of ['codemap', 'deepwork', 'reflect']) {
+      writeSkill(root, name, `---\nname: ${name}\ndescription: d\n---\n`);
+    }
+    for (const dir of [
+      path.join(project, '.claude', 'skills', 'codemap'),
+      path.join(project, '.agents', 'skills', 'deepwork'),
+    ]) {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), 'user skill');
+    }
+    return { root, project };
+  }
+
+  const names = (paths: string[]) => paths.map((item) => path.basename(item));
+
+  test('skips names supplied by .claude and .agents skill directories', () => {
+    const { root, project } = setup();
+    expect(names(getV1BundledSkillPaths(root, project, []))).toEqual([
+      'reflect',
+    ]);
+  });
+
+  test('ignores external directories the host is told to skip', () => {
+    const { root, project } = setup();
+    process.env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS = '1';
+    expect(names(getV1BundledSkillPaths(root, project, []))).toEqual([
+      'codemap',
+      'reflect',
+    ]);
+    process.env.OPENCODE_DISABLE_EXTERNAL_SKILLS = 'true';
+    expect(names(getV1BundledSkillPaths(root, project, []))).toEqual([
+      'codemap',
+      'deepwork',
+      'reflect',
+    ]);
+  });
+});
 
 describe('buildBundledSkillInfos', () => {
   afterEach(() => mock.restore());
