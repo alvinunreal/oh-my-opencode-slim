@@ -308,17 +308,6 @@ export class WeztermMultiplexer implements Multiplexer {
     return closed;
   }
 
-  async applyLayout(
-    layout: MultiplexerLayout,
-    mainPaneSize: number,
-  ): Promise<void> {
-    // WezTerm has no preset layouts to switch to; the new layout applies to
-    // panes spawned from now on.
-    if (layout !== this.layout) this.agentAreaPaneId = null;
-    this.layout = layout;
-    this.mainPaneSize = mainPaneSize;
-  }
-
   /** Splits `targetPaneId`; reports whether a failure means it is gone. */
   private async runSplit(
     wezterm: string,

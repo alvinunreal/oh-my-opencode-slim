@@ -17,7 +17,7 @@ import { ZellijMultiplexer } from './zellij';
  * Create a multiplexer instance based on config.
  *
  * Adapters capture pane-scoped state as they run (herdr's agent-area pane id
- * and spawn mutex, tmux's pane targets and layout debounce, kitty's applied
+ * and spawn mutex, tmux's pane targets, kitty's applied
  * layout), so a caller that performs more than one operation on one plugin
  * context must reuse a single instance per type - the TUI client wiring
  * memoizes one for its lifetime (`createReusingAdapterFactory`). Callers that
