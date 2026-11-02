@@ -1346,6 +1346,7 @@ export function createBackgroundJobTerminalGate(options: {
       response === undefined &&
       signal?.kind === 'output' &&
       signal.origin.kind === 'native' &&
+      signal.origin.callIDConfirmed === true &&
       signal.status.result?.trim() &&
       signal.status.state !== 'running'
     ) {

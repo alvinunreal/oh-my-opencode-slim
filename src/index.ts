@@ -2766,6 +2766,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         sessionID,
         messageID,
       ),
+    'v2.noteExternalPromptIntent': (sessionID: string, messageID: string) =>
+      foregroundFallback?.observeExternalPromptIntent(sessionID, messageID),
 
     agent: agents,
 
@@ -4021,6 +4023,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       >['v2.registerDelegatedLaunchFromStructured']
     >;
     'v2.notePromptAdmission': (sessionID: string, messageID: string) => void;
+    'v2.noteExternalPromptIntent'?: (
+      sessionID: string,
+      messageID: string,
+    ) => void;
   };
 
   return hooks;

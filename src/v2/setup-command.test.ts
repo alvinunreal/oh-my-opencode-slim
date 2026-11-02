@@ -34,6 +34,7 @@ import {
   INTERNAL_INITIATOR_METADATA_KEY,
   SLIM_INTERNAL_INITIATOR_MARKER,
 } from '../utils/internal-initiator';
+import { isInternalAdmission } from './internal-admissions';
 import { createV2InterviewBridge, markerText } from './interview-bridge';
 import { createSessionSubmit } from './session-submit';
 import {
@@ -2587,6 +2588,103 @@ describe('createSessionPromptBridge raw admission feed', () => {
   // above; first-wins/binding/ambiguity tracker semantics (firstAdmission,
   // peekByCallId) are pinned in pending-call-tracker.test.ts and
   // run-input-anchor.test.ts.
+});
+
+describe('createSessionPromptBridge external prompt intent feed', () => {
+  test('observePromptIntent feeds external intent synchronously before handlePrompt', () => {
+    const intents: Array<{ sessionID: string; messageID: string }> = [];
+    const bridge = createSessionPromptBridge(
+      async () => {},
+      undefined,
+      (sessionID, messageID) => {
+        intents.push({ sessionID, messageID });
+      },
+    );
+
+    bridge.observePromptIntent({
+      sessionID: 'ses_intent',
+      messageID: 'msg_intent_1',
+      prompt: { text: 'hello world' },
+    });
+
+    expect(intents).toEqual([
+      { sessionID: 'ses_intent', messageID: 'msg_intent_1' },
+    ]);
+  });
+
+  test('observePromptIntent ignores invalid inputs and empty IDs', () => {
+    const intents: Array<{ sessionID: string; messageID: string }> = [];
+    const bridge = createSessionPromptBridge(
+      async () => {},
+      undefined,
+      (sessionID, messageID) => {
+        intents.push({ sessionID, messageID });
+      },
+    );
+
+    bridge.observePromptIntent(null as any);
+    bridge.observePromptIntent({ sessionID: '', messageID: 'msg_1' });
+    bridge.observePromptIntent({ sessionID: 'ses_1', messageID: '' });
+    bridge.observePromptIntent({} as any);
+
+    expect(intents).toEqual([]);
+  });
+
+  test('observePromptIntent filters internal metadata, text marker, and existing internal admission', () => {
+    const intents: Array<{ sessionID: string; messageID: string }> = [];
+    const bridge = createSessionPromptBridge(
+      async () => {},
+      undefined,
+      (sessionID, messageID) => {
+        intents.push({ sessionID, messageID });
+      },
+    );
+
+    // 1. Metadata internal
+    bridge.observePromptIntent({
+      sessionID: 'ses_meta',
+      messageID: 'msg_meta',
+      metadata: { [INTERNAL_INITIATOR_METADATA_KEY]: true },
+      prompt: { text: 'wake queue' },
+    });
+
+    // 2. Text marker internal
+    bridge.observePromptIntent({
+      sessionID: 'ses_marker',
+      messageID: 'msg_marker',
+      prompt: { text: `hello ${SLIM_INTERNAL_INITIATOR_MARKER}` },
+    });
+
+    expect(intents).toEqual([]);
+    // Text marker should be recorded in internal admissions
+    expect(isInternalAdmission('ses_marker', 'msg_marker')).toBe(true);
+
+    // 3. Pre-recorded internal admission
+    bridge.observePromptIntent({
+      sessionID: 'ses_marker',
+      messageID: 'msg_marker',
+      prompt: { text: 'normal text now' },
+    });
+    expect(intents).toEqual([]);
+  });
+
+  test('a throwing intent observer does not throw or break the bridge', () => {
+    const bridge = createSessionPromptBridge(
+      async () => {},
+      undefined,
+      () => {
+        throw new Error('intent observer exploded');
+      },
+    );
+
+    expect(() => {
+      bridge.observePromptIntent({
+        sessionID: 'ses_throw',
+        messageID: 'msg_throw',
+        prompt: { text: 'user prompt' },
+      });
+    }).not.toThrow();
+  });
 });
 
 describe('context handler: v2 single cache breakpoint', () => {
