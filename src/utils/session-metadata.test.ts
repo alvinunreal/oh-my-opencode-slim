@@ -16,6 +16,24 @@ describe('SessionMetadataStore', () => {
     expect(store.hasAgent('old-specialist')).toBe(false);
   });
 
+  test('declared primary sessions share the active-primary eviction guard', () => {
+    const store = new SessionMetadataStore({
+      maxEntries: 3,
+      isPrimaryAgentName: (agent) =>
+        agent === 'orchestrator' || agent === 'coworker',
+    });
+
+    store.setAgent('primary-a', 'coworker');
+    store.setAgent('primary-b', 'coworker');
+    store.setAgent('old-specialist', 'explore');
+    store.setDirectory('new-session', '/tmp/project');
+
+    expect(store.size).toBe(3);
+    expect(store.getAgent('primary-a')).toBe('coworker');
+    expect(store.getAgent('primary-b')).toBe('coworker');
+    expect(store.hasAgent('old-specialist')).toBe(false);
+  });
+
   test('makes an idle orchestrator evictable without dropping another active one', () => {
     const store = new SessionMetadataStore({ maxEntries: 3 });
 

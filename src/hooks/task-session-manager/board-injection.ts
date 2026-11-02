@@ -36,6 +36,7 @@ import { log } from '../../utils/logger';
 import {
   appendTrailingVolatileMessage,
   isTaggedPart,
+  stripTaggedContent,
 } from '../cache-safe-injection';
 import type { MessagePart, MessageWithParts } from '../types';
 import { isMessageWithParts, isUserMessageWithParts } from '../types';
@@ -46,6 +47,8 @@ import { extractTaskSummary, isLateCancelledTaskError } from './status-utils';
 
 export const BACKGROUND_JOB_BOARD_METADATA_KEY =
   'oh-my-opencode-slim.backgroundJobBoard';
+const REFUSAL_CORRECTION_METADATA_KEY =
+  'oh-my-opencode-slim.refusalContinuation';
 
 const BACKGROUND_COMPLETION_COMPLETED = /^Background task completed: /;
 const BACKGROUND_COMPLETION_FAILED = /^Background task failed: /;
@@ -109,6 +112,44 @@ export function formatReopenCorrectionText(
       `- ${correction.alias} / ${correction.taskID} / run ${correction.generation} / previously ${correction.priorTerminalState}, now running`,
       'Check `task_status` for the current state before acting on the earlier result.',
     ].join('\n'),
+  );
+}
+
+export function formatRefusalCorrectionText(
+  corrections: Array<{ taskID: string; model: string }>,
+): string {
+  return formatSystemReminder(
+    [
+      '### Child task — Continuing after fallback',
+      ...corrections.map(
+        ({ taskID, model }) =>
+          `- ${taskID}: the previous error is superseded; the child continues on ${model}.`,
+      ),
+      'Do not relaunch, cancel, or replace these tasks; their results will arrive.',
+    ].join('\n'),
+  );
+}
+
+export function appendRefusalCorrections(
+  messages: unknown[],
+  corrections: Array<{ taskID: string; model: string }>,
+): void {
+  stripTaggedContent(messages, REFUSAL_CORRECTION_METADATA_KEY);
+  if (corrections.length === 0) return;
+  const anchor = findTriggeringUserMessage(
+    messages,
+    BACKGROUND_JOB_BOARD_METADATA_KEY,
+  );
+  if (!anchor) return;
+  const unique = new Map(corrections.map((item) => [item.taskID, item]));
+  appendTrailingVolatileMessage(
+    messages,
+    { ...anchor.info, id: `${anchor.info.id ?? 'board'}-refusal-correction` },
+    {
+      text: formatRefusalCorrectionText([...unique.values()]),
+      metadataKey: BACKGROUND_JOB_BOARD_METADATA_KEY,
+      extraMetadata: { [REFUSAL_CORRECTION_METADATA_KEY]: true },
+    },
   );
 }
 

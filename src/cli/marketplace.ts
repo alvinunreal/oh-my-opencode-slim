@@ -29,6 +29,7 @@ function usage(): string {
     `Commands: ${COMMANDS.join(', ')}`,
     'Targets are package IDs/selectors or bundle file paths as appropriate.',
     'enable/disable accept optional --user; default activation scope is project.',
+    'All commands accept --host-flavor v1|v2; default is v1.',
   ].join('\n');
 }
 
@@ -83,7 +84,21 @@ export async function runMarketplaceCommand(
   }
 
   try {
-    const service = io.service ?? new MarketplaceService({ projectDir: cwd });
+    let hostFlavor: 'v1' | 'v2' = 'v1';
+    const flavorIndex = rest.indexOf('--host-flavor');
+    if (flavorIndex !== -1) {
+      const value = rest[flavorIndex + 1];
+      if (
+        (value !== 'v1' && value !== 'v2') ||
+        rest.lastIndexOf('--host-flavor') !== flavorIndex
+      ) {
+        throw new Error('--host-flavor requires exactly one value: v1 or v2');
+      }
+      hostFlavor = value;
+      rest.splice(flavorIndex, 2);
+    }
+    const service =
+      io.service ?? new MarketplaceService({ projectDir: cwd, hostFlavor });
     if (
       rest.includes('--user') &&
       command !== 'enable' &&

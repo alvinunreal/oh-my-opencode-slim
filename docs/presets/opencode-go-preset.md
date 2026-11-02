@@ -24,6 +24,8 @@ opencode auth login
 opencode models --refresh
 ```
 
+On OpenCode v2, use `opencode models` instead.
+
 ## Switch at Runtime
 
 If both presets are already in your config, switch from inside OpenCode:

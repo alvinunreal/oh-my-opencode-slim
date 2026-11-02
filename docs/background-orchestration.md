@@ -40,7 +40,7 @@ means no evidence beyond launch, `unknown` means none). See the
 ## Runtime Requirement
 
 Background orchestration needs an OpenCode release with native background
-subagents and hook-driven completion, started with background subagents
+subagents and hook-driven completion. On v1, start it with background subagents
 enabled:
 
 ```bash
@@ -48,10 +48,10 @@ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
 ```
 
 The tools, their v1/v2 differences, and the `task()`/`subagent()` vocabulary are
-listed in [Tools](tools.md#background-task-control). Without the environment
-variable the default background workflow is unavailable: configure it through
-the installer (see [Installation](installation.md)) or use the one-shot export
-above, and confirm the release with `opencode --version`.
+listed in [Tools](tools.md#background-task-control). On v1, configure the
+environment variable through the installer (see [Installation](installation.md))
+or use the one-shot export above. V2 does not use this variable. Confirm the
+release with `opencode --version`.
 
 Setting `backgroundJobs.mode: "off"` (or the legacy `backgroundJobs.enabled:
 false`) turns this managed layer off entirely:

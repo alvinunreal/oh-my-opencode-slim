@@ -29,6 +29,12 @@ import type { MarketplacePackageBundle } from './schemas';
 import type { MarketplaceStoreOptions } from './store';
 import { MarketplaceStore } from './store';
 
+function readStoredLockfile(store: MarketplaceStore) {
+  return existsSync(store.paths.lockfilePath)
+    ? JSON.parse(readFileSync(store.paths.lockfilePath, 'utf8'))
+    : { packages: {} };
+}
+
 function createStore(
   options: Omit<MarketplaceStoreOptions, 'pluginVersion'> & {
     pluginVersion?: string;
@@ -295,7 +301,7 @@ describe('MarketplaceStore', () => {
         MarketplaceCompatibilityError,
       );
       expect(() => downgraded.remove('community/example')).not.toThrow();
-      expect(downgraded.getLockfile().packages).toEqual({});
+      expect(readStoredLockfile(downgraded).packages).toEqual({});
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -311,7 +317,7 @@ describe('MarketplaceStore', () => {
       expect(store.list().map((pkg) => pkg.manifest.id)).toEqual([
         'community/example',
       ]);
-      expect(store.getLockfile().packages['community/example']).toEqual({
+      expect(readStoredLockfile(store).packages['community/example']).toEqual({
         manifestSchemaVersion: 2,
         manifestVersion: '1.0.0',
         source: { kind: 'in-memory', label: 'programmatic' },
@@ -407,7 +413,7 @@ describe('MarketplaceStore', () => {
       mkdirSync(store.paths.lockfilePath);
       let readError: unknown;
       try {
-        store.getLockfile();
+        store.list();
       } catch (error) {
         readError = error;
       }
@@ -552,7 +558,7 @@ describe('MarketplaceStore', () => {
         }
 
         expect(() => store.remove('community/example')).not.toThrow();
-        expect(store.getLockfile().packages).toEqual({});
+        expect(readStoredLockfile(store).packages).toEqual({});
         expect(store.list()).toEqual([]);
       } finally {
         rmSync(root, { recursive: true, force: true });
@@ -572,7 +578,7 @@ describe('MarketplaceStore', () => {
         },
       });
       expect(notifications).toBe(1);
-      expect(store.getLockfile().packages).toEqual({});
+      expect(readStoredLockfile(store).packages).toEqual({});
 
       store.remove('community/example', {
         onCommitted: () => {
@@ -613,7 +619,7 @@ describe('MarketplaceStore', () => {
         expect(callbacks).toEqual(['initial']);
         expect(existsSync(quarantineRoot)).toBe(true);
         expect(
-          store.getLockfile().packages['community/example'],
+          readStoredLockfile(store).packages['community/example'],
         ).toBeUndefined();
 
         const retryEvents: string[] = [];
@@ -644,7 +650,7 @@ describe('MarketplaceStore', () => {
 
       expect(callbacks).toEqual(['initial', 'retry']);
       expect(existsSync(quarantineRoot)).toBe(false);
-      expect(reopened.getLockfile().packages).toEqual({});
+      expect(readStoredLockfile(reopened).packages).toEqual({});
       expect(readdirSync(store.paths.packagesDir, { recursive: true })).toEqual(
         [],
       );
@@ -728,7 +734,7 @@ describe('MarketplaceStore', () => {
           join(store.paths.stagingDir, 'removed', 'community', 'example'),
         ),
       ).toBe(true);
-      expect(store.getLockfile().packages).toEqual({});
+      expect(readStoredLockfile(store).packages).toEqual({});
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -911,7 +917,7 @@ describe('MarketplaceStore', () => {
 
         store.remove('community/example');
         expect(
-          store.getLockfile().packages['community/example'],
+          readStoredLockfile(store).packages['community/example'],
         ).toBeUndefined();
         expect(existsSync(olderVersionPath)).toBe(false);
         expect(store.show('community/other').manifest.id).toBe(
@@ -1049,7 +1055,7 @@ describe('MarketplaceStore', () => {
         if (quarantineKind === 'removal') {
           store.remove('community/example');
           expect(
-            store.getLockfile().packages['community/example'],
+            readStoredLockfile(store).packages['community/example'],
           ).toBeUndefined();
           store.show('community/other');
         } else {
@@ -1135,7 +1141,7 @@ describe('MarketplaceStore', () => {
         expect(existsSync(installed.path)).toBe(true);
         if (operation === 'update') {
           expect(
-            reopened.getLockfile().packages['community/example']
+            readStoredLockfile(reopened).packages['community/example']
               ?.manifestVersion,
           ).toBe('2.0.0');
           expect(existsSync(oldVersionPath)).toBe(false);
@@ -1195,7 +1201,7 @@ describe('MarketplaceStore', () => {
           '{original damage',
         );
         expect(
-          store.getLockfile().packages['community/example']?.digest.value,
+          readStoredLockfile(store).packages['community/example']?.digest.value,
         ).toBe(installed.digest);
         expect(store.install(original).digest).toBe(installed.digest);
       } finally {
@@ -1263,7 +1269,7 @@ describe('MarketplaceStore', () => {
             );
           }
           expect(
-            reopened.getLockfile().packages['community/example']
+            readStoredLockfile(reopened).packages['community/example']
               ?.manifestVersion,
           ).toBe(mode === 'update' ? '1.0.0' : undefined);
           expect(existsSync(nextPath)).toBe(false);
@@ -1275,7 +1281,7 @@ describe('MarketplaceStore', () => {
               original.digest,
             );
           } else {
-            expect(reopened.getLockfile().packages).toEqual({});
+            expect(readStoredLockfile(reopened).packages).toEqual({});
           }
         } finally {
           rmSync(root, { recursive: true, force: true });
@@ -1290,7 +1296,7 @@ describe('MarketplaceStore', () => {
       const store = createStore({ rootDir: root });
       mkdirSync(root, { recursive: true });
       writeFileSync(store.paths.lockfilePath, '{bad json');
-      expect(() => store.getLockfile()).toThrow(MarketplaceLockfileError);
+      expect(() => store.list()).toThrow(MarketplaceLockfileError);
       expect(() => store.install(bundle())).toThrow(MarketplaceLockfileError);
       expect(existsSync(store.paths.lockfilePath)).toBe(true);
     } finally {
@@ -1412,7 +1418,7 @@ new MarketplaceStore({ rootDir, pluginVersion: '3.2.0' }).install(input);`,
       );
       expect(results.map((result) => result.exitCode)).toEqual([0, 0]);
       expect(results.map((result) => result.stderr).join('')).toBe('');
-      expect(Object.keys(store.getLockfile().packages).sort()).toEqual([
+      expect(Object.keys(readStoredLockfile(store).packages).sort()).toEqual([
         'community/first',
         'community/second',
       ]);
@@ -1553,11 +1559,11 @@ try {
 
         const reopened = createStore({ rootDir: root });
         if (operation === 'remove') {
-          expect(reopened.getLockfile().packages).toEqual({
+          expect(readStoredLockfile(reopened).packages).toEqual({
             'community/recovered': expect.any(Object),
           });
           expect(
-            reopened.getLockfile().packages['community/example'],
+            readStoredLockfile(reopened).packages['community/example'],
           ).toBeUndefined();
         } else {
           expect(reopened.show('community/example').manifest.version).toBe(
@@ -1608,7 +1614,7 @@ try {
         unlink.mockRestore();
       }
       expect(failedLeaseUnlink).toBe(true);
-      expect(store.getLockfile().packages).toEqual({});
+      expect(readStoredLockfile(store).packages).toEqual({});
       expect(store.install(bundle()).manifest.version).toBe('1.0.0');
       expect(
         createStore({ rootDir: root }).show('community/example').manifest
@@ -1694,7 +1700,7 @@ try {
       } finally {
         rename.mockRestore();
       }
-      expect(store.getLockfile().packages).toEqual({});
+      expect(readStoredLockfile(store).packages).toEqual({});
       expect(store.list()).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1824,7 +1830,7 @@ try {
         remove.mockRestore();
       }
       const reopened = createStore({ rootDir: root });
-      expect(reopened.getLockfile().packages).toEqual({});
+      expect(readStoredLockfile(reopened).packages).toEqual({});
       expect(reopened.list()).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });

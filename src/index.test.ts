@@ -33,6 +33,7 @@ import {
 import { RuntimeConfig } from './config/runtime';
 import * as wakeHooks from './hooks';
 import { isTaggedPart, stripTaggedContent } from './hooks/cache-safe-injection';
+import { COUNCIL_INJECT_METADATA_KEY } from './hooks/council-inject';
 import { JSON_ERROR_REMINDER } from './hooks/json-error-recovery/hook';
 import {
   getWakeProgress,
@@ -359,6 +360,158 @@ describe('plugin tool registration', () => {
     expect(hooks.dispose).toBeFunction();
     await hooks.dispose?.();
     await hooks.dispose?.();
+  });
+
+  test('v1 checks the project native skill inventory at chat.params, not config time', async () => {
+    const originalEnv = { ...process.env };
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), 'marketplace-v1-skills-'),
+    );
+    const configDir = path.join(root, 'config');
+    await mkdir(configDir, { recursive: true });
+    process.env = {
+      ...originalEnv,
+      OPENCODE_CONFIG_DIR: configDir,
+      XDG_CONFIG_HOME: path.join(root, 'xdg'),
+      XDG_DATA_HOME: path.join(root, 'data'),
+    };
+    await Bun.write(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        preset: 'work',
+        presets: { work: { marketplace: { agents: ['team/skill-user'] } } },
+      }),
+    );
+    new MarketplaceStore({ pluginVersion: '3.2.0' }).install({
+      manifest: {
+        schemaVersion: 2,
+        id: 'team/skill-user',
+        version: '1.0.0',
+        displayName: 'Skill user',
+        description: 'Skill fixture',
+        agentName: 'skill-user',
+        prompt: 'Use the skill.',
+        skills: ['native-skill'],
+        mcps: [],
+        tools: ['read'],
+        author: { name: 'Test' },
+        tags: [],
+        license: 'MIT',
+        compatibility: { plugin: '*' },
+        model: { source: 'session' },
+        routing: { description: 'Skill', when: 'Testing', keywords: [] },
+      } as never,
+    });
+    let inventory = [
+      {
+        name: 'native-skill',
+        location: '/skills/native-skill/SKILL.md',
+        content: 'Native skill.',
+      },
+    ];
+    const requests: unknown[] = [];
+    const client = createPluginClient(async () => ({}));
+    Object.assign(client, {
+      _client: {
+        get: async (options: unknown) => {
+          requests.push(options);
+          return { data: inventory };
+        },
+      },
+    });
+    const hooks = await plugin({
+      client,
+      directory: root,
+      worktree: root,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    try {
+      await hooks.config?.({ agent: {} });
+      expect(requests).toHaveLength(0);
+      await hooks['chat.params']?.({} as never, {} as never);
+      expect(requests).toEqual([
+        expect.objectContaining({ url: '/skill', query: { directory: root } }),
+      ]);
+      inventory = [];
+      await expect(
+        hooks['chat.params']?.({} as never, {} as never),
+      ).rejects.toThrow('team/skill-user');
+    } finally {
+      await hooks.dispose?.();
+      process.env = originalEnv;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test('status and reload report a disabled marketplace against the live registry', async () => {
+    const originalEnv = { ...process.env };
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), 'marketplace-disabled-live-'),
+    );
+    const configDir = path.join(root, 'config');
+    await mkdir(configDir, { recursive: true });
+    process.env = {
+      ...originalEnv,
+      OPENCODE_CONFIG_DIR: configDir,
+      XDG_DATA_HOME: path.join(root, 'data'),
+    };
+    delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.json');
+    const config = {
+      preset: 'work',
+      presets: { work: { marketplace: { agents: ['team/live'] } } },
+    };
+    await Bun.write(configPath, JSON.stringify(config));
+    new MarketplaceStore({ pluginVersion: '3.2.0' }).install({
+      manifest: {
+        schemaVersion: 2,
+        id: 'team/live',
+        version: '1.0.0',
+        displayName: 'Live',
+        description: 'Live fixture',
+        agentName: 'live-agent',
+        prompt: 'Test.',
+        skills: [],
+        mcps: [],
+        tools: ['read'],
+        author: { name: 'Test' },
+        tags: [],
+        license: 'MIT',
+        compatibility: { plugin: '*' },
+        model: { source: 'session' },
+        routing: { description: 'Live', when: 'Testing.', keywords: [] },
+      } as never,
+    });
+    const hooks = await plugin({
+      client: createPluginClient(async () => ({})),
+      directory: root,
+      worktree: root,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    try {
+      await hooks.config?.({ agent: {} });
+      const { marketplaceService } = (
+        hooks as unknown as { registryBridge: RegistryFactoryBridge }
+      ).registryBridge;
+      expect(marketplaceService.status().reloadRequired).toBe(false);
+      await Bun.write(
+        configPath,
+        JSON.stringify({ ...config, marketplace: { enabled: false } }),
+      );
+      expect(marketplaceService.status()).toMatchObject({
+        desiredPackageIds: [],
+        reloadRequired: true,
+      });
+      expect(marketplaceService.requestReload()).toMatchObject({
+        desiredPackageIds: [],
+        reloadRequired: true,
+      });
+    } finally {
+      await hooks.dispose?.();
+      process.env = originalEnv;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test('activates only marketplace packages selected by the resolved preset at first host finalization', async () => {
@@ -3959,6 +4112,50 @@ describe('plugin config model inheritance', () => {
     } as never);
   }
 
+  test('v1 exposes enabled bundled skills without overriding user skills', async () => {
+    const hooks = await loadConfiguredPlugin({ disabled_skills: ['reflect'] });
+    const configDir = lastConfigDir as string;
+    const userSkill = path.join(configDir, 'skills', 'codemap');
+    await mkdir(userSkill, { recursive: true });
+    await Bun.write(
+      path.join(userSkill, 'SKILL.md'),
+      '---\nname: codemap\ndescription: user skill\n---\nuser content',
+    );
+    const disabledClaudeSkill = path.join(
+      configDir,
+      '.claude',
+      'skills',
+      'deepwork',
+    );
+    await mkdir(disabledClaudeSkill, { recursive: true });
+    await Bun.write(
+      path.join(disabledClaudeSkill, 'SKILL.md'),
+      '---\nname: deepwork\ndescription: disabled external skill\n---\n',
+    );
+    process.env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS = '1';
+    const hostConfig = { skills: { paths: [] as string[] } };
+    try {
+      await hooks.config?.(hostConfig as never);
+      expect(
+        hostConfig.skills.paths.some((item) =>
+          item.endsWith('/src/skills/deepwork'),
+        ),
+      ).toBe(true);
+      expect(
+        hostConfig.skills.paths.some((item) =>
+          item.endsWith('/src/skills/codemap'),
+        ),
+      ).toBe(false);
+      expect(
+        hostConfig.skills.paths.some((item) =>
+          item.endsWith('/src/skills/reflect'),
+        ),
+      ).toBe(false);
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
   async function selectParent(
     hooks: Awaited<ReturnType<typeof loadConfiguredPlugin>>,
     model: { providerID: string; modelID: string },
@@ -4793,6 +4990,45 @@ describe('plugin config model inheritance', () => {
       await hooks.dispose?.();
     }
   });
+
+  test.each([
+    [undefined, true],
+    [['explorer', 'councillor-alpha'], false],
+  ])(
+    'council-inject follows the orchestrator seat pointer (scope %p)',
+    async (subagents, expected) => {
+      const hooks = await loadConfiguredPlugin({
+        council: {
+          presets: { default: { alpha: { model: 'test/councillor' } } },
+        },
+        agents: subagents ? { orchestrator: { subagents } } : {},
+      });
+      const transcript = {
+        messages: [
+          {
+            info: {
+              sessionID: 'council-scope',
+              role: 'user',
+              agent: 'orchestrator',
+            },
+            parts: [{ type: 'text', text: 'get a consensus on this' }],
+          },
+        ],
+      };
+      try {
+        await hooks['experimental.chat.messages.transform']?.(
+          {},
+          transcript as never,
+        );
+        const injected = transcript.messages[0].parts.some((part) =>
+          isTaggedPart(part as never, COUNCIL_INJECT_METADATA_KEY),
+        );
+        expect(injected).toBe(expected);
+      } finally {
+        await hooks.dispose?.();
+      }
+    },
+  );
 
   test('config() keeps compaction exception after host council prompt override', async () => {
     const hooks = await loadConfiguredPlugin({
@@ -5854,6 +6090,147 @@ describe('plugin foreground fallback host gating', () => {
             ?.variant,
         continuationModel: output.message.model,
       }).toEqual({ projectedVariant: undefined, continuationModel: fallback });
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test('v2 refusal continuation yields to an external prompt but not internal discovery', async () => {
+    const { client, promptAsync } = createFallbackClient();
+    client.session.get = mock(async () => ({
+      data: {
+        agent: 'orchestrator',
+        model: { providerID: 'openai', id: 'gpt-b' },
+      },
+    }));
+    const first = Promise.withResolvers<void>();
+    const second = Promise.withResolvers<void>();
+    const switchModel = mock((sessionID: string) =>
+      sessionID === 'epoch-internal' ? first.promise : second.promise,
+    );
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      hostFlavor: 'v2',
+      experimental_v2: { switchModel },
+    } as never);
+    jest.useFakeTimers();
+    const settle = async () => {
+      for (let i = 0; i < 40; i++) await Promise.resolve();
+    };
+    const start = async (sessionID: string) => {
+      const data = {
+        sessionID,
+        assistantMessageID: `assistant-${sessionID}`,
+        agent: 'orchestrator',
+        model: { providerID: 'openai', id: 'gpt-b' },
+      };
+      await hooks.event?.({
+        event: { type: 'session.step.started', data },
+      } as never);
+      await hooks.event?.({
+        event: {
+          type: 'session.step.failed',
+          data: {
+            ...data,
+            finish: 'content-filter',
+            error: { type: 'provider.content-filter', message: 'blocked' },
+          },
+        },
+      } as never);
+      await settle();
+    };
+    try {
+      await start('epoch-internal');
+      expect(switchModel).toHaveBeenCalledTimes(1);
+      await hooks['chat.message']?.(
+        { sessionID: 'epoch-internal', agent: 'orchestrator' } as never,
+        { parts: [createInternalAgentTextPart('internal wake')] } as never,
+      );
+      await hooks['chat.message']?.(
+        { sessionID: 'epoch-internal', agent: 'orchestrator' } as never,
+        {} as never,
+      );
+      first.resolve();
+      await settle();
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+      await start('epoch-external');
+      expect(switchModel).toHaveBeenCalledTimes(2);
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'epoch-external',
+          agent: 'orchestrator',
+          parts: [{ type: 'text', text: 'new turn' }],
+        } as never,
+        {} as never,
+      );
+      second.resolve();
+      await settle();
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+    } finally {
+      first.resolve();
+      second.resolve();
+      await hooks.dispose?.();
+    }
+  });
+
+  test('v2 retry projects the fallback model and variant without another external prompt', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: false },
+        fallback: { enabled: true, maxRetries: 0 },
+        agents: {
+          orchestrator: {
+            model: ['openai/gpt-b', { id: 'openai/gpt-c', variant: 'high' }],
+          },
+        },
+      }),
+    );
+    const hooks = await createHooks('v2');
+    try {
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'sidebar-switch',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', modelID: 'gpt-b' },
+        } as never,
+        {} as never,
+      );
+      const switchModel = mock(async () => ({}));
+      await hooks['v2.session.retry']?.(
+        {
+          sessionID: 'sidebar-switch',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', id: 'gpt-b' },
+          error: { message: 'rate limit' },
+          decision: { retry: false },
+        } as never,
+        switchModel as never,
+      );
+      expect(switchModel).toHaveBeenCalledTimes(1);
+      expect(
+        readTuiSnapshot(projectDir).sessionModels?.['sidebar-switch']
+          ?.orchestrator,
+      ).toEqual({ model: 'openai/gpt-c', variant: 'high' });
+      const { recordInternalAdmission } = await import(
+        './v2/internal-admissions'
+      );
+      recordInternalAdmission('sidebar-switch', 'internal-discovery');
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'sidebar-switch',
+          agent: 'orchestrator',
+          messageID: 'internal-discovery',
+          model: { providerID: 'openai', modelID: 'gpt-b' },
+        } as never,
+        {} as never,
+      );
+      expect(
+        readTuiSnapshot(projectDir).sessionModels?.['sidebar-switch']
+          ?.orchestrator?.model,
+      ).toBe('openai/gpt-c');
     } finally {
       await hooks.dispose?.();
     }

@@ -46,9 +46,18 @@ import { COUNCIL_INJECT_METADATA_KEY } from '../hooks/council-inject';
 import { GOAL_POINTER_METADATA_KEY } from '../hooks/deepwork-goal';
 import type { ForegroundFallbackManager } from '../hooks/foreground-fallback';
 import { PHASE_REMINDER_METADATA_KEY } from '../hooks/phase-reminder';
-import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/task-session-manager/board-injection';
+import {
+  appendRefusalCorrections,
+  BACKGROUND_JOB_BOARD_METADATA_KEY,
+} from '../hooks/task-session-manager/board-injection';
 import { OhMyOpenCodeLite } from '../index';
+import { MarketplaceBusyError } from '../marketplace/errors';
+import {
+  retryMarketplaceLeases,
+  withImmediateMarketplaceLeases,
+} from '../marketplace/lease';
 import { loadMergedOpenCodeConfig } from '../marketplace/preflight';
+import { skillIdsFromResponse } from '../marketplace/skills';
 import type { McpConfig } from '../mcp/types';
 import {
   collectAgentDisplayNames,
@@ -72,6 +81,7 @@ import {
   modelExistsInCatalog,
 } from '../utils/model-image-capability';
 import { OperationTimeoutError, withTimeout } from '../utils/session';
+import { findTaskErrorNotice, parseTaskResultFromOutput } from '../utils/task';
 import {
   adaptTool,
   applyAgentToDraft,
@@ -122,8 +132,15 @@ import {
   type SessionTeamBundle,
   wrapSessionPresetSubagent,
 } from './session-presets';
-import { createSessionSubmit, type V2CommandSubmit } from './session-submit';
-import { createSubagentExecutorWrapper } from './subagent-executor-wrapper';
+import {
+  createSessionSubmit,
+  userTextFromContent,
+  type V2CommandSubmit,
+} from './session-submit';
+import {
+  createSubagentExecutorWrapper,
+  readRefusalOutcome,
+} from './subagent-executor-wrapper';
 import type {
   V2AgentDraft,
   V2Cleanup,
@@ -349,6 +366,13 @@ export interface V2SessionContextHandlerDeps {
   sessionContext?: (
     sessionID: string,
   ) => Promise<Array<Record<string, unknown>> | undefined>;
+  backgroundGeneration?: (
+    parentID: string,
+    childID: string,
+    runningOnly?: boolean,
+    refusalTime?: number,
+  ) => number | undefined;
+  refusalOutcome?: ForegroundFallbackManager['refusedChildOutcome'];
   /** v1 `experimental.chat.system.transform` hook. */
   systemTransform?: (
     input: unknown,
@@ -433,12 +457,18 @@ export function attributeAgentsByHistory(
   return attribution;
 }
 
+const MAX_REFUSAL_NOTICES = 1024;
+
 /** Build the single `ctx.session.hook("context")` handler: interview marker
  * bridge, generic command marker dispatch, chat.message agent tracking, and
  * the v1 system/messages transforms — each independently try/catch-guarded. */
 export function createSessionContextHandler(
   deps: V2SessionContextHandlerDeps,
 ): (event: V2SessionContextEvent) => Promise<void> {
+  const refusalNotices = new Map<
+    string,
+    { model: string; completedAt: number } | undefined
+  >();
   return async (event) => {
     // Interview marker bridge (transcript projection + /interview).
     try {
@@ -635,6 +665,76 @@ export function createSessionContextHandler(
             ),
           };
         });
+        const refusalCorrections: Array<{
+          taskID: string;
+          model: string;
+          completedAt: number;
+        }> = [];
+        if (
+          deps.backgroundGeneration &&
+          deps.refusalOutcome &&
+          deps.sessionContext
+        ) {
+          for (const message of v1messages) {
+            if (message.info.role !== 'user') continue;
+            for (const part of message.parts) {
+              if (part.type !== 'text' || typeof part.text !== 'string')
+                continue;
+              const notice = findTaskErrorNotice(part.text, 'subagent');
+              const block = notice?.block;
+              const childID = notice?.taskID;
+              if (!block || !childID) continue;
+              if (
+                deps.backgroundGeneration(event.sessionID, childID, true) ===
+                undefined
+              )
+                continue;
+              const text = parseTaskResultFromOutput(block);
+              if (!text) continue;
+              const noticeKey = `${message.info.id ?? ''}\0${childID}\0${text}`;
+              let recovery = refusalNotices.get(noticeKey);
+              if (!refusalNotices.has(noticeKey)) {
+                const outcome = await readRefusalOutcome(
+                  deps.sessionContext,
+                  deps.refusalOutcome,
+                  childID,
+                  text,
+                );
+                if (outcome !== null) {
+                  recovery =
+                    outcome &&
+                    typeof outcome.completedAt === 'number' &&
+                    Number.isFinite(outcome.completedAt)
+                      ? {
+                          model: outcome.model,
+                          completedAt: outcome.completedAt,
+                        }
+                      : undefined;
+                  if (refusalNotices.size >= MAX_REFUSAL_NOTICES) {
+                    const oldest = refusalNotices.keys().next().value;
+                    if (oldest !== undefined) refusalNotices.delete(oldest);
+                  }
+                  refusalNotices.set(noticeKey, recovery);
+                }
+              }
+              if (recovery) {
+                refusalCorrections.push({ taskID: childID, ...recovery });
+              }
+            }
+          }
+        }
+        appendRefusalCorrections(
+          v1messages,
+          refusalCorrections.filter(
+            ({ taskID, completedAt }) =>
+              deps.backgroundGeneration?.(
+                event.sessionID,
+                taskID,
+                true,
+                completedAt,
+              ) !== undefined,
+          ),
+        );
         await deps.messagesTransform({}, { messages: v1messages });
         event.messages = v1messages.map((m) => {
           const info = m.info as { content?: unknown; time?: unknown };
@@ -2492,6 +2592,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         resolvePermissionSnapshotReady = resolve;
       });
       let pendingAgentDraft: V2AgentDraft | undefined;
+      let pendingMarketplaceLeaseRetry: Promise<void> | undefined;
+      const marketplaceLeaseAbort = new AbortController();
+      disposers.push(() => marketplaceLeaseAbort.abort());
       // An agent pass that ended before the MCP snapshot existed: our agents
       // were added to it afterwards, missing later host transforms.
       let agentPassDeferred = false;
@@ -2517,6 +2620,17 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         | undefined;
       if (!registryBridge)
         throw new Error('v1 factory registry bridge is unavailable');
+      if (registryBridge.hasSelectedMarketplaceAgents && !ctx.session) {
+        throw new Error(
+          'Marketplace agents require session model request hooks',
+        );
+      }
+      registryBridge.setMarketplaceSkillReader(async () => {
+        if (typeof ctx.skill?.list !== 'function') {
+          throw new Error('Native skill inventory unavailable');
+        }
+        return skillIdsFromResponse(await ctx.skill.list(), 'id');
+      });
       const configCommands: Record<string, unknown> = {};
       registryBridge.prepareCommands(configCommands);
       const command = configCommands.command as
@@ -2540,12 +2654,48 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         }
         // Consume before applying: MCP replays must not reuse this editor.
         pendingAgentDraft = undefined;
-        const registry =
-          finalizedRegistry ??
-          registryBridge.finalize(
-            { agent: nativeAgentSnapshot.agents, mcp: hostMcpSnapshot },
-            nativeAgentSnapshot.permissions,
-          );
+        if (pendingMarketplaceLeaseRetry && !finalizedRegistry) return;
+        const agentSnapshot = nativeAgentSnapshot;
+        const mcpSnapshot = hostMcpSnapshot;
+        let registry: ReturnType<RegistryFactoryBridge['requireRegistry']>;
+        try {
+          registry =
+            finalizedRegistry ??
+            withImmediateMarketplaceLeases(() =>
+              registryBridge.finalize(
+                { agent: agentSnapshot.agents, mcp: mcpSnapshot },
+                agentSnapshot.permissions,
+              ),
+            );
+        } catch (error) {
+          if (!(error instanceof MarketplaceBusyError)) throw error;
+          agentPassDeferred = true;
+          if (typeof ctx.agent?.reload !== 'function') {
+            throw new Error(
+              'Marketplace registry needs agent reload after a busy lease',
+            );
+          }
+          pendingMarketplaceLeaseRetry = retryMarketplaceLeases(
+            () =>
+              registryBridge.finalize(
+                { agent: agentSnapshot.agents, mcp: mcpSnapshot },
+                agentSnapshot.permissions,
+              ),
+            marketplaceLeaseAbort.signal,
+          )
+            .then((result) => {
+              if (generationDisposed) return;
+              finalizedRegistry = result;
+              requestAgentRebuild();
+            })
+            .catch((cause) => {
+              if (generationDisposed) return;
+              permissionSnapshotFailure =
+                cause instanceof Error ? cause : new Error(String(cause));
+              resolvePermissionSnapshotReady();
+            });
+          return;
+        }
         finalizedRegistry = registry;
         marketplaceAgentsRequirePromptPolicy =
           registry.marketplaceAgentNames.length > 0;
@@ -2626,12 +2776,17 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         if (typeof ctx.agent?.reload !== 'function') return;
         agentRebuild = Promise.resolve()
           .then(() => (generationDisposed ? undefined : ctx.agent.reload()))
-          .catch((err) =>
+          .catch((err) => {
             log(
               '[v2] agent rebuild after deferred finalization failed',
               String(err),
-            ),
-          );
+            );
+            if (!permissionSnapshotReady && !generationDisposed) {
+              permissionSnapshotFailure =
+                err instanceof Error ? err : new Error(String(err));
+              resolvePermissionSnapshotReady();
+            }
+          });
       };
       const captureAgentDraft = (draft: V2AgentDraft) => {
         if (permissionSnapshotFailure) {
@@ -2683,6 +2838,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           agentPassDeferred = !permissionSnapshotReady;
         } catch (error) {
           if (generationDisposed) throw error;
+          log('[v2] agent finalization failed', String(error));
           permissionSnapshotFailure =
             error instanceof Error ? error : new Error(String(error));
           resolvePermissionSnapshotReady();
@@ -3328,6 +3484,12 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           // Per-message agent attribution source: durable agent-switched
           // markers in the stored, compaction-bounded history stream.
           sessionContext: sessionContextRead,
+          backgroundGeneration: v1Hooks[
+            'v2.backgroundGeneration'
+          ] as V2SessionContextHandlerDeps['backgroundGeneration'],
+          refusalOutcome: v1Hooks[
+            'v2.refusalOutcome'
+          ] as V2SessionContextHandlerDeps['refusalOutcome'],
           systemTransform,
           messagesTransform,
           // Primaries use the startup registry; child profiles stay session-frozen.
@@ -3413,10 +3575,26 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         // HTTP headers; registered unconditionally when the v1
         // hook exists — a failure fails setup rather than silently skipping
         // the Copilot initiator header).
-        if (chatHeadersHook) {
+        if (chatHeadersHook || registryBridge.hasSelectedMarketplaceAgents) {
+          const headers = chatHeadersHook
+            ? createChatHeadersBridge(chatHeaderStates)
+            : undefined;
           const headerReg = await ctx.session.hook(
             'model.request',
-            createChatHeadersBridge(chatHeaderStates),
+            async (event) => {
+              if (registryBridge.hasSelectedMarketplaceAgents) {
+                if (!permissionSnapshotReady) {
+                  await withTimeout(
+                    permissionSnapshotReadiness,
+                    PERMISSION_RULES_OPERATION_TIMEOUT_MS,
+                    'Agent registry readiness timed out',
+                  );
+                }
+                if (permissionSnapshotFailure) throw permissionSnapshotFailure;
+                await registryBridge.verifyMarketplaceSkills();
+              }
+              await headers?.(event);
+            },
           );
           disposers.push(() => headerReg.dispose());
           log('[v2] chat.headers bridge registered (session.model.request)');
@@ -3654,6 +3832,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
               const wrapper =
                 lifecycleEnabled && registerStructuredLaunch
                   ? createSubagentExecutorWrapper({
+                      context: sessionContextRead,
+                      refusalOutcome: v1Hooks[
+                        'v2.refusalOutcome'
+                      ] as V2SessionContextHandlerDeps['refusalOutcome'],
                       register: (launch) =>
                         registerStructuredLaunch({
                           ...launch,

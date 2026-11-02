@@ -123,6 +123,7 @@ export interface RevivedRunTracker {
     parentSessionID: string;
     baselineMessageID?: string;
     description: string;
+    allowForeground?: boolean;
   }): boolean;
   admitObservation(
     taskID: string,
@@ -655,6 +656,7 @@ export function createRevivedRunTracker(options: {
       baselineMessageID?: string;
       readonly attemptStartedAt: number;
       description: string;
+      background: boolean;
       state: 'pending' | 'promoted';
       expiryTimer?: ReturnType<typeof setTimeout>;
     }
@@ -747,7 +749,7 @@ export function createRevivedRunTracker(options: {
     if (
       record?.state !== 'running' ||
       record.generation !== pending.generation ||
-      record.background !== true
+      record.background !== pending.background
     ) {
       // The execution was superseded while the admission was unknown:
       // nothing to own.
@@ -780,13 +782,15 @@ export function createRevivedRunTracker(options: {
     parentSessionID: string;
     baselineMessageID?: string;
     description: string;
+    allowForeground?: boolean;
   }): boolean {
     if (disposed) return false;
     const record = options.backgroundJobBoard.get(input.taskID);
     if (
       record?.state !== 'running' ||
       record.generation !== input.generation ||
-      record.background !== true
+      (record.background !== true &&
+        (!input.allowForeground || record.provisional === true))
     ) {
       return false;
     }
@@ -808,6 +812,7 @@ export function createRevivedRunTracker(options: {
       baselineMessageID: input.baselineMessageID,
       attemptStartedAt: Date.now(),
       description: input.description,
+      background: record.background,
       state: 'pending',
       expiryTimer,
     });
@@ -841,7 +846,7 @@ export function createRevivedRunTracker(options: {
     if (
       record?.state !== 'running' ||
       record.generation !== generation ||
-      record.background !== true
+      record.background !== pending.background
     ) {
       return false;
     }

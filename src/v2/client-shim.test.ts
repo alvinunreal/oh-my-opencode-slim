@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isReplayableUserMessage } from '../hooks/types';
+import { classifyTerminalEvidence } from '../utils/child-transcript';
 import { createInternalAgentTextPart } from '../utils/internal-initiator';
 import { buildPluginInput } from './client-shim';
 import type { V2Context } from './types';
@@ -52,6 +53,20 @@ function makeCtxWithPermission(options: {
 }
 
 describe('v2 client shim delegation', () => {
+  test('exposes the real switchModel capability only when available', async () => {
+    const calls: unknown[] = [];
+    const input = buildPluginInput(
+      makeCtx({ switchModel: async (args) => void calls.push(args) }),
+    );
+    const channel = input.experimental_v2 as {
+      switchModel: (sessionID: string, model: unknown) => Promise<unknown>;
+    };
+    const model = { providerID: 'test', id: 'b', variant: 'fast' };
+    await channel.switchModel('session', model);
+    expect(calls).toEqual([{ sessionID: 'session', model }]);
+    expect(buildPluginInput(makeCtx()).experimental_v2).toBeUndefined();
+  });
+
   test('messages maps session.context to v1 {data} with info/parts', async () => {
     const calls: unknown[] = [];
     const input = buildPluginInput(
@@ -1982,6 +1997,39 @@ describe('v2 client shim foreground-fallback integration', () => {
       time: { created: 1789774973283 },
     });
     expect(idle.parts).toEqual([]);
+  });
+
+  test('model switch and idle markers do not hide a completed child answer', async () => {
+    const input = buildPluginInput(
+      makeCtx({
+        context: async () => [
+          { id: 'user', type: 'user', time: { created: 1 }, text: 'work' },
+          {
+            id: 'answer',
+            type: 'assistant',
+            time: { created: 2, completed: 5 },
+            finish: 'stop',
+            content: [{ type: 'text', text: 'CHILD_OK' }],
+          },
+          { id: 'switch', type: 'model-switched', time: { created: 3 } },
+          {
+            id: 'idle',
+            type: 'idle',
+            time: { created: 6 },
+            outcome: 'succeeded',
+          },
+        ],
+      } as never),
+    );
+    const result = await input.client.session.messages({
+      path: { id: 'child' },
+    });
+    expect(
+      classifyTerminalEvidence(result, {
+        runStartedAt: 1,
+        terminalOutcomeConfirmed: true,
+      }),
+    ).toEqual({ verdict: 'completed', text: 'CHILD_OK' });
   });
 
   test('messages preserves assistant error and finish state for failed turns', async () => {

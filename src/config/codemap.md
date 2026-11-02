@@ -61,7 +61,7 @@ an eager config dependency: package-ID validation comes from `id-schema.ts`.
    └─ Environment variable: OH_MY_OPENCODE_SLIM_PRESET (overrides preset field)
 
 2. Parsing Phase
-   ├─ JSONC support (comments, trailing commas) via stripJsonComments
+   ├─ JSONC support (comments, trailing commas) via parseJsonConfigText
    ├─ Environment variable interpolation: {env:VAR_NAME} → process.env.VAR_NAME
    └─ Zod validation with detailed error reporting
 
@@ -116,7 +116,7 @@ Preset resolution flow:
 ### Dependencies
 
 - **Zod**: Runtime validation and schema inference
-- **Node.js fs**: Configuration file reading (JSONC support via stripJsonComments)
+- **Node.js fs**: Configuration file reading (JSONC support via parseJsonConfigText)
 - **Environment**: Environment variable interpolation via {env:VAR_NAME} syntax
 
 ### Published Exports
@@ -202,6 +202,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `displayName`: Custom display name for the agent
 - `color`: Agent display color as a six-digit hex value or OpenCode theme color
 - `primary`: Declare a custom agent as a peer primary orchestrator (SDK mode `primary`; ignored on built-in names)
+- `subagents`: Primary agents only — delegation scope allowlist compiled into the `task` permission stance (`{"*": "deny", "<name>": "allow"}`); an explicit `permission.task` entry wins and skips the scoped `<Agents>` catalog. `'*'` is reserved
 
 ### CouncilConfig
 - `presets`: Named council presets (map of councillor name → CouncillorConfig)
