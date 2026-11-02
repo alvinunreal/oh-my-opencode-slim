@@ -15,6 +15,7 @@
  */
 
 import path from 'node:path';
+import { LRUCache } from 'lru-cache';
 import type { RegistryFactoryBridge } from '../agents/registry-bridge';
 import {
   buildBundledSkillInfos,
@@ -64,7 +65,10 @@ import {
 import { isPluginDisabledByEnv } from '../utils/env';
 import { createEventDirectoryScope } from '../utils/event-directory-scope';
 import { isRecord } from '../utils/guards';
-import { INTERNAL_INITIATOR_METADATA_KEY } from '../utils/internal-initiator';
+import {
+  INTERNAL_INITIATOR_METADATA_KEY,
+  SLIM_INTERNAL_INITIATOR_MARKER,
+} from '../utils/internal-initiator';
 import { initLogger, log } from '../utils/logger';
 import {
   type ModelImageCapabilityCache,
@@ -228,6 +232,7 @@ export function createCommandRegistration(
         await submit(
           invocation?.sessionID ?? '',
           wrapCommandMarker(name, invocation?.prompt?.text ?? ''),
+          ...(invocation?.prompt?.files ? [invocation.prompt.files] : []),
         );
       } catch (err) {
         log('[v2] command submit failed', { name, err: String(err) });
@@ -257,47 +262,65 @@ export function registerSynthCommands(
   }
 }
 
-/** Dispatch a generic command marker found in the trailing user message to
- * the v1 `command.execute.before` hook, then replace that message's content
- * with the hook-produced parts. Mirrors the interview bridge mutation
- * semantics: only the trailing message is touched so earlier messages stay
- * byte-for-byte identical (provider prompt-cache prefix reuse). */
+const commandExpansions = new WeakMap<
+  V1CommandBeforeHook,
+  LRUCache<string, Promise<V1CommandPart[]>>
+>();
+
+/** Replay the same expansion whenever the host rebuilds its message history. */
 export async function applyCommandMarkerToContext(
   event: V2SessionContextEvent,
   commandBefore: V1CommandBeforeHook,
 ): Promise<void> {
-  const trailing = event.messages.at(-1);
-  if (trailing?.role !== 'user') return;
-  const text = userTextFromContent(trailing.content);
-  const parsed = parseCommandMarker(text);
-  if (!parsed) return;
+  for (const trailing of event.messages) {
+    if (trailing.role !== 'user') continue;
+    const markerIndex = trailing.content.findIndex(
+      (part) => part.type === 'text' && part.synthetic !== true,
+    );
+    const marker = trailing.content[markerIndex];
+    const text = typeof marker?.text === 'string' ? marker.text : '';
+    const parsed = parseCommandMarker(text);
+    if (!parsed) continue;
 
-  const output = { parts: [] as V1CommandPart[] };
-  await commandBefore(
-    {
-      command: parsed.name,
-      sessionID: event.sessionID,
-      arguments: parsed.args.trim(),
-    },
-    output,
-  );
+    let cache = commandExpansions.get(commandBefore);
+    if (!cache) {
+      cache = new LRUCache({ max: 512 });
+      commandExpansions.set(commandBefore, cache);
+    }
+    const key =
+      trailing.id && JSON.stringify([event.sessionID, trailing.id, text]);
+    let expansion = key ? cache.get(key) : undefined;
+    if (!expansion) {
+      const output = { parts: [] as V1CommandPart[] };
+      expansion = commandBefore(
+        {
+          command: parsed.name,
+          sessionID: event.sessionID,
+          arguments: parsed.args.trim(),
+        },
+        output,
+      ).then(() => output.parts);
+      if (key) cache.set(key, expansion);
+    }
+    const parts = await expansion.catch((error) => {
+      if (key) cache.delete(key);
+      throw error;
+    });
 
-  const syntheticParts = trailing.content.filter(
-    (part) => part.synthetic === true,
-  );
+    const otherParts = trailing.content.filter(
+      (_, index) => index !== markerIndex,
+    );
 
-  if (output.parts.length > 0) {
+    if (parts.length > 0) {
+      trailing.content = [...parts.map((part) => ({ ...part })), ...otherParts];
+      continue;
+    }
+    // Hook produced nothing: strip the marker and leave the raw args text.
     trailing.content = [
-      ...output.parts.map((part) => ({ ...part })),
-      ...syntheticParts,
+      { type: 'text', text: stripCommandMarker(text) },
+      ...otherParts,
     ];
-    return;
   }
-  // Hook produced nothing: strip the marker and leave the raw args text.
-  trailing.content = [
-    { type: 'text', text: stripCommandMarker(text) },
-    ...syntheticParts,
-  ];
 }
 
 /** Payload the v1 `chat.message` bridge feeds its consumers (a subset of
@@ -359,7 +382,30 @@ export interface V2SessionContextHandlerDeps {
   /** Session-frozen runtime profile application: mutates ONLY the request
    * `options` record (temperature/provider options) for a captured child
    * session. Never touches system/messages/tools. */
-  applyRuntimeProfile?: (event: V2SessionContextEvent) => void;
+  applyRuntimeProfile?: (event: V2SessionContextEvent) => void | Promise<void>;
+}
+
+/** Keep primary options not superseded by the host's variant defaults. */
+function withoutVariantSettings(
+  options: Record<string, unknown>,
+  settings: Record<string, unknown>,
+): Record<string, unknown> {
+  const entries: Array<[string, unknown]> = [];
+  for (const [key, value] of Object.entries(options)) {
+    const selected = Object.hasOwn(settings, key) ? settings[key] : undefined;
+    if (selected === undefined) {
+      entries.push([key, value]);
+    } else if (
+      isRecord(value) &&
+      !Array.isArray(value) &&
+      isRecord(selected) &&
+      !Array.isArray(selected)
+    ) {
+      const remaining = withoutVariantSettings(value, selected);
+      if (Object.keys(remaining).length > 0) entries.push([key, remaining]);
+    }
+  }
+  return Object.fromEntries(entries);
 }
 
 /**
@@ -730,7 +776,7 @@ export function createSessionContextHandler(
     // system/messages/tools stay byte-stable.
     if (deps.applyRuntimeProfile) {
       try {
-        deps.applyRuntimeProfile(event);
+        await deps.applyRuntimeProfile(event);
       } catch (err) {
         log('[v2] runtime profile apply failed', String(err));
       }
@@ -776,6 +822,9 @@ export interface V2SessionPromptBridge {
    * The raw admission feed (when wired) still fires immediately, before
    * that deferral. */
   handlePrompt(event: V2SessionPromptEvent): Promise<void>;
+  /** Early synchronous external-prompt intent observer. Runs on the first line
+   *  of the registered `prompt` callback before any permission or profile awaits. */
+  observePromptIntent(event: V2SessionPromptEvent): void;
   /** Record per-session agent/model from context events; forward NEWLY
    * learned state to the v1 chat.message hook, flushing any deferred
    * first admission with the agent attached. */
@@ -1814,6 +1863,7 @@ export function createPermissionRulesBridge(
 export function createSessionPromptBridge(
   chatMessage: (input: V1ChatMessageInput, output: unknown) => Promise<void>,
   notePromptAdmission?: (sessionID: string, messageID: string) => void,
+  noteExternalPromptIntent?: (sessionID: string, messageID: string) => void,
 ): V2SessionPromptBridge {
   /** Last admitted messageID per session (once-per-admission dedupe). */
   const seenAdmissions = new Map<string, string>();
@@ -1841,6 +1891,40 @@ export function createSessionPromptBridge(
   }
 
   return {
+    observePromptIntent(event: V2SessionPromptEvent): void {
+      if (!event || typeof event !== 'object') return;
+      const sessionID = event.sessionID;
+      const messageID = event.messageID;
+      if (typeof sessionID !== 'string' || !sessionID) return;
+      if (typeof messageID !== 'string' || !messageID) return;
+
+      const internalMetadata =
+        isRecord(event.metadata) &&
+        event.metadata[INTERNAL_INITIATOR_METADATA_KEY] === true;
+      const promptText =
+        isRecord(event.prompt) && typeof event.prompt.text === 'string'
+          ? event.prompt.text
+          : '';
+      const internalMarker = promptText.includes(
+        SLIM_INTERNAL_INITIATOR_MARKER,
+      );
+
+      // Only metadata proves a Slim admission; marker text alone (which a
+      // user can paste) skips the fence without widening the registry.
+      if (internalMetadata) recordInternalAdmission(sessionID, messageID);
+      if (internalMetadata || internalMarker) return;
+
+      if (isInternalAdmission(sessionID, messageID)) {
+        return;
+      }
+
+      try {
+        noteExternalPromptIntent?.(sessionID, messageID);
+      } catch (err) {
+        log('[v2] external prompt intent observer failed', String(err));
+      }
+    },
+
     async handlePrompt(event) {
       if (!event || typeof event !== 'object') return;
       const sessionID = event.sessionID;
@@ -2026,12 +2110,21 @@ function renderOutput(value: unknown): string {
   }
 }
 
-/** Formatted error text from a v2 execute.after `error` payload (string,
- * Error-like `{message}`, or structured record). Empty string when the
- * host provided nothing. */
+function causeTextOf(error: Record<string, unknown>): string {
+  if (error._tag !== 'Tool.Error' || error.error === undefined) return '';
+  return error.error instanceof Error
+    ? errorTextOf(error.error)
+    : String(error.error);
+}
+
+/** Model-visible text from a v2 execute.after error, unwrapping tool causes. */
 function errorTextOf(error: unknown): string {
+  if (isRecord(error)) {
+    const cause = causeTextOf(error);
+    if (cause) return cause;
+  }
   if (typeof error === 'string') return error;
-  if (isRecord(error) && typeof error.message === 'string' && error.message) {
+  if (isRecord(error) && typeof error.message === 'string') {
     return error.message;
   }
   return renderOutput(error);
@@ -2150,15 +2243,11 @@ export function createToolExecuteBridges(
     // v2 execute.after is status-discriminated: `completed` → mutable
     // result; `error` → `error` payload (result may be absent or stale).
     // Absent status (defensive null-safety) keeps the completed path.
-    // On error the v1 output is synthesized from the error text — that
-    // is exactly the v1 shape, where a failed tool's model-visible
-    // output WAS the error message — so error-recovery consumers
-    // (json-error-recovery appends its reminder to output.output) still
-    // run meaningfully. An errored call never presents its result
-    // content as a successful output.
+    // On error, synthesize v1 output from the failure message and return
+    // after-hook changes through the failure, not a stale result.
     const errored = e.status === 'error';
     // Map v2 Tool.Result.content (string | Content[]) -> v1 output.output
-    // string; the v1 after-hooks (jsonErrorRecovery, taskSessionManagerAfter)
+    // string; the v1 after-hooks (tool-loop-guard, taskSessionManagerAfter)
     // read output.output to decide recovery and task state.
     const result = e.result as
       | {
@@ -2197,25 +2286,27 @@ export function createToolExecuteBridges(
         tool: toolNameToV1(e.tool),
         sessionID: e.sessionID,
         callID: e.id,
+        status: e.status,
         args: isDelegation ? subagentArgsToV1(e.input) : e.input,
       },
       output,
     );
 
+    const updatedText =
+      typeof output.output === 'string'
+        ? output.output
+        : renderOutput(output.output);
+    if (errored) {
+      if (updatedText !== content && isRecord(e.error)) {
+        if (causeTextOf(e.error))
+          e.error.error = new Error(updatedText, { cause: e.error.error });
+        else e.error.message = updatedText;
+      }
+      return;
+    }
     if (result) {
-      const updatedText =
-        typeof output.output === 'string'
-          ? output.output
-          : renderOutput(output.output);
       if (updatedText !== content) {
-        if (errored) {
-          // Errored call: the model-visible content is the synthesized
-          // error text plus whatever the hook appended (e.g. the
-          // json-error-recovery reminder). Written as plain string
-          // content — never keep a stale/empty result content looking
-          // like a successful output.
-          result.content = updatedText;
-        } else if (hasRenderableContent) {
+        if (hasRenderableContent) {
           result.content = updateToolResultContent(
             rawContent,
             content,
@@ -2507,6 +2598,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         | undefined;
       let permissionRulesBridgeEnabled = false;
       const pluginAgents = new Set<string>();
+      const primaryRequestOptions = new Map<
+        string,
+        { options: Record<string, unknown>; temperature?: number }
+      >();
       let marketplaceAgentsRequirePromptPolicy = false;
       let permissionRulesBridge:
         | ReturnType<typeof createPermissionRulesBridge>
@@ -2575,6 +2670,14 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             !Object.hasOwn(registry.identities, name)
           )
             continue;
+          if (cfg.mode === 'primary') {
+            primaryRequestOptions.set(name, {
+              options: isRecord(cfg.options) ? { ...cfg.options } : {},
+              ...(typeof cfg.temperature === 'number'
+                ? { temperature: cfg.temperature }
+                : {}),
+            });
+          }
           applyAgentToDraft(
             draft,
             name,
@@ -2582,7 +2685,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             registry.nativePolicies[name]?.rules,
           );
         }
-        if (resolvedAgents.orchestrator) {
+        if (
+          preFlightConfig.setDefaultAgent !== false &&
+          resolvedAgents.orchestrator
+        ) {
           try {
             draft.default(registry.identities.orchestrator ?? 'orchestrator');
           } catch {
@@ -3222,12 +3328,17 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           const notePromptAdmission = v1Hooks['v2.notePromptAdmission'] as
             | ((sessionID: string, messageID: string) => void)
             | undefined;
+          const noteExternalPromptIntent = v1Hooks[
+            'v2.noteExternalPromptIntent'
+          ] as ((sessionID: string, messageID: string) => void) | undefined;
           const bridge = createSessionPromptBridge(
             chatMessage,
             notePromptAdmission,
+            noteExternalPromptIntent,
           );
           promptBridge = bridge;
           const promptReg = await ctx.session.hook('prompt', async (event) => {
+            bridge.observePromptIntent(event);
             if (!permissionSnapshotReady) {
               await withTimeout(
                 permissionSnapshotReadiness,
@@ -3319,14 +3430,80 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           ] as V2SessionContextHandlerDeps['refusalOutcome'],
           systemTransform,
           messagesTransform,
-          // Captured child sessions get their frozen temperature/provider
-          // options on the request options record only.
-          applyRuntimeProfile: (event) =>
-            applyRuntimeProfileOptions(
-              event,
-              sessionProfileBridge.profileForSession(event.sessionID),
-              sessionPresets.peek(event.sessionID),
-            ),
+          // Primaries use the startup registry; child profiles stay session-frozen.
+          applyRuntimeProfile: async (event) => {
+            const profile = sessionProfileBridge.profileForSession(
+              event.sessionID,
+            );
+            const binding = sessionPresets.peek(event.sessionID);
+            if (profile) {
+              applyRuntimeProfileOptions(event, profile, binding);
+            } else if (!binding?.parentID && isRecord(event.options)) {
+              const primary = primaryRequestOptions.get(event.agent);
+              if (!primary) return;
+              let options = primary.options;
+              const { providerID, id, variant } = event.model;
+              if (
+                Object.keys(options).length > 0 &&
+                variant &&
+                variant !== 'default'
+              ) {
+                options = {};
+                try {
+                  const catalog = ctx.model?.list
+                    ? await withTimeout(
+                        ctx.model.list(),
+                        2_000,
+                        'Model variant lookup timed out',
+                      )
+                    : undefined;
+                  const models =
+                    isRecord(catalog) && Array.isArray(catalog.data)
+                      ? catalog.data
+                      : [];
+                  const model = models.find(
+                    (entry) =>
+                      isRecord(entry) &&
+                      entry.providerID === providerID &&
+                      entry.id === id,
+                  );
+                  const selected =
+                    isRecord(model) && Array.isArray(model.variants)
+                      ? model.variants.find(
+                          (entry: unknown) =>
+                            isRecord(entry) && entry.id === variant,
+                        )
+                      : undefined;
+                  if (isRecord(selected) && selected.settings === undefined) {
+                    options = primary.options;
+                  } else if (
+                    isRecord(selected) &&
+                    isRecord(selected.settings) &&
+                    !Array.isArray(selected.settings)
+                  ) {
+                    options = withoutVariantSettings(
+                      primary.options,
+                      selected.settings,
+                    );
+                  } else {
+                    log(
+                      '[v2] primary options omitted: model variant unavailable',
+                      { providerID, modelID: id, variant },
+                    );
+                  }
+                } catch (err) {
+                  log(
+                    '[v2] primary options omitted: model variant lookup failed',
+                    { providerID, modelID: id, variant, error: String(err) },
+                  );
+                }
+              }
+              Object.assign(event.options, options);
+              if (primary.temperature !== undefined) {
+                event.options.temperature = primary.temperature;
+              }
+            }
+          },
         });
         const reg = await ctx.session.hook('context', handler);
         disposers.push(() => reg.dispose());

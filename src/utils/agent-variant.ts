@@ -1,8 +1,4 @@
-import {
-  AGENT_ALIASES,
-  type AgentOverrideConfig,
-  ALL_AGENT_NAMES,
-} from '../config';
+import { AGENT_ALIASES, ALL_AGENT_NAMES } from '../config';
 import type { RuntimeConfig } from '../config/runtime';
 import { lookupWithAliases } from '../config/utils';
 
@@ -29,14 +25,6 @@ function getRuntimeAgentNames(runtime: RuntimeConfig): string[] {
   return [...unique];
 }
 
-/** Plugin-layer override for a name, alias-aware (no host merge). */
-function getPluginOverride(
-  runtime: RuntimeConfig,
-  name: string,
-): AgentOverrideConfig | undefined {
-  return lookupWithAliases(runtime.agents(), name);
-}
-
 /**
  * Resolve a runtime-provided agent name to an internal agent name.
  *
@@ -58,8 +46,9 @@ export function resolveRuntimeAgentName(
     return normalized;
   }
 
+  const agents = runtime.agents();
   for (const internalName of getRuntimeAgentNames(runtime)) {
-    const displayName = getPluginOverride(runtime, internalName)?.displayName;
+    const displayName = lookupWithAliases(agents, internalName)?.displayName;
     if (!displayName) {
       continue;
     }
@@ -82,9 +71,10 @@ export function createDisplayNameMentionRewriter(
   runtime: RuntimeConfig,
 ): DisplayNameMentionRewriter {
   const replacements: Array<{ regex: RegExp; internalName: string }> = [];
+  const agents = runtime.agents();
 
   for (const internalName of getRuntimeAgentNames(runtime)) {
-    const displayName = getPluginOverride(runtime, internalName)?.displayName;
+    const displayName = lookupWithAliases(agents, internalName)?.displayName;
     if (!displayName) {
       continue;
     }

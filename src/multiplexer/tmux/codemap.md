@@ -10,7 +10,7 @@ Implements the `Multiplexer` interface contract defined in `src/multiplexer/type
 
 - **Singleton-like lifecycle**: The `TmuxMultiplexer` class maintains internal state (binary path, layout preferences, pane tracking) but is instantiated per-use-case rather than globally
 - **Binary discovery**: Uses `which`/`where` to locate `tmux` executable at runtime with fallback behavior
-- **Layout strategy**: Implements debounced layout application to prevent rapid successive layout changes during bursts of pane operations
+- **Layout strategy**: Combines splitting and layout commands in one tmux invocation
 - **Graceful shutdown protocol**: Sends Ctrl+C signal before pane termination to allow child processes to exit cleanly
 - **Pane lifecycle hooks**: Triggers layout rebalancing after pane creation and destruction events
 - **Attached-session targeting**: Re-resolves the anchor pane from
@@ -38,20 +38,11 @@ Implements the `Multiplexer` interface contract defined in `src/multiplexer/type
    ├─ Validates tmux binary availability
    ├─ Constructs opencode attach command with quoted arguments
    ├─ Re-resolves socket (TMUX) and anchor (TMUX_PANE); either missing → fail closed
-   ├─ Executes: tmux -S <socket> split-window -h -d -P -F '#{pane_id}' -t <anchor> <opencode-cmd>
-   ├─ Captures stdout to extract pane_id
-   ├─ Sets FR-8 metadata as the title and, on tmux 3.0a+, the `@omosc` pane option
-   └─ Schedules layout rebalance via scheduleLayout(anchor)
-
-3. scheduleLayout(anchor) → applyLayoutNow() (debounced 150ms per anchor pane)
-   ├─ Replaces any pending timer for the anchor
-   ├─ Re-resolves the socket at fire time (missing → skip)
-   ├─ Applies stored layout via tmux -S <socket> select-layout -t <anchor>
-   ├─ For main-* layouts: sets main-pane-width/height percentage
-   └─ Reapplies layout to use new size
-
-The lifecycle's post-spawn layout check leaves this timer intact when the
-preferences match. Explicit `applyLayout` calls still apply immediately.
+   ├─ For main-* layouts, lists panes in the anchor's window
+   ├─ Splits before the pane following the anchor, or splits the anchor itself
+   ├─ Applies the layout in the same invocation as split-window
+   ├─ Captures stdout to extract pane_id, including on a later layout failure
+   └─ Sets the FR-8 title and, on tmux 3.0a+, the `@omosc` option in one invocation
 ```
 
 ### Pane Termination Flow
@@ -61,25 +52,16 @@ preferences match. Explicit `applyLayout` calls still apply immediately.
    ├─ Requires TMUX; missing socket → returns false without issuing a command
    ├─ Sends Ctrl+C to pane: tmux -S <socket> send-keys -t <paneId> 'C-c'
    ├─ Waits 250ms for graceful shutdown
-   ├─ Executes: tmux -S <socket> kill-pane -t <paneId>
-   └─ Schedules layout rebalance for the anchor this instance split from
+   ├─ Executes kill-pane and select-layout for the anchor in one invocation
+   └─ If the pane was already gone, applies the layout separately
 ```
 
 ### Layout Application Flow
 
 ```
-1. applyLayout(layout, mainPaneSize)
-   ├─ Cancels all pending debounced layout timers
-   ├─ Stores layout and size preferences
-   ├─ Resolves socket (TMUX) and anchor (TMUX_PANE); either missing → skip
-   └─ Calls applyLayoutNow() immediately
-
-2. applyLayoutNow(layout, mainPaneSize, socket, targetPane)
-   ├─ Executes: tmux -S <socket> select-layout -t <targetPane> <layout>
-   ├─ For main-* layouts:
-   │  ├─ Sets main-pane-width/main-pane-height option
-   │  └─ Reapplies layout to use new size
-   └─ Logs success/failure
+1. layoutArgs(targetPane)
+   ├─ Selects the configured layout
+   └─ For main-* layouts, sets main-pane-width/height and selects the layout again
 ```
 
 ## Integration
@@ -106,7 +88,7 @@ preferences match. Explicit `applyLayout` calls still apply immediately.
 ### Error Handling & Recovery
 
 - **Binary not found**: Returns `success: false` from all operations, logs warning
-- **Pane already closed**: `kill-pane` failure returns `false`; the lifecycle keeps the record and retries on a later event
+- **Pane already closed**: `can't find pane` counts as closed; transport errors keep the record for a later retry
 - **Layout failures**: Silently ignored with debug logging; maintains last known good state
 - **Ctrl+C failure**: Proceeds to kill-pane after timeout regardless of send-keys result
 
@@ -118,9 +100,8 @@ preferences match. Explicit `applyLayout` calls still apply immediately.
 
 ## Performance Characteristics
 
-- **Debouncing**: Layout changes are debounced to 150ms to prevent rapid successive commands
+- **Combined operations**: Split/layout and kill/layout each use one tmux invocation
 - **Binary caching**: Binary discovery is performed once per instance lifecycle
-- **Unref timers**: Layout timers are unref'd to prevent event loop blocking
 - **Minimal logging**: Debug-level logging only for critical operations and failures
 
 ## Configuration
@@ -144,7 +125,7 @@ No user-facing configuration required. Tmux binary location and session environm
 | Pane spawn fails | Returns success: false, logs error | Session continues without pane |
 | Registered parent pane is stale | n/a (no registry) | Anchor is re-resolved from `TMUX_PANE` on every spawn |
 | Layout application fails | Silently ignored, logs debug | Maintains previous layout |
-| Pane already closed | Returns false | Lifecycle keeps tracking the pane and retries on a later event |
+| Pane already closed | Returns true | Reapplies the anchor layout separately |
 | Ctrl+C send fails | Proceeds to kill-pane | Ensures pane termination |
 
 ## See Also

@@ -2544,6 +2544,234 @@ describe('createV2Setup e2e', () => {
     }
   }, 20_000);
 
+  test('v2 leaves the host default agent unchanged when disabled', async () => {
+    await mkdir(path.join(projectDir, '.opencode'), { recursive: true });
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({ companion: { enabled: false }, setDefaultAgent: false }),
+    );
+    const { ctx } = makeMockV2Context(projectDir);
+    let defaultAgent = 'build';
+    ctx.agent.transform = async (callback) => {
+      callback({
+        list: () => [],
+        get: () => undefined,
+        default: (id) => {
+          defaultAgent = id ?? '';
+        },
+        update: (_id, update) => update({}),
+        remove: () => {},
+      });
+      return { dispose: () => {} };
+    };
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(defaultAgent).toBe('build');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('v2 primary requests receive startup inference settings', async () => {
+    await mkdir(path.join(projectDir, '.opencode'), { recursive: true });
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        preset: 'team',
+        presets: {
+          team: {
+            orchestrator: {
+              temperature: 0.25,
+              options: {
+                reasoningEffort: 'high',
+                serviceTier: 'priority',
+                include: ['agent-setting'],
+                thinking: { type: 'enabled', budgetTokens: 4096 },
+              },
+            },
+          },
+        },
+        agents: {
+          planner: {
+            primary: true,
+            model: 'openai/gpt-6',
+            temperature: 0.7,
+            options: { reasoningEffort: 'low' },
+          },
+        },
+      }),
+    );
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    Object.assign(ctx, {
+      model: {
+        list: async () => ({
+          data: [
+            {
+              id: 'gpt-6',
+              modelID: 'gpt-6-api',
+              providerID: 'openai',
+              name: 'GPT-6',
+              capabilities: { tools: true, input: ['text'], output: ['text'] },
+              variants: [
+                {
+                  id: 'low',
+                  settings: {
+                    reasoningEffort: 'low',
+                    include: ['reasoning.encrypted_content'],
+                    temperature: 0.9,
+                    thinking: { budgetTokens: 1024, display: 'summarized' },
+                  },
+                },
+              ],
+              time: { released: 0 },
+              cost: [],
+              status: 'active',
+              enabled: true,
+              limit: { context: 100000, output: 4096 },
+            },
+            {
+              id: 'anthropic.claude-sonnet-4-6',
+              modelID: 'anthropic.claude-sonnet-4-6',
+              providerID: 'amazon-bedrock',
+              name: 'Claude Sonnet',
+              capabilities: { tools: true, input: ['text'], output: ['text'] },
+              variants: [
+                {
+                  id: 'low',
+                  body: {
+                    additionalModelRequestFields: {
+                      output_config: { effort: 'low' },
+                    },
+                  },
+                },
+              ],
+              time: { released: 0 },
+              cost: [],
+              status: 'active',
+              enabled: true,
+              limit: { context: 100000, output: 4096 },
+            },
+          ],
+        }),
+      },
+    });
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      for (const [agent, temperature, reasoningEffort] of [
+        ['orchestrator', 0.25, 'high'],
+        ['planner', 0.7, 'low'],
+      ] as const) {
+        const event = {
+          sessionID: `root-${agent}`,
+          agent,
+          model: { providerID: 'openai', id: 'gpt-6' },
+          options: { maxTokens: 2048 },
+          system: [],
+          messages: [],
+          tools: {},
+        };
+        await calls.contextHookCb?.(event);
+        expect(event.options).toEqual({
+          maxTokens: 2048,
+          temperature,
+          reasoningEffort,
+          ...(agent === 'orchestrator'
+            ? {
+                serviceTier: 'priority',
+                include: ['agent-setting'],
+                thinking: { type: 'enabled', budgetTokens: 4096 },
+              }
+            : {}),
+        });
+      }
+      const variantEvent = {
+        sessionID: 'root-orchestrator-low',
+        agent: 'orchestrator',
+        model: { providerID: 'openai', id: 'gpt-6', variant: 'low' },
+        options: { maxTokens: 2048 },
+        system: [],
+        messages: [],
+        tools: {},
+      };
+      await calls.contextHookCb?.(variantEvent);
+      expect(variantEvent.options).toEqual({
+        maxTokens: 2048,
+        temperature: 0.25,
+        serviceTier: 'priority',
+        thinking: { type: 'enabled' },
+      });
+      const bodyOnlyVariantEvent = {
+        sessionID: 'root-orchestrator-bedrock-low',
+        agent: 'orchestrator',
+        model: {
+          providerID: 'amazon-bedrock',
+          id: 'anthropic.claude-sonnet-4-6',
+          variant: 'low',
+        },
+        options: { maxTokens: 2048 },
+        system: [],
+        messages: [],
+        tools: {},
+      };
+      await calls.contextHookCb?.(bodyOnlyVariantEvent);
+      expect(bodyOnlyVariantEvent.options).toEqual({
+        maxTokens: 2048,
+        temperature: 0.25,
+        reasoningEffort: 'high',
+        serviceTier: 'priority',
+        include: ['agent-setting'],
+        thinking: { type: 'enabled', budgetTokens: 4096 },
+      });
+      await flushLoggerForTesting();
+      expect(readPluginLog()).not.toContain('[v2] primary options omitted');
+      Object.assign(ctx, {
+        model: {
+          list: async () => {
+            throw new Error('catalog unavailable');
+          },
+        },
+      });
+      const unavailableVariantEvent = {
+        sessionID: 'root-orchestrator-low-unavailable',
+        agent: 'orchestrator',
+        model: { providerID: 'openai', id: 'gpt-6', variant: 'low' },
+        options: {
+          maxTokens: 2048,
+          reasoningEffort: 'native',
+          serviceTier: 'native',
+          temperature: 0.8,
+        },
+        system: [],
+        messages: [],
+        tools: {},
+      };
+      await calls.contextHookCb?.(unavailableVariantEvent);
+      expect(unavailableVariantEvent.options).toEqual({
+        maxTokens: 2048,
+        reasoningEffort: 'native',
+        serviceTier: 'native',
+        temperature: 0.25,
+      });
+      await flushLoggerForTesting();
+      expect(readPluginLog()).toContain('[v2] primary options omitted');
+      expect(readPluginLog()).toContain('catalog unavailable');
+      const foreign = {
+        sessionID: 'root-build',
+        agent: 'build',
+        model: { providerID: 'openai', id: 'gpt-6' },
+        options: { maxTokens: 2048 },
+        system: [],
+        messages: [],
+        tools: {},
+      };
+      await calls.contextHookCb?.(foreign);
+      expect(foreign.options).toEqual({ maxTokens: 2048 });
+    } finally {
+      await cleanup();
+    }
+  });
+
   test('host-only MCP namespaces are denied in both agent and child policies', async () => {
     const { ctx, events, calls } = makeMockV2Context(projectDir);
     const setupCtx = ctx as unknown as {
@@ -3950,4 +4178,153 @@ describe('createV2Setup e2e', () => {
       await cleanup();
     }
   }, 20_000);
+
+  test('mock context: native prompt hook observes external intent synchronously before permission/profile awaits and suppresses stale retry switch', async () => {
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        fallback: { maxRetries: 1 },
+        agents: {
+          orchestrator: {
+            model: [
+              'anthropic/claude-3-haiku',
+              'anthropic/claude-opus-4-5',
+              'openai/gpt-4o',
+            ],
+          },
+        },
+      }),
+    );
+    const { ctx, calls } = makeMockV2Context(projectDir);
+
+    let retryHook: ((event: any) => Promise<void>) | undefined;
+    const originalSessionHook = (ctx.session as any).hook;
+    (ctx.session as any).hook = (name: string, callback: any) => {
+      if (name === 'retry') retryHook = callback;
+      return originalSessionHook.call(ctx.session, name, callback);
+    };
+
+    const switchCalls: unknown[] = [];
+    let switchHoldPromise: Promise<void> | undefined;
+    ctx.session.switchModel = async (input) => {
+      switchCalls.push(input);
+      if (switchHoldPromise) {
+        await switchHoldPromise;
+      }
+    };
+
+    const sid = 'ses_intent_race';
+    let admissionAwaitingResolve: () => void = () => {};
+    const admissionAwaiting = new Promise<void>((resolve) => {
+      admissionAwaitingResolve = resolve;
+    });
+    const { promise: admissionRelease, reject: rejectAdmission } =
+      Promise.withResolvers<void>();
+
+    const originalSessionGet = ctx.session.get;
+    ctx.session.get = async (input: { sessionID: string }) => {
+      if (input.sessionID === sid) {
+        admissionAwaitingResolve();
+        await admissionRelease;
+      }
+      return originalSessionGet(input);
+    };
+
+    const cleanup = await createV2Setup()(ctx);
+    let releaseSwitch: () => void = () => {};
+    try {
+      if (!retryHook) throw new Error('retry hook not registered');
+      const promptHook = calls.promptHookCb;
+      if (!promptHook) throw new Error('prompt hook not registered');
+
+      // 1. First failure on non-head model: absorbs 1 host retry per maxRetries: 1
+      const absorbDecision = { retry: true, delay: 500 };
+      const absorbEvent = {
+        sessionID: sid,
+        agent: 'orchestrator',
+        model: { providerID: 'anthropic', id: 'claude-opus-4-5' },
+        error: { message: 'rate limit' },
+        decision: absorbDecision,
+      };
+      await retryHook(absorbEvent);
+      expect(switchCalls).toHaveLength(0);
+      expect(absorbDecision).toEqual({ retry: true, delay: 500 });
+
+      // 2. Second failure: budget absorbed, selects fallback model (openai/gpt-4o) and calls switchModel
+      const { promise: holdPromise, resolve: resolver } =
+        Promise.withResolvers<void>();
+      releaseSwitch = resolver;
+      switchHoldPromise = holdPromise;
+
+      const oldSwitchDecision = { retry: false };
+      const oldSwitchEvent = {
+        sessionID: sid,
+        agent: 'orchestrator',
+        model: { providerID: 'anthropic', id: 'claude-opus-4-5' },
+        error: { message: 'rate limit' },
+        decision: oldSwitchDecision,
+      };
+      const retryPromise = retryHook(oldSwitchEvent);
+
+      // Verify switchModel was called and is currently in flight
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+      expect(switchCalls).toHaveLength(1);
+      expect(switchCalls[0]).toEqual({
+        sessionID: sid,
+        model: { providerID: 'anthropic', id: 'claude-3-haiku' },
+      });
+
+      // 3. A native prompt hook arrives with UNKNOWN agent/model before context
+      const promptPromise = promptHook({
+        sessionID: sid,
+        messageID: 'msg_prompt_user_1',
+        prompt: { text: 'new external prompt' },
+      });
+
+      // Wait until the prompt hook enters sessionPresets.ensureAdmission -> session.get,
+      // proving that the first-line bridge.observePromptIntent has ALREADY executed
+      // synchronously before the permission/profile/admission await.
+      await admissionAwaiting;
+
+      // 4. Now release the OLD host switch while prompt hook is still held in admission await
+      releaseSwitch();
+      await retryPromise;
+
+      // The old switch must be suppressed: decision is NOT mutated to retry
+      expect(oldSwitchDecision).toEqual({ retry: false });
+
+      // 5. Fail the prompt admission (e.g. permission check or profile failure)
+      rejectAdmission(new Error('admission refused: permission denied'));
+      await expect(promptPromise).rejects.toThrow(
+        'admission refused: permission denied',
+      );
+
+      // 6. Because admission failed, message.updated was never emitted and retry budget was NOT reset.
+      // Subsequent actual retry must SWITCH to fallback model rather than re-absorbing a fresh budget.
+      switchHoldPromise = undefined;
+      const subsequentDecision = { retry: true, delay: 500 };
+      const subsequentEvent = {
+        sessionID: sid,
+        agent: 'orchestrator',
+        model: { providerID: 'anthropic', id: 'claude-opus-4-5' },
+        error: { message: 'rate limit' },
+        decision: subsequentDecision,
+      };
+      await retryHook(subsequentEvent);
+
+      expect(switchCalls).toHaveLength(2);
+      expect(switchCalls[1]).toEqual({
+        sessionID: sid,
+        model: { providerID: 'openai', id: 'gpt-4o' },
+      });
+      expect(subsequentDecision).toEqual({ retry: true, delay: 500 });
+    } finally {
+      releaseSwitch();
+      try {
+        rejectAdmission(new Error('cleanup'));
+      } catch {}
+      await cleanup();
+    }
+  });
 });

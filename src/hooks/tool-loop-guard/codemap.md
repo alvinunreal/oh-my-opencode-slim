@@ -25,7 +25,7 @@ The run counter only advances in `tool.execute.after` when arguments and output 
   - `SessionState`: `last`, `runs`, `lastOutput` fingerprints
   - `CallState`: Associates `after` calls with `before` calls
   - `TaskSupervisionState`: Separate tracking for task supervision tools
-- **Global State**: Closure-scoped per-factory Maps (`sessions`, `callKeys`, `taskSupervision`, `waitRuns`), bounded at `MAX_TRACKED_SESSIONS = 512` with FIFO (oldest-inserted) eviction via `keepSessionsBounded()`
+- **Global State**: Closure-scoped per-factory Maps (`sessions`, `callKeys`, `taskSupervision`, `waitRuns`, `userMessageIdentities`), bounded at `MAX_TRACKED_SESSIONS = 512` with FIFO (oldest-inserted) eviction via `keepSessionsBounded()`
 
 ### Key Components
 - **fingerprint()**: Deterministic tool+args hash insensitive to key order
@@ -125,7 +125,7 @@ Reset on parent turn boundary or meaningful action
 
 ### Performance Considerations
 - **Bounded tracking**: Max 512 sessions per Map with FIFO (oldest-inserted) eviction
-- **Fingerprinting**: deterministic `stableStringify()` string comparison — cost is linear in argument size, not hash-based
+- **Fingerprinting**: deterministic `stableStringify()` for arguments and SHA-256 for retained output fingerprints
 - **Minimal overhead**: Only runs for non-exempt tools
 - **Selective updates**: Session state updates only on relevant tool calls
 
