@@ -10809,3 +10809,28 @@ describe('ForegroundFallbackManager same-model retry hardening', () => {
     });
   });
 });
+
+describe('ForegroundFallbackManager v1 replay outcome', () => {
+  test('the outcome wait is scheduled on the injected timers', async () => {
+    const { manager } = makeManager();
+    createMockClient({
+      messagesData: [
+        {
+          info: { id: 'refused', role: 'assistant', finish: 'content-filter' },
+          parts: [],
+        },
+      ],
+    });
+    let settled = false;
+    const outcome = manager
+      .v1ReplayOutcome('child', 1, 'orchestrator', clock.now())
+      .finally(() => {
+        settled = true;
+      });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(settled).toBe(false);
+    await clock.advance(5_000);
+    expect(await outcome).toBeUndefined();
+    expect(clock.pending()).toBe(0);
+  });
+});

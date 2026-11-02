@@ -869,6 +869,20 @@ A model switch that times out but later succeeds is reconciled if the observed
 model is still the failed source or already the switch target; a different
 observed selection is left untouched.
 
+Hosts up to v2.2.x end a step that finishes with `content-filter` without
+calling the `retry` hook. Slim observes `session.step.failed` instead,
+switches the model in place, and continues the run with one internal prompt:
+root sessions and board-tracked background children continue in place, and
+foreground children are re-attached inside the same `task` call. The host's
+own `state="error"` notice stays in the parent's history; while the child is
+still running, Slim appends a short trailing note telling the parent the
+child continues on the fallback model.
+
+Models rejected for the request itself (content policy, unknown or retired
+model, HTTP 410/421/451) stay excluded from the chain until the next external
+prompt, even after later successful steps reset the rest of the descent. On
+v2 they also skip the host-retry budget and fail over at once.
+
 ### Agent Display Names
 
 Use `displayName` to give an agent a user-facing alias while keeping the

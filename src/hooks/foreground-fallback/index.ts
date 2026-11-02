@@ -741,7 +741,7 @@ export class ForegroundFallbackManager {
   private incidentSequence = 0;
   /** Confirmed external user-turn generations fence suspended work. */
   private readonly turnEpoch = new Map<string, number>();
-  private readonly startedAt = Date.now();
+  private readonly startedAt: number;
   private readonly v2Steps = new Map<string, V2RefusalStep>();
   private readonly childOutcomes = new Map<string, ChildOutcome>();
   private readonly v1Waiters = new Map<string, (model?: string) => void>();
@@ -1059,14 +1059,17 @@ export class ForegroundFallbackManager {
     const existing = this.childOutcomes.get(key);
     if (existing) return existing;
     const { promise, resolve } = Promise.withResolvers<string | undefined>();
-    const timer = setTimeout(() => {
-      if (this.v1Waiters.get(key) === resolve) {
+    const finish = (model?: string) => {
+      this.clearTimer(timer);
+      resolve(model);
+    };
+    const timer = this.setTimer(() => {
+      if (this.v1Waiters.get(key) === finish) {
         this.v1Waiters.delete(key);
         resolve(undefined);
       }
     }, timeout);
-    timer.unref?.();
-    this.v1Waiters.set(key, resolve);
+    this.v1Waiters.set(key, finish);
     return this.rememberOutcome(key, promise);
   }
 
@@ -1087,7 +1090,7 @@ export class ForegroundFallbackManager {
     if (typeof completedAt !== 'number' || !Number.isFinite(completedAt))
       return;
     if (!this.hasFallbackChain(sessionID)) return;
-    if (Date.now() - completedAt >= timeout) return;
+    if (this.now() - completedAt >= timeout) return;
     try {
       const path = { id: sessionID };
       const query = { limit: FALLBACK_REPLAY_TAIL_MESSAGES };
@@ -1457,6 +1460,7 @@ export class ForegroundFallbackManager {
     this.setTimer =
       timers?.setTimeout ?? ((callback, delay) => setTimeout(callback, delay));
     this.clearTimer = timers?.clearTimeout ?? ((timer) => clearTimeout(timer));
+    this.startedAt = this.now();
     this.timerSeam = {
       setTimeout: this.setTimer,
       clearTimeout: this.clearTimer,
