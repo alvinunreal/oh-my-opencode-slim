@@ -18,9 +18,11 @@ import {
   stripRemovedDisabledValues,
 } from './removed-keys';
 import {
+  AcpAgentsConfigSchema,
   BackgroundJobsConfigSchema,
   DISABLED_COMMANDS_VALUES,
   DISABLED_HOOKS_VALUES,
+  FailoverConfigSchema,
   InterviewConfigSchema,
   type MarketplaceActivation,
   MarketplaceConfigSchema,
@@ -53,6 +55,7 @@ export type ConfigLoadWarningKind =
   | 'read-error'
   | 'missing-preset'
   | 'normalized'
+  | 'unsupported-host'
   | 'unknown-key'
   | 'removed-key';
 
@@ -149,6 +152,20 @@ export function interpolateEnvironmentVariables(value: string): string {
   return value.replace(
     /\{env:([^}]+)\}/g,
     (_match, varName: string) => process.env[varName] ?? '',
+  );
+}
+
+/** Escape interpolated values inside JSON strings, preserving raw JSON tokens. */
+function interpolateJsonEnvironmentVariables(source: string): string {
+  return source.replace(/"(?:\\.|[^"\\])*"|\{env:[^}]+\}/g, (token) =>
+    token.startsWith('"')
+      ? token.replace(/\{env:[^}]+\}/g, (placeholder) =>
+          JSON.stringify(interpolateEnvironmentVariables(placeholder)).slice(
+            1,
+            -1,
+          ),
+        )
+      : interpolateEnvironmentVariables(token),
   );
 }
 
@@ -427,7 +444,7 @@ export function loadRawPluginConfigFromPath(
     let rawConfig: unknown;
     try {
       const stripped = stripJsonComments(content);
-      const interpolated = interpolateEnvironmentVariables(stripped);
+      const interpolated = interpolateJsonEnvironmentVariables(stripped);
       rawConfig = JSON.parse(interpolated);
     } catch (error) {
       // Empty file or JSON parse error is treated as invalid-json
@@ -502,6 +519,26 @@ export function loadRawPluginConfigFromPath(
     let layerConfig = retainExplicitInterviewFields(result.data, rawConfig);
     layerConfig = retainExplicitBackgroundJobsFields(layerConfig, rawConfig);
     layerConfig = retainExplicitMultiplexerFields(layerConfig, rawConfig);
+    if (isPlainRecord(rawConfig)) {
+      if (layerConfig.fallback && isPlainRecord(rawConfig.fallback)) {
+        layerConfig.fallback = retainSanitizedValues(
+          layerConfig.fallback,
+          rawConfig.fallback,
+        ) as RawPluginConfig['fallback'];
+      }
+      if (layerConfig.council && isPlainRecord(rawConfig.council)) {
+        if (!Object.hasOwn(rawConfig.council, 'default_preset')) {
+          delete (layerConfig.council as Partial<typeof layerConfig.council>)
+            .default_preset;
+        }
+      }
+      if (layerConfig.acpAgents && isPlainRecord(rawConfig.acpAgents)) {
+        layerConfig.acpAgents = retainSanitizedValues(
+          layerConfig.acpAgents,
+          rawConfig.acpAgents,
+        ) as RawPluginConfig['acpAgents'];
+      }
+    }
     // marketplace.enabled carries no Zod default, so nothing parsed at this
     // layer can masquerade as an explicit override; the merged marketplace
     // config is normalized to the switch shape after all layers are merged.
@@ -623,10 +660,13 @@ function validateFinalImageRouting(
 }
 
 /** Use the host's case-insensitive boolean flag semantics. */
-export function isProjectConfigDisabled(): boolean {
-  return ['true', '1'].includes(
-    process.env.OPENCODE_DISABLE_PROJECT_CONFIG?.toLowerCase() ?? '',
-  );
+export function isProjectConfigDisabled(hostFlavor?: string): boolean {
+  const flag =
+    hostFlavor === 'v2'
+      ? (process.env.OPENCODE_CONFIG_PROJECT_DISABLE ??
+        process.env.OPENCODE_DISABLE_PROJECT_CONFIG)
+      : process.env.OPENCODE_DISABLE_PROJECT_CONFIG;
+  return ['true', '1'].includes(flag?.toLowerCase() ?? '');
 }
 
 /** Project .opencode directories in host-specific, farthest-to-nearest order. */
@@ -634,7 +674,7 @@ export function getProjectConfigDirectories(
   directory: string,
   hostFlavor?: string,
 ): string[] {
-  if (isProjectConfigDisabled()) {
+  if (isProjectConfigDisabled(hostFlavor)) {
     return [];
   }
   const directories: string[] = [];
@@ -804,12 +844,19 @@ export function loadPluginConfig(
   const presetInheritancePaths = new Map<string, string>();
   let selectedPresetPath = '';
   let imageRoutingPath = '';
+  let wakeConfigPath = '';
   const recordConfigSources = (
     layer: RawPluginConfig,
     configPath: string,
   ): void => {
     if (layer.preset !== undefined) selectedPresetPath = configPath;
     if (layer.image_routing !== undefined) imageRoutingPath = configPath;
+    if (
+      layer.backgroundJobs?.orchestratorWake &&
+      Object.keys(layer.backgroundJobs.orchestratorWake).length > 0
+    ) {
+      wakeConfigPath = configPath;
+    }
     for (const [name, definition] of Object.entries(layer.presets ?? {})) {
       presetPaths.set(name, configPath);
       if (normalizePreset(definition).extends !== undefined) {
@@ -831,7 +878,7 @@ export function loadPluginConfig(
   // the native background notifier owns terminal delivery and the whole
   // backgroundJobs.orchestratorWake section is v1-only. Warn so the
   // override is never silent.
-  if (options?.hostFlavor === 'v2' && !options?.silent) {
+  if (options?.hostFlavor === 'v2') {
     const backgroundJobs = (config.backgroundJobs ?? {}) as Record<
       string,
       unknown
@@ -842,9 +889,14 @@ export function loadPluginConfig(
       typeof orchestratorWake === 'object' &&
       Object.keys(orchestratorWake as Record<string, unknown>).length > 0
     ) {
-      console.warn(
-        '[oh-my-opencode-slim] backgroundJobs.orchestratorWake is v1-only and ignored on OpenCode v2 hosts: the native background notifier owns terminal delivery. Run oh-my-opencode-slim doctor for details.',
-      );
+      const message =
+        'backgroundJobs.orchestratorWake is v1-only and ignored on OpenCode v2 hosts: the native background notifier owns terminal delivery. Run oh-my-opencode-slim doctor for details.';
+      options.onWarning?.({
+        path: wakeConfigPath || directory,
+        kind: 'unsupported-host',
+        message,
+      });
+      if (!options.silent) console.warn(`[oh-my-opencode-slim] ${message}`);
     }
   }
 
@@ -871,6 +923,15 @@ export function loadPluginConfig(
     // (see retainExplicitMultiplexerFields), so defaults apply once here,
     // after all layers are merged.
     config.multiplexer = MultiplexerConfigSchema.parse(config.multiplexer);
+  }
+  if (config.fallback) {
+    config.fallback = FailoverConfigSchema.parse(config.fallback);
+  }
+  if (config.council) {
+    config.council.default_preset ??= 'default';
+  }
+  if (config.acpAgents) {
+    config.acpAgents = AcpAgentsConfigSchema.parse(config.acpAgents);
   }
 
   // Override preset from environment variable if set
@@ -1071,22 +1132,26 @@ export function loadAgentPrompt(
   }
 
   const readFirstPrompt = (
-    fileName: string,
+    suffix: string,
     errorPrefix: string,
   ): string | undefined => {
     for (const dir of searchDirs) {
-      const promptPath = path.join(dir, fileName);
-      if (!fs.existsSync(promptPath)) {
-        continue;
-      }
+      for (const candidate of [agentName, ...legacyAliasesFor(agentName)]) {
+        const fileName = `${candidate}${suffix}.md`;
+        const promptPath = path.join(dir, fileName);
+        if (!fs.existsSync(promptPath)) continue;
 
-      try {
-        return fs.readFileSync(promptPath, 'utf-8');
-      } catch (error) {
-        console.warn(
-          `[oh-my-opencode-slim] ${errorPrefix} ${promptPath}:`,
-          error instanceof Error ? error.message : String(error),
-        );
+        try {
+          const content = fs.readFileSync(promptPath, 'utf-8');
+          if (candidate !== agentName)
+            warnLegacyPromptFile(agentName, fileName);
+          return content;
+        } catch (error) {
+          console.warn(
+            `[oh-my-opencode-slim] ${errorPrefix} ${promptPath}:`,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
       }
     }
 
@@ -1095,34 +1160,13 @@ export function loadAgentPrompt(
 
   const result: { prompt?: string; appendPrompt?: string } = {};
 
-  // Rename continuity: fall back to pre-rename file names (e.g. a
-  // `librarian.md` override keeps applying to the merged `explorer`). Warn
-  // once per process so users learn to rename.
-  const nameCandidates = [agentName, ...legacyAliasesFor(agentName)];
-
-  // Check for replacement prompt
-  for (const candidate of nameCandidates) {
-    const fileName = `${candidate}.md`;
-    const found = readFirstPrompt(fileName, 'Error reading prompt file');
-    if (found === undefined) continue;
-    if (candidate !== agentName) {
-      warnLegacyPromptFile(agentName, fileName);
-    }
-    result.prompt = found;
-    break;
-  }
-
-  // Check for append prompt
-  for (const candidate of nameCandidates) {
-    const fileName = `${candidate}_append.md`;
-    const found = readFirstPrompt(fileName, 'Error reading append prompt file');
-    if (found === undefined) continue;
-    if (candidate !== agentName) {
-      warnLegacyPromptFile(agentName, fileName);
-    }
-    result.appendPrompt = found;
-    break;
-  }
+  const prompt = readFirstPrompt('', 'Error reading prompt file');
+  const appendPrompt = readFirstPrompt(
+    '_append',
+    'Error reading append prompt file',
+  );
+  if (prompt !== undefined) result.prompt = prompt;
+  if (appendPrompt !== undefined) result.appendPrompt = appendPrompt;
 
   return result;
 }

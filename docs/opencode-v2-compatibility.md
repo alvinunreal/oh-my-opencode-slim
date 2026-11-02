@@ -246,6 +246,9 @@ not an optional-degradation path.
       the last part of the last non-board-only message and gives it one
       `ContentPart.cache` `{type: "ephemeral"}` hint. The shared injection
       helper adds no hints; the v1 pipeline remains unchanged.
+      Primary agents use their startup `temperature` and provider `options`
+      on request options; live profile refresh continues to affect new child
+      sessions only.
     - a native `ctx.session.hook("prompt")` registration (capability-
       guarded): the v2 prompt hook fires **once per admitted input** with
       the eventual inbox User `messageID`, giving the v1 `chat.message`

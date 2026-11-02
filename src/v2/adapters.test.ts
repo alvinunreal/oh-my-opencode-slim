@@ -326,6 +326,7 @@ describe('applyAgentToDraft', () => {
     const { draft, calls } = recorder();
     applyAgentToDraft(draft, 'explorer', {
       description: 'recon',
+      color: '#123456',
       prompt: "Delegate via task(subagent_type='x')",
       mode: 'subagent',
     });
@@ -336,6 +337,7 @@ describe('applyAgentToDraft', () => {
       name: 'explorer',
       mode: 'subagent',
       description: 'recon',
+      color: '#123456',
       system: "Delegate via task(subagent_type='x')",
     });
   });
@@ -459,6 +461,7 @@ describe('applyAgentToDraft', () => {
       id: 'native',
       name: 'Native',
       description: 'host description',
+      color: '#654321',
       system: 'host system',
       mode: 'primary',
       hidden: true,
@@ -484,12 +487,14 @@ describe('applyAgentToDraft', () => {
       mode: 'primary',
       hidden: true,
       description: 'host description',
+      color: '#654321',
     });
     expect(snapshot.config).not.toHaveProperty('permission');
     expect(snapshot.permissions).toEqual(native.permissions);
     expect(calls[0].agent).toMatchObject({
       model: { providerID: 'anthropic', id: 'claude', variant: 'thinking' },
       system: 'host system',
+      color: '#654321',
       request: {
         settings: { temperature: 0.3, topP: 0.9 },
         headers: { 'x-host': 'kept' },
