@@ -100,6 +100,7 @@ import { createRevivedRunTracker } from './hooks/task-session-manager/revived-ru
 import {
   createAliasAuthority,
   createSessionRecovery,
+  proveUndeliveredBackgroundChild,
   recoverSubagentSessionsAtStartup,
 } from './hooks/task-session-manager/session-recovery';
 import type { ToolLoopGuardHook } from './hooks/tool-loop-guard/hook';
@@ -1293,6 +1294,18 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
         isDisposed: () => instanceDisposed,
         shouldManageSession: (sessionID) => isManagedSession(sessionID),
+        // v2 wakes from the host's own delivery; a plugin-side observation
+        // fallback would only page in a row the host never executes (#1560).
+        proveUndeliveredBackgroundChild:
+          hostFlavor === 'v2'
+            ? undefined
+            : (parentSessionID, taskID) =>
+                proveUndeliveredBackgroundChild({
+                  input: ctx,
+                  hostFlavor,
+                  parentSessionID,
+                  taskID,
+                }),
         registerSessionAsOrchestrator: (sessionID) => {
           // Membership in task management, not a selection rewrite (#1079).
           sessionMetadata.markTaskManaged(sessionID);
