@@ -648,6 +648,13 @@ function latestFence(...values: Array<number | undefined>): number | undefined {
   return chosen;
 }
 
+/** A proven orphan: the parent plus the identity the observation supplied. */
+export interface UndeliveredBackgroundChild {
+  parentSessionID: string;
+  agent?: string;
+  title?: string;
+}
+
 /**
  * Observation-time counterpart of startup recovery's single-child check.
  *
@@ -658,53 +665,87 @@ function latestFence(...values: Array<number | undefined>): number | undefined {
  * background delegation for this task, and that run must have no trusted
  * native delivery yet. Without a launch time the delivery fence has no
  * boundary, so the absence of delivery cannot be proven and this returns
- * false. A failed read is no evidence either.
+ * undefined. A failed read is no evidence either.
+ *
+ * v1 terminal events carry only the child session id, so the parent comes from
+ * a bounded `session.get` when the event names none; the shared single-flight
+ * reader collapses repeated observations of the same child into one host read.
  */
-export async function proveUndeliveredBackgroundChild(options: {
+export async function resolveUndeliveredBackgroundChild(options: {
   input: PluginInput;
   hostFlavor?: string;
-  parentSessionID: string;
   taskID: string;
+  /** Parent named by the event, when the host shape carries one. */
+  parentSessionID?: string;
+  agent?: string;
+  title?: string;
   readTimeoutMs?: number;
   timers?: Parameters<typeof raceEvidenceDeadline>[2];
-}): Promise<boolean> {
-  if (
-    !SESSION_ID_PATTERN.test(options.taskID) ||
-    !SESSION_ID_PATTERN.test(options.parentSessionID)
-  ) {
-    return false;
-  }
+}): Promise<UndeliveredBackgroundChild | undefined> {
+  if (!SESSION_ID_PATTERN.test(options.taskID)) return undefined;
   const readTimeoutMs = options.readTimeoutMs ?? TRANSCRIPT_READ_TIMEOUT_MS;
-  if (!Number.isFinite(readTimeoutMs) || readTimeoutMs <= 0) return false;
+  if (!Number.isFinite(readTimeoutMs) || readTimeoutMs <= 0) return undefined;
+  let parentSessionID = options.parentSessionID;
+  let agent = options.agent;
+  let title = options.title;
+  if (!parentSessionID) {
+    let response: unknown;
+    try {
+      response = await raceEvidenceDeadline(
+        readHostSessionInfo(options.input, {
+          taskID: options.taskID,
+          identity: 'orphan-parent',
+        }),
+        readTimeoutMs,
+        options.timers,
+      );
+    } catch {
+      return undefined;
+    }
+    const data =
+      isRecord(response) && isRecord(response.data) ? response.data : undefined;
+    if (typeof data?.parentID !== 'string') return undefined;
+    parentSessionID = data.parentID;
+    agent ??= typeof data.agent === 'string' ? data.agent.trim() : undefined;
+    title ??= typeof data.title === 'string' ? data.title : undefined;
+  }
+  if (!SESSION_ID_PATTERN.test(parentSessionID)) return undefined;
   let transcript: unknown;
   try {
     transcript = await readParentTranscript(
       getClient(options.input),
       options.input.directory,
-      options.parentSessionID,
+      parentSessionID,
       options.hostFlavor,
       readTimeoutMs,
       options.timers,
     );
   } catch {
-    return false;
+    return undefined;
   }
   const delegation = parentDelegation(
     parentTaskParts(transcript),
-    options.parentSessionID,
+    parentSessionID,
     options.taskID,
   );
   if (delegation?.background !== true || delegation.at === undefined) {
-    return false;
+    return undefined;
   }
-  return (
+  if (
     nativeDeliveryForRun(
       transcript,
-      options.parentSessionID,
+      parentSessionID,
       options.taskID,
       delegation.at,
-    ) === undefined
-  );
+    ) !== undefined
+  ) {
+    return undefined;
+  }
+  return {
+    parentSessionID,
+    ...(agent ? { agent } : {}),
+    ...(title ? { title } : {}),
+  };
 }
 
 /**
