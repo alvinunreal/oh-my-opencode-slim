@@ -1,6 +1,7 @@
-import { existsSync, lstatSync, mkdirSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { parseJsonConfigText } from './jsonc';
 
 function getDefaultOpenCodeConfigDir(): string {
   const userConfigDir = process.env.XDG_CONFIG_HOME
@@ -97,7 +98,6 @@ function existsOrSymlink(filePath: string): boolean {
 
 export function getExistingLiteConfigPath(): string {
   const jsonPath = getLiteConfig();
-  if (existsOrSymlink(jsonPath)) return jsonPath;
   const jsoncPath = getLiteConfigJsonc();
   if (existsOrSymlink(jsoncPath)) return jsoncPath;
   return jsonPath;
@@ -107,7 +107,6 @@ export function getExistingTuiConfigPath(): string {
   const customConfigPath = getCustomTuiConfigPath();
   if (customConfigPath) return customConfigPath;
   const jsonPath = join(getConfigDir(), 'tui.json');
-  if (existsOrSymlink(jsonPath)) return jsonPath;
   const jsoncPath = getTuiConfigJsonc();
   if (existsOrSymlink(jsoncPath)) return jsoncPath;
   return jsonPath;
@@ -115,8 +114,18 @@ export function getExistingTuiConfigPath(): string {
 
 export function getExistingConfigPath(): string {
   const jsonPath = getConfigJson();
-  if (existsOrSymlink(jsonPath)) return jsonPath;
   const jsoncPath = getConfigJsonc();
+  for (const path of [jsoncPath, jsonPath]) {
+    if (!existsOrSymlink(path)) continue;
+    try {
+      if (
+        Object.hasOwn(parseJsonConfigText(readFileSync(path, 'utf8')), 'plugin')
+      )
+        return path;
+    } catch {
+      return path;
+    }
+  }
   if (existsOrSymlink(jsoncPath)) return jsoncPath;
   return jsonPath;
 }

@@ -15,7 +15,7 @@ import {
   mutateJsonFile,
   removeTopLevelJsonProperty,
 } from '../config/json-file';
-import { stripJsonComments } from '../config/jsonc';
+import { parseJsonConfigText } from '../config/jsonc';
 import {
   findPluginConfigPaths,
   isProjectConfigDisabled,
@@ -611,7 +611,7 @@ export function readUserConfig(
     // Strip a UTF-8 BOM (RFC 8259 permits one); JSON.parse would otherwise
     // fail with "Unrecognized token" and the preset name would be lost.
     const raw = fs.readFileSync(userConfigPath, 'utf-8').replace(/^\uFEFF/, '');
-    return JSON.parse(stripJsonComments(raw)) as Record<string, unknown>;
+    return parseJsonConfigText(raw);
   } catch {
     return null;
   }

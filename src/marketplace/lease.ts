@@ -140,9 +140,16 @@ export function writeAtomic(filePath: string, content: string): void {
   const parent = path.dirname(filePath);
   fs.mkdirSync(parent, { recursive: true });
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  let mode = 0o600;
   try {
-    const fd = fs.openSync(temporaryPath, 'wx');
+    mode = fs.statSync(filePath).mode & 0o7777;
+  } catch (error) {
+    if (errnoCode(error) !== 'ENOENT') throw error;
+  }
+  try {
+    const fd = fs.openSync(temporaryPath, 'wx', 0o600);
     try {
+      fs.fchmodSync(fd, mode);
       fs.writeFileSync(fd, content, 'utf8');
       fs.fsyncSync(fd);
     } finally {
@@ -523,11 +530,15 @@ function acquireMarketplaceLeaseInternal(
 ): MarketplaceLease {
   const options = normalizeLockOptions(partialOptions);
   retryPendingLeaseCleanup(paths.lockDir);
-  fs.mkdirSync(paths.rootDir, { recursive: true });
-  fs.mkdirSync(paths.lockDir, { recursive: true });
   const deadline = Date.now() + options.timeoutMs;
   do {
-    const lease = acquireOnce(paths.lockDir, options);
+    let lease: LockEntry | undefined;
+    try {
+      fs.mkdirSync(paths.lockDir, { recursive: true });
+      lease = acquireOnce(paths.lockDir, options);
+    } catch (error) {
+      if (errnoCode(error) !== 'ENOENT') throw error;
+    }
     if (lease) return createLease(paths.lockDir, lease);
     if (
       hasImmediateMarketplaceLeases() ||

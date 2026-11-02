@@ -118,6 +118,54 @@ describe('runDoctorCheck', () => {
     expect(invalid.configs[2].ok).toBe(true);
   });
 
+  test('finds ancestor configuration above a git root on v2', () => {
+    const bin = path.join(tempDir, 'bin');
+    const ancestor = path.join(tempDir, 'workspace');
+    const project = path.join(ancestor, 'repo');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(
+      path.join(bin, 'opencode'),
+      '#!/bin/sh\necho opencode v2.2.4\n',
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:/usr/bin:/bin`;
+    fs.mkdirSync(path.join(project, '.git'), { recursive: true });
+    fs.mkdirSync(path.join(ancestor, '.opencode'), { recursive: true });
+    fs.writeFileSync(
+      path.join(ancestor, '.opencode', 'oh-my-opencode-slim.json'),
+      '{"preset":"missing"}',
+    );
+    expect(runDoctorCheck(project).presetCheck?.error?.kind).toBe(
+      'missing-preset',
+    );
+  });
+
+  test('interpolates environment values before validating presets', () => {
+    const configDir = path.join(tempDir, 'project', '.opencode');
+    fs.mkdirSync(configDir, { recursive: true });
+    process.env.REVIEW_PRESET = 'work';
+    fs.writeFileSync(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      '{"preset":"{env:REVIEW_PRESET}","presets":{"work":{}}}',
+    );
+    expect(runDoctorCheck(path.dirname(configDir)).presetCheck).toEqual({
+      preset: 'work',
+      ok: true,
+    });
+  });
+
+  test('reports invalid preset inheritance', () => {
+    const configDir = path.join(tempDir, 'project', '.opencode');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      '{"preset":"work","presets":{"work":{"extends":"absent"}}}',
+    );
+    const result = runDoctorCheck(path.dirname(configDir));
+    expect(result.ok).toBe(false);
+    expect(result.presetCheck?.error?.message).toContain('absent');
+  });
+
   test('valid project config returns ok', () => {
     const projectDir = path.join(tempDir, 'project');
     const configDir = path.join(projectDir, '.opencode');
@@ -154,6 +202,9 @@ describe('runDoctorCheck', () => {
     const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const result = runDoctorCheck(projectDir);
+      expect(formatJsonDoctorResult(result)).toContain(
+        'should be an array; normalized',
+      );
 
       // The string is normalized (matching the loader), so the config is
       // valid rather than a false invalid-schema diagnosis
@@ -165,12 +216,10 @@ describe('runDoctorCheck', () => {
         'test/model',
       );
 
-      // The normalization is reported to the user
-      const calls = warnSpy.mock.calls as string[][];
-      const message = calls.find((call) =>
-        (call[0] as string).includes('disabled_agents'),
-      )?.[0];
-      expect(message).toContain('should be an array; normalized');
+      expect(result.configs[1].warnings?.[0]).toContain(
+        'should be an array; normalized',
+      );
+      expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
     }

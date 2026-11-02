@@ -8,10 +8,9 @@ register it.
 The source baseline for this compatibility work is **oh-my-opencode-slim
 v3.0.5**, with historical live host verification on **OpenCode v2.0.7**. The
 plugin requires OpenCode v2.0.7+ on v2 hosts; older v2 hosts are unsupported.
-Bundled-skill delivery requires the host's in-process skill registration
-channel (a `ctx.skill` draft with `add`), available on OpenCode v2 hosts. On
-v1 hosts bundled skills are **not** delivered: the legacy disk-copy sync was
-removed, and v1-era skill drafts expose `{source, list}` rather than `add`.
+Bundled skills use the host's in-process registration channel (`ctx.skill` with
+`add`) on v2. On v1 the config hook adds package skill paths to the host's disk
+scanner, excluding disabled skills and names supplied by the user.
 The adapter targets the v2 plugin API surface (see
 [The v2 plugin API surface](#the-v2-plugin-api-surface-this-adapter-uses)),
 and the compile-time mirror guard below is pinned to `@opencode/plugin`
