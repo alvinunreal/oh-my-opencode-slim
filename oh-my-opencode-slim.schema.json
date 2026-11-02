@@ -1766,6 +1766,10 @@
         "debug": {
           "description": "Enable verbose native companion debug logs.",
           "type": "boolean"
+        },
+        "hideWhenIdle": {
+          "description": "Hides the companion window while no agent is active.",
+          "type": "boolean"
         }
       }
     },
