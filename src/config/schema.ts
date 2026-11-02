@@ -508,6 +508,34 @@ export const InterviewConfigSchema = z.object({
 
 export type InterviewConfig = z.infer<typeof InterviewConfigSchema>;
 
+export const DeepworkExplorerConfigSchema = z.object({
+  enabled: z
+    .boolean()
+    .default(true)
+    .describe(
+      'Serve the read-only deepwork explorer (live passes, lanes, agents and oracle verdicts) on localhost when /deepwork starts. Default true.',
+    ),
+  autoOpenBrowser: z
+    .boolean()
+    .default(true)
+    .describe(
+      'Open the deepwork explorer in your default browser when /deepwork starts. Disabled automatically in tests and CI.',
+    ),
+  port: z
+    .number()
+    .int()
+    .min(0)
+    .max(65535)
+    .default(43212)
+    .describe(
+      'Explorer port on 127.0.0.1. Falls back to a free port when taken; 0 always picks a free port.',
+    ),
+});
+
+export type DeepworkExplorerConfig = z.infer<
+  typeof DeepworkExplorerConfigSchema
+>;
+
 const ConcurrencyLimitSchema = z.number().int().min(0).max(1000);
 
 export const BackgroundTaskConcurrencyConfigSchema = z
@@ -1120,6 +1148,7 @@ export const RawPluginConfigSchema = z
     // Multiplexer config
     multiplexer: MultiplexerConfigSchema.optional(),
     interview: InterviewConfigSchema.optional(),
+    deepworkExplorer: DeepworkExplorerConfigSchema.partial().optional(),
     backgroundJobs: BackgroundJobsConfigSchema.optional(),
     fallback: FailoverConfigSchema.optional(),
     council: CouncilConfigSchema.optional(),

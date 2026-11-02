@@ -292,6 +292,16 @@ function WorkDetail({ work, t }: { work: WorkNode; t: number }) {
         </Section>
       )}
 
+      {work.resultText && status !== 'running' && (
+        <Section
+          title={work.agent === 'oracle' ? 'Full review' : 'Lane report'}
+        >
+          <div className="scroll-thin max-h-[420px] overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--panel-2)] px-3.5 py-3 text-[12.5px] leading-relaxed whitespace-pre-wrap text-[var(--muted)]">
+            {work.resultText}
+          </div>
+        </Section>
+      )}
+
       {showReport && work.report && (
         <Section title="Lane report">
           <div className="flex flex-col gap-3 text-[12.5px]">

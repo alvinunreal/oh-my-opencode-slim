@@ -2,8 +2,7 @@ import { Handle, type NodeProps, Position } from '@xyflow/react';
 import { GitCommitHorizontal, Lock, ScrollText } from 'lucide-react';
 
 import { AGENTS } from '../agents';
-import { Avatar, elapsed, StatusPill, useTime } from '../components/ui';
-import { MOCK_RUN } from '../data/mock-run';
+import { Avatar, elapsed, StatusPill, useRun, useTime } from '../components/ui';
 import {
   clock,
   currentStep,
@@ -126,7 +125,7 @@ export function LaneNode({ data, selected }: NodeProps) {
       <div className="min-h-[18px] truncate text-[12px] text-[var(--muted)]">
         {status === 'running' ? (
           <span className="shimmer-text">
-            {step ?? 'Writing the lane report'}
+            {step ?? (total > 0 ? 'Writing the lane report' : 'In progress')}
           </span>
         ) : status === 'done' ? (
           (work.report?.unverified.length ?? 0) > 0 ? (
@@ -378,7 +377,8 @@ const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V'];
 export function PassGroupNode({ data }: NodeProps) {
   const { pass } = data as PassData;
   const t = useTime();
-  const progress = passProgress(MOCK_RUN, pass, t);
+  const run = useRun();
+  const progress = passProgress(run, pass, t);
   return (
     <div
       className="h-full w-full rounded-[28px]"
@@ -421,7 +421,8 @@ export function PassGroupNode({ data }: NodeProps) {
 
 export function PassSummaryNode({ data, selected }: NodeProps) {
   const { pass } = data as PassData;
-  const nodes = MOCK_RUN.nodes.filter((n) => n.passId === pass.id);
+  const run = useRun();
+  const nodes = run.nodes.filter((n) => n.passId === pass.id);
   const agents = [...new Set(nodes.map((n) => n.agent))] as AgentId[];
   const gate = [...nodes].reverse().find((n) => n.kind === 'gate');
   return (

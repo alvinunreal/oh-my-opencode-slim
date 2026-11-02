@@ -476,6 +476,19 @@ export class RuntimeConfig {
     return this.backgroundJobsMode === 'managed';
   }
 
+  get deepworkExplorer(): {
+    enabled: boolean;
+    autoOpenBrowser: boolean;
+    port: number;
+  } {
+    const c = this.pluginConfig?.deepworkExplorer;
+    return {
+      enabled: c?.enabled !== false,
+      autoOpenBrowser: c?.autoOpenBrowser !== false,
+      port: c?.port ?? 43212,
+    };
+  }
+
   get interviewEnabled(): boolean {
     return this.pluginConfig?.interview?.enabled !== false;
   }

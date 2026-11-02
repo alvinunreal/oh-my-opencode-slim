@@ -35,7 +35,10 @@ function activationPrompt(task: string, sessionID: string): string {
   ].join('\n');
 }
 
-export function createDeepworkCommandHook(): {
+export function createDeepworkCommandHook(options?: {
+  /** Fired once per activation; observation only (deepwork explorer). */
+  onActivate?: (sessionID: string) => void;
+}): {
   registerCommand: (config: Record<string, unknown>) => void;
   handleCommandExecuteBefore: (
     input: { command: string; sessionID: string; arguments: string },
@@ -70,6 +73,7 @@ export function createDeepworkCommandHook(): {
         type: 'text',
         text: activationPrompt(task, input.sessionID),
       });
+      options?.onActivate?.(input.sessionID);
     },
   };
 }

@@ -33,10 +33,12 @@ export function TopBar({
           </div>
           <div className="flex items-center gap-3 font-mono text-[10.5px] text-[var(--faint)]">
             <span>.slim/deepwork/{run.slug}/</span>
-            <span className="hidden items-center gap-1 sm:flex">
-              <GitBranch size={11} />
-              {run.branch}
-            </span>
+            {run.branch && (
+              <span className="hidden items-center gap-1 sm:flex">
+                <GitBranch size={11} />
+                {run.branch}
+              </span>
+            )}
           </div>
         </div>
       </div>

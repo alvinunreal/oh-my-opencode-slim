@@ -62,6 +62,8 @@ export interface WorkNode {
   };
   attempt?: { n: number; max: number };
   verdict?: Verdict;
+  /** Full result text (lane report or oracle review), live runs only. */
+  resultText?: string;
 }
 
 export interface PassDef {
@@ -91,7 +93,7 @@ export interface RunDef {
   task: string;
   slug: string;
   sessionId: string;
-  branch: string;
+  branch?: string;
   endAt: number;
   passes: PassDef[];
   nodes: WorkNode[];

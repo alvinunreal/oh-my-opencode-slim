@@ -155,6 +155,17 @@ Start it directly with:
 - Existing `.runtime/receipts/` data is obsolete after the guard removal and
   may be deleted locally. Tombstone archiving remains a project convention.
 
+**Deepwork explorer.** `/deepwork` also opens a live, read-only view of the
+run in your browser at `http://127.0.0.1:43212/s/<session-id>` (the next free
+port if 43212 is taken; `http://127.0.0.1:43212/` jumps to the latest session).
+It shows the pass track, each lane's agent and status, oracle design reviews and
+gates with their full text, upcoming steps, the `progress.md` next step and
+known issues, and a scrubbable timeline. It only reads `.slim/deepwork/` and the
+background job board: no state is written and nothing is added to any prompt.
+Lanes and oracle results come from the job board, so the view is richest with
+`backgroundJobs` in managed mode. Configure or turn it off with
+[`deepworkExplorer`](configuration.md#full-option-reference).
+
 **When to use:** Large-scale refactoring, multi-file architectural changes, complex feature development spanning modules.
 
 **When NOT to use:** Simple single-file edits, trivial bug fixes, quick one-off changes.

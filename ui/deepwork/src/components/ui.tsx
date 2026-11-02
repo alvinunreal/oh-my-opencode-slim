@@ -2,11 +2,16 @@ import { Check, Circle, OctagonAlert } from 'lucide-react';
 import { createContext, useContext } from 'react';
 
 import { AGENTS } from '../agents';
-import type { AgentId, Status } from '../data/types';
+import { MOCK_RUN } from '../data/mock-run';
+import type { AgentId, RunDef, Status } from '../data/types';
 
 /** Current sample time (minutes), shared by every node and panel. */
 export const TimeContext = createContext(0);
 export const useTime = () => useContext(TimeContext);
+
+/** The run being shown (live snapshot or the sample run). */
+export const RunContext = createContext<RunDef>(MOCK_RUN);
+export const useRun = () => useContext(RunContext);
 
 export function Avatar({
   agent,

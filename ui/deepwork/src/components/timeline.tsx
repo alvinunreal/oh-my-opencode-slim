@@ -11,6 +11,7 @@ export function Timeline({
   head,
   playing,
   speed,
+  controls = true,
   onScrub,
   onLive,
   onTogglePlay,
@@ -22,6 +23,8 @@ export function Timeline({
   head: number;
   playing: boolean;
   speed: number;
+  /** Play and speed only make sense for the sample run. */
+  controls?: boolean;
   onScrub: (t: number) => void;
   onLive: () => void;
   onTogglePlay: () => void;
@@ -39,27 +42,31 @@ export function Timeline({
   return (
     <footer className="flex h-[88px] shrink-0 items-center gap-4 border-t border-[var(--line)] bg-[var(--panel)] px-4">
       <div className="flex shrink-0 items-center gap-1.5">
-        <button
-          type="button"
-          onClick={onTogglePlay}
-          aria-label={playing ? 'Pause' : 'Play'}
-          className="grid h-9 w-9 place-items-center rounded-full bg-[var(--fg)] text-[var(--bg)] transition-transform hover:scale-105 active:scale-95"
-        >
-          {playing ? (
-            <Pause size={15} fill="currentColor" />
-          ) : (
-            <Play size={15} fill="currentColor" className="ml-0.5" />
-          )}
-        </button>
-        <button
-          type="button"
-          onClick={onSpeed}
-          aria-label="Change speed"
-          className="flex h-9 items-center gap-1 rounded-full border border-[var(--line-2)] px-3 font-mono text-[11px] text-[var(--muted)] transition-colors hover:text-[var(--fg)]"
-        >
-          <FastForward size={12} />
-          {speed}×
-        </button>
+        {controls && (
+          <>
+            <button
+              type="button"
+              onClick={onTogglePlay}
+              aria-label={playing ? 'Pause' : 'Play'}
+              className="grid h-9 w-9 place-items-center rounded-full bg-[var(--fg)] text-[var(--bg)] transition-transform hover:scale-105 active:scale-95"
+            >
+              {playing ? (
+                <Pause size={15} fill="currentColor" />
+              ) : (
+                <Play size={15} fill="currentColor" className="ml-0.5" />
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={onSpeed}
+              aria-label="Change speed"
+              className="flex h-9 items-center gap-1 rounded-full border border-[var(--line-2)] px-3 font-mono text-[11px] text-[var(--muted)] transition-colors hover:text-[var(--fg)]"
+            >
+              <FastForward size={12} />
+              {speed}×
+            </button>
+          </>
+        )}
         <button
           type="button"
           onClick={onLive}

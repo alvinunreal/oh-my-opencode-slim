@@ -38,6 +38,10 @@ import {
   type PluginConfigSnapshot,
   readPluginConfigSnapshot,
 } from './config/snapshot';
+import {
+  createDeepworkExplorer,
+  type DeepworkExplorer,
+} from './deepwork-explorer';
 import { getBuildInfo } from './generated/build-info';
 import {
   HEALTH_CHECK,
@@ -173,6 +177,7 @@ import {
   type ModelImageCapabilityDeps,
   modelAcceptsImageInput,
 } from './utils/model-image-capability';
+import { isAutomatedRuntime } from './utils/open-browser';
 import { registerPendingSessionPrune } from './utils/pending-session-prunes';
 import { parseModelReference, withTimeout } from './utils/session';
 import { SessionMetadataStore } from './utils/session-metadata';
@@ -612,6 +617,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     | ((sessionID: string) => SessionTeamBundle | undefined)
     | undefined;
   let selectedMarketplacePackageIds: readonly string[] = [];
+  let deepworkExplorer: DeepworkExplorer | undefined;
   let deepworkCommandHook:
     | ReturnType<typeof createDeepworkCommandHook>
     | undefined;
@@ -959,7 +965,23 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       disabledSkills: runtime.disabledSkills,
     };
     if (isCommandEnabled('deepwork', commandOptions)) {
-      deepworkCommandHook = createDeepworkCommandHook();
+      const explorerConfig = runtime.deepworkExplorer;
+      // Observation-only local view; never started under tests or CI.
+      deepworkExplorer =
+        explorerConfig.enabled && !isAutomatedRuntime(process.env)
+          ? createDeepworkExplorer({
+              directory: ctx.directory,
+              listJobs: (sessionID) =>
+                backgroundJobBoard?.list(sessionID) ?? [],
+              port: explorerConfig.port,
+              autoOpenBrowser: explorerConfig.autoOpenBrowser,
+            })
+          : undefined;
+      deepworkCommandHook = createDeepworkCommandHook({
+        onActivate: (sessionID) => {
+          void deepworkExplorer?.activate(sessionID);
+        },
+      });
     }
     if (isCommandEnabled('reflect', commandOptions)) {
       reflectCommandHook = createReflectCommandHook();
@@ -3268,6 +3290,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       v1InternalSelectionOverrides.clear();
       v1DelegatedIntents.length = 0;
       await interviewManager?.dispose();
+      deepworkExplorer?.close();
       clearTuiActivities();
       tuiReusableProjection?.dispose();
       // Explicitly release this generation's companion ownership: a

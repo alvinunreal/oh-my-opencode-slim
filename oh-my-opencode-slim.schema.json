@@ -1406,6 +1406,28 @@
         }
       }
     },
+    "deepworkExplorer": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Serve the read-only deepwork explorer (live passes, lanes, agents and oracle verdicts) on localhost when /deepwork starts. Default true.",
+          "type": "boolean"
+        },
+        "autoOpenBrowser": {
+          "default": true,
+          "description": "Open the deepwork explorer in your default browser when /deepwork starts. Disabled automatically in tests and CI.",
+          "type": "boolean"
+        },
+        "port": {
+          "default": 43212,
+          "description": "Explorer port on 127.0.0.1. Falls back to a free port when taken; 0 always picks a free port.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      }
+    },
     "backgroundJobs": {
       "type": "object",
       "properties": {

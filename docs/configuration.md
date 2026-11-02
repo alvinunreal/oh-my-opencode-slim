@@ -352,6 +352,9 @@ and [Council](council.md) for what remains.
 | `council.presets.<name>.<councillor>.prompt` | string | - | Optional role guidance for the councillor See [Council configuration note](#council-configuration-note). |
 | `council.default_preset` | string | `"default"` | Default preset when none is specified See [Council configuration note](#council-configuration-note). |
 | — | — | — | *Timeouts, retries, and bounded waits are handled by the orchestrator's injected Council Mode procedure (`src/hooks/council-inject/index.ts`); execution modes are no longer configured.* |
+| `deepworkExplorer.enabled` | boolean | `true` | Serve the read-only deepwork explorer on `127.0.0.1` when `/deepwork` starts. See [Skills: deepwork](skills.md#deepwork). Never started in tests or CI. |
+| `deepworkExplorer.autoOpenBrowser` | boolean | `true` | Open the explorer in your default browser when `/deepwork` starts (once per session). |
+| `deepworkExplorer.port` | integer | `43212` | Explorer port. Falls back to a free port when taken; `0` always picks a free port. |
 | `interview.enabled` | boolean | `true` | Master switch for the interview subsystem. When `false`, the `/interview` command is not intercepted, the interview server and dashboard never start, and no interview state or output machinery runs; the native host is untouched See [Interview configuration](interview.md). |
 | `interview.maxQuestions` | integer | `2` | Max questions per interview round (1–10) See [Interview configuration](interview.md). |
 | `interview.outputFolder` | string | `"interview"` | Directory where interview markdown files are written relative to the project root; absolute paths and `..` traversal are rejected See [Interview configuration](interview.md). |

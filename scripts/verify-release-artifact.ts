@@ -34,6 +34,7 @@ const packagedRequiredFiles = [
   'dist/tui2.js',
   'dist/tui.d.ts',
   'dist/cli/index.js',
+  'dist/deepwork-explorer.html',
   'dist/marketplace-contract/index.js',
   'dist/marketplace-contract/index.d.ts',
   'oh-my-opencode-slim.schema.json',
