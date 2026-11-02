@@ -1,5 +1,8 @@
 {
   "$schema": "https://unpkg.com/knip@latest/schema.json",
+  // Treat knip's report as a work queue: it cannot see cache-busted `?test=N`
+  // dynamic imports or namespace aliases. Deliberate keeps carry `@public`
+  // with the reason inline; genuine dead code is deleted, never file-ignored.
   // Files the import graph cannot see: each is invoked or looked up by path
   // string. Keep this list in sync when adding spawn targets, contract
   // registries, compile-time guards, or manual-run tools.
@@ -13,5 +16,10 @@
     "scripts/benchmark-opencode-cache.ts",
     "scripts/e2e-windows-spawn.ts"
   ],
+  // Platform tools invoked by name at runtime; not package dependencies.
+  "ignoreBinaries": ["opencode", "mkfifo", "where"],
+  // Repo-root-relative spawn path in companion-release-scripts.test.ts; knip
+  // resolves spawn specifiers relative to the spawning file.
+  "ignoreUnresolved": ["scripts/verify-companion-manifest.ts"],
   "project": ["src/**/*.ts", "scripts/**/*.{ts,mjs}"]
 }
