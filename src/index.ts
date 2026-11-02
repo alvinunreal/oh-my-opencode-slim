@@ -694,6 +694,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let releaseRuntimeConfig: (() => void) | undefined;
   let finalHostAgentConfig: Record<string, unknown> | undefined;
   let interviewManager: ReturnType<typeof createInterviewManager> | undefined;
+  const v1InterviewRefusals = new Map<
+    string,
+    { messageID: string; outcome: Promise<string | undefined> }
+  >();
   let collapseActiveInterviewHistory:
     | typeof collapseInterviewHistory
     | undefined;
@@ -2856,6 +2860,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'v2.backgroundDefaultFlip': backgroundDefaultFlip,
     'v2.refusalOutcome':
       foregroundFallback?.refusedChildOutcome.bind(foregroundFallback),
+    'v2.pendingRefusalOutcome':
+      foregroundFallback?.pendingRefusalOutcome.bind(foregroundFallback),
     'v2.backgroundGeneration': (
       parentID: string,
       childID: string,
@@ -3104,15 +3110,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           marketplaceLeaseAbort.abort();
           terminalGate?.dispose();
         }
-        // Token streams have no work in this fan-out. The v2 Interview
-        // bridge consumes text deltas independently before dispatching here.
+        // V1 token streams have no work in this fan-out.
         const streamEventType = (input.event as { type?: string } | undefined)
           ?.type;
-        if (
-          streamEventType === 'message.part.delta' ||
-          streamEventType === 'session.text.delta' ||
-          streamEventType === 'session.reasoning.delta'
-        ) {
+        if (streamEventType === 'message.part.delta') {
           return;
         }
 
@@ -3132,6 +3133,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           properties?: {
             info?: {
               id?: string;
+              role?: string;
+              finish?: string;
               parentID?: string;
               title?: string;
               agent?: string;
@@ -3167,6 +3170,38 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
                 typeof (rawStatus as { type?: unknown }).type === 'string'
               ? (rawStatus as { type: string }).type
               : undefined;
+        if (eventSessionID && interviewManager) {
+          const info = event.properties?.info;
+          if (
+            event.type === 'message.updated' &&
+            info?.role === 'assistant' &&
+            info.finish === 'content-filter' &&
+            typeof info.id === 'string' &&
+            interviewManager.service.getActiveInterviewId(eventSessionID) &&
+            v1InterviewRefusals.get(eventSessionID)?.messageID !== info.id
+          ) {
+            const outcome = foregroundFallback?.v1InterviewRefusal(
+              eventSessionID,
+              info.id,
+            );
+            if (outcome)
+              v1InterviewRefusals.set(eventSessionID, {
+                messageID: info.id,
+                outcome,
+              });
+          } else if (
+            event.type === 'session.deleted' ||
+            (event.type === 'session.status' && statusType === 'busy')
+          ) {
+            v1InterviewRefusals.delete(eventSessionID);
+          }
+        }
+        const refusalAtIdle =
+          eventSessionID &&
+          (event.type === 'session.idle' ||
+            (event.type === 'session.status' && statusType === 'idle'))
+            ? v1InterviewRefusals.get(eventSessionID)
+            : undefined;
         // Publish before any awaited consumer can admit a newer run.
         const companionProperties = event.properties;
         const companionData = (
@@ -3423,11 +3458,30 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // disabled_hooks entry is absent.
         await autoUpdateChecker?.event(input);
 
-        await interviewManager?.handleEvent(
-          input as {
-            event: { type: string; properties?: Record<string, unknown> };
-          },
-        );
+        const deliverInterviewEvent = () =>
+          interviewManager?.handleEvent(
+            input as {
+              event: { type: string; properties?: Record<string, unknown> };
+            },
+          );
+        if (refusalAtIdle && eventSessionID) {
+          const settle = (model?: string) => {
+            if (
+              !instanceDisposed &&
+              v1InterviewRefusals.get(eventSessionID) === refusalAtIdle
+            ) {
+              v1InterviewRefusals.delete(eventSessionID);
+              if (!model) return deliverInterviewEvent();
+            }
+          };
+          void refusalAtIdle.outcome
+            .then(settle, () => settle())
+            .catch((error) =>
+              log('[interview] deferred idle failed', String(error)),
+            );
+        } else {
+          await deliverInterviewEvent();
+        }
 
         if (input.event.type === 'session.deleted') {
           const props = input.event.properties as
@@ -3451,6 +3505,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // Synchronous: v2 setup calls this directly and does not emit the
       // public server.instance.disposed event first.
       instanceDisposed = true;
+      v1InterviewRefusals.clear();
       companionStartupAbort?.abort();
       marketplaceLeaseAbort.abort();
       registryBridge.retire();
@@ -4213,6 +4268,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       if (taskSessionManagerHook) await taskSessionManagerAfter(input, output);
     },
   } as Hooks & {
+    'v2.pendingRefusalOutcome':
+      | ForegroundFallbackManager['pendingRefusalOutcome']
+      | undefined;
     'v2.refusalOutcome':
       | ForegroundFallbackManager['refusedChildOutcome']
       | undefined;

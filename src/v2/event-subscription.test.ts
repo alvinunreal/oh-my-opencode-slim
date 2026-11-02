@@ -3,14 +3,10 @@
  * The union is pinned to the names the production v2 pump actually
  * consumes (verified live against the pinned host surface; the
  * compile-time membership guard lives in `mirror-conformance.ts`).
- * Stream text deltas are included only when the `/interview` subsystem
- * is enabled — their only consumer.
+ * Complete text events are included only when `/interview` is enabled.
  */
 import { describe, expect, test } from 'bun:test';
-import {
-  buildV2EventSubscriptionTypes,
-  isV2StreamDeltaType,
-} from './event-subscription';
+import { buildV2EventSubscriptionTypes } from './event-subscription';
 
 /** Source event types the production pipeline consumes, independent of
  *  the implementation list (names verified against the pinned host
@@ -49,11 +45,7 @@ const PRODUCTION_REQUIRED = [
   'permission.replied',
 ] as const;
 
-const INTERVIEW_TEXT_STREAM = [
-  'session.text.started',
-  'session.text.delta',
-  'session.text.ended',
-] as const;
+const INTERVIEW_TEXT_STREAM = ['session.text.ended'] as const;
 
 describe('buildV2EventSubscriptionTypes', () => {
   test('includes every production-required source event type', () => {
@@ -82,6 +74,8 @@ describe('buildV2EventSubscriptionTypes', () => {
 
   test('includes interview stream text events when enabled', () => {
     const types = buildV2EventSubscriptionTypes({ interview: true });
+    expect(types).not.toContain('session.text.started');
+    expect(types).not.toContain('session.text.delta');
     for (const name of INTERVIEW_TEXT_STREAM) {
       expect(types).toContain(name);
     }
@@ -98,19 +92,5 @@ describe('buildV2EventSubscriptionTypes', () => {
     }).toThrow();
     const again = buildV2EventSubscriptionTypes();
     expect(Object.isFrozen(again)).toBe(true);
-  });
-});
-
-describe('isV2StreamDeltaType', () => {
-  test('only the interview text delta is a stream delta', () => {
-    expect(isV2StreamDeltaType('session.text.delta')).toBe(true);
-    expect(isV2StreamDeltaType('session.text.started')).toBe(false);
-    expect(isV2StreamDeltaType('session.text.ended')).toBe(false);
-    // Legacy names the current pump hardcodes are dead on the pinned host
-    // (they are not in its event union), so they must not be treated as
-    // stream deltas either.
-    expect(isV2StreamDeltaType('session.next.text.delta')).toBe(false);
-    expect(isV2StreamDeltaType('message.part.delta')).toBe(false);
-    expect(isV2StreamDeltaType('session.reasoning.delta')).toBe(false);
   });
 });

@@ -2,10 +2,11 @@
 
 ## Responsibility
 
-- `patch.ts` applies unified diffs to the current spec body; `history.ts`
+- `patch.ts` rejects unanchored replacements and applies unified diffs to the current spec body; `history.ts`
   collapses the older kickoff copy for active interviews.
 - `service.ts` handles quiet state turns, consumed-state dedupe, one patch repair
-  prompt, turn status notices, and `/implement` with newest-complete fallback.
+  prompt, turn status notices, and `/implement` with newest-complete fallback;
+  the command's own busy event does not reject a zero-question active spec.
 - `../tools/interview-submit-state.ts` is the static quiet submission tool;
   primary agents may use it and subagents are denied by permission projection.
 
@@ -32,8 +33,8 @@
   implementation without expanding the global client shim.
 
 - `manager.ts` (composition root)
-  - Chooses mode via the shared pure `computeInterviewMode` (also used by the
-    v2 interview bridge): `interview.dashboard === true || interview.port > 0`:
+  - Chooses mode via `computeInterviewMode` for both v1 and v2:
+    `interview.dashboard === true || interview.port > 0`:
     - per-session mode → `createPerSessionInterviewServer` (`session-server.ts`)
     - dashboard mode → `createDashboardManager` (`dashboard-manager.ts`)
   - Returns event hooks:
@@ -49,8 +50,8 @@
     `tryBecomeDashboard(...)` to elect one process as dashboard,
     non-dashboard processes read auth token via `readDashboardAuthFile(port)`,
     registers/unregisters sessions over HTTP, and pushes state back via
-    `/api/interviews/{id}/state`; 10-second fallback polling keeps
-    answer/nudge delivery active if needed.
+    `/api/interviews/{id}/state`; local queued actions are delivered as soon
+    as their owning session is idle, while clients also poll every 10 seconds.
 
 - `createInterviewService` (`service.ts`)
   - Manages interview domain maps:
@@ -90,6 +91,7 @@
   - HTML/JS renderers for interview pages (list/detail), shared
     client-side helpers (clipboard, polling), and the dashboard brand UI;
     uses `escapeHtml` from `src/utils/escape-html.ts`.
+  - Questions without options start in free-text mode.
 
 - `dashboard.ts`
   - Implements a shared dashboard server and state cache.
@@ -99,7 +101,7 @@
   - In-memory state/cache contracts:
     - `sessions` registry,
     - `stateCache` keyed by interview ID,
-    - pending answers and nudge actions with consume-on-read semantics.
+    - pending answers, nudges, comments and chat with claim/ack semantics.
   - Recovery/scan:
     - periodic `rebuildFromFiles()` from markdown frontmatter,
     - session directory discovery via SDK + manual folders,
@@ -155,9 +157,14 @@
 
 - v1 loads `manager.ts`; v2 loads only its Interview bridge. Both reuse the
   same Interview Implementation rather than constructing two owners on v2.
-- Native v2 text observations use `session.text.started/delta/ended` and the
-  host's `assistantMessageID`; full text-ended values remain distinct from
-  lifecycle idle boundaries.
+- Native v2 text observations use complete `session.text.ended` values keyed
+  by the host's `assistantMessageID` and ordinal, distinct from idle boundaries.
+- The v2 bridge replays command expansions for each context rebuild without
+  re-running interview side effects; uncached historical markers lose their tags.
+- v2 service turns use tracked synthetic admissions and retain the session's
+  current agent without emitting an agent-switch event.
+- Notices produced inside a v2 command context are sent after execution ends,
+  rather than being promoted as steer input during the active model turn.
 - Uses OpenCode SDK session APIs for messages, prompts, and status events.
 - Uses local HTTP server contracts for:
   - dashboard browsing,
@@ -174,14 +181,22 @@
 - The interview-only `runtime.ts` boundary owns message reads, notifications,
   orchestrator continuation, and session rename operations. The v2 bridge uses
   this boundary instead of expanding the global client shim.
-- After `confirm-complete`, the next clean assistant response is persisted with
-  `rewriteInterviewDocumentWithFinalSpec` only after an idle/text-ended
-  completion event; a stream prefix cannot overwrite the final markdown.
+- `confirm-complete` marks the accepted document complete without requesting
+  another model turn.
 - Dashboard clients register at `/api/register`, unregister at
   `/api/unregister`, and receive `202 {"status":"queued"}` for deferred
   browser submissions. Session polling claims each queued value and must
   acknowledge it after service delivery; rejected deliveries roll the claim
   back without clearing the answer, chat message, block comment, or nudge.
+- Cross-process state pushes omit derived blocks and allow a bounded 4 MiB
+  request; other JSON requests retain the 64 KiB limit.
+- A disconnected dashboard client falls back to its local server and notifies
+  the session; inputs held only by the lost dashboard must be resubmitted.
 - Markdown documents persist their owning `sessionID` in frontmatter. A
   different session cannot resume or mutate an owned document, while the
-  original session can resume it across plugin processes.
+  original session can resume it across plugin processes. Deleting the owner
+  releases its documents under the document lock.
+- New documents retain a hash of their original idea so the owning session can
+  find them after a restart even if the displayed title changed.
+- Transcript boundaries use the last host-generated ascending message ID;
+  the previous message count remains a fallback when IDs are unavailable.
