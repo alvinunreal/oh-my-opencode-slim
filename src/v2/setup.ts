@@ -1776,10 +1776,10 @@ export function createSessionPromptBridge(
         SLIM_INTERNAL_INITIATOR_MARKER,
       );
 
-      if (internalMetadata || internalMarker) {
-        recordInternalAdmission(sessionID, messageID);
-        return;
-      }
+      // Only metadata proves a Slim admission; marker text alone (which a
+      // user can paste) skips the fence without widening the registry.
+      if (internalMetadata) recordInternalAdmission(sessionID, messageID);
+      if (internalMetadata || internalMarker) return;
 
       if (isInternalAdmission(sessionID, messageID)) {
         return;

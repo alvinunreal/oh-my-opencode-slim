@@ -2656,13 +2656,15 @@ describe('createSessionPromptBridge external prompt intent feed', () => {
     });
 
     expect(intents).toEqual([]);
-    // Text marker should be recorded in internal admissions
-    expect(isInternalAdmission('ses_marker', 'msg_marker')).toBe(true);
+    // Metadata proves a Slim admission; marker text alone is user-pasteable
+    // and must not widen the internal-admission registry.
+    expect(isInternalAdmission('ses_meta', 'msg_meta')).toBe(true);
+    expect(isInternalAdmission('ses_marker', 'msg_marker')).toBe(false);
 
     // 3. Pre-recorded internal admission
     bridge.observePromptIntent({
-      sessionID: 'ses_marker',
-      messageID: 'msg_marker',
+      sessionID: 'ses_meta',
+      messageID: 'msg_meta',
       prompt: { text: 'normal text now' },
     });
     expect(intents).toEqual([]);
