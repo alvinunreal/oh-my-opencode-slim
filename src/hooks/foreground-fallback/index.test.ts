@@ -3637,6 +3637,14 @@ describe('isPermanentQuotaBillingError', () => {
     };
     expect(isFailoverError(poolError)).toBe(true);
     expect(isPermanentQuotaBillingError(poolError)).toBe(true);
+    // A generic HTTP 412 is a request rejection: no Antigravity signal, no
+    // failover, and the host's own verdict stands.
+    const genericPrecondition = {
+      status: 412,
+      message: 'Precondition Failed',
+    };
+    expect(isFailoverError(genericPrecondition)).toBe(false);
+    expect(isPermanentQuotaBillingError(genericPrecondition)).toBe(false);
     expect(
       isFailoverError({
         cause: {

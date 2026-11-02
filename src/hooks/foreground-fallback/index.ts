@@ -322,34 +322,44 @@ function nestedField(source: unknown, key: string): unknown {
   return isRecord(source) ? source[key] : undefined;
 }
 
+/** Structured provider body (v2 wraps it in `data.body` or a raw JSON
+ *  `responseBody`), plus the raw string for whole-carrier matching. */
+function errorBody(error: Record<string, unknown>): {
+  rawBody: string | undefined;
+  bodyObj: Record<string, unknown> | undefined;
+  bodyError: Record<string, unknown> | undefined;
+} {
+  const { data, cause, response } = error;
+  const body =
+    nestedField(data, 'body') ??
+    nestedField(response, 'body') ??
+    nestedField(cause, 'body') ??
+    error.body;
+  const raw =
+    nestedField(data, 'responseBody') ??
+    nestedField(cause, 'responseBody') ??
+    error.responseBody;
+  const rawBody = typeof raw === 'string' ? raw : undefined;
+  let bodyObj = isRecord(body) ? body : undefined;
+  if (!bodyObj && rawBody !== undefined) {
+    try {
+      const parsed = JSON.parse(rawBody);
+      if (isRecord(parsed)) bodyObj = parsed;
+    } catch {
+      // Not JSON: the raw string still reaches errorMessages.
+    }
+  }
+  const bodyError = isRecord(bodyObj?.error) ? bodyObj.error : undefined;
+  return { rawBody, bodyObj, bodyError };
+}
+
 function extractStatusCode(error: unknown): number | undefined {
   if (!isRecord(error)) return undefined;
   const { data, cause, response } = error;
   const dataObj = isRecord(data) ? data : undefined;
   const causeObj = isRecord(cause) ? cause : undefined;
   const responseObj = isRecord(response) ? response : undefined;
-
-  const body =
-    nestedField(dataObj, 'body') ??
-    nestedField(responseObj, 'body') ??
-    nestedField(causeObj, 'body') ??
-    error.body;
-  let bodyObj = isRecord(body) ? body : undefined;
-  if (!bodyObj) {
-    const rawBody =
-      nestedField(dataObj, 'responseBody') ??
-      nestedField(causeObj, 'responseBody') ??
-      error.responseBody;
-    if (typeof rawBody === 'string') {
-      try {
-        const parsed = JSON.parse(rawBody);
-        if (isRecord(parsed)) bodyObj = parsed;
-      } catch {
-        // ignore
-      }
-    }
-  }
-  const bodyError = isRecord(bodyObj?.error) ? bodyObj.error : undefined;
+  const { bodyObj, bodyError } = errorBody(error);
 
   const candidates = [
     error.statusCode,
@@ -440,35 +450,15 @@ function spentQuotaSignature(error: unknown): string {
 function errorMessages(error: unknown): string[] {
   if (typeof error === 'string') return [error];
   if (!isRecord(error)) return [];
-  const { data, cause, response } = error;
+  const { data, cause } = error;
   const dataObj = isRecord(data) ? data : undefined;
   const causeObj = isRecord(cause) ? cause : undefined;
-  const responseObj = isRecord(response) ? response : undefined;
-
-  const body =
-    nestedField(dataObj, 'body') ??
-    nestedField(responseObj, 'body') ??
-    nestedField(causeObj, 'body') ??
-    error.body;
-  let bodyObj = isRecord(body) ? body : undefined;
-  const rawBody =
-    nestedField(dataObj, 'responseBody') ??
-    nestedField(causeObj, 'responseBody') ??
-    error.responseBody;
-  if (!bodyObj && typeof rawBody === 'string') {
-    try {
-      const parsed = JSON.parse(rawBody);
-      if (isRecord(parsed)) bodyObj = parsed;
-    } catch {
-      // ignore
-    }
-  }
-  const bodyError = isRecord(bodyObj?.error) ? bodyObj.error : undefined;
+  const { rawBody, bodyObj, bodyError } = errorBody(error);
 
   return [
     error.message,
     nestedField(dataObj, 'message'),
-    typeof rawBody === 'string' ? rawBody : undefined,
+    rawBody,
     nestedField(causeObj, 'message'),
     nestedField(nestedField(causeObj, 'data'), 'message'),
     typeof error.status === 'string' ? error.status : undefined,
@@ -498,24 +488,20 @@ function isAntigravity412Error(text: string, statusCode?: number): boolean {
   if (ANTIGRAVITY_412_PATTERNS.some((pattern) => pattern.test(text))) {
     return true;
   }
-  if (
+  // A bare "Precondition Failed" 412 is a request rejection (e.g. If-Match):
+  // require an Antigravity, pool, or quota signal.
+  return (
     statusCode === 412 &&
-    (/\bprecondition\b/i.test(text) ||
+    (/\bantigravity\b/i.test(text) ||
       /\baccount pool\b/i.test(text) ||
       /\bquota\b/i.test(text))
-  ) {
-    return true;
-  }
-  return false;
+  );
 }
 
 function failoverScope(error: unknown): 'provider' | 'request' | undefined {
   const messages = errorMessages(error);
   const text = messages.join(' ');
   const statusCode = extractStatusCode(error);
-  if (isAntigravity412Error(text, statusCode)) {
-    return 'provider';
-  }
   // Recognizable failover bodies count under HTTP 400; other 400s stay hard.
   // OpenRouter can wrap policy rejections in HTTP 403. The request-specific
   // reason must win over provider status/type/transport signals. 421 and 451
@@ -530,6 +516,7 @@ function failoverScope(error: unknown): 'provider' | 'request' | undefined {
     return 'request';
   }
   if (
+    isAntigravity412Error(text, statusCode) ||
     PROVIDER_ERROR_PATTERNS.some((pattern) => pattern.test(text)) ||
     PROVIDER_OUTAGE_PATTERNS.some((pattern) => pattern.test(text)) ||
     messages.some((message) =>
@@ -613,12 +600,7 @@ export function isPermanentQuotaBillingError(error: unknown): boolean {
   ) {
     return false;
   }
-  if (
-    statusCode === 412 &&
-    (/\bprecondition\b/i.test(text) ||
-      /\bFAILED_PRECONDITION\b/.test(text) ||
-      ANTIGRAVITY_412_PATTERNS.some((pattern) => pattern.test(text)))
-  ) {
+  if (statusCode === 412 && isAntigravity412Error(text, statusCode)) {
     return true;
   }
   return PERMANENT_QUOTA_BILLING_PATTERNS.some((pattern) => pattern.test(text));
