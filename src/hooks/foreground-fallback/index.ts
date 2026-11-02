@@ -58,6 +58,7 @@ import {
   type TimerSeam,
   withTimeout,
 } from '../../utils/session';
+import type { ExperimentalV2, V2GenerateModelRef } from '../../v2/client-shim';
 import { isInternalAdmission } from '../../v2/internal-admissions';
 import type { SessionLifecycle } from '../session-lifecycle';
 import type { createBackgroundFallbackHandoff } from '../task-session-manager/fallback-observation-transfer';
@@ -74,6 +75,19 @@ export interface ForegroundFallbackTimers extends TimerSeam {
 type BackgroundFallbackHandoff = ReturnType<
   typeof createBackgroundFallbackHandoff
 >;
+
+type V2SwitchDetail = {
+  agentName: string | undefined;
+  variant: string | undefined;
+};
+type V2SwitchModel = NonNullable<ExperimentalV2['switchModel']>;
+type ChildOutcome = Promise<string | undefined>;
+type V2RefusalStep = {
+  assistantMessageID: string;
+  agent: string;
+  model: V2GenerateModelRef;
+  epoch: number;
+};
 
 // ---------------------------------------------------------------------------
 // Retryable error detection
@@ -641,6 +655,9 @@ const MAX_HOST_RETRY_DELAY_MS = 30 * 60_000;
 const PROVIDER_MARK_TTL_MS = 30 * 60_000;
 /** Ceiling on host calls: a hung transport must not stall fallback. */
 const HOST_CALL_TIMEOUT_MS = 2_000;
+const V1_OUTCOME_TIMEOUT_MS = 5_000;
+export const REFUSAL_CONTINUATION =
+  "The previous response was stopped by the provider's content filter. Continue from where it stopped without repeating completed content.";
 /** The replay send's ack can lag after the host admitted it: wait as long as
  *  the tracker's own `promptAsync`, so a slow ack is not read as a refusal. */
 const REPLAY_SEND_TIMEOUT_MS = 10_000;
@@ -761,6 +778,10 @@ export class ForegroundFallbackManager {
   private readonly sessionParent = new Map<string, string>();
   /** sessionID → set of models already attempted this session */
   private readonly sessionTried = new Map<string, Set<string>>();
+  /** Request-scoped rejections remain ineligible until the next external turn. */
+  private readonly requestRejected = new Map<string, Set<string>>();
+  /** A recovered foreground child's wrapper re-attach is our own prompt. */
+  private readonly reattachPending = new Set<string>();
   /** sessionID → providers whose allowance is spent (issue #966). The chain
    *  walk skips them; once every chain provider is listed the error
    *  surfaces. Holds at most the providers seen failing, and re-arms with
@@ -818,6 +839,11 @@ export class ForegroundFallbackManager {
   private incidentSequence = 0;
   /** Confirmed external user-turn generations fence suspended work. */
   private readonly turnEpoch = new Map<string, number>();
+  private readonly startedAt: number;
+  private readonly v2Steps = new Map<string, V2RefusalStep>();
+  private readonly childOutcomes = new Map<string, ChildOutcome>();
+  private readonly v1Waiters = new Map<string, (model?: string) => void>();
+  private readonly lastUserMessageID = new Map<string, string>();
   /** External user message IDs seen during the session lifetime (never evicted by turn resets). */
   private readonly seenExternalUserMessageIDs = new Map<string, Set<string>>();
   private readonly lastExternalPromptIntentID = new Map<string, string>();
@@ -879,6 +905,7 @@ export class ForegroundFallbackManager {
   private readonly onSessionModelChanged?: (
     sessionID: string,
     model: string,
+    detail?: V2SwitchDetail,
   ) => void;
   /** sessionID + transcript baseline + the board generation captured
    *  BEFORE the admission await, notified when a fallback re-prompt was
@@ -898,6 +925,7 @@ export class ForegroundFallbackManager {
    *  fallback preparation. */
   private readonly readBackgroundGeneration?: (
     sessionID: string,
+    includeForeground?: boolean,
   ) => number | undefined;
 
   /** Exposed for task-session-manager: prevents idle reconciliation
@@ -1046,6 +1074,9 @@ export class ForegroundFallbackManager {
    *  transcript read runs through the destroyed generation's client. */
   dispose(): void {
     this.disposed = true;
+    for (const finish of this.v1Waiters.values()) finish();
+    this.v1Waiters.clear();
+    this.childOutcomes.clear();
     for (const pending of this.pendingInitialDelay.values()) {
       this.clearTimer(pending.timer);
     }
@@ -1055,6 +1086,144 @@ export class ForegroundFallbackManager {
     this.v2RetryNotices.clear();
     this.lastExternalPromptIntentID.clear();
     this.seenExternalUserMessageIDs.clear();
+  }
+
+  private rememberOutcome(key: string, outcome: ChildOutcome) {
+    if (this.childOutcomes.size >= 1024) {
+      const oldest = this.childOutcomes.keys().next().value;
+      if (oldest !== undefined) this.childOutcomes.delete(oldest);
+    }
+    this.childOutcomes.set(key, outcome);
+    return outcome;
+  }
+
+  private refusalOutcome(
+    sessionID: string,
+    step: V2RefusalStep,
+    error: unknown,
+    rawFinish?: unknown,
+  ): Promise<string | undefined> {
+    const key = `${sessionID}\0${step.assistantMessageID}`;
+    const existing = this.childOutcomes.get(key);
+    if (existing) return existing;
+    return this.rememberOutcome(
+      key,
+      this.handleV2Refusal(sessionID, step, error, rawFinish),
+    );
+  }
+
+  refusedChildOutcome(
+    sessionID: string,
+    entry: Record<string, unknown>,
+  ): Promise<string | undefined> {
+    if (typeof entry.id !== 'string') return Promise.resolve(undefined);
+    const existing = this.childOutcomes.get(`${sessionID}\0${entry.id}`);
+    if (existing) return existing;
+    if (
+      entry.type !== 'assistant' ||
+      entry.finish !== 'content-filter' ||
+      typeof entry.agent !== 'string' ||
+      !isRecord(entry.model) ||
+      typeof entry.model.providerID !== 'string' ||
+      typeof entry.model.id !== 'string' ||
+      (entry.model.variant !== undefined &&
+        typeof entry.model.variant !== 'string') ||
+      !isRecord(entry.time) ||
+      typeof entry.time.completed !== 'number' ||
+      !Number.isFinite(entry.time.completed) ||
+      entry.time.completed < this.startedAt
+    )
+      return Promise.resolve(undefined);
+    const step = this.v2Steps.get(sessionID);
+    return this.refusalOutcome(
+      sessionID,
+      {
+        assistantMessageID: entry.id,
+        agent: entry.agent,
+        model: {
+          providerID: entry.model.providerID,
+          id: entry.model.id,
+          ...(typeof entry.model.variant === 'string'
+            ? { variant: entry.model.variant }
+            : {}),
+        },
+        // The pump's epoch is from step start; a later prompt must win.
+        epoch:
+          step?.assistantMessageID === entry.id
+            ? step.epoch
+            : (this.turnEpoch.get(sessionID) ?? 0),
+      },
+      entry.error,
+      entry.rawFinish,
+    );
+  }
+
+  private createV1Outcome(key: string, timeout: number) {
+    const existing = this.childOutcomes.get(key);
+    if (existing) return existing;
+    const { promise, resolve } = Promise.withResolvers<string | undefined>();
+    const finish = (model?: string) => {
+      this.clearTimer(timer);
+      resolve(model);
+    };
+    const timer = this.setTimer(() => {
+      if (this.v1Waiters.get(key) === finish) {
+        this.v1Waiters.delete(key);
+        resolve(undefined);
+      }
+    }, timeout);
+    this.v1Waiters.set(key, finish);
+    return this.rememberOutcome(key, promise);
+  }
+
+  async v1ReplayOutcome(
+    sessionID: string,
+    generation: number,
+    agent: string,
+    completedAt?: number,
+  ): Promise<string | undefined> {
+    if (this.disposed || !this.enabled) return;
+    const key = `v1\0${sessionID}\0${generation}`;
+    const existing = this.childOutcomes.get(key);
+    if (existing) return existing;
+    this.registerSessionAgent(sessionID, agent);
+    const timeout =
+      V1_OUTCOME_TIMEOUT_MS +
+      Math.max(this.initialRetryDelayMs, this.retryDelayMs);
+    if (typeof completedAt !== 'number' || !Number.isFinite(completedAt))
+      return;
+    if (!this.hasFallbackChain(sessionID)) return;
+    if (this.now() - completedAt >= timeout) return;
+    try {
+      const path = { id: sessionID };
+      const query = { limit: FALLBACK_REPLAY_TAIL_MESSAGES };
+      const read = getClient(this.input).session.messages({ path, query });
+      const result = await withTimeout(
+        read,
+        HOST_CALL_TIMEOUT_MS,
+        'transcript read timed out',
+      );
+      const claimed = this.childOutcomes.get(key);
+      if (claimed) return claimed;
+      if (!result.error && Array.isArray(result.data)) {
+        const last = (result.data as unknown[]).findLast(
+          (message) =>
+            isRecord(message) &&
+            isRecord(message.info) &&
+            message.info.role === 'assistant',
+        );
+        const info =
+          isRecord(last) && isRecord(last.info) ? last.info : undefined;
+        if (info?.finish !== 'content-filter' && !isFailoverError(info?.error))
+          return;
+      }
+    } catch (error) {
+      log(
+        '[foreground-fallback] outcome transcript read failed',
+        stringifyError(error),
+      );
+    }
+    return this.createV1Outcome(key, timeout);
   }
 
   /** Dispose fence for fallback chains: true when this generation was
@@ -1072,6 +1241,8 @@ export class ForegroundFallbackManager {
   }
 
   private noteExternalTurn(sessionID: string, messageID: string): void {
+    this.lastUserMessageID.set(sessionID, messageID);
+    this.requestRejected.delete(sessionID);
     let seen = this.seenExternalUserMessageIDs.get(sessionID);
     if (!seen) {
       seen = new Set();
@@ -1100,6 +1271,12 @@ export class ForegroundFallbackManager {
     this.deterministicTerminal.delete(sessionID);
     this.v2RetryNotices.delete(sessionID);
     this.cancelInitialDelay(sessionID);
+  }
+
+  noteV2Prompt(sessionID: string): void {
+    if (!this.reattachPending.delete(sessionID))
+      this.requestRejected.delete(sessionID);
+    this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
   }
 
   /** Early synchronous external-prompt intent observer. Runs on the first line
@@ -1366,7 +1543,11 @@ export class ForegroundFallbackManager {
      *  together). */
     private readonly maxRetries: number = 3,
     coordinator?: SessionLifecycle,
-    onSessionModelChanged?: (sessionID: string, model: string) => void,
+    onSessionModelChanged?: (
+      sessionID: string,
+      model: string,
+      detail?: V2SwitchDetail,
+    ) => void,
     /** Delay before first fallback; gives intercepting plugins time to recover. */
     private readonly initialRetryDelayMs: number = 0,
     /** Delay between consecutive fallback attempts. */
@@ -1381,7 +1562,10 @@ export class ForegroundFallbackManager {
      *  confirmed BACKGROUND child only (undefined = foreground or
      *  unmanaged — the handoff is not applicable, never a wildcard).
      *  Captured before ANY await in the fallback preparation. */
-    readBackgroundGeneration?: (sessionID: string) => number | undefined,
+    readBackgroundGeneration?: (
+      sessionID: string,
+      includeForeground?: boolean,
+    ) => number | undefined,
     /** Synchronous check for running background children OF this session. */
     private readonly hasRunningChildren?: (sessionID: string) => boolean,
     /** v2 retry-hook steering enablement. Independent of `enabled` (the
@@ -1409,6 +1593,7 @@ export class ForegroundFallbackManager {
     this.setTimer =
       timers?.setTimeout ?? ((callback, delay) => setTimeout(callback, delay));
     this.clearTimer = timers?.clearTimeout ?? ((timer) => clearTimeout(timer));
+    this.startedAt = this.now();
     this.timerSeam = {
       setTimeout: this.setTimer,
       clearTimeout: this.clearTimer,
@@ -1426,10 +1611,13 @@ export class ForegroundFallbackManager {
     this.activeFallback.delete(id);
     this.sessionAgent.delete(id);
     this.sessionTried.delete(id);
+    this.requestRejected.delete(id);
+    this.reattachPending.delete(id);
     this.sessionChains.delete(id);
     this.sessionRetryEnabled.delete(id);
     this.unknownFinishStreak.delete(id);
     this.v2RetryNotices.delete(id);
+    this.v2Steps.delete(id);
     // NOTE: inProgress is intentionally NOT cleared here —
     // the finally blocks in tryFallback() and tryFallbackWithAbort()
     // manage inProgress lifecycle. Clearing it here would make
@@ -1483,6 +1671,7 @@ export class ForegroundFallbackManager {
     from: string | undefined,
     model: string,
     error: unknown,
+    detail?: V2SwitchDetail,
   ): void {
     const downProviders = new Map(
       this.activeFallback.get(sessionID)?.downProviders,
@@ -1498,7 +1687,8 @@ export class ForegroundFallbackManager {
     this.activeFallback.set(sessionID, { model, downProviders });
     this.sessionModel.set(sessionID, model);
     this.resetUnknownFinishStreak(sessionID);
-    this.onSessionModelChanged?.(sessionID, model);
+    if (detail) this.onSessionModelChanged?.(sessionID, model, detail);
+    else this.onSessionModelChanged?.(sessionID, model);
     log('[foreground-fallback] active fallback committed', {
       sessionID,
       model,
@@ -1557,6 +1747,55 @@ export class ForegroundFallbackManager {
       (this.input as PluginInput & { hostFlavor?: string }).hostFlavor === 'v2';
 
     switch (event.type) {
+      case 'session.step.started': {
+        if (!isV2Host) break;
+        const props = isRecord(event.data) ? event.data : event.properties;
+        if (
+          isRecord(props) &&
+          typeof props.sessionID === 'string' &&
+          typeof props.assistantMessageID === 'string' &&
+          typeof props.agent === 'string' &&
+          isRecord(props.model) &&
+          typeof props.model.providerID === 'string' &&
+          typeof props.model.id === 'string' &&
+          (props.model.variant === undefined ||
+            typeof props.model.variant === 'string')
+        ) {
+          this.v2Steps.set(props.sessionID, {
+            assistantMessageID: props.assistantMessageID,
+            agent: props.agent,
+            epoch: this.turnEpoch.get(props.sessionID) ?? 0,
+            model: {
+              providerID: props.model.providerID,
+              id: props.model.id,
+              ...(typeof props.model.variant === 'string'
+                ? { variant: props.model.variant }
+                : {}),
+            },
+          });
+        }
+        break;
+      }
+      case 'session.step.failed': {
+        if (!isV2Host) break;
+        const props = isRecord(event.data) ? event.data : event.properties;
+        if (
+          isRecord(props) &&
+          typeof props.sessionID === 'string' &&
+          typeof props.assistantMessageID === 'string' &&
+          props.finish === 'content-filter'
+        ) {
+          const step = this.v2Steps.get(props.sessionID);
+          if (step?.assistantMessageID === props.assistantMessageID)
+            void this.refusalOutcome(
+              props.sessionID,
+              step,
+              props.error,
+              props.rawFinish,
+            );
+        }
+        break;
+      }
       case 'session.step.ended':
       case 'session.execution.succeeded': {
         if (!isV2Host) break;
@@ -2002,8 +2241,6 @@ export class ForegroundFallbackManager {
       model: { providerID: string; id: string },
     ) => Promise<unknown>,
   ): Promise<void> {
-    let picked: string | undefined;
-    let switchRequest: Promise<unknown> | undefined;
     const { sessionID } = event;
     const epoch = this.turnEpoch.get(sessionID) ?? 0;
     const from = `${event.model.providerID}/${event.model.id}`;
@@ -2013,7 +2250,8 @@ export class ForegroundFallbackManager {
       // classified, independent of steering enablement. One line per
       // session and failing model, so a disabled steering path can never
       // masquerade as a working hook (a3ac0bee postmortem).
-      const failover = isFailoverError(event.error);
+      const scope = failoverScope(event.error);
+      const failover = scope !== undefined;
       let notices = this.v2RetryNotices.get(sessionID);
       if (!notices) {
         notices = new Set();
@@ -2067,20 +2305,62 @@ export class ForegroundFallbackManager {
       if (this.surfacesSpentQuota(sessionID, event.error, from)) return;
       if (event.decision?.retry === true) {
         this.rearmIfFreshDescent(sessionID);
-        // Permanent quota/billing exhaustion and spent allowance never
-        // recover by host retries on this provider — skip the host-retry
-        // budget and steer at once.
+        // Request rejections and spent allowance cannot recover by retrying
+        // this model, so steer without charging the host-retry budget.
         if (
           !isPermanentQuotaBillingError(event.error) &&
           !isSpentQuotaError(event.error) &&
+          scope !== 'request' &&
           this.absorbHostRetry(sessionID, event.decision.delay)
         )
           return;
       }
-      const selected = this.selectFallbackModel(sessionID, event.error);
+      this.inProgress.add(sessionID);
+      try {
+        const nextModel = await this.switchV2InPlace(
+          sessionID,
+          from,
+          event.error,
+          switchModel,
+          epoch,
+        );
+        if (nextModel)
+          event.decision = { retry: true, delay: this.retryDelayMs };
+      } finally {
+        this.inProgress.delete(sessionID);
+      }
+    } catch (err) {
+      log(
+        '[foreground-fallback] retry hook switch failed; host decision unchanged',
+        { sessionID: event?.sessionID, error: stringifyError(err) },
+      );
+    }
+  }
+
+  private async switchV2InPlace(
+    sessionID: string,
+    from: string,
+    error: unknown,
+    switchModel: V2SwitchModel,
+    /** Retry-hook turn fence. The refusal path omits it: its switch is a
+     *  durable selection change that a newer prompt still runs on, so only
+     *  its continuation is epoch-fenced (by the caller). */
+    epoch?: number,
+  ): Promise<string | undefined> {
+    const live = () =>
+      epoch === undefined
+        ? !this.disposed
+        : this.isCurrentTurn(sessionID, epoch);
+    let picked: string | undefined;
+    let switchRequest: Promise<unknown> | undefined;
+    let detail: V2SwitchDetail | undefined;
+    let confirmed = false;
+    try {
+      const selected = this.selectFallbackModel(sessionID, error);
       if (!selected || selected === 'exhausted') return;
       const { agentName, nextModel, ref, variant } = selected;
       picked = nextModel;
+      detail = { agentName, variant };
       switchRequest = switchModel(sessionID, {
         providerID: ref.providerID,
         id: ref.modelID,
@@ -2092,20 +2372,30 @@ export class ForegroundFallbackManager {
         'foreground retry model switch timed out',
         this.timerSeam,
       );
-      if (!this.isCurrentTurn(sessionID, epoch)) return;
-      event.decision = { retry: true, delay: this.retryDelayMs };
-      this.commitSwitch(sessionID, from, nextModel, event.error);
-      this.showFallbackToast(agentName, nextModel, event.error);
-      log('[foreground-fallback] retry hook switched model in place', {
+      if (!live()) return;
+      confirmed = true;
+      this.commitSwitch(sessionID, from, nextModel, error, detail);
+      this.showFallbackToast(agentName, nextModel, error);
+      log('[foreground-fallback] v2 switched model in place', {
         sessionID,
         from,
         to: nextModel,
       });
+      return nextModel;
     } catch (err) {
-      // Unconfirmed switch: keep the target selectable on the current turn.
-      // A stale turn's timeout must not delete picked from a fresh descent's tried set.
-      if (picked && this.isCurrentTurn(event.sessionID, epoch)) {
-        this.sessionTried.get(event.sessionID)?.delete(picked);
+      if (confirmed) {
+        log('[foreground-fallback] v2 switch bookkeeping failed', {
+          sessionID,
+          error: stringifyError(err),
+        });
+        return picked;
+      }
+      // Unconfirmed switch: keep the target selectable on the current turn
+      // (a timed-out switch may still land; the next event's model is the
+      // host truth). A stale turn's timeout must not delete picked from a
+      // fresh descent's tried set.
+      if (picked && live()) {
+        this.sessionTried.get(sessionID)?.delete(picked);
       }
       const pendingSwitch = switchRequest;
       if (err instanceof OperationTimeoutError && picked && pendingSwitch) {
@@ -2116,28 +2406,160 @@ export class ForegroundFallbackManager {
         // The check/write run synchronously. No toast here: the next event's
         // success path notifies; this only repairs state.
         const target = picked;
-        void pendingSwitch.then(
-          () => {
-            const observedModel = this.sessionModel.get(event.sessionID);
-            if (
-              !this.isCurrentTurn(event.sessionID, epoch) ||
-              (observedModel !== from && observedModel !== target)
-            )
-              return;
-            this.commitSwitch(event.sessionID, from, target, event.error);
-            log('[foreground-fallback] retry hook reconciled a late switch', {
-              sessionID: event.sessionID,
-              from,
-              to: target,
+        void pendingSwitch
+          .then(
+            () => {
+              const observedModel = this.sessionModel.get(sessionID);
+              if (
+                !live() ||
+                (observedModel !== from && observedModel !== target)
+              )
+                return;
+              this.commitSwitch(sessionID, from, target, error, detail);
+              log('[foreground-fallback] v2 reconciled a late model switch', {
+                sessionID,
+                from,
+                to: target,
+              });
+            },
+            () => {},
+          )
+          .catch((lateError) => {
+            log('[foreground-fallback] v2 late switch bookkeeping failed', {
+              sessionID,
+              error: stringifyError(lateError),
             });
-          },
-          () => {},
-        );
+          });
       }
-      log(
-        '[foreground-fallback] retry hook switch failed; host decision unchanged',
-        { sessionID: event?.sessionID, error: stringifyError(err) },
+      log('[foreground-fallback] v2 model switch failed', {
+        sessionID,
+        error: stringifyError(err),
+      });
+    }
+  }
+
+  private async handleV2Refusal(
+    sessionID: string,
+    step: V2RefusalStep,
+    error: unknown,
+    rawFinish: unknown,
+  ): Promise<string | undefined> {
+    const switchModel = (
+      this.input as PluginInput & { experimental_v2?: ExperimentalV2 }
+    ).experimental_v2?.switchModel;
+    if (
+      !this.retryEnabledFor(sessionID) ||
+      this.disposed ||
+      this.inProgress.has(sessionID) ||
+      !isFailoverError(error) ||
+      !switchModel
+    )
+      return;
+    const from = `${step.model.providerID}/${step.model.id}`;
+    if (
+      this.sessionTried.get(sessionID)?.has(from) &&
+      this.sessionModel.get(sessionID) !== from
+    )
+      return;
+    this.v2Steps.delete(sessionID);
+    this.registerSessionAgent(sessionID, step.agent);
+    if (!this.hasFallbackChain(sessionID)) return;
+    const epoch = step.epoch;
+    const preparedGeneration = this.readBackgroundGeneration?.(sessionID);
+    let handoffArmed = false;
+    this.inProgress.add(sessionID);
+    log('[foreground-fallback] v2 refusal observed', {
+      sessionID,
+      agent: step.agent,
+      from,
+      rawFinish,
+    });
+    try {
+      const session = getClient(this.input).session;
+      if (typeof session.get !== 'function') return;
+      const result = await withTimeout(
+        session.get({ path: { id: sessionID } }),
+        HOST_CALL_TIMEOUT_MS,
+        'foreground refusal session lookup timed out',
       );
+      const data: unknown = result.data;
+      if (this.disposed || !isRecord(data)) return;
+      const current = data.model;
+      if (
+        (typeof data.agent === 'string' && data.agent !== step.agent) ||
+        (current !== undefined &&
+          (!isRecord(current) ||
+            current.providerID !== step.model.providerID ||
+            current.id !== step.model.id ||
+            (current.variant ?? 'default') !==
+              (step.model.variant ?? 'default')))
+      )
+        return;
+      if ((this.turnEpoch.get(sessionID) ?? 0) !== epoch) return;
+      if (typeof data.parentID === 'string' && data.parentID) {
+        this.sessionParent.set(sessionID, data.parentID);
+      }
+      this.sessionModel.set(sessionID, from);
+      const nextModel = await this.switchV2InPlace(
+        sessionID,
+        from,
+        error,
+        switchModel,
+      );
+      if (
+        !nextModel ||
+        this.disposed ||
+        (this.turnEpoch.get(sessionID) ?? 0) !== epoch
+      )
+        return;
+      if (data.parentID && preparedGeneration === undefined) {
+        this.reattachPending.add(sessionID);
+        return nextModel;
+      }
+      handoffArmed =
+        preparedGeneration !== undefined &&
+        (this.backgroundFallbackHandoff?.prepare(
+          sessionID,
+          preparedGeneration,
+          step.assistantMessageID,
+        ) ??
+          false);
+      if (preparedGeneration !== undefined && !handoffArmed) return;
+      const promptResult = await withTimeout(
+        session.promptAsync({
+          path: { id: sessionID },
+          body: {
+            agent: step.agent,
+            parts: [createInternalAgentTextPart(REFUSAL_CONTINUATION)],
+          },
+        }),
+        HOST_CALL_TIMEOUT_MS,
+        'foreground refusal continuation timed out',
+      );
+      if (isRecord(promptResult) && responseError(promptResult) !== undefined) {
+        if (handoffArmed)
+          this.backgroundFallbackHandoff?.reject(sessionID, preparedGeneration);
+        return;
+      }
+      if (handoffArmed)
+        this.backgroundFallbackHandoff?.admit(sessionID, preparedGeneration, {
+          from,
+          to: nextModel,
+          error: structuredErrorMessage(error) ?? 'Session error',
+        });
+      return nextModel;
+    } catch (err) {
+      if (handoffArmed)
+        this.backgroundFallbackHandoff?.settleUnresolved(
+          sessionID,
+          preparedGeneration,
+        );
+      log('[foreground-fallback] v2 refusal recovery failed', {
+        sessionID,
+        error: stringifyError(err),
+      });
+    } finally {
+      this.inProgress.delete(sessionID);
     }
   }
 
@@ -3122,6 +3544,12 @@ export class ForegroundFallbackManager {
     const exhaustion = this.chainExhaustion.get(sessionID) ?? 0;
     if (exhaustion === 2) return;
     if (currentModel) tried.add(currentModel);
+    if (observedModel && failoverScope(error) === 'request') {
+      const rejected = this.requestRejected.get(sessionID) ?? new Set();
+      rejected.add(observedModel);
+      this.requestRejected.set(sessionID, rejected);
+    }
+    const rejected = this.requestRejected.get(sessionID);
     // Re-mark after a re-arm above: the failing provider stays excluded.
     const quotaExhausted = this.markQuotaExhausted(
       sessionID,
@@ -3144,6 +3572,7 @@ export class ForegroundFallbackManager {
           const provider = parseModelReference(model)?.providerID ?? '';
           return (
             !tried.has(model) &&
+            !rejected?.has(model) &&
             hasAllowance(model) &&
             !downProviders?.has(provider) &&
             !parentDownProviders?.has(provider)
@@ -3226,6 +3655,20 @@ export class ForegroundFallbackManager {
     // points in the tryFallback* callers; a disposed generation must not
     // even read the transcript through the old client.
     if (!this.isCurrentTurn(sessionID, expectedEpoch)) return;
+    const isV2Host =
+      (this.input as PluginInput & { hostFlavor?: string }).hostFlavor === 'v2';
+    const preparedGeneration = this.readBackgroundGeneration?.(
+      sessionID,
+      announce && !isV2Host,
+    );
+    const outcomeKey =
+      announce && !isV2Host && preparedGeneration !== undefined
+        ? `v1\0${sessionID}\0${preparedGeneration}`
+        : undefined;
+    if (outcomeKey) this.createV1Outcome(outcomeKey, V1_OUTCOME_TIMEOUT_MS);
+    const waiter = outcomeKey ? this.v1Waiters.get(outcomeKey) : undefined;
+    if (outcomeKey) this.v1Waiters.delete(outcomeKey);
+    let admittedModel: string | undefined;
     const session = getClient(this.input).session;
     try {
       const selection = this.selectFallbackModel(sessionID, error);
@@ -3251,8 +3694,6 @@ export class ForegroundFallbackManager {
       // baseline. undefined = not a tracked background child
       // (foreground/untracked) → the handoff is a no-op, never a
       // wildcard.
-      const preparedGeneration = this.readBackgroundGeneration?.(sessionID);
-
       // Read only the transcript tail: the replay needs the last replayable
       // user message and the trailing message id (handoff baseline), not the
       // whole history. Long-lived sessions serve the full listing in the
@@ -3339,9 +3780,6 @@ export class ForegroundFallbackManager {
       // the fallback TARGET, so a v2 host without session.switchModel must
       // reject the replay (typed error) instead of silently replaying on
       // the model that just failed. v1 call bytes stay untouched.
-      const isV2Host =
-        (this.input as PluginInput & { hostFlavor?: string }).hostFlavor ===
-        'v2';
       const promptBody = {
         path: { id: sessionID },
         body: {
@@ -3551,7 +3989,7 @@ export class ForegroundFallbackManager {
       // probe) so the substituted run's result is observed and
       // delivered to the parent.
       if (handoffArmed) {
-        this.backgroundFallbackHandoff?.admit(
+        const admitted = this.backgroundFallbackHandoff?.admit(
           sessionID,
           preparedGeneration,
           announce
@@ -3562,6 +4000,8 @@ export class ForegroundFallbackManager {
               }
             : undefined,
         );
+        if (admitted)
+          admittedModel = deliveredWithoutSwitch ? currentModel : nextModel;
       }
       if (deliveredWithoutSwitch) return;
       log('[foreground-fallback] switched to fallback model', {
@@ -3576,6 +4016,8 @@ export class ForegroundFallbackManager {
         sessionID,
         error: stringifyError(err),
       });
+    } finally {
+      waiter?.(admittedModel);
     }
   }
 
