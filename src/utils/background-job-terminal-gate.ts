@@ -28,6 +28,7 @@ import {
   guardCompletedStatusText,
   type TaskStatusOutput,
 } from './task';
+import type { TimerHandle, TimerSeamOptions } from './timer-seam';
 
 export const STOP_CONFIRMATION_GRACE_MS = 5_000;
 export const DEFAULT_EVIDENCE_READ_TIMEOUT_MS = 5_000;
@@ -136,9 +137,6 @@ export function consumeTerminalCommitToken(
     authorization.validate()
   );
 }
-
-/** Platform timer handle; fake harnesses may return bare numeric ids. */
-type TimerHandle = Timer;
 
 export function runtimeObservationFromSnapshot(
   snapshot: RuntimeSessionStatusSnapshot,
@@ -372,50 +370,52 @@ export function readSessionInfoForObservation(
   });
 }
 
-export function createBackgroundJobTerminalGate(options: {
-  backgroundJobBoard: BackgroundJobBoard;
-  input?: PluginInput;
-  readRuntime?: (run: RunRef, startedAt: number) => Promise<RuntimeObservation>;
-  readTerminalEvidence?: (
-    taskID: string,
-    historyBoundary?: string,
-  ) => Promise<unknown>;
-  baselineFor?: (taskID: string, generation: number) => string | undefined;
-  promptMessageIDFor?: (
-    taskID: string,
-    generation: number,
-  ) => string | undefined;
-  attemptStartedAtFor?: (
-    taskID: string,
-    generation: number,
-  ) => number | undefined;
-  /** Explicit integration contract; never inferred from host flavor/capabilities. */
-  hostOutcomeClock?: 'shared-unix-ms';
-  observationRevisionFor?: (
-    taskID: string,
-    generation: number,
-  ) => number | undefined;
-  isObservationPending?: (taskID: string, generation: number) => boolean;
-  onRunning?: (record: BackgroundJobRecord) => void;
-  /**
-   * Final give-up only: the gate can never establish a terminal outcome for
-   * this task (no evidence source left to poll). The task stays `running` on
-   * the board, so anything it holds must be released here — otherwise a host
-   * that cannot read terminal evidence leaks one resource per such task.
-   */
-  onGiveUp?: (taskID: string, generation: number) => void;
-  graceMs?: number;
-  readTimeoutMs?: number;
-  maxEvidenceRetries?: number;
-  /** Slow-tier base delay for the bounded evidence re-arm (#1561). */
-  evidenceRearmMs?: number;
-  /** Slow-tier arm budget per observation episode (#1561). */
-  maxEvidenceRearms?: number;
-  now?: () => number;
-  /** Test seam: defaults to the platform timers. */
-  setTimeout?: (callback: () => void, delay: number) => TimerHandle;
-  clearTimeout?: (timer: TimerHandle) => void;
-}): BackgroundJobTerminalGate {
+export function createBackgroundJobTerminalGate(
+  options: {
+    backgroundJobBoard: BackgroundJobBoard;
+    input?: PluginInput;
+    readRuntime?: (
+      run: RunRef,
+      startedAt: number,
+    ) => Promise<RuntimeObservation>;
+    readTerminalEvidence?: (
+      taskID: string,
+      historyBoundary?: string,
+    ) => Promise<unknown>;
+    baselineFor?: (taskID: string, generation: number) => string | undefined;
+    promptMessageIDFor?: (
+      taskID: string,
+      generation: number,
+    ) => string | undefined;
+    attemptStartedAtFor?: (
+      taskID: string,
+      generation: number,
+    ) => number | undefined;
+    /** Explicit integration contract; never inferred from host flavor/capabilities. */
+    hostOutcomeClock?: 'shared-unix-ms';
+    observationRevisionFor?: (
+      taskID: string,
+      generation: number,
+    ) => number | undefined;
+    isObservationPending?: (taskID: string, generation: number) => boolean;
+    onRunning?: (record: BackgroundJobRecord) => void;
+    /**
+     * Final give-up only: the gate can never establish a terminal outcome for
+     * this task (no evidence source left to poll). The task stays `running` on
+     * the board, so anything it holds must be released here — otherwise a host
+     * that cannot read terminal evidence leaks one resource per such task.
+     */
+    onGiveUp?: (taskID: string, generation: number) => void;
+    graceMs?: number;
+    readTimeoutMs?: number;
+    maxEvidenceRetries?: number;
+    /** Slow-tier base delay for the bounded evidence re-arm (#1561). */
+    evidenceRearmMs?: number;
+    /** Slow-tier arm budget per observation episode (#1561). */
+    maxEvidenceRearms?: number;
+    now?: () => number;
+  } & TimerSeamOptions,
+): BackgroundJobTerminalGate {
   const board = options.backgroundJobBoard;
   const now = options.now ?? Date.now;
   const setTimer =
@@ -593,7 +593,7 @@ export function createBackgroundJobTerminalGate(options: {
       },
       Math.max(1, delay),
     );
-    value.timer.unref?.();
+    if (typeof value.timer !== 'number') value.timer.unref?.();
     return 'armed';
   }
 
@@ -623,7 +623,7 @@ export function createBackgroundJobTerminalGate(options: {
         },
         Math.max(1, graceMs),
       );
-      value.timer.unref?.();
+      if (typeof value.timer !== 'number') value.timer.unref?.();
     }
     if (diagnostic === EVIDENCE_UNAVAILABLE_DIAGNOSTIC) {
       // Give-up branch: the fast evidence budget is exhausted. Hand the

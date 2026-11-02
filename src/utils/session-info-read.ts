@@ -1,10 +1,8 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import { getClient } from './opencode-client';
+import type { TimerSeam } from './timer-seam';
 
-interface TimerFns {
-  setTimeout(callback: () => void, delay: number): unknown;
-  clearTimeout(timer: unknown): void;
-}
+type TimerFns = TimerSeam;
 
 /** Wait for a host read with a deadline: the deadline only releases the
  *  WAITER (to undefined), never the underlying read. */

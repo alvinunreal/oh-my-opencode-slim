@@ -15,15 +15,9 @@ export class OperationTimeoutError extends Error {
   }
 }
 
-/** Timer handle: platform timers or a harness's numeric ids. */
-export type TimerHandle = ReturnType<typeof setTimeout> | number;
+import type { TimerHandle, TimerSeam } from './timer-seam';
 
-/** Scheduling seam (see src/utils/test-timers.ts); defaults to platform
- *  timers. */
-export type TimerSeam = {
-  setTimeout: (callback: () => void, delay: number) => TimerHandle;
-  clearTimeout: (timer: TimerHandle) => void;
-};
+export type { TimerHandle, TimerSeam } from './timer-seam';
 
 export async function withTimeout<T>(
   operation: Promise<T>,

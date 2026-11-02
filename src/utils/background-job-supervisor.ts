@@ -4,9 +4,7 @@ import type {
   BackgroundJobRecord,
 } from './background-job-board';
 import { log } from './logger';
-
-/** Platform timer handle; fake harnesses may return bare numeric ids. */
-type TimerHandle = Timer;
+import type { TimerHandle, TimerSeamOptions } from './timer-seam';
 
 /**
  * Interval between re-attempts of the deadline's lease acquisition while
@@ -16,7 +14,7 @@ type TimerHandle = Timer;
  */
 export const LEASE_RETRY_INTERVAL_MS = 1_000;
 
-export interface BackgroundJobSupervisorOptions {
+export interface BackgroundJobSupervisorOptions extends TimerSeamOptions {
   backgroundJobBoard: BackgroundJobBoard;
   wallClockTimeoutMs: number;
   /**
@@ -25,8 +23,6 @@ export interface BackgroundJobSupervisorOptions {
    */
   abort: (taskID: string) => Promise<unknown>;
   now?: () => number;
-  setTimeout?: (callback: () => void, delay: number) => TimerHandle;
-  clearTimeout?: (timer: TimerHandle) => void;
 }
 
 interface RunTimer {

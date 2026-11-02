@@ -3,6 +3,7 @@ import type { CurrentRoundClassification } from './child-transcript';
 import { isRecord } from './guards';
 import { getClient } from './opencode-client';
 import { raceEvidenceDeadline, readHostSessionInfo } from './session-info-read';
+import type { TimerHandle, TimerSeam } from './timer-seam';
 
 export type RuntimeSessionStatus = 'busy' | 'retry' | 'idle';
 export const DEFAULT_RUNTIME_SESSION_STATUS_TIMEOUT_MS = 5_000;
@@ -13,10 +14,7 @@ const DEFAULT_LIVE_SESSION_CLASSIFY_TIMEOUT_MS = 1_500;
  * Injectable timer seam for the bounded reads in this module. Tests wire
  * `src/utils/test-timers.ts` here instead of binding to real time.
  */
-interface RuntimeStatusTimers {
-  setTimeout: (callback: () => void, delay: number) => unknown;
-  clearTimeout: (timer: unknown) => void;
-}
+type RuntimeStatusTimers = TimerSeam;
 
 const openStatusReads = new WeakMap<object, Promise<void>>();
 
@@ -415,8 +413,9 @@ async function withTimeout<T>(
     ((callback: () => void, delay: number) => setTimeout(callback, delay));
   const clearTimer =
     timers?.clearTimeout ??
-    ((timer: unknown) => clearTimeout(timer as ReturnType<typeof setTimeout>));
-  let timer: unknown;
+    ((timer: TimerHandle) =>
+      clearTimeout(timer as ReturnType<typeof setTimeout>));
+  let timer: TimerHandle | undefined;
   try {
     return await Promise.race([
       promise,
@@ -424,7 +423,7 @@ async function withTimeout<T>(
         timer = setTimer(() => {
           reject(new Error('Session status lookup timed out'));
         }, timeoutMs);
-        (timer as { unref?: () => void }).unref?.();
+        if (typeof timer !== 'number') timer.unref?.();
       }),
     ]);
   } finally {

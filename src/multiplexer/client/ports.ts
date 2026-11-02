@@ -5,17 +5,16 @@
  * timers: the wiring layer supplies every port.
  */
 
+import type { TimerHandle, TimerSeam } from '../../utils/timer-seam';
 import type { Multiplexer } from '../types';
 import type { AdapterType, SessionRuntimeStatus } from './types';
 
-/** Opaque handle returned by `Clock.setTimeout` and passed back to clear. */
-export type ClockTimerHandle = unknown;
+/** Handle returned by `Clock.setTimeout` and passed back to clear. */
+export type ClockTimerHandle = TimerHandle;
 
 /** Injected time source; the core never creates real timers directly. */
-export interface Clock {
+export interface Clock extends TimerSeam {
   now(): number;
-  setTimeout(handler: () => void, delayMs: number): ClockTimerHandle;
-  clearTimeout(handle: ClockTimerHandle): void;
 }
 
 /** Result of one `/session/status` read. */
