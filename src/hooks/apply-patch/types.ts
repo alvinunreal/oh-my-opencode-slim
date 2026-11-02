@@ -45,7 +45,10 @@ export type PatchHunk = AddPatchHunk | DeletePatchHunk | UpdatePatchHunk;
 
 export type ParsedPatch = {
   hunks: PatchHunk[];
+  canonicalized?: boolean;
 };
+
+export type PatchHostFlavor = 'v1' | 'v2';
 
 export type MatchHit = {
   start: number;

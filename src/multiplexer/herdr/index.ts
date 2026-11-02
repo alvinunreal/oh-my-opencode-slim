@@ -419,25 +419,6 @@ export class HerdrMultiplexer implements Multiplexer {
     return true;
   }
 
-  async applyLayout(
-    layout: MultiplexerLayout,
-    mainPaneSize: number,
-  ): Promise<void> {
-    // ponytail: herdr has no rebalancing API; a layout *switch* starts fresh
-    // from the parent pane, but re-applying the same layout must keep the
-    // agent-area anchor so later children stack inside it (below for
-    // main-vertical, to the right for main-horizontal).
-    if (this.layout !== layout) {
-      this.agentAreaPaneId = null;
-      this.mainPaneId = null;
-      this.agentPaneIds.clear();
-    }
-    this.layout = layout;
-    this.paneDirection = getPaneDirection(layout);
-    this.stackDirection = getStackDirection(layout);
-    this.mainPaneSize = mainPaneSize;
-  }
-
   private isMainLayout(): boolean {
     return this.layout === 'main-vertical' || this.layout === 'main-horizontal';
   }

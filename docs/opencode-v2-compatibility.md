@@ -246,6 +246,9 @@ not an optional-degradation path.
       the last part of the last non-board-only message and gives it one
       `ContentPart.cache` `{type: "ephemeral"}` hint. The shared injection
       helper adds no hints; the v1 pipeline remains unchanged.
+      Primary agents use their startup `temperature` and provider `options`
+      on request options; live profile refresh continues to affect new child
+      sessions only.
     - a native `ctx.session.hook("prompt")` registration (capability-
       guarded): the v2 prompt hook fires **once per admitted input** with
       the eventual inbox User `messageID`, giving the v1 `chat.message`
@@ -309,8 +312,9 @@ not an optional-degradation path.
       **rethrows** — v2 rejects the tool call, which is how the v1
       anti-duplicate / relaunch-lease guards enforce on v2. The after
       bridge honors v2's status discrimination: `error` events synthesize
-      the v1 after-hook output from the error text (so json-error-recovery
-      still appends its reminder to a failed call's output), and an
+      the v1 after-hook output from the error text (so v1 after-hooks such
+      as tool-loop-guard can append warnings, written back where the host
+      renders the failure: its cause when it has one), and an
       errored call never presents its result content as a success.
       The v2 executor wrapper registers child identity and state from the
       structured result, scoped by `(parentSessionID, callID)`. For terminal

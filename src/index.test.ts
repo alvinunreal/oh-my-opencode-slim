@@ -1865,7 +1865,7 @@ describe('plugin reload generation cleanup', () => {
         metadata: {},
       };
       await hooks['tool.execute.after']?.(
-        { tool: 'Edit', sessionID: 'guards-on', callID: 'c-7' } as never,
+        { tool: 'invalid', sessionID: 'guards-on', callID: 'c-7' } as never,
         jsonOutput as never,
       );
       expect(String(jsonOutput.output)).toContain(JSON_ERROR_REMINDER);
@@ -4987,6 +4987,49 @@ describe('plugin config model inheritance', () => {
     } finally {
       await hooks.dispose?.();
       disableChain.mockRestore();
+    }
+  });
+
+  test('releases runtime snapshots after the last generation and keeps reload state', async () => {
+    const config = {
+      presets: { runtime: { explorer: { temperature: 0.4 } } },
+      agents: { explorer: { model: ['provider/first', 'provider/next'] } },
+    };
+    for (const hostFlavor of [undefined, 'v2'] as const) {
+      const first = await loadConfiguredPlugin(config, undefined, hostFlavor);
+      const directory = lastConfigDir as string;
+      let second: Awaited<ReturnType<typeof loadConfiguredPlugin>> | undefined;
+      let reloaded:
+        | Awaited<ReturnType<typeof loadConfiguredPlugin>>
+        | undefined;
+      try {
+        await first.config?.({
+          agent: { explorer: { model: 'provider/selected' } },
+        });
+        const runtime = RuntimeConfig.get(directory);
+        runtime.setRuntimePreset('runtime');
+        expect(runtime.hasModelSwitched('explorer')).toBe(true);
+        second = await loadConfiguredPlugin(config, directory, hostFlavor);
+        await first.dispose?.();
+        await first.dispose?.();
+        expect(RuntimeConfig.get(directory)).toBe(runtime);
+        expect(runtime.plugin).toBeDefined();
+        await second.dispose?.();
+        const afterDispose = RuntimeConfig.get(directory);
+        expect(afterDispose).not.toBe(runtime);
+        expect(afterDispose.plugin).toBeUndefined();
+        expect(afterDispose.host()).toBeUndefined();
+        reloaded = await loadConfiguredPlugin(config, directory, hostFlavor);
+        expect(RuntimeConfig.get(directory).getRuntimePreset()).toBe('runtime');
+        expect(RuntimeConfig.get(directory).hasModelSwitched('explorer')).toBe(
+          true,
+        );
+      } finally {
+        await first.dispose?.();
+        await second?.dispose?.();
+        await reloaded?.dispose?.();
+        RuntimeConfig.reset(directory);
+      }
     }
   });
 

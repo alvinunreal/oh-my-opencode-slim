@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
-import type { MultiplexerLayout } from '../../config/schema';
 
 type SpawnResult = {
   exited: Promise<number>;
@@ -319,79 +318,6 @@ describe('KittyMultiplexer', () => {
     const closed = await kitty.closePane('42');
     expect(closed).toBe(false);
     expect(commands()).toHaveLength(0);
-  });
-
-  test('applyLayout maps each layout with an explicit parent-window match', async () => {
-    const { KittyMultiplexer } = await importFreshKitty();
-    const cases: Array<[MultiplexerLayout, string]> = [
-      ['main-vertical', 'tall'],
-      ['main-horizontal', 'fat'],
-      ['tiled', 'grid'],
-      ['even-horizontal', 'horizontal'],
-      ['even-vertical', 'vertical'],
-    ];
-
-    for (const [layout, kittyLayout] of cases) {
-      crossSpawnMock.mockReset();
-      installDefaultMock();
-      const kitty = new KittyMultiplexer();
-      await kitty.applyLayout(layout, 60);
-
-      expect(commandContaining('goto-layout')).toEqual([
-        '/usr/bin/kitten',
-        '@',
-        'goto-layout',
-        `--match=window_id:${PARENT_WINDOW_ID}`,
-        kittyLayout,
-      ]);
-    }
-  });
-
-  test('applyLayout ignores main_pane_size', async () => {
-    const { KittyMultiplexer } = await importFreshKitty();
-    const kitty = new KittyMultiplexer();
-
-    await kitty.applyLayout('main-vertical', 80);
-
-    const commands = kittyCommands();
-    expect(commands.length).toBeGreaterThan(0);
-    for (const command of commands) {
-      expect(command).not.toContain('--bias');
-      expect(command.join(' ')).not.toContain('80');
-    }
-  });
-
-  test('applyLayout is a no-op when KITTY_WINDOW_ID is missing', async () => {
-    delete process.env.KITTY_WINDOW_ID;
-    const { KittyMultiplexer } = await importFreshKitty();
-    const kitty = new KittyMultiplexer();
-
-    await kitty.applyLayout('tiled', 60);
-
-    expect(kittyCommands()).toHaveLength(0);
-  });
-
-  test('applyLayout switches layout after a spawn', async () => {
-    const { KittyMultiplexer } = await importFreshKitty();
-    const kitty = new KittyMultiplexer('main-vertical');
-
-    // First spawn applies 'tall'
-    await kitty.spawnPane(
-      'session-1',
-      'First worker',
-      'http://localhost:4096',
-      '/repo',
-    );
-    // applyLayout to a different layout must re-apply (goto-layout grid)
-    await kitty.applyLayout('tiled', 60);
-
-    const layoutCmds = kittyCommands().filter((c) => c.includes('goto-layout'));
-    expect(layoutCmds).toHaveLength(2);
-    expect(layoutCmds[0]).toContain('tall');
-    expect(layoutCmds[1]).toContain('grid');
-    for (const command of layoutCmds) {
-      expect(command).toContain(`--match=window_id:${PARENT_WINDOW_ID}`);
-    }
   });
 
   test('keeps the full encoded FR-8 title at launch', async () => {

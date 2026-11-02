@@ -1,8 +1,6 @@
-import type { ResolveMarketplaceActivationOptions } from './activation';
 import { resolveMarketplaceActivation } from './activation';
 import {
   createMarketplaceAgentDefinitions,
-  type MarketplaceAgentDefinitions,
   type MarketplaceAgentMetadata,
 } from './agent-definitions';
 
@@ -11,9 +9,6 @@ export interface MarketplaceRegistryImplementation {
   createMarketplaceAgentDefinitions: typeof createMarketplaceAgentDefinitions;
 }
 
-export type {
-  MarketplaceAgentDefinitions,
-  MarketplaceAgentMetadata,
-  ResolveMarketplaceActivationOptions,
-};
+export type { MarketplaceAgentMetadata };
+/** @public knip: consumed via namespace alias import in src/index.ts. */
 export { createMarketplaceAgentDefinitions, resolveMarketplaceActivation };

@@ -1,0 +1,9 @@
+{
+  "name": "mutation-runner",
+  "private": true,
+  "dependencies": {
+    "@hughescr/stryker-bun-runner": "1.6.0",
+    "@stryker-mutator/core": "10.0.0",
+    "typescript": "7.0"
+  }
+}

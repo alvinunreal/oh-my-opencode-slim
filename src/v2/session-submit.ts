@@ -13,6 +13,7 @@ import type { V2Context } from './types';
 export type V2CommandSubmit = (
   sessionID: string,
   text: string,
+  files?: Array<{ uri: string; name?: string }>,
 ) => Promise<void>;
 
 /** Submit marker text as a user prompt via `ctx.session.prompt`. Never
@@ -23,10 +24,10 @@ export function createSessionSubmit(ctx: V2Context): V2CommandSubmit {
   // interview-bridge.ts); without the ?? {} the probe below would throw a
   // TypeError and be mislogged as a submit failure.
   const session = (ctx.session ?? {}) as V2Context['session'];
-  return async (sessionID, text) => {
+  return async (sessionID, text, files) => {
     try {
       if (typeof session.prompt === 'function') {
-        await session.prompt({ sessionID, text });
+        await session.prompt({ sessionID, text, ...(files ? { files } : {}) });
         return;
       }
       log('[v2] command submit unavailable', { sessionID });
