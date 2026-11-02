@@ -6,7 +6,11 @@
  * the appropriate subsystems.
  */
 import type { BackgroundJobBoard } from '../../utils/background-job-board';
-import { deriveTaskSessionLabel } from '../../utils/background-job-board';
+import {
+  deriveTaskSessionLabel,
+  getBackgroundJobLifecycleLedger,
+} from '../../utils/background-job-board';
+import { getPersistedBackgroundChild } from '../../utils/background-job-persistence';
 import type { BackgroundJobSupervisor } from '../../utils/background-job-supervisor';
 import { structuredErrorMessage } from '../../utils/child-transcript';
 import { isRecord } from '../../utils/guards';
@@ -198,6 +202,78 @@ function isCurrentSessionObservation(
   );
 }
 
+/**
+ * #1560 observation fallback: a child the board lost mid-run (host restart,
+ * or a launch that predates persistence) goes idle/error with no row to claim
+ * the completion, so nothing would ever wake its parent. Adopt it only when
+ * startup recovery's own single-child proof holds — the parent owns the child
+ * and its history shows an undelivered background delegation — then let the
+ * normal reconciliation publish the terminal outcome; that publication is the
+ * one-shot wake. Children with a persisted identity are startup recovery's
+ * business, and v2 wires no prover because the host owns delivery there.
+ */
+async function adoptUndeliveredBackgroundChild(args: {
+  board: BackgroundJobBoard;
+  shouldManageSession: (sessionID: string) => boolean;
+  proveUndelivered?: (
+    parentSessionID: string,
+    taskID: string,
+  ) => Promise<boolean>;
+  sessionID: string;
+  info?: { parentID?: string; agent?: string; title?: string };
+}): Promise<BackgroundJobRecord | undefined> {
+  const { board, sessionID, info, proveUndelivered } = args;
+  if (!proveUndelivered) return undefined;
+  if (args.shouldManageSession(sessionID)) return undefined;
+  // A persisted identity means startup recovery already judged this child.
+  if (getPersistedBackgroundChild(sessionID)) return undefined;
+  const parentID = info?.parentID;
+  if (!parentID || !args.shouldManageSession(parentID)) return undefined;
+  if (
+    board.get(sessionID) ||
+    getBackgroundJobLifecycleLedger(board).tombstones.has(sessionID)
+  ) {
+    return undefined;
+  }
+  if (!(await proveUndelivered(parentID, sessionID))) return undefined;
+  // The proof read is asynchronous: a row may have appeared or been deleted
+  // meanwhile, and adopting now would replace that newer state.
+  if (
+    board.get(sessionID) ||
+    getBackgroundJobLifecycleLedger(board).tombstones.has(sessionID)
+  ) {
+    return undefined;
+  }
+  let adopted: BackgroundJobRecord;
+  try {
+    adopted = board.registerLaunch({
+      taskID: sessionID,
+      parentSessionID: parentID,
+      agent: info?.agent ?? 'unknown',
+      description: info?.title,
+      background: true,
+      adopted: true,
+      // The run predates this process; 0 keeps its terminal evidence in window.
+      now: 0,
+    });
+  } catch (error) {
+    log('[task-session-manager] orphan adoption refused', {
+      taskID: sessionID,
+      parentSessionID: parentID,
+      error: String(error),
+    });
+    return undefined;
+  }
+  // No native observer survives this process boundary, so the plugin owns the
+  // first publication's wake (mirrors the startup adoption sites).
+  adopted.recoveredAtStartup = true;
+  log('[task-session-manager] adopted undelivered background child', {
+    taskID: sessionID,
+    parentSessionID: parentID,
+  });
+  return adopted;
+}
+
 export async function handleEvent(
   input: {
     event: {
@@ -253,6 +329,13 @@ export async function handleEvent(
       /** True when foreground fallback could still recover the session. */
       willAttemptFallback?: (sessionID: string) => boolean;
       hostFlavor?: string;
+      /** Observation-time oracle for #1560 adoption: proves the parent's
+       *  history holds an undelivered background delegation for the child.
+       *  Wired on v1 only — v2 delivery belongs to the host. */
+      proveUndeliveredBackgroundChild?: (
+        parentSessionID: string,
+        taskID: string,
+      ) => Promise<boolean>;
       /** Test seam; production uses event-arrival wall-clock time. */
       now?: () => number;
     };
@@ -542,6 +625,23 @@ export async function handleEvent(
           job.generation,
         );
       }
+    } else if (sessionId) {
+      // #1560: no board row claims this completion, so re-adopt a proven
+      // orphan and let the reconciliation above publish its terminal outcome.
+      const adopted = await adoptUndeliveredBackgroundChild({
+        board: deps.backgroundJobBoard,
+        shouldManageSession: deps.options.shouldManageSession,
+        proveUndelivered: deps.options.proveUndeliveredBackgroundChild,
+        sessionID: sessionId,
+        info: input.event.properties?.info,
+      });
+      if (adopted) {
+        deps.idleReconciler.scheduleChildIdleReconciliation(
+          sessionId,
+          observedAt,
+          adopted.generation,
+        );
+      }
     }
     return;
   }
@@ -652,16 +752,21 @@ export async function handleEvent(
       // idle without recovery terminalizes the deferred error, so the
       // parent still sees the failure.
       if (
-        job &&
-        job.state === 'running' &&
         props?.error &&
         isFailoverError(props.error) &&
         deps.options.willAttemptFallback?.(sessionId)
       ) {
-        deps.deferredInlineErrors.set(
-          sessionId,
-          structuredErrorMessage(props.error) ?? 'Session error',
-        );
+        if (job && job.state === 'running') {
+          deps.deferredInlineErrors.set(
+            sessionId,
+            structuredErrorMessage(props.error) ?? 'Session error',
+          );
+        } else {
+          // An orphan has no record for the handoff, so it waits for the
+          // re-prompted run's own terminal event instead of publishing a
+          // stale error now.
+          deps.deferredInlineErrors.delete(sessionId);
+        }
         return;
       }
       deps.deferredInlineErrors.delete(sessionId);
@@ -681,6 +786,26 @@ export async function handleEvent(
             ? deps.withFallbackReason(sessionId, message)
             : message,
         });
+      } else if (!job) {
+        // #1560 terminal flavor: re-adopt the proven orphan and publish its
+        // failure so the parent's wake carries the error.
+        const adopted = await adoptUndeliveredBackgroundChild({
+          board: deps.backgroundJobBoard,
+          shouldManageSession: deps.options.shouldManageSession,
+          proveUndelivered: deps.options.proveUndeliveredBackgroundChild,
+          sessionID: sessionId,
+          info: input.event.properties?.info,
+        });
+        if (adopted) {
+          const message =
+            structuredErrorMessage(props?.error) ?? 'Session error';
+          await deps.terminalGate.reconcile(adopted, {
+            kind: 'session-error',
+            message: isFailoverError(props?.error)
+              ? deps.withFallbackReason(sessionId, message)
+              : message,
+          });
+        }
       }
     }
 

@@ -649,6 +649,65 @@ function latestFence(...values: Array<number | undefined>): number | undefined {
 }
 
 /**
+ * Observation-time counterpart of startup recovery's single-child check.
+ *
+ * A child the board lost mid-run (host restart, or a launch that predates
+ * persistence) only goes idle/terminal with no row to claim the completion.
+ * Re-adopting it is safe only under the same proofs startup recovery demands
+ * of a non-persisted candidate: the parent's own history must show a
+ * background delegation for this task, and that run must have no trusted
+ * native delivery yet. Without a launch time the delivery fence has no
+ * boundary, so the absence of delivery cannot be proven and this returns
+ * false. A failed read is no evidence either.
+ */
+export async function proveUndeliveredBackgroundChild(options: {
+  input: PluginInput;
+  hostFlavor?: string;
+  parentSessionID: string;
+  taskID: string;
+  readTimeoutMs?: number;
+  timers?: Parameters<typeof raceEvidenceDeadline>[2];
+}): Promise<boolean> {
+  if (
+    !SESSION_ID_PATTERN.test(options.taskID) ||
+    !SESSION_ID_PATTERN.test(options.parentSessionID)
+  ) {
+    return false;
+  }
+  const readTimeoutMs = options.readTimeoutMs ?? TRANSCRIPT_READ_TIMEOUT_MS;
+  if (!Number.isFinite(readTimeoutMs) || readTimeoutMs <= 0) return false;
+  let transcript: unknown;
+  try {
+    transcript = await readParentTranscript(
+      getClient(options.input),
+      options.input.directory,
+      options.parentSessionID,
+      options.hostFlavor,
+      readTimeoutMs,
+      options.timers,
+    );
+  } catch {
+    return false;
+  }
+  const delegation = parentDelegation(
+    parentTaskParts(transcript),
+    options.parentSessionID,
+    options.taskID,
+  );
+  if (delegation?.background !== true || delegation.at === undefined) {
+    return false;
+  }
+  return (
+    nativeDeliveryForRun(
+      transcript,
+      options.parentSessionID,
+      options.taskID,
+      delegation.at,
+    ) === undefined
+  );
+}
+
+/**
  * Restore owned background subagents that survived a plugin restart while
  * their parent stayed idle. Persisted plugin-owned identities are the
  * primary source (they also cover hosts without session listing); a host
