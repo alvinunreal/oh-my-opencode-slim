@@ -1357,6 +1357,100 @@ describe('v2 tui preset plugin', () => {
       }
     });
 
+    test('sidebar subagent rows render session titles from the host session store', async () => {
+      writeUserConfig(makeConfig() as unknown as Record<string, unknown>);
+      process.env.XDG_DATA_HOME = path.join(configHome, 'sidebar-titles-data');
+      process.env.OPENCODE_LOG_DIR = path.join(configHome, 'logs');
+      process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '60000';
+      recordTuiSessionParent('child-a', 'root', projectDir);
+      recordTuiSessionParent('child-b', 'root', projectDir);
+      recordTuiAgentActivity(
+        {
+          sessionID: 'child-a',
+          agentName: 'explorer',
+          active: true,
+          details: { alias: 'exp-1', status: 'busy' },
+        },
+        projectDir,
+      );
+      recordTuiAgentActivity(
+        {
+          sessionID: 'child-b',
+          agentName: 'explorer',
+          active: true,
+          details: { alias: 'exp-2', status: 'busy' },
+        },
+        projectDir,
+      );
+      recordTuiAgentModels(
+        { agentModels: { explorer: 'openai/gpt-5-mini' } },
+        projectDir,
+      );
+      const stub = makeSetupCtx();
+      const ui = stub.ctx.ui as {
+        router: {
+          current: () => unknown;
+          navigate: (route: unknown) => void;
+        };
+      };
+      ui.router.current = () => ({ type: 'session', sessionID: 'root' });
+      ui.router.navigate = () => {};
+      // Direct get() serves child-a; child-b resolves only through list().
+      stub.ctx.data = {
+        session: {
+          get: (sessionID: string) =>
+            sessionID === 'child-a'
+              ? {
+                  parentID: 'root',
+                  agent: 'explorer',
+                  title: 'Audit the login flow',
+                }
+              : { parentID: 'root', agent: 'explorer' },
+          list: () => [
+            { id: 'child-a', title: 'Audit the login flow' },
+            { id: 'child-b', title: 'Harden the API client' },
+          ],
+        },
+      };
+      let cleanup: (() => void) | undefined;
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        const sidebarSlot = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        expect(sidebarSlot).toBeDefined();
+        screen = await testRender(() => sidebarSlot?.render?.() as never, {
+          width: 100,
+          height: 32,
+        });
+        await screen.renderOnce();
+        // Collapsed: both children share one agent row.
+        const collapsed = screen.captureCharFrame();
+        const lines = collapsed.split('\n');
+        const agentRow = lines.findIndex((line) => line.includes('explorer'));
+        expect(agentRow).toBeGreaterThan(-1);
+        // Expansion is user-driven: click the agent row to reveal the rows.
+        await screen.mockMouse.click(
+          Math.max(lines[agentRow].indexOf('explorer'), 0) + 2,
+          agentRow,
+        );
+        await screen.renderOnce();
+        const frame = screen.captureCharFrame();
+        // Titles come from the host store (get for child-a, list for
+        // child-b) — no exp-N alias prefixes remain.
+        expect(frame).toContain('Audit the login flow 1/2');
+        expect(frame).toContain('Harden the API client 2/2');
+        expect(frame).not.toContain('exp-1');
+        expect(frame).not.toContain('exp-2');
+      } finally {
+        cleanup?.();
+        screen?.renderer.destroy();
+      }
+    });
+
     test('agent hover contrasts with the raised sidebar surface and restores on exit', async () => {
       const stub = makeSetupCtx();
       writeUserConfig(makeConfig() as unknown as Record<string, unknown>);
