@@ -20,38 +20,43 @@ export function Avatar({
   const meta = AGENTS[agent];
   const running = status === 'running';
   const upcoming = status === 'upcoming';
-  const ring = Math.max(2, Math.round(size / 18));
+  const dot = Math.max(7, Math.round(size * 0.24));
   return (
-    <div
-      className="relative shrink-0 rounded-full"
-      style={{ width: size, height: size }}
-    >
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
       {running && (
         <div
-          className="ring-spin absolute rounded-full"
-          style={{
-            inset: -ring - 1,
-            background: `conic-gradient(from 0deg, ${meta.color}, transparent 55%, ${meta.color})`,
-          }}
+          className="breathe absolute rounded-[34%] blur-md"
+          style={{ inset: -3, background: meta.color, opacity: 0.55 }}
         />
       )}
-      <div
-        className="absolute inset-0 rounded-full"
-        style={{
-          boxShadow: running
-            ? `0 0 0 ${ring}px var(--panel-2), 0 0 18px ${meta.color}66`
-            : `0 0 0 1px ${upcoming ? 'var(--line-2)' : `${meta.color}55`}`,
-        }}
-      />
       <img
         src={meta.avatar}
         alt={meta.name}
         draggable={false}
-        className="relative h-full w-full rounded-full object-cover"
+        className="relative h-full w-full rounded-[30%] object-cover"
         style={{
-          filter: upcoming ? 'grayscale(0.85) brightness(0.6)' : undefined,
+          filter: upcoming ? 'grayscale(0.9) brightness(0.55)' : undefined,
         }}
       />
+      <div className="pointer-events-none absolute inset-0 rounded-[30%] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.09),inset_0_1px_0_rgba(255,255,255,0.14)]" />
+      {running && (
+        <span
+          className="absolute rounded-full"
+          style={{
+            width: dot,
+            height: dot,
+            right: -dot * 0.25,
+            bottom: -dot * 0.25,
+            background: meta.color,
+            boxShadow: `0 0 0 2px var(--panel-2), 0 0 10px ${meta.color}`,
+          }}
+        >
+          <span
+            className="pulse-dot absolute inset-0 rounded-full"
+            style={{ background: meta.color }}
+          />
+        </span>
+      )}
     </div>
   );
 }

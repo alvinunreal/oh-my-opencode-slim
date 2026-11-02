@@ -23,28 +23,62 @@ function Ports() {
   );
 }
 
-function cardStyle(status: Status, color: string, selected?: boolean) {
-  const base: React.CSSProperties = {
-    background:
-      status === 'upcoming'
-        ? 'color-mix(in oklab, var(--panel) 70%, transparent)'
-        : 'var(--panel-2)',
-    border: `1px ${status === 'upcoming' ? 'dashed' : 'solid'} var(--line-2)`,
+/**
+ * Card states share one neutral hairline. State reads through light, not
+ * outline colour: a tinted wash from the avatar corner, a soft coloured
+ * shadow underneath, and a lift when selected.
+ */
+function cardStyle(
+  status: Status,
+  color: string,
+  selected?: boolean,
+  wash?: string,
+): React.CSSProperties {
+  const lit = status === 'running' || status === 'blocked';
+  const tint = status === 'blocked' ? 'var(--bad)' : lit ? color : wash;
+  const strength = lit ? 18 : 9;
+  const layers: string[] = [];
+  if (tint)
+    layers.push(
+      `radial-gradient(130% 115% at 0% 0%, color-mix(in oklab, ${tint} ${strength}%, transparent), transparent 60%)`,
+    );
+  if (selected)
+    layers.push(
+      'radial-gradient(120% 120% at 100% 100%, rgba(217,166,96,0.12), transparent 55%)',
+    );
+  const shadows = ['inset 0 1px 0 rgba(255,255,255,0.05)'];
+  if (lit)
+    shadows.push(
+      `0 24px 48px -24px color-mix(in oklab, ${tint} 75%, transparent)`,
+    );
+  if (selected)
+    shadows.push(
+      '0 30px 60px -26px rgba(217,166,96,0.6)',
+      '0 2px 0 -1px rgba(217,166,96,0.35)',
+    );
+  else shadows.push('0 10px 30px -18px rgba(0,0,0,0.8)');
+
+  const upcoming = status === 'upcoming';
+  return {
+    background: upcoming
+      ? 'color-mix(in oklab, var(--panel) 70%, transparent)'
+      : [...layers, 'var(--panel-2)'].join(', '),
+    border: `1px ${upcoming ? 'dashed' : 'solid'} var(--line-2)`,
+    boxShadow: upcoming ? undefined : shadows.join(', '),
+    transform: selected ? 'translateY(-3px)' : undefined,
+    transition:
+      'transform 400ms cubic-bezier(0.22,1,0.36,1), box-shadow 500ms, background 500ms',
   };
-  if (status === 'running') {
-    base.border = `1px solid ${color}88`;
-    base.boxShadow = `0 0 0 1px ${color}22, 0 12px 40px -12px ${color}55`;
-  }
-  if (status === 'blocked') {
-    base.border = '1px solid color-mix(in oklab, var(--bad) 55%, transparent)';
-    base.boxShadow =
-      '0 12px 40px -16px color-mix(in oklab, var(--bad) 60%, transparent)';
-  }
-  if (selected) {
-    base.outline = '2px solid var(--bronze)';
-    base.outlineOffset = '3px';
-  }
-  return base;
+}
+
+/** A slow light sweep across a card while its agent is working. */
+function Sheen({ on }: { on: boolean }) {
+  if (!on) return null;
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-[inherit]">
+      <div className="sheen absolute inset-y-0 w-1/2" />
+    </div>
+  );
 }
 
 // ── Lane: one specialist working a scoped piece of the pass ─────────
@@ -60,7 +94,7 @@ export function LaneNode({ data, selected }: NodeProps) {
 
   return (
     <div
-      className="flex flex-col gap-2.5 rounded-2xl p-3.5 transition-[box-shadow,border-color] duration-500"
+      className="relative flex flex-col gap-2.5 rounded-2xl p-3.5"
       style={{
         width: SIZE.lane.w,
         height: SIZE.lane.h,
@@ -68,7 +102,8 @@ export function LaneNode({ data, selected }: NodeProps) {
       }}
     >
       <Ports />
-      <div className="flex items-center gap-2.5">
+      <Sheen on={status === 'running'} />
+      <div className="relative flex items-center gap-2.5">
         <Avatar agent={work.agent} size={38} status={status} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 text-[11.5px]">
@@ -154,7 +189,7 @@ export function StepNode({ data, selected }: NodeProps) {
   const isCommit = work.id.endsWith('-commit');
   return (
     <div
-      className="flex items-center gap-3 rounded-2xl px-3.5"
+      className="relative flex items-center gap-3 rounded-2xl px-3.5"
       style={{
         width: SIZE.step.w,
         height: SIZE.step.h,
@@ -162,6 +197,7 @@ export function StepNode({ data, selected }: NodeProps) {
       }}
     >
       <Ports />
+      <Sheen on={status === 'running'} />
       {isCommit ? (
         <div
           className="grid h-8 w-8 shrink-0 place-items-center rounded-full"
@@ -230,16 +266,11 @@ export function GateNode({ data, selected }: NodeProps) {
       style={{
         width: SIZE.gate.w,
         height: SIZE.gate.h,
-        ...cardStyle(status, meta.color, selected),
+        ...cardStyle(status, meta.color, selected, decided ? tone : undefined),
       }}
     >
       <Ports />
-      <div
-        className="pointer-events-none absolute inset-x-0 top-0 h-[2px]"
-        style={{
-          background: `linear-gradient(90deg, transparent, ${status === 'upcoming' ? 'var(--line-2)' : tone}, transparent)`,
-        }}
-      />
+      <Sheen on={status === 'running'} />
       <div className="flex items-center gap-2.5">
         <Avatar
           agent="oracle"
@@ -354,7 +385,8 @@ export function PassGroupNode({ data }: NodeProps) {
       style={{
         background:
           'radial-gradient(120% 80% at 0% 0%, rgba(217,166,96,0.07), transparent 55%), color-mix(in oklab, var(--panel) 55%, transparent)',
-        border: '1px solid rgba(217,166,96,0.22)',
+        border: '1px solid var(--line)',
+        boxShadow: 'inset 0 1px 0 rgba(255,236,214,0.05)',
       }}
     >
       <div className="flex items-start justify-between gap-6 px-9 pt-6">
@@ -398,10 +430,7 @@ export function PassSummaryNode({ data, selected }: NodeProps) {
       style={{
         width: SIZE.passSummary.w,
         height: SIZE.passSummary.h,
-        background: 'var(--panel-2)',
-        border: '1px solid var(--line-2)',
-        outline: selected ? '2px solid var(--bronze)' : undefined,
-        outlineOffset: 3,
+        ...cardStyle('done', 'var(--bronze)', selected),
       }}
     >
       <Ports />
@@ -421,7 +450,7 @@ export function PassSummaryNode({ data, selected }: NodeProps) {
       </p>
       <div className="flex -space-x-2">
         {agents.map((a) => (
-          <div key={a} className="rounded-full ring-2 ring-[var(--panel-2)]">
+          <div key={a} className="rounded-[34%] ring-2 ring-[var(--panel-2)]">
             <Avatar agent={a} size={26} />
           </div>
         ))}

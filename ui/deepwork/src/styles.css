@@ -150,6 +150,26 @@ body {
   }
 }
 
+.sheen {
+  left: -60%;
+  background: linear-gradient(
+    100deg,
+    transparent 20%,
+    rgba(255, 245, 230, 0.06) 50%,
+    transparent 80%
+  );
+  animation: sweep 3.6s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+@keyframes sweep {
+  0% {
+    transform: translateX(0);
+  }
+  60%,
+  100% {
+    transform: translateX(320%);
+  }
+}
+
 .ring-spin {
   animation: spin 2.4s linear infinite;
 }
@@ -179,6 +199,7 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .ring-spin,
+  .sheen,
   .edge-flow,
   .pulse-dot,
   .shimmer-text,

@@ -55,8 +55,14 @@ export function TopBar({
                 className="flex w-[172px] flex-col gap-1.5 rounded-xl px-3 py-2"
                 style={{
                   background:
-                    phase === 'active' ? 'var(--bronze-dim)' : 'transparent',
-                  border: `1px solid ${phase === 'active' ? 'rgba(217,166,96,0.35)' : 'var(--line)'}`,
+                    phase === 'active'
+                      ? 'linear-gradient(180deg, rgba(217,166,96,0.16), rgba(217,166,96,0.05))'
+                      : 'transparent',
+                  border: '1px solid var(--line)',
+                  boxShadow:
+                    phase === 'active'
+                      ? 'inset 0 1px 0 rgba(255,236,214,0.08), 0 10px 30px -14px rgba(217,166,96,0.45)'
+                      : undefined,
                 }}
               >
                 <div className="flex items-center justify-between">
