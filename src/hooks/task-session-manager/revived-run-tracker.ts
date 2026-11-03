@@ -223,7 +223,7 @@ export function createRevivedRunTracker(options: {
     const result = await options.terminalGate.reconcile(run, {
       kind: 'inspect',
     });
-    if (disposed || runs.get(taskID) !== run || result.kind === 'stale')
+    if (disposed || runs.get(taskID) !== run || result.kind !== 'committed')
       return false;
     onTerminal(result.record);
     return result.record.state !== 'running';

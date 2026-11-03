@@ -16,6 +16,7 @@ import {
   type BackgroundJobTerminalGate,
   createBackgroundJobTerminalGate,
   type GateResult,
+  type ObservationToken,
   runtimeObservationFromSnapshot,
 } from '../utils/background-job-terminal-gate';
 import {
@@ -86,18 +87,60 @@ function terminalStateOf(record: BackgroundJobRecord): string {
     : record.state;
 }
 
+/** A terminal verdict must still describe the publication being rendered. */
+function samePublication(
+  left: BackgroundJobRecord,
+  right: BackgroundJobRecord,
+): boolean {
+  return (
+    left.taskID === right.taskID &&
+    left.parentSessionID === right.parentSessionID &&
+    left.generation === right.generation &&
+    left.activityRevision === right.activityRevision &&
+    left.terminalRevision === right.terminalRevision
+  );
+}
+
+/** Compare the execution identity while allowing its terminal publication. */
+function sameObservationEpoch(
+  left: ObservationToken,
+  right: ObservationToken,
+): boolean {
+  return (
+    left.taskID === right.taskID &&
+    left.generation === right.generation &&
+    left.activityRevision === right.activityRevision &&
+    left.attemptRevision === right.attemptRevision &&
+    left.attemptStartedAt === right.attemptStartedAt &&
+    left.baselineMessageID === right.baselineMessageID &&
+    left.promptMessageID === right.promptMessageID &&
+    left.episode === right.episode
+  );
+}
+
 interface TerminalProbeResult {
-  classificationKind: 'running' | 'idle' | 'outcome' | 'unknown';
   record?: BackgroundJobRecord;
   gateResult?: GateResult;
+  confirmation?: ObservationToken;
+  historical?: {
+    outcome: 'succeeded' | 'failed' | 'interrupted';
+    idleAt: number;
+    record: BackgroundJobRecord;
+    observation: ObservationToken;
+  };
+}
+
+export interface StatusTimers {
+  setTimeout: (callback: () => void, delay: number) => unknown;
+  clearTimeout: (timer: unknown) => void;
 }
 
 /**
  * One host-side terminal-outcome probe for a tracked run.
  *
- * The classifier is called exactly once. If it finds a valid host outcome,
- * the observation token is captured only after that await and the evidence is
- * handed to the terminal gate; this helper never calls board.commitTerminal.
+ * The observation token is captured before the classifier's host read. If it
+ * finds a valid outcome, the evidence is handed to the terminal gate; this
+ * helper never calls board.commitTerminal.
  * The board is re-read after classification regardless of its result.
  */
 async function probeTerminalOutcome(
@@ -105,37 +148,85 @@ async function probeTerminalOutcome(
     input: PluginInput;
     gate: BackgroundJobTerminalGate;
     board: BackgroundJobBoard;
+    statusTimeoutMs?: number;
+    statusTimers?: StatusTimers;
   },
   run: { taskID: string; generation: number },
   snapshot?: RuntimeSessionStatusSnapshot,
   loadHostInfo?: () => Promise<Record<string, unknown> | undefined>,
 ): Promise<TerminalProbeResult> {
+  // Capture before the host read so an intervening attempt or activity cannot
+  // lend its identity to evidence obtained for an earlier execution.
+  const startingRecord = options.board.get(run.taskID);
+  const token = options.gate.capture(run);
   const hostInfo = loadHostInfo ? await loadHostInfo() : undefined;
   const classification = await classifyLiveSession(options.input, run.taskID, {
     ...(snapshot ? { snapshot } : {}),
     ...(hostInfo !== undefined ? { hostInfo } : {}),
+    ...(options.statusTimeoutMs !== undefined
+      ? { timeoutMs: options.statusTimeoutMs }
+      : {}),
+    ...(options.statusTimers !== undefined
+      ? { timers: options.statusTimers }
+      : {}),
   });
   let gateResult: GateResult | undefined;
-  if (classification.kind === 'outcome') {
-    const token = options.gate.capture(run);
-    if (token) {
-      const observed = options.gate.observe(token, {
-        kind: 'quiescent',
-        origin: 'host-outcome',
-        readStartedAt: token.readStartedAt,
-        observedAt: classification.idleAt,
-        terminalOutcome: classification.outcome,
-      });
-      if (observed.kind !== 'stale') {
-        gateResult = await options.gate.reconcile(run);
-      }
+  let historical: TerminalProbeResult['historical'];
+  if (classification.kind === 'outcome' && token) {
+    const after = options.gate.capture(run);
+    const current = options.board.get(run.taskID);
+    if (
+      after &&
+      startingRecord &&
+      current &&
+      current.state !== 'running' &&
+      samePublication(startingRecord, current) &&
+      after.terminalRevision === token.terminalRevision &&
+      sameObservationEpoch(token, after) &&
+      classification.sessionID === run.taskID &&
+      classification.parentID === current.parentSessionID &&
+      classification.idleAt !== undefined
+    ) {
+      historical = {
+        outcome: classification.outcome,
+        idleAt: classification.idleAt,
+        record: current,
+        observation: after,
+      };
+    }
+    // Classification alone is historical evidence. Only the gate's own
+    // fresh, attributable read may establish a live run's terminal result.
+    if (
+      after &&
+      current?.state === 'running' &&
+      after.terminalRevision === token.terminalRevision &&
+      sameObservationEpoch(token, after)
+    ) {
+      gateResult = await options.gate.reconcile(run);
     }
   }
   const latest = options.board.get(run.taskID);
+  let confirmation: ObservationToken | undefined;
+  if (gateResult?.kind === 'committed') {
+    const after = options.gate.capture(run);
+    if (
+      !token ||
+      !after ||
+      !sameObservationEpoch(token, after) ||
+      after.terminalRevision !== gateResult.record.terminalRevision ||
+      !latest ||
+      !samePublication(gateResult.record, latest)
+    ) {
+      gateResult = undefined;
+    } else {
+      confirmation = after;
+    }
+  }
   return {
-    classificationKind: classification.kind,
     record: latest,
     ...(gateResult ? { gateResult } : {}),
+    ...(confirmation ? { confirmation } : {}),
+    ...(historical ? { historical } : {}),
   };
 }
 
@@ -167,6 +258,7 @@ export function createTaskStatusTool(options: {
   terminalGate?: BackgroundJobTerminalGate;
   now?: () => number;
   statusTimeoutMs?: number;
+  statusTimers?: StatusTimers;
   resolveCanonicalTaskRef?: CanonicalTaskResolver;
   isDisposed?: () => boolean;
   readTimeoutMs?: number;
@@ -212,6 +304,8 @@ export function createTaskStatusTool(options: {
             board: options.backgroundJobBoard,
             isDisposed: options.isDisposed,
             readTimeoutMs: options.readTimeoutMs,
+            statusTimeoutMs: options.statusTimeoutMs,
+            statusTimers: options.statusTimers,
             resolveCanonicalTaskRef: options.resolveCanonicalTaskRef,
           },
           { parentSessionID, idParam, requested },
@@ -300,37 +394,78 @@ export function createTaskStatusTool(options: {
         now,
       );
       let terminalProbe: TerminalProbeResult | undefined;
+      let historical: TerminalProbeResult['historical'];
       if (report.uncertain) {
         terminalProbe = await probeTerminalOutcome(
-          { input: options.input, gate, board: options.backgroundJobBoard },
+          {
+            input: options.input,
+            gate,
+            board: options.backgroundJobBoard,
+            statusTimeoutMs: options.statusTimeoutMs,
+            statusTimers: options.statusTimers,
+          },
           { taskID, generation: current.generation },
           snapshot,
         );
         // Render from the board record re-read after the classifier await.
+        const latest = options.backgroundJobBoard.get(taskID);
         if (
-          terminalProbe.record?.taskID === taskID &&
-          terminalProbe.record.generation === current.generation
+          latest?.taskID === taskID &&
+          latest.parentSessionID === parentSessionID
         ) {
-          renderRecord = terminalProbe.record;
+          renderRecord = latest;
           activity = resolveLastActivity(renderRecord, options.activityTracker);
           lastActivityAt = activity.at;
           report = summarizeTaskStatus(
             renderRecord,
-            observation,
+            renderRecord.generation === current.generation
+              ? observation
+              : {
+                  ok: false,
+                  error: 'task generation changed during status read',
+                },
             lastActivityAt,
             now,
           );
         }
+        const afterProbe = terminalProbe.confirmation
+          ? gate.capture({ taskID, generation: current.generation })
+          : undefined;
         if (
           terminalProbe.gateResult?.kind === 'committed' &&
-          terminalProbe.record?.generation === current.generation
+          terminalProbe.confirmation &&
+          afterProbe &&
+          sameObservationEpoch(terminalProbe.confirmation, afterProbe) &&
+          afterProbe.terminalRevision ===
+            terminalProbe.gateResult.record.terminalRevision &&
+          renderRecord.generation === current.generation &&
+          samePublication(terminalProbe.gateResult.record, renderRecord) &&
+          !gate.isRetainedObservationBlocked(renderRecord)
         ) {
           return committedStatusOutput(
-            terminalProbe.record,
+            renderRecord,
             lastActivityAt,
             now,
             activity.source,
           );
+        }
+        if (terminalProbe.historical) {
+          const afterHistory = gate.capture({
+            taskID,
+            generation: current.generation,
+          });
+          if (
+            afterHistory &&
+            sameObservationEpoch(
+              terminalProbe.historical.observation,
+              afterHistory,
+            ) &&
+            afterHistory.terminalRevision ===
+              terminalProbe.historical.record.terminalRevision &&
+            samePublication(terminalProbe.historical.record, renderRecord)
+          ) {
+            historical = terminalProbe.historical;
+          }
         }
       }
 
@@ -351,6 +486,12 @@ export function createTaskStatusTool(options: {
       }
       if (report.uncertain) {
         details.push('status_uncertain: true');
+        if (historical) {
+          details.push(
+            `last_host_outcome: ${historical.outcome} (historical; not proof of current activity or ownership)`,
+            `last_host_idle_at: ${historical.idleAt}`,
+          );
+        }
         if (report.lastStatusError) {
           details.push(`last_status_error: ${report.lastStatusError}`);
         }
@@ -371,25 +512,6 @@ export function createTaskStatusTool(options: {
   });
 
   return { task_status };
-}
-
-function readonlyTerminalResult(
-  requested: string,
-  record:
-    | {
-        state?: string;
-        terminalState?: string;
-        resultSummary?: string;
-      }
-    | undefined,
-): string {
-  const state =
-    record?.state === 'reconciled' ? record.terminalState : record?.state;
-  const summary = record?.resultSummary?.trim();
-  if (state === 'completed' && summary) return summary;
-  throw new Error(
-    `Task ${requested} result was not consumed. No action was sent.`,
-  );
 }
 
 function runningResultRefusal(
@@ -433,6 +555,8 @@ interface TaskResultReadOptions {
   board: BackgroundJobBoard;
   isDisposed?: () => boolean;
   readTimeoutMs?: number;
+  statusTimeoutMs?: number;
+  statusTimers?: StatusTimers;
   resolveCanonicalTaskRef?: CanonicalTaskResolver;
 }
 
@@ -499,7 +623,7 @@ async function readTaskResult(
   if (options.isDisposed?.()) throw new Error(pluginDisposedMessage());
   let result = tracked ? await gate.reconcile(tracked) : undefined;
   if (options.isDisposed?.()) {
-    return readonlyTerminalResult(requested, tracked);
+    throw new Error(pluginDisposedMessage());
   }
   let current = canonical
     ? board.get(taskID)
@@ -574,7 +698,7 @@ async function readTaskResult(
   };
   if (current?.state === 'running') {
     terminalProbe = await probeTerminalOutcome(
-      { input: options.input, gate, board },
+      options,
       { taskID, generation: current.generation },
       snapshot,
       loadHostInfo,
@@ -626,14 +750,15 @@ async function readTaskResult(
       options.isDisposed?.() ||
       (token === undefined && after === undefined)
     ) {
-      return readonlyTerminalResult(requested, current);
+      throw new Error(pluginDisposedMessage());
     }
     if (
       latest?.generation !== current.generation ||
       latest.terminalRevision !== current.terminalRevision ||
-      after?.activityRevision !== token?.activityRevision ||
-      after?.attemptRevision !== token?.attemptRevision ||
-      after?.episode !== token?.episode
+      !token ||
+      !after ||
+      !sameObservationEpoch(token, after) ||
+      after.terminalRevision !== token.terminalRevision
     ) {
       throw new Error(
         `Task ${requested} changed generation or publication while its result was being retrieved; wait for its current terminal result instead of retrieving it.`,
@@ -644,7 +769,7 @@ async function readTaskResult(
     if (state === 'completed' && result?.kind !== 'committed') {
       if (!terminalProbe) {
         terminalProbe = await probeTerminalOutcome(
-          { input: options.input, gate, board },
+          options,
           { taskID, generation: current.generation },
           snapshot,
           loadHostInfo,
@@ -664,6 +789,27 @@ async function readTaskResult(
       if (latestState === 'completed' && result?.kind !== 'committed')
         return runningResultRefusal(idParam, taskID, true);
     }
+    // Admission ownership can change while the host read is pending.
+    // Do not acknowledge or return a retained result through an old verdict.
+    const finalLatest = board.get(taskID);
+    const finalToken = gate.capture(current);
+    if (
+      !finalLatest ||
+      !token ||
+      !finalToken ||
+      !sameObservationEpoch(token, finalToken) ||
+      finalToken.terminalRevision !== token.terminalRevision ||
+      !samePublication(finalLatest, current) ||
+      (result?.kind === 'committed' &&
+        !samePublication(result.record, finalLatest)) ||
+      gate.isRetainedObservationBlocked(finalLatest)
+    )
+      return runningResultRefusal(idParam, taskID, true);
+    if (
+      (state === 'error' || state === 'cancelled') &&
+      result?.kind !== 'committed'
+    )
+      return runningResultRefusal(idParam, taskID, true);
     if (state === 'error') {
       board.markUsed(parentSessionID, taskID);
       throw new Error(
