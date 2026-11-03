@@ -32,16 +32,19 @@ const MAX_BODY_SIZE = 64 * 1024; // 64KB
 
 /**
  * Read and parse JSON body from an HTTP request with size limit.
- * Destroys the request if the body exceeds MAX_BODY_SIZE.
+ * Destroys the request if the body exceeds the configured limit.
  */
-export async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+export async function readJsonBody(
+  request: IncomingMessage,
+  maxSize = MAX_BODY_SIZE,
+): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
 
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.length;
-    if (size > MAX_BODY_SIZE) {
+    if (size > maxSize) {
       request.destroy();
       throw new Error('Request body too large');
     }

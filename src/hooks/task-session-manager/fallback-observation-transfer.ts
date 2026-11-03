@@ -20,9 +20,7 @@ import type { FallbackNotice, RevivedRunTracker } from './revived-run-tracker';
  *   notification (the exact incident shape). Preparing also SUPPLANTS
  *   the previous publisher (its in-flight probe fences out).
  * - `admit` converts the preparation into a tracked run (register +
- *   immediate probe) once the host accepts the re-prompt — including a
- *   v2 `switched: false` delivery (prompt admitted on the current
- *   model is still admitted work).
+ *   immediate probe) once the host accepts the re-prompt.
  * - `reject` releases ownership on an EXPLICIT host refusal (error
  *   envelope, typed capability rejection): nothing was admitted.
  * - `settleUnresolved` handles unknown outcomes (transport failed
@@ -42,7 +40,6 @@ export function createBackgroundFallbackHandoff(options: {
   revivedRunTracker: RevivedRunTracker;
   allowForeground?: boolean;
 }): {
-  isEligible: (sessionID: string, generation: number | undefined) => boolean;
   prepare: (
     sessionID: string,
     preparedGeneration: number | undefined,
@@ -82,8 +79,6 @@ export function createBackgroundFallbackHandoff(options: {
   };
 
   return {
-    isEligible: (sessionID, generation) =>
-      resolveEligibleRecord(sessionID, generation) !== undefined,
     prepare: (sessionID, preparedGeneration, baselineMessageID) => {
       const record = resolveEligibleRecord(sessionID, preparedGeneration);
       if (!record) return false;

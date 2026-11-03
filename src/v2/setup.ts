@@ -15,7 +15,6 @@
  */
 
 import path from 'node:path';
-import { LRUCache } from 'lru-cache';
 import type { RegistryFactoryBridge } from '../agents/registry-bridge';
 import {
   buildBundledSkillInfos,
@@ -25,7 +24,7 @@ import {
   AGENT_ALIASES,
   BUILTIN_OPENCODE_SUBAGENTS_TO_DISABLE,
 } from '../config/constants';
-import { resolveBackgroundJobsMode } from '../config/runtime';
+import { resolveFeatureGates } from '../config/feature-gates';
 import { InterviewConfigSchema } from '../config/schema';
 import type { PluginConfigSnapshot } from '../config/snapshot';
 import { readPluginConfigSnapshot } from '../config/snapshot';
@@ -107,10 +106,7 @@ import {
   v1ArgsToSubagent,
 } from './delegation';
 import { mapV2EventToV1 } from './event-adapter';
-import {
-  buildV2EventSubscriptionTypes,
-  isV2StreamDeltaType,
-} from './event-subscription';
+import { buildV2EventSubscriptionTypes } from './event-subscription';
 import {
   INTERNAL_SYNTHETIC_MESSAGE_PREFIX,
   isInternalAdmission,
@@ -134,7 +130,8 @@ import {
 } from './session-presets';
 import {
   createSessionSubmit,
-  userTextFromContent,
+  replayMarkerExpansions,
+  type V1CommandBeforeHook,
   type V2CommandSubmit,
 } from './session-submit';
 import {
@@ -155,27 +152,6 @@ import type {
   V2ToolAfterEvent,
   V2ToolBeforeEvent,
 } from './types';
-
-/** v1 `command.execute.before` hook shape (see src/index.ts wiring). */
-export type V1CommandBeforeHook = (
-  input: { command: string; sessionID: string; arguments: string },
-  output: {
-    parts: Array<{
-      type: string;
-      text?: string;
-      synthetic?: boolean;
-      metadata?: Record<string, unknown>;
-    }>;
-  },
-) => Promise<void>;
-
-/** v1 command hook part shape. */
-type V1CommandPart = {
-  type: string;
-  text?: string;
-  synthetic?: boolean;
-  metadata?: Record<string, unknown>;
-};
 
 /** Wrap slash-command arguments in the generic v2 command marker. v2 command
  * drafts are add-only (no `template`), so `execute` submits this marker as a
@@ -202,16 +178,6 @@ export function parseCommandMarker(
   const match = text.match(COMMAND_MARKER_PATTERN);
   if (!match) return undefined;
   return { name: match[1], args: match[2] };
-}
-
-/** Strip the marker tags from marker-only `text`, leaving the raw args. */
-export function stripCommandMarker(text: string): string {
-  // Function replacer: a string replacer would interpret `$`-sequences in
-  // the captured args. Group 1 is the command name; group 2 the args.
-  return text.replace(
-    COMMAND_MARKER_PATTERN,
-    (_match, _name: string, args: string) => args,
-  );
 }
 
 /** Register one v1 synth command on a v2 command draft. Uses `add` when
@@ -268,65 +234,12 @@ export function registerSynthCommands(
   }
 }
 
-const commandExpansions = new WeakMap<
-  V1CommandBeforeHook,
-  LRUCache<string, Promise<V1CommandPart[]>>
->();
-
 /** Replay the same expansion whenever the host rebuilds its message history. */
 export async function applyCommandMarkerToContext(
   event: V2SessionContextEvent,
   commandBefore: V1CommandBeforeHook,
 ): Promise<void> {
-  for (const trailing of event.messages) {
-    if (trailing.role !== 'user') continue;
-    const markerIndex = trailing.content.findIndex(
-      (part) => part.type === 'text' && part.synthetic !== true,
-    );
-    const marker = trailing.content[markerIndex];
-    const text = typeof marker?.text === 'string' ? marker.text : '';
-    const parsed = parseCommandMarker(text);
-    if (!parsed) continue;
-
-    let cache = commandExpansions.get(commandBefore);
-    if (!cache) {
-      cache = new LRUCache({ max: 512 });
-      commandExpansions.set(commandBefore, cache);
-    }
-    const key =
-      trailing.id && JSON.stringify([event.sessionID, trailing.id, text]);
-    let expansion = key ? cache.get(key) : undefined;
-    if (!expansion) {
-      const output = { parts: [] as V1CommandPart[] };
-      expansion = commandBefore(
-        {
-          command: parsed.name,
-          sessionID: event.sessionID,
-          arguments: parsed.args.trim(),
-        },
-        output,
-      ).then(() => output.parts);
-      if (key) cache.set(key, expansion);
-    }
-    const parts = await expansion.catch((error) => {
-      if (key) cache.delete(key);
-      throw error;
-    });
-
-    const otherParts = trailing.content.filter(
-      (_, index) => index !== markerIndex,
-    );
-
-    if (parts.length > 0) {
-      trailing.content = [...parts.map((part) => ({ ...part })), ...otherParts];
-      continue;
-    }
-    // Hook produced nothing: strip the marker and leave the raw args text.
-    trailing.content = [
-      { type: 'text', text: stripCommandMarker(text) },
-      ...otherParts,
-    ];
-  }
+  await replayMarkerExpansions(event, commandBefore, parseCommandMarker);
 }
 
 /** Payload the v1 `chat.message` bridge feeds its consumers (a subset of
@@ -656,7 +569,7 @@ export function createSessionContextHandler(
             info,
             parts: m.content.map((part) =>
               ((part.type === 'tool-call' || part.type === 'tool-result') &&
-                part.toolName === 'interview_submit_state') ||
+                (part.toolName ?? part.name) === 'interview_submit_state') ||
               (part.type === 'text' &&
                 typeof part.text === 'string' &&
                 part.text.includes('<interview_state'))
@@ -699,6 +612,11 @@ export function createSessionContextHandler(
                   deps.refusalOutcome,
                   childID,
                   text,
+                  'time' in message.info &&
+                    isRecord(message.info.time) &&
+                    typeof message.info.time.created === 'number'
+                    ? message.info.time.created
+                    : undefined,
                 );
                 if (outcome !== null) {
                   recovery =
@@ -2433,11 +2351,12 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       hostFlavor: 'v2',
     });
     const preFlightConfig = startupConfigSnapshot.config;
-    // Resolve the same mode the v1 factory will resolve: `native` and `off`
-    // must not wire board persistence or the native-subagent executor
-    // wrapper, and only `managed` may claim the lifecycle.
-    const lifecycleEnabled =
-      resolveBackgroundJobsMode(preFlightConfig.backgroundJobs) === 'managed';
+    // Derive every startup feature gate ONCE from the same snapshot the v1
+    // factory consumes. Only `managed` may claim the lifecycle: `native` and
+    // `off` must not wire board persistence or the native-subagent executor
+    // wrapper.
+    const featureGates = resolveFeatureGates(preFlightConfig);
+    const lifecycleEnabled = featureGates.managedJobs;
     if (lifecycleEnabled) {
       try {
         const storage = ctx.storage;
@@ -2539,24 +2458,18 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       const implementCommandEnabled = isCommandEnabled('implement', {
         disabledCommands,
       });
-      // Master switches (default true — an untouched config keeps every
-      // behavior). `sidebar`/`liveConfigRefresh` are read from the raw
-      // config here because the parsed interview config above is the only
-      // structured view that carries `.enabled` today.
-      const interviewEnabled = interviewConfig.enabled !== false;
-      const sidebarEnabled = pluginConfig.sidebar !== false;
-      const liveRefreshEnabled = pluginConfig.liveConfigRefresh !== false;
-      const updateCheckerEnabled = !(
-        pluginConfig.disabled_hooks ?? []
-      ).includes('auto-update-checker');
-      // The server-side auto-update checker is gated by the v1 factory's own
-      // disabled_hooks read; surface the decision once for the setup log.
+      // Master switches come from the same startup feature-gate resolution
+      // that gated lifecycle persistence above. The parsed interview config
+      // still supplies the bridge's own options.
+      const interviewEnabled = featureGates.interview;
+      const sidebarEnabled = featureGates.sidebar;
+      const liveRefreshEnabled = featureGates.liveConfigRefresh;
       log('[v2] feature switches', {
-        lifecycle: lifecycleEnabled,
-        interview: interviewEnabled,
-        sidebar: sidebarEnabled,
-        liveConfigRefresh: liveRefreshEnabled,
-        updateChecker: updateCheckerEnabled,
+        lifecycle: featureGates.managedJobs,
+        interview: featureGates.interview,
+        sidebar: featureGates.sidebar,
+        liveConfigRefresh: featureGates.liveConfigRefresh,
+        updateChecker: featureGates.updateChecker,
       });
       let interviewBridge: V2InterviewBridge | undefined;
       if (interviewEnabled) {
@@ -2564,6 +2477,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         interviewBridge = createV2InterviewBridge(ctx, interviewConfig, {
           commandEnabled: interviewCommandEnabled,
           implementEnabled: implementCommandEnabled,
+          refusalOutcome: v1Hooks[
+            'v2.pendingRefusalOutcome'
+          ] as ForegroundFallbackManager['pendingRefusalOutcome'],
         });
       }
       if (interviewBridge) disposers.push(() => interviewBridge.dispose());
@@ -3872,6 +3788,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                       refusalOutcome: v1Hooks[
                         'v2.refusalOutcome'
                       ] as V2SessionContextHandlerDeps['refusalOutcome'],
+                      onSteerProgress: v1Hooks['v2.coverSteer'] as Parameters<
+                        typeof createSubagentExecutorWrapper
+                      >[0]['onSteerProgress'],
                       register: (launch) =>
                         registerStructuredLaunch({
                           ...launch,
@@ -4055,46 +3974,34 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                 while (!eventStopped) {
                   const next = await eventIterator.next();
                   if (next.done) break;
-                  // Token-stream deltas: the interview bridge already gates to
-                  // managed sessions. Skip permission rules and v1 synthesis;
-                  // still deliver the raw event so the multiplexer heartbeat in
-                  // the v1 event hook can run. Deltas are not location-scoped
-                  // and fire per token, so they skip the directory scope too.
                   const rawType =
                     typeof next.value?.type === 'string' ? next.value.type : '';
-                  const isStreamDelta = isV2StreamDeltaType(rawType);
-                  if (!isStreamDelta) {
-                    // Keep directory-local bridges scoped, while allowing the
-                    // task owner to observe children moved to live locations.
-                    eventDirectoryScope.note(next.value);
-                    if (eventDirectoryScope.isForeign(next.value)) {
-                      // Moved children retain their task owner in the parent's
-                      // location. Forward observation only, not permission or
-                      // profile handling from this foreign location.
-                      const foreignTaskEvent = v1Hooks['v2.foreignTaskEvent'] as
-                        | ((input: { event: unknown }) => Promise<void>)
-                        | undefined;
-                      if (foreignTaskEvent) {
-                        try {
-                          await withTuiSnapshotBatch(async () => {
-                            for (const ev of mapV2EventToV1(next.value)) {
-                              await foreignTaskEvent({ event: ev });
-                            }
-                          });
-                        } catch (err) {
-                          log('[v2] foreign task event failed', String(err));
-                        }
+                  // Keep directory-local bridges scoped, while allowing the
+                  // task owner to observe children moved to live locations.
+                  eventDirectoryScope.note(next.value);
+                  if (eventDirectoryScope.isForeign(next.value)) {
+                    // Moved children retain their task owner in the parent's
+                    // location. Forward observation only, not permission or
+                    // profile handling from this foreign location.
+                    const foreignTaskEvent = v1Hooks['v2.foreignTaskEvent'] as
+                      | ((input: { event: unknown }) => Promise<void>)
+                      | undefined;
+                    if (foreignTaskEvent) {
+                      try {
+                        await withTuiSnapshotBatch(async () => {
+                          for (const ev of mapV2EventToV1(next.value)) {
+                            await foreignTaskEvent({ event: ev });
+                          }
+                        });
+                      } catch (err) {
+                        log('[v2] foreign task event failed', String(err));
                       }
-                      continue;
                     }
+                    continue;
                   }
                   try {
                     await withTuiSnapshotBatch(async () => {
                       await interviewBridge?.handleEvent(next.value);
-                      if (isStreamDelta) {
-                        if (eventHook) await eventHook({ event: next.value });
-                        return;
-                      }
                       // Only reduced hosts retain legacy created prewarming.
                       // With persistence, native progress must bind before the
                       // first capture; a created event may precede that barrier.

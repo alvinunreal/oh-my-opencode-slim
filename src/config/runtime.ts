@@ -28,6 +28,7 @@ import {
 } from './constants';
 import type { CouncilConfig } from './council-schema';
 import { resolveEffectiveAgentOverrides } from './effective-agent-overrides';
+import { type FeatureGates, resolveFeatureGates } from './feature-gates';
 import {
   deepMerge,
   mergeAgentOverrides,
@@ -39,7 +40,6 @@ import {
   type AcpAgentsConfig,
   type AgentOverrideConfig,
   type BackgroundJobsConfig,
-  type BackgroundJobsMode,
   type CompanionConfig,
   type FailoverConfig,
   type MultiplexerConfig,
@@ -79,31 +79,11 @@ const reloadState = new Map<
   { preset: string | null; switchedModels: Set<string> }
 >();
 
-/**
- * Resolve the lifecycle mode from a raw/parsed `backgroundJobs` block.
- *
- * Shared by `RuntimeConfig` (the v1 factory) and the v2 setup pre-flight,
- * which reads the same snapshot before the v1 factory runs — both must agree,
- * otherwise `native`/`off` would still wire v2 board persistence and the
- * native-subagent executor wrapper.
- */
-export function resolveBackgroundJobsMode(backgroundJobs?: {
-  mode?: unknown;
-  enabled?: unknown;
-}): BackgroundJobsMode {
-  const explicit = backgroundJobs?.mode;
-  if (explicit === 'managed' || explicit === 'native' || explicit === 'off') {
-    return explicit;
-  }
-  return backgroundJobs?.enabled === false ? 'off' : 'managed';
-}
-
 const DEFAULT_MULTIPLEXER: MultiplexerConfig =
   MultiplexerConfigStrictSchema.parse({});
 
 const DEFAULT_BACKGROUND_JOBS: BackgroundJobsConfig = {
   mode: 'managed',
-  enabled: true,
   maxSessionsPerAgent: DEFAULT_MAX_SESSIONS_PER_AGENT,
   orchestratorWake: {
     enabled: true,
@@ -272,6 +252,7 @@ export class RuntimeConfig {
 
   private owners = 0;
   private pluginConfig: ResolvedPluginConfig | undefined;
+  private featureGatesCache: Readonly<FeatureGates> | undefined;
   private hostSnapshot: HostConfigSnapshot | undefined;
   private runtimePresetName: string | null = null;
   private switchedModels = new Set<string>();
@@ -286,6 +267,7 @@ export class RuntimeConfig {
 
   private seedPlugin(pluginConfig: ResolvedPluginConfig): void {
     this.pluginConfig = deepFreeze(clonePlain(pluginConfig));
+    this.featureGatesCache = resolveFeatureGates(this.pluginConfig);
     this.localSkillNamesCache = undefined;
     this.agentsCache = undefined;
     this.disabledAgentsCache = undefined;
@@ -309,6 +291,15 @@ export class RuntimeConfig {
   /** Frozen snapshot of the plugin config as loaded at factory start. */
   get plugin(): ResolvedPluginConfig | undefined {
     return this.pluginConfig;
+  }
+
+  /**
+   * Immutable projection of every optional-subsystem switch. Cached for the
+   * current config generation; unseeded instances expose the defaults.
+   */
+  get featureGates(): Readonly<FeatureGates> {
+    this.featureGatesCache ??= resolveFeatureGates(this.pluginConfig);
+    return this.featureGatesCache;
   }
 
   /** Active preset name: runtime override wins over the config-file preset. */
@@ -454,7 +445,7 @@ export class RuntimeConfig {
       ...this.resolveChildInputWake(
         this.pluginConfig?.backgroundJobs ?? DEFAULT_BACKGROUND_JOBS,
       ),
-      mode: this.backgroundJobsMode,
+      mode: this.featureGates.backgroundJobsMode,
     };
   }
 
@@ -493,32 +484,36 @@ export class RuntimeConfig {
     return this.pluginConfig?.council;
   }
 
-  get autoUpdate(): boolean {
-    return this.pluginConfig?.autoUpdate ?? true;
+  /**
+   * Update checker switch: enabled unless `autoUpdate: false` or the
+   * `auto-update-checker` hook is disabled. Both are independent off
+   * switches for the same update hook.
+   */
+  get updateCheckerEnabled(): boolean {
+    return this.featureGates.updateChecker;
   }
 
-  /** Resolved background-task lifecycle mode.
+  /**
+   * Resolved background-task lifecycle mode.
    *
-   * An explicit `mode` wins; the legacy `enabled: false` maps to `off` so
-   * existing configs keep their exact no-op behavior. Only `managed`
-   * constructs the board-shaped lifecycle; `native` registers the two thin
-   * host-read control tools; `off` registers none.
+   * Only `managed` constructs the board-shaped lifecycle; `native` registers
+   * the two thin host-read control tools; `off` registers none.
    */
-  get backgroundJobsMode(): BackgroundJobsMode {
-    return resolveBackgroundJobsMode(this.pluginConfig?.backgroundJobs);
+  get backgroundJobsMode(): FeatureGates['backgroundJobsMode'] {
+    return this.featureGates.backgroundJobsMode;
   }
 
   /** True only for the managed lifecycle (`mode: "managed"`). */
   get backgroundJobsEnabled(): boolean {
-    return this.backgroundJobsMode === 'managed';
+    return this.featureGates.managedJobs;
   }
 
   get interviewEnabled(): boolean {
-    return this.pluginConfig?.interview?.enabled !== false;
+    return this.featureGates.interview;
   }
 
   get sidebarEnabled(): boolean {
-    return this.pluginConfig?.sidebar !== false;
+    return this.featureGates.sidebar;
   }
 
   /**
@@ -528,7 +523,7 @@ export class RuntimeConfig {
    * applicable.
    */
   get liveConfigRefresh(): boolean {
-    return this.pluginConfig?.liveConfigRefresh !== false;
+    return this.featureGates.liveConfigRefresh;
   }
 
   /**
@@ -538,7 +533,7 @@ export class RuntimeConfig {
    * selected package IDs and the manager/store are not initialized at all.
    */
   get marketplaceEnabled(): boolean {
-    return this.pluginConfig?.marketplace?.enabled !== false;
+    return this.featureGates.marketplace;
   }
 
   get stripOrchestratorModel(): boolean {

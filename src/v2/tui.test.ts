@@ -699,6 +699,30 @@ describe('v2 tui preset plugin', () => {
       }
     });
 
+    test('autoUpdate false alone skips the update notice', async () => {
+      writeUserConfig({ autoUpdate: false });
+      const originalFetch = globalThis.fetch;
+      let requests = 0;
+      globalThis.fetch = (async () => {
+        requests += 1;
+        return new Response('{"version":"1.0.0"}');
+      }) as typeof fetch;
+      jest.useFakeTimers();
+      let cleanup: (() => void) | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          makeSetupCtx().ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        jest.advanceTimersByTime(1_500);
+        for (let i = 0; i < 30; i += 1) await Promise.resolve();
+        expect(requests).toBe(0);
+      } finally {
+        cleanup?.();
+        jest.useRealTimers();
+        globalThis.fetch = originalFetch;
+      }
+    });
+
     test('v2 cleanup returns a promise to the host', async () => {
       writeUserConfig({
         sidebar: false,
@@ -712,7 +736,7 @@ describe('v2 tui preset plugin', () => {
       await done;
     });
 
-    test('sidebar separates default from session snapshot and rejects stale route/workspace responses', async () => {
+    test('sidebar shows a differing session preset beside the default and rejects stale route/workspace responses', async () => {
       writeUserConfig(makeConfig() as unknown as Record<string, unknown>);
       process.env.XDG_DATA_HOME = path.join(configHome, 'sidebar-data');
       process.env.OPENCODE_LOG_DIR = path.join(configHome, 'logs');
@@ -784,10 +808,8 @@ describe('v2 tui preset plugin', () => {
           height: 32,
         });
         await screen.renderOnce();
-        expect(screen.captureCharFrame()).toContain('Default');
-        expect(screen.captureCharFrame()).toContain('balanced');
         expect(screen.captureCharFrame()).toContain(
-          'Session team snapshot: server-alpha',
+          'Preset server-alpha · default balanced',
         );
         expect(screen.captureCharFrame()).toContain('team-a');
         expect(screen.captureCharFrame()).not.toContain('team-b');
@@ -796,9 +818,9 @@ describe('v2 tui preset plugin', () => {
         await screen.renderOnce();
         expect(screen.captureCharFrame()).not.toContain('server-alpha');
         expect(screen.captureCharFrame()).not.toContain('team-a');
-        expect(screen.captureCharFrame()).toContain(
-          'Session team snapshot: Loading',
-        );
+        // Loading binding: the default shows alone.
+        expect(screen.captureCharFrame()).toContain('Preset balanced');
+        expect(screen.captureCharFrame()).not.toContain('· default');
         writeUserConfig({
           ...makeConfig(),
           preset: 'cheap',
@@ -831,9 +853,8 @@ describe('v2 tui preset plugin', () => {
         });
         setRoute({ type: 'home', sessionID: '' });
         await screen.renderOnce();
-        expect(screen.captureCharFrame()).toContain(
-          'Session team snapshot: No session displayed',
-        );
+        expect(screen.captureCharFrame()).toContain('Preset');
+        expect(screen.captureCharFrame()).not.toContain('· default');
       } finally {
         finishSecondRead({
           sessionID: 'root-b',
@@ -1994,7 +2015,7 @@ describe('v2 tui preset plugin', () => {
           height: 24,
         });
         await screen.renderOnce();
-        expect(screen.captureCharFrame()).toContain('Default balanced');
+        expect(screen.captureCharFrame()).toContain('Preset balanced');
         directory = projectB;
         handlers.get('session.created')?.({
           data: {
@@ -2009,7 +2030,7 @@ describe('v2 tui preset plugin', () => {
         jest.advanceTimersByTime(1_000);
         await rendered;
         await screen.renderOnce();
-        expect(screen.captureCharFrame()).toContain('Default cheap');
+        expect(screen.captureCharFrame()).toContain('Preset cheap');
         for (let i = 0; i < 5; i += 1) await Promise.resolve();
         rendered = new Promise<void>((resolve) => {
           notifyRender = resolve;
@@ -2111,9 +2132,8 @@ describe('v2 tui preset plugin', () => {
           height: 24,
         });
         await screen.renderOnce();
-        expect(screen.captureCharFrame()).toContain('Default balanced');
         expect(screen.captureCharFrame()).toContain(
-          'Session team snapshot: session-team',
+          'Preset session-team · default balanced',
         );
 
         await runPresetFlow(stub.ctx as unknown as V2TuiPluginContext);
@@ -2124,9 +2144,8 @@ describe('v2 tui preset plugin', () => {
         jest.advanceTimersByTime(1_000);
         await refreshed;
         await screen.renderOnce();
-        expect(screen.captureCharFrame()).toContain('Default cheap');
         expect(screen.captureCharFrame()).toContain(
-          'Session team snapshot: session-team',
+          'Preset session-team · default cheap',
         );
       } finally {
         await cleanup?.();

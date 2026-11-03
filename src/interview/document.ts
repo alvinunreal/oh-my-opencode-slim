@@ -39,6 +39,8 @@ export class InterviewDocumentOwnershipError extends Error {
   }
 }
 
+export class InterviewDocumentFormatError extends Error {}
+
 export class InterviewPatchRequiredError extends InterviewPatchApplyError {
   constructor() {
     super('', '');
@@ -166,6 +168,7 @@ function buildInterviewFrontmatter(
   tags = ['spec', 'diagnostic'],
   consumedState?: string,
   status?: string,
+  ideaHash?: string,
 ): string {
   const now = new Date();
   const dateStr = now.toISOString().split('T')[0];
@@ -180,6 +183,7 @@ function buildInterviewFrontmatter(
     `tags: [${tags.join(', ')}]`,
     ...(consumedState ? [`consumedState: ${consumedState}`] : []),
     ...(status ? [`status: ${status}`] : []),
+    ...(ideaHash ? [`ideaHash: ${ideaHash}`] : []),
     '---',
     '',
   ].join('\n');
@@ -215,6 +219,14 @@ export async function claimInterviewDocument(
 ): Promise<string> {
   return withInterviewDocumentLock(markdownPath, async () => {
     const document = await fs.readFile(markdownPath, 'utf8');
+    if (
+      !/^## Current spec\s*$/im.test(document) ||
+      !/^## Q&A history\s*$/im.test(document)
+    ) {
+      throw new InterviewDocumentFormatError(
+        'This is not an interview document.',
+      );
+    }
     const frontmatter = sharedParseFrontmatter(document);
     const owner = frontmatter?.sessionID;
     if (owner && owner !== sessionID) {
@@ -244,6 +256,25 @@ export async function claimInterviewDocument(
       : `${buildInterviewFrontmatter(sessionID, baseMessageCount)}${document}`;
     await fs.writeFile(markdownPath, next, 'utf8');
     return next;
+  });
+}
+
+export async function releaseInterviewDocument(
+  markdownPath: string,
+  sessionID: string,
+): Promise<void> {
+  await withInterviewDocumentLock(markdownPath, async () => {
+    const document = await fs.readFile(markdownPath, 'utf8');
+    if (parseFrontmatter(document)?.sessionID !== sessionID) return;
+    const next = document.replace(
+      /^---\r?\n[\s\S]*?\r?\n---\r?\n?/,
+      (frontmatter) =>
+        frontmatter.replace(
+          /^(?:sessionID|baseMessageCount):[^\r\n]*(?:\r?\n|$)/gm,
+          '',
+        ),
+    );
+    await fs.writeFile(markdownPath, next, 'utf8');
   });
 }
 
@@ -391,6 +422,7 @@ export function buildInterviewDocument(
     tags?: string[];
     consumedState?: string;
     status?: string;
+    ideaHash?: string;
   },
 ): string {
   const normalizedSummary = summary.trim() || 'Waiting for interview answers.';
@@ -407,6 +439,7 @@ export function buildInterviewDocument(
         tags,
         meta.consumedState,
         meta.status,
+        meta.ideaHash,
       )
     : '';
 
@@ -438,6 +471,7 @@ export async function ensureInterviewFile(
       buildInterviewDocument(record.idea, '', '', {
         sessionID: interviewOwnerSessionID(record),
         baseMessageCount: record.baseMessageCount,
+        ideaHash: createHash('sha256').update(record.idea).digest('hex'),
       }),
       { encoding: 'utf8', flag: 'wx' },
     );
@@ -504,6 +538,7 @@ export async function rewriteInterviewDocument(
       baseMessageCount: record.baseMessageCount,
       consumedState: consumedState ?? parseFrontmatter(existing)?.consumedState,
       status: parseFrontmatter(existing)?.status,
+      ideaHash: parseFrontmatter(existing)?.ideaHash,
     },
   );
   await fs.writeFile(record.markdownPath, next, 'utf8');
@@ -546,42 +581,6 @@ function updateInterviewStatus(
   return `${updatedFrontmatter}${document.slice(frontmatter.length)}`;
 }
 
-/**
- * Replace only the current specification with a clean completion response.
- * The response is deliberately not passed through the interview-state parser:
- * a previous structured response must never win over the final markdown.
- */
-export async function rewriteInterviewDocumentWithFinalSpec(
-  record: InterviewRecord,
-  finalMarkdown: string,
-): Promise<string> {
-  const existing = await readInterviewDocument(record);
-  const history = extractHistorySection(existing);
-  const frontmatter = existing.match(/^---[\s\S]*?---\s*/)?.[0] ?? '';
-  const withoutFrontmatter = finalMarkdown
-    .trim()
-    .replace(/^---[\s\S]*?---\s*/i, '')
-    .trim();
-  const summary =
-    extractSummarySection(withoutFrontmatter) || withoutFrontmatter;
-  const title = extractTitle(existing) || record.idea;
-  const next = [
-    frontmatter,
-    `# ${title}`,
-    '',
-    '## Current spec',
-    '',
-    summary.trim() || 'Specification completed.',
-    '',
-    '## Q&A history',
-    '',
-    history || 'No answers yet.',
-    '',
-  ].join('\n');
-  await fs.writeFile(record.markdownPath, next, 'utf8');
-  return next;
-}
-
 export async function appendInterviewAnswers(
   record: InterviewRecord,
   questions: InterviewQuestion[],
@@ -616,6 +615,7 @@ export async function appendInterviewAnswers(
         baseMessageCount: record.baseMessageCount,
         consumedState: parseFrontmatter(existing)?.consumedState,
         status: parseFrontmatter(existing)?.status,
+        ideaHash: parseFrontmatter(existing)?.ideaHash,
       },
     ),
     'utf8',

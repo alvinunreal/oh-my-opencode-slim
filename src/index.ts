@@ -694,6 +694,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let releaseRuntimeConfig: (() => void) | undefined;
   let finalHostAgentConfig: Record<string, unknown> | undefined;
   let interviewManager: ReturnType<typeof createInterviewManager> | undefined;
+  const v1InterviewRefusals = new Map<
+    string,
+    { messageID: string; outcome: Promise<string | undefined> }
+  >();
   let collapseActiveInterviewHistory:
     | typeof collapseInterviewHistory
     | undefined;
@@ -975,8 +979,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       clearTuiAgentActivities(ctx.directory);
     }
 
-    // Managed lifecycle gate (`backgroundJobs.mode: "managed"`, the default;
-    // the legacy `enabled: false` resolves to `off`). When it is not managed,
+    // Managed lifecycle gate (`backgroundJobs.mode: "managed"`, the default).
+    // When it is not managed,
     // nothing board-shaped is constructed: no job board, admission lease, TUI
     // projection, terminal gate, supervisor, revived-run tracker, session
     // recovery, alias authority, task-session-manager hook, wake scheduler,
@@ -1320,15 +1324,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       getRevivedContextFiles = taskSessionManagerHook!.contextFilesForTask;
       pruneRevivedContext = taskSessionManagerHook!.pruneTaskContext;
 
-      // v2: the host's native background notifier owns terminal delivery —
-      // steer reaches a busy parent at its next step boundary, restart
-      // recovery re-delivers from the durable KV job marker, and the inbox
-      // dedupes by message ID — and child permission/question asks are a
-      // host UI boundary the host does not route to the parent agent. No
-      // plugin wake machinery exists on v2 (council 2026-10-23): no
-      // scheduler is created, so every trigger call no-ops through the
-      // undefined optional chain, and asks stay in the sidecar for
-      // task_status pull. v1 keeps the scheduler.
+      // v2 has no wake scheduler; later child executions without a host job
+      // are delivered by the tracker. Child asks remain available via task_status.
       orchestratorWakeScheduler =
         hostFlavor === 'v2'
           ? undefined
@@ -1449,7 +1446,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // task_status must not show it after a restart. Runs on both hosts —
         // the ask store has no run-generation fence of its own.
         clearChildInputWaitsForSession(record.taskID);
-        // v2 has no wake machinery (no scheduler): native delivery owns
+        // v2 has no wake scheduler: native delivery owns
         // stops for job-backed runs, and the plugin does not push one for
         // a non-job run (council 2026-10-23).
         if (hostFlavor === 'v2') return;
@@ -1537,9 +1534,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // double-notify.
       backgroundJobBoard!.addTerminalOutcomeListener((record) => {
         revivedRunTracker!.onTerminal(record);
-        // tool relaunch re-arms the native observer, and a direct-prompt
-        // rev>1 run is out of plugin scope (council 2026-10-23).
-        if (hostFlavor === 'v2') return;
+        if (hostFlavor === 'v2') {
+          revivedRunTracker!.deliverContinuation(record);
+          return;
+        }
         // Unattributed child sessions are not delegated work, just as in
         // stopped-job recovery; their owner controls parent notifications.
         if (record.provisional === true) return;
@@ -1711,10 +1709,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
     }
 
-    if (!runtime.disabledHooks.has('auto-update-checker')) {
+    if (runtime.updateCheckerEnabled) {
       // Initialize auto-update checker hook
       autoUpdateChecker = createAutoUpdateCheckerHook(ctx, {
-        autoUpdate: runtime.autoUpdate,
         companion: runtime.companion,
       });
     }
@@ -2856,6 +2853,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'v2.backgroundDefaultFlip': backgroundDefaultFlip,
     'v2.refusalOutcome':
       foregroundFallback?.refusedChildOutcome.bind(foregroundFallback),
+    'v2.pendingRefusalOutcome':
+      foregroundFallback?.pendingRefusalOutcome.bind(foregroundFallback),
     'v2.backgroundGeneration': (
       parentID: string,
       childID: string,
@@ -2928,6 +2927,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ),
     'v2.noteExternalPromptIntent': (sessionID: string, messageID: string) =>
       foregroundFallback?.observeExternalPromptIntent(sessionID, messageID),
+    'v2.coverSteer': (
+      callID: string,
+      parentSessionID: string,
+      childSessionID: string,
+    ) =>
+      taskSessionManagerHook?.['v2.coverSteer'](
+        callID,
+        parentSessionID,
+        childSessionID,
+      ),
 
     agent: agents,
 
@@ -3092,6 +3101,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // captured only after every host/plugin merge, model pass and
       // permission pass.
       finalHostAgentConfig = opencodeConfig.agent as Record<string, unknown>;
+      const compaction = finalHostAgentConfig.compaction as
+        | { model?: unknown }
+        | undefined;
+      foregroundFallback?.setCompactionModelPinned(
+        typeof compaction?.model === 'string' && compaction.model.length > 0,
+      );
 
       registryBridge.prepareCommands(opencodeConfig);
     },
@@ -3104,15 +3119,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           marketplaceLeaseAbort.abort();
           terminalGate?.dispose();
         }
-        // Token streams have no work in this fan-out. The v2 Interview
-        // bridge consumes text deltas independently before dispatching here.
+        // V1 token streams have no work in this fan-out.
         const streamEventType = (input.event as { type?: string } | undefined)
           ?.type;
-        if (
-          streamEventType === 'message.part.delta' ||
-          streamEventType === 'session.text.delta' ||
-          streamEventType === 'session.reasoning.delta'
-        ) {
+        if (streamEventType === 'message.part.delta') {
           return;
         }
 
@@ -3132,7 +3142,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           properties?: {
             info?: {
               id?: string;
+              role?: string;
+              finish?: string;
               parentID?: string;
+              summary?: boolean;
               title?: string;
               agent?: string;
               providerID?: string;
@@ -3157,6 +3170,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // message id in info.id and the session id in info.sessionID. Resolve
         // by session so child activity refreshes the correct stuck timer.
         const eventSessionID = resolveEventSessionID(event);
+        if (event.type === 'message.updated' && event.properties?.info) {
+          foregroundFallback?.observeCompactionMessage(event.properties.info);
+        }
         const rawStatus = event.properties?.status;
         const statusType =
           typeof rawStatus === 'string'
@@ -3167,6 +3183,38 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
                 typeof (rawStatus as { type?: unknown }).type === 'string'
               ? (rawStatus as { type: string }).type
               : undefined;
+        if (eventSessionID && interviewManager) {
+          const info = event.properties?.info;
+          if (
+            event.type === 'message.updated' &&
+            info?.role === 'assistant' &&
+            info.finish === 'content-filter' &&
+            typeof info.id === 'string' &&
+            interviewManager.service.getActiveInterviewId(eventSessionID) &&
+            v1InterviewRefusals.get(eventSessionID)?.messageID !== info.id
+          ) {
+            const outcome = foregroundFallback?.v1InterviewRefusal(
+              eventSessionID,
+              info.id,
+            );
+            if (outcome)
+              v1InterviewRefusals.set(eventSessionID, {
+                messageID: info.id,
+                outcome,
+              });
+          } else if (
+            event.type === 'session.deleted' ||
+            (event.type === 'session.status' && statusType === 'busy')
+          ) {
+            v1InterviewRefusals.delete(eventSessionID);
+          }
+        }
+        const refusalAtIdle =
+          eventSessionID &&
+          (event.type === 'session.idle' ||
+            (event.type === 'session.status' && statusType === 'idle'))
+            ? v1InterviewRefusals.get(eventSessionID)
+            : undefined;
         // Publish before any awaited consumer can admit a newer run.
         const companionProperties = event.properties;
         const companionData = (
@@ -3289,7 +3337,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
                 : undefined;
           // Track each session's current model so background task admission
           // can resolve the model a model-less subagent will inherit.
-          if (typeof info?.sessionID === 'string' && providerID && modelID) {
+          if (
+            typeof info?.sessionID === 'string' &&
+            info.summary !== true &&
+            providerID &&
+            modelID
+          ) {
             const model = `${providerID}/${modelID}`;
             // Accounting/fallback follows the model actually executing.
             // External selection tracking does not: a synthetic wake's
@@ -3423,11 +3476,30 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // disabled_hooks entry is absent.
         await autoUpdateChecker?.event(input);
 
-        await interviewManager?.handleEvent(
-          input as {
-            event: { type: string; properties?: Record<string, unknown> };
-          },
-        );
+        const deliverInterviewEvent = () =>
+          interviewManager?.handleEvent(
+            input as {
+              event: { type: string; properties?: Record<string, unknown> };
+            },
+          );
+        if (refusalAtIdle && eventSessionID) {
+          const settle = (model?: string) => {
+            if (
+              !instanceDisposed &&
+              v1InterviewRefusals.get(eventSessionID) === refusalAtIdle
+            ) {
+              v1InterviewRefusals.delete(eventSessionID);
+              if (!model) return deliverInterviewEvent();
+            }
+          };
+          void refusalAtIdle.outcome
+            .then(settle, () => settle())
+            .catch((error) =>
+              log('[interview] deferred idle failed', String(error)),
+            );
+        } else {
+          await deliverInterviewEvent();
+        }
 
         if (input.event.type === 'session.deleted') {
           const props = input.event.properties as
@@ -3451,6 +3523,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // Synchronous: v2 setup calls this directly and does not emit the
       // public server.instance.disposed event first.
       instanceDisposed = true;
+      v1InterviewRefusals.clear();
       companionStartupAbort?.abort();
       marketplaceLeaseAbort.abort();
       registryBridge.retire();
@@ -3709,8 +3782,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           foregroundFallback?.noteV2Prompt(input.sessionID);
         }
         const model = input.model ?? output?.message?.model;
-        foregroundFallback?.observeExternalTurn(
+        foregroundFallback?.noteExternalTurn(
           input.sessionID,
+          // v2 retains its retry budget across external prompts.
+          hostFlavor === 'v2' ? undefined : messageID,
           model ? `${model.providerID}/${model.modelID}` : undefined,
         );
       }
@@ -3894,7 +3969,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
 
       if (agent) {
-        foregroundFallback?.registerSessionAgent(input.sessionID, agent);
+        if (hostFlavor !== 'v2' && !internalAdmission) {
+          await foregroundFallback?.registerExternalSessionAgent(
+            input.sessionID,
+            agent,
+          );
+        } else {
+          foregroundFallback?.registerSessionAgent(input.sessionID, agent);
+        }
         if (!internalAdmission) {
           sessionMetadata.setAgent(input.sessionID, agent);
         }
@@ -4213,6 +4295,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       if (taskSessionManagerHook) await taskSessionManagerAfter(input, output);
     },
   } as Hooks & {
+    'v2.pendingRefusalOutcome':
+      | ForegroundFallbackManager['pendingRefusalOutcome']
+      | undefined;
     'v2.refusalOutcome':
       | ForegroundFallbackManager['refusedChildOutcome']
       | undefined;
@@ -4239,6 +4324,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       >['v2.registerDelegatedLaunchFromStructured']
     >;
     'v2.notePromptAdmission': (sessionID: string, messageID: string) => void;
+    'v2.coverSteer': NonNullable<
+      typeof taskSessionManagerHook
+    >['v2.coverSteer'];
     'v2.noteExternalPromptIntent'?: (
       sessionID: string,
       messageID: string,

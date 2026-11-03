@@ -180,6 +180,84 @@ afterEach(() => {
 });
 
 describe('revived run tracker', () => {
+  test('delivers each later child publication once', async () => {
+    const h = createHarness(() => ({ data: [] }));
+    const now = Date.now();
+    h.board.updateStatus({
+      taskID: h.run.taskID,
+      state: 'completed',
+      resultSummary: 'partial',
+      now,
+    });
+    h.board.markRunningFromLiveSession(h.run.taskID, now + 1);
+    const completed = h.board.updateStatus({
+      taskID: h.run.taskID,
+      state: 'completed',
+      resultSummary: 'final result',
+      now: now + 2,
+    });
+    if (!completed) throw new Error('missing terminal record');
+    h.tracker.deliverContinuation(completed);
+    h.tracker.onTerminal(completed);
+    await flushNotify();
+    expect(h.prompt).toHaveBeenCalledTimes(1);
+    expect(h.prompt.mock.calls[0]?.[0]).toMatchObject({
+      path: { id: 'parent' },
+      delivery: 'queue',
+      body: { parts: [{ text: expect.stringContaining('final result') }] },
+    });
+
+    h.board.markRunningFromLiveSession(h.run.taskID, now + 3);
+    const direct = h.board.updateStatus({
+      taskID: h.run.taskID,
+      state: 'completed',
+      resultSummary: 'direct answer',
+      now: now + 4,
+    });
+    if (!direct) throw new Error('missing direct terminal record');
+    h.tracker.onTerminal(direct);
+    h.tracker.deliverContinuation(direct);
+    await flushNotify();
+    expect(h.prompt).toHaveBeenCalledTimes(2);
+    expect(h.prompt.mock.calls[1]?.[0]).toMatchObject({
+      path: { id: 'parent' },
+      delivery: 'queue',
+      body: { parts: [{ text: expect.stringContaining('direct answer') }] },
+    });
+    h.tracker.dispose();
+  });
+
+  test('a deferred terminal probe does not settle or release its admission lease', async () => {
+    const h = createHarness(() => ({ data: [] }));
+    h.board.updateStatus({
+      taskID: h.run.taskID,
+      state: 'completed',
+      resultSummary: 'prior result',
+    });
+    const record = h.board.get(h.run.taskID);
+    const lease = h.board.acquireLease(
+      h.run.taskID,
+      h.run.generation,
+      'relaunch',
+    );
+    if (!record || !lease) throw new Error('Missing terminal fixture');
+    h.tracker.register({
+      taskID: h.run.taskID,
+      generation: h.run.generation,
+      parentSessionID: 'parent',
+      promptMessageID: 'pending-input',
+      admissionLease: lease,
+      description: 'pending admission',
+    });
+    spyOn(h.gate, 'reconcile').mockResolvedValue({ kind: 'deferred', record });
+
+    expect(await h.tracker.probe(h.run.taskID, h.run.generation)).toBe(false);
+    expect(h.board.validateLease(lease)).toBe(true);
+    expect(h.settled).not.toHaveBeenCalled();
+    expect(h.prompt).not.toHaveBeenCalled();
+    h.tracker.dispose();
+  });
+
   test('confirmed fallback admission sends one queued internal continuation notice', async () => {
     jest.useFakeTimers();
     jest.setSystemTime(0);
@@ -426,7 +504,7 @@ describe('revived run tracker', () => {
     });
   });
 
-  test('forwards the resolved notification variant in the v1 body and v2 modelVariant', async () => {
+  test('forwards the resolved notification variant in the v1 body', async () => {
     jest.useFakeTimers();
     let probe = false;
     const harness = createHarness(
@@ -456,7 +534,6 @@ describe('revived run tracker', () => {
 
     expect(harness.prompt.mock.calls[0]?.[0]).toMatchObject({
       delivery: 'queue',
-      modelVariant: 'max',
       body: {
         agent: 'plan',
         model: { providerID: 'test', modelID: 'plan-model' },

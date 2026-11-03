@@ -53,8 +53,7 @@ environment variable through the installer (see [Installation](installation.md))
 or use the one-shot export above. V2 does not use this variable. Confirm the
 release with `opencode --version`.
 
-Setting `backgroundJobs.mode: "off"` (or the legacy `backgroundJobs.enabled:
-false`) turns this managed layer off entirely:
+Setting `backgroundJobs.mode: "off"` turns this managed layer off entirely:
 the `task_*` control tools and `wait_for_user` are not registered, and no job
 board, retention, terminal gate, watchdog, wake scheduler, or startup recovery
 runs. Native `task`/`subagent` delegation and host completion delivery keep
@@ -486,9 +485,8 @@ absent, and `"children"` selects children-driven mode. Set `enabled: false` to d
 and background-job orchestration.
 
 This whole section is **v1-only**: on OpenCode v2 hosts the plugin creates no
-wake scheduler at all — the native background notifier owns terminal delivery
-(council 2026-10-23) — and every `backgroundJobs.orchestratorWake` key warns
-as ignored there.
+wake scheduler, and every `backgroundJobs.orchestratorWake` key warns as
+ignored. Slim delivers later child executions that are not covered by a host job.
 
 Behavior:
 
@@ -542,9 +540,9 @@ the local job board. When no incomplete TODOs remain, it ends the current idle
 spell and stops polling until new activity.
 
 **v2 hosts: no scheduler.** On OpenCode v2 the plugin creates no wake
-scheduler at all (council 2026-10-23): the native background notifier owns
-terminal delivery, restart recovery re-delivers anything lost, and the
-parent discovers open child asks via `task_status` pull.
+scheduler (council 2026-10-23). The native notifier delivers each generation's
+first terminal result, and the revived-run tracker queues later results to
+the parent. Open child asks remain available through `task_status`.
 
 #### v2 structural defaults
 
@@ -609,9 +607,9 @@ Terminal facts travel as one-shot pushes instead:
   dropping: results inside the window stay queued and one wake delivers them
   together when it elapses.
   The wake that carries it is a bare resume pointer: the delta holds the
-  facts. On v2 the plugin sends no wake for it: a later run relaunched
-  through the `subagent` tool is delivered natively, and any other later
-  result is pulled with `task_status`.
+  facts. On v2 the revived-run tracker queues a `<task>` result to the parent.
+  A run relaunched through `subagent` starts a new generation and its first
+  result is delivered natively.
 - Overflowed pushes keep a durable pointer to `task_status` instead of
   listing the coalesced facts inline.
 

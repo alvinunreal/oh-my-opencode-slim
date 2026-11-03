@@ -23,7 +23,7 @@ import type { BackgroundJobsMode } from './config/schema';
  * retained sessions resume through native `subagent(sessionID, prompt)`, and
  * a running child is steered the same way), so the v2 floor drops by three
  * relative to the v1 baseline. When the OMOS managed background-task
- * lifecycle is disabled (`backgroundJobs.enabled = false`), the three
+ * lifecycle is disabled (`backgroundJobs.mode = "off"`), the three
  * background-task tools (`task_cancel`, `task_status`, `task_reply`) plus
  * the v1-only `task_revive`, `task_message` and `wait_for_user` are not
  * registered either, so the floor drops by six on v1 (three on v2, where

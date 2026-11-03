@@ -107,6 +107,14 @@ stops the generation but retains its session; it does not roll back partial edit
 After cancelling a write-capable task, inspect and reconcile file changes before
 launching replacement work.
 
+For a tracked v2 task whose live status is unavailable, `task_status` may show
+`last_host_outcome` and `last_host_idle_at` from an identity-checked host record.
+These describe a past execution. They do not prove the worker is currently idle,
+that its admission is released, or that its files are safe for another writer.
+The status remains `unconfirmed` until the existing terminal checks establish it.
+If the plugin is disposed during a result read, the read is refused without
+acknowledging the result; a fresh plugin instance can retrieve it later.
+
 `task_cancel` and `task_revive` admit managed parent sessions, including Build
 and custom primary agents that have delegated work. Host tool permissions still
 apply, and a parent can only control its own children. Switching primary agents

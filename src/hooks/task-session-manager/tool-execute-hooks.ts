@@ -99,6 +99,19 @@ function isSteeredCall(pending: {
   );
 }
 
+function releaseSteerCoverage(
+  pending: PendingTaskCall,
+  board: BackgroundJobBoard,
+): void {
+  const fence = pending.steerAmendment;
+  if (!fence || pending.steerCoverRevision === undefined) return;
+  board.uncoverHostSteer(
+    fence.taskID,
+    fence.generation,
+    pending.steerCoverRevision,
+  );
+}
+
 function refuseKnownTaskResume(
   requested: string,
   job: ResumeRefusalJob,
@@ -856,6 +869,9 @@ export async function handleToolExecuteAfter(
 
   if (!pending) return;
 
+  if (!pending.registeredByWrapper)
+    releaseSteerCoverage(pending, deps.backgroundJobBoard);
+
   try {
     // v2 gate: the executor wrapper registered this call's delegated
     // (subagent) launch from the STRUCTURED executor result — launch
@@ -1357,12 +1373,13 @@ export async function registerDelegatedLaunchFromStructured(
     if (
       input.handledByWrapper === true &&
       input.exactCallConfirmed &&
-      !input.pending.identityUnresolved &&
       input.pending.steerAmendment &&
       input.pending.steerAmendment.taskID === input.childTaskID &&
       input.pending.resumedTaskId === input.childTaskID
     ) {
-      noteSteerAmendment(input.pending, deps);
+      if (!input.pending.identityUnresolved)
+        noteSteerAmendment(input.pending, deps);
+      input.pending.registeredByWrapper = true;
     }
     if (input.background && !input.pending.background) {
       adoptHostConfirmedBackground(input.pending, deps);

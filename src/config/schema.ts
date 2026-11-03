@@ -572,14 +572,13 @@ export const BackgroundJobsConfigStrictSchema = z.object({
     .enum(['managed', 'native', 'off'])
     .optional()
     .describe(
-      'Background-task lifecycle mode. "managed" (default) runs the OMOS managed lifecycle and its task_cancel/task_status/task_reply tools. "native" skips every board-shaped component and registers only two thin host-read tools — task_status (parent-checked host read plus trailing result) and task_cancel (the host atomic interruption) — for agents driving native subagent/task delegation. "off" registers no OMOS task tool at all and leaves native OpenCode delegation completely untouched. An explicit mode wins over the legacy `enabled` key.',
+      'Background-task lifecycle mode. "managed" (default) runs the OMOS managed lifecycle and its task_cancel/task_status/task_reply tools. "native" skips every board-shaped component and registers only two thin host-read tools — task_status (parent-checked host read plus trailing result) and task_cancel (the host atomic interruption) — for agents driving native subagent/task delegation. "off" registers no OMOS task tool at all and leaves native OpenCode delegation completely untouched.',
     ),
   enabled: z
-    .boolean()
-    .default(true)
-    .describe(
-      'Legacy master switch for the OMOS managed background-task lifecycle (job board, retention, wake scheduler, wall-clock watchdog, terminal gate, and the task_cancel/task_status/task_reply tools). Prefer `mode`: `enabled: false` is equivalent to `mode: "off"`, and an explicit `mode` wins when both are set. When the lifecycle is off, every other backgroundJobs key stays accepted but inert. Default true.',
-    ),
+    .never({
+      error: 'backgroundJobs.enabled was removed; use backgroundJobs.mode',
+    })
+    .optional(),
   maxSessionsPerAgent: z.number().int().min(1).max(10).default(2),
   maxContextLines: z
     .never({
@@ -638,13 +637,13 @@ export const BackgroundJobsConfigStrictSchema = z.object({
         .enum(['auto', 'todo', 'children'])
         .default('auto')
         .describe(
-          'Wake-condition source (v1 hosts only). "auto" uses todo-gating; "todo" or "children" pin one mode, degrading to children when the host lacks the todo API. On OpenCode v2 hosts the whole section is ignored: the native background notifier owns terminal delivery. Default "auto".',
+          'Wake-condition source (v1 hosts only). "auto" uses todo-gating; "todo" or "children" pin one mode, degrading to children when the host lacks the todo API. On OpenCode v2 hosts the whole section is ignored. Default "auto".',
         ),
       periodicWakeEnabled: z
         .boolean()
         .default(true)
         .describe(
-          'When false, the periodic idle evaluation never runs; only event-driven wakes (stopped-job recovery, terminal-publication rev>1, child-input) still deliver. Failed event wakes keep their timer-based retry path. v1 hosts only; v2 hosts run no plugin wake machinery at all. Default enabled.',
+          'When false, the periodic idle evaluation never runs; only event-driven wakes (stopped-job recovery, terminal-publication rev>1, child-input) still deliver. Failed event wakes keep their timer-based retry path. v1 hosts only; v2 hosts create no wake scheduler. Default enabled.',
         ),
       wakeOnTerminalPublication: z
         .boolean()
@@ -671,7 +670,7 @@ export const BackgroundJobsConfigStrictSchema = z.object({
       publicationWakeMinIntervalMs: 30_000,
     })
     .describe(
-      'Periodic orchestrator wake scheduler for idle sessions (v1 hosts only; ignored on OpenCode v2 hosts, where the native background notifier owns terminal delivery). Requires host session APIs (session.get, todo, children, status, promptAsync) and wakes while incomplete todos remain. Default enabled at a 5-minute interval.',
+      'Periodic orchestrator wake scheduler for idle sessions (v1 hosts only; ignored on OpenCode v2 hosts). Requires host session APIs (session.get, todo, children, status, promptAsync) and wakes while incomplete todos remain. Default enabled at a 5-minute interval.',
     ),
   wallClockTimeoutMs: z
     .union([z.literal(0), z.number().int().min(60_000).max(2_147_483_647)])
@@ -846,7 +845,7 @@ export const BackgroundJobsConfigSchema = z.preprocess(
 
 export type BackgroundJobsConfig = z.infer<typeof BackgroundJobsConfigSchema>;
 
-/** Resolved background-task lifecycle mode. `enabled: false` maps to `off`. */
+/** Resolved background-task lifecycle mode. */
 export type BackgroundJobsMode = 'managed' | 'native' | 'off';
 
 export const FailoverConfigSchema = z
@@ -1038,7 +1037,7 @@ export const RawPluginConfigSchema = z
       .boolean()
       .optional()
       .describe(
-        'Master switch for all OMOS TUI surfaces (sidebar, /preset, /killall, /subagent, update notice). When false, the TUI entry registers nothing; server-side features are untouched. Defaults to true.',
+        'Master switch for all OMOS TUI surfaces (sidebar, /preset, /killall, /subagent, update notice). When false, the TUI entry registers nothing and the server records no sidebar state; other server-side features are untouched. Defaults to true.',
       ),
     compactSidebar: z
       .boolean()
@@ -1050,7 +1049,7 @@ export const RawPluginConfigSchema = z
       .boolean()
       .optional()
       .describe(
-        'Master switch for the OMOS TUI sidebar surface (the agent list it renders and its state file). When false, the plugin never registers or renders the sidebar and writes no sidebar state; the native host sidebar is untouched. Defaults to true.',
+        'Master switch for the OMOS TUI sidebar surface (the agent list it renders and its state file). When false, the plugin never registers or renders the sidebar and writes no sidebar state; the other OMOS TUI surfaces (/preset, /killall, /subagent, update notice) are unaffected, and the native host sidebar is untouched. Defaults to true.',
       ),
     liveConfigRefresh: z
       .boolean()
@@ -1074,7 +1073,7 @@ export const RawPluginConfigSchema = z
       .boolean()
       .optional()
       .describe(
-        'Disable automatic installation of plugin updates when false. Defaults to true.',
+        'Master switch for OMOS plugin updates: when false, all update checks, update notices, and automatic installation stay off. Listing "auto-update-checker" in disabled_hooks independently disables the same update hook — neither setting strengthens or weakens the other. Defaults to true.',
       ),
     presets: z.record(z.string(), PresetSchema).optional(),
     agents: z.record(z.string(), AgentOverrideConfigSchema).optional(),
@@ -1123,7 +1122,7 @@ export const RawPluginConfigSchema = z
       .describe(
         'Hook names to disable completely. Valid values: ' +
           DISABLED_HOOKS_VALUES.join(', ') +
-          '. "phase-reminder" is not registered, so orchestrator phase reminders are never injected; "foreground-fallback" prevents the fallback manager from being constructed at all and never triggers automatic intervention, same effect as fallback.enabled = false; "chat-headers" is not registered, so the Copilot x-initiator header is never stamped (v1 chat.headers and the v2 model.request bridge); "cache-monitor" stops the prompt-cache bust watchdog, so cache warnings are never logged; the on-demand tool guards ("json-error-recovery", "tool-loop-guard", "search-path-guard", "absolute-path-rescue", "apply-patch" — v1 apply_patch / v2 patch) stop intercepting tool calls entirely, so malformed output, repeated identical calls, and invalid or guessed paths surface raw to the model; "council-inject" is not registered, so the keyword-triggered Council Mode injection is never appended to orchestrator messages; "auto-update-checker" stops both update checking and automatic installation (a stronger switch than autoUpdate, which only controls installation). Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer\'s list still applies.',
+          '. "phase-reminder" is not registered, so orchestrator phase reminders are never injected; "foreground-fallback" prevents the fallback manager and its retry hook from being constructed at all, so no automatic intervention runs on any host (fallback.enabled = false still leaves the retry bookkeeping registered on v2 hosts, where a live per-session enable can switch it back on); "chat-headers" is not registered, so the Copilot x-initiator header is never stamped (v1 chat.headers and the v2 model.request bridge); "cache-monitor" stops the prompt-cache bust watchdog, so cache warnings are never logged; the on-demand tool guards ("json-error-recovery", "tool-loop-guard", "search-path-guard", "absolute-path-rescue", "apply-patch" — v1 apply_patch / v2 patch) stop intercepting tool calls entirely, so malformed output, repeated identical calls, and invalid or guessed paths surface raw to the model; "council-inject" is not registered, so the keyword-triggered Council Mode injection is never appended to orchestrator messages; "auto-update-checker" stops the same OMOS update hook that autoUpdate: false covers — all update checks, update notices, and automatic installation — so either switch alone turns it off. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer\'s list still applies.',
       ),
     disabled_commands: z
       .array(z.enum(DISABLED_COMMANDS_VALUES))

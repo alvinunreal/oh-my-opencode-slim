@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { PluginInput } from '@opencode-ai/plugin';
@@ -21,6 +21,7 @@ import {
   extractSummarySection,
   extractTitle,
   hashInterviewState,
+  InterviewDocumentFormatError,
   InterviewDocumentOwnershipError,
   InterviewPatchApplyError,
   markInterviewDocumentComplete,
@@ -30,9 +31,9 @@ import {
   parseSpecBlocks,
   readInterviewDocument,
   relativeInterviewPath,
+  releaseInterviewDocument,
   resolveExistingInterviewPath,
   rewriteInterviewDocument,
-  rewriteInterviewDocumentWithFinalSpec,
   withInterviewDocumentLock,
 } from './document';
 import {
@@ -177,6 +178,17 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function lastHostMessageID(messages: InterviewMessage[]): string | undefined {
+  // Both supported hosts generate ascending msg_ IDs; synthetic IDs use another prefix.
+  return [...messages]
+    .reverse()
+    .map((message) => message.info?.id)
+    .find(
+      (id): id is string =>
+        typeof id === 'string' && /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(id),
+    );
+}
+
 export function createInterviewService(
   ctx: PluginInput,
   config?: InterviewConfig,
@@ -194,6 +206,7 @@ export function createInterviewService(
     callback: (interview: InterviewRecord) => void,
   ) => void;
   getActiveInterviewId: (sessionID: string) => string | null;
+  isSessionIdle: (sessionID: string) => boolean;
   registerCommand: (
     config: Record<string, unknown>,
     enabled?: { interview?: boolean; implement?: boolean },
@@ -264,8 +277,6 @@ export function createInterviewService(
     | null = null;
   let onInterviewCreated: ((interview: InterviewRecord) => void) | null = null;
   let abandonedOrderCounter = 0;
-  const finalizationPending = new Set<string>();
-  const finalizationReady = new Set<string>();
   type InterviewMemory = {
     lastAppliedState?: {
       state: InterviewAssistantState;
@@ -359,22 +370,6 @@ export function createInterviewService(
     return sessionRuntime.messages(sessionID);
   }
 
-  async function loadMessagesWithRetry(
-    sessionID: string,
-  ): Promise<InterviewMessage[]> {
-    for (let i = 0; i < 8; i++) {
-      const messages = await loadMessages(sessionID);
-      if (messages.length > 0) {
-        const last = messages[messages.length - 1];
-        if (last?.info?.role === 'assistant') {
-          return messages;
-        }
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-    return loadMessages(sessionID);
-  }
-
   function isUserVisibleMessage(message: InterviewMessage): boolean {
     return !(message.parts ?? []).some((part) => isInternalInitiatorPart(part));
   }
@@ -435,8 +430,6 @@ export function createInterviewService(
       .forEach((record) => {
         interviewsById.delete(record.id);
         interviewMemory.delete(record.id);
-        finalizationPending.delete(record.id);
-        finalizationReady.delete(record.id);
         browserOpened.delete(record.id);
       });
   }
@@ -479,6 +472,7 @@ export function createInterviewService(
       createdAt: nowIso(),
       status: 'active',
       baseMessageCount: messages.length,
+      baseMessageID: lastHostMessageID(messages),
     };
 
     await withInterviewDocumentLock(record.markdownPath, () =>
@@ -527,6 +521,7 @@ export function createInterviewService(
       status: 'active',
       completed: frontmatter?.status === 'complete',
       baseMessageCount: messages.length,
+      baseMessageID: lastHostMessageID(messages),
     };
 
     if (record.completed) {
@@ -540,16 +535,13 @@ export function createInterviewService(
     return record;
   }
 
-  function syncInterview(
-    interview: InterviewRecord,
-    retryMessages = true,
-  ): Promise<InterviewState> {
+  function syncInterview(interview: InterviewRecord): Promise<InterviewState> {
     const existing = activeSyncs.get(interview.id);
     if (existing) {
       return existing;
     }
 
-    const sync = performSyncInterview(interview, retryMessages).finally(() => {
+    const sync = performSyncInterview(interview).finally(() => {
       activeSyncs.delete(interview.id);
     });
     activeSyncs.set(interview.id, sync);
@@ -573,8 +565,14 @@ export function createInterviewService(
     return withInterviewDocumentLock(interview.markdownPath, async () => {
       const existingDocument = await readInterviewDocument(interview);
       const turnHash = hashInterviewState(state);
-      const consumed = parseFrontmatter(existingDocument)?.consumedState;
-      if (consumed === turnHash) {
+      const frontmatter = parseFrontmatter(existingDocument);
+      // Re-check under the lock: a deleted owner's release may have won it.
+      if (frontmatter?.sessionID !== interview.sessionID)
+        throw new InterviewDocumentOwnershipError(
+          interview.markdownPath,
+          frontmatter?.sessionID ?? '',
+        );
+      if (frontmatter?.consumedState === turnHash) {
         return {
           document: existingDocument,
           patchError: null,
@@ -669,6 +667,16 @@ export function createInterviewService(
     delete turn.patchError;
   }
 
+  function openTurn(sessionID: string): void {
+    if (turnFor(sessionID).turnOpen === true) return;
+    resetTurnNoticeState(sessionID);
+    const interviewID = activeInterviewIds.get(sessionID);
+    if (interviewID && memoryFor(interviewID).patchRepairSent === true) {
+      turnFor(sessionID).repairTurnStarted = true;
+    }
+    turnFor(sessionID).turnOpen = true;
+  }
+
   async function retryPendingAnswerHistory(
     interview: InterviewRecord,
   ): Promise<void> {
@@ -749,7 +757,6 @@ export function createInterviewService(
 
   async function performSyncInterview(
     interview: InterviewRecord,
-    retryMessages = true,
   ): Promise<InterviewState> {
     if (interview.status !== 'active') {
       const document = await readInterviewDocument(interview);
@@ -769,26 +776,29 @@ export function createInterviewService(
         blocks: parseSpecBlocks(document),
       };
     }
-    const allMessages = retryMessages
-      ? await loadMessagesWithRetry(interview.sessionID)
-      : await loadMessages(interview.sessionID);
-    const interviewMessages = allMessages
-      .slice(interview.baseMessageCount)
-      .filter(isUserVisibleMessage);
+    const allMessages = await loadMessages(interview.sessionID);
+    const baseMessageID = interview.baseMessageID;
+    const baseIndex = baseMessageID
+      ? allMessages.findIndex((message) => message.info?.id === baseMessageID)
+      : -1;
+    const interviewMessages = (
+      baseIndex >= 0
+        ? allMessages.slice(baseIndex + 1)
+        : baseMessageID
+          ? allMessages.filter(
+              (message) =>
+                typeof message.info?.id === 'string' &&
+                message.info.id > baseMessageID,
+            )
+          : allMessages.slice(interview.baseMessageCount)
+    ).filter(isUserVisibleMessage);
     const latestAssistant = [...interviewMessages]
       .reverse()
       .find((message) => message.info?.role === 'assistant');
-    const latestAssistantText = latestAssistant
-      ? flattenMessage(latestAssistant)
-      : '';
     const latestAssistantId =
       typeof latestAssistant?.info?.id === 'string'
         ? latestAssistant.info.id
         : undefined;
-    const isCleanFinalResponse =
-      finalizationPending.has(interview.id) &&
-      finalizationReady.has(interview.id) &&
-      latestAssistantText.length > 0;
     const remembered = memoryFor(interview.id).lastAppliedState;
     const toolMessageID = turnFor(interview.sessionID).toolMessageID;
     // The assistant message the current state was applied for: the tool path
@@ -827,9 +837,10 @@ export function createInterviewService(
       return hasInterviewStateBlock(flattenMessage(message));
     });
 
-    const parsed = isCleanFinalResponse
-      ? { state: null, latestAssistantError: undefined }
-      : findLatestAssistantState(newerAssistantMessages, maxQuestions);
+    const parsed = findLatestAssistantState(
+      newerAssistantMessages,
+      maxQuestions,
+    );
 
     const rememberedForLatest =
       remembered && !hasNewerStateBearingText ? remembered : undefined;
@@ -884,14 +895,7 @@ export function createInterviewService(
 
     let document: string;
 
-    if (isCleanFinalResponse) {
-      document = await withInterviewDocumentLock(interview.markdownPath, () =>
-        rewriteInterviewDocumentWithFinalSpec(interview, latestAssistantText),
-      );
-      finalizationPending.delete(interview.id);
-      delete memoryFor(interview.id).lastAppliedState;
-      delete turnFor(interview.sessionID).pendingNotice;
-    } else if (stateFromText) {
+    if (stateFromText) {
       const outcome = await applyStateToDocument(interview, stateFromText);
       document = outcome.document;
       patchError = outcome.patchError;
@@ -1105,11 +1109,10 @@ export function createInterviewService(
 
     // Apply any state still present in stored text (printState mode, a missed
     // text.complete hook, or the v2 fallback) before choosing the notice.
-    // Non-retrying: the turn is over, so a missing assistant message is real.
     const turn = turnFor(sessionID);
     if (!turn.noticeHandled) {
       try {
-        await syncInterview(interview, false);
+        await syncInterview(interview);
       } catch (error) {
         log('[interview] turn-end sync failed', {
           interviewId: interview.id,
@@ -1609,6 +1612,7 @@ export function createInterviewService(
         interview.completed = false;
       }
       await notifyInterviewUrl(input.sessionID, interview);
+      openTurn(input.sessionID);
       turnFor(input.sessionID).serviceInitiated = true;
       const document = await readInterviewDocument(interview);
       const preface =
@@ -1625,16 +1629,46 @@ export function createInterviewService(
       return;
     }
 
-    const resumePath = resolveExistingInterviewPath(
+    let resumePath = resolveExistingInterviewPath(
       ctx.directory,
       outputFolder,
       idea,
     );
+    if (!resumePath) {
+      const outputDir = createInterviewDirectoryPath(
+        ctx.directory,
+        outputFolder,
+      );
+      const ideaHash = createHash('sha256').update(idea).digest('hex');
+      try {
+        for (const entry of await fs.readdir(outputDir)) {
+          if (!entry.endsWith('.md')) continue;
+          const candidate = path.join(outputDir, entry);
+          const document = await fs.readFile(candidate, 'utf8');
+          const frontmatter = parseFrontmatter(document);
+          // shortcut: renamed legacy files have no idea hash, upgrade after metadata migration.
+          if (
+            frontmatter?.sessionID === input.sessionID &&
+            (frontmatter.ideaHash === ideaHash ||
+              (!frontmatter.ideaHash && extractTitle(document) === idea))
+          ) {
+            resumePath = candidate;
+            break;
+          }
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
     if (resumePath) {
       let interview: InterviewRecord;
       try {
         interview = await resumeInterview(input.sessionID, resumePath);
       } catch (error) {
+        if (error instanceof InterviewDocumentFormatError) {
+          output.parts.push(createInternalAgentTextPart(error.message));
+          return;
+        }
         if (error instanceof InterviewDocumentOwnershipError) {
           output.parts.push(
             createInternalAgentTextPart(
@@ -1647,6 +1681,7 @@ export function createInterviewService(
       }
       const document = await fs.readFile(interview.markdownPath, 'utf8');
       await notifyInterviewUrl(input.sessionID, interview);
+      openTurn(input.sessionID);
       turnFor(input.sessionID).serviceInitiated = true;
       output.parts.push(
         createInternalAgentTextPart(
@@ -1667,6 +1702,7 @@ export function createInterviewService(
       existingSummary !== '' &&
       existingSummary !== 'Waiting for interview answers.';
     await notifyInterviewUrl(input.sessionID, interview);
+    openTurn(input.sessionID);
     turnFor(input.sessionID).serviceInitiated = true;
     output.parts.push(
       createInternalAgentTextPart(
@@ -1703,17 +1739,7 @@ export function createInterviewService(
           // emit busy once per loop step; resetting on every busy would wipe a
           // mid-turn tool submit. `sessionBusy` is deliberately not used as
           // the gate (submitAnswers sets it before the host emits busy).
-          if (turnFor(sessionID).turnOpen !== true) {
-            resetTurnNoticeState(sessionID);
-            const interviewID = activeInterviewIds.get(sessionID);
-            if (
-              interviewID &&
-              memoryFor(interviewID).patchRepairSent === true
-            ) {
-              turnFor(sessionID).repairTurnStarted = true;
-            }
-            turnFor(sessionID).turnOpen = true;
-          }
+          openTurn(sessionID);
         }
         sessionBusy.set(sessionID, isBusy);
         const interviewId = activeInterviewIds.get(sessionID);
@@ -1721,9 +1747,6 @@ export function createInterviewService(
           const state = turnState.get(sessionID);
           if (state) state.turnOpen = false;
           if (interviewId) {
-            if (finalizationPending.has(interviewId)) {
-              finalizationReady.add(interviewId);
-            }
             await notifyTurnStatus(sessionID);
           }
         }
@@ -1741,26 +1764,8 @@ export function createInterviewService(
         const state = turnState.get(sessionID);
         if (state) state.turnOpen = false;
         const interviewId = activeInterviewIds.get(sessionID);
-        if (interviewId && finalizationPending.has(interviewId)) {
-          finalizationReady.add(interviewId);
-        }
         if (interviewId) {
           await notifyTurnStatus(sessionID);
-        }
-      }
-      return;
-    }
-
-    if (event.type === 'session.text.ended') {
-      // Not a turn-end boundary: never post the notice here.
-      const sessionID =
-        (properties.sessionID as string | undefined) ??
-        (properties.info as { id?: string } | undefined)?.id ??
-        undefined;
-      if (sessionID) {
-        const interviewId = activeInterviewIds.get(sessionID);
-        if (interviewId && finalizationPending.has(interviewId)) {
-          finalizationReady.add(interviewId);
         }
       }
       return;
@@ -1797,13 +1802,42 @@ export function createInterviewService(
       sessionBusy.delete(deletedSessionId);
       sessionModel.delete(deletedSessionId);
       turnState.delete(deletedSessionId);
+      const outputDir = createInterviewDirectoryPath(
+        ctx.directory,
+        outputFolder,
+      );
+      const paths = new Set(
+        [...interviewsById.values()]
+          .filter((record) => record.sessionID === deletedSessionId)
+          .map((record) => record.markdownPath),
+      );
+      try {
+        for (const entry of await fs.readdir(outputDir)) {
+          if (entry.endsWith('.md')) paths.add(path.join(outputDir, entry));
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+          log('[interview] failed to scan deleted session documents', {
+            error: String(error),
+          });
+      }
+      for (const filePath of paths) {
+        try {
+          const content = await fs.readFile(filePath, 'utf8');
+          if (parseFrontmatter(content)?.sessionID === deletedSessionId)
+            await releaseInterviewDocument(filePath, deletedSessionId);
+        } catch (error) {
+          log('[interview] failed to release deleted session document', {
+            filePath,
+            error: String(error),
+          });
+        }
+      }
+      fileCache = null;
       const interviewId = activeInterviewIds.get(deletedSessionId);
       if (!interviewId) {
         return;
       }
-      finalizationReady.delete(interviewId);
-      finalizationPending.delete(interviewId);
-
       const interview = interviewsById.get(interviewId);
       if (!interview) {
         return;
@@ -1853,6 +1887,7 @@ export function createInterviewService(
       } catch {
         continue;
       }
+      if (parseFrontmatter(content)?.sessionID) continue;
 
       const title = extractTitle(content) || entry.replace(/\.md$/, '');
       const summary = extractSummarySection(content) || '';
@@ -1968,7 +2003,6 @@ export function createInterviewService(
 
     await runServiceTurn(interview, async (state) => {
       const prompt = buildNudgePrompt(
-        action,
         maxQuestions,
         specContext(interview.markdownPath, state.document),
         printState,
@@ -2097,7 +2131,8 @@ export function createInterviewService(
       }
       const body = extractSummarySection(state.document);
       if (
-        state.mode !== 'completed' ||
+        // The implement command itself marks the session busy on v2.
+        (state.mode !== 'completed' && !state.isBusy) ||
         !body ||
         body === 'Waiting for interview answers.'
       ) {
@@ -2122,6 +2157,7 @@ export function createInterviewService(
     setStatePushCallback,
     setOnInterviewCreated,
     getActiveInterviewId,
+    isSessionIdle: (sessionID) => sessionBusy.get(sessionID) === false,
     registerCommand,
     handleCommandExecuteBefore,
     handleEvent,

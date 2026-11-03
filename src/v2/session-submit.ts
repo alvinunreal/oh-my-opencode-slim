@@ -6,8 +6,75 @@
  * avoids a setup↔interview-bridge import cycle.
  */
 
+import { LRUCache } from 'lru-cache';
 import { log } from '../utils/logger';
-import type { V2Context } from './types';
+import type { V2Context, V2SessionContextEvent } from './types';
+
+type CommandPart = {
+  type: string;
+  text?: string;
+  synthetic?: boolean;
+  metadata?: Record<string, unknown>;
+};
+
+export type V1CommandBeforeHook = (
+  input: { command: string; sessionID: string; arguments: string },
+  output: { parts: CommandPart[] },
+) => Promise<void>;
+
+const commandExpansions = new WeakMap<
+  V1CommandBeforeHook,
+  LRUCache<string, Promise<CommandPart[]>>
+>();
+
+export async function replayMarkerExpansions(
+  event: V2SessionContextEvent,
+  commandBefore: V1CommandBeforeHook,
+  parse: (text: string) => { name: string; args: string } | undefined,
+  mayRun: (index: number) => boolean = () => true,
+  beforeRun?: () => void,
+): Promise<void> {
+  for (const [index, message] of event.messages.entries()) {
+    if (message.role !== 'user') continue;
+    const markerIndex = message.content.findIndex(
+      (part) => part.type === 'text' && part.synthetic !== true,
+    );
+    const marker = message.content[markerIndex];
+    const text = typeof marker?.text === 'string' ? marker.text : '';
+    const parsed = parse(text);
+    if (!parsed) continue;
+
+    let cache = commandExpansions.get(commandBefore);
+    if (!cache) {
+      cache = new LRUCache({ max: 512 });
+      commandExpansions.set(commandBefore, cache);
+    }
+    const key =
+      message.id && JSON.stringify([event.sessionID, message.id, text]);
+    let expansion = key ? cache.get(key) : undefined;
+    if (!expansion && mayRun(index)) {
+      beforeRun?.();
+      const output = { parts: [] as CommandPart[] };
+      expansion = commandBefore(
+        {
+          command: parsed.name,
+          sessionID: event.sessionID,
+          arguments: parsed.args.trim(),
+        },
+        output,
+      ).then(() => output.parts);
+      if (key) cache.set(key, expansion);
+    }
+    const parts = await expansion?.catch((error) => {
+      if (key) cache.delete(key);
+      throw error;
+    });
+    const otherParts = message.content.filter((_, i) => i !== markerIndex);
+    message.content = parts?.length
+      ? [...parts.map((part) => ({ ...part })), ...otherParts]
+      : [{ type: 'text', text: parsed.args }, ...otherParts];
+  }
+}
 
 /** Function that submits `text` as a user prompt on a v2 session. */
 export type V2CommandSubmit = (
@@ -65,14 +132,4 @@ export function textFromContent(
   content: Array<Record<string, unknown>>,
 ): string {
   return joinTextParts(content, '');
-}
-
-/** Join user-authored text parts, excluding synthetic plugin additions. */
-export function userTextFromContent(
-  content: Array<Record<string, unknown>>,
-): string {
-  return joinTextParts(
-    content.filter((part) => part.synthetic !== true),
-    '',
-  );
 }
