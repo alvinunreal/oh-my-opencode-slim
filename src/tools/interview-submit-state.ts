@@ -3,7 +3,7 @@ import type { InterviewAssistantState } from '../interview/types';
 
 const z = tool.schema;
 
-export interface InterviewSubmitStateResult {
+interface InterviewSubmitStateResult {
   ok: boolean;
   /** Short acknowledgement, or `⎔ Interview state rejected: <reason>`. */
   message: string;
