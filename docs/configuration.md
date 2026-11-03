@@ -880,6 +880,13 @@ own `state="error"` notice stays in the parent's history; while the child is
 still running, Slim appends a short trailing note telling the parent the
 child continues on the fallback model.
 
+On v2, the host's `provider.transport` errors (response-header timeouts,
+dropped connections) walk the chain like other provider failures. A
+`provider.no-route` failure before the step starts (the session's model or
+route is gone) continues on the next model the same way as a content-filter
+step. A `provider.auth` 401 gets one same-model retry per turn, so an OAuth
+refresh can land, before the next 401 switches models.
+
 Models rejected for the request itself (content policy, unknown or retired
 model, HTTP 410/421/451) stay excluded from the chain until the next external
 prompt, even after later successful steps reset the rest of the descent. On
