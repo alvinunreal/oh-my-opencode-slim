@@ -111,6 +111,29 @@ describe('adaptTool agent context', () => {
     }
   });
 
+  test('keeps dynamic asks usable on hosts without permission.assert', async () => {
+    const tool = adaptTool(
+      'webfetch',
+      {
+        execute: async (_args, context) => {
+          await (context as { ask: (request: unknown) => Promise<void> }).ask({
+            permission: 'webfetch',
+            patterns: ['https://example.org'],
+            always: [],
+            metadata: {},
+          });
+          return 'body';
+        },
+      },
+      '/project',
+      {},
+    );
+
+    await expect(
+      tool.execute({}, { sessionID: 'ses_child', agent: 'explorer' }),
+    ).resolves.toEqual({ content: 'body' });
+  });
+
   test('SF-02: passes the native cancellation signal to the v1 tool', async () => {
     const controller = new AbortController();
     let abort: AbortSignal | undefined;

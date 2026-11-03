@@ -218,8 +218,15 @@ export function adaptTool(
           always: string[];
           metadata: Record<string, unknown>;
         }) {
+          // `permission.assert` landed in OpenCode v2.0.29; older supported
+          // hosts have no per-call authorization surface, so keep the
+          // pre-assert behavior there instead of breaking the tool.
           if (!permission?.assert) {
-            throw new Error('permission.assert unavailable for adapted tool');
+            log('[v2][tool] permission.assert unavailable; ask not enforced', {
+              tool: name,
+              permission: request.permission,
+            });
+            return;
           }
           await permission.assert({
             sessionID: ctx.sessionID ?? '',

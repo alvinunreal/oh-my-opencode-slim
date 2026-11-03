@@ -56,6 +56,13 @@ wildcard-action grants remain conservatively bounded; this is not a general
 permission-widening rule. These mappings are source-checked against OpenCode
 v2.0.18 and v2.0.32; they do not represent a new live-host certification.
 
+Plugin tools that ask at runtime (`webfetch` per URL, `acp_run` on spawn and
+on ACP agent requests) are authorized through the host's
+`permission.assert`, so per-call `ask` and resource-level `deny` rules apply
+as on v1. `permission.assert` exists from OpenCode v2.0.29; on older v2 hosts
+those asks are logged and not enforced (whole-tool `deny` still hides the
+tool).
+
 ## How it works
 
 The package's default export is an object:
