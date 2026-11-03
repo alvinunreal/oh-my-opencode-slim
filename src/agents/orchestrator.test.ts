@@ -220,7 +220,7 @@ describe('createAgents orchestrator prompt gates', () => {
 
   test('v1 lifecycle off names no wait_for_user, no wake scheduler', () => {
     const agents = createAgents(
-      runtimeFor({ backgroundJobs: { enabled: false } }),
+      runtimeFor({ backgroundJobs: { mode: 'off' } }),
     );
     const prompt = agents.find((a) => a.name === 'orchestrator')?.config
       .prompt as string;
@@ -234,7 +234,7 @@ describe('createAgents orchestrator prompt gates', () => {
 
   test('v2 lifecycle off keeps the v2 vocabulary and names no managed tool', () => {
     const agents = createAgents(
-      runtimeFor({ backgroundJobs: { enabled: false } }),
+      runtimeFor({ backgroundJobs: { mode: 'off' } }),
       { hostFlavor: 'v2' },
     );
     const prompt = agents.find((a) => a.name === 'orchestrator')?.config
@@ -261,7 +261,7 @@ describe('createAgents orchestrator prompt gates', () => {
   test('v1 lifecycle off with both tools disabled still renders the fallback channel', () => {
     const agents = createAgents(
       runtimeFor({
-        backgroundJobs: { enabled: false },
+        backgroundJobs: { mode: 'off' },
         disabled_tools: ['wait_for_user'],
       }),
     );

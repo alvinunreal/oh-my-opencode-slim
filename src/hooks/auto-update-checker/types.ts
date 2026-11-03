@@ -30,7 +30,6 @@ export interface PackageJson {
 }
 
 export interface AutoUpdateCheckerOptions {
-  autoUpdate?: boolean;
   companion?: CompanionConfig;
 }
 

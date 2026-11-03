@@ -699,6 +699,30 @@ describe('v2 tui preset plugin', () => {
       }
     });
 
+    test('autoUpdate false alone skips the update notice', async () => {
+      writeUserConfig({ autoUpdate: false });
+      const originalFetch = globalThis.fetch;
+      let requests = 0;
+      globalThis.fetch = (async () => {
+        requests += 1;
+        return new Response('{"version":"1.0.0"}');
+      }) as typeof fetch;
+      jest.useFakeTimers();
+      let cleanup: (() => void) | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          makeSetupCtx().ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        jest.advanceTimersByTime(1_500);
+        for (let i = 0; i < 30; i += 1) await Promise.resolve();
+        expect(requests).toBe(0);
+      } finally {
+        cleanup?.();
+        jest.useRealTimers();
+        globalThis.fetch = originalFetch;
+      }
+    });
+
     test('v2 cleanup returns a promise to the host', async () => {
       writeUserConfig({
         sidebar: false,

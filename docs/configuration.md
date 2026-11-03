@@ -209,6 +209,7 @@ council-and-observer-only setup turns off the rest:
   "interview": { "enabled": false },
   "marketplace": { "enabled": false },
   "tui": false,
+  "autoUpdate": false,
   "liveConfigRefresh": false,
   "fallback": { "enabled": false },
   "webfetch": { "enabled": false },
@@ -228,8 +229,7 @@ council-and-observer-only setup turns off the rest:
   "disabled_hooks": [
     "phase-reminder", "foreground-fallback", "deepwork-goal",
     "cache-monitor", "json-error-recovery", "tool-loop-guard",
-    "search-path-guard", "absolute-path-rescue", "apply-patch",
-    "auto-update-checker"
+    "search-path-guard", "absolute-path-rescue", "apply-patch"
   ],
   "disabled_tools": [
     "ast_grep_search", "ast_grep_replace", "acp_run",
@@ -239,11 +239,11 @@ council-and-observer-only setup turns off the rest:
 }
 ```
 
-`tui: false` gates the TUI client process only (the entry also skips loading the
-TUI render stack); the server-side council,
-observer, agents, and hooks keep working. Remove it (and optionally set
-`sidebar: false` instead) when you want the OMOS sidebar and commands without
-the rest. `interview.enabled: false` also disables `/implement`, because
+`tui: false` gates the whole OMOS TUI surface: the client entry skips loading
+the TUI render stack and the server stops writing sidebar state. The
+server-side council, observer, agents, hooks, and tools keep working. Use
+`sidebar: false` instead when you want the remaining TUI surface without the
+sidebar. `interview.enabled: false` also disables `/implement`, because
 `/implement` feeds the same interview flow.
 
 A disabled subsystem is not constructed at all: no tools, listeners, timers,
@@ -264,8 +264,8 @@ and [Council](council.md) for what remains.
 |--------|------|---------|-------------|
 | `preset` | string | - | Active preset name (e.g. `"openai"`, `"best"`) |
 | `setDefaultAgent` | boolean | `true` | When `true`, sets OpenCode's `default_agent` to the orchestrator if unset or pointing at a subagent; `false` leaves it untouched |
-| `sidebar` | boolean | `true` | Master switch for the OMOS TUI sidebar surface (the agent list it renders and its state file). When `false`, the plugin never registers or renders the sidebar and writes no sidebar state; the native host sidebar is untouched, and pane management keeps following `multiplexer` config changes |
-| `tui` | boolean | `true` | Master switch for all OMOS TUI surfaces: the sidebar, `/preset`, `/killall`, `/subagent`, and the update notice. When `false`, the TUI entry registers nothing and never loads the TUI render stack (the heavy implementation is imported only after this gate); server-side agents, council, observer, hooks, and tools are untouched. Stronger than `sidebar: false`. |
+| `sidebar` | boolean | `true` | Master switch for the OMOS TUI sidebar surface (the agent list it renders and its state file). When `false`, the plugin never registers or renders the sidebar and writes no sidebar state; the native host sidebar is untouched, and pane management keeps following `multiplexer` config changes. `tui: false` implies this off. |
+| `tui` | boolean | `true` | Master switch for all OMOS TUI surfaces: the sidebar and its server-side state, `/preset`, `/killall`, `/subagent`, and the update notice. When `false`, the TUI entry registers nothing and never loads the TUI render stack, and the server writes no sidebar state; server-side agents, council, observer, hooks, and tools remain active. |
 | `liveConfigRefresh` | boolean | `true` | v2 only: master switch for the live config-file watcher that reloads runtime model/preset profiles when `oh-my-opencode-slim.json(c)` changes on disk. When `false`, v2 does not watch config files and file edits apply only after a restart; explicit `/preset` writes still refresh the current generation where applicable |
 | `stripOrchestratorModel` | boolean | `false` | Preserve a runtime `/model` selection for the orchestrator after subagent dispatch by omitting its configured model from the SDK config. A selected preset's explicit `orchestrator.model` is retained. Without a runtime selection, this opt-in delegates the initial orchestrator choice to OpenCode's session default. |
 | `routingBlock` | boolean | `true` | When false, removes the `<Agents>` routing block from the built-in orchestrator prompt. The host's native delegation-tool roster still lists every enabled agent with its one-line description, but it carries no Delegate/Don't routing criteria — the block's routing guidance (~300 tokens) has no roster equivalent, so `false` trades routing quality for tokens, or drops stock routing claims that drift against custom agent prompts (`agents.<name>.prompt`). Applies on v1 and v2 hosts. No effect when an orchestrator.md override already replaces the whole prompt. |
@@ -306,7 +306,7 @@ and [Council](council.md) for what remains.
 | `acpAgents.<name>.timeoutMs` | integer | `0` | Timeout for a single ACP run in milliseconds. `0` disables the timeout so external agents can run indefinitely. Finite values can be up to `2147483647`ms (~24.8 days) See [ACP-connected agents](#acp-connected-agents). |
 | `disabled_agents` | string[] | `["observer"]` | Agent names to disable globally. Set to `[]` to enable Observer; this is global, not per-preset See [Custom Agents](#custom-agents). |
 | `image_routing` | `"auto"` \| `"direct"` | omitted (legacy conditional) | Optional. When omitted, resolves to `"auto"` if Observer is enabled, otherwise `"direct"`. Explicit `"auto"` saves image attachments under `.opencode/images/<session>/` and nudges delegation to @observer; saved images remain until you remove them. `"direct"` always passes image parts to the orchestrator. Remove saved images with `rm -rf .opencode/images/` (or a single session subdirectory) when they are no longer needed; session-less messages save images at the top level. |
-| `autoUpdate` | boolean | `true` | Automatically install plugin updates in the background; set to `false` for notification-only mode |
+| `autoUpdate` | boolean | `true` | Master switch for OMOS plugin updates. When `false`, no update check, notification, or automatic installation runs. Either this or `disabled_hooks: ["auto-update-checker"]` disables the same update path. |
 | `multiplexer.type` | string | `"none"` | Multiplexer mode: `auto`, `tmux`, `zellij`, `herdr`, `cmux-tui`, `kitty`, `wezterm`, `orca`, or `none` See [Multiplexer Integration](multiplexer-integration.md). On OpenCode v2 hosts, panes work with the shared background service or an explicit `--server`; `--standalone` hosts ignore the setting (one diagnostic per process). |
 | `multiplexer.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Each adapter maps it to its nearest native expression (tmux full layouts; split directions for Zellij/Herdr; built-in layouts for kitty; split order for WezTerm); cmux-tui has no layout expression and ignores it. Herdr builds an agent area for both `main-*` layouts (`main-vertical` agent column, `main-horizontal` agent row) and re-equalizes only its agent panes after each spawn/close. See [Multiplexer Integration](multiplexer-integration.md#layouts). |
 | `multiplexer.main_pane_size` | number | `60` | Main pane size as percentage (20–80) for tmux main layouts and the first Herdr/WezTerm agent split of the `main-*` layouts; Herdr then equalizes the agent panes in the agent column (`main-vertical`) or row (`main-horizontal`) after each spawn/close while the main pane keeps this share. Ignored by Zellij, kitty, and cmux-tui See [Multiplexer Integration](multiplexer-integration.md#layouts). |
@@ -315,8 +315,7 @@ and [Council](council.md) for what remains.
 | `multiplexer.viewer` | string | `"tui"` on v1, `"mini"` on v2 | Subagent pane surface: `"tui"` (full interface) or `"mini"` (lightweight interface). Explicit values override the host default. On v1, `"mini"` requires OpenCode >= 1.17.10 and runs `attach ... --dir <dir> --mini`; on v2 it runs `opencode mini` without a positional directory. Changes take effect on the next opencode start. See [Multiplexer Integration](multiplexer-integration.md). |
 | `multiplexer.zellij_pane_mode` | — | — | Removed: ignored with a warning. See [Removed config keys](#removed-config-keys). |
 | `tmux` (top-level) | — | — | Removed: ignored with a warning. Use `multiplexer.*`. See [Removed config keys](#removed-config-keys). |
-| `backgroundJobs.mode` | string | `"managed"` | Background-task lifecycle mode. `"managed"` runs the OMOS job board, retention, wake scheduler, wall-clock watchdog, terminal gate, and the `task_cancel`/`task_status`/`task_reply` tools. `"native"` skips every board-shaped component and registers only two thin host-read controls: `task_status` (parent-scoped `session.get` plus the trailing result) and `task_cancel` (`session.abort`, session retained). `"off"` registers no OMOS task tool and leaves native OpenCode delegation completely untouched (session presets still bind delegated children; they are not board state). The legacy `enabled` key maps to `"off"`; an explicit `mode` wins when both are set. See [Background Job Management](#background-job-management). |
-| `backgroundJobs.enabled` | boolean | `true` | Legacy alias for the lifecycle switch: `false` is equivalent to `mode: "off"`, and an explicit `mode` wins when both are set. Prefer `mode`. When the lifecycle is off, every other `backgroundJobs.*` key stays accepted but inert, and the `/interview`-style foreground flows are unaffected. See [Background Job Management](#background-job-management). |
+| `backgroundJobs.mode` | string | `"managed"` | Background-task lifecycle mode. `"managed"` runs the OMOS job board, retention, wake scheduler, wall-clock watchdog, terminal gate, and the `task_cancel`/`task_status`/`task_reply` tools. `"native"` skips every board-shaped component and registers only two thin host-read controls: `task_status` (parent-scoped `session.get` plus the trailing result) and `task_cancel` (`session.abort`, session retained). `"off"` registers no OMOS task tool and leaves native OpenCode delegation completely untouched (session presets still bind delegated children; they are not board state). See [Background Job Management](#background-job-management). |
 | `backgroundJobs.maxSessionsPerAgent` | integer | `2` | Maximum completed/reconciled reusable child sessions per specialist type in the current orchestrator session (1–10) See [Background Job Management](#background-job-management). |
 | `backgroundJobs.maxRetainedSnapshots` | — | — | Removed: ignored with a warning. See [Removed config keys](#removed-config-keys). |
 | `backgroundJobs.strategy` | — | — | Removed: board placement is change-only. See [Removed config keys](#removed-config-keys). |
@@ -339,7 +338,7 @@ and [Council](council.md) for what remains.
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
 | `disabled_tools` | string[] | `[]` | Slim tool names to disable globally. Disabled Slim tools are not registered with OpenCode and cannot be used by agents; OpenCode built-in tools are not affected |
 | `disabled_skills` | string[] | `[]` | Skill names to disable globally. Disabled skills are not granted to agents, and disabled bundled skills are not registered; listing `reflect` here also disables the `/reflect` command |
-| `disabled_hooks` | string[] | `[]` | Hook names to disable globally: `phase-reminder`, `foreground-fallback`, `deepwork-goal`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`, `auto-update-checker`. `auto-update-checker` gates update **checking** and installation together, so it is stronger than `autoUpdate`, which only controls installation. Unknown values are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies. See [Hooks](#hooks) |
+| `disabled_hooks` | string[] | `[]` | Hook names to disable globally: `phase-reminder`, `foreground-fallback`, `deepwork-goal`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`, `auto-update-checker`. Either `auto-update-checker` here or `autoUpdate: false` turns the whole update feature off (check, notice, install); the hook entry also keeps the hook off if the feature switch is later re-enabled. Unknown values are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies. See [Hooks](#hooks) |
 | `disabled_commands` | string[] | `[]` | Slash commands to disable globally: `interview`, `implement`, `deepwork`, `reflect`, `preset`, `killall`, `subagent`. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. Listing `reflect` in `disabled_skills` also disables the `/reflect` command. See [Slash Commands](#slash-commands) |
 | `webfetch.enabled` | boolean | `true` | When `false`, the enhanced `webfetch` is not registered and OpenCode's built-in is used. See [Webfetch](webfetch.md) |
 | `fallback.enabled` | boolean | `true` | Enable Slim's foreground model-chain failover. It does not configure OpenCode provider/AI-SDK retries. On **v2 hosts** the replay path (abort + re-prompt) stays disabled — the v2 `switchModel` has no per-turn/atomic conditional form, so an in-flight replay could commit after a newer user turn has taken over — while the retry-hook steering path runs: host retry events are absorbed up to `fallback.maxRetries`, then the model is switched in place via the host `session.switchModel` and the host retries the current turn on the new model. The same switch disables both paths. |
@@ -388,6 +387,7 @@ replacement yourself where one exists.
 | `council.master`, `council.master_timeout`, `council.master_fallback` | Configure the Council agent like any agent, e.g. `presets.<name>.council.model` |
 | `council.presets.<name>.master` (councillor named `master`) | None; rename the councillor if you still want it |
 | `council.presets.<name>.councillors` (nested wrapper) | Put councillors directly under `council.presets.<name>` (the wrapped entries are dropped) |
+| `backgroundJobs.enabled` | `backgroundJobs.mode`: `true` → `"managed"`, `false` → `"off"`; no compatibility migration |
 | `backgroundJobs.continueOnIdle` | `backgroundJobs.orchestratorWake.enabled` |
 | `backgroundJobs.maxContextLines` | None; reusability is state-based (terminal, reconciled, status-certain). See [Background Job Management](#background-job-management) |
 | `backgroundJobs.readContextMinLines` | None; the per-session read-context list is path-only with an internal display cap |
@@ -585,8 +585,8 @@ ambiguous, not omitted or guessed. See
 
 ### Manual Update Mode
 
-Set `autoUpdate` to `false` if you want update notifications without automatic
-package installs.
+Set `autoUpdate` to `false` to turn the whole OMOS plugin update feature off:
+no startup check, no update notice, and no automatic package install.
 
 ```jsonc
 {
@@ -594,18 +594,18 @@ package installs.
 }
 ```
 
-With `autoUpdate` set to `false`, this becomes notification-only mode: you'll
-see that a new version is available, but the plugin won't install it
-automatically.
-
-To disable update checking as well as installation, list the checker in
-`disabled_hooks` (on both v1 and v2, including the v2 TUI notice):
+Alternatively, list the checker in `disabled_hooks` (on both v1 and v2,
+including the v2 TUI notice). Either switch disables the same feature; the hook
+entry is the per-hook form and stays effective if `autoUpdate` is re-enabled:
 
 ```jsonc
 {
   "disabled_hooks": ["auto-update-checker"]
 }
 ```
+
+Pinned versions and unsupported install layouts retain their existing
+notification behavior when update checking is enabled.
 
 Auto-update never crosses major versions. For example, a 1.x install can
 auto-update to a newer 1.x release, but it won't auto-install 2.x. When a newer
@@ -642,8 +642,7 @@ the full layer described here. `"native"` keeps native OpenCode delegation and
 registers only `task_status` (host read of a child's state and trailing result)
 and `task_cancel` (host interruption, session retained) — no board, lease,
 retention, watchdog, wake scheduler, v2 board persistence, or structured-launch
-wrapper. `"off"` (also reachable through the legacy `enabled: false`) registers
-no OMOS task tool at all.
+wrapper. `"off"` registers no OMOS task tool at all.
 
 **What gates reusability.** A completed child session enters the reusable pool
 when it reached a canonical terminal state, has been reconciled, and its status
@@ -1329,17 +1328,17 @@ Disable built-in hooks via `disabled_hooks`:
 Available hooks:
 
 - **Prompt injection**: `phase-reminder` (per-turn scheduler-workflow reminder on orchestrator messages), `deepwork-goal` (post-compaction goal pointer, delivered once per compaction epoch), `council-inject` (keyword-triggered Council Mode procedure, injected once per session at the first trigger).
-- **Model failover**: `foreground-fallback` — same effect as `fallback.enabled = false`.
+- **Model failover**: `foreground-fallback` — removes the fallback manager and retry hook entirely. `fallback.enabled: false` disables intervention too, but on v2 it keeps the retry bookkeeping registered so a live per-session enable can switch it back on.
 - **Tool guards**: `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch` (v1 `apply_patch`, v2 `patch`) — each stops intercepting tool calls entirely, so malformed output, repeated identical calls, and invalid or guessed paths surface raw to the model.
 - **Deepwork**: `deepwork-goal` turns the post-compaction goal pointer off (the model then relies on the skill's resume discipline alone).
-- **Update checking**: `auto-update-checker` — stops both the startup update check (including the notification) and the automatic installation. It is the stronger switch: `autoUpdate: false` only suppresses installation, notifications may still appear.
+- **Update checking**: `auto-update-checker` — stops the startup update check, notification, and automatic installation. `autoUpdate: false` has the same effect for the feature; this entry is the per-hook form and also stays effective if the feature switch is re-enabled.
 - **Telemetry / headers**: `cache-monitor` (prompt-cache bust watchdog; warnings stop), `chat-headers` (Copilot `x-initiator` header on both the v1 `chat.headers` hook and the v2 `model.request` bridge).
 
 Guards such as `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, and `apply-patch` protect against model-side loops, bad paths, and malformed patches. Disable them only when you want raw upstream behavior.
 
 Notes:
 
-- Injection surfaces that have dedicated switches are not listed here: wake prompts (`backgroundJobs.orchestratorWake.enabled`, `backgroundJobs.childInputWake`), the whole managed background-task lifecycle (`backgroundJobs.mode`), the interview subsystem (`interview.enabled`), the TUI sidebar (`sidebar`), and image routing (`image_routing`). `autoUpdate` controls automatic installation of updates; use the `auto-update-checker` hook name to stop update checking too.
+- Injection surfaces that have dedicated switches are not listed here: wake prompts (`backgroundJobs.orchestratorWake.enabled`, `backgroundJobs.childInputWake`), the whole managed background-task lifecycle (`backgroundJobs.mode`), the interview subsystem (`interview.enabled`), the TUI surface (`tui`, `sidebar`), and image routing (`image_routing`). `autoUpdate: false` and `disabled_hooks: ["auto-update-checker"]` both stop the update feature; use whichever granularity you need.
 - Invalid entries are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies.
 
 ### Slash Commands

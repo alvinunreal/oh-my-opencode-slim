@@ -35,7 +35,7 @@ export function createAutoUpdateCheckerHook(
   ctx: PluginInput,
   options: AutoUpdateCheckerOptions = {},
 ) {
-  const { autoUpdate = true, companion } = options;
+  const { companion } = options;
 
   let hasChecked = false;
 
@@ -59,7 +59,7 @@ export function createAutoUpdateCheckerHook(
           return;
         }
 
-        runBackgroundUpdateCheck(ctx, autoUpdate, companion).catch((err) => {
+        runBackgroundUpdateCheck(ctx, companion).catch((err) => {
           log('[auto-update-checker] Background update check failed:', err);
         });
       }, 0);
@@ -118,11 +118,9 @@ async function ensureCompanionForPackageRoot(
 /**
  * Orchestrates the version comparison and update process in the background.
  * @param ctx The plugin input context.
- * @param autoUpdate Whether to automatically install updates.
  */
 async function runBackgroundUpdateCheck(
   ctx: PluginInput,
-  autoUpdate: boolean,
   companion: AutoUpdateCheckerOptions['companion'],
 ): Promise<void> {
   const pluginInfo = findPluginEntry(ctx.directory);
@@ -199,18 +197,6 @@ async function runBackgroundUpdateCheck(
       8000,
     );
     log(`[auto-update-checker] Version is pinned; skipping auto-update.`);
-    return;
-  }
-
-  if (!autoUpdate) {
-    showToast(
-      ctx,
-      `OMO-Slim ${latestVersion}`,
-      `v${latestVersion} available. Auto-update is disabled.`,
-      'info',
-      8000,
-    );
-    log('[auto-update-checker] Auto-update disabled, notification only');
     return;
   }
 

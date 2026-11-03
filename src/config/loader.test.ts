@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { resolveFeatureGates } from './feature-gates';
 import type { ConfigLoadWarning } from './loader';
 import {
   findPluginConfigPaths,
@@ -582,6 +583,34 @@ describe('loadPluginConfig', () => {
     expect('strategy' in (config.backgroundJobs ?? {})).toBe(false);
     expect(config.backgroundJobs?.orchestratorWake?.intervalMs).toBe(120_000);
     expect(config.backgroundJobs?.orchestratorWake?.enabled).toBe(false);
+  });
+
+  test('a project backgroundJobs layer without mode keeps the user mode off', () => {
+    const userConfigPath = path.join(userConfigDir, 'opencode');
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(userConfigPath, { recursive: true });
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userConfigPath, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        backgroundJobs: { mode: 'off', maxSessionsPerAgent: 8 },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        backgroundJobs: { concurrency: { defaultConcurrency: 2 } },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir, { silent: true });
+
+    // The project layer configures only concurrency: its absent mode must
+    // not reset the user's explicit lifecycle switch.
+    expect(config.backgroundJobs?.mode).toBe('off');
+    expect(config.backgroundJobs?.maxSessionsPerAgent).toBe(8);
+    expect(config.backgroundJobs?.concurrency?.defaultConcurrency).toBe(2);
   });
 
   test('validates auto image routing after project enables Observer', () => {
@@ -3299,6 +3328,7 @@ describe('removed config keys', () => {
       'backgroundJobs.continueOnIdle',
       { backgroundJobs: { continueOnIdle: true } },
     ],
+    ['backgroundJobs.enabled', { backgroundJobs: { enabled: true } }],
     [
       'backgroundJobs.boardInjection',
       { backgroundJobs: { boardInjection: true } },
@@ -3334,6 +3364,30 @@ describe('removed config keys', () => {
       }
     });
   }
+
+  test('removed backgroundJobs.enabled warns, drops the alias, and keeps siblings', () => {
+    const { config, warnings } = load({
+      backgroundJobs: {
+        enabled: false,
+        maxSessionsPerAgent: 4,
+        concurrency: { defaultConcurrency: 2 },
+        orchestratorWake: { enabled: false },
+      },
+    });
+
+    expect(config.agents?.oracle?.model).toBe('test/preset-oracle');
+    expect(config.backgroundJobs?.mode).toBeUndefined();
+    // Only the alias is dropped; every sibling keeps its configured value.
+    expect(config.backgroundJobs?.maxSessionsPerAgent).toBe(4);
+    expect(config.backgroundJobs?.concurrency?.defaultConcurrency).toBe(2);
+    expect(config.backgroundJobs?.orchestratorWake?.enabled).toBe(false);
+    expect(Object.hasOwn(config.backgroundJobs ?? {}, 'enabled')).toBe(false);
+    expect(warnings.map((w) => w.kind)).toEqual(['removed-key']);
+    expect(warnings[0]?.message).toContain('"backgroundJobs.enabled"');
+    // A stale enabled:false is dropped, not migrated to mode: with no mode the
+    // runtime resolves the default managed lifecycle.
+    expect(resolveFeatureGates(config).backgroundJobsMode).toBe('managed');
+  });
 
   test('SF-01: drops webfetch.model without losing the other file settings', () => {
     const { config, warnings } = load({
