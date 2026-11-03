@@ -49,10 +49,10 @@ role:
 | Agent | Model |
 |-------|-------|
 | Orchestrator | `opencode-go/minimax-m3` (`thinking`) |
-| Oracle | `opencode-go/qwen3.7-max` (`max`) |
-| Explorer | `opencode-go/deepseek-v4-flash` (`high`) + MCPs |
+| Oracle | `opencode-go/qwen3.8-max` (`xhigh`) |
+| Explorer | `opencode-go/deepseek-v4.1-flash` (`high`) + MCPs |
 | Designer | `opencode-go/kimi-k2.7-code` |
-| Fixer | `opencode-go/deepseek-v4-flash` (`high`) |
+| Fixer | `opencode-go/deepseek-v4.1-flash` (`high`) |
 | Observer | `opencode-go/mimo-v2.5` |
 
 ## Generated Config Shape
@@ -71,18 +71,18 @@ setting the top-level `preset` field:
         "variant": "thinking"
       },
       "oracle": {
-        "model": "opencode-go/qwen3.7-max",
-        "variant": "max"
+        "model": "opencode-go/qwen3.8-max",
+        "variant": "xhigh"
       },
       "explorer": {
-        "model": "opencode-go/deepseek-v4-flash",
+        "model": "opencode-go/deepseek-v4.1-flash",
         "variant": "high"
       },
       "designer": {
         "model": "opencode-go/kimi-k2.7-code"
       },
       "fixer": {
-        "model": "opencode-go/deepseek-v4-flash",
+        "model": "opencode-go/deepseek-v4.1-flash",
         "variant": "high"
       },
       "observer": {

@@ -1276,6 +1276,12 @@ export class BackgroundJobBoard {
     );
   }
 
+  /** Notification delivery does not admit or resume a child execution. */
+  hasExecutionLease(taskID: string): boolean {
+    const lease = this.liveLeases.get(taskID);
+    return lease !== undefined && lease.kind !== 'terminal-notification';
+  }
+
   releaseLease(lease: BackgroundJobLease): boolean {
     const active = this.liveLeases.get(lease.taskID);
     if (

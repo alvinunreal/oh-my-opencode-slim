@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 
 export const COMPANION_REPOSITORY = 'alvinunreal/oh-my-opencode-companion';
-export const COMPANION_TARGETS = [
+const COMPANION_TARGETS = [
   'aarch64-apple-darwin',
   'aarch64-unknown-linux-gnu',
   'x86_64-apple-darwin',

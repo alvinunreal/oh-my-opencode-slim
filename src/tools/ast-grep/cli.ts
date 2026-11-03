@@ -111,17 +111,6 @@ export async function getAstGrepPath(): Promise<string | null> {
   return initializeAstGrep();
 }
 
-export function startBackgroundInit(): void {
-  if (!initPromise) {
-    getAstGrepPath().catch((err) => {
-      console.warn(
-        '[ast-grep] Background initialization failed:',
-        err?.message ?? err,
-      );
-    });
-  }
-}
-
 export async function runSg(
   options: RunOptions,
   dependencies: RunDependencies = {},
@@ -315,14 +304,4 @@ export async function runSg(
         ? 'max_matches'
         : undefined,
   };
-}
-
-export function isCliAvailable(): boolean {
-  const path = findSgCliPathSync();
-  return path !== null && existsSync(path);
-}
-
-export async function ensureCliAvailable(): Promise<boolean> {
-  const path = await getAstGrepPath();
-  return path !== null && existsSync(path);
 }
