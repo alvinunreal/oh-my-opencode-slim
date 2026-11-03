@@ -1241,7 +1241,7 @@ function agentRow(options: AgentRowOptions): JSX.Element {
   const modelParts = splitSidebarModelId(model);
   const detailRows: JSX.Element[] = [];
 
-  function detailRow(fieldLabel: string, value: string) {
+  function detailRow(fieldLabel: string, value: string, fg = theme.textMuted) {
     return box(
       {
         width: '100%',
@@ -1251,7 +1251,7 @@ function agentRow(options: AgentRowOptions): JSX.Element {
       },
       [
         text({ fg: theme.textMuted, width: 9 }, [fieldLabel]),
-        text({ fg: theme.textMuted }, [value]),
+        text({ fg }, [value]),
       ],
     );
   }
@@ -1259,7 +1259,9 @@ function agentRow(options: AgentRowOptions): JSX.Element {
   if (modelParts.provider) {
     detailRows.push(detailRow('provider', modelParts.provider));
   }
-  detailRows.push(detailRow('model', modelParts.model));
+  detailRows.push(
+    detailRow('model', modelParts.model, agentColor(options.color, theme)),
+  );
   if (modelName && modelName !== modelParts.model) {
     detailRows.push(detailRow('name', modelName));
   }

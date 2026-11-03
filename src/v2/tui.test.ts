@@ -1361,6 +1361,53 @@ describe('v2 tui preset plugin', () => {
       }
     });
 
+    test('noncompact rows tint the model detail with the configured color', async () => {
+      const stub = makeSetupCtx();
+      writeUserConfig({ ...makeConfig(), compactSidebar: false });
+      recordTuiAgentModels(
+        {
+          agentModels: {
+            oracle: 'openai/gpt-5-mini',
+            explorer: 'anthropic/claude-haiku',
+          },
+          agentColors: { explorer: '#ff0000' },
+        },
+        projectDir,
+      );
+      let cleanup: (() => void) | undefined;
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        const sidebarSlot = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        screen = await testRender(() => sidebarSlot?.render?.() as never, {
+          width: 160,
+          height: 30,
+        });
+        await screen.renderOnce();
+
+        const spans = screen.captureSpans().lines.flatMap((line) => line.spans);
+        const coloredModel = spans.find((span) =>
+          span.text.includes('claude-haiku'),
+        );
+        const mutedModel = spans.find((span) =>
+          span.text.includes('gpt-5-mini'),
+        );
+        const provider = spans.find((span) => span.text.includes('anthropic'));
+        expect(coloredModel?.fg.r).toBeCloseTo(1);
+        expect(coloredModel?.fg.g).toBeCloseTo(0);
+        expect(mutedModel?.fg.r).toBeCloseTo(138 / 255);
+        // Field labels and other detail rows stay muted.
+        expect(provider?.fg.r).toBeCloseTo(138 / 255);
+      } finally {
+        cleanup?.();
+        screen?.renderer.destroy();
+      }
+    });
+
     test('agent hover contrasts with the raised sidebar surface and restores on exit', async () => {
       const stub = makeSetupCtx();
       writeUserConfig(makeConfig() as unknown as Record<string, unknown>);
