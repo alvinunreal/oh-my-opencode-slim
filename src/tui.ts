@@ -852,6 +852,27 @@ export function shortSessionID(sessionID: string): string {
 }
 
 /**
+ * Label of an expanded subagent row: the host session title with
+ * whitespace normalized, else the board alias / short session id fallback. Fitting the label to
+ * the sidebar's actual width is native: the row renders the label with
+ * truncate + flexShrink so the OpenTUI layout engine ellipsizes it to
+ * the laid-out columns.
+ */
+export function sidebarTargetLabel(
+  target: Pick<SidebarSessionTarget, 'sessionID' | 'alias'>,
+  resolveSessionTitle?: (sessionID: string) => string | undefined,
+): string {
+  const title = (resolveSessionTitle?.(target.sessionID) ?? '').replace(
+    /\s+/g,
+    ' ',
+  );
+  const normalized = title.trim();
+  return normalized !== ''
+    ? normalized
+    : (target.alias ?? shortSessionID(target.sessionID));
+}
+
+/**
  * Per-window sidebar interaction state. `navigate` is feature-detected at
  * startup: without it the sidebar renders informatively (no handlers).
  * Expansion state is local to this window and never persisted.
@@ -1337,7 +1358,8 @@ function compactAgentRow(options: AgentRowOptions): JSX.Element {
 }
 
 /**
- * One expanded subagent destination: a fixed-width status indicator and alias.
+ * One expanded subagent destination: a fixed-width status indicator and a
+ * label (session title when known, else alias / short id).
  * Hover mutates this box in place so the click target survives ticks.
  */
 function sessionTargetRow(
@@ -1347,8 +1369,9 @@ function sessionTargetRow(
   onActivate: () => void,
   hoverBackground: unknown,
   hasSelectedText?: () => boolean,
+  resolveSessionTitle?: (sessionID: string) => string | undefined,
 ): JSX.Element {
-  const label = target.alias ?? shortSessionID(target.sessionID);
+  const label = sidebarTargetLabel(target, resolveSessionTitle);
   const annotation = sidebarSiblingAnnotation(target);
   const reusable = target.status === 'reusable';
   const stopped = target.status === 'stopped';
@@ -1384,8 +1407,9 @@ function sessionTargetRow(
       text(
         {
           fg: theme.textMuted,
-          flexShrink: 0,
+          flexShrink: 1,
           wrapMode: 'none',
+          truncate: true,
         },
         [label],
       ),
@@ -1394,9 +1418,8 @@ function sessionTargetRow(
             text(
               {
                 fg: theme.textMuted,
-                flexShrink: 1,
+                flexShrink: 0,
                 wrapMode: 'none',
-                truncate: true,
               },
               [` ${annotation}`],
             ),
@@ -1586,6 +1609,7 @@ export function renderSidebar(
   interaction?: SidebarInteraction,
   presetRow?: SidebarPresetRow,
   modelNames?: ReadonlyMap<string, string>,
+  resolveSessionTitle?: (sessionID: string) => string | undefined,
 ): JSX.Element {
   const configStatusRow = buildConfigStatusRow(configInvalid, theme);
   const hoverBackground = resolveHoverBackground({
@@ -1751,6 +1775,7 @@ export function renderSidebar(
                   () => interaction?.navigate?.(target.sessionID),
                   hoverBackground,
                   interaction?.hasSelectedText,
+                  resolveSessionTitle,
                 ),
               ),
             ];
@@ -1991,7 +2016,8 @@ interface V2TuiContext extends V2PresetManagerContext {
     session?: {
       get?: (
         sessionID: string,
-      ) => { parentID?: unknown; agent?: unknown } | undefined;
+      ) => { parentID?: unknown; agent?: unknown; title?: string } | undefined;
+      list?: () => Array<{ id?: string; title?: string }>;
     };
   };
   renderer: { requestRender: () => void; getSelection?: () => unknown };
@@ -2070,6 +2096,10 @@ interface SidebarRuntimeAdapter {
   getSelectedRootModel?: (
     snapshot: TuiSnapshot,
   ) => { model: string; variant?: string | undefined } | undefined;
+  /** v2 hosts only: synchronous session-title lookup against the
+   * in-memory session store. Expanded subagent rows prefer the title
+   * over the board alias; absent/blank titles keep the alias fallback. */
+  resolveSessionTitle?: (sessionID: string) => string | undefined;
 }
 
 /** Shape `readTuiSnapshot` returns for an empty/missing state file. */
@@ -2442,6 +2472,7 @@ function createSidebarRuntime(
               sessionOverride,
             ),
             modelNames(),
+            adapter.resolveSessionTitle,
           );
         }),
       )
@@ -2616,6 +2647,17 @@ async function setup(
       hostFlavor: 'v2',
       getDirectory: () => ctx.location?.directory ?? process.cwd(),
       getVisibleSession: () => resolveRouteSessionId(ctx.ui.router.current()),
+      resolveSessionTitle: (sessionID) => {
+        const session = ctx.data?.session;
+        // get() reads the same in-memory store as list(); scan list() only
+        // on hosts without get() so renders stay O(1) per row.
+        const title = session?.get
+          ? session.get(sessionID)?.title
+          : session?.list?.().find((entry) => entry.id === sessionID)?.title;
+        return typeof title === 'string' && title.trim() !== ''
+          ? title
+          : undefined;
+      },
       getSelectedRootModel: (currentSnapshot) => {
         const route = ctx.ui.router.current();
         const sessionID = resolveRouteSessionId(route);

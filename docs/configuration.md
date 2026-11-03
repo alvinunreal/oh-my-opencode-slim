@@ -106,7 +106,7 @@ agent has a `•` before its name. While an agent session reports `busy` or
 The bullet returns after every active session for that agent becomes idle or
 is deleted.
 
-In an expanded agent list, `⚰` marks a stopped session (no terminal result); only `task_revive` can continue it.
+In an expanded agent list, `⚰` marks a stopped session (no terminal result); only `task_revive` can continue it. Expanded subagent rows show the session's title, truncated to the sidebar's width, when the host knows one; before a title is generated or on hosts without title data they fall back to the numbered alias.
 
 ---
 

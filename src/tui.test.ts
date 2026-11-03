@@ -37,6 +37,7 @@ import {
   selectionGuard,
   shortSessionID,
   sidebarSiblingAnnotation,
+  sidebarTargetLabel,
   splitSidebarModelId,
   default as tuiPlugin,
 } from './tui';
@@ -1519,9 +1520,10 @@ describe('clickable sidebar sessions', () => {
 
   async function renderAttributionFrame(
     render: () => unknown,
+    width = 60,
   ): Promise<string> {
     const setup = await testRender(() => render() as never, {
-      width: 60,
+      width,
       height: 24,
     });
     try {
@@ -1744,6 +1746,125 @@ describe('clickable sidebar sessions', () => {
     );
     expect(frame).toContain('exp-1 1/2');
     expect(frame).toContain('exp-2 2/2');
+  });
+
+  test('expanded rows show the session title itself with the alias fallback', async () => {
+    const snapshot = createSnapshot({
+      agentModels: { explorer: 'openai/gpt-6' },
+      activeSessions: { exp_a: 'explorer', exp_b: 'explorer' },
+      sessionParents: { exp_a: 'conv-1', exp_b: 'conv-1' },
+      sessionDetails: {
+        exp_a: { alias: 'exp-1', status: 'busy' },
+        exp_b: { alias: 'exp-2', status: 'busy' },
+      },
+    });
+    const frame = await renderAttributionFrame(() =>
+      renderSidebar(
+        snapshot,
+        'test',
+        attributionTheme,
+        false,
+        false,
+        () => 0,
+        'conv-1',
+        expandedInteraction(),
+        undefined,
+        undefined,
+        (sessionID) =>
+          sessionID === 'exp_a' ? 'Investigate flaky login tests' : undefined,
+      ),
+    );
+    // The parent row already names the agent, so a titled sub-row shows the
+    // title itself (no exp-1 prefix) and keeps its sibling annotation.
+    expect(frame).toContain('Investigate flaky login tests 1/2');
+    expect(frame).not.toContain('exp-1');
+    // Without a title the row falls back to the board alias.
+    expect(frame).toContain('exp-2 2/2');
+  });
+
+  test('board-projected reusable rows prefer host session titles too', async () => {
+    const snapshot = createSnapshot({
+      agentModels: { explorer: 'openai/gpt-6' },
+      sessionParents: { 'exp-idle-a': 'conv-1', 'exp-idle-b': 'conv-1' },
+      reusableByAgent: {
+        'conv-1': {
+          explorer: [
+            {
+              taskID: 'exp-idle-a',
+              alias: 'exp-9',
+              terminalState: 'completed',
+              lastUsedAt: 2,
+            },
+            {
+              taskID: 'exp-idle-b',
+              alias: 'exp-8',
+              terminalState: 'completed',
+              lastUsedAt: 1,
+            },
+          ],
+        },
+      },
+    });
+    const frame = await renderAttributionFrame(() =>
+      renderSidebar(
+        snapshot,
+        'test',
+        attributionTheme,
+        false,
+        false,
+        () => 0,
+        'conv-1',
+        expandedInteraction(),
+        undefined,
+        undefined,
+        (sessionID) =>
+          sessionID === 'exp-idle-a' ? 'Refactor the config loader' : undefined,
+      ),
+    );
+    expect(frame).toContain('Refactor the config loader');
+    expect(frame).not.toContain('exp-9');
+    expect(frame).toContain('exp-8');
+  });
+
+  test('titled rows truncate adaptively to the sidebar width, annotation pinned', async () => {
+    const snapshot = createSnapshot({
+      agentModels: { explorer: 'openai/gpt-6' },
+      activeSessions: { exp_a: 'explorer', exp_b: 'explorer' },
+      sessionParents: { exp_a: 'conv-1', exp_b: 'conv-1' },
+      sessionDetails: {
+        exp_a: { alias: 'exp-1', status: 'busy' },
+        exp_b: { alias: 'exp-2', status: 'busy' },
+      },
+    });
+    const title = 'Investigate systematically the flaky login test failures';
+    const renderWithTitle = () =>
+      renderSidebar(
+        snapshot,
+        'test',
+        attributionTheme,
+        false,
+        false,
+        () => 0,
+        'conv-1',
+        expandedInteraction(),
+        undefined,
+        undefined,
+        (sessionID) => (sessionID === 'exp_a' ? title : undefined),
+      );
+    // Wide sidebar: the full title fits beside its sibling annotation.
+    const wide = await renderAttributionFrame(renderWithTitle, 100);
+    expect(wide).toContain(`${title} 1/2`);
+    expect(wide).toContain('exp-2 2/2');
+    // Narrow sidebar: the OpenTUI layout engine ellipsizes the label to
+    // the laid-out width while the pinned 1/2 annotation survives.
+    const narrow = await renderAttributionFrame(renderWithTitle, 34);
+    const titleLine = narrow.split('\n').find((line) => line.includes('1/2'));
+    expect(titleLine).toBeDefined();
+    expect(titleLine).toContain('Investigat'); // head kept
+    expect(titleLine).toContain('...'); // native ellipsis, not a tail cut
+    expect(titleLine?.trimEnd().endsWith('1/2')).toBe(true);
+    expect(narrow).not.toContain(title);
+    expect(narrow).toContain('exp-2 2/2');
   });
 
   test('renders display names while canonical IDs keep models, activity and clicks', async () => {
@@ -3415,6 +3536,38 @@ describe('clickable sidebar sessions', () => {
     }
     expect(hashes).toEqual(sidebarFrameGolden);
   }, 20_000);
+});
+
+describe('sidebarTargetLabel', () => {
+  const resolver = (sessionID: string): string | undefined =>
+    sessionID === 'ses-res' ? 'Resolver title' : undefined;
+
+  test('prefers the resolved title, then alias/id', () => {
+    expect(
+      sidebarTargetLabel({ sessionID: 'ses-res', alias: 'exp-2' }, resolver),
+    ).toBe('Resolver title');
+    expect(
+      sidebarTargetLabel({ sessionID: 'ses-x', alias: 'exp-3' }, resolver),
+    ).toBe('exp-3');
+    expect(sidebarTargetLabel({ sessionID: 'ses-x' }, resolver)).toBe(
+      shortSessionID('ses-x'),
+    );
+  });
+
+  test('collapses whitespace in resolved titles', () => {
+    expect(
+      sidebarTargetLabel(
+        { sessionID: 'ses-x', alias: 'exp-2' },
+        () => ' Investigate\n\tflaky tests  ',
+      ),
+    ).toBe('Investigate flaky tests');
+  });
+
+  test('a blank resolved title falls back to the alias', () => {
+    expect(
+      sidebarTargetLabel({ sessionID: 'ses-b', alias: 'exp-4' }, () => ' \n '),
+    ).toBe('exp-4');
+  });
 });
 
 describe('resolveSidebarSlotOrder', () => {
