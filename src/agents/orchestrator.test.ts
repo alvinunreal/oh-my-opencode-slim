@@ -286,6 +286,28 @@ describe('createAgents orchestrator prompt gates', () => {
     expect(prompt).toContain('A specialist can load only the skills');
   });
 
+  test('routing lines keep skill grants from permission.skill', () => {
+    const agents = createAgents(
+      runtimeFor({
+        agents: {
+          fixer: {
+            permission: { skill: { '*': 'deny', 'custom-review': 'allow' } },
+          },
+        },
+      }),
+    );
+    const prompt = agents.find((a) => a.name === 'orchestrator')?.config
+      .prompt as string;
+    const fixerLine = prompt
+      .split('\n')
+      .find((line) => line.startsWith('@fixer'));
+    expect(fixerLine).toEndWith(' Skills: custom-review.');
+    const fixerPermission = agents.find((a) => a.name === 'fixer')?.config
+      .permission as { skill?: Record<string, string> } | undefined;
+    const fixerSkill = fixerPermission?.skill;
+    expect(fixerSkill?.['custom-review']).toBe('allow');
+  });
+
   test('defaults keep the registered-tool prompt bytes unchanged', () => {
     // No cold-gate is set: the default render must lead to the same bytes
     // the snapshot-pinned builder produces with the same option defaults.

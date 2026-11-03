@@ -748,6 +748,29 @@ function buildCustomAgentDefinition(
 }
 
 /**
+ * Final `permission.skill` record for an agent: user-authored skill rules
+ * first, then the resolved grants (which own `'*'` and every named grant).
+ * Shared by the enforced permissions and the orchestrator's routing lines.
+ */
+function resolveSkillRules(
+  agentName: string,
+  permission: unknown,
+  configuredSkills?: readonly string[],
+  disabledSkills?: readonly string[],
+): Record<string, 'ask' | 'allow' | 'deny'> {
+  const existing =
+    typeof permission === 'object' && permission !== null
+      ? (permission as { skill?: unknown }).skill
+      : undefined;
+  return {
+    ...(typeof existing === 'object'
+      ? (existing as Record<string, 'ask' | 'allow' | 'deny'>)
+      : {}),
+    ...getSkillPermissionsForAgent(agentName, configuredSkills, disabledSkills),
+  };
+}
+
+/**
  * Apply default permissions to an agent.
  * Includes skill permission presets. If configuredSkills is provided, it
  * honors that list instead of defaults.
@@ -778,13 +801,6 @@ function applyDefaultPermissions(
     string,
     'ask' | 'allow' | 'deny' | Record<string, 'ask' | 'allow' | 'deny'>
   >;
-
-  // Get skill-specific permissions for this agent
-  const skillPermissions = getSkillPermissionsForAgent(
-    agent.name,
-    configuredSkills,
-    disabledSkills,
-  );
 
   // Primaries (built-in or declared) run the guarded task/marketplace
   // controls; everyone else needs the ORCHESTRATOR_GUARDED_TOOL_NAMES
@@ -863,10 +879,12 @@ function applyDefaultPermissions(
     wait_for_user: waitForUserPerm,
     ...marketplacePermissions,
     // Apply skill permissions as nested object under 'skill' key
-    skill: {
-      ...(typeof existing.skill === 'object' ? existing.skill : {}),
-      ...skillPermissions,
-    },
+    skill: resolveSkillRules(
+      agent.name,
+      existing,
+      configuredSkills,
+      disabledSkills,
+    ),
   } as SDKAgentConfig['permission'];
 }
 
@@ -976,16 +994,13 @@ function createAgentViews(
       names.flatMap((name) => {
         const override = getOverrideFromAgents(mergedAgents, name);
         if (typeof override?.permission === 'string') return [];
-        return [
-          [
-            name,
-            summarizeSkillGrants(
-              name,
-              override?.skills,
-              runtime.disabledSkills,
-            ),
-          ],
-        ];
+        const rules = resolveSkillRules(
+          name,
+          override?.permission,
+          override?.skills,
+          runtime.disabledSkills,
+        );
+        return [[name, summarizeSkillGrants(rules)]];
       }),
     );
   if (!runtime.council) {
