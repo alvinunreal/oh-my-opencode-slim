@@ -24,7 +24,7 @@ import {
   AGENT_ALIASES,
   BUILTIN_OPENCODE_SUBAGENTS_TO_DISABLE,
 } from '../config/constants';
-import { resolveBackgroundJobsMode } from '../config/runtime';
+import { resolveFeatureGates } from '../config/feature-gates';
 import { InterviewConfigSchema } from '../config/schema';
 import type { PluginConfigSnapshot } from '../config/snapshot';
 import { readPluginConfigSnapshot } from '../config/snapshot';
@@ -2351,11 +2351,12 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       hostFlavor: 'v2',
     });
     const preFlightConfig = startupConfigSnapshot.config;
-    // Resolve the same mode the v1 factory will resolve: `native` and `off`
-    // must not wire board persistence or the native-subagent executor
-    // wrapper, and only `managed` may claim the lifecycle.
-    const lifecycleEnabled =
-      resolveBackgroundJobsMode(preFlightConfig.backgroundJobs) === 'managed';
+    // Derive every startup feature gate ONCE from the same snapshot the v1
+    // factory consumes. Only `managed` may claim the lifecycle: `native` and
+    // `off` must not wire board persistence or the native-subagent executor
+    // wrapper.
+    const featureGates = resolveFeatureGates(preFlightConfig);
+    const lifecycleEnabled = featureGates.managedJobs;
     if (lifecycleEnabled) {
       try {
         const storage = ctx.storage;
@@ -2457,24 +2458,18 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       const implementCommandEnabled = isCommandEnabled('implement', {
         disabledCommands,
       });
-      // Master switches (default true — an untouched config keeps every
-      // behavior). `sidebar`/`liveConfigRefresh` are read from the raw
-      // config here because the parsed interview config above is the only
-      // structured view that carries `.enabled` today.
-      const interviewEnabled = interviewConfig.enabled !== false;
-      const sidebarEnabled = pluginConfig.sidebar !== false;
-      const liveRefreshEnabled = pluginConfig.liveConfigRefresh !== false;
-      const updateCheckerEnabled = !(
-        pluginConfig.disabled_hooks ?? []
-      ).includes('auto-update-checker');
-      // The server-side auto-update checker is gated by the v1 factory's own
-      // disabled_hooks read; surface the decision once for the setup log.
+      // Master switches come from the same startup feature-gate resolution
+      // that gated lifecycle persistence above. The parsed interview config
+      // still supplies the bridge's own options.
+      const interviewEnabled = featureGates.interview;
+      const sidebarEnabled = featureGates.sidebar;
+      const liveRefreshEnabled = featureGates.liveConfigRefresh;
       log('[v2] feature switches', {
-        lifecycle: lifecycleEnabled,
-        interview: interviewEnabled,
-        sidebar: sidebarEnabled,
-        liveConfigRefresh: liveRefreshEnabled,
-        updateChecker: updateCheckerEnabled,
+        lifecycle: featureGates.managedJobs,
+        interview: featureGates.interview,
+        sidebar: featureGates.sidebar,
+        liveConfigRefresh: featureGates.liveConfigRefresh,
+        updateChecker: featureGates.updateChecker,
       });
       let interviewBridge: V2InterviewBridge | undefined;
       if (interviewEnabled) {

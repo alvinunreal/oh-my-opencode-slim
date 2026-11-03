@@ -3,7 +3,7 @@
  *
  * - `interview.enabled: false` → no bridge instance (no `/interview` command
  *   marker registered, no per-event bridge work, no context-hook dispatch).
- * - `backgroundJobs.enabled: false` → no board persistence and no
+ * - `backgroundJobs.mode: "off"` → no board persistence and no
  *   structured delegated-launch wrapper (native subagent paths untouched).
  * - `liveConfigRefresh: false` → no config-file watcher, while the one-shot
  *   startup profile seed and explicit `refreshProfiles` still function.
@@ -417,7 +417,7 @@ describe('v2 setup feature gates', () => {
   test('lifecycle disabled: no persistence and no structured-launch wrapper', async () => {
     await writeProjectConfig({
       companion: { enabled: false },
-      backgroundJobs: { enabled: false },
+      backgroundJobs: { mode: 'off' },
     });
     const { ctx, toolUpdates } = makeCtx(projectDir);
     const cleanup = await createV2Setup()(ctx);
@@ -468,7 +468,6 @@ describe('v2 setup feature gates', () => {
   // lifecycle left the guard armed in `native`/`off`, so every `subagent` call
   // was rejected with 'Native subagent session preset wrapper unavailable'.
   for (const [label, backgroundJobs] of [
-    ['enabled: false', { enabled: false }],
     ['mode "native"', { mode: 'native' }],
     ['mode "off"', { mode: 'off' }],
   ] as const) {
@@ -578,7 +577,7 @@ describe('v2 setup feature gates', () => {
 
       await writeProjectConfig({
         companion: { enabled: false },
-        backgroundJobs: { enabled: false },
+        backgroundJobs: { mode: 'off' },
       });
       const { ctx, storageCalls } = makeCtx(projectDir, persistence.backend);
       const cleanup = await createV2Setup()(ctx);

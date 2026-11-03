@@ -979,8 +979,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       clearTuiAgentActivities(ctx.directory);
     }
 
-    // Managed lifecycle gate (`backgroundJobs.mode: "managed"`, the default;
-    // the legacy `enabled: false` resolves to `off`). When it is not managed,
+    // Managed lifecycle gate (`backgroundJobs.mode: "managed"`, the default).
+    // When it is not managed,
     // nothing board-shaped is constructed: no job board, admission lease, TUI
     // projection, terminal gate, supervisor, revived-run tracker, session
     // recovery, alias authority, task-session-manager hook, wake scheduler,
@@ -1709,10 +1709,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
     }
 
-    if (!runtime.disabledHooks.has('auto-update-checker')) {
+    if (runtime.updateCheckerEnabled) {
       // Initialize auto-update checker hook
       autoUpdateChecker = createAutoUpdateCheckerHook(ctx, {
-        autoUpdate: runtime.autoUpdate,
         companion: runtime.companion,
       });
     }

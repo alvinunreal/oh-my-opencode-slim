@@ -16,8 +16,10 @@ project reads.
 
 The sidebar keeps its 1s render poll. With `sidebar: false`, the 5s config poll
 still detects external multiplexer edits, but unchanged files are not parsed
-again. Companion request detection keeps its 250ms interval; its config refresh
-is a separate once-per-second duty.
+again. `tui: false` also stops the server-side sidebar recorder: no state-file
+writes and no parent-hydration `session.get` reads. Companion request detection
+keeps its 250ms interval; its config refresh is a separate once-per-second
+duty.
 
 ## Pass-local facts
 

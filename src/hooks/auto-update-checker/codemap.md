@@ -97,8 +97,7 @@ Notify: Success/failure via OpenCode TUI toast
 7. If unparseable version: Show notification and skip auto-update
 8. If current == latest: Log and exit
 9. If pinned: Show pinned version notification
-10. If auto-update disabled: Show notification only
-11. Acquire the cross-process install lock for the target install dir
+10. Acquire the cross-process install lock for the target install dir
     (PID-guarded dir lock, async wait up to install timeout + slack);
     skip quietly on timeout
 12. Under the lock: re-verify the target install dir; if another process
@@ -201,7 +200,7 @@ Key test scenarios:
 - Channel extraction (latest, alpha, beta, rc, canary, next)
 - Major version blocking
 - Pinned version handling
-- Auto-update enabled/disabled scenarios
+- Outer feature-gate cold disable (no construction when updates are off)
 - Network timeout and failure handling
 - Skill synchronization (install, skip, failure cases)
 - Companion update scenarios

@@ -14,7 +14,6 @@
  * Loaded only by the thin entry (`./tui.ts`) after the config gate passes, so
  * `tui: false` never evaluates this module's render stack.
  */
-import { loadPluginConfig } from '../config/loader';
 import { isCommandEnabled } from '../hooks/command-hook-utils';
 import { PANE_VIEWER_ENV } from '../multiplexer/shared';
 import type { TuiRouteView } from '../tui';
@@ -385,18 +384,20 @@ export async function runSetup(
   // but has no UI channel on V2 — `client.tui.showToast` is a no-op in the
   // shim — so the TUI owns the message. Scheduled off the startup path and
   // silent on every failure; see ./update-notice.
-  // `disabled_hooks: ["auto-update-checker"]` is the explicit off switch.
+  // The shared update-checker gate is off for `autoUpdate: false` or
+  // `disabled_hooks: ["auto-update-checker"]`: no timer, no notice, no
+  // network.
   if (
     process.env[PANE_VIEWER_ENV] !== '1' &&
-    !gatesRead.gates.disabledHooks.has('auto-update-checker')
+    gatesRead.gates.updateCheckerEnabled
   ) {
     disposers.push(
       registerUpdateNotice(ctx, {
         renderBadge: (latest, color) => renderUpdateBadge(latest, color),
       }),
     );
-  } else if (gatesRead.gates.disabledHooks.has('auto-update-checker')) {
-    log('[v2][tui] update notice skipped: auto-update-checker disabled');
+  } else if (!gatesRead.gates.updateCheckerEnabled) {
+    log('[v2][tui] update notice skipped: update checker disabled');
   }
 
   return () =>

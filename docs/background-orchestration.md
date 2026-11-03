@@ -53,8 +53,7 @@ environment variable through the installer (see [Installation](installation.md))
 or use the one-shot export above. V2 does not use this variable. Confirm the
 release with `opencode --version`.
 
-Setting `backgroundJobs.mode: "off"` (or the legacy `backgroundJobs.enabled:
-false`) turns this managed layer off entirely:
+Setting `backgroundJobs.mode: "off"` turns this managed layer off entirely:
 the `task_*` control tools and `wait_for_user` are not registered, and no job
 board, retention, terminal gate, watchdog, wake scheduler, or startup recovery
 runs. Native `task`/`subagent` delegation and host completion delivery keep
