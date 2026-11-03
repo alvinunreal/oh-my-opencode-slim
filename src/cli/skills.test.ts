@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { getSkillPermissionsForAgent } from './skills';
+import { getSkillPermissionsForAgent, summarizeSkillGrants } from './skills';
 
 describe('skills permissions', () => {
   it('should allow all skills for orchestrator by default', () => {
@@ -85,5 +85,38 @@ describe('getSkillPermissionsForAgent with malformed disabledSkillNames', () => 
       invalid: 'object',
     } as any);
     expect(perms['*']).toBe('allow');
+  });
+});
+
+describe('summarizeSkillGrants', () => {
+  const summarize = (
+    agent: string,
+    skills?: readonly string[],
+    disabled?: readonly string[],
+  ) =>
+    summarizeSkillGrants(getSkillPermissionsForAgent(agent, skills, disabled));
+
+  it('lists default grants and reports none as empty', () => {
+    expect(summarize('oracle')).toBe('simplify, requesting-code-review');
+    expect(summarize('fixer')).toBe('');
+  });
+
+  it('honors explicit lists, wildcards, exclusions and disabled skills', () => {
+    expect(summarize('fixer', ['simplify', 'gone'], ['gone'])).toBe('simplify');
+    expect(summarize('fixer', ['*', '!deepwork'])).toBe('all except deepwork');
+  });
+
+  it('keeps disabled skills as wildcard exceptions', () => {
+    // A disabled user-authored skill still exists; the rules deny it.
+    expect(summarize('fixer', ['*'], ['reflect'])).toBe('all except reflect');
+  });
+
+  it('skips named rules shadowed by a later wildcard', () => {
+    expect(
+      summarizeSkillGrants({ 'custom-review': 'allow', '*': 'deny' }),
+    ).toBe('');
+    expect(
+      summarizeSkillGrants({ '*': 'deny', 'custom-review': 'allow' }),
+    ).toBe('custom-review');
   });
 });

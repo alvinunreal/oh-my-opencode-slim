@@ -25,16 +25,28 @@ export const ROLE_ROUTING_SLIM_LINES: Readonly<Record<string, string>> =
     observer: `@observer — analyzes images/PDFs/diagrams, keeping media bytes out of your context. Always pass the full file path. Don't: plain-text files.`,
   });
 
+/** Agent name → skill grant summary (see `summarizeSkillGrants`). */
+export type AgentSkillGrants = Readonly<Record<string, string>>;
+
+/** Closing note: specialists can't load skills only the orchestrator has. */
+export const AGENT_SKILLS_NOTE =
+  'A specialist can load only the skills on its line; for any other skill, load it yourself and brief the steps.';
+
+function withSkills(line: string, skills: string | undefined): string {
+  return skills ? `${line} Skills: ${skills}.` : line;
+}
+
 /** Routing lines for every agent not disabled or excluded, blank-line
  * separated. */
 export function renderRoutingLines(
   disabledAgents?: ReadonlySet<string>,
   excludeDescriptions?: readonly string[],
+  agentSkills?: AgentSkillGrants,
 ): string {
   return Object.entries(ROLE_ROUTING_SLIM_LINES)
     .filter(([name]) => !disabledAgents?.has(name))
     .filter(([name]) => !excludeDescriptions?.includes(name))
-    .map(([, line]) => line)
+    .map(([name, line]) => withSkills(line, agentSkills?.[name]))
     .join('\n\n');
 }
 
@@ -83,13 +95,18 @@ export function renderScopedAgentsBlock(
   names: readonly string[],
   customDescriptions?: Readonly<Record<string, string | undefined>>,
   disabledAgents?: ReadonlySet<string>,
+  agentSkills?: AgentSkillGrants,
 ): string {
   const inScope = new Set(names.map((name) => name.toLowerCase()));
   const lines = names
     .filter((name) => !disabledAgents?.has(name))
     .map((name) =>
-      scopedRoutingLine(name, customDescriptions?.[name], inScope),
+      withSkills(
+        scopedRoutingLine(name, customDescriptions?.[name], inScope),
+        agentSkills?.[name],
+      ),
     );
   if (lines.length === 0) return '';
-  return `<Agents>\n${lines.join('\n\n')}\n</Agents>\n`;
+  const note = agentSkills ? `\n\n${AGENT_SKILLS_NOTE}` : '';
+  return `<Agents>\n${lines.join('\n\n')}${note}\n</Agents>\n`;
 }

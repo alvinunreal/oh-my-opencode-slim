@@ -1,5 +1,8 @@
 import type { AgentConfig as SDKAgentConfig } from '@opencode-ai/sdk/v2';
-import { getSkillPermissionsForAgent } from '../cli/skills';
+import {
+  getSkillPermissionsForAgent,
+  summarizeSkillGrants,
+} from '../cli/skills';
 import {
   AGENT_ALIASES,
   type AgentOverrideConfig,
@@ -40,7 +43,7 @@ import {
   resolvePrompt,
 } from './orchestrator';
 import { mergeTaskStance, TASK_NO_NESTED_DISPATCH } from './permissions';
-import { renderScopedAgentsBlock } from './role-routing';
+import { type AgentSkillGrants, renderScopedAgentsBlock } from './role-routing';
 import {
   appendObserverDispatchInstruction,
   appendTaskRejectionInstruction,
@@ -745,6 +748,29 @@ function buildCustomAgentDefinition(
 }
 
 /**
+ * Final `permission.skill` record for an agent: user-authored skill rules
+ * first, then the resolved grants (which own `'*'` and every named grant).
+ * Shared by the enforced permissions and the orchestrator's routing lines.
+ */
+function resolveSkillRules(
+  agentName: string,
+  permission: unknown,
+  configuredSkills?: readonly string[],
+  disabledSkills?: readonly string[],
+): Record<string, 'ask' | 'allow' | 'deny'> {
+  const existing =
+    typeof permission === 'object' && permission !== null
+      ? (permission as { skill?: unknown }).skill
+      : undefined;
+  return {
+    ...(typeof existing === 'object'
+      ? (existing as Record<string, 'ask' | 'allow' | 'deny'>)
+      : {}),
+    ...getSkillPermissionsForAgent(agentName, configuredSkills, disabledSkills),
+  };
+}
+
+/**
  * Apply default permissions to an agent.
  * Includes skill permission presets. If configuredSkills is provided, it
  * honors that list instead of defaults.
@@ -775,13 +801,6 @@ function applyDefaultPermissions(
     string,
     'ask' | 'allow' | 'deny' | Record<string, 'ask' | 'allow' | 'deny'>
   >;
-
-  // Get skill-specific permissions for this agent
-  const skillPermissions = getSkillPermissionsForAgent(
-    agent.name,
-    configuredSkills,
-    disabledSkills,
-  );
 
   // Primaries (built-in or declared) run the guarded task/marketplace
   // controls; everyone else needs the ORCHESTRATOR_GUARDED_TOOL_NAMES
@@ -860,10 +879,12 @@ function applyDefaultPermissions(
     wait_for_user: waitForUserPerm,
     ...marketplacePermissions,
     // Apply skill permissions as nested object under 'skill' key
-    skill: {
-      ...(typeof existing.skill === 'object' ? existing.skill : {}),
-      ...skillPermissions,
-    },
+    skill: resolveSkillRules(
+      agent.name,
+      existing,
+      configuredSkills,
+      disabledSkills,
+    ),
   } as SDKAgentConfig['permission'];
 }
 
@@ -965,6 +986,23 @@ function createAgentViews(
   const vocab = delegationVocabulary(options?.hostFlavor);
   const mergedAgents = runtime.agents();
   const disabled = new Set(runtime.disabledAgents);
+  // Skill grants as the routing block shows them: same resolver as the
+  // enforced permissions, so the orchestrator never briefs a skill the
+  // delegate cannot load. String-shorthand permissions bypass the resolver.
+  const skillGrants = (names: readonly string[]): AgentSkillGrants =>
+    Object.fromEntries(
+      names.flatMap((name) => {
+        const override = getOverrideFromAgents(mergedAgents, name);
+        if (typeof override?.permission === 'string') return [];
+        const rules = resolveSkillRules(
+          name,
+          override?.permission,
+          override?.skills,
+          runtime.disabledSkills,
+        );
+        return [[name, summarizeSkillGrants(rules)]];
+      }),
+    );
   if (!runtime.council) {
     disabled.add('council');
     // The bare councillor is only meaningful as part of configured Council Mode.
@@ -1231,6 +1269,7 @@ function createAgentViews(
                 scope.map((n) => [n, mergedAgents[n]?.description]),
               ),
               disabled,
+              skillGrants(scope),
             )
           : undefined,
       ),
@@ -1420,6 +1459,9 @@ function createAgentViews(
               orchestratorScope.map((n) => [n, mergedAgents[n]?.description]),
             )
           : undefined,
+        agentSkills: skillGrants(
+          orchestratorScope ?? allSubAgents.map((agent) => agent.name),
+        ),
         waitForUser:
           runtime.backgroundJobsEnabled &&
           !runtime.disabledTools.includes('wait_for_user'),

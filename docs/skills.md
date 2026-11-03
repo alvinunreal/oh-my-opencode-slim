@@ -361,6 +361,13 @@ Control which skills each agent can use in `~/.config/opencode/oh-my-opencode-sl
 - `!item` excludes a specific skill
 - Conflicts (e.g. `["a", "!a"]`) → deny wins (principle of least privilege)
 
+The orchestrator's `<Agents>` routing block shows each specialist's effective
+grants (from `skills`, `disabled_skills` and `permission.skill`) on that
+specialist's line (for example `Skills: simplify.`, `Skills:
+all`, or `Skills: all except codemap.`). This lets the orchestrator load
+skills only it has itself instead of asking a delegate that can't load them.
+Specialists with no skills show nothing.
+
 **Example:**
 
 ```json
