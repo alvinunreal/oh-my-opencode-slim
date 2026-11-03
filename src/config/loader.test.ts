@@ -3328,7 +3328,6 @@ describe('removed config keys', () => {
       'backgroundJobs.continueOnIdle',
       { backgroundJobs: { continueOnIdle: true } },
     ],
-    ['backgroundJobs.enabled', { backgroundJobs: { enabled: true } }],
     [
       'backgroundJobs.boardInjection',
       { backgroundJobs: { boardInjection: true } },
@@ -3365,7 +3364,7 @@ describe('removed config keys', () => {
     });
   }
 
-  test('removed backgroundJobs.enabled warns, drops the alias, and keeps siblings', () => {
+  test('removed backgroundJobs.enabled: false warns and keeps the opt-out as mode off', () => {
     const { config, warnings } = load({
       backgroundJobs: {
         enabled: false,
@@ -3376,7 +3375,8 @@ describe('removed config keys', () => {
     });
 
     expect(config.agents?.oracle?.model).toBe('test/preset-oracle');
-    expect(config.backgroundJobs?.mode).toBeUndefined();
+    // A stale opt-out must not silently re-enable the managed lifecycle.
+    expect(config.backgroundJobs?.mode).toBe('off');
     // Only the alias is dropped; every sibling keeps its configured value.
     expect(config.backgroundJobs?.maxSessionsPerAgent).toBe(4);
     expect(config.backgroundJobs?.concurrency?.defaultConcurrency).toBe(2);
@@ -3384,9 +3384,15 @@ describe('removed config keys', () => {
     expect(Object.hasOwn(config.backgroundJobs ?? {}, 'enabled')).toBe(false);
     expect(warnings.map((w) => w.kind)).toEqual(['removed-key']);
     expect(warnings[0]?.message).toContain('"backgroundJobs.enabled"');
-    // A stale enabled:false is dropped, not migrated to mode: with no mode the
-    // runtime resolves the default managed lifecycle.
-    expect(resolveFeatureGates(config).backgroundJobsMode).toBe('managed');
+    expect(warnings[0]?.message).toContain('backgroundJobs.mode');
+    expect(resolveFeatureGates(config).backgroundJobsMode).toBe('off');
+  });
+
+  test('removed backgroundJobs.enabled: false never overrides an explicit mode', () => {
+    const { config } = load({
+      backgroundJobs: { enabled: false, mode: 'native' },
+    });
+    expect(config.backgroundJobs?.mode).toBe('native');
   });
 
   test('SF-01: drops webfetch.model without losing the other file settings', () => {

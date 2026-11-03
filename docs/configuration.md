@@ -378,7 +378,8 @@ an MCP tool remains authoritative.
 These keys were removed. A config file that still contains one keeps loading:
 the key is dropped before validation and a warning names it, for example
 `Config key "fallback.timeoutMs" was removed in this version and is ignored;
-see docs/configuration.md`. Values are **not** migrated, so set the
+see docs/configuration.md`. Values are **not** migrated (the one exception is
+`backgroundJobs.enabled: false`, still applied as `mode: "off"`), so set the
 replacement yourself where one exists.
 
 | Removed key | Use instead |
@@ -387,7 +388,7 @@ replacement yourself where one exists.
 | `council.master`, `council.master_timeout`, `council.master_fallback` | Configure the Council agent like any agent, e.g. `presets.<name>.council.model` |
 | `council.presets.<name>.master` (councillor named `master`) | None; rename the councillor if you still want it |
 | `council.presets.<name>.councillors` (nested wrapper) | Put councillors directly under `council.presets.<name>` (the wrapped entries are dropped) |
-| `backgroundJobs.enabled` | `backgroundJobs.mode`: `true` → `"managed"`, `false` → `"off"`; no compatibility migration |
+| `backgroundJobs.enabled` | `backgroundJobs.mode`: `true` → `"managed"`, `false` → `"off"` (a stale `enabled: false` without `mode` is still applied as `"off"`, with a warning) |
 | `backgroundJobs.continueOnIdle` | `backgroundJobs.orchestratorWake.enabled` |
 | `backgroundJobs.maxContextLines` | None; reusability is state-based (terminal, reconciled, status-certain). See [Background Job Management](#background-job-management) |
 | `backgroundJobs.readContextMinLines` | None; the per-session read-context list is path-only with an internal display cap |

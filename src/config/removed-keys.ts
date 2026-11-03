@@ -1,5 +1,6 @@
 /**
- * Config keys removed in this version (no migration, only dropped).
+ * Config keys removed in this version (dropped, not migrated, except that
+ * `backgroundJobs.enabled: false` still maps to `backgroundJobs.mode: "off"`).
  *
  * A stale removed key must not invalidate the whole config file: the loader
  * strips each one from the raw layer before schema validation and reports a
@@ -33,8 +34,17 @@ export const REMOVED_CONFIG_KEYS = [
   'webfetch.model',
 ] as const;
 
+/** Removed keys whose successor needs a specific message. */
+const REMOVED_CONFIG_KEY_MESSAGES: Readonly<Record<string, string>> = {
+  'backgroundJobs.enabled':
+    'Config key "backgroundJobs.enabled" was removed; use backgroundJobs.mode ("managed" | "native" | "off") instead. enabled: false is still applied as mode "off".',
+};
+
 export function removedConfigKeyMessage(path: string): string {
-  return `Config key "${path}" was removed in this version and is ignored; see docs/configuration.md`;
+  return (
+    REMOVED_CONFIG_KEY_MESSAGES[path] ??
+    `Config key "${path}" was removed in this version and is ignored; see docs/configuration.md`
+  );
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -73,6 +83,16 @@ export function stripRemovedConfigKeys(
   onRemoved: (message: string, path: string) => void,
 ): void {
   if (!isPlainObject(rawConfig)) return;
+  // The one removed key with a behavior to keep: a stale opt-out must not
+  // silently re-enable the managed lifecycle (and its task_* tools).
+  const jobs = rawConfig.backgroundJobs;
+  if (
+    isPlainObject(jobs) &&
+    jobs.enabled === false &&
+    jobs.mode === undefined
+  ) {
+    jobs.mode = 'off';
+  }
   const removed: string[] = [];
   for (const path of REMOVED_CONFIG_KEYS) {
     stripPath(rawConfig, path.split('.'), [], removed);
