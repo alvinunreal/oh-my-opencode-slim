@@ -17,10 +17,10 @@ export const MODEL_MAPPINGS = {
   },
   'opencode-go': {
     orchestrator: { model: 'opencode-go/minimax-m3', variant: 'thinking' },
-    oracle: { model: 'opencode-go/qwen3.7-max', variant: 'max' },
-    explorer: { model: 'opencode-go/deepseek-v4-flash', variant: 'high' },
+    oracle: { model: 'opencode-go/qwen3.8-max', variant: 'xhigh' },
+    explorer: { model: 'opencode-go/deepseek-v4.1-flash', variant: 'high' },
     designer: { model: 'opencode-go/kimi-k2.7-code' },
-    fixer: { model: 'opencode-go/deepseek-v4-flash', variant: 'high' },
+    fixer: { model: 'opencode-go/deepseek-v4.1-flash', variant: 'high' },
     observer: { model: 'opencode-go/mimo-v2.5' },
   },
 } as const;
