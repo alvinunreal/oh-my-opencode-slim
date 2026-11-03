@@ -118,7 +118,7 @@ with one equivalent pass; the cache-safety harness mirrors this wiring.
   injection and on `session-lifecycle.ts` for delete coordination.
 - **Orchestrator-wake**: gates on the task-session-manager's `hasInputWait`
   and continuation-model seams.
-- **Foreground-fallback**: uses `types.ts` `isReplayableUserMessage` to locate the
+- **Foreground-fallback**: uses `types.ts` `isUserMessageWithParts` to locate the
   user turn before a replay and reports
   retryable/deferred errors to the task-session-manager event router.
 

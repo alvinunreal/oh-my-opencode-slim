@@ -180,6 +180,53 @@ afterEach(() => {
 });
 
 describe('revived run tracker', () => {
+  test('delivers each later child publication once', async () => {
+    const h = createHarness(() => ({ data: [] }));
+    const now = Date.now();
+    h.board.updateStatus({
+      taskID: h.run.taskID,
+      state: 'completed',
+      resultSummary: 'partial',
+      now,
+    });
+    h.board.markRunningFromLiveSession(h.run.taskID, now + 1);
+    const completed = h.board.updateStatus({
+      taskID: h.run.taskID,
+      state: 'completed',
+      resultSummary: 'final result',
+      now: now + 2,
+    });
+    if (!completed) throw new Error('missing terminal record');
+    h.tracker.deliverContinuation(completed);
+    h.tracker.onTerminal(completed);
+    await flushNotify();
+    expect(h.prompt).toHaveBeenCalledTimes(1);
+    expect(h.prompt.mock.calls[0]?.[0]).toMatchObject({
+      path: { id: 'parent' },
+      delivery: 'queue',
+      body: { parts: [{ text: expect.stringContaining('final result') }] },
+    });
+
+    h.board.markRunningFromLiveSession(h.run.taskID, now + 3);
+    const direct = h.board.updateStatus({
+      taskID: h.run.taskID,
+      state: 'completed',
+      resultSummary: 'direct answer',
+      now: now + 4,
+    });
+    if (!direct) throw new Error('missing direct terminal record');
+    h.tracker.onTerminal(direct);
+    h.tracker.deliverContinuation(direct);
+    await flushNotify();
+    expect(h.prompt).toHaveBeenCalledTimes(2);
+    expect(h.prompt.mock.calls[1]?.[0]).toMatchObject({
+      path: { id: 'parent' },
+      delivery: 'queue',
+      body: { parts: [{ text: expect.stringContaining('direct answer') }] },
+    });
+    h.tracker.dispose();
+  });
+
   test('a deferred terminal probe does not settle or release its admission lease', async () => {
     const h = createHarness(() => ({ data: [] }));
     h.board.updateStatus({
@@ -457,7 +504,7 @@ describe('revived run tracker', () => {
     });
   });
 
-  test('forwards the resolved notification variant in the v1 body and v2 modelVariant', async () => {
+  test('forwards the resolved notification variant in the v1 body', async () => {
     jest.useFakeTimers();
     let probe = false;
     const harness = createHarness(
@@ -487,7 +534,6 @@ describe('revived run tracker', () => {
 
     expect(harness.prompt.mock.calls[0]?.[0]).toMatchObject({
       delivery: 'queue',
-      modelVariant: 'max',
       body: {
         agent: 'plan',
         model: { providerID: 'test', modelID: 'plan-model' },

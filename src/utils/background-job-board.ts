@@ -100,6 +100,8 @@ export interface BackgroundJobRecord {
    * anchor when a new generation starts.
    */
   amendmentInputMessageID?: string;
+  /** Host-admitted steers whose jobs deliver this terminal revision. */
+  hostSteerCover?: { revision: number; calls: number };
   lastLiveBusyAt?: number;
   completedAt?: number;
   resultSummary?: string;
@@ -712,6 +714,7 @@ export class BackgroundJobBoard {
         // amendment id dies with the old generation for the same reason.
         runInputMessageID: input.runInputMessageID,
         amendmentInputMessageID: undefined,
+        hostSteerCover: undefined,
         lastLiveBusyAt: now,
         lastUsedAt: now,
       } satisfies BackgroundJobRecord;
@@ -998,7 +1001,10 @@ export class BackgroundJobBoard {
       // amendment id belongs to the previous generation for the same reason.
       ...(existing.state === 'running'
         ? {}
-        : { runInputMessageID: undefined, amendmentInputMessageID: undefined }),
+        : {
+            runInputMessageID: undefined,
+            amendmentInputMessageID: undefined,
+          }),
       lastLiveBusyAt: now,
       activityRevision: existing.activityRevision + 1,
       timedOut: false,
@@ -1487,6 +1493,31 @@ export class BackgroundJobBoard {
     if (job.amendmentInputMessageID === messageID) return true;
     this.setJob({ ...job, amendmentInputMessageID: messageID });
     return true;
+  }
+
+  /** Cover the live run or its successor, depending on host admission time. */
+  coverHostSteer(taskID: string, generation: number, previous?: number) {
+    const job = this.jobs.get(taskID);
+    if (job?.generation !== generation) return previous;
+    const revision = job.terminalRevision + (job.state === 'running' ? 1 : 2);
+    if (revision === previous) return previous;
+    const cover = job.hostSteerCover;
+    const calls = cover?.revision === revision ? cover.calls + 1 : 1;
+    if (!cover || cover.revision <= revision)
+      this.setJob({ ...job, hostSteerCover: { revision, calls } });
+    return revision;
+  }
+
+  /** Remove only the cover belonging to a steer that failed before its job. */
+  uncoverHostSteer(taskID: string, generation: number, revision: number) {
+    const job = this.jobs.get(taskID);
+    const cover = job?.hostSteerCover;
+    if (job?.generation !== generation || cover?.revision !== revision) return;
+    this.setJob({
+      ...job,
+      hostSteerCover:
+        cover.calls > 1 ? { revision, calls: cover.calls - 1 } : undefined,
+    });
   }
 
   hasRunning(parentSessionID: string): boolean {

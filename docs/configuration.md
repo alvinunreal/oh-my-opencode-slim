@@ -323,7 +323,7 @@ and [Council](council.md) for what remains.
 | `backgroundJobs.orchestratorWake.enabled` | boolean | `true` | When true, idle orchestrator sessions with incomplete todos may receive periodic internal wake prompts (default every 5 minutes of continuous parent idle). Requires host session APIs. v1 hosts only. See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler) See [Background Job Management](#background-job-management). |
 | `backgroundJobs.orchestratorWake.intervalMs` | integer | `300000` | Continuous parent-idle interval between wake evaluations (`60000`–`2147483647` ms). `0` is invalid. v1 hosts only. See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler) See [Background Job Management](#background-job-management). |
 | `backgroundJobs.orchestratorWake.mode` | string | `"auto"` | Wake-condition source (v1 hosts only): `"auto"` uses todo-gating; `"todo"`/`"children"` pin one mode (explicit `"todo"` degrades to children where no todo API exists). | See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler). |
-| `backgroundJobs.orchestratorWake.periodicWakeEnabled` | boolean | `true` | When false, the periodic idle evaluation never runs; only event-driven wakes (stopped-job recovery, later terminal publications, child-input asks) still deliver, and failed event wakes keep their timer-based retry. v1 hosts only: on v2 no scheduler is created, so the whole `orchestratorWake` section is ignored — with a warning when you configure it (the native background notifier owns terminal delivery). | See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler). |
+| `backgroundJobs.orchestratorWake.periodicWakeEnabled` | boolean | `true` | When false, the periodic idle evaluation never runs; only event-driven wakes (stopped-job recovery, later terminal publications, child-input asks) still deliver, and failed event wakes keep their timer-based retry. v1 hosts only: on v2 no scheduler is created, so the whole `orchestratorWake` section is ignored with a warning. | See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler). |
 | `backgroundJobs.orchestratorWake.wakeOnTerminalPublication` | boolean | `true` | When true, a terminal completed/error publication that reaches an idle parent wakes it immediately instead of waiting for the next periodic evaluation. The first terminal publication of any generation (terminalRevision 1) is skipped (the native notifier armed by that generation's `subagent` tool call already delivers it); busy parents are skipped the same way. v1 hosts only. See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler) See [Background Job Management](#background-job-management). |
 | `backgroundJobs.orchestratorWake.publicationWakeMinIntervalMs` | integer | `30000` | Per-parent minimum spacing between terminal-publication wakes (`1000`–`2147483647` ms; `0` is invalid — the schema floor is 1,000ms). A burst of publications collapses into one wake; later-result `<completed-job>` pushes honor the same spacing (queued, then delivered together when the window elapses); the window is consumed only when a wake is actually delivered. v1 hosts only. See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler) See [Background Job Management](#background-job-management). |
 | `backgroundJobs.wallClockTimeoutMs` | integer | `0` | **Opt-in wall-clock watchdog.** `0` disables it. Otherwise, only native background child sessions (`task(..., background: true)` on v1, `subagent(..., background: true)` on v2) are supervised; accepted values are `60000`–`2147483647` milliseconds. On expiry the plugin asks the host to stop the child (a session abort, the same primitive `task_cancel` uses) and the host's own terminal report publishes the row — the plugin never fabricates a terminal for the deadline See [Background Job Management](#background-job-management). |
@@ -669,8 +669,9 @@ to the parent — idle parents get a new turn, busy parents get a steer — so t
 periodic evaluation duplicates that channel. Setting
 `orchestratorWake.periodicWakeEnabled` has no effect on v2 (the key stays
 honored on v1); an explicit `true` is ignored with a warning. Event-driven wakes (stopped-job recovery, later terminal
-publications, child-input asks) are v1-only: on v2 no wake scheduler exists,
-so later results and open child asks are seen through `task_status`.
+publications, child-input asks) are v1-only: on v2 no wake scheduler exists.
+The tracker queues later child results to the parent; open child asks remain
+available through `task_status`.
 
 `routingBlock` deliberately gets **no** v2-derived default. Unlike the board
 injection, the `<Agents>` block is not duplicated by a native channel: the
@@ -878,6 +879,13 @@ foreground children are re-attached inside the same `task` call. The host's
 own `state="error"` notice stays in the parent's history; while the child is
 still running, Slim appends a short trailing note telling the parent the
 child continues on the fallback model.
+
+On v2, the host's `provider.transport` errors (response-header timeouts,
+dropped connections) walk the chain like other provider failures. A
+`provider.no-route` failure before the step starts (the session's model or
+route is gone) continues on the next model the same way as a content-filter
+step. A `provider.auth` 401 gets one same-model retry per turn, so an OAuth
+refresh can land, before the next 401 switches models.
 
 Models rejected for the request itself (content policy, unknown or retired
 model, HTTP 410/421/451) stay excluded from the chain until the next external

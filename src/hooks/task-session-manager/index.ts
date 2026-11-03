@@ -782,6 +782,20 @@ export function createTaskSessionManagerHook(
 
   return {
     scheduleRuntimeStatusReconciliation: runtimeStatusReconciler.schedule,
+    'v2.coverSteer': (
+      callID: string,
+      parentSessionID: string,
+      childSessionID: string,
+    ) => {
+      const pending = pendingCallTracker.peekByCallId(callID, parentSessionID);
+      const steer = pending?.steerAmendment;
+      if (!pending || !steer || steer.taskID !== childSessionID) return;
+      pending.steerCoverRevision = backgroundJobBoard.coverHostSteer(
+        steer.taskID,
+        steer.generation,
+        pending.steerCoverRevision,
+      );
+    },
     /**
      * v2-only extension handle (consumed by src/v2/setup.ts's executor
      * wrapper): register a delegated `subagent` launch from its STRUCTURED

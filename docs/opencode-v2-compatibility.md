@@ -147,7 +147,8 @@ Verified live on OpenCode v2 (all bridges green — health check
 `bridges:11`, +1 on hosts that accept the `session.model.request` hook
 name for the chat.headers bridge; the event stream and bridges are exercised end-to-end on the stable host;
 since the council 2026-10-23 removal the plugin creates no wake scheduler on
-v2 — terminal delivery is the host's native background notifier). v2 conformance is compile-time-pinned by the
+v2; the host delivers first terminal results and the tracker delivers later
+publications). v2 conformance is compile-time-pinned by the
 mirror-conformance guard against the `@opencode/plugin` 2.2.0
 devDependency and exercised by the mock-driven bridge tests. Every v2
 API the adapter touches is
@@ -489,7 +490,7 @@ side cannot be observed.
 | Default primary agent | ✅ finalized visible orchestrator identity | ✅ `draft.default(<visible orchestrator identity>)`; the canonical `orchestrator` entry remains a hidden alias when `displayName` is configured | v1 `default_agent` and v2 draft default target the same visible entry |
 | TUI default agent | ✅ orchestrator | ✅ host follows the default primary agent and hoists it to the head of the agent list | — |
 | Multiplexer (tmux/zellij/herdr/cmux-tui/kitty/wezterm panes) | ✅ | ✅ TUI plugin entry wires the client-owned pane lifecycle through a v2 host adapter: shared background service and `--server` hosts are supported, `--standalone` is fail-closed (one diagnostic per process, `/subagent` fallback — opens a tab without moving focus) | Defaults are host-specific: `"tui"` on v1 (`opencode attach <url> --session <id> --dir <dir>`); `"mini"` on v2 shared (`opencode mini --session <id>`) and remote (`opencode mini --server <url> --session <id>`), with the pane cwd pinned by the adapter. Explicit `viewer: "tui"` retains the v2 full-TUI commands with a positional directory; v1 `viewer: "mini"` appends `--mini` to attach (OpenCode >= 1.17.10), without extra cwd pinning. The `OPENCODE_PASSWORD` secret is injected through the multiplexer's spawn-time environment (or a Linux + POSIX-shell `/proc` bridge on zellij/cmux-tui), never through the viewer's command line — see [Secret handling](multiplexer-integration.md#known-limitations). Events are projected from `session.created` / `session.execution.*` / `session.idle` / `session.deleted`; directory attribution is recorded at `session.created` because execution events carry none |
-| Orchestrator-wake scheduler | ✅ todo-gated (host `todo`/`children`/`status` APIs) | ❌ not created (council 2026-10-23) | v2 runs no plugin wake machinery: the native background notifier owns terminal delivery and `task_status` is the pull channel; the whole `backgroundJobs.orchestratorWake` section is v1-only |
+| Orchestrator-wake scheduler | ✅ todo-gated (host `todo`/`children`/`status` APIs) | ❌ not created (council 2026-10-23) | On v2 the native notifier delivers each generation's first result; the tracker queues later publications to the parent. The `backgroundJobs.orchestratorWake` section is v1-only |
 | `chat.headers` (Copilot `x-initiator` routing) | ✅ | ✅ via `session.hook("model.request")` | transport-level only; auxiliary kinds are covered by v2's built-in Copilot provider hook |
 | Companion app | ✅ | ⚠️ unverified | independent desktop app; test separately against v2 |
 
@@ -1106,11 +1107,13 @@ calls do not flood the log.
 ### No orchestrator-wake on v2
 
 The wake scheduler is **not created on v2** (council 2026-10-23). The host's
-native background notifier owns terminal delivery: a busy parent is reached
-by steer at its next step boundary, an idle parent gets a successor turn,
-restart recovery re-delivers from the durable KV job marker, and the durable
-inbox dedupes by message ID. A rev>1 continuation relaunched through the
-`subagent` tool re-arms the native notifier. Child permission/question asks
+native background notifier delivers the first terminal result of each
+generation: a busy parent is reached by steer at its next step boundary, an
+idle parent gets a successor turn, and restart recovery uses the durable job
+marker. A relaunch through the `subagent` tool starts a new generation and
+re-arms the notifier. The tracker queues later completed or error publications
+of a managed child to the parent, including direct prompts to the child.
+Child permission/question asks
 are a host-UI boundary the host does not route to the parent agent; the
 parent discovers open asks via `task_status` pull. The whole
 `backgroundJobs.orchestratorWake` config section is v1-only and warns as
@@ -1121,14 +1124,10 @@ ignored on v2.
 The native notifier fires on the FIRST terminal publication of every
 generation — on v2 every plugin task launch AND relaunch is a host
 `subagent` tool call that arms the native background notifier (a relaunch
-re-arms it with a fresh `started_at`, defeating the notify dedupe). Only a
-terminal publication that lands while the parent sits idle on a LATER
-revision of the same generation (a child that self-continues via its own
-background-shell notification and finishes again, or a completion after a
-direct prompt to the child session) would otherwise wait for the periodic
-idle evaluation (up to `orchestratorWake.intervalMs`, default 5 minutes).
-The **terminal-publication wake** closes that gap on v1 (on v2 no plugin wake
-exists — the native notifier and `task_status` pull are the only channels):
+re-arms it with a fresh `started_at`, defeating the notify dedupe). Later
+publications of the same generation have no native notifier. On v2, the
+revived-run tracker queues their results to the parent. On v1, the
+**terminal-publication wake** handles them:
 
 - **Trigger:** the terminal gate publishes a `completed` or `error` host
   outcome (state-disjoint from the stopped-job recovery listener, which
@@ -1175,14 +1174,11 @@ Related: when a job whose terminal report the parent already consumed
 trailing notice ("previously reported terminal, now running again; the earlier
 report is superseded") in the cache-safe tail zone, pointing at `task_status`.
 
-On v1 hosts the same first-publication rule holds (the native task-tool
-notifier delivers it), and a LATER publication of the same run — which has no
-native notifier on either host — is delivered by the plugin itself on v1 only,
-as one self-contained `<completed-job>` delta through the bounded delta queue
-(it survives a busy parent, and inside the per-parent publication spacing it
-stays queued until the window elapses). On v2 the plugin sends no wake: a
-relaunch through the `subagent` tool re-arms the native notifier, and any
-other later result is pulled through `task_status`.
+On v1 the native task-tool notifier delivers the first publication. The
+plugin sends later results as self-contained `<completed-job>` deltas through
+the bounded queue, including while the parent is busy. On v2, the tracker
+queues a `<task>` result for each later publication; a relaunch through the
+`subagent` tool starts a generation whose first result is delivered natively.
 
 ### Host outcome quirks the terminal gate defends against
 

@@ -612,6 +612,11 @@ export function createSessionContextHandler(
                   deps.refusalOutcome,
                   childID,
                   text,
+                  'time' in message.info &&
+                    isRecord(message.info.time) &&
+                    typeof message.info.time.created === 'number'
+                    ? message.info.time.created
+                    : undefined,
                 );
                 if (outcome !== null) {
                   recovery =
@@ -3752,6 +3757,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                       refusalOutcome: v1Hooks[
                         'v2.refusalOutcome'
                       ] as V2SessionContextHandlerDeps['refusalOutcome'],
+                      onSteerProgress: v1Hooks['v2.coverSteer'] as Parameters<
+                        typeof createSubagentExecutorWrapper
+                      >[0]['onSteerProgress'],
                       register: (launch) =>
                         registerStructuredLaunch({
                           ...launch,

@@ -12,13 +12,8 @@
  *
  * The v2 model-switch semantics (prompts carry no model; `switchModel`
  * must precede the prompt) are encapsulated in the `promptAsync`
- * translation, which is what lets the v1 foreground-fallback pipeline work
- * unmodified on v2. A failed `switchModel` degrades to steering on the
- * current model (logged, `switched: false` on the result) because the
- * prompt delivery is the load-bearing action; a host with NO
- * `switchModel` rejects callers that declare `modelSwitch: 'required'`
- * (foreground-fallback) while pin-callers (orchestrator-wake) keep the
- * logged steer.
+ * translation. A failed or unavailable `switchModel` degrades to a logged
+ * steer on the current model for callers that pin a model in the body.
  */
 
 import { isRecord } from '../utils/guards';
@@ -175,6 +170,7 @@ function toV1Message(m: Record<string, unknown>) {
       ...(typeof m.agent === 'string' ? { agent: m.agent } : {}),
       ...(typeof m.parentID === 'string' ? { parentID: m.parentID } : {}),
       ...(typeof m.outcome === 'string' ? { outcome: m.outcome } : {}),
+      ...(typeof m.status === 'string' ? { status: m.status } : {}),
       ...(time ? { time } : {}),
       ...(m.finish !== undefined ? { finish: m.finish } : {}),
       ...(m.rawFinish !== undefined ? { rawFinish: m.rawFinish } : {}),
@@ -660,14 +656,9 @@ export function buildPluginInput(
           },
       // v1 prompt_async QUEUED its prompt. The optional `delivery` argument
       // lets callers preserve that on v2 ('queue' — orchestrator-wake);
-      // the default stays 'steer' because the foreground-fallback replay
-      // must steer an in-flight run. The optional `modelSwitch` argument
-      // declares caller intent for the body model: 'required'
-      // (foreground-fallback — the model is the fallback TARGET, so a host
-      // without session.switchModel must fail loudly instead of silently
-      // replaying on the model that just failed); default callers pass the
-      // session's CURRENT model as a pin (orchestrator-wake) and keep the
-      // honest degrade-with-log steer. The optional `modelSelection:
+      // the default stays 'steer'. Callers may pass the session's current
+      // model as a pin (orchestrator-wake), with a logged degrade on failure.
+      // The optional `modelSelection:
       // 'inherit'` argument opts a pure-internal caller into LIFECYCLE
       // continuation semantics (#1079): the body pin is a snapshot, so the
       // host's persisted selection wins and switchModel is skipped. Callers
@@ -676,9 +667,7 @@ export function buildPluginInput(
       promptAsync: async (
         args: Record<string, unknown> & {
           delivery?: 'steer' | 'queue';
-          modelSwitch?: 'required';
           modelSelection?: 'inherit';
-          modelVariant?: string;
         },
       ) => {
         const delivery = args?.delivery === 'queue' ? 'queue' : 'steer';
@@ -714,44 +703,29 @@ export function buildPluginInput(
           );
         }
         const ref = modelRefFromBody(body);
-        let switched = false;
         // Lifecycle continuations that OPT IN via `modelSelection:
         // 'inherit'` (wake / terminal notify) take the host's persisted
         // selection: their body pin — with or without variant — is a
         // snapshot that can be stale by delivery time (#1079). Purely
         // internal bodies WITHOUT the flag keep the pin semantics: the
         // interview runtime tracks its own model and must keep switching.
-        // Mixed bodies still switch; `modelSwitch: 'required'` (the
-        // foreground-fallback replay) still switches.
-        const inheritPersistedSelection =
-          args?.modelSelection === 'inherit' &&
-          args?.modelSwitch !== 'required';
+        // Mixed bodies without that flag still switch.
+        const inheritPersistedSelection = args?.modelSelection === 'inherit';
         if (ref && !inheritPersistedSelection) {
-          // `modelVariant` carries the variant for v2; `body.variant` is
-          // the v1 channel. A non-empty string overrides the ref's variant
-          // so switchModel does not reset it to the host default.
-          const explicitVariant =
-            typeof args?.modelVariant === 'string' && args.modelVariant
-              ? args.modelVariant
-              : undefined;
-          const switchRef = explicitVariant
-            ? { ...ref, variant: explicitVariant }
-            : ref;
           // Variant preservation: pin-callers that name the session's
           // CURRENT model without a variant opinion must not reset the
           // host-side reasoning-effort variant (wake-variant-reset).
-          // Explicit variants and required fallback switches still
-          // switch. Hosts without session.get keep the legacy switch.
+          // Hosts without session.get keep the legacy switch.
           let skipSwitch = false;
-          if (s.get && args?.modelSwitch !== 'required') {
+          if (s.get) {
             try {
               const info = await s.get({ sessionID: sessionIDOf(args) });
               const current = isRecord(info) ? info.model : undefined;
               const pinMatchesCurrent =
                 isRecord(current) &&
-                current.providerID === switchRef.providerID &&
-                current.id === switchRef.id;
-              if (pinMatchesCurrent && !explicitVariant) {
+                current.providerID === ref.providerID &&
+                current.id === ref.id;
+              if (pinMatchesCurrent) {
                 skipSwitch = true;
               }
             } catch {
@@ -760,36 +734,27 @@ export function buildPluginInput(
           }
           if (skipSwitch) {
             // The session already runs the pinned model (with its current
-            // variant); the switch claim stays truthful without a call.
-            switched = true;
+            // variant).
             log(
               '[v2][shim] pin matches current model; variant-preserving skip of session.switchModel',
-              { id: sessionIDOf(args), model: switchRef },
+              { id: sessionIDOf(args), model: ref },
             );
           } else if (s.switchModel) {
             // The prompt delivery is the load-bearing action: a failed
             // model switch degrades to steering on the CURRENT model
-            // (logged here; `switched: false` on the result) instead of
-            // aborting the caller's fallback chain (upstream #1125).
+            // instead of aborting the caller's continuation.
             try {
               await s.switchModel({
                 sessionID: sessionIDOf(args),
-                model: switchRef,
+                model: ref,
               });
-              switched = true;
             } catch (err) {
               log('[v2][shim] session.switchModel failed', {
                 id: sessionIDOf(args),
-                model: switchRef,
+                model: ref,
                 error: err instanceof Error ? err.message : String(err),
               });
             }
-          } else if (args?.modelSwitch === 'required') {
-            const switchErr = new Error(
-              '[v2] host provides no session.switchModel; cannot switch model for fallback prompt',
-            );
-            switchErr.name = 'V2SwitchModelUnavailableError';
-            throw switchErr;
           } else {
             log(
               '[v2][shim] session.switchModel unavailable; steering on the current model',
@@ -811,7 +776,7 @@ export function buildPluginInput(
           // chat-headers bridge could never classify the wake request.
           const internalMessageID = createInternalSyntheticMessageID();
           recordInternalAdmission(sessionIDOf(args), internalMessageID);
-          const result = await s.synthetic?.({
+          return s.synthetic?.({
             sessionID: sessionIDOf(args),
             id: internalMessageID,
             text: textFromBody(args),
@@ -820,14 +785,11 @@ export function buildPluginInput(
             delivery,
             resume: true,
           });
-          // `switched` reports whether the requested model switch was
-          // CONFIRMED — same contract as the prompt path below.
-          return isRecord(result) ? { ...result, switched } : { switched };
         }
         const files = filesFromBody(args);
         // Reachable only when s.prompt exists (the guard above throws
         // otherwise and internalViaSynthetic returned early).
-        const result = await s.prompt?.({
+        return s.prompt?.({
           sessionID: sessionIDOf(args),
           ...(body.messageID ? { id: body.messageID } : {}),
           text: textFromBody(args),
@@ -835,12 +797,6 @@ export function buildPluginInput(
           ...(files.length > 0 ? { files } : {}),
           ...(metadata ? { metadata } : {}),
         });
-        // `switched` reports whether the requested model switch was
-        // CONFIRMED, letting callers gate model-switch bookkeeping on the
-        // truth (foreground-fallback's "switched to fallback model"
-        // claim). Additive over the v2 ack record; callers that ignore
-        // the result are unaffected.
-        return isRecord(result) ? { ...result, switched } : { switched };
       },
       update: s.update
         ? async (args: Record<string, unknown>) => {
