@@ -3757,6 +3757,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                       refusalOutcome: v1Hooks[
                         'v2.refusalOutcome'
                       ] as V2SessionContextHandlerDeps['refusalOutcome'],
+                      onSteerProgress: v1Hooks['v2.coverSteer'] as Parameters<
+                        typeof createSubagentExecutorWrapper
+                      >[0]['onSteerProgress'],
                       register: (launch) =>
                         registerStructuredLaunch({
                           ...launch,

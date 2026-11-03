@@ -2928,6 +2928,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ),
     'v2.noteExternalPromptIntent': (sessionID: string, messageID: string) =>
       foregroundFallback?.observeExternalPromptIntent(sessionID, messageID),
+    'v2.coverSteer': (
+      callID: string,
+      parentSessionID: string,
+      childSessionID: string,
+    ) =>
+      taskSessionManagerHook?.['v2.coverSteer'](
+        callID,
+        parentSessionID,
+        childSessionID,
+      ),
 
     agent: agents,
 
@@ -4315,6 +4325,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       >['v2.registerDelegatedLaunchFromStructured']
     >;
     'v2.notePromptAdmission': (sessionID: string, messageID: string) => void;
+    'v2.coverSteer': NonNullable<
+      typeof taskSessionManagerHook
+    >['v2.coverSteer'];
     'v2.noteExternalPromptIntent'?: (
       sessionID: string,
       messageID: string,

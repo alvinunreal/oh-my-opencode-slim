@@ -264,7 +264,7 @@ export function createRevivedRunTracker(options: {
       options.backgroundJobBoard.releaseLease(run.admissionLease);
       run.admissionLease = undefined;
     }
-    if ((record.hostSteerCount ?? 0) > 0) {
+    if (record.hostSteerCover?.revision === record.terminalRevision) {
       settleRun(run, record);
       options.backgroundJobSupervisor?.onTerminal(record);
       discardRun(run);
@@ -278,7 +278,7 @@ export function createRevivedRunTracker(options: {
       disposed ||
       record.provisional === true ||
       record.terminalRevision <= 1 ||
-      (record.hostSteerCount ?? 0) > 0 ||
+      record.hostSteerCover?.revision === record.terminalRevision ||
       (record.state !== 'completed' && record.state !== 'error') ||
       isTracked(record.taskID, record.generation)
     )

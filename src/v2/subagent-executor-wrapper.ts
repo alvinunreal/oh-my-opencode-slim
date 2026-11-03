@@ -66,6 +66,12 @@ export interface SubagentExecutorWrapperOptions {
     sessionID: string,
   ) => Promise<Array<Record<string, unknown>> | undefined>;
   refusalOutcome?: ForegroundFallbackManager['refusedChildOutcome'];
+  /** The native steer passed permission and reached its progress signal. */
+  onSteerProgress?: (
+    callID: string,
+    parentSessionID: string,
+    childSessionID: string,
+  ) => void;
 }
 
 export async function readRefusalOutcome(
@@ -275,6 +281,34 @@ export function createSubagentExecutorWrapper(
           | undefined;
         const callID = readString(call?.id);
         const parentSessionID = readString(call?.sessionID);
+        const nativeContext = context;
+        const progress = isRecord(nativeContext)
+          ? nativeContext.progress
+          : undefined;
+        if (
+          options.onSteerProgress &&
+          callID &&
+          parentSessionID &&
+          isRecord(nativeContext) &&
+          typeof progress === 'function'
+        ) {
+          context = {
+            ...nativeContext,
+            progress: async (update: unknown) => {
+              await progress.call(nativeContext, update);
+              if (
+                isRecord(update) &&
+                update.status === 'running' &&
+                typeof update.sessionID === 'string'
+              )
+                options.onSteerProgress?.(
+                  callID,
+                  parentSessionID,
+                  update.sessionID,
+                );
+            },
+          };
+        }
         let currentInput = input;
         const retried = new Set<string>();
         while (true) {

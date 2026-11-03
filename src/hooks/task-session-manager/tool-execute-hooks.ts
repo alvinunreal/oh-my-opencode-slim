@@ -104,15 +104,12 @@ function releaseSteerCoverage(
   board: BackgroundJobBoard,
 ): void {
   const fence = pending.steerAmendment;
-  if (!fence) return;
-  const record = board.get(fence.taskID);
-  if (
-    record?.generation === fence.generation &&
-    (record.terminalRevision === fence.terminalRevision ||
-      record.terminalRevision === fence.terminalRevision + 1)
-  ) {
-    record.hostSteerCount = Math.max(0, (record.hostSteerCount ?? 0) - 1);
-  }
+  if (!fence || pending.steerCoverRevision === undefined) return;
+  board.uncoverHostSteer(
+    fence.taskID,
+    fence.generation,
+    pending.steerCoverRevision,
+  );
 }
 
 function refuseKnownTaskResume(
@@ -549,7 +546,6 @@ export async function handleToolExecuteBefore(
           generation: remembered.generation,
           terminalRevision: remembered.terminalRevision,
         };
-        remembered.hostSteerCount = (remembered.hostSteerCount ?? 0) + 1;
       }
       if (!steered) {
         const relaunchLease = deps.backgroundJobBoard.acquireLease(

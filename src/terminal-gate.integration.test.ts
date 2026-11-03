@@ -446,32 +446,42 @@ test('v2 steer of a woken child leaves its final delivery to the host job', asyn
         ...launch,
         exactCallConfirmed: true,
       }),
+    onSteerProgress: h.hooks['v2.coverSteer'],
   });
+  const call = (id: string) => ({
+    id,
+    sessionID: 'parent',
+    progress: async () => {},
+  });
+  const progressed = (context: unknown) =>
+    (context as { progress: (update: unknown) => Promise<void> }).progress({
+      sessionID: 'child',
+      status: 'running',
+    });
   const rejected = { ...steer, id: 'rejected' };
   await bridges.beforeBridge(rejected);
-  expect(h.board.get('child')?.hostSteerCount).toBe(1);
-  const reject = wrapper.wrap(async () => {
+  expect(h.board.get('child')?.hostSteerCover).toBeUndefined();
+  const reject = wrapper.wrap(async (_input: unknown, context: unknown) => {
+    await progressed(context);
     throw new Error('Failed to prompt subagent: child');
   });
-  await expect(
-    reject(rejected.input, { id: rejected.id, sessionID: 'parent' }),
-  ).rejects.toThrow();
+  await expect(reject(rejected.input, call(rejected.id))).rejects.toThrow();
   await bridges.afterBridge({
     ...rejected,
     status: 'error',
     error: 'Failed to prompt subagent: child',
   });
-  expect(h.board.get('child')?.hostSteerCount).toBe(0);
+  expect(h.board.get('child')?.hostSteerCover).toBeUndefined();
 
-  const execute = wrapper.wrap(async () => ({
-    output: { sessionID: 'child', status: 'running' },
-    content: 'The subagent is working in the background (sessionID: child).',
-  }));
-  await bridges.beforeBridge(steer);
-  const result = await execute(steer.input, {
-    id: steer.id,
-    sessionID: 'parent',
+  const execute = wrapper.wrap(async (_input: unknown, context: unknown) => {
+    await progressed(context);
+    return {
+      output: { sessionID: 'child', status: 'running' },
+      content: 'The subagent is working in the background (sessionID: child).',
+    };
   });
+  await bridges.beforeBridge(steer);
+  const result = await execute(steer.input, call(steer.id));
   await bridges.afterBridge({
     ...steer,
     status: 'completed',
@@ -493,10 +503,10 @@ test('v2 steer of a woken child leaves its final delivery to the host job', asyn
   });
   const trackedSteer = { ...steer, id: 'tracked-steer' };
   await bridges.beforeBridge(trackedSteer);
-  const trackedResult = await execute(trackedSteer.input, {
-    id: trackedSteer.id,
-    sessionID: 'parent',
-  });
+  const trackedResult = await execute(
+    trackedSteer.input,
+    call(trackedSteer.id),
+  );
   await bridges.afterBridge({
     ...trackedSteer,
     status: 'completed',
@@ -508,6 +518,50 @@ test('v2 steer of a woken child leaves its final delivery to the host job', asyn
   expect(h.board.get('child')?.terminalRevision).toBe(5);
   expect(promptAsync).not.toHaveBeenCalled();
   expect(h.revivedTracker?.isTracked('child', run.generation)).toBe(false);
+
+  // The child finishes while a steer awaits permission; a later acceptance
+  // gives the host the successor, not the already-published run.
+  h.board.markRunningFromLiveSession('child', now - 9, run.generation, 5);
+  const late = { ...steer, id: 'late-steer' };
+  await bridges.beforeBridge(late);
+  probe.commitTerminalOutcome(now - 8);
+  await publish();
+  await flush();
+  expect(h.board.get('child')?.terminalRevision).toBe(7);
+  expect(promptAsync).toHaveBeenCalledTimes(1);
+  const lateResult = await execute(late.input, call(late.id));
+  await bridges.afterBridge({
+    ...late,
+    status: 'completed',
+    result: lateResult,
+  });
+  h.board.markRunningFromLiveSession('child', now - 7, run.generation, 7);
+  probe.commitTerminalOutcome(now - 6);
+  await publish();
+  await flush();
+  expect(h.board.get('child')?.terminalRevision).toBe(9);
+  expect(promptAsync).toHaveBeenCalledTimes(1);
+
+  // A denied permission creates no host job for the completed run.
+  h.board.markRunningFromLiveSession('child', now - 5, run.generation, 9);
+  const declined = { ...steer, id: 'declined' };
+  await bridges.beforeBridge(declined);
+  probe.commitTerminalOutcome(now - 4);
+  await publish();
+  await flush();
+  expect(h.board.get('child')?.terminalRevision).toBe(11);
+  expect(promptAsync).toHaveBeenCalledTimes(2);
+  const deny = wrapper.wrap(async () => {
+    throw new Error('Subagent denied: explorer');
+  });
+  await expect(deny(declined.input, call(declined.id))).rejects.toThrow();
+  await bridges.afterBridge({
+    ...declined,
+    status: 'error',
+    error: 'Subagent denied: explorer',
+  });
+  await flush();
+  expect(promptAsync).toHaveBeenCalledTimes(2);
 });
 
 async function fallbackAssembly(
