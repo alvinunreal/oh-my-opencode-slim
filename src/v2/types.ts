@@ -381,6 +381,15 @@ export interface V2Context {
     ): AsyncIterable<Record<string, unknown>>;
   };
   permission?: {
+    assert?(input: {
+      sessionID: string;
+      agent?: string;
+      action: string;
+      resources: string[];
+      save?: string[];
+      metadata?: Record<string, unknown>;
+      source?: { type: 'tool'; messageID: string; id: string };
+    }): Promise<void>;
     reply(input: {
       sessionID: string;
       requestID: string;

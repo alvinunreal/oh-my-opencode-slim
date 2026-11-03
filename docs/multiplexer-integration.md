@@ -90,7 +90,7 @@ Pane behavior is fixed per host mode:
 | `opencode --mini` | TUI host does not load plugins | — | No pane |
 | v2 host, shared background service (default) | TUI client of the user-level shared service | discovered via the service registration | Supported: default viewers run `opencode mini --session <id>` and rediscover the same service; `viewer: "tui"` uses `opencode --session <id> <dir>` |
 | v2 host, `--server <url>` | TUI client of an explicit server | `--server` URL | Supported: default viewers run `opencode mini --server <url> --session <id>`; `viewer: "tui"` uses `opencode --server <url> --session <id> <dir>`. The `OPENCODE_PASSWORD` secret comes from the parent process environment and is injected at pane creation through the multiplexer's spawn-time environment mechanism (see [Secret handling](#known-limitations)), never through the viewer's command line |
-| v2 host, `--standalone` | private stdio server (no registration, random password, exits with the parent) | ephemeral loopback | **Not supported**: fail-closed + exactly one diagnostic; the fallback is v2's native subagent surfaces (`/subagent` opens the latest child session in a tab without moving focus — the tab is a salience and quick-switch affordance, and the displayed session stays the interaction surface) |
+| v2 host, `--standalone` | private stdio server (no registration, random password, exits with the parent) | ephemeral loopback | **Not supported**: fail-closed + exactly one diagnostic; `/subagent` navigates to the latest child session, or use the host's native subagent picker |
 
 If the v2 shared service cannot initially resolve its URL, pane setup retries
 every five seconds while enabled; unsupported host modes remain disabled.
@@ -534,9 +534,7 @@ produces one `multiplexer.host-unsupported` record per process; shared and
 - **Embedded hosts and v2 `--standalone` hosts have no pane feature** (see
   [Deployment Modes](#deployment-modes)). On v2 `--standalone`, a configured
   `multiplexer.type` is ignored and one diagnostic per process is logged; use
-  `/subagent` or the host's subagent picker instead. Opening the child tab is
-  deliberately a salience and quick-switch affordance: it does not move focus,
-  because the displayed session stays the interaction surface.
+  `/subagent` to navigate to the latest child, or use the host's subagent picker.
 - **v2 viewers are clients, not read-only views.** A pane opens `mini` by
   default, or the full TUI with `viewer: "tui"`. Opening a session replaces
   the process environment its shell commands use (the last client to open it

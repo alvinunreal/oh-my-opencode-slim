@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createReadOnlyAgentPermission } from '../agents/permissions';
 import { PermissionConfigSchema } from '../config/schema';
+import { createWebfetchTool } from '../tools/smartfetch/tool';
 import {
   adaptPermissions,
   adaptTool,
@@ -54,6 +55,85 @@ describe('parseModelRef', () => {
 });
 
 describe('adaptTool agent context', () => {
+  test('webfetch forwards the native tool identity and propagates denied permissions', async () => {
+    const requests: unknown[] = [];
+    const originalFetch = globalThis.fetch;
+    let fetched = false;
+    globalThis.fetch = async () => {
+      fetched = true;
+      return new Response('unexpected fetch');
+    };
+    const tool = adaptTool(
+      'webfetch',
+      createWebfetchTool({} as never) as unknown as Record<string, unknown>,
+      '/project',
+      {},
+      {
+        assert: async (request: unknown) => {
+          requests.push(request);
+          throw new Error('URL denied');
+        },
+      },
+    );
+    try {
+      await expect(
+        tool.execute(
+          { url: 'https://example.org/private', format: 'html' },
+          {
+            sessionID: 'ses_child',
+            agent: 'explorer',
+            messageID: 'msg_1',
+            id: 'call_1',
+            signal: new AbortController().signal,
+          },
+        ),
+      ).rejects.toThrow('URL denied');
+      expect(requests).toEqual([
+        {
+          sessionID: 'ses_child',
+          agent: 'explorer',
+          action: 'webfetch',
+          resources: ['https://example.org/private'],
+          save: ['https://example.org/private'],
+          metadata: {
+            url: 'https://example.org/private',
+            requested_url: 'https://example.org/private',
+            fallback_url: undefined,
+            llms_probe_enabled: false,
+            format: 'html',
+          },
+          source: { type: 'tool', messageID: 'msg_1', id: 'call_1' },
+        },
+      ]);
+      expect(fetched).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('keeps dynamic asks usable on hosts without permission.assert', async () => {
+    const tool = adaptTool(
+      'webfetch',
+      {
+        execute: async (_args, context) => {
+          await (context as { ask: (request: unknown) => Promise<void> }).ask({
+            permission: 'webfetch',
+            patterns: ['https://example.org'],
+            always: [],
+            metadata: {},
+          });
+          return 'body';
+        },
+      },
+      '/project',
+      {},
+    );
+
+    await expect(
+      tool.execute({}, { sessionID: 'ses_child', agent: 'explorer' }),
+    ).resolves.toEqual({ content: 'body' });
+  });
+
   test('SF-02: passes the native cancellation signal to the v1 tool', async () => {
     const controller = new AbortController();
     let abort: AbortSignal | undefined;

@@ -2627,6 +2627,202 @@ describe('createV2Setup e2e', () => {
     }
   });
 
+  test('tracks child agent switches without reusing another agent profile', async () => {
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        agents: {
+          explorer: { model: 'openai/gpt-5.2', variant: 'high' },
+          fixer: { model: 'openai/gpt-5.2', variant: 'high' },
+        },
+      }),
+    );
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    const model = { providerID: 'openai', id: 'gpt-5.2', variant: 'high' };
+    const frozen = {
+      presetName: 'frozen',
+      fallbackEnabled: false,
+      profiles: {
+        explorer: {
+          model,
+          temperature: 0.1,
+          sidebarModel: 'openai/gpt-5.2',
+        },
+        fixer: {
+          model: { ...model, id: 'team-gpt-5.2' },
+          temperature: 0.8,
+          providerOptions: { reasoningEffort: 'low', serviceTier: 'priority' },
+          sidebarModel: 'openai/gpt-5.2',
+        },
+      },
+      chains: {},
+      inheritance: {},
+    };
+    await ctx.storage?.set('session-preset/v1/child', {
+      schemaVersion: 1,
+      parentID: 'root',
+      execution: frozen,
+      bundle: {
+        ...frozen,
+        profiles: {
+          ...frozen.profiles,
+          fixer: { ...frozen.profiles.fixer, temperature: 0.2 },
+        },
+      },
+      explicitModel: false,
+    });
+    let agent = 'explorer';
+    const switches: unknown[] = [];
+    ctx.session.get = async ({ sessionID }) => ({
+      id: sessionID,
+      directory: projectDir,
+      ...(sessionID === 'child' ? { parentID: 'root', agent, model } : {}),
+    });
+    Object.assign(ctx.session, {
+      switchModel: async (input: unknown) => switches.push(input),
+    });
+    Object.assign(ctx, {
+      model: {
+        list: async () => ({
+          data: [
+            {
+              providerID: model.providerID,
+              id: model.id,
+              variants: [{ id: 'high', settings: { reasoningEffort: 'high' } }],
+            },
+          ],
+        }),
+      },
+    });
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      const admit = () =>
+        calls.promptHookCb?.({
+          sessionID: 'child',
+          messageID: 'message',
+          prompt: { text: 'hello' },
+        });
+      const context = (currentAgent: string) => ({
+        sessionID: 'child',
+        agent: currentAgent,
+        model: { ...model },
+        options: { maxTokens: 32000 },
+        system: [],
+        messages: [],
+        tools: {},
+      });
+
+      await admit();
+      expect(switches).toEqual([{ sessionID: 'child', model }]);
+      const explorer = context('explorer');
+      await calls.contextHookCb?.(explorer);
+      expect(explorer.options).toEqual({ maxTokens: 32000, temperature: 0.1 });
+
+      agent = 'fixer';
+      const fixer = context(agent);
+      await calls.contextHookCb?.(fixer);
+      expect(fixer.options).toEqual({
+        maxTokens: 32000,
+        temperature: 0.8,
+        serviceTier: 'priority',
+      });
+      expect(fixer.model).toEqual(model);
+      await admit();
+      expect(switches).toEqual([{ sessionID: 'child', model }]);
+      const admittedFixer = context(agent);
+      await calls.contextHookCb?.(admittedFixer);
+      expect(admittedFixer.options).toEqual(fixer.options);
+
+      agent = 'build';
+      const foreign = context(agent);
+      await calls.contextHookCb?.(foreign);
+      expect(foreign.options).toEqual({ maxTokens: 32000 });
+      await admit();
+      await calls.contextHookCb?.(foreign);
+      expect(foreign.options).toEqual({ maxTokens: 32000 });
+
+      agent = 'explorer';
+      await admit();
+      const resumed = context(agent);
+      await calls.contextHookCb?.(resumed);
+      expect(resumed.options).toEqual({ maxTokens: 32000, temperature: 0.1 });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('a child request preserves the explicitly selected variant settings', async () => {
+    await mkdir(path.join(projectDir, '.opencode'), { recursive: true });
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        preset: 'team',
+        presets: {
+          team: {
+            explorer: {
+              model: 'openai/gpt-5.2',
+              variant: 'low',
+              temperature: 0.1,
+              options: { reasoningEffort: 'low', serviceTier: 'priority' },
+            },
+          },
+        },
+      }),
+    );
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    ctx.session.get = async ({ sessionID }) => ({
+      id: sessionID,
+      directory: projectDir,
+      ...(sessionID === 'child'
+        ? {
+            parentID: 'root',
+            agent: 'explorer',
+            model: { providerID: 'openai', id: 'gpt-5.2', variant: 'high' },
+          }
+        : { agent: 'orchestrator' }),
+    });
+    Object.assign(ctx, {
+      model: {
+        list: async () => ({
+          data: [
+            {
+              providerID: 'openai',
+              id: 'gpt-5.2',
+              variants: [{ id: 'high', settings: { reasoningEffort: 'high' } }],
+            },
+          ],
+        }),
+      },
+    });
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      await calls.promptHookCb?.({
+        sessionID: 'child',
+        messageID: 'message',
+        prompt: { text: 'hello' },
+      });
+      const event = {
+        sessionID: 'child',
+        agent: 'explorer',
+        model: { providerID: 'openai', id: 'gpt-5.2', variant: 'high' },
+        options: { maxTokens: 32000 },
+        system: [],
+        messages: [],
+        tools: {},
+      };
+      await calls.contextHookCb?.(event);
+      expect(event.options).toEqual({
+        maxTokens: 32000,
+        temperature: 0.1,
+        serviceTier: 'priority',
+      });
+    } finally {
+      await cleanup();
+    }
+  });
+
   test('v2 primary requests receive startup inference settings', async () => {
     await mkdir(path.join(projectDir, '.opencode'), { recursive: true });
     await Bun.write(

@@ -56,12 +56,12 @@ function readUserConfig(): Record<string, unknown> {
 
 /** Polls a predicate until it holds; fails loudly on timeout. */
 async function waitFor(
-  predicate: () => boolean,
+  predicate: () => boolean | Promise<boolean>,
   timeoutMs = 5000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error('waitFor timed out');
@@ -1038,8 +1038,8 @@ describe('v2 tui preset plugin', () => {
         } as unknown as Record<string, unknown>);
         setRoute(nextRoute as { type: string; sessionID?: string });
         await notifyConfigChanged(projectDir, 'overlay-refresh');
-        await waitFor(() => {
-          void screen?.renderOnce();
+        await waitFor(async () => {
+          await screen?.renderOnce();
           return screen?.captureCharFrame().includes(expectedModel) === true;
         });
         const frame = screen?.captureCharFrame() ?? '';
@@ -1668,9 +1668,9 @@ describe('v2 tui preset plugin', () => {
       }
     });
 
-    test('fallback command opens the latest subagent tab manually', async () => {
+    test('fallback command navigates to the latest subagent even without tabs', async () => {
       const stub = makeSetupCtx();
-      const opened: string[] = [];
+      const navigated: unknown[] = [];
       const toasts: string[] = [];
       stub.ctx.data = {
         session: {
@@ -1683,13 +1683,10 @@ describe('v2 tui preset plugin', () => {
       };
       (stub.ctx.ui as { router?: unknown }).router = {
         current: () => ({ type: 'session', sessionID: 'conv-1' }),
+        navigate: (destination: unknown) => navigated.push(destination),
       };
       (stub.ctx.ui as { tabs?: unknown }).tabs = {
-        enabled: () => true,
-        open: (sessionID: string) => {
-          opened.push(sessionID);
-          return true;
-        },
+        enabled: () => false,
       };
       (stub.ctx.ui as { toast?: unknown }).toast = {
         show: (toast: { message: string }) => {
@@ -1708,59 +1705,11 @@ describe('v2 tui preset plugin', () => {
           (c) => c.id === 'omo.open_subagent',
         );
         expect(command).toBeDefined();
-        // Registration alone must never open anything (manual fallback).
-        expect(opened).toEqual([]);
+        expect(navigated).toEqual([]);
 
         await command?.run();
-        await Bun.sleep(10);
-        expect(opened).toEqual(['ora-new']);
+        expect(navigated).toEqual([{ type: 'session', sessionID: 'ora-new' }]);
         expect(toasts[0]).toContain('ora-new');
-      } finally {
-        cleanup?.();
-      }
-    });
-
-    test('fallback command toasts when session tabs are disabled', async () => {
-      const stub = makeSetupCtx();
-      const opened: string[] = [];
-      const toasts: string[] = [];
-      stub.ctx.data = {
-        session: {
-          list: () => [
-            { id: 'ora-new', parentID: 'conv-1', time: { created: 2 } },
-          ],
-        },
-      };
-      (stub.ctx.ui as { router?: unknown }).router = {
-        current: () => ({ type: 'session', sessionID: 'conv-1' }),
-      };
-      (stub.ctx.ui as { tabs?: unknown }).tabs = {
-        enabled: () => false,
-        open: (sessionID: string) => {
-          opened.push(sessionID);
-          return false;
-        },
-      };
-      (stub.ctx.ui as { toast?: unknown }).toast = {
-        show: (toast: { message: string }) => {
-          toasts.push(toast.message);
-        },
-      };
-
-      let cleanup: (() => void) | undefined;
-      try {
-        cleanup = (await tui2Plugin.setup(
-          stub.ctx as unknown as V2TuiPluginContext,
-        )) as (() => void) | undefined;
-        stub.renderAppSlot();
-
-        const command = stub.layers[0]?.commands.find(
-          (c) => c.id === 'omo.open_subagent',
-        );
-        await command?.run();
-        await Bun.sleep(10);
-        expect(opened).toEqual([]);
-        expect(toasts[0]).toContain('tabs are disabled');
       } finally {
         cleanup?.();
       }
