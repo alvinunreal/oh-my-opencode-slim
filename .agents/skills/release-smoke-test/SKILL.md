@@ -53,13 +53,13 @@ Write the minimal OpenCode config:
 ```bash
 cat > "$SMOKE/xdg/opencode/opencode.json" <<EOF
 {
-  "model": "opencode/deepseek-v4-flash-free",
+  "model": "opencode/deepseek-v4.1-flash-free",
   "plugin": [
     "file://$SMOKE/app/node_modules/oh-my-opencode-slim/dist/index.js"
   ],
   "agent": {
     "orchestrator": {
-      "model": "opencode/deepseek-v4-flash-free"
+      "model": "opencode/deepseek-v4.1-flash-free"
     }
   }
 }
