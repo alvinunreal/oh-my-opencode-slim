@@ -2,7 +2,6 @@ import { existsSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { getCachedBinaryPath } from './downloader';
-import { CLI_LANGUAGES } from './types';
 
 type Platform = 'darwin' | 'linux' | 'win32' | 'unsupported';
 
@@ -106,18 +105,7 @@ export function setSgCliPath(path: string): void {
   resolvedCliPath = path;
 }
 
-// Re-export language constants
-export { CLI_LANGUAGES };
-
 // Defaults
 export const DEFAULT_TIMEOUT_MS = 300_000;
 export const DEFAULT_MAX_OUTPUT_BYTES = 1 * 1024 * 1024;
 export const DEFAULT_MAX_MATCHES = 500;
-
-export interface EnvironmentCheckResult {
-  cli: {
-    available: boolean;
-    path: string;
-    error?: string;
-  };
-}

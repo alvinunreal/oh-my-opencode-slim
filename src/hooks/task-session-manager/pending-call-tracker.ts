@@ -56,6 +56,8 @@ export interface PendingTaskCall {
     generation: number;
     terminalRevision: number;
   };
+  /** Revision covered by this steer after native progress. */
+  steerCoverRevision?: number;
 }
 
 const MAX_PENDING_TASK_CALLS = 100;

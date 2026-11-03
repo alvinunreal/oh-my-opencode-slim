@@ -24,13 +24,16 @@ import * as gateFactories from './utils/background-job-terminal-gate';
 import { BackgroundTaskConcurrency } from './utils/background-task-concurrency';
 import { createEventDirectoryScope } from './utils/event-directory-scope';
 import {
-  type createInternalAgentTextPart,
+  createInternalAgentTextPart,
   isInternalInitiatorPart,
   isNativeBackgroundTaskNotification,
 } from './utils/internal-initiator';
 import * as loggerModule from './utils/logger';
+import { createTimerHarness } from './utils/test-timers';
 import { buildPluginInput } from './v2/client-shim';
 import { mapV2EventToV1 } from './v2/event-adapter';
+import { createToolExecuteBridges } from './v2/setup';
+import { createSubagentExecutorWrapper } from './v2/subagent-executor-wrapper';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -318,7 +321,7 @@ async function pullTaskStatus(
 
 for (const state of ['completed', 'error'] as const) {
   for (const provisional of [true, false]) {
-    test(`v2 publication injects nothing, pull-only: ${state}, provisional=${provisional}`, async () => {
+    test(`v2 later publication delivers when attributed: ${state}, provisional=${provisional}`, async () => {
       resetOrchestratorWakeGateForTests();
       const promptAsync = mock(async () => ({}));
       const probe = v2ShimClient({
@@ -365,21 +368,208 @@ for (const state of ['completed', 'error'] as const) {
       expect(h.board.get('child')?.state).toBe(state);
       expect(h.board.get('child')?.provisional === true).toBe(provisional);
       expect(h.board.get('child')?.terminalRevision).toBeGreaterThan(1);
-      // v2 has no wake machinery (council 2026-10-23): neither a later
-      // publication nor provisional promotion injects a prompt. The parent
-      // can still inspect the terminal through task_status.
-      expect(promptAsync).not.toHaveBeenCalled();
+      // Provisional records wait for attribution; managed records deliver.
+      expect(promptAsync).toHaveBeenCalledTimes(provisional ? 0 : 1);
       expect(await pullTaskStatus(h, 'child')).toContain(`state: ${state}`);
       if (provisional) {
         h.board.promoteProvisional('child', 'parent');
         await flush();
-        expect(promptAsync).not.toHaveBeenCalled();
+        expect(promptAsync).toHaveBeenCalledTimes(1);
       }
     });
   }
 }
 
-async function fallbackAssembly(hostFlavor?: string, delayMs = 2000) {
+test('v2 steer of a woken child leaves its final delivery to the host job', async () => {
+  const promptAsync = mock(async () => ({}));
+  const probe = v2ShimClient({
+    outcome: 'succeeded',
+    wakeSurface: { promptAsync },
+  });
+  const h = await assembly(undefined, {
+    client: probe.client,
+    hostFlavor: 'v2',
+  });
+  await h.hooks['chat.message']?.(
+    { sessionID: 'parent', agent: 'orchestrator' } as never,
+    { parts: [] } as never,
+  );
+  const now = Date.now();
+  const run = h.board.registerLaunch({
+    taskID: 'child',
+    parentSessionID: 'parent',
+    agent: 'explorer',
+    description: 'background task',
+    background: true,
+    now: now - 300,
+  });
+  const publish = () =>
+    h.gate.reconcile(run, {
+      kind: 'output',
+      status: {
+        taskID: 'child',
+        state: 'completed',
+        timedOut: false,
+        result: 'result',
+      },
+      origin: {
+        kind: 'native',
+        callID: 'host-result',
+        callIDConfirmed: true,
+        run,
+      },
+    });
+  probe.commitTerminalOutcome(now - 200);
+  await publish();
+  expect(h.board.get('child')?.terminalRevision).toBe(1);
+  h.board.markRunningFromLiveSession('child', now - 100, run.generation, 1);
+  expect(h.board.get('child')?.terminalRevision).toBe(2);
+
+  const bridges = createToolExecuteBridges(
+    h.hooks['tool.execute.before'] as never,
+    h.hooks['tool.execute.after'] as never,
+  );
+  const steer = {
+    tool: 'subagent',
+    sessionID: 'parent',
+    id: 'steer',
+    input: {
+      agent: 'explorer',
+      sessionID: 'child',
+      prompt: 'continue',
+      background: true,
+    },
+  };
+  const wrapper = createSubagentExecutorWrapper({
+    register: (launch) =>
+      h.hooks['v2.registerDelegatedLaunchFromStructured']({
+        ...launch,
+        exactCallConfirmed: true,
+      }),
+    onSteerProgress: h.hooks['v2.coverSteer'],
+  });
+  const call = (id: string) => ({
+    id,
+    sessionID: 'parent',
+    progress: async () => {},
+  });
+  const progressed = (context: unknown) =>
+    (context as { progress: (update: unknown) => Promise<void> }).progress({
+      sessionID: 'child',
+      status: 'running',
+    });
+  const rejected = { ...steer, id: 'rejected' };
+  await bridges.beforeBridge(rejected);
+  expect(h.board.get('child')?.hostSteerCover).toBeUndefined();
+  const reject = wrapper.wrap(async (_input: unknown, context: unknown) => {
+    await progressed(context);
+    throw new Error('Failed to prompt subagent: child');
+  });
+  await expect(reject(rejected.input, call(rejected.id))).rejects.toThrow();
+  await bridges.afterBridge({
+    ...rejected,
+    status: 'error',
+    error: 'Failed to prompt subagent: child',
+  });
+  expect(h.board.get('child')?.hostSteerCover).toBeUndefined();
+
+  const execute = wrapper.wrap(async (_input: unknown, context: unknown) => {
+    await progressed(context);
+    return {
+      output: { sessionID: 'child', status: 'running' },
+      content: 'The subagent is working in the background (sessionID: child).',
+    };
+  });
+  await bridges.beforeBridge(steer);
+  const result = await execute(steer.input, call(steer.id));
+  await bridges.afterBridge({
+    ...steer,
+    status: 'completed',
+    result,
+  });
+  probe.commitTerminalOutcome(now - 50);
+  await publish();
+  await flush();
+  expect(h.board.get('child')?.terminalRevision).toBe(3);
+  expect(promptAsync).not.toHaveBeenCalled();
+
+  h.board.markRunningFromLiveSession('child', now - 30, run.generation, 3);
+  h.revivedTracker?.register({
+    taskID: 'child',
+    generation: run.generation,
+    parentSessionID: 'parent',
+    description: 'tracked recovery',
+    attemptStartedAt: now - 20,
+  });
+  const trackedSteer = { ...steer, id: 'tracked-steer' };
+  await bridges.beforeBridge(trackedSteer);
+  const trackedResult = await execute(
+    trackedSteer.input,
+    call(trackedSteer.id),
+  );
+  await bridges.afterBridge({
+    ...trackedSteer,
+    status: 'completed',
+    result: trackedResult,
+  });
+  probe.commitTerminalOutcome(now - 10);
+  await publish();
+  await flush();
+  expect(h.board.get('child')?.terminalRevision).toBe(5);
+  expect(promptAsync).not.toHaveBeenCalled();
+  expect(h.revivedTracker?.isTracked('child', run.generation)).toBe(false);
+
+  // The child finishes while a steer awaits permission; a later acceptance
+  // gives the host the successor, not the already-published run.
+  h.board.markRunningFromLiveSession('child', now - 9, run.generation, 5);
+  const late = { ...steer, id: 'late-steer' };
+  await bridges.beforeBridge(late);
+  probe.commitTerminalOutcome(now - 8);
+  await publish();
+  await flush();
+  expect(h.board.get('child')?.terminalRevision).toBe(7);
+  expect(promptAsync).toHaveBeenCalledTimes(1);
+  const lateResult = await execute(late.input, call(late.id));
+  await bridges.afterBridge({
+    ...late,
+    status: 'completed',
+    result: lateResult,
+  });
+  h.board.markRunningFromLiveSession('child', now - 7, run.generation, 7);
+  probe.commitTerminalOutcome(now - 6);
+  await publish();
+  await flush();
+  expect(h.board.get('child')?.terminalRevision).toBe(9);
+  expect(promptAsync).toHaveBeenCalledTimes(1);
+
+  // A denied permission creates no host job for the completed run.
+  h.board.markRunningFromLiveSession('child', now - 5, run.generation, 9);
+  const declined = { ...steer, id: 'declined' };
+  await bridges.beforeBridge(declined);
+  probe.commitTerminalOutcome(now - 4);
+  await publish();
+  await flush();
+  expect(h.board.get('child')?.terminalRevision).toBe(11);
+  expect(promptAsync).toHaveBeenCalledTimes(2);
+  const deny = wrapper.wrap(async () => {
+    throw new Error('Subagent denied: explorer');
+  });
+  await expect(deny(declined.input, call(declined.id))).rejects.toThrow();
+  await bridges.afterBridge({
+    ...declined,
+    status: 'error',
+    error: 'Subagent denied: explorer',
+  });
+  await flush();
+  expect(promptAsync).toHaveBeenCalledTimes(2);
+});
+
+async function fallbackAssembly(
+  hostFlavor?: string,
+  delayMs = 2000,
+  foreground = false,
+  chain = ['test/primary', 'test/fallback'],
+) {
   jest.useFakeTimers();
   let fakeTimers = true;
   const restoreTimers = async () => {
@@ -393,7 +583,7 @@ async function fallbackAssembly(hostFlavor?: string, delayMs = 2000) {
     hostFlavor,
     rootConfigOverrides: {
       agents: {
-        explorer: { model: ['test/primary', 'test/fallback'] },
+        explorer: { model: chain },
       },
       fallback: { initialRetryDelayMs: delayMs },
     },
@@ -402,8 +592,25 @@ async function fallbackAssembly(hostFlavor?: string, delayMs = 2000) {
   // disposal. Disposing under fake timers can wait on a timer that never
   // fires, time out afterEach, and flip the next test's timers mid-run.
   cleanups.push(restoreTimers);
-  await h.begin();
-  await h.after('running');
+  if (foreground) {
+    const description =
+      'Investigate   the complete foreground fallback path with a long task description';
+    await h.hooks['tool.execute.before']?.(
+      { tool: 'task', sessionID: 'parent', callID: 'native' },
+      { args: { subagent_type: 'explorer', description } },
+    );
+    await h.event('session.created', {
+      info: {
+        id: 'child',
+        parentID: 'parent',
+        agent: 'explorer',
+        title: `${description} (@explorer subagent)`,
+      },
+    });
+  } else {
+    await h.begin();
+    await h.after('running');
+  }
   await h.hooks['chat.message']?.(
     {
       sessionID: 'child',
@@ -444,6 +651,281 @@ async function fallbackAssembly(hostFlavor?: string, delayMs = 2000) {
   };
 }
 
+const contentFilterError = {
+  name: 'ContentFilterError',
+  data: {
+    message: "The response was blocked by the provider's content filter",
+  },
+};
+const nativeRefusal =
+  '<task id="child" state="error">\n<summary>Background task failed: ordinary task</summary>\n<task_error>\nSubagent failed (task_id: child): The response was blocked by the provider\'s content filter\n</task_error>\n</task>';
+
+function setChildError(
+  h: Awaited<ReturnType<typeof fallbackAssembly>>,
+  error = contentFilterError,
+) {
+  h.history.pop();
+  h.history.push({
+    info: {
+      id: 'filtered',
+      role: 'assistant',
+      finish: 'content-filter',
+      error,
+      time: { completed: Date.now() },
+    },
+    parts: [],
+  });
+}
+
+function parentMessage(
+  part: Record<string, unknown>,
+  role = 'user',
+  created = Date.now(),
+) {
+  return {
+    messages: [
+      {
+        info: { id: 'notice', sessionID: 'parent', role, time: { created } },
+        parts: [part],
+      },
+    ],
+  };
+}
+
+function foregroundFailure(error = contentFilterError.data.message) {
+  return {
+    type: 'tool',
+    tool: 'task',
+    callID: 'native',
+    state: {
+      status: 'error',
+      input: { subagent_type: 'explorer' },
+      error: `Subagent failed (task_id: child): ${error}`,
+      time: { start: Date.now() - 10, end: Date.now() },
+    },
+  };
+}
+
+test('v1 foreground replay keeps the error part and appends a correction', async () => {
+  const h = await fallbackAssembly(undefined, 2000, true);
+  expect(h.board.get('child')?.background).toBe(false);
+  setChildError(h);
+  const part = foregroundFailure();
+  const request = parentMessage(part, 'assistant');
+  request.messages.unshift(
+    parentMessage({ type: 'text', text: 'work' }).messages[0],
+  );
+  const transform = h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    request as never,
+  );
+  await h.event('session.error', {
+    sessionID: 'child',
+    error: contentFilterError,
+  });
+  await h.idle();
+  await h.advance(2000);
+  await transform;
+  expect(request.messages[1].parts[0]).toEqual(part);
+  expect(request.messages.at(-1)?.parts[0]).toMatchObject({
+    synthetic: true,
+    text: expect.stringContaining('test/fallback'),
+    metadata: { [BACKGROUND_JOB_BOARD_METADATA_KEY]: true },
+  });
+  expect(part.state.status).toBe('error');
+  const prompts = () =>
+    h.promptAsync.mock.calls.map(
+      ([call]) =>
+        call as {
+          path: { id: string };
+          body: { messageID: string; parts: { text: string }[] };
+        },
+    );
+  expect(
+    h.revivedTracker?.isTracked('child', h.board.get('child')?.generation ?? 0),
+  ).toBe(true);
+  h.setBusy(true);
+  await h.busySignal();
+  h.history.push(
+    {
+      info: { id: prompts()[0].body.messageID, role: 'user' },
+      parts: prompts()[0].body.parts,
+    },
+    ...transcript().data,
+  );
+  h.setBusy(false);
+  await h.idle();
+  await h.runtime.reconcile();
+  await flush();
+  expect(
+    prompts()
+      .filter(({ path }) => path.id === 'parent')
+      .at(-1)?.body.parts[0].text,
+  ).toContain('confirmed result');
+});
+
+test('v1 foreground leaves the native failure when its chain is exhausted', async () => {
+  const h = await fallbackAssembly(undefined, 2000, true, ['test/primary']);
+  setChildError(h);
+  const part = foregroundFailure();
+  const request = parentMessage(part, 'assistant');
+  const transform = h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    request as never,
+  );
+  await h.event('session.error', {
+    sessionID: 'child',
+    error: contentFilterError,
+  });
+  await h.advance(2000);
+  await transform;
+  expect(request.messages[0].parts[0]).toEqual(part);
+  expect(h.promptAsync).not.toHaveBeenCalled();
+});
+
+test('v1 background keeps a prefixed refusal and sends one terminal result', async () => {
+  const h = await fallbackAssembly();
+  setChildError(h);
+  const prefix = '\u00a742\u00a7 ';
+  const part = { type: 'text', synthetic: true, text: prefix + nativeRefusal };
+  const request = parentMessage(part);
+  const transform = h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    request as never,
+  );
+  await h.event('session.error', {
+    sessionID: 'child',
+    error: contentFilterError,
+  });
+  await h.idle();
+  await h.advance(2000);
+  await transform;
+  expect(request.messages[0].parts[0].text).toBe(prefix + nativeRefusal);
+  expect(request.messages.at(-1)?.parts[0]).toMatchObject({
+    synthetic: true,
+    text: expect.stringContaining('test/fallback'),
+    metadata: { [BACKGROUND_JOB_BOARD_METADATA_KEY]: true },
+  });
+  expect(part.text).toBe(prefix + nativeRefusal);
+  const calls = () =>
+    h.promptAsync.mock.calls.map(
+      ([call]) =>
+        call as {
+          path: { id: string };
+          body: { messageID: string; parts: { text: string }[] };
+        },
+    );
+  h.setBusy(true);
+  await h.busySignal();
+  const replay = calls().find(({ path }) => path.id === 'child')?.body;
+  h.history.push(
+    { info: { id: replay?.messageID, role: 'user' }, parts: replay?.parts },
+    ...transcript().data,
+  );
+  h.setBusy(false);
+  await h.idle();
+  await h.runtime.reconcile();
+  await flush();
+  expect(
+    calls().filter(
+      ({ path, body }) =>
+        path.id === 'parent' &&
+        body.parts[0].text.includes('state="completed"'),
+    ),
+  ).toHaveLength(1);
+  expect(h.board.get('child')?.state).not.toBe('running');
+  const settled = parentMessage(part);
+  await h.hooks['experimental.chat.messages.transform']?.({}, settled as never);
+  expect(settled.messages[0].parts[0]).toEqual(part);
+  expect(
+    settled.messages.some((message) =>
+      isVolatileTaggedMessage(message, BACKGROUND_JOB_BOARD_METADATA_KEY),
+    ),
+  ).toBe(false);
+});
+
+test('v1 terminal error delivered by Slim is never rewritten', async () => {
+  const h = await fallbackAssembly();
+  const part = createInternalAgentTextPart(nativeRefusal);
+  const request = parentMessage(part);
+  await h.hooks['experimental.chat.messages.transform']?.({}, request as never);
+  expect(request.messages[0].parts[0]).toEqual(part);
+});
+
+test('v1 non-failover child error does not wait for replay', async () => {
+  const h = await fallbackAssembly(undefined, 2000, true);
+  h.history.pop();
+  h.history.push({
+    info: {
+      id: 'bad',
+      role: 'assistant',
+      error: {
+        name: 'APIError',
+        data: { statusCode: 400, message: 'invalid request' },
+      },
+      time: { completed: Date.now() },
+    },
+    parts: [],
+  });
+  const part = foregroundFailure('invalid request');
+  const request = parentMessage(part, 'assistant');
+  let finished = false;
+  const transform = h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    request as never,
+  ).then(() => {
+    finished = true;
+  });
+  await flush();
+  expect(finished).toBe(true);
+  await transform;
+  expect(request.messages[0].parts[0]).toEqual(part);
+});
+
+test('v1 replay wait includes the configured retry delay', async () => {
+  const h = await fallbackAssembly(undefined, 6000);
+  setChildError(h);
+  const request = parentMessage({
+    type: 'text',
+    synthetic: true,
+    text: nativeRefusal,
+  });
+  let finished = false;
+  const transform = h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    request as never,
+  ).then(() => {
+    finished = true;
+  });
+  await h.event('session.error', {
+    sessionID: 'child',
+    error: contentFilterError,
+  });
+  await h.advance(5001);
+  expect(finished).toBe(false);
+  await h.advance(999);
+  await transform;
+  expect(request.messages[0].parts[0].text).toBe(nativeRefusal);
+  expect(request.messages.at(-1)?.parts[0].text).toContain('test/fallback');
+});
+
+test('v1 old refusal notice does not wait for replay', async () => {
+  const h = await fallbackAssembly();
+  const part = { type: 'text', synthetic: true, text: nativeRefusal };
+  const request = parentMessage(part, 'user', Date.now() - 10_000);
+  let finished = false;
+  const transform = h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    request as never,
+  ).then(() => {
+    finished = true;
+  });
+  await flush();
+  expect(finished).toBe(true);
+  await transform;
+  expect(request.messages[0].parts[0]).toEqual(part);
+});
+
 test('fallback initial delay cannot replay a cancelled background child', async () => {
   const h = await fallbackAssembly();
   await h.fail();
@@ -481,21 +963,28 @@ test('a hung fallback replay transcript read publishes the unrecovered error', a
   );
 });
 
-test('task_cancel during fallback resend backoff prevents a second replay', async () => {
+test('task_cancel retains an uncertain fallback observation until its bounded expiry', async () => {
   const h = await fallbackAssembly();
   let childSends = 0;
   h.promptAsync.mockImplementation(async (call: unknown) => {
     const { path } = call as { path: { id: string } };
     if (path.id === 'child') {
-      if (childSends++ === 0) throw new Error('socket hang up');
-      h.setBusy(true);
-      await h.busySignal();
+      childSends++;
+      throw new Error('socket hang up');
     }
     return {};
   });
   await h.fail();
   await h.idle();
   await h.advance(2000);
+  const generation = h.board.get('child')?.generation ?? 0;
+  expect(childSends).toBe(1);
+  expect(h.abort).not.toHaveBeenCalled();
+  expect(h.revivedTracker?.isTracked('child', generation)).toBe(true);
+  expect(h.revivedTracker?.isObservationPending('child', generation)).toBe(
+    true,
+  );
+
   const cancellation = h.hooks.tool?.task_cancel.execute(
     { task_id: 'child' },
     h.context,
@@ -504,15 +993,18 @@ test('task_cancel during fallback resend backoff prevents a second replay', asyn
   await h.advance(300);
   await cancellation;
   expect(h.board.get('child')?.state).toBe('cancelled');
-  await h.advance(300);
+  expect(h.abort).toHaveBeenCalledTimes(1);
+  expect(h.revivedTracker?.isObservationPending('child', generation)).toBe(
+    true,
+  );
+
+  await h.advance(30_000);
   expect(childSends).toBe(1);
   expect(h.board.get('child')?.state).toBe('cancelled');
-  expect(
-    h.revivedTracker?.isObservationPending(
-      'child',
-      h.board.get('child')?.generation ?? 0,
-    ),
-  ).toBe(false);
+  expect(h.revivedTracker?.isObservationPending('child', generation)).toBe(
+    false,
+  );
+  expect(h.revivedTracker?.isTracked('child', generation)).toBe(true);
 });
 
 test('a timed-out fallback replay retains its owner without aborting or resending', async () => {
@@ -793,6 +1285,135 @@ function expectReopened(h: Assembly, publication: BackgroundJobRecord) {
     resultSummary: undefined,
   });
 }
+
+test('regression: unconfirmed native call with evidence timeout must remain unconfirmed until attributable evidence arrives', async () => {
+  const timers = createTimerHarness();
+  const h = await assembly(undefined, {
+    configOverrides: { concurrency: { defaultConcurrency: 5 } },
+    gateOptions: {
+      readTimeoutMs: 10,
+      graceMs: 0,
+      setTimeout: timers.setTimeout,
+      clearTimeout: timers.clearTimeout,
+    },
+  });
+  await h.requestTask('call-1', 'task one');
+  await h.requestTask('call-2', 'task two');
+
+  await h.event('session.created', {
+    info: {
+      id: 'child-1',
+      parentID: 'parent',
+      agent: 'explorer',
+      title: 'task one',
+    },
+  });
+
+  const readBegun = Promise.withResolvers<void>();
+  const heldTranscript = Promise.withResolvers<unknown>();
+  h.messages.mockImplementation(() => {
+    readBegun.resolve();
+    return heldTranscript.promise;
+  });
+
+  // Real tool.execute.after arrives without exact tool call ID match:
+  // identity-recovery path takes pending by taskID, supplying callIDConfirmed: false.
+  const afterHook = h.hooks['tool.execute.after']?.(
+    {
+      tool: 'task',
+      sessionID: 'parent',
+      callID: undefined as unknown as string,
+    },
+    {
+      output:
+        'task_id: child-1\nstate: completed\n<task_result>foreign stale text</task_result>',
+    },
+  );
+
+  // Deterministically wait for read to begin, then advance timer harness past readTimeoutMs
+  await readBegun.promise;
+  await timers.advance(10);
+  await timers.tick();
+  await afterHook;
+
+  await h.idle();
+  await flush();
+
+  // Unconfirmed native output must NOT publish before attributable host/transcript evidence arrives.
+  expect(h.board.get('child-1')?.state).toBe('running');
+  expect(h.board.get('child-1')?.resultSummary).not.toBe('foreign stale text');
+
+  // Attributable transcript evidence arrives
+  heldTranscript.resolve({
+    data: [
+      { info: { id: 'msg-u', role: 'user' }, parts: [] },
+      {
+        info: {
+          id: 'msg-a',
+          role: 'assistant',
+          time: { completed: Date.now() },
+          finish: 'stop',
+        },
+        parts: [{ type: 'text', text: 'attributable transcript result' }],
+      },
+    ],
+  });
+  const record = h.board.get('child-1');
+  if (record) {
+    await h.gate.reconcile(record);
+  }
+  await flush();
+
+  expect(h.board.get('child-1')?.state).toBe('completed');
+  expect(h.board.get('child-1')?.resultSummary).toBe(
+    'attributable transcript result',
+  );
+});
+
+test('positive control: confirmed native call with evidence timeout publishes confirmed result', async () => {
+  const timers = createTimerHarness();
+  const h = await assembly(undefined, {
+    gateOptions: {
+      readTimeoutMs: 10,
+      graceMs: 0,
+      setTimeout: timers.setTimeout,
+      clearTimeout: timers.clearTimeout,
+    },
+  });
+  await h.requestTask('confirmed-call', 'confirmed task');
+  await h.event('session.created', {
+    info: { id: 'child-confirmed', parentID: 'parent', agent: 'explorer' },
+  });
+
+  const readBegun = Promise.withResolvers<void>();
+  const heldTranscript = Promise.withResolvers<unknown>();
+  h.messages.mockImplementation(() => {
+    readBegun.resolve();
+    return heldTranscript.promise;
+  });
+
+  const afterHook = h.hooks['tool.execute.after']?.(
+    { tool: 'task', sessionID: 'parent', callID: 'confirmed-call' },
+    {
+      output:
+        'task_id: child-confirmed\nstate: completed\n<task_result>confirmed native text</task_result>',
+    },
+  );
+
+  await readBegun.promise;
+  await timers.advance(10);
+  await timers.tick();
+  await afterHook;
+
+  await h.idle();
+  await flush();
+
+  expect(h.board.get('child-confirmed')?.state).toBe('completed');
+  expect(h.board.get('child-confirmed')?.resultSummary).toBe(
+    'confirmed native text',
+  );
+  heldTranscript.resolve({ data: [] });
+});
 
 test('regression: idle-with-busy-host must query status and publish nothing', async () => {
   const h = await assembly();
@@ -1882,9 +2503,8 @@ test('probe: late-attributable outcome after exhaustion terminalizes the strande
 // carries the host envelope `created` timestamp, so the gate's
 // ambiguous-event demotion cannot pass vacuously), the parent's real
 // request cycle (`experimental.chat.messages.transform`) performing the
-// injection-time reconcile and the Task 6 reopen corrective notice. On v2
-// the parent pulls a later terminal result via task_status; council
-// 2026-10-23 removed plugin wake machinery from that host path.
+// injection-time reconcile and the Task 6 reopen corrective notice. The
+// tracker queues the later terminal result to the parent on v2.
 
 /** Interactive v2 driver: the SAME production pump order as
  * `driveV2Lifecycle` (host outcome committed before terminal execution
@@ -2080,7 +2700,7 @@ test('v2 hosts are structurally boardless and still retire consumed terminal job
   }
 });
 
-test('reopen-after-reconcile: child self-continuation republishes without a plugin wake and corrects the parent', async () => {
+test('reopen-after-reconcile: child continuation notifies and corrects the parent', async () => {
   resetOrchestratorWakeGateForTests();
   const capture = captureGateLogs();
   try {
@@ -2241,9 +2861,7 @@ test('reopen-after-reconcile: child self-continuation republishes without a plug
       ),
     ).toHaveLength(0);
 
-    // Run 2 completes again: a second terminal publication for the SAME
-    // generation (new attempt, advanced terminalRevision). The parent can
-    // pull this result from task_status; no plugin prompt is injected.
+    // Run 2 completes again in the same generation and advances its revision.
     hostChildren = [
       {
         id: 'child',
@@ -2265,11 +2883,10 @@ test('reopen-after-reconcile: child self-continuation republishes without a plug
       capture.of('[terminal-gate] terminal published', 'child'),
     ).toHaveLength(2);
 
-    // v2 injects no wake for later publications either (council
-    // 2026-10-23). The terminal remains on the task_status pull surface.
+    // The tracker queues exactly one result; no scheduler wake is created.
     await flush();
     expect(wakingPublicationWakes()).toHaveLength(0);
-    expect(promptAsync).not.toHaveBeenCalled();
+    expect(promptAsync).toHaveBeenCalledTimes(1);
     expect(await pullTaskStatus(h, 'child')).toContain('state: completed');
   } finally {
     capture.restore();
@@ -2640,7 +3257,7 @@ test('revived-run tracker exhaustion sends no further prompt; result is pull-onl
   }
 });
 
-test('regression: publications of the same v2 lineage inject nothing; results are pull-only', async () => {
+test('later publications of the same v2 lineage reach the parent once', async () => {
   resetOrchestratorWakeGateForTests();
   const capture = captureGateLogs();
   try {
@@ -2660,7 +3277,6 @@ test('regression: publications of the same v2 lineage inject nothing; results ar
     });
 
     // A plain background task completes, resumes, and completes again.
-    // Neither publication injects a plugin wake on v2 (council 2026-10-23).
     await h.requestTask('native', 'v2 publication-wake regression probe');
     await pump({
       type: 'session.created',
@@ -2710,8 +3326,7 @@ test('regression: publications of the same v2 lineage inject nothing; results ar
     ).toHaveLength(0);
     expect(await pullTaskStatus(h, 'child')).toContain('state: completed');
 
-    // The child resumes and finishes again; its later publication is
-    // also pull-only on v2, with no throttle wait or plugin prompt.
+    // The child resumes and finishes again; the tracker delivers that result.
     hostChildren = [
       { id: 'child', parentID: 'parent', time: { updated: Date.now() } },
     ];
@@ -2736,7 +3351,7 @@ test('regression: publications of the same v2 lineage inject nothing; results ar
     await flush();
     expect(second).toMatchObject({ state: 'completed' });
     expect(waking()).toHaveLength(0);
-    expect(promptAsync).not.toHaveBeenCalled();
+    expect(promptAsync).toHaveBeenCalledTimes(1);
     expect(await pullTaskStatus(h, 'child')).toContain('state: completed');
   } finally {
     capture.restore();
@@ -2752,10 +3367,9 @@ test('regression: publications of the same v2 lineage inject nothing; results ar
 // host `subagent` tool call that arms the native background notifier — a
 // relaunch re-arms it with a fresh `started_at`, defeating the notify
 // dedupe — so even an UNOWNED second generation's first publication is
-// natively delivered. On v2 the plugin injects NO wake for any of them:
-// all of these terminals are pull-only (council 2026-10-23).
+// natively delivered. The tracker only delivers later revisions.
 
-test('first publication of an unowned second generation delivers nothing (pull-only)', async () => {
+test('first publication of an unowned second generation remains native-owned', async () => {
   resetOrchestratorWakeGateForTests();
   const capture = captureGateLogs();
   try {

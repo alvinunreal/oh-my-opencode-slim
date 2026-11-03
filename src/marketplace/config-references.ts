@@ -7,7 +7,10 @@ import {
   restorePreparedJsonConfig,
   withSerializedConfigWrites,
 } from '../config/json-file';
-import { findPluginConfigPaths } from '../config/loader';
+import {
+  findPluginConfigPaths,
+  getPluginConfigCandidates,
+} from '../config/loader';
 import { getConfigSearchDirs } from '../config/paths';
 import { MarketplaceActivationError } from './errors';
 import { normalizeMarketplacePackageId } from './ids';
@@ -177,16 +180,11 @@ export function withMarketplaceConfigReferencesRemoved(
   projectDir: string,
   id: string,
   operation: (onCommitted: () => void) => void,
+  hostFlavor?: string,
 ): void {
   const initialUserConfigPath = findExistingUserConfigPath();
-  const projectConfigBase = join(
-    resolve(projectDir),
-    '.opencode',
-    'oh-my-opencode-slim',
-  );
   const candidateConfigPaths = [
-    `${projectConfigBase}.jsonc`,
-    `${projectConfigBase}.json`,
+    ...getPluginConfigCandidates(projectDir, hostFlavor).project,
     ...(initialUserConfigPath ? [initialUserConfigPath] : []),
   ];
   const orderedPaths = [
@@ -208,16 +206,23 @@ export function withMarketplaceConfigReferencesRemoved(
       // Rediscover while holding the selected user config and all feasible
       // project config leases. A project config may have been created while
       // uninstall waited.
-      const current = findPluginConfigPaths(projectDir);
+      const current = findPluginConfigPaths(projectDir, hostFlavor);
       const currentUserConfigPath = findExistingUserConfigPath();
       if (currentUserConfigPath !== initialUserConfigPath) {
         throw new MarketplaceActivationError(
           'Marketplace user config resolution changed during uninstall; retry the operation',
         );
       }
-      const configPaths = [currentUserConfigPath, current.projectConfigPath]
+      const configPaths = [currentUserConfigPath, ...current.projectConfigPaths]
         .filter((configPath): configPath is string => configPath !== null)
         .map((configPath) => resolve(configPath));
+      if (
+        configPaths.some((configPath) => !orderedPaths.includes(configPath))
+      ) {
+        throw new MarketplaceActivationError(
+          'Marketplace project config resolution changed during uninstall; retry the operation',
+        );
+      }
       const prepared = [];
       for (const configPath of [...new Set(configPaths)].sort()) {
         if (!pathExists(configPath)) continue;

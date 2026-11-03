@@ -141,7 +141,14 @@ function classifySessionInfo(
 ): LiveSessionClassification {
   const state = hostRoundStateOf(info);
   if (state.kind === 'terminal') {
-    return { kind: 'outcome', outcome: state.outcome, idleAt: state.idleAt };
+    return {
+      kind: 'outcome',
+      outcome: state.outcome,
+      idleAt: state.idleAt,
+      ...(typeof info.id === 'string' && typeof info.parentID === 'string'
+        ? { sessionID: info.id, parentID: info.parentID }
+        : {}),
+    };
   }
   if (state.kind === 'pending') {
     return { kind: 'unknown', reason: 'no host terminal outcome' };
@@ -166,7 +173,13 @@ function classifySessionInfo(
 type LiveSessionClassification =
   | { kind: 'running' }
   | { kind: 'idle' }
-  | { kind: 'outcome'; outcome: HostTerminalOutcome; idleAt?: number }
+  | {
+      kind: 'outcome';
+      outcome: HostTerminalOutcome;
+      idleAt?: number;
+      sessionID?: string;
+      parentID?: string;
+    }
   | { kind: 'unknown'; reason: string };
 
 function classificationFromSnapshot(

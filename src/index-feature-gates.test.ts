@@ -29,12 +29,13 @@ type PluginHooks = Awaited<ReturnType<typeof plugin>>;
 
 const noop = async () => ({ data: [] });
 
-function createClient() {
+function createClient(onSessionGet?: (sessionID: string) => void) {
   const session = new Proxy(
     {
-      get: async ({ path: requestPath }: { path: { id: string } }) => ({
-        data: { id: requestPath.id },
-      }),
+      get: async ({ path: requestPath }: { path: { id: string } }) => {
+        onSessionGet?.(requestPath.id);
+        return { data: { id: requestPath.id } };
+      },
       messages: noop,
       status: async () => ({ data: {} }),
     },
@@ -85,9 +86,9 @@ describe('plugin feature gates through exported hooks', () => {
     );
   };
 
-  const createHooks = (hostFlavor?: 'v1' | 'v2') =>
+  const createHooks = (hostFlavor?: 'v1' | 'v2', client = createClient()) =>
     plugin({
-      client: createClient(),
+      client,
       directory: projectDir,
       worktree: projectDir,
       serverUrl: new URL('http://127.0.0.1:4096'),
@@ -97,7 +98,7 @@ describe('plugin feature gates through exported hooks', () => {
   for (const flavor of ['v1', 'v2'] as const) {
     test(`${flavor}: disabling managed jobs preserves headers and real retry steering`, async () => {
       await configure({
-        backgroundJobs: { enabled: false },
+        backgroundJobs: { mode: 'off' },
         fallback: { enabled: true, maxRetries: 0 },
         agents: {
           orchestrator: { model: ['openai/gpt-b', 'openai/gpt-c'] },
@@ -194,7 +195,7 @@ describe('plugin feature gates through exported hooks', () => {
 
   test('foreground-fallback disabled hook does not dispatch retry steering', async () => {
     await configure({
-      backgroundJobs: { enabled: false },
+      backgroundJobs: { mode: 'off' },
       disabled_hooks: ['auto-update-checker', 'foreground-fallback'],
       fallback: { enabled: true, maxRetries: 0 },
       agents: {
@@ -231,7 +232,7 @@ describe('plugin feature gates through exported hooks', () => {
 
   test('v2 fallback disabled at startup can still be enabled live', async () => {
     await configure({
-      backgroundJobs: { enabled: false },
+      backgroundJobs: { mode: 'off' },
       fallback: { enabled: false, maxRetries: 0 },
       agents: {
         orchestrator: { model: ['openai/gpt-b', 'openai/gpt-c'] },
@@ -267,7 +268,7 @@ describe('plugin feature gates through exported hooks', () => {
 
   test('v1 interview disabled keeps request transforms inert', async () => {
     await configure({
-      backgroundJobs: { enabled: false },
+      backgroundJobs: { mode: 'off' },
       interview: { enabled: false },
       disabled_hooks: [
         'auto-update-checker',
@@ -304,7 +305,7 @@ describe('plugin feature gates through exported hooks', () => {
   });
 
   test('v2 uses the bridge service without constructing a v1 interview owner', async () => {
-    await configure({ backgroundJobs: { enabled: false } });
+    await configure({ backgroundJobs: { mode: 'off' } });
     const managerSpy = spyOn(interviewFactories, 'createInterviewManager');
     const submitState = mock(async () => ({ ok: true, message: 'accepted' }));
     const service = {
@@ -330,7 +331,7 @@ describe('plugin feature gates through exported hooks', () => {
   });
 
   test('v1 still constructs exactly one enabled interview owner', async () => {
-    await configure({ backgroundJobs: { enabled: false } });
+    await configure({ backgroundJobs: { mode: 'off' } });
     const managerSpy = spyOn(interviewFactories, 'createInterviewManager');
     let hooks: PluginHooks | undefined;
     try {
@@ -408,16 +409,16 @@ describe('plugin feature gates through exported hooks', () => {
     }
   });
 
-  test('auto-update checker is cold-gated with lifecycle on and off', async () => {
+  test('auto-update checker is cold-gated by the disabled hook in every lifecycle mode', async () => {
     const checkerEvent = mock(() => undefined);
     const factorySpy = spyOn(
       hookFactories,
       'createAutoUpdateCheckerHook',
     ).mockImplementation(() => ({ event: checkerEvent }));
     try {
-      for (const enabled of [true, false]) {
+      for (const mode of ['managed', 'native', 'off'] as const) {
         await configure({
-          backgroundJobs: { enabled },
+          backgroundJobs: { mode },
           disabled_hooks: ['auto-update-checker'],
         });
         const hooks = await createHooks();
@@ -436,7 +437,7 @@ describe('plugin feature gates through exported hooks', () => {
       }
 
       await configure({
-        backgroundJobs: { enabled: false },
+        backgroundJobs: { mode: 'managed' },
         disabled_hooks: [],
       });
       const hooks = await createHooks();
@@ -451,6 +452,60 @@ describe('plugin feature gates through exported hooks', () => {
         expect(checkerEvent).toHaveBeenCalledTimes(1);
       } finally {
         await hooks.dispose?.();
+      }
+    } finally {
+      factorySpy.mockRestore();
+    }
+  });
+
+  test('autoUpdate false alone keeps the server hook unconstructed', async () => {
+    const checkerEvent = mock(() => undefined);
+    const factorySpy = spyOn(
+      hookFactories,
+      'createAutoUpdateCheckerHook',
+    ).mockImplementation(() => ({ event: checkerEvent }));
+    let hooks: PluginHooks | undefined;
+    try {
+      await configure({
+        backgroundJobs: { mode: 'managed' },
+        disabled_hooks: [],
+        autoUpdate: false,
+      });
+      hooks = await createHooks();
+      try {
+        await hooks.event?.({
+          event: {
+            type: 'session.created',
+            properties: { info: { id: 'ses_autoupdate_off' } },
+          },
+        } as never);
+        // `autoUpdate: false` is the whole switch here: the disabled_hooks
+        // mask is empty, yet the hook factory must never be constructed.
+        expect(factorySpy).not.toHaveBeenCalled();
+        expect(checkerEvent).not.toHaveBeenCalled();
+      } finally {
+        await hooks.dispose?.();
+        hooks = undefined;
+      }
+
+      await configure({
+        backgroundJobs: { mode: 'managed' },
+        disabled_hooks: [],
+        autoUpdate: true,
+      });
+      hooks = await createHooks();
+      try {
+        expect(factorySpy).toHaveBeenCalledTimes(1);
+        await hooks.event?.({
+          event: {
+            type: 'session.created',
+            properties: { info: { id: 'ses_autoupdate_on' } },
+          },
+        } as never);
+        expect(checkerEvent).toHaveBeenCalledTimes(1);
+      } finally {
+        await hooks.dispose?.();
+        hooks = undefined;
       }
     } finally {
       factorySpy.mockRestore();
@@ -513,7 +568,7 @@ describe('plugin feature gates through exported hooks', () => {
       await configure({
         sidebar,
         backgroundJobs: {
-          enabled: true,
+          mode: 'managed',
           wallClockTimeoutMs: 0,
           orchestratorWake: { enabled: false },
         },
@@ -541,9 +596,60 @@ describe('plugin feature gates through exported hooks', () => {
     });
   }
 
+  test('tui false overrides sidebar true: no server state writes or parent hydration', async () => {
+    const externalDir = await mkdtemp(path.join(projectDir, 'external-'));
+    await configure({
+      tui: false,
+      sidebar: true,
+      // Keep the managed lifecycle out of this observation: its terminal gate
+      // legitimately reads the child through the same client API. With the
+      // lifecycle off, any session.get here can only come from TUI hydration.
+      backgroundJobs: { mode: 'off' },
+    });
+    const sessionReads: string[] = [];
+    let hooks: PluginHooks | undefined;
+    try {
+      hooks = await createHooks(
+        undefined,
+        createClient((sessionID) => sessionReads.push(sessionID)),
+      );
+      await exerciseSidebar(hooks, externalDir);
+
+      // Parent hydration only runs from an active TUI agent. The child has
+      // an agent from exerciseSidebar, so a busy status would hydrate the
+      // parent link if the sidebar gate were open.
+      sessionReads.length = 0;
+      await hooks.event?.({
+        event: {
+          type: 'session.status',
+          properties: {
+            sessionID: 'ses_child',
+            status: { type: 'busy' },
+          },
+        },
+      } as never);
+      await Promise.resolve();
+      expect(sessionReads).toEqual([]);
+
+      // Startup/config refresh and explicit profile refresh write paths.
+      await hooks.config?.({});
+      await expect(
+        hooks['v2.refreshProfiles']?.({ allowInvalidFallback: true }),
+      ).resolves.toMatchObject({ ok: true });
+    } finally {
+      await hooks?.dispose?.();
+    }
+
+    for (const directory of [projectDir, externalDir]) {
+      const statePath = getTuiStatePath(directory);
+      expect(existsSync(statePath)).toBe(false);
+      expect(existsSync(`${statePath}.lock`)).toBe(false);
+    }
+  });
+
   test('terminal live foreground recovery never restores background admission', async () => {
     await configure({
-      backgroundJobs: { enabled: true, wallClockTimeoutMs: 0 },
+      backgroundJobs: { mode: 'managed', wallClockTimeoutMs: 0 },
     });
     let onRunning: ((record: BackgroundJobRecord) => void) | undefined;
     const originalGate = gateFactories.createBackgroundJobTerminalGate;

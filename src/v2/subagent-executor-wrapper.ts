@@ -14,8 +14,20 @@
  * the original executor and always returns its result unchanged.
  */
 
+import {
+  type ForegroundFallbackManager,
+  NO_ROUTE_CONTINUATION,
+  REFUSAL_CONTINUATION,
+} from '../hooks/foreground-fallback';
+import { isRecord } from '../utils/guards';
 import { log } from '../utils/logger';
+import { withTimeout } from '../utils/session';
 import { parseTaskResultFromOutput } from '../utils/task';
+import {
+  isNoRouteAnchor,
+  isNoRouteFailureMessage,
+  noRouteOutcomeID,
+} from './terminal-fallback';
 
 export type SubagentStructuredState =
   | 'running'
@@ -50,6 +62,73 @@ export interface SubagentExecutorWrapperOptions {
   /** Register one structured launch/status. The wrapper never lets a
    *  registration failure reach the tool result. */
   register: (launch: SubagentStructuredLaunch) => Promise<unknown> | unknown;
+  context?: (
+    sessionID: string,
+  ) => Promise<Array<Record<string, unknown>> | undefined>;
+  refusalOutcome?: ForegroundFallbackManager['refusedChildOutcome'];
+  /** The native steer passed permission and reached its progress signal. */
+  onSteerProgress?: (
+    callID: string,
+    parentSessionID: string,
+    childSessionID: string,
+  ) => void;
+}
+
+export async function readRefusalOutcome(
+  context: NonNullable<SubagentExecutorWrapperOptions['context']>,
+  outcome: NonNullable<SubagentExecutorWrapperOptions['refusalOutcome']>,
+  sessionID: string,
+  text?: string,
+  observedAt = Date.now(),
+) {
+  try {
+    const history = await withTimeout(
+      context(sessionID),
+      2_000,
+      '[v2] refused child context lookup timed out',
+    );
+    if (text && isNoRouteFailureMessage(text)) {
+      const input = Array.isArray(history)
+        ? history.findLast((entry) => isNoRouteAnchor(entry.type, entry.status))
+        : undefined;
+      if (!input || typeof input.id !== 'string') return;
+      const created = isRecord(input.time) ? input.time.created : input.time;
+      const entry = {
+        id: noRouteOutcomeID(input.id, text),
+        baselineMessageID: input.id,
+        type: 'no-route',
+        agent: input.agent,
+        error: { type: 'provider.no-route', message: text },
+        time: { created, completed: observedAt },
+      };
+      const model = await outcome(sessionID, entry);
+      if (model) return { id: entry.id, model, completedAt: observedAt };
+      return;
+    }
+    const last = Array.isArray(history)
+      ? history.findLast(
+          (entry) =>
+            entry.type === 'assistant' &&
+            (text === undefined ||
+              (entry.finish === 'content-filter' &&
+                isRecord(entry.error) &&
+                entry.error.message === text)),
+        )
+      : undefined;
+    if (last?.finish !== 'content-filter' || typeof last.id !== 'string')
+      return;
+    const model = await outcome(sessionID, last);
+    if (model)
+      return {
+        id: last.id,
+        model,
+        completedAt: isRecord(last.time) ? last.time.completed : undefined,
+      };
+  } catch (error) {
+    log('[v2] refused child context lookup failed', String(error));
+    // null = lookup failed (retryable); undefined = definitive no recovery.
+    return null;
+  }
 }
 
 /** Host-authored failure sentence; the ONLY prose the wrapper reads, and only
@@ -202,17 +281,80 @@ export function createSubagentExecutorWrapper(
           | undefined;
         const callID = readString(call?.id);
         const parentSessionID = readString(call?.sessionID);
-        try {
-          const result = await run(input, context);
-          if (callID && parentSessionID) {
-            registerSafely(structuredLaunch(callID, parentSessionID, result));
+        const nativeContext = context;
+        const progress = isRecord(nativeContext)
+          ? nativeContext.progress
+          : undefined;
+        if (
+          options.onSteerProgress &&
+          callID &&
+          parentSessionID &&
+          isRecord(nativeContext) &&
+          typeof progress === 'function'
+        ) {
+          context = {
+            ...nativeContext,
+            progress: async (update: unknown) => {
+              await progress.call(nativeContext, update);
+              if (
+                isRecord(update) &&
+                update.status === 'running' &&
+                typeof update.sessionID === 'string'
+              )
+                options.onSteerProgress?.(
+                  callID,
+                  parentSessionID,
+                  update.sessionID,
+                );
+            },
+          };
+        }
+        let currentInput = input;
+        const retried = new Set<string>();
+        while (true) {
+          try {
+            const result = await run(currentInput, context);
+            if (callID && parentSessionID)
+              registerSafely(structuredLaunch(callID, parentSessionID, result));
+            return result;
+          } catch (error) {
+            const launch =
+              callID && parentSessionID
+                ? threwLaunch(callID, parentSessionID, error)
+                : undefined;
+            if (
+              launch?.state === 'error' &&
+              isRecord(currentInput) &&
+              options.context &&
+              options.refusalOutcome
+            ) {
+              const failure = launch.result
+                ?.replace(HOST_FAILURE_MESSAGE_PATTERN, '')
+                .replace(/^:\s*/, '');
+              const noRoute = failure && isNoRouteFailureMessage(failure);
+              const recovery = await readRefusalOutcome(
+                options.context,
+                options.refusalOutcome,
+                launch.childTaskID,
+                noRoute ? failure : undefined,
+              );
+              if (recovery && !retried.has(recovery.id)) {
+                retried.add(recovery.id);
+                const next: Record<string, unknown> = {
+                  ...currentInput,
+                  sessionID: launch.childTaskID,
+                  prompt: noRoute
+                    ? NO_ROUTE_CONTINUATION
+                    : REFUSAL_CONTINUATION,
+                };
+                delete next.model;
+                currentInput = next;
+                continue;
+              }
+            }
+            registerSafely(launch);
+            throw error;
           }
-          return result;
-        } catch (error) {
-          if (callID && parentSessionID) {
-            registerSafely(threwLaunch(callID, parentSessionID, error));
-          }
-          throw error;
         }
       };
       Object.defineProperty(wrapped, WRAPPED_MARKER, {

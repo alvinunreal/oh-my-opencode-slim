@@ -28,6 +28,7 @@ import {
 } from './constants';
 import type { CouncilConfig } from './council-schema';
 import { resolveEffectiveAgentOverrides } from './effective-agent-overrides';
+import { type FeatureGates, resolveFeatureGates } from './feature-gates';
 import {
   deepMerge,
   mergeAgentOverrides,
@@ -39,7 +40,6 @@ import {
   type AcpAgentsConfig,
   type AgentOverrideConfig,
   type BackgroundJobsConfig,
-  type BackgroundJobsMode,
   type CompanionConfig,
   type FailoverConfig,
   type MultiplexerConfig,
@@ -74,32 +74,16 @@ export interface HostConfigSnapshot {
 
 /** Per-directory registry backing the singleton instances. */
 const registry = new Map<string, RuntimeConfig>();
-
-/**
- * Resolve the lifecycle mode from a raw/parsed `backgroundJobs` block.
- *
- * Shared by `RuntimeConfig` (the v1 factory) and the v2 setup pre-flight,
- * which reads the same snapshot before the v1 factory runs — both must agree,
- * otherwise `native`/`off` would still wire v2 board persistence and the
- * native-subagent executor wrapper.
- */
-export function resolveBackgroundJobsMode(backgroundJobs?: {
-  mode?: unknown;
-  enabled?: unknown;
-}): BackgroundJobsMode {
-  const explicit = backgroundJobs?.mode;
-  if (explicit === 'managed' || explicit === 'native' || explicit === 'off') {
-    return explicit;
-  }
-  return backgroundJobs?.enabled === false ? 'off' : 'managed';
-}
+const reloadState = new Map<
+  string,
+  { preset: string | null; switchedModels: Set<string> }
+>();
 
 const DEFAULT_MULTIPLEXER: MultiplexerConfig =
   MultiplexerConfigStrictSchema.parse({});
 
 const DEFAULT_BACKGROUND_JOBS: BackgroundJobsConfig = {
   mode: 'managed',
-  enabled: true,
   maxSessionsPerAgent: DEFAULT_MAX_SESSIONS_PER_AGENT,
   orchestratorWake: {
     enabled: true,
@@ -205,9 +189,9 @@ export class RuntimeConfig {
       existing.seedPlugin(pluginConfig);
       return existing;
     }
-    const instance = new RuntimeConfig(directory, hostFlavor);
+    const instance = RuntimeConfig.get(directory);
+    instance.hostFlavor = hostFlavor;
     instance.seedPlugin(pluginConfig);
-    registry.set(directory, instance);
     return instance;
   }
 
@@ -227,36 +211,53 @@ export class RuntimeConfig {
     let instance = registry.get(directory);
     if (!instance) {
       instance = new RuntimeConfig(directory);
+      const saved = reloadState.get(directory);
+      if (saved) {
+        instance.runtimePresetName = saved.preset;
+        instance.switchedModels = saved.switchedModels;
+        reloadState.delete(directory);
+      }
       registry.set(directory, instance);
     }
-    return instance;
-  }
-
-  /**
-   * Build an UNREGISTERED instance from a plugin config. Used by read-only
-   * resolution paths (the v2 hot-profile refresh) that must not disturb the
-   * live per-directory singleton. Host override and runtime-preset state can
-   * be applied on the throwaway instance without any global side effect.
-   */
-  static create(
-    directory: string,
-    pluginConfig: ResolvedPluginConfig,
-  ): RuntimeConfig {
-    const instance = new RuntimeConfig(directory);
-    instance.seedPlugin(pluginConfig);
     return instance;
   }
 
   /** Remove a directory from the registry (plugin re-init / dispose). */
   static reset(directory: string): void {
     registry.delete(directory);
+    reloadState.delete(directory);
   }
 
+  /** Retain this generation until its owner disposes or initialization fails. */
+  acquire(): () => void {
+    if (registry.get(this.directory) !== this) {
+      throw new Error('Cannot acquire an unregistered runtime config');
+    }
+    this.owners += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.owners -= 1;
+      if (this.owners !== 0 || registry.get(this.directory) !== this) return;
+      if (this.runtimePresetName || this.switchedModels.size > 0) {
+        reloadState.set(this.directory, {
+          preset: this.runtimePresetName,
+          switchedModels: new Set(this.switchedModels),
+        });
+      }
+      registry.delete(this.directory);
+    };
+  }
+
+  private owners = 0;
   private pluginConfig: ResolvedPluginConfig | undefined;
+  private featureGatesCache: Readonly<FeatureGates> | undefined;
   private hostSnapshot: HostConfigSnapshot | undefined;
   private runtimePresetName: string | null = null;
   private switchedModels = new Set<string>();
   private localSkillNamesCache: readonly string[] | undefined;
+  private agentsCache: Record<string, AgentOverrideConfig> | undefined;
   // Memoized disabled-* sets: computed once per instance per config
   // generation (re-seeding clears them) instead of allocating a fresh Set
   // on every hot-path read.
@@ -266,7 +267,9 @@ export class RuntimeConfig {
 
   private seedPlugin(pluginConfig: ResolvedPluginConfig): void {
     this.pluginConfig = deepFreeze(clonePlain(pluginConfig));
+    this.featureGatesCache = resolveFeatureGates(this.pluginConfig);
     this.localSkillNamesCache = undefined;
+    this.agentsCache = undefined;
     this.disabledAgentsCache = undefined;
     this.disabledHooksCache = undefined;
     this.disabledCommandsCache = undefined;
@@ -290,6 +293,15 @@ export class RuntimeConfig {
     return this.pluginConfig;
   }
 
+  /**
+   * Immutable projection of every optional-subsystem switch. Cached for the
+   * current config generation; unseeded instances expose the defaults.
+   */
+  get featureGates(): Readonly<FeatureGates> {
+    this.featureGatesCache ??= resolveFeatureGates(this.pluginConfig);
+    return this.featureGatesCache;
+  }
+
   /** Active preset name: runtime override wins over the config-file preset. */
   get preset(): string | undefined {
     return this.runtimePresetName ?? this.pluginConfig?.preset;
@@ -303,6 +315,20 @@ export class RuntimeConfig {
    */
   agents(
     defaultSkills: Readonly<Record<string, readonly string[]>> = {},
+  ): Record<string, AgentOverrideConfig> {
+    if (Object.keys(defaultSkills).length === 0) {
+      return clonePlain(this.cachedAgents());
+    }
+    return this.resolveAgents(defaultSkills);
+  }
+
+  private cachedAgents(): Record<string, AgentOverrideConfig> {
+    this.agentsCache ??= deepFreeze(this.resolveAgents({}));
+    return this.agentsCache;
+  }
+
+  private resolveAgents(
+    defaultSkills: Readonly<Record<string, readonly string[]>>,
   ): Record<string, AgentOverrideConfig> {
     let base = mergeAgentOverrides({}, this.pluginConfig?.agents ?? {});
     const filePreset = this.pluginConfig?.preset
@@ -327,7 +353,9 @@ export class RuntimeConfig {
    * host override > runtime override > plugin file.
    */
   agent(name: string): AgentOverrideConfig | undefined {
-    const merged = this.aliasAwareOverride(this.agents(), name);
+    const merged = clonePlain(
+      this.aliasAwareOverride(this.cachedAgents(), name),
+    );
     const hostLayer = this.hostAgent(name) ?? this.hostLegacyAgent(name);
     if (!hostLayer) {
       return merged;
@@ -417,7 +445,7 @@ export class RuntimeConfig {
       ...this.resolveChildInputWake(
         this.pluginConfig?.backgroundJobs ?? DEFAULT_BACKGROUND_JOBS,
       ),
-      mode: this.backgroundJobsMode,
+      mode: this.featureGates.backgroundJobsMode,
     };
   }
 
@@ -456,32 +484,36 @@ export class RuntimeConfig {
     return this.pluginConfig?.council;
   }
 
-  get autoUpdate(): boolean {
-    return this.pluginConfig?.autoUpdate ?? true;
+  /**
+   * Update checker switch: enabled unless `autoUpdate: false` or the
+   * `auto-update-checker` hook is disabled. Both are independent off
+   * switches for the same update hook.
+   */
+  get updateCheckerEnabled(): boolean {
+    return this.featureGates.updateChecker;
   }
 
-  /** Resolved background-task lifecycle mode.
+  /**
+   * Resolved background-task lifecycle mode.
    *
-   * An explicit `mode` wins; the legacy `enabled: false` maps to `off` so
-   * existing configs keep their exact no-op behavior. Only `managed`
-   * constructs the board-shaped lifecycle; `native` registers the two thin
-   * host-read control tools; `off` registers none.
+   * Only `managed` constructs the board-shaped lifecycle; `native` registers
+   * the two thin host-read control tools; `off` registers none.
    */
-  get backgroundJobsMode(): BackgroundJobsMode {
-    return resolveBackgroundJobsMode(this.pluginConfig?.backgroundJobs);
+  get backgroundJobsMode(): FeatureGates['backgroundJobsMode'] {
+    return this.featureGates.backgroundJobsMode;
   }
 
   /** True only for the managed lifecycle (`mode: "managed"`). */
   get backgroundJobsEnabled(): boolean {
-    return this.backgroundJobsMode === 'managed';
+    return this.featureGates.managedJobs;
   }
 
   get interviewEnabled(): boolean {
-    return this.pluginConfig?.interview?.enabled !== false;
+    return this.featureGates.interview;
   }
 
   get sidebarEnabled(): boolean {
-    return this.pluginConfig?.sidebar !== false;
+    return this.featureGates.sidebar;
   }
 
   /**
@@ -491,7 +523,7 @@ export class RuntimeConfig {
    * applicable.
    */
   get liveConfigRefresh(): boolean {
-    return this.pluginConfig?.liveConfigRefresh !== false;
+    return this.featureGates.liveConfigRefresh;
   }
 
   /**
@@ -501,7 +533,7 @@ export class RuntimeConfig {
    * selected package IDs and the manager/store are not initialized at all.
    */
   get marketplaceEnabled(): boolean {
-    return this.pluginConfig?.marketplace?.enabled !== false;
+    return this.featureGates.marketplace;
   }
 
   get stripOrchestratorModel(): boolean {
@@ -529,7 +561,7 @@ export class RuntimeConfig {
   get modelArrays(): Record<string, Array<{ id: string; variant?: string }>> {
     const arrays: Record<string, Array<{ id: string; variant?: string }>> = {};
     const disabled = this.disabledAgents;
-    const agents = this.agents();
+    const agents = this.cachedAgents();
     const names = new Set<string>([
       ...ALL_AGENT_NAMES,
       ...getCustomAgentNames(this.pluginConfig),
@@ -543,7 +575,7 @@ export class RuntimeConfig {
         continue;
       }
       arrays[name] = override.model.map((entry) =>
-        typeof entry === 'string' ? { id: entry } : entry,
+        typeof entry === 'string' ? { id: entry } : { ...entry },
       );
     }
 
@@ -590,7 +622,7 @@ export class RuntimeConfig {
   combinedModelInheritanceSource(
     name: string,
   ): 'session' | 'orchestrator' | undefined {
-    const override = this.aliasAwareOverride(this.agents(), name);
+    const override = this.aliasAwareOverride(this.cachedAgents(), name);
     if (
       !Array.isArray(override?.model) ||
       override.model.length === 0 ||
@@ -666,6 +698,7 @@ export class RuntimeConfig {
    * guard, mirrors the previous config-hook reset branch).
    */
   setRuntimePreset(name: string | null): void {
+    this.agentsCache = undefined;
     const presets = this.pluginConfig?.presets;
     if (!name || !presets || !Object.hasOwn(presets, name)) {
       this.runtimePresetName = null;

@@ -25,6 +25,7 @@ The config system follows a layered architecture:
 | Abstraction | Purpose | Location |
 |-------------|---------|----------|
 | `PluginConfig` | Root configuration object with agents, presets, and feature flags | schema.ts |
+| `FeatureGates` | Frozen optional-subsystem projection shared by runtime, v1/v2 setup, and TUI gates | feature-gates.ts |
 | `AgentOverrideConfig` | Per-agent configuration (model, temperature, skills, MCPs) | schema.ts |
 | `CouncilConfig` | Multi-LLM council configuration with councillor presets and a default preset | council-schema.ts |
 | `MultiplexerConfig` | Unified pane management configuration (tmux/zellij) | schema.ts |
@@ -61,7 +62,7 @@ an eager config dependency: package-ID validation comes from `id-schema.ts`.
    └─ Environment variable: OH_MY_OPENCODE_SLIM_PRESET (overrides preset field)
 
 2. Parsing Phase
-   ├─ JSONC support (comments, trailing commas) via stripJsonComments
+   ├─ JSONC support (comments, trailing commas) via parseJsonConfigText
    ├─ Environment variable interpolation: {env:VAR_NAME} → process.env.VAR_NAME
    └─ Zod validation with detailed error reporting
 
@@ -116,7 +117,7 @@ Preset resolution flow:
 ### Dependencies
 
 - **Zod**: Runtime validation and schema inference
-- **Node.js fs**: Configuration file reading (JSONC support via stripJsonComments)
+- **Node.js fs**: Configuration file reading (JSONC support via parseJsonConfigText)
 - **Environment**: Environment variable interpolation via {env:VAR_NAME} syntax
 
 ### Published Exports
@@ -158,7 +159,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `RuntimeConfig.reset(directory)`: Clear the singleton for a directory
 - `RuntimeConfig.captureHostConfig(opencodeConfig)`: Capture host-side config before the config hook mutates it
 - `setRuntimePreset(name)` / `getRuntimePreset()`: Runtime preset override (stale names clear it)
-- Derived getters: `plugin`, `preset`, `agents()`, `agent(name)`, `disabledAgents`, `disabledTools`, `disabledSkills`, `disabledHooks`, `disabledCommands`, `customAgentNames`, `disabledMcps`, `imageRouting`, `multiplexer`, `backgroundJobs` (incl. `orchestratorWake`), `fallback`, `webfetch`, `acpAgents`, `companion`, `council`, `autoUpdate`, `stripOrchestratorModel`, `setDefaultAgent`, `compactSidebar`, `modelArrays` (incl. councillor chains), `runtimeChains`, `primaryModel`, `smallModel()`, `hostAgent(name)`
+- Derived getters: `plugin`, `preset`, `featureGates`, `agents()`, `agent(name)`, `disabledAgents`, `disabledTools`, `disabledSkills`, `disabledHooks`, `disabledCommands`, `customAgentNames`, `disabledMcps`, `imageRouting`, `multiplexer`, `backgroundJobs` (incl. `orchestratorWake`), `fallback`, `webfetch`, `acpAgents`, `companion`, `council`, `updateCheckerEnabled`, `stripOrchestratorModel`, `setDefaultAgent`, `compactSidebar`, `modelArrays` (incl. councillor chains), `runtimeChains`, `primaryModel`, `smallModel()`, `hostAgent(name)`
 
 ### MCP Management
 
@@ -170,7 +171,7 @@ This allows consumers to import directly from `src/config` rather than individua
 ### PluginConfig (Root Schema)
 - `preset`: Active preset name
 - `setDefaultAgent`: Whether to set default agent model
-- `autoUpdate`: Enable automatic plugin updates
+- `autoUpdate`: Master switch for OMOS plugin update checks, notices, and automatic installs; `disabled_hooks: ["auto-update-checker"]` is the per-hook form of the same off switch
 - `presets`: Named preset groupings (map of presetName → AgentOverrideConfig)
 - `agents`: Per-agent overrides (map of agentName → AgentOverrideConfig)
 - `disabled_agents`: List of agents to disable
@@ -202,6 +203,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `displayName`: Custom display name for the agent
 - `color`: Agent display color as a six-digit hex value or OpenCode theme color
 - `primary`: Declare a custom agent as a peer primary orchestrator (SDK mode `primary`; ignored on built-in names)
+- `subagents`: Primary agents only — delegation scope allowlist compiled into the `task` permission stance (`{"*": "deny", "<name>": "allow"}`); an explicit `permission.task` entry wins and skips the scoped `<Agents>` catalog. `'*'` is reserved
 
 ### CouncilConfig
 - `presets`: Named council presets (map of councillor name → CouncillorConfig)

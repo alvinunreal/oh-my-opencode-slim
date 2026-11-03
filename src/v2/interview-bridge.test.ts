@@ -3,11 +3,8 @@ import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { bindFreePort } from '../interview/test-port';
-import {
-  applyInterviewCommandParts,
-  createV2InterviewBridge,
-  markerText,
-} from './interview-bridge';
+import { isInternalAdmission } from './internal-admissions';
+import { createV2InterviewBridge, markerText } from './interview-bridge';
 
 function createContext(overrides?: {
   synthetic?: (input: Record<string, unknown>) => Promise<unknown>;
@@ -51,28 +48,79 @@ describe('markerText', () => {
 });
 
 describe('v2 interview bridge', () => {
-  test('propagates v2 prompt failures through interview continuation', async () => {
-    const prompt = mock(async () => {
-      throw new Error('prompt rejected');
+  test('replays a command across retries and tool steps without repeating its handler', async () => {
+    const bridge = createV2InterviewBridge(createContext());
+    const handler = mock(async (_input: any, output: any) => {
+      output.parts.push({ type: 'text', text: 'expanded interview' });
     });
-    const bridge = createV2InterviewBridge(createContext({ prompt }), {
+    bridge.service.handleCommandExecuteBefore = handler;
+    const marker = {
+      id: 'command',
+      role: 'user',
+      content: [{ type: 'text', text: markerText('idea') }],
+    };
+    const event = (messages: any[]) => ({
+      sessionID: 'ses_replay',
+      agent: 'orchestrator',
+      model: {},
+      system: [],
+      tools: {},
+      messages,
+    });
+    const first = event([structuredClone(marker)]);
+    const retry = event([structuredClone(marker)]);
+    const next = event([
+      structuredClone(marker),
+      {
+        id: 'assistant',
+        role: 'assistant',
+        content: [{ type: 'tool-call', id: 'call', name: 'read', input: {} }],
+      },
+      {
+        id: 'tool',
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            id: 'call',
+            name: 'read',
+            result: { type: 'text', value: 'ok' },
+          },
+        ],
+      },
+    ]);
+
+    await bridge.handleContext(first);
+    await bridge.handleContext(retry);
+    await bridge.handleContext(next);
+    expect(retry.messages[0].content).toEqual(first.messages[0].content);
+    expect(next.messages[0].content).toEqual(first.messages[0].content);
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    const restarted = createV2InterviewBridge(createContext());
+    const historic = event(
+      next.messages.map((message) => structuredClone(message)),
+    );
+    historic.messages[0] = structuredClone(marker);
+    await restarted.handleContext(historic);
+    expect(historic.messages[0].content).toEqual([
+      { type: 'text', text: 'idea' },
+    ]);
+    bridge.dispose();
+    restarted.dispose();
+  });
+
+  test('propagates v2 synthetic failures through interview continuation', async () => {
+    const synthetic = mock(async () => {
+      throw new Error('synthetic rejected');
+    });
+    const bridge = createV2InterviewBridge(createContext({ synthetic }), {
       outputFolder: `.tmp-v2-prompt-error-${Date.now()}`,
     } as never);
 
     await expect(
       bridge.runtime.continue('ses_prompt_error', 'Continue.'),
-    ).rejects.toThrow('prompt rejected');
-    bridge.dispose();
-  });
-
-  test('rejects continuation when v2 prompt is unavailable', async () => {
-    const bridge = createV2InterviewBridge(createContext(), {
-      outputFolder: `.tmp-v2-prompt-missing-${Date.now()}`,
-    } as never);
-
-    await expect(
-      bridge.runtime.continue('ses_prompt_missing', 'Continue.'),
-    ).rejects.toThrow('session.prompt is unavailable');
+    ).rejects.toThrow('synthetic rejected');
     bridge.dispose();
   });
 
@@ -134,6 +182,11 @@ describe('v2 interview bridge', () => {
     expect(earlier).toEqual(earlierBefore);
     expect(event.messages[1].content[0].text).toContain('build a notes app');
     expect(event.messages[1].content[0].text).toContain('<interview_state>');
+    expect(synthetic).not.toHaveBeenCalled();
+    await bridge.handleEvent({
+      type: 'session.execution.succeeded',
+      data: { sessionID: 'ses_v2' },
+    });
     expect(synthetic).toHaveBeenCalled();
     expect(update).toHaveBeenCalledWith({
       sessionID: 'ses_v2',
@@ -294,7 +347,7 @@ describe('v2 interview bridge', () => {
     bridge.dispose();
   });
 
-  test('continue preserves the session live agent instead of forcing orchestrator', async () => {
+  test('continue admits a tracked synthetic update without switching agents', async () => {
     const calls: Array<{ method: string; input: Record<string, unknown> }> = [];
     const track =
       (method: string) =>
@@ -306,15 +359,27 @@ describe('v2 interview bridge', () => {
       session: {
         get: async () => ({ agent: 'coworker' }),
         prompt: track('prompt'),
+        synthetic: track('synthetic'),
         switchAgent: track('switchAgent'),
       },
     } as never);
 
     await bridge.runtime.continue('ses_c', 'go on');
-    expect(calls).toContainEqual({
-      method: 'switchAgent',
-      input: { sessionID: 'ses_c', agent: 'coworker' },
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({
+      method: 'synthetic',
+      input: {
+        sessionID: 'ses_c',
+        id: expect.any(String),
+        text: 'go on',
+        description: 'Interview update',
+        resume: true,
+      },
     });
+    expect(isInternalAdmission('ses_c', calls[0].input.id as string)).toBe(
+      true,
+    );
+    bridge.dispose();
   });
 
   test('runtime methods probe the v2 session domain with flat inputs', async () => {
@@ -334,22 +399,21 @@ describe('v2 interview bridge', () => {
       },
     } as never);
 
-    await bridge.runtime.notify('ses_n', 'ready');
+    await bridge.runtime.notify(
+      'ses_n',
+      '⎔ Interview UI ready\n\nOpen: http://127.0.0.1:43211/interview/id\n\n[system status: continue without acknowledging this notification]',
+    );
     expect(calls).toContainEqual({
       method: 'synthetic',
       // resume:false = admit the interview URL without waking the session
       // (v1's noReply prompt equivalent; no agent turn, no double-send).
-      input: { sessionID: 'ses_n', text: 'ready', resume: false },
-    });
-
-    await bridge.runtime.continue('ses_c', 'go on');
-    expect(calls).toContainEqual({
-      method: 'switchAgent',
-      input: { sessionID: 'ses_c', agent: 'orchestrator' },
-    });
-    expect(calls).toContainEqual({
-      method: 'prompt',
-      input: { sessionID: 'ses_c', text: 'go on' },
+      input: {
+        sessionID: 'ses_n',
+        text: '⎔ Interview UI ready\n\nOpen: http://127.0.0.1:43211/interview/id\n\n[system status: continue without acknowledging this notification]',
+        description:
+          '⎔ Interview UI ready · Open: http://127.0.0.1:43211/interview/id',
+        resume: false,
+      },
     });
 
     await bridge.runtime.rename('ses_r', 'Interview: x');
@@ -381,32 +445,6 @@ describe('v2 interview bridge', () => {
     ).resolves.toBeUndefined();
     expect(prompt).not.toHaveBeenCalled();
     bridge.dispose();
-  });
-
-  test('applyInterviewCommandParts: empty parts strip the marker, keep args', () => {
-    const trailing = {
-      role: 'user',
-      content: [{ type: 'text', text: markerText('standup notes') }],
-    };
-    applyInterviewCommandParts(
-      trailing,
-      trailing.content[0].text as string,
-      [],
-    );
-    expect(trailing.content).toEqual([{ type: 'text', text: 'standup notes' }]);
-  });
-
-  test('applyInterviewCommandParts: non-empty parts replace the content', () => {
-    const trailing = {
-      role: 'user',
-      content: [{ type: 'text', text: markerText('idea') }],
-    };
-    applyInterviewCommandParts(trailing, trailing.content[0].text as string, [
-      { type: 'text', text: 'EXPANDED', synthetic: true },
-    ]);
-    expect(trailing.content).toEqual([
-      { type: 'text', text: 'EXPANDED', synthetic: true },
-    ]);
   });
 
   test('snapshots transcript before downstream part injection', async () => {
@@ -474,10 +512,6 @@ describe('v2 interview bridge', () => {
     expect(bridge.service.getActiveInterviewId('ses_exec')).not.toBeNull();
 
     await bridge.handleEvent({
-      type: 'session.text.started',
-      data: { sessionID: 'ses_exec', assistantMessageID: 'msg-1', ordinal: 0 },
-    });
-    await bridge.handleEvent({
       type: 'session.text.ended',
       data: {
         sessionID: 'ses_exec',
@@ -536,20 +570,44 @@ describe('v2 interview bridge', () => {
       ],
     });
     await bridge.handleEvent({
-      type: 'session.text.started',
-      properties: { sessionID: 'ses_text' },
+      type: 'session.text.ended',
+      properties: {
+        sessionID: 'ses_text',
+        assistantMessageID: 'msg-1',
+        ordinal: 0,
+        text: 'one',
+      },
     });
     await bridge.handleEvent({
-      type: 'session.text.delta',
-      properties: { sessionID: 'ses_text', delta: 'one' },
+      type: 'session.text.ended',
+      properties: {
+        sessionID: 'ses_text',
+        assistantMessageID: 'msg-1',
+        ordinal: 1,
+        text: ' two',
+      },
     });
     await bridge.handleEvent({
-      type: 'session.text.delta',
-      properties: { sessionID: 'ses_text', delta: ' two' },
+      type: 'session.text.ended',
+      properties: {
+        sessionID: 'ses_text',
+        assistantMessageID: 'msg-2',
+        ordinal: 0,
+        text: 'next',
+      },
     });
-    expect(bridge.getTranscript('ses_text').at(-1)?.parts?.[0]?.text).toBe(
-      'one two',
-    );
+    expect(
+      bridge
+        .getTranscript('ses_text')
+        .slice(-2)
+        .map((message) => message.parts),
+    ).toEqual([
+      [
+        { type: 'text', text: 'one' },
+        { type: 'text', text: ' two' },
+      ],
+      [{ type: 'text', text: 'next' }],
+    ]);
 
     await bridge.handleEvent({
       type: 'session.deleted',
@@ -585,12 +643,13 @@ describe('v2 interview bridge', () => {
       ],
     });
     await bridge.handleEvent({
-      type: 'session.text.started',
-      data: { sessionID: 'ses_live' },
-    });
-    await bridge.handleEvent({
-      type: 'session.text.delta',
-      data: { sessionID: 'ses_live', delta: 'from data' },
+      type: 'session.text.ended',
+      data: {
+        sessionID: 'ses_live',
+        assistantMessageID: 'msg-live',
+        ordinal: 0,
+        text: 'from data',
+      },
     });
     expect(bridge.getTranscript('ses_live').at(-1)?.parts?.[0]?.text).toBe(
       'from data',
@@ -625,12 +684,13 @@ describe('v2 interview bridge', () => {
       ],
     });
     await bridge.handleEvent({
-      type: 'session.text.started',
-      properties: { sessionID: 'ses_plain' },
-    });
-    await bridge.handleEvent({
-      type: 'session.text.delta',
-      properties: { sessionID: 'ses_plain', delta: 'ignored' },
+      type: 'session.text.ended',
+      properties: {
+        sessionID: 'ses_plain',
+        assistantMessageID: 'msg-plain',
+        ordinal: 0,
+        text: 'ignored',
+      },
     });
     expect(bridge.getTranscript('ses_plain')).toEqual([]);
     bridge.dispose();
@@ -682,13 +742,25 @@ describe('v2 interview bridge', () => {
       const event2 = createEvent('v2-session-2', 'second dashboard idea');
       await bridge1.handleContext(event1);
       await bridge2.handleContext(event2);
+      await bridge1.handleEvent({
+        type: 'session.execution.succeeded',
+        data: { sessionID: 'v2-session-1' },
+      });
+      await bridge2.handleEvent({
+        type: 'session.execution.succeeded',
+        data: { sessionID: 'v2-session-2' },
+      });
 
-      expect(synthetic1.mock.calls[0]?.[0].text).toContain(
-        `http://127.0.0.1:${port}/interview/`,
-      );
-      expect(synthetic2.mock.calls[0]?.[0].text).toContain(
-        `http://127.0.0.1:${port}/interview/`,
-      );
+      expect(
+        synthetic1.mock.calls.some(([notice]) =>
+          notice.text.includes(`http://127.0.0.1:${port}/interview/`),
+        ),
+      ).toBe(true);
+      expect(
+        synthetic2.mock.calls.some(([notice]) =>
+          notice.text.includes(`http://127.0.0.1:${port}/interview/`),
+        ),
+      ).toBe(true);
     } finally {
       await bridge1.dispose();
       await bridge2.dispose();

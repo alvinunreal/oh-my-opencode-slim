@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import { createHash } from 'node:crypto';
+import * as fs from 'node:fs';
 import {
   existsSync,
   mkdirSync,
@@ -9,6 +11,7 @@ import {
 } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as zip from '../utils/zip-extractor';
 import {
   COMPANION_MANIFEST,
   ensureCompanionVersion,
@@ -213,6 +216,85 @@ describe('companion updater', () => {
       error: 'Companion archive checksum mismatch',
     });
     expect(readFileSync(bin, 'utf8')).toBe('old-binary');
+  });
+
+  test('replaces a locked Windows executable and removes the old image on a later start', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    const arch = Object.getOwnPropertyDescriptor(process, 'arch');
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    Object.defineProperty(process, 'arch', { value: 'x64' });
+    const bin = getCompanionBinaryPath();
+    mkdirSync(path.dirname(bin), { recursive: true });
+    writeFileSync(bin, 'old-binary');
+    const originalRename = fs.renameSync;
+    const originalRemove = fs.rmSync;
+    let imageLocked = true;
+    const rename = spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (
+        String(from) === `${bin}.tmp` &&
+        String(to) === bin &&
+        existsSync(bin)
+      ) {
+        throw Object.assign(new Error('executable is locked'), {
+          code: 'EPERM',
+        });
+      }
+      return originalRename(from, to);
+    });
+    const remove = spyOn(fs, 'rmSync').mockImplementation((file, options) => {
+      if (imageLocked && String(file).startsWith(`${bin}.old-`)) {
+        throw Object.assign(new Error('image is locked'), { code: 'EPERM' });
+      }
+      return originalRemove(file, options);
+    });
+    const extract = spyOn(zip, 'extractZip').mockImplementation(
+      async (_archive, destination) => {
+        writeFileSync(
+          path.join(destination, 'oh-my-opencode-slim-companion.exe'),
+          'new-binary',
+        );
+      },
+    );
+    const bytes = Buffer.from('verified archive');
+    globalThis.fetch = (async () => new Response(bytes)) as typeof fetch;
+    const manifest = {
+      version: '0.2.0',
+      tag: 'companion-v0.2.0',
+      repo: 'owner/repo',
+      checksums: {
+        [archiveName('0.2.0', 'x86_64-pc-windows-msvc')]: createHash('sha256')
+          .update(bytes)
+          .digest('hex'),
+      },
+    };
+    try {
+      expect(
+        (await ensureCompanionVersion({ config: { enabled: true }, manifest }))
+          .status,
+      ).toBe('installed');
+      expect(readFileSync(bin, 'utf8')).toBe('new-binary');
+      expect(
+        fs
+          .readdirSync(path.dirname(bin))
+          .some((name) => name.startsWith(`${path.basename(bin)}.old-`)),
+      ).toBe(true);
+      imageLocked = false;
+      expect(
+        (await ensureCompanionVersion({ config: { enabled: true }, manifest }))
+          .status,
+      ).toBe('current');
+      expect(
+        fs
+          .readdirSync(path.dirname(bin))
+          .some((name) => name.startsWith(`${path.basename(bin)}.old-`)),
+      ).toBe(false);
+    } finally {
+      extract.mockRestore();
+      remove.mockRestore();
+      rename.mockRestore();
+      if (platform) Object.defineProperty(process, 'platform', platform);
+      if (arch) Object.defineProperty(process, 'arch', arch);
+    }
   });
 
   test('fails instead of installing without a lock after lock timeout', async () => {

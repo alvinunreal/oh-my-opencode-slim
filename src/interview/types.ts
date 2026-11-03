@@ -52,6 +52,7 @@ export interface InterviewRecord {
   /** Set when the user finishes. The file on disk is the plan. */
   completed?: boolean;
   baseMessageCount: number;
+  baseMessageID?: string;
 }
 
 export interface InterviewMessagePart {

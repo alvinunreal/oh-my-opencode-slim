@@ -16,6 +16,7 @@ import { log } from '../utils/logger';
 import type {
   ModelRef,
   V2AgentDraft,
+  V2Context,
   V2PermissionRule,
   V2ToolDefinition,
 } from './types';
@@ -160,6 +161,7 @@ export function adaptTool(
   v1Tool: Record<string, unknown>,
   directory: string,
   inputSchema: unknown,
+  permission?: Pick<NonNullable<V2Context['permission']>, 'assert'>,
 ): V2ToolDefinition {
   const description =
     (v1Tool.description as string | undefined) ?? `Tool ${name}`;
@@ -184,6 +186,7 @@ export function adaptTool(
       const ctx = context as {
         sessionID?: string;
         messageID?: string;
+        id?: string;
         agent?: string;
         signal?: AbortSignal;
         progress?: (m: Record<string, unknown>) => Promise<void>;
@@ -209,8 +212,39 @@ export function adaptTool(
               log('[v2][tool] metadata failed', { tool: name, error });
             });
         },
-        async ask(_m: unknown) {
-          /* permission deferred to v2 model */
+        async ask(request: {
+          permission: string;
+          patterns: string[];
+          always: string[];
+          metadata: Record<string, unknown>;
+        }) {
+          // `permission.assert` landed in OpenCode v2.0.29; older supported
+          // hosts have no per-call authorization surface, so keep the
+          // pre-assert behavior there instead of breaking the tool.
+          if (!permission?.assert) {
+            log('[v2][tool] permission.assert unavailable; ask not enforced', {
+              tool: name,
+              permission: request.permission,
+            });
+            return;
+          }
+          await permission.assert({
+            sessionID: ctx.sessionID ?? '',
+            agent: ctx.agent,
+            action: request.permission,
+            resources: request.patterns,
+            save: request.always,
+            metadata: request.metadata,
+            ...(ctx.messageID && ctx.id
+              ? {
+                  source: {
+                    type: 'tool',
+                    messageID: ctx.messageID,
+                    id: ctx.id,
+                  },
+                }
+              : {}),
+          });
         },
       };
       const result = await execute(input, v1Ctx);
@@ -252,6 +286,7 @@ export function applyAgentToDraft(
       (v1.mode as string) ?? (name === 'orchestrator' ? 'primary' : 'subagent');
     agent.hidden = v1.hidden === true;
     if (typeof v1.description === 'string') agent.description = v1.description;
+    if (typeof v1.color === 'string') agent.color = v1.color;
     if (typeof v1.prompt === 'string') agent.system = v1.prompt;
     if (model) {
       agent.model = {
@@ -277,9 +312,8 @@ export function applyAgentToDraft(
     if (typeof v1.temperature === 'number') {
       settings.temperature = v1.temperature;
     }
-    // v1 `options` are provider-specific request options; the v2 host merges
-    // `request.body` into the outgoing provider request body. Dropping them
-    // here would silently lose configured thinking/reasoning options on v2.
+    // Keep provider options on the native agent projection. The context hook
+    // separately applies inference options to actual requests.
     if (
       v1.options &&
       typeof v1.options === 'object' &&
@@ -326,6 +360,7 @@ export function snapshotNativeAgentForRegistry(
 
   if (typeof agent.description === 'string')
     config.description = agent.description;
+  if (typeof agent.color === 'string') config.color = agent.color;
   if (typeof agent.system === 'string') config.prompt = agent.system;
   if (typeof agent.mode === 'string') config.mode = agent.mode;
   if (typeof agent.hidden === 'boolean') config.hidden = agent.hidden;

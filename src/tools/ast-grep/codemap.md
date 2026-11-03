@@ -15,7 +15,7 @@ The implementation follows a layered architecture:
 
 - **CLI Integration** (`cli.ts`):
   - `runSg()`: Core function that spawns the ast-grep CLI with proper argument construction, timeout handling, and output parsing
-  - Manages CLI availability via lazy initialization (`getAstGrepPath()`, `startBackgroundInit()`)
+  - Manages CLI availability via lazy initialization (`getAstGrepPath()`)
   - Implements robust error handling, truncation detection, and retry logic for missing binaries
   - Uses `crossSpawn` for cross-platform process spawning
 
@@ -43,7 +43,7 @@ The implementation follows a layered architecture:
   - Implements path resolution logic that checks: cached binary → npm package → platform-specific package → Homebrew → PATH
 
 - **Public API** (`index.ts`):
-  - Re-exports `ast_grep_replace`/`ast_grep_search` tools, types, and constants for external consumers
+  - Exports the `ast_grep_replace` and `ast_grep_search` tools
 
 ## Flow
 
@@ -68,7 +68,7 @@ The implementation follows a layered architecture:
 6. Output is surfaced to user via metadata
 
 ### Binary Availability Flow
-1. On first use, `getAstGrepPath()` triggers background initialization via `startBackgroundInit()`
+1. On first use, `getAstGrepPath()` initializes the binary path
 2. If cached binary exists and is valid, use it
 3. Else, download platform-specific binary via `ensureAstGrepBinary()`
 4. Fallback to npm package or system-installed binary if available

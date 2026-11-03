@@ -3,17 +3,37 @@ import {
   beforeEach,
   describe,
   expect,
+  jest,
   mock,
   spyOn,
   test,
 } from 'bun:test';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { isInternalInitiatorPart } from '../../utils';
+import { BackgroundJobBoard } from '../../utils/background-job-board';
+import { createBackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
+import {
+  INTERNAL_INITIATOR_METADATA_KEY,
+  SLIM_INTERNAL_INITIATOR_MARKER,
+} from '../../utils/internal-initiator';
 import * as logger from '../../utils/logger';
 import { createTimerHarness } from '../../utils/test-timers';
+import { buildPluginInput } from '../../v2/client-shim';
 import { mapV2EventToV1 } from '../../v2/event-adapter';
 import { recordInternalAdmission } from '../../v2/internal-admissions';
+import { createV2InterviewBridge, markerText } from '../../v2/interview-bridge';
+import {
+  createSessionContextHandler,
+  createSessionPromptBridge,
+} from '../../v2/setup';
+import { createSubagentExecutorWrapper } from '../../v2/subagent-executor-wrapper';
 import { SessionLifecycle } from '../session-lifecycle';
+import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../task-session-manager/board-injection';
+import { createBackgroundFallbackHandoff } from '../task-session-manager/fallback-observation-transfer';
 import type { FallbackNotice } from '../task-session-manager/revived-run-tracker';
+import { createRevivedRunTracker } from '../task-session-manager/revived-run-tracker';
 import {
   ForegroundFallbackManager,
   type ForegroundFallbackTimers,
@@ -359,6 +379,199 @@ function timedManager(
 }
 
 describe('foreground fallback agent identity', () => {
+  test('v1 separate compaction model failures leave the owner chain intact', async () => {
+    const { manager, mocks } = makeManager({
+      chain: ['p1/a', 'p1/b'],
+      maxRetries: 0,
+    });
+    const sessionID = 'compaction-owner';
+    const user = (id: string, created = 1) => ({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id,
+          sessionID,
+          role: 'user',
+          agent: 'orchestrator',
+          model: { providerID: 'p1', modelID: 'a' },
+          time: { created },
+        },
+      },
+    });
+    const summary = {
+      id: 'msg_000000000003summary',
+      parentID: 'msg_000000000002compaction',
+      sessionID,
+      role: 'assistant',
+      agent: 'compaction',
+      summary: true,
+      providerID: 'p3',
+      modelID: 'summary',
+      time: { created: 3 },
+    };
+    const error = {
+      name: 'APIError',
+      data: {
+        message: 'Rate limit exceeded',
+        statusCode: 429,
+        isRetryable: true,
+      },
+    };
+    await manager.handleEvent(user('msg_000000000001user'));
+    await manager.handleEvent(user(summary.parentID, 2));
+    await manager.handleEvent({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'prt_compaction',
+          messageID: summary.parentID,
+          sessionID,
+          type: 'compaction',
+          auto: true,
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: { info: summary },
+    });
+    expect(manager.willAttemptFallback(sessionID)).toBe(false);
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID,
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'Rate limit exceeded',
+          next: Date.now() + 2_000,
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID, error },
+    });
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: { ...summary, error, time: { created: 3, completed: 4 } },
+      },
+    });
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    expect(manager.getActiveFallback(sessionID)).toBeUndefined();
+
+    await manager.handleEvent(user('msg_000000000004user', 5));
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_000000000005assistant',
+          sessionID,
+          role: 'assistant',
+          providerID: 'p1',
+          modelID: 'a',
+          time: { created: 6 },
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: { ...summary, error, time: { created: 3, completed: 4 } },
+      },
+    });
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID, error },
+    });
+    expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
+      body: {
+        agent: 'orchestrator',
+        model: { providerID: 'p1', modelID: 'b' },
+      },
+    });
+  });
+
+  test('v1 compaction using the owner model can still fall back', async () => {
+    const { manager, mocks } = makeManager({
+      chain: ['p1/a', 'p2/b'],
+      maxRetries: 0,
+    });
+    const sessionID = 'inherited-compaction';
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_000000000001user',
+          sessionID,
+          role: 'user',
+          agent: 'orchestrator',
+          model: { providerID: 'p1', modelID: 'a' },
+          time: { created: 1 },
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_000000000002compaction',
+          sessionID,
+          role: 'user',
+          agent: 'orchestrator',
+          model: { providerID: 'p1', modelID: 'a' },
+          time: { created: 2 },
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'prt_compaction',
+          messageID: 'msg_000000000002compaction',
+          sessionID,
+          type: 'compaction',
+          auto: true,
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_000000000003summary',
+          sessionID,
+          parentID: 'msg_000000000002compaction',
+          role: 'assistant',
+          agent: 'compaction',
+          summary: true,
+          providerID: 'p1',
+          modelID: 'a',
+          time: { created: 3 },
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID,
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'Rate limit exceeded',
+          next: Date.now() + 2_000,
+        },
+      },
+    });
+    expect(mocks.abort).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
+      body: { model: { providerID: 'p2', modelID: 'b' } },
+    });
+  });
+
   test('ignores assistant identities and uses the user-requested agent', async () => {
     const { mocks } = createMockClient();
     const manager = new ForegroundFallbackManager(makeChains(), true, {
@@ -447,6 +660,61 @@ describe('foreground fallback redo harness', () => {
   const flush = async () => {
     for (let i = 0; i < 10; i++) await Promise.resolve();
   };
+
+  test('v1 request rejections survive a successful replay until the next external prompt', async () => {
+    const { manager, mocks } = makeManager();
+    const sessionID = 'request-rejection-v1';
+    manager.registerSessionAgent(sessionID, 'orchestrator');
+    const assistant = (id: string, modelID: string, result: object) => ({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id,
+          sessionID,
+          role: 'assistant',
+          agent: 'orchestrator',
+          providerID: 'test',
+          modelID,
+          time: { created: Date.now() - 1, completed: Date.now() },
+          ...result,
+        },
+      },
+    });
+    const policy = {
+      name: 'APIError',
+      data: { message: 'cyber_policy: request flagged', statusCode: 400 },
+    };
+
+    await manager.handleEvent(
+      assistant('m1', 'a', { finish: 'content-filter' }),
+    );
+    const replay = (mocks.promptAsync.mock.calls[0][0] as any).body;
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: { id: replay.messageID, sessionID, role: 'user' },
+        parts: replay.parts,
+      },
+    });
+    await manager.handleEvent(assistant('m2', 'b', { finish: 'tool-calls' }));
+    await clock.advance(6_000);
+    await manager.handleEvent(assistant('m3', 'b', { error: policy }));
+    expect(
+      mocks.promptAsync.mock.calls.map(([args]) => (args as any).body.model),
+    ).toEqual([
+      { providerID: 'test', modelID: 'b' },
+      { providerID: 'test', modelID: 'c' },
+    ]);
+
+    await manager.handleEvent(assistant('m4', 'c', { finish: 'stop' }));
+    await manager.handleEvent(redoEvents.user(sessionID, 'new-user', 'c'));
+    await clock.advance(6_000);
+    await manager.handleEvent(assistant('m5', 'c', { error: policy }));
+    expect((mocks.promptAsync.mock.calls[2][0] as any).body.model).toEqual({
+      providerID: 'test',
+      modelID: 'a',
+    });
+  });
 
   test('a replay read answering after a host stall still replays', async () => {
     const { manager, mocks } = makeManager();
@@ -946,32 +1214,22 @@ describe('foreground fallback redo harness', () => {
     });
   });
 
-  test('a re-emitted user-message update is inert while a newer turn classifies', async () => {
-    // v1 republishes a turn's user message (info only) on every step finish.
+  test('a re-emitted older user message cannot replace a newer admission', async () => {
     const { manager, mocks } = makeManager();
-    const newerTurnRead = deferred<unknown>();
-    mocks.messages
-      .mockImplementationOnce(async () => ({ data: [] }))
-      .mockImplementationOnce(() => newerTurnRead.promise);
-    const update = (id: string, modelID: string) => ({
+    manager.noteExternalTurn('reemitted', 'turn-1', 'test/a');
+    manager.noteExternalTurn('reemitted', 'turn-2', 'test/b');
+    await manager.handleEvent({
       type: 'message.updated',
       properties: {
         info: {
-          id,
+          id: 'turn-1',
           sessionID: 'reemitted',
           role: 'user',
-          model: { providerID: 'test', modelID },
+          model: { providerID: 'test', modelID: 'a' },
         },
       },
     });
-
-    await manager.handleEvent(update('turn-1', 'a'));
-    const newerTurn = manager.handleEvent(update('turn-2', 'b'));
-    await manager.handleEvent(update('turn-1', 'a'));
-    newerTurnRead.resolve({ data: [] });
-    await newerTurn;
-
-    expect(mocks.messages).toHaveBeenCalledTimes(2);
+    expect(mocks.messages).not.toHaveBeenCalled();
     expect((manager as any).sessionModel.get('reemitted')).toBe('test/b');
   });
 
@@ -1105,28 +1363,15 @@ describe('foreground fallback redo harness', () => {
     expect(onChanged).not.toHaveBeenCalled();
   });
 
-  test('an older transcript probe cannot overwrite a newer external turn', async () => {
-    const olderProbe = deferred<unknown>();
-    let lookupCount = 0;
+  test('an older user re-emission cannot overwrite a newer external turn', async () => {
     const onChanged = mock((_sessionID: string, _model: string) => {});
     const { mocks } = createMockClient({
-      messagesImpl: async () => {
-        lookupCount += 1;
-        if (lookupCount === 1) return olderProbe.promise;
-        if (lookupCount === 2) {
-          return {
-            data: [{ info: { id: 'newer-user', role: 'user' }, parts: [] }],
-          };
-        }
-        return {
-          data: [
-            {
-              info: { id: 'replay-source', role: 'user' },
-              parts: [{ type: 'text', text: 'hello' }],
-            },
-          ],
-        };
-      },
+      messagesData: [
+        {
+          info: { id: 'replay-source', role: 'user' },
+          parts: [{ type: 'text', text: 'hello' }],
+        },
+      ],
     });
     const manager = timedManager(
       { orchestrator: ['test/a', 'test/b', 'test/c'] },
@@ -1148,12 +1393,10 @@ describe('foreground fallback redo harness', () => {
       },
     });
 
-    const oldEvent = manager.handleEvent(userEvent('older-user', 'a'));
+    await manager.handleEvent(userEvent('older-user', 'a'));
     await manager.handleEvent(userEvent('newer-user', 'b'));
-    olderProbe.resolve({
-      data: [{ info: { id: 'older-user', role: 'user' }, parts: [] }],
-    });
-    await oldEvent;
+    await manager.handleEvent(userEvent('older-user', 'a'));
+    expect(mocks.messages).not.toHaveBeenCalled();
 
     await manager.handleEvent(redoEvents.error('turn-probe-order'));
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
@@ -1163,26 +1406,12 @@ describe('foreground fallback redo harness', () => {
     expect(onChanged).toHaveBeenCalledWith('turn-probe-order', 'test/a');
   });
 
-  test('an internal replay notification does not invalidate an external turn probe', async () => {
-    const externalProbe = deferred<unknown>();
+  test('an internal replay notification does not hide a later external turn', async () => {
     const promptStarted = deferred<void>();
     const promptResponse = deferred<unknown>();
-    let lookupCount = 0;
     let manager!: ForegroundFallbackManager;
     const onChanged = mock((_sessionID: string, _model: string) => {});
     const { mocks } = createMockClient({
-      messagesImpl: async () => {
-        lookupCount += 1;
-        if (lookupCount === 1) return externalProbe.promise;
-        return {
-          data: [
-            {
-              info: { id: 'fallback-source', role: 'user' },
-              parts: [{ type: 'text', text: 'hello' }],
-            },
-          ],
-        };
-      },
       promptAsyncImpl: async (args) => {
         const messageID = (args as { body: { messageID: string } }).body
           .messageID;
@@ -1212,7 +1441,9 @@ describe('foreground fallback redo harness', () => {
 
     manager.registerSessionAgent(sessionID, 'orchestrator');
     await manager.handleEvent(redoEvents.assistant(sessionID));
-    const externalTurn = manager.handleEvent({
+    const fallback = manager.handleEvent(redoEvents.error(sessionID));
+    await promptStarted.promise;
+    await manager.handleEvent({
       type: 'message.updated',
       properties: {
         info: {
@@ -1223,14 +1454,6 @@ describe('foreground fallback redo harness', () => {
         },
       },
     });
-    const fallback = manager.handleEvent(redoEvents.error(sessionID));
-    await promptStarted.promise;
-    externalProbe.resolve({
-      data: [
-        { info: { id: 'genuine-external-turn', role: 'user' }, parts: [] },
-      ],
-    });
-    await externalTurn;
     promptResponse.resolve({});
     await fallback;
 
@@ -1484,32 +1707,6 @@ describe('foreground fallback redo harness', () => {
     expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
 
-  test('a newer turn during busy promotion fences the busy abort and retry', async () => {
-    const promotion = deferred<unknown>();
-    const { manager, mocks } = makeManager({
-      maxRetries: 0,
-    });
-    mocks.promptAsync.mockImplementationOnce(async () => {
-      throw new Error('session busy');
-    });
-    currentMockPost = mock(() => promotion.promise);
-    await manager.handleEvent({
-      type: 'session.created',
-      properties: { info: { id: 'busy-race', parentID: 'parent' } },
-    });
-    manager.registerSessionAgent('busy-race', 'orchestrator');
-    const pending = manager.handleEvent(redoEvents.error('busy-race'));
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-    await manager.handleEvent(redoEvents.user('busy-race', 'new-turn'));
-    promotion.resolve({});
-    await pending;
-
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(mocks.abort).not.toHaveBeenCalled();
-  });
-
   test('a newer turn during fallback backoff fences the delayed replay', async () => {
     const { manager, mocks } = makeManager({ retryDelayMs: 500 });
     manager.registerSessionAgent('backoff-race', 'orchestrator');
@@ -1661,6 +1858,409 @@ describe('foreground fallback redo: host retry budget', () => {
       body: { model: { providerID: 'test', modelID: 'b' } },
     });
   });
+
+  test('v1 retry-primary skips retry budget and initial delay for live down marks', async () => {
+    const { manager, mocks } = makeManager({
+      chain: ['primary/a', 'backup/b'],
+      maxRetries: 2,
+      initialRetryDelayMs: 1_000,
+    });
+    const parent = 'retry-primary-parent';
+    manager.registerSessionAgent(parent, 'orchestrator');
+    manager.noteExternalTurn(parent, 'msg_initial', 'primary/a');
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: {
+        sessionID: parent,
+        error: {
+          name: 'APIError',
+          data: {
+            message: 'Rate limit exceeded',
+            statusCode: 429,
+            isRetryable: true,
+          },
+        },
+      },
+    });
+    await clock.advance(1_000);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(manager.getActiveFallback(parent)?.downProviders).toEqual(
+      new Set(['primary']),
+    );
+
+    manager.observeContinuationModel(parent, 'primary/a');
+    expect(manager.getActiveFallback(parent)).toBeUndefined();
+    recordInternalAdmission(parent, 'msg_wake');
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_wake',
+          sessionID: parent,
+          role: 'user',
+          agent: 'orchestrator',
+          model: { providerID: 'primary', modelID: 'a' },
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_primary',
+          sessionID: parent,
+          role: 'assistant',
+          providerID: 'primary',
+          modelID: 'a',
+          time: { created: clock.now() },
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: parent,
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'Rate limit exceeded',
+          next: clock.now() + 2_000,
+        },
+      },
+    });
+    expect(mocks.abort).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+    expect(mocks.promptAsync.mock.calls[1]?.[0]).toMatchObject({
+      path: { id: parent },
+      body: { model: { providerID: 'backup', modelID: 'b' } },
+    });
+
+    const child = 'retry-primary-child';
+    await manager.handleEvent({
+      type: 'session.created',
+      properties: { info: { id: child, parentID: parent } },
+    });
+    manager.registerSessionAgent(child, 'orchestrator');
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_child_primary',
+          sessionID: child,
+          role: 'assistant',
+          providerID: 'primary',
+          modelID: 'a',
+          time: { created: clock.now() },
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: child,
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'Rate limit exceeded',
+          next: clock.now() + 2_000,
+        },
+      },
+    });
+    expect(mocks.abort).toHaveBeenCalledTimes(2);
+    expect(mocks.promptAsync.mock.calls[2]?.[0]).toMatchObject({
+      path: { id: child },
+      body: { model: { providerID: 'backup', modelID: 'b' } },
+    });
+
+    await clock.advance(30 * 60 * 1_000);
+    const later = 'retry-primary-later-child';
+    await manager.handleEvent({
+      type: 'session.created',
+      properties: { info: { id: later, parentID: parent } },
+    });
+    manager.registerSessionAgent(later, 'orchestrator');
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_later_primary',
+          sessionID: later,
+          role: 'assistant',
+          providerID: 'primary',
+          modelID: 'a',
+          time: { created: clock.now() },
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID: later,
+        status: {
+          type: 'retry',
+          attempt: 1,
+          message: 'Rate limit exceeded',
+          next: clock.now() + 2_000,
+        },
+      },
+    });
+    expect(mocks.abort).toHaveBeenCalledTimes(2);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(3);
+  });
+
+  test('v1 recovery clears only the recovered provider mark and absorbs its next retry', async () => {
+    const { manager, mocks } = makeManager({
+      chain: ['primary/a', 'backup/b', 'third/c'],
+      maxRetries: 2,
+      initialRetryDelayMs: 1_000,
+    });
+    const parent = 'recovered-primary';
+    const error = { statusCode: 429, message: 'Rate limit exceeded' };
+    manager.registerSessionAgent(parent, 'orchestrator');
+    manager.noteExternalTurn(parent, 'msg_initial', 'primary/a');
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID: parent, error },
+    });
+    await clock.advance(1_000);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID: parent, error },
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+    expect(manager.getActiveFallback(parent)).toEqual({
+      model: 'third/c',
+      downProviders: new Set(['primary', 'backup']),
+    });
+
+    manager.observeContinuationModel(parent, 'primary/a');
+    recordInternalAdmission(parent, 'msg_notice');
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_notice',
+          sessionID: parent,
+          role: 'user',
+          agent: 'orchestrator',
+          model: { providerID: 'primary', modelID: 'a' },
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_success',
+          sessionID: parent,
+          role: 'assistant',
+          providerID: 'primary',
+          modelID: 'a',
+          finish: 'tool-calls',
+          time: { created: clock.now(), completed: clock.now() },
+        },
+      },
+    });
+    await clock.advance(60_000);
+    const retry = (sessionID: string) => ({
+      type: 'session.status',
+      properties: {
+        sessionID,
+        status: { type: 'retry', attempt: 1, message: 'Rate limit exceeded' },
+      },
+    });
+    await manager.handleEvent(retry(parent));
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+    expect(manager.isFallbackInProgress(parent)).toBe(false);
+    expect((manager as any).sessionRetries.get(parent)).toBe(1);
+    expect([...(manager as any).downProviders.get(parent).keys()]).toEqual([
+      'backup',
+    ]);
+
+    const child = 'recovered-primary-child';
+    await manager.handleEvent({
+      type: 'session.created',
+      properties: { info: { id: child, parentID: parent } },
+    });
+    manager.registerSessionAgent(child, 'orchestrator');
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_child',
+          sessionID: child,
+          role: 'assistant',
+          providerID: 'primary',
+          modelID: 'a',
+          time: { created: clock.now() },
+        },
+      },
+    });
+    await manager.handleEvent(retry(child));
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+    expect(manager.isFallbackInProgress(child)).toBe(false);
+    expect((manager as any).sessionRetries.get(child)).toBe(1);
+  });
+
+  test.each(['after', 'same', 'before'] as const)(
+    'v1 child recovery created %s the parent provider mark',
+    async (timing) => {
+      const chain = ['primary/a', 'backup/b'];
+      const { mocks } = createMockClient();
+      const manager = timedManager(
+        { orchestrator: chain, explorer: chain },
+        true,
+        { directory: '/test' } as never,
+        2,
+        undefined,
+        undefined,
+        1_000,
+      );
+      const parent = `foreground-parent-${timing}`;
+      const child = `foreground-child-${timing}`;
+      manager.registerSessionAgent(parent, 'orchestrator');
+      manager.noteExternalTurn(parent, 'msg_parent', 'primary/a');
+      const startChild = async () => {
+        await manager.handleEvent({
+          type: 'session.created',
+          properties: {
+            info: { id: child, parentID: parent, agent: 'explorer' },
+          },
+        });
+        await manager.handleEvent({
+          type: 'message.updated',
+          properties: {
+            info: {
+              id: 'msg_child_user',
+              sessionID: child,
+              role: 'user',
+              agent: 'explorer',
+              model: { providerID: 'primary', modelID: 'a' },
+              time: { created: clock.now() },
+            },
+          },
+        });
+        const created = clock.now();
+        await manager.handleEvent({
+          type: 'message.updated',
+          properties: {
+            info: {
+              id: 'msg_child_step',
+              parentID: 'msg_child_user',
+              sessionID: child,
+              role: 'assistant',
+              providerID: 'primary',
+              modelID: 'a',
+              time: { created },
+            },
+          },
+        });
+        return created;
+      };
+      let created = timing === 'before' ? await startChild() : 0;
+      await manager.handleEvent({
+        type: 'session.error',
+        properties: {
+          sessionID: parent,
+          error: { statusCode: 429, message: 'Rate limit exceeded' },
+        },
+      });
+      await clock.advance(1_000);
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+      const marks = (manager as any).downProviders.get(parent) as Map<
+        string,
+        number
+      >;
+      const markedAt = marks.get('primary');
+      if (markedAt === undefined)
+        throw new Error('missing parent provider mark');
+      expect(markedAt).toBe(clock.now());
+
+      manager.observeContinuationModel(parent, 'primary/a');
+      recordInternalAdmission(parent, 'msg_native_notice');
+      await manager.handleEvent({
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg_native_notice',
+            sessionID: parent,
+            role: 'user',
+            agent: 'orchestrator',
+            model: { providerID: 'primary', modelID: 'a' },
+            time: { created: clock.now() },
+          },
+        },
+      });
+      await manager.handleEvent({
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg_parent_step',
+            parentID: 'msg_native_notice',
+            sessionID: parent,
+            role: 'assistant',
+            providerID: 'primary',
+            modelID: 'a',
+            time: { created: clock.now() },
+          },
+        },
+      });
+      if (timing !== 'before') {
+        if (timing === 'after') await clock.advance(1);
+        created = await startChild();
+      }
+      expect(Math.sign(created - markedAt)).toBe(
+        timing === 'before' ? -1 : timing === 'after' ? 1 : 0,
+      );
+      expect(marks.get('primary')).toBe(markedAt);
+      await manager.handleEvent({
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg_child_step',
+            parentID: 'msg_child_user',
+            sessionID: child,
+            role: 'assistant',
+            providerID: 'primary',
+            modelID: 'a',
+            finish: 'tool-calls',
+            time: { created, completed: clock.now() },
+          },
+        },
+      });
+      expect(marks.has('primary')).toBe(timing === 'before');
+      await manager.handleEvent({
+        type: 'session.status',
+        properties: {
+          sessionID: child,
+          status: {
+            type: 'retry',
+            attempt: 1,
+            message: 'Rate limit exceeded',
+            next: clock.now() + 2_000,
+          },
+        },
+      });
+      if (timing === 'before') {
+        expect(mocks.abort).toHaveBeenCalledTimes(1);
+        expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+        expect(mocks.promptAsync.mock.calls[1]?.[0]).toMatchObject({
+          path: { id: child },
+          body: { model: { providerID: 'backup', modelID: 'b' } },
+        });
+      } else {
+        expect(mocks.abort).not.toHaveBeenCalled();
+        expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+        expect((manager as any).sessionRetries.get(child)).toBe(1);
+        expect(manager.isFallbackInProgress(child)).toBe(false);
+      }
+    },
+  );
 
   test('a native notice with inline parts keeps recovery pending until a real external turn cancels it', async () => {
     const sid = 'native-inline';
@@ -2007,46 +2607,63 @@ describe('foreground fallback redo: host retry budget', () => {
     expect(event.decision).toEqual({ retry: true, delay: 77 });
   });
 
-  test('v2 retry hook logs a one-shot delivery notice per session and model', async () => {
-    const captured: string[] = [];
+  test('v2 retry hook logs every failure and its final decision', async () => {
+    const captured: Array<{ message: string; data: unknown }> = [];
     const capture = spyOn(logger, 'log').mockImplementation(
-      (message: string) => {
-        captured.push(message);
+      (message: string, data?: unknown) => {
+        captured.push({ message, data });
       },
     );
     try {
-      const mgr = timedManager(
-        makeChains({ orchestrator: ['test/a', 'test/b', 'test/c'] }),
-        false,
-        { directory: '/test', hostFlavor: 'v2' } as never,
-        0,
-        undefined,
-        undefined,
-        0,
-        0,
-        undefined,
-        undefined,
-        undefined,
-        false,
-      );
+      const { manager: mgr } = makeManager({ hostFlavor: 'v2', maxRetries: 2 });
       const switchModel = mock(async () => ({}));
+      const secret = 'sk-secret0123456789abcdefghijklmnopqrstuv';
+      const event = {
+        ...retryEvent('v2-notice', 'a', { retry: true, delay: 77 }),
+        error: {
+          type: 'provider.rate-limit',
+          status: 429,
+          message: `${'rate limit '.repeat(26)}Bearer ${secret}`,
+          retryAfterMs: 1_250,
+        },
+      };
+      await mgr.handleV2Retry(event, switchModel);
+      await mgr.handleV2Retry(event, switchModel);
       await mgr.handleV2Retry(
-        retryEvent('v2-notice', 'a', { retry: true }),
+        {
+          ...retryEvent('v2-notice', 'a', { retry: false }),
+          error: { type: 'provider.auth', status: 403, message: 'Forbidden' },
+        },
         switchModel,
       );
+      (mgr as any).sessionRetryEnabled.set('v2-disabled-notice', false);
       await mgr.handleV2Retry(
-        retryEvent('v2-notice', 'a', { retry: true }),
-        switchModel,
-      );
-      // Same session, different failing model: a second notice.
-      await mgr.handleV2Retry(
-        retryEvent('v2-notice', 'b', { retry: true }),
+        { ...event, sessionID: 'v2-disabled-notice' },
         switchModel,
       );
       const notices = captured.filter(
-        (message) => message === '[foreground-fallback] v2 retry hook observed',
+        ({ message }) =>
+          message === '[foreground-fallback] v2 retry hook observed',
       );
-      expect(notices).toHaveLength(2);
+      expect(notices).toHaveLength(4);
+      expect(notices[0]?.data).toMatchObject({
+        type: 'provider.rate-limit',
+        status: 429,
+        retryAfterMs: 1_250,
+        decision: { retry: true, delay: 77 },
+      });
+      const loggedMessage = (
+        notices[0]?.data as { message: string } | undefined
+      )?.message;
+      expect(loggedMessage?.length).toBeLessThanOrEqual(300);
+      expect(loggedMessage).not.toContain(secret.slice(0, 11));
+      expect(notices[2]?.data).toMatchObject({
+        type: 'provider.auth',
+        status: 403,
+        message: 'Forbidden',
+        decision: { retry: true, delay: 0 },
+      });
+      expect(notices[3]?.data).toMatchObject({ steering: false });
     } finally {
       capture.mockRestore();
     }
@@ -2151,48 +2768,19 @@ describe('foreground fallback redo: host retry budget', () => {
     expect(inert.willAttemptFallback('v2-wa')).toBe(false);
   });
 
-  test('T7: mapped v2 failed execution prompts once without charging host retries', async () => {
-    const sid = 'v2-failed-execution';
-    const { manager, mocks } = makeManager({ maxRetries: 2 });
+  test('T8: v1 replay carries the fallback entry variant', async () => {
+    const sid = 'variant-replay-v1';
+    const { manager, mocks } = makeManager({
+      chain: ['test/a', { id: 'test/b', variant: 'fast' }],
+    });
     manager.registerSessionAgent(sid, 'orchestrator');
     await manager.handleEvent(redoEvents.assistant(sid));
-    for (const mapped of mapV2EventToV1({
-      type: 'session.execution.failed',
-      data: { sessionID: sid, error: { message: 'rate limit' } },
-    }))
-      await manager.handleEvent(mapped);
+    await manager.handleEvent(redoEvents.error(sid));
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
     expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
-      body: { model: { providerID: 'test', modelID: 'b' } },
+      body: { model: { providerID: 'test', modelID: 'b' }, variant: 'fast' },
     });
-    const switchModel = mock(async () => {});
-    const host = retryEvent(sid, 'b', { retry: true, delay: 77 });
-    await manager.handleV2Retry(host, switchModel);
-    expect(switchModel).not.toHaveBeenCalled();
-    expect(host.decision).toEqual({ retry: true, delay: 77 });
   });
-
-  test.each([
-    ['v1', undefined],
-    ['v2', 'v2'],
-  ] as const)(
-    'T8: %s replay carries the fallback entry variant',
-    async (label, hostFlavor) => {
-      const sid = `variant-replay-${label}`;
-      const { manager, mocks } = makeManager({
-        chain: ['test/a', { id: 'test/b', variant: 'fast' }],
-        hostFlavor,
-      });
-      manager.registerSessionAgent(sid, 'orchestrator');
-      await manager.handleEvent(redoEvents.assistant(sid));
-      await manager.handleEvent(redoEvents.error(sid));
-      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-      expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
-        body: { model: { providerID: 'test', modelID: 'b' }, variant: 'fast' },
-        ...(hostFlavor ? { modelVariant: 'fast' } : {}),
-      });
-    },
-  );
 
   test('T9: v2 retry hook switches with the fallback entry variant', async () => {
     const { manager } = makeManager({
@@ -2211,21 +2799,14 @@ describe('foreground fallback redo: host retry budget', () => {
   });
 
   test('T10: entries without a variant add no replay or switch keys', async () => {
-    for (const hostFlavor of [undefined, 'v2'] as const) {
-      const sid = `no-variant-${hostFlavor ?? 'v1'}`;
-      const { manager, mocks } = makeManager({
-        chain: ['test/a', 'test/b'],
-        hostFlavor,
-      });
-      manager.registerSessionAgent(sid, 'orchestrator');
-      await manager.handleEvent(redoEvents.assistant(sid));
-      await manager.handleEvent(redoEvents.error(sid));
-      const call = mocks.promptAsync.mock.calls[0]?.[0] as {
-        body: Record<string, unknown>;
-      };
-      expect(Object.hasOwn(call.body, 'variant')).toBe(false);
-      expect(Object.hasOwn(call, 'modelVariant')).toBe(false);
-    }
+    const replay = makeManager({ chain: ['test/a', 'test/b'] });
+    replay.manager.registerSessionAgent('no-variant-v1', 'orchestrator');
+    await replay.manager.handleEvent(redoEvents.assistant('no-variant-v1'));
+    await replay.manager.handleEvent(redoEvents.error('no-variant-v1'));
+    const call = replay.mocks.promptAsync.mock.calls[0]?.[0] as {
+      body: Record<string, unknown>;
+    };
+    expect(Object.hasOwn(call.body, 'variant')).toBe(false);
     const { manager } = makeManager({ chain: ['test/a', 'test/b'] });
     const refs: Array<{ providerID: string; id: string; variant?: string }> =
       [];
@@ -2258,8 +2839,6 @@ describe('foreground fallback redo: host retry budget', () => {
     await v1.manager.handleEvent(redoEvents.error(sid));
 
     const v2 = makeManager({ chain, hostFlavor: 'v2' });
-    await v2.manager.handleEvent(assistant);
-    await v2.manager.handleEvent(redoEvents.error(sid));
     const refs: Array<{ providerID: string; id: string; variant?: string }> =
       [];
     await v2.manager.handleV2Retry(
@@ -2275,25 +2854,1336 @@ describe('foreground fallback redo: host retry budget', () => {
     );
 
     expect(v1.mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(v2.mocks.promptAsync).toHaveBeenCalledTimes(1);
     expect({
       v1: v1.mocks.promptAsync.mock.calls[0]?.[0],
-      v2: v2.mocks.promptAsync.mock.calls[0]?.[0],
       refs,
     }).toMatchObject({
       v1: {
         body: { model: { providerID: 'test', modelID: 'b' }, variant: 'fast' },
-      },
-      v2: {
-        body: { model: { providerID: 'test', modelID: 'b' }, variant: 'fast' },
-        modelVariant: 'fast',
       },
       refs: [{ providerID: 'test', id: 'b', variant: 'fast' }],
     });
   });
 });
 
+describe('ForegroundFallbackManager v2 content-filter refusal', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  function fixture(options?: {
+    parentID?: string;
+    chains?: Record<string, Array<string | { id: string; variant: string }>>;
+    switchModel?: (sessionID: string, model: unknown) => Promise<unknown>;
+    promptAsyncImpl?: (args: unknown) => Promise<unknown>;
+    handoff?: ReturnType<typeof createBackgroundFallbackHandoff>;
+    readBackgroundGeneration?: (sessionID: string) => number | undefined;
+    retryEnabled?: boolean;
+    maxRetries?: number;
+  }) {
+    const durable = { providerID: 'test', id: 'a', variant: 'source' };
+    const info: { model?: typeof durable; parentID?: string; agent?: string } =
+      {
+        model: durable,
+        parentID: options?.parentID,
+        agent: 'orchestrator',
+      };
+    const { client, mocks } = createMockClient({
+      getData: info,
+      promptAsyncImpl: options?.promptAsyncImpl,
+    });
+    const switchModel = mock(
+      options?.switchModel ??
+        (async (_sessionID: string, _model: unknown) => {}),
+    );
+    const onChanged = mock();
+    const manager = new ForegroundFallbackManager(
+      options?.chains ?? {
+        orchestrator: ['test/a', { id: 'test/b', variant: 'high' }],
+      },
+      false,
+      {
+        directory: '/test',
+        hostFlavor: 'v2',
+        client,
+        experimental_v2: { switchModel },
+      } as never,
+      options?.maxRetries ?? 0,
+      undefined,
+      onChanged,
+      0,
+      0,
+      options?.handoff,
+      options?.readBackgroundGeneration,
+      undefined,
+      options?.retryEnabled ?? true,
+    );
+    return { manager, mocks, switchModel, onChanged, durable, info };
+  }
+
+  const started = (id: string, model = 'a', message = 'assistant-1') => ({
+    type: 'session.step.started',
+    data: {
+      sessionID: id,
+      assistantMessageID: message,
+      agent: 'orchestrator',
+      model: {
+        providerID: 'test',
+        id: model,
+        ...(model === 'a' ? { variant: 'source' } : { variant: 'high' }),
+      },
+    },
+  });
+  const failed = (
+    id: string,
+    message = 'assistant-1',
+    finish = 'content-filter',
+  ) => ({
+    type: 'session.step.failed',
+    data: {
+      sessionID: id,
+      assistantMessageID: message,
+      finish,
+      rawFinish: 'refusal',
+      error: {
+        type: 'provider.content-filter',
+        message: 'Provider blocked the response',
+      },
+    },
+  });
+  const refused = (completedAt = Date.now()) => ({
+    id: 'assistant-1',
+    type: 'assistant',
+    agent: 'orchestrator',
+    model: started('child').data.model,
+    finish: 'content-filter',
+    error: failed('child').data.error,
+    rawFinish: 'refusal',
+    time: { created: completedAt - 100, completed: completedAt },
+  });
+  const settle = async () => {
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+  };
+
+  const noRoute = (sessionID: string, model = 'test/a') => ({
+    type: 'session.execution.failed',
+    created: Date.now(),
+    data: {
+      sessionID,
+      error: {
+        type: 'provider.no-route',
+        message: `Model unavailable: ${model}`,
+      },
+    },
+  });
+  function installV2History(history: Array<Record<string, unknown>>) {
+    const context = mock(async () => history);
+    const messages = mock(async ({ limit }: { limit: number }) => ({
+      data: history.slice(-limit).reverse(),
+    }));
+    const input = buildPluginInput({ session: { context, messages } } as never);
+    if (!currentMockSession) throw new Error('fixture session missing');
+    currentMockSession.messages = (
+      input.client as { session: { messages: unknown } }
+    ).session.messages;
+    return { context, messages };
+  }
+
+  test('v2 no-route continues a root after a long compacted turn', async () => {
+    const created = Date.now() - 60_000;
+    const history = [
+      {
+        id: 'compact',
+        type: 'compaction',
+        status: 'completed',
+        time: { created },
+      },
+      ...Array.from({ length: 50 }, (_, i) => ({
+        id: `step-${i}`,
+        type: 'assistant',
+        time: { created: created + i + 1 },
+      })),
+    ];
+    const { manager, mocks, switchModel } = fixture();
+    const host = installV2History(history);
+    for (const event of mapV2EventToV1(noRoute('root-no-route')))
+      await manager.handleEvent(event);
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
+      body: {
+        parts: [
+          expect.objectContaining({
+            text: expect.stringContaining('model was unavailable'),
+          }),
+        ],
+      },
+    });
+    expect(host.context).toHaveBeenCalled();
+    expect(host.messages).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  test('v2 root no-route falls back to the bounded tail if context fails', async () => {
+    const { manager, mocks, switchModel } = fixture();
+    const host = installV2History([
+      { id: 'user', type: 'user', time: { created: Date.now() - 1 } },
+    ]);
+    host.context.mockImplementationOnce(async () => {
+      throw new Error('context unavailable');
+    });
+    for (const event of mapV2EventToV1(noRoute('root-tail')))
+      await manager.handleEvent(event);
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(host.messages).toHaveBeenCalledWith({
+      sessionID: 'root-tail',
+      limit: 50,
+      order: 'desc',
+    });
+    manager.dispose();
+  });
+
+  test('v2 foreground reattaches after a retry selects an unavailable route', async () => {
+    const childID = 'child-no-route';
+    const created = Date.now() - 60_000;
+    const history = [
+      {
+        id: 'compact-child',
+        type: 'compaction',
+        status: 'completed',
+        time: { created },
+      },
+      ...Array.from({ length: 50 }, (_, i) => ({
+        id: `step-${i}`,
+        type: 'assistant',
+        time: { created: created + i + 1 },
+      })),
+    ];
+    const { manager, mocks, switchModel, durable } = fixture({
+      parentID: 'parent',
+      chains: { orchestrator: ['test/a', 'test/b', 'test/c'] },
+    });
+    const host = installV2History(history);
+    switchModel.mockImplementation(async (_id, model) => {
+      durable.id = (model as { id: string }).id;
+      durable.variant = 'default';
+    });
+    await manager.handleEvent({
+      type: 'session.created',
+      properties: { info: { id: childID, parentID: 'parent' } },
+    });
+    await manager.handleV2Retry(
+      retryEvent(childID, 'a', { retry: true, delay: 2_000 }),
+      switchModel,
+    );
+    const result = {
+      output: { sessionID: childID, status: 'completed' },
+      content: 'CHILD_OK',
+    };
+    const execute = mock(async () => {
+      if (execute.mock.calls.length === 1) {
+        for (const event of mapV2EventToV1(noRoute(childID, 'test/b')))
+          await manager.handleEvent(event);
+        throw new Error(
+          `Subagent failed (sessionID: ${childID}): Model unavailable: test/b`,
+        );
+      }
+      return result;
+    });
+    const wrapper = createSubagentExecutorWrapper({
+      register: () => {},
+      context: host.context,
+      refusalOutcome: (...args) => manager.refusedChildOutcome(...args),
+    });
+    expect(
+      await wrapper.wrap(execute)(
+        { agent: 'orchestrator', model: 'test/a' },
+        { id: 'call', sessionID: 'parent' },
+      ),
+    ).toBe(result);
+    expect(switchModel).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute.mock.calls[1]?.[0]).toMatchObject({
+      sessionID: childID,
+      prompt: expect.stringContaining('model was unavailable'),
+    });
+    expect(execute.mock.calls[1]?.[0]).not.toHaveProperty('model');
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  test('v2 no-route falls back when the session has no selected model', async () => {
+    const { manager, mocks, switchModel, info } = fixture();
+    info.model = undefined;
+    installV2History([
+      {
+        id: 'user',
+        type: 'user',
+        agent: 'orchestrator',
+        time: { created: Date.now() - 1 },
+      },
+    ]);
+    const event = noRoute('no-selected-model');
+    event.data.error.message =
+      'No model is available for session no-selected-model';
+    for (const mapped of mapV2EventToV1(event))
+      await manager.handleEvent(mapped);
+    expect(switchModel).toHaveBeenCalledWith('no-selected-model', {
+      providerID: 'test',
+      id: 'b',
+      variant: 'high',
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    manager.dispose();
+  });
+
+  test('v2 unmanaged child no-route does not switch or continue', async () => {
+    const { manager, mocks, switchModel } = fixture({ parentID: 'parent' });
+    installV2History([
+      { id: 'user', type: 'user', time: { created: Date.now() } },
+    ]);
+    await manager.handleEvent({
+      type: 'session.created',
+      properties: { info: { id: 'unmanaged', parentID: 'parent' } },
+    });
+    for (const event of mapV2EventToV1(noRoute('unmanaged')))
+      await manager.handleEvent(event);
+    await settle();
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  test('v2 foreground leaves no-route untouched when the wrapper cannot read context', async () => {
+    const childID = 'child-context-failed';
+    const { manager, switchModel } = fixture({ parentID: 'parent' });
+    await manager.handleEvent({
+      type: 'session.created',
+      properties: { info: { id: childID, parentID: 'parent' } },
+    });
+    const failure = new Error(
+      `Subagent failed (sessionID: ${childID}): Model unavailable: test/a`,
+    );
+    const wrapper = createSubagentExecutorWrapper({
+      register: () => {},
+      context: async () => {
+        throw new Error('context unavailable');
+      },
+      refusalOutcome: (...args) => manager.refusedChildOutcome(...args),
+    });
+    const execute = wrapper.wrap(async () => {
+      for (const event of mapV2EventToV1(noRoute(childID)))
+        await manager.handleEvent(event);
+      throw failure;
+    });
+    await expect(execute({}, { id: 'call', sessionID: 'parent' })).rejects.toBe(
+      failure,
+    );
+    expect(switchModel).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  test('v2 background no-route keeps the handoff and corrects its notice', async () => {
+    const childID = 'background-no-route';
+    const created = Date.now() - 1_000;
+    const board = new BackgroundJobBoard();
+    const run = board.registerLaunch({
+      taskID: childID,
+      parentSessionID: 'parent',
+      agent: 'orchestrator',
+      background: true,
+    });
+    const tracker = createRevivedRunTracker({
+      input: { directory: '/test', client: {} } as never,
+      backgroundJobBoard: board,
+      terminalGate: {
+        reconcile: async () => ({ kind: 'deferred', record: run }),
+      } as never,
+    });
+    const prepare = spyOn(tracker, 'prepareObservation');
+    const { manager, mocks, switchModel } = fixture({
+      parentID: 'parent',
+      handoff: createBackgroundFallbackHandoff({
+        backgroundJobBoard: board,
+        revivedRunTracker: tracker,
+      }),
+      readBackgroundGeneration: () => run.generation,
+    });
+    const host = installV2History([
+      {
+        id: 'compact-background',
+        type: 'compaction',
+        status: 'completed',
+        time: { created },
+      },
+    ]);
+    const text = `<subagent sessionID="${childID}" state="error">\nModel unavailable: test/a\n</subagent>`;
+    const notice = {
+      id: 'notice',
+      type: 'synthetic',
+      text,
+      time: { created: Date.now() },
+    };
+    const handler = createSessionContextHandler({
+      interviewHandleContext: async () => {},
+      messagesTransform: async () => {},
+      sessionContext: async (id) =>
+        id === 'parent' ? [notice] : host.context(),
+      backgroundGeneration: () => run.generation,
+      refusalOutcome: (...args) => manager.refusedChildOutcome(...args),
+    });
+    const event = {
+      sessionID: 'parent',
+      agent: 'orchestrator',
+      model: {},
+      system: [],
+      tools: {},
+      messages: [
+        { id: notice.id, role: 'user', content: [{ type: 'text', text }] },
+      ],
+    };
+    for (const mapped of mapV2EventToV1(noRoute(childID)))
+      await manager.handleEvent(mapped);
+    await handler(event as never);
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.promptAsync.mock.calls.filter(
+        ([args]) => (args as { path: { id: string } }).path.id === childID,
+      ),
+    ).toHaveLength(1);
+    expect(tracker.isTracked(childID, run.generation)).toBe(true);
+    expect(prepare).toHaveBeenCalledWith(
+      expect.objectContaining({ baselineMessageID: 'compact-background' }),
+    );
+    expect(event.messages[0].content[0].text).toBe(text);
+    expect(event.messages.at(-1)?.content[0].text).toContain('test/b');
+    manager.dispose();
+  });
+
+  test('v2 background no-route does not switch without an armed handoff', async () => {
+    const handoff = {
+      prepare: mock(() => false),
+      admit: mock(() => false),
+      reject: mock(() => {}),
+      settleUnresolved: mock(() => {}),
+    };
+    const { manager, mocks, switchModel } = fixture({
+      parentID: 'parent',
+      handoff,
+      readBackgroundGeneration: () => 1,
+    });
+    installV2History([
+      { id: 'user', type: 'user', time: { created: Date.now() - 1 } },
+    ]);
+    for (const mapped of mapV2EventToV1(noRoute('background-unarmed')))
+      await manager.handleEvent(mapped);
+    expect(handoff.prepare).toHaveBeenCalledTimes(1);
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  test('a recovered interview refusal reports only the continued turn', async () => {
+    jest.useRealTimers();
+    const directory = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'interview-refusal-'),
+    );
+    const { manager, mocks } = fixture();
+    const synthetic = mock(async (_input: Record<string, unknown>) => ({}));
+    const bridge = createV2InterviewBridge(
+      { location: { directory }, session: { synthetic } } as never,
+      { outputFolder: 'interview', autoOpenBrowser: false } as never,
+      {
+        refusalOutcome: (id, messageID) =>
+          manager.pendingRefusalOutcome(id, messageID),
+      },
+    );
+    const sessionID = 'interview-refusal';
+    try {
+      await bridge.handleEvent({
+        type: 'session.execution.started',
+        data: { sessionID },
+      });
+      await bridge.handleContext({
+        sessionID,
+        agent: 'orchestrator',
+        model: {},
+        system: [],
+        tools: {},
+        messages: [
+          {
+            id: 'user-1',
+            role: 'user',
+            content: [{ type: 'text', text: markerText('Test idea') }],
+          },
+        ],
+      });
+      await manager.handleEvent(started(sessionID));
+      await bridge.handleEvent(failed(sessionID));
+      await manager.handleEvent(failed(sessionID));
+      await bridge.handleEvent({
+        type: 'session.execution.failed',
+        data: { sessionID },
+      });
+      expect(
+        await manager.pendingRefusalOutcome(sessionID, 'assistant-1'),
+      ).toBe('test/b');
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+      await bridge.handleEvent({
+        type: 'session.execution.started',
+        data: { sessionID },
+      });
+      expect(
+        (
+          await bridge.service.submitState(sessionID, {
+            summary: 'Spec',
+            questions: [],
+          })
+        ).ok,
+      ).toBe(true);
+      await bridge.handleEvent({
+        type: 'session.execution.succeeded',
+        data: { sessionID },
+      });
+      const notices = synthetic.mock.calls.map(([input]) =>
+        String(input.text ?? ''),
+      );
+      expect(
+        notices.filter((text) => text.includes('Interview update failed')),
+      ).toEqual([]);
+      expect(
+        notices.filter((text) => text.includes('Spec updated')),
+      ).toHaveLength(1);
+    } finally {
+      await bridge.dispose();
+      manager.dispose();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('v2 foreground re-attach keeps request rejections', async () => {
+    const { manager, switchModel } = fixture({
+      parentID: 'parent',
+      chains: { orchestrator: ['test/a', 'test/b', 'test/c'] },
+    });
+    const sessionID = 'foreground-reattach-policy';
+    await manager.handleEvent(started(sessionID));
+    await manager.handleEvent(failed(sessionID));
+    await settle();
+    manager.noteV2Prompt(sessionID);
+    await manager.handleEvent({
+      type: 'session.step.ended',
+      data: { sessionID, finish: 'tool-calls' },
+    });
+    await manager.handleV2Retry(
+      {
+        sessionID,
+        agent: 'orchestrator',
+        model: { providerID: 'test', id: 'b' },
+        error: { type: 'provider.invalid-request', message: 'cyber_policy' },
+        decision: { retry: false },
+      },
+      switchModel,
+    );
+    expect(switchModel.mock.calls.map(([, model]) => model)).toEqual([
+      { providerID: 'test', id: 'b' },
+      { providerID: 'test', id: 'c' },
+    ]);
+  });
+
+  test('v2 request rejections survive a successful tool step on the fallback', async () => {
+    const { manager, switchModel } = fixture({
+      chains: { orchestrator: ['test/a', 'test/b', 'test/c'] },
+    });
+    const sessionID = 'request-rejection-v2';
+    await manager.handleEvent(started(sessionID));
+    await manager.handleEvent(failed(sessionID));
+    await settle();
+    await manager.handleEvent({
+      type: 'session.step.ended',
+      data: { sessionID, finish: 'tool-calls' },
+    });
+    await manager.handleV2Retry(
+      {
+        sessionID,
+        agent: 'orchestrator',
+        model: { providerID: 'test', id: 'b' },
+        error: { type: 'provider.invalid-request', message: 'cyber_policy' },
+        decision: { retry: false },
+      },
+      switchModel,
+    );
+    expect(switchModel.mock.calls.map(([, model]) => model)).toEqual([
+      { providerID: 'test', id: 'b' },
+      { providerID: 'test', id: 'c' },
+    ]);
+  });
+
+  test('v2 retryable cyber policy errors switch without consuming the host retry budget', async () => {
+    const { manager, switchModel } = fixture({
+      chains: { orchestrator: ['test/a', 'test/b', 'test/c'] },
+      maxRetries: 1,
+    });
+    const sessionID = 'policy-retry-budget-v2';
+    const policy = {
+      sessionID,
+      agent: 'orchestrator',
+      model: { providerID: 'test', id: 'a' },
+      error: { type: 'provider.transport', message: 'cyber_policy' },
+      decision: { retry: true, delay: 2_000 },
+    };
+    await manager.handleV2Retry(policy, switchModel);
+    expect(switchModel.mock.calls.map(([, model]) => model)).toEqual([
+      { providerID: 'test', id: 'b' },
+    ]);
+    expect(policy.decision).toEqual({ retry: true, delay: 0 });
+
+    const transport = {
+      sessionID,
+      agent: 'orchestrator',
+      model: { providerID: 'test', id: 'b' },
+      error: { type: 'provider.transport', message: 'socket hang up' },
+      decision: { retry: true, delay: 2_000 },
+    };
+    await manager.handleV2Retry(transport, switchModel);
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    await manager.handleV2Retry(transport, switchModel);
+    expect(switchModel.mock.calls.map(([, model]) => model)).toEqual([
+      { providerID: 'test', id: 'b' },
+      { providerID: 'test', id: 'c' },
+    ]);
+  });
+
+  test('v2 external prompt makes request-rejected models selectable again', async () => {
+    const { manager, switchModel } = fixture({
+      chains: { orchestrator: ['test/a', 'test/b', 'test/c'] },
+    });
+    const sessionID = 'new-prompt-request-rejection-v2';
+    await manager.handleEvent(started(sessionID));
+    await manager.handleEvent(failed(sessionID));
+    await settle();
+    await manager.handleEvent({
+      type: 'session.step.ended',
+      data: { sessionID, finish: 'tool-calls' },
+    });
+    const policy = (id: string) => ({
+      sessionID,
+      agent: 'orchestrator',
+      model: { providerID: 'test', id },
+      error: { type: 'provider.invalid-request', message: 'cyber_policy' },
+      decision: { retry: false },
+    });
+    await manager.handleV2Retry(policy('b'), switchModel);
+    await manager.handleEvent({
+      type: 'session.step.ended',
+      data: { sessionID, finish: 'stop' },
+    });
+    manager.noteV2Prompt(sessionID);
+    await manager.handleV2Retry(policy('c'), switchModel);
+    expect(switchModel.mock.calls.map(([, model]) => model)).toEqual([
+      { providerID: 'test', id: 'b' },
+      { providerID: 'test', id: 'c' },
+      { providerID: 'test', id: 'a' },
+    ]);
+  });
+
+  test('v2 background refusal hands off its continued run and defers an empty successor', async () => {
+    const board = new BackgroundJobBoard();
+    const run = board.registerLaunch({
+      taskID: 'child-bg',
+      parentSessionID: 'parent',
+      agent: 'orchestrator',
+      background: true,
+    });
+    const admission = deferred<void>();
+    let manager: ForegroundFallbackManager;
+    const input = { directory: '/test', client: {} } as never;
+    const gate = createBackgroundJobTerminalGate({
+      backgroundJobBoard: board,
+      input,
+      readRuntime: async (_run, readStartedAt) => ({
+        kind: 'quiescent',
+        origin: 'v2-successor',
+        readStartedAt,
+        terminalOutcome: 'succeeded',
+      }),
+      baselineFor: (id, generation) => tracker.baselineFor(id, generation),
+      observationRevisionFor: (id, generation) =>
+        tracker.revisionFor(id, generation),
+      isObservationPending: (id, generation) =>
+        manager.isFallbackInProgress(id) ||
+        tracker.isObservationPending(id, generation),
+    });
+    const tracker = createRevivedRunTracker({
+      input,
+      backgroundJobBoard: board,
+      terminalGate: gate,
+    });
+    const child = fixture({
+      parentID: 'parent',
+      handoff: createBackgroundFallbackHandoff({
+        backgroundJobBoard: board,
+        revivedRunTracker: tracker,
+      }),
+      readBackgroundGeneration: () => run.generation,
+      promptAsyncImpl: () => admission.promise,
+    });
+    manager = child.manager;
+    try {
+      await manager.handleEvent(started('child-bg'));
+      await manager.handleEvent(failed('child-bg'));
+      await settle();
+      expect(child.switchModel).toHaveBeenCalledTimes(1);
+      expect(child.mocks.promptAsync).toHaveBeenCalledTimes(1);
+      expect(tracker.isObservationPending('child-bg', run.generation)).toBe(
+        true,
+      );
+      expect((await gate.reconcile(run)).kind).toBe('deferred');
+      admission.resolve();
+      await settle();
+      expect(tracker.isTracked('child-bg', run.generation)).toBe(true);
+    } finally {
+      admission.resolve();
+      manager.dispose();
+      tracker.dispose();
+      gate.dispose();
+    }
+  });
+
+  test('v2 waiter claims the refused assistant before the pump and both join once', async () => {
+    const { manager, switchModel } = fixture({ parentID: 'parent' });
+    const outcome = manager.refusedChildOutcome('child', refused());
+    await manager.handleEvent(started('child'));
+    await manager.handleEvent(failed('child'));
+    expect(await outcome).toBe('test/b');
+    expect(switchModel).toHaveBeenCalledTimes(1);
+  });
+
+  test('v2 waiter leaves a refusal from before manager startup unchanged', async () => {
+    const { manager, switchModel } = fixture({ parentID: 'parent' });
+    expect(
+      await manager.refusedChildOutcome('child', refused(Date.now() - 1)),
+    ).toBeUndefined();
+    expect(switchModel).not.toHaveBeenCalled();
+  });
+
+  test('v2 waiter returns immediately when fallback is disabled', async () => {
+    const { manager, switchModel } = fixture({
+      parentID: 'parent',
+      retryEnabled: false,
+    });
+    expect(
+      await manager.refusedChildOutcome('child', refused()),
+    ).toBeUndefined();
+    expect(switchModel).not.toHaveBeenCalled();
+  });
+
+  test('v2 foreground refusal reattaches the same child and returns its result', async () => {
+    const child = fixture({ parentID: 'parent' });
+    const wrapper = createSubagentExecutorWrapper({
+      register: () => {},
+      context: async () => [refused()],
+      refusalOutcome: (...args) => child.manager.refusedChildOutcome(...args),
+    });
+    const result = {
+      output: { sessionID: 'child', status: 'completed' },
+      content: 'CHILD_OK',
+    };
+    const execute = mock(async () => {
+      if (execute.mock.calls.length === 1) {
+        await child.manager.handleEvent(started('child'));
+        throw new Error(
+          'Subagent failed (sessionID: child): Provider blocked the response',
+        );
+      }
+      return result;
+    });
+    expect(
+      await wrapper.wrap(execute)(
+        { agent: 'orchestrator', model: 'test/a' },
+        { id: 'call', sessionID: 'parent' },
+      ),
+    ).toBe(result);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute.mock.calls[1]?.[0]).toMatchObject({ sessionID: 'child' });
+    expect(execute.mock.calls[1]?.[0]).not.toHaveProperty('model');
+  });
+
+  test('v2 foreground keeps the native error when no model or no refusal is available', async () => {
+    const failure = new Error(
+      'Subagent failed (sessionID: child): invalid request',
+    );
+    const outcome = mock(async () => undefined);
+    const history: Array<Record<string, unknown>> = [
+      { id: 'message', type: 'assistant', finish: 'stop' },
+    ];
+    const wrapper = createSubagentExecutorWrapper({
+      register: () => {},
+      context: async () => history,
+      refusalOutcome: outcome,
+    });
+    const execute = wrapper.wrap(async () => {
+      throw failure;
+    });
+    await expect(execute({}, { id: 'call', sessionID: 'parent' })).rejects.toBe(
+      failure,
+    );
+    expect(outcome).not.toHaveBeenCalled();
+    history[0].finish = 'content-filter';
+    await expect(execute({}, { id: 'call', sessionID: 'parent' })).rejects.toBe(
+      failure,
+    );
+    expect(outcome).toHaveBeenCalledTimes(1);
+  });
+
+  function notice(
+    result: string | undefined,
+    options: { running?: boolean } = {},
+  ) {
+    const text =
+      '<subagent sessionID="child" state="error" description="inspect">\nProvider blocked the response\n</subagent>';
+    const prefix = '\u00a742\u00a7 ';
+    const sessionContext = mock(async (_sessionID: string) => [
+      {
+        id: 'assistant-1',
+        type: 'assistant',
+        finish: 'content-filter',
+        error: {
+          type: 'provider.content-filter',
+          message: 'Provider blocked the response',
+        },
+        time: { completed: Date.now() },
+      },
+    ]);
+    const handler = createSessionContextHandler({
+      interviewHandleContext: async () => {},
+      messagesTransform: async () => {},
+      sessionContext,
+      backgroundGeneration: (parent, child, runningOnly) =>
+        parent === 'parent' &&
+        child === 'child' &&
+        (!runningOnly || options.running !== false)
+          ? 1
+          : undefined,
+      refusalOutcome: async () => result,
+    });
+    const event = {
+      sessionID: 'parent',
+      agent: 'orchestrator',
+      model: {},
+      system: [],
+      tools: {},
+      messages: [
+        {
+          id: 'notice',
+          role: 'user',
+          agent: 'orchestrator',
+          content: [{ type: 'text', text: prefix + text }],
+        },
+      ],
+    };
+    return { handler, event, text, prefix, sessionContext };
+  }
+
+  test('v2 parent keeps a prefixed refusal and receives a trailing correction', async () => {
+    const { handler, event, prefix, text } = notice('test/b');
+    await handler(event as never);
+    expect(event.messages[0].content[0].text).toBe(prefix + text);
+    expect(event.messages.at(-1)?.content[0]).toMatchObject({
+      synthetic: true,
+      text: expect.stringContaining('test/b'),
+      metadata: { [BACKGROUND_JOB_BOARD_METADATA_KEY]: true },
+    });
+    expect(event.messages.at(-1)?.content[0]).not.toHaveProperty('cache');
+    expect(event.messages[0].content[0]).toHaveProperty('cache');
+  });
+
+  test('v2 reuses the refused child context across parent requests', async () => {
+    const { handler, event, sessionContext } = notice('test/b');
+    const next = structuredClone(event);
+    await handler(event as never);
+    await handler(next as never);
+    expect(event.messages.at(-1)?.content[0].text).toContain('test/b');
+    expect(next.messages.at(-1)?.content[0].text).toContain('test/b');
+    expect(
+      sessionContext.mock.calls.filter(([id]) => id === 'child'),
+    ).toHaveLength(1);
+  });
+
+  test('v2 skips refused child context reads for terminal jobs', async () => {
+    const { handler, event, sessionContext } = notice('test/b', {
+      running: false,
+    });
+    await handler(event as never);
+    expect(event.messages).toHaveLength(1);
+    expect(
+      sessionContext.mock.calls.filter(([id]) => id === 'child'),
+    ).toHaveLength(0);
+  });
+
+  test('v2 parent retains the native error when no continuation is admitted', async () => {
+    const { handler, event, prefix, text } = notice(undefined);
+    await handler(event as never);
+    expect(event.messages[0].content[0].text).toBe(prefix + text);
+  });
+
+  test('v2 correction disappears after the child leaves the board', async () => {
+    const board = new BackgroundJobBoard();
+    const completedAt = Date.now();
+    board.registerLaunch({
+      taskID: 'child',
+      parentSessionID: 'parent',
+      agent: 'explorer',
+      description: 'inspect',
+      background: true,
+      now: completedAt - 1,
+    });
+    const text =
+      '<subagent sessionID="child" state="error" description="inspect">\ncontent filter\n</subagent>';
+    const refusalOutcome = mock(async () => 'test/b');
+    const handler = createSessionContextHandler({
+      interviewHandleContext: async () => {},
+      messagesTransform: async () => {},
+      sessionContext: async () => [
+        {
+          id: 'assistant-1',
+          type: 'assistant',
+          finish: 'content-filter',
+          error: { message: 'content filter' },
+          time: { completed: completedAt },
+        },
+      ],
+      backgroundGeneration: (_parent, _child, runningOnly, refusalTime) => {
+        const record = board.get('child');
+        return record &&
+          (!runningOnly || record.state === 'running') &&
+          (refusalTime === undefined || refusalTime >= record.runStartedAt)
+          ? record.generation
+          : undefined;
+      },
+      refusalOutcome,
+    });
+    const event = () => ({
+      sessionID: 'parent',
+      agent: 'orchestrator',
+      model: {},
+      system: [],
+      tools: {},
+      messages: [
+        { id: 'notice', role: 'user', content: [{ type: 'text', text }] },
+      ],
+    });
+    const running = event();
+    await handler(running as never);
+    expect(running.messages[0].content[0].text).toBe(text);
+    expect(running.messages.at(-1)?.content[0].text).toContain('test/b');
+    expect(refusalOutcome).toHaveBeenCalledTimes(1);
+    board.registerLaunch({
+      taskID: 'child',
+      parentSessionID: 'parent',
+      agent: 'explorer',
+      description: 'inspect again',
+      background: true,
+      now: completedAt + 1,
+    });
+    const relaunched = event();
+    await handler(relaunched as never);
+    expect(relaunched.messages[0].content[0].text).toBe(text);
+    expect(relaunched.messages).toHaveLength(1);
+    expect(refusalOutcome).toHaveBeenCalledTimes(1);
+    board.drop('child');
+    expect(board.get('child')).toBeUndefined();
+    const completed = event();
+    await handler(completed as never);
+    expect(completed.messages[0].content[0].text).toBe(text);
+    expect(completed.messages).toHaveLength(1);
+  });
+
+  test('v2 refusal continuation names the refused step agent', async () => {
+    const { manager, mocks } = fixture();
+    await manager.handleEvent(started('agent'));
+    await manager.handleEvent(failed('agent'));
+    await settle();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
+      body: { agent: 'orchestrator' },
+    });
+  });
+
+  test('v2 refusal reports a failed switch without implying a retry hook', async () => {
+    const logSpy = spyOn(logger, 'log').mockImplementation(() => {});
+    try {
+      const { manager } = fixture({
+        switchModel: async () => {
+          throw new Error('denied');
+        },
+      });
+      await manager.handleEvent(started('failed-log'));
+      await manager.handleEvent(failed('failed-log'));
+      await settle();
+      expect(logSpy).toHaveBeenCalledWith(
+        '[foreground-fallback] v2 model switch failed',
+        expect.objectContaining({ sessionID: 'failed-log' }),
+      );
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test('v2 refusal consumes one step and accepts the next distinct step', async () => {
+    const { manager, mocks, switchModel, durable } = fixture();
+    await manager.handleEvent(started('consume'));
+    await manager.handleEvent(failed('consume'));
+    await settle();
+    await manager.handleEvent(failed('consume'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+
+    durable.id = 'b';
+    durable.variant = 'high';
+    await manager.handleEvent(started('consume', 'b', 'assistant-2'));
+    await manager.handleEvent(failed('consume'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    await manager.handleEvent(failed('consume', 'assistant-2'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(2);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+  });
+
+  test('v2 refusal does not race a pending retry-hook switch', async () => {
+    const pending = deferred<void>();
+    const { manager, mocks, switchModel } = fixture({
+      switchModel: () => pending.promise,
+    });
+    await manager.handleEvent(started('retry-race'));
+    const retry = manager.handleV2Retry(
+      retryEvent('retry-race', 'a', { retry: false }),
+      switchModel,
+    );
+    try {
+      await settle();
+      expect(switchModel).toHaveBeenCalledTimes(1);
+      await manager.handleEvent(failed('retry-race'));
+      await settle();
+      expect(switchModel).toHaveBeenCalledTimes(1);
+      expect(mocks.promptAsync).not.toHaveBeenCalled();
+    } finally {
+      pending.resolve();
+      await retry;
+      await settle();
+    }
+  });
+
+  test('v2 refusal from a tried model does not poison a later retry-hook fallback', async () => {
+    const { manager, mocks, switchModel, durable } = fixture();
+    await manager.handleV2Retry(
+      retryEvent('late-refusal', 'a', { retry: false }),
+      switchModel,
+    );
+    durable.id = 'b';
+    durable.variant = 'high';
+    await manager.handleEvent(started('late-refusal'));
+    await manager.handleEvent(failed('late-refusal'));
+    expect(manager.isFallbackInProgress('late-refusal')).toBe(false);
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    const retry = retryEvent('late-refusal', 'b', { retry: false });
+    await manager.handleV2Retry(retry, switchModel);
+    expect(switchModel).toHaveBeenCalledTimes(2);
+    expect(retry.decision).toEqual({ retry: true, delay: 0 });
+  });
+
+  test('v2 child refusal with no chain does not delay terminal bookkeeping', async () => {
+    const { manager, mocks, switchModel } = fixture({
+      parentID: 'parent',
+      chains: { orchestrator: [] },
+    });
+    const get = spyOn(currentMockSession as any, 'get');
+    await manager.handleEvent({
+      type: 'session.created',
+      properties: { info: { id: 'no-chain-child', parentID: 'parent' } },
+    });
+    await manager.handleEvent(started('no-chain-child'));
+    await manager.handleEvent(failed('no-chain-child'));
+    await settle();
+    expect(get).not.toHaveBeenCalled();
+    expect(manager.isFallbackInProgress('no-chain-child')).toBe(false);
+    expect(manager.willAttemptFallback('no-chain-child')).toBe(false);
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('v2 stale durable selection does not overwrite the observed session model', async () => {
+    const { manager, mocks, switchModel, durable, onChanged } = fixture();
+    durable.id = 'b';
+    durable.variant = 'high';
+    manager.noteExternalTurn('stale-model', undefined, 'test/b');
+    await manager.handleEvent(started('stale-model'));
+    await manager.handleEvent(failed('stale-model'));
+    await settle();
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    manager.observeContinuationModel('stale-model', 'test/b');
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  test('v2 refusal from a step predating an external prompt neither switches nor continues', async () => {
+    const { manager, mocks, switchModel } = fixture();
+    await manager.handleEvent(started('old-step'));
+    manager.noteV2Prompt('old-step');
+    await manager.handleEvent(failed('old-step'));
+    await settle();
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('v2 content-filter ignores a failure before step start', async () => {
+    const { manager, switchModel } = fixture();
+    await manager.handleEvent(failed('root'));
+    await settle();
+    expect(switchModel).not.toHaveBeenCalled();
+  });
+
+  test('v2 content-filter ignores a failure for a different step', async () => {
+    const { manager, switchModel } = fixture();
+    await manager.handleEvent(started('root'));
+    await manager.handleEvent(failed('root', 'other'));
+    await settle();
+    expect(switchModel).not.toHaveBeenCalled();
+  });
+
+  test('v2 content-filter ignores other step finishes', async () => {
+    const { manager, switchModel } = fixture();
+    await manager.handleEvent(started('root'));
+    await manager.handleEvent(failed('root', 'assistant-1', ''));
+    await settle();
+    expect(switchModel).not.toHaveBeenCalled();
+  });
+
+  test('v2 content-filter switches to the configured fallback variant', async () => {
+    const { manager, switchModel } = fixture();
+    await manager.handleEvent(started('root'));
+    await manager.handleEvent(failed('root'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(switchModel).toHaveBeenCalledWith('root', {
+      providerID: 'test',
+      id: 'b',
+      variant: 'high',
+    });
+  });
+
+  test('v2 content-filter projects the confirmed agent and variant', async () => {
+    const { manager, onChanged } = fixture();
+    await manager.handleEvent(started('root'));
+    await manager.handleEvent(failed('root'));
+    await settle();
+    expect(onChanged).toHaveBeenCalledWith('root', 'test/b', {
+      agentName: 'orchestrator',
+      variant: 'high',
+    });
+  });
+
+  test('v2 content-filter does not mark the provider down', async () => {
+    const { manager } = fixture();
+    await manager.handleEvent(started('root'));
+    await manager.handleEvent(failed('root'));
+    await settle();
+    expect(manager.getActiveFallback('root')?.downProviders.size).toBe(0);
+  });
+
+  test('v2 content-filter continuation is internal and does not override the model', async () => {
+    const { manager, mocks } = fixture();
+    await manager.handleEvent(started('root'));
+    await manager.handleEvent(failed('root'));
+    await settle();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    const request = mocks.promptAsync.mock.calls[0]?.[0] as {
+      body: { parts: unknown[]; model?: unknown };
+    };
+    expect(request.body.model).toBeUndefined();
+    expect(isInternalInitiatorPart(request.body.parts[0])).toBe(true);
+  });
+
+  test('v2 content-filter remains in progress until continuation admission settles', async () => {
+    const admission = deferred<void>();
+    const { manager } = fixture({ promptAsyncImpl: () => admission.promise });
+    await manager.handleEvent(started('root'));
+    await manager.handleEvent(failed('root'));
+    await settle();
+    expect(manager.isFallbackInProgress('root')).toBe(true);
+    admission.resolve();
+    await settle();
+    expect(manager.isFallbackInProgress('root')).toBe(false);
+  });
+
+  test('v2 content-filter child switches without an orphan continuation', async () => {
+    const { manager, mocks, switchModel } = fixture({ parentID: 'parent' });
+    await manager.handleEvent(started('child'));
+    await manager.handleEvent(failed('child'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('v2 content-filter uses the step model when the session has no explicit model', async () => {
+    const { manager, mocks, switchModel, info } = fixture();
+    delete info.model;
+    info.agent = 'explorer';
+    await manager.handleEvent(started('implicit'));
+    await manager.handleEvent(failed('implicit'));
+    await settle();
+    expect(switchModel).not.toHaveBeenCalled();
+    info.agent = 'orchestrator';
+    await manager.handleEvent(started('implicit', 'a', 'assistant-2'));
+    await manager.handleEvent(failed('implicit', 'assistant-2'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('v2 content-filter matches the host default variant to an unpinned durable selection', async () => {
+    const { manager, mocks, switchModel, durable } = fixture();
+    (durable as { variant?: string }).variant = undefined;
+    const start = started('default');
+    start.data.model.variant = 'default';
+    await manager.handleEvent(start);
+    await manager.handleEvent(failed('default'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('v2 content-filter refuses a stale durable variant then handles the current step', async () => {
+    const { manager, mocks, switchModel, durable } = fixture();
+    durable.variant = 'newer';
+    await manager.handleEvent(started('stale'));
+    await manager.handleEvent(failed('stale'));
+    await settle();
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    durable.variant = 'source';
+    await manager.handleEvent(started('stale', 'a', 'assistant-2'));
+    await manager.handleEvent(failed('stale', 'assistant-2'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('v2 content-filter does not continue over a newer external prompt', async () => {
+    const pending = deferred<void>();
+    const { manager, mocks, switchModel } = fixture({
+      switchModel: () => pending.promise,
+    });
+    await manager.handleEvent(started('epoch'));
+    await manager.handleEvent(failed('epoch'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    manager.noteV2Prompt('epoch');
+    pending.resolve();
+    await settle();
+    expect(manager.getActiveFallback('epoch')?.model).toBe('test/b');
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('v2 content-filter rejected switch leaves its target available to the next step', async () => {
+    let calls = 0;
+    const { manager, mocks, switchModel } = fixture({
+      switchModel: async () => {
+        if (++calls === 1) throw new Error('denied');
+      },
+    });
+    await manager.handleEvent(started('retry'));
+    await manager.handleEvent(failed('retry'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    await manager.handleEvent(started('retry', 'a', 'assistant-2'));
+    await manager.handleEvent(failed('retry', 'assistant-2'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(2);
+    expect(switchModel.mock.calls[1]?.[1]).toEqual({
+      providerID: 'test',
+      id: 'b',
+      variant: 'high',
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('v2 content-filter keeps the existing sticky retry and exhaustion policy', async () => {
+    const { manager, mocks, switchModel, durable } = fixture();
+    await manager.handleEvent(started('exhaust'));
+    await manager.handleEvent(failed('exhaust'));
+    await settle();
+    durable.id = 'b';
+    durable.variant = 'high';
+    await manager.handleEvent(started('exhaust', 'b', 'assistant-2'));
+    await manager.handleEvent(failed('exhaust', 'assistant-2'));
+    await settle();
+    await manager.handleEvent(started('exhaust', 'b', 'assistant-3'));
+    await manager.handleEvent(failed('exhaust', 'assistant-3'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(2);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+    expect(manager.willAttemptFallback('exhaust')).toBe(false);
+  });
+});
+
 describe('ForegroundFallbackManager v2 retry hook', () => {
+  test('retains a confirmed switch when the projection callback throws', async () => {
+    const retryManager = retryMgr(['A', 'B'], () => {
+      throw new Error('projection failed');
+    });
+    const retry = retryEvent('retry-projection-error', 'A', { retry: false });
+    await retryManager.handleV2Retry(retry, async () => {});
+    expect(retry.decision).toEqual({ retry: true, delay: 500 });
+    expect(
+      retryManager.getActiveFallback('retry-projection-error')?.model,
+    ).toBe('test/B');
+  });
+
+  test('v2 transport timeout switches providers and continues the turn', async () => {
+    createMockClient();
+    const mgr = new ForegroundFallbackManager(
+      { orchestrator: ['p1/a', 'p2/b'] },
+      false,
+      { directory: '/test', hostFlavor: 'v2' } as never,
+      0,
+      undefined,
+      undefined,
+      0,
+      0,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    const switchModel = mock(async () => {});
+    const event = {
+      sessionID: 'v2-transport',
+      agent: 'orchestrator',
+      model: { providerID: 'p1', id: 'a' },
+      error: {
+        type: 'provider.transport',
+        message: 'Timed out waiting for response headers',
+      },
+      decision: { retry: true, delay: 2_000 },
+    };
+    await mgr.handleV2Retry(event, switchModel);
+    expect(switchModel).toHaveBeenCalledWith('v2-transport', {
+      providerID: 'p2',
+      id: 'b',
+    });
+    expect(event.decision).toEqual({ retry: true, delay: 0 });
+    expect(mgr.getActiveFallback('v2-transport')?.downProviders).toEqual(
+      new Set(['p1']),
+    );
+  });
+
   test.each([{ retry: true, delay: 2000 }, { retry: false }])(
     'switches in place without abort or re-prompt (initial decision %p)',
     async (decision) => {
@@ -2310,7 +4200,10 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
       expect(event.decision).toEqual({ retry: true, delay: 500 });
       expect(mocks.abort).not.toHaveBeenCalled();
       expect(mocks.promptAsync).not.toHaveBeenCalled();
-      expect(onChanged).toHaveBeenCalledWith('c', 'test/B');
+      expect(onChanged).toHaveBeenCalledWith('c', 'test/B', {
+        agentName: 'orchestrator',
+        variant: undefined,
+      });
       await mgr.handleV2Retry(
         retryEvent('c', 'A', { ...decision }),
         switchModel,
@@ -2319,8 +4212,8 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
     },
   );
 
-  test('permanent quota error skips the host retry budget', async () => {
-    const { manager } = makeManager({ maxRetries: 3 });
+  test('v2 401 gets one grace retry while quota and 403 still switch', async () => {
+    const { manager } = makeManager({ hostFlavor: 'v2', maxRetries: 3 });
     const switchModel = mock(async () => {});
     const event = {
       sessionID: 'v2-permanent',
@@ -2331,6 +4224,67 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
     };
     await manager.handleV2Retry(event, switchModel);
     expect(switchModel).toHaveBeenCalledWith('v2-permanent', {
+      providerID: 'test',
+      id: 'b',
+    });
+
+    const auth = (sessionID: string, status: number, retry = false) => ({
+      sessionID,
+      agent: 'orchestrator',
+      model: { providerID: 'test', id: 'a' },
+      error: { type: 'provider.auth', status, message: 'Unauthorized' },
+      decision: (retry ? { retry: true, delay: 0 } : { retry: false }) as {
+        retry: boolean;
+        delay?: number;
+      },
+    });
+    const first = auth('v2-auth', 401);
+    await manager.handleV2Retry(first, switchModel);
+    expect(first.decision).toEqual({ retry: true, delay: 0 });
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(manager.getActiveFallback('v2-auth')).toBeUndefined();
+    expect((manager as any).downProviders.has('v2-auth')).toBe(false);
+    await manager.handleV2Retry(auth('v2-auth', 401), switchModel);
+    expect(switchModel).toHaveBeenCalledTimes(2);
+    expect(manager.getActiveFallback('v2-auth')?.model).toBe('test/b');
+
+    // Another auth plugin may already have changed the host decision.
+    const preapproved = auth('v2-auth-plugin-first', 401, true);
+    await manager.handleV2Retry(preapproved, switchModel);
+    expect(preapproved.decision).toEqual({ retry: true, delay: 0 });
+    expect(switchModel).toHaveBeenCalledTimes(2);
+    await manager.handleV2Retry(
+      auth('v2-auth-plugin-first', 401, true),
+      switchModel,
+    );
+    expect(switchModel).toHaveBeenCalledTimes(3);
+
+    manager.noteV2Prompt('v2-auth');
+    const nextTurn = {
+      ...auth('v2-auth', 401),
+      model: { providerID: 'test', id: 'b' },
+    };
+    await manager.handleV2Retry(nextTurn, switchModel);
+    expect(nextTurn.decision).toEqual({ retry: true, delay: 0 });
+    expect(switchModel).toHaveBeenCalledTimes(3);
+
+    await manager.handleV2Retry(auth('v2-forbidden', 403), switchModel);
+    expect(switchModel).toHaveBeenCalledWith('v2-forbidden', {
+      providerID: 'test',
+      id: 'b',
+    });
+    await manager.handleV2Retry(
+      {
+        ...auth('v2-transport-401', 401),
+        error: {
+          type: 'provider.transport',
+          status: 401,
+          message: 'Unauthorized',
+        },
+      },
+      switchModel,
+    );
+    expect(switchModel).toHaveBeenCalledWith('v2-transport-401', {
       providerID: 'test',
       id: 'b',
     });
@@ -2386,6 +4340,396 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
     resolveSwitch();
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(observed).toEqual(calls);
+  });
+
+  describe('v2 retry turn-epoch and late-landing race guards', () => {
+    function promptBridgeFor(mgr: ForegroundFallbackManager) {
+      return createSessionPromptBridge(
+        async () => {},
+        undefined,
+        (sid, msgId) => mgr.observeExternalPromptIntent(sid, msgId),
+      );
+    }
+
+    test('normal current epoch switch succeeds and mutates decision', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const sid = 'retry-epoch-normal-success';
+      const switchModel = mock(async () => {});
+      const decision = { retry: false };
+      const event = retryEvent(sid, 'A', decision);
+
+      await mgr.handleV2Retry(event, switchModel);
+
+      expect(switchModel).toHaveBeenCalledWith(sid, {
+        providerID: 'test',
+        id: 'B',
+      });
+      expect(event.decision).toEqual({ retry: true, delay: 500 });
+      expect(observed).toEqual(['test/B']);
+      expect(mgr.getActiveFallback(sid)).toEqual({
+        model: 'test/B',
+        downProviders: expect.any(Set),
+      });
+    });
+
+    test('new user prompt intent arriving before normal switch resolution suppresses stale decision and bookkeeping', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid = 'retry-epoch-normal-new-turn';
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const switchModel = mock(() => switchRequest);
+      const decision = { retry: false };
+      const event = retryEvent(sid, 'A', decision);
+
+      const pending = mgr.handleV2Retry(event, switchModel);
+      expect(switchModel).toHaveBeenCalledTimes(1);
+
+      // New genuine user prompt intent arrives through the prompt bridge
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-new-intent',
+        prompt: { text: 'new prompt' },
+      });
+
+      // Switch resolves normally before timeout
+      resolveSwitch();
+      await pending;
+
+      // Decision must NOT be mutated to retry
+      expect(event.decision).toEqual({ retry: false });
+      // Callback must NOT be invoked
+      expect(observed).toEqual([]);
+      // Active fallback must NOT be committed
+      expect(mgr.getActiveFallback(sid)).toBeUndefined();
+      // Host dispatch was called exactly once
+      expect(switchModel).toHaveBeenCalledTimes(1);
+    });
+
+    test('timed-out switch settling late is suppressed when a new user prompt intent arrived on the same from model', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid = 'retry-epoch-late-new-turn';
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const decision = { retry: false };
+      const event = retryEvent(sid, 'A', decision);
+
+      const pending = mgr.handleV2Retry(event, () => switchRequest);
+
+      // Timeout fires on the old turn
+      await clock.advance(2_500);
+      await pending;
+      expect(observed).toEqual([]);
+      expect(event.decision).toEqual({ retry: false });
+
+      // New genuine user prompt intent arrives on the same model A
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-new-intent-late',
+        prompt: { text: 'new prompt' },
+      });
+
+      // Old switch resolves late
+      resolveSwitch();
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+
+      // Reconcile must be suppressed by epoch check even though session model is still 'test/A'
+      expect(observed).toEqual([]);
+      expect(mgr.getActiveFallback(sid)).toBeUndefined();
+    });
+
+    test('current epoch late-landing switch control successfully reconciles when no intent arrived', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const sid = 'retry-epoch-late-control';
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const decision = { retry: false };
+      const event = retryEvent(sid, 'A', decision);
+
+      const pending = mgr.handleV2Retry(event, () => switchRequest);
+      await clock.advance(2_500);
+      await pending;
+      expect(observed).toEqual([]);
+
+      // Turn is still current (no intent arrived); resolve late switch
+      resolveSwitch();
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+
+      // In current epoch without newer selection, late B must reconcile
+      expect(observed).toEqual(['test/B']);
+      expect(mgr.getActiveFallback(sid)?.model).toBe('test/B');
+    });
+
+    test('dedup trap: a duplicate prompt intent does not suppress the switch started after the first intent; the next new ID supersedes', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B', 'C'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid = 'retry-dedup-trap';
+
+      // 1. First intent arrives for msg-1 -> advances turnEpoch from 0 to 1
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-1',
+        prompt: { text: 'turn 1' },
+      });
+
+      // 2. A switch starts on turn 1 (captures epoch = 1)
+      const { promise: switchReq1, resolve: resolveSwitch1 } =
+        Promise.withResolvers<void>();
+      const event1 = retryEvent(sid, 'A', { retry: false });
+      const pending1 = mgr.handleV2Retry(event1, () => switchReq1);
+
+      // 3. Duplicate prepared ID arrives with same msg-1 -> MUST NOT bump epoch again
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-1',
+        prompt: { text: 'turn 1 duplicate' },
+      });
+
+      // 4. Switch 1 resolves -> must SUCCEED because turn 1 is still current
+      resolveSwitch1();
+      await pending1;
+
+      expect(event1.decision).toEqual({ retry: true, delay: 500 });
+      expect(observed).toEqual(['test/B']);
+      expect(mgr.getActiveFallback(sid)?.model).toBe('test/B');
+
+      // 5. Next switch starts on model B (still turn 1)
+      const { promise: switchReq2, resolve: resolveSwitch2 } =
+        Promise.withResolvers<void>();
+      const event2 = retryEvent(sid, 'B', { retry: false });
+      const pending2 = mgr.handleV2Retry(event2, () => switchReq2);
+
+      // 6. Next NEW ID intent arrives: msg-2 -> advances turnEpoch to 2
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-2',
+        prompt: { text: 'turn 2' },
+      });
+
+      // 7. Switch 2 resolves -> must be SUPERSEDED by turn 2
+      resolveSwitch2();
+      await pending2;
+
+      expect(event2.decision).toEqual({ retry: false });
+      expect(observed).toEqual(['test/B']); // did not add test/C
+    });
+
+    test('admission failure leaves old switch superseded without granting new fallback budget', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid = 'retry-admission-failure';
+
+      // Set up an existing consumed retry count on turn 0
+      (mgr as any).sessionRetries.set(sid, 2);
+
+      // Old switch is in flight
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const event = retryEvent(sid, 'A', { retry: false });
+      const pending = mgr.handleV2Retry(event, () => switchRequest);
+
+      // New prompt intent arrives, but admission will fail (e.g. permission check rejects)
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-admit-fail',
+        prompt: { text: 'prompt that fails admission' },
+      });
+
+      // Admission fails: message.updated is NEVER emitted for msg-admit-fail
+      // Now old switch finishes
+      resolveSwitch();
+      await pending;
+
+      // Old switch was superseded
+      expect(event.decision).toEqual({ retry: false });
+      expect(observed).toEqual([]);
+      expect(mgr.getActiveFallback(sid)).toBeUndefined();
+
+      // But fallback budget was NOT granted/cleared (still 2)
+      expect((mgr as any).sessionRetries.get(sid)).toBe(2);
+    });
+
+    test('internal prompt intent with metadata, text marker, or existing internal admission does not bump epoch', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid = 'retry-internal-intent';
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const decision = { retry: false };
+      const event = retryEvent(sid, 'A', decision);
+
+      const pending = mgr.handleV2Retry(event, () => switchRequest);
+
+      // 1. Internal metadata prompt intent
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-meta',
+        metadata: { [INTERNAL_INITIATOR_METADATA_KEY]: true },
+        prompt: { text: 'wake queue' },
+      });
+
+      // 2. Text marker prompt intent
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-marker',
+        prompt: { text: `wake ${SLIM_INTERNAL_INITIATOR_MARKER}` },
+      });
+
+      // 3. Pre-recorded internal admission
+      recordInternalAdmission(sid, 'msg-pre-recorded');
+      bridge.observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-pre-recorded',
+        prompt: { text: 'normal text' },
+      });
+
+      // Switch resolves
+      resolveSwitch();
+      await pending;
+
+      // None of the internal prompts bumped epoch, so switch succeeds
+      expect(event.decision).toEqual({ retry: true, delay: 500 });
+      expect(observed).toEqual(['test/B']);
+      expect(mgr.getActiveFallback(sid)?.model).toBe('test/B');
+    });
+
+    test('other-session prompt intent does not suppress the in-flight switch of this session', async () => {
+      const observed: string[] = [];
+      const mgr = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observed.push(model),
+      );
+      const bridge = promptBridgeFor(mgr);
+      const sid1 = 'retry-session-1';
+      const sid2 = 'retry-session-2';
+      const { promise: switchRequest, resolve: resolveSwitch } =
+        Promise.withResolvers<void>();
+      const decision = { retry: false };
+      const event1 = retryEvent(sid1, 'A', decision);
+
+      const pending = mgr.handleV2Retry(event1, () => switchRequest);
+
+      // Another session has a prompt intent
+      bridge.observePromptIntent({
+        sessionID: sid2,
+        messageID: 'msg-session-2',
+        prompt: { text: 'prompt for sid2' },
+      });
+
+      // Session 1 resolves
+      resolveSwitch();
+      await pending;
+
+      // Session 1 must succeed normally
+      expect(event1.decision).toEqual({ retry: true, delay: 500 });
+      expect(observed).toEqual(['test/B']);
+      expect(mgr.getActiveFallback(sid1)?.model).toBe('test/B');
+    });
+
+    test('disposing manager suppresses in-flight normal resolution and in-flight late reconciliation', async () => {
+      // Normal in-flight disposal
+      const observedNormal: string[] = [];
+      const mgrNormal = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observedNormal.push(model),
+      );
+      const sidNormal = 'retry-dispose-normal';
+      const { promise: switchReq1, resolve: resolve1 } =
+        Promise.withResolvers<void>();
+      const decision1 = { retry: false };
+      const event1 = retryEvent(sidNormal, 'A', decision1);
+
+      const pendingNormal = mgrNormal.handleV2Retry(event1, () => switchReq1);
+      mgrNormal.dispose();
+      resolve1();
+      await pendingNormal;
+      expect(event1.decision).toEqual({ retry: false });
+      expect(observedNormal).toEqual([]);
+      expect(mgrNormal.getActiveFallback(sidNormal)).toBeUndefined();
+
+      // Late in-flight disposal
+      const observedLate: string[] = [];
+      const mgrLate = retryMgr(
+        ['A', 'B'],
+        (_sid, model) => void observedLate.push(model),
+      );
+      const sidLate = 'retry-dispose-late';
+      const { promise: switchReq2, resolve: resolve2 } =
+        Promise.withResolvers<void>();
+      const event2 = retryEvent(sidLate, 'A');
+
+      const pendingLate = mgrLate.handleV2Retry(event2, () => switchReq2);
+      await clock.advance(2_500);
+      await pendingLate;
+
+      mgrLate.dispose();
+      resolve2();
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(observedLate).toEqual([]);
+      expect(mgrLate.getActiveFallback(sidLate)).toBeUndefined();
+    });
+
+    test('late rejection after a new user turn does not alter fresh tried state', async () => {
+      const mgr = retryMgr(['A', 'B', 'C']);
+      const sid = 'retry-late-rejection';
+      const { promise: switchRequest, reject: rejectSwitch } =
+        Promise.withResolvers<void>();
+      const pending = mgr.handleV2Retry(
+        retryEvent(sid, 'A'),
+        () => switchRequest,
+      );
+
+      await clock.advance(2_500);
+      await pending;
+
+      // Advance to a fresh turn
+      promptBridgeFor(mgr).observePromptIntent({
+        sessionID: sid,
+        messageID: 'msg-turn-2',
+        prompt: { text: 'turn 2' },
+      });
+
+      // In turn 2, a descent tries B
+      const triedSet = (mgr as any).sessionTried.get(sid) as Set<string>;
+      expect(triedSet).toBeDefined();
+      triedSet.add('test/B');
+
+      // Late rejection arrives from turn 1
+      rejectSwitch(new Error('late host error'));
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+
+      // Fresh tried state for B must remain intact
+      expect(triedSet.has('test/B')).toBe(true);
+    });
   });
 });
 
@@ -3637,6 +5981,14 @@ describe('isPermanentQuotaBillingError', () => {
     };
     expect(isFailoverError(poolError)).toBe(true);
     expect(isPermanentQuotaBillingError(poolError)).toBe(true);
+    // A generic HTTP 412 is a request rejection: no Antigravity signal, no
+    // failover, and the host's own verdict stands.
+    const genericPrecondition = {
+      status: 412,
+      message: 'Precondition Failed',
+    };
+    expect(isFailoverError(genericPrecondition)).toBe(false);
+    expect(isPermanentQuotaBillingError(genericPrecondition)).toBe(false);
     expect(
       isFailoverError({
         cause: {
@@ -3746,11 +6098,11 @@ describe('ForegroundFallbackManager session.error', () => {
     };
     expect(mgr.getActiveFallback('sess-1')).toEqual(activeFallback);
 
-    mgr.observeExternalTurn('sess-1', undefined);
+    mgr.noteExternalTurn('sess-1', undefined);
     expect(mgr.getActiveFallback('sess-1')).toEqual(activeFallback);
-    mgr.observeExternalTurn('sess-1', 'openai/gpt-4o');
+    mgr.noteExternalTurn('sess-1', 'turn-2', 'openai/gpt-4o');
     expect(mgr.getActiveFallback('sess-1')).toEqual(activeFallback);
-    mgr.observeExternalTurn('sess-1', 'anthropic/claude-opus-4-5');
+    mgr.noteExternalTurn('sess-1', 'turn-3', 'anthropic/claude-opus-4-5');
     expect(mgr.getActiveFallback('sess-1')).toBeUndefined();
   });
 
@@ -4162,31 +6514,11 @@ describe('ForegroundFallbackManager session.error', () => {
     );
   });
 
-  test('falls back to the full transcript read when the tail has no replayable user message', async () => {
-    // A host that ignores `limit` (or an exotic transcript whose tail
-    // carries no user message) must still fail over: pay the full read
-    // rather than skip the replay.
-    let reads = 0;
-    ({ mocks } = createMockClient({
-      messagesImpl: async () => {
-        reads += 1;
-        if (reads === 1) {
-          return { data: [{ info: { role: 'assistant' }, parts: [] }] };
-        }
-        return {
-          data: [
-            {
-              info: { role: 'user' },
-              parts: [{ type: 'text', text: 'deep prompt' }],
-            },
-          ],
-        };
-      },
-    }));
+  test('stops after an empty transcript tail without requesting the full history', async () => {
+    ({ mocks } = createMockClient({ messagesData: [] }));
     mgr = new ForegroundFallbackManager(makeChains(), true, {
       directory: '/test',
     } as any);
-
     await mgr.handleEvent({
       type: 'message.updated',
       properties: {
@@ -4206,24 +6538,16 @@ describe('ForegroundFallbackManager session.error', () => {
       },
     });
 
-    expect(reads).toBe(2);
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    const promptCall = mocks.promptAsync.mock.calls[0] as [
-      { parts: Array<{ text?: string }> },
-    ];
-    expect(promptCall[0].body.parts).toHaveLength(1);
+    expect(mocks.messages).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
 
-  test('keeps both errors when the tail and the full transcript reads fail', async () => {
-    // A dual transcript-read incident must surface the tail error too:
-    // the full-read error aggregates after it instead of overwriting it.
+  test('stops after a failed transcript tail without requesting the full history', async () => {
     let reads = 0;
     ({ mocks } = createMockClient({
       messagesImpl: async () => {
         reads += 1;
-        return reads === 1
-          ? { error: { message: 'tail down' }, data: [] }
-          : { error: { message: 'full down' }, data: [] };
+        return { error: { message: 'tail down' }, data: [] };
       },
     }));
     mgr = new ForegroundFallbackManager(makeChains(), true, {
@@ -4249,7 +6573,7 @@ describe('ForegroundFallbackManager session.error', () => {
       },
     });
 
-    expect(reads).toBe(2);
+    expect(reads).toBe(1);
     expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
 
@@ -4263,7 +6587,6 @@ describe('ForegroundFallbackManager session.error', () => {
     return {
       calls,
       handoff: {
-        isEligible: () => true,
         prepare: (
           sessionID: string,
           generation: number | undefined,
@@ -4293,18 +6616,16 @@ describe('ForegroundFallbackManager session.error', () => {
   }
 
   /** Common handoff-scenario runner: builds the mock client, the
-   * manager (with optional handoff/reader/modelChanged) and fires the
+   * manager (with optional handoff/reader) and fires the
    * message.updated → session.error sequence that triggers a fallback
    * attempt on 'sess-1'. */
   async function runFallbackScenario(options?: {
-    v2?: boolean;
     promptAsyncImpl?: () => Promise<unknown>;
     abortImpl?: () => Promise<unknown>;
     messagesData?: unknown[];
     messageData?: unknown;
     handoff?: ReturnType<typeof handoffMock>['handoff'];
     readBackgroundGeneration?: (sessionID: string) => number | undefined;
-    modelChanged?: () => void;
   }) {
     ({ mocks } = createMockClient({
       promptAsyncImpl: options?.promptAsyncImpl,
@@ -4315,10 +6636,10 @@ describe('ForegroundFallbackManager session.error', () => {
     mgr = new ForegroundFallbackManager(
       makeChains(),
       true,
-      { directory: '/test', hostFlavor: options?.v2 ? 'v2' : undefined } as any,
+      { directory: '/test' } as any,
       3,
       undefined,
-      options?.modelChanged,
+      undefined,
       0,
       500,
       options?.handoff,
@@ -4439,12 +6760,12 @@ describe('ForegroundFallbackManager session.error', () => {
     expect(calls.reject).toHaveLength(1);
   });
 
-  test('converts the handoff to a owner when every promptAsync attempt rejects', async () => {
+  test('transport failure keeps unresolved handoff without aborting or resending', async () => {
     // A transport failure without a response does NOT prove the host
     // refused — the replay may have been accepted. The prepared
     // ownership converts into a tracked run instead of being dropped.
     const { calls, handoff } = handoffMock();
-    await runFallbackScenario({
+    const mocks = await runFallbackScenario({
       handoff,
       messagesData: taskPrompt,
       promptAsyncImpl: async () => {
@@ -4459,28 +6780,9 @@ describe('ForegroundFallbackManager session.error', () => {
     expect(calls.admit).toEqual([]);
     expect(calls.reject).toEqual([]);
     expect(calls.settleUnresolved).toHaveLength(1);
-  });
-
-  test('switched:false still delivers — the handoff is admitted without the switch claim', async () => {
-    // The v2 shim runs s.prompt even when switchModel fails;
-    // `switched: false` means the replay WAS delivered on the current
-    // model. Admission and switch confirmation are different facts:
-    // the delivery keeps its owner; only sessionModel stays.
-    const { calls, handoff } = handoffMock();
-    const modelChanged = mock(() => {});
-    const mocks = await runFallbackScenario({
-      handoff,
-      modelChanged,
-      messagesData: taskPrompt,
-      promptAsyncImpl: async () => ({ switched: false }),
-    });
-
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(calls.admit).toHaveLength(1);
-    expect(calls.reject).toEqual([]);
-    expect(calls.settleUnresolved).toEqual([]);
-    // The switch claim is suppressed: no model migration.
-    expect(modelChanged).not.toHaveBeenCalled();
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mocks.post).not.toHaveBeenCalled();
   });
 
   test('a stale background generation during the transcript read aborts the replay', async () => {
@@ -4494,7 +6796,6 @@ describe('ForegroundFallbackManager session.error', () => {
     const mocks = await runFallbackScenario({
       messagesData: taskPrompt,
       handoff: {
-        isEligible: () => false,
         prepare: (
           sessionID: string,
           generation: number | undefined,
@@ -4530,52 +6831,6 @@ describe('ForegroundFallbackManager session.error', () => {
     expect(calls.prepare).toEqual([['sess-1', 7, 'm1']]);
     expect(calls.admit).toEqual([['sess-1', 7]]);
     expect(generation).toBe(8);
-  });
-
-  test('replays after a v2-shaped user message in session.messages data', async () => {
-    // OpenCode 1.18+ session.messages() returns v2 SessionMessage objects
-    // ({ type, text }) instead of the v1 { info, parts } shape. The fallback
-    // must still recognize the v2 user turn even when an assistant message
-    // appears after it.
-    ({ mocks } = createMockClient({
-      messagesData: [
-        { id: 'm1', type: 'user', text: 'v2 prompt' },
-        {
-          id: 'm2',
-          type: 'assistant',
-          parts: [{ type: 'text', text: 'reply' }],
-        },
-      ],
-    }));
-    mgr = new ForegroundFallbackManager(makeChains(), true, {
-      directory: '/test',
-    } as any);
-
-    await mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID: 'sess-1',
-          providerID: 'anthropic',
-          modelID: 'claude-opus-4-5',
-          role: 'assistant',
-        },
-      },
-    });
-
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 'sess-1',
-        error: { message: 'Rate limit exceeded' },
-      },
-    });
-
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    const call = mocks.promptAsync.mock.calls[0] as [
-      { parts: Array<{ text?: string }> },
-    ];
-    expect(call[0].body.parts).toHaveLength(1);
   });
 
   test('does nothing when error is not a rate limit', async () => {
@@ -4624,32 +6879,6 @@ describe('ForegroundFallbackManager session.error', () => {
     expect(mocks.promptAsync).not.toHaveBeenCalled();
   });
 
-  test('falls back to abort+retry when promptAsync fails on busy session', async () => {
-    const { mocks } = createMockClient({
-      promptAsyncImpl: async () => {
-        throw new Error('session busy');
-      },
-      abortImpl: async () => {
-        // abort succeeds on first call
-      },
-    });
-    const mgr = new ForegroundFallbackManager(makeChains(), true, {
-      directory: '/test',
-    } as any);
-
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 'sess-busy',
-        error: { message: 'Rate limit exceeded' },
-      },
-    });
-
-    // First promptAsync attempt failed → abort called, then promptAsync retried
-    expect(mocks.abort).toHaveBeenCalledTimes(1);
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
-  });
-
   test('promptAsync is invoked bound: a this-reading implementation must not throw', async () => {
     // Regression (issue #595): the extracted promptAsync was called as a
     // free function, so a real SDK implementation reading `this._client`
@@ -4690,10 +6919,7 @@ describe('ForegroundFallbackManager session.error', () => {
     );
   });
 
-  test('v1 promptBody carries no v2 modelSwitch flag and still claims the switch', async () => {
-    // v1 byte-identity: the shim-only `modelSwitch` arg must appear ONLY
-    // on v2 hosts, and a v1-shaped result (no `switched` key) keeps the
-    // model-switch bookkeeping.
+  test('v1 replay records the selected model', async () => {
     const { mocks } = createMockClient();
     const onModelChanged = mock();
     const mgr = new ForegroundFallbackManager(
@@ -4725,168 +6951,9 @@ describe('ForegroundFallbackManager session.error', () => {
     });
 
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    const call = mocks.promptAsync.mock.calls[0] as [Record<string, unknown>];
-    expect('modelSwitch' in call[0]).toBe(false);
     expect(onModelChanged).toHaveBeenCalledTimes(1);
     expect(onModelChanged).toHaveBeenCalledWith('sess-1', 'openai/gpt-4o');
   });
-
-  test('v2 host promptBody requests a required model switch', async () => {
-    const { mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, {
-      directory: '/test',
-      hostFlavor: 'v2',
-    } as any);
-
-    await mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID: 'sess-v2',
-          providerID: 'anthropic',
-          modelID: 'claude-opus-4-5',
-          role: 'assistant',
-        },
-      },
-    });
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 'sess-v2',
-        error: { message: 'Rate limit exceeded' },
-      },
-    });
-
-    const call = mocks.promptAsync.mock.calls[0] as [Record<string, unknown>];
-    expect(call[0].modelSwitch).toBe('required');
-  });
-
-  test('v2 same-model replay sends no modelSwitch flag', async () => {
-    const { mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager({}, true, {
-      directory: '/test',
-      hostFlavor: 'v2',
-    } as any);
-    mgr.registerSessionAgent('sess-no-chain', 'orchestrator');
-    mgr.registerSessionAgent('sess-no-chain', 'orchestrator');
-    await mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID: 'sess-no-chain',
-          agent: 'orchestrator',
-          providerID: 'anthropic',
-          modelID: 'claude-opus-4-5',
-          role: 'assistant',
-        },
-      },
-    });
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 'sess-no-chain',
-        error: { message: 'Rate limit exceeded' },
-      },
-    });
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    const call = mocks.promptAsync.mock.calls[0] as [Record<string, unknown>];
-    expect('modelSwitch' in call[0]).toBe(false);
-  });
-
-  test('switched:false result (v2 switch failure) skips the switch claim', async () => {
-    // The v2 shim degrades a failed switchModel into a prompt delivered on
-    // the CURRENT model; the manager must not record a model switch that
-    // did not happen (sessionModel feeds chain descent, the callback
-    // migrates provider accounting, the toast claims a switch).
-    const { mocks } = createMockClient({
-      promptAsyncImpl: async () => ({ switched: false }),
-    });
-    const onModelChanged = mock();
-    const showToast = mock(async () => ({}));
-    const mgr = new ForegroundFallbackManager(
-      makeChains(),
-      true,
-      { directory: '/test', hostFlavor: 'v2', client: { tui: { showToast } } },
-      3,
-      undefined,
-      onModelChanged,
-    );
-
-    await mgr.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID: 'sess-degrade',
-          providerID: 'anthropic',
-          modelID: 'claude-opus-4-5',
-          role: 'assistant',
-        },
-      },
-    });
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 'sess-degrade',
-        error: { message: 'Rate limit exceeded' },
-      },
-    });
-
-    // The prompt was delivered exactly once — no busy-session abort dance.
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(mocks.abort).not.toHaveBeenCalled();
-    expect(onModelChanged).not.toHaveBeenCalled();
-    expect(showToast).not.toHaveBeenCalled();
-  });
-
-  const noSwitch = Object.assign(
-    new Error(
-      '[v2] host provides no session.switchModel; cannot switch model for fallback prompt',
-    ),
-    { name: 'V2SwitchModelUnavailableError' },
-  );
-  const conflict = Object.assign(new Error(''), {
-    name: 'Session.SyntheticConflictError',
-    _tag: 'Session.SyntheticConflictError',
-    inputID: 'msg_omos_existing',
-  });
-  test.each([
-    ['missing switchModel', noSwitch, /host provides no session\.switchModel/],
-    [
-      'synthetic id conflict',
-      conflict,
-      /"_tag":"Session\.SyntheticConflictError","inputID":"msg_omos_existing"/,
-    ],
-  ])(
-    'v2 %s rejection is final and reports its cause',
-    async (_kind, error, detail) => {
-      const { calls, handoff } = handoffMock();
-      const onModelChanged = mock();
-      const logSpy = spyOn(logger, 'log').mockImplementation(() => {});
-      try {
-        const mocks = await runFallbackScenario({
-          v2: true,
-          handoff,
-          modelChanged: onModelChanged,
-          messagesData: taskPrompt,
-          promptAsyncImpl: async () => {
-            throw error;
-          },
-        });
-
-        expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-        expect(mocks.abort).not.toHaveBeenCalled();
-        expect(onModelChanged).not.toHaveBeenCalled();
-        expect(calls.reject).toEqual([['sess-1', undefined]]);
-        expect(calls.settleUnresolved).toEqual([]);
-        expect(logSpy).toHaveBeenCalledWith(
-          '[foreground-fallback] fallback attempt failed',
-          expect.objectContaining({ error: expect.stringMatching(detail) }),
-        );
-      } finally {
-        logSpy.mockRestore();
-      }
-    },
-  );
 
   test('shows a toast when fallback switches models on a transient error', async () => {
     const { mocks } = createMockClient();
@@ -5502,7 +7569,6 @@ describe('ForegroundFallbackManager v1 abort protection for live children', () =
     return live.has(id);
   };
   const manager = (
-    hostFlavor?: string,
     chain = makeChains(),
     handoff?: ConstructorParameters<typeof ForegroundFallbackManager>[8],
     readGeneration?: (id: string) => number | undefined,
@@ -5510,7 +7576,7 @@ describe('ForegroundFallbackManager v1 abort protection for live children', () =
     new ForegroundFallbackManager(
       chain,
       true,
-      { directory: '/test', hostFlavor } as any,
+      { directory: '/test' } as any,
       0, // Exercise abort/handoff guards on the first host retry.
       undefined,
       undefined,
@@ -5588,7 +7654,7 @@ describe('ForegroundFallbackManager v1 abort protection for live children', () =
 
   test('T4: exhausted chain stops intervening without aborting live children', async () => {
     const { mocks } = createMockClient();
-    const mgr = manager(undefined, { orchestrator: ['openai/model-y'] });
+    const mgr = manager({ orchestrator: ['openai/model-y'] });
     live.add('sess-exhaust');
     mgr.registerSessionAgent('sess-exhaust', 'orchestrator');
     await mgr.handleEvent({
@@ -5610,7 +7676,7 @@ describe('ForegroundFallbackManager v1 abort protection for live children', () =
 
   test('T4b: second exhaustion stops intervening without aborting live children', async () => {
     const { mocks } = createMockClient();
-    const mgr = manager(undefined, {
+    const mgr = manager({
       orchestrator: ['openai/gpt-b', 'openai/gpt-c'],
     });
     mgr.registerSessionAgent('sess-loop', 'orchestrator');
@@ -5649,42 +7715,6 @@ describe('ForegroundFallbackManager v1 abort protection for live children', () =
     }
   });
 
-  test('T5: busy replay withdraws armed handoff without promoting, aborting or retrying', async () => {
-    const { mocks } = createMockClient({
-      promptAsyncImpl: async () => {
-        throw new Error('session busy');
-      },
-    });
-    const prepare = mock(() => true);
-    const reject = mock(() => {});
-    const settleUnresolved = mock(() => {});
-    const mgr = manager(
-      undefined,
-      makeChains(),
-      {
-        isEligible: () => true,
-        prepare,
-        admit: mock(() => {}),
-        reject,
-        settleUnresolved,
-      },
-      () => 1,
-    );
-    live.add('sess-child');
-    await mgr.handleEvent({
-      type: 'session.created',
-      properties: { info: { id: 'sess-child', parentID: 'sess-parent' } },
-    });
-    await seed(mgr, 'sess-child');
-    await mgr.handleEvent(error('sess-child'));
-    expect(prepare).toHaveBeenCalledTimes(1);
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(mocks.post).toHaveBeenCalledTimes(0);
-    expect(mocks.abort).toHaveBeenCalledTimes(0);
-    expect(reject).toHaveBeenCalledTimes(1);
-    expect(settleUnresolved).toHaveBeenCalledTimes(0);
-  });
-
   test('T6: a background job for the failing child is not a child of that session', async () => {
     const { mocks } = createMockClient();
     const mgr = manager();
@@ -5699,16 +7729,6 @@ describe('ForegroundFallbackManager v1 abort protection for live children', () =
     expect(checked.every((id) => id === 'sess-child')).toBe(true);
     expect(mocks.post).toHaveBeenCalledTimes(1);
     expect(mocks.abort).toHaveBeenCalledTimes(1);
-  });
-
-  test('T7: v2 keeps aborting on retry even when children are live', async () => {
-    const { mocks } = createMockClient();
-    const mgr = manager('v2');
-    live.add('sess-parent');
-    await seed(mgr, 'sess-parent');
-    await mgr.handleEvent(retry('sess-parent'));
-    expect(mocks.abort).toHaveBeenCalledTimes(1);
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
 
   test('T8: children appearing during waiter promotion prevent the retry abort', async () => {
@@ -5729,43 +7749,6 @@ describe('ForegroundFallbackManager v1 abort protection for live children', () =
     expect(mocks.abort).toHaveBeenCalledTimes(0);
     expect(mocks.promptAsync).toHaveBeenCalledTimes(0);
     expect(mgr.isFallbackInProgress('sess-child')).toBe(false);
-  });
-
-  test('T9: children appearing during busy promotion withdraw the armed handoff without abort', async () => {
-    const { mocks } = createMockClient({
-      postImpl: async () => {
-        live.add('sess-child');
-        return {};
-      },
-      promptAsyncImpl: async () => {
-        throw new Error('session busy');
-      },
-    });
-    const reject = mock(() => {});
-    const settleUnresolved = mock(() => {});
-    const mgr = manager(
-      undefined,
-      makeChains(),
-      {
-        isEligible: () => true,
-        prepare: mock(() => true),
-        admit: mock(() => {}),
-        reject,
-        settleUnresolved,
-      },
-      () => 1,
-    );
-    await mgr.handleEvent({
-      type: 'session.created',
-      properties: { info: { id: 'sess-child', parentID: 'sess-parent' } },
-    });
-    await seed(mgr, 'sess-child');
-    await mgr.handleEvent(error('sess-child'));
-    expect(mocks.post).toHaveBeenCalledTimes(1);
-    expect(mocks.abort).toHaveBeenCalledTimes(0);
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(reject).toHaveBeenCalledTimes(1);
-    expect(settleUnresolved).toHaveBeenCalledTimes(0);
   });
 });
 
@@ -5998,61 +7981,6 @@ describe('ForegroundFallbackManager session.status', () => {
     },
   );
 
-  test('promotes the waiter before the busy-session abort in execFallback too', async () => {
-    const calls: string[] = [];
-    const postArgs: unknown[] = [];
-    const { mocks } = createMockClient({
-      promptAsyncImpl: async () => {
-        calls.push('promptAsync');
-        throw new Error('session busy');
-      },
-      abortImpl: async () => {
-        calls.push('abort');
-      },
-      postImpl: async (args) => {
-        postArgs.push(args);
-        calls.push('promote');
-        return true;
-      },
-    });
-    const mgr = new ForegroundFallbackManager(
-      makeChains(),
-      true,
-      { directory: '/test' } as any,
-      3,
-    );
-
-    await mgr.handleEvent({
-      type: 'session.created',
-      properties: {
-        info: {
-          id: 'sess-busy-promoted',
-          parentID: 'sess-busy-promoted-parent',
-        },
-      },
-    });
-
-    await mgr.handleEvent({
-      type: 'session.error',
-      properties: {
-        sessionID: 'sess-busy-promoted',
-        error: { message: 'Rate limit exceeded' },
-      },
-    });
-
-    // Same ordering contract as tryFallbackWithAbort, exercised through
-    // the promptAsync-busy abort inside execFallback: the promotion must
-    // land between the first (busy) attempt and the abort.
-    expect(calls[0]).toBe('promptAsync');
-    expect(calls[1]).toBe('promote');
-    expect(calls[2]).toBe('abort');
-    expect(postArgs[0]).toMatchObject({
-      url: '/experimental/session/{sessionID}/background',
-      path: { sessionID: 'sess-busy-promoted-parent' },
-    });
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
-  });
-
   test('v2 without post reports promotion unavailable without network calls', async () => {
     const calls: string[] = [];
     const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(async () => {
@@ -6216,6 +8144,7 @@ describe('ForegroundFallbackManager session.status', () => {
   });
 
   test('triggers fallback on retry status with rate limit message', async () => {
+    const capture = spyOn(logger, 'log');
     const { mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(
       makeChains(),
@@ -6235,15 +8164,31 @@ describe('ForegroundFallbackManager session.status', () => {
       },
     });
 
-    await mgr.handleEvent({
-      type: 'session.status',
-      properties: {
-        sessionID: 'sess-4',
-        status: { type: 'retry', message: 'usage limit reached, retrying...' },
-      },
-    });
+    try {
+      await mgr.handleEvent({
+        type: 'session.status',
+        properties: {
+          sessionID: 'sess-4',
+          status: {
+            type: 'retry',
+            message: 'usage limit reached, retrying...',
+            attempt: 4,
+          },
+        },
+      });
 
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+      expect(capture).toHaveBeenCalledWith(
+        '[foreground-fallback] v1 retry observed',
+        expect.objectContaining({
+          sessionID: 'sess-4',
+          message: 'usage limit reached, retrying...',
+          attempt: 4,
+        }),
+      );
+    } finally {
+      capture.mockRestore();
+    }
   });
 
   test('triggers fallback on retry status with insufficient balance message', async () => {
@@ -8290,20 +10235,20 @@ describe('ForegroundFallbackManager forgetSession cleanup', () => {
   test.each([
     'sessionModel',
     'activeFallback',
+    'downProviders',
     'sessionAgent',
+    'separateCompaction',
     'sessionTried',
     'sessionChains',
     'sessionRetryEnabled',
     'unknownFinishStreak',
-    'v2RetryNotices',
+    'authGrace',
     'lastTrigger',
     'lastTriggerModel',
     'lastSwitchTrigger',
     'triggerIncidents',
     'pendingErrorCorrelation',
-    'lastUserMessageID',
-    'userEventSequence',
-    'replayMessageIds',
+    'observedUserMessageIds',
     'retryAttempt',
     'sessionRetries',
     'deterministicTerminal',
@@ -8351,6 +10296,25 @@ describe('ForegroundFallbackManager forgetSession cleanup', () => {
 });
 
 describe('ForegroundFallbackManager noteExternalTurn cleanup', () => {
+  test('preserves provider marks for the fallback or an unknown model, but clears them on an external return to primary', () => {
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    });
+    const marks = (mgr as any).downProviders as Map<
+      string,
+      Map<string, number>
+    >;
+    (mgr as any).activeFallback.set('session', 'backup/b');
+    marks.set('session', new Map([['primary', Date.now()]]));
+    mgr.noteExternalTurn('session', 'same', 'backup/b');
+    mgr.noteExternalTurn('session', 'unknown');
+    expect(marks.has('session')).toBe(true);
+    mgr.observeContinuationModel('session', 'primary/a');
+    expect(marks.has('session')).toBe(true);
+    mgr.noteExternalTurn('session', 'new', 'primary/a');
+    expect(marks.has('session')).toBe(false);
+  });
+
   test.each([
     'lastTrigger',
     'lastTriggerModel',
@@ -8365,7 +10329,6 @@ describe('ForegroundFallbackManager noteExternalTurn cleanup', () => {
     'retryAttempt',
     'chainExhaustion',
     'deterministicTerminal',
-    'v2RetryNotices',
   ])('%s entry is removed on an external turn', (mapName) => {
     const mgr = new ForegroundFallbackManager(makeChains(), true, {
       directory: '/test',
@@ -8381,19 +10344,21 @@ describe('ForegroundFallbackManager noteExternalTurn cleanup', () => {
 });
 
 describe('ForegroundFallbackManager dispose cleanup', () => {
-  test.each(['replayMessageIds', 'userEventSequence', 'v2RetryNotices'])(
-    '%s is cleared on dispose',
-    (mapName) => {
-      const mgr = new ForegroundFallbackManager(makeChains(), true, {
-        directory: '/test',
-      });
-      const target = (mgr as any)[mapName];
-      expect(target).toBeDefined();
-      target.set('gone', 1);
-      mgr.dispose();
-      expect(target.has('gone')).toBe(false);
-    },
-  );
+  test.each([
+    'observedUserMessageIds',
+    'separateCompaction',
+    'downProviders',
+    'authGrace',
+  ])('%s is cleared on dispose', (mapName) => {
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      directory: '/test',
+    });
+    const target = (mgr as any)[mapName];
+    expect(target).toBeDefined();
+    target.set('gone', 1);
+    mgr.dispose();
+    expect(target.has('gone')).toBe(false);
+  });
 });
 
 describe('ForegroundFallbackManager resetRecoveryState cleanup', () => {
@@ -8401,7 +10366,7 @@ describe('ForegroundFallbackManager resetRecoveryState cleanup', () => {
     'lastFallbackTime',
     'initialDelayUsed',
     'retryAttempt',
-    'v2RetryNotices',
+    'authGrace',
     'sessionRetries',
     'chainExhaustion',
     'deterministicTerminal',
@@ -9164,26 +11129,6 @@ describe('ForegroundFallbackManager no-chain sessions', () => {
     expect(mocks.abort).not.toHaveBeenCalled();
   });
 
-  test('proven-busy refusal aborts once and re-sends', async () => {
-    let calls = 0;
-    const { mocks } = createMockClient({
-      promptAsyncImpl: async () => {
-        calls++;
-        if (calls === 1) throw new Error('session busy');
-        return {};
-      },
-    });
-    const mgr = new ForegroundFallbackManager(makeChains(), true, {
-      directory: '/test',
-    } as any);
-    await seedNoChain(mgr, 'busy-nc');
-
-    await mgr.handleEvent(noChainError('busy-nc', 'e1'));
-
-    expect(mocks.abort).toHaveBeenCalledTimes(1);
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
-  });
-
   test('F1: deterministic error before model known does not block later recovery', async () => {
     const { mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(makeChains(), true, {
@@ -9706,21 +11651,6 @@ describe('ForegroundFallbackManager same-model retry hardening', () => {
     ).toBe(true);
   });
 
-  test('v2 same-model replay does not require a model switch', async () => {
-    const { client, mocks } = createMockClient();
-    const mgr = new ForegroundFallbackManager(makeChains(), true, {
-      client,
-      directory: '/test',
-      hostFlavor: 'v2',
-    } as any);
-    await seed(mgr, 'v2-nc');
-    await mgr.handleEvent(streamError('v2-nc', 'e1'));
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(mocks.promptAsync.mock.calls[0]?.[0]).not.toHaveProperty(
-      'modelSwitch',
-    );
-  });
-
   test('a host retry status paired with a replayed error sends no second prompt', async () => {
     const { client, mocks } = createMockClient();
     const mgr = new ForegroundFallbackManager(makeChains(), true, {
@@ -9770,6 +11700,19 @@ describe('ForegroundFallbackManager same-model retry hardening', () => {
       },
     });
     expect(mgr.willAttemptFallback('det-nc')).toBe(true);
+  });
+
+  test('same-model replay stops and refunds on an empty transcript tail', async () => {
+    const { client, mocks } = createMockClient({ messagesData: [] });
+    const mgr = new ForegroundFallbackManager(makeChains(), true, {
+      client,
+      directory: '/test',
+    } as any);
+    await seed(mgr, 'empty-nc');
+    await mgr.handleEvent(streamError('empty-nc', 'e1'));
+    expect(mocks.messages).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    expect((mgr as any).sessionRetries.get('empty-nc') ?? 0).toBe(0);
   });
 
   describe('with fake timers', () => {
@@ -9860,5 +11803,349 @@ describe('ForegroundFallbackManager same-model retry hardening', () => {
         logSpy.mockRestore();
       }
     });
+  });
+
+  describe('Antigravity 412 and quota-reset recognition on v2', () => {
+    test('handleV2Retry switches immediately on Antigravity 412 account pool unavailable without status field', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5', variant: 'medium' },
+            { id: 'opencode-go/deepseek-v4.1-flash', variant: 'high' },
+            { id: 'google/antigravity-gemini-3.8-flash', variant: 'high' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+        3,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string; variant?: string };
+      }> = [];
+      const event = {
+        sessionID: 'ses-ag-pool-412',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error: {
+          message:
+            'Antigravity account pool has no account available within the configured wait limit. Add accounts with `opencode auth login` or wait for account availability. Quota resets in 142h 40m 46s.',
+        },
+        decision: { retry: false },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toEqual([
+        {
+          sessionID: 'ses-ag-pool-412',
+          model: {
+            providerID: 'opencode-go',
+            id: 'deepseek-v4.1-flash',
+            variant: 'high',
+          },
+        },
+      ]);
+      expect(event.decision.retry).toBe(true);
+    });
+
+    test('handleV2Retry switches immediately on Antigravity HTTP 412 account pool error with top-level status and active retry decision', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5', variant: 'medium' },
+            { id: 'opencode-go/deepseek-v4.1-flash', variant: 'high' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+        3,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string; variant?: string };
+      }> = [];
+      const event = {
+        sessionID: 'ses-ag-412-status',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error: {
+          status: 412,
+          message:
+            'Precondition Failed: Antigravity account pool is unavailable',
+        },
+        decision: { retry: true, delay: 1000 },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toEqual([
+        {
+          sessionID: 'ses-ag-412-status',
+          model: {
+            providerID: 'opencode-go',
+            id: 'deepseek-v4.1-flash',
+            variant: 'high',
+          },
+        },
+      ]);
+      expect(event.decision.retry).toBe(true);
+      expect((mgr as any).sessionRetries.get('ses-ag-412-status') ?? 0).toBe(0);
+    });
+
+    test('handleV2Retry switches immediately on Antigravity Quota resets in ... error with nested body error code', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5' },
+            { id: 'opencode-go/deepseek-v4.1-flash' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string };
+      }> = [];
+      const event = {
+        sessionID: 'ses-ag-quota-reset',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error: {
+          data: {
+            body: {
+              error: {
+                code: 412,
+                message: 'Quota resets in 10h 30m. Please try again later.',
+              },
+            },
+          },
+        },
+        decision: { retry: false },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toEqual([
+        {
+          sessionID: 'ses-ag-quota-reset',
+          model: {
+            providerID: 'opencode-go',
+            id: 'deepseek-v4.1-flash',
+          },
+        },
+      ]);
+      expect(event.decision.retry).toBe(true);
+    });
+
+    test('handleV2Retry switches immediately on FAILED_PRECONDITION error without top-level status field', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5' },
+            { id: 'opencode-go/deepseek-v4.1-flash' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string };
+      }> = [];
+      const event = {
+        sessionID: 'ses-ag-failed-precondition',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error: {
+          message:
+            'FAILED_PRECONDITION: requested Antigravity model is not available to the configured accounts',
+        },
+        decision: { retry: true, delay: 500 },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toEqual([
+        {
+          sessionID: 'ses-ag-failed-precondition',
+          model: {
+            providerID: 'opencode-go',
+            id: 'deepseek-v4.1-flash',
+          },
+        },
+      ]);
+      expect(event.decision.retry).toBe(true);
+    });
+
+    test('handleV2Retry switches immediately on bare FAILED_PRECONDITION error with status 412', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5' },
+            { id: 'opencode-go/deepseek-v4.1-flash' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string };
+      }> = [];
+      const event = {
+        sessionID: 'ses-bare-412-precondition',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error: {
+          status: 412,
+          message: 'FAILED_PRECONDITION',
+        },
+        decision: { retry: false },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toEqual([
+        {
+          sessionID: 'ses-bare-412-precondition',
+          model: {
+            providerID: 'opencode-go',
+            id: 'deepseek-v4.1-flash',
+          },
+        },
+      ]);
+      expect(event.decision.retry).toBe(true);
+    });
+
+    test('handleV2Retry does not switch on generic 412 without Antigravity pool or precondition text', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5' },
+            { id: 'opencode-go/deepseek-v4.1-flash' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string };
+      }> = [];
+      const event = {
+        sessionID: 'ses-generic-412',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error: {
+          status: 412,
+          message: 'If-Match header validation failed',
+        },
+        decision: { retry: false },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toHaveLength(0);
+      expect(event.decision.retry).toBe(false);
+    });
+
+    test('handleV2Retry absorbs host retry for HTTP 412 with short-horizon quota reset instead of switching immediately', async () => {
+      const { client } = createMockClient();
+      const mgr = new ForegroundFallbackManager(
+        {
+          reviewer: [
+            { id: 'google/antigravity-claude-sonnet-5-5' },
+            { id: 'opencode-go/deepseek-v4.1-flash' },
+          ],
+        },
+        true,
+        { client, directory: '/test', hostFlavor: 'v2' } as any,
+        3,
+      );
+      const switched: Array<{
+        sessionID: string;
+        model: { providerID: string; id: string };
+      }> = [];
+      const error = {
+        status: 412,
+        message: 'Rate limited, quota resets in 30s',
+      };
+      expect(isPermanentQuotaBillingError(error)).toBe(false);
+
+      const event = {
+        sessionID: 'ses-412-short-reset',
+        agent: 'reviewer',
+        model: { providerID: 'google', id: 'antigravity-claude-sonnet-5-5' },
+        error,
+        decision: { retry: true, delay: 1000 },
+      };
+
+      await mgr.handleV2Retry(event, async (sessionID, model) => {
+        switched.push({ sessionID, model });
+      });
+
+      expect(switched).toHaveLength(0);
+      expect(event.decision.retry).toBe(true);
+      expect((mgr as any).sessionRetries.get('ses-412-short-reset')).toBe(1);
+    });
+
+    test('isSpentQuotaError keeps whole JSON responseBody together and does not classify retry-eligible bodies as spent', () => {
+      const error = {
+        data: {
+          responseBody: JSON.stringify({
+            error: {
+              message: 'Quota exceeded',
+              details: 'Please retry after 30s',
+            },
+          }),
+        },
+      };
+      expect(isSpentQuotaError(error)).toBe(false);
+    });
+  });
+});
+
+describe('ForegroundFallbackManager v1 replay outcome', () => {
+  test('the outcome wait is scheduled on the injected timers', async () => {
+    const { manager } = makeManager();
+    createMockClient({
+      messagesData: [
+        {
+          info: { id: 'refused', role: 'assistant', finish: 'content-filter' },
+          parts: [],
+        },
+      ],
+    });
+    let settled = false;
+    const outcome = manager
+      .v1ReplayOutcome('child', 1, 'orchestrator', clock.now())
+      .finally(() => {
+        settled = true;
+      });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(settled).toBe(false);
+    await clock.advance(5_000);
+    expect(await outcome).toBeUndefined();
+    expect(clock.pending()).toBe(0);
   });
 });

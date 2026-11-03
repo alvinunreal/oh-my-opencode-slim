@@ -8,6 +8,7 @@
  * heavy modules re-export these names, so every existing importer keeps
  * its path.
  */
+import { resolveFeatureGates } from './config/feature-gates';
 import { MultiplexerConfigSchema, type MultiplexerType } from './config/schema';
 import {
   type PluginConfigSnapshot,
@@ -34,8 +35,8 @@ export interface SidebarConfigState {
 export interface TuiGatesSnapshot extends SidebarConfigState {
   tuiEnabled: boolean;
   sidebarEnabled: boolean;
+  updateCheckerEnabled: boolean;
   disabledCommands: ReadonlySet<string>;
-  disabledHooks: ReadonlySet<string>;
 }
 
 /**
@@ -75,8 +76,8 @@ function failOpenTuiGates(): TuiGatesSnapshot {
     compactSidebar: true,
     multiplexerType: 'none',
     presetName: undefined,
+    updateCheckerEnabled: true,
     disabledCommands: new Set(),
-    disabledHooks: new Set(),
   };
 }
 
@@ -99,9 +100,11 @@ export function warningsMakeConfigInvalid(
 /** Derive every gate from one snapshot. Pure; no file access. */
 function deriveTuiGates(snapshot: PluginConfigSnapshot): TuiGatesSnapshot {
   const config = snapshot.config;
+  const featureGates = resolveFeatureGates(config);
   return {
-    tuiEnabled: config.tui !== false,
-    sidebarEnabled: config.sidebar !== false,
+    tuiEnabled: featureGates.tui,
+    sidebarEnabled: featureGates.sidebar,
+    updateCheckerEnabled: featureGates.updateChecker,
     configInvalid: warningsMakeConfigInvalid(snapshot.warnings),
     compactSidebar: config.compactSidebar ?? true,
     multiplexerType: resolveMultiplexerType(config.multiplexer),
@@ -109,7 +112,6 @@ function deriveTuiGates(snapshot: PluginConfigSnapshot): TuiGatesSnapshot {
       ? { presetName: config.preset }
       : {}),
     disabledCommands: new Set(config.disabled_commands ?? []),
-    disabledHooks: new Set(config.disabled_hooks ?? []),
   };
 }
 

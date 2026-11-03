@@ -47,6 +47,8 @@ export interface TuiSnapshot {
    * a missing or identical entry falls back to the ID.
    */
   agentDisplayNames: Record<string, string>;
+  /** Canonical agent ID → configured `color` (#RRGGBB or theme token). */
+  agentColors?: Record<string, string>;
   activeSessions: Record<string, string>;
   /**
    * Recording process per activity; used to sweep crash residue.
@@ -263,6 +265,7 @@ function parseSnapshot(value: string): TuiSnapshot {
     agentVariants: parsed.agentVariants ?? {},
     sessionModels: parseSessionModels(parsed.sessionModels),
     agentDisplayNames: parseStringRecord(parsed.agentDisplayNames),
+    agentColors: parseStringRecord(parsed.agentColors),
     activeSessions: parsed.activeSessions ?? {},
     activityPids: parsePidRecord(parsed.activityPids),
     sessionParents: parseStringRecord(parsed.sessionParents),
@@ -548,6 +551,7 @@ export function snapshotSectionsEqual(a: TuiSnapshot, b: TuiSnapshot): boolean {
         agentVariants: a.agentVariants,
         sessionModels: a.sessionModels ?? {},
         agentDisplayNames: a.agentDisplayNames,
+        agentColors: a.agentColors ?? {},
         activeSessions: a.activeSessions,
         activityPids: a.activityPids,
         sessionParents: a.sessionParents,
@@ -560,6 +564,7 @@ export function snapshotSectionsEqual(a: TuiSnapshot, b: TuiSnapshot): boolean {
         agentVariants: b.agentVariants,
         sessionModels: b.sessionModels ?? {},
         agentDisplayNames: b.agentDisplayNames,
+        agentColors: b.agentColors ?? {},
         activeSessions: b.activeSessions,
         activityPids: b.activityPids,
         sessionParents: b.sessionParents,
@@ -869,6 +874,20 @@ export function collectAgentDisplayNames(
   return displayNames;
 }
 
+/** Project each agent's configured `color` into the sidebar map. */
+export function collectAgentColors(
+  agentConfig: Readonly<Record<string, unknown>> | undefined,
+  agentNames: readonly string[] | undefined,
+): Record<string, string> {
+  const colors: Record<string, string> = {};
+  for (const name of agentNames ?? []) {
+    const color = (agentConfig?.[name] as { color?: unknown } | undefined)
+      ?.color;
+    if (typeof color === 'string') colors[name] = color;
+  }
+  return colors;
+}
+
 export function recordTuiAgentDisplayNames(
   displayNames: Record<string, string>,
   projectDir: string,
@@ -884,6 +903,8 @@ export function recordTuiAgentModels(
     agentVariants?: Record<string, string>;
     /** Canonical ID → display name; omitted callers keep the last-known map. */
     agentDisplayNames?: Record<string, string>;
+    /** Canonical ID → configured color; omitted callers keep the last map. */
+    agentColors?: Record<string, string>;
   },
   projectDir: string,
 ): void {
@@ -892,6 +913,9 @@ export function recordTuiAgentModels(
     snapshot.agentVariants = { ...(input.agentVariants ?? {}) };
     if (input.agentDisplayNames !== undefined) {
       snapshot.agentDisplayNames = { ...input.agentDisplayNames };
+    }
+    if (input.agentColors !== undefined) {
+      snapshot.agentColors = { ...input.agentColors };
     }
   });
 }

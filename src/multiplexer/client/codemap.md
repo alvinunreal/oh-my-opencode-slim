@@ -79,8 +79,6 @@ export interface PaneLifecycleConfig {
   directory: string;              // project directory (FR-3)
   displayedSessionId: string | null;
   adapter: AdapterType | null;    // null when admission failed (FR-9)
-  layout: MultiplexerLayout;
-  mainPaneSize: number;
   stableIdleMs: number;           // FR-10 debounce window
   readiness: ReadinessPolicy;
   viewer?: Pick<PaneSpawnOptions, 'viewerFlavor' | 'viewerPassword' | 'viewerSurface'>;
@@ -109,7 +107,6 @@ Shown for v1. On v2, `v2-host.ts` supplies the base URL, an authenticated
    │  └─ Timeout → readiness-timeout, no pane
    ├─ Adapter.spawnPane() → split client's own parent pane
    ├─ Record in in-process map + log pane created (identity fields)
-   ├─ Apply layout; tmux retains its pending debounce for unchanged preferences
    └─ Deletion racing spawn closes pane right after registration
 
 3. Adapter failure → adapter-not-found / adapter-hard / adapter-unavailable

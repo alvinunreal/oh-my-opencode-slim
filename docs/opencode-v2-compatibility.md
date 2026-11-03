@@ -8,10 +8,9 @@ register it.
 The source baseline for this compatibility work is **oh-my-opencode-slim
 v3.0.5**, with historical live host verification on **OpenCode v2.0.7**. The
 plugin requires OpenCode v2.0.7+ on v2 hosts; older v2 hosts are unsupported.
-Bundled-skill delivery requires the host's in-process skill registration
-channel (a `ctx.skill` draft with `add`), available on OpenCode v2 hosts. On
-v1 hosts bundled skills are **not** delivered: the legacy disk-copy sync was
-removed, and v1-era skill drafts expose `{source, list}` rather than `add`.
+Bundled skills use the host's in-process registration channel (`ctx.skill` with
+`add`) on v2. On v1 the config hook adds package skill paths to the host's disk
+scanner, excluding disabled skills and names supplied by the user.
 The adapter targets the v2 plugin API surface (see
 [The v2 plugin API surface](#the-v2-plugin-api-surface-this-adapter-uses)),
 and the compile-time mirror guard below is pinned to `@opencode/plugin`
@@ -56,6 +55,13 @@ for the action (including narrower resources) still wins. Overlapping
 wildcard-action grants remain conservatively bounded; this is not a general
 permission-widening rule. These mappings are source-checked against OpenCode
 v2.0.18 and v2.0.32; they do not represent a new live-host certification.
+
+Plugin tools that ask at runtime (`webfetch` per URL, `acp_run` on spawn and
+on ACP agent requests) are authorized through the host's
+`permission.assert`, so per-call `ask` and resource-level `deny` rules apply
+as on v1. `permission.assert` exists from OpenCode v2.0.29; on older v2 hosts
+those asks are logged and not enforced (whole-tool `deny` still hides the
+tool).
 
 ## How it works
 
@@ -148,7 +154,8 @@ Verified live on OpenCode v2 (all bridges green — health check
 `bridges:11`, +1 on hosts that accept the `session.model.request` hook
 name for the chat.headers bridge; the event stream and bridges are exercised end-to-end on the stable host;
 since the council 2026-10-23 removal the plugin creates no wake scheduler on
-v2 — terminal delivery is the host's native background notifier). v2 conformance is compile-time-pinned by the
+v2; the host delivers first terminal results and the tracker delivers later
+publications). v2 conformance is compile-time-pinned by the
 mirror-conformance guard against the `@opencode/plugin` 2.2.0
 devDependency and exercised by the mock-driven bridge tests. Every v2
 API the adapter touches is
@@ -246,6 +253,9 @@ not an optional-degradation path.
       the last part of the last non-board-only message and gives it one
       `ContentPart.cache` `{type: "ephemeral"}` hint. The shared injection
       helper adds no hints; the v1 pipeline remains unchanged.
+      Primary agents use their startup `temperature` and provider `options`
+      on request options; live profile refresh continues to affect new child
+      sessions only.
     - a native `ctx.session.hook("prompt")` registration (capability-
       guarded): the v2 prompt hook fires **once per admitted input** with
       the eventual inbox User `messageID`, giving the v1 `chat.message`
@@ -309,8 +319,9 @@ not an optional-degradation path.
       **rethrows** — v2 rejects the tool call, which is how the v1
       anti-duplicate / relaunch-lease guards enforce on v2. The after
       bridge honors v2's status discrimination: `error` events synthesize
-      the v1 after-hook output from the error text (so json-error-recovery
-      still appends its reminder to a failed call's output), and an
+      the v1 after-hook output from the error text (so v1 after-hooks such
+      as tool-loop-guard can append warnings, written back where the host
+      renders the failure: its cause when it has one), and an
       errored call never presents its result content as a success.
       The v2 executor wrapper registers child identity and state from the
       structured result, scoped by `(parentSessionID, callID)`. For terminal
@@ -472,7 +483,7 @@ side cannot be observed.
 |---|---|---|---|
 | `routingBlock` (drop `<Agents>` from the built orchestrator prompt) | ✅ removes the block | ✅ removes the block | The host's native delegation-tool roster keeps agent identity; the block's Delegate/Don't routing criteria have no roster equivalent — see [Upstream behaviors to know](#upstream-behaviors-to-know) |
 | Orchestrator + specialist agents, prompts & permission mapping | ✅ | ✅ `ctx.agent.transform` | — |
-| Delegation + background job board + `task_*` tools | ✅ `task` tool | ✅ host `subagent` (auto-bridged: name/args normalization in `src/v2/delegation.ts`, output parsing in the execute bridges) | On v2 the model-visible identifier parameter is `sessionID` for both the host `subagent` resume arg and the plugin's `task_*` tools; `task_id` is accepted only as a deprecated alias (never emitted). Prompt text must use the host's vocabulary directly — no v1→v2 delegation-vocabulary rewriting is applied (display-name substitution separately rewrites `@<internalName>` mentions to the agent's `displayName` throughout the final orchestrator prompt — inline, file, and append orchestrator prompts — and in `orchestratorPrompt`/ACP routing snippets) — so an instructed resume continues the child instead of forking a new one. `backgroundJobs.enabled: false` removes the managed board and every `task_*` tool on both hosts while leaving native `subagent` delegation, completion delivery, and `sessionID` continuation untouched; council seat assembly switches to the native resolver |
+| Delegation + background job board + `task_*` tools | ✅ `task` tool | ✅ host `subagent` (auto-bridged: name/args normalization in `src/v2/delegation.ts`, output parsing in the execute bridges) | On v2 the model-visible identifier parameter is `sessionID` for both the host `subagent` resume arg and the plugin's `task_*` tools; `task_id` is accepted only as a deprecated alias (never emitted). Prompt text must use the host's vocabulary directly — no v1→v2 delegation-vocabulary rewriting is applied (display-name substitution separately rewrites `@<internalName>` mentions to the agent's `displayName` throughout the final orchestrator prompt — inline, file, and append orchestrator prompts — and in `orchestratorPrompt`/ACP routing snippets) — so an instructed resume continues the child instead of forking a new one. `backgroundJobs.mode: "off"` removes the managed board and every `task_*` tool on both hosts while leaving native `subagent` delegation, completion delivery, and `sessionID` continuation untouched; council seat assembly switches to the native resolver |
 | Tools (ast-grep, webfetch, task_status/task_cancel/task_reply, acp_run; `task_revive`, `task_message` and `wait_for_user` are v1-only — v2 continues retained sessions through native `subagent(sessionID, prompt)` and uses the native `question` tool as the blocking boundary) | ✅ | ✅ `ctx.tool.transform` | v2 requires `options: {codemode: false}` on each registration (CodeMode split): without it a tool registers cleanly but is confined to the `execute` tool's JS runtime and session catalogs yield `Unknown tool: <name>`. The plugin stamps it on every adapted tool (`adaptTool` in `src/v2/adapters.ts`; additive field, older hosts ignore it). ast-grep needs its CLI binary (package, system, or lazy download); webfetch needs `jsdom` resolvable |
 | Slash commands `/deepwork` `/reflect` | ✅ | ✅ marker round-trip | — |
 | `/interview` | ✅ | ✅ marker command + trailing-message context bridge | `interview.enabled: false` removes the command, the v1 manager, and the v2 bridge entirely |
@@ -485,8 +496,8 @@ side cannot be observed.
 | `/preset` (preset manager) | ✅ configuration writes; reload to apply | ✅ TUI entry (`./tui` → `dist/tui2.js`), with **Current session** / **Global default** selection; `/preset <name>` binds the current session | The command layer registers from an `append: "app"` slot render because `keymap.layer` is provider-scoped; commands carry an `id` and `slash.arguments`. The manager needs `ui.dialog.select` + `prompt` + `confirm`; feedback uses `ui.toast.show`. Session scope is a server-registered RPC domain — `ctx.rpc.register` on the plugin side, `client.rpc` on the TUI side — whose snapshots live in `ctx.storage`; all three are required members of the v2 plugin contract, so no host-version gate is involved. It changes future subagent inference for the selected session, not its main model or existing children. User/project `.json` and `.jsonc` edits are watched (~300 ms debounce), including newly created candidates; they refresh defaults for future bindings, not saved snapshots. Global-write feedback acknowledges the refresh request, while session-apply feedback requires RPC confirmation. With persistence available, native subagent `progress` saves the child binding before the first prompt; `session.created` is not used to capture its profile. Non-TUI clients also get a server-side `/preset <name>` command (apply-only): a name binds the invoking session, and the result is reported through the command error channel so the switch costs no model turn and adds no context. See [Preset switching](presets/preset-switching.md) for inheritance, reapplication and compatibility limits |
 | Default primary agent | ✅ finalized visible orchestrator identity | ✅ `draft.default(<visible orchestrator identity>)`; the canonical `orchestrator` entry remains a hidden alias when `displayName` is configured | v1 `default_agent` and v2 draft default target the same visible entry |
 | TUI default agent | ✅ orchestrator | ✅ host follows the default primary agent and hoists it to the head of the agent list | — |
-| Multiplexer (tmux/zellij/herdr/cmux-tui/kitty/wezterm panes) | ✅ | ✅ TUI plugin entry wires the client-owned pane lifecycle through a v2 host adapter: shared background service and `--server` hosts are supported, `--standalone` is fail-closed (one diagnostic per process, `/subagent` fallback — opens a tab without moving focus) | Defaults are host-specific: `"tui"` on v1 (`opencode attach <url> --session <id> --dir <dir>`); `"mini"` on v2 shared (`opencode mini --session <id>`) and remote (`opencode mini --server <url> --session <id>`), with the pane cwd pinned by the adapter. Explicit `viewer: "tui"` retains the v2 full-TUI commands with a positional directory; v1 `viewer: "mini"` appends `--mini` to attach (OpenCode >= 1.17.10), without extra cwd pinning. The `OPENCODE_PASSWORD` secret is injected through the multiplexer's spawn-time environment (or a Linux + POSIX-shell `/proc` bridge on zellij/cmux-tui), never through the viewer's command line — see [Secret handling](multiplexer-integration.md#known-limitations). Events are projected from `session.created` / `session.execution.*` / `session.idle` / `session.deleted`; directory attribution is recorded at `session.created` because execution events carry none |
-| Orchestrator-wake scheduler | ✅ todo-gated (host `todo`/`children`/`status` APIs) | ❌ not created (council 2026-10-23) | v2 runs no plugin wake machinery: the native background notifier owns terminal delivery and `task_status` is the pull channel; the whole `backgroundJobs.orchestratorWake` section is v1-only |
+| Multiplexer (tmux/zellij/herdr/cmux-tui/kitty/wezterm panes) | ✅ | ✅ TUI plugin entry wires the client-owned pane lifecycle through a v2 host adapter: shared background service and `--server` hosts are supported, `--standalone` is fail-closed (one diagnostic per process, `/subagent` navigates to the latest child) | Defaults are host-specific: `"tui"` on v1 (`opencode attach <url> --session <id> --dir <dir>`); `"mini"` on v2 shared (`opencode mini --session <id>`) and remote (`opencode mini --server <url> --session <id>`), with the pane cwd pinned by the adapter. Explicit `viewer: "tui"` retains the v2 full-TUI commands with a positional directory; v1 `viewer: "mini"` appends `--mini` to attach (OpenCode >= 1.17.10), without extra cwd pinning. The `OPENCODE_PASSWORD` secret is injected through the multiplexer's spawn-time environment (or a Linux + POSIX-shell `/proc` bridge on zellij/cmux-tui), never through the viewer's command line — see [Secret handling](multiplexer-integration.md#known-limitations). Events are projected from `session.created` / `session.execution.*` / `session.idle` / `session.deleted`; directory attribution is recorded at `session.created` because execution events carry none |
+| Orchestrator-wake scheduler | ✅ todo-gated (host `todo`/`children`/`status` APIs) | ❌ not created (council 2026-10-23) | On v2 the native notifier delivers each generation's first result; the tracker queues later publications to the parent. The `backgroundJobs.orchestratorWake` section is v1-only |
 | `chat.headers` (Copilot `x-initiator` routing) | ✅ | ✅ via `session.hook("model.request")` | transport-level only; auxiliary kinds are covered by v2's built-in Copilot provider hook |
 | Companion app | ✅ | ⚠️ unverified | independent desktop app; test separately against v2 |
 
@@ -1036,8 +1047,7 @@ Q&A history.
 The v2 TUI entry (`setup()`) wires the client-owned pane lifecycle through a
 v2 host adapter: shared background service and `--server` hosts are supported;
 `--standalone` is fail-closed (no panes, one `multiplexer.host-unsupported`
-diagnostic per process, `/subagent` fallback — the child opens in a tab
-without moving focus; the displayed session stays the interaction surface).
+diagnostic per process, `/subagent` navigates to the latest child).
 
 On `--server` hosts the viewer's `OPENCODE_PASSWORD` secret is injected at
 pane creation through the multiplexer's native spawn-time environment
@@ -1103,11 +1113,13 @@ calls do not flood the log.
 ### No orchestrator-wake on v2
 
 The wake scheduler is **not created on v2** (council 2026-10-23). The host's
-native background notifier owns terminal delivery: a busy parent is reached
-by steer at its next step boundary, an idle parent gets a successor turn,
-restart recovery re-delivers from the durable KV job marker, and the durable
-inbox dedupes by message ID. A rev>1 continuation relaunched through the
-`subagent` tool re-arms the native notifier. Child permission/question asks
+native background notifier delivers the first terminal result of each
+generation: a busy parent is reached by steer at its next step boundary, an
+idle parent gets a successor turn, and restart recovery uses the durable job
+marker. A relaunch through the `subagent` tool starts a new generation and
+re-arms the notifier. The tracker queues later completed or error publications
+of a managed child to the parent, including direct prompts to the child.
+Child permission/question asks
 are a host-UI boundary the host does not route to the parent agent; the
 parent discovers open asks via `task_status` pull. The whole
 `backgroundJobs.orchestratorWake` config section is v1-only and warns as
@@ -1118,14 +1130,10 @@ ignored on v2.
 The native notifier fires on the FIRST terminal publication of every
 generation — on v2 every plugin task launch AND relaunch is a host
 `subagent` tool call that arms the native background notifier (a relaunch
-re-arms it with a fresh `started_at`, defeating the notify dedupe). Only a
-terminal publication that lands while the parent sits idle on a LATER
-revision of the same generation (a child that self-continues via its own
-background-shell notification and finishes again, or a completion after a
-direct prompt to the child session) would otherwise wait for the periodic
-idle evaluation (up to `orchestratorWake.intervalMs`, default 5 minutes).
-The **terminal-publication wake** closes that gap on v1 (on v2 no plugin wake
-exists — the native notifier and `task_status` pull are the only channels):
+re-arms it with a fresh `started_at`, defeating the notify dedupe). Later
+publications of the same generation have no native notifier. On v2, the
+revived-run tracker queues their results to the parent. On v1, the
+**terminal-publication wake** handles them:
 
 - **Trigger:** the terminal gate publishes a `completed` or `error` host
   outcome (state-disjoint from the stopped-job recovery listener, which
@@ -1172,14 +1180,11 @@ Related: when a job whose terminal report the parent already consumed
 trailing notice ("previously reported terminal, now running again; the earlier
 report is superseded") in the cache-safe tail zone, pointing at `task_status`.
 
-On v1 hosts the same first-publication rule holds (the native task-tool
-notifier delivers it), and a LATER publication of the same run — which has no
-native notifier on either host — is delivered by the plugin itself on v1 only,
-as one self-contained `<completed-job>` delta through the bounded delta queue
-(it survives a busy parent, and inside the per-parent publication spacing it
-stays queued until the window elapses). On v2 the plugin sends no wake: a
-relaunch through the `subagent` tool re-arms the native notifier, and any
-other later result is pulled through `task_status`.
+On v1 the native task-tool notifier delivers the first publication. The
+plugin sends later results as self-contained `<completed-job>` deltas through
+the bounded queue, including while the parent is busy. On v2, the tracker
+queues a `<task>` result for each later publication; a relaunch through the
+`subagent` tool starts a generation whose first result is delivered natively.
 
 ### Host outcome quirks the terminal gate defends against
 

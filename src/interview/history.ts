@@ -16,6 +16,7 @@ type HistoryPart = {
   text?: string;
   tool?: unknown;
   toolName?: unknown;
+  name?: unknown;
   state?: unknown;
   input?: unknown;
 };
@@ -60,7 +61,7 @@ function isInterviewSubmitPart(part: HistoryPart): boolean {
   return (
     (part.type === 'tool' && part.tool === INTERVIEW_SUBMIT_TOOL) ||
     ((part.type === 'tool-call' || part.type === 'tool-result') &&
-      part.toolName === INTERVIEW_SUBMIT_TOOL)
+      (part.toolName ?? part.name) === INTERVIEW_SUBMIT_TOOL)
   );
 }
 

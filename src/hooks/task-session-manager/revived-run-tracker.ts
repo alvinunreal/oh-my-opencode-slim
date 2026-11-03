@@ -51,6 +51,7 @@ type RevivedRun = {
   readonly attemptStartedAt: number;
   description: string;
   fallback?: true;
+  onlyTerminalRevision?: number;
   fallbackNotice?: Promise<void>;
   /** Monotonic observation identity: incremented on every
    * registration so evidence consumers can fence a snapshot against a
@@ -101,6 +102,7 @@ export interface RevivedRunTracker {
   attemptStartedAtFor(taskID: string, generation: number): number | undefined;
   probe(taskID: string, generation: number): Promise<boolean>;
   onTerminal(record: BackgroundJobRecord): void;
+  deliverContinuation(record: BackgroundJobRecord): void;
   /** Delivery ownership for a tracked run's terminal outcome: true when
    * THIS tracker has delivered, is delivering, or still owes a delivery
    * attempt for the exact (taskID, generation) — the ownership state
@@ -123,6 +125,7 @@ export interface RevivedRunTracker {
     parentSessionID: string;
     baselineMessageID?: string;
     description: string;
+    allowForeground?: boolean;
   }): boolean;
   admitObservation(
     taskID: string,
@@ -222,7 +225,7 @@ export function createRevivedRunTracker(options: {
     const result = await options.terminalGate.reconcile(run, {
       kind: 'inspect',
     });
-    if (disposed || runs.get(taskID) !== run || result.kind === 'stale')
+    if (disposed || runs.get(taskID) !== run || result.kind !== 'committed')
       return false;
     onTerminal(result.record);
     return result.record.state !== 'running';
@@ -239,6 +242,14 @@ export function createRevivedRunTracker(options: {
       current.state === 'running'
     )
       return;
+    if (
+      run.onlyTerminalRevision !== undefined &&
+      run.onlyTerminalRevision !== record.terminalRevision
+    ) {
+      discardRun(run);
+      options.onSettled?.(run.taskID);
+      return;
+    }
     if (record.state === 'cancelled') {
       settleRun(run, record);
       options.backgroundJobSupervisor?.onTerminal(record);
@@ -253,8 +264,41 @@ export function createRevivedRunTracker(options: {
       options.backgroundJobBoard.releaseLease(run.admissionLease);
       run.admissionLease = undefined;
     }
+    if (record.hostSteerCover?.revision === record.terminalRevision) {
+      settleRun(run, record);
+      options.backgroundJobSupervisor?.onTerminal(record);
+      discardRun(run);
+      return;
+    }
     finish(run, record);
   };
+
+  function deliverContinuation(record: BackgroundJobRecord): void {
+    if (
+      disposed ||
+      record.provisional === true ||
+      record.terminalRevision <= 1 ||
+      record.hostSteerCover?.revision === record.terminalRevision ||
+      (record.state !== 'completed' && record.state !== 'error') ||
+      isTracked(record.taskID, record.generation)
+    )
+      return;
+    const current = options.backgroundJobBoard.get(record.taskID);
+    if (
+      current?.generation !== record.generation ||
+      current.terminalRevision !== record.terminalRevision ||
+      current.state !== record.state
+    )
+      return;
+    installRun({
+      taskID: record.taskID,
+      generation: record.generation,
+      parentSessionID: record.parentSessionID,
+      description: record.description,
+      onlyTerminalRevision: record.terminalRevision,
+    });
+    onTerminal(current);
+  }
 
   const dispose = (): void => {
     disposed = true;
@@ -356,7 +400,6 @@ export function createRevivedRunTracker(options: {
         // replacing its sticky model selection with the resolve snapshot.
         delivery: 'queue',
         modelSelection: 'inherit',
-        ...(selection?.variant ? { modelVariant: selection.variant } : {}),
         body: {
           agent: selection?.agent ?? 'orchestrator',
           ...(selection?.model ? { model: selection.model } : {}),
@@ -521,6 +564,7 @@ export function createRevivedRunTracker(options: {
             clearTimeout(notification.retryTimer);
             notification.retryTimer = undefined;
           }
+          if (run.onlyTerminalRevision !== undefined) discardRun(run);
         },
       );
     } catch (error) {
@@ -655,6 +699,7 @@ export function createRevivedRunTracker(options: {
       baselineMessageID?: string;
       readonly attemptStartedAt: number;
       description: string;
+      background: boolean;
       state: 'pending' | 'promoted';
       expiryTimer?: ReturnType<typeof setTimeout>;
     }
@@ -693,6 +738,7 @@ export function createRevivedRunTracker(options: {
     attemptStartedAt?: number;
     description: string;
     fallback?: true;
+    onlyTerminalRevision?: number;
   }): RevivedRun {
     const old = runs.get(input.taskID);
     if (old?.notification.retryTimer) clearTimeout(old.notification.retryTimer);
@@ -747,7 +793,7 @@ export function createRevivedRunTracker(options: {
     if (
       record?.state !== 'running' ||
       record.generation !== pending.generation ||
-      record.background !== true
+      record.background !== pending.background
     ) {
       // The execution was superseded while the admission was unknown:
       // nothing to own.
@@ -780,13 +826,15 @@ export function createRevivedRunTracker(options: {
     parentSessionID: string;
     baselineMessageID?: string;
     description: string;
+    allowForeground?: boolean;
   }): boolean {
     if (disposed) return false;
     const record = options.backgroundJobBoard.get(input.taskID);
     if (
       record?.state !== 'running' ||
       record.generation !== input.generation ||
-      record.background !== true
+      (record.background !== true &&
+        (!input.allowForeground || record.provisional === true))
     ) {
       return false;
     }
@@ -808,6 +856,7 @@ export function createRevivedRunTracker(options: {
       baselineMessageID: input.baselineMessageID,
       attemptStartedAt: Date.now(),
       description: input.description,
+      background: record.background,
       state: 'pending',
       expiryTimer,
     });
@@ -841,7 +890,7 @@ export function createRevivedRunTracker(options: {
     if (
       record?.state !== 'running' ||
       record.generation !== generation ||
-      record.background !== true
+      record.background !== pending.background
     ) {
       return false;
     }
@@ -908,6 +957,7 @@ export function createRevivedRunTracker(options: {
     attemptStartedAtFor,
     probe,
     onTerminal,
+    deliverContinuation,
     willNotifyParent,
     prepareObservation,
     admitObservation,

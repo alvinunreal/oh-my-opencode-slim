@@ -8,6 +8,8 @@ import { resolveUpdate } from './resolution';
 import type {
   AddPatchHunk,
   DeletePatchHunk,
+  ParsedPatch,
+  PatchHostFlavor,
   PatchHunk,
   UpdatePatchHunk,
 } from './types';
@@ -207,16 +209,19 @@ async function guardPatchTargets(
   }
 }
 
-export function parseValidatedPatch(patchText: string): PatchHunk[] {
-  let hunks: PatchHunk[];
+export function parseValidatedPatch(
+  patchText: string,
+  flavor: PatchHostFlavor = 'v1',
+): ParsedPatch {
+  let parsed: ParsedPatch;
 
   try {
-    hunks = parsePatch(patchText).hunks;
+    parsed = parsePatch(patchText, flavor);
   } catch (error) {
     throw new ApplyPatchError('validation', getErrorMessage(error));
   }
 
-  if (hunks.length === 0) {
+  if (parsed.hunks.length === 0) {
     const clean = normalizeLineEndings(patchText).trim();
     if (clean === '*** Begin Patch\n*** End Patch') {
       throw new ApplyPatchError('validation', 'empty patch');
@@ -225,7 +230,7 @@ export function parseValidatedPatch(patchText: string): PatchHunk[] {
     throw new ApplyPatchError('validation', 'no hunks found');
   }
 
-  return hunks;
+  return parsed;
 }
 
 async function readPreparedFileText(
@@ -254,8 +259,10 @@ async function createPatchExecutionContext(
   root: string,
   patchText: string,
   worktree?: string,
+  flavor: PatchHostFlavor = 'v1',
 ): Promise<PatchExecutionContext> {
-  const parsedHunks = parseValidatedPatch(patchText);
+  const parsed = parseValidatedPatch(patchText, flavor);
+  const parsedHunks = parsed.hunks;
   await guardPatchTargets(
     root,
     worktree,
@@ -316,7 +323,7 @@ async function createPatchExecutionContext(
 
   return {
     hunks: normalized.hunks,
-    pathsNormalized: normalized.changed,
+    pathsNormalized: normalized.changed || !!parsed.canonicalized,
     staged,
     getPreparedFileState,
     assertPreparedPathMissing,
@@ -327,6 +334,7 @@ export async function simulatePatch(
   root: string,
   patchText: string,
   worktree?: string,
+  flavor: PatchHostFlavor = 'v1',
 ): Promise<{
   hunks: PatchHunk[];
   pathsNormalized: boolean;
@@ -338,7 +346,7 @@ export async function simulatePatch(
     staged,
     getPreparedFileState,
     assertPreparedPathMissing,
-  } = await createPatchExecutionContext(root, patchText, worktree);
+  } = await createPatchExecutionContext(root, patchText, worktree, flavor);
   const steps: SimulatedStep[] = [];
   const addedPaths = new Set<string>();
 
@@ -385,6 +393,7 @@ export async function simulatePatch(
       filePath,
       current.text,
       hunk,
+      flavor,
     );
     steps.push({
       type: 'update',
@@ -413,9 +422,10 @@ export function resolvePreparedUpdate(
   filePath: string,
   currentText: string,
   hunk: UpdatePatchHunk,
+  flavor: PatchHostFlavor = 'v1',
 ): ResolvedPreparedUpdate {
   try {
-    return resolveUpdate(filePath, currentText, hunk.chunks);
+    return resolveUpdate(filePath, currentText, hunk.chunks, flavor);
   } catch (error) {
     throw new ApplyPatchError('verification', getErrorMessage(error), error);
   }

@@ -1,4 +1,3 @@
-export type BooleanArg = 'yes' | 'no';
 export type BackgroundSubagentsArg = 'ask' | 'yes' | 'no';
 
 export interface InstallArgs {
@@ -31,16 +30,4 @@ export interface ConfigMergeResult {
   success: boolean;
   configPath: string;
   error?: string;
-}
-
-export interface DetectedConfig {
-  isInstalled: boolean;
-  hasKimi: boolean;
-  hasOpenAI: boolean;
-  hasAnthropic?: boolean;
-  hasCopilot?: boolean;
-  hasZaiPlan?: boolean;
-  hasAntigravity: boolean;
-  hasChutes?: boolean;
-  hasOpencodeZen: boolean;
 }

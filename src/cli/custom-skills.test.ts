@@ -4,8 +4,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   buildBundledSkillInfos,
+  getV1BundledSkillPaths,
   removeLegacySkillSyncState,
 } from './custom-skills';
+
+const EMPTY_MANAGED_HASH =
+  'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
 function tmpDir(): string {
   return fs.realpathSync(
@@ -18,6 +22,54 @@ function writeSkill(root: string, name: string, skillMd: string): void {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'SKILL.md'), skillMd);
 }
+
+describe('getV1BundledSkillPaths', () => {
+  const originalEnv = { ...process.env };
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  function setup(): { root: string; project: string } {
+    const root = tmpDir();
+    const project = tmpDir();
+    fs.mkdirSync(path.join(project, '.git'));
+    for (const name of ['codemap', 'deepwork', 'reflect']) {
+      writeSkill(root, name, `---\nname: ${name}\ndescription: d\n---\n`);
+    }
+    for (const dir of [
+      path.join(project, '.claude', 'skills', 'codemap'),
+      path.join(project, '.agents', 'skills', 'deepwork'),
+    ]) {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), 'user skill');
+    }
+    return { root, project };
+  }
+
+  const names = (paths: string[]) => paths.map((item) => path.basename(item));
+
+  test('skips names supplied by .claude and .agents skill directories', () => {
+    const { root, project } = setup();
+    expect(names(getV1BundledSkillPaths(root, project, []))).toEqual([
+      'reflect',
+    ]);
+  });
+
+  test('ignores external directories the host is told to skip', () => {
+    const { root, project } = setup();
+    process.env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS = '1';
+    expect(names(getV1BundledSkillPaths(root, project, []))).toEqual([
+      'codemap',
+      'reflect',
+    ]);
+    process.env.OPENCODE_DISABLE_EXTERNAL_SKILLS = 'true';
+    expect(names(getV1BundledSkillPaths(root, project, []))).toEqual([
+      'codemap',
+      'deepwork',
+      'reflect',
+    ]);
+  });
+});
 
 describe('buildBundledSkillInfos', () => {
   afterEach(() => mock.restore());
@@ -100,8 +152,8 @@ describe('removeLegacySkillSyncState', () => {
       JSON.stringify({
         schemaVersion: 1,
         skills: {
-          deepwork: { status: 'managed' },
-          reflect: { status: 'managed' },
+          deepwork: { status: 'managed', lastManagedHash: EMPTY_MANAGED_HASH },
+          reflect: { status: 'managed', lastManagedHash: EMPTY_MANAGED_HASH },
         },
       }),
     );
@@ -145,7 +197,7 @@ describe('removeLegacySkillSyncState', () => {
           '': { status: 'managed' },
           '.': { status: 'managed' },
           '..': { status: 'managed' },
-          normal: { status: 'managed' },
+          normal: { status: 'managed', lastManagedHash: EMPTY_MANAGED_HASH },
         },
       }),
     );
@@ -168,7 +220,7 @@ describe('removeLegacySkillSyncState', () => {
       JSON.stringify({
         schemaVersion: 1,
         skills: {
-          deepwork: { status: 'managed' },
+          deepwork: { status: 'managed', lastManagedHash: EMPTY_MANAGED_HASH },
           reflect: { status: 'customized' },
         },
       }),
@@ -186,6 +238,29 @@ describe('removeLegacySkillSyncState', () => {
     expect(fs.existsSync(path.join(configDir, 'skills', 'reflect'))).toBe(true);
     expect(fs.existsSync(path.join(configDir, '.oh-my-opencode-slim'))).toBe(
       false,
+    );
+  });
+
+  test('keeps managed skills edited after their last sync', () => {
+    const configDir = tmpDir();
+    const legacyDir = path.join(configDir, '.oh-my-opencode-slim');
+    const skillDir = path.join(configDir, 'skills', 'deepwork');
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), 'user edits');
+    fs.writeFileSync(
+      path.join(legacyDir, 'skills-manifest.json'),
+      JSON.stringify({
+        skills: {
+          deepwork: { status: 'managed', lastManagedHash: EMPTY_MANAGED_HASH },
+        },
+      }),
+    );
+
+    const result = removeLegacySkillSyncState(configDir);
+    expect(result.kept).toEqual(['deepwork']);
+    expect(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8')).toBe(
+      'user edits',
     );
   });
 
@@ -213,7 +288,9 @@ describe('removeLegacySkillSyncState', () => {
       false,
     );
     expect(
-      fs.existsSync(path.join(configDir, 'skills', 'reflect.omos-backup')),
+      fs.existsSync(
+        path.join(configDir, '.oh-my-opencode-slim-skill-backups', 'reflect'),
+      ),
     ).toBe(true);
     expect(fs.existsSync(path.join(configDir, '.oh-my-opencode-slim'))).toBe(
       false,

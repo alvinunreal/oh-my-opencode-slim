@@ -1,15 +1,18 @@
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
+  realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { parse as parseJsonc } from 'jsonc-parser';
 import { mutateJsonFile, writeJsonAtomic } from '../config/json-file';
+import { parseJsonConfigText } from '../config/jsonc';
 import {
   ensureConfigDir,
   ensureOpenCodeConfigDir,
@@ -19,57 +22,17 @@ import {
   getLiteConfig,
 } from '../config/paths';
 import {
+  getPluginSpec,
+  getPlugins,
   INSTALLER_MANAGED_PLUGIN_OPTION,
   type PluginEntry,
 } from '../plugin-entry';
 import { crossSpawn } from '../utils/compat';
 import { resolvePackageInstallCommand } from '../utils/package-manager';
 import { generateLiteConfig } from './providers';
-import type {
-  ConfigMergeResult,
-  DetectedConfig,
-  InstallConfig,
-  OpenCodeConfig,
-} from './types';
+import type { ConfigMergeResult, InstallConfig, OpenCodeConfig } from './types';
 
 const PACKAGE_NAME = 'oh-my-opencode-slim';
-
-function isString(value: unknown): value is string {
-  return typeof value === 'string';
-}
-
-function getModelIds(model: unknown): string[] {
-  if (isString(model)) return [model];
-  if (!Array.isArray(model)) return [];
-
-  return model.flatMap((entry) => {
-    if (isString(entry)) return [entry];
-    if (entry && typeof entry === 'object' && isString(entry.id)) {
-      return [entry.id];
-    }
-    return [];
-  });
-}
-
-/** opencode2 hosts read `plugins` natively and migrate the legacy
- * singular `plugin` key (packages/core/src/config/normalize.ts merges
- * both), so user files carry either key. Read plural-first; writers
- * keep whichever key the file already uses. */
-function getPlugins(config: OpenCodeConfig): unknown[] {
-  return Array.isArray(config.plugins)
-    ? config.plugins
-    : Array.isArray(config.plugin)
-      ? config.plugin
-      : [];
-}
-
-function getPluginSpec(entry: unknown): string | undefined {
-  if (isString(entry)) return entry;
-  if (!Array.isArray(entry)) return undefined;
-
-  const spec = entry[0];
-  return isString(spec) ? spec : undefined;
-}
 
 function normalizePathForMatch(path: string): string {
   return path.replaceAll('\\', '/');
@@ -144,8 +107,29 @@ function isMatchingPluginEntry(entry: unknown): boolean {
   return spec ? isPluginEntry(spec) : false;
 }
 
+function removePluginEntries(config: OpenCodeConfig): OpenCodeConfig {
+  for (const key of ['plugin', 'plugins'] as const) {
+    if (Array.isArray(config[key])) {
+      config[key] = config[key].filter(
+        (entry) => !isMatchingPluginEntry(entry),
+      );
+    }
+  }
+  return config;
+}
+
+function getCliEntryPath(): string | undefined {
+  const entry = process.argv[1];
+  if (!entry) return undefined;
+  try {
+    return realpathSync(entry);
+  } catch {
+    return entry;
+  }
+}
+
 function getPluginEntry(): PluginEntry {
-  const cliEntryPath = process.argv[1];
+  const cliEntryPath = getCliEntryPath();
 
   if (!cliEntryPath) {
     return PACKAGE_NAME;
@@ -273,17 +257,6 @@ function writeOpenCodePluginCacheManifest(
   }
 }
 
-function removeOpenCodePluginCacheArtifacts(cacheDir: string): void {
-  rmSync(join(cacheDir, 'node_modules', PACKAGE_NAME), {
-    recursive: true,
-    force: true,
-  });
-  rmSync(join(cacheDir, 'bun.lock'), { force: true });
-  rmSync(join(cacheDir, 'bun.lockb'), { force: true });
-  rmSync(join(cacheDir, 'package-lock.json'), { force: true });
-  rmSync(join(cacheDir, 'node_modules', '.package-lock.json'), { force: true });
-}
-
 function verifyOpenCodePluginCache(cacheDir: string): ConfigMergeResult | null {
   const pluginPackageJsonPath = join(
     cacheDir,
@@ -326,7 +299,7 @@ function verifyOpenCodePluginCache(cacheDir: string): ConfigMergeResult | null {
 }
 
 export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | null> {
-  const cliEntryPath = process.argv[1];
+  const cliEntryPath = getCliEntryPath();
   if (!cliEntryPath) {
     return null;
   }
@@ -353,27 +326,18 @@ export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | nul
     };
   }
 
+  let staging: string | undefined;
+  let backup: string | undefined;
   try {
-    mkdirSync(cacheDir, { recursive: true });
-  } catch (err) {
-    return {
-      success: false,
-      configPath: cacheDir,
-      error: `Failed to create OpenCode cache directory: ${err}`,
-    };
-  }
-
-  const manifestError = writeOpenCodePluginCacheManifest(
-    cacheDir,
-    cacheVersion,
-  );
-  if (manifestError) return manifestError;
-
-  removeOpenCodePluginCacheArtifacts(cacheDir);
-
-  try {
+    mkdirSync(dirname(cacheDir), { recursive: true });
+    staging = mkdtempSync(`${cacheDir}.staging-`);
+    const manifestError = writeOpenCodePluginCacheManifest(
+      staging,
+      cacheVersion,
+    );
+    if (manifestError) return { ...manifestError, configPath: cacheDir };
     const proc = crossSpawn(install.command, {
-      cwd: cacheDir,
+      cwd: staging,
       stdout: 'pipe',
       stderr: 'pipe',
       env: install.env,
@@ -391,16 +355,31 @@ export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | nul
       };
     }
 
-    const verificationError = verifyOpenCodePluginCache(cacheDir);
-    if (verificationError) return verificationError;
+    const verificationError = verifyOpenCodePluginCache(staging);
+    if (verificationError)
+      return { ...verificationError, configPath: cacheDir };
+
+    backup = `${staging}.previous`;
+    const hadCache = existsSync(cacheDir);
+    if (hadCache) renameSync(cacheDir, backup);
+    renameSync(staging, cacheDir);
+    if (hadCache) rmSync(backup, { recursive: true, force: true });
 
     return { success: true, configPath: cacheDir };
   } catch (err) {
+    if (backup && existsSync(backup) && !existsSync(cacheDir))
+      renameSync(backup, cacheDir);
     return {
       success: false,
       configPath: cacheDir,
       error: `Failed to warm OpenCode cache: ${err}`,
     };
+  } finally {
+    if (staging) {
+      try {
+        rmSync(staging, { recursive: true, force: true });
+      } catch {}
+    }
   }
 }
 
@@ -415,10 +394,7 @@ export function parseConfigFile(path: string): {
     // Strip a UTF-8 BOM (RFC 8259 permits one) so JSON.parse does not choke.
     const content = readFileSync(path, 'utf-8').replace(/^\uFEFF/, '');
     if (content.trim().length === 0) return { config: null };
-    const errors: Parameters<typeof parseJsonc>[1] = [];
-    const parsed = parseJsonc(content, errors, { allowTrailingComma: true });
-    if (errors.length > 0) throw new Error('Invalid JSONC config');
-    return { config: parsed as OpenCodeConfig };
+    return { config: parseJsonConfigText(content) as OpenCodeConfig };
   } catch (err) {
     return { config: null, error: String(err) };
   }
@@ -438,13 +414,6 @@ export function parseConfig(path: string): {
   return { config: null };
 }
 
-/**
- * Write config to file atomically.
- */
-export function writeConfig(configPath: string, config: OpenCodeConfig): void {
-  writeJsonAtomic(configPath, config);
-}
-
 export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
   const configPath = getExistingConfigPath();
 
@@ -460,17 +429,26 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
 
   try {
     const pluginEntry = getPluginEntry();
+    const otherPath = configPath.endsWith('.jsonc')
+      ? configPath.slice(0, -1)
+      : `${configPath}c`;
+    const otherConfig = parseConfigFile(otherPath).config;
     mutateJsonFile(configPath, (current) => {
-      const config = current as OpenCodeConfig;
-      const plugins = getPlugins(config);
-      const filteredPlugins = plugins.filter(
-        (plugin) => !isMatchingPluginEntry(plugin),
-      );
-      filteredPlugins.push(pluginEntry);
-      if (Array.isArray(config.plugins)) config.plugins = filteredPlugins;
-      else config.plugin = filteredPlugins;
+      const config = removePluginEntries(current as OpenCodeConfig);
+      config.plugin = [...(config.plugin ?? []), pluginEntry];
+      if (config.lsp === undefined && otherConfig?.lsp === undefined)
+        config.lsp = true;
       return config;
     });
+    if (
+      otherConfig &&
+      getPlugins(otherConfig).some(isMatchingPluginEntry) &&
+      realpathSync(otherPath) !== realpathSync(configPath)
+    ) {
+      mutateJsonFile(otherPath, (current) =>
+        removePluginEntries(current as OpenCodeConfig),
+      );
+    }
     return { success: true, configPath };
   } catch (err) {
     return {
@@ -527,7 +505,7 @@ export function writeLiteConfig(
   try {
     ensureConfigDir();
     const config = generateLiteConfig(installConfig);
-    writeConfig(configPath, config as OpenCodeConfig);
+    writeJsonAtomic(configPath, config);
 
     return { success: true, configPath };
   } catch (err) {
@@ -539,91 +517,9 @@ export function writeLiteConfig(
   }
 }
 
-export function enableLspByDefault(): ConfigMergeResult {
-  const configPath = getExistingConfigPath();
-
-  try {
-    ensureOpenCodeConfigDir();
-    mutateJsonFile(configPath, (current) => {
-      const config = current as OpenCodeConfig;
-      if (config.lsp !== undefined) return current;
-      config.lsp = true;
-      return config;
-    });
-
-    return { success: true, configPath };
-  } catch (err) {
-    return {
-      success: false,
-      configPath,
-      error: `Failed to enable LSP: ${err}`,
-    };
-  }
-}
-
 // Antigravity, Google provider, and Chutes provider functions removed in simplification refactor.
 
-export function detectCurrentConfig(): DetectedConfig {
-  const result: DetectedConfig = {
-    isInstalled: false,
-    hasKimi: false,
-    hasOpenAI: false,
-    hasAnthropic: false,
-    hasCopilot: false,
-    hasZaiPlan: false,
-    hasAntigravity: false,
-    hasChutes: false,
-    hasOpencodeZen: false,
-  };
-
+export function isPluginConfigured(): boolean {
   const { config } = parseConfig(getExistingConfigPath());
-  if (!config) return result;
-
-  const plugins = getPlugins(config);
-  result.isInstalled = plugins.some((p) => isMatchingPluginEntry(p));
-  result.hasAntigravity = plugins.some((p) => {
-    const spec = getPluginSpec(p);
-    return spec?.startsWith('opencode-antigravity-auth') ?? false;
-  });
-
-  // Check for providers
-  const providers = config.provider as Record<string, unknown> | undefined;
-  result.hasKimi = !!providers?.kimi;
-  result.hasAnthropic = !!providers?.anthropic;
-  result.hasCopilot = !!providers?.['github-copilot'];
-  result.hasZaiPlan = !!providers?.['zai-coding-plan'];
-  result.hasChutes = !!providers?.chutes;
-  if (providers?.google) result.hasAntigravity = true;
-
-  // Try to detect from lite config
-  const { config: liteConfig } = parseConfig(getLiteConfig());
-  if (liteConfig && typeof liteConfig === 'object') {
-    const configObj = liteConfig as Record<string, unknown>;
-    const presetName = configObj.preset as string;
-    const presets = configObj.presets as Record<string, unknown>;
-    const agents = presets?.[presetName] as
-      | Record<string, { model?: unknown }>
-      | undefined;
-
-    if (agents && typeof agents === 'object') {
-      const models = Object.values(agents)
-        .filter((a) => a && typeof a === 'object')
-        .flatMap((a) => getModelIds(a.model));
-      result.hasOpenAI ||= models.some((m) => m.startsWith('openai/'));
-      result.hasAnthropic ||= models.some((m) => m.startsWith('anthropic/'));
-      result.hasCopilot ||= models.some((m) => m.startsWith('github-copilot/'));
-      result.hasZaiPlan ||= models.some((m) =>
-        m.startsWith('zai-coding-plan/'),
-      );
-      result.hasOpencodeZen ||= models.some((m) => m.startsWith('opencode/'));
-      if (models.some((m) => m.startsWith('google/'))) {
-        result.hasAntigravity = true;
-      }
-      if (models.some((m) => m.startsWith('chutes/'))) {
-        result.hasChutes = true;
-      }
-    }
-  }
-
-  return result;
+  return !!config && getPlugins(config).some(isMatchingPluginEntry);
 }

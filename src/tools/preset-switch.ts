@@ -15,7 +15,7 @@ import {
   mutateJsonFile,
   removeTopLevelJsonProperty,
 } from '../config/json-file';
-import { stripJsonComments } from '../config/jsonc';
+import { parseJsonConfigText } from '../config/jsonc';
 import {
   findPluginConfigPaths,
   isProjectConfigDisabled,
@@ -30,7 +30,7 @@ import {
   withoutAgentOverride,
 } from '../preset-editor-domain';
 
-export type PresetMap = Record<string, PresetInput>;
+type PresetMap = Record<string, PresetInput>;
 
 function interpolateConfigEnvironment(raw: string): string {
   return raw.replace(
@@ -65,7 +65,7 @@ export interface PresetSwitchResult {
   summary: string[];
 }
 
-export type PresetSwitchScope = 'user' | 'effective' | 'project' | 'global';
+type PresetSwitchScope = 'user' | 'effective' | 'project' | 'global';
 
 export interface PresetSwitchOptions {
   hostFlavor?: string;
@@ -120,7 +120,7 @@ export interface AgentUpdate {
  * Non-model fields (inheritModelFrom, skills, mcps, prompts, permissions, etc.)
  * make an override valid.
  */
-export function hasPresetOverrides(preset: Preset): boolean {
+function hasPresetOverrides(preset: Preset): boolean {
   for (const override of Object.values(preset)) {
     if (override && typeof override === 'object' && !Array.isArray(override)) {
       if (Object.keys(override).length > 0) {
@@ -152,12 +152,12 @@ export function switchPresetOnDisk(
   options: PresetSwitchOptions = {},
 ): PresetSwitchResult {
   const scope = options.scope ?? 'user';
-  if (scope === 'project' && isProjectConfigDisabled()) {
+  if (scope === 'project' && isProjectConfigDisabled(options.hostFlavor)) {
     return {
       ok: false,
       presetName,
       message:
-        'Cannot save a project preset: OPENCODE_DISABLE_PROJECT_CONFIG disables project configuration. Unset it or use Global scope.',
+        'Cannot save a project preset: OPENCODE_CONFIG_PROJECT_DISABLE or OPENCODE_DISABLE_PROJECT_CONFIG disables project configuration. Unset it or use Global scope.',
       summary: [],
     };
   }
@@ -300,12 +300,12 @@ export function clearProjectPresetOnDisk(
   directory: string,
   hostFlavor?: string,
 ): PresetSwitchResult {
-  if (isProjectConfigDisabled()) {
+  if (isProjectConfigDisabled(hostFlavor)) {
     return {
       ok: false,
       presetName: '',
       message:
-        'Cannot change project preset inheritance: OPENCODE_DISABLE_PROJECT_CONFIG disables project configuration. Unset it or use Global scope.',
+        'Cannot change project preset inheritance: OPENCODE_CONFIG_PROJECT_DISABLE or OPENCODE_DISABLE_PROJECT_CONFIG disables project configuration. Unset it or use Global scope.',
       summary: [],
     };
   }
@@ -357,7 +357,7 @@ export function clearProjectPresetOnDisk(
  * Build the SDK-shaped agent overrides from a preset, resolving legacy alias
  * keys (e.g. "explore" → "explorer").
  */
-export function buildAgentUpdates(preset: Preset): Record<string, AgentUpdate> {
+function buildAgentUpdates(preset: Preset): Record<string, AgentUpdate> {
   const agentUpdates: Record<string, AgentUpdate> = {};
   for (const [agentName, override] of Object.entries(preset)) {
     if (!override || typeof override !== 'object' || Array.isArray(override)) {
@@ -376,9 +376,7 @@ export function buildAgentUpdates(preset: Preset): Record<string, AgentUpdate> {
  * Map an AgentOverrideConfig (from plugin config) to the subset of agent
  * config fields shown in the saved preset summary.
  */
-export function mapOverrideToAgentConfig(
-  override: AgentOverrideConfig,
-): AgentUpdate {
+function mapOverrideToAgentConfig(override: AgentOverrideConfig): AgentUpdate {
   const agentConfig: AgentUpdate = {};
 
   if (typeof override.model === 'string') {
@@ -602,16 +600,14 @@ function describeError(error: unknown): string {
  * Read the user-level config file as a parsed object. Returns null if the
  * file is absent or unreadable.
  */
-export function readUserConfig(
-  directory: string,
-): Record<string, unknown> | null {
+function readUserConfig(directory: string): Record<string, unknown> | null {
   try {
     const { userConfigPath } = findPluginConfigPaths(directory);
     if (!userConfigPath) return null;
     // Strip a UTF-8 BOM (RFC 8259 permits one); JSON.parse would otherwise
     // fail with "Unrecognized token" and the preset name would be lost.
     const raw = fs.readFileSync(userConfigPath, 'utf-8').replace(/^\uFEFF/, '');
-    return JSON.parse(stripJsonComments(raw)) as Record<string, unknown>;
+    return parseJsonConfigText(raw);
   } catch {
     return null;
   }
@@ -620,9 +616,7 @@ export function readUserConfig(
 /**
  * Read raw presets from the editable user config file.
  */
-export function readUserPresets(
-  directory: string,
-): Record<string, PresetInput> {
+function readUserPresets(directory: string): Record<string, PresetInput> {
   const config = readUserConfig(directory);
   if (
     !config ||

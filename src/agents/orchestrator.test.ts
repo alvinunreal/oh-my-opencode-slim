@@ -56,6 +56,34 @@ describe('orchestrator prompt: host vocabulary', () => {
   });
 });
 
+describe('orchestrator prompt: scoped catalog', () => {
+  const count = (prompt: string, token: string) =>
+    prompt.split(token).length - 1;
+
+  test('a scoped catalog is wrapped exactly once', () => {
+    const prompt = v2({ onlyAgents: ['fixer'] });
+    expect(count(prompt, '<Agents>')).toBe(1);
+    expect(count(prompt, '</Agents>')).toBe(1);
+  });
+
+  test('the unscoped catalog keeps its single wrapping', () => {
+    const prompt = v1();
+    expect(count(prompt, '<Agents>')).toBe(1);
+    expect(count(prompt, '</Agents>')).toBe(1);
+  });
+
+  test('out-of-scope @mentions are scrubbed from a reused routing line', () => {
+    const prompt = v2({ onlyAgents: ['designer'] });
+    expect(prompt).toContain('@designer — owns all UI/UX');
+    expect(prompt).not.toContain('@fixer');
+  });
+
+  test('a fully in-scope built-in line stays byte-identical', () => {
+    const prompt = v2({ onlyAgents: ['fixer'] });
+    expect(prompt).toContain(ROLE_ROUTING_SLIM_LINES.fixer);
+  });
+});
+
 describe('orchestrator prompt: blocking on the user', () => {
   test('v1 with wait_for_user enabled ends manual steps with wait_for_user', () => {
     const prompt = v1();
@@ -192,7 +220,7 @@ describe('createAgents orchestrator prompt gates', () => {
 
   test('v1 lifecycle off names no wait_for_user, no wake scheduler', () => {
     const agents = createAgents(
-      runtimeFor({ backgroundJobs: { enabled: false } }),
+      runtimeFor({ backgroundJobs: { mode: 'off' } }),
     );
     const prompt = agents.find((a) => a.name === 'orchestrator')?.config
       .prompt as string;
@@ -206,7 +234,7 @@ describe('createAgents orchestrator prompt gates', () => {
 
   test('v2 lifecycle off keeps the v2 vocabulary and names no managed tool', () => {
     const agents = createAgents(
-      runtimeFor({ backgroundJobs: { enabled: false } }),
+      runtimeFor({ backgroundJobs: { mode: 'off' } }),
       { hostFlavor: 'v2' },
     );
     const prompt = agents.find((a) => a.name === 'orchestrator')?.config
@@ -233,7 +261,7 @@ describe('createAgents orchestrator prompt gates', () => {
   test('v1 lifecycle off with both tools disabled still renders the fallback channel', () => {
     const agents = createAgents(
       runtimeFor({
-        backgroundJobs: { enabled: false },
+        backgroundJobs: { mode: 'off' },
         disabled_tools: ['wait_for_user'],
       }),
     );
@@ -245,6 +273,39 @@ describe('createAgents orchestrator prompt gates', () => {
       amend: true,
     });
     expect(prompt).not.toContain('task_message');
+  });
+
+  test("routing lines name each specialist's configured skills", () => {
+    const prompt = createAgents(
+      runtimeFor({ agents: { fixer: { skills: ['simplify'] } } }),
+    ).find((a) => a.name === 'orchestrator')?.config.prompt as string;
+    const fixerLine = prompt
+      .split('\n')
+      .find((line) => line.startsWith('@fixer'));
+    expect(fixerLine).toEndWith(' Skills: simplify.');
+    expect(prompt).toContain('A specialist can load only the skills');
+  });
+
+  test('routing lines keep skill grants from permission.skill', () => {
+    const agents = createAgents(
+      runtimeFor({
+        agents: {
+          fixer: {
+            permission: { skill: { '*': 'deny', 'custom-review': 'allow' } },
+          },
+        },
+      }),
+    );
+    const prompt = agents.find((a) => a.name === 'orchestrator')?.config
+      .prompt as string;
+    const fixerLine = prompt
+      .split('\n')
+      .find((line) => line.startsWith('@fixer'));
+    expect(fixerLine).toEndWith(' Skills: custom-review.');
+    const fixerPermission = agents.find((a) => a.name === 'fixer')?.config
+      .permission as { skill?: Record<string, string> } | undefined;
+    const fixerSkill = fixerPermission?.skill;
+    expect(fixerSkill?.['custom-review']).toBe('allow');
   });
 
   test('defaults keep the registered-tool prompt bytes unchanged', () => {
@@ -260,6 +321,7 @@ describe('createAgents orchestrator prompt gates', () => {
       expect(prompt).toBe(
         buildOrchestratorPrompt({
           disabledAgents: new Set(['observer', 'council', 'councillor']),
+          agentSkills: { oracle: 'simplify, requesting-code-review' },
           hostFlavor,
         }),
       );

@@ -3,14 +3,20 @@ import { createTaskSessionManagerHook } from '../hooks/task-session-manager';
 import { createRevivedRunTracker } from '../hooks/task-session-manager/revived-run-tracker';
 import { createTaskStatusTool } from '../tools/task-status';
 import { buildPluginInput } from '../v2/client-shim';
-import { BackgroundJobBoard } from './background-job-board';
+import {
+  BackgroundJobBoard,
+  type BackgroundJobTerminalInput,
+} from './background-job-board';
 import {
   type BackgroundJobTerminalGate,
+  consumeTerminalCommitToken,
   createBackgroundJobTerminalGate,
   EVIDENCE_UNAVAILABLE_DIAGNOSTIC,
   idleContradictsBusy,
   type RuntimeObservation,
   runtimeObservationFromSnapshot,
+  type TerminalCommitToken,
+  type TerminalSignal,
 } from './background-job-terminal-gate';
 import { BackgroundTaskConcurrency } from './background-task-concurrency';
 import { classifyTerminalEvidence } from './child-transcript';
@@ -684,7 +690,12 @@ describe('terminal gate', () => {
     h.observe('quiescent');
     await h.gate.reconcile(h.run, {
       kind: 'output',
-      origin: { kind: 'native', run: h.run, callID: 'native' },
+      origin: {
+        kind: 'native',
+        run: h.run,
+        callID: 'native',
+        callIDConfirmed: true,
+      },
       status: {
         taskID: h.run.taskID,
         state: 'completed',
@@ -2252,7 +2263,12 @@ describe('outcome corroboration (log-only mirror)', () => {
       h.advance(61);
       const result = await h.gate.reconcile(h.run, {
         kind: 'output',
-        origin: { kind: 'native', run: h.run, callID: 'native' },
+        origin: {
+          kind: 'native',
+          run: h.run,
+          callID: 'native',
+          callIDConfirmed: true,
+        },
         status: {
           taskID: h.run.taskID,
           state: 'error',
@@ -2930,5 +2946,605 @@ describe('give-up log contract under repeated reads (#1561)', () => {
     } finally {
       capture.restore();
     }
+  });
+});
+
+describe('terminal attribution race guards and publication fences', () => {
+  test('unconfirmed native output with evidence timeout remains unconfirmed, while confirmed native publishes', async () => {
+    const h = harness({
+      readTerminalEvidence: async () => undefined,
+      maxEvidenceRetries: 1,
+    });
+    h.observe('quiescent');
+    // 1. Unconfirmed native call (callIDConfirmed: false)
+    const unconfirmed = await h.gate.reconcile(h.run, {
+      kind: 'output',
+      origin: {
+        kind: 'native',
+        run: h.run,
+        callID: 'unconfirmed-call',
+        callIDConfirmed: false,
+      },
+      status: {
+        taskID: h.run.taskID,
+        state: 'completed',
+        timedOut: false,
+        result: 'unconfirmed native text',
+      },
+    });
+    expect(unconfirmed.kind).toBe('deferred');
+    expect(h.board.get(h.run.taskID)?.state).toBe('running');
+    expect(h.board.get(h.run.taskID)?.resultSummary).not.toBe(
+      'unconfirmed native text',
+    );
+
+    // 2. Confirmed native call (callIDConfirmed: true)
+    const confirmed = await h.gate.reconcile(h.run, {
+      kind: 'output',
+      origin: {
+        kind: 'native',
+        run: h.run,
+        callID: 'confirmed-call',
+        callIDConfirmed: true,
+      },
+      status: {
+        taskID: h.run.taskID,
+        state: 'completed',
+        timedOut: false,
+        result: 'confirmed native text',
+      },
+    });
+    expect(confirmed.kind).toBe('committed');
+    expect(h.board.get(h.run.taskID)?.state).toBe('completed');
+    expect(h.board.get(h.run.taskID)?.resultSummary).toBe(
+      'confirmed native text',
+    );
+  });
+
+  test('attributable host outcome positive publishes completed with host outcome summary', async () => {
+    let clock = 150;
+    const h = harness({
+      hostOutcomeClock: 'shared-unix-ms',
+      now: () => clock,
+      readTerminalEvidence: async () => undefined,
+      input: {
+        client: {
+          session: {
+            get: async () => {
+              clock = 200;
+              return { data: { outcome: 'succeeded', time: { idle: 160 } } };
+            },
+          },
+        },
+      } as never,
+    });
+    h.observe('quiescent');
+    const result = await h.gate.reconcile(h.run);
+    expect(result.kind).toBe('committed');
+    expect(h.board.get(h.run.taskID)).toMatchObject({
+      state: 'completed',
+      resultSummary: 'Host reported outcome: succeeded.',
+    });
+  });
+
+  test('competing reads and duplicate output idle notify listener exactly once with revision 1', async () => {
+    const h = harness();
+    const listener = mock(() => {});
+    h.board.addTerminalOutcomeListener(listener);
+    h.observe('quiescent');
+
+    const [first, second] = await Promise.all([
+      h.gate.reconcile(h.run),
+      h.gate.reconcile(h.run),
+    ]);
+    expect(first.kind).toBe('committed');
+    expect(second.kind).toBe('committed');
+
+    // Duplicate idle after commit
+    h.observe('quiescent');
+    await h.gate.reconcile(h.run);
+
+    expect(h.board.get(h.run.taskID)).toMatchObject({
+      state: 'completed',
+      terminalRevision: 1,
+      resultSummary: 'answer',
+    });
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  test('consumeTerminalCommitToken: wrong gate, record, input, or consumed replay is invalid', async () => {
+    const h = harness();
+    let capturedToken: TerminalCommitToken | undefined;
+    let capturedInput: BackgroundJobTerminalInput | undefined;
+    const commitTerminalSpy = spyOn(
+      h.board,
+      'commitTerminal',
+    ).mockImplementation((input, token) => {
+      capturedInput = input;
+      capturedToken = token;
+      return h.board.get(h.run.taskID);
+    });
+    try {
+      h.observe('quiescent');
+      await h.gate.reconcile(h.run);
+      expect(capturedToken).toBeDefined();
+      expect(capturedInput).toBeDefined();
+    } finally {
+      commitTerminalSpy.mockRestore();
+    }
+
+    const record = h.board.get(h.run.taskID);
+    if (!record || !capturedToken || !capturedInput) {
+      throw new Error('missing test preconditions');
+    }
+
+    // 1. Wrong gate (token remains unconsumed on h.gate)
+    const otherGate = createBackgroundJobTerminalGate({
+      backgroundJobBoard: h.board,
+    });
+    gates.push(otherGate);
+    expect(
+      consumeTerminalCommitToken(
+        otherGate,
+        capturedToken,
+        record,
+        capturedInput,
+      ),
+    ).toBe(false);
+
+    // 2. Valid consumption succeeds and consumes token
+    expect(
+      consumeTerminalCommitToken(h.gate, capturedToken, record, capturedInput),
+    ).toBe(true);
+
+    // 3. Replay of consumed token is invalid (single-use)
+    expect(
+      consumeTerminalCommitToken(h.gate, capturedToken, record, capturedInput),
+    ).toBe(false);
+
+    // 4. A fresh authorization with wrong record or wrong input fails
+    let token2: TerminalCommitToken | undefined;
+    let input2: BackgroundJobTerminalInput | undefined;
+    const commitSpy2 = spyOn(h.board, 'commitTerminal').mockImplementation(
+      (input, token) => {
+        input2 = input;
+        token2 = token;
+        return h.board.get(h.run.taskID);
+      },
+    );
+    try {
+      h.observe('quiescent');
+      await h.gate.reconcile(h.run);
+    } finally {
+      commitSpy2.mockRestore();
+    }
+    if (!token2 || !input2) throw new Error('missing second token');
+    const otherRecord = { ...record, taskID: 'other_task' };
+    expect(
+      consumeTerminalCommitToken(h.gate, token2, otherRecord, input2),
+    ).toBe(false);
+    // Already consumed on wrong-record attempt, replay is also invalid
+    expect(consumeTerminalCommitToken(h.gate, token2, record, input2)).toBe(
+      false,
+    );
+  });
+
+  test('disposal and unconfirmed late evidence are no-ops', async () => {
+    const held = Promise.withResolvers<unknown>();
+    const h = harness({
+      readTerminalEvidence: () => held.promise,
+    });
+    h.observe('quiescent');
+    const pending = h.gate.reconcile(h.run);
+    await tick();
+
+    // Dispose while evidence read is pending
+    h.gate.dispose();
+
+    // Late evidence resolves after disposal
+    held.resolve(answer('late text'));
+    await pending;
+
+    // Record remains running; late evidence did not publish
+    expect(h.board.get(h.run.taskID)?.state).toBe('running');
+    expect(h.board.get(h.run.taskID)?.resultSummary).toBeUndefined();
+
+    // Further operations on disposed gate are stale / no-op
+    expect(h.gate.capture(h.run)).toBeUndefined();
+    const token = {
+      taskID: h.run.taskID,
+      generation: h.run.generation,
+      activityRevision: 0,
+      episode: 0,
+      readStartedAt: 1,
+    };
+    expect(
+      h.gate.observe(token, {
+        kind: 'quiescent',
+        origin: 'test',
+        readStartedAt: 1,
+      }),
+    ).toEqual({ kind: 'stale' });
+    expect(await h.gate.reconcile(h.run)).toEqual({ kind: 'stale' });
+  });
+
+  test('busy or relaunch during held read prevents old publication', async () => {
+    const held = Promise.withResolvers<unknown>();
+    const h = harness({
+      readTerminalEvidence: () => held.promise,
+    });
+    const token = h.gate.capture(h.run);
+    if (!token) throw new Error('missing token');
+    h.gate.observe(token, {
+      kind: 'quiescent',
+      origin: 'test',
+      readStartedAt: token.readStartedAt,
+    });
+
+    const pending = h.gate.reconcile(h.run);
+    await tick();
+
+    // Transition to busy while read is held
+    h.gate.observe(token, {
+      kind: 'busy',
+      origin: 'session.status',
+      readStartedAt: token.readStartedAt + 1,
+    });
+    expect(h.board.get(h.run.taskID)?.state).toBe('running');
+
+    // Held read resolves with old evidence
+    held.resolve(answer('stale held answer'));
+    const res = await pending;
+
+    expect(['deferred', 'stale']).toContain(res.kind);
+    expect(h.board.get(h.run.taskID)?.state).toBe('running');
+    expect(h.board.get(h.run.taskID)?.resultSummary).toBeUndefined();
+  });
+
+  test('relaunch during held read prevents old publication', async () => {
+    const held = Promise.withResolvers<unknown>();
+    const h = harness({
+      readTerminalEvidence: () => held.promise,
+    });
+    const token = h.gate.capture(h.run);
+    if (!token) throw new Error('missing token');
+    h.gate.observe(token, {
+      kind: 'quiescent',
+      origin: 'test',
+      readStartedAt: token.readStartedAt,
+    });
+
+    const pending = h.gate.reconcile(h.run);
+    await tick();
+
+    // Relaunch the task while read is held (generation advances)
+    const lease = h.board.acquireLease(
+      h.run.taskID,
+      h.run.generation,
+      'relaunch',
+    );
+    if (!lease) throw new Error('missing relaunch lease');
+    const relaunched = h.board.registerLaunch({
+      taskID: h.run.taskID,
+      parentSessionID: 'parent',
+      agent: 'fixer',
+      relaunchLease: lease,
+      now: 10,
+    });
+    h.board.releaseLease(lease);
+    expect(relaunched.generation).toBe(2);
+
+    // Held read from generation 1 resolves
+    held.resolve(answer('generation 1 stale answer'));
+    const res = await pending;
+
+    expect(['deferred', 'stale']).toContain(res.kind);
+    expect(h.board.get(h.run.taskID)?.state).toBe('running');
+    expect(h.board.get(h.run.taskID)?.resultSummary).toBeUndefined();
+  });
+
+  test('legitimate fresh relaunch publishes once and does not seal record forever', async () => {
+    const h = harness();
+    h.observe('quiescent');
+    const first = await h.gate.reconcile(h.run);
+    expect(first.kind).toBe('committed');
+    expect(h.board.get(h.run.taskID)).toMatchObject({
+      state: 'completed',
+      terminalRevision: 1,
+      generation: 1,
+    });
+
+    // Acquire relaunch lease and register launch for generation 2
+    const lease = h.board.acquireLease(
+      h.run.taskID,
+      h.run.generation,
+      'relaunch',
+    );
+    if (!lease) throw new Error('missing relaunch lease');
+    const relaunched = h.board.registerLaunch({
+      taskID: h.run.taskID,
+      parentSessionID: 'parent',
+      agent: 'fixer',
+      relaunchLease: lease,
+      now: 10,
+    });
+    h.board.releaseLease(lease);
+
+    expect(h.board.get(h.run.taskID)?.state).toBe('running');
+    expect(relaunched.generation).toBe(2);
+
+    // Fresh run completes with new observation
+    const token = h.gate.capture(relaunched);
+    if (!token) throw new Error('missing fresh token');
+    h.gate.observe(token, {
+      kind: 'quiescent',
+      origin: 'test',
+      readStartedAt: 11,
+    });
+
+    const second = await h.gate.reconcile(relaunched);
+    expect(second.kind).toBe('committed');
+    expect(h.board.get(h.run.taskID)).toMatchObject({
+      state: 'completed',
+      generation: 2,
+      terminalRevision: 1,
+    });
+  });
+
+  test('deadline expired raw read remains owned so no duplicate read is started, then fresh can proceed', async () => {
+    let underlyingReads = 0;
+    const held = Promise.withResolvers<unknown>();
+    const read = mock((): Promise<unknown> => {
+      underlyingReads += 1;
+      if (underlyingReads === 1) return held.promise;
+      return Promise.resolve(answer('fresh answer'));
+    });
+    const h = harness({
+      readTerminalEvidence: read,
+      readTimeoutMs: 2,
+      graceMs: 1000,
+    });
+    h.observe('quiescent');
+
+    // First reconcile starts the raw read
+    const first = h.gate.reconcile(h.run);
+    await h.timers.tick();
+    await h.timers.advance(2); // Deadline expires
+    await first;
+    expect(underlyingReads).toBe(1);
+
+    // Second reconcile while underlying is still in-flight: reuses in-flight read, does not start a new underlying read
+    const second = h.gate.reconcile(h.run);
+    await h.timers.tick();
+    await h.timers.advance(2);
+    await second;
+    expect(underlyingReads).toBe(1);
+
+    // Underlying read finally settles
+    held.resolve(answer('initial settled'));
+    await tick();
+
+    // Now that the slot is settled, a fresh reconcile can launch a new read and proceed
+    const third = await h.gate.reconcile(h.run);
+    expect(underlyingReads).toBe(2);
+    expect(third.kind).toBe('committed');
+    expect(h.board.get(h.run.taskID)?.state).toBe('completed');
+  });
+});
+
+describe('retained task terminal gate controls', () => {
+  test('restored completed session with pending handoff is deferred; clearing pending commits matching confirmation without duplicate publication', async () => {
+    const board = new BackgroundJobBoard();
+    const run = board.restoreRetainedSession({
+      taskID: 'ses_restored_pending',
+      parentSessionID: 'parent',
+      agent: 'fixer',
+      description: 'restored test',
+      alias: 'fix-1',
+      state: 'completed',
+      launchedAt: 1_000,
+      completedAt: 2_000,
+      resultSummary: 'Restored completed result.',
+    });
+    if (!run) throw new Error('Missing restored run');
+
+    let pending = true;
+    const gate = createBackgroundJobTerminalGate({
+      backgroundJobBoard: board,
+      isObservationPending: () => pending,
+    });
+    gates.push(gate);
+
+    const publications: string[] = [];
+    board.addTerminalOutcomeListener((record) => {
+      publications.push(`${record.taskID}:${record.terminalRevision}`);
+    });
+
+    // 1. With pending handoff, reconcile returns deferred
+    const deferredRes = await gate.reconcile(run);
+    expect(deferredRes.kind).toBe('deferred');
+    expect(deferredRes.record.state).toBe('completed');
+    expect(publications).toHaveLength(0);
+    expect(board.get(run.taskID)?.terminalRevision).toBe(run.terminalRevision);
+
+    // 2. Clear pending handoff: matching confirmation is committed
+    pending = false;
+    const committedRes = await gate.reconcile(run);
+    expect(committedRes.kind).toBe('committed');
+    expect(committedRes.record.resultSummary).toBe(
+      'Restored completed result.',
+    );
+    // No duplicate publication or revision bump
+    expect(publications).toHaveLength(0);
+    expect(board.get(run.taskID)?.terminalRevision).toBe(run.terminalRevision);
+    expect(board.get(run.taskID)?.generation).toBe(run.generation);
+  });
+
+  test('exact queued promptMessageID completion with pending handoff or relaunch lease is deferred; clear/release yields idempotent committed on matching answer', async () => {
+    const board = new BackgroundJobBoard();
+    const run = board.registerLaunch({
+      taskID: 'ses_queued_reconcile',
+      parentSessionID: 'parent',
+      agent: 'fixer',
+      now: 1_000,
+    });
+    let pending = false;
+    const gate = createBackgroundJobTerminalGate({
+      backgroundJobBoard: board,
+      promptMessageIDFor: () => 'prompt-continue-1',
+      isObservationPending: () => pending,
+      readTerminalEvidence: async () => ({
+        data: [
+          {
+            info: { id: 'prompt-continue-1', role: 'user' },
+            parts: [{ type: 'text', text: 'continue' }],
+          },
+          {
+            info: {
+              id: 'answer-continue-1',
+              role: 'assistant',
+              time: { completed: 1_005 },
+              finish: 'stop',
+            },
+            parts: [{ type: 'text', text: 'queued answer text' }],
+          },
+        ],
+      }),
+    });
+    gates.push(gate);
+
+    // Initial commit to establish completed state with queued answer text
+    const token = gate.capture(run);
+    if (!token) throw new Error('Missing token');
+    gate.observe(token, {
+      kind: 'quiescent',
+      origin: 'test',
+      readStartedAt: token.readStartedAt,
+    });
+    const initialCommit = await gate.reconcile(run);
+    expect(initialCommit.kind).toBe('committed');
+    expect(board.get(run.taskID)?.state).toBe('completed');
+    expect(board.get(run.taskID)?.resultSummary).toBe('queued answer text');
+
+    // A. Pending handoff blocks retained reconciliation
+    pending = true;
+    const resPending = await gate.reconcile(run);
+    expect(resPending.kind).toBe('deferred');
+    pending = false;
+
+    // B. Actual relaunch lease blocks retained reconciliation
+    const lease = board.acquireLease(run.taskID, run.generation, 'relaunch');
+    if (!lease) throw new Error('Failed to acquire relaunch lease');
+    expect(board.hasExecutionLease(run.taskID)).toBe(true);
+
+    const resLeased = await gate.reconcile(run);
+    expect(resLeased.kind).toBe('deferred');
+    expect(board.validateLease(lease)).toBe(true);
+
+    // C. Release relaunch lease: reconciliation is committed on same matching answer
+    expect(board.releaseLease(lease)).toBe(true);
+    expect(board.hasExecutionLease(run.taskID)).toBe(false);
+
+    const resUnblocked = await gate.reconcile(run);
+    expect(resUnblocked.kind).toBe('committed');
+    expect(resUnblocked.record.resultSummary).toBe('queued answer text');
+
+    // D. Idempotent repeated reconciliation remains committed with identical matching answer
+    const resIdempotent = await gate.reconcile(run);
+    expect(resIdempotent.kind).toBe('committed');
+    expect(resIdempotent.record.resultSummary).toBe('queued answer text');
+  });
+
+  test('restored task under relaunch lease rejects non-inspect output signal and does not shortcut', async () => {
+    const board = new BackgroundJobBoard();
+    const run = board.restoreRetainedSession({
+      taskID: 'ses_restored_output',
+      parentSessionID: 'parent',
+      agent: 'fixer',
+      description: 'restored test',
+      alias: 'fix-output',
+      state: 'completed',
+      launchedAt: 1_000,
+      completedAt: 2_000,
+      resultSummary: 'Restored completed result.',
+    });
+    if (!run) throw new Error('Missing restored run');
+
+    const gate = createBackgroundJobTerminalGate({
+      backgroundJobBoard: board,
+    });
+    gates.push(gate);
+
+    const lease = board.acquireLease(run.taskID, run.generation, 'relaunch');
+    if (!lease) throw new Error('Failed to acquire relaunch lease');
+
+    const outputSignal: TerminalSignal = {
+      kind: 'output',
+      origin: {
+        kind: 'synthetic',
+        occurrenceID: 'audit-output-1',
+        run,
+        provenance: 'test',
+      },
+      status: {
+        taskID: run.taskID,
+        state: 'completed',
+        timedOut: false,
+        result: 'output signal result',
+      },
+    };
+
+    // Under lease, non-inspect output signal is deferred
+    const res = await gate.reconcile(run, outputSignal);
+    expect(res.kind).toBe('deferred');
+    expect(board.validateLease(lease)).toBe(true);
+    expect(board.get(run.taskID)?.resultSummary).toBe(
+      'Restored completed result.',
+    );
+
+    // Releasing lease still does not shortcut non-inspect signal as committed
+    board.releaseLease(lease);
+    const resUnleased = await gate.reconcile(run, outputSignal);
+    expect(resUnleased.kind).toBe('deferred');
+  });
+
+  test('notification lease allows legitimate terminal read with board, revision, and lease unchanged', async () => {
+    const board = new BackgroundJobBoard();
+    const run = board.restoreRetainedSession({
+      taskID: 'ses_notification_lease',
+      parentSessionID: 'parent',
+      agent: 'fixer',
+      description: 'notification lease test',
+      alias: 'fix-notif',
+      state: 'completed',
+      launchedAt: 1_000,
+      completedAt: 2_000,
+      resultSummary: 'Restored completed result.',
+    });
+    if (!run) throw new Error('Missing restored run');
+
+    const gate = createBackgroundJobTerminalGate({
+      backgroundJobBoard: board,
+    });
+    gates.push(gate);
+
+    const lease = board.acquireLease(
+      run.taskID,
+      run.generation,
+      'terminal-notification',
+      { terminalRevision: run.terminalRevision },
+    );
+    if (!lease) throw new Error('Failed to acquire notification lease');
+    expect(board.hasExecutionLease(run.taskID)).toBe(false);
+
+    const res = await gate.reconcile(run);
+    expect(res.kind).toBe('committed');
+    expect(res.record.resultSummary).toBe('Restored completed result.');
+
+    // Board, revision, and notification lease remain unchanged and valid
+    expect(board.validateLease(lease)).toBe(true);
+    expect(board.get(run.taskID)?.terminalRevision).toBe(run.terminalRevision);
+    expect(board.get(run.taskID)?.generation).toBe(run.generation);
+    expect(board.get(run.taskID)?.state).toBe('completed');
   });
 });

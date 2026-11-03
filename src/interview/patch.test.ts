@@ -24,6 +24,14 @@ const SOURCE = [
 ].join('\n');
 
 describe('applyUnifiedDiff', () => {
+  test('rejects a replacement without any old lines', () => {
+    const patch = '@@ -1,2 +1,1 @@\n+A';
+    expect(applyUnifiedDiff('a\nb', patch)).toMatchObject({
+      ok: false,
+      failedHunk: patch,
+    });
+  });
+
   test('applies an insertion at the hinted old zero-count position', () => {
     const applied = applyUnifiedDiff('a\nb', '@@ -1,0 +2,1 @@\n+x');
     expect(applied).toEqual({ ok: true, text: 'a\nx\nb' });

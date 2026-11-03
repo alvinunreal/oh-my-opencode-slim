@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { log } from '../../utils/logger';
 
@@ -142,31 +143,15 @@ function extractReadContentAndRegion(
   canonicalPath?: string,
 ): {
   rawContent: string;
-  endLine: number;
-  truncated: boolean;
 } {
   let text = output;
-  if (text.includes(LOOP_GUARD_MARKER)) {
-    const idx = text.indexOf(LOOP_GUARD_MARKER);
-    const stripIdx = idx > 0 && text[idx - 1] === '\n' ? idx - 1 : idx;
-    text = text.slice(0, stripIdx);
-  }
-  let endLine = 0;
-  let truncated = false;
-  const linesMatch = text.match(/^Read file .+?, lines \d+-(\d+)/m);
-  if (linesMatch) {
-    endLine = Number.parseInt(linesMatch[1], 10);
-    truncated = /\bOutput truncated\b|Continue reading with offset/i.test(text);
-  } else {
-    endLine = text ? text.split('\n').length : 0;
-  }
   if (canonicalPath) {
     text = text.replace(
       /^Read file .+?, (lines \d+-.*)$/m,
       `Read file ${canonicalPath}, $1`,
     );
   }
-  return { rawContent: text, endLine, truncated };
+  return { rawContent: text };
 }
 
 /** Deterministic fingerprint of tool + args, insensitive to key order. */
@@ -195,8 +180,6 @@ interface SessionState {
   runs: number;
   /** Fingerprint of the most recent completed call's output. */
   lastOutput: string;
-  maxEndLine?: number;
-  truncated?: boolean;
 }
 
 interface CallState {
@@ -204,7 +187,6 @@ interface CallState {
   key: string;
   taskID?: string;
   canonicalPath?: string;
-  offset?: number;
 }
 
 interface TaskSupervisionState {
@@ -281,7 +263,13 @@ export function createToolLoopGuardHook(
 
   /** FIFO-cap tracked maps; a throwing tool never runs `after` (callKeys). */
   function keepSessionsBounded(): void {
-    for (const map of [sessions, waitRuns, callKeys]) {
+    for (const map of [
+      sessions,
+      waitRuns,
+      callKeys,
+      taskSupervision,
+      userMessageIdentities,
+    ]) {
       while (map.size > MAX_TRACKED_SESSIONS) {
         map.delete(map.keys().next().value as string);
       }
@@ -328,7 +316,6 @@ export function createToolLoopGuardHook(
       }
 
       let canonicalPath: string | undefined;
-      let requestedOffset = 1;
       let normalizedArgs: unknown = output.args;
       if (
         tool === 'read' &&
@@ -345,13 +332,6 @@ export function createToolLoopGuardHook(
               : undefined;
         if (rawPath && rawPath.trim() !== '') {
           canonicalPath = normalizeReadTarget(rawPath, options?.directory);
-        }
-        if (
-          typeof rec.offset === 'number' &&
-          Number.isFinite(rec.offset) &&
-          rec.offset >= 1
-        ) {
-          requestedOffset = rec.offset;
         }
         if (canonicalPath) {
           const rest: Record<string, unknown> = {};
@@ -390,20 +370,14 @@ export function createToolLoopGuardHook(
         existing.runs >= LOOP_GUARD_BLOCK_AT &&
         LOOP_GUARD_BLOCK_TOOLS[tool]
       ) {
-        const isPaginating =
-          tool === 'read' &&
-          existing.truncated === true &&
-          requestedOffset > (existing.maxEndLine ?? 0);
-        if (!isPaginating) {
-          log('[tool-loop-guard] blocked repeated tool call', {
-            sessionID,
-            tool,
-            runs: existing.runs,
-          });
-          throw new Error(
-            `Refusing to execute "${tool}": this exact call (same tool, same arguments) has returned identical results ${existing.runs} times in a row and constitutes an infinite loop. Stop repeating it. Reassess your goal, make a different call, or produce your final answer.`,
-          );
-        }
+        log('[tool-loop-guard] blocked repeated tool call', {
+          sessionID,
+          tool,
+          runs: existing.runs,
+        });
+        throw new Error(
+          `Refusing to execute "${tool}": this exact call (same tool, same arguments) has returned identical results ${existing.runs} times in a row and constitutes an infinite loop. Stop repeating it. Reassess your goal, make a different call, or produce your final answer.`,
+        );
       }
 
       if (input.callID) {
@@ -411,7 +385,6 @@ export function createToolLoopGuardHook(
           sessionID,
           key,
           canonicalPath,
-          offset: requestedOffset,
         });
       }
     },
@@ -473,6 +446,7 @@ export function createToolLoopGuardHook(
             previous?.lifecycleState === lifecycleState ? previous.runs + 1 : 1,
         };
         states.set(taskID, state);
+        keepSessionsBounded();
         if (
           state.runs >= LOOP_GUARD_WARN_AT &&
           typeof output.output === 'string' &&
@@ -489,21 +463,19 @@ export function createToolLoopGuardHook(
         }
         return;
       }
-      let endLine = 0;
-      let truncated = false;
       let outputToHash: unknown = output.output;
       if (tool === 'read' && typeof output.output === 'string') {
         const extracted = extractReadContentAndRegion(
           output.output,
           call?.canonicalPath,
         );
-        endLine = extracted.endLine;
-        truncated = extracted.truncated;
         outputToHash = extracted.rawContent;
       }
 
       const key = call?.key;
-      const outputHash = fingerprint(tool, outputToHash);
+      const outputHash = createHash('sha256')
+        .update(fingerprint(tool, outputToHash))
+        .digest('hex');
 
       const existing = sessions.get(sessionID);
       let state: SessionState;
@@ -516,15 +488,11 @@ export function createToolLoopGuardHook(
                 last: key,
                 runs: existing.runs + 1,
                 lastOutput: outputHash,
-                maxEndLine: Math.max(existing.maxEndLine ?? 0, endLine),
-                truncated,
               }
             : {
                 last: key,
                 runs: 1,
                 lastOutput: outputHash,
-                maxEndLine: endLine,
-                truncated,
               };
       } else {
         // Different args or untracked call: start a fresh run.
@@ -532,8 +500,6 @@ export function createToolLoopGuardHook(
           last: key ?? `${tool}:<untracked>`,
           runs: 1,
           lastOutput: outputHash,
-          maxEndLine: endLine,
-          truncated,
         };
       }
       sessions.set(sessionID, state);
@@ -558,6 +524,7 @@ export function createToolLoopGuardHook(
     ): void {
       if (userMessageIdentities.get(sessionID) === messageID) return;
       userMessageIdentities.set(sessionID, messageID);
+      keepSessionsBounded();
       // Plugin-injected admissions (wakes, completion pushes) still open a
       // fresh polling/wait window but must not clear a confirmed read loop.
       if (options?.internalAdmission !== true) sessions.delete(sessionID);

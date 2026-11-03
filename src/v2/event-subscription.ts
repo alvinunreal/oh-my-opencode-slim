@@ -11,6 +11,8 @@ const BASE_TYPES = [
   'session.execution.interrupted',
   'session.status',
   'session.idle',
+  'session.step.started',
+  'session.step.failed',
   'session.step.ended',
   'form.created',
   'form.replied',
@@ -19,11 +21,7 @@ const BASE_TYPES = [
   'permission.replied',
 ] as const;
 
-const INTERVIEW_TEXT_TYPES = [
-  'session.text.started',
-  'session.text.delta',
-  'session.text.ended',
-] as const;
+const INTERVIEW_TEXT_TYPES = ['session.text.ended'] as const;
 
 export type V2EventSubscriptionType =
   | (typeof BASE_TYPES)[number]
@@ -41,10 +39,4 @@ export function buildV2EventSubscriptionTypes(
       ? [...BASE_TYPES, ...INTERVIEW_TEXT_TYPES]
       : [...BASE_TYPES],
   );
-}
-
-// Other token streams have no consumer in the plugin. Text deltas bypass
-// permission/profile handling; Interview scopes them to its managed sessions.
-export function isV2StreamDeltaType(type: string): boolean {
-  return type === 'session.text.delta';
 }

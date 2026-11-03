@@ -5,11 +5,16 @@ Unlike MCPs (which are running servers), skills are **prompt-based instructions*
 injected into an agent's system prompt to guide decisions, workflows, and, when
 relevant, tool use.
 
-Bundled skills are registered in-process by the plugin at load (never copied to
-disk); plugin updates apply on the next OpenCode restart. Skills listed in
+Bundled skills are registered by the plugin at load (never copied to the user
+skill directory): v1 scans the package paths and v2 registers them in-process.
+Plugin updates apply on the next OpenCode restart. Skills listed in
 `disabled_skills` are not registered. To override a bundled skill, create a
 same-named directory under `~/.config/opencode/skills/` — directory skills take
 precedence over the bundled registration.
+
+Legacy managed copies are removed only if their content still matches the last
+managed version. Edited copies are kept; disabled edited copies are moved to
+`~/.config/opencode/.oh-my-opencode-slim-skill-backups/` outside the skill scan.
 
 ---
 
@@ -355,6 +360,13 @@ Control which skills each agent can use in `~/.config/opencode/oh-my-opencode-sl
   native permissions
 - `!item` excludes a specific skill
 - Conflicts (e.g. `["a", "!a"]`) → deny wins (principle of least privilege)
+
+The orchestrator's `<Agents>` routing block shows each specialist's effective
+grants (from `skills`, `disabled_skills` and `permission.skill`) on that
+specialist's line (for example `Skills: simplify.`, `Skills:
+all`, or `Skills: all except codemap.`). This lets the orchestrator load
+skills only it has itself instead of asking a delegate that can't load them.
+Specialists with no skills show nothing.
 
 **Example:**
 

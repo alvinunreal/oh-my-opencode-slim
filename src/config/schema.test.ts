@@ -853,21 +853,37 @@ describe('PluginConfigSchema backgroundJobs', () => {
     warnSpy.mockRestore();
   });
 
-  it('defaults backgroundJobs.enabled to true', () => {
+  it('leaves backgroundJobs.mode unset by default so the runtime resolves managed', () => {
     const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.backgroundJobs?.enabled).toBe(true);
+      expect(result.data.backgroundJobs?.mode).toBeUndefined();
     }
   });
 
-  it('accepts enabled: false and keeps the otherwise-inert lifecycle keys', () => {
-    // false only turns the managed lifecycle off; the sibling keys stay
+  it('rejects the removed enabled alias and names backgroundJobs.mode', () => {
+    const result = PluginConfigSchema.safeParse({
+      backgroundJobs: { enabled: false, maxSessionsPerAgent: 4 },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ['backgroundJobs', 'enabled'],
+          message: expect.stringContaining('use backgroundJobs.mode'),
+        }),
+      );
+    }
+  });
+
+  it('accepts mode: "off" and keeps the otherwise-inert lifecycle keys', () => {
+    // mode off only turns the managed lifecycle off; the sibling keys stay
     // accepted (validated as usual, then inert at runtime).
     const result = PluginConfigSchema.safeParse({
       backgroundJobs: {
-        enabled: false,
+        mode: 'off',
         maxSessionsPerAgent: 4,
         orchestratorWake: { enabled: false, intervalMs: 120_000 },
         wallClockTimeoutMs: 60_000,
@@ -879,7 +895,7 @@ describe('PluginConfigSchema backgroundJobs', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.backgroundJobs?.enabled).toBe(false);
+      expect(result.data.backgroundJobs?.mode).toBe('off');
       expect(result.data.backgroundJobs?.maxSessionsPerAgent).toBe(4);
       expect(result.data.backgroundJobs?.wallClockTimeoutMs).toBe(60_000);
       expect(result.data.backgroundJobs?.concurrency?.defaultConcurrency).toBe(
@@ -1508,6 +1524,20 @@ describe('PluginConfigSchema removed legacy keys', () => {
     }
   });
 
+  it('rejects the removed backgroundJobs.enabled alias with the mode hint', () => {
+    const result = PluginConfigSchema.safeParse({
+      backgroundJobs: { enabled: true },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(
+        result.error.issues.map((issue) => issue.message).join('\n'),
+      ).toContain(
+        'backgroundJobs.enabled was removed; use backgroundJobs.mode',
+      );
+    }
+  });
+
   it('accepts orca as a multiplexer type with sibling keys', () => {
     const parsed = MultiplexerConfigSchema.parse({
       type: 'orca',
@@ -1526,5 +1556,21 @@ describe('PluginConfigSchema removed legacy keys', () => {
     if (result.success) {
       expect(result.data.type).toBe('none');
     }
+  });
+});
+
+describe('AgentOverrideConfigSchema.subagents', () => {
+  it('accepts a delegation-scope allowlist', () => {
+    const result = PluginConfigSchema.safeParse({
+      agents: { coworker: { model: 'x/y', subagents: ['fixer', '@writer'] } },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects the reserved * wildcard as a specialist name', () => {
+    const result = PluginConfigSchema.safeParse({
+      agents: { coworker: { model: 'x/y', subagents: ['fixer', '*'] } },
+    });
+    expect(result.success).toBe(false);
   });
 });

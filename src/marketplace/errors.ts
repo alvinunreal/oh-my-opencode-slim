@@ -36,6 +36,13 @@ export class MarketplaceConflictError extends MarketplaceError {
   }
 }
 
+export class MarketplaceAlreadyUpToDateError extends MarketplaceConflictError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MarketplaceAlreadyUpToDateError';
+  }
+}
+
 export class MarketplaceBusyError extends MarketplaceError {
   constructor(message: string) {
     super(message, 'busy');

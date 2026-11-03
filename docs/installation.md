@@ -34,9 +34,13 @@ Common options: `--preset=<openai|opencode-go>` (default `openai`),
 `--background-subagents=ask|yes|no`, `--background-subagents-target=<path>`,
 `--no-tui`, `--dry-run`, `--reset`.
 
+When invoked through `bunx` with a tag other than `latest` or an exact version,
+the installer pins the resolved package version in OpenCode's configuration.
+`npx` does not expose that request in its cache path, so its entry is unpinned.
+
 ### Background Subagents Environment Setup
 
-Background orchestration is the default workflow. It depends on OpenCode's
+On OpenCode v1, background orchestration is the default workflow. It depends on OpenCode's
 native background subagents, enabled by two exports the installer offers to add
 to your shell startup file (the prompt defaults to yes):
 
@@ -46,13 +50,15 @@ OPENCODE_ENABLE_EXA=1
 ```
 
 The Exa flag enables OpenCode's built-in `websearch` tool without an API key.
-Pass `--background-subagents=no` to skip the exports.
+Pass `--background-subagents=no` to skip the exports. `--no-tui` skips them
+unless `--background-subagents=yes` or `ask` is explicitly supplied. OpenCode v2
+does not need these installer-managed exports.
 
 After the installer updates a shell startup file, restart your terminal or source
 the file before launching OpenCode. Examples:
 
 ```bash
-source ~/.zshrc
+source "${ZDOTDIR:-$HOME}/.zshrc"
 # or
 source ~/.bashrc
 ```
@@ -83,8 +89,9 @@ bunx oh-my-opencode-slim@latest install --reset
 
 The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default (using variant-aware GPT-6 models, including `gpt-6.1-sol` at `medium` for Orchestrator, `high` for Oracle, and `low` for Fixer, and `gpt-6-luna` variants for Explorer and Designer). To make OpenCode Go active during install, run `bunx oh-my-opencode-slim@latest install --preset=opencode-go`. That preset uses Minimax-M3 for Orchestrator, so the installer also enables Observer with `opencode-go/mimo-v2.5` for visual analysis. To switch providers later or build a mixed setup, use **[Configuration Reference](configuration.md)** for the full option reference and the preset docs for copyable examples.
 
-Bundled skills are registered in-process at plugin load — nothing is copied to
-disk, and plugin updates apply on the next OpenCode restart. Skills listed in
+Bundled skills are registered at plugin load — v1 scans their package paths,
+while v2 registers them in-process. Nothing is copied to the user skill directory,
+and plugin updates apply on the next OpenCode restart. Skills listed in
 `disabled_skills` are not registered. A same-named skill directory under
 `~/.config/opencode/skills/` overrides the bundled version (directory sources
 take precedence over plugin registrations).
@@ -99,6 +106,8 @@ opencode auth login
 ```bash
 opencode models --refresh
 ```
+
+On OpenCode v2, use `opencode models` instead.
 
 Open your generated config at `~/.config/opencode/oh-my-opencode-slim.json`
 and adjust models if needed.
@@ -162,7 +171,7 @@ The installer automatically:
   `$OPENCODE_CONFIG_DIR` when set, otherwise `~/.config/opencode`
 - Disables default OpenCode agents
 - Enables OpenCode LSP integration when no explicit `lsp` setting exists
-- Configures `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` when approved
+- On v1, configures `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` when approved
 - Generates agent model mappings in the same OpenCode config directory as
   `oh-my-opencode-slim.json` (or `.jsonc`)
 
@@ -180,10 +189,10 @@ opencode auth login
 Ask the user to:
 
 1. Authenticate: `opencode auth login`
-2. Refresh models: `opencode models --refresh`
-3. Restart the terminal or source the shell file updated by the installer
-   (`source ~/.zshrc` or `source ~/.bashrc`), then start OpenCode: `opencode`
-   - One-shot alternative: `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode`
+2. Refresh models: `opencode models --refresh` on v1, `opencode models` on v2
+3. On v1, restart the terminal or source the shell file updated by the installer
+   (`source "${ZDOTDIR:-$HOME}/.zshrc"` or `source ~/.bashrc`), then start OpenCode: `opencode`
+   - On v1, a one-shot alternative is `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode`
 4. Run: `ping all agents`
 
 Verify all agents respond successfully.
@@ -235,8 +244,9 @@ If the installer reports that the configuration already exists, you have two opt
 
 ### Missing Background Task Tools
 
-If background tasks never
-return task IDs, or delegation behaves like a blocking foreground call:
+If background tasks never return task IDs, or delegation behaves like a
+blocking foreground call, check your OpenCode version. The steps below apply to
+v1; v2 does not use this environment variable.
 
 1. Confirm OpenCode was launched with the environment variable:
    ```bash
@@ -328,7 +338,7 @@ See the [Multiplexer Integration Guide](multiplexer-integration.md) for more det
 4. Remove the environment variable:
 
    The installer may have added an export to your shell startup file. Remove the `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` line from your shell config:
-   - `~/.zshrc` (Zsh)
+   - `${ZDOTDIR:-$HOME}/.zshrc` (Zsh)
    - `~/.bashrc` (Bash)
    - `~/.config/fish/conf.d/opencode-background-subagents.fish` (Fish) — also remove `set -gx OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS true`
 
@@ -347,7 +357,7 @@ See the [Multiplexer Integration Guide](multiplexer-integration.md) for more det
    rm -f ~/.config/opencode/oh-my-opencode-slim.json.bak
    ```
 
-7. Bundled skills are registered in-process by the plugin — removing the plugin entry (previous step) removes them. If a legacy install copied skills under `~/.config/opencode/skills/`, the plugin removes its manifest-tracked copies automatically on next load; user-authored skills are never touched.
+7. Bundled skills are provided by the plugin and disappear when it is removed. For legacy copies under `~/.config/opencode/skills/`, review the files and remove only those you no longer need; removing the plugin prevents its migration cleanup from running.
 
 8. Remove the desktop companion binary (if installed):
 

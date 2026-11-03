@@ -101,6 +101,7 @@ export interface BackgroundJobTerminalGate {
   capture(run: RunRef): ObservationToken | undefined;
   observe(token: ObservationToken, runtime: RuntimeObservation): GateResult;
   reconcile(run: RunRef, signal?: TerminalSignal): Promise<GateResult>;
+  isRetainedObservationBlocked(run: RunRef): boolean;
   hasGivenUp(run: RunRef): boolean;
   dispose(): void;
 }
@@ -517,6 +518,17 @@ export function createBackgroundJobTerminalGate(options: {
       : { kind: 'stale' };
   }
 
+  function isRetainedObservationBlocked(run: RunRef): boolean {
+    const record = board.get(run.taskID);
+    return (
+      record === undefined ||
+      record.generation !== run.generation ||
+      record.state === 'running' ||
+      board.hasExecutionLease(run.taskID) ||
+      options.isObservationPending?.(run.taskID, run.generation) === true
+    );
+  }
+
   /**
    * Arm the slow-tier evidence re-arm for one observation episode (#1561).
    *
@@ -586,6 +598,12 @@ export function createBackgroundJobTerminalGate(options: {
   }
 
   function retry(run: RunRef, diagnostic?: string): GateResult {
+    // A read of an already-terminal row must not arm recovery, change its
+    // diagnostics, or release an admission slot a second time.
+    const record = board.get(run.taskID);
+    if (!record || record.generation !== run.generation)
+      return { kind: 'stale' };
+    if (record.state !== 'running') return { kind: 'deferred', record };
     const value = observation(run);
     if (!value) return { kind: 'stale' };
     if (
@@ -675,6 +693,11 @@ export function createBackgroundJobTerminalGate(options: {
     const before = board.get(token.taskID);
     if (!before || !value || !current(token)) return { kind: 'stale' };
     if (before.state !== 'running') {
+      // Reconfirming a retained result must not bypass a newly pending
+      // handoff or execution lease, including for queued answers.
+      if (state !== 'cancelled' && isRetainedObservationBlocked(token)) {
+        return deferred(token);
+      }
       const terminal =
         before.state === 'reconciled' ? before.terminalState : before.state;
       return terminal === state && before.resultSummary === text
@@ -1346,6 +1369,7 @@ export function createBackgroundJobTerminalGate(options: {
       response === undefined &&
       signal?.kind === 'output' &&
       signal.origin.kind === 'native' &&
+      signal.origin.callIDConfirmed === true &&
       signal.status.result?.trim() &&
       signal.status.state !== 'running'
     ) {
@@ -1490,9 +1514,18 @@ export function createBackgroundJobTerminalGate(options: {
     signal: TerminalSignal = { kind: 'inspect' },
   ): Promise<GateResult> {
     const retained = board.get(run.taskID);
+    if (
+      signal.kind !== 'cancel' &&
+      retained?.generation === run.generation &&
+      retained.state !== 'running' &&
+      isRetainedObservationBlocked(run)
+    ) {
+      return Promise.resolve(deferred(run));
+    }
     // A restored round stands in for live status only until an event makes
     // later activity ambiguous (episode bump); then the live read decides.
     if (
+      signal.kind === 'inspect' &&
       retained?.verifiedRetainedRound === true &&
       retained.generation === run.generation &&
       retained.state !== 'running' &&
@@ -1535,6 +1568,7 @@ export function createBackgroundJobTerminalGate(options: {
     capture,
     observe,
     reconcile,
+    isRetainedObservationBlocked,
     hasGivenUp(run) {
       const value = observations.get(run.taskID);
       const record = board.get(run.taskID);

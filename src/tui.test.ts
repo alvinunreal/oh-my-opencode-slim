@@ -2656,7 +2656,7 @@ describe('clickable sidebar sessions', () => {
     }
   });
 
-  test('preset snapshot row shows hover contrast, restores it, and activates', async () => {
+  test('preset row shows a differing session preset with the default as a suffix, hovers, and activates', async () => {
     let activations = 0;
     const hover = resolveHoverBackground({
       background: '#111111',
@@ -2667,7 +2667,7 @@ describe('clickable sidebar sessions', () => {
         buildPresetRow(
           {
             name: 'custom',
-            sessionLabel: 'team',
+            sessionPreset: 'team',
             onActivate: () => activations++,
           },
           { text: '#ffffff', textMuted: '#aaaaaa' },
@@ -2679,29 +2679,24 @@ describe('clickable sidebar sessions', () => {
     try {
       await setup.renderOnce();
       const frame = () => setup.captureCharFrame().split('\n');
-      const line = frame().findIndex((row) => row.includes('Default'));
-      const snapshotLine = frame().findIndex((row) =>
-        row.includes('Session team snapshot: team'),
-      );
+      const line = frame().findIndex((row) => row.includes('Preset'));
       expect(line).toBeGreaterThanOrEqual(0);
-      expect(snapshotLine).toBeGreaterThan(line);
+      expect(frame()[line]).toContain('Preset team · default custom');
+      // Single row: nothing renders below it.
+      expect(frame()[line + 1]?.trim()).toBe('');
       const backgrounds = (row: number) =>
         setup.captureSpans().lines[row]?.spans.map((span) => span.bg.toInts());
       const before = backgrounds(line);
-      const snapshotBefore = backgrounds(snapshotLine);
       expect(before?.length).toBeGreaterThan(0);
 
-      const col = frame()[line]?.indexOf('custom') ?? -1;
+      const col = frame()[line]?.indexOf('team') ?? -1;
       await setup.mockMouse.moveTo(col + 1, line);
       await setup.renderOnce();
-      const hovered = backgrounds(line);
-      expect(hovered).not.toEqual(before);
-      expect(backgrounds(snapshotLine)).not.toEqual(snapshotBefore);
+      expect(backgrounds(line)).not.toEqual(before);
 
       await setup.mockMouse.moveTo(0, 5);
       await setup.renderOnce();
       expect(backgrounds(line)).toEqual(before);
-      expect(backgrounds(snapshotLine)).toEqual(snapshotBefore);
       await setup.mockMouse.click(col + 1, line);
       expect(activations).toBe(1);
     } finally {
@@ -3508,19 +3503,13 @@ describe('clickable sidebar sessions', () => {
               );
             const key = `${compactSidebar ? 'compact' : 'full'}/${state}/${disclosure}`;
             const lines = frame.split('\n');
-            const defaultRow = lines.findIndex((line) =>
-              line.includes('Default'),
+            const presetRow = lines.findIndex((line) =>
+              line.includes('Preset'),
             );
-            expect(defaultRow).toBeGreaterThan(0);
-            expect(lines[defaultRow]).toContain('Default (none)');
-            expect(lines[defaultRow + 1]).toContain(
-              'Session team snapshot: Unavailable',
-            );
-            expect(spans[defaultRow + 1][0]).toEqual([
-              'Session team snapshot: Unavailable',
-              [170, 170, 170, 255],
-              [0, 0, 0, 0],
-            ]);
+            expect(presetRow).toBeGreaterThan(0);
+            // An unreadable session binding falls back to the default alone.
+            expect(lines[presetRow]).toContain('Preset (none)');
+            expect(frame).not.toContain('default (none)');
             if (process.env.OMO_REVIEW_SIDEBAR_FRAMES === '1') {
               console.log(JSON.stringify({ key, frame, spans }, null, 2));
             }
@@ -3536,8 +3525,8 @@ describe('clickable sidebar sessions', () => {
         }
       }
     }
-    // Session-preset baseline: removing only the new default/snapshot block
-    // (including its top margin) reproduced all 24 pre-change frame+color hashes.
+    // Session-preset baseline: one preset row; a differing session binding
+    // renders inline as `<session> · default <name>`.
     // Review updates with OMO_REVIEW_SIDEBAR_FRAMES=1 bun test src/tui.test.ts
     // -t 'sidebar frame text and colors remain byte-identical'; inspect frames
     // and colors before copying the printed hashes to sidebar-frame-golden.json.

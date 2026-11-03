@@ -6,13 +6,7 @@ import { generateLiteConfig, MODEL_MAPPINGS } from './providers';
 describe('providers', () => {
   test('MODEL_MAPPINGS includes supported providers', () => {
     const keys = Object.keys(MODEL_MAPPINGS);
-    expect(keys.sort()).toEqual([
-      'copilot',
-      'kimi',
-      'openai',
-      'opencode-go',
-      'zai-plan',
-    ]);
+    expect(keys.sort()).toEqual(['openai', 'opencode-go']);
   });
 
   test('generateLiteConfig defaults to openai and includes generated presets', () => {
@@ -71,13 +65,13 @@ describe('providers', () => {
     expect(agents).toBeDefined();
     expect(agents).toMatchObject({
       orchestrator: { model: 'opencode-go/minimax-m3', variant: 'thinking' },
-      oracle: { model: 'opencode-go/qwen3.7-max', variant: 'max' },
+      oracle: { model: 'opencode-go/qwen3.8-max', variant: 'xhigh' },
       explorer: {
-        model: 'opencode-go/deepseek-v4-flash',
+        model: 'opencode-go/deepseek-v4.1-flash',
         variant: 'high',
       },
       designer: { model: 'opencode-go/kimi-k2.7-code' },
-      fixer: { model: 'opencode-go/deepseek-v4-flash', variant: 'high' },
+      fixer: { model: 'opencode-go/deepseek-v4.1-flash', variant: 'high' },
       observer: { model: 'opencode-go/mimo-v2.5' },
     });
     expect(agents.council).toBeUndefined();
@@ -135,6 +129,7 @@ describe('providers', () => {
 
     // Oracle should have bundled simplify
     expect(agents.oracle.skills).toContain('simplify');
+    expect(agents.oracle.skills).toContain('requesting-code-review');
 
     // Orchestrator should implicitly cover bundled codemap via '*'
     expect(agents.orchestrator.skills).toContain('*');

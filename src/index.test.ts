@@ -8,19 +8,32 @@ import {
   spyOn,
   test,
 } from 'bun:test';
-import { readdirSync, readFileSync } from 'node:fs';
+import * as childProcess from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import * as fs from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import * as os from 'node:os';
 import path from 'node:path';
+import * as promiseTimers from 'node:timers/promises';
 import { testRender } from '@opentui/solid';
 import type { RegistryFactoryBridge } from './agents/registry-bridge';
 import {
+  CompanionManager,
   companionSessionIdForDirectory,
   stateFilePath,
 } from './companion/manager';
+import * as companionUpdater from './companion/updater';
+import {
+  COMPANION_MANIFEST,
+  getCompanionBinaryPath,
+  getCompanionTarget,
+} from './companion/updater';
 import { RuntimeConfig } from './config/runtime';
 import * as wakeHooks from './hooks';
 import { isTaggedPart, stripTaggedContent } from './hooks/cache-safe-injection';
+import { COUNCIL_INJECT_METADATA_KEY } from './hooks/council-inject';
 import { JSON_ERROR_REMINDER } from './hooks/json-error-recovery/hook';
 import {
   getWakeProgress,
@@ -53,10 +66,12 @@ import {
   BackgroundJobBoard as ProductionBoard,
 } from './utils/background-job-board';
 import { BackgroundJobBoard } from './utils/background-job-fixture';
+import * as compat from './utils/compat';
 import { resetLiveDirectoriesForTests } from './utils/event-directory-scope';
 import { createInternalAgentTextPart } from './utils/internal-initiator';
 import * as loggerModule from './utils/logger';
 import { pendingSessionPrune } from './utils/pending-session-prunes';
+import * as zip from './utils/zip-extractor';
 
 function createPluginClient(
   noop: () => Promise<unknown>,
@@ -345,6 +360,158 @@ describe('plugin tool registration', () => {
     expect(hooks.dispose).toBeFunction();
     await hooks.dispose?.();
     await hooks.dispose?.();
+  });
+
+  test('v1 checks the project native skill inventory at chat.params, not config time', async () => {
+    const originalEnv = { ...process.env };
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), 'marketplace-v1-skills-'),
+    );
+    const configDir = path.join(root, 'config');
+    await mkdir(configDir, { recursive: true });
+    process.env = {
+      ...originalEnv,
+      OPENCODE_CONFIG_DIR: configDir,
+      XDG_CONFIG_HOME: path.join(root, 'xdg'),
+      XDG_DATA_HOME: path.join(root, 'data'),
+    };
+    await Bun.write(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        preset: 'work',
+        presets: { work: { marketplace: { agents: ['team/skill-user'] } } },
+      }),
+    );
+    new MarketplaceStore({ pluginVersion: '3.2.0' }).install({
+      manifest: {
+        schemaVersion: 2,
+        id: 'team/skill-user',
+        version: '1.0.0',
+        displayName: 'Skill user',
+        description: 'Skill fixture',
+        agentName: 'skill-user',
+        prompt: 'Use the skill.',
+        skills: ['native-skill'],
+        mcps: [],
+        tools: ['read'],
+        author: { name: 'Test' },
+        tags: [],
+        license: 'MIT',
+        compatibility: { plugin: '*' },
+        model: { source: 'session' },
+        routing: { description: 'Skill', when: 'Testing', keywords: [] },
+      } as never,
+    });
+    let inventory = [
+      {
+        name: 'native-skill',
+        location: '/skills/native-skill/SKILL.md',
+        content: 'Native skill.',
+      },
+    ];
+    const requests: unknown[] = [];
+    const client = createPluginClient(async () => ({}));
+    Object.assign(client, {
+      _client: {
+        get: async (options: unknown) => {
+          requests.push(options);
+          return { data: inventory };
+        },
+      },
+    });
+    const hooks = await plugin({
+      client,
+      directory: root,
+      worktree: root,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    try {
+      await hooks.config?.({ agent: {} });
+      expect(requests).toHaveLength(0);
+      await hooks['chat.params']?.({} as never, {} as never);
+      expect(requests).toEqual([
+        expect.objectContaining({ url: '/skill', query: { directory: root } }),
+      ]);
+      inventory = [];
+      await expect(
+        hooks['chat.params']?.({} as never, {} as never),
+      ).rejects.toThrow('team/skill-user');
+    } finally {
+      await hooks.dispose?.();
+      process.env = originalEnv;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test('status and reload report a disabled marketplace against the live registry', async () => {
+    const originalEnv = { ...process.env };
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), 'marketplace-disabled-live-'),
+    );
+    const configDir = path.join(root, 'config');
+    await mkdir(configDir, { recursive: true });
+    process.env = {
+      ...originalEnv,
+      OPENCODE_CONFIG_DIR: configDir,
+      XDG_DATA_HOME: path.join(root, 'data'),
+    };
+    delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
+    const configPath = path.join(configDir, 'oh-my-opencode-slim.json');
+    const config = {
+      preset: 'work',
+      presets: { work: { marketplace: { agents: ['team/live'] } } },
+    };
+    await Bun.write(configPath, JSON.stringify(config));
+    new MarketplaceStore({ pluginVersion: '3.2.0' }).install({
+      manifest: {
+        schemaVersion: 2,
+        id: 'team/live',
+        version: '1.0.0',
+        displayName: 'Live',
+        description: 'Live fixture',
+        agentName: 'live-agent',
+        prompt: 'Test.',
+        skills: [],
+        mcps: [],
+        tools: ['read'],
+        author: { name: 'Test' },
+        tags: [],
+        license: 'MIT',
+        compatibility: { plugin: '*' },
+        model: { source: 'session' },
+        routing: { description: 'Live', when: 'Testing.', keywords: [] },
+      } as never,
+    });
+    const hooks = await plugin({
+      client: createPluginClient(async () => ({})),
+      directory: root,
+      worktree: root,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    try {
+      await hooks.config?.({ agent: {} });
+      const { marketplaceService } = (
+        hooks as unknown as { registryBridge: RegistryFactoryBridge }
+      ).registryBridge;
+      expect(marketplaceService.status().reloadRequired).toBe(false);
+      await Bun.write(
+        configPath,
+        JSON.stringify({ ...config, marketplace: { enabled: false } }),
+      );
+      expect(marketplaceService.status()).toMatchObject({
+        desiredPackageIds: [],
+        reloadRequired: true,
+      });
+      expect(marketplaceService.requestReload()).toMatchObject({
+        desiredPackageIds: [],
+        reloadRequired: true,
+      });
+    } finally {
+      await hooks.dispose?.();
+      process.env = originalEnv;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test('activates only marketplace packages selected by the resolved preset at first host finalization', async () => {
@@ -1851,7 +2018,7 @@ describe('plugin reload generation cleanup', () => {
         metadata: {},
       };
       await hooks['tool.execute.after']?.(
-        { tool: 'Edit', sessionID: 'guards-on', callID: 'c-7' } as never,
+        { tool: 'invalid', sessionID: 'guards-on', callID: 'c-7' } as never,
         jsonOutput as never,
       );
       expect(String(jsonOutput.output)).toContain(JSON_ERROR_REMINDER);
@@ -2165,7 +2332,7 @@ describe('plugin reload generation cleanup', () => {
   // OMOS publishes NOTHING for it. A later publication (rev>1) has no native
   // notifier: v1 pushes ONE self-contained `<completed-job>` delta through
   // the bounded delta queue (never the drop-prone publication wake); v2
-  // creates no wake scheduler, so it pushes nothing.
+  // delivers later untracked publications through the revived-run tracker.
 
   async function emitTerminalPublication(record: {
     pluginConfig?: Record<string, unknown>;
@@ -2434,7 +2601,7 @@ describe('plugin reload generation cleanup', () => {
     expect(skipLogs).toHaveLength(0);
   });
 
-  test('C3: v2 later publication after a direct prompt injects nothing (pull-only)', async () => {
+  test('C3: v2 later stop after a direct prompt injects nothing', async () => {
     const { wake, skipLogs, scheduler } = await emitStoppedRecovery({
       resultSummary: HOST_INTERRUPTED_SUMMARY,
       pluginConfig: { hostFlavor: 'v2' },
@@ -2495,6 +2662,299 @@ describe('plugin reload generation cleanup', () => {
     // dispose must call companionManager.onExit(): the session entry is
     // withdrawn even if the next generation fails before its own onLoad.
     expect(readSessionIds()).not.toContain(companionSessionId);
+  });
+
+  test('companion startup does not gate plugin availability on a slow download', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({ companion: { enabled: true } }),
+    );
+    const fetchOriginal = globalThis.fetch;
+    const started = Promise.withResolvers<void>();
+    const loaded = Promise.withResolvers<void>();
+    let complete!: (response: Response) => void;
+    let aborted = false;
+    globalThis.fetch = ((_url, options) =>
+      new Promise<Response>((resolve, reject) => {
+        complete = resolve;
+        options?.signal?.addEventListener('abort', () => {
+          aborted = true;
+          reject(new Error('aborted'));
+        });
+        started.resolve();
+      })) as typeof fetch;
+    const originalLoad = CompanionManager.prototype.onLoad;
+    const load = spyOn(CompanionManager.prototype, 'onLoad').mockImplementation(
+      function (this: CompanionManager) {
+        originalLoad.call(this);
+        loaded.resolve();
+      },
+    );
+    jest.useFakeTimers();
+    let hooks: Awaited<ReturnType<typeof plugin>> | undefined;
+    try {
+      const initialization = createHooks();
+      await started.promise;
+      jest.advanceTimersByTime(3_001);
+      hooks = await initialization;
+      expect(aborted).toBe(false);
+      complete(new Response('', { status: 503 }));
+      await loaded.promise;
+      expect(
+        JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions,
+      ).toHaveLength(1);
+    } finally {
+      complete?.(new Response('', { status: 503 }));
+      await hooks?.dispose?.();
+      load.mockRestore();
+      globalThis.fetch = fetchOriginal;
+      jest.useRealTimers();
+    }
+  });
+
+  test('reloaded companion starts after the retired generation finishes installing', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({ companion: { enabled: true } }),
+    );
+    const binary = getCompanionBinaryPath();
+    const target = getCompanionTarget();
+    const archive = `oh-my-opencode-slim-companion-v${COMPANION_MANIFEST.version}-${target}.${process.platform === 'win32' ? 'zip' : 'tar.gz'}`;
+    const bytes = Buffer.from('verified companion archive');
+    const checksums = COMPANION_MANIFEST.checksums;
+    COMPANION_MANIFEST.checksums = {
+      ...checksums,
+      [archive]: createHash('sha256').update(bytes).digest('hex'),
+    };
+    const download = Promise.withResolvers<Response>();
+    const started = Promise.withResolvers<void>();
+    const installed = Promise.withResolvers<void>();
+    const loaded = Promise.withResolvers<void>();
+    const joined = Promise.withResolvers<void>();
+    const attempts: Promise<unknown>[] = [];
+    const originalEnsure = companionUpdater.ensureCompanionVersionForStartup;
+    const ensure = spyOn(
+      companionUpdater,
+      'ensureCompanionVersionForStartup',
+    ).mockImplementation((...args) => {
+      const pending = originalEnsure(...args);
+      attempts.push(pending);
+      if (attempts.length === 2) joined.resolve();
+      return pending;
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => {
+      started.resolve();
+      return download.promise;
+    }) as typeof fetch;
+    const extractBinary = (destination: string) => {
+      writeFileSync(path.join(destination, path.basename(binary)), 'binary');
+    };
+    const originalCrossSpawn = compat.crossSpawn;
+    const extractTar = spyOn(compat, 'crossSpawn').mockImplementation(
+      (command, options) => {
+        if (command[0] !== 'tar') return originalCrossSpawn(command, options);
+        extractBinary(command[4]);
+        return { exited: Promise.resolve(0) } as ReturnType<
+          typeof compat.crossSpawn
+        >;
+      },
+    );
+    const extractZip = spyOn(zip, 'extractZip').mockImplementation(
+      async (_archive, destination) => extractBinary(destination),
+    );
+    const originalRename = fs.renameSync;
+    const rename = spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      originalRename(from, to);
+      if (String(to) === binary) installed.resolve();
+    });
+    const child = Object.assign(new EventEmitter(), {
+      pid: undefined,
+      unref: () => {},
+      kill: () => true,
+    });
+    const spawn = spyOn(childProcess, 'spawn').mockReturnValue(
+      child as childProcess.ChildProcess,
+    );
+    const originalLoad = CompanionManager.prototype.onLoad;
+    const load = spyOn(CompanionManager.prototype, 'onLoad').mockImplementation(
+      function (this: CompanionManager) {
+        originalLoad.call(this);
+        loaded.resolve();
+      },
+    );
+    jest.useFakeTimers();
+    let first: Awaited<ReturnType<typeof plugin>> | undefined;
+    let current: Awaited<ReturnType<typeof plugin>> | undefined;
+    try {
+      first = await createHooks();
+      await started.promise;
+      await first.dispose?.();
+      current = await createHooks();
+      await joined.promise;
+      expect(attempts[1]).toBe(attempts[0]);
+      download.resolve(new Response(bytes));
+      await installed.promise;
+      await loaded.promise;
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(spawn).toHaveBeenCalledWith(binary, [], expect.any(Object));
+    } finally {
+      await first?.dispose?.();
+      await current?.dispose?.();
+      download.resolve(new Response(bytes));
+      jest.useRealTimers();
+      await Promise.allSettled(attempts);
+      ensure.mockRestore();
+      load.mockRestore();
+      spawn.mockRestore();
+      rename.mockRestore();
+      extractZip.mockRestore();
+      extractTar.mockRestore();
+      globalThis.fetch = originalFetch;
+      COMPANION_MANIFEST.checksums = checksums;
+    }
+  });
+
+  test('disposing the last companion consumer stops waiting for another process', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({ companion: { enabled: true } }),
+    );
+    const binary = getCompanionBinaryPath();
+    const lock = `${binary}.lock`;
+    fs.mkdirSync(lock, { recursive: true });
+    writeFileSync(path.join(lock, 'owner'), 'another process');
+    const waiting = Promise.withResolvers<void>();
+    const joined = Promise.withResolvers<void>();
+    const originalDelay = promiseTimers.setTimeout;
+    const delay = spyOn(promiseTimers, 'setTimeout').mockImplementation(((
+      ...args: Parameters<typeof originalDelay>
+    ) => {
+      waiting.resolve();
+      return originalDelay(...args);
+    }) as typeof originalDelay);
+    const originalEnsure = companionUpdater.ensureCompanionVersionForStartup;
+    const attempts: ReturnType<typeof originalEnsure>[] = [];
+    const ensure = spyOn(
+      companionUpdater,
+      'ensureCompanionVersionForStartup',
+    ).mockImplementation((...args) => {
+      const pending = originalEnsure(...args);
+      attempts.push(pending);
+      if (attempts.length === 2) joined.resolve();
+      return pending;
+    });
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mock(async () => new Response('', { status: 503 }));
+    globalThis.fetch = fetchMock as typeof fetch;
+    jest.useFakeTimers();
+    let first: Awaited<ReturnType<typeof plugin>> | undefined;
+    let current: Awaited<ReturnType<typeof plugin>> | undefined;
+    try {
+      first = await createHooks({ hostFlavor: 'v2' });
+      await waiting.promise;
+      current = await createHooks({ hostFlavor: 'v2' });
+      await joined.promise;
+      expect(attempts[1]).toBe(attempts[0]);
+      const signal = delay.mock.calls[0]?.[2]?.signal;
+      expect(signal?.aborted).toBe(false);
+      await first.event?.({
+        event: { type: 'server.instance.disposed' },
+      } as never);
+      expect(signal?.aborted).toBe(false);
+      await current.dispose?.();
+      expect(signal?.aborted).toBe(true);
+      expect(readFileSync(path.join(lock, 'owner'), 'utf8')).toBe(
+        'another process',
+      );
+      fs.rmSync(lock, { recursive: true });
+      jest.advanceTimersByTime(25);
+      await attempts[0];
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(fs.existsSync(binary)).toBe(false);
+    } finally {
+      await first?.dispose?.();
+      await current?.dispose?.();
+      fs.rmSync(lock, { recursive: true, force: true });
+      jest.advanceTimersByTime(25);
+      await Promise.allSettled(attempts);
+      jest.useRealTimers();
+      globalThis.fetch = originalFetch;
+      ensure.mockRestore();
+      delay.mockRestore();
+    }
+  });
+
+  test('companion keeps other input requests pending when one is resolved', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: true, binaryPath: `${projectDir}/missing` },
+      }),
+    );
+    const hooks = await createHooks();
+    try {
+      const send = (type: string, properties: Record<string, unknown>) =>
+        hooks.event?.({ event: { type, properties } } as never);
+      await send('session.status', {
+        sessionID: 'child-a',
+        status: { type: 'busy' },
+      });
+      await send('session.status', {
+        sessionID: 'child-b',
+        status: { type: 'busy' },
+      });
+      await send('permission.asked', { sessionID: 'child-a', id: 'a' });
+      await send('permission.asked', { sessionID: 'child-b', id: 'b' });
+      await send('permission.asked', { sessionID: 'child-b', id: 'b' });
+      await send('permission.replied', {
+        sessionID: 'child-a',
+        requestID: 'a',
+      });
+      const row = () =>
+        JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions[0];
+      expect(row().status).toBe('waiting-input');
+      expect(row().attention_seq).toBe(2);
+      await send('permission.replied', {
+        sessionID: 'child-b',
+        requestID: 'b',
+      });
+      expect(row().status).toBe('busy');
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test('companion clears cancelled waits only for the terminated or deleted session', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: true, binaryPath: `${projectDir}/missing` },
+      }),
+    );
+    const hooks = await createHooks();
+    try {
+      const send = (type: string, properties: Record<string, unknown>) =>
+        hooks.event?.({ event: { type, properties } } as never);
+      await send('session.status', {
+        sessionID: 'a',
+        status: { type: 'busy' },
+      });
+      await send('session.status', {
+        sessionID: 'b',
+        status: { type: 'busy' },
+      });
+      await send('permission.asked', { sessionID: 'a', id: 'permission' });
+      await send('question.asked', { sessionID: 'b', id: 'question' });
+      await send('session.idle', { sessionID: 'a' });
+      const row = () =>
+        JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions[0];
+      expect(row().status).toBe('waiting-input');
+      await send('session.deleted', { info: { id: 'b' }, sessionID: 'b' });
+      expect(row()).toMatchObject({ status: 'idle', active_agents: ['intro'] });
+    } finally {
+      await hooks.dispose?.();
+    }
   });
 });
 
@@ -3652,6 +4112,50 @@ describe('plugin config model inheritance', () => {
     } as never);
   }
 
+  test('v1 exposes enabled bundled skills without overriding user skills', async () => {
+    const hooks = await loadConfiguredPlugin({ disabled_skills: ['reflect'] });
+    const configDir = lastConfigDir as string;
+    const userSkill = path.join(configDir, 'skills', 'codemap');
+    await mkdir(userSkill, { recursive: true });
+    await Bun.write(
+      path.join(userSkill, 'SKILL.md'),
+      '---\nname: codemap\ndescription: user skill\n---\nuser content',
+    );
+    const disabledClaudeSkill = path.join(
+      configDir,
+      '.claude',
+      'skills',
+      'deepwork',
+    );
+    await mkdir(disabledClaudeSkill, { recursive: true });
+    await Bun.write(
+      path.join(disabledClaudeSkill, 'SKILL.md'),
+      '---\nname: deepwork\ndescription: disabled external skill\n---\n',
+    );
+    process.env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS = '1';
+    const hostConfig = { skills: { paths: [] as string[] } };
+    try {
+      await hooks.config?.(hostConfig as never);
+      expect(
+        hostConfig.skills.paths.some((item) =>
+          item.endsWith('/src/skills/deepwork'),
+        ),
+      ).toBe(true);
+      expect(
+        hostConfig.skills.paths.some((item) =>
+          item.endsWith('/src/skills/codemap'),
+        ),
+      ).toBe(false);
+      expect(
+        hostConfig.skills.paths.some((item) =>
+          item.endsWith('/src/skills/reflect'),
+        ),
+      ).toBe(false);
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
   async function selectParent(
     hooks: Awaited<ReturnType<typeof loadConfiguredPlugin>>,
     model: { providerID: string; modelID: string },
@@ -4487,6 +4991,45 @@ describe('plugin config model inheritance', () => {
     }
   });
 
+  test.each([
+    [undefined, true],
+    [['explorer', 'councillor-alpha'], false],
+  ])(
+    'council-inject follows the orchestrator seat pointer (scope %p)',
+    async (subagents, expected) => {
+      const hooks = await loadConfiguredPlugin({
+        council: {
+          presets: { default: { alpha: { model: 'test/councillor' } } },
+        },
+        agents: subagents ? { orchestrator: { subagents } } : {},
+      });
+      const transcript = {
+        messages: [
+          {
+            info: {
+              sessionID: 'council-scope',
+              role: 'user',
+              agent: 'orchestrator',
+            },
+            parts: [{ type: 'text', text: 'get a consensus on this' }],
+          },
+        ],
+      };
+      try {
+        await hooks['experimental.chat.messages.transform']?.(
+          {},
+          transcript as never,
+        );
+        const injected = transcript.messages[0].parts.some((part) =>
+          isTaggedPart(part as never, COUNCIL_INJECT_METADATA_KEY),
+        );
+        expect(injected).toBe(expected);
+      } finally {
+        await hooks.dispose?.();
+      }
+    },
+  );
+
   test('config() keeps compaction exception after host council prompt override', async () => {
     const hooks = await loadConfiguredPlugin({
       council: {
@@ -4680,6 +5223,49 @@ describe('plugin config model inheritance', () => {
     } finally {
       await hooks.dispose?.();
       disableChain.mockRestore();
+    }
+  });
+
+  test('releases runtime snapshots after the last generation and keeps reload state', async () => {
+    const config = {
+      presets: { runtime: { explorer: { temperature: 0.4 } } },
+      agents: { explorer: { model: ['provider/first', 'provider/next'] } },
+    };
+    for (const hostFlavor of [undefined, 'v2'] as const) {
+      const first = await loadConfiguredPlugin(config, undefined, hostFlavor);
+      const directory = lastConfigDir as string;
+      let second: Awaited<ReturnType<typeof loadConfiguredPlugin>> | undefined;
+      let reloaded:
+        | Awaited<ReturnType<typeof loadConfiguredPlugin>>
+        | undefined;
+      try {
+        await first.config?.({
+          agent: { explorer: { model: 'provider/selected' } },
+        });
+        const runtime = RuntimeConfig.get(directory);
+        runtime.setRuntimePreset('runtime');
+        expect(runtime.hasModelSwitched('explorer')).toBe(true);
+        second = await loadConfiguredPlugin(config, directory, hostFlavor);
+        await first.dispose?.();
+        await first.dispose?.();
+        expect(RuntimeConfig.get(directory)).toBe(runtime);
+        expect(runtime.plugin).toBeDefined();
+        await second.dispose?.();
+        const afterDispose = RuntimeConfig.get(directory);
+        expect(afterDispose).not.toBe(runtime);
+        expect(afterDispose.plugin).toBeUndefined();
+        expect(afterDispose.host()).toBeUndefined();
+        reloaded = await loadConfiguredPlugin(config, directory, hostFlavor);
+        expect(RuntimeConfig.get(directory).getRuntimePreset()).toBe('runtime');
+        expect(RuntimeConfig.get(directory).hasModelSwitched('explorer')).toBe(
+          true,
+        );
+      } finally {
+        await first.dispose?.();
+        await second?.dispose?.();
+        await reloaded?.dispose?.();
+        RuntimeConfig.reset(directory);
+      }
     }
   });
 
@@ -5020,6 +5606,42 @@ describe('plugin foreground fallback host gating', () => {
       ...(hostFlavor ? { hostFlavor } : {}),
     } as never);
 
+  const publishCompactionRequest = async (
+    hooks: Awaited<ReturnType<typeof plugin>>,
+    sessionID: string,
+    model: { providerID: string; modelID: string },
+  ) => {
+    await hooks.event?.({
+      event: {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg_compaction',
+            sessionID,
+            role: 'user',
+            agent: 'orchestrator',
+            model,
+            time: { created: 2 },
+          },
+        },
+      },
+    } as never);
+    await hooks.event?.({
+      event: {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'prt_compaction',
+            messageID: 'msg_compaction',
+            sessionID,
+            type: 'compaction',
+            auto: true,
+          },
+        },
+      },
+    } as never);
+  };
+
   beforeEach(async () => {
     originalEnv = { ...process.env };
     projectDir = await mkdtemp(
@@ -5050,6 +5672,599 @@ describe('plugin foreground fallback host gating', () => {
     jest.useRealTimers();
     process.env = originalEnv;
     await rm(projectDir, { recursive: true, force: true });
+  });
+
+  test('companion preserves replay busy when an older error starts fallback', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: true, binaryPath: `${projectDir}/missing` },
+        fallback: { enabled: true, maxRetries: 0 },
+        agents: { orchestrator: { model: ['openai/gpt-b', 'openai/gpt-c'] } },
+      }),
+    );
+    const { client, messages, promptAsync } = createFallbackClient();
+    messages.mockResolvedValue({
+      data: [
+        {
+          info: { id: 'user', role: 'user' },
+          parts: [{ type: 'text', text: 'hello' }],
+        },
+      ],
+    });
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    const busy = () =>
+      hooks.event?.({
+        event: {
+          type: 'session.status',
+          properties: { sessionID: 'root', status: { type: 'busy' } },
+        },
+      } as never);
+    promptAsync.mockImplementation(async () => {
+      await busy();
+      return {};
+    });
+    try {
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'root',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', modelID: 'gpt-b' },
+        } as never,
+        {} as never,
+      );
+      await hooks.event?.({
+        event: {
+          type: 'message.updated',
+          properties: {
+            info: {
+              id: 'assistant',
+              sessionID: 'root',
+              role: 'assistant',
+              agent: 'orchestrator',
+              providerID: 'openai',
+              modelID: 'gpt-b',
+            },
+          },
+        },
+      } as never);
+      await busy();
+      await hooks.event?.({
+        event: {
+          type: 'session.error',
+          properties: { sessionID: 'root', error: { message: 'rate limit' } },
+        },
+      } as never);
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+      expect(
+        JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions[0],
+      ).toMatchObject({ status: 'busy', active_agents: ['orchestrator'] });
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test('v1 external admission fences a pending fallback before message.updated', async () => {
+    const { client, messages, abort, promptAsync } = createFallbackClient();
+    const promotion = Promise.withResolvers<unknown>();
+    const started = Promise.withResolvers<void>();
+    (client as any)._client = {
+      post: () => {
+        started.resolve();
+        return promotion.promise;
+      },
+    };
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    const sessionID = 'admission-race';
+    const model = { providerID: 'openai', modelID: 'gpt-b' };
+    try {
+      await hooks.config?.({ agent: {} });
+      await hooks.event?.({
+        event: {
+          type: 'session.created',
+          properties: { info: { id: sessionID, parentID: 'parent' } },
+        },
+      } as never);
+      await hooks['chat.message']?.(
+        {
+          sessionID,
+          messageID: 'msg_old',
+          agent: 'orchestrator',
+          model,
+        } as never,
+        {
+          message: { id: 'msg_old', sessionID, role: 'user', model },
+          parts: [],
+        } as never,
+      );
+      const pending = hooks.event?.({
+        event: {
+          type: 'session.status',
+          properties: {
+            sessionID,
+            status: { type: 'retry', attempt: 1, message: 'rate limit' },
+          },
+        },
+      } as never);
+      await started.promise;
+      await hooks['chat.message']?.(
+        {
+          sessionID,
+          messageID: 'msg_new',
+          agent: 'orchestrator',
+          model,
+        } as never,
+        {
+          message: { id: 'msg_new', sessionID, role: 'user', model },
+          parts: [],
+        } as never,
+      );
+      promotion.resolve({});
+      await pending;
+      await hooks.event?.({
+        event: {
+          type: 'message.updated',
+          properties: {
+            info: { id: 'msg_new', sessionID, role: 'user', model },
+          },
+        },
+      } as never);
+
+      expect(abort).not.toHaveBeenCalled();
+      expect(promptAsync).not.toHaveBeenCalled();
+      expect(messages).not.toHaveBeenCalled();
+    } finally {
+      promotion.resolve({});
+      await hooks.dispose?.();
+    }
+  });
+
+  test('v2 external admission preserves the host retry budget', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: false },
+        fallback: { enabled: true, maxRetries: 1 },
+        agents: { orchestrator: { model: ['openai/gpt-b', 'openai/gpt-c'] } },
+      }),
+    );
+    const hooks = await createHooks('v2');
+    const switchModel = mock(async () => ({}));
+    const sessionID = 'v2-retry-admission';
+    const model = { providerID: 'openai', modelID: 'gpt-b' };
+    const retry = () => ({
+      sessionID,
+      agent: 'orchestrator',
+      model: { providerID: 'openai', id: 'gpt-b' },
+      error: { message: 'rate limit' },
+      decision: { retry: true, delay: 2_000 },
+    });
+    try {
+      await hooks.config?.({ agent: {} });
+      await hooks['v2.session.retry']?.(retry() as never, switchModel as never);
+      expect(switchModel).not.toHaveBeenCalled();
+      await hooks['chat.message']?.(
+        {
+          sessionID,
+          messageID: 'msg_new',
+          agent: 'orchestrator',
+          model,
+        } as never,
+        {
+          message: { id: 'msg_new', sessionID, role: 'user', model },
+          parts: [],
+        } as never,
+      );
+      await hooks['v2.session.retry']?.(retry() as never, switchModel as never);
+      expect(switchModel).toHaveBeenCalledTimes(1);
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test('v1 agent changes affect root replay but not child or internal admissions', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: false },
+        fallback: { enabled: true, maxRetries: 0 },
+        agents: {
+          orchestrator: { model: ['p1/a', 'p1/b'] },
+          explorer: { model: ['p2/a', 'p2/b'] },
+        },
+      }),
+    );
+    const { client, messages, promptAsync } = createFallbackClient();
+    (client.session as any).get = async ({ path }: any) => ({
+      data: {
+        id: path.id,
+        ...(path.id === 'agent-child' ? { parentID: 'agent-root' } : {}),
+      },
+    });
+    messages.mockResolvedValue({
+      data: [
+        {
+          info: { id: 'msg_user', role: 'user' },
+          parts: [{ type: 'text', text: 'work' }],
+        },
+      ],
+    });
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    const chat = async (
+      sessionID: string,
+      id: string,
+      agent: string,
+      providerID: string,
+      internal = false,
+    ) => {
+      const model = { providerID, modelID: 'a' };
+      await hooks['chat.message']?.(
+        {
+          sessionID,
+          messageID: id,
+          agent,
+          model,
+          ...(internal ? { parts: [createInternalAgentTextPart('wake')] } : {}),
+        } as never,
+        {
+          message: { id, sessionID, role: 'user', agent, model },
+          parts: [],
+        } as never,
+      );
+    };
+    try {
+      await hooks.config?.({ agent: {} });
+      for (const sessionID of ['agent-root', 'agent-child']) {
+        await chat(sessionID, `msg_first_${sessionID}`, 'orchestrator', 'p1');
+        await chat(sessionID, `msg_second_${sessionID}`, 'explorer', 'p2');
+      }
+      await chat('agent-root', 'msg_wake', 'orchestrator', 'p1', true);
+      for (const sessionID of ['agent-root', 'agent-child']) {
+        await hooks.event?.({
+          event: {
+            type: 'session.error',
+            properties: { sessionID, error: { message: 'rate limit' } },
+          },
+        } as never);
+      }
+      expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({
+        path: { id: 'agent-root' },
+        body: { agent: 'explorer', model: { providerID: 'p2', modelID: 'b' } },
+      });
+      expect(promptAsync.mock.calls[1]?.[0]).toMatchObject({
+        path: { id: 'agent-child' },
+        body: {
+          agent: 'orchestrator',
+          model: { providerID: 'p1', modelID: 'a' },
+        },
+      });
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test.each(['root', 'child'] as const)(
+    'v1 native continuation retains a down-provider mark for a %s retry',
+    async (target) => {
+      await Bun.write(
+        `${projectDir}/oh-my-opencode-slim.json`,
+        JSON.stringify({
+          companion: { enabled: false },
+          fallback: {
+            enabled: true,
+            maxRetries: 2,
+            initialRetryDelayMs: 1_000,
+          },
+          agents: { orchestrator: { model: ['primary/a', 'backup/b'] } },
+        }),
+      );
+      const { client, messages, abort, promptAsync } = createFallbackClient();
+      messages.mockResolvedValue({
+        data: [
+          {
+            info: { id: 'msg_user', role: 'user' },
+            parts: [{ type: 'text', text: 'work' }],
+          },
+        ],
+      });
+      const hooks = await plugin({
+        client,
+        directory: projectDir,
+        worktree: projectDir,
+        serverUrl: new URL('http://127.0.0.1:4096'),
+      } as never);
+      const parent = `native-mark-${target}`;
+      const primary = { providerID: 'primary', modelID: 'a' };
+      try {
+        await hooks.config?.({ agent: {} });
+        jest.useFakeTimers();
+        await hooks['chat.message']?.(
+          {
+            sessionID: parent,
+            messageID: 'msg_user',
+            agent: 'orchestrator',
+            model: primary,
+          } as never,
+          {
+            message: {
+              id: 'msg_user',
+              sessionID: parent,
+              role: 'user',
+              agent: 'orchestrator',
+              model: primary,
+            },
+            parts: [],
+          } as never,
+        );
+        await hooks.event?.({
+          event: {
+            type: 'session.error',
+            properties: {
+              sessionID: parent,
+              error: { statusCode: 429, message: 'Rate limit exceeded' },
+            },
+          },
+        } as never);
+        jest.advanceTimersByTime(1_000);
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+        expect(promptAsync).toHaveBeenCalledTimes(1);
+        expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({
+          body: { model: { providerID: 'backup', modelID: 'b' } },
+        });
+
+        const notice = {
+          message: {
+            id: 'msg_notice',
+            sessionID: parent,
+            role: 'user',
+            agent: 'orchestrator',
+            model: primary,
+          },
+          parts: [
+            {
+              type: 'text',
+              synthetic: true,
+              text: '<task id="child-done" state="completed">\n<summary>Background task completed: work</summary>\n<task_result>done</task_result>\n</task>',
+            },
+          ],
+        };
+        await hooks['chat.message']?.(
+          {
+            sessionID: parent,
+            messageID: 'msg_notice',
+            agent: 'orchestrator',
+          } as never,
+          notice as never,
+        );
+        expect(notice.message.model).toEqual(primary);
+        const sessionID = target === 'root' ? parent : `${parent}-child`;
+        if (target === 'child') {
+          await hooks.event?.({
+            event: {
+              type: 'session.created',
+              properties: { info: { id: sessionID, parentID: parent } },
+            },
+          } as never);
+          await hooks['chat.message']?.(
+            {
+              sessionID,
+              messageID: 'msg_child',
+              agent: 'orchestrator',
+              model: primary,
+            } as never,
+            {
+              message: {
+                id: 'msg_child',
+                sessionID,
+                role: 'user',
+                agent: 'orchestrator',
+                model: primary,
+              },
+              parts: [],
+            } as never,
+          );
+        }
+        await hooks.event?.({
+          event: {
+            type: 'message.updated',
+            properties: {
+              info: {
+                id: 'msg_assistant',
+                sessionID,
+                role: 'assistant',
+                ...primary,
+                time: { created: Date.now() },
+              },
+            },
+          },
+        } as never);
+        await hooks.event?.({
+          event: {
+            type: 'session.status',
+            properties: {
+              sessionID,
+              status: {
+                type: 'retry',
+                attempt: 1,
+                message: 'Rate limit exceeded',
+              },
+            },
+          },
+        } as never);
+        expect(abort).toHaveBeenCalledTimes(1);
+        expect(promptAsync).toHaveBeenCalledTimes(2);
+        expect(promptAsync.mock.calls[1]?.[0]).toMatchObject({
+          path: { id: sessionID },
+          body: { model: { providerID: 'backup', modelID: 'b' } },
+        });
+      } finally {
+        jest.useRealTimers();
+        await hooks.dispose?.();
+      }
+    },
+  );
+
+  test('v1 compaction telemetry does not replace the external continuation model', async () => {
+    const { client, abort, promptAsync } = createFallbackClient();
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    const sessionID = 'compaction-metadata';
+    const model = { providerID: 'openai', modelID: 'gpt-b' };
+    try {
+      await hooks.config?.({ agent: {} });
+      await hooks['chat.message']?.(
+        {
+          sessionID,
+          messageID: 'msg_original',
+          agent: 'orchestrator',
+          model,
+        } as never,
+        {
+          message: {
+            id: 'msg_original',
+            sessionID,
+            role: 'user',
+            agent: 'orchestrator',
+            model,
+          },
+          parts: [],
+        } as never,
+      );
+      await publishCompactionRequest(hooks, sessionID, model);
+      const summary = hooks.event?.({
+        event: {
+          type: 'message.updated',
+          properties: {
+            info: {
+              id: 'msg_summary',
+              parentID: 'msg_compaction',
+              sessionID,
+              role: 'assistant',
+              agent: 'compaction',
+              summary: true,
+              providerID: 'p3',
+              modelID: 'summary',
+              time: { created: 3 },
+            },
+          },
+        },
+      } as never);
+      const retry = hooks.event?.({
+        event: {
+          type: 'session.status',
+          properties: {
+            sessionID,
+            status: { type: 'retry', attempt: 1, message: 'rate limit' },
+          },
+        },
+      } as never);
+      await Promise.all([summary, retry]);
+      expect(abort).not.toHaveBeenCalled();
+      expect(promptAsync).not.toHaveBeenCalled();
+      const output = {
+        message: {
+          id: 'msg_wake',
+          sessionID,
+          role: 'user',
+          agent: 'orchestrator',
+          model,
+        },
+        parts: [createInternalAgentTextPart('wake')],
+      };
+      await hooks['chat.message']?.(
+        { sessionID, messageID: 'msg_wake' } as never,
+        output as never,
+      );
+      expect(output.message.model).toEqual(model);
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test('v1 compaction explicitly pinned to the owner model does not consume its chain', async () => {
+    const { client, abort, promptAsync } = createFallbackClient();
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    const sessionID = 'pinned-compaction';
+    const model = { providerID: 'openai', modelID: 'gpt-b' };
+    try {
+      await hooks.config?.({
+        agent: { compaction: { model: 'openai/gpt-b' } },
+      });
+      await hooks['chat.message']?.(
+        {
+          sessionID,
+          messageID: 'msg_original',
+          agent: 'orchestrator',
+          model,
+        } as never,
+        {
+          message: {
+            id: 'msg_original',
+            sessionID,
+            role: 'user',
+            agent: 'orchestrator',
+            model,
+          },
+          parts: [],
+        } as never,
+      );
+      await publishCompactionRequest(hooks, sessionID, model);
+      await hooks.event?.({
+        event: {
+          type: 'message.updated',
+          properties: {
+            info: {
+              id: 'msg_summary',
+              parentID: 'msg_compaction',
+              sessionID,
+              role: 'assistant',
+              agent: 'compaction',
+              summary: true,
+              providerID: 'openai',
+              modelID: 'gpt-b',
+              time: { created: 3 },
+            },
+          },
+        },
+      } as never);
+      await hooks.event?.({
+        event: {
+          type: 'session.status',
+          properties: {
+            sessionID,
+            status: { type: 'retry', attempt: 1, message: 'rate limit' },
+          },
+        },
+      } as never);
+      expect(abort).not.toHaveBeenCalled();
+      expect(promptAsync).not.toHaveBeenCalled();
+    } finally {
+      await hooks.dispose?.();
+    }
   });
 
   test('v2 host: the replay path stays disabled', async () => {
@@ -5429,6 +6644,287 @@ describe('plugin foreground fallback host gating', () => {
             ?.variant,
         continuationModel: output.message.model,
       }).toEqual({ projectedVariant: undefined, continuationModel: fallback });
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test('v2 refusal continuation yields to an external prompt but not internal discovery', async () => {
+    const { client, promptAsync } = createFallbackClient();
+    client.session.get = mock(async () => ({
+      data: {
+        agent: 'orchestrator',
+        model: { providerID: 'openai', id: 'gpt-b' },
+      },
+    }));
+    const first = Promise.withResolvers<void>();
+    const second = Promise.withResolvers<void>();
+    const switchModel = mock((sessionID: string) =>
+      sessionID === 'epoch-internal' ? first.promise : second.promise,
+    );
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      hostFlavor: 'v2',
+      experimental_v2: { switchModel },
+    } as never);
+    jest.useFakeTimers();
+    const settle = async () => {
+      for (let i = 0; i < 40; i++) await Promise.resolve();
+    };
+    const start = async (sessionID: string) => {
+      const data = {
+        sessionID,
+        assistantMessageID: `assistant-${sessionID}`,
+        agent: 'orchestrator',
+        model: { providerID: 'openai', id: 'gpt-b' },
+      };
+      await hooks.event?.({
+        event: { type: 'session.step.started', data },
+      } as never);
+      await hooks.event?.({
+        event: {
+          type: 'session.step.failed',
+          data: {
+            ...data,
+            finish: 'content-filter',
+            error: { type: 'provider.content-filter', message: 'blocked' },
+          },
+        },
+      } as never);
+      await settle();
+    };
+    try {
+      await start('epoch-internal');
+      expect(switchModel).toHaveBeenCalledTimes(1);
+      await hooks['chat.message']?.(
+        { sessionID: 'epoch-internal', agent: 'orchestrator' } as never,
+        { parts: [createInternalAgentTextPart('internal wake')] } as never,
+      );
+      await hooks['chat.message']?.(
+        { sessionID: 'epoch-internal', agent: 'orchestrator' } as never,
+        {} as never,
+      );
+      first.resolve();
+      await settle();
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+      await start('epoch-external');
+      expect(switchModel).toHaveBeenCalledTimes(2);
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'epoch-external',
+          agent: 'orchestrator',
+          parts: [{ type: 'text', text: 'new turn' }],
+        } as never,
+        {} as never,
+      );
+      second.resolve();
+      await settle();
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+    } finally {
+      first.resolve();
+      second.resolve();
+      await hooks.dispose?.();
+    }
+  });
+
+  test('v2 retry follows the failing agent and retains it for compaction', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: false },
+        fallback: { enabled: true, maxRetries: 0 },
+        agents: {
+          orchestrator: { model: ['openai/gpt-b', 'openai/gpt-c'] },
+          oracle: { model: ['openai/gpt-b', 'anthropic/claude-backup'] },
+        },
+      }),
+    );
+    const hooks = await createHooks('v2');
+    const switchModel = mock(async () => ({}));
+    try {
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'changed-agent',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', modelID: 'gpt-b' },
+        } as never,
+        {} as never,
+      );
+      await hooks['v2.session.retry']?.(
+        {
+          sessionID: 'changed-agent',
+          agent: 'oracle',
+          model: { providerID: 'openai', id: 'gpt-b' },
+          error: { type: 'provider.rate-limit', message: 'rate limit' },
+          decision: { retry: false },
+        } as never,
+        switchModel as never,
+      );
+      expect(switchModel).toHaveBeenCalledWith('changed-agent', {
+        providerID: 'anthropic',
+        id: 'claude-backup',
+      });
+
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'compaction-agent',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', modelID: 'gpt-b' },
+        } as never,
+        {} as never,
+      );
+      await hooks['v2.session.retry']?.(
+        {
+          sessionID: 'compaction-agent',
+          agent: 'compaction',
+          model: { providerID: 'openai', id: 'gpt-b' },
+          error: { type: 'provider.rate-limit', message: 'rate limit' },
+          decision: { retry: false },
+        } as never,
+        switchModel as never,
+      );
+      expect(switchModel).toHaveBeenCalledWith('compaction-agent', {
+        providerID: 'openai',
+        id: 'gpt-c',
+      });
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test('v2 refusal selects the chain of the started step agent', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: false },
+        fallback: { enabled: true, maxRetries: 0 },
+        agents: {
+          orchestrator: { model: ['openai/gpt-b', 'openai/gpt-c'] },
+          oracle: { model: ['openai/gpt-b', 'anthropic/claude-backup'] },
+        },
+      }),
+    );
+    const { client, promptAsync } = createFallbackClient();
+    client.session.get = mock(async () => ({
+      data: { agent: 'oracle', model: { providerID: 'openai', id: 'gpt-b' } },
+    }));
+    const switchModel = mock(async () => ({}));
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      hostFlavor: 'v2',
+      experimental_v2: { switchModel },
+    } as never);
+    try {
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'changed-refusal-agent',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', modelID: 'gpt-b' },
+        } as never,
+        {} as never,
+      );
+      const data = {
+        sessionID: 'changed-refusal-agent',
+        assistantMessageID: 'assistant-refused',
+        agent: 'oracle',
+        model: { providerID: 'openai', id: 'gpt-b' },
+      };
+      await hooks.event?.({
+        event: { type: 'session.step.started', data },
+      } as never);
+      await hooks.event?.({
+        event: {
+          type: 'session.step.failed',
+          data: {
+            ...data,
+            finish: 'content-filter',
+            error: { type: 'provider.content-filter', message: 'blocked' },
+          },
+        },
+      } as never);
+      expect(
+        await hooks['v2.refusalOutcome']?.(data.sessionID, {
+          id: data.assistantMessageID,
+          type: 'assistant',
+          agent: data.agent,
+          model: data.model,
+          finish: 'content-filter',
+          error: { type: 'provider.content-filter', message: 'blocked' },
+          time: { created: Date.now(), completed: Date.now() },
+        }),
+      ).toBe('anthropic/claude-backup');
+      expect(switchModel).toHaveBeenCalledWith(data.sessionID, {
+        providerID: 'anthropic',
+        id: 'claude-backup',
+      });
+      expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({
+        body: { agent: 'oracle' },
+      });
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
+  test('v2 retry projects the fallback model and variant without another external prompt', async () => {
+    await Bun.write(
+      `${projectDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        companion: { enabled: false },
+        fallback: { enabled: true, maxRetries: 0 },
+        agents: {
+          orchestrator: {
+            model: ['openai/gpt-b', { id: 'openai/gpt-c', variant: 'high' }],
+          },
+        },
+      }),
+    );
+    const hooks = await createHooks('v2');
+    try {
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'sidebar-switch',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', modelID: 'gpt-b' },
+        } as never,
+        {} as never,
+      );
+      const switchModel = mock(async () => ({}));
+      await hooks['v2.session.retry']?.(
+        {
+          sessionID: 'sidebar-switch',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', id: 'gpt-b' },
+          error: { message: 'rate limit' },
+          decision: { retry: false },
+        } as never,
+        switchModel as never,
+      );
+      expect(switchModel).toHaveBeenCalledTimes(1);
+      expect(
+        readTuiSnapshot(projectDir).sessionModels?.['sidebar-switch']
+          ?.orchestrator,
+      ).toEqual({ model: 'openai/gpt-c', variant: 'high' });
+      const { recordInternalAdmission } = await import(
+        './v2/internal-admissions'
+      );
+      recordInternalAdmission('sidebar-switch', 'internal-discovery');
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'sidebar-switch',
+          agent: 'orchestrator',
+          messageID: 'internal-discovery',
+          model: { providerID: 'openai', modelID: 'gpt-b' },
+        } as never,
+        {} as never,
+      );
+      expect(
+        readTuiSnapshot(projectDir).sessionModels?.['sidebar-switch']
+          ?.orchestrator?.model,
+      ).toBe('openai/gpt-c');
     } finally {
       await hooks.dispose?.();
     }

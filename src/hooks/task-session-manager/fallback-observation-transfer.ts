@@ -20,9 +20,7 @@ import type { FallbackNotice, RevivedRunTracker } from './revived-run-tracker';
  *   notification (the exact incident shape). Preparing also SUPPLANTS
  *   the previous publisher (its in-flight probe fences out).
  * - `admit` converts the preparation into a tracked run (register +
- *   immediate probe) once the host accepts the re-prompt — including a
- *   v2 `switched: false` delivery (prompt admitted on the current
- *   model is still admitted work).
+ *   immediate probe) once the host accepts the re-prompt.
  * - `reject` releases ownership on an EXPLICIT host refusal (error
  *   envelope, typed capability rejection): nothing was admitted.
  * - `settleUnresolved` handles unknown outcomes (transport failed
@@ -40,8 +38,8 @@ import type { FallbackNotice, RevivedRunTracker } from './revived-run-tracker';
 export function createBackgroundFallbackHandoff(options: {
   backgroundJobBoard: BackgroundJobBoard;
   revivedRunTracker: RevivedRunTracker;
+  allowForeground?: boolean;
 }): {
-  isEligible: (sessionID: string, generation: number | undefined) => boolean;
   prepare: (
     sessionID: string,
     preparedGeneration: number | undefined,
@@ -51,7 +49,7 @@ export function createBackgroundFallbackHandoff(options: {
     sessionID: string,
     preparedGeneration: number | undefined,
     notice?: FallbackNotice,
-  ) => void;
+  ) => boolean;
   /** Explicit host refusal (error envelope / typed capability
    * rejection): nothing was admitted, ownership is released. */
   reject: (sessionID: string, preparedGeneration: number | undefined) => void;
@@ -71,7 +69,8 @@ export function createBackgroundFallbackHandoff(options: {
     const record = options.backgroundJobBoard.get(sessionID);
     if (
       record?.state !== 'running' ||
-      record.background !== true ||
+      (record.background !== true &&
+        (!options.allowForeground || record.provisional === true)) ||
       record.generation !== preparedGeneration
     ) {
       return undefined;
@@ -80,8 +79,6 @@ export function createBackgroundFallbackHandoff(options: {
   };
 
   return {
-    isEligible: (sessionID, generation) =>
-      resolveEligibleRecord(sessionID, generation) !== undefined,
     prepare: (sessionID, preparedGeneration, baselineMessageID) => {
       const record = resolveEligibleRecord(sessionID, preparedGeneration);
       if (!record) return false;
@@ -91,17 +88,18 @@ export function createBackgroundFallbackHandoff(options: {
         parentSessionID: record.parentSessionID,
         baselineMessageID,
         description: record.description,
+        ...(record.background ? {} : { allowForeground: true }),
       });
     },
     admit: (sessionID, preparedGeneration, notice) => {
-      if (preparedGeneration === undefined) return;
+      if (preparedGeneration === undefined) return false;
       // Resolve the preparation for the SAME generation idempotently
       // even when the board record already left 'running' — a promoted
       // owner may have found and delivered the result BEFORE this ack
       // arrived; the entry must still be cleaned (no reinstall, no
       // notification reset — that is the tracker's promoted-admit
       // contract).
-      options.revivedRunTracker.admitObservation(
+      return options.revivedRunTracker.admitObservation(
         sessionID,
         preparedGeneration,
         notice,
