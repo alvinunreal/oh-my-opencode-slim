@@ -3553,13 +3553,7 @@ describe('sidebarTargetLabel', () => {
   const resolver = (sessionID: string): string | undefined =>
     sessionID === 'ses-res' ? 'Resolver title' : undefined;
 
-  test('prefers the title field, then the resolver, then alias/id', () => {
-    expect(
-      sidebarTargetLabel(
-        { sessionID: 'ses-a', alias: 'exp-1', title: 'Field title' },
-        resolver,
-      ),
-    ).toBe('Field title');
+  test('prefers the resolved title, then alias/id', () => {
     expect(
       sidebarTargetLabel({ sessionID: 'ses-res', alias: 'exp-2' }, resolver),
     ).toBe('Resolver title');
@@ -3571,13 +3565,7 @@ describe('sidebarTargetLabel', () => {
     );
   });
 
-  test('collapses whitespace in titles from either source', () => {
-    expect(
-      sidebarTargetLabel(
-        { sessionID: 'ses-a', alias: 'exp-1', title: ' Fix \n the loader ' },
-        resolver,
-      ),
-    ).toBe('Fix the loader');
+  test('collapses whitespace in resolved titles', () => {
     expect(
       sidebarTargetLabel(
         { sessionID: 'ses-x', alias: 'exp-2' },
@@ -3590,12 +3578,6 @@ describe('sidebarTargetLabel', () => {
     expect(
       sidebarTargetLabel({ sessionID: 'ses-b', alias: 'exp-4' }, () => ' \n '),
     ).toBe('exp-4');
-    expect(
-      sidebarTargetLabel(
-        { sessionID: 'ses-c', alias: 'exp-5', title: ' \t ' },
-        resolver,
-      ),
-    ).toBe('exp-5');
   });
 });
 

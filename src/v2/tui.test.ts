@@ -1395,21 +1395,23 @@ describe('v2 tui preset plugin', () => {
       };
       ui.router.current = () => ({ type: 'session', sessionID: 'root' });
       ui.router.navigate = () => {};
-      // Direct get() serves child-a; child-b resolves only through list().
+      // get() serves titles in O(1); an untitled get() result keeps the
+      // alias instead of scanning list() on every render.
+      let listCalls = 0;
       stub.ctx.data = {
         session: {
-          get: (sessionID: string) =>
-            sessionID === 'child-a'
-              ? {
-                  parentID: 'root',
-                  agent: 'explorer',
-                  title: 'Audit the login flow',
-                }
-              : { parentID: 'root', agent: 'explorer' },
-          list: () => [
-            { id: 'child-a', title: 'Audit the login flow' },
-            { id: 'child-b', title: 'Harden the API client' },
-          ],
+          get: (sessionID: string) => ({
+            parentID: 'root',
+            agent: 'explorer',
+            title: sessionID === 'child-a' ? 'Audit the login flow' : undefined,
+          }),
+          list: () => {
+            listCalls += 1;
+            return [
+              { id: 'child-a', title: 'Audit the login flow' },
+              { id: 'child-b', title: 'Harden the API client' },
+            ];
+          },
         },
       };
       let cleanup: (() => void) | undefined;
@@ -1439,12 +1441,13 @@ describe('v2 tui preset plugin', () => {
         );
         await screen.renderOnce();
         const frame = screen.captureCharFrame();
-        // Titles come from the host store (get for child-a, list for
-        // child-b) — no exp-N alias prefixes remain.
+        // A titled row shows the title itself; the untitled one keeps its
+        // alias.
         expect(frame).toContain('Audit the login flow 1/2');
-        expect(frame).toContain('Harden the API client 2/2');
         expect(frame).not.toContain('exp-1');
-        expect(frame).not.toContain('exp-2');
+        expect(frame).not.toContain('Harden the API client');
+        expect(frame).toContain('2/2');
+        expect(listCalls).toBe(0);
       } finally {
         cleanup?.();
         screen?.renderer.destroy();

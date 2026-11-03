@@ -591,11 +591,6 @@ export interface SidebarSessionTarget {
   sessionID: string;
   agentName: string;
   alias?: string;
-  /**
-   * Session title for the expanded row label. Wins over the host-supplied
-   * title resolver; blank after normalization falls back to the alias.
-   */
-  title?: string;
   status?: 'busy' | 'retry' | 'reusable' | 'stopped';
   /**
    * 1-based position among the active sessions of the same agent sharing
@@ -858,22 +853,20 @@ export function shortSessionID(sessionID: string): string {
 }
 
 /**
- * Label of an expanded subagent row: the session title (pre-resolved
- * `target.title` or the host title resolver) with whitespace normalized,
- * else the board alias / short session id fallback. Fitting the label to
+ * Label of an expanded subagent row: the host session title with
+ * whitespace normalized, else the board alias / short session id fallback. Fitting the label to
  * the sidebar's actual width is native: the row renders the label with
  * truncate + flexShrink so the OpenTUI layout engine ellipsizes it to
  * the laid-out columns.
  */
 export function sidebarTargetLabel(
-  target: Pick<SidebarSessionTarget, 'sessionID' | 'alias' | 'title'>,
+  target: Pick<SidebarSessionTarget, 'sessionID' | 'alias'>,
   resolveSessionTitle?: (sessionID: string) => string | undefined,
 ): string {
-  const title = (
-    target.title ??
-    resolveSessionTitle?.(target.sessionID) ??
-    ''
-  ).replace(/\s+/g, ' ');
+  const title = (resolveSessionTitle?.(target.sessionID) ?? '').replace(
+    /\s+/g,
+    ' ',
+  );
   const normalized = title.trim();
   return normalized !== ''
     ? normalized
@@ -2667,9 +2660,11 @@ async function setup(
       getVisibleSession: () => resolveRouteSessionId(ctx.ui.router.current()),
       resolveSessionTitle: (sessionID) => {
         const session = ctx.data?.session;
-        const title =
-          session?.get?.(sessionID)?.title ??
-          session?.list?.().find((entry) => entry.id === sessionID)?.title;
+        // get() reads the same in-memory store as list(); scan list() only
+        // on hosts without get() so renders stay O(1) per row.
+        const title = session?.get
+          ? session.get(sessionID)?.title
+          : session?.list?.().find((entry) => entry.id === sessionID)?.title;
         return typeof title === 'string' && title.trim() !== ''
           ? title
           : undefined;
