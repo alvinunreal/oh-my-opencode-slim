@@ -955,9 +955,9 @@ interface AgentRowTheme {
   accent: unknown;
   text: unknown;
   textMuted: unknown;
-  agentColors?: readonly unknown[];
   primary?: unknown;
   secondary?: unknown;
+  error?: unknown;
   info?: unknown;
   background?: unknown;
   success?: unknown;
@@ -967,20 +967,14 @@ interface AgentRowTheme {
 const STATUS_ACTIVE_COLOR = '#22c55e';
 const STATUS_RETRY_COLOR = '#f59e0b';
 
-function agentColor(agentName: string, theme: AgentRowTheme): unknown {
-  const categorical = theme.agentColors?.filter((color) => color !== undefined);
-  const palette = categorical?.length
-    ? categorical
-    : [theme.primary, theme.secondary, theme.accent, theme.info].filter(
-        (color) => color !== undefined,
-      );
-  if (palette.length === 0) return theme.textMuted;
-
-  let hash = 0;
-  for (let index = 0; index < agentName.length; index += 1) {
-    hash = (hash * 31 + agentName.charCodeAt(index)) >>> 0;
-  }
-  return palette[hash % palette.length];
+/** Configured agent color: hex passes through, a theme token resolves
+ * against the active theme, and unset/unknown stays muted. */
+function agentColor(color: string | undefined, theme: AgentRowTheme): unknown {
+  if (color === undefined) return theme.textMuted;
+  if (color.startsWith('#')) return color;
+  return (
+    (theme as unknown as Record<string, unknown>)[color] ?? theme.textMuted
+  );
 }
 
 function hasPrimarySelection(hasSelectedText?: () => boolean): boolean {
@@ -1173,7 +1167,8 @@ function statusDot(
 
 interface AgentRowOptions {
   label: string;
-  agentName: string;
+  /** Configured agent color (`agents.<name>.color`); unset = muted. */
+  color?: string;
   model: string;
   modelName?: string;
   variant?: string;
@@ -1190,8 +1185,8 @@ interface AgentRowOptions {
 }
 
 function agentHeaderCells({
-  agentName,
   label,
+  color,
   active,
   now,
   theme,
@@ -1200,12 +1195,11 @@ function agentHeaderCells({
   annotation,
   hasHistory,
 }: AgentRowOptions): JSX.Element[] {
-  const color = agentColor(agentName, theme);
   return [
     statusDot(active, hasHistory, now, theme),
     text(
       {
-        fg: color,
+        fg: agentColor(color, theme),
         wrapMode: 'none',
         truncate: true,
         flexShrink: 1,
@@ -1248,7 +1242,7 @@ function agentRow(options: AgentRowOptions): JSX.Element {
   const modelParts = splitSidebarModelId(model);
   const detailRows: JSX.Element[] = [];
 
-  function detailRow(fieldLabel: string, value: string) {
+  function detailRow(fieldLabel: string, value: string, fg = theme.textMuted) {
     return box(
       {
         width: '100%',
@@ -1258,7 +1252,7 @@ function agentRow(options: AgentRowOptions): JSX.Element {
       },
       [
         text({ fg: theme.textMuted, width: 9 }, [fieldLabel]),
-        text({ fg: theme.textMuted }, [value]),
+        text({ fg }, [value]),
       ],
     );
   }
@@ -1266,7 +1260,9 @@ function agentRow(options: AgentRowOptions): JSX.Element {
   if (modelParts.provider) {
     detailRows.push(detailRow('provider', modelParts.provider));
   }
-  detailRows.push(detailRow('model', modelParts.model));
+  detailRows.push(
+    detailRow('model', modelParts.model, agentColor(options.color, theme)),
+  );
   if (modelName && modelName !== modelParts.model) {
     detailRows.push(detailRow('name', modelName));
   }
@@ -1323,7 +1319,7 @@ function compactAgentRow(options: AgentRowOptions): JSX.Element {
       box({ flexDirection: 'row', flexGrow: 1, shouldFill: false }),
       text(
         {
-          fg: agentColor(options.agentName, theme),
+          fg: agentColor(options.color, theme),
           wrapMode: 'none',
           truncate: true,
           flexShrink: 1,
@@ -1578,9 +1574,9 @@ export function renderSidebar(
     success?: unknown;
     warning?: unknown;
     hover?: unknown;
-    agentColors?: readonly unknown[];
     primary?: unknown;
     secondary?: unknown;
+    error?: unknown;
     info?: unknown;
   },
   configInvalid: boolean,
@@ -1726,7 +1722,7 @@ export function renderSidebar(
               // agent ID so models, activity, expansion and history keep
               // resolving.
               label: snapshot.agentDisplayNames?.[agentName] || agentName,
-              agentName,
+              color: snapshot.agentColors?.[agentName],
               model,
               modelName: modelNames?.get(model),
               variant,
@@ -1952,10 +1948,6 @@ export function resolveSidebarSlotOrder(
 // declared locally because the pinned @opencode-ai/plugin dep ships v1
 // types only.
 interface V2TuiThemeTokens {
-  categorical?: readonly Record<
-    100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900,
-    unknown
-  >[];
   hue?: {
     interactive: Record<
       100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900,
@@ -2029,7 +2021,6 @@ function v2ThemeView(theme: V2TuiThemeTokens): {
   textMuted: unknown;
   success?: unknown;
   warning?: unknown;
-  agentColors: readonly unknown[];
 } {
   return {
     accent: theme.hue?.interactive[200],
@@ -2039,7 +2030,6 @@ function v2ThemeView(theme: V2TuiThemeTokens): {
     textMuted: theme.text.muted ?? theme.text.subdued,
     success: theme.text.feedback?.success?.base ?? theme.success,
     warning: theme.text.feedback?.warning?.base ?? theme.warning,
-    agentColors: theme.categorical?.map((scale) => scale[500]) ?? [],
   };
 }
 

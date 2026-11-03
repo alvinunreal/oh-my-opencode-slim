@@ -137,6 +137,7 @@ import {
 import {
   clearTuiAgentActivities,
   clearTuiSessionAlias,
+  collectAgentColors,
   collectAgentDisplayNames,
   flushTuiSnapshotBatch,
   readTuiSessionParents,
@@ -2743,6 +2744,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
               ...projection.agentVariants,
             },
             agentDisplayNames: collectAgentDisplayNames(registry?.identities),
+            agentColors: collectAgentColors(
+              registry?.finalAgentConfig,
+              registry?.agentNames,
+            ),
           },
           ctx.directory,
         );
@@ -3092,6 +3097,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             agentModels: registry.tuiAgentModels,
             agentVariants: registry.tuiAgentVariants,
             agentDisplayNames: collectAgentDisplayNames(registry.identities),
+            agentColors: collectAgentColors(
+              registry.finalAgentConfig,
+              registry.agentNames,
+            ),
           },
           ctx.directory,
         );
