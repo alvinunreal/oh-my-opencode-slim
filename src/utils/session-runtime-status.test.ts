@@ -209,6 +209,29 @@ describe('getRuntimeSessionStatusSnapshot capability probe', () => {
 });
 
 describe('classifyLiveSession', () => {
+  test('preserves host identity alongside a historical outcome', async () => {
+    const get = mock(async () => ({
+      data: {
+        id: 'ses_child',
+        parentID: 'ses_parent',
+        outcome: 'succeeded',
+        time: { idle: 5 },
+      },
+    }));
+    expect(
+      await classifyLiveSession(
+        pluginInputWithClient({ session: { get } } as never),
+        'ses_child',
+      ),
+    ).toEqual({
+      kind: 'outcome',
+      outcome: 'succeeded',
+      idleAt: 5,
+      sessionID: 'ses_child',
+      parentID: 'ses_parent',
+    });
+  });
+
   test('concurrent probes share one in-flight host-info read', async () => {
     let resolveRead: (value: unknown) => void = () => {};
     const pending = new Promise<unknown>((resolve) => {

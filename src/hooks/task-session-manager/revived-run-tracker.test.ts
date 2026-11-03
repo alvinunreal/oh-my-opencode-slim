@@ -180,6 +180,37 @@ afterEach(() => {
 });
 
 describe('revived run tracker', () => {
+  test('a deferred terminal probe does not settle or release its admission lease', async () => {
+    const h = createHarness(() => ({ data: [] }));
+    h.board.updateStatus({
+      taskID: h.run.taskID,
+      state: 'completed',
+      resultSummary: 'prior result',
+    });
+    const record = h.board.get(h.run.taskID);
+    const lease = h.board.acquireLease(
+      h.run.taskID,
+      h.run.generation,
+      'relaunch',
+    );
+    if (!record || !lease) throw new Error('Missing terminal fixture');
+    h.tracker.register({
+      taskID: h.run.taskID,
+      generation: h.run.generation,
+      parentSessionID: 'parent',
+      promptMessageID: 'pending-input',
+      admissionLease: lease,
+      description: 'pending admission',
+    });
+    spyOn(h.gate, 'reconcile').mockResolvedValue({ kind: 'deferred', record });
+
+    expect(await h.tracker.probe(h.run.taskID, h.run.generation)).toBe(false);
+    expect(h.board.validateLease(lease)).toBe(true);
+    expect(h.settled).not.toHaveBeenCalled();
+    expect(h.prompt).not.toHaveBeenCalled();
+    h.tracker.dispose();
+  });
+
   test('confirmed fallback admission sends one queued internal continuation notice', async () => {
     jest.useFakeTimers();
     jest.setSystemTime(0);
