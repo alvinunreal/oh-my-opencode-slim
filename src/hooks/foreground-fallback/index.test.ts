@@ -5270,7 +5270,9 @@ describe('isFailoverError', () => {
       providerID: 'test',
       id: 'b',
     });
-    expect((manager as any).downProviders.has('test')).toBe(false);
+    const mgr = manager as any;
+    expect(mgr.downProviders.get(event.sessionID)?.has('test')).toBeFalsy();
+    expect(mgr.requestRejected.get(event.sessionID)?.has('test/a')).toBe(true);
   });
 
   test('returns true for existing model-outage patterns (regression guard)', () => {
