@@ -45,16 +45,47 @@ describe('asHttpStatus properties', () => {
   });
 
   test('rejects non-integers and NaN', () => {
-    const nonInteger = fc
-      .double({ noNaN: true, noDefaultInfinity: true })
-      .filter((value) => !Number.isInteger(value));
+    const nonInteger = fc.oneof(
+      fc.constant(Number.NaN),
+      fc
+        .double({ noNaN: true, noDefaultInfinity: true })
+        .filter((value) => !Number.isInteger(value)),
+    );
     fc.assert(
       fc.property(nonInteger, (value) => {
         expect(asHttpStatus(value)).toBeUndefined();
       }),
     );
+  });
+
+  test('rejects values outside the accepted input shapes', () => {
+    const wrongLengthString = fc.oneof(
+      fc.string({ maxLength: 2 }),
+      fc.string({ minLength: 4, maxLength: 5 }),
+    );
+    const nonDigitString = fc
+      .tuple(
+        fc.constantFrom('a', 'x', '-'),
+        fc.string({ minLength: 2, maxLength: 2 }),
+      )
+      .map(([first, rest]) => `${first}${rest}`);
+    const outOfShape = fc.oneof(
+      fc.array(fc.integer()),
+      fc.object(),
+      fc.constant(null),
+      fc.constant(undefined),
+      fc.boolean(),
+      fc.constant(Infinity),
+      fc.constant(-Infinity),
+      fc
+        .double({ min: 100, max: 599 })
+        .filter((value) => !Number.isInteger(value)),
+      wrongLengthString,
+      nonDigitString,
+    );
+
     fc.assert(
-      fc.property(fc.constant(Number.NaN), (value) => {
+      fc.property(outOfShape, (value) => {
         expect(asHttpStatus(value)).toBeUndefined();
       }),
     );

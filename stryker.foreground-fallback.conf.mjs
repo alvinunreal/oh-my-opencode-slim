@@ -27,6 +27,7 @@ export default {
     testFiles: [
       'src/hooks/foreground-fallback/index.test.ts',
       'src/hooks/foreground-fallback/index.decision-trace.test.ts',
+      'src/hooks/foreground-fallback/index.property.test.ts',
     ],
   },
 };

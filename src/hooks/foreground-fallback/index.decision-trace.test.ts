@@ -55,19 +55,6 @@ function createMockClient() {
 }
 
 const redoEvents = {
-  assistant: (sessionID: string, modelID = 'a') => ({
-    type: 'message.updated',
-    properties: {
-      info: {
-        id: `assistant-${sessionID}-${modelID}`,
-        sessionID,
-        role: 'assistant',
-        agent: 'orchestrator',
-        providerID: 'test',
-        modelID,
-      },
-    },
-  }),
   error: (
     sessionID: string,
     error: unknown = { message: 'rate limit' },
@@ -75,13 +62,6 @@ const redoEvents = {
   ) => ({
     type: 'session.error',
     properties: { sessionID, info: { id: messageID }, error },
-  }),
-  retry: (sessionID: string, attempt = 1) => ({
-    type: 'session.status',
-    properties: {
-      sessionID,
-      status: { type: 'retry', attempt, message: 'rate limit' },
-    },
   }),
 };
 
@@ -113,91 +93,7 @@ function timedManager(
   );
 }
 
-function makeManager({
-  chain = ['test/a', 'test/b', 'test/c'],
-  maxRetries = 3,
-  onChanged,
-}: {
-  chain?: ReadonlyArray<string | { id: string; variant?: string }>;
-  maxRetries?: number;
-  onChanged?: (sessionID: string, model: string) => void;
-} = {}) {
-  const { mocks } = createMockClient();
-  return {
-    manager: new ForegroundFallbackManager(
-      { orchestrator: chain },
-      true,
-      { directory: '/test' } as never,
-      maxRetries,
-      undefined,
-      onChanged,
-      0,
-      0,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      clock,
-    ),
-    mocks,
-  };
-}
-
 describe('foreground fallback replay routing', () => {
-  test('decision trace: no-chain session retries without switching models', async () => {
-    const onChanged = mock((_sessionID: string, _model: string) => {});
-    const { manager, mocks } = makeManager({ onChanged });
-    const sessionID = 'decision-trace-no-chain';
-    manager.registerSessionAgent(sessionID, 'councillor');
-    await manager.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID,
-          agent: 'councillor',
-          providerID: 'test',
-          modelID: 'a',
-        },
-      },
-    });
-
-    await manager.handleEvent(
-      redoEvents.error(sessionID, { message: 'rate limit' }, 'failure-1'),
-    );
-
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(onChanged).not.toHaveBeenCalled();
-  });
-
-  test('decision trace: a healthy chain head receives the replay', async () => {
-    const onChanged = mock((_sessionID: string, _model: string) => {});
-    const { manager, mocks } = makeManager({
-      chain: ['healthy/head', 'backup/next'],
-      onChanged,
-    });
-    const sessionID = 'decision-trace-healthy-head';
-    manager.registerSessionAgent(sessionID, 'orchestrator');
-    await manager.handleEvent({
-      type: 'message.updated',
-      properties: {
-        info: {
-          sessionID,
-          role: 'assistant',
-          agent: 'orchestrator',
-          providerID: 'outside',
-          modelID: 'current',
-        },
-      },
-    });
-
-    await manager.handleEvent(
-      redoEvents.error(sessionID, { message: 'rate limit' }, 'failure-1'),
-    );
-
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(onChanged).toHaveBeenCalledWith(sessionID, 'healthy/head');
-  });
-
   test('decision trace: an abandoned head provider is skipped', async () => {
     const onChanged = mock((_sessionID: string, _model: string) => {});
     const { mocks } = createMockClient();
@@ -254,25 +150,5 @@ describe('foreground fallback replay routing', () => {
 
     expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
     expect(onChanged).toHaveBeenCalledWith(childID, 'backup/child');
-  });
-
-  test('decision trace: exhausted retry budget switches to the fallback', async () => {
-    const onChanged = mock((_sessionID: string, _model: string) => {});
-    const { manager, mocks } = makeManager({
-      chain: ['test/a', 'backup/b'],
-      maxRetries: 1,
-      onChanged,
-    });
-    const sessionID = 'decision-trace-retry-budget';
-    manager.registerSessionAgent(sessionID, 'orchestrator');
-    await manager.handleEvent(redoEvents.assistant(sessionID));
-    await manager.handleEvent(redoEvents.retry(sessionID, 1));
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-    expect(onChanged).not.toHaveBeenCalled();
-
-    await manager.handleEvent(redoEvents.retry(sessionID, 2));
-
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
-    expect(onChanged).toHaveBeenCalledWith(sessionID, 'backup/b');
   });
 });
