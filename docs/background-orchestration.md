@@ -137,9 +137,11 @@ it under the parent named by the event and lets the normal reconciliation publis
 the terminal outcome, which carries the parent wake. This runs on v1 only and
 under startup recovery's own proofs: the parent's history must show a background
 delegation for that child, that run must have no trusted native delivery yet, and
-the child must have no persisted identity (those belong to startup recovery). On
-v2 the host owns completion delivery through its native subagent push, and the
-plugin forgoes observation-time adoption there rather than race that wake.
+the child must have no persisted identity (those belong to startup recovery). The
+parent must be a managed session, or an orchestrator session recognized from its
+own history, which the plugin then registers as managed. On v2 the host owns
+completion delivery through its native subagent push, and the plugin forgoes
+observation-time adoption there rather than race that wake.
 On V2, `session.execution.interrupted` with reason `shutdown` is suspension,
 not a terminal idle transition. OMO preserves the raw event without synthesizing
 idle/status events; the host retains execution and first-notification ownership.

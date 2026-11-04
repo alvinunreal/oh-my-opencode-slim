@@ -45,6 +45,7 @@ function createDeps(
   options?: {
     resolve?: typeof resolveUndeliveredBackgroundChild;
     willAttemptFallback?: (sessionID: string) => boolean;
+    registerSessionAsOrchestrator?: (sessionID: string) => void;
   },
 ) {
   const scheduleChildIdleReconciliation = mock(() => {});
@@ -65,6 +66,7 @@ function createDeps(
       shouldManageSession: managed,
       now: () => 1000,
       willAttemptFallback: options?.willAttemptFallback,
+      registerSessionAsOrchestrator: options?.registerSessionAsOrchestrator,
       ...(options?.resolve
         ? { resolveUndeliveredBackgroundChild: options.resolve }
         : {}),
@@ -102,8 +104,10 @@ function createDeps(
 
 // PARENT is managed; every child id is unmanaged.
 const managed = (sessionID: string) => sessionID === PARENT;
+const LAUNCHED_AT = 4242;
 const proven: typeof resolveUndeliveredBackgroundChild = async () => ({
   parentSessionID: PARENT,
+  launchedAt: LAUNCHED_AT,
 });
 
 function memoryStorage() {
@@ -156,6 +160,8 @@ describe('orphaned-child observation fallback (#1560)', () => {
       // publication's wake — without this the wake listener skips it.
       recoveredAtStartup: true,
     });
+    // The run fence is the delegation evidence, not process start.
+    expect(row?.runStartedAt).toBe(LAUNCHED_AT);
     expect(scheduleChildIdleReconciliation).toHaveBeenCalledWith(
       CHILD,
       1000,
@@ -276,6 +282,48 @@ describe('orphaned-child observation fallback (#1560)', () => {
     expect(board.get(CHILD)).toBeUndefined();
     expect(resolve).toHaveBeenCalledTimes(1);
     expect(scheduleChildIdleReconciliation).not.toHaveBeenCalled();
+  });
+
+  test('admits and registers an orchestrator parent whose membership was lost', async () => {
+    const board = new BackgroundJobBoard();
+    const register = mock(() => {});
+    const { deps } = createDeps(board, managed, {
+      resolve: async () => ({
+        parentSessionID: 'ses_restarted_orchestrator',
+        launchedAt: LAUNCHED_AT,
+        parentAgent: 'orchestrator',
+      }),
+      registerSessionAsOrchestrator: register,
+    });
+
+    await handleEvent(
+      idleEvent(CHILD, { parentID: 'ses_restarted_orchestrator' }),
+      deps,
+    );
+
+    expect(board.get(CHILD)).toMatchObject({
+      parentSessionID: 'ses_restarted_orchestrator',
+      recoveredAtStartup: true,
+    });
+    expect(register).toHaveBeenCalledWith('ses_restarted_orchestrator');
+  });
+
+  test('never adopts for an unmanaged parent that is not an orchestrator', async () => {
+    const board = new BackgroundJobBoard();
+    const register = mock(() => {});
+    const { deps } = createDeps(board, managed, {
+      resolve: async () => ({
+        parentSessionID: 'ses_someone_else',
+        launchedAt: LAUNCHED_AT,
+        parentAgent: 'fixer',
+      }),
+      registerSessionAsOrchestrator: register,
+    });
+
+    await handleEvent(idleEvent(CHILD, { parentID: 'ses_someone_else' }), deps);
+
+    expect(board.get(CHILD)).toBeUndefined();
+    expect(register).not.toHaveBeenCalled();
   });
 
   test('never adopts a managed child or a tombstoned one', async () => {

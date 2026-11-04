@@ -217,6 +217,7 @@ function isCurrentSessionObservation(
 async function adoptUndeliveredBackgroundChild(args: {
   board: BackgroundJobBoard;
   shouldManageSession: (sessionID: string) => boolean;
+  registerParentSession?: (sessionID: string) => void;
   resolve?: (observation: {
     taskID: string;
     parentSessionID?: string;
@@ -253,7 +254,13 @@ async function adoptUndeliveredBackgroundChild(args: {
     });
     return undefined;
   }
-  if (!proven || !args.shouldManageSession(proven.parentSessionID)) {
+  if (!proven) return undefined;
+  const parentManaged = args.shouldManageSession(proven.parentSessionID);
+  // Order of permission checks does not survive a restart: a session that was
+  // managed keeps its history but loses the in-memory membership. Startup
+  // recovery admits an orchestrator parent on transcript evidence and
+  // registers it; do the same here, and never adopt for anyone else.
+  if (!parentManaged && proven.parentAgent !== 'orchestrator') {
     return undefined;
   }
   // The proof read is asynchronous: a row may have appeared or been deleted
@@ -288,6 +295,9 @@ async function adoptUndeliveredBackgroundChild(args: {
   // No native observer survives this process boundary, so the plugin owns the
   // first publication's wake (mirrors the startup adoption sites).
   adopted.recoveredAtStartup = true;
+  if (!parentManaged) {
+    args.registerParentSession?.(proven.parentSessionID);
+  }
   log('[task-session-manager] adopted undelivered background child', {
     taskID: sessionID,
     parentSessionID: proven.parentSessionID,
@@ -655,6 +665,7 @@ export async function handleEvent(
       const adopted = await adoptUndeliveredBackgroundChild({
         board: deps.backgroundJobBoard,
         shouldManageSession: deps.options.shouldManageSession,
+        registerParentSession: deps.options.registerSessionAsOrchestrator,
         resolve: deps.options.resolveUndeliveredBackgroundChild,
         sessionID: sessionId,
         info: input.event.properties?.info,
@@ -816,6 +827,7 @@ export async function handleEvent(
         const adopted = await adoptUndeliveredBackgroundChild({
           board: deps.backgroundJobBoard,
           shouldManageSession: deps.options.shouldManageSession,
+          registerParentSession: deps.options.registerSessionAsOrchestrator,
           resolve: deps.options.resolveUndeliveredBackgroundChild,
           sessionID: sessionId,
           info: input.event.properties?.info,

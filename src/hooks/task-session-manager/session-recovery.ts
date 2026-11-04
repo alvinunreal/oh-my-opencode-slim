@@ -653,6 +653,10 @@ export interface UndeliveredBackgroundChild {
   parentSessionID: string;
   /** Time of the parent's own delegation evidence; fences the adoption. */
   launchedAt: number;
+  /** The parent's own agent, read from its history. Startup recovery uses the
+   *  same fallback to recognize an orchestrator parent whose in-memory
+   *  membership did not survive the restart. */
+  parentAgent?: string;
   agent?: string;
   title?: string;
 }
@@ -672,6 +676,8 @@ export interface UndeliveredBackgroundChild {
  * v1 terminal events carry only the child session id, so the parent comes from
  * a bounded `session.get` when the event names none; the shared single-flight
  * reader collapses repeated observations of the same child into one host read.
+ * The parent's agent rides along because a restart drops its in-memory
+ * membership while its history still names it as an orchestrator.
  */
 export async function resolveUndeliveredBackgroundChild(options: {
   input: PluginInput;
@@ -743,9 +749,11 @@ export async function resolveUndeliveredBackgroundChild(options: {
   ) {
     return undefined;
   }
+  const parentAgent = latestTranscriptAgent(transcript);
   return {
     parentSessionID,
     launchedAt: delegation.at,
+    ...(parentAgent ? { parentAgent } : {}),
     ...(agent ? { agent } : {}),
     ...(title ? { title } : {}),
   };
