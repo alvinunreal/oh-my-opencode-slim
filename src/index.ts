@@ -124,6 +124,7 @@ import {
   createNativeTaskControlTools,
   createTaskMessageTool,
   createTaskReplyTool,
+  createTaskReportTool,
   createTaskReviveTool,
   createTaskStatusTool,
   createWaitForUserTool,
@@ -1913,6 +1914,15 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
         isDisposed: () => instanceDisposed,
       });
+      const taskReportTools =
+        hostFlavor === 'v2' && !runtime.disabledTools.includes('task_report')
+          ? createTaskReportTool({
+              input: ctx,
+              hasInputWait: (sessionID) =>
+                taskSessionManagerHook?.hasInputWait(sessionID) ?? false,
+              isDisposed: () => instanceDisposed,
+            })
+          : {};
       const taskStatusTools = createTaskStatusTool({
         input: ctx,
         backgroundJobBoard: backgroundJobBoard!,
@@ -1963,6 +1973,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           : {};
       lifecycleTaskTools = {
         ...taskCancelTools,
+        ...taskReportTools,
         ...taskMessageTools,
         ...taskReplyTools,
         // Keep master's v1 registration order (cache-stable tool list).
