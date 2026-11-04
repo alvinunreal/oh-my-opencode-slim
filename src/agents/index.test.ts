@@ -31,6 +31,14 @@ function runtimeFor(config: PluginConfig | undefined = {}) {
   return RuntimeConfig.get(TEST_DIRECTORY);
 }
 
+function permissionFor(agents: ReturnType<typeof createAgents>, name: string) {
+  return (
+    agents.find((agent) => agent.name === name) as {
+      config: { permission: Record<string, unknown> };
+    }
+  ).config.permission;
+}
+
 function councilConfig() {
   const parsed = CouncilConfigSchema.parse({
     presets: { default: { alpha: { model: 'test/councillor' } } },
@@ -841,6 +849,31 @@ describe('orchestrator agent', () => {
     // Custom and ACP agents are subagents: denied unless explicitly allowed.
     expect(permission('reviewer')).toBe('deny');
     expect(permission('bridge')).toBe('deny');
+  });
+
+  test('task_report is available to subagents and denied to primaries', () => {
+    const agents = createAgents(runtimeFor({ council: councilConfig() }), {
+      hostFlavor: 'v2',
+    });
+    expect(permissionFor(agents, 'orchestrator').task_report).toBe('deny');
+    expect(permissionFor(agents, 'explorer').task_report).toBe('allow');
+    // Preserve explicit deny-all agents such as council synthesis.
+    expect(permissionFor(agents, 'council').task_report).toBe('deny');
+    expect(permissionFor(agents, 'councillor').task_report).toBe('deny');
+  });
+
+  test('task_report honors explicit agent permissions', () => {
+    const agents = createAgents(
+      runtimeFor({
+        agents: {
+          explorer: { permission: { task_report: 'deny' } },
+          orchestrator: { permission: { task_report: 'allow' } },
+        },
+      }),
+      { hostFlavor: 'v2' },
+    );
+    expect(permissionFor(agents, 'explorer').task_report).toBe('deny');
+    expect(permissionFor(agents, 'orchestrator').task_report).toBe('allow');
   });
 
   test('interview_submit_state honors an explicit agent permission', () => {

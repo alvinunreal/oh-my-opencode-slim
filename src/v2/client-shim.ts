@@ -667,6 +667,7 @@ export function buildPluginInput(
       promptAsync: async (
         args: Record<string, unknown> & {
           delivery?: 'steer' | 'queue';
+          resume?: boolean;
           modelSelection?: 'inherit';
         },
       ) => {
@@ -783,7 +784,7 @@ export function buildPluginInput(
             description: 'oh-my-opencode-slim internal initiator',
             ...(metadata ? { metadata } : {}),
             delivery,
-            resume: true,
+            resume: args?.resume !== false,
           });
         }
         const files = filesFromBody(args);
@@ -796,6 +797,7 @@ export function buildPluginInput(
           delivery,
           ...(files.length > 0 ? { files } : {}),
           ...(metadata ? { metadata } : {}),
+          ...(typeof args?.resume === 'boolean' ? { resume: args.resume } : {}),
         });
       },
       update: s.update

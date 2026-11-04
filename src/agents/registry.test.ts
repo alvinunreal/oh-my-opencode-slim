@@ -2767,7 +2767,7 @@ describe('child permission payload stance tail', () => {
     expect(decideOf(compiled)('read', 'src/index.ts')).toBe('deny');
   });
 
-  test('agents without a task stance get no tail: orchestrator payload passes through unchanged', () => {
+  test('primary task_report denial survives child permission compilation', () => {
     const runtime = runtimeFor({ disabled_agents: [] });
     const registry = build(runtime, {}, { hostFlavor: 'v2' });
     expect(
@@ -2779,9 +2779,13 @@ describe('child permission payload stance tail', () => {
       USER_GLOBAL_ALLOW,
     ];
     const compiled = registry.compileChildPermissions('orchestrator', payload);
-    expect(compiled).toEqual(payload);
+    expect(compiled).toEqual([
+      ...payload,
+      { action: 'task_report', resource: '*', effect: 'deny' },
+    ]);
     expect(compiled.some((rule) => rule.action === 'subagent')).toBe(false);
     expect(evaluateLast(compiled, 'subagent', 'observer')).toBe('allow');
+    expect(evaluateLast(compiled, 'task_report', '*')).toBe('deny');
   });
 
   test('is idempotent: recompiling a tailed payload changes nothing', () => {

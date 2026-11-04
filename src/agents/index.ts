@@ -865,6 +865,11 @@ function applyDefaultPermissions(
 
   agent.config.permission = {
     ...existing,
+    // A child can report to its authoritative host parent; primaries do not
+    // need the tool, and the tool also rejects parentless sessions at runtime.
+    task_report:
+      existing.task_report ??
+      (isPrimary || existing['*'] === 'deny' ? 'deny' : 'allow'),
     // Stance defaults above: an explicit `task` entry wins, then the
     // compiled scope, then the nested-dispatch deny for non-primaries —
     // the compiled v2 permission base allows every unmatched action, so an
