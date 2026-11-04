@@ -5231,6 +5231,24 @@ describe('isFailoverError', () => {
     ).toBe(true);
   });
 
+  test('returns true for model unavailable error', () => {
+    expect(isFailoverError('Model unavailable: test/provider')).toBe(true);
+    expect(
+      isFailoverError({ message: 'Model unavailable: anthropic/claude-3' }),
+    ).toBe(true);
+  });
+
+  test('returns true for variant unavailable error', () => {
+    expect(
+      isFailoverError('Variant unavailable for test/provider: test-variant'),
+    ).toBe(true);
+    expect(
+      isFailoverError({
+        message: 'Variant unavailable for openai/gpt-4o: max',
+      }),
+    ).toBe(true);
+  });
+
   test('returns true for existing model-outage patterns (regression guard)', () => {
     expect(isFailoverError('model not available')).toBe(true);
     expect(isFailoverError('unsupported model')).toBe(true);
