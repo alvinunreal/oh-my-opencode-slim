@@ -5,7 +5,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-export function stripOrchestratorModel(
+function stripOrchestratorModel(
   agents: Record<string, unknown>,
   enabled: boolean | undefined,
   preset: Preset | undefined,

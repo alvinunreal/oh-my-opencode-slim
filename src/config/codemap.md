@@ -129,7 +129,6 @@ export * from './constants';
 export * from './council-schema';
 export { deepMerge, loadAgentPrompt, loadPluginConfig } from './loader';
 export * from './schema';
-export { getAcpAgentNames, getAgentOverride, getCustomAgentNames } from './utils';
 ```
 
 This allows consumers to import directly from `src/config` rather than individual files.
@@ -148,7 +147,6 @@ This allows consumers to import directly from `src/config` rather than individua
 
 - `getAgentOverride(config, name)`: Get agent-specific override with alias support
 - `getCustomAgentNames(config)`: List custom agents declared in config.agents
-- `getAcpAgentNames(config)`: List ACP agent names from config.acpAgents
 - `loadAgentPrompt(agentName, preset?)`: Load custom prompt files for agents, searching current and ancestor locations before global directories
 - `stripOrchestratorModel` / `applyOrchestratorModelConfig` (strip-orchestrator-model.ts): Strip the orchestrator's single model/variant when a fallback chain is configured
 
