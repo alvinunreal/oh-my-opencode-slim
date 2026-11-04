@@ -750,6 +750,10 @@ export async function resolveUndeliveredBackgroundChild(options: {
     return undefined;
   }
   const parentAgent = latestTranscriptAgent(transcript);
+  // Neither the event nor the host names the child's agent on v1 terminal
+  // events; the delegation is the only remaining source, and a later
+  // continuation's agent-equality check depends on it.
+  agent ??= delegation.agent;
   return {
     parentSessionID,
     launchedAt: delegation.at,

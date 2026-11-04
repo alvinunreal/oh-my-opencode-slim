@@ -218,6 +218,7 @@ async function adoptUndeliveredBackgroundChild(args: {
   board: BackgroundJobBoard;
   shouldManageSession: (sessionID: string) => boolean;
   registerParentSession?: (sessionID: string) => void;
+  isDisposed?: () => boolean;
   resolve?: (observation: {
     taskID: string;
     parentSessionID?: string;
@@ -271,6 +272,9 @@ async function adoptUndeliveredBackgroundChild(args: {
   ) {
     return undefined;
   }
+  // A disposed instance has no live terminal gate to reconcile this row, so
+  // registering now would strand it.
+  if (args.isDisposed?.()) return undefined;
   let adopted: BackgroundJobRecord;
   try {
     adopted = board.registerLaunch({
@@ -359,6 +363,9 @@ export async function handleEvent(
       isFallbackInProgress?: (sessionID: string) => boolean;
       /** True when foreground fallback could still recover the session. */
       willAttemptFallback?: (sessionID: string) => boolean;
+      /** Instance shutdown latch; a disposed instance has no live gate to
+       *  reconcile a row it registers. */
+      isDisposed?: () => boolean;
       hostFlavor?: string;
       /** Observation-time oracle for #1560 adoption: resolves the child's
        *  parent and proves its history holds an undelivered background
@@ -666,6 +673,7 @@ export async function handleEvent(
         board: deps.backgroundJobBoard,
         shouldManageSession: deps.options.shouldManageSession,
         registerParentSession: deps.options.registerSessionAsOrchestrator,
+        isDisposed: deps.options.isDisposed,
         resolve: deps.options.resolveUndeliveredBackgroundChild,
         sessionID: sessionId,
         info: input.event.properties?.info,
@@ -828,6 +836,7 @@ export async function handleEvent(
           board: deps.backgroundJobBoard,
           shouldManageSession: deps.options.shouldManageSession,
           registerParentSession: deps.options.registerSessionAsOrchestrator,
+          isDisposed: deps.options.isDisposed,
           resolve: deps.options.resolveUndeliveredBackgroundChild,
           sessionID: sessionId,
           info: input.event.properties?.info,

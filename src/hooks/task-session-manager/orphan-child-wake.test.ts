@@ -46,6 +46,7 @@ function createDeps(
     resolve?: typeof resolveUndeliveredBackgroundChild;
     willAttemptFallback?: (sessionID: string) => boolean;
     registerSessionAsOrchestrator?: (sessionID: string) => void;
+    isDisposed?: () => boolean;
   },
 ) {
   const scheduleChildIdleReconciliation = mock(() => {});
@@ -67,6 +68,7 @@ function createDeps(
       now: () => 1000,
       willAttemptFallback: options?.willAttemptFallback,
       registerSessionAsOrchestrator: options?.registerSessionAsOrchestrator,
+      isDisposed: options?.isDisposed,
       ...(options?.resolve
         ? { resolveUndeliveredBackgroundChild: options.resolve }
         : {}),
@@ -326,6 +328,22 @@ describe('orphaned-child observation fallback (#1560)', () => {
     expect(register).not.toHaveBeenCalled();
   });
 
+  test('never registers a row for a disposed instance', async () => {
+    const board = new BackgroundJobBoard();
+    const { deps, scheduleChildIdleReconciliation } = createDeps(
+      board,
+      managed,
+      { resolve: proven, isDisposed: () => true },
+    );
+
+    await handleEvent(idleEvent(CHILD, { parentID: PARENT }), deps);
+
+    // A disposed instance has no live terminal gate to reconcile the row or
+    // publish its wake, so registering it would strand the child.
+    expect(board.get(CHILD)).toBeUndefined();
+    expect(scheduleChildIdleReconciliation).not.toHaveBeenCalled();
+  });
+
   test('never adopts a managed child or a tombstoned one', async () => {
     const board = new BackgroundJobBoard();
     const { deps } = createDeps(board, () => true, { resolve: proven });
@@ -491,7 +509,11 @@ describe('resolveUndeliveredBackgroundChild (#1560)', () => {
 
   function proverInput(
     transcript: unknown,
-    options: { fail?: boolean; hostParentID?: string | null } = {},
+    options: {
+      fail?: boolean;
+      hostParentID?: string | null;
+      hostAgent?: string | null;
+    } = {},
   ) {
     return {
       input: {
@@ -507,7 +529,9 @@ describe('resolveUndeliveredBackgroundChild (#1560)', () => {
                       ...(options.hostParentID === null
                         ? {}
                         : { parentID: options.hostParentID ?? PARENT }),
-                      agent: 'explorer',
+                      ...(options.hostAgent === null
+                        ? {}
+                        : { agent: options.hostAgent ?? 'explorer' }),
                       title: 'delegated work',
                     }
                   : { id: path.id },
@@ -595,6 +619,22 @@ describe('resolveUndeliveredBackgroundChild (#1560)', () => {
     expect(
       await resolveUndeliveredBackgroundChild(observation),
     ).toBeUndefined();
+  });
+
+  test('falls back to the delegation agent when the observation names none', async () => {
+    const transcript = {
+      data: delegationMessage(CHILD, 10, { background: true }),
+    };
+    const { parentSessionID: _named, ...observation } = proverInput(
+      transcript,
+      { hostAgent: null },
+    );
+
+    // A later continuation's agent-equality check depends on this value.
+    expect(await resolveUndeliveredBackgroundChild(observation)).toMatchObject({
+      parentSessionID: PARENT,
+      agent: 'explorer',
+    });
   });
 
   test('treats an unreadable transcript as no evidence', async () => {
