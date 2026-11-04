@@ -1456,14 +1456,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         if (hostFlavor === 'v2') return;
         if (record.state !== 'stopped' || !record.terminalUnreconciled) return;
         // Symmetric tracker suppression (M4): when the revived-run tracker
-        // owns this generation's delivery — it already delivered the run's
-        // terminal <task> notification — a recovery wake beside it would
-        // queue a second admission for a lineage the parent already heard
-        // from. Scoped like the publication listener's check: a stop that
-        // is the generation's FIRST publication normally belongs to the
-        // host notifier rather than the continuation tracker.
+        // owns this generation's delivery it sends the stop as its own
+        // <task state="stopped"> notification; a recovery wake beside it
+        // would queue a second admission for the same stop.
         if (
-          record.terminalRevision > 1 &&
           revivedRunTracker!.willNotifyParent(record.taskID, record.generation)
         ) {
           log('[orchestrator-wake] stopped-job recovery wake skipped', {
@@ -1483,8 +1479,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             record.background && killAllStop.isActive(record.parentSessionID)
           ) &&
           record.recoveredAtStartup !== true &&
-          HOST_ATTRIBUTED_STOP_OUTCOME.test(record.resultSummary ?? '') &&
-          !revivedRunTracker!.willNotifyParent(record.taskID, record.generation)
+          HOST_ATTRIBUTED_STOP_OUTCOME.test(record.resultSummary ?? '')
         ) {
           log('[orchestrator-wake] stopped-job recovery wake skipped', {
             sessionID: record.parentSessionID,

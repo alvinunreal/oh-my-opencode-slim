@@ -1400,9 +1400,11 @@ function rememberDeliveryKey(seen: Map<string, true>, seenKey: string): void {
  * fallback is its only retirement channel on v1). `stopped` records are
  * excluded (recovery-wake ownership) unless the host attributed the stop to
  * an interruption: that outcome retires like the error it replaces. A
- * foreground host stop needs no timestamp: it reaches the parent as its own
- * tool result, so every parent request after the publication carries it.
- * Other runs without comparable timestamps fail closed.
+ * foreground host stop needs no timestamp: a first run reaches the parent as
+ * its own tool result, and retiring never suppresses a fallback
+ * continuation's tracker notice (the record stays `stopped`), so retiring
+ * early only reopens the duplicate guard for a run with no result. Other
+ * runs without comparable timestamps fail closed.
  */
 function retireStaleTerminalRecords(
   state: InjectionState,

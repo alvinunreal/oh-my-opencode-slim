@@ -975,6 +975,64 @@ test('v1 foreground replay keeps the error part and appends a correction', async
   ).toContain('confirmed result');
 });
 
+test('v1 foreground continuation stop reaches the parent once', async () => {
+  const h = await fallbackAssembly(undefined, 2000, true);
+  setChildError(h);
+  const request = parentMessage(foregroundFailure(), 'assistant');
+  request.messages.unshift(
+    parentMessage({ type: 'text', text: 'work' }).messages[0],
+  );
+  const transform = h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    request as never,
+  );
+  await h.event('session.error', {
+    sessionID: 'child',
+    error: contentFilterError,
+  });
+  await h.idle();
+  await h.advance(2000);
+  await transform;
+  const prompts = () =>
+    h.promptAsync.mock.calls.map(
+      ([call]) =>
+        call as {
+          path: { id: string };
+          body: { messageID: string; parts: { text: string }[] };
+        },
+    );
+  h.setBusy(true);
+  await h.busySignal();
+  const replay = prompts().find(({ path }) => path.id === 'child')?.body;
+  const error = {
+    name: 'MessageAbortedError',
+    data: { message: 'The user aborted a request.' },
+  };
+  h.history.push(
+    { info: { id: replay?.messageID, role: 'user' }, parts: replay?.parts },
+    {
+      info: {
+        id: 'aborted',
+        role: 'assistant',
+        error,
+        time: { completed: Date.now() },
+      },
+      parts: [],
+    },
+  );
+  await h.event('session.error', { sessionID: 'child', error });
+  h.setBusy(false);
+  await h.idle();
+  await h.runtime.reconcile();
+  await h.advance(10_000);
+  // The continuation tracker owns the stop; no recovery wake beside it.
+  const parent = prompts()
+    .filter(({ path }) => path.id === 'parent')
+    .map(({ body }) => body.parts[0].text);
+  expect(parent).toHaveLength(2);
+  expect(parent[1]).toContain('<task id="child" state="stopped">');
+});
+
 test('v1 foreground leaves the native failure when its chain is exhausted', async () => {
   const h = await fallbackAssembly(undefined, 2000, true, ['test/primary']);
   setChildError(h);
