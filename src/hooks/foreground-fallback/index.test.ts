@@ -5249,6 +5249,30 @@ describe('isFailoverError', () => {
     ).toBe(true);
   });
 
+  test.each([
+    'Model unavailable: test/a',
+    'Variant unavailable for test/a: max',
+  ])('keeps %s request-scoped during v2 retry', async (message) => {
+    const { manager } = makeManager({
+      chain: ['test/a', 'test/b'],
+      hostFlavor: 'v2',
+    });
+    const switchModel = mock(async () => {});
+    const event = {
+      sessionID: 'request-scoped-model-error',
+      agent: 'orchestrator',
+      model: { providerID: 'test', id: 'a' },
+      error: { message },
+      decision: { retry: false },
+    };
+    await manager.handleV2Retry(event, switchModel);
+    expect(switchModel).toHaveBeenCalledWith(event.sessionID, {
+      providerID: 'test',
+      id: 'b',
+    });
+    expect((manager as any).downProviders.has('test')).toBe(false);
+  });
+
   test('returns true for existing model-outage patterns (regression guard)', () => {
     expect(isFailoverError('model not available')).toBe(true);
     expect(isFailoverError('unsupported model')).toBe(true);
@@ -10252,6 +10276,7 @@ function seedMap(target, id) {
 describe('ForegroundFallbackManager forgetSession cleanup', () => {
   test.each([
     'sessionModel',
+    'sessionParent',
     'activeFallback',
     'downProviders',
     'sessionAgent',
