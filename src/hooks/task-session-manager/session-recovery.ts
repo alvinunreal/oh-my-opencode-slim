@@ -648,6 +648,121 @@ function latestFence(...values: Array<number | undefined>): number | undefined {
   return chosen;
 }
 
+/** A proven orphan: its parent, its launch fence, and the observation identity. */
+export interface UndeliveredBackgroundChild {
+  parentSessionID: string;
+  /** Time of the parent's own delegation evidence; fences the adoption. */
+  launchedAt: number;
+  /** The parent's own agent, read from its history. Startup recovery uses the
+   *  same fallback to recognize an orchestrator parent whose in-memory
+   *  membership did not survive the restart. */
+  parentAgent?: string;
+  agent?: string;
+  title?: string;
+}
+
+/**
+ * Observation-time counterpart of startup recovery's single-child check.
+ *
+ * A child the board lost mid-run (host restart, or a launch that predates
+ * persistence) only goes idle/terminal with no row to claim the completion.
+ * Re-adopting it is safe only under the same proofs startup recovery demands
+ * of a non-persisted candidate: the parent's own history must show a
+ * background delegation for this task, and that run must have no trusted
+ * native delivery yet. Without a launch time the delivery fence has no
+ * boundary, so the absence of delivery cannot be proven and this returns
+ * undefined. A failed read is no evidence either.
+ *
+ * v1 terminal events carry only the child session id, so the parent comes from
+ * a bounded `session.get` when the event names none; the shared single-flight
+ * reader collapses repeated observations of the same child into one host read.
+ * The parent's agent rides along because a restart drops its in-memory
+ * membership while its history still names it as an orchestrator.
+ */
+export async function resolveUndeliveredBackgroundChild(options: {
+  input: PluginInput;
+  hostFlavor?: string;
+  taskID: string;
+  /** Parent named by the event, when the host shape carries one. */
+  parentSessionID?: string;
+  agent?: string;
+  title?: string;
+  readTimeoutMs?: number;
+  timers?: Parameters<typeof raceEvidenceDeadline>[2];
+}): Promise<UndeliveredBackgroundChild | undefined> {
+  if (!SESSION_ID_PATTERN.test(options.taskID)) return undefined;
+  const readTimeoutMs = options.readTimeoutMs ?? TRANSCRIPT_READ_TIMEOUT_MS;
+  if (!Number.isFinite(readTimeoutMs) || readTimeoutMs <= 0) return undefined;
+  let parentSessionID = options.parentSessionID;
+  let agent = options.agent;
+  let title = options.title;
+  if (!parentSessionID) {
+    let response: unknown;
+    try {
+      response = await raceEvidenceDeadline(
+        readHostSessionInfo(options.input, {
+          taskID: options.taskID,
+          identity: 'orphan-parent',
+        }),
+        readTimeoutMs,
+        options.timers,
+      );
+    } catch {
+      return undefined;
+    }
+    const data =
+      isRecord(response) && isRecord(response.data) ? response.data : undefined;
+    if (typeof data?.parentID !== 'string') return undefined;
+    parentSessionID = data.parentID;
+    agent ??= typeof data.agent === 'string' ? data.agent.trim() : undefined;
+    title ??= typeof data.title === 'string' ? data.title : undefined;
+  }
+  if (!SESSION_ID_PATTERN.test(parentSessionID)) return undefined;
+  let transcript: unknown;
+  try {
+    transcript = await readParentTranscript(
+      getClient(options.input),
+      options.input.directory,
+      parentSessionID,
+      options.hostFlavor,
+      readTimeoutMs,
+      options.timers,
+    );
+  } catch {
+    return undefined;
+  }
+  const delegation = parentDelegation(
+    parentTaskParts(transcript),
+    parentSessionID,
+    options.taskID,
+  );
+  if (delegation?.background !== true || delegation.at === undefined) {
+    return undefined;
+  }
+  if (
+    nativeDeliveryForRun(
+      transcript,
+      parentSessionID,
+      options.taskID,
+      delegation.at,
+    ) !== undefined
+  ) {
+    return undefined;
+  }
+  const parentAgent = latestTranscriptAgent(transcript);
+  // Neither the event nor the host names the child's agent on v1 terminal
+  // events; the delegation is the only remaining source, and a later
+  // continuation's agent-equality check depends on it.
+  agent ??= delegation.agent;
+  return {
+    parentSessionID,
+    launchedAt: delegation.at,
+    ...(parentAgent ? { parentAgent } : {}),
+    ...(agent ? { agent } : {}),
+    ...(title ? { title } : {}),
+  };
+}
+
 /**
  * Restore owned background subagents that survived a plugin restart while
  * their parent stayed idle. Persisted plugin-owned identities are the
