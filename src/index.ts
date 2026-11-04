@@ -1778,16 +1778,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // aliases this record; see publishChainGeneration.
     foregroundFallbackChains = runtime.modelArrays;
     foregroundFallback = fallbackManagerNeeded
-      ? new ForegroundFallbackManager(
-          foregroundFallbackChains,
-          fallbackEnabled,
-          ctx,
-          runtime.fallback.maxRetries,
-          sessionLifecycle,
+      ? new ForegroundFallbackManager({
+          chains: foregroundFallbackChains,
+          enabled: fallbackEnabled,
+          input: ctx,
+          maxRetries: runtime.fallback.maxRetries,
+          coordinator: sessionLifecycle,
           // A managed background-task session switching models mid-flight must
           // move its admission accounting (provider/model caps) to the new
           // model. No-op for unknown/non-task sessions; idempotent per model.
-          (sessionID, model, detail) => {
+          onSessionModelChanged: (sessionID, model, detail) => {
             if (lifecycleEnabled)
               backgroundTaskConcurrency?.migrateTask(sessionID, model);
             if (hostFlavor === 'v2' && detail?.agentName) {
@@ -1799,14 +1799,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
               );
             }
           },
-          runtime.fallback.initialRetryDelayMs,
-          runtime.fallback.retryDelayMs,
-          backgroundFallbackHandoff,
+          initialRetryDelayMs: runtime.fallback.initialRetryDelayMs,
+          retryDelayMs: runtime.fallback.retryDelayMs,
+          backgroundFallbackHandoff: backgroundFallbackHandoff,
           // Identify confirmed background children even after cancellation or
           // termination, so handoff preparation rejects a delayed stale replay.
           // Undefined remains exclusive to foreground/unmanaged sessions, and
           // is the honest value when no board exists.
-          lifecycleEnabled
+          readBackgroundGeneration: lifecycleEnabled
             ? (sessionID, includeForeground) => {
                 const record = backgroundJobBoard?.get(sessionID);
                 return record &&
@@ -1816,11 +1816,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
                   : undefined;
               }
             : undefined,
-          lifecycleEnabled
+          hasRunningChildren: lifecycleEnabled
             ? (sessionID) => backgroundJobBoard?.hasRunning(sessionID) ?? false
             : undefined,
-          v2RetryEnabled,
-        )
+          v2RetryEnabled: v2RetryEnabled,
+        })
       : undefined;
 
     // P0 cold gating: each on-demand tool guard is only constructed when
