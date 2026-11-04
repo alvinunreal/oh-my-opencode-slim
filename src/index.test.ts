@@ -71,6 +71,7 @@ import { resetLiveDirectoriesForTests } from './utils/event-directory-scope';
 import { createInternalAgentTextPart } from './utils/internal-initiator';
 import * as loggerModule from './utils/logger';
 import { pendingSessionPrune } from './utils/pending-session-prunes';
+import { tick } from './utils/test-timers';
 import * as zip from './utils/zip-extractor';
 
 function createPluginClient(
@@ -6380,6 +6381,87 @@ describe('plugin foreground fallback host gating', () => {
     } finally {
       await hooks.dispose?.();
     }
+  });
+
+  describe('v2 dispose drains pending native switches', () => {
+    const steer = (
+      hooks: Awaited<ReturnType<typeof plugin>>,
+      native: Promise<void>,
+    ) =>
+      hooks['v2.session.retry']?.(
+        {
+          sessionID: 'sess-v2-drain',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', id: 'gpt-b' },
+          error: { message: 'Rate limit exceeded' },
+          decision: { retry: true, delay: 2_000 },
+        } as never,
+        (() => native) as never,
+      );
+
+    test('runtime ownership is released only after the switch settles', async () => {
+      const hooks = await createHooks('v2');
+      const runtime = RuntimeConfig.get(projectDir);
+      const native = Promise.withResolvers<void>();
+      try {
+        const retry = steer(hooks, native.promise);
+        let disposed = false;
+        const disposal = hooks.dispose?.().then(() => {
+          disposed = true;
+        });
+        await tick();
+        expect(disposed).toBe(false);
+        expect(RuntimeConfig.get(projectDir)).toBe(runtime);
+
+        native.resolve();
+        await disposal;
+        await retry;
+        expect(RuntimeConfig.get(projectDir)).not.toBe(runtime);
+      } finally {
+        native.resolve();
+        RuntimeConfig.reset(projectDir);
+      }
+    });
+
+    test('a rejecting unrelated cleanup still waits for the switch', async () => {
+      const original = wakeHooks.createTaskSessionManagerHook;
+      const create = spyOn(
+        wakeHooks,
+        'createTaskSessionManagerHook',
+      ).mockImplementation((...args) => {
+        const hook = original(...args);
+        const event = hook.event;
+        hook.event = async (input) => {
+          if (input.event.type === 'server.instance.disposed')
+            throw new Error('cleanup failed');
+          return event(input);
+        };
+        return hook;
+      });
+      const native = Promise.withResolvers<void>();
+      try {
+        const hooks = await createHooks('v2');
+        const runtime = RuntimeConfig.get(projectDir);
+        const retry = steer(hooks, native.promise);
+        let settled = false;
+        const disposal = hooks.dispose?.().finally(() => {
+          settled = true;
+        });
+        disposal?.catch(() => {});
+        await tick();
+        expect(settled).toBe(false);
+        expect(RuntimeConfig.get(projectDir)).toBe(runtime);
+
+        native.resolve();
+        await expect(disposal).rejects.toThrow('cleanup failed');
+        await retry;
+        expect(RuntimeConfig.get(projectDir)).not.toBe(runtime);
+      } finally {
+        native.resolve();
+        create.mockRestore();
+        RuntimeConfig.reset(projectDir);
+      }
+    });
   });
 
   test('disabled_hooks foreground-fallback performs no automatic intervention', async () => {
