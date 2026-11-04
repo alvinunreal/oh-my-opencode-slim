@@ -312,6 +312,61 @@ describe('interview manager - per-session mode', () => {
   });
 });
 
+test('falls back to a local server after the dashboard stops', async () => {
+  const { port, server } = await bindFreePort();
+  heldServers.add(server);
+  const config = createTestConfig({ dashboard: true, port });
+  const owner = createInterviewManager(
+    createMockContext({ directory: await makeTempDir() }),
+    config,
+    { server },
+  );
+  await owner.handleCommandExecuteBefore(
+    { command: 'interview', sessionID: 'dashboard-owner', arguments: 'Owner' },
+    { parts: [] },
+  );
+  const notifications: string[] = [];
+  const client = createInterviewManager(
+    createMockContext({ directory: await makeTempDir() }),
+    config,
+    {
+      runtime: {
+        messages: async () => [],
+        continue: async () => {},
+        rename: async () => {},
+        notify: async (_sessionID, text) => {
+          notifications.push(text);
+        },
+      },
+    },
+  );
+  await client.handleCommandExecuteBefore(
+    {
+      command: 'interview',
+      sessionID: 'dashboard-client',
+      arguments: 'Client',
+    },
+    { parts: [] },
+  );
+  const id = client.service.getActiveInterviewId('dashboard-client') as string;
+  const previousUrl = (await client.service.getInterviewState(id)).url;
+  await owner.dispose();
+  await client.handleEvent({
+    event: {
+      type: 'session.idle',
+      properties: { sessionID: 'dashboard-client' },
+    },
+  });
+  const newUrl = (await client.service.getInterviewState(id)).url;
+  expect(newUrl).not.toBe(previousUrl);
+  expect((await fetch(newUrl)).status).toBe(200);
+  expect(
+    notifications.some(
+      (text) => text.includes(newUrl) && text.includes('resubmit'),
+    ),
+  ).toBe(true);
+});
+
 describe('interview manager - state push callback wiring', () => {
   test('in dashboard mode, state push callback is wired', async () => {
     const tempDir = await makeTempDir();
@@ -624,6 +679,68 @@ describe('interview manager - session registration', () => {
 });
 
 describe('interview manager - edge cases', () => {
+  test('delivers dashboard answers submitted after the session becomes idle', async () => {
+    const directory = await makeTempDir();
+    const { port, server } = await bindFreePort();
+    heldServers.add(server);
+    let delivered!: (args: any) => void;
+    const continuation = new Promise<any>((resolve) => {
+      delivered = resolve;
+    });
+    const ctx = createMockContext({
+      directory,
+      messagesData: [
+        {
+          info: { role: 'assistant' },
+          parts: [{ type: 'text', text: 'Done.' }],
+        },
+      ],
+      promptImpl: async (args) => {
+        if (!args.body.noReply) delivered(args);
+        return {};
+      },
+    });
+    const manager = createInterviewManager(
+      ctx,
+      createTestConfig({ port, dashboard: true }),
+      { server },
+    );
+    const sessionID = 'session-idle-delivery';
+    await manager.handleCommandExecuteBefore(
+      { command: 'interview', sessionID, arguments: 'Idle delivery' },
+      { parts: [] },
+    );
+    await manager.handleEvent({
+      event: {
+        type: 'session.status',
+        properties: { sessionID, status: { type: 'busy' } },
+      },
+    });
+    await manager.service.submitState(sessionID, {
+      summary: 'Draft',
+      questions: [{ id: 'q-1', question: 'What?', options: ['A'] }],
+    });
+    await manager.handleEvent({
+      event: {
+        type: 'session.status',
+        properties: { sessionID, status: { type: 'idle' } },
+      },
+    });
+    const interviewId = manager.service.getActiveInterviewId(sessionID);
+    const auth = await readDashboardAuthFile(port);
+    const response = await fetch(
+      `http://127.0.0.1:${port}/api/interviews/${interviewId}/answers?token=${auth?.token}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ answers: [{ questionId: 'q-1', answer: 'A' }] }),
+      },
+    );
+    expect(response.status).toBe(202);
+    const sent = await continuation;
+    expect(sent.body.parts[0].text).toContain('A');
+  });
+
   test('does not roll back a claim during an overlapping in-process delivery', async () => {
     const tempDir = await makeTempDir();
     const ctx = createMockContext({ directory: tempDir });

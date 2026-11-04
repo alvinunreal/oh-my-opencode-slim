@@ -10,10 +10,11 @@ import {
   type BackgroundJobTerminalGate,
   createBackgroundJobTerminalGate,
 } from '../utils/background-job-terminal-gate';
+import { createTimerHarness } from '../utils/test-timers';
 import { buildPluginInput } from '../v2/client-shim';
 import { createCancelTaskTool } from './cancel-task';
 import { TaskActivityTracker } from './task-activity';
-import { createTaskStatusTool } from './task-status';
+import { createTaskStatusTool, type StatusTimers } from './task-status';
 
 let client: Record<string, any>;
 const statusGates: BackgroundJobTerminalGate[] = [];
@@ -2198,5 +2199,1025 @@ describe('task_status unknown-handle enumeration', () => {
       unknownOutput.replace('state: unknown', 'state: running'),
     );
     expect(String(changed.output)).not.toContain(LOOP_GUARD_WARNING);
+  });
+});
+
+describe('retained V2 worker status regression', () => {
+  const context = { sessionID: 'parent-1' } as never;
+
+  function queuedAnswerTranscript() {
+    return {
+      data: [
+        {
+          info: { id: 'prompt-continue-1', role: 'user' },
+          parts: [{ type: 'text', text: 'continue' }],
+        },
+        {
+          info: {
+            id: 'answer-continue-1',
+            role: 'assistant',
+            time: { completed: 1_005 },
+            finish: 'stop',
+          },
+          parts: [{ type: 'text', text: 'done' }],
+        },
+      ],
+    };
+  }
+
+  function makeRegressionTool(
+    options: {
+      taskID?: string;
+      restored?: boolean;
+      restoredState?: 'completed' | 'error' | 'cancelled';
+      outcome?: string;
+      idle?: number;
+      runStartedAt?: number;
+      statusTimeoutMs?: number;
+      statusTimers?: StatusTimers;
+      getFn?: (args: unknown) => Promise<unknown>;
+      isObservationPending?: boolean | (() => boolean);
+      readTerminalEvidence?: (
+        taskID: string,
+        historyBoundary?: string,
+      ) => Promise<unknown>;
+      promptMessageIDFor?: (
+        taskID: string,
+        generation: number,
+      ) => string | undefined;
+      isDisposed?: () => boolean;
+      realV2Shim?: boolean;
+      contextTranscript?: () => Array<Record<string, unknown>>;
+    } = {},
+  ) {
+    const board = new BackgroundJobBoard();
+    const taskID = options.taskID ?? 'ses_child1';
+    const run = options.restored
+      ? board.restoreRetainedSession({
+          taskID,
+          parentSessionID: 'parent-1',
+          agent: 'explorer',
+          description: 'regression',
+          alias: 'exp-1',
+          state: options.restoredState ?? 'completed',
+          launchedAt: options.runStartedAt ?? 1_000,
+          completedAt: 2_000,
+          resultSummary: 'Host reported outcome: succeeded.',
+        })
+      : board.registerLaunch({
+          taskID,
+          parentSessionID: 'parent-1',
+          agent: 'explorer',
+          description: 'regression',
+          now: options.runStartedAt ?? 1_000,
+        });
+    if (!run) throw new Error('Failed to create regression fixture');
+    const prompt = mock(async () => {});
+    const promptAsync = mock(async () => {});
+    const get = mock(async (args: unknown) => {
+      if (options.getFn) return options.getFn(args);
+      return {
+        data: {
+          id: taskID,
+          parentID: 'parent-1',
+          ...(options.outcome !== undefined
+            ? { outcome: options.outcome }
+            : {}),
+          ...(options.idle !== undefined
+            ? { time: { idle: options.idle } }
+            : {}),
+        },
+      };
+    });
+    let input: any;
+    if (options.realV2Shim) {
+      const v2Ctx = {
+        location: { directory: '/test', project: { id: 'proj_1' } },
+        session: {
+          get: async (_i: { sessionID: string }) => {
+            if (options.getFn) return options.getFn(_i);
+            return {
+              id: taskID,
+              parentID: 'parent-1',
+              agent: 'explorer',
+              ...(options.outcome !== undefined
+                ? { outcome: options.outcome }
+                : {}),
+              ...(options.idle !== undefined
+                ? { time: { idle: options.idle } }
+                : {}),
+            };
+          },
+          ...(options.contextTranscript
+            ? {
+                context: async () => options.contextTranscript?.(),
+              }
+            : {}),
+        },
+      };
+      input = buildPluginInput(v2Ctx as never);
+    } else {
+      input = {
+        directory: '/test',
+        client: { session: { get, prompt, promptAsync } },
+        hostFlavor: 'v2',
+      };
+    }
+    const gate = createBackgroundJobTerminalGate({
+      backgroundJobBoard: board,
+      input,
+      hostOutcomeClock: 'shared-unix-ms',
+      ...(options.isObservationPending !== undefined
+        ? {
+            isObservationPending:
+              typeof options.isObservationPending === 'function'
+                ? options.isObservationPending
+                : () => Boolean(options.isObservationPending),
+          }
+        : {}),
+      ...(options.readTerminalEvidence !== undefined
+        ? { readTerminalEvidence: options.readTerminalEvidence }
+        : {}),
+      ...(options.promptMessageIDFor !== undefined
+        ? { promptMessageIDFor: options.promptMessageIDFor }
+        : {}),
+    });
+    statusGates.push(gate);
+    const tool = createTaskStatusTool({
+      input,
+      backgroundJobBoard: board,
+      terminalGate: gate,
+      now: () => 2_000,
+      statusTimeoutMs: options.statusTimeoutMs,
+      statusTimers: options.statusTimers,
+      isDisposed: options.isDisposed,
+    });
+    return { board, run, gate, get, prompt, promptAsync, tool };
+  }
+
+  test('a later status reports the historical outcome without confirming ownership', async () => {
+    const h = makeRegressionTool({
+      outcome: 'succeeded',
+      idle: 1_005,
+      runStartedAt: 1_000,
+    });
+
+    const initialOutput = await h.tool.task_status.execute(
+      { task_id: 'exp-1' },
+      context,
+    );
+    expect(String(initialOutput)).toContain('Task exp-1 (ses_child1)');
+    expect(String(initialOutput)).toContain('state: completed');
+    expect(String(initialOutput)).not.toContain('unconfirmed');
+    expect(String(initialOutput)).not.toContain('status_uncertain');
+
+    const boardRecordBefore = h.board.get('ses_child1');
+    expect(boardRecordBefore).toBeDefined();
+    expect(boardRecordBefore?.state).toBe('completed');
+    const generationBefore = boardRecordBefore?.generation;
+    const terminalRevisionBefore = boardRecordBefore?.terminalRevision;
+    const activityRevisionBefore = boardRecordBefore?.activityRevision;
+
+    const lease = h.board.acquireLease(
+      'ses_child1',
+      h.run.generation,
+      'terminal-notification',
+      { terminalRevision: terminalRevisionBefore },
+    );
+    if (!lease) throw new Error('Failed to acquire notification lease');
+
+    const terminalListener = mock(() => {});
+    const mutationListener = mock(() => {});
+    h.board.addTerminalOutcomeListener(terminalListener);
+    h.board.addMutationListener(mutationListener);
+
+    const laterOutput = await h.tool.task_status.execute(
+      { task_id: 'exp-1' },
+      context,
+    );
+
+    expect(String(laterOutput)).toContain('Task exp-1 (ses_child1)');
+    expect(String(laterOutput)).toContain('state: completed (unconfirmed)');
+    expect(String(laterOutput)).toContain('status_uncertain: true');
+    expect(String(laterOutput)).toContain(
+      'last_host_outcome: succeeded (historical; not proof of current activity or ownership)',
+    );
+    expect(String(laterOutput)).toContain('last_host_idle_at: 1005');
+
+    expect(terminalListener).not.toHaveBeenCalled();
+    expect(mutationListener).not.toHaveBeenCalled();
+
+    const boardRecordAfter = h.board.get('ses_child1');
+    expect(boardRecordAfter?.generation).toBe(generationBefore);
+    expect(boardRecordAfter?.terminalRevision).toBe(terminalRevisionBefore);
+    expect(boardRecordAfter?.activityRevision).toBe(activityRevisionBefore);
+    expect(h.board.validateLease(lease)).toBe(true);
+  });
+
+  for (const mismatch of ['session', 'parent'] as const) {
+    test(`a mismatched host ${mismatch} cannot supply a historical outcome`, async () => {
+      const h = makeRegressionTool({
+        restored: true,
+        getFn: async () => ({
+          data: {
+            id: mismatch === 'session' ? 'ses_foreign' : 'ses_child1',
+            parentID: mismatch === 'parent' ? 'foreign-parent' : 'parent-1',
+            outcome: 'succeeded',
+            time: { idle: 1_005 },
+          },
+        }),
+      });
+      const output = await h.tool.task_status.execute(
+        { task_id: 'exp-1' },
+        context,
+      );
+      expect(String(output)).toContain('state: completed (unconfirmed)');
+      expect(String(output)).not.toContain('last_host_outcome:');
+    });
+  }
+
+  test('an ambiguous busy event prevents confirming a retained historical outcome', async () => {
+    const h = makeRegressionTool({ outcome: 'succeeded', idle: 1_005 });
+    await h.tool.task_status.execute({ task_id: 'exp-1' }, context);
+    const completedAt = h.board.get('ses_child1')?.completedAt;
+    const token = h.gate.capture(h.run);
+    if (completedAt === undefined || !token) throw new Error('Missing fixture');
+
+    expect(
+      h.gate.observe(token, {
+        kind: 'busy',
+        origin: 'session.status-event',
+        readStartedAt: token.readStartedAt,
+        observedAt: completedAt - 1,
+      }).kind,
+    ).toBe('deferred');
+
+    const output = await h.tool.task_status.execute(
+      { task_id: 'exp-1' },
+      context,
+    );
+    expect(String(output)).toContain('state: completed (unconfirmed)');
+  });
+
+  test('a restored terminal round stays unconfirmed while observation is pending', async () => {
+    let pending = true;
+    const h = makeRegressionTool({
+      restored: true,
+      outcome: 'succeeded',
+      idle: 1_005,
+      isObservationPending: () => pending,
+    });
+
+    const output = await h.tool.task_status.execute(
+      { task_id: 'exp-1' },
+      context,
+    );
+    expect(String(output)).toContain('state: completed (unconfirmed)');
+
+    // Direct gate regression control: pending observation defers reconciliation
+    expect((await h.gate.reconcile(h.run)).kind).toBe('deferred');
+    pending = false;
+    expect((await h.gate.reconcile(h.run)).kind).toBe('committed');
+  });
+
+  test('a queued retained answer stays unconfirmed while handoff is pending', async () => {
+    let pending = false;
+    const h = makeRegressionTool({
+      outcome: 'succeeded',
+      idle: 1_005,
+      promptMessageIDFor: () => 'prompt-continue-1',
+      isObservationPending: () => pending,
+      readTerminalEvidence: async () => queuedAnswerTranscript(),
+    });
+    const initial = await h.tool.task_status.execute(
+      { task_id: 'exp-1' },
+      context,
+    );
+    expect(String(initial)).toContain('state: completed');
+    pending = true;
+
+    const output = await h.tool.task_status.execute(
+      { task_id: 'exp-1' },
+      context,
+    );
+    expect(String(output)).toContain('state: completed (unconfirmed)');
+
+    // Direct gate regression control: pending handoff defers retained reconciliation
+    expect((await h.gate.reconcile(h.run)).kind).toBe('deferred');
+    pending = false;
+    expect((await h.gate.reconcile(h.run)).kind).toBe('committed');
+  });
+
+  test('a queued retained answer cannot confirm while a relaunch lease exists', async () => {
+    const h = makeRegressionTool({
+      outcome: 'succeeded',
+      idle: 1_005,
+      promptMessageIDFor: () => 'prompt-continue-1',
+      readTerminalEvidence: async () => queuedAnswerTranscript(),
+    });
+    await h.tool.task_status.execute({ task_id: 'exp-1' }, context);
+    const lease = h.board.acquireLease(
+      'ses_child1',
+      h.run.generation,
+      'relaunch',
+    );
+    if (!lease) throw new Error('Failed to acquire fixture lease');
+
+    const output = await h.tool.task_status.execute(
+      { task_id: 'exp-1' },
+      context,
+    );
+    expect(String(output)).toContain('state: completed (unconfirmed)');
+    expect(h.board.validateLease(lease)).toBe(true);
+
+    // Direct gate regression control: active relaunch lease defers retained reconciliation
+    expect((await h.gate.reconcile(h.run)).kind).toBe('deferred');
+    h.board.releaseLease(lease);
+    expect((await h.gate.reconcile(h.run)).kind).toBe('committed');
+  });
+
+  test('a terminal-notification lease does not block the retained result', async () => {
+    const h = makeRegressionTool({
+      outcome: 'succeeded',
+      idle: 1_005,
+      promptMessageIDFor: () => 'prompt-continue-1',
+      readTerminalEvidence: async () => queuedAnswerTranscript(),
+    });
+    await h.tool.task_status.execute({ task_id: 'exp-1' }, context);
+    const record = h.board.get('ses_child1');
+    if (!record) throw new Error('Missing terminal record');
+    const lease = h.board.acquireLease(
+      'ses_child1',
+      h.run.generation,
+      'terminal-notification',
+      {
+        terminalRevision: record.terminalRevision,
+      },
+    );
+    if (!lease) throw new Error('Failed to acquire notification lease');
+
+    const output = await h.tool.task_status.execute(
+      { task_id: 'exp-1', result: true },
+      context,
+    );
+    expect(output).toBe('done');
+    expect(h.board.validateLease(lease)).toBe(true);
+  });
+
+  test('result retrieval refuses a relaunch lease acquired during the host read', async () => {
+    let readStarted!: () => void;
+    let resolveRead!: (value: unknown) => void;
+    const started = new Promise<void>((resolve) => {
+      readStarted = resolve;
+    });
+    const held = new Promise<unknown>((resolve) => {
+      resolveRead = resolve;
+    });
+    const h = makeRegressionTool({
+      restored: true,
+      getFn: () => {
+        readStarted();
+        return held;
+      },
+    });
+    const result = h.tool.task_status.execute(
+      { task_id: 'exp-1', result: true },
+      context,
+    );
+    await started;
+    const lease = h.board.acquireLease(
+      'ses_child1',
+      h.run.generation,
+      'relaunch',
+    );
+    if (!lease) throw new Error('Failed to acquire fixture lease');
+    resolveRead({
+      data: {
+        id: 'ses_child1',
+        parentID: 'parent-1',
+        outcome: 'succeeded',
+        time: { idle: 1_005 },
+      },
+    });
+
+    const output = await result;
+    expect(String(output)).toContain('unconfirmed');
+    expect(h.board.validateLease(lease)).toBe(true);
+    expect(h.board.get('ses_child1')?.state).toBe('completed');
+  });
+
+  test('result retrieval refuses a handoff appearing during the host read', async () => {
+    let pending = false;
+    let markReadStarted!: () => void;
+    let resolveRead!: (value: unknown) => void;
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    const held = new Promise<unknown>((resolve) => {
+      resolveRead = resolve;
+    });
+    const h = makeRegressionTool({
+      restored: true,
+      isObservationPending: () => pending,
+      getFn: () => {
+        markReadStarted();
+        return held;
+      },
+    });
+    const query = h.tool.task_status.execute(
+      { task_id: 'exp-1', result: true },
+      context,
+    );
+    await readStarted;
+    pending = true;
+    resolveRead({
+      data: {
+        id: 'ses_child1',
+        parentID: 'parent-1',
+        outcome: 'succeeded',
+        time: { idle: 1_005 },
+      },
+    });
+
+    expect(String(await query)).toContain('unconfirmed');
+    expect(h.board.get('ses_child1')?.state).toBe('completed');
+  });
+
+  test('disposal cannot return a result after a relaunch lease appears', async () => {
+    let disposed = false;
+    let markVerdictReady!: () => void;
+    let releaseVerdict!: () => void;
+    const verdictReady = new Promise<void>((resolve) => {
+      markVerdictReady = resolve;
+    });
+    const heldVerdict = new Promise<void>((resolve) => {
+      releaseVerdict = resolve;
+    });
+    const h = makeRegressionTool({
+      restored: true,
+      isDisposed: () => disposed,
+    });
+    const reconcile = h.gate.reconcile.bind(h.gate);
+    spyOn(h.gate, 'reconcile').mockImplementation(async (...args) => {
+      const result = await reconcile(...args);
+      markVerdictReady();
+      await heldVerdict;
+      return result;
+    });
+    const query = h.tool.task_status.execute(
+      { task_id: 'exp-1', result: true },
+      context,
+    );
+    await verdictReady;
+    const lease = h.board.acquireLease(
+      'ses_child1',
+      h.run.generation,
+      'relaunch',
+    );
+    if (!lease) throw new Error('Failed to acquire fixture lease');
+    disposed = true;
+    releaseVerdict();
+
+    await expect(query).rejects.toThrow(/not consumed|disposed/i);
+    expect(h.board.validateLease(lease)).toBe(true);
+  });
+
+  test('disposal cannot return a result after its observation epoch changes', async () => {
+    let disposed = false;
+    let readStarted!: () => void;
+    let resolveRead!: (value: unknown) => void;
+    const started = new Promise<void>((resolve) => {
+      readStarted = resolve;
+    });
+    const held = new Promise<unknown>((resolve) => {
+      resolveRead = resolve;
+    });
+    const h = makeRegressionTool({
+      restored: true,
+      isDisposed: () => disposed,
+      getFn: () => {
+        readStarted();
+        return held;
+      },
+    });
+    const query = h.tool.task_status.execute(
+      { task_id: 'exp-1', result: true },
+      context,
+    );
+    await started;
+    const token = h.gate.capture(h.run);
+    if (!token) throw new Error('Missing fixture token');
+    h.gate.observe(token, {
+      kind: 'busy',
+      origin: 'session.status-event',
+      readStartedAt: token.readStartedAt,
+      observedAt: 1_500,
+    });
+    disposed = true;
+    h.gate.dispose();
+    resolveRead({ data: { id: 'ses_child1', parentID: 'parent-1' } });
+
+    await expect(query).rejects.toThrow(/not consumed|disposed/i);
+    expect(h.board.get('ses_child1')?.state).toBe('completed');
+  });
+
+  test('an unconfirmed error is not acknowledged by a result read', async () => {
+    const h = makeRegressionTool({ restored: true, restoredState: 'error' });
+    const record = h.board.get('ses_child1');
+    if (!record) throw new Error('Missing terminal record');
+    spyOn(h.gate, 'reconcile').mockResolvedValue({ kind: 'deferred', record });
+
+    const output = await h.tool.task_status.execute(
+      { task_id: 'exp-1', result: true },
+      context,
+    );
+    expect(String(output)).toContain('unconfirmed');
+    expect(h.board.get('ses_child1')?.state).toBe('error');
+    expect(h.board.get('ses_child1')?.lastUsedAt).toBe(record.lastUsedAt);
+  });
+
+  test('a restored output signal cannot bypass a live relaunch lease', async () => {
+    const h = makeRegressionTool({ restored: true });
+    const lease = h.board.acquireLease(
+      'ses_child1',
+      h.run.generation,
+      'relaunch',
+    );
+    if (!lease) throw new Error('Failed to acquire fixture lease');
+
+    const result = await h.gate.reconcile(h.run, {
+      kind: 'output',
+      origin: {
+        kind: 'synthetic',
+        occurrenceID: 'audit-output',
+        run: h.run,
+        provenance: 'test',
+      },
+      status: {
+        taskID: 'ses_child1',
+        state: 'completed',
+        timedOut: false,
+        result: 'done',
+      },
+    });
+    expect(result.kind).toBe('deferred');
+    expect(h.board.validateLease(lease)).toBe(true);
+  });
+
+  for (const race of ['lease', 'new publication'] as const) {
+    test(`a committed verdict cannot confirm after ${race} changes`, async () => {
+      const h = makeRegressionTool({
+        outcome: 'succeeded',
+        idle: 1_005,
+        promptMessageIDFor: () => 'prompt-continue-1',
+        readTerminalEvidence: async () => queuedAnswerTranscript(),
+      });
+      let markVerdictReady!: () => void;
+      let releaseVerdict!: () => void;
+      const verdictReady = new Promise<void>((resolve) => {
+        markVerdictReady = resolve;
+      });
+      const heldVerdict = new Promise<void>((resolve) => {
+        releaseVerdict = resolve;
+      });
+      const reconcile = h.gate.reconcile.bind(h.gate);
+      spyOn(h.gate, 'reconcile').mockImplementation(async (...args) => {
+        const result = await reconcile(...args);
+        if (result.kind === 'committed') {
+          markVerdictReady();
+          await heldVerdict;
+        }
+        return result;
+      });
+
+      const query = h.tool.task_status.execute({ task_id: 'exp-1' }, context);
+      await verdictReady;
+      const prior = h.board.get('ses_child1');
+      if (!prior || prior.completedAt === undefined) {
+        throw new Error('Missing first publication');
+      }
+      if (race === 'lease') {
+        const lease = h.board.acquireLease(
+          'ses_child1',
+          h.run.generation,
+          'relaunch',
+        );
+        if (!lease) throw new Error('Failed to acquire fixture lease');
+      } else {
+        h.board.markRunningFromLiveSession(
+          'ses_child1',
+          prior.completedAt + 1,
+          prior.generation,
+          prior.terminalRevision,
+        );
+        boardFixture.updateStatus(h.board, {
+          taskID: 'ses_child1',
+          state: 'completed',
+          resultSummary: 'new result',
+        });
+      }
+      releaseVerdict();
+      const output = await query;
+      expect(String(output)).toContain('state: completed (unconfirmed)');
+    });
+  }
+
+  test('an ambiguous busy event after the probe invalidates plain status', async () => {
+    const h = makeRegressionTool({ outcome: 'succeeded', idle: 1_005 });
+    const capture = h.gate.capture.bind(h.gate);
+    let injected = false;
+    spyOn(h.gate, 'capture').mockImplementation((run) => {
+      const token = capture(run);
+      const record = h.board.get(run.taskID);
+      if (!injected && token && record?.state === 'completed') {
+        injected = true;
+        queueMicrotask(() => {
+          const current = capture(run);
+          if (!current || record.completedAt === undefined) {
+            throw new Error('Missing completed fixture');
+          }
+          h.gate.observe(current, {
+            kind: 'busy',
+            origin: 'session.status-event',
+            readStartedAt: current.readStartedAt,
+            observedAt: record.completedAt - 1,
+          });
+        });
+      }
+      return token;
+    });
+
+    const output = await h.tool.task_status.execute(
+      { task_id: 'exp-1' },
+      context,
+    );
+    expect(injected).toBe(true);
+    expect(String(output)).toContain('state: completed (unconfirmed)');
+  });
+
+  test('result retrieval cannot consume a newer same-generation publication', async () => {
+    const h = makeRegressionTool({
+      restored: true,
+      outcome: 'succeeded',
+      idle: 1_005,
+    });
+    let markVerdictReady!: () => void;
+    let releaseVerdict!: () => void;
+    const verdictReady = new Promise<void>((resolve) => {
+      markVerdictReady = resolve;
+    });
+    const heldVerdict = new Promise<void>((resolve) => {
+      releaseVerdict = resolve;
+    });
+    const reconcile = h.gate.reconcile.bind(h.gate);
+    spyOn(h.gate, 'reconcile').mockImplementation(async (...args) => {
+      const result = await reconcile(...args);
+      markVerdictReady();
+      await heldVerdict;
+      return result;
+    });
+    const query = h.tool.task_status.execute(
+      { task_id: 'exp-1', result: true },
+      context,
+    );
+    await verdictReady;
+    const prior = h.board.get('ses_child1');
+    if (!prior || prior.completedAt === undefined) {
+      throw new Error('Missing first publication');
+    }
+    h.board.markRunningFromLiveSession(
+      'ses_child1',
+      prior.completedAt + 1,
+      prior.generation,
+      prior.terminalRevision,
+    );
+    boardFixture.updateStatus(h.board, {
+      taskID: 'ses_child1',
+      state: 'completed',
+      resultSummary: 'new result',
+    });
+    releaseVerdict();
+
+    const output = await query;
+    expect(String(output)).toContain('unconfirmed');
+    expect(h.board.get('ses_child1')?.state).toBe('completed');
+    expect(h.board.get('ses_child1')?.resultSummary).toBe('new result');
+  });
+
+  test('when a new input, generation, or attempt makes host idle historical, status remains uncertain without completing', async () => {
+    const h = makeRegressionTool({
+      outcome: 'succeeded',
+      idle: 1_500,
+      runStartedAt: 2_000,
+    });
+
+    const output = await h.tool.task_status.execute(
+      { task_id: 'exp-1' },
+      context,
+    );
+
+    expect(String(output)).toContain('Task exp-1 (ses_child1)');
+    expect(String(output)).toContain('state: running (unconfirmed)');
+    expect(String(output)).toContain('status_uncertain: true');
+    expect(String(output)).toContain(
+      'next: state unconfirmed; await the completion notice, do not poll task_status.',
+    );
+    expect(h.board.get('ses_child1')?.state).toBe('running');
+    expect(h.board.get('ses_child1')?.terminalRevision).toBe(0);
+    expect(h.prompt).not.toHaveBeenCalled();
+    expect(h.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('when untracked fallback ownership is unverified or pending, status refuses without claiming or reviving', async () => {
+    const h = makeRegressionTool();
+    h.get.mockImplementation(async () => {
+      return { data: { id: 'ses_pending1' } };
+    });
+
+    await expect(
+      h.tool.task_status.execute({ task_id: 'ses_pending1' }, context),
+    ).rejects.toThrow('Unknown task ID or alias: ses_pending1');
+
+    expect(h.board.get('ses_pending1')).toBeUndefined();
+    expect(h.prompt).not.toHaveBeenCalled();
+    expect(h.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('when tracked worker observation or admission is pending, terminal outcome is fenced and status remains uncertain', async () => {
+    const h = makeRegressionTool({
+      outcome: 'succeeded',
+      idle: 1_005,
+      runStartedAt: 1_000,
+      isObservationPending: true,
+    });
+
+    const output = await h.tool.task_status.execute(
+      { task_id: 'exp-1' },
+      context,
+    );
+
+    expect(String(output)).toContain('state: running (unconfirmed)');
+    expect(String(output)).toContain('status_uncertain: true');
+    expect(h.board.get('ses_child1')?.state).toBe('running');
+    expect(h.board.get('ses_child1')?.terminalRevision).toBe(0);
+    expect(h.prompt).not.toHaveBeenCalled();
+    expect(h.promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('concurrent queries report historical outcome without confirming ownership', async () => {
+    const h = makeRegressionTool({
+      outcome: 'succeeded',
+      idle: 1_005,
+      runStartedAt: 1_000,
+    });
+
+    await h.tool.task_status.execute({ task_id: 'exp-1' }, context);
+    expect(h.board.get('ses_child1')?.state).toBe('completed');
+
+    const terminalListener = mock(() => {});
+    const mutationListener = mock(() => {});
+    h.board.addTerminalOutcomeListener(terminalListener);
+    h.board.addMutationListener(mutationListener);
+
+    const [out1, out2, out3] = await Promise.all([
+      h.tool.task_status.execute({ task_id: 'exp-1' }, context),
+      h.tool.task_status.execute({ task_id: 'exp-1' }, context),
+      h.tool.task_status.execute({ task_id: 'exp-1' }, context),
+    ]);
+
+    for (const output of [out1, out2, out3]) {
+      expect(String(output)).toContain('Task exp-1 (ses_child1)');
+      expect(String(output)).toContain('state: completed (unconfirmed)');
+      expect(String(output)).toContain('status_uncertain: true');
+      expect(String(output)).toContain(
+        'last_host_outcome: succeeded (historical;',
+      );
+    }
+
+    expect(terminalListener).not.toHaveBeenCalled();
+    expect(mutationListener).not.toHaveBeenCalled();
+  });
+
+  test('when host read deterministically times out via createTimerHarness, status remains uncertain without completing', async () => {
+    const timers = createTimerHarness();
+    let getCalls = 0;
+    const h = makeRegressionTool({
+      statusTimeoutMs: 20,
+      statusTimers: timers,
+      getFn: () => {
+        getCalls += 1;
+        return new Promise(() => {}); // never resolves
+      },
+    });
+
+    const queryPromise = h.tool.task_status.execute(
+      { task_id: 'exp-1' },
+      context,
+    );
+
+    await timers.tick();
+    await timers.advance(20);
+
+    const output = await queryPromise;
+    expect(String(output)).toContain('state: running (unconfirmed)');
+    expect(String(output)).toContain('status_uncertain: true');
+    expect(String(output)).not.toContain('last_host_outcome:');
+    expect(h.board.get('ses_child1')?.state).toBe('running');
+    expect(getCalls).toBeGreaterThanOrEqual(1);
+    expect(h.prompt).not.toHaveBeenCalled();
+  });
+
+  test('already-completed record with pending admission or observation handoff remains uncertain without reporting confirmed completed', async () => {
+    let pending = false;
+    const h = makeRegressionTool({
+      outcome: 'succeeded',
+      idle: 1_005,
+      runStartedAt: 1_000,
+      isObservationPending: () => pending,
+    });
+
+    await h.tool.task_status.execute({ task_id: 'exp-1' }, context);
+    expect(h.board.get('ses_child1')?.state).toBe('completed');
+
+    pending = true;
+
+    const laterOutput = await h.tool.task_status.execute(
+      { task_id: 'exp-1' },
+      context,
+    );
+
+    expect(String(laterOutput)).toContain('state: completed (unconfirmed)');
+    expect(String(laterOutput)).toContain('status_uncertain: true');
+    expect(h.prompt).not.toHaveBeenCalled();
+  });
+
+  test('generation or attempt mutation across await invalidates retained confirmation and stays uncertain', async () => {
+    let resolveGet!: (v: unknown) => void;
+    let markReadStarted!: () => void;
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    const held = new Promise((resolve) => {
+      resolveGet = resolve;
+    });
+    let getCalls = 0;
+    const h = makeRegressionTool({
+      outcome: 'succeeded',
+      idle: 1_005,
+      runStartedAt: 1_000,
+      getFn: async () => {
+        getCalls += 1;
+        if (getCalls <= 2) {
+          return {
+            data: {
+              id: 'ses_child1',
+              parentID: 'parent-1',
+              outcome: 'succeeded',
+              time: { idle: 1_005 },
+            },
+          };
+        }
+        markReadStarted();
+        return held;
+      },
+    });
+
+    await h.tool.task_status.execute({ task_id: 'exp-1' }, context);
+    expect(h.board.get('ses_child1')?.state).toBe('completed');
+
+    const queryPromise = h.tool.task_status.execute(
+      { task_id: 'exp-1' },
+      context,
+    );
+    await readStarted;
+
+    h.board.registerLaunch({
+      taskID: 'ses_child1',
+      parentSessionID: 'parent-1',
+      agent: 'explorer',
+      now: 3_000,
+    });
+    expect(h.board.get('ses_child1')?.generation).toBe(2);
+
+    resolveGet?.({
+      data: {
+        id: 'ses_child1',
+        parentID: 'parent-1',
+        outcome: 'succeeded',
+        time: { idle: 1_005 },
+      },
+    });
+
+    const output = await queryPromise;
+    expect(String(output)).toContain('state: running (unconfirmed)');
+    expect(String(output)).toContain('status_uncertain: true');
+  });
+
+  test('already-completed record with changed final transcript refuses result read without markUsed while plain status reports historical uncertainty', async () => {
+    let transcriptText = 'LAB-MARKER: done';
+    const readEvidence = mock(async () => ({
+      data: [
+        {
+          info: { id: 'msg_u', role: 'user', time: { created: 1_000 } },
+          parts: [{ type: 'text', text: 'prompt' }],
+        },
+        {
+          info: {
+            id: 'msg_a',
+            role: 'assistant',
+            finish: 'stop',
+            time: { created: 1_001, completed: 1_005 },
+          },
+          parts: [{ type: 'text', text: transcriptText }],
+        },
+      ],
+    }));
+    const h = makeRegressionTool({
+      outcome: 'succeeded',
+      idle: 1_005,
+      runStartedAt: 1_000,
+      promptMessageIDFor: () => 'msg_u',
+      readTerminalEvidence: readEvidence,
+    });
+
+    await h.tool.task_status.execute({ task_id: 'exp-1' }, context);
+    expect(h.board.get('ses_child1')?.state).toBe('completed');
+    expect(h.board.get('ses_child1')?.resultSummary).toBe('LAB-MARKER: done');
+
+    transcriptText = 'LAB-MARKER: diverged output';
+
+    const plainOutput = await h.tool.task_status.execute(
+      { task_id: 'exp-1' },
+      context,
+    );
+    expect(String(plainOutput)).toContain('(unconfirmed)');
+    expect(String(plainOutput)).toContain('status_uncertain: true');
+
+    const lastUsedAtBefore = h.board.get('ses_child1')?.lastUsedAt;
+    const resultCallsBefore = readEvidence.mock.calls.length;
+    const resultOutput = await h.tool.task_status.execute(
+      { task_id: 'exp-1', result: true },
+      context,
+    );
+    expect(readEvidence.mock.calls.length).toBeGreaterThan(resultCallsBefore);
+    expect(String(resultOutput)).toContain('state: running (unconfirmed)');
+    expect(String(resultOutput)).toContain(
+      'Live task status is uncertain; no definitive running state is available.',
+    );
+    expect(h.board.get('ses_child1')?.lastUsedAt).toBe(lastUsedAtBefore);
+  });
+
+  test('real V2 client shim reports the historical outcome without confirming ownership', async () => {
+    const h = makeRegressionTool({
+      realV2Shim: true,
+      outcome: 'succeeded',
+      idle: 1_005,
+      runStartedAt: 1_000,
+      contextTranscript: () => [
+        {
+          id: 'msg_user',
+          type: 'user',
+          time: { created: 1_000 },
+          text: 'count files',
+        },
+        {
+          id: 'msg_assistant',
+          type: 'assistant',
+          agent: 'explorer',
+          time: { created: 1_001, completed: 1_005 },
+          finish: 'stop',
+          content: [{ type: 'text', text: 'done: 42' }],
+        },
+        {
+          id: 'msg_idle',
+          type: 'idle',
+          time: { created: 1_005 },
+          outcome: 'succeeded',
+        },
+      ],
+    });
+
+    const initial = await h.tool.task_status.execute(
+      { task_id: 'exp-1' },
+      context,
+    );
+    expect(String(initial)).toContain('state: completed');
+    expect(String(initial)).not.toContain('unconfirmed');
+
+    const terminalListener = mock(() => {});
+    const mutationListener = mock(() => {});
+    h.board.addTerminalOutcomeListener(terminalListener);
+    h.board.addMutationListener(mutationListener);
+
+    const later = await h.tool.task_status.execute(
+      { task_id: 'exp-1' },
+      context,
+    );
+    expect(String(later)).toContain('state: completed (unconfirmed)');
+    expect(String(later)).toContain(
+      'last_host_outcome: succeeded (historical;',
+    );
+    expect(terminalListener).not.toHaveBeenCalled();
+    expect(mutationListener).not.toHaveBeenCalled();
   });
 });

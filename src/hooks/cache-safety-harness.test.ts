@@ -40,6 +40,7 @@ export interface PipelineOptions {
    * test board/bridge behavior in isolation.
    */
   goalPointer?: boolean;
+  refusalCorrection?: boolean;
 }
 
 export interface Pipeline {
@@ -55,6 +56,16 @@ export interface Pipeline {
 export function createPipeline(options: PipelineOptions = {}): Pipeline {
   const sessionAgentMap = new Map<string, string>();
   const board = new BackgroundJobBoard();
+  if (options.refusalCorrection) {
+    board.registerLaunch({
+      taskID: 'ses_refused_child',
+      parentSessionID: SESSION_ID,
+      agent: 'explorer',
+      description: 'inspect',
+      background: true,
+      now: FIXTURE_NOW - 1,
+    });
+  }
   const lifecycle = new SessionLifecycle(() => {});
   const noopLog = () => {};
 
@@ -84,6 +95,9 @@ export function createPipeline(options: PipelineOptions = {}): Pipeline {
         sessionAgentMap.set(sessionID, 'orchestrator');
       },
       coordinator: lifecycle,
+      ...(options.refusalCorrection
+        ? { v1ReplayOutcome: async () => 'test/fallback' }
+        : {}),
     },
   );
 
@@ -197,6 +211,25 @@ export function internalInitiatorTurn(id: string, text: string) {
       id,
     },
     parts: [createInternalAgentTextPart(text)],
+  };
+}
+
+export function refusedChildTurn() {
+  return {
+    info: {
+      role: 'user',
+      agent: 'orchestrator',
+      sessionID: SESSION_ID,
+      id: 'native-refusal',
+      time: { created: FIXTURE_NOW },
+    },
+    parts: [
+      {
+        type: 'text',
+        synthetic: true,
+        text: '<task id="ses_refused_child" state="error">\n<summary>Background task failed: inspect</summary>\n<task_error>Subagent failed (task_id: ses_refused_child): content filter</task_error>\n</task>',
+      },
+    ],
   };
 }
 

@@ -7,6 +7,7 @@ import { RuntimeConfig } from '../config/runtime';
 import type { MarketplaceActivationStore } from '../marketplace/activation';
 import * as marketplaceImplementation from '../marketplace/registry-runtime';
 import { MarketplacePackageManifestSchema } from '../marketplace/schemas';
+import { MarketplaceStore } from '../marketplace/store';
 import {
   adaptPermissions,
   snapshotNativeAgentForRegistry,
@@ -1378,6 +1379,91 @@ describe('finalized existing-agent registry', () => {
           }
         }
       }
+    }
+  });
+
+  test('write and apply_patch capabilities use the native edit permission', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-edit-'));
+    try {
+      const store = new MarketplaceStore({
+        rootDir: root,
+        pluginVersion: '3.2.0',
+      });
+      store.install({
+        manifest: marketplacePackage('team/writer', {
+          agentName: 'market-writer',
+          skills: [],
+          mcps: [],
+          tools: ['write'],
+        }).manifest,
+      });
+      store.install({
+        manifest: marketplacePackage('team/patcher', {
+          agentName: 'market-patcher',
+          skills: [],
+          mcps: [],
+          tools: ['apply_patch'],
+        }).manifest,
+      });
+      store.install({
+        manifest: marketplacePackage('team/blocked', {
+          agentName: 'market-blocked',
+          skills: [],
+          mcps: [],
+          tools: ['write'],
+        }).manifest,
+      });
+      const runtime = runtimeFor({
+        agents: {
+          'market-writer': {
+            model: 'provider/owner',
+            permission: { edit: { '*': 'allow', 'private/*': 'deny' } },
+          },
+          'market-blocked': {
+            model: 'provider/owner',
+            permission: { write: 'deny' },
+          },
+        },
+      });
+      const registry = build(
+        runtime,
+        { mcp: {} },
+        {
+          hostFlavor: 'v2',
+          marketplace: {
+            implementation: marketplaceImplementation,
+            selectedPackageIds: ['team/writer', 'team/patcher', 'team/blocked'],
+            store,
+            pluginVersion: '3.2.0',
+            availableSkillNames: [],
+          },
+        },
+      );
+      const sdk = registry.getSdkAgentProjection();
+      expect(sdk['market-writer']?.permission?.edit).toEqual({
+        '*': 'allow',
+        'private/*': 'deny',
+      });
+      expect(sdk['market-patcher']?.permission?.edit).toBe('allow');
+      expect(sdk['market-blocked']?.permission?.edit).toBe('deny');
+      const writer = registry.nativePolicies['market-writer'];
+      const patcher = registry.nativePolicies['market-patcher'];
+      expect(writer.decide('edit', 'src/file.ts')).toBe('allow');
+      expect(writer.decide('edit', 'private/file.ts')).toBe('deny');
+      expect(patcher.decide('edit', 'src/file.ts')).toBe('allow');
+      expect(
+        registry.nativePolicies['market-blocked'].decide('edit', 'src/file.ts'),
+      ).toBe('deny');
+      const child = compilePermissionPolicy({
+        baselineRules: registry.compileChildPermissions('market-writer', [
+          ...writer.rules,
+          { action: '*', resource: '*', effect: 'allow' },
+        ]),
+        hostRules: [],
+      });
+      expect(child.decide('edit', 'private/file.ts')).toBe('deny');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -4304,13 +4390,13 @@ describe('pass-local derived inputs', () => {
     expect(large.definitionCount).toBe(small.definitionCount + 10);
     expect(large.checkpoints).toEqual(small.checkpoints);
     // Pin the constant budget across the three phases: one merged-override
-    // derivation in createAgents, one per MCP-projection pass, one hoist +
-    // one modelArrays derivation + one marketplace-defaults flavor inside
-    // the registry build.
+    // call in createAgents, one per MCP-projection pass, and one hoist plus
+    // one marketplace-defaults call inside the registry build. modelArrays
+    // reads the cached agent view without calling agents().
     expect(small.checkpoints).toEqual({
       definitions: { agentsCalls: 1, arraysCalls: 0 },
       sdk: { agentsCalls: 2, arraysCalls: 0 },
-      registry: { agentsCalls: 6, arraysCalls: 1 },
+      registry: { agentsCalls: 5, arraysCalls: 1 },
     });
   });
 

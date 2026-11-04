@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { resolveFeatureGates } from './feature-gates';
 import type { ConfigLoadWarning } from './loader';
 import {
   findPluginConfigPaths,
@@ -582,6 +583,34 @@ describe('loadPluginConfig', () => {
     expect('strategy' in (config.backgroundJobs ?? {})).toBe(false);
     expect(config.backgroundJobs?.orchestratorWake?.intervalMs).toBe(120_000);
     expect(config.backgroundJobs?.orchestratorWake?.enabled).toBe(false);
+  });
+
+  test('a project backgroundJobs layer without mode keeps the user mode off', () => {
+    const userConfigPath = path.join(userConfigDir, 'opencode');
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(userConfigPath, { recursive: true });
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userConfigPath, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        backgroundJobs: { mode: 'off', maxSessionsPerAgent: 8 },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        backgroundJobs: { concurrency: { defaultConcurrency: 2 } },
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir, { silent: true });
+
+    // The project layer configures only concurrency: its absent mode must
+    // not reset the user's explicit lifecycle switch.
+    expect(config.backgroundJobs?.mode).toBe('off');
+    expect(config.backgroundJobs?.maxSessionsPerAgent).toBe(8);
+    expect(config.backgroundJobs?.concurrency?.defaultConcurrency).toBe(2);
   });
 
   test('validates auto image routing after project enables Observer', () => {
@@ -2008,6 +2037,63 @@ describe('deepMerge behavior', () => {
     expect(config.fallback?.enabled).toBe(false);
   });
 
+  test('preserves inherited fallback, council and ACP values across config layers', () => {
+    const userOpencodeDir = path.join(userConfigDir, 'opencode');
+    fs.mkdirSync(userOpencodeDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userOpencodeDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        fallback: { enabled: false, maxRetries: 7 },
+        council: {
+          default_preset: 'review',
+          presets: { review: { alpha: { model: 'openai/gpt-6' } } },
+        },
+        acpAgents: {
+          reviewer: {
+            command: 'old-acp',
+            args: ['--acp'],
+            timeoutMs: 1200,
+            permissionMode: 'allow',
+          },
+        },
+      }),
+    );
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        fallback: { retryDelayMs: 200 },
+        council: {
+          presets: { extra: { beta: { model: 'google/gemini-3-pro' } } },
+        },
+        acpAgents: { reviewer: { command: 'new-acp' } },
+      }),
+    );
+
+    for (const hostFlavor of ['v1', 'v2']) {
+      const config = loadPluginConfig(projectDir, { hostFlavor });
+      expect(config.fallback).toMatchObject({
+        enabled: false,
+        maxRetries: 7,
+        retryDelayMs: 200,
+        initialRetryDelayMs: 0,
+      });
+      expect(config.council?.default_preset).toBe('review');
+      expect(config.council?.presets.review.alpha.models).toEqual([
+        { id: 'openai/gpt-6' },
+      ]);
+      expect(config.acpAgents?.reviewer).toMatchObject({
+        command: 'new-acp',
+        args: ['--acp'],
+        env: {},
+        timeoutMs: 1200,
+        permissionMode: 'allow',
+      });
+    }
+  });
+
   test('fallback delay keys alone produce no deprecation warning', () => {
     const userOpencodeDir = path.join(userConfigDir, 'opencode');
     fs.mkdirSync(userOpencodeDir, { recursive: true });
@@ -2615,6 +2701,19 @@ describe('JSONC config support', () => {
     expect(config.agents?.oracle?.model).toBe('test/model');
   });
 
+  test('loads JSONC comments after a string ending in an escaped backslash', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.jsonc'),
+      '{"companion":{"binaryPath":"C:\\\\tools\\\\"}, // comment\n"agents":{"oracle":{"model":"test/model"}}}',
+    );
+    expect(loadPluginConfig(projectDir).agents?.oracle?.model).toBe(
+      'test/model',
+    );
+  });
+
   test('loads .jsonc file with multi-line comments', () => {
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
@@ -3049,6 +3148,29 @@ describe('env variable interpolation', () => {
     expect(config.agents?.explorer?.model).toBe('bar-model');
   });
 
+  test('interpolates special characters literally without discarding the layer', () => {
+    process.env.ACP_COMMAND = 'C:\\tools\\"agent"\nlauncher';
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.jsonc'),
+      JSON.stringify({
+        acpAgents: { reviewer: { command: '{env:ACP_COMMAND}' } },
+        agents: { oracle: { prompt: 'Run {env:ACP_COMMAND} safely' } },
+        setDefaultAgent: false,
+      }),
+    );
+    for (const hostFlavor of ['v1', 'v2']) {
+      const config = loadPluginConfig(projectDir, { hostFlavor });
+      expect(config.acpAgents?.reviewer.command).toBe(process.env.ACP_COMMAND);
+      expect(config.agents?.oracle?.prompt).toBe(
+        `Run ${process.env.ACP_COMMAND} safely`,
+      );
+      expect(config.setDefaultAgent).toBe(false);
+    }
+  });
+
   test('undefined variable: {env:NONEXISTENT} resolves to empty string', () => {
     delete process.env.NONEXISTENT;
     const projectDir = path.join(tempDir, 'project');
@@ -3241,6 +3363,37 @@ describe('removed config keys', () => {
       }
     });
   }
+
+  test('removed backgroundJobs.enabled: false warns and keeps the opt-out as mode off', () => {
+    const { config, warnings } = load({
+      backgroundJobs: {
+        enabled: false,
+        maxSessionsPerAgent: 4,
+        concurrency: { defaultConcurrency: 2 },
+        orchestratorWake: { enabled: false },
+      },
+    });
+
+    expect(config.agents?.oracle?.model).toBe('test/preset-oracle');
+    // A stale opt-out must not silently re-enable the managed lifecycle.
+    expect(config.backgroundJobs?.mode).toBe('off');
+    // Only the alias is dropped; every sibling keeps its configured value.
+    expect(config.backgroundJobs?.maxSessionsPerAgent).toBe(4);
+    expect(config.backgroundJobs?.concurrency?.defaultConcurrency).toBe(2);
+    expect(config.backgroundJobs?.orchestratorWake?.enabled).toBe(false);
+    expect(Object.hasOwn(config.backgroundJobs ?? {}, 'enabled')).toBe(false);
+    expect(warnings.map((w) => w.kind)).toEqual(['removed-key']);
+    expect(warnings[0]?.message).toContain('"backgroundJobs.enabled"');
+    expect(warnings[0]?.message).toContain('backgroundJobs.mode');
+    expect(resolveFeatureGates(config).backgroundJobsMode).toBe('off');
+  });
+
+  test('removed backgroundJobs.enabled: false never overrides an explicit mode', () => {
+    const { config } = load({
+      backgroundJobs: { enabled: false, mode: 'native' },
+    });
+    expect(config.backgroundJobs?.mode).toBe('native');
+  });
 
   test('SF-01: drops webfetch.model without losing the other file settings', () => {
     const { config, warnings } = load({

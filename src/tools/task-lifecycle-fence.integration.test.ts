@@ -217,7 +217,7 @@ test('dispose after reconcile does not consume a restored terminal result', asyn
   disposed = true;
   gate.dispose();
   read.resolve({ data: { parentID: PARENT } });
-  await expect(pending).resolves.toBe('CACHED-TEXT');
+  await expect(pending).rejects.toThrow(/disposed/);
   expect(board.get(CHILD)?.lastUsedAt).toBe(20);
   const fresh = createTaskStatusTool({
     input: {

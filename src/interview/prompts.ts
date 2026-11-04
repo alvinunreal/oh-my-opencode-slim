@@ -255,22 +255,10 @@ export function buildChatPrompt(
 }
 
 export function buildNudgePrompt(
-  action: 'more-questions' | 'confirm-complete',
   maxQuestions: number,
   context: SpecPromptContext,
   printState = false,
 ): string {
-  if (action === 'confirm-complete') {
-    return [
-      'You are finishing the interview.',
-      describeSpec(context),
-      'The user confirmed the interview spec is complete.',
-      'Produce a final, polished version of the full spec document as clean markdown.',
-      'Do NOT include any <interview_state> block.',
-      'The spec should be comprehensive, well-structured, and ready for implementation.',
-    ].join('\n\n');
-  }
-
   return [
     'Continue the same interview.',
     SPECIFICATION_TEMPLATE_GUIDELINE,

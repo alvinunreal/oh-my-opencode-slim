@@ -27,6 +27,7 @@ import {
   buildHistory,
   createPipeline,
   FIXTURE_NOW,
+  refusedChildTurn,
   renderTurn,
   SESSION_ID,
   stableFingerprints,
@@ -61,6 +62,17 @@ function goalMessages(messages: unknown[]): MessageWithParts[] {
 }
 
 describe('cache-safety: turn-over-turn prefix stability', () => {
+  test('a fallback notice can disappear without changing earlier payload bytes', async () => {
+    const pipeline = createPipeline({ refusalCorrection: true });
+    const history = [...buildHistory(), refusedChildTurn()];
+    const running = await renderTurn(pipeline, history, history.length - 1);
+    pipeline.board.drop('ses_refused_child');
+    const evicted = await renderTurn(pipeline, history, history.length - 1);
+    expect(stableFingerprints(running.messages)).toEqual(
+      stableFingerprints(evicted.messages),
+    );
+    expect(running.messages).toHaveLength(evicted.messages.length + 1);
+  });
   test('re-rendering a growing conversation reproduces byte-identical history', async () => {
     const pipeline = createPipeline({ goalPointer: true });
     const history = buildHistory();

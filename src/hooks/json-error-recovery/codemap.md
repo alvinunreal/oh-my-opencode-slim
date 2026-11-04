@@ -8,7 +8,6 @@ Provides automatic JSON error detection and recovery for OpenCode plugin tool ex
 
 ### Core Components
 
-- **JSON_ERROR_TOOL_EXCLUDE_LIST**: Set of tools excluded from JSON error checking (bash, read, glob, webfetch, gh_grep_searchgithub)
 - **JSON_ERROR_PATTERNS**: Array of regex patterns for detecting various JSON error messages
 - **JSON_ERROR_REMINDER**: Standardized error message template instructing users on JSON correction
 - **createJsonErrorRecoveryHook()**: Factory function that returns the OpenCode plugin hook
@@ -23,7 +22,7 @@ The hook implements the OpenCode plugin's `tool.execute.after` lifecycle hook:
 
 ### Error Detection Logic
 
-1. **Tool Exclusion Check**: Skips excluded tools immediately
+1. **Failure Check**: Only v1 `invalid` tool outputs are eligible; v2 handles malformed argument JSON before the after-hook
 2. **Output Type Check**: Verifies output is a string before processing
 3. **Marker Check**: Skips output already containing the error reminder marker
 4. **Pattern Matching**: Tests output against multiple JSON error regex patterns
@@ -33,7 +32,7 @@ The hook implements the OpenCode plugin's `tool.execute.after` lifecycle hook:
 
 ```
 Tool Execution → tool.execute.after Hook Trigger → 
-  [Check Exclusion] → [Validate Output Type] → [Check Marker] →
+  [Check Failure] → [Validate Output Type] → [Check Marker] →
   [Pattern Matching] → [Inject Reminder if JSON Error Detected] → Return Output
 ```
 
@@ -41,7 +40,7 @@ Tool Execution → tool.execute.after Hook Trigger →
 
 1. **Hook Registration**: `createJsonErrorRecoveryHook()` is called during plugin initialization
 2. **Event Subscription**: Hook subscribes to `tool.execute.after` lifecycle event
-3. **Filtering**: Excluded tools are checked first for performance optimization
+3. **Filtering**: Calls other than the v1 `invalid` tool are skipped
 4. **Validation**: Output type is verified to be a string
 5. **Duplicate Prevention**: Outputs already containing the error marker are skipped
 6. **Pattern Testing**: Output is tested against all JSON error patterns
@@ -69,7 +68,6 @@ Tool Execution → tool.execute.after Hook Trigger →
 ### Configuration
 
 The hook uses hardcoded constants for:
-- Excluded tools list
 - JSON error patterns
 - Error reminder message
 

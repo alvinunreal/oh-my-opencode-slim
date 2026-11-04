@@ -17,6 +17,7 @@ import {
   isInternalInitiatorPart,
   TERMINAL_DELTA_METADATA_KEY,
 } from '../../utils';
+import { isBuiltInPrimaryAgent } from '../../utils/agent-variant';
 import { stringifyError } from '../../utils/child-transcript';
 import { isRecord as isObjectRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
@@ -456,6 +457,9 @@ export type OrchestratorWakeOptions = {
    * session to a non-orchestrator agent — the wake continues in the
    * CURRENT selection instead of forcing `orchestrator`. */
   hasPendingDelegatedWork?: (sessionID: string) => boolean;
+  /** Primary classification (issue #1591): declared-primary sessions stay
+   *  wake-eligible like the built-in orchestrator. */
+  isPrimaryAgentName?: (agent: string) => boolean;
   /** Test seam: override interval without changing config validation. */
   intervalMs?: number;
   /** Scheduling seam for deterministic tests. Defaults to the global timer
@@ -2093,8 +2097,10 @@ export function createOrchestratorWakeScheduler(
         return false;
       }
       const wakeAgent = selection?.agent ?? 'orchestrator';
+      const isPrimaryAgentName =
+        options.isPrimaryAgentName ?? isBuiltInPrimaryAgent;
       if (
-        wakeAgent !== 'orchestrator' &&
+        !isPrimaryAgentName(wakeAgent) &&
         !(options.hasPendingDelegatedWork?.(sessionID) ?? false)
       ) {
         return false;

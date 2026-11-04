@@ -57,11 +57,14 @@ describe('collapseInterviewHistory', () => {
       parts: [
         {
           type: 'tool-call',
-          toolName: 'interview_submit_state',
+          id: 'call-1',
+          name: 'interview_submit_state',
           input: {
-            summary: '# Full V2\n\nDetailed specification.',
-            title: 'spec',
-            questions: [],
+            state: {
+              summary: '# Full V2\n\nDetailed specification.',
+              title: 'spec',
+              questions: [],
+            },
           },
         },
       ],
@@ -70,17 +73,18 @@ describe('collapseInterviewHistory', () => {
       info: { role: 'assistant' },
       parts: [
         {
-          type: 'tool-result',
-          toolName: 'interview_submit_state',
-          input: { summary: 'status', patch: 'x', questions: [] },
+          type: 'tool-call',
+          id: 'call-2',
+          name: 'interview_submit_state',
+          input: { state: { summary: 'status', patch: 'x', questions: [] } },
         },
       ],
     };
 
     collapseInterviewHistory([first, second]);
 
-    expect(first.parts[0].input.summary).toBe(INTERVIEW_SUMMARY_STUB);
-    expect(first.parts[0].input.patch).toBeUndefined();
+    expect(first.parts[0].input.state.summary).toBe(INTERVIEW_SUMMARY_STUB);
+    expect(first.parts[0].input.state).not.toHaveProperty('patch');
   });
 
   test('keeps the v2 tool-call input wrapper while stubbing its state', () => {
@@ -89,7 +93,8 @@ describe('collapseInterviewHistory', () => {
       parts: [
         {
           type: 'tool-call',
-          toolName: 'interview_submit_state',
+          id: 'call-1',
+          name: 'interview_submit_state',
           input: {
             state: {
               title: 'spec',

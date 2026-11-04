@@ -268,31 +268,6 @@ export class KittyMultiplexer implements Multiplexer {
     });
   }
 
-  async applyLayout(
-    layout: MultiplexerLayout,
-    mainPaneSize: number,
-  ): Promise<void> {
-    void mainPaneSize; // kitty uses layout bias, not main pane size
-    const parentWindowId = this.resolveParentWindowId();
-    if (!parentWindowId) {
-      log(
-        '[kitty] applyLayout: KITTY_WINDOW_ID is not set; cannot target a ' +
-          'kitty tab',
-      );
-      return;
-    }
-    if (!this.hasListenOn()) {
-      log(
-        '[kitty] applyLayout: KITTY_LISTEN_ON is not set; cannot target kitty. ' +
-          'Add `listen_on` to kitty.conf and restart kitty.',
-      );
-      return;
-    }
-    this.storedLayout = layout;
-    const { kittyLayout } = getKittyLayoutConfig(layout);
-    await this.ensureLayout(kittyLayout, parentWindowId);
-  }
-
   private async runKitty(kitten: string, args: string[]): Promise<number> {
     const proc = crossSpawn([kitten, ...args], {
       stdout: 'pipe',
@@ -322,8 +297,6 @@ export class KittyMultiplexer implements Multiplexer {
     parentWindowId: string,
   ): Promise<void> {
     // Skip if this layout is already applied (avoids redundant global switches).
-    // Tracking the applied layout (not a boolean) lets applyLayout switch to a
-    // different layout even after panes have spawned.
     if (this.appliedLayout === kittyLayout) return;
     const kitten = await this.getBinary();
     if (!kitten) return;

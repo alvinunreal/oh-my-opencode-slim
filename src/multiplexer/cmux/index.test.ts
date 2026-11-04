@@ -882,24 +882,6 @@ describe('CmuxMultiplexer', () => {
     expect(other).not.toBe(first);
   });
 
-  const layouts: MultiplexerLayout[] = [
-    'main-vertical',
-    'main-horizontal',
-    'even-horizontal',
-    'even-vertical',
-    'tiled',
-  ];
-
-  for (const layout of layouts) {
-    test(`applyLayout(${layout}) issues no command`, async () => {
-      const { runner, calls } = recorder();
-      const instance = mux({ runner, layout });
-
-      await instance.applyLayout(layout, 60);
-      expect(calls).toEqual([]);
-    });
-  }
-
   test('spawns identically under different layout values', async () => {
     const first = recorder();
     await mux({ runner: first.runner, layout: 'main-horizontal' }).spawnPane(

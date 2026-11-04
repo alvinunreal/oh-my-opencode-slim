@@ -1,4 +1,5 @@
 import { statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 
 import type { PluginInput } from '@opencode-ai/plugin';
@@ -34,6 +35,17 @@ export function resolveSearchPath(
   pathOperations: PathOperations = path,
 ): string | null {
   if (!directory) return null;
+  if (
+    hostFlavor === 'v2' &&
+    (raw === '~' ||
+      raw.startsWith('~/') ||
+      (process.platform === 'win32' && raw.startsWith('~\\')))
+  ) {
+    return pathOperations.resolve(
+      directory,
+      pathOperations.join(homedir(), raw.slice(2)),
+    );
+  }
   if (pathOperations.isAbsolute(raw)) return raw;
   if (hostFlavor === 'v2' || tool === 'glob') {
     return pathOperations.resolve(directory, raw);
@@ -58,14 +70,15 @@ export function createSearchPathGuardHook(ctx: PluginInput) {
         return;
       }
 
-      // Mirror the host exactly: the path is used as-is. The host never
-      // trims it and has no runtime handling for the literal strings
-      // 'undefined'/'null' (upstream resolves them as ordinary relative
-      // paths; they only appear as schema-description guidance). An empty
-      // string resolves to the instance directory itself, so there is
-      // nothing to block either.
+      // Only v2 glob treats the literal placeholders as an absent path.
       const raw = args.path;
-      if (typeof raw !== 'string' || raw === '') {
+      if (
+        typeof raw !== 'string' ||
+        raw === '' ||
+        (hostFlavor === 'v2' &&
+          input.tool === 'glob' &&
+          (raw === 'undefined' || raw === 'null'))
+      ) {
         return;
       }
 

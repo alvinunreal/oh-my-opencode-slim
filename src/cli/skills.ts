@@ -102,6 +102,29 @@ export function getSkillPermissionsForAgent(
 }
 
 /**
+ * Short, model-facing summary of an agent's final skill rules (the record
+ * the host enforces): `''` (none), `'all'`, `'all except a, b'`, or
+ * `'a, b'`. The host applies the last matching rule in key order, so a
+ * named rule placed before `'*'` is shadowed and not listed.
+ */
+export function summarizeSkillGrants(
+  rules: Readonly<Record<string, 'allow' | 'ask' | 'deny'>>,
+): string {
+  const entries = Object.entries(rules);
+  const named = entries.slice(entries.findIndex(([name]) => name === '*') + 1);
+  if (rules['*'] === 'allow') {
+    const denied = named
+      .filter(([, rule]) => rule !== 'allow')
+      .map(([name]) => name);
+    return denied.length > 0 ? `all except ${denied.join(', ')}` : 'all';
+  }
+  return named
+    .filter(([, rule]) => rule === 'allow')
+    .map(([name]) => name)
+    .join(', ');
+}
+
+/**
  * Fold per-agent skill directives into an effective skills list.
  *
  * 1. Without a base `skills` list the working base is the agent's default

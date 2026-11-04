@@ -78,7 +78,7 @@ export function logPaneClosed(
  * private server no second client can join, or a malformed launch mode), so a
  * configured `multiplexer.type` is ignored. The message points at the
  * fallback surfaces: the host's native subagent picker, or `/subagent` to
- * open a child session in a host tab. Logs nothing when no multiplexer is
+ * open a child session. Logs nothing when no multiplexer is
  * configured; the caller owns the once-per-process gate, like every other
  * diagnostic here.
  */
@@ -89,7 +89,7 @@ export function logHostUnsupported(
 ): boolean {
   if (configuredType === 'none') return false;
   logger.log(
-    `[multiplexer] no pane: host-unsupported (v2 ${detail.mode} host): configured multiplexer.type is ignored; use the host's native subagent picker, or /subagent to open a child session in a tab`,
+    `[multiplexer] no pane: host-unsupported (v2 ${detail.mode} host): configured multiplexer.type is ignored; use the host's native subagent picker, or /subagent to open a child session`,
     {
       event: DIAGNOSTIC_EVENT_HOST_UNSUPPORTED,
       reason: 'host-unsupported',

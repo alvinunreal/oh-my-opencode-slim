@@ -278,8 +278,9 @@ plugin package. The updater writes install metadata beside the binary so future
 starts can skip unnecessary downloads. Existing `companion-v0.1.2` installs that
 predate metadata are migrated in place without re-downloading.
 
-Startup checks run before the Companion is spawned, but they use a short timeout
-so OpenCode startup is not blocked by a slow network. Plugin auto-update also
+Startup checks run in the background before the Companion is spawned, so
+OpenCode startup is never blocked by the download; the Companion starts once
+the install finishes (or fails). Plugin auto-update also
 tries to update the Companion binary after the new package is installed. If a
 download fails, the plugin update still succeeds and Companion update is retried
 on the next OpenCode restart. The updater uses a lock to prevent concurrent

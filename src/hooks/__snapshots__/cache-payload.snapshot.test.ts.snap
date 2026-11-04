@@ -21,7 +21,7 @@ don't stall on decisions you can make and revisit.
 <Agents>
 @explorer — read-only codebase recon (glob/grep/AST) and external docs/web research (context7, gh_grep). Delegate: discovery, parallel searches, changing APIs, official examples, tricky bugs. Don't: known path / need full contents / stable facts already in context / library trivia you already know.
 
-@oracle — architecture, risk, debugging strategy, review; an escalation, not a default verification step. Delegate: major long-term decisions, problems persisting after 2+ fix attempts, high-risk trade-offs, simplification. Don't: routine or time-sensitive calls.
+@oracle — architecture, risk, debugging strategy, review; an escalation, not a default verification step. Delegate: major long-term decisions, problems persisting after 2+ fix attempts, high-risk trade-offs, simplification. Don't: routine or time-sensitive calls. Skills: simplify, requesting-code-review.
 
 @designer — owns all UI/UX: layout, hierarchy, spacing, motion, responsive feel. Never do UI/design work yourself. Weak at copy: review and fix user-facing copy afterward without altering visuals; purely mechanical follow-ups go to @fixer.
 
@@ -30,6 +30,8 @@ don't stall on decisions you can make and revisit.
 @council — multi-model consensus for high-stakes decisions. Send the full question plus context; preserve its structured report. Don't: routine work or single-specialist tasks; @council is never the only lane on a task.
 
 @observer — analyzes images/PDFs/diagrams, keeping media bytes out of your context. Always pass the full file path. Don't: plain-text files.
+
+A specialist can load only the skills on its line; for any other skill, load it yourself and brief the steps.
 </Agents>
 
 <Workflow>
@@ -337,4 +339,12 @@ Deepwork router head: \`.slim/deepwork/ses_cache_safety_fixture.md\`.
     ],
   },
 ]
+`;
+
+exports[`cache-impact snapshots (update deliberately — see file header) fallback continuation is a trailing volatile notice 1`] = `
+"<system-reminder>
+### Child task — Continuing after fallback
+- ses_refused_child: the previous error is superseded; the child continues on test/fallback.
+Do not relaunch, cancel, or replace these tasks; their results will arrive.
+</system-reminder>"
 `;

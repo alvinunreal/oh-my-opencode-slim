@@ -1,14 +1,14 @@
 import type { Server } from 'node:http';
 import type { PluginInput } from '@opencode-ai/plugin';
 import type { InterviewConfig, PluginConfig } from '../config';
-import { DEFAULT_DASHBOARD_PORT } from './dashboard';
+import { type DashboardConfig, DEFAULT_DASHBOARD_PORT } from './dashboard';
 import { createDashboardManager } from './dashboard-manager';
+import type { InterviewSessionRuntime } from './runtime';
 import type { createInterviewService } from './service';
 import { createPerSessionInterviewServer } from './session-server';
 
 /**
- * Pure interview mode computation shared by the v1 manager and the v2
- * interview bridge: dashboard enablement (`dashboard === true` or an
+ * Pure interview mode computation: dashboard enablement (`dashboard === true` or an
  * explicit port), the resolved output folder, and the dashboard port
  * (explicit port when set, else the default).
  */
@@ -31,6 +31,9 @@ export function createInterviewManager(
   options: {
     /** Already-listening server for the dashboard role to adopt. */
     server?: Server;
+    runtime?: InterviewSessionRuntime;
+    sessionClient?: DashboardConfig['sessionClient'];
+    hostFlavor?: DashboardConfig['hostFlavor'];
   } = {},
 ): {
   service: ReturnType<typeof createInterviewService>;
@@ -53,12 +56,19 @@ export function createInterviewManager(
 
   // ─── Per-session mode (upstream behavior) ───────────────────────
   if (!dashboardEnabled) {
-    return createPerSessionInterviewServer(ctx, interviewConfig, outputFolder);
+    return createPerSessionInterviewServer(
+      ctx,
+      interviewConfig,
+      outputFolder,
+      options.runtime,
+    );
   }
 
   // ─── Dashboard mode ─────────────────────────────────────────────
   return createDashboardManager(ctx, config, dashboardPort, outputFolder, {
     ...options,
-    hostFlavor: (ctx as PluginInput & { hostFlavor?: string }).hostFlavor,
+    hostFlavor:
+      options.hostFlavor ??
+      (ctx as PluginInput & { hostFlavor?: string }).hostFlavor,
   });
 }

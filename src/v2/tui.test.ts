@@ -56,12 +56,12 @@ function readUserConfig(): Record<string, unknown> {
 
 /** Polls a predicate until it holds; fails loudly on timeout. */
 async function waitFor(
-  predicate: () => boolean,
+  predicate: () => boolean | Promise<boolean>,
   timeoutMs = 5000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error('waitFor timed out');
@@ -699,6 +699,30 @@ describe('v2 tui preset plugin', () => {
       }
     });
 
+    test('autoUpdate false alone skips the update notice', async () => {
+      writeUserConfig({ autoUpdate: false });
+      const originalFetch = globalThis.fetch;
+      let requests = 0;
+      globalThis.fetch = (async () => {
+        requests += 1;
+        return new Response('{"version":"1.0.0"}');
+      }) as typeof fetch;
+      jest.useFakeTimers();
+      let cleanup: (() => void) | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          makeSetupCtx().ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        jest.advanceTimersByTime(1_500);
+        for (let i = 0; i < 30; i += 1) await Promise.resolve();
+        expect(requests).toBe(0);
+      } finally {
+        cleanup?.();
+        jest.useRealTimers();
+        globalThis.fetch = originalFetch;
+      }
+    });
+
     test('v2 cleanup returns a promise to the host', async () => {
       writeUserConfig({
         sidebar: false,
@@ -712,7 +736,7 @@ describe('v2 tui preset plugin', () => {
       await done;
     });
 
-    test('sidebar separates default from session snapshot and rejects stale route/workspace responses', async () => {
+    test('sidebar shows a differing session preset beside the default and rejects stale route/workspace responses', async () => {
       writeUserConfig(makeConfig() as unknown as Record<string, unknown>);
       process.env.XDG_DATA_HOME = path.join(configHome, 'sidebar-data');
       process.env.OPENCODE_LOG_DIR = path.join(configHome, 'logs');
@@ -784,10 +808,8 @@ describe('v2 tui preset plugin', () => {
           height: 32,
         });
         await screen.renderOnce();
-        expect(screen.captureCharFrame()).toContain('Default');
-        expect(screen.captureCharFrame()).toContain('balanced');
         expect(screen.captureCharFrame()).toContain(
-          'Session team snapshot: server-alpha',
+          'Preset server-alpha · default balanced',
         );
         expect(screen.captureCharFrame()).toContain('team-a');
         expect(screen.captureCharFrame()).not.toContain('team-b');
@@ -796,9 +818,9 @@ describe('v2 tui preset plugin', () => {
         await screen.renderOnce();
         expect(screen.captureCharFrame()).not.toContain('server-alpha');
         expect(screen.captureCharFrame()).not.toContain('team-a');
-        expect(screen.captureCharFrame()).toContain(
-          'Session team snapshot: Loading',
-        );
+        // Loading binding: the default shows alone.
+        expect(screen.captureCharFrame()).toContain('Preset balanced');
+        expect(screen.captureCharFrame()).not.toContain('· default');
         writeUserConfig({
           ...makeConfig(),
           preset: 'cheap',
@@ -831,9 +853,8 @@ describe('v2 tui preset plugin', () => {
         });
         setRoute({ type: 'home', sessionID: '' });
         await screen.renderOnce();
-        expect(screen.captureCharFrame()).toContain(
-          'Session team snapshot: No session displayed',
-        );
+        expect(screen.captureCharFrame()).toContain('Preset');
+        expect(screen.captureCharFrame()).not.toContain('· default');
       } finally {
         finishSecondRead({
           sessionID: 'root-b',
@@ -1017,8 +1038,8 @@ describe('v2 tui preset plugin', () => {
         } as unknown as Record<string, unknown>);
         setRoute(nextRoute as { type: string; sessionID?: string });
         await notifyConfigChanged(projectDir, 'overlay-refresh');
-        await waitFor(() => {
-          void screen?.renderOnce();
+        await waitFor(async () => {
+          await screen?.renderOnce();
           return screen?.captureCharFrame().includes(expectedModel) === true;
         });
         const frame = screen?.captureCharFrame() ?? '';
@@ -1276,7 +1297,7 @@ describe('v2 tui preset plugin', () => {
       expect(cleanup).toBeUndefined();
     });
 
-    test('renders agent labels and models in categorical colors and the brand in the interactive hue', async () => {
+    test('renders only configured agent colors and the brand in the interactive hue', async () => {
       const stub = makeSetupCtx();
       writeUserConfig(makeConfig() as unknown as Record<string, unknown>);
       recordTuiSessionParent('oracle-live', 'root', projectDir);
@@ -1296,6 +1317,7 @@ describe('v2 tui preset plugin', () => {
             explorer: 'anthropic/claude-haiku',
           },
           agentDisplayNames: { oracle: 'Oracle' },
+          agentColors: { explorer: '#ff0000' },
         },
         projectDir,
       );
@@ -1344,13 +1366,160 @@ describe('v2 tui preset plugin', () => {
         expect(brand).toBeDefined();
         expect(activeIndicator).toBeDefined();
         expect(mutedText).toBeDefined();
-        expect(namedAgent?.fg.r).toBeCloseTo(210 / 255);
-        expect(secondAgent?.fg.r).toBeCloseTo(80 / 255);
-        expect(model?.fg).toEqual(namedAgent?.fg);
+        // Unconfigured agents stay muted even though the host ships a
+        // categorical palette; a configured color tints label and model.
+        expect(namedAgent?.fg).toEqual(mutedText?.fg);
+        expect(model?.fg).toEqual(mutedText?.fg);
+        expect(secondAgent?.fg.r).toBeCloseTo(1);
+        expect(secondAgent?.fg.g).toBeCloseTo(0);
         expect(secondModel?.fg).toEqual(secondAgent?.fg);
         expect(brand?.bg.b).toBeCloseTo(210 / 255);
         expect(brand?.fg.r).toBeCloseTo(240 / 255);
         expect(activeIndicator?.fg.g).toBeCloseTo(171 / 255);
+      } finally {
+        cleanup?.();
+        screen?.renderer.destroy();
+      }
+    });
+
+    test('sidebar subagent rows render session titles from the host session store', async () => {
+      writeUserConfig(makeConfig() as unknown as Record<string, unknown>);
+      process.env.XDG_DATA_HOME = path.join(configHome, 'sidebar-titles-data');
+      process.env.OPENCODE_LOG_DIR = path.join(configHome, 'logs');
+      process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '60000';
+      recordTuiSessionParent('child-a', 'root', projectDir);
+      recordTuiSessionParent('child-b', 'root', projectDir);
+      recordTuiAgentActivity(
+        {
+          sessionID: 'child-a',
+          agentName: 'explorer',
+          active: true,
+          details: { alias: 'exp-1', status: 'busy' },
+        },
+        projectDir,
+      );
+      recordTuiAgentActivity(
+        {
+          sessionID: 'child-b',
+          agentName: 'explorer',
+          active: true,
+          details: { alias: 'exp-2', status: 'busy' },
+        },
+        projectDir,
+      );
+      recordTuiAgentModels(
+        { agentModels: { explorer: 'openai/gpt-5-mini' } },
+        projectDir,
+      );
+      const stub = makeSetupCtx();
+      const ui = stub.ctx.ui as {
+        router: {
+          current: () => unknown;
+          navigate: (route: unknown) => void;
+        };
+      };
+      ui.router.current = () => ({ type: 'session', sessionID: 'root' });
+      ui.router.navigate = () => {};
+      // get() serves titles in O(1); an untitled get() result keeps the
+      // alias instead of scanning list() on every render.
+      let listCalls = 0;
+      stub.ctx.data = {
+        session: {
+          get: (sessionID: string) => ({
+            parentID: 'root',
+            agent: 'explorer',
+            title: sessionID === 'child-a' ? 'Audit the login flow' : undefined,
+          }),
+          list: () => {
+            listCalls += 1;
+            return [
+              { id: 'child-a', title: 'Audit the login flow' },
+              { id: 'child-b', title: 'Harden the API client' },
+            ];
+          },
+        },
+      };
+      let cleanup: (() => void) | undefined;
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        const sidebarSlot = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        expect(sidebarSlot).toBeDefined();
+        screen = await testRender(() => sidebarSlot?.render?.() as never, {
+          width: 100,
+          height: 32,
+        });
+        await screen.renderOnce();
+        // Collapsed: both children share one agent row.
+        const collapsed = screen.captureCharFrame();
+        const lines = collapsed.split('\n');
+        const agentRow = lines.findIndex((line) => line.includes('explorer'));
+        expect(agentRow).toBeGreaterThan(-1);
+        // Expansion is user-driven: click the agent row to reveal the rows.
+        await screen.mockMouse.click(
+          Math.max(lines[agentRow].indexOf('explorer'), 0) + 2,
+          agentRow,
+        );
+        await screen.renderOnce();
+        const frame = screen.captureCharFrame();
+        // A titled row shows the title itself; the untitled one keeps its
+        // alias.
+        expect(frame).toContain('Audit the login flow 1/2');
+        expect(frame).not.toContain('exp-1');
+        expect(frame).not.toContain('Harden the API client');
+        expect(frame).toContain('2/2');
+        expect(listCalls).toBe(0);
+      } finally {
+        cleanup?.();
+        screen?.renderer.destroy();
+      }
+    });
+
+    test('noncompact rows tint the model detail with the configured color', async () => {
+      const stub = makeSetupCtx();
+      writeUserConfig({ ...makeConfig(), compactSidebar: false });
+      recordTuiAgentModels(
+        {
+          agentModels: {
+            oracle: 'openai/gpt-5-mini',
+            explorer: 'anthropic/claude-haiku',
+          },
+          agentColors: { explorer: '#ff0000' },
+        },
+        projectDir,
+      );
+      let cleanup: (() => void) | undefined;
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        const sidebarSlot = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        screen = await testRender(() => sidebarSlot?.render?.() as never, {
+          width: 160,
+          height: 30,
+        });
+        await screen.renderOnce();
+
+        const spans = screen.captureSpans().lines.flatMap((line) => line.spans);
+        const coloredModel = spans.find((span) =>
+          span.text.includes('claude-haiku'),
+        );
+        const mutedModel = spans.find((span) =>
+          span.text.includes('gpt-5-mini'),
+        );
+        const provider = spans.find((span) => span.text.includes('anthropic'));
+        expect(coloredModel?.fg.r).toBeCloseTo(1);
+        expect(coloredModel?.fg.g).toBeCloseTo(0);
+        expect(mutedModel?.fg.r).toBeCloseTo(138 / 255);
+        // Field labels and other detail rows stay muted.
+        expect(provider?.fg.r).toBeCloseTo(138 / 255);
       } finally {
         cleanup?.();
         screen?.renderer.destroy();
@@ -1647,9 +1816,9 @@ describe('v2 tui preset plugin', () => {
       }
     });
 
-    test('fallback command opens the latest subagent tab manually', async () => {
+    test('fallback command navigates to the latest subagent even without tabs', async () => {
       const stub = makeSetupCtx();
-      const opened: string[] = [];
+      const navigated: unknown[] = [];
       const toasts: string[] = [];
       stub.ctx.data = {
         session: {
@@ -1662,13 +1831,10 @@ describe('v2 tui preset plugin', () => {
       };
       (stub.ctx.ui as { router?: unknown }).router = {
         current: () => ({ type: 'session', sessionID: 'conv-1' }),
+        navigate: (destination: unknown) => navigated.push(destination),
       };
       (stub.ctx.ui as { tabs?: unknown }).tabs = {
-        enabled: () => true,
-        open: (sessionID: string) => {
-          opened.push(sessionID);
-          return true;
-        },
+        enabled: () => false,
       };
       (stub.ctx.ui as { toast?: unknown }).toast = {
         show: (toast: { message: string }) => {
@@ -1687,59 +1853,11 @@ describe('v2 tui preset plugin', () => {
           (c) => c.id === 'omo.open_subagent',
         );
         expect(command).toBeDefined();
-        // Registration alone must never open anything (manual fallback).
-        expect(opened).toEqual([]);
+        expect(navigated).toEqual([]);
 
         await command?.run();
-        await Bun.sleep(10);
-        expect(opened).toEqual(['ora-new']);
+        expect(navigated).toEqual([{ type: 'session', sessionID: 'ora-new' }]);
         expect(toasts[0]).toContain('ora-new');
-      } finally {
-        cleanup?.();
-      }
-    });
-
-    test('fallback command toasts when session tabs are disabled', async () => {
-      const stub = makeSetupCtx();
-      const opened: string[] = [];
-      const toasts: string[] = [];
-      stub.ctx.data = {
-        session: {
-          list: () => [
-            { id: 'ora-new', parentID: 'conv-1', time: { created: 2 } },
-          ],
-        },
-      };
-      (stub.ctx.ui as { router?: unknown }).router = {
-        current: () => ({ type: 'session', sessionID: 'conv-1' }),
-      };
-      (stub.ctx.ui as { tabs?: unknown }).tabs = {
-        enabled: () => false,
-        open: (sessionID: string) => {
-          opened.push(sessionID);
-          return false;
-        },
-      };
-      (stub.ctx.ui as { toast?: unknown }).toast = {
-        show: (toast: { message: string }) => {
-          toasts.push(toast.message);
-        },
-      };
-
-      let cleanup: (() => void) | undefined;
-      try {
-        cleanup = (await tui2Plugin.setup(
-          stub.ctx as unknown as V2TuiPluginContext,
-        )) as (() => void) | undefined;
-        stub.renderAppSlot();
-
-        const command = stub.layers[0]?.commands.find(
-          (c) => c.id === 'omo.open_subagent',
-        );
-        await command?.run();
-        await Bun.sleep(10);
-        expect(opened).toEqual([]);
-        expect(toasts[0]).toContain('tabs are disabled');
       } finally {
         cleanup?.();
       }
@@ -1872,9 +1990,6 @@ describe('v2 tui preset plugin', () => {
       const close = jest
         .spyOn(TmuxMultiplexer.prototype, 'closePane')
         .mockResolvedValue(true);
-      const layout = jest
-        .spyOn(TmuxMultiplexer.prototype, 'applyLayout')
-        .mockResolvedValue();
       const sweep = jest
         .spyOn(TmuxMultiplexer.prototype, 'listPanesWithTitles')
         .mockResolvedValue([]);
@@ -1944,7 +2059,6 @@ describe('v2 tui preset plugin', () => {
         process.argv = originalArgv;
         spawn.mockRestore();
         close.mockRestore();
-        layout.mockRestore();
         sweep.mockRestore();
       }
     }
@@ -1992,9 +2106,6 @@ describe('v2 tui preset plugin', () => {
       const close = jest
         .spyOn(TmuxMultiplexer.prototype, 'closePane')
         .mockResolvedValue(true);
-      const layout = jest
-        .spyOn(TmuxMultiplexer.prototype, 'applyLayout')
-        .mockResolvedValue();
       const stub = makeSetupCtx();
       let directory = projectDir;
       (stub.ctx.ui as { router: { current: () => unknown } }).router.current =
@@ -2052,7 +2163,7 @@ describe('v2 tui preset plugin', () => {
           height: 24,
         });
         await screen.renderOnce();
-        expect(screen.captureCharFrame()).toContain('Default balanced');
+        expect(screen.captureCharFrame()).toContain('Preset balanced');
         directory = projectB;
         handlers.get('session.created')?.({
           data: {
@@ -2067,7 +2178,7 @@ describe('v2 tui preset plugin', () => {
         jest.advanceTimersByTime(1_000);
         await rendered;
         await screen.renderOnce();
-        expect(screen.captureCharFrame()).toContain('Default cheap');
+        expect(screen.captureCharFrame()).toContain('Preset cheap');
         for (let i = 0; i < 5; i += 1) await Promise.resolve();
         rendered = new Promise<void>((resolve) => {
           notifyRender = resolve;
@@ -2088,7 +2199,6 @@ describe('v2 tui preset plugin', () => {
         sweep.mockRestore();
         spawn.mockRestore();
         close.mockRestore();
-        layout.mockRestore();
         screen?.renderer.destroy();
       }
     });
@@ -2170,9 +2280,8 @@ describe('v2 tui preset plugin', () => {
           height: 24,
         });
         await screen.renderOnce();
-        expect(screen.captureCharFrame()).toContain('Default balanced');
         expect(screen.captureCharFrame()).toContain(
-          'Session team snapshot: session-team',
+          'Preset session-team · default balanced',
         );
 
         await runPresetFlow(stub.ctx as unknown as V2TuiPluginContext);
@@ -2183,9 +2292,8 @@ describe('v2 tui preset plugin', () => {
         jest.advanceTimersByTime(1_000);
         await refreshed;
         await screen.renderOnce();
-        expect(screen.captureCharFrame()).toContain('Default cheap');
         expect(screen.captureCharFrame()).toContain(
-          'Session team snapshot: session-team',
+          'Preset session-team · default cheap',
         );
       } finally {
         await cleanup?.();

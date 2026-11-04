@@ -24,7 +24,7 @@ import {
   AGENT_ALIASES,
   BUILTIN_OPENCODE_SUBAGENTS_TO_DISABLE,
 } from '../config/constants';
-import { resolveBackgroundJobsMode } from '../config/runtime';
+import { resolveFeatureGates } from '../config/feature-gates';
 import { InterviewConfigSchema } from '../config/schema';
 import type { PluginConfigSnapshot } from '../config/snapshot';
 import { readPluginConfigSnapshot } from '../config/snapshot';
@@ -45,9 +45,18 @@ import { COUNCIL_INJECT_METADATA_KEY } from '../hooks/council-inject';
 import { GOAL_POINTER_METADATA_KEY } from '../hooks/deepwork-goal';
 import type { ForegroundFallbackManager } from '../hooks/foreground-fallback';
 import { PHASE_REMINDER_METADATA_KEY } from '../hooks/phase-reminder';
-import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/task-session-manager/board-injection';
+import {
+  appendRefusalCorrections,
+  BACKGROUND_JOB_BOARD_METADATA_KEY,
+} from '../hooks/task-session-manager/board-injection';
 import { OhMyOpenCodeLite } from '../index';
+import { MarketplaceBusyError } from '../marketplace/errors';
+import {
+  retryMarketplaceLeases,
+  withImmediateMarketplaceLeases,
+} from '../marketplace/lease';
 import { loadMergedOpenCodeConfig } from '../marketplace/preflight';
+import { skillIdsFromResponse } from '../marketplace/skills';
 import type { McpConfig } from '../mcp/types';
 import {
   collectAgentDisplayNames,
@@ -61,13 +70,17 @@ import {
 import { isPluginDisabledByEnv } from '../utils/env';
 import { createEventDirectoryScope } from '../utils/event-directory-scope';
 import { isRecord } from '../utils/guards';
-import { INTERNAL_INITIATOR_METADATA_KEY } from '../utils/internal-initiator';
+import {
+  INTERNAL_INITIATOR_METADATA_KEY,
+  SLIM_INTERNAL_INITIATOR_MARKER,
+} from '../utils/internal-initiator';
 import { initLogger, log } from '../utils/logger';
 import {
   type ModelImageCapabilityCache,
   modelExistsInCatalog,
 } from '../utils/model-image-capability';
 import { OperationTimeoutError, withTimeout } from '../utils/session';
+import { findTaskErrorNotice, parseTaskResultFromOutput } from '../utils/task';
 import {
   adaptTool,
   applyAgentToDraft,
@@ -93,10 +106,7 @@ import {
   v1ArgsToSubagent,
 } from './delegation';
 import { mapV2EventToV1 } from './event-adapter';
-import {
-  buildV2EventSubscriptionTypes,
-  isV2StreamDeltaType,
-} from './event-subscription';
+import { buildV2EventSubscriptionTypes } from './event-subscription';
 import {
   INTERNAL_SYNTHETIC_MESSAGE_PREFIX,
   isInternalAdmission,
@@ -120,10 +130,14 @@ import {
 } from './session-presets';
 import {
   createSessionSubmit,
-  userTextFromContent,
+  replayMarkerExpansions,
+  type V1CommandBeforeHook,
   type V2CommandSubmit,
 } from './session-submit';
-import { createSubagentExecutorWrapper } from './subagent-executor-wrapper';
+import {
+  createSubagentExecutorWrapper,
+  readRefusalOutcome,
+} from './subagent-executor-wrapper';
 import type {
   V2AgentDraft,
   V2Cleanup,
@@ -138,27 +152,6 @@ import type {
   V2ToolAfterEvent,
   V2ToolBeforeEvent,
 } from './types';
-
-/** v1 `command.execute.before` hook shape (see src/index.ts wiring). */
-export type V1CommandBeforeHook = (
-  input: { command: string; sessionID: string; arguments: string },
-  output: {
-    parts: Array<{
-      type: string;
-      text?: string;
-      synthetic?: boolean;
-      metadata?: Record<string, unknown>;
-    }>;
-  },
-) => Promise<void>;
-
-/** v1 command hook part shape. */
-type V1CommandPart = {
-  type: string;
-  text?: string;
-  synthetic?: boolean;
-  metadata?: Record<string, unknown>;
-};
 
 /** Wrap slash-command arguments in the generic v2 command marker. v2 command
  * drafts are add-only (no `template`), so `execute` submits this marker as a
@@ -187,16 +180,6 @@ export function parseCommandMarker(
   return { name: match[1], args: match[2] };
 }
 
-/** Strip the marker tags from marker-only `text`, leaving the raw args. */
-export function stripCommandMarker(text: string): string {
-  // Function replacer: a string replacer would interpret `$`-sequences in
-  // the captured args. Group 1 is the command name; group 2 the args.
-  return text.replace(
-    COMMAND_MARKER_PATTERN,
-    (_match, _name: string, args: string) => args,
-  );
-}
-
 /** Register one v1 synth command on a v2 command draft. Uses `add` when
  * present; callers wrap per-command in try/catch so a throwing `draft.add`
  * only skips that command. */
@@ -221,6 +204,7 @@ export function createCommandRegistration(
         await submit(
           invocation?.sessionID ?? '',
           wrapCommandMarker(name, invocation?.prompt?.text ?? ''),
+          ...(invocation?.prompt?.files ? [invocation.prompt.files] : []),
         );
       } catch (err) {
         log('[v2] command submit failed', { name, err: String(err) });
@@ -250,47 +234,12 @@ export function registerSynthCommands(
   }
 }
 
-/** Dispatch a generic command marker found in the trailing user message to
- * the v1 `command.execute.before` hook, then replace that message's content
- * with the hook-produced parts. Mirrors the interview bridge mutation
- * semantics: only the trailing message is touched so earlier messages stay
- * byte-for-byte identical (provider prompt-cache prefix reuse). */
+/** Replay the same expansion whenever the host rebuilds its message history. */
 export async function applyCommandMarkerToContext(
   event: V2SessionContextEvent,
   commandBefore: V1CommandBeforeHook,
 ): Promise<void> {
-  const trailing = event.messages.at(-1);
-  if (trailing?.role !== 'user') return;
-  const text = userTextFromContent(trailing.content);
-  const parsed = parseCommandMarker(text);
-  if (!parsed) return;
-
-  const output = { parts: [] as V1CommandPart[] };
-  await commandBefore(
-    {
-      command: parsed.name,
-      sessionID: event.sessionID,
-      arguments: parsed.args.trim(),
-    },
-    output,
-  );
-
-  const syntheticParts = trailing.content.filter(
-    (part) => part.synthetic === true,
-  );
-
-  if (output.parts.length > 0) {
-    trailing.content = [
-      ...output.parts.map((part) => ({ ...part })),
-      ...syntheticParts,
-    ];
-    return;
-  }
-  // Hook produced nothing: strip the marker and leave the raw args text.
-  trailing.content = [
-    { type: 'text', text: stripCommandMarker(text) },
-    ...syntheticParts,
-  ];
+  await replayMarkerExpansions(event, commandBefore, parseCommandMarker);
 }
 
 /** Payload the v1 `chat.message` bridge feeds its consumers (a subset of
@@ -330,6 +279,13 @@ export interface V2SessionContextHandlerDeps {
   sessionContext?: (
     sessionID: string,
   ) => Promise<Array<Record<string, unknown>> | undefined>;
+  backgroundGeneration?: (
+    parentID: string,
+    childID: string,
+    runningOnly?: boolean,
+    refusalTime?: number,
+  ) => number | undefined;
+  refusalOutcome?: ForegroundFallbackManager['refusedChildOutcome'];
   /** v1 `experimental.chat.system.transform` hook. */
   systemTransform?: (
     input: unknown,
@@ -345,7 +301,30 @@ export interface V2SessionContextHandlerDeps {
   /** Session-frozen runtime profile application: mutates ONLY the request
    * `options` record (temperature/provider options) for a captured child
    * session. Never touches system/messages/tools. */
-  applyRuntimeProfile?: (event: V2SessionContextEvent) => void;
+  applyRuntimeProfile?: (event: V2SessionContextEvent) => void | Promise<void>;
+}
+
+/** Keep primary options not superseded by the host's variant defaults. */
+function withoutVariantSettings(
+  options: Record<string, unknown>,
+  settings: Record<string, unknown>,
+): Record<string, unknown> {
+  const entries: Array<[string, unknown]> = [];
+  for (const [key, value] of Object.entries(options)) {
+    const selected = Object.hasOwn(settings, key) ? settings[key] : undefined;
+    if (selected === undefined) {
+      entries.push([key, value]);
+    } else if (
+      isRecord(value) &&
+      !Array.isArray(value) &&
+      isRecord(selected) &&
+      !Array.isArray(selected)
+    ) {
+      const remaining = withoutVariantSettings(value, selected);
+      if (Object.keys(remaining).length > 0) entries.push([key, remaining]);
+    }
+  }
+  return Object.fromEntries(entries);
 }
 
 /**
@@ -391,12 +370,18 @@ export function attributeAgentsByHistory(
   return attribution;
 }
 
+const MAX_REFUSAL_NOTICES = 1024;
+
 /** Build the single `ctx.session.hook("context")` handler: interview marker
  * bridge, generic command marker dispatch, chat.message agent tracking, and
  * the v1 system/messages transforms — each independently try/catch-guarded. */
 export function createSessionContextHandler(
   deps: V2SessionContextHandlerDeps,
 ): (event: V2SessionContextEvent) => Promise<void> {
+  const refusalNotices = new Map<
+    string,
+    { model: string; completedAt: number } | undefined
+  >();
   return async (event) => {
     // Interview marker bridge (transcript projection + /interview).
     try {
@@ -584,7 +569,7 @@ export function createSessionContextHandler(
             info,
             parts: m.content.map((part) =>
               ((part.type === 'tool-call' || part.type === 'tool-result') &&
-                part.toolName === 'interview_submit_state') ||
+                (part.toolName ?? part.name) === 'interview_submit_state') ||
               (part.type === 'text' &&
                 typeof part.text === 'string' &&
                 part.text.includes('<interview_state'))
@@ -593,6 +578,81 @@ export function createSessionContextHandler(
             ),
           };
         });
+        const refusalCorrections: Array<{
+          taskID: string;
+          model: string;
+          completedAt: number;
+        }> = [];
+        if (
+          deps.backgroundGeneration &&
+          deps.refusalOutcome &&
+          deps.sessionContext
+        ) {
+          for (const message of v1messages) {
+            if (message.info.role !== 'user') continue;
+            for (const part of message.parts) {
+              if (part.type !== 'text' || typeof part.text !== 'string')
+                continue;
+              const notice = findTaskErrorNotice(part.text, 'subagent');
+              const block = notice?.block;
+              const childID = notice?.taskID;
+              if (!block || !childID) continue;
+              if (
+                deps.backgroundGeneration(event.sessionID, childID, true) ===
+                undefined
+              )
+                continue;
+              const text = parseTaskResultFromOutput(block);
+              if (!text) continue;
+              const noticeKey = `${message.info.id ?? ''}\0${childID}\0${text}`;
+              let recovery = refusalNotices.get(noticeKey);
+              if (!refusalNotices.has(noticeKey)) {
+                const outcome = await readRefusalOutcome(
+                  deps.sessionContext,
+                  deps.refusalOutcome,
+                  childID,
+                  text,
+                  'time' in message.info &&
+                    isRecord(message.info.time) &&
+                    typeof message.info.time.created === 'number'
+                    ? message.info.time.created
+                    : undefined,
+                );
+                if (outcome !== null) {
+                  recovery =
+                    outcome &&
+                    typeof outcome.completedAt === 'number' &&
+                    Number.isFinite(outcome.completedAt)
+                      ? {
+                          model: outcome.model,
+                          completedAt: outcome.completedAt,
+                        }
+                      : undefined;
+                  if (refusalNotices.size >= MAX_REFUSAL_NOTICES) {
+                    const oldest = refusalNotices.keys().next().value;
+                    if (oldest !== undefined) refusalNotices.delete(oldest);
+                  }
+                  refusalNotices.set(noticeKey, recovery);
+                }
+              }
+              if (recovery) {
+                refusalCorrections.push({ taskID: childID, ...recovery });
+              }
+            }
+          }
+        }
+        appendRefusalCorrections(
+          v1messages,
+          refusalCorrections.filter(
+            ({ taskID, completedAt }) =>
+              deps.backgroundGeneration?.(
+                event.sessionID,
+                taskID,
+                true,
+                completedAt,
+              ) !== undefined,
+          ),
+        );
         await deps.messagesTransform({}, { messages: v1messages });
         event.messages = v1messages.map((m) => {
           const info = m.info as { content?: unknown; time?: unknown };
@@ -640,7 +700,7 @@ export function createSessionContextHandler(
     // system/messages/tools stay byte-stable.
     if (deps.applyRuntimeProfile) {
       try {
-        deps.applyRuntimeProfile(event);
+        await deps.applyRuntimeProfile(event);
       } catch (err) {
         log('[v2] runtime profile apply failed', String(err));
       }
@@ -686,6 +746,9 @@ export interface V2SessionPromptBridge {
    * The raw admission feed (when wired) still fires immediately, before
    * that deferral. */
   handlePrompt(event: V2SessionPromptEvent): Promise<void>;
+  /** Early synchronous external-prompt intent observer. Runs on the first line
+   *  of the registered `prompt` callback before any permission or profile awaits. */
+  observePromptIntent(event: V2SessionPromptEvent): void;
   /** Record per-session agent/model from context events; forward NEWLY
    * learned state to the v1 chat.message hook, flushing any deferred
    * first admission with the agent attached. */
@@ -1724,6 +1787,7 @@ export function createPermissionRulesBridge(
 export function createSessionPromptBridge(
   chatMessage: (input: V1ChatMessageInput, output: unknown) => Promise<void>,
   notePromptAdmission?: (sessionID: string, messageID: string) => void,
+  noteExternalPromptIntent?: (sessionID: string, messageID: string) => void,
 ): V2SessionPromptBridge {
   /** Last admitted messageID per session (once-per-admission dedupe). */
   const seenAdmissions = new Map<string, string>();
@@ -1751,6 +1815,40 @@ export function createSessionPromptBridge(
   }
 
   return {
+    observePromptIntent(event: V2SessionPromptEvent): void {
+      if (!event || typeof event !== 'object') return;
+      const sessionID = event.sessionID;
+      const messageID = event.messageID;
+      if (typeof sessionID !== 'string' || !sessionID) return;
+      if (typeof messageID !== 'string' || !messageID) return;
+
+      const internalMetadata =
+        isRecord(event.metadata) &&
+        event.metadata[INTERNAL_INITIATOR_METADATA_KEY] === true;
+      const promptText =
+        isRecord(event.prompt) && typeof event.prompt.text === 'string'
+          ? event.prompt.text
+          : '';
+      const internalMarker = promptText.includes(
+        SLIM_INTERNAL_INITIATOR_MARKER,
+      );
+
+      // Only metadata proves a Slim admission; marker text alone (which a
+      // user can paste) skips the fence without widening the registry.
+      if (internalMetadata) recordInternalAdmission(sessionID, messageID);
+      if (internalMetadata || internalMarker) return;
+
+      if (isInternalAdmission(sessionID, messageID)) {
+        return;
+      }
+
+      try {
+        noteExternalPromptIntent?.(sessionID, messageID);
+      } catch (err) {
+        log('[v2] external prompt intent observer failed', String(err));
+      }
+    },
+
     async handlePrompt(event) {
       if (!event || typeof event !== 'object') return;
       const sessionID = event.sessionID;
@@ -1936,12 +2034,21 @@ function renderOutput(value: unknown): string {
   }
 }
 
-/** Formatted error text from a v2 execute.after `error` payload (string,
- * Error-like `{message}`, or structured record). Empty string when the
- * host provided nothing. */
+function causeTextOf(error: Record<string, unknown>): string {
+  if (error._tag !== 'Tool.Error' || error.error === undefined) return '';
+  return error.error instanceof Error
+    ? errorTextOf(error.error)
+    : String(error.error);
+}
+
+/** Model-visible text from a v2 execute.after error, unwrapping tool causes. */
 function errorTextOf(error: unknown): string {
+  if (isRecord(error)) {
+    const cause = causeTextOf(error);
+    if (cause) return cause;
+  }
   if (typeof error === 'string') return error;
-  if (isRecord(error) && typeof error.message === 'string' && error.message) {
+  if (isRecord(error) && typeof error.message === 'string') {
     return error.message;
   }
   return renderOutput(error);
@@ -2060,15 +2167,11 @@ export function createToolExecuteBridges(
     // v2 execute.after is status-discriminated: `completed` → mutable
     // result; `error` → `error` payload (result may be absent or stale).
     // Absent status (defensive null-safety) keeps the completed path.
-    // On error the v1 output is synthesized from the error text — that
-    // is exactly the v1 shape, where a failed tool's model-visible
-    // output WAS the error message — so error-recovery consumers
-    // (json-error-recovery appends its reminder to output.output) still
-    // run meaningfully. An errored call never presents its result
-    // content as a successful output.
+    // On error, synthesize v1 output from the failure message and return
+    // after-hook changes through the failure, not a stale result.
     const errored = e.status === 'error';
     // Map v2 Tool.Result.content (string | Content[]) -> v1 output.output
-    // string; the v1 after-hooks (jsonErrorRecovery, taskSessionManagerAfter)
+    // string; the v1 after-hooks (tool-loop-guard, taskSessionManagerAfter)
     // read output.output to decide recovery and task state.
     const result = e.result as
       | {
@@ -2107,25 +2210,27 @@ export function createToolExecuteBridges(
         tool: toolNameToV1(e.tool),
         sessionID: e.sessionID,
         callID: e.id,
+        status: e.status,
         args: isDelegation ? subagentArgsToV1(e.input) : e.input,
       },
       output,
     );
 
+    const updatedText =
+      typeof output.output === 'string'
+        ? output.output
+        : renderOutput(output.output);
+    if (errored) {
+      if (updatedText !== content && isRecord(e.error)) {
+        if (causeTextOf(e.error))
+          e.error.error = new Error(updatedText, { cause: e.error.error });
+        else e.error.message = updatedText;
+      }
+      return;
+    }
     if (result) {
-      const updatedText =
-        typeof output.output === 'string'
-          ? output.output
-          : renderOutput(output.output);
       if (updatedText !== content) {
-        if (errored) {
-          // Errored call: the model-visible content is the synthesized
-          // error text plus whatever the hook appended (e.g. the
-          // json-error-recovery reminder). Written as plain string
-          // content — never keep a stale/empty result content looking
-          // like a successful output.
-          result.content = updatedText;
-        } else if (hasRenderableContent) {
+        if (hasRenderableContent) {
           result.content = updateToolResultContent(
             rawContent,
             content,
@@ -2246,11 +2351,12 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       hostFlavor: 'v2',
     });
     const preFlightConfig = startupConfigSnapshot.config;
-    // Resolve the same mode the v1 factory will resolve: `native` and `off`
-    // must not wire board persistence or the native-subagent executor
-    // wrapper, and only `managed` may claim the lifecycle.
-    const lifecycleEnabled =
-      resolveBackgroundJobsMode(preFlightConfig.backgroundJobs) === 'managed';
+    // Derive every startup feature gate ONCE from the same snapshot the v1
+    // factory consumes. Only `managed` may claim the lifecycle: `native` and
+    // `off` must not wire board persistence or the native-subagent executor
+    // wrapper.
+    const featureGates = resolveFeatureGates(preFlightConfig);
+    const lifecycleEnabled = featureGates.managedJobs;
     if (lifecycleEnabled) {
       try {
         const storage = ctx.storage;
@@ -2352,24 +2458,18 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       const implementCommandEnabled = isCommandEnabled('implement', {
         disabledCommands,
       });
-      // Master switches (default true — an untouched config keeps every
-      // behavior). `sidebar`/`liveConfigRefresh` are read from the raw
-      // config here because the parsed interview config above is the only
-      // structured view that carries `.enabled` today.
-      const interviewEnabled = interviewConfig.enabled !== false;
-      const sidebarEnabled = pluginConfig.sidebar !== false;
-      const liveRefreshEnabled = pluginConfig.liveConfigRefresh !== false;
-      const updateCheckerEnabled = !(
-        pluginConfig.disabled_hooks ?? []
-      ).includes('auto-update-checker');
-      // The server-side auto-update checker is gated by the v1 factory's own
-      // disabled_hooks read; surface the decision once for the setup log.
+      // Master switches come from the same startup feature-gate resolution
+      // that gated lifecycle persistence above. The parsed interview config
+      // still supplies the bridge's own options.
+      const interviewEnabled = featureGates.interview;
+      const sidebarEnabled = featureGates.sidebar;
+      const liveRefreshEnabled = featureGates.liveConfigRefresh;
       log('[v2] feature switches', {
-        lifecycle: lifecycleEnabled,
-        interview: interviewEnabled,
-        sidebar: sidebarEnabled,
-        liveConfigRefresh: liveRefreshEnabled,
-        updateChecker: updateCheckerEnabled,
+        lifecycle: featureGates.managedJobs,
+        interview: featureGates.interview,
+        sidebar: featureGates.sidebar,
+        liveConfigRefresh: featureGates.liveConfigRefresh,
+        updateChecker: featureGates.updateChecker,
       });
       let interviewBridge: V2InterviewBridge | undefined;
       if (interviewEnabled) {
@@ -2377,6 +2477,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         interviewBridge = createV2InterviewBridge(ctx, interviewConfig, {
           commandEnabled: interviewCommandEnabled,
           implementEnabled: implementCommandEnabled,
+          refusalOutcome: v1Hooks[
+            'v2.pendingRefusalOutcome'
+          ] as ForegroundFallbackManager['pendingRefusalOutcome'],
         });
       }
       if (interviewBridge) disposers.push(() => interviewBridge.dispose());
@@ -2405,6 +2508,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         resolvePermissionSnapshotReady = resolve;
       });
       let pendingAgentDraft: V2AgentDraft | undefined;
+      let pendingMarketplaceLeaseRetry: Promise<void> | undefined;
+      const marketplaceLeaseAbort = new AbortController();
+      disposers.push(() => marketplaceLeaseAbort.abort());
       // An agent pass that ended before the MCP snapshot existed: our agents
       // were added to it afterwards, missing later host transforms.
       let agentPassDeferred = false;
@@ -2417,6 +2523,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         | undefined;
       let permissionRulesBridgeEnabled = false;
       const pluginAgents = new Set<string>();
+      const primaryRequestOptions = new Map<
+        string,
+        { options: Record<string, unknown>; temperature?: number }
+      >();
       let marketplaceAgentsRequirePromptPolicy = false;
       let permissionRulesBridge:
         | ReturnType<typeof createPermissionRulesBridge>
@@ -2426,6 +2536,17 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         | undefined;
       if (!registryBridge)
         throw new Error('v1 factory registry bridge is unavailable');
+      if (registryBridge.hasSelectedMarketplaceAgents && !ctx.session) {
+        throw new Error(
+          'Marketplace agents require session model request hooks',
+        );
+      }
+      registryBridge.setMarketplaceSkillReader(async () => {
+        if (typeof ctx.skill?.list !== 'function') {
+          throw new Error('Native skill inventory unavailable');
+        }
+        return skillIdsFromResponse(await ctx.skill.list(), 'id');
+      });
       const configCommands: Record<string, unknown> = {};
       registryBridge.prepareCommands(configCommands);
       const command = configCommands.command as
@@ -2449,12 +2570,48 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         }
         // Consume before applying: MCP replays must not reuse this editor.
         pendingAgentDraft = undefined;
-        const registry =
-          finalizedRegistry ??
-          registryBridge.finalize(
-            { agent: nativeAgentSnapshot.agents, mcp: hostMcpSnapshot },
-            nativeAgentSnapshot.permissions,
-          );
+        if (pendingMarketplaceLeaseRetry && !finalizedRegistry) return;
+        const agentSnapshot = nativeAgentSnapshot;
+        const mcpSnapshot = hostMcpSnapshot;
+        let registry: ReturnType<RegistryFactoryBridge['requireRegistry']>;
+        try {
+          registry =
+            finalizedRegistry ??
+            withImmediateMarketplaceLeases(() =>
+              registryBridge.finalize(
+                { agent: agentSnapshot.agents, mcp: mcpSnapshot },
+                agentSnapshot.permissions,
+              ),
+            );
+        } catch (error) {
+          if (!(error instanceof MarketplaceBusyError)) throw error;
+          agentPassDeferred = true;
+          if (typeof ctx.agent?.reload !== 'function') {
+            throw new Error(
+              'Marketplace registry needs agent reload after a busy lease',
+            );
+          }
+          pendingMarketplaceLeaseRetry = retryMarketplaceLeases(
+            () =>
+              registryBridge.finalize(
+                { agent: agentSnapshot.agents, mcp: mcpSnapshot },
+                agentSnapshot.permissions,
+              ),
+            marketplaceLeaseAbort.signal,
+          )
+            .then((result) => {
+              if (generationDisposed) return;
+              finalizedRegistry = result;
+              requestAgentRebuild();
+            })
+            .catch((cause) => {
+              if (generationDisposed) return;
+              permissionSnapshotFailure =
+                cause instanceof Error ? cause : new Error(String(cause));
+              resolvePermissionSnapshotReady();
+            });
+          return;
+        }
         finalizedRegistry = registry;
         marketplaceAgentsRequirePromptPolicy =
           registry.marketplaceAgentNames.length > 0;
@@ -2485,6 +2642,14 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             !Object.hasOwn(registry.identities, name)
           )
             continue;
+          if (cfg.mode === 'primary') {
+            primaryRequestOptions.set(name, {
+              options: isRecord(cfg.options) ? { ...cfg.options } : {},
+              ...(typeof cfg.temperature === 'number'
+                ? { temperature: cfg.temperature }
+                : {}),
+            });
+          }
           applyAgentToDraft(
             draft,
             name,
@@ -2492,7 +2657,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             registry.nativePolicies[name]?.rules,
           );
         }
-        if (resolvedAgents.orchestrator) {
+        if (
+          preFlightConfig.setDefaultAgent !== false &&
+          resolvedAgents.orchestrator
+        ) {
           try {
             draft.default(registry.identities.orchestrator ?? 'orchestrator');
           } catch {
@@ -2524,12 +2692,17 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         if (typeof ctx.agent?.reload !== 'function') return;
         agentRebuild = Promise.resolve()
           .then(() => (generationDisposed ? undefined : ctx.agent.reload()))
-          .catch((err) =>
+          .catch((err) => {
             log(
               '[v2] agent rebuild after deferred finalization failed',
               String(err),
-            ),
-          );
+            );
+            if (!permissionSnapshotReady && !generationDisposed) {
+              permissionSnapshotFailure =
+                err instanceof Error ? err : new Error(String(err));
+              resolvePermissionSnapshotReady();
+            }
+          });
       };
       const captureAgentDraft = (draft: V2AgentDraft) => {
         if (permissionSnapshotFailure) {
@@ -2581,6 +2754,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           agentPassDeferred = !permissionSnapshotReady;
         } catch (error) {
           if (generationDisposed) throw error;
+          log('[v2] agent finalization failed', String(error));
           permissionSnapshotFailure =
             error instanceof Error ? error : new Error(String(error));
           resolvePermissionSnapshotReady();
@@ -2854,7 +3028,15 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                 // registration (CodeMode opt-out) — without it v2's
                 // Tool.snapshot() confines the tool to the `execute` tool's
                 // JS runtime instead of the model-visible tool catalog.
-                draft.add(adaptTool(name, def, directory, schemaFor(def)));
+                draft.add(
+                  adaptTool(
+                    name,
+                    def,
+                    directory,
+                    schemaFor(def),
+                    ctx.permission,
+                  ),
+                );
               } catch (err) {
                 log('[v2] tool adapt failed', { name, err: String(err) });
               }
@@ -3132,12 +3314,17 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           const notePromptAdmission = v1Hooks['v2.notePromptAdmission'] as
             | ((sessionID: string, messageID: string) => void)
             | undefined;
+          const noteExternalPromptIntent = v1Hooks[
+            'v2.noteExternalPromptIntent'
+          ] as ((sessionID: string, messageID: string) => void) | undefined;
           const bridge = createSessionPromptBridge(
             chatMessage,
             notePromptAdmission,
+            noteExternalPromptIntent,
           );
           promptBridge = bridge;
           const promptReg = await ctx.session.hook('prompt', async (event) => {
+            bridge.observePromptIntent(event);
             if (!permissionSnapshotReady) {
               await withTimeout(
                 permissionSnapshotReadiness,
@@ -3201,6 +3388,68 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         const sessionContextRead = contextRead
           ? (sessionID: string) => contextRead({ sessionID })
           : undefined;
+        const variantCompatibleOptions = async (
+          options: Record<string, unknown>,
+          modelRef: V2SessionContextEvent['model'],
+          owner: 'primary' | 'child',
+        ): Promise<Record<string, unknown>> => {
+          const { providerID, id, variant } = modelRef;
+          if (
+            !Object.keys(options).length ||
+            !variant ||
+            variant === 'default'
+          ) {
+            return options;
+          }
+          try {
+            const catalog = ctx.model?.list
+              ? await withTimeout(
+                  ctx.model.list(),
+                  2_000,
+                  'Model variant lookup timed out',
+                )
+              : undefined;
+            const models =
+              isRecord(catalog) && Array.isArray(catalog.data)
+                ? catalog.data
+                : [];
+            const model = models.find(
+              (entry) =>
+                isRecord(entry) &&
+                entry.providerID === providerID &&
+                entry.id === id,
+            );
+            const selected =
+              isRecord(model) && Array.isArray(model.variants)
+                ? model.variants.find(
+                    (entry: unknown) => isRecord(entry) && entry.id === variant,
+                  )
+                : undefined;
+            if (isRecord(selected) && selected.settings === undefined) {
+              return options;
+            }
+            if (
+              isRecord(selected) &&
+              isRecord(selected.settings) &&
+              !Array.isArray(selected.settings)
+            ) {
+              return withoutVariantSettings(options, selected.settings);
+            }
+            log(`[v2] ${owner} options omitted: model variant unavailable`, {
+              providerID,
+              modelID: id,
+              variant,
+            });
+          } catch (err) {
+            log(`[v2] ${owner} options omitted: model variant lookup failed`, {
+              providerID,
+              modelID: id,
+              variant,
+              error: String(err),
+            });
+          }
+          return {};
+        };
         const handler = createSessionContextHandler({
           // Interview marker bridge (transcript projection + /interview);
           // a no-op when the interview subsystem is disabled by config.
@@ -3221,16 +3470,54 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           // Per-message agent attribution source: durable agent-switched
           // markers in the stored, compaction-bounded history stream.
           sessionContext: sessionContextRead,
+          backgroundGeneration: v1Hooks[
+            'v2.backgroundGeneration'
+          ] as V2SessionContextHandlerDeps['backgroundGeneration'],
+          refusalOutcome: v1Hooks[
+            'v2.refusalOutcome'
+          ] as V2SessionContextHandlerDeps['refusalOutcome'],
           systemTransform,
           messagesTransform,
-          // Captured child sessions get their frozen temperature/provider
-          // options on the request options record only.
-          applyRuntimeProfile: (event) =>
-            applyRuntimeProfileOptions(
-              event,
-              sessionProfileBridge.profileForSession(event.sessionID),
-              sessionPresets.peek(event.sessionID),
-            ),
+          // Primaries use the startup registry; child profiles stay session-frozen.
+          applyRuntimeProfile: async (event) => {
+            const binding = sessionPresets.peek(event.sessionID);
+            const profile =
+              sessionProfileBridge.profileForSession(
+                event.sessionID,
+                event.agent,
+              ) ??
+              (binding?.parentID && pluginAgents.has(event.agent)
+                ? sessionAdmissionProfiles(
+                    binding,
+                    currentProfiles,
+                    registeredProfiles,
+                  )[event.agent]
+                : undefined);
+            if (profile) {
+              const providerOptions = await variantCompatibleOptions(
+                profile.providerOptions ?? {},
+                event.model,
+                'child',
+              );
+              applyRuntimeProfileOptions(
+                event,
+                { ...profile, providerOptions },
+                binding,
+              );
+            } else if (!binding?.parentID && isRecord(event.options)) {
+              const primary = primaryRequestOptions.get(event.agent);
+              if (!primary) return;
+              const options = await variantCompatibleOptions(
+                primary.options,
+                event.model,
+                'primary',
+              );
+              Object.assign(event.options, options);
+              if (primary.temperature !== undefined) {
+                event.options.temperature = primary.temperature;
+              }
+            }
+          },
         });
         const reg = await ctx.session.hook('context', handler);
         disposers.push(() => reg.dispose());
@@ -3240,10 +3527,26 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         // HTTP headers; registered unconditionally when the v1
         // hook exists — a failure fails setup rather than silently skipping
         // the Copilot initiator header).
-        if (chatHeadersHook) {
+        if (chatHeadersHook || registryBridge.hasSelectedMarketplaceAgents) {
+          const headers = chatHeadersHook
+            ? createChatHeadersBridge(chatHeaderStates)
+            : undefined;
           const headerReg = await ctx.session.hook(
             'model.request',
-            createChatHeadersBridge(chatHeaderStates),
+            async (event) => {
+              if (registryBridge.hasSelectedMarketplaceAgents) {
+                if (!permissionSnapshotReady) {
+                  await withTimeout(
+                    permissionSnapshotReadiness,
+                    PERMISSION_RULES_OPERATION_TIMEOUT_MS,
+                    'Agent registry readiness timed out',
+                  );
+                }
+                if (permissionSnapshotFailure) throw permissionSnapshotFailure;
+                await registryBridge.verifyMarketplaceSkills();
+              }
+              await headers?.(event);
+            },
           );
           disposers.push(() => headerReg.dispose());
           log('[v2] chat.headers bridge registered (session.model.request)');
@@ -3481,6 +3784,13 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
               const wrapper =
                 lifecycleEnabled && registerStructuredLaunch
                   ? createSubagentExecutorWrapper({
+                      context: sessionContextRead,
+                      refusalOutcome: v1Hooks[
+                        'v2.refusalOutcome'
+                      ] as V2SessionContextHandlerDeps['refusalOutcome'],
+                      onSteerProgress: v1Hooks['v2.coverSteer'] as Parameters<
+                        typeof createSubagentExecutorWrapper
+                      >[0]['onSteerProgress'],
                       register: (launch) =>
                         registerStructuredLaunch({
                           ...launch,
@@ -3664,46 +3974,34 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                 while (!eventStopped) {
                   const next = await eventIterator.next();
                   if (next.done) break;
-                  // Token-stream deltas: the interview bridge already gates to
-                  // managed sessions. Skip permission rules and v1 synthesis;
-                  // still deliver the raw event so the multiplexer heartbeat in
-                  // the v1 event hook can run. Deltas are not location-scoped
-                  // and fire per token, so they skip the directory scope too.
                   const rawType =
                     typeof next.value?.type === 'string' ? next.value.type : '';
-                  const isStreamDelta = isV2StreamDeltaType(rawType);
-                  if (!isStreamDelta) {
-                    // Keep directory-local bridges scoped, while allowing the
-                    // task owner to observe children moved to live locations.
-                    eventDirectoryScope.note(next.value);
-                    if (eventDirectoryScope.isForeign(next.value)) {
-                      // Moved children retain their task owner in the parent's
-                      // location. Forward observation only, not permission or
-                      // profile handling from this foreign location.
-                      const foreignTaskEvent = v1Hooks['v2.foreignTaskEvent'] as
-                        | ((input: { event: unknown }) => Promise<void>)
-                        | undefined;
-                      if (foreignTaskEvent) {
-                        try {
-                          await withTuiSnapshotBatch(async () => {
-                            for (const ev of mapV2EventToV1(next.value)) {
-                              await foreignTaskEvent({ event: ev });
-                            }
-                          });
-                        } catch (err) {
-                          log('[v2] foreign task event failed', String(err));
-                        }
+                  // Keep directory-local bridges scoped, while allowing the
+                  // task owner to observe children moved to live locations.
+                  eventDirectoryScope.note(next.value);
+                  if (eventDirectoryScope.isForeign(next.value)) {
+                    // Moved children retain their task owner in the parent's
+                    // location. Forward observation only, not permission or
+                    // profile handling from this foreign location.
+                    const foreignTaskEvent = v1Hooks['v2.foreignTaskEvent'] as
+                      | ((input: { event: unknown }) => Promise<void>)
+                      | undefined;
+                    if (foreignTaskEvent) {
+                      try {
+                        await withTuiSnapshotBatch(async () => {
+                          for (const ev of mapV2EventToV1(next.value)) {
+                            await foreignTaskEvent({ event: ev });
+                          }
+                        });
+                      } catch (err) {
+                        log('[v2] foreign task event failed', String(err));
                       }
-                      continue;
                     }
+                    continue;
                   }
                   try {
                     await withTuiSnapshotBatch(async () => {
                       await interviewBridge?.handleEvent(next.value);
-                      if (isStreamDelta) {
-                        if (eventHook) await eventHook({ event: next.value });
-                        return;
-                      }
                       // Only reduced hosts retain legacy created prewarming.
                       // With persistence, native progress must bind before the
                       // first capture; a created event may precede that barrier.

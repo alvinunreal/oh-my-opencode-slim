@@ -1,5 +1,6 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { DEFAULT_CHILD_INPUT_WAKE_KINDS } from './constants';
+import * as effectiveOverrides from './effective-agent-overrides';
 import { RuntimeConfig } from './runtime';
 import type { PluginConfig } from './schema';
 
@@ -10,6 +11,55 @@ function resetRegistry(): void {
 }
 
 describe('RuntimeConfig', () => {
+  test('reuses agent resolution until a preset switch or reseed', () => {
+    resetRegistry();
+    const runtime = RuntimeConfig.init(DIRECTORY, {
+      agents: {
+        explorer: {
+          model: ['provider/first', 'provider/next'],
+          inheritModelFrom: 'session',
+        },
+        oracle: { skills_add: ['project-skill'] },
+      },
+      presets: {
+        fast: { explorer: { model: ['provider/fast', 'provider/backup'] } },
+      },
+    });
+    const resolve = spyOn(effectiveOverrides, 'resolveEffectiveAgentOverrides');
+    try {
+      expect(runtime.agent('explorer')?.model).toEqual([
+        'provider/first',
+        'provider/next',
+      ]);
+      expect(runtime.combinedModelInheritanceSource('explorer')).toBe(
+        'session',
+      );
+      expect(runtime.modelArrays.explorer[0].id).toBe('provider/first');
+      expect(resolve).toHaveBeenCalledTimes(1);
+
+      const snapshot = runtime.agents();
+      snapshot.explorer.model = 'provider/changed-by-caller';
+      expect(runtime.agent('explorer')?.model).toEqual([
+        'provider/first',
+        'provider/next',
+      ]);
+      expect(
+        runtime.agents({ oracle: ['marketplace-skill'] }).oracle.skills,
+      ).toContain('marketplace-skill');
+      expect(runtime.agents().oracle.skills).not.toContain('marketplace-skill');
+      runtime.setRuntimePreset('fast');
+      expect(runtime.agent('explorer')?.model).toEqual([
+        'provider/fast',
+        'provider/backup',
+      ]);
+      RuntimeConfig.init(DIRECTORY, {
+        agents: { explorer: { model: 'provider/reseeded' } },
+      });
+      expect(runtime.agent('explorer')?.model).toBe('provider/reseeded');
+    } finally {
+      resolve.mockRestore();
+    }
+  });
   test('init seeds a frozen plugin snapshot and get returns it', () => {
     resetRegistry();
     const plugin: PluginConfig = {
@@ -188,7 +238,7 @@ describe('RuntimeConfig', () => {
     resetRegistry();
     const runtime = RuntimeConfig.init(DIRECTORY, {});
     expect(runtime.preset).toBeUndefined();
-    expect(runtime.autoUpdate).toBe(true);
+    expect(runtime.updateCheckerEnabled).toBe(true);
     expect(runtime.stripOrchestratorModel).toBe(false);
     expect(runtime.routingBlock).toBe(true);
     expect(runtime.setDefaultAgent).toBe(true);
@@ -201,12 +251,41 @@ describe('RuntimeConfig', () => {
     expect(runtime.imageRouting).toBe('direct');
     expect(runtime.companion).toBeUndefined();
     expect(runtime.council).toBeUndefined();
+    expect(runtime.featureGates).toEqual({
+      backgroundJobsMode: 'managed',
+      managedJobs: true,
+      tui: true,
+      sidebar: true,
+      interview: true,
+      marketplace: true,
+      liveConfigRefresh: true,
+      updateChecker: true,
+    });
   });
 
-  test('lifecycle switches default on and read explicit false', () => {
+  test('featureGates is frozen, cached per generation, and defaults while unseeded', () => {
+    resetRegistry();
+    const unseeded = RuntimeConfig.get(DIRECTORY).featureGates;
+    expect(unseeded.backgroundJobsMode).toBe('managed');
+    expect(RuntimeConfig.get(DIRECTORY).featureGates).toBe(unseeded);
+
+    const runtime = RuntimeConfig.init(DIRECTORY, {});
+    const gates = runtime.featureGates;
+    expect(Object.isFrozen(gates)).toBe(true);
+    expect(runtime.featureGates).toBe(gates);
+    expect(runtime.sidebarEnabled).toBe(gates.sidebar);
+
+    RuntimeConfig.init(DIRECTORY, { tui: false });
+    expect(runtime.featureGates).not.toBe(gates);
+    expect(runtime.featureGates.tui).toBe(false);
+    // The TUI master switch also turns off server-side sidebar recording.
+    expect(runtime.sidebarEnabled).toBe(false);
+  });
+
+  test('feature gates default on and read explicit off values', () => {
     resetRegistry();
     const off = RuntimeConfig.init(DIRECTORY, {
-      backgroundJobs: { enabled: false },
+      backgroundJobs: { mode: 'off' },
       interview: { enabled: false },
       sidebar: false,
     });
@@ -215,11 +294,11 @@ describe('RuntimeConfig', () => {
     expect(off.interviewEnabled).toBe(false);
     expect(off.sidebarEnabled).toBe(false);
     // Sibling backgroundJobs keys stay readable (parsed; inert at runtime).
-    expect(off.backgroundJobs.enabled).toBe(false);
+    expect(off.backgroundJobs.mode).toBe('off');
 
     RuntimeConfig.reset(DIRECTORY);
     const partial = RuntimeConfig.init(DIRECTORY, {
-      backgroundJobs: { enabled: false, maxSessionsPerAgent: 4 },
+      backgroundJobs: { mode: 'off', maxSessionsPerAgent: 4 },
       interview: { maxQuestions: 5 },
     });
     expect(partial.backgroundJobsEnabled).toBe(false);
@@ -239,7 +318,7 @@ describe('RuntimeConfig', () => {
     expect(RuntimeConfig.get(DIRECTORY).liveConfigRefresh).toBe(false);
   });
 
-  test('backgroundJobs.mode resolves the lifecycle and outranks the legacy enabled key', () => {
+  test('backgroundJobs.mode resolves the lifecycle', () => {
     resetRegistry();
     const native = RuntimeConfig.init(DIRECTORY, {
       backgroundJobs: { mode: 'native' },
@@ -249,17 +328,11 @@ describe('RuntimeConfig', () => {
     expect(native.backgroundJobsEnabled).toBe(false);
 
     RuntimeConfig.reset(DIRECTORY);
-    const nativeWithLegacyOff = RuntimeConfig.init(DIRECTORY, {
-      backgroundJobs: { mode: 'native', enabled: false },
+    const off = RuntimeConfig.init(DIRECTORY, {
+      backgroundJobs: { mode: 'off' },
     });
-    expect(nativeWithLegacyOff.backgroundJobsMode).toBe('native');
-
-    RuntimeConfig.reset(DIRECTORY);
-    const explicitOff = RuntimeConfig.init(DIRECTORY, {
-      backgroundJobs: { mode: 'off', enabled: true },
-    });
-    expect(explicitOff.backgroundJobsMode).toBe('off');
-    expect(explicitOff.backgroundJobsEnabled).toBe(false);
+    expect(off.backgroundJobsMode).toBe('off');
+    expect(off.backgroundJobsEnabled).toBe(false);
 
     RuntimeConfig.reset(DIRECTORY);
     const managed = RuntimeConfig.init(DIRECTORY, {
@@ -267,6 +340,24 @@ describe('RuntimeConfig', () => {
     });
     expect(managed.backgroundJobsMode).toBe('managed');
     expect(managed.backgroundJobsEnabled).toBe(true);
+  });
+
+  test('updateCheckerEnabled is off for autoUpdate false or the disabled hook', () => {
+    resetRegistry();
+    const autoUpdateOff = RuntimeConfig.init(DIRECTORY, { autoUpdate: false });
+    expect(autoUpdateOff.updateCheckerEnabled).toBe(false);
+
+    RuntimeConfig.reset(DIRECTORY);
+    const hookOff = RuntimeConfig.init(DIRECTORY, {
+      disabled_hooks: ['auto-update-checker'],
+    });
+    expect(hookOff.updateCheckerEnabled).toBe(false);
+
+    RuntimeConfig.reset(DIRECTORY);
+    const unrelatedHook = RuntimeConfig.init(DIRECTORY, {
+      disabled_hooks: ['cache-monitor'],
+    });
+    expect(unrelatedHook.updateCheckerEnabled).toBe(true);
   });
 
   test('marketplaceEnabled defaults on and reads an explicit root kill switch', () => {
@@ -410,7 +501,7 @@ describe('RuntimeConfig', () => {
       backgroundJobs: { maxSessionsPerAgent: 7 },
       multiplexer: { type: 'tmux', layout: 'main-vertical' },
     });
-    expect(runtime.autoUpdate).toBe(false);
+    expect(runtime.updateCheckerEnabled).toBe(false);
     expect(runtime.stripOrchestratorModel).toBe(true);
     expect(runtime.routingBlock).toBe(false);
     expect(runtime.setDefaultAgent).toBe(false);

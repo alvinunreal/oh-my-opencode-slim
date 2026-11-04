@@ -676,7 +676,6 @@ describe('tool-loop-guard', () => {
       }),
     ).rejects.toThrow('infinite loop');
 
-    // Forward pagination (offset > maxEndLine) or any changed range (offset/limit) is allowed
     await expect(
       hook['tool.execute.before'](beforeInput({ callID: 'p6_next' }), {
         args: { path: 'src/big.ts', offset: 101, limit: 100 },

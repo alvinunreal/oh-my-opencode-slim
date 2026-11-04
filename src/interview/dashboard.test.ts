@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises';
 import { get } from 'node:http';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { createDashboardServer } from './dashboard';
+import { createDashboardServer, readDashboardAuthFile } from './dashboard';
 import { bindFreePort } from './test-port';
 
 // Helper to start a dashboard on a held port (bindFreePort keeps the
@@ -115,6 +115,101 @@ async function openSseConnection(
 }
 
 describe('dashboard server', () => {
+  test('recovers distinct long filenames and resumes the original document', async () => {
+    const directory = await createTempInterviewDir();
+    const { baseUrl, authToken, cleanup } = await startDashboard();
+    try {
+      const names = [
+        `a-very-long-interview-name-with-a-shared-prefix-${'a'.repeat(36)}`,
+        `a-very-long-interview-name-with-a-shared-prefix-${'b'.repeat(36)}`,
+      ];
+      for (const [index, name] of names.entries()) {
+        await fs.writeFile(
+          path.join(directory, 'interview', `${name}.md`),
+          `---\nsessionID: session-${index}\n---\n\n# Interview ${index}\n\n## Current spec\n\nSpec ${index}\n\n## Q&A history\n`,
+        );
+      }
+      await fetch(`${baseUrl}/api/settings?token=${authToken}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ addFolder: directory, discover: true }),
+      });
+      const health = (await (await fetch(`${baseUrl}/api/health`)).json()) as {
+        interviews: number;
+      };
+      expect(health.interviews).toBe(2);
+      const index = await (await fetch(baseUrl)).text();
+      const links = [
+        ...index.matchAll(/href="(\/interview\/recovered-[^"]+)"/g),
+      ].map((match) => match[1]);
+      expect(new Set(links).size).toBe(2);
+      const pages = await Promise.all(
+        links.map(async (link) => (await fetch(baseUrl + link)).text()),
+      );
+      for (const name of names) {
+        expect(index).toContain(`/interview ${name}`);
+        expect(
+          pages.some((page) =>
+            page.includes(`const resumeSlug = ${JSON.stringify(name)}`),
+          ),
+        ).toBe(true);
+      }
+    } finally {
+      cleanup();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('authorizes SSE with the interview page cookie and rejects anonymous requests', async () => {
+    const { baseUrl, dashboard, cleanup } = await startDashboard();
+    try {
+      dashboard.pushState({
+        interviewId: 'sse-cookie',
+        sessionID: 'session-sse',
+        idea: 'SSE',
+        mode: 'awaiting-user',
+        summary: 'Draft',
+        title: 'SSE',
+        questions: [],
+        pendingAnswers: null,
+        lastUpdatedAt: Date.now(),
+        filePath: 'spec.md',
+        nudgeAction: null,
+        pendingBlockComment: null,
+        pendingChatMessage: null,
+      });
+      const url = `${baseUrl}/api/interviews/sse-cookie/events`;
+      expect((await fetch(url)).status).toBe(401);
+      const page = await fetch(`${baseUrl}/interview/sse-cookie`);
+      const cookie = page.headers.get('set-cookie')?.split(';')[0] ?? '';
+      const stream = await fetch(url, { headers: { cookie } });
+      expect(stream.status).toBe(200);
+      expect(stream.headers.get('access-control-allow-origin')).toBeNull();
+      await stream.body?.cancel();
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('a failed bind does not remove the active dashboard credentials', async () => {
+    const { port, server } = await bindFreePort();
+    const winner = createDashboardServer({
+      port,
+      outputFolder: 'interview',
+      server,
+    });
+    const loser = createDashboardServer({ port, outputFolder: 'interview' });
+    try {
+      await winner.start();
+      await expect(loser.start()).rejects.toThrow('already in use');
+      loser.close();
+      expect((await readDashboardAuthFile(port))?.token).toBe(winner.authToken);
+    } finally {
+      loser.close();
+      winner.close();
+    }
+  });
+
   test('uses each manual folder project outputFolder', async () => {
     const originalEnv = { ...process.env };
     const tempDir = await fs.mkdtemp(path.join(tmpdir(), 'dashboard-project-'));
@@ -762,6 +857,39 @@ describe('dashboard server', () => {
   });
 
   describe('state push/merge (POST /api/interviews/:id/state)', () => {
+    test('accepts a large document and derives its specification blocks', async () => {
+      const { baseUrl, authToken, dashboard, cleanup } = await startDashboard();
+      try {
+        const document = `# Large\n\n## Current spec\n\n## 1. Requirements\n\n${'A'.repeat(90000)}\n\n## Q&A history\n\nNo answers yet.\n`;
+        const response = await fetch(
+          `${baseUrl}/api/interviews/large-spec/state?token=${authToken}`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              interviewId: 'large-spec',
+              sessionID: 'session-large',
+              idea: 'Large',
+              mode: 'completed',
+              summary: 'Done',
+              title: 'Large',
+              questions: [],
+              filePath: 'large.md',
+              document,
+            }),
+          },
+        );
+        expect(response.status).toBe(200);
+        expect(
+          dashboard
+            .getState('large-spec')
+            ?.blocks?.find((block) => block.id === 'section-1')?.content,
+        ).toContain('A'.repeat(90000));
+      } finally {
+        cleanup();
+      }
+    });
+
     test('creates new entry when not in cache', async () => {
       const { baseUrl, authToken, dashboard, cleanup } = await startDashboard();
       try {

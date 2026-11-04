@@ -16,19 +16,6 @@ interface ToolExecuteBeforeOutput {
   };
 }
 
-function replacePatchArgs(
-  args: NonNullable<ToolExecuteBeforeOutput['args']>,
-  patchText: string,
-): boolean {
-  try {
-    args.patchText = patchText;
-  } catch {
-    return false;
-  }
-
-  return args.patchText === patchText;
-}
-
 export function createApplyPatchHook(ctx: PluginInput) {
   return {
     'tool.execute.before': async (
@@ -50,18 +37,16 @@ export function createApplyPatchHook(ctx: PluginInput) {
       const root = input.directory || ctx.directory || process.cwd();
       const worktree = ctx.worktree || root;
       try {
-        const result = await rewritePatch(root, patchText, worktree);
+        const result = await rewritePatch(
+          root,
+          patchText,
+          worktree,
+          input.tool === 'patch' ? 'v2' : 'v1',
+        );
 
         if (result.changed) {
-          if (replacePatchArgs(args, result.patchText)) {
-            log('apply-patch hook rewrite');
-          } else {
-            log('apply-patch hook skipped', {
-              reason: 'readonly output args',
-              failOpen: true,
-              rewriteStage: 'before-native',
-            });
-          }
+          args.patchText = result.patchText;
+          log('apply-patch hook rewrite');
           return;
         }
 

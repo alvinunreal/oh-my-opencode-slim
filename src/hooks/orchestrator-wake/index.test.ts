@@ -164,6 +164,7 @@ function createScheduler(options?: {
   isChildInputWaitCurrent?: (taskID: string, requestID: string) => boolean;
   isCompletedJobCurrent?: (taskID: string, generation: number) => boolean;
   hasPendingDelegatedWork?: (id: string) => boolean;
+  isPrimaryAgentName?: (agent: string) => boolean;
   resolveSelection?: (sessionID: string) => Promise<{
     agent?: string;
     model?: { providerID: string; modelID: string };
@@ -198,6 +199,7 @@ function createScheduler(options?: {
     isChildInputWaitCurrent: options?.isChildInputWaitCurrent,
     isCompletedJobCurrent: options?.isCompletedJobCurrent,
     hasPendingDelegatedWork: options?.hasPendingDelegatedWork,
+    isPrimaryAgentName: options?.isPrimaryAgentName,
     resolveSelection: options?.resolveSelection,
     coordinator: options?.coordinator,
   });
@@ -2532,6 +2534,28 @@ describe('wake selection for delegated work', () => {
     expect(promptAsync).not.toHaveBeenCalled();
   });
 
+  test('wakes a declared primary parent with no delegated work', async () => {
+    const promptAsync = mock(async () => ({}));
+    const { scheduler } = createScheduler({
+      shouldManageSession: (id) => id === 'coworker',
+      hasPendingDelegatedWork: () => false,
+      isPrimaryAgentName: (agent) => agent === 'coworker',
+      resolveSelection: async () => ({
+        agent: 'coworker',
+        provenance: 'host-persisted',
+      }),
+      sessionClient: makeClient({ promptAsync }),
+    });
+    await scheduler.event({
+      event: {
+        type: 'session.idle',
+        properties: { sessionID: 'coworker' },
+      },
+    });
+    await clock.advance(60_000);
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+  });
+
   test('recovers a stopped job on a Plan parent with pending delegated work', async () => {
     const promptAsync = mock(async () => ({}));
     const { scheduler } = createScheduler({
@@ -2579,14 +2603,16 @@ describe('wake selection for delegated work', () => {
     const call = (
       promptAsync.mock.calls as unknown as Array<[Record<string, unknown>]>
     )[0]?.[0] as {
-      modelVariant?: string;
-      body: { model?: { providerID: string; modelID: string } };
+      body: {
+        model?: { providerID: string; modelID: string };
+        variant?: string;
+      };
     };
     expect(call.body.model).toEqual({
       providerID: 'test',
       modelID: 'model-b',
     });
-    expect(call.modelVariant).toBeUndefined();
+    expect(call.body.variant).toBeUndefined();
   });
 
   test('aborts the wake when an external message arrives during selection resolve', async () => {
@@ -2709,13 +2735,9 @@ describe('children mode on v1 (explicit opt-in)', () => {
       promptAsync.mock.calls as unknown as Array<[Record<string, unknown>]>
     )[0]?.[0] as {
       delivery?: string;
-      modelVariant?: string;
       body: { parts: Array<{ text: string }> };
     };
     expect(call.delivery).toBeUndefined(); // v1 call shape unchanged
-    // The default makeClient get reports a 'high' variant; v1 must still
-    // never receive the v2-only modelVariant argument.
-    expect(call.modelVariant).toBeUndefined();
     expect(call.body.parts[0]?.text).toBe(
       `${ORCHESTRATOR_CHILDREN_WAKE_TEXT}\n<!-- SLIM_INTERNAL_INITIATOR -->`,
     );

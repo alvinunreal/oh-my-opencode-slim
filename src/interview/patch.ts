@@ -68,6 +68,9 @@ function parseHunks(patch: string): Hunk[] | { failedHunk: string } {
     if (lines.length === 0) {
       return { failedHunk: current.header };
     }
+    if (current.oldCount > 0 && !lines.some((line) => line.kind !== '+')) {
+      return { failedHunk: [current.header, ...current.body].join('\n') };
+    }
     hunks.push({
       raw: [current.header, ...current.body].join('\n'),
       oldStart: current.oldStart,

@@ -14,7 +14,6 @@
  * Loaded only by the thin entry (`./tui.ts`) after the config gate passes, so
  * `tui: false` never evaluates this module's render stack.
  */
-import { loadPluginConfig } from '../config/loader';
 import { isCommandEnabled } from '../hooks/command-hook-utils';
 import { PANE_VIEWER_ENV } from '../multiplexer/shared';
 import type { TuiRouteView } from '../tui';
@@ -75,10 +74,9 @@ export interface V2PresetTuiContext extends V2PresetManagerContext {
     };
   };
   ui?: V2PresetUiSurface & {
-    router?: { current?: () => unknown };
-    tabs?: {
-      enabled?: () => boolean;
-      open?: (sessionID: string) => boolean;
+    router?: {
+      current?: () => unknown;
+      navigate?: (destination: { type: 'session'; sessionID: string }) => void;
     };
     slot?: V2SlotApi;
   };
@@ -228,13 +226,12 @@ function buildKillAllCommand(
 /**
  * Fallback surface for v2 hosts that cannot host panes (standalone private
  * servers, malformed launch modes): open the most recent subagent session of
- * the visible conversation in a host tab. Manual only — nothing opens
- * automatically, and a host without tab support just toasts.
+ * the visible conversation. Manual only — nothing opens automatically.
  */
 function buildOpenSubagentCommand(ctx: V2PresetTuiContext): V2KeymapCommand {
   return {
     id: OPEN_SUBAGENT_COMMAND_ID,
-    title: 'OMO: open latest subagent in a tab',
+    title: 'OMO: open latest subagent',
     group: 'System',
     palette: true,
     slash: { name: 'subagent' },
@@ -244,7 +241,7 @@ function buildOpenSubagentCommand(ctx: V2PresetTuiContext): V2KeymapCommand {
   };
 }
 
-/** Opens the newest child of the displayed session in a tab; never throws. */
+/** Navigates to the newest child of the displayed session; never throws. */
 async function runOpenSubagentFlow(ctx: V2PresetTuiContext): Promise<void> {
   const toast = (message: string) => ctx.ui?.toast?.show?.({ message });
   try {
@@ -262,17 +259,12 @@ async function runOpenSubagentFlow(ctx: V2PresetTuiContext): Promise<void> {
       toast('No subagent session found for this conversation.');
       return;
     }
-    const tabs = ctx.ui?.tabs;
-    if (tabs?.enabled?.() === false) {
-      toast('Session tabs are disabled for this host.');
+    if (!ctx.ui?.router?.navigate) {
+      toast('Session navigation is unavailable.');
       return;
     }
-    const opened = tabs?.open?.(child.id);
-    if (opened === false) {
-      toast('Session tabs are unavailable.');
-      return;
-    }
-    toast(`Opened subagent ${child.id} in a tab.`);
+    ctx.ui.router.navigate({ type: 'session', sessionID: child.id });
+    toast(`Opened subagent ${child.id}.`);
   } catch (err) {
     log('[v2][tui] open-subagent flow failed', String(err));
     toast('Open subagent failed.');
@@ -385,18 +377,20 @@ export async function runSetup(
   // but has no UI channel on V2 — `client.tui.showToast` is a no-op in the
   // shim — so the TUI owns the message. Scheduled off the startup path and
   // silent on every failure; see ./update-notice.
-  // `disabled_hooks: ["auto-update-checker"]` is the explicit off switch.
+  // The shared update-checker gate is off for `autoUpdate: false` or
+  // `disabled_hooks: ["auto-update-checker"]`: no timer, no notice, no
+  // network.
   if (
     process.env[PANE_VIEWER_ENV] !== '1' &&
-    !gatesRead.gates.disabledHooks.has('auto-update-checker')
+    gatesRead.gates.updateCheckerEnabled
   ) {
     disposers.push(
       registerUpdateNotice(ctx, {
         renderBadge: (latest, color) => renderUpdateBadge(latest, color),
       }),
     );
-  } else if (gatesRead.gates.disabledHooks.has('auto-update-checker')) {
-    log('[v2][tui] update notice skipped: auto-update-checker disabled');
+  } else if (!gatesRead.gates.updateCheckerEnabled) {
+    log('[v2][tui] update notice skipped: update checker disabled');
   }
 
   return () =>

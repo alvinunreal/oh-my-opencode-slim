@@ -3,7 +3,8 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { isReplayableUserMessage } from '../hooks/types';
+import { isUserMessageWithParts } from '../hooks/types';
+import { classifyTerminalEvidence } from '../utils/child-transcript';
 import { createInternalAgentTextPart } from '../utils/internal-initiator';
 import { buildPluginInput } from './client-shim';
 import type { V2Context } from './types';
@@ -52,6 +53,20 @@ function makeCtxWithPermission(options: {
 }
 
 describe('v2 client shim delegation', () => {
+  test('exposes the real switchModel capability only when available', async () => {
+    const calls: unknown[] = [];
+    const input = buildPluginInput(
+      makeCtx({ switchModel: async (args) => void calls.push(args) }),
+    );
+    const channel = input.experimental_v2 as {
+      switchModel: (sessionID: string, model: unknown) => Promise<unknown>;
+    };
+    const model = { providerID: 'test', id: 'b', variant: 'fast' };
+    await channel.switchModel('session', model);
+    expect(calls).toEqual([{ sessionID: 'session', model }]);
+    expect(buildPluginInput(makeCtx()).experimental_v2).toBeUndefined();
+  });
+
   test('messages maps session.context to v1 {data} with info/parts', async () => {
     const calls: unknown[] = [];
     const input = buildPluginInput(
@@ -773,7 +788,6 @@ describe('v2 client shim delegation', () => {
         parts: [createInternalAgentTextPart('wake with model pin')],
       },
       modelSelection: 'inherit',
-      modelVariant: 'high',
     });
     expect(seq.map((c) => c.m)).toEqual(['synthetic']);
     expect(seq[0].i).toMatchObject({
@@ -807,7 +821,6 @@ describe('v2 client shim delegation', () => {
     ).session.promptAsync({
       path: { id: 'ses_1' },
       body: { parts: [{ type: 'text', text: 'user prompt' }] },
-      modelSwitch: 'required',
     });
     expect(seq).toHaveLength(1);
     expect(seq[0].m).toBe('prompt');
@@ -845,7 +858,6 @@ describe('v2 client shim delegation', () => {
           promptAsync: (
             a: Record<string, unknown> & {
               delivery?: 'steer' | 'queue';
-              modelSwitch?: 'required';
             },
           ) => Promise<unknown>;
         };
@@ -867,7 +879,6 @@ describe('v2 client shim delegation', () => {
           ),
         ],
       },
-      modelSwitch: 'required',
     });
     expect(seq).toHaveLength(1);
     expect(seq[0].m).toBe('prompt');
@@ -1324,8 +1335,6 @@ describe('v2 client shim promptAsync model-switch hardening (#1125)', () => {
           promptAsync: (
             a: Record<string, unknown> & {
               delivery?: 'steer' | 'queue';
-              modelSwitch?: 'required';
-              modelVariant?: string;
             },
           ) => Promise<unknown>;
         };
@@ -1333,7 +1342,7 @@ describe('v2 client shim promptAsync model-switch hardening (#1125)', () => {
     ).session.promptAsync;
   }
 
-  test('confirmed switch resolves with switched:true over the ack record', async () => {
+  test('confirmed switch preserves the prompt acknowledgment', async () => {
     const seq: Array<{ m: string; i: unknown }> = [];
     const promptAsync = makePromptAsync({
       switchModel: async (i: unknown) => {
@@ -1352,11 +1361,10 @@ describe('v2 client shim promptAsync model-switch hardening (#1125)', () => {
       },
     });
     expect(seq).toHaveLength(2);
-    // The ack payload passes through untouched; `switched` is additive.
-    expect(res).toEqual({ data: { id: 'inbox_1' }, switched: true });
+    expect(res).toEqual({ data: { id: 'inbox_1' } });
   });
 
-  test('switchModel failure degrades: prompt still delivered, switched:false', async () => {
+  test('switchModel failure degrades to prompt delivery on the current model', async () => {
     const seq: Array<{ m: string; i: unknown }> = [];
     const promptAsync = makePromptAsync({
       switchModel: async () => {
@@ -1374,51 +1382,18 @@ describe('v2 client shim promptAsync model-switch hardening (#1125)', () => {
         model: { providerID: 'anthropic', modelID: 'claude-x' },
         parts: [{ type: 'text', text: 'retry me' }],
       },
-      modelSwitch: 'required',
     });
     // The prompt delivery is the load-bearing action: the failed switch
-    // must NOT reject the call (that would abort the fallback chain as a
-    // bogus "busy session") — the prompt is steered on the current model.
+    // must not reject the continuation; it steers on the current model.
     expect(seq.map((e) => e.m)).toEqual(['switchModel', 'prompt']);
     expect(seq[1]).toMatchObject({
       m: 'prompt',
       i: { sessionID: 'ses_1', delivery: 'steer' },
     });
-    expect(res).toEqual({ data: { id: 'inbox_1' }, switched: false });
+    expect(res).toEqual({ data: { id: 'inbox_1' } });
   });
 
-  test('modelSwitch required + host without switchModel → typed throw, no prompt', async () => {
-    const prompts: unknown[] = [];
-    const promptAsync = makePromptAsync({
-      prompt: async (i: unknown) => {
-        prompts.push(i);
-        return {};
-      },
-    } as never);
-    let caught: unknown;
-    try {
-      await promptAsync({
-        path: { id: 'ses_1' },
-        body: {
-          model: { providerID: 'anthropic', modelID: 'claude-x' },
-          parts: [{ type: 'text', text: 'retry me' }],
-        },
-        modelSwitch: 'required',
-      });
-    } catch (err) {
-      caught = err;
-    }
-    // No silent same-model steering: the caller's logs must reflect that
-    // the fallback target model could not be applied.
-    expect(caught).toBeInstanceOf(Error);
-    expect((caught as Error).name).toBe('V2SwitchModelUnavailableError');
-    expect((caught as Error).message).toBe(
-      '[v2] host provides no session.switchModel; cannot switch model for fallback prompt',
-    );
-    expect(prompts).toHaveLength(0);
-  });
-
-  test('modelSwitch absent + model requested keeps the steering degrade (wake pin regression guard)', async () => {
+  test('a wake pin still steers when switchModel is unavailable', async () => {
     // orchestrator-wake passes the session's CURRENT model as a pin; a
     // host without switchModel must keep steering (logged) — a blanket
     // throw would suppress every wake on such hosts.
@@ -1440,61 +1415,7 @@ describe('v2 client shim promptAsync model-switch hardening (#1125)', () => {
     });
     expect(prompts).toHaveLength(1);
     expect(prompts[0]?.delivery).toBe('queue');
-    expect((res as { switched: boolean }).switched).toBe(false);
-  });
-
-  test('promptAsync merges modelVariant into the switchModel model ref', async () => {
-    const seq: Array<{ m: string; i: unknown }> = [];
-    const promptAsync = makePromptAsync({
-      switchModel: async (i: unknown) => {
-        seq.push({ m: 'switchModel', i });
-      },
-      prompt: async (i: unknown) => {
-        seq.push({ m: 'prompt', i });
-        return {};
-      },
-    } as never);
-    await promptAsync({
-      path: { id: 'ses_1' },
-      body: {
-        agent: 'orchestrator',
-        model: { providerID: 'test', modelID: 'model-a' },
-        parts: [{ type: 'text', text: 'wake reminder' }],
-      },
-      delivery: 'queue',
-      modelVariant: 'max',
-    });
-    expect(seq).toHaveLength(2);
-    const switchCall = seq[0] as { i: { model: unknown } };
-    expect(switchCall.i.model).toEqual({
-      id: 'model-a',
-      providerID: 'test',
-      variant: 'max',
-    });
-  });
-
-  test('promptAsync without modelVariant keeps the switchModel ref variant-free', async () => {
-    const seq: Array<{ m: string; i: unknown }> = [];
-    const promptAsync = makePromptAsync({
-      switchModel: async (i: unknown) => {
-        seq.push({ m: 'switchModel', i });
-      },
-      prompt: async (i: unknown) => {
-        seq.push({ m: 'prompt', i });
-        return {};
-      },
-    } as never);
-    await promptAsync({
-      path: { id: 'ses_1' },
-      body: {
-        model: { providerID: 'test', modelID: 'model-a' },
-        parts: [{ type: 'text', text: 'retry me' }],
-      },
-    });
-    const switchCall = seq[0] as { i: { model: Record<string, unknown> } };
-    const model = switchCall.i.model;
-    expect(model).toEqual({ id: 'model-a', providerID: 'test' });
-    expect(Object.hasOwn(model, 'variant')).toBe(false);
+    expect(res).toEqual({});
   });
 
   test('promptAsync preserves the current variant when a variant-less pin matches the session model', async () => {
@@ -1511,49 +1432,16 @@ describe('v2 client shim promptAsync model-switch hardening (#1125)', () => {
         return {};
       },
     } as never);
-    const res = (await promptAsync({
+    await promptAsync({
       path: { id: 'ses_1' },
       body: {
         model: { providerID: 'test', modelID: 'model-a' },
         parts: [{ type: 'text', text: 'wake reminder' }],
       },
-    })) as { switched?: boolean };
+    });
     // The pin names the model the session already runs on; asserting no
     // variant must not reset the user's reasoning-effort selection.
     expect(seq.map((c) => c.m)).toEqual(['prompt']);
-    // Session is on the requested model — the switch claim stays truthful.
-    expect(res.switched).toBe(true);
-  });
-
-  test('promptAsync explicit modelVariant still switches when the pin matches the session model', async () => {
-    const seq: Array<{ m: string; i: unknown }> = [];
-    const promptAsync = makePromptAsync({
-      get: async () => ({
-        model: { providerID: 'test', id: 'model-a', variant: 'max' },
-      }),
-      switchModel: async (i: unknown) => {
-        seq.push({ m: 'switchModel', i });
-      },
-      prompt: async (i: unknown) => {
-        seq.push({ m: 'prompt', i });
-        return {};
-      },
-    } as never);
-    await promptAsync({
-      path: { id: 'ses_1' },
-      body: {
-        model: { providerID: 'test', modelID: 'model-a' },
-        parts: [{ type: 'text', text: 'user prompt' }],
-      },
-      modelVariant: 'default',
-    });
-    expect(seq.map((c) => c.m)).toEqual(['switchModel', 'prompt']);
-    const switchCall = seq[0] as { i: { model: unknown } };
-    expect(switchCall.i.model).toEqual({
-      id: 'model-a',
-      providerID: 'test',
-      variant: 'default',
-    });
   });
 
   test('promptAsync still switches when the pin targets a different model than the session', async () => {
@@ -1596,34 +1484,14 @@ describe('v2 client shim promptAsync model-switch hardening (#1125)', () => {
         return {};
       },
     } as never);
-    const res = (await promptAsync({
+    await promptAsync({
       path: { id: 'ses_1' },
       body: {
         model: { providerID: 'test', modelID: 'model-a' },
         parts: [{ type: 'text', text: 'wake reminder' }],
       },
-    })) as { switched?: boolean };
-    expect(seq.map((c) => c.m)).toEqual(['switchModel', 'prompt']);
-    expect(res.switched).toBe(true);
-  });
-
-  test('promptAsync modelVariant without a body model does not switch models', async () => {
-    const seq: Array<{ m: string; i: unknown }> = [];
-    const promptAsync = makePromptAsync({
-      switchModel: async (i: unknown) => {
-        seq.push({ m: 'switchModel', i });
-      },
-      prompt: async (i: unknown) => {
-        seq.push({ m: 'prompt', i });
-        return {};
-      },
-    } as never);
-    await promptAsync({
-      path: { id: 'ses_1' },
-      body: { parts: [{ type: 'text', text: 'plain steer' }] },
-      modelVariant: 'max',
     });
-    expect(seq.map((e) => e.m)).toEqual(['prompt']);
+    expect(seq.map((c) => c.m)).toEqual(['switchModel', 'prompt']);
   });
 
   test('interview-style internal continuation keeps its explicit pin (switchModel runs)', async () => {
@@ -1655,7 +1523,6 @@ describe('v2 client shim promptAsync model-switch hardening (#1125)', () => {
         parts: [createInternalAgentTextPart('interview next question')],
       },
       delivery: 'queue',
-      modelVariant: 'high',
     });
     expect(seq.map((c) => c.m)).toEqual(['switchModel', 'synthetic']);
   });
@@ -1683,136 +1550,12 @@ describe('v2 client shim promptAsync model-switch hardening (#1125)', () => {
       },
       delivery: 'queue',
       modelSelection: 'inherit',
-      modelVariant: 'high',
     });
     expect(seq.map((c) => c.m)).toEqual(['prompt']);
-  });
-
-  test('required model switch still runs for mixed bodies', async () => {
-    const seq: Array<{ m: string; i: unknown }> = [];
-    const promptAsync = makePromptAsync({
-      get: async () => ({
-        model: { providerID: 'test', id: 'model-b' },
-      }),
-      switchModel: async (i: unknown) => {
-        seq.push({ m: 'switchModel', i });
-      },
-      prompt: async (i: unknown) => {
-        seq.push({ m: 'prompt', i });
-        return {};
-      },
-    } as never);
-    await promptAsync({
-      path: { id: 'ses_1' },
-      body: {
-        model: { providerID: 'anthropic', modelID: 'claude-fallback' },
-        parts: [
-          { type: 'text', text: 'user replay' },
-          createInternalAgentTextPart('retry reminder'),
-        ],
-      },
-      modelSwitch: 'required',
-    });
-    expect(seq.map((c) => c.m)).toEqual(['switchModel', 'prompt']);
   });
 });
 
 describe('v2 client shim foreground-fallback integration', () => {
-  test('replay → switchModel → synthetic reminder → interrupt flow', async () => {
-    const seq: Array<{ m: string; i: unknown }> = [];
-    const ctx = makeCtx({
-      switchModel: async (i: unknown) => {
-        seq.push({ m: 'switchModel', i });
-      },
-      prompt: async (i: unknown) => {
-        seq.push({ m: 'prompt', i });
-        return {};
-      },
-      synthetic: async (i: unknown) => {
-        seq.push({ m: 'synthetic', i });
-        return {};
-      },
-      interrupt: async (i: unknown) => {
-        seq.push({ m: 'interrupt', i });
-        return { interrupted: true };
-      },
-      context: async () => [
-        {
-          id: 'msg_1',
-          role: 'user',
-          content: [{ type: 'text', text: 'Fix the failing build' }],
-        },
-        {
-          id: 'msg_2',
-          role: 'assistant',
-          content: [{ type: 'text', text: 'on it' }],
-        },
-      ],
-    } as never);
-    const input = buildPluginInput(ctx);
-    const session = (
-      input.client as {
-        session: {
-          messages: (a: unknown) => Promise<{ data: unknown[] }>;
-          promptAsync: (a: unknown) => Promise<unknown>;
-          abort: (a: unknown) => Promise<unknown>;
-        };
-      }
-    ).session;
-
-    // Step 1 of the fallback flow: fetch the transcript and confirm a user
-    // turn using the real pipeline helper.
-    const result = await session.messages({ path: { id: 'ses_1' } });
-    expect([...(result.data ?? [])].some(isReplayableUserMessage)).toBe(true);
-
-    // Step 2: the replay body foreground-fallback sends — only the internal
-    // reminder, with the required model switch.
-    await session.promptAsync({
-      path: { id: 'ses_1' },
-      body: {
-        parts: [
-          createInternalAgentTextPart(
-            'The previous model request failed and is being retried.',
-          ),
-        ],
-        model: {
-          providerID: 'anthropic',
-          modelID: 'claude-fallback',
-          variant: 'high',
-        },
-        agent: 'orchestrator',
-      },
-      modelSwitch: 'required',
-    });
-
-    // v2 semantics: switchModel first (v1 {providerID, modelID, variant} →
-    // v2 {id, providerID, variant}), then the reminder through the
-    // synthetic admission; the user's request stays in the host history.
-    expect(seq[0]).toMatchObject({
-      m: 'switchModel',
-      i: {
-        sessionID: 'ses_1',
-        model: {
-          id: 'claude-fallback',
-          providerID: 'anthropic',
-          variant: 'high',
-        },
-      },
-    });
-    expect(seq[1]).toMatchObject({ m: 'synthetic', i: { sessionID: 'ses_1' } });
-    expect((seq[1].i as { text: string }).text).toContain(
-      'The previous model request failed',
-    );
-    expect(seq.some((c) => c.m === 'prompt')).toBe(false);
-
-    // Step 3: abort maps to interrupt with resume:false.
-    await session.abort({ path: { id: 'ses_1' } });
-    expect(seq[2]).toEqual({
-      m: 'interrupt',
-      i: { sessionID: 'ses_1', resume: false },
-    });
-  });
-
   test('mapped transcript messages satisfy the v1 message-parts shape', async () => {
     const ctx = makeCtx({
       context: async () => [
@@ -1846,7 +1589,7 @@ describe('v2 client shim foreground-fallback integration', () => {
       },
     ]);
     const message = result.data[0];
-    expect(isReplayableUserMessage(message)).toBe(true);
+    expect(isUserMessageWithParts(message)).toBe(true);
   });
 
   // ── Task 4 live gap: terminal metadata must survive the mapping ──
@@ -1982,6 +1725,39 @@ describe('v2 client shim foreground-fallback integration', () => {
       time: { created: 1789774973283 },
     });
     expect(idle.parts).toEqual([]);
+  });
+
+  test('model switch and idle markers do not hide a completed child answer', async () => {
+    const input = buildPluginInput(
+      makeCtx({
+        context: async () => [
+          { id: 'user', type: 'user', time: { created: 1 }, text: 'work' },
+          {
+            id: 'answer',
+            type: 'assistant',
+            time: { created: 2, completed: 5 },
+            finish: 'stop',
+            content: [{ type: 'text', text: 'CHILD_OK' }],
+          },
+          { id: 'switch', type: 'model-switched', time: { created: 3 } },
+          {
+            id: 'idle',
+            type: 'idle',
+            time: { created: 6 },
+            outcome: 'succeeded',
+          },
+        ],
+      } as never),
+    );
+    const result = await input.client.session.messages({
+      path: { id: 'child' },
+    });
+    expect(
+      classifyTerminalEvidence(result, {
+        runStartedAt: 1,
+        terminalOutcomeConfirmed: true,
+      }),
+    ).toEqual({ verdict: 'completed', text: 'CHILD_OK' });
   });
 
   test('messages preserves assistant error and finish state for failed turns', async () => {

@@ -20,7 +20,6 @@ import {
   extractTitle,
   parseFrontmatter,
   parseSpecBlocks,
-  slugify,
 } from './document';
 import {
   extractResumeSlug,
@@ -61,11 +60,15 @@ function writeAuthFile(port: number, token: string): void {
   );
 }
 
-function removeAuthFile(port: number): void {
+function removeAuthFile(port: number, token: string): void {
   try {
-    fsSync.unlinkSync(getAuthFilePath(port));
+    const filePath = getAuthFilePath(port);
+    const credentials = JSON.parse(fsSync.readFileSync(filePath, 'utf8')) as {
+      token?: string;
+    };
+    if (credentials.token === token) fsSync.unlinkSync(filePath);
   } catch {
-    // File doesn't exist, ignore
+    // Missing or unreadable credentials do not belong to this server.
   }
 }
 
@@ -105,7 +108,7 @@ function jitterMs(): number {
 
 /**
  * When a live interview is created or pushes state, remove any stale
- * recovered- entry for the same slug.  Called from three code paths:
+ * recovered entry for the same file. Called from three code paths:
  * HTTP create, HTTP state-push, and in-process pushState.
  */
 function dedupRecovered(
@@ -113,27 +116,25 @@ function dedupRecovered(
   cache: Map<string, InterviewStateEntry>,
 ): void {
   if (interviewId.startsWith('recovered-')) return;
-  const slug = extractResumeSlug(interviewId);
-  if (!slug) return;
-  const recoveredKey = `recovered-${slug}`;
-  if (cache.has(recoveredKey)) {
-    cache.delete(recoveredKey);
+  const filePath = cache.get(interviewId)?.filePath;
+  if (!filePath) return;
+  for (const [id, entry] of cache) {
+    if (id.startsWith('recovered-') && entry.filePath === filePath)
+      cache.delete(id);
   }
 }
 
 /**
  * Check whether the cache already contains a live (non-recovered) entry
- * whose slug matches the given one.  Used by rebuildFromFiles to skip
+ * whose file matches the given one. Used by rebuildFromFiles to skip
  * adding a recovered entry when a live session already covers it.
  */
-function hasLiveForSlug(
-  slug: string,
+function hasLiveForFile(
+  filePath: string,
   cache: Map<string, InterviewStateEntry>,
 ): boolean {
   return [...cache.values()].some(
-    (e) =>
-      !e.interviewId.startsWith('recovered-') &&
-      extractResumeSlug(e.interviewId) === slug,
+    (e) => !e.interviewId.startsWith('recovered-') && e.filePath === filePath,
   );
 }
 
@@ -165,6 +166,7 @@ export interface DashboardConfig {
   sessionClient?: Pick<PluginInput['client']['session'], 'list'>;
   /** Already-listening server to adopt instead of binding `port`. */
   server?: Server;
+  onQueued?: (interviewId: string) => void;
 }
 
 // ─── Dashboard Server ─────────────────────────────────────────────────
@@ -562,16 +564,13 @@ export function createDashboardServer(config: DashboardConfig): {
         const title = extractTitle(content) || entry.replace(/\.md$/, '');
         const summary = extractSummarySection(content);
 
-        // Generate a stable interview ID from slugified filename
-        const baseName = entry.replace(/\.md$/, '');
-        const interviewId = `recovered-${slugify(baseName) || baseName}`;
+        const filePath = path.join(interviewDir, entry);
+        const interviewId = `recovered-${crypto.createHash('sha256').update(filePath).digest('hex')}`;
 
         // Only add if not already in cache (sessions may have re-pushed)
         if (stateCache.has(interviewId)) continue;
 
-        // Also skip if a live interview already covers this slug.
-        const slug = slugify(baseName) || baseName;
-        if (hasLiveForSlug(slug, stateCache)) continue;
+        if (hasLiveForFile(filePath, stateCache)) continue;
 
         stateCache.set(interviewId, {
           interviewId,
@@ -585,7 +584,7 @@ export function createDashboardServer(config: DashboardConfig): {
           lastUpdatedAt: fm.updatedAt
             ? new Date(fm.updatedAt).getTime()
             : Date.now(),
-          filePath: path.join(interviewDir, entry),
+          filePath,
           nudgeAction: null,
           pendingBlockComment: null,
           pendingChatMessage: null,
@@ -719,7 +718,9 @@ export function createDashboardServer(config: DashboardConfig): {
       }> = [...stateCache.values()]
         .sort((a, b) => b.lastUpdatedAt - a.lastUpdatedAt)
         .map((entry) => {
-          const resumeSlug = extractResumeSlug(entry.interviewId);
+          const resumeSlug = entry.filePath
+            ? path.basename(entry.filePath, '.md')
+            : extractResumeSlug(entry.interviewId);
           const session = entry.sessionID
             ? sessions.get(entry.sessionID)
             : undefined;
@@ -896,6 +897,10 @@ export function createDashboardServer(config: DashboardConfig): {
       pathname.startsWith('/api/interviews/') &&
       pathname.endsWith('/events')
     ) {
+      if (!isAuthenticated(request)) {
+        sendJson(response, 401, { error: 'Unauthorized' });
+        return;
+      }
       const interviewId = pathname
         .replace('/api/interviews/', '')
         .replace('/events', '');
@@ -913,7 +918,6 @@ export function createDashboardServer(config: DashboardConfig): {
         'content-type': 'text/event-stream',
         'cache-control': 'no-cache',
         connection: 'keep-alive',
-        'access-control-allow-origin': '*',
       });
 
       // Register this client
@@ -962,7 +966,7 @@ export function createDashboardServer(config: DashboardConfig): {
 
       let body: unknown;
       try {
-        body = await readJsonBody(request);
+        body = await readJsonBody(request, 4 * 1024 * 1024);
       } catch {
         sendJson(response, 400, { error: 'Invalid JSON' });
         return;
@@ -978,7 +982,9 @@ export function createDashboardServer(config: DashboardConfig): {
         if (state.questions) existing.questions = state.questions;
         if (state.filePath) existing.filePath = state.filePath;
         if (state.document !== undefined) existing.document = state.document;
-        if (state.blocks !== undefined) existing.blocks = state.blocks;
+        if (state.document !== undefined)
+          existing.blocks = state.blocks ?? parseSpecBlocks(state.document);
+        else if (state.blocks !== undefined) existing.blocks = state.blocks;
         existing.lastUpdatedAt = Date.now();
         dedupRecovered(interviewId, stateCache);
         broadcastSse(interviewId, existing);
@@ -999,7 +1005,11 @@ export function createDashboardServer(config: DashboardConfig): {
           pendingBlockComment: state.pendingBlockComment ?? null,
           pendingChatMessage: state.pendingChatMessage ?? null,
           document: state.document,
-          blocks: state.blocks,
+          blocks:
+            state.blocks ??
+            (state.document !== undefined
+              ? parseSpecBlocks(state.document)
+              : undefined),
         };
         stateCache.set(interviewId, entry);
         broadcastSse(interviewId, entry);
@@ -1190,6 +1200,7 @@ export function createDashboardServer(config: DashboardConfig): {
       entry.mode = 'awaiting-agent';
       entry.lastUpdatedAt = Date.now();
       sendJson(response, 202, { status: 'queued' });
+      config.onQueued?.(interviewId);
       return;
     }
 
@@ -1246,6 +1257,7 @@ export function createDashboardServer(config: DashboardConfig): {
       entry.mode = 'awaiting-agent';
       entry.lastUpdatedAt = Date.now();
       sendJson(response, 202, { status: 'queued' });
+      config.onQueued?.(interviewId);
       return;
     }
 
@@ -1332,6 +1344,7 @@ export function createDashboardServer(config: DashboardConfig): {
       entry.mode = 'awaiting-agent';
       entry.lastUpdatedAt = Date.now();
       sendJson(response, 202, { status: 'queued' });
+      config.onQueued?.(interviewId);
       return;
     }
 
@@ -1455,6 +1468,7 @@ export function createDashboardServer(config: DashboardConfig): {
       entry.mode = 'awaiting-agent';
       entry.lastUpdatedAt = Date.now();
       sendJson(response, 202, { status: 'queued' });
+      config.onQueued?.(interviewId);
       return;
     }
 
@@ -1505,7 +1519,9 @@ export function createDashboardServer(config: DashboardConfig): {
         sendJson(response, 404, { error: 'Interview not found' });
         return;
       }
-      const resumeSlug = extractResumeSlug(interviewId);
+      const resumeSlug = entry.filePath
+        ? path.basename(entry.filePath, '.md')
+        : extractResumeSlug(interviewId);
       setSessionCookie(response);
       sendHtml(response, renderInterviewPage(interviewId, resumeSlug));
       return;
@@ -1651,7 +1667,7 @@ export function createDashboardServer(config: DashboardConfig): {
     sseClients.clear();
     pendingClaims.clear();
 
-    removeAuthFile(config.port);
+    removeAuthFile(config.port, authToken);
 
     const server = activeServer ?? pendingServer;
     activeServer = null;
