@@ -573,10 +573,12 @@ exact run (generation- and revision-fenced) when it observes the delivery that
 reported it — the native `<subagent>` delivery on v2, its own tagged
 `<completed-job>` push on v1, or the revived-run notification. A completed,
 error, or cancelled record also retires once the parent demonstrably moves past
-the terminal report. Stopped jobs are not retired that way: v2 uses native
-delivery for the first publication, while the tracker delivers later stopped
-continuations. On v1 an abort cancels the native background job without a
-notification; Slim uses a recovery wake for kill-all stops;
+the terminal report. So does a stop the host attributed to an interruption
+(`Host reported outcome: interrupted.` or `cancelled.`), like the error it
+replaces; a foreground one retires at the parent's next request, because the
+tool result already reported it. Other stopped jobs are not retired that way.
+On v1 an abort cancels the native background job without a notification; Slim
+wakes the parent for a background kill-all stop unless the tracker delivers it.
 `task_revive` acknowledges stopped jobs. Reopen corrections tell the parent once
 not to rely on the earlier result.
 
