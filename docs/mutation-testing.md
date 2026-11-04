@@ -52,9 +52,12 @@ The CI `mutation` job runs the foreground-fallback gate instead:
 bun run mutation:foreground-fallback
 ```
 
-It uses `stryker.foreground-fallback.conf.mjs` (mutates
-`src/hooks/foreground-fallback/index.ts`, `break: 60`) and fails the job when
-the mutation score drops below the break threshold.
+It uses `stryker.foreground-fallback.conf.mjs` to mutate `asHttpStatus` and the
+seven `DEDUP_WINDOW_MS` use sites in `src/hooks/foreground-fallback/index.ts`.
+The measured sweep produced 37 mutants: 35 killed, 2 survived, 0 timeouts,
+0 no-coverage, and a 94.59% score in 19.4 seconds (exit 0). Thresholds are
+`high: 90`, `low: 85`, and `break: 80`; the job fails when the score drops
+below `break`.
 
 The first run installs the tool tree (`bun install --cwd tools/mutation`,
 frozen lockfile). Nothing in the repo root is modified to run a sweep, but
