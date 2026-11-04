@@ -8,6 +8,8 @@ import config from '../stryker.foreground-fallback.conf.mjs';
 
 const REPORT = 'reports/mutation/mutation.json';
 const INDEX = 'src/hooks/foreground-fallback/index.ts';
+const DEDUP = 'src/hooks/foreground-fallback/dedup.ts';
+const EXPECTED_GUARDS = 7;
 
 const report = JSON.parse(readFileSync(REPORT, 'utf8'));
 const mutantLines = (file) =>
@@ -17,15 +19,25 @@ const mutantLines = (file) =>
 const indexLines = readFileSync(INDEX, 'utf8').split('\n');
 
 const problems = [];
-if (!report.files['src/hooks/foreground-fallback/dedup.ts']?.mutants?.length) {
+if (!report.files[DEDUP]?.mutants?.length) {
   problems.push('dedup.ts has no mutants');
 }
 const lines = mutantLines(INDEX);
+const guardTargets = config.mutate.filter((t) => t.startsWith(`${INDEX}:`));
+if (guardTargets.length !== EXPECTED_GUARDS) {
+  problems.push(
+    `expected ${EXPECTED_GUARDS} guard targets, config has ${guardTargets.length}`,
+  );
+}
 for (const target of config.mutate) {
+  if (target === DEDUP) continue;
   const match = target.match(
     /^src\/hooks\/foreground-fallback\/index\.ts:(\d+)-(\d+)$/,
   );
-  if (!match) continue;
+  if (!match) {
+    problems.push(`unrecognized target: ${target}`);
+    continue;
+  }
   const line = Number(match[1]);
   if (!indexLines[line - 1]?.includes('DEDUP_WINDOW_MS')) {
     problems.push(`line ${line} no longer holds DEDUP_WINDOW_MS`);
