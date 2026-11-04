@@ -323,7 +323,7 @@ const UNKNOWN_FINISH_LOOP_ERROR = {
   message: 'Consecutive unknown assistant finishes without tool calls',
 };
 
-function asHttpStatus(value: unknown): number | undefined {
+export function asHttpStatus(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isInteger(value)) {
     return value >= 100 && value <= 599 ? value : undefined;
   }
