@@ -576,9 +576,12 @@ error, or cancelled record also retires once the parent demonstrably moves past
 the terminal report. So does a stop the host attributed to an interruption
 (`Host reported outcome: interrupted.` or `cancelled.`), like the error it
 replaces; a foreground one retires at the parent's next request, because the
-tool result already reported it. Other stopped jobs are not retired that way.
-On v1 an abort cancels the native background job without a notification; Slim
-wakes the parent for a background kill-all stop unless the tracker delivers it.
+tool result already reported it, and so does a background one while the
+parent's kill-all notice is active, because that request carries the notice.
+Other stopped jobs are not retired that way. On v1 an abort cancels the native
+background job without a notification; Slim wakes the parent for a background
+kill-all stop unless the tracker delivers it or the parent has already made a
+request carrying the notice.
 `task_revive` acknowledges stopped jobs. Reopen corrections tell the parent once
 not to rely on the earlier result.
 

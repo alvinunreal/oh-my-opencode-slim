@@ -837,6 +837,47 @@ test('v1 background abort wakes the idle parent only for kill-all', async () => 
   await h.requestTask('relaunch', 'ordinary task');
 });
 
+test('v1 kill-all stop already reported to a busy parent does not wake it again', async () => {
+  const h = await fallbackAssembly();
+  const error = {
+    name: 'MessageAbortedError',
+    data: { message: 'The user aborted a request.' },
+  };
+  const working = Date.now();
+  await h.advance(1);
+  // alt+w while the parent is still working.
+  h.status.mockImplementation(async () => ({
+    data: { parent: { type: 'busy' } },
+  }));
+  writeKillAllStop(h.directory, ['parent']);
+  setChildError(h, error);
+  await h.event('session.error', { sessionID: 'child', error });
+  await h.idle();
+  await h.runtime.reconcile();
+  await h.advance(0);
+  expect(h.board.get('child')?.state).toBe('stopped');
+  expect(h.promptAsync).not.toHaveBeenCalled();
+
+  // Its next request carries the notice, then it ends its turn.
+  const request = {
+    messages: [
+      ['ask', 'user', 'Delegate the task and keep working.'],
+      ['working', 'assistant', 'Checking files.'],
+    ].map(([id, role, text]) => ({
+      info: { id, sessionID: 'parent', role, time: { created: working } },
+      parts: [{ type: 'text', text }],
+    })),
+  };
+  await h.hooks['experimental.chat.messages.transform']?.({}, request as never);
+  expect(JSON.stringify(request)).toContain(
+    'User stopped all running subagents',
+  );
+  h.status.mockImplementation(async () => ({ data: {} }));
+  await h.event('session.idle', { sessionID: 'parent' });
+  await h.advance(0);
+  expect(h.promptAsync).not.toHaveBeenCalled();
+});
+
 function parentMessage(
   part: Record<string, unknown>,
   role = 'user',

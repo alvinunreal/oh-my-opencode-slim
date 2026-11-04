@@ -1403,8 +1403,10 @@ function rememberDeliveryKey(seen: Map<string, true>, seenKey: string): void {
  * foreground host stop needs no timestamp: a first run reaches the parent as
  * its own tool result, and retiring never suppresses a fallback
  * continuation's tracker notice (the record stays `stopped`), so retiring
- * early only reopens the duplicate guard for a run with no result. Other
- * runs without comparable timestamps fail closed.
+ * early only reopens the duplicate guard for a run with no result. Neither
+ * does a background one while the parent's kill-all notice is active: this
+ * request carries the notice, and the queued recovery wake would only repeat
+ * it. Other runs without comparable timestamps fail closed.
  */
 function retireStaleTerminalRecords(
   state: InjectionState,
@@ -1444,8 +1446,12 @@ function retireStaleTerminalRecords(
       ) {
         continue;
       }
+      const reported =
+        hostStop &&
+        (!record.background ||
+          state.isKillAllStopActive?.(parentSessionID) === true);
       if (
-        !(hostStop && !record.background) &&
+        !reported &&
         (record.completedAt === undefined ||
           newestAssistantTurn === undefined ||
           record.completedAt >= newestAssistantTurn)
