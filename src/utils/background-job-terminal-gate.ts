@@ -439,7 +439,8 @@ export function createBackgroundJobTerminalGate(options: {
     if (disposed || record?.generation !== run.generation) return;
     let value = observations.get(run.taskID);
     if (!value || value.generation !== run.generation) {
-      if (value?.timer) clearTimer(value.timer);
+      if (value !== undefined && value.timer !== undefined)
+        clearTimer(value.timer);
       value = {
         generation: run.generation,
         activityRevision: record.activityRevision,
