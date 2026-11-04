@@ -127,7 +127,7 @@ while the `.ignore` allowlist keeps them readable to OpenCode.
 !.slim/clonedeps/repos/**
 .slim/clonedeps/repos/**/.git/
 .slim/clonedeps/repos/**/.git/**
-.slim/clonedeps/repos/**/node_modules/
+**/.slim/clonedeps/repos/**/node_modules/
 # END oh-my-opencode-slim clonedeps
 ```
 

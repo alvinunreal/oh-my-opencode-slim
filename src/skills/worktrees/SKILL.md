@@ -104,7 +104,7 @@ keeps them readable to OpenCode.
 !.slim/worktrees.json
 !.slim/worktrees/
 !.slim/worktrees/**
-.slim/worktrees/**/node_modules/
+**/.slim/worktrees/**/node_modules/
 # END oh-my-opencode-slim worktrees
 ```
 
