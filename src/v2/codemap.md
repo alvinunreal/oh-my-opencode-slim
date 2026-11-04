@@ -51,7 +51,9 @@ check directory/parent/storage. Attributed messages skip stored-history reads.
 For a changed parent team, `wrapSessionPresetSubagent` retains native model
 selection and installs the child's replacement inference profile at awaited
 progress. The existing profile capture owns an effective binding so prompt
-admission and fallback pinning see that team before the v1 snapshot is saved.
+admission, fallback pinning and nested delegations see that team before the v1
+snapshot is saved. A separately applied child bundle takes precedence for its
+future delegations, including an Apply made during the continuation.
 Native execute success, including a running return, precedes snapshot commit.
 A failed commit reports an error while retaining the submitted run's profile.
 

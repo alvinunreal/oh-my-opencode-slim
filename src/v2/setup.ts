@@ -3649,8 +3649,13 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                   'Native subagent session preset wrapper unavailable',
                 );
               await ensureFinalizedProfiles();
+              const binding = await sessionPresets.ensure(parentSessionID);
+              // A child's independent Apply wins over its in-flight execution.
               const bundle =
-                (await sessionPresets.ensure(parentSessionID))?.bundle ?? null;
+                (binding?.execution
+                  ? binding.bundle
+                  : (sessionProfileBridge.effectiveBinding(parentSessionID)
+                      ?.bundle ?? binding?.bundle)) ?? null;
               const explicitModel = typeof args.model === 'string';
               const targetAgent =
                 !agentType && typeof args.task_id === 'string'

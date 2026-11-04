@@ -106,10 +106,10 @@ preset fallback chain. After a team is successfully adopted, further
 continuations of that team keep the child's current manual or fallback model
 selection.
 
-After successful adoption, the child's future delegations use the adopted
-team too. If you separately applied a preset inside that child, its own team
-for future delegations stays separate; the parent's continuation changes only
-the child's execution settings.
+New subagents launched by the child during that continuation also use the
+adopted team. A preset separately applied inside that child takes precedence
+for its future delegations; the parent's continuation changes only the child's
+execution settings.
 
 Continuation is **best-effort**. OpenCode authorizes and selects the model,
 then Slim installs options and fallback at the awaited native progress step,

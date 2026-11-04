@@ -1380,19 +1380,95 @@ describe('createV2Setup e2e', () => {
       expect(switches).toHaveLength(beforeResumeRetry);
       expect(nativeInputs.at(-1)?.model).toBeUndefined();
 
-      // Child Apply remains its independent future-delegation bundle: a
-      // successful parent continuation updates only the child's execution.
-      await rpc.apply(
-        { sessionID: 'ses_child-1', presetName: 'C' },
-        { signal: new AbortController().signal },
-      );
+      // A foreground continuation can delegate before its adopted snapshot is
+      // committed. Nested calls use runtime B until a child Apply chooses C.
       await rpc.apply(
         { sessionID: 'root', presetName: 'B' },
         { signal: new AbortController().signal },
       );
+      afterNativePrompt = async (sessionID) => {
+        if (sessionID !== 'ses_child-1') return; // Nested native calls re-enter.
+        expect(nativeInputs.at(-1)).toMatchObject({
+          sessionID,
+          model: 'test/b#low',
+          background: false,
+        });
+        expect(
+          stored.get(`session-preset/v1/${sessionID}`).bundle.presetName,
+        ).toBe('A');
+        const nestedB = await launch(
+          'nested-before-outer-commit',
+          sessionID,
+          {},
+        );
+        expect(nativeInputs.at(-1)?.model).toBe('test/b#low');
+        expect(
+          stored.get(`session-preset/v1/${nestedB}`).bundle.presetName,
+        ).toBe('B');
+        const nestedRequest = {
+          ...crossProviderContext,
+          sessionID: nestedB,
+          model: identities.get(nestedB).model,
+          options: { reasoning: 'A', onlyA: true, native: true },
+        };
+        await calls.contextHookCb?.(nestedRequest);
+        expect(nestedRequest.options).toEqual({
+          ...selectedProfiles.explorer.providerOptions,
+          temperature: selectedProfiles.explorer.temperature,
+          native: true,
+        });
+        await retry(nestedB, 'test', 'b');
+        expect(switches.at(-1)).toMatchObject({
+          sessionID: nestedB,
+          model: { providerID: 'backup', id: 'b' },
+        });
+        await rpc.apply(
+          { sessionID, presetName: 'C' },
+          { signal: new AbortController().signal },
+        );
+        const nestedC = await launch('nested-after-child-apply', sessionID, {
+          agent: 'market-session',
+        });
+        expect(nativeInputs.at(-1)?.model).toBe('override/static');
+        expect(
+          stored.get(`session-preset/v1/${nestedC}`).bundle.presetName,
+        ).toBe('C');
+        const appliedRequest = {
+          ...nestedRequest,
+          sessionID: nestedC,
+          agent: 'market-session',
+          model: identities.get(nestedC).model,
+          options: {},
+        };
+        await calls.contextHookCb?.(appliedRequest);
+        expect(appliedRequest.options).toEqual({
+          temperature: 0.25,
+          nativeReasoning: true,
+        });
+        // Child Apply persists the prior execution A, not the in-flight B.
+        // Runtime B must survive it, then commit while preserving bundle C.
+        expect(stored.get(`session-preset/v1/${sessionID}`)).toMatchObject({
+          bundle: { presetName: 'C' },
+          execution: { presetName: 'A' },
+        });
+        expect(identities.get(sessionID).model).toEqual({
+          providerID: 'test',
+          id: 'b',
+          variant: 'low',
+        });
+        const outerRequest = {
+          ...nestedRequest,
+          sessionID,
+          model: identities.get(sessionID).model,
+          options: { reasoning: 'A', onlyA: true, native: true },
+        };
+        await calls.contextHookCb?.(outerRequest);
+        expect(outerRequest.options).toEqual(nestedRequest.options);
+      };
       await launch('adopt-after-child-apply', 'root', {
         sessionID: 'ses_child-1',
       });
+      afterNativePrompt = undefined;
       const appliedChild = stored.get('session-preset/v1/ses_child-1');
       expect(appliedChild.bundle.presetName).toBe('C');
       expect(appliedChild.execution.presetName).toBe('B');
@@ -1406,14 +1482,6 @@ describe('createV2Setup e2e', () => {
         id: 'b',
       });
       expect(switches).toHaveLength(switchesBeforeUnchanged);
-      const appliedGrandchild = await launch(
-        'child-applied-descendant',
-        'ses_child-1',
-        {},
-      );
-      expect(
-        stored.get(`session-preset/v1/${appliedGrandchild}`).bundle.presetName,
-      ).toBe('C');
       // Model-less inherited profiles must use the newly captured parent provider
       // during the uncommitted window, not the old KV provider origin.
       const inheritedUpdate = await launch('inherited-update-child', 'root', {
