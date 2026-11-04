@@ -1399,48 +1399,56 @@ function rememberDeliveryKey(seen: Map<string, true>, seenKey: string): void {
  * cancelled (cancelled has no native delivery and no push delta, so this
  * fallback is its only retirement channel on v1). `stopped` records are
  * excluded (recovery-wake ownership) unless the host attributed the stop to
- * an interruption: that outcome retires like the error it replaces. Runs
- * without comparable timestamps fail closed.
+ * an interruption: that outcome retires like the error it replaces. A
+ * foreground host stop needs no timestamp: it reaches the parent as its own
+ * tool result, so every parent request after the publication carries it.
+ * Other runs without comparable timestamps fail closed.
  */
 function retireStaleTerminalRecords(
   state: InjectionState,
   messages: unknown[],
 ): void {
-  const newestAssistantTurnByParent = new Map<string, number>();
+  const newestAssistantTurnByParent = new Map<string, number | undefined>();
   for (const message of messages) {
     if (!isMessageWithParts(message)) continue;
-    if (message.info.role !== 'assistant') continue;
     const parentSessionID = message.info.sessionID;
     if (!parentSessionID || !state.shouldManageSession(parentSessionID)) {
       continue;
     }
-    const createdAt = messageCreatedAt(message);
-    if (createdAt === undefined) continue;
+    const createdAt =
+      message.info.role === 'assistant' ? messageCreatedAt(message) : undefined;
     const newest = newestAssistantTurnByParent.get(parentSessionID);
-    if (newest === undefined || createdAt > newest) {
-      newestAssistantTurnByParent.set(parentSessionID, createdAt);
-    }
+    newestAssistantTurnByParent.set(
+      parentSessionID,
+      createdAt !== undefined && (newest === undefined || createdAt > newest)
+        ? createdAt
+        : newest,
+    );
   }
-  if (newestAssistantTurnByParent.size === 0) return;
   for (const [
     parentSessionID,
     newestAssistantTurn,
   ] of newestAssistantTurnByParent) {
     for (const record of state.backgroundJobBoard.list(parentSessionID)) {
       if (!record.terminalUnreconciled) continue;
+      const hostStop =
+        record.state === 'stopped' &&
+        HOST_ATTRIBUTED_STOP_OUTCOME.test(record.resultSummary ?? '');
       if (
         record.state !== 'completed' &&
         record.state !== 'error' &&
         record.state !== 'cancelled' &&
-        !(
-          record.state === 'stopped' &&
-          HOST_ATTRIBUTED_STOP_OUTCOME.test(record.resultSummary ?? '')
-        )
+        !hostStop
       ) {
         continue;
       }
-      if (record.completedAt === undefined) continue;
-      if (record.completedAt >= newestAssistantTurn) continue;
+      if (
+        !(hostStop && !record.background) &&
+        (record.completedAt === undefined ||
+          newestAssistantTurn === undefined ||
+          record.completedAt >= newestAssistantTurn)
+      )
+        continue;
       // An undelivered queued push IS this publication's delivery: acking
       // the run here would fence the queued answer out forever. Its own
       // observed push (or a later fallback pass after delivery) retires it.

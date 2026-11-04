@@ -994,6 +994,40 @@ test('v1 foreground leaves the native failure when its chain is exhausted', asyn
   expect(h.promptAsync).not.toHaveBeenCalled();
 });
 
+test('a foreground host stop is acknowledged by the next parent request', async () => {
+  const h = await fallbackAssembly(undefined, 2000, true, ['test/primary']);
+  const error = {
+    name: 'MessageAbortedError',
+    data: { message: 'The user aborted a request.' },
+  };
+  setChildError(h, error);
+  await h.event('session.error', { sessionID: 'child', error });
+  await h.idle();
+  await h.runtime.reconcile();
+  await h.advance(0);
+  const stopped = h.board.get('child');
+  expect(stopped).toMatchObject({
+    state: 'stopped',
+    background: false,
+    terminalUnreconciled: true,
+  });
+  // The parent turn that answers the stop can be created before the stop
+  // is published; its request still carries the tool result.
+  await h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    parentMessage(
+      { type: 'text', text: 'Stopped. How should I proceed?' },
+      'assistant',
+      (stopped?.completedAt ?? 0) - 15,
+    ) as never,
+  );
+  expect(h.board.get('child')?.terminalUnreconciled).toBe(false);
+  await h.requestTask(
+    'relaunch',
+    'Investigate   the complete foreground fallback path with a long task description',
+  );
+});
+
 test('v1 background keeps a prefixed refusal and sends one terminal result', async () => {
   const h = await fallbackAssembly();
   setChildError(h);
