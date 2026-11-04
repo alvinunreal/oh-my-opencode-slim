@@ -4391,7 +4391,6 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
       const event = retryEvent(sid, 'A', decision);
 
       const pending = mgr.handleV2Retry(event, switchModel);
-      await tick(); // the native write is issued from a queued callback
       expect(switchModel).toHaveBeenCalledTimes(1);
 
       // New genuine user prompt intent arrives through the prompt bridge
@@ -11446,23 +11445,31 @@ describe('ForegroundFallbackManager dispose', () => {
     expect(writes).toBe(1);
   });
 
-  test('a switch queued before dispose never issues the native write', async () => {
+  test('dispose still waits for a native switch whose admission timed out', async () => {
     const { manager } = makeManager({
       chain: ['test/a', 'test/b'],
       hostFlavor: 'v2',
       maxRetries: 0,
     });
-    let writes = 0;
-    const work = manager.handleV2Retry(
-      nativeEvent('sess-dispose-queued'),
-      async () => {
-        writes++;
-      },
-    );
-    // dispose runs after the slot is claimed but before the queued callback.
-    void manager.dispose();
+    const sessionID = 'sess-dispose-timed-out';
+    const native = Promise.withResolvers<void>();
+    const work = manager.handleV2Retry(nativeEvent(sessionID), () => {
+      return native.promise;
+    });
+    await clock.advance(2_500); // past HOST_CALL_TIMEOUT_MS
     await work;
-    expect(writes).toBe(0);
+    expect(manager.isFallbackInProgress(sessionID)).toBe(false);
+
+    let drained = false;
+    const drain = manager.dispose().then(() => {
+      drained = true;
+    });
+    await tick();
+    expect(drained).toBe(false);
+
+    native.resolve();
+    await drain;
+    expect(drained).toBe(true);
   });
 
   test('dispose cancels pending initial-delay timers and empties the map', async () => {

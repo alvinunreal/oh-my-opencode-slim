@@ -2459,15 +2459,10 @@ export class ForegroundFallbackManager {
       const { agentName, nextModel, ref, variant } = selected;
       picked = nextModel;
       detail = { agentName, variant };
-      switchRequest = Promise.resolve().then(() => {
-        // Disposal can run after the slot is claimed but before this queued
-        // callback starts. Never issue a fresh native write from that callback.
-        if (this.disposed) return;
-        return switchModel(sessionID, {
-          providerID: ref.providerID,
-          id: ref.modelID,
-          ...(variant ? { variant } : {}),
-        });
+      switchRequest = switchModel(sessionID, {
+        providerID: ref.providerID,
+        id: ref.modelID,
+        ...(variant ? { variant } : {}),
       });
       const request = switchRequest;
       this.switchRequests.add(request);
