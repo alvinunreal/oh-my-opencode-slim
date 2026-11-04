@@ -280,10 +280,9 @@ describe('v2 tui preset plugin', () => {
         },
       ]);
       expect(stub.toasts).toHaveLength(1);
-      expect(stub.toasts[0]).toContain(
+      expect(stub.toasts[0]).toBe(
         'Applied preset "cheap" to this session\'s team.',
       );
-      expect(stub.toasts[0]).toContain('global default stay unchanged');
       expect(readUserConfig().preset).toBe('balanced');
     });
 

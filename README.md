@@ -219,7 +219,10 @@ apply subagent inference settings to **Current session** or change the
 in — no restart — while manual configuration edits change the default for
 future sessions; existing work and its future subagents retain their saved
 configuration until you explicitly reapply a preset to that session.
-Already-created children keep their own configuration. Main-session models,
+After reapplying, explicitly continuing a bound child with the same agent
+adopts the parent's updated inference settings while retaining its ID and
+history. This is best-effort: a failed continuation can leave the native
+model changed without saving the new team snapshot. Main-session models,
 prompts, tools, skills and MCPs are not switched by the session action.
 The sidebar shows the current session's saved team models and variants;
 `/preset` marks its bound preset separately from the global default.

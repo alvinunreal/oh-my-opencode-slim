@@ -15,9 +15,11 @@
  *   `options` record for that captured session only (never system/messages/
  *   tools — prompt bytes and tool catalogs stay untouched).
  *
- * Existing/resumed child sessions keep their captured profile while the agent
- * stays the same; parents and foreign-agent sessions are never touched.
+ * Existing children keep their capture unless an authorized native continuation
+ * explicitly adopts a changed bound team. Parents/foreign agents stay untouched.
  */
+
+import type { SessionPresetRecord } from './session-presets';
 import type { ModelRef, V2Context, V2SessionContextEvent } from './types';
 
 /** One agent's hot-applicable inference fields + sidebar projection. */
@@ -36,7 +38,12 @@ export interface V2AgentRuntimeProfile {
 export type V2AgentRuntimeProfiles = Record<string, V2AgentRuntimeProfile>;
 
 /** Per-session frozen profile (`null` = frozen with no applicable profile). */
-type FrozenProfile = { agent: string; profile: V2AgentRuntimeProfile | null };
+type FrozenProfile = {
+  agent: string;
+  profile: V2AgentRuntimeProfile | null;
+  /** Effective only while native continuation has not committed its snapshot. */
+  binding?: SessionPresetRecord;
+};
 
 /** Cap on per-session bookkeeping (FIFO eviction, mirrors the other v2 maps). */
 const MAX_PROFILE_SESSIONS = 1024;
@@ -200,6 +207,14 @@ export interface SessionProfileBridge {
     sessionID: string,
     agent?: string,
   ): V2AgentRuntimeProfile | undefined;
+  effectiveBinding(sessionID: string): SessionPresetRecord | undefined;
+  /** Replace inference after native selection, without switching the host. */
+  replaceSessionProfile(
+    sessionID: string,
+    identity: SessionProfileIdentity,
+    capture: SessionProfileCapture,
+    binding: SessionPresetRecord,
+  ): Promise<(committed: boolean) => void>;
   /** Captured session count (bounded; test seam). */
   size(): number;
 }
@@ -507,6 +522,53 @@ export function createSessionProfileBridge(
   }
 
   return {
+    effectiveBinding(sessionID) {
+      return captured.get(sessionID)?.binding;
+    },
+
+    async replaceSessionProfile(sessionID, identity, capture, binding) {
+      await pending.get(sessionID);
+      if (
+        deleted.has(sessionID) ||
+        !identity.parentID ||
+        !identity.agent ||
+        !options.pluginAgents.has(identity.agent)
+      )
+        throw new Error('Subagent runtime profile identity unavailable');
+      const previous = captured.get(sessionID)?.profile;
+      const profile = capture.profiles[identity.agent];
+      const replacement: FrozenProfile = {
+        agent: identity.agent,
+        profile: profile
+          ? {
+              ...profile,
+              managedProviderOptionKeys: [
+                ...new Set([
+                  ...(previous?.managedProviderOptionKeys ?? []),
+                  ...Object.keys(previous?.providerOptions ?? {}),
+                  ...(profile.managedProviderOptionKeys ?? []),
+                ]),
+              ],
+            }
+          : null,
+        binding,
+      };
+      ignored.delete(sessionID);
+      captured.set(sessionID, replacement);
+      options.onSessionCaptured?.(sessionID);
+      prune();
+      return (committed) => {
+        if (captured.get(sessionID) !== replacement) return;
+        if (committed) delete replacement.binding;
+        else {
+          // Failed execute leaves native model/history as-is. Release only
+          // the uncommitted plugin capture; no rollback or replay is promised.
+          captured.delete(sessionID);
+          options.onSessionCaptureFailed?.(sessionID);
+        }
+      };
+    },
+
     async observeEvent(event) {
       try {
         if (!isRecord(event)) return;

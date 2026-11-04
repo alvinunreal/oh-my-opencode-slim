@@ -407,7 +407,8 @@ On v2, `/preset` opens a manager with two application scopes:
 
 - **Current session** saves that session's subagent inference configuration
   without changing the configuration file's selected preset. It affects
-  future delegations, not already-created children or the main session's
+  future delegations, including explicit same-agent continuations of bound
+  children. Applying alone does not update a child or the main session's
   native model selection.
 - **Global default** writes the user configuration. It affects sessions that
   first bind after the refresh, subject to project and environment overrides.
@@ -421,6 +422,11 @@ or project configuration, and edits to the same preset definition, do not
 change existing bindings or their future children.** Explicitly reapply the
 preset to Current session to use an updated definition. Bindings persist in
 OpenCode's plugin storage across restarts.
+
+Same-ID continuation is best-effort. The host selects the model, the plugin
+installs inference options before the prompt, and a successful native return
+saves the adopted snapshot. Failures are reported without rolling back native
+model or history changes; repeating a failed call can submit the prompt again.
 
 Only subagent inference settings (`model`, `variant`, `temperature`,
 `options`, and fallback chains) are isolated. Prompts, tools, permissions,

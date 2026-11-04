@@ -3231,8 +3231,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
 
       // Session-frozen runtime profiles: freeze the current profile for each
       // newly seen plugin CHILD session, switching host defaults before the
-      // first request but preserving per-call models. Existing children keep their
-      // profile; parents and foreign agents are never touched.
+      // first request but preserving per-call models. Existing children keep
+      // their profile until an authorized continuation adopts a changed bound
+      // team; parents and foreign agents are never touched.
       //
       // Created BEFORE the native prompt hook below so the hook can await
       // `ensureSessionProfile`: the prompt hook is the guaranteed
@@ -3255,7 +3256,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         'v2.releaseSessionChains'?: (sessionID: string) => void;
       };
       const pinBoundSessionChains = (sessionID: string) => {
-        const record = sessionPresets.peek(sessionID);
+        const record =
+          sessionProfileBridge.effectiveBinding(sessionID) ??
+          sessionPresets.peek(sessionID);
         pinSessionChainsHook['v2.pinSessionChains']?.(
           sessionID,
           record?.explicitModel
@@ -3354,7 +3357,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             const admission = await sessionPresets.ensureAdmission(
               event.sessionID,
             );
-            const binding = admission?.record;
+            const binding =
+              sessionProfileBridge.effectiveBinding(event.sessionID) ??
+              admission?.record;
             // A resumed, already-profiled child may acquire an explicit
             // per-call model. Re-pin its execution policy on every admission.
             if (binding?.parentID) pinBoundSessionChains(event.sessionID);
@@ -3480,7 +3485,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           messagesTransform,
           // Primaries use the startup registry; child profiles stay session-frozen.
           applyRuntimeProfile: async (event) => {
-            const binding = sessionPresets.peek(event.sessionID);
+            const binding =
+              sessionProfileBridge.effectiveBinding(event.sessionID) ??
+              sessionPresets.peek(event.sessionID);
             const profile =
               sessionProfileBridge.profileForSession(
                 event.sessionID,
@@ -3645,13 +3652,17 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
               const bundle =
                 (await sessionPresets.ensure(parentSessionID))?.bundle ?? null;
               const explicitModel = typeof args.model === 'string';
+              const targetAgent =
+                !agentType && typeof args.task_id === 'string'
+                  ? ((await sessionPresets.ensureAdmission(args.task_id))
+                      ?.identity.agent ?? agentType)
+                  : agentType;
               let parentModel:
                 | { providerID: string; id: string; variant?: string }
                 | undefined;
               if (
-                typeof args.task_id !== 'string' &&
-                (bundle?.inheritance[agentType] ??
-                  bundle?.inheritance[AGENT_ALIASES[agentType] ?? agentType])
+                bundle?.inheritance[targetAgent] ??
+                bundle?.inheritance[AGENT_ALIASES[targetAgent] ?? targetAgent]
               ) {
                 const response = await ctx.session.get?.({
                   sessionID: parentSessionID,
@@ -3666,7 +3677,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                   typeof model.providerID !== 'string' ||
                   typeof model.id !== 'string'
                 ) {
-                  if (!explicitModel)
+                  if (!explicitModel && typeof args.task_id !== 'string')
                     throw new Error(
                       'Inherited subagent parent model unavailable',
                     );
@@ -3685,9 +3696,18 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                       : {}),
                   };
               }
+              const model = explicitModel
+                ? undefined
+                : resolveDelegatedModel?.({
+                    agentType: targetAgent,
+                    parentSessionID,
+                    bundle,
+                    ...(parentModel ? { parentModel } : {}),
+                  });
               captures.set(captureKey(parentSessionID, callID), {
                 bundle,
                 explicitModel,
+                ...(model ? { model } : {}),
                 ...(parentModel
                   ? { inheritedProviderID: parentModel.providerID }
                   : {}),
@@ -3702,12 +3722,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
               }
               if (typeof args.task_id === 'string' || explicitModel)
                 return undefined;
-              return resolveDelegatedModel?.({
-                agentType,
-                parentSessionID,
-                bundle,
-                ...(parentModel ? { parentModel } : {}),
-              });
+              return model;
             },
           );
           if (before) {
@@ -3820,6 +3835,20 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                         execute,
                         presets: sessionPresets,
                         capture: captureTeam,
+                        effectiveBinding: sessionProfileBridge.effectiveBinding,
+                        replaceProfile: (sessionID, identity, record) =>
+                          sessionProfileBridge.replaceSessionProfile(
+                            sessionID,
+                            identity,
+                            {
+                              profiles: sessionAdmissionProfiles(
+                                record,
+                                currentProfiles,
+                                registeredProfiles,
+                              ),
+                            },
+                            record,
+                          ),
                       });
                       wrapped.add(execute);
                       tool.execute = execute;
