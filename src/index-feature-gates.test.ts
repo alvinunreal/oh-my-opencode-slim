@@ -24,6 +24,7 @@ import { getTuiStatePath, readTuiSnapshot } from './tui-state';
 import type { BackgroundJobRecord } from './utils/background-job-board';
 import * as gateFactories from './utils/background-job-terminal-gate';
 import { BackgroundTaskConcurrency } from './utils/background-task-concurrency';
+import * as jsdom from './utils/jsdom';
 
 type PluginHooks = Awaited<ReturnType<typeof plugin>>;
 
@@ -80,6 +81,7 @@ describe('plugin feature gates through exported hooks', () => {
       path.join(projectDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
         companion: { enabled: false },
+        webfetch: { enabled: false },
         disabled_hooks: ['auto-update-checker'],
         ...overrides,
       }),
@@ -94,6 +96,35 @@ describe('plugin feature gates through exported hooks', () => {
       serverUrl: new URL('http://127.0.0.1:4096'),
       ...(hostFlavor ? { hostFlavor } : {}),
     } as never);
+
+  for (const [label, options, enabled] of [
+    ['enabled', { webfetch: { enabled: true } }, true],
+    ['feature disabled', { webfetch: { enabled: false } }, false],
+    [
+      'tool disabled',
+      { webfetch: { enabled: true }, disabled_tools: ['webfetch'] },
+      false,
+    ],
+    [
+      'both disabled',
+      { webfetch: { enabled: false }, disabled_tools: ['webfetch'] },
+      false,
+    ],
+  ] as const) {
+    test(`webfetch ${label}: registration and JSDOM probe agree`, async () => {
+      await configure({ backgroundJobs: { mode: 'off' }, ...options });
+      const probe = spyOn(jsdom, 'probeJSDOM').mockResolvedValue(null);
+      let hooks: PluginHooks | undefined;
+      try {
+        hooks = await createHooks();
+        expect(Boolean(hooks.tool?.webfetch)).toBe(enabled);
+        expect(probe).toHaveBeenCalledTimes(enabled ? 1 : 0);
+      } finally {
+        await hooks?.dispose?.();
+        probe.mockRestore();
+      }
+    });
+  }
 
   for (const flavor of ['v1', 'v2'] as const) {
     test(`${flavor}: disabling managed jobs preserves headers and real retry steering`, async () => {
@@ -258,6 +289,43 @@ describe('plugin feature gates through exported hooks', () => {
       };
       await hooks['v2.session.retry']?.(retry as never, switchModel as never);
       expect(switchModel).toHaveBeenCalledWith(sessionID, {
+        providerID: 'openai',
+        id: 'gpt-c',
+      });
+    } finally {
+      await hooks?.dispose?.();
+    }
+  });
+
+  test('v2 fallback remains retry-capable with watcher off for explicit preset bindings', async () => {
+    await configure({
+      backgroundJobs: { mode: 'off' },
+      fallback: { enabled: false, maxRetries: 0 },
+      liveConfigRefresh: false,
+      agents: {
+        orchestrator: { model: ['openai/gpt-b', 'openai/gpt-c'] },
+      },
+    });
+    let hooks: PluginHooks | undefined;
+    try {
+      hooks = await createHooks('v2');
+      // An explicit /preset (or a persisted child binding) can turn fallback on
+      // without the file watcher; the retry hook must stay registered.
+      hooks['v2.pinSessionChains']?.(
+        'ses_explicit_fallback',
+        { orchestrator: ['openai/gpt-b', 'openai/gpt-c'] },
+        true,
+      );
+      const switchModel = mock(async () => ({}));
+      const retry = {
+        sessionID: 'ses_explicit_fallback',
+        agent: 'orchestrator',
+        model: { providerID: 'openai', id: 'gpt-b' },
+        error: { message: 'Rate limit exceeded' },
+        decision: { retry: true, delay: 2_000 },
+      };
+      await hooks['v2.session.retry']?.(retry as never, switchModel as never);
+      expect(switchModel).toHaveBeenCalledWith('ses_explicit_fallback', {
         providerID: 'openai',
         id: 'gpt-c',
       });

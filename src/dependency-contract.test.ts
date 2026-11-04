@@ -212,6 +212,8 @@ describe('optional implementation loading', () => {
       'marketplace/service.ts',
       'companion/manager.ts',
       'companion/updater.ts',
+      'tools/smartfetch/index.ts',
+      'tools/smartfetch/tool.ts',
       'cli/config-io.ts',
       'cli/paths.ts',
     ]) {
