@@ -69,6 +69,7 @@ import {
 import type { SessionLifecycle } from '../session-lifecycle';
 import type { createBackgroundFallbackHandoff } from '../task-session-manager/fallback-observation-transfer';
 import { isUserMessageWithParts } from '../types';
+import { asHttpStatus, DEDUP_WINDOW_MS } from './dedup';
 
 /** Timer port for deterministic test control (see `src/utils/test-timers.ts`):
  *  `now` is observation time (dedup windows, incident clocks); scheduling
@@ -322,17 +323,6 @@ const UNKNOWN_FINISH_LOOP_ERROR = {
   name: 'UnknownFinishLoopError',
   message: 'Consecutive unknown assistant finishes without tool calls',
 };
-
-export function asHttpStatus(value: unknown): number | undefined {
-  if (typeof value === 'number' && Number.isInteger(value)) {
-    return value >= 100 && value <= 599 ? value : undefined;
-  }
-  if (typeof value === 'string' && /^\d{3}$/.test(value)) {
-    const parsed = Number(value);
-    return parsed >= 100 && parsed <= 599 ? parsed : undefined;
-  }
-  return undefined;
-}
 
 function nestedField(source: unknown, key: string): unknown {
   return isRecord(source) ? source[key] : undefined;
@@ -651,7 +641,6 @@ export function isInlineFailoverError(error: unknown): boolean {
 // ---------------------------------------------------------------------------
 
 /** Bounds stale-retry rejection, incident correlation, and incident dedup. */
-const DEDUP_WINDOW_MS = 5_000;
 /** Longer host backoffs should use the configured model chain instead. */
 const MAX_HOST_RETRY_DELAY_MS = 30 * 60_000;
 const PROVIDER_MARK_TTL_MS = 30 * 60_000;

@@ -5,14 +5,14 @@ export default {
   testRunner: 'bun',
   coverageAnalysis: 'perTest',
   mutate: [
-    'src/hooks/foreground-fallback/index.ts:326-336',
-    'src/hooks/foreground-fallback/index.ts:1412',
-    'src/hooks/foreground-fallback/index.ts:1444',
-    'src/hooks/foreground-fallback/index.ts:1499',
-    'src/hooks/foreground-fallback/index.ts:1930',
-    'src/hooks/foreground-fallback/index.ts:2175',
-    'src/hooks/foreground-fallback/index.ts:2994',
-    'src/hooks/foreground-fallback/index.ts:3674',
+    'src/hooks/foreground-fallback/dedup.ts',
+    'src/hooks/foreground-fallback/index.ts:1401-1401',
+    'src/hooks/foreground-fallback/index.ts:1433-1433',
+    'src/hooks/foreground-fallback/index.ts:1488-1488',
+    'src/hooks/foreground-fallback/index.ts:1919-1919',
+    'src/hooks/foreground-fallback/index.ts:2164-2164',
+    'src/hooks/foreground-fallback/index.ts:2983-2983',
+    'src/hooks/foreground-fallback/index.ts:3663-3663',
   ],
   // Non-file path skips Stryker's TS 7-incompatible tsconfig preprocessor.
   tsconfigFile: 'tsconfig.stryker-unused.json',
@@ -24,6 +24,9 @@ export default {
   bun: {
     bunPath: 'bun',
     timeout: 30000,
-    testFiles: ['src/hooks/foreground-fallback/index.test.ts'],
+    testFiles: [
+      'src/hooks/foreground-fallback/index.test.ts',
+      'src/hooks/foreground-fallback/index.decision-trace.test.ts',
+    ],
   },
 };

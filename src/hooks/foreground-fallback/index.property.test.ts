@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import fc from 'fast-check';
-import { asHttpStatus } from './index';
+import { asHttpStatus } from './dedup';
 
 describe('asHttpStatus properties', () => {
   test('accepts integer HTTP status codes', () => {
