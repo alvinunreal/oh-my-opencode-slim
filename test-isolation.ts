@@ -1,10 +1,16 @@
-import { afterAll } from 'bun:test';
+import { afterAll, mock } from 'bun:test';
 import { mkdtempSync, readdirSync, rm, rmSync } from 'node:fs';
+import * as os from 'node:os';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // bun test shares one process: keep every test off the real user dirs.
 const root = mkdtempSync(join(tmpdir(), `omos-test-${process.pid}-`));
+// Bun resolves os.homedir() before an in-process HOME assignment takes effect,
+// so isolate the home directory through the module contract too.
+const home = join(root, 'home');
+process.env.HOME = home;
+mock.module('node:os', () => ({ ...os, homedir: () => home }));
 process.env.XDG_DATA_HOME = join(root, 'data');
 process.env.XDG_CONFIG_HOME = join(root, 'config');
 process.env.OPENCODE_LOG_DIR = join(root, 'log');
