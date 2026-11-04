@@ -42,7 +42,7 @@ import { bindSessionPreset } from './session-preset-apply';
 import { registerUpdateNotice } from './update-notice';
 
 /** A keymap command as accepted by the host's `keymap.layer` reducer. */
-export interface V2KeymapCommand {
+interface V2KeymapCommand {
   id: string;
   title?: string;
   group?: string;
@@ -397,5 +397,4 @@ export async function runSetup(
     Promise.all(disposers.reverse().map((dispose) => dispose())).then(() => {});
 }
 
-export const id = omoTui.id;
 export const tui = omoTui.tui;

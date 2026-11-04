@@ -24,7 +24,7 @@ export interface V2AgentDraft {
  * tool's confined JS runtime, so session tool catalogs yield
  * `Unknown tool: <name>` even though registration succeeded. The field
  * is additive: hosts that don't recognize the field ignore it. */
-export interface V2ToolOptions {
+interface V2ToolOptions {
   codemode?: boolean;
   namespace?: string;
   permission?: string;
@@ -38,7 +38,7 @@ export interface V2ToolDefinition {
   options?: V2ToolOptions;
   execute: (input: unknown, context: unknown) => Promise<unknown>;
 }
-export interface V2ToolDraft {
+interface V2ToolDraft {
   add(tool: V2ToolDefinition): void;
   /** Update a registered tool by id; missing ids are ignored (host
    * `tool.transform` editor semantics). The callback receives the fields it
@@ -182,7 +182,7 @@ export interface V2ToolAfterEvent {
   result?: unknown;
   error?: unknown;
 }
-export interface V2Registration {
+interface V2Registration {
   dispose(): Promise<void> | void;
 }
 /** v2 permission Rule (OpenCode core's `Permission.Rule`). The host
@@ -198,7 +198,7 @@ export interface V2PermissionRule {
 /** v2 mcp transform draft (used after capability probing; RemoteConfig
  * shape see packages/schema/src/mcp.ts — no `enabled`, it uses
  * `disabled?: boolean`; the name is the map key, not in the config). */
-export interface V2McpDraft {
+interface V2McpDraft {
   list(): Array<[string, Record<string, unknown>]>;
   get(name: string): Record<string, unknown> | undefined;
   set(name: string, config: Record<string, unknown>): void;
@@ -219,7 +219,7 @@ export type V2SessionPresetRpcHandlers = {
  * subset): filter by event type names; `server.connected` always passes and
  * must not be listed. The mirror uses `string` element types — the pinned
  * name union is enforced against the host surface in `mirror-conformance.ts`. */
-export interface V2EventSubscribeOptions {
+interface V2EventSubscribeOptions {
   readonly types?: ReadonlyArray<string>;
 }
 

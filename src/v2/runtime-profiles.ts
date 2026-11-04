@@ -149,7 +149,7 @@ export interface SessionProfileBridgeOptions {
  * the prompt path resolves them through `session.get` (and the prompt
  * bridge's learned agent as a fallback).
  */
-export interface SessionProfileIdentity {
+interface SessionProfileIdentity {
   parentID?: string;
   agent?: string;
   model?: unknown;
@@ -168,7 +168,7 @@ export interface SessionProfileIdentity {
  * it replaces the `profilesForSession` read so one admission performs
  * one identity lookup and one KV lookup total.
  */
-export interface SessionProfileCapture {
+interface SessionProfileCapture {
   profiles: V2AgentRuntimeProfiles;
 }
 
