@@ -600,7 +600,7 @@ describe('createV2Setup e2e', () => {
             model: ['test/a', 'backup/a'],
             variant: 'high',
             temperature: 0.1,
-            options: { reasoning: 'A' },
+            options: { reasoning: 'A', onlyA: true },
           },
         },
         B: {
@@ -679,6 +679,7 @@ describe('createV2Setup e2e', () => {
       ],
     ]);
     const order: string[] = [];
+    let failContinuationWrite = false;
     let rpc: any;
     (ctx as any).rpc = {
       register: async (contract: { id: string }, handlers: unknown) => {
@@ -691,6 +692,8 @@ describe('createV2Setup e2e', () => {
     (ctx as any).storage = {
       get: async (key: string) => structuredClone(stored.get(key)),
       set: async (key: string, value: unknown) => {
+        if (failContinuationWrite && key === 'session-preset/v1/ses_child-1')
+          throw new Error('snapshot write failed');
         stored.set(key, structuredClone(value));
         order.push(`persist:${key.split('/').at(-1)}`);
       },
@@ -718,12 +721,13 @@ describe('createV2Setup e2e', () => {
       };
     };
     ctx.session.update = async () => ({});
+    const resumableChildren = new Set(['ses_child-1']);
     (ctx.session as any).context = async ({
       sessionID,
     }: {
       sessionID: string;
     }) =>
-      sessionID === 'ses_child-1'
+      resumableChildren.has(sessionID)
         ? [
             {
               id: 'msg_delivered_user',
@@ -757,12 +761,15 @@ describe('createV2Setup e2e', () => {
       switches.push(input);
     };
     let nativeCalls = 0;
+    let nativeFailure: 'authorization' | 'switch' | 'after-prompt' | undefined;
+    let afterNativePrompt: ((sessionID: string) => Promise<void>) | undefined;
     const nativeInputs: Array<Record<string, unknown>> = [];
     const native = {
       description: 'native',
       execute: async (input: any, context: any) => {
         nativeCalls++;
         nativeInputs.push({ ...input });
+        if (nativeFailure === 'authorization') throw new Error('native denied');
         const id = input.sessionID ?? `ses_child-${nativeCalls}`;
         const [selection, variant] = String(input.model ?? 'test/a#high').split(
           '#',
@@ -783,6 +790,8 @@ describe('createV2Setup e2e', () => {
           });
           order.push(`create:${id}`);
         } else if (input.model) {
+          if (nativeFailure === 'switch')
+            throw new Error('native switch failed');
           identities.get(id).model = model;
         }
         await context.progress({ sessionID: id, status: 'running' });
@@ -792,7 +801,15 @@ describe('createV2Setup e2e', () => {
           prompt: { text: 'work' },
         });
         order.push(`prompt:${id}`);
-        return { content: 'native-result', metadata: { sessionID: id } };
+        await afterNativePrompt?.(id);
+        if (nativeFailure === 'after-prompt') throw new Error('native failed');
+        return {
+          content: 'native-result',
+          metadata: {
+            sessionID: id,
+            status: input.background ? 'running' : 'completed',
+          },
+        };
       },
     };
     let replay: (() => void) | undefined;
@@ -1084,11 +1101,258 @@ describe('createV2Setup e2e', () => {
         sessionID: grandchild,
         model: { providerID: 'backup', id: 'b' },
       });
-      // A cached, already-profiled child gets the same protection on resume.
+      // Same-ID continuation installs B before the real prompt/context hooks,
+      // while KV still contains A. The parent's before-hook intention wins
+      // even if another Apply lands before execute starts.
+      (ctx as any).model = {
+        list: async () => ({
+          data: [{ providerID: 'test', id: 'b', variants: [{ id: 'low' }] }],
+        }),
+      };
+      // Native running is already a successful submission. A later KV error
+      // must report failure without discarding the running child's B inference.
+      const beforeFailedCommit = structuredClone(
+        stored.get('session-preset/v1/ses_child-1'),
+      );
+      failContinuationWrite = true;
+      await expect(
+        launch('native-submit-kv-reject', 'root', {
+          sessionID: 'ses_child-1',
+          background: true,
+        }),
+      ).rejects.toThrow('snapshot write failed');
+      expect(nativeInputs.at(-1)).toMatchObject({
+        sessionID: 'ses_child-1',
+        background: true,
+        model: 'test/b#low',
+      });
+      expect(stored.get('session-preset/v1/ses_child-1')).toEqual(
+        beforeFailedCommit,
+      );
+      for (const readmission of [false, true]) {
+        if (readmission)
+          await calls.promptHookCb?.({
+            sessionID: 'ses_child-1',
+            messageID: 'after-native-submit-kv-error',
+            prompt: { text: 'continue submitted work' },
+          });
+        const request = {
+          ...crossProviderContext,
+          sessionID: 'ses_child-1',
+          model: identities.get('ses_child-1').model,
+          options: { reasoning: 'A', onlyA: true, native: true },
+        };
+        await calls.contextHookCb?.(request);
+        expect(request.options).toEqual({
+          ...selectedProfiles.explorer.providerOptions,
+          temperature: selectedProfiles.explorer.temperature,
+          native: true,
+        });
+      }
+      const beforeRetainedRetry = switches.length;
+      await retry('ses_child-1', 'test', 'b');
+      expect(switches).toHaveLength(beforeRetainedRetry + 1);
+      expect(switches.at(-1)).toMatchObject({
+        sessionID: 'ses_child-1',
+        model: { providerID: 'backup', id: 'b' },
+      });
+      expect(stored.get('session-preset/v1/ses_child-1')).toEqual(
+        beforeFailedCommit,
+      );
+      failContinuationWrite = false;
+      // KV still says A, but the running capture says B. Returning the parent
+      // to A must reconcile that retained capture and this call's explicit
+      // selection, not treat matching KV as an unchanged execution.
+      await rpc.apply(
+        { sessionID: 'root', presetName: 'A' },
+        { signal: new AbortController().signal },
+      );
+      afterNativePrompt = async (sessionID) => {
+        const request = {
+          ...crossProviderContext,
+          sessionID,
+          model: identities.get(sessionID).model,
+          options: {
+            ...selectedProfiles.explorer.providerOptions,
+            native: true,
+          },
+        };
+        await calls.contextHookCb?.(request);
+        expect(request.options).toEqual({
+          ...beforeFailedCommit.bundle.profiles.explorer.providerOptions,
+          temperature: beforeFailedCommit.bundle.profiles.explorer.temperature,
+          native: true,
+        });
+        const beforeExplicitRetry = switches.length;
+        await retry(sessionID, 'test', 'manual-X');
+        expect(switches).toHaveLength(beforeExplicitRetry);
+        expect(stored.get(`session-preset/v1/${sessionID}`)).toEqual(
+          beforeFailedCommit,
+        );
+      };
+      await launch('retained-b-explicit-a', 'root', {
+        sessionID: 'ses_child-1',
+        model: 'test/manual-X',
+        background: true,
+      });
+      afterNativePrompt = undefined;
+      expect(nativeInputs.at(-1)?.model).toBe('test/manual-X');
+      expect(identities.get('ses_child-1').model).toEqual({
+        providerID: 'test',
+        id: 'manual-X',
+      });
+      expect(stored.get('session-preset/v1/ses_child-1')).toMatchObject({
+        bundle: beforeFailedCommit.bundle,
+        explicitModel: true,
+        preserveModel: true,
+      });
+      expect(
+        stored.get('session-preset/v1/ses_child-1').inheritedProviderID,
+      ).toBeUndefined(); // A fixed model profile owns its own provider origin.
+      // Retain B again so the existing B→B continuation below also proves
+      // that a matching effective team still commits its stale KV snapshot.
+      await rpc.apply(
+        { sessionID: 'root', presetName: 'B' },
+        { signal: new AbortController().signal },
+      );
+      failContinuationWrite = true;
+      await expect(
+        launch('retained-b-again', 'root', {
+          sessionID: 'ses_child-1',
+          background: true,
+        }),
+      ).rejects.toThrow('snapshot write failed');
+      failContinuationWrite = false;
+      const continuation = {
+        tool: 'subagent',
+        sessionID: 'root',
+        id: 'adopt-b',
+        input: {
+          agent: 'explorer',
+          sessionID: 'ses_child-1',
+          prompt: 'continue history',
+          background: true,
+        },
+      };
+      await calls.toolBeforeCb?.(continuation);
+      expect((continuation.input as any).model).toBeUndefined();
+      await rpc.apply(
+        { sessionID: 'root', presetName: 'A' },
+        { signal: new AbortController().signal },
+      );
+      const history = await ctx.session.context?.({ sessionID: 'ses_child-1' });
+      afterNativePrompt = async (sessionID) => {
+        expect(sessionID).toBe('ses_child-1');
+        expect(
+          stored.get(`session-preset/v1/${sessionID}`).bundle.presetName,
+        ).toBe('A');
+        const request = {
+          ...crossProviderContext,
+          sessionID,
+          model: identities.get(sessionID).model,
+          options: { reasoning: 'A', onlyA: true, native: true },
+        };
+        await calls.contextHookCb?.(request);
+        expect(request.options).toEqual({
+          ...selectedProfiles.explorer.providerOptions,
+          temperature: selectedProfiles.explorer.temperature,
+          native: true,
+        });
+        await retry(sessionID, 'test', 'b');
+        expect(switches.at(-1)).toMatchObject({
+          sessionID,
+          model: { providerID: 'backup', id: 'b' },
+        });
+      };
+      const continued = await native.execute(continuation.input, {
+        sessionID: 'root',
+        id: continuation.id,
+        signal: new AbortController().signal,
+        progress: async () => {
+          expect(identities.get('ses_child-1').model).toEqual({
+            providerID: 'test',
+            id: 'b',
+            variant: 'low',
+          });
+          expect(
+            stored.get('session-preset/v1/ses_child-1').bundle.presetName,
+          ).toBe('A');
+        },
+      });
+      afterNativePrompt = undefined;
+      expect(continued.metadata).toEqual({
+        sessionID: 'ses_child-1',
+        status: 'running',
+      });
+      expect(nativeInputs.at(-1)?.model).toBe('test/b#low');
+      expect(
+        stored.get('session-preset/v1/ses_child-1').bundle.presetName,
+      ).toBe('B');
+      expect(order.slice(-2)).toEqual([
+        'prompt:ses_child-1',
+        'persist:ses_child-1',
+      ]);
+      expect(await ctx.session.context?.({ sessionID: 'ses_child-1' })).toEqual(
+        history,
+      );
+
+      // Native denial/switch failure and a failure after admission all reject
+      // honestly, without committing the parent's A snapshot.
+      for (const failure of [
+        'authorization',
+        'switch',
+        'after-prompt',
+      ] as const) {
+        nativeFailure = failure;
+        const previous = structuredClone(
+          stored.get('session-preset/v1/ses_child-1'),
+        );
+        await expect(
+          launch(`failed-${failure}`, 'root', {
+            sessionID: 'ses_child-1',
+          }),
+        ).rejects.toThrow(
+          failure === 'authorization'
+            ? 'native denied'
+            : failure === 'switch'
+              ? 'native switch failed'
+              : 'native failed',
+        );
+        expect(stored.get('session-preset/v1/ses_child-1')).toEqual(previous);
+      }
+      nativeFailure = undefined;
+      failContinuationWrite = true;
+      await expect(
+        launch('failed-commit', 'root', {
+          sessionID: 'ses_child-1',
+        }),
+      ).rejects.toThrow('snapshot write failed');
+      expect(
+        stored.get('session-preset/v1/ses_child-1').bundle.presetName,
+      ).toBe('B');
+      failContinuationWrite = false;
+
+      // Explicit native selection outranks the newly adopted A model. Provider
+      // options stay scoped to their original vendor, not the manual model.
+      afterNativePrompt = async (sessionID) => {
+        const request = {
+          ...crossProviderContext,
+          sessionID,
+          model: identities.get(sessionID).model,
+          options: { reasoning: 'B', native: true },
+        };
+        await calls.contextHookCb?.(request);
+        expect(request.options).toEqual({ temperature: 0.35, native: true });
+        expect(
+          stored.get(`session-preset/v1/${sessionID}`).bundle.presetName,
+        ).toBe('B');
+      };
       await launch('explicit-resume-call', 'root', {
         sessionID: 'ses_child-1',
         model: 'manual/resumed#low',
       });
+      afterNativePrompt = undefined;
+      expect(nativeInputs.at(-1)?.model).toBe('manual/resumed#low');
       expect(
         stored.get('session-preset/v1/ses_child-1').bundle.presetName,
       ).toBe('A');
@@ -1099,11 +1363,11 @@ describe('createV2Setup e2e', () => {
         sessionID: 'ses_child-1',
       });
       expect(stored.get('session-preset/v1/ses_child-1').explicitModel).toBe(
-        false,
+        true,
       );
-      expect(
-        stored.get('session-preset/v1/ses_child-1').preserveModel,
-      ).toBeUndefined();
+      expect(stored.get('session-preset/v1/ses_child-1').preserveModel).toBe(
+        true,
+      );
       const resumedModel = identities.get('ses_child-1')?.model as {
         providerID: string;
         id: string;
@@ -1113,14 +1377,192 @@ describe('createV2Setup e2e', () => {
         id: 'resumed',
       });
       await retry('ses_child-1', resumedModel.providerID, resumedModel.id);
-      expect(switches.at(-1)).toMatchObject({
+      expect(switches).toHaveLength(beforeResumeRetry);
+      expect(nativeInputs.at(-1)?.model).toBeUndefined();
+
+      // A foreground continuation can delegate before its adopted snapshot is
+      // committed. Nested calls use runtime B until a child Apply chooses C.
+      await rpc.apply(
+        { sessionID: 'root', presetName: 'B' },
+        { signal: new AbortController().signal },
+      );
+      afterNativePrompt = async (sessionID) => {
+        if (sessionID !== 'ses_child-1') return; // Nested native calls re-enter.
+        expect(nativeInputs.at(-1)).toMatchObject({
+          sessionID,
+          model: 'test/b#low',
+          background: false,
+        });
+        expect(
+          stored.get(`session-preset/v1/${sessionID}`).bundle.presetName,
+        ).toBe('A');
+        const nestedB = await launch(
+          'nested-before-outer-commit',
+          sessionID,
+          {},
+        );
+        expect(nativeInputs.at(-1)?.model).toBe('test/b#low');
+        expect(
+          stored.get(`session-preset/v1/${nestedB}`).bundle.presetName,
+        ).toBe('B');
+        const nestedRequest = {
+          ...crossProviderContext,
+          sessionID: nestedB,
+          model: identities.get(nestedB).model,
+          options: { reasoning: 'A', onlyA: true, native: true },
+        };
+        await calls.contextHookCb?.(nestedRequest);
+        expect(nestedRequest.options).toEqual({
+          ...selectedProfiles.explorer.providerOptions,
+          temperature: selectedProfiles.explorer.temperature,
+          native: true,
+        });
+        await retry(nestedB, 'test', 'b');
+        expect(switches.at(-1)).toMatchObject({
+          sessionID: nestedB,
+          model: { providerID: 'backup', id: 'b' },
+        });
+        await rpc.apply(
+          { sessionID, presetName: 'C' },
+          { signal: new AbortController().signal },
+        );
+        const nestedC = await launch('nested-after-child-apply', sessionID, {
+          agent: 'market-session',
+        });
+        expect(nativeInputs.at(-1)?.model).toBe('override/static');
+        expect(
+          stored.get(`session-preset/v1/${nestedC}`).bundle.presetName,
+        ).toBe('C');
+        const appliedRequest = {
+          ...nestedRequest,
+          sessionID: nestedC,
+          agent: 'market-session',
+          model: identities.get(nestedC).model,
+          options: {},
+        };
+        await calls.contextHookCb?.(appliedRequest);
+        expect(appliedRequest.options).toEqual({
+          temperature: 0.25,
+          nativeReasoning: true,
+        });
+        // Child Apply persists the prior execution A, not the in-flight B.
+        // Runtime B must survive it, then commit while preserving bundle C.
+        expect(stored.get(`session-preset/v1/${sessionID}`)).toMatchObject({
+          bundle: { presetName: 'C' },
+          execution: { presetName: 'A' },
+        });
+        expect(identities.get(sessionID).model).toEqual({
+          providerID: 'test',
+          id: 'b',
+          variant: 'low',
+        });
+        const outerRequest = {
+          ...nestedRequest,
+          sessionID,
+          model: identities.get(sessionID).model,
+          options: { reasoning: 'A', onlyA: true, native: true },
+        };
+        await calls.contextHookCb?.(outerRequest);
+        expect(outerRequest.options).toEqual(nestedRequest.options);
+      };
+      await launch('adopt-after-child-apply', 'root', {
         sessionID: 'ses_child-1',
-        model: { providerID: 'test', id: 'a' },
       });
-      await retry('ses_child-1', 'test', 'a');
-      expect(switches.at(-1)).toMatchObject({
-        sessionID: 'ses_child-1',
-        model: { providerID: 'backup', id: 'a' },
+      afterNativePrompt = undefined;
+      const appliedChild = stored.get('session-preset/v1/ses_child-1');
+      expect(appliedChild.bundle.presetName).toBe('C');
+      expect(appliedChild.execution.presetName).toBe('B');
+      expect(appliedChild.explicitModel).toBe(false);
+      identities.get('ses_child-1').model = { providerID: 'backup', id: 'b' };
+      const switchesBeforeUnchanged = switches.length;
+      await launch('unchanged-fallback', 'root', { sessionID: 'ses_child-1' });
+      expect(nativeInputs.at(-1)?.model).toBeUndefined();
+      expect(identities.get('ses_child-1').model).toEqual({
+        providerID: 'backup',
+        id: 'b',
+      });
+      expect(switches).toHaveLength(switchesBeforeUnchanged);
+      // Model-less inherited profiles must use the newly captured parent provider
+      // during the uncommitted window, not the old KV provider origin.
+      const inheritedUpdate = await launch('inherited-update-child', 'root', {
+        agent: 'market-session',
+      });
+      resumableChildren.add(inheritedUpdate);
+      await rpc.apply(
+        { sessionID: 'root', presetName: 'A' },
+        { signal: new AbortController().signal },
+      );
+      const parentModel = identities.get('root').model;
+      identities.get('root').model = {
+        providerID: 'next-native',
+        id: 'inherited',
+      };
+      afterNativePrompt = async (sessionID) => {
+        expect(
+          stored.get(`session-preset/v1/${sessionID}`).inheritedProviderID,
+        ).toBe('native');
+        const request = {
+          sessionID,
+          agent: 'market-session',
+          model: identities.get(sessionID).model,
+          options: {},
+          system: [],
+          messages: [],
+          tools: {},
+        };
+        await calls.contextHookCb?.(request);
+        expect(request.options).toEqual({
+          temperature: 0.25,
+          nativeReasoning: true,
+        });
+      };
+      await launch('inherited-update-resume', 'root', {
+        agent: 'market-session',
+        sessionID: inheritedUpdate,
+      });
+      afterNativePrompt = undefined;
+      expect(nativeInputs.at(-1)?.model).toBe('next-native/inherited');
+      expect(
+        stored.get(`session-preset/v1/${inheritedUpdate}`).inheritedProviderID,
+      ).toBe('next-native');
+      identities.get('root').model = parentModel;
+      await rpc.apply(
+        { sessionID: 'root', presetName: 'B' },
+        { signal: new AbortController().signal },
+      );
+      // Explicit cross-provider continuation preserves native selection, not
+      // ownership of the inherited provider's options. Temperature is generic.
+      afterNativePrompt = async (sessionID) => {
+        const request = {
+          sessionID,
+          agent: 'market-session',
+          model: identities.get(sessionID).model,
+          options: { nativeReasoning: true, native: true },
+          system: [],
+          messages: [],
+          tools: {},
+        };
+        await calls.contextHookCb?.(request);
+        expect(request.options).toEqual({ temperature: 0.25, native: true });
+        expect(
+          stored.get(`session-preset/v1/${sessionID}`).inheritedProviderID,
+        ).toBe('next-native');
+      };
+      await launch('inherited-explicit-cross-provider', 'root', {
+        agent: 'market-session',
+        sessionID: inheritedUpdate,
+        model: 'manual/inherited-override',
+      });
+      afterNativePrompt = undefined;
+      expect(nativeInputs.at(-1)?.model).toBe('manual/inherited-override');
+      expect(identities.get(inheritedUpdate).model).toEqual({
+        providerID: 'manual',
+        id: 'inherited-override',
+      });
+      expect(stored.get(`session-preset/v1/${inheritedUpdate}`)).toMatchObject({
+        inheritedProviderID: 'native',
+        explicitModel: true,
+        bundle: { presetName: 'B' },
       });
       const cancelled = {
         tool: 'subagent',

@@ -19,7 +19,9 @@
  * Apply explicitly chooses a scope. Global defaults and definition edits
  * persist to user config and request a refresh for future unbound roots.
  * Current-session inference bindings are owned by the server RPC, never local
- * config. Neither operation changes the root model or existing children.
+ * config. Neither operation changes the root model or immediately updates
+ * existing children. Children can adopt their parent's bound team on
+ * continuation.
  * A requested config refresh is not a confirmed watcher outcome; session
  * apply succeeds only when the RPC confirms its binding.
  *

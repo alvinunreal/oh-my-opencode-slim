@@ -189,9 +189,7 @@ describe('presetApplyFeedback', () => {
     });
 
     expect(calls).toEqual([{ sessionID: 'ses_caller', presetName: 'fast' }]);
-    expect(message).toBe(
-      'Applied preset "fast" to this session\'s team. Future subagents use it on their next dispatch; the root model, already-created children and the global default stay unchanged.',
-    );
+    expect(message).toBe('Applied preset "fast" to this session\'s team.');
     expect(readUserConfig().preset).toBeUndefined();
   });
 

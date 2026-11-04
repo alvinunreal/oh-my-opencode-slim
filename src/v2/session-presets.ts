@@ -83,6 +83,8 @@ export type SessionTeamAdmission = {
   bundle: SessionTeamBundle | null;
   explicitModel: boolean;
   inheritedProviderID?: string;
+  /** Native continuation selection, captured from the direct parent's team. */
+  model?: string;
 };
 
 /**
@@ -422,6 +424,35 @@ export function createSessionPresets(options: {
     ensure,
     ensureAdmission,
     bindChild,
+    async adoptExecution(
+      id: string,
+      adopted: SessionPresetRecord,
+      signal?: AbortSignal,
+    ) {
+      requireAvailable();
+      return serial(id, async () => {
+        const info = await identity(id);
+        const existing = await read(id);
+        if (
+          !existing ||
+          existing.parentID !== adopted.parentID ||
+          info.parentID !== adopted.parentID
+        )
+          throw new Error('Subagent parent identity mismatch');
+        // A child Apply owns its future-delegation bundle independently.
+        return write(
+          id,
+          existing.execution
+            ? {
+                ...adopted,
+                bundle: existing.bundle,
+                execution: adopted.execution ?? adopted.bundle,
+              }
+            : adopted,
+          signal,
+        );
+      });
+    },
     checkActive: check,
     peek: (id: string) => cache.get(id),
     async readState(id: string) {
@@ -490,12 +521,19 @@ export function createSessionPresets(options: {
 
 export type SessionPresets = ReturnType<typeof createSessionPresets>;
 
-/** Wrap the official execute, never duplicate its create/prompt logic. The host
- * awaits progress between creation and prompt; persistence failure rejects it. */
+/** Wrap official execute, never duplicate create/prompt or model selection.
+ * Creation binds at progress; continuation installs inference there and commits
+ * its snapshot only after execute succeeds (including a running return). */
 export function wrapSessionPresetSubagent(options: {
   execute: (input: unknown, context: unknown) => Promise<unknown>;
   presets: SessionPresets;
   capture: (callID: string, parentID: string) => Promise<SessionTeamAdmission>;
+  effectiveBinding?: (sessionID: string) => SessionPresetRecord | undefined;
+  replaceProfile?: (
+    sessionID: string,
+    identity: SessionPresetAdmissionIdentity,
+    record: SessionPresetRecord,
+  ) => Promise<(committed: boolean) => void>;
 }) {
   return async (input: unknown, rawContext: unknown): Promise<unknown> => {
     const context = rawContext as {
@@ -512,42 +550,125 @@ export function wrapSessionPresetSubagent(options: {
     const args = input as Record<string, unknown>;
     const existingID =
       typeof args.sessionID === 'string' ? args.sessionID : undefined;
-    // Resume identity/snapshot must be restored BEFORE native model selection.
-    if (existingID)
+    const previous = existingID
+      ? await options.presets.ensureAdmission(existingID, context.signal)
+      : undefined;
+    const retained = existingID
+      ? options.effectiveBinding?.(existingID)
+      : undefined;
+    const agent = previous?.identity.agent;
+    const sameAgent = Boolean(
+      agent && agent === args.agent && bundle?.profiles[agent],
+    );
+    const changed = Boolean(
+      bundle &&
+        previous?.record?.parentID === context.sessionID &&
+        sameAgent &&
+        agent &&
+        bundle.profiles[agent] &&
+        options.replaceProfile &&
+        // A retained runtime binding needs reconciliation even when KV already
+        // matches the target. Conversely, matching runtime must not skip a
+        // stale KV commit after a previous submission's write failed.
+        (retained ||
+          !isDeepStrictEqual(
+            previous.record.execution ?? previous.record.bundle,
+            bundle,
+          )),
+    );
+    // Unchanged teams retain manual model/fallback selections. Legacy and
+    // different-agent continuations keep their existing admission behavior.
+    if (existingID && !changed && (admission.explicitModel || !sameAgent))
       await options.presets.ensure(
         existingID,
         context.signal,
         admission.explicitModel,
       );
     options.presets.checkActive(context.signal);
-    return options.execute(input, {
-      ...context,
-      progress: async (update: Record<string, unknown>) => {
-        options.presets.checkActive(context.signal);
-        if (typeof update.sessionID === 'string') {
-          if (existingID) {
-            if (update.sessionID !== existingID)
-              throw new Error('Subagent resume identity changed');
-            await options.presets.ensure(existingID, context.signal);
-          } else if (bundle) {
-            await options.presets.bindChild(
-              update.sessionID,
-              context.sessionID,
-              bundle,
-              context.signal,
-              {
-                preserveModel: typeof args.model === 'string',
-                explicitModel: admission.explicitModel,
-                ...(admission.inheritedProviderID
-                  ? { inheritedProviderID: admission.inheritedProviderID }
-                  : {}),
-              },
-            );
-          }
-        }
-        options.presets.checkActive(context.signal);
-        await context.progress(update);
-      },
-    });
+    let adopted: SessionPresetRecord | undefined;
+    let finishProfile: ((committed: boolean) => void) | undefined;
+    let submitted = false;
+    let committed = false;
+    try {
+      const result = await options.execute(
+        changed && !admission.explicitModel && admission.model
+          ? { ...args, model: admission.model }
+          : input,
+        {
+          ...context,
+          progress: async (update: Record<string, unknown>) => {
+            options.presets.checkActive(context.signal);
+            if (typeof update.sessionID === 'string') {
+              if (existingID) {
+                if (update.sessionID !== existingID)
+                  throw new Error('Subagent resume identity changed');
+                const current = await options.presets.ensureAdmission(
+                  existingID,
+                  context.signal,
+                );
+                if (changed && bundle && current?.record && !adopted) {
+                  if (
+                    current.identity.parentID !== context.sessionID ||
+                    current.identity.agent !== previous?.identity.agent
+                  )
+                    throw new Error('Subagent resume identity changed');
+                  // Native selection is already applied. Options retain their
+                  // captured inheritance origin, not an explicit override's
+                  // provider (the same source used when binding a new child).
+                  adopted = {
+                    schemaVersion: 1,
+                    parentID: context.sessionID,
+                    bundle: current.record.execution
+                      ? current.record.bundle
+                      : bundle,
+                    ...(current.record.execution ? { execution: bundle } : {}),
+                    preserveModel: true,
+                    explicitModel: admission.explicitModel,
+                    ...(admission.inheritedProviderID
+                      ? { inheritedProviderID: admission.inheritedProviderID }
+                      : {}),
+                  };
+                  finishProfile = await options.replaceProfile?.(
+                    existingID,
+                    current.identity,
+                    adopted,
+                  );
+                }
+              } else if (bundle) {
+                await options.presets.bindChild(
+                  update.sessionID,
+                  context.sessionID,
+                  bundle,
+                  context.signal,
+                  {
+                    preserveModel: typeof args.model === 'string',
+                    explicitModel: admission.explicitModel,
+                    ...(admission.inheritedProviderID
+                      ? { inheritedProviderID: admission.inheritedProviderID }
+                      : {}),
+                  },
+                );
+              }
+            }
+            options.presets.checkActive(context.signal);
+            await context.progress(update);
+          },
+        },
+      );
+      submitted = true;
+      if (existingID && adopted) {
+        await options.presets.adoptExecution(
+          existingID,
+          adopted,
+          context.signal,
+        );
+        committed = true;
+      }
+      return result;
+    } finally {
+      // A KV error after native success must not strip inference from an
+      // already submitted child. Retain the unpersisted effective binding.
+      if (!submitted || committed) finishProfile?.(committed);
+    }
   };
 }

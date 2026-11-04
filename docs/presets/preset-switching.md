@@ -63,8 +63,8 @@ the existing session creates later.
 
 | Action | What is saved | Who uses the change |
 |--------|---------------|---------------------|
-| Manager → Current session | The session's inference snapshot in OpenCode's plugin storage | New delegations from that session after the switch |
-| `/preset <name>` (TUI fast path or server-side) | The same session snapshot, for the session the command runs in | New delegations from that session after the switch |
+| Manager → Current session | The session's inference snapshot in OpenCode's plugin storage | New children and explicit same-agent continuations of bound children |
+| `/preset <name>` (TUI fast path or server-side) | The same session snapshot, for the session the command runs in | New children and explicit same-agent continuations of bound children |
 | Manager → Global default | The selected preset in the user configuration | Sessions that first bind after the configuration refresh, subject to project and environment overrides |
 | Edit the user configuration's `preset` | The global default | Future bindings that inherit the global default |
 | Edit a project configuration's `preset` | That project's default | Future bindings in that project |
@@ -89,13 +89,36 @@ pretending a global selection changed that project's effective default.
 3. A's new subagents still use its `cheap` snapshot; B's use `powerful`.
 4. Changing the global default back to `cheap` does not change B.
 5. Applying `powerful` to A's **Current session** changes A's future
-   delegations. Its already-created children keep their own snapshots.
+   delegations. An existing child keeps its current settings until A explicitly
+   continues that bound child with the same agent.
 
-A bound child also retains its snapshot when resumed. If it creates a
-grandchild after its parent switches presets, the grandchild inherits that
-child's older snapshot, not the root's latest selection. An explicit model
-or variant supplied to a delegation takes precedence over the preset default;
-an explicit model selection does not opt into that child's preset fallback chain.
+### Continuing an existing child
+
+The next same-agent continuation adopts the direct parent's changed team:
+model, variant, temperature, provider options and fallback chains. The child
+keeps its session ID and history. Apply alone sends no prompt and does not
+broadcast changes to children. Prompts, tools, permissions, skills and MCPs
+keep their existing configuration.
+
+An explicit model or variant supplied to the continuation takes precedence
+over the preset default; an explicit model selection disables that child's
+preset fallback chain. After a team is successfully adopted, further
+continuations of that team keep the child's current manual or fallback model
+selection.
+
+New subagents launched by the child during that continuation also use the
+adopted team. A preset separately applied inside that child takes precedence
+for its future delegations; the parent's continuation changes only the child's
+execution settings.
+
+Continuation is **best-effort**. OpenCode authorizes and selects the model,
+then Slim installs options and fallback at the awaited native progress step,
+before the prompt. The team snapshot is saved after native execute succeeds;
+a background `running` return counts as successful submission, not completed
+work. A failure reports an error without rolling back native model or history
+changes. After interruption or restart, repeat the operation if needed; the
+plugin does not retain a pending target, and repeating a failed call may send
+the prompt again.
 
 ### Persistence and failures
 

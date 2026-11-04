@@ -26,7 +26,7 @@ immediately before native admission; it is never forwarded to the host.
 | `types.ts` | v2 plugin context surface (`V2Context` + draft/event types), mirrored locally (v2 plugin package is not a build-time dependency). Runtime-probed session methods (`get`/`interrupt`/`switchModel`/`context`/`prompt`/`synthetic`/`update`/`switchAgent`) and the optional `mcp` domain are declared optional with probe notes. |
 | `session-submit.ts` | Shared `createSessionSubmit` (prompt-only user-prompt submit via `ctx.session.prompt`) + `textFromContent`; used by both the generic command bridge and the interview bridge to avoid a setup↔bridge import cycle. |
 | `preset-command.ts` | Server-side, apply-only `/preset` for non-TUI clients (issues #1474, #1700): lists presets with no argument, otherwise binds the invoking session through `session-preset-apply` (the same result as the TUI fast path). It never writes the global default. A config switch must not run a turn, and v2 has no display-only message channel (a synthetic inbox item enters the context on the next turn), so the command definition rejects with its feedback — the one surface a non-TUI client renders without creating a message or waking a turn. |
-| `session-preset-apply.ts` | Session-scoped preset switching shared by the TUI `/preset <name>` fast path and the server command: validates the name against the visible presets, owns the applied/refused wording, and takes a `bind` transport seam (TUI: session-preset RPC; server: the in-process store). A switch binds future subagent inference only; the root model, existing children and the global default stay unchanged. |
+| `session-preset-apply.ts` | Session-scoped preset switching shared by the TUI `/preset <name>` fast path and the server command: validates the name against the visible presets, owns the applied/refused wording, and takes a `bind` transport seam (TUI: session-preset RPC; server: the in-process store). Apply updates the team for new children and the next explicit same-agent continuation; it does not immediately change existing children, the root model or the global default. |
 | `client-shim.ts` | `buildPluginInput`: constructs a v1-shaped `PluginInput` with a **real-delegation** client — v1 SDK call shapes translate to v2 flat session calls (`get`, `interrupt` — abort sends `resume: false`, `context`, `prompt` with `delivery:"steer"`, `update` for renames — `{sessionID, title}`), with honest degradation (log or omit) where the host lacks the method. A v1-shaped `noReply` prompt body maps to `delivery:"queue", resume:false` (no wake); non-noReply prompts steer. `resolveV2Directory` prefers `ctx.location.directory` (#45403+) with a `process.cwd()` fallback. `promptAsync` encapsulates v2 model switching and defaults to `"steer"`; chat-header metadata is derived internally from the body's internal-initiator parts. |
 | `internal-admissions.ts` | Bounded tracker of internal-initiator admissions (`recordInternalAdmission`/`isInternalAdmission` + `createInternalSyntheticMessageID`): the in-band marker source for the chat-headers bridge on v2 (prompt-metadata admissions recorded by the session-prompt bridge; synthetic admissions recorded by the client shim with the client-chosen id the v2 `Session.synthetic` endpoint honors and preserves on the LLM context message). |
 | `terminal-fallback.ts` | Shared no-route anchor, host-error recognition and outcome identity for the manager and child waiters. |
@@ -47,6 +47,15 @@ and initial profile seed; deliberate refreshes revalidate source identity.
 from one binding transaction. `admission-view.ts` supplies profile facts to the
 existing capture seam without a second binding read. Later admissions still
 check directory/parent/storage. Attributed messages skip stored-history reads.
+
+For a changed parent team, `wrapSessionPresetSubagent` retains native model
+selection and installs the child's replacement inference profile at awaited
+progress. The existing profile capture owns an effective binding so prompt
+admission, fallback pinning and nested delegations see that team before the v1
+snapshot is saved. A separately applied child bundle takes precedence for its
+future delegations, including an Apply made during the continuation.
+Native execute success, including a running return, precedes snapshot commit.
+A failed commit reports an error while retaining the submitted run's profile.
 
 `event-subscription.ts` freezes the native type union for enabled consumers,
 including correlated `session.step.started`/`session.step.failed` refusal
@@ -107,7 +116,18 @@ The v2 runtime surface and plugin contracts are adapted through the following da
 - **Interview cache boundary.** The interview context hook only rewrites the current trailing command message; prior messages remain unchanged for provider prompt-cache prefix reuse.
 - **Commands via marker round-trip.** v2 command drafts are add-only, so `execute` submits a whole-text-anchored `<omos-cmd-command>` marker as a user prompt. The context hook replays its expansion for every projection so prior request bytes remain stable.
 - **Capability guard.** Hosts invoking `setup()` with a reduced/TUI-side ctx (no `agent.transform`) are skipped gracefully instead of crashing.
-- **Session-frozen runtime profiles.** Config/preset changes never rebuild agent definitions or reload the host registry. Only model/variant (via `session.switchModel` before a new child's first request, unless it already runs a per-call model/variant that still resolves in the catalog — a provably retired pin is refreshed to the current profile) and temperature/provider options (per-session request options) hot-apply to NEW child sessions; capture is awaited on the `session.prompt` request path so the asynchronous event pump cannot race the first request. Existing/resumed children keep their captured profile for the same agent; a bound child's agent switch uses the current agent's frozen execution profile and preserves the host's model through the next admission, and foreign agents receive no plugin profile. System/tools/permissions/skills/MCPs/prompt content stay byte-stable (AGENTS.md prompt-cache rule). Failures are honest: malformed configs (`invalid-json`/`invalid-schema`/`read-error`) are rejected before any swap and the last-known-good profiles/sidebar stay; the TUI requests the refresh and never claims it was applied (the server watcher's outcome is unobservable from the TUI process) — no swap, no success log, no success toast on failure.
+- **Session-frozen runtime profiles.** Config-file refreshes update the profiles
+  available to new children, without rebuilding agent definitions or the host
+  registry. A bound session keeps its saved team until Apply. New-child capture
+  is awaited on `session.prompt`; it preserves valid per-call model selections
+  and refreshes provably retired pins. Existing children keep their captured
+  profile unless an explicit same-agent native continuation adopts a changed
+  parent team through the progress path above. A bound child's agent switch
+  uses that agent's frozen execution profile and preserves the host model;
+  foreign agents receive no plugin profile. System/tools/permissions/skills/MCPs
+  and prompt content stay unchanged. Malformed config refreshes preserve the
+  last-known-good profiles/sidebar, and the TUI reports a refresh request
+  rather than claiming the server has applied it.
 - **Shared session submit.** A single `session-submit.ts` helper submits marker text via `ctx.session.prompt` for both the generic commands and the interview bridge.
 
 ## Integration Points
