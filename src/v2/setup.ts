@@ -2875,6 +2875,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         storage: ctx.storage,
         session: ctx.session,
         directory,
+        location: ctx.location && {
+          directory: ctx.location.directory,
+          workspaceID: ctx.location.workspaceID,
+        },
         current: () => {
           if (!currentBundle)
             throw new Error('Session team snapshot unavailable');
@@ -2919,6 +2923,17 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           read: ({ sessionID }) => sessionPresets.readState(sessionID),
           apply: ({ sessionID, presetName }, { signal }) =>
             sessionPresets.apply(sessionID, presetName, signal),
+          createBound: async ({ presetName }, { signal, error }) => {
+            try {
+              return await sessionPresets.createBound(presetName, signal);
+            } catch (cause) {
+              throw error(
+                'create_failed',
+                cause instanceof Error ? cause.message : String(cause),
+                null,
+              );
+            }
+          },
         });
         disposers.push(() => registration.dispose());
       }

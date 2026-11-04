@@ -10,7 +10,7 @@ the built-in `/models`, so it triggers no LLM turn.
 
 | Level | What you do |
 |-------|-------------|
-| 1. Preset list | Apply / Edit / Delete an existing preset, or create a new one |
+| 1. Preset list | Apply / Edit / Delete a preset, start a bound session (v2), or create a preset |
 | 2. Agent arrangement | Choose a Base preset, add / remove / edit local agents, then Save (or Save & Apply) |
 | 3. Edit agent | Pick model → variant (thinking strength) → temperature → options (JSON) |
 
@@ -34,6 +34,21 @@ the built-in `/models`, so it triggers no LLM turn.
 > or context is spent and the binding applies to that session's next
 > delegation. Listing `preset` in `disabled_commands` removes both the TUI
 > entry and the server command.
+
+## Start a session from a preset
+
+On v2, open `/preset`, select a preset, and choose **New session**. It opens
+an empty session in the current directory and workspace, with the selected
+team already bound. Creation sends no message and leaves the global default
+unchanged.
+
+The binding covers subagent inference settings: models, variants, temperature,
+provider options and fallback chains. The main-agent model uses OpenCode's
+native selection; prompts, tools, skills and MCPs follow normal host configuration.
+
+If creation succeeds but binding fails, the error includes the new session ID.
+Open that session and use **Apply preset → Current session**. A host shutdown
+between creation and binding can also leave an unbound empty session.
 
 ## Reading the current team
 
@@ -65,6 +80,7 @@ the existing session creates later.
 |--------|---------------|---------------------|
 | Manager → Current session | The session's inference snapshot in OpenCode's plugin storage | New delegations from that session after the switch |
 | `/preset <name>` (TUI fast path or server-side) | The same session snapshot, for the session the command runs in | New delegations from that session after the switch |
+| Manager → New session | The selected inference snapshot on a new empty session | Subagents delegated from the new session |
 | Manager → Global default | The selected preset in the user configuration | Sessions that first bind after the configuration refresh, subject to project and environment overrides |
 | Edit the user configuration's `preset` | The global default | Future bindings that inherit the global default |
 | Edit a project configuration's `preset` | That project's default | Future bindings in that project |

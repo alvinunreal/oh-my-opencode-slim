@@ -259,6 +259,49 @@ describe('v2 tui preset plugin', () => {
       expect(stub.selectTitles()[1]).toBe('Preset: cheap');
     });
 
+    test('bare /preset can create and open a bound session from home', async () => {
+      writeUserConfig(makeConfig());
+      const before = fs.readFileSync(userConfigPath(), 'utf-8');
+      const stub = makeStubCtx({ selects: ['cheap', 'new-session'] });
+      const navigate = jest.fn();
+      const apply = jest.fn();
+      const prompt = jest.fn();
+      const createBound = jest.fn(async () => ({
+        sessionID: 'created-root',
+        status: 'bound',
+        presetName: 'cheap',
+        affects: 'future-children-only',
+      }));
+      Object.assign(stub.ctx.ui, {
+        router: { current: () => ({ type: 'home' }), navigate },
+      });
+      Object.assign(stub.ctx, {
+        client: {
+          rpc: () => ({ createBound, apply }),
+          session: { prompt },
+        },
+      });
+
+      await runPresetFlow(stub.ctx);
+
+      expect(createBound).toHaveBeenCalledTimes(1);
+      expect(createBound).toHaveBeenCalledWith(
+        { presetName: 'cheap' },
+        { location: { directory: projectDir } },
+      );
+      expect(navigate).toHaveBeenCalledTimes(1);
+      expect(navigate).toHaveBeenCalledWith({
+        type: 'session',
+        sessionID: 'created-root',
+      });
+      expect(apply).not.toHaveBeenCalled();
+      expect(prompt).not.toHaveBeenCalled();
+      expect(stub.promptCalls).toEqual([]);
+      expect(stub.toasts).toEqual(['"cheap" applied.']);
+      expect(fs.readFileSync(userConfigPath(), 'utf-8')).toBe(before);
+      expect(stub.reloadCalls()).toBe(0);
+    });
+
     test('applies a named preset to the visible session and leaves the default alone', async () => {
       writeUserConfig({
         preset: 'balanced',

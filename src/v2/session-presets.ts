@@ -149,9 +149,14 @@ export function createSessionPresets(options: {
   storage: V2Context['storage'];
   session: V2Context['session'];
   directory: string;
+  location?: Pick<
+    NonNullable<V2Context['location']>,
+    'directory' | 'workspaceID'
+  >;
   current: () => SessionTeamBundle;
   named: (name: string) => Promise<SessionTeamBundle>;
 }) {
+  const location = options.location ? { ...options.location } : undefined;
   const cache = new Map<string, SessionPresetRecord>();
   const pending = new Map<string, Promise<unknown>>();
   const available =
@@ -424,6 +429,29 @@ export function createSessionPresets(options: {
     bindChild,
     checkActive: check,
     peek: (id: string) => cache.get(id),
+    async createBound(name: string, signal?: AbortSignal) {
+      requireAvailable();
+      check(signal);
+      if (!location || typeof options.session.create !== 'function')
+        throw new Error(
+          'Create with preset unavailable: host location or session.create API missing',
+        );
+      const bundle = structuredClone(await options.named(name));
+      check(signal);
+      // Native creation supplies a new, empty root and its initial selection.
+      // Only its future delegation team is ours to bind; never submit a prompt.
+      const { id } = await options.session.create({ location });
+      try {
+        return await serial(id, async () =>
+          state(id, await write(id, { schemaVersion: 1, bundle }, signal)),
+        );
+      } catch (cause) {
+        throw new Error(
+          `Created session ${id}, but preset binding failed. Open it and use Apply to bind ${JSON.stringify(name)}.`,
+          { cause },
+        );
+      }
+    },
     async readState(id: string) {
       requireAvailable();
       return serial(id, async () => {
