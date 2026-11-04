@@ -573,10 +573,16 @@ exact run (generation- and revision-fenced) when it observes the delivery that
 reported it — the native `<subagent>` delivery on v2, its own tagged
 `<completed-job>` push on v1, or the revived-run notification. A completed,
 error, or cancelled record also retires once the parent demonstrably moves past
-the terminal report. Stopped jobs are not retired that way (a stop has no native
-notification): they stay stopped and unreconciled, the stopped-job recovery wake
-reports them, and `task_revive` acknowledges them. Reopen corrections tell the
-parent once not to rely on the earlier result.
+the terminal report. Stopped jobs are not retired that way: v2 uses native
+delivery for the first publication, while the tracker delivers later stopped
+continuations. On v1 an abort cancels the native background job without a
+notification; Slim uses a recovery wake for kill-all stops;
+`task_revive` acknowledges stopped jobs. Reopen corrections tell the parent once
+not to rely on the earlier result.
+
+TUI kill-all (`alt+w` or `/killall`) writes a temporary notice for each affected
+parent before interrupting its children. The notice asks the parent not to
+relaunch them and expires on its next external prompt or server restart.
 
 For external manual work, the orchestrator gives concrete steps and then calls
 `wait_for_user` as its final tool action; the wait is cleared only by a distinct
@@ -607,7 +613,8 @@ Terminal facts travel as one-shot pushes instead:
   dropping: results inside the window stay queued and one wake delivers them
   together when it elapses.
   The wake that carries it is a bare resume pointer: the delta holds the
-  facts. On v2 the revived-run tracker queues a `<task>` result to the parent.
+  facts. On v2 the revived-run tracker queues a `<task>` result, including
+  `stopped`, to the parent. Tracked continuations also deliver `stopped` on v1.
   A run relaunched through `subagent` starts a new generation and its first
   result is delivered natively.
 - Overflowed pushes keep a durable pointer to `task_status` instead of

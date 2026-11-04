@@ -28,6 +28,10 @@ import {
   isInternalInitiatorPart,
   isNativeBackgroundTaskNotification,
 } from './utils/internal-initiator';
+import {
+  createKillAllStopReader,
+  writeKillAllStop,
+} from './utils/kill-all-stop';
 import * as loggerModule from './utils/logger';
 import { createTimerHarness } from './utils/test-timers';
 import { buildPluginInput } from './v2/client-shim';
@@ -318,6 +322,77 @@ async function pullTaskStatus(
   } as never);
   return String(status);
 }
+
+test('v2 interrupted continuation publishes stopped and notifies its parent once', async () => {
+  const promptAsync = mock(async (_args: unknown) => ({}));
+  let currentTranscript = transcript();
+  const probe = v2ShimClient({
+    outcome: 'interrupted',
+    transcript: () => currentTranscript,
+    wakeSurface: { promptAsync },
+  });
+  let hostOutcome = 'succeeded';
+  let hostIdleAt = 0;
+  probe.get.mockImplementation(async () => ({
+    data: {
+      parentID: 'parent',
+      outcome: hostOutcome,
+      time: { idle: hostIdleAt },
+    },
+  }));
+  const h = await assembly(undefined, {
+    client: probe.client,
+    hostFlavor: 'v2',
+  });
+  await h.hooks['chat.message']?.(
+    { sessionID: 'parent', agent: 'orchestrator' } as never,
+    { parts: [] } as never,
+  );
+  currentTranscript = transcript();
+  const now = Date.now();
+  const run = h.board.registerLaunch({
+    taskID: 'child',
+    parentSessionID: 'parent',
+    agent: 'explorer',
+    description: 'continued work',
+    background: true,
+    now: now - 300,
+  });
+  hostIdleAt = now - 200;
+  await h.gate.reconcile(run);
+  expect(h.board.get('child')?.state).toBe('completed');
+  h.board.markRunningFromLiveSession('child', now - 100, run.generation, 1);
+  currentTranscript = {
+    data: [
+      {
+        info: {
+          id: 'aborted',
+          role: 'assistant',
+          time: { completed: now - 20 },
+          finish: 'error',
+          error: { type: 'aborted', message: 'Step interrupted' },
+        },
+        parts: [],
+      },
+    ],
+  } as typeof currentTranscript;
+  hostOutcome = 'interrupted';
+  hostIdleAt = now - 10;
+  await h.gate.reconcile(run);
+  await flush();
+  expect(h.board.get('child')).toMatchObject({
+    state: 'stopped',
+    resultSummary: 'Host reported outcome: interrupted.',
+  });
+  expect(h.board.get('child')?.terminalRevision).toBeGreaterThan(1);
+  expect(promptAsync).toHaveBeenCalledTimes(1);
+  expect(JSON.stringify(promptAsync.mock.calls[0])).toContain(
+    'state=\\"stopped\\"',
+  );
+  expect(JSON.stringify(promptAsync.mock.calls[0])).toContain(
+    'Background task stopped: continued work',
+  );
+});
 
 for (const state of ['completed', 'error'] as const) {
   for (const provisional of [true, false]) {
@@ -677,6 +752,59 @@ function setChildError(
   });
 }
 
+test('v1 background abort wakes the idle parent only for kill-all', async () => {
+  const h = await fallbackAssembly();
+  const error = {
+    name: 'MessageAbortedError',
+    data: { message: 'The user aborted a request.' },
+  };
+  await h.advance(1);
+  writeKillAllStop(h.directory, ['parent']);
+  setChildError(h, error);
+  await h.event('session.error', { sessionID: 'child', error });
+  await h.idle();
+  await h.runtime.reconcile();
+  await h.advance(0);
+  expect(h.board.get('child')).toMatchObject({
+    state: 'stopped',
+    terminalRevision: 1,
+    resultSummary: 'Host reported outcome: interrupted.',
+  });
+  expect(h.promptAsync).toHaveBeenCalledTimes(1);
+  const wake = (
+    h.promptAsync.mock.calls as unknown as Array<
+      [{ body: { parts: Array<{ text: string }> } }]
+    >
+  )[0][0].body.parts[0].text;
+  expect(wake).toContain('state: stopped');
+
+  await h.hooks['chat.message']?.(
+    { sessionID: 'parent', agent: 'orchestrator' } as never,
+    { parts: [{ type: 'text', text: 'continue' }] } as never,
+  );
+  await h.advance(1);
+  h.promptAsync.mockClear();
+  await h.requestTask('another', 'another task');
+  await h.event('session.created', {
+    info: { id: 'child2', parentID: 'parent', agent: 'explorer' },
+  });
+  await h.hooks['tool.execute.after']?.(
+    { tool: 'task', sessionID: 'parent', callID: 'another' },
+    { output: 'task_id: child2\nstate: running' },
+  );
+  setChildError(h, error);
+  await h.event('session.error', { sessionID: 'child2', error });
+  await h.event('session.idle', { sessionID: 'child2' });
+  await h.runtime.reconcile();
+  await h.advance(0);
+  expect(h.board.get('child2')).toMatchObject({
+    state: 'stopped',
+    terminalRevision: 1,
+    resultSummary: 'Host reported outcome: interrupted.',
+  });
+  expect(h.promptAsync).not.toHaveBeenCalled();
+});
+
 function parentMessage(
   part: Record<string, unknown>,
   role = 'user',
@@ -691,6 +819,57 @@ function parentMessage(
     ],
   };
 }
+
+test('kill-all notice follows internal turns and expires on the next external prompt', async () => {
+  let now = Date.now();
+  const clock = spyOn(Date, 'now').mockImplementation(() => now);
+  cleanups.push(async () => clock.mockRestore());
+  const h = await assembly();
+  now += 1;
+  writeKillAllStop(h.directory, ['parent']);
+  const notice =
+    "User stopped all running subagents (emergency stop). Don't relaunch or retry them; ask how to proceed.";
+  const request = parentMessage({ type: 'text', text: 'work' });
+  const transform = async () => {
+    await h.hooks['experimental.chat.messages.transform']?.(
+      {},
+      request as never,
+    );
+  };
+  await transform();
+  expect(request.messages.at(-1)?.parts[0]).toMatchObject({
+    synthetic: true,
+    text: expect.stringContaining(notice),
+    metadata: {
+      [BACKGROUND_JOB_BOARD_METADATA_KEY]: true,
+      'oh-my-opencode-slim.killAllStop': true,
+    },
+  });
+  await h.hooks['chat.message']?.(
+    { sessionID: 'parent', agent: 'orchestrator' } as never,
+    { parts: [createInternalAgentTextPart('internal wake')] } as never,
+  );
+  await transform();
+  expect(JSON.stringify(request).split(notice)).toHaveLength(2);
+
+  const other = parentMessage({ type: 'text', text: 'other' });
+  other.messages[0].info.sessionID = 'other';
+  await h.hooks['experimental.chat.messages.transform']?.({}, other as never);
+  expect(JSON.stringify(other)).not.toContain(notice);
+
+  now += 1;
+  await h.hooks['chat.message']?.(
+    { sessionID: 'parent', agent: 'orchestrator' } as never,
+    { parts: [{ type: 'text', text: 'sigue' }] } as never,
+  );
+  await transform();
+  expect(JSON.stringify(request)).not.toContain(notice);
+  now += 1;
+  writeKillAllStop(h.directory, ['parent']);
+  await transform();
+  expect(JSON.stringify(request).split(notice)).toHaveLength(2);
+  expect(createKillAllStopReader(h.directory).isActive('parent')).toBe(false);
+});
 
 function foregroundFailure(error = contentFilterError.data.message) {
   return {
@@ -3494,15 +3673,13 @@ test('first publication of an unowned second generation remains native-owned', a
   }
 });
 
-// ── M4+M1 pin: honest stop reason + pull-only stops ─────────────────────
+// ── M4+M1 pin: honest stop reason + tracker delivery ────────────────────
 //
 // A revived run that STOPS no longer triggers a recovery wake on v2
-// (council 2026-10-23): the plugin has no wake machinery, so neither the
-// tracker-owned nor the tracker-less stop is pushed. The board record
-// still carries the truthful host-attributed reason for a task_status
-// pull.
+// (council 2026-10-23). The tracker delivers stopped continuations, and the
+// board record retains the host-attributed reason for a task_status pull.
 
-test('revived stop with no prior tracker delivery injects nothing; the attributed reason stays on the record', async () => {
+test('revived stop notifies the parent and retains its attributed reason', async () => {
   resetOrchestratorWakeGateForTests();
   const capture = captureGateLogs();
   try {
@@ -3627,20 +3804,19 @@ test('revived stop with no prior tracker delivery injects nothing; the attribute
     if (!stopped) throw new Error('revived stop never published');
     expect(stopped.resultSummary).toBe('Host reported outcome: interrupted.');
 
-    // v2 has no recovery wake for a revived stop (council 2026-10-23):
-    // nothing is queued, and the parent reads the stop (state + the
-    // truthful reason kept on the board record above) through
-    // task_status pull. Status mode reports state/activity, not the
-    // result summary, so only the state is asserted here.
+    // The tracker owns this continuation; no recovery scheduler is needed.
     await flush();
-    expect(promptAsync).not.toHaveBeenCalled();
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(promptAsync.mock.calls[0])).toContain(
+      'state=\\"stopped\\"',
+    );
     expect(await pullTaskStatus(h, 'child')).toContain('state: stopped');
   } finally {
     capture.restore();
   }
 });
 
-test('revived generation stays silent after a tracker-delivered terminal and a later stop', async () => {
+test('revived generation delivers a later stop after a tracker-delivered terminal', async () => {
   resetOrchestratorWakeGateForTests();
   const capture = captureGateLogs();
   try {
@@ -3767,9 +3943,7 @@ test('revived generation stays silent after a tracker-delivered terminal and a l
 
     // The delivered generation resumes and is then interrupted: the
     // stop is a LATER revision of a lineage the parent already heard
-    // from. v2 injects nothing for the stop (council 2026-10-23) — the
-    // tracker's one <task> delivery stays the generation's only prompt,
-    // and there is no recovery-wake skip log either.
+    // from. The tracker delivers this new revision without a recovery wake.
     hostOutcome = 'interrupted';
     hostIdleAt = undefined;
     hostChildren = [
@@ -3804,7 +3978,10 @@ test('revived generation stays silent after a tracker-delivered terminal and a l
     if (!stopped) throw new Error('post-completion stop never published');
 
     await flush();
-    expect(promptAsync).toHaveBeenCalledTimes(1);
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(promptAsync.mock.calls[1])).toContain(
+      'state=\\"stopped\\"',
+    );
     expect(
       capture.of(
         '[orchestrator-wake] stopped-job recovery wake skipped',

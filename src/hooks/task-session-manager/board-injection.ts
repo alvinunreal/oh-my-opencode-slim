@@ -32,6 +32,7 @@ import {
 } from '../../utils';
 import type { BackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
 import { isRecord } from '../../utils/guards';
+import { KILL_ALL_STOP_NOTICE } from '../../utils/kill-all-stop';
 import { log } from '../../utils/logger';
 import {
   appendTrailingVolatileMessage,
@@ -49,6 +50,7 @@ export const BACKGROUND_JOB_BOARD_METADATA_KEY =
   'oh-my-opencode-slim.backgroundJobBoard';
 const REFUSAL_CORRECTION_METADATA_KEY =
   'oh-my-opencode-slim.refusalContinuation';
+const KILL_ALL_STOP_METADATA_KEY = 'oh-my-opencode-slim.killAllStop';
 
 const BACKGROUND_COMPLETION_COMPLETED = /^Background task completed: /;
 const BACKGROUND_COMPLETION_FAILED = /^Background task failed: /;
@@ -312,6 +314,7 @@ export interface InjectionState {
   reportedTerminalRunsByParent?: Map<string, Map<string, ReportedTerminalRun>>;
   metadataKey: string;
   shouldManageSession: (sessionID: string) => boolean;
+  isKillAllStopActive?: (sessionID: string) => boolean;
   taskContextTracker: {
     pendingManagedTaskIds: Set<string>;
     contextFilesForPrompt(taskId: string): ContextFile[];
@@ -1683,10 +1686,31 @@ export async function injectBackgroundJobBoard(
   //      publication they reported (generation + revision fenced).
   //   3. The stale-terminal fallback bounds a missed observation.
   //   4. Reopen corrections are staleness notices on the volatile tail.
+  //   5. Emergency-stop guidance follows the same volatile-tail contract.
   reconcileObservedNativeDeliveries(state, messages);
   reconcileObservedTerminalDeltas(state, messages);
   retireStaleTerminalRecords(state, messages);
   deliverReopenCorrectionsForTurn(state, messages);
+  deliverKillAllStopNotice(state, messages);
+}
+
+function deliverKillAllStopNotice(
+  state: InjectionState,
+  messages: unknown[],
+): void {
+  stripTaggedContent(messages, KILL_ALL_STOP_METADATA_KEY);
+  const trigger = findTriggeringUserMessage(messages, state.metadataKey);
+  const sessionID = trigger?.info.sessionID;
+  if (!trigger || !sessionID || !state.isKillAllStopActive?.(sessionID)) return;
+  appendTrailingVolatileMessage(
+    messages,
+    { ...trigger.info, id: `${trigger.info.id ?? 'board'}-kill-all-stop` },
+    {
+      text: formatSystemReminder(KILL_ALL_STOP_NOTICE),
+      metadataKey: BACKGROUND_JOB_BOARD_METADATA_KEY,
+      extraMetadata: { [KILL_ALL_STOP_METADATA_KEY]: true },
+    },
+  );
 }
 
 /**

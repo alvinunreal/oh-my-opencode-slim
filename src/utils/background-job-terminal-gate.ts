@@ -8,7 +8,9 @@ import type {
 import {
   classifyTerminalEvidence,
   fetchChildTranscript,
+  isHostAbortError,
   responseError,
+  type TerminalEvidenceVerdict,
 } from './child-transcript';
 import { isRecord } from './guards';
 import { log } from './logger';
@@ -44,6 +46,17 @@ export const EVIDENCE_UNAVAILABLE_DIAGNOSTIC =
   'Terminal evidence could not be read after repeated attempts; task termination is unconfirmed (observation unavailable).';
 const UNATTRIBUTABLE_HOST_OUTCOME =
   'Host outcome is not attributable to this run/attempt; task termination is unconfirmed.';
+
+function transcriptOutcome(
+  evidence: Extract<
+    TerminalEvidenceVerdict,
+    { verdict: 'completed' | 'error' }
+  >,
+): ['completed' | 'error' | 'stopped', string] {
+  return evidence.verdict === 'error' && evidence.aborted
+    ? ['stopped', 'Host reported outcome: interrupted.']
+    : [evidence.verdict, evidence.text];
+}
 
 /** Origin of the terminal evidence behind a publication. Log field only. */
 type TerminalAttribution = 'host-outcome' | 'transcript' | 'event';
@@ -91,7 +104,7 @@ export type TaskOutputOrigin =
 export type TerminalSignal =
   | { kind: 'inspect' }
   | { kind: 'output'; status: TaskStatusOutput; origin: TaskOutputOrigin }
-  | { kind: 'session-error'; message: string }
+  | { kind: 'session-error'; message: string; error?: unknown }
   | { kind: 'cancel'; lease: BackgroundJobLease; reason?: string };
 export type GateResult =
   | { kind: 'deferred'; record: BackgroundJobRecord }
@@ -1075,13 +1088,8 @@ export function createBackgroundJobTerminalGate(options: {
         token,
         'Queued continuation has no attributable terminal answer yet.',
       );
-    return commit(
-      token,
-      evidence.verdict,
-      evidence.text,
-      undefined,
-      'transcript',
-    );
+    const [state, text] = transcriptOutcome(evidence);
+    return commit(token, state, text, undefined, 'transcript');
   }
 
   async function inspect(run: RunRef): Promise<GateResult> {
@@ -1272,7 +1280,9 @@ export function createBackgroundJobTerminalGate(options: {
       );
     }
     if (signal?.kind === 'session-error')
-      return commit(token, 'error', signal.message);
+      return isHostAbortError(signal.error)
+        ? commit(token, 'stopped', 'Host reported outcome: interrupted.')
+        : commit(token, 'error', signal.message);
     // Capability absence, not a pending read: fetchChildTranscript
     // resolves undefined ONLY when the host exposes no session.messages
     // endpoint. A host that HAS the source keeps its pending/textless
@@ -1353,15 +1363,17 @@ export function createBackgroundJobTerminalGate(options: {
           });
       }
     }
-    if (evidence.verdict === 'completed' || evidence.verdict === 'error')
+    if (evidence.verdict === 'completed' || evidence.verdict === 'error') {
+      const [state, text] = transcriptOutcome(evidence);
       return commit(
         token,
-        evidence.verdict,
-        evidence.text,
+        state,
+        text,
         undefined,
         'transcript',
         terminalOutcome,
       );
+    }
     // Native return is attributable only when no transcript exists. Foreground
     // still publishes when the transcript is pending; empty result uses a
     // placeholder instead of the original whitespace.

@@ -48,6 +48,7 @@ import {
   killAllSummaryMessage,
 } from './tui-kill';
 import {
+  getTuiStatePath,
   readTuiSnapshot,
   recordTuiAgentActivity,
   recordTuiAgentModel,
@@ -3703,6 +3704,19 @@ describe('resolveSidebarSlotOrder', () => {
 });
 
 describe('kill-all running subagents', () => {
+  let dataHome: string;
+  let originalDataHome: string | undefined;
+  beforeEach(() => {
+    originalDataHome = process.env.XDG_DATA_HOME;
+    dataHome = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-kill-data-'));
+    process.env.XDG_DATA_HOME = dataHome;
+  });
+  afterEach(() => {
+    if (originalDataHome === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = originalDataHome;
+    fs.rmSync(dataHome, { recursive: true, force: true });
+  });
+
   function killSnapshot() {
     return createSnapshot({
       activeSessions: {
@@ -3894,6 +3908,13 @@ describe('kill-all running subagents', () => {
     const client = {
       session: {
         interrupt: async (args: { sessionID: string; resume: boolean }) => {
+          const file = path.join(
+            path.dirname(getTuiStatePath('/proj')),
+            'kill-all-stop.json',
+          );
+          expect(JSON.parse(fs.readFileSync(file, 'utf8')).parents).toEqual([
+            'conv-1',
+          ]);
           calls.push(args);
           return args.sessionID === 'ora-retry' ? { error: 'busy' } : true;
         },

@@ -612,6 +612,7 @@ export async function handleEvent(
             structuredErrorMessage(props?.error) ?? 'Session error';
           await deps.terminalGate.reconcile(job, {
             kind: 'session-error',
+            error: props?.error,
             message:
               job.background && isFailoverError(props?.error)
                 ? deps.withFallbackReason(sessionId, message)
@@ -677,6 +678,7 @@ export async function handleEvent(
         const message = structuredErrorMessage(props?.error) ?? 'Session error';
         await deps.terminalGate.reconcile(job, {
           kind: 'session-error',
+          error: props?.error,
           message: isFailoverError(props?.error)
             ? deps.withFallbackReason(sessionId, message)
             : message,
