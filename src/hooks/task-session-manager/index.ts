@@ -381,6 +381,7 @@ export function createTaskSessionManagerHook(
     ) => Promise<import('./session-recovery').CanonicalTaskReference>;
     isDisposed?: () => boolean;
     shouldManageSession: (sessionID: string) => boolean;
+    isKillAllStopActive?: (sessionID: string) => boolean;
     /** Register a session as orchestrator when the transform hook detects
      *  an orchestrator message but the session isn't in the agent map yet. */
     registerSessionAsOrchestrator?: (sessionID: string) => void;
@@ -769,6 +770,7 @@ export function createTaskSessionManagerHook(
     hasUndeliveredTerminalPush: options.hasUndeliveredTerminalPush,
     metadataKey: BACKGROUND_JOB_BOARD_METADATA_KEY,
     shouldManageSession: options.shouldManageSession,
+    isKillAllStopActive: options.isKillAllStopActive,
     taskContextTracker,
   };
 

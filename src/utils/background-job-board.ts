@@ -1216,7 +1216,7 @@ export class BackgroundJobBoard {
    *   message-scope control operation, e.g. the v1-only task_message
    *   queueing against a running child);
    * - relaunch: any state (it authorizes a same-ID relaunch observation);
-   * - terminal-notification: a completed/error publication, optionally
+   * - terminal-notification: a completed/error/stopped publication, optionally
    *   pinned to an exact terminalRevision; the lease then carries it so a
    *   later revision invalidates the lease.
    */
@@ -1240,6 +1240,7 @@ export class BackgroundJobBoard {
       const terminal =
         existing.state === 'completed' ||
         existing.state === 'error' ||
+        existing.state === 'stopped' ||
         (existing.state === 'reconciled' &&
           (existing.terminalState === 'completed' ||
             existing.terminalState === 'error'));

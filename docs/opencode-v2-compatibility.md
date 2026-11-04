@@ -1117,8 +1117,10 @@ native background notifier delivers the first terminal result of each
 generation: a busy parent is reached by steer at its next step boundary, an
 idle parent gets a successor turn, and restart recovery uses the durable job
 marker. A relaunch through the `subagent` tool starts a new generation and
-re-arms the notifier. The tracker queues later completed or error publications
+re-arms the notifier. The tracker queues later completed, error, or stopped publications
 of a managed child to the parent, including direct prompts to the child.
+After TUI kill-all, a volatile reminder tells each affected parent not to
+relaunch the stopped work. It expires at that parent's next external prompt.
 Child permission/question asks
 are a host-UI boundary the host does not route to the parent agent; the
 parent discovers open asks via `task_status` pull. The whole

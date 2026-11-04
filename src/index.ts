@@ -181,6 +181,7 @@ import {
   isNativeBackgroundTaskNotification,
 } from './utils/internal-initiator';
 import { probeJSDOM } from './utils/jsdom';
+import { createKillAllStopReader } from './utils/kill-all-stop';
 import { initLogger, log } from './utils/logger';
 import {
   type ModelImageCapabilityCache,
@@ -371,6 +372,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     log('[plugin] disabled by OH_MY_OPENCODE_SLIM_DISABLE');
     return {};
   }
+  const killAllStop = createKillAllStopReader(ctx.directory);
 
   // Directory scope (multi-instance): created inside the init try so every
   // exit path releases its live-directory claim (see the catch below).
@@ -1264,6 +1266,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       });
 
       taskSessionManagerHook = createTaskSessionManagerHook(ctx, {
+        isKillAllStopActive: killAllStop.isActive,
         v1ReplayOutcome: (...args) =>
           foregroundFallback?.v1ReplayOutcome(...args) ??
           Promise.resolve(undefined),
@@ -1454,15 +1457,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         if (hostFlavor === 'v2') return;
         if (record.state !== 'stopped' || !record.terminalUnreconciled) return;
         // Symmetric tracker suppression (M4): when the revived-run tracker
-        // owns this generation's delivery — it already delivered the run's
-        // terminal <task> notification — a recovery wake beside it would
-        // queue a second admission for a lineage the parent already heard
-        // from. Scoped like the publication listener's check: a stop that
-        // is the generation's FIRST publication has no tracker delivery
-        // beside it (the tracker only delivers completed/error), so the
-        // recovery wake stays that stop's one and only notification.
+        // owns this generation's delivery it sends the stop as its own
+        // <task state="stopped"> notification; a recovery wake beside it
+        // would queue a second admission for the same stop.
         if (
-          record.terminalRevision > 1 &&
           revivedRunTracker!.willNotifyParent(record.taskID, record.generation)
         ) {
           log('[orchestrator-wake] stopped-job recovery wake skipped', {
@@ -1475,33 +1473,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           });
           return;
         }
-        // Host-attributed double-delivery gate: a stop the host itself
-        // reported (interrupted/cancelled — the terminal gate's own result
-        // summary, same anchor as stoppedJobRecoveryReason) is already
-        // delivered to the parent by the host's native notifier for a
-        // tool-launched generation, so a recovery wake beside it would
-        // queue a second admission for one stop. The revived-run tracker is
-        // the complementary view: when it owns this generation's delivery
-        // (task_revive lineage), omos stays the wake's author and the skip
-        // does not apply. Tracker without a record for this (taskID,
-        // generation) reads as false → only host-attributed stops fall to
-        // the native side (error-safe: at worst a redundant wake is
-        // dropped); every other stop keeps its recovery wake.
-        // First-publication only (terminalRevision === 1): the native
-        // observer is armed per tool-launched run, and every
-        // tool-launched relaunch resets the revision (board recordLaunch
-        // bumps the generation and zeroes terminalRevision), so a
-        // revision-1 host-attributed stop is always a fresh tool-launched
-        // run the native notifier covers. A later publication (rev > 1)
-        // means the child ran again WITHOUT a tool launch — e.g. a direct
-        // prompt after completion — where no native observer exists for
-        // the new run and this recovery wake is the only notification the
-        // parent gets. Skipping there would lose the stop entirely.
+        // For ordinary first v1 aborts, only kill-all needs a recovery wake.
         if (
           record.terminalRevision === 1 &&
+          !(
+            record.background && killAllStop.isActive(record.parentSessionID)
+          ) &&
           record.recoveredAtStartup !== true &&
-          HOST_ATTRIBUTED_STOP_OUTCOME.test(record.resultSummary ?? '') &&
-          !revivedRunTracker!.willNotifyParent(record.taskID, record.generation)
+          HOST_ATTRIBUTED_STOP_OUTCOME.test(record.resultSummary ?? '')
         ) {
           log('[orchestrator-wake] stopped-job recovery wake skipped', {
             sessionID: record.parentSessionID,
@@ -1509,7 +1488,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             generation: record.generation,
             trigger: 'stopped-job-recovery',
             verdict: 'skipped',
-            reason: 'native-delivers-host-attributed-stop',
+            reason: 'host-attributed-stop-no-recovery',
           });
           return;
         }
@@ -3798,6 +3777,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         (typeof messageID === 'string' &&
           isInternalAdmission(input.sessionID, messageID));
       if (!internalAdmission) {
+        killAllStop.noteExternalPrompt(input.sessionID);
         if (hostFlavor === 'v2' && (inputParts.length || outputParts.length)) {
           foregroundFallback?.noteV2Prompt(input.sessionID);
         }

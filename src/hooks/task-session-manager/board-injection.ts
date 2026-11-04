@@ -32,12 +32,14 @@ import {
 } from '../../utils';
 import type { BackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
 import { isRecord } from '../../utils/guards';
+import { KILL_ALL_STOP_NOTICE } from '../../utils/kill-all-stop';
 import { log } from '../../utils/logger';
 import {
   appendTrailingVolatileMessage,
   isTaggedPart,
   stripTaggedContent,
 } from '../cache-safe-injection';
+import { HOST_ATTRIBUTED_STOP_OUTCOME } from '../orchestrator-wake/index';
 import type { MessagePart, MessageWithParts } from '../types';
 import { isMessageWithParts, isUserMessageWithParts } from '../types';
 import { messageCreatedAt, parseNativeDelivery } from './native-delivery';
@@ -49,6 +51,7 @@ export const BACKGROUND_JOB_BOARD_METADATA_KEY =
   'oh-my-opencode-slim.backgroundJobBoard';
 const REFUSAL_CORRECTION_METADATA_KEY =
   'oh-my-opencode-slim.refusalContinuation';
+const KILL_ALL_STOP_METADATA_KEY = 'oh-my-opencode-slim.killAllStop';
 
 const BACKGROUND_COMPLETION_COMPLETED = /^Background task completed: /;
 const BACKGROUND_COMPLETION_FAILED = /^Background task failed: /;
@@ -312,6 +315,7 @@ export interface InjectionState {
   reportedTerminalRunsByParent?: Map<string, Map<string, ReportedTerminalRun>>;
   metadataKey: string;
   shouldManageSession: (sessionID: string) => boolean;
+  isKillAllStopActive?: (sessionID: string) => boolean;
   taskContextTracker: {
     pendingManagedTaskIds: Set<string>;
     contextFilesForPrompt(taskId: string): ContextFile[];
@@ -1394,44 +1398,65 @@ function rememberDeliveryKey(seen: Map<string, true>, seenKey: string): void {
  * hasTerminalUnreconciled consumers forever. Covers completed, error, AND
  * cancelled (cancelled has no native delivery and no push delta, so this
  * fallback is its only retirement channel on v1). `stopped` records are
- * excluded (recovery-wake ownership). Runs without comparable timestamps
- * fail closed.
+ * excluded (recovery-wake ownership) unless the host attributed the stop to
+ * an interruption: that outcome retires like the error it replaces. A
+ * foreground host stop needs no timestamp: a first run reaches the parent as
+ * its own tool result, and retiring never suppresses a fallback
+ * continuation's tracker notice (the record stays `stopped`), so retiring
+ * early only reopens the duplicate guard for a run with no result. Neither
+ * does a background one while the parent's kill-all notice is active: this
+ * request carries the notice, and the queued recovery wake would only repeat
+ * it. Other runs without comparable timestamps fail closed.
  */
 function retireStaleTerminalRecords(
   state: InjectionState,
   messages: unknown[],
 ): void {
-  const newestAssistantTurnByParent = new Map<string, number>();
+  const newestAssistantTurnByParent = new Map<string, number | undefined>();
   for (const message of messages) {
     if (!isMessageWithParts(message)) continue;
-    if (message.info.role !== 'assistant') continue;
     const parentSessionID = message.info.sessionID;
     if (!parentSessionID || !state.shouldManageSession(parentSessionID)) {
       continue;
     }
-    const createdAt = messageCreatedAt(message);
-    if (createdAt === undefined) continue;
+    const createdAt =
+      message.info.role === 'assistant' ? messageCreatedAt(message) : undefined;
     const newest = newestAssistantTurnByParent.get(parentSessionID);
-    if (newest === undefined || createdAt > newest) {
-      newestAssistantTurnByParent.set(parentSessionID, createdAt);
-    }
+    newestAssistantTurnByParent.set(
+      parentSessionID,
+      createdAt !== undefined && (newest === undefined || createdAt > newest)
+        ? createdAt
+        : newest,
+    );
   }
-  if (newestAssistantTurnByParent.size === 0) return;
   for (const [
     parentSessionID,
     newestAssistantTurn,
   ] of newestAssistantTurnByParent) {
     for (const record of state.backgroundJobBoard.list(parentSessionID)) {
       if (!record.terminalUnreconciled) continue;
+      const hostStop =
+        record.state === 'stopped' &&
+        HOST_ATTRIBUTED_STOP_OUTCOME.test(record.resultSummary ?? '');
       if (
         record.state !== 'completed' &&
         record.state !== 'error' &&
-        record.state !== 'cancelled'
+        record.state !== 'cancelled' &&
+        !hostStop
       ) {
         continue;
       }
-      if (record.completedAt === undefined) continue;
-      if (record.completedAt >= newestAssistantTurn) continue;
+      const reported =
+        hostStop &&
+        (!record.background ||
+          state.isKillAllStopActive?.(parentSessionID) === true);
+      if (
+        !reported &&
+        (record.completedAt === undefined ||
+          newestAssistantTurn === undefined ||
+          record.completedAt >= newestAssistantTurn)
+      )
+        continue;
       // An undelivered queued push IS this publication's delivery: acking
       // the run here would fence the queued answer out forever. Its own
       // observed push (or a later fallback pass after delivery) retires it.
@@ -1460,7 +1485,7 @@ type ObservedCompletedJobDelta = {
   taskID: string;
   generation: number;
   terminalRevision: number;
-  state: 'completed' | 'error';
+  state: 'completed' | 'error' | 'stopped';
 };
 
 /** Validate the host-side fences carried by a push part. Anything malformed
@@ -1483,7 +1508,8 @@ function parseObservedCompletedJobFences(
     ) {
       continue;
     }
-    if (state !== 'completed' && state !== 'error') continue;
+    if (state !== 'completed' && state !== 'error' && state !== 'stopped')
+      continue;
     fences.push({
       taskID,
       generation: generation as number,
@@ -1520,16 +1546,17 @@ function parseCompletedJobDeltaText(
  * delivery. */
 function parseRevivedTerminalNotification(
   text: string,
-): Array<{ taskID: string; state: 'completed' | 'error' }> {
-  const blocks: Array<{ taskID: string; state: 'completed' | 'error' }> = [];
+): Array<{ taskID: string; state: 'completed' | 'error' | 'stopped' }> {
+  const blocks: Array<{
+    taskID: string;
+    state: 'completed' | 'error' | 'stopped';
+  }> = [];
   for (const match of text.matchAll(
-    /<task id="([^"]+)" state="(completed|error)">/g,
+    /<task id="([^"]+)" state="(completed|error|stopped)">/g,
   )) {
     const taskID = match[1]?.trim();
-    const state = match[2];
-    if (taskID && (state === 'completed' || state === 'error')) {
-      blocks.push({ taskID, state: state as 'completed' | 'error' });
-    }
+    const state = match[2] as 'completed' | 'error' | 'stopped' | undefined;
+    if (taskID && state) blocks.push({ taskID, state });
   }
   return blocks;
 }
@@ -1683,10 +1710,31 @@ export async function injectBackgroundJobBoard(
   //      publication they reported (generation + revision fenced).
   //   3. The stale-terminal fallback bounds a missed observation.
   //   4. Reopen corrections are staleness notices on the volatile tail.
+  //   5. Emergency-stop guidance follows the same volatile-tail contract.
   reconcileObservedNativeDeliveries(state, messages);
   reconcileObservedTerminalDeltas(state, messages);
   retireStaleTerminalRecords(state, messages);
   deliverReopenCorrectionsForTurn(state, messages);
+  deliverKillAllStopNotice(state, messages);
+}
+
+function deliverKillAllStopNotice(
+  state: InjectionState,
+  messages: unknown[],
+): void {
+  stripTaggedContent(messages, KILL_ALL_STOP_METADATA_KEY);
+  const trigger = findTriggeringUserMessage(messages, state.metadataKey);
+  const sessionID = trigger?.info.sessionID;
+  if (!trigger || !sessionID || !state.isKillAllStopActive?.(sessionID)) return;
+  appendTrailingVolatileMessage(
+    messages,
+    { ...trigger.info, id: `${trigger.info.id ?? 'board'}-kill-all-stop` },
+    {
+      text: formatSystemReminder(KILL_ALL_STOP_NOTICE),
+      metadataKey: BACKGROUND_JOB_BOARD_METADATA_KEY,
+      extraMetadata: { [KILL_ALL_STOP_METADATA_KEY]: true },
+    },
+  );
 }
 
 /**

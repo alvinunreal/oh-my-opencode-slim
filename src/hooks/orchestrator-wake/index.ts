@@ -168,9 +168,8 @@ export function formatCompletedJobDelta(record: {
  * gate in src/index.ts): the host's own report that it interrupted or
  * cancelled the run, committed by the terminal gate as a terminal result
  * summary. Anchor of both the honest recovery reason below and the
- * native-delivers skip (a stop the host reported is a stop the host's
- * native notifier already delivers to the parent on tool-launched
- * generations). */
+ * wake skip for host-attributed stops (foreground tool calls, and
+ * background ones unless an emergency stop is pending). */
 export const HOST_ATTRIBUTED_STOP_OUTCOME =
   /^Host reported outcome: (interrupted|cancelled)\./;
 
