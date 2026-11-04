@@ -392,6 +392,25 @@ test('v2 interrupted continuation publishes stopped and notifies its parent once
   expect(JSON.stringify(promptAsync.mock.calls[0])).toContain(
     'Background task stopped: continued work',
   );
+  // The v2 host keeps only the text of the queued part; the bridge restores
+  // its internal marker (src/v2/setup.ts), so the notice text is the delivery.
+  const [[sent]] = promptAsync.mock.calls as unknown as Array<
+    [{ body: { parts: Array<{ text: string }> } }]
+  >;
+  const notice = sent.body.parts[0];
+  await h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    parentMessage({
+      type: 'text',
+      text: notice.text,
+      synthetic: true,
+      metadata: { 'oh-my-opencode-slim.internalInitiator': true },
+    }) as never,
+  );
+  expect(h.board.get('child')).toMatchObject({
+    state: 'stopped',
+    terminalUnreconciled: false,
+  });
 });
 
 for (const state of ['completed', 'error'] as const) {
@@ -803,6 +822,19 @@ test('v1 background abort wakes the idle parent only for kill-all', async () => 
     resultSummary: 'Host reported outcome: interrupted.',
   });
   expect(h.promptAsync).not.toHaveBeenCalled();
+
+  // Once the parent has replied, the stop retires like the error it
+  // replaces and the user can have the same objective relaunched.
+  await h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    parentMessage(
+      { type: 'text', text: 'Both stopped. How should I proceed?' },
+      'assistant',
+      Date.now() + 1,
+    ) as never,
+  );
+  expect(h.board.get('child')?.terminalUnreconciled).toBe(false);
+  await h.requestTask('relaunch', 'ordinary task');
 });
 
 function parentMessage(

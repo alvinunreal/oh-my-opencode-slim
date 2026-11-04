@@ -80,6 +80,8 @@ export async function killAllRunningSubagents(
       ),
     ];
     try {
+      // A timed-out interrupt may still stop the child; writing afterward could
+      // leave its parent without the emergency-stop notice.
       writeKillAllStop(directory, parents);
     } catch (error) {
       log('[tui-kill] stop notice write failed', { error: String(error) });

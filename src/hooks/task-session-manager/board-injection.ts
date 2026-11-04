@@ -39,6 +39,7 @@ import {
   isTaggedPart,
   stripTaggedContent,
 } from '../cache-safe-injection';
+import { HOST_ATTRIBUTED_STOP_OUTCOME } from '../orchestrator-wake/index';
 import type { MessagePart, MessageWithParts } from '../types';
 import { isMessageWithParts, isUserMessageWithParts } from '../types';
 import { messageCreatedAt, parseNativeDelivery } from './native-delivery';
@@ -1397,8 +1398,9 @@ function rememberDeliveryKey(seen: Map<string, true>, seenKey: string): void {
  * hasTerminalUnreconciled consumers forever. Covers completed, error, AND
  * cancelled (cancelled has no native delivery and no push delta, so this
  * fallback is its only retirement channel on v1). `stopped` records are
- * excluded (recovery-wake ownership). Runs without comparable timestamps
- * fail closed.
+ * excluded (recovery-wake ownership) unless the host attributed the stop to
+ * an interruption: that outcome retires like the error it replaces. Runs
+ * without comparable timestamps fail closed.
  */
 function retireStaleTerminalRecords(
   state: InjectionState,
@@ -1429,7 +1431,11 @@ function retireStaleTerminalRecords(
       if (
         record.state !== 'completed' &&
         record.state !== 'error' &&
-        record.state !== 'cancelled'
+        record.state !== 'cancelled' &&
+        !(
+          record.state === 'stopped' &&
+          HOST_ATTRIBUTED_STOP_OUTCOME.test(record.resultSummary ?? '')
+        )
       ) {
         continue;
       }
@@ -1463,7 +1469,7 @@ type ObservedCompletedJobDelta = {
   taskID: string;
   generation: number;
   terminalRevision: number;
-  state: 'completed' | 'error';
+  state: 'completed' | 'error' | 'stopped';
 };
 
 /** Validate the host-side fences carried by a push part. Anything malformed
@@ -1486,7 +1492,8 @@ function parseObservedCompletedJobFences(
     ) {
       continue;
     }
-    if (state !== 'completed' && state !== 'error') continue;
+    if (state !== 'completed' && state !== 'error' && state !== 'stopped')
+      continue;
     fences.push({
       taskID,
       generation: generation as number,
@@ -1523,16 +1530,17 @@ function parseCompletedJobDeltaText(
  * delivery. */
 function parseRevivedTerminalNotification(
   text: string,
-): Array<{ taskID: string; state: 'completed' | 'error' }> {
-  const blocks: Array<{ taskID: string; state: 'completed' | 'error' }> = [];
+): Array<{ taskID: string; state: 'completed' | 'error' | 'stopped' }> {
+  const blocks: Array<{
+    taskID: string;
+    state: 'completed' | 'error' | 'stopped';
+  }> = [];
   for (const match of text.matchAll(
-    /<task id="([^"]+)" state="(completed|error)">/g,
+    /<task id="([^"]+)" state="(completed|error|stopped)">/g,
   )) {
     const taskID = match[1]?.trim();
-    const state = match[2];
-    if (taskID && (state === 'completed' || state === 'error')) {
-      blocks.push({ taskID, state: state as 'completed' | 'error' });
-    }
+    const state = match[2] as 'completed' | 'error' | 'stopped' | undefined;
+    if (taskID && state) blocks.push({ taskID, state });
   }
   return blocks;
 }
