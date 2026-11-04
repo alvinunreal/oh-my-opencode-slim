@@ -16,7 +16,7 @@ Manages the cloning and management of read-only dependency source repositories i
 3. **Verify and confirm**: Orchestrator verifies refs with `git ls-remote`, avoids unsafe URLs, presents plan to user, and gets approval before cloning.
 4. **Clone sources**: Orchestrator runs git commands directly. Creates one folder per source under `.slim/clonedeps/repos/<safe-repo-name>/`. Prefers shallow clones, pinned tags, HTTPS URLs.
 5. **Write local state**: Writes `.slim/clonedeps.json` with structured manifest (version, updatedAt, dependencies array).
-6. **Update ignore files**: Adds idempotent marker blocks to `.gitignore` and `.ignore`.
+6. **Update ignore files**: Adds idempotent marker block to `.gitignore`; removes legacy `.ignore` blocks.
 7. **Register in AGENTS.md**: Appends a `## Cloned Dependency Source` section so future agents know what exists.
 
 ## Integration
