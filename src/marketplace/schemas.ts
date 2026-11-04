@@ -355,17 +355,15 @@ export type MarketplaceVersion = z.infer<typeof MarketplaceVersionSchema>;
 export type MarketplaceModelPolicy = z.infer<
   typeof MarketplaceModelPolicySchema
 >;
-type MarketplaceAgentManifestV2 = z.infer<
-  typeof MarketplacePackageManifestV2Schema
->;
-type MarketplaceAgentManifestV3 = z.infer<
-  typeof MarketplacePackageManifestV3Schema
->;
 export type MarketplacePackageManifest = z.infer<
   typeof MarketplacePackageManifestSchema
 >;
-export type MarketplacePackageManifestV2 = MarketplaceAgentManifestV2;
-export type MarketplacePackageManifestV3 = MarketplaceAgentManifestV3;
+export type MarketplacePackageManifestV2 = z.infer<
+  typeof MarketplacePackageManifestV2Schema
+>;
+export type MarketplacePackageManifestV3 = z.infer<
+  typeof MarketplacePackageManifestV3Schema
+>;
 export type MarketplacePackageBundle = z.infer<
   typeof MarketplacePackageBundleSchema
 >;
