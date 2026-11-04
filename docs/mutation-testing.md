@@ -46,6 +46,16 @@ the cleanup PRs that follow this workflow convert survivors into named tests.
 bun run mutation
 ```
 
+The CI `mutation` job runs the foreground-fallback gate instead:
+
+```sh
+bun run mutation:foreground-fallback
+```
+
+It uses `stryker.foreground-fallback.conf.mjs` (mutates
+`src/hooks/foreground-fallback/index.ts`, `break: 60`) and fails the job when
+the mutation score drops below the break threshold.
+
 The first run installs the tool tree (`bun install --cwd tools/mutation`,
 frozen lockfile). Nothing in the repo root is modified to run a sweep, but
 the repo root's `node_modules` must already be installed: the sandboxed
