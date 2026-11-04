@@ -733,7 +733,8 @@ export type ForegroundFallbackOptions = {
   /** Host retry events tolerated before the first model switch. No-chain
    *  sessions reuse the same budget for same-model retries (the shared
    *  sessionRetries counter bounds host absorbs and replay charges
-   *  together). */
+   *  together).
+   *  @default 3 */
   maxRetries?: number;
   coordinator?: SessionLifecycle;
   onSessionModelChanged?: (
@@ -741,9 +742,15 @@ export type ForegroundFallbackOptions = {
     model: string,
     detail?: V2SwitchDetail,
   ) => void;
-  /** Delay before first fallback; gives intercepting plugins time to recover. */
+  /**
+   * Delay before first fallback; gives intercepting plugins time to recover.
+   * @default 0
+   */
   initialRetryDelayMs?: number;
-  /** Delay between consecutive fallback attempts. */
+  /**
+   * Delay between consecutive fallback attempts.
+   * @default 500
+   */
   retryDelayMs?: number;
   /** Terminal-observation handoff for background children: prepare()
    *  arms the stop-gate deferral BEFORE the admission await (with the
