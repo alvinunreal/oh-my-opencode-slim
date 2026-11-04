@@ -19,6 +19,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  mutation:
+    name: Required / Mutation gate (foreground-fallback)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun ci
+
+      - name: Run scoped mutation gate
+        run: bun run mutation:foreground-fallback
+
   test:
     name: Required / Bun from package.json
     runs-on: ubuntu-latest
