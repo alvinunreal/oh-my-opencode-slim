@@ -16,10 +16,13 @@ import {
   companionSessionIdForDirectory,
   stateFilePath,
 } from './companion/manager';
-import * as hookFactories from './hooks';
+import * as autoUpdateFactories from './hooks/auto-update-checker';
+import * as foregroundFallbackFactories from './hooks/foreground-fallback';
 import * as handoffFactories from './hooks/task-session-manager/fallback-observation-transfer';
 import { OhMyOpenCodeLite as plugin } from './index';
 import * as interviewFactories from './interview';
+import * as interviewSubmitStateFactories from './tools/interview-submit-state';
+import * as nativeTaskControlFactories from './tools/native-task-control';
 import { getTuiStatePath, readTuiSnapshot } from './tui-state';
 import type { BackgroundJobRecord } from './utils/background-job-board';
 import * as gateFactories from './utils/background-job-terminal-gate';
@@ -136,7 +139,7 @@ describe('plugin feature gates through exported hooks', () => {
         },
       });
       const retrySpy = spyOn(
-        hookFactories.ForegroundFallbackManager.prototype,
+        foregroundFallbackFactories.ForegroundFallbackManager.prototype,
         'handleV2Retry',
       );
       const handoffSpy = spyOn(
@@ -155,6 +158,7 @@ describe('plugin feature gates through exported hooks', () => {
         ]) {
           expect(hooks.tool?.[name]).toBeUndefined();
         }
+        expect(hooks['v2.backgroundGeneration']).toBeUndefined();
         expect(hooks['chat.headers']).toBeFunction();
         expect(handoffSpy).not.toHaveBeenCalled();
 
@@ -198,8 +202,36 @@ describe('plugin feature gates through exported hooks', () => {
         ]) {
           expect(hooks.tool?.[name]).toBeUndefined();
         }
+        expect(hooks['v2.backgroundGeneration']).toBeUndefined();
       } finally {
         await hooks?.dispose?.();
+      }
+    });
+
+    test(`${flavor}: native mode returns nothing when both host-read controls are disabled`, async () => {
+      // Startup-only case: keep unrelated optional subsystems cold so the
+      // assertion is about the native-control gate, not init cost.
+      await configure({
+        backgroundJobs: { mode: 'native' },
+        disabled_tools: ['task_cancel', 'task_status'],
+        webfetch: { enabled: false },
+        marketplace: { enabled: false },
+        disabled_hooks: ['auto-update-checker', 'foreground-fallback'],
+        disabled_commands: ['deepwork', 'reflect'],
+      });
+      const nativeControlSpy = spyOn(
+        nativeTaskControlFactories,
+        'createNativeTaskControlTools',
+      );
+      let hooks: PluginHooks | undefined;
+      try {
+        hooks = await createHooks(flavor);
+        expect(nativeControlSpy).not.toHaveBeenCalled();
+        expect(hooks.tool?.task_cancel).toBeUndefined();
+        expect(hooks.tool?.task_status).toBeUndefined();
+      } finally {
+        await hooks?.dispose?.();
+        nativeControlSpy.mockRestore();
       }
     });
 
@@ -218,6 +250,7 @@ describe('plugin feature gates through exported hooks', () => {
         ]) {
           expect(hooks.tool?.[name]).toBeUndefined();
         }
+        expect(hooks['v2.backgroundGeneration']).toBeUndefined();
       } finally {
         await hooks?.dispose?.();
       }
@@ -234,7 +267,7 @@ describe('plugin feature gates through exported hooks', () => {
       },
     });
     const retrySpy = spyOn(
-      hookFactories.ForegroundFallbackManager.prototype,
+      foregroundFallbackFactories.ForegroundFallbackManager.prototype,
       'handleV2Retry',
     );
     let hooks: PluginHooks | undefined;
@@ -372,6 +405,35 @@ describe('plugin feature gates through exported hooks', () => {
     }
   });
 
+  test('disabled interview_submit_state skips its tool registration', async () => {
+    // Feature stays enabled (interview on, command available); only the tool
+    // is switched off, so this exercises the tool-level guard. Unrelated
+    // subsystems stay cold for a startup-only assertion. The factory spy
+    // pins the outcome to construction, not just registration.
+    const submitStateSpy = spyOn(
+      interviewSubmitStateFactories,
+      'createInterviewSubmitStateTool',
+    );
+    await configure({
+      backgroundJobs: { mode: 'off' },
+      interview: { enabled: true },
+      disabled_tools: ['interview_submit_state'],
+      webfetch: { enabled: false },
+      marketplace: { enabled: false },
+      disabled_hooks: ['auto-update-checker', 'foreground-fallback'],
+      disabled_commands: ['deepwork', 'reflect'],
+    });
+    let hooks: PluginHooks | undefined;
+    try {
+      hooks = await createHooks('v2');
+      expect(submitStateSpy).not.toHaveBeenCalled();
+      expect(hooks.tool?.interview_submit_state).toBeUndefined();
+    } finally {
+      await hooks?.dispose?.();
+      submitStateSpy.mockRestore();
+    }
+  });
+
   test('v2 uses the bridge service without constructing a v1 interview owner', async () => {
     await configure({ backgroundJobs: { mode: 'off' } });
     const managerSpy = spyOn(interviewFactories, 'createInterviewManager');
@@ -480,7 +542,7 @@ describe('plugin feature gates through exported hooks', () => {
   test('auto-update checker is cold-gated by the disabled hook in every lifecycle mode', async () => {
     const checkerEvent = mock(() => undefined);
     const factorySpy = spyOn(
-      hookFactories,
+      autoUpdateFactories,
       'createAutoUpdateCheckerHook',
     ).mockImplementation(() => ({ event: checkerEvent }));
     try {
@@ -529,7 +591,7 @@ describe('plugin feature gates through exported hooks', () => {
   test('autoUpdate false alone keeps the server hook unconstructed', async () => {
     const checkerEvent = mock(() => undefined);
     const factorySpy = spyOn(
-      hookFactories,
+      autoUpdateFactories,
       'createAutoUpdateCheckerHook',
     ).mockImplementation(() => ({ event: checkerEvent }));
     let hooks: PluginHooks | undefined;

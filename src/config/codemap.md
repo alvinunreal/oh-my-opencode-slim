@@ -186,7 +186,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `fallback`: Failover/retry configuration
 - `council`: Council configuration with councillor presets and a default preset
 - `companion`: Companion animation configuration
-- `acpAgents`: ACP agent configurations
+- `acpAgents`: active ACP wrapper projection (empty when `acp_run` or every wrapper is disabled; raw config remains `plugin.acpAgents`)
 
 ### AgentOverrideConfig
 - `model`: Model ID or array of model IDs

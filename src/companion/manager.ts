@@ -1,5 +1,4 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -30,6 +29,13 @@ import {
   isProcessAlive,
   parsePidFile,
 } from '../utils/pid-file-lock';
+import {
+  companionSessionIdForDirectory,
+  registerCompanionCleanup,
+  stateFilePath,
+} from './runtime';
+
+export { companionSessionIdForDirectory, stateFilePath };
 
 // Only one companion `process.on('exit')` listener should be live per process.
 // The plugin function can re-run (config.update() → Instance.dispose()),
@@ -117,21 +123,6 @@ interface CompanionState {
     speed: number;
     debug: boolean;
   };
-}
-
-export function stateFilePath(): string {
-  const xdg = process.env.XDG_DATA_HOME?.trim();
-  const base =
-    xdg && path.isAbsolute(xdg)
-      ? xdg
-      : path.join(os.homedir(), '.local', 'share');
-  return path.join(
-    base,
-    'opencode',
-    'storage',
-    'oh-my-opencode-slim',
-    'companion-state.json',
-  );
 }
 
 function pidFilePath(): string {
@@ -401,17 +392,6 @@ function writeState(mutator: (state: CompanionState) => void): boolean {
     log('[companion] write failed', String(err));
     return false;
   }
-}
-
-export function companionSessionIdForDirectory(directory: string): string {
-  const normalized = path.resolve(directory).replace(/[\\/]+$/, '');
-  const identity =
-    process.platform === 'win32' ? normalized.toLowerCase() : normalized;
-  const digest = createHash('sha256')
-    .update(identity)
-    .digest('hex')
-    .slice(0, 12);
-  return `proc_${process.pid}_${digest}`;
 }
 
 /**
@@ -1259,6 +1239,14 @@ export class CompanionManager {
     }
   }
 }
+
+// The light `runtime.ts` disabled-startup helper only dynamically imports
+// this module when state exists. Register the disposal seam here at load: it
+// resolves the class static at call time (never a captured instance) and is
+// never cleared, so later generations in this process stay reachable.
+registerCompanionCleanup((sessionId) => {
+  CompanionManager.disposeActiveManagers(sessionId);
+});
 
 /**
  * Disabled-companion startup cleanup: stop any manager this process still

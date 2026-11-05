@@ -23,7 +23,7 @@ import {
   normalizeAgentName,
   resolveRuntimeAgentName,
 } from '../utils/agent-variant';
-import { delegationVocabulary, parseModelRef } from '../v2/adapters';
+import { parseModelRef } from '../v2/adapters';
 
 import {
   createCouncilAgent,
@@ -58,6 +58,8 @@ type AgentFactory = (
   customAppendPrompt?: string,
 ) => AgentDefinition;
 
+/** Plugin-controlled tools that receive a generated default stance, in
+ * emission order. */
 const ORCHESTRATOR_DEFAULT_TOOL_NAMES = [
   'task_cancel',
   'task_reply',
@@ -73,17 +75,16 @@ const MARKETPLACE_TOOL_NAMES = [
   'marketplace_inspect',
   'marketplace_manage',
 ] as const;
-/** Runtime guards accept only primary-owned sessions for these tools
- * (managed-session fence, wait_for_user name check, marketplace identity
- * allow-list): the canonical orchestrator plus declared primaries
- * (issue #1591). */
-const ORCHESTRATOR_GUARDED_TOOL_NAMES = new Set([
-  'task_cancel',
-  'task_revive',
+/** Generated defaults that stay `deny` for non-primaries even when explicitly
+ * allowed: their runtime fences classify by primary-ness. */
+const FORCED_NON_PRIMARY_DENY = new Set<string>([
   'wait_for_user',
-  'marketplace_inspect',
-  'marketplace_manage',
+  ...MARKETPLACE_TOOL_NAMES,
 ]);
+/** Slim AST tools: factory read-only maps grant `ast_grep_search`. */
+const SLIM_AST_TOOL_NAMES = ['ast_grep_search', 'ast_grep_replace'] as const;
+/** Shared empty projection for inference-only passes (no permissions). */
+const EMPTY_REGISTERED_TOOLS: ReadonlySet<string> = new Set<string>();
 const SAFE_AGENT_ALIAS_RE = /^[a-z][a-z0-9_-]*$/i;
 
 export function resolvePrimaryModelValue(value: unknown): string | undefined {
@@ -129,15 +130,10 @@ function buildAcpAgentDefinition(
     config.prompt ??
     [
       `You are the ${name} ACP wrapper agent.`,
-      '',
-      'Your only job is to send the user task to the configured external ACP agent using the acp_run tool, then return the ACP agent result.',
-      `Always call acp_run with agent: ${JSON.stringify(
+      `You proxy tasks to the configured external ACP agent ${JSON.stringify(
         name,
-      )} and pass the actual task, constraints, and relevant context as prompt, not wrapper-routing instructions.`,
-      'For each invocation, extract an explicitly requested inner ACP selector (for example, "Inner ACP selector: <value>") into acp_run.model. This is the exact ACP-advertised selector, not an OpenCode provider/model.',
-      'Never infer the inner selector from the outer wrapper model, a previous call, or incidental model names in the task. Native subagent.model selects only the outer wrapper.',
-      'If no inner model was requested, omit acp_run.model to use the external agent default. If an explicit inner model request cannot be resolved to an exact selector, report the ambiguity to the caller instead of calling acp_run without model or guessing a default.',
-      'Do not edit files yourself unless the ACP result explicitly asks you to report a local follow-up to the orchestrator.',
+      )} and return its result; do not implement tasks yourself.`,
+      'Preserve any explicitly requested inner ACP selector; do not infer one from the outer wrapper model.',
     ].join('\n');
 
   return {
@@ -769,22 +765,74 @@ function resolveSkillRules(
   };
 }
 
+/** Tools the plugin registers for this generation; generated allow grants
+ * follow this set — generated denies are always retained. */
+function registeredDefaultToolNames(
+  runtime: RuntimeConfig,
+  hostFlavor?: string,
+): ReadonlySet<string> {
+  const disabledTools = new Set(runtime.disabledTools);
+  const registered = new Set<string>();
+  const register = (toolName: string) => {
+    if (!disabledTools.has(toolName)) registered.add(toolName);
+  };
+  const taskControls =
+    runtime.backgroundJobsMode === 'managed'
+      ? [
+          'task_cancel',
+          'task_reply',
+          'task_status',
+          ...(hostFlavor === 'v2'
+            ? []
+            : (['task_revive', 'task_message', 'wait_for_user'] as const)),
+        ]
+      : runtime.backgroundJobsMode === 'native'
+        ? ['task_cancel', 'task_status']
+        : [];
+  for (const toolName of taskControls) register(toolName);
+  if (runtime.interviewEnabled && !runtime.disabledCommands.has('interview')) {
+    register('interview_submit_state');
+  }
+  if (runtime.marketplaceEnabled) {
+    for (const toolName of MARKETPLACE_TOOL_NAMES) register(toolName);
+  }
+  if (Object.keys(runtime.acpAgents).length > 0) register('acp_run');
+  for (const toolName of SLIM_AST_TOOL_NAMES) register(toolName);
+  return registered;
+}
+
+/** Drop factory-default Slim AST **allow** grants when the tool is not
+ * registered, before user overrides replace the map; factory denies and the
+ * wildcard read-only deny stay. */
+function stripUnregisteredSlimAstFactoryTools(
+  permission: unknown,
+  registeredTools: ReadonlySet<string>,
+): void {
+  if (
+    typeof permission !== 'object' ||
+    permission === null ||
+    Array.isArray(permission)
+  ) {
+    return;
+  }
+  const map = permission as Record<string, unknown>;
+  for (const toolName of SLIM_AST_TOOL_NAMES) {
+    if (!registeredTools.has(toolName) && map[toolName] === 'allow') {
+      delete map[toolName];
+    }
+  }
+}
+
 /**
- * Apply default permissions to an agent.
- * Includes skill permission presets. If configuredSkills is provided, it
- * honors that list instead of defaults.
- *
- * Question policy: subagents never block on the human. A background
- * child's question parks with no tokens moving and no headless answerer
- * (task_reply covers permissions on both hosts; v2 form questions need a
- * host UI), so subagents default to 'deny' — same stance as `wait_for_user`
- * and as v2's own built-in subagents. Primary agents are the ask
- * channels. Explicit per-agent config always wins.
+ * Apply default permissions plus skill presets. Generated allow grants are
+ * emitted only for tools this generation registers; every generated deny is
+ * kept (v2 starts from `*: allow`), and explicit user entries are preserved.
  */
 function applyDefaultPermissions(
   agent: AgentDefinition,
-  configuredSkills?: readonly string[],
-  disabledSkills?: readonly string[],
+  registeredTools: ReadonlySet<string>,
+  configuredSkills: readonly string[] | undefined,
+  runtime: RuntimeConfig,
   hostFlavor?: string,
   isPrimary = false,
   subagentScope?: readonly string[],
@@ -801,49 +849,42 @@ function applyDefaultPermissions(
     'ask' | 'allow' | 'deny' | Record<string, 'ask' | 'allow' | 'deny'>
   >;
 
-  // Primaries (built-in or declared) run the guarded task/marketplace
-  // controls; everyone else needs the ORCHESTRATOR_GUARDED_TOOL_NAMES
-  // restriction (issue #1591).
-  const grantable = (toolName: string) =>
-    isPrimary || !ORCHESTRATOR_GUARDED_TOOL_NAMES.has(toolName);
-
   // Subagents don't ask the human by default: a parked child question
   // has no headless answerer. Explicit config wins.
   const questionPerm = isPrimary
     ? (existing.question ?? 'allow')
     : (existing.question ?? 'deny');
-  const orchestratorDefaultToolNames = [
+  const pluginDefaultToolNames = [
     ...ORCHESTRATOR_DEFAULT_TOOL_NAMES,
     ...(hostFlavor === 'v2' ? [] : ORCHESTRATOR_V1_ONLY_TOOL_NAMES),
+    'interview_submit_state',
+    'wait_for_user',
+    ...MARKETPLACE_TOOL_NAMES,
   ];
-  const orchestratorDefaultPermissions = Object.fromEntries(
-    orchestratorDefaultToolNames.map((toolName) => [
-      toolName,
-      existing[toolName] ??
-        (isPrimary && grantable(toolName) ? 'allow' : 'deny'),
-    ]),
-  );
-  // Primary agents get allow because quiet interview prompts forbid printing
-  // the state block; subagents never run interviews.
-  const interviewSubmitPermission =
-    existing.interview_submit_state ?? (isPrimary ? 'allow' : 'deny');
-  const waitForUserPerm =
-    isPrimary && grantable('wait_for_user')
-      ? (existing.wait_for_user ?? 'allow')
-      : 'deny';
-  const marketplacePermissions = Object.fromEntries(
-    MARKETPLACE_TOOL_NAMES.map((toolName) => {
-      const configured = existing[toolName];
-      const orchestratorPermission =
-        configured === 'allow' || configured === 'ask' || configured === 'deny'
-          ? configured
-          : 'allow';
-      return [
-        toolName,
-        isPrimary && grantable(toolName) ? orchestratorPermission : 'deny',
-      ];
-    }),
-  );
+  const pluginDefaultPermissions: Record<
+    string,
+    'ask' | 'allow' | 'deny' | Record<string, 'ask' | 'allow' | 'deny'>
+  > = {};
+  for (const toolName of pluginDefaultToolNames) {
+    const configured = existing[toolName];
+    // Runtime fences classify the forced-deny controls by primary-ness, so a
+    // non-primary allow would dead-end; other primary-owned controls keep an
+    // explicit user stance.
+    if (configured !== undefined) {
+      pluginDefaultPermissions[toolName] =
+        !isPrimary && FORCED_NON_PRIMARY_DENY.has(toolName)
+          ? 'deny'
+          : configured;
+      continue;
+    }
+    const effect = isPrimary ? 'allow' : 'deny';
+    // Only allow grants are gated on registration; generated denies stay
+    // because v2 starts from `*: allow` and a dropped deny could expose a
+    // same-named foreign tool.
+    if (effect === 'deny' || registeredTools.has(toolName)) {
+      pluginDefaultPermissions[toolName] = effect;
+    }
+  }
 
   // Delegation stance (issue #1591): a primary's `subagents` allowlist
   // compiles into the `task` map the host evaluates, wildcard-deny first per
@@ -878,16 +919,13 @@ function applyDefaultPermissions(
     // flavor (v1 and v2 both evaluate per-name `task` maps).
     ...(taskStance !== undefined ? { task: taskStance } : {}),
     question: questionPerm,
-    ...orchestratorDefaultPermissions,
-    interview_submit_state: interviewSubmitPermission,
-    wait_for_user: waitForUserPerm,
-    ...marketplacePermissions,
+    ...pluginDefaultPermissions,
     // Apply skill permissions as nested object under 'skill' key
     skill: resolveSkillRules(
       agent.name,
       existing,
       configuredSkills,
-      disabledSkills,
+      runtime.disabledSkills,
     ),
   } as SDKAgentConfig['permission'];
 }
@@ -985,11 +1023,13 @@ function createAgentViews(
   options: { projectDirectory?: string; hostFlavor?: string } | undefined,
   inferenceOnly: boolean,
 ): AgentDefinition[] {
-  // Native delegation vocabulary for the host flavor ('v2' → subagent/agent,
-  // v1/default → task/subagent_type). Construction-time constant — cache-safe.
-  const vocab = delegationVocabulary(options?.hostFlavor);
   const mergedAgents = runtime.agents();
   const disabled = new Set(runtime.disabledAgents);
+  // One availability projection per roster pass (inference-only refreshes
+  // build no permissions at all, matching their skipped factory prompts).
+  const registeredTools = inferenceOnly
+    ? EMPTY_REGISTERED_TOOLS
+    : registeredDefaultToolNames(runtime, options?.hostFlavor);
   // Skill grants as the routing block shows them: same resolver as the
   // enforced permissions, so the orchestrator never briefs a skill the
   // delegate cannot load. String-shorthand permissions bypass the resolver.
@@ -1077,6 +1117,15 @@ function createAgentViews(
       const agent: AgentDefinition = inferenceOnly
         ? { name, config: { model } }
         : factory(model, undefined, undefined);
+      if (!inferenceOnly) {
+        // Factory read-only maps grant the Slim AST tools by default; when
+        // they are disabled the tools are unregistered, so the default grant
+        // is dropped before user overrides replace the map.
+        stripUnregisteredSlimAstFactoryTools(
+          agent.config.permission,
+          registeredTools,
+        );
+      }
       if (!inferenceOnly && !nestedDispatchEnabled) {
         // v1 omits object stances; v2 denies dispatch without an observer.
         const permission = agent.config.permission as
@@ -1329,8 +1378,9 @@ function createAgentViews(
     if (!inferenceOnly) {
       applyDefaultPermissions(
         agent,
+        registeredTools,
         override?.skills,
-        runtime.disabledSkills,
+        runtime,
         options?.hostFlavor,
       );
     }
@@ -1346,8 +1396,9 @@ function createAgentViews(
     if (!inferenceOnly) {
       applyDefaultPermissions(
         agent,
+        registeredTools,
         override?.skills,
-        runtime.disabledSkills,
+        runtime,
         options?.hostFlavor,
         override?.primary === true,
         customPrimaryScopes.get(agent.name),
@@ -1360,8 +1411,9 @@ function createAgentViews(
     if (!inferenceOnly) {
       applyDefaultPermissions(
         agent,
+        registeredTools,
         undefined,
-        runtime.disabledSkills,
+        runtime,
         options?.hostFlavor,
       );
     }
@@ -1386,10 +1438,18 @@ function createAgentViews(
   ).map((agent) => {
     if (!inferenceOnly) {
       if (councillorColor) agent.config.color ??= councillorColor;
+      // Councillor factory maps grant the Slim AST search tool by default;
+      // when disabled the grant is dead config, while the factory wildcard
+      // deny (and the explicit `ast_grep_replace` deny) still stands.
+      stripUnregisteredSlimAstFactoryTools(
+        agent.config.permission,
+        registeredTools,
+      );
       applyDefaultPermissions(
         agent,
+        registeredTools,
         undefined,
-        runtime.disabledSkills,
+        runtime,
         options?.hostFlavor,
       );
     }
@@ -1466,9 +1526,6 @@ function createAgentViews(
         agentSkills: skillGrants(
           orchestratorScope ?? allSubAgents.map((agent) => agent.name),
         ),
-        waitForUser:
-          runtime.backgroundJobsEnabled &&
-          !runtime.disabledTools.includes('wait_for_user'),
         wakeScheduler:
           runtime.backgroundJobsEnabled &&
           runtime.backgroundJobs.orchestratorWake.enabled,
@@ -1506,8 +1563,9 @@ function createAgentViews(
   if (!inferenceOnly) {
     applyDefaultPermissions(
       orchestrator,
+      registeredTools,
       orchestratorOverride?.skills,
-      runtime.disabledSkills,
+      runtime,
       options?.hostFlavor,
       true,
       orchestratorScope,
@@ -1554,9 +1612,7 @@ function createAgentViews(
         `- Role: ${agent.description ?? `External ACP agent ${agent.name}`}`,
         '- **Delegate when:** The user explicitly asks for this ACP-backed agent, or the task matches its role and benefits from software/subscription-specific capabilities outside OpenCode.',
         '- **Do not delegate when:** The built-in specialists can handle the task more directly or local file ownership would conflict with another writer lane.',
-        '- **Model selection:** Native subagent.model selects the OUTER OpenCode wrapper only; keep it independent of the INNER ACP selector passed in acp_run.model. Do not change the outer model to select an inner model.',
-        '- **Delegation prompt:** When the user explicitly requests a known inner selector, use "Inner ACP selector: <value>\nTask: ..." with the task, constraints, and relevant context. The wrapper extracts this into acp_run.model; this is LLM-mediated, not a new native subagent argument.',
-        '- **No guessing:** Do not infer an inner selector from the outer model, earlier calls, or incidental model names in task content. If an explicit inner model request is unresolved, report the ambiguity rather than silently using a default. With no inner request, omit the selector line.',
+        '- **Delegation prompt:** Include an explicitly requested inner ACP selector in the delegation brief (for example, "Inner ACP selector: <value>").',
         '- **Result handling:** Treat returned output as external-agent work. Reconcile any reported file changes before continuing.',
       ].join('\n');
     });
@@ -1663,7 +1719,7 @@ function createAgentViews(
   if (councillorSeats.length > 0) {
     const seatList = councillorSeats.join(', ');
     updatedPrompt = runtime.disabledHooks.has('council-inject')
-      ? `${updatedPrompt}\n\n## Council\nSeats: ${seatList} — dispatch via ${vocab.tool}() when the user asks for consensus.`
+      ? `${updatedPrompt}\n\n## Council\nSeats: ${seatList} — dispatch when the user asks for consensus.`
       : `${updatedPrompt}\n\n## Council\nSeats: ${seatList}`;
   }
 

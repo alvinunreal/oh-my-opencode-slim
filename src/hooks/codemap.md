@@ -11,10 +11,9 @@ from `index.ts`) that returns the hook points OpenCode invokes.
 
 ### Core Architecture
 
-- **Factory barrel** (`index.ts`): Exports every hook factory plus the shared
-  helpers (`cache-safe-injection`, `chat-headers`, `command-hook-utils`,
-  `image-hook`, `session-lifecycle`, `types`). `src/index.ts` imports from here
-  rather than individual files.
+- **Factory leaves**: Optional implementations load inside the feature gate that
+  uses them. `src/index.ts` imports shared leaves directly; the historical
+  `index.ts` barrel remains for tests and local consumers, not the server entry.
 - **SessionLifecycle** (`session-lifecycle.ts`): Coordinator that owns
   `session.deleted` cleanup-callback registration. Stateful hooks register
   cleanup callbacks instead of implementing their own `session.deleted`
@@ -33,6 +32,13 @@ from `index.ts`) that returns the hook points OpenCode invokes.
   shared by command-style hooks (deepwork, reflect).
 - **Message types** (`types.ts`): `MessageInfo`, `MessagePart`,
   `MessageWithParts`, plus replay helpers used by foreground-fallback.
+- **Cold-load leaves**: `orchestrator-wake/operator-text.ts` owns the pure
+  operator/delta helpers without the v1 scheduler;
+  `task-session-manager/refusal-corrections.ts` owns the board metadata key and
+  refusal correction injection without the board graph; `deepwork/announcement.ts`
+  owns the router-head sentence without bundling the deepwork skill text;
+  `auto-update-checker/runtime-package.ts` owns package resolution without the
+  updater graph.
 
 ### Hook Categories
 
@@ -87,7 +93,8 @@ with one equivalent pass; the cache-safety harness mirrors this wiring.
 
 ```
 1. Plugin initializes (src/index.ts)
-2. Hook factories are called, returning handler objects
+2. Hook factories load inside their feature/disabled_hooks gates and return
+   handler objects
 3. src/index.ts wires them directly into the plugin's hook object
    (no central registry; factories are composed at the call site)
 4. Stateful hooks register session.deleted cleanup with SessionLifecycle

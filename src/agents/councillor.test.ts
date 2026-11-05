@@ -9,6 +9,23 @@ describe('createCouncillorAgent', () => {
     );
   });
 
+  test('capabilities state read-only access without naming tools', () => {
+    const prompt = createCouncillorAgent('test-model').config.prompt as string;
+    expect(prompt).toContain('You have read-only access to the codebase.');
+    expect(prompt).toContain('READ-ONLY: inspect and report');
+    expect(prompt).toContain('Do not use bash or shell commands.');
+    for (const catalog of [
+      'ast_grep_search',
+      '(glob)',
+      '(grep)',
+      '(read)',
+      '`lsp`',
+      'MCPs',
+    ]) {
+      expect(prompt).not.toContain(catalog);
+    }
+  });
+
   test('creates agent with correct name', () => {
     const agent = createCouncillorAgent('test-model');
     expect(agent.name).toBe('councillor');

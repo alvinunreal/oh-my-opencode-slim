@@ -12,14 +12,14 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import type { OpencodeClient } from '@opencode-ai/sdk';
 import { DEFAULT_CHILD_INPUT_WAKE_KINDS } from '../../config/constants';
+import { isBuiltInPrimaryAgent } from '../../utils/agent-variant';
+import { stringifyError } from '../../utils/child-transcript';
+import { isRecord as isObjectRecord } from '../../utils/guards';
 import {
   createInternalAgentTextPart,
   isInternalInitiatorPart,
   TERMINAL_DELTA_METADATA_KEY,
-} from '../../utils';
-import { isBuiltInPrimaryAgent } from '../../utils/agent-variant';
-import { stringifyError } from '../../utils/child-transcript';
-import { isRecord as isObjectRecord } from '../../utils/guards';
+} from '../../utils/internal-initiator';
 import { log } from '../../utils/logger';
 import type { SessionSelection } from '../../utils/session-selection';
 import type { TimerHandle, TimerSeam } from '../../utils/timer-seam';
@@ -30,6 +30,7 @@ import {
   parseContinuationModelSelection,
 } from '../task-session-manager/continuation-model-selection';
 import { isActiveStatus } from '../task-session-manager/status-utils';
+import { isGenuineOperatorMessage } from './operator-text';
 import {
   claimWakeSession,
   clearExpectingWakeBusy,
@@ -58,161 +59,25 @@ export const ORCHESTRATOR_STOPPED_JOB_WAKE_TEXT =
   '<system-reminder>\nA background job stopped without a terminal result. Check `task_status` for the stopped task, recover or reroute the work as needed, and do not wait for that job as if it were still running. Do not respond to this reminder.\n</system-reminder>';
 
 /**
- * True only for a genuine external operator message. Plugin-injected nudges
- * must never rearm the no-progress cap or clear wait state:
- * - synthetic parts (board tails, revived-run terminal notifications,
- *   internal-initiator wake replays) are host/internal, not operator input.
- *   Phase reminders ride only the anchored first eligible user message since
- *   the phase-reminder first-anchor change, so the phaseReminder metadata veto
- *   below applies only to that anchored message; non-anchor historical user
- *   messages carry no tag and fall through to the remaining arms;
- * - `noReply` prompts (interview URL
- *   notifications) never expect an operator turn;
- * - v2 command-marker submits (`ctx.session.prompt` text-only submits) carry
- *   no chat.message messageID identity, so they fail the operator-identity
- *   gate below.
- *
- * Exported for unit tests and shared with task-session-manager (single
- * source of truth for the genuine-operator verdict).
+ * Pure operator-message helpers and wake delta texts, split out into
+ * ./operator-text.ts so light consumers (src/index.ts,
+ * task-session-manager) can use them without loading the scheduler
+ * implementation. Single owner there; re-exported here so existing
+ * `from '.'` callers and tests keep working.
  */
-export function isGenuineOperatorMessage(
-  inputMessage: Record<string, unknown> | undefined,
-  outputMessage: Record<string, unknown> | undefined,
-  parts: unknown,
-): boolean {
-  if (!Array.isArray(parts) || parts.length === 0) return false;
-  for (const part of parts) {
-    if (!isObjectRecord(part)) continue;
-    // Any synthetic or internal-initiator part vetoes the whole message:
-    // a single plugin-injected part marks the turn as plugin-injected even
-    // when it rides alongside genuine operator text (e.g. a wake replay
-    // appended to an operator turn). Fail closed toward no-rearm.
-    if (part.synthetic === true || isInternalInitiatorPart(part)) return false;
-    // Non-text/non-file/non-image parts (e.g. step-start markers) carry no
-    // operator content.
-    if (
-      !(
-        (part.type === 'text' && typeof part.text === 'string') ||
-        part.type === 'file' ||
-        part.type === 'image'
-      )
-    ) {
-      continue;
-    }
-    // Tagged synthetic-adjacent injections (board/phase metadata keys) that
-    // survived without the synthetic flag are still not operator input. The
-    // phase key now narrows to the anchored first eligible message only.
-    if (isObjectRecord(part.metadata)) {
-      const metadata = part.metadata as Record<string, unknown>;
-      if (
-        metadata['oh-my-opencode-slim.backgroundJobBoard'] === true ||
-        metadata['oh-my-opencode-slim.phaseReminder'] === true ||
-        metadata['oh-my-opencode-slim.deepworkGoal'] === true ||
-        metadata['oh-my-opencode-slim.internalInitiator'] === true
-      ) {
-        return false;
-      }
-    }
-  }
-  // Operator identity: the host assigns a messageID to real chat.message
-  // turns. v2 command submits and bare notify injections arrive without one.
-  // Upstream's messageIdentity seam (input.messageID → output.message.id →
-  // same-process output.message object, fail closed) is the identity half
-  // of this verdict; the checks above are the genuineness half. Both must
-  // pass: callers keep their own messageIdentity computation and additionally
-  // require this helper, so neither seam can pass an injection alone.
-  const inputMessageID = inputMessage?.messageID;
-  const outputMessageID = outputMessage?.id;
-  const hasOperatorIdentity =
-    (typeof inputMessageID === 'string' && inputMessageID.length > 0) ||
-    (typeof outputMessageID === 'string' && outputMessageID.length > 0);
-  if (!hasOperatorIdentity) return false;
-  // noReply injections never expect an operator turn.
-  if (inputMessage?.noReply === true || outputMessage?.noReply === true) {
-    return false;
-  }
-  return true;
-}
-
-/** Self-contained terminal delta appended to the stopped-job recovery wake.
- * The board cannot serve this wake: internal-initiator turns (which this
- * wake is) are excluded from board placement, so the first board the
- * parent sees after the wake reflects a board state from BEFORE the job
- * stopped. A wake that says "check the board" with no board entry behind
- * it leaves the parent guessing. The delta carries the facts
- * of the triggering stop inline: alias, task id, state, and why it stopped.
- * Deduplicated per execution by the caller. */
-export function formatStoppedJobDelta(record: {
-  alias: string;
-  taskID: string;
-  generation: number;
-  state: string;
-  reason: string;
-}): string {
-  return `<stopped-job>\nalias: ${record.alias}\ntask: ${record.taskID}\nstate: ${record.state}\nreason: ${record.reason}\n</stopped-job>`;
-}
-
-/** Self-contained result for a later terminal publication not covered by the
- * host's native first-publication notifier. The result text is carried
- * verbatim; the generation/revision fence travels in part metadata, never in
- * the prompt-visible body. */
-export function formatCompletedJobDelta(record: {
-  alias: string;
-  taskID: string;
-  state: 'completed' | 'error';
-  resultSummary: string;
-}): string {
-  return `<completed-job>\nalias: ${record.alias}\ntask: ${record.taskID}\nstate: ${record.state}\nresult: ${record.resultSummary}\n</completed-job>`;
-}
-
-/** Host-attributed stop outcome (shared with the stopped-recovery wake
- * gate in src/index.ts): the host's own report that it interrupted or
- * cancelled the run, committed by the terminal gate as a terminal result
- * summary. Anchor of both the honest recovery reason below and the
- * wake skip for host-attributed stops (foreground tool calls, and
- * background ones unless an emergency stop is pending). */
-export const HOST_ATTRIBUTED_STOP_OUTCOME =
-  /^Host reported outcome: (interrupted|cancelled)\./;
-
-/** Reason line for a stopped-job recovery delta. A stop committed from a
- * host-attributed interruption/cancellation DOES carry a terminal result
- * (the host's own outcome report); blaming a missing result misinforms
- * the woken parent about what recovery means here. */
-export function stoppedJobRecoveryReason(record: {
-  timedOut: boolean;
-  statusUncertain: boolean;
-  resultSummary?: string;
-}): string {
-  if (record.timedOut) return 'external task-wait timeout';
-  if (record.statusUncertain) return 'runtime status uncertain';
-  const attributed = HOST_ATTRIBUTED_STOP_OUTCOME.exec(
-    record.resultSummary ?? '',
-  );
-  if (attributed) {
-    const kind =
-      attributed[1] === 'interrupted' ? 'interruption' : 'cancellation';
-    return `host-attributed ${kind} (terminal result present)`;
-  }
-  return 'stopped without a terminal result';
-}
+export {
+  formatChildInputWaitDelta,
+  formatCompletedJobDelta,
+  formatStoppedJobDelta,
+  HOST_ATTRIBUTED_STOP_OUTCOME,
+  isGenuineOperatorMessage,
+  stoppedJobRecoveryReason,
+} from './operator-text';
 
 /** Wake the parent model for an unresolved child request. Host UIs may
  * independently answer it; the delivery path revalidates pending asks. */
 export const ORCHESTRATOR_CHILD_INPUT_WAKE_TEXT =
   '<system-reminder>\nHandle the pending request below, then continue the task.\n</system-reminder>';
-
-/** Self-contained delta for a child input-wait wake (same rationale as
- * formatStoppedJobDelta: the wake carries the facts inline). Deduplicated
- * per (taskID, requestID) by the caller. */
-export function formatChildInputWaitDelta(record: {
-  alias: string;
-  taskID: string;
-  kind: 'question' | 'permission';
-  requestID: string;
-  detail: string;
-}): string {
-  return `<child-input-wait>\nalias: ${record.alias}\ntask: ${record.taskID}\nkind: ${record.kind}\nrequest: ${record.requestID}\n${record.detail}</child-input-wait>`;
-}
 
 /** Max child-input deltas queued per parent. Same bounding policy as the
  * stopped-job recovery queue: oldest entries are dropped when a new

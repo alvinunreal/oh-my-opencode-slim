@@ -15,7 +15,6 @@ import {
   INSTALLER_MANAGED_PLUGIN_OPTION,
 } from '../../plugin-entry';
 import { log } from '../../utils/logger';
-import { findOwnedPackageJson } from '../../utils/package-root';
 import { compareNumericVersions } from '../../utils/version';
 import {
   INSTALLED_PACKAGE_JSON,
@@ -26,6 +25,10 @@ import {
   USER_OPENCODE_CONFIG,
   USER_OPENCODE_CONFIG_JSONC,
 } from './constants';
+import {
+  findPackageJsonUp,
+  getCurrentRuntimePackageJsonPath,
+} from './runtime-package';
 import type {
   CompatibleVersionResult,
   NpmDistTags,
@@ -237,12 +240,10 @@ function getLocalDevPath(directory: string): string | null {
 
 /**
  * Recursively searches upwards for a package.json belonging to this plugin.
- * Shared with the TUI update notice (`src/utils/package-root.ts`) — no
- * caller-side traversal logic duplicates here.
+ * Single owner is `./runtime-package.ts` (light leaf, also used by
+ * `src/v2/setup.ts`); re-exported here for internal callers/tests.
  */
-function findPackageJsonUp(startPath: string): string | null {
-  return findOwnedPackageJson(startPath, PACKAGE_NAME)?.path ?? null;
-}
+export { getCurrentRuntimePackageJsonPath } from './runtime-package';
 
 /**
  * Resolves the version of the plugin when running in local development mode.
@@ -261,22 +262,6 @@ export function getLocalDevVersion(directory: string): string | null {
     return null;
   }
 }
-
-/**
- * Resolves the package.json for the currently running plugin bundle.
- */
-export function getCurrentRuntimePackageJsonPath(
-  currentModuleUrl: string = import.meta.url,
-): string | null {
-  try {
-    const currentDir = path.dirname(fileURLToPath(currentModuleUrl));
-    return findPackageJsonUp(currentDir);
-  } catch (err) {
-    log('[auto-update-checker] Failed to resolve runtime package path:', err);
-    return null;
-  }
-}
-
 /**
  * Searches across all config locations to find the current installation entry for this plugin.
  */

@@ -132,6 +132,7 @@ bun run build
 bun run verify:companion-manifest
 bun run verify:companion-release
 bun run verify:release
+bun run verify:optional-loading
 bun run verify:host-smoke
 ```
 
