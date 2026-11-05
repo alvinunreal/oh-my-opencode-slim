@@ -254,6 +254,7 @@ describe('RuntimeConfig', () => {
     expect(runtime.featureGates).toEqual({
       backgroundJobsMode: 'managed',
       managedJobs: true,
+      presetRouting: true,
       tui: true,
       sidebar: true,
       interview: true,

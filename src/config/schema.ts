@@ -565,7 +565,7 @@ const BackgroundJobsConfigStrictSchema = z.object({
     .enum(['managed', 'native', 'off'])
     .optional()
     .describe(
-      'Background-task lifecycle mode. "managed" (default) runs the OMOS managed lifecycle and its task_cancel/task_status/task_reply tools. "native" skips every board-shaped component and registers only two thin host-read tools — task_status (parent-checked host read plus trailing result) and task_cancel (the host atomic interruption) — for agents driving native subagent/task delegation. "off" registers no OMOS task tool at all and leaves native OpenCode delegation completely untouched.',
+      'Background-task lifecycle mode. "managed" (default) runs the OMOS managed lifecycle and its task_cancel/task_status/task_reply tools. "native" skips every board-shaped component and registers only two thin host-read tools — task_status (parent-checked host read plus trailing result) and task_cancel (the host atomic interruption) — for agents driving native subagent/task delegation. "off" registers no OMOS task tool. On v2 it also disables session-preset routing and leaves the native subagent executor untouched; agent inference settings still register normally.',
     ),
   enabled: z
     .never({

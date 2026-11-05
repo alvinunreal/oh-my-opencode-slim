@@ -227,6 +227,9 @@ model changed without saving the new team snapshot. Main-session models,
 prompts, tools, skills and MCPs are not switched by the session action.
 The sidebar shows the current session's saved team models and variants;
 `/preset` marks its bound preset separately from the global default.
+With `backgroundJobs.mode: "off"`, V2 delegation stays fully native: session
+bindings are disabled, while the configured global preset still selects the
+agent settings registered at startup.
 On v1, reload OpenCode after applying a preset. See
 [Preset Switching](docs/presets/preset-switching.md) for scope and timing, and
 [Configuration](docs/configuration.md#preset-inheritance) for the inheritance

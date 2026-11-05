@@ -28,9 +28,14 @@ Agent registration reuses merged overrides, model arrays and MCP inputs within
 each pass; a larger custom-agent roster no longer repeats those whole-table
 derivations. Health accounting comes from completed registrations.
 
-On v2, one prompt admission reuses its validated session identity and preset
-binding for profile capture; the next admission rechecks host identity and
-storage. Stored history is read for agent attribution only when a message lacks
+On v2 with session preset routing enabled, one prompt admission reuses its
+validated session identity and preset binding for profile capture; the next
+admission rechecks host identity and storage. `backgroundJobs.mode: "off"`
+constructs neither the preset store nor the child profile bridge, registers no
+session-preset RPC or server command, and leaves the native executor unchanged.
+Preset delegation, prompt and event paths perform no session reads or KV work
+in that mode; static agent inference settings still register with the host.
+Stored history is read for agent attribution only when a message lacks
 an agent. Message transforms use a request-local view of valid/user messages,
 rebuilt after structural edits, preserving phase/council anchors and the
 trailing goal pointer byte-for-byte.

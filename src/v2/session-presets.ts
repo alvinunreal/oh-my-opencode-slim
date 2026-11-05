@@ -109,8 +109,9 @@ export interface SessionPresetAdmissionIdentity {
  * `ensure` transaction (one `session.get` + one storage lookup). The
  * `record` object is the exact object `ensure` would return — the
  * internal cache map stays the single owner; there is no second cached
- * copy. `undefined` only when the service is unavailable (reduced host
- * without storage/identity); a historical unbound child yields
+ * copy. `undefined` when the service is unavailable (reduced host without
+ * storage/identity) or when the host reports the id as not found — the
+ * advisory absence case; a historical unbound child yields
  * `{ record: undefined, identity }`.
  */
 export type SessionPresetAdmission = {
@@ -328,7 +329,8 @@ export function createSessionPresets(options: {
     check(signal);
     if (!available) return undefined;
     return serial(id, async () => {
-      const info = await identity(id);
+      const info = await absentWhenUnknown(id);
+      if (!info) return undefined;
       return ensureTransaction(id, signal, explicitModel, info);
     });
   }
@@ -340,12 +342,32 @@ export function createSessionPresets(options: {
     check(signal);
     if (!available) return undefined;
     return serial(id, async () => {
-      const info = await identity(id);
+      const info = await absentWhenUnknown(id);
+      if (!info) return undefined;
       check(signal);
       const record = await ensureTransaction(id, signal, explicitModel, info);
       return { record, identity: admissionIdentity(info) };
     });
   }
+  /** Host identity for an id this store may not know yet. The host's
+   * not-found is a tagged error with an EMPTY message; surfacing it from an
+   * advisory read would reject the tool call with no readable reason and
+   * hide the host's own refusal, so absence is reported as absence. */
+  async function absentWhenUnknown(
+    id: string,
+  ): Promise<Record<string, unknown> | undefined> {
+    try {
+      return await identity(id);
+    } catch (error) {
+      if (
+        (error as { _tag?: string } | undefined)?._tag ===
+        'Session.NotFoundError'
+      )
+        return undefined;
+      throw error;
+    }
+  }
+
   async function bindChild(
     id: string,
     parentID: string,

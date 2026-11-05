@@ -4733,6 +4733,133 @@ describe('createV2Setup e2e', () => {
     }
   }, 20_000);
 
+  test.each(['off', 'native'] as const)(
+    'an unknown continuation session in lifecycle %s reaches the host refusal with a readable message',
+    async (mode) => {
+      // Mirrors the failing deployment: the PARENT exists and the model
+      // invented a child id. The preset executor wrapper reads that child
+      // before the native executor runs; the host answers unknown ids with a
+      // tagged error whose message is empty. Letting it escape produced
+      // {"type":"tool.execution","message":""}.
+      await Bun.write(
+        path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+        JSON.stringify({
+          companion: { enabled: false },
+          backgroundJobs: { mode },
+        }),
+      );
+      const { ctx, calls } = makeMockV2Context(projectDir);
+      const session = ctx.session as unknown as Record<string, unknown>;
+      const sessionReads: string[] = [];
+      const notFound = (sessionID: string) =>
+        Promise.reject(
+          Object.assign(new Error(''), {
+            _tag: 'Session.NotFoundError',
+            sessionID,
+          }),
+        );
+      session.get = async ({ sessionID }: { sessionID: string }) => {
+        sessionReads.push(sessionID);
+        return sessionID === 'ses_parent'
+          ? {
+              id: sessionID,
+              directory: projectDir,
+              agent: 'orchestrator',
+              model: { providerID: 'pipi', id: 'glm-5.3-flash' },
+            }
+          : notFound(sessionID);
+      };
+
+      const storage = ctx.storage as unknown as {
+        set: (key: string, value: unknown) => Promise<void>;
+      };
+      const storageSet = storage.set.bind(storage);
+      const setKeys: string[] = [];
+      storage.set = async (key, value) => {
+        setKeys.push(key);
+        await storageSet(key, value);
+      };
+
+      let nativeCalls = 0;
+      const nativeInputs: Array<Record<string, unknown>> = [];
+      const native = {
+        description: 'native subagent',
+        execute: async (
+          input: { sessionID?: string },
+          _context: unknown,
+        ): Promise<unknown> => {
+          nativeCalls++;
+          nativeInputs.push({ ...input });
+          throw new Error(
+            `Subagent session not found: ${String(input?.sessionID)}`,
+          );
+        },
+      };
+      const tool = ctx.tool as unknown as Record<string, unknown>;
+      tool.transform = async (cb: (draft: unknown) => void) => {
+        cb({
+          add: () => {},
+          update: (id: string, update: (candidate: unknown) => void) => {
+            if (id === 'subagent') update(native);
+          },
+          get: (id: string) => (id === 'subagent' ? native : undefined),
+        });
+        return { dispose() {} };
+      };
+
+      const unwrappedExecute = native.execute;
+      const cleanup = await createV2Setup()(ctx);
+      try {
+        if (mode === 'off') expect(native.execute).toBe(unwrappedExecute);
+        else expect(native.execute).not.toBe(unwrappedExecute);
+        const beforeHook = calls.toolBeforeCb;
+        if (!beforeHook) throw new Error('tool:execute.before not captured');
+        const event = {
+          tool: 'subagent',
+          sessionID: 'ses_parent',
+          agent: 'orchestrator',
+          messageID: 'msg_unknown',
+          id: 'call_unknown',
+          input: {
+            agent: 'explorer',
+            description: 'unknown resume',
+            prompt: 'Look at the code',
+            background: true,
+            sessionID: 'ses_unused',
+          },
+        };
+        await beforeHook(event);
+        // The invented id is preserved; no session is created under it.
+        expect((event.input as { sessionID?: string }).sessionID).toBe(
+          'ses_unused',
+        );
+        // The wrapper must let the host refusal through instead of rejecting
+        // first with the host's empty-message not-found.
+        await expect(
+          native.execute(event.input, {
+            sessionID: 'ses_parent',
+            id: 'call_unknown',
+            signal: new AbortController().signal,
+            progress: async () => {},
+          }),
+        ).rejects.toThrow(/Subagent session not found: ses_unused/);
+        expect(nativeCalls).toBe(1);
+        expect(nativeInputs[0]?.sessionID).toBe('ses_unused');
+        expect(setKeys).not.toContain('session-preset/v1/ses_unused');
+        if (mode === 'off') {
+          // Off never reads a child or writes a preset before/around native.
+          expect(sessionReads).toEqual([]);
+          expect(setKeys).toEqual([]);
+        } else {
+          expect(sessionReads).toContain('ses_parent');
+        }
+      } finally {
+        await cleanup();
+      }
+    },
+    20_000,
+  );
+
   test('moved child completion reaches its owning task board without foreign permission updates', async () => {
     const { ctx, calls, events } = makeMockV2Context(projectDir);
     const worktreeDir = path.join(projectDir, '.slim', 'worktrees', 'child');

@@ -58,10 +58,11 @@ the `task_*` control tools and `wait_for_user` are not registered, and no job
 board, retention, terminal gate, watchdog, wake scheduler, or startup recovery
 runs. Native `task`/`subagent` delegation and host completion delivery keep
 working exactly as OpenCode provides them, so council seat assembly and
-ordinary background delegation still function — only the OMOS bookkeeping and
-control surface disappear. Session presets are a separate subsystem (they bind
-delegated children to the frozen inference snapshot and back `/preset`), so
-they keep applying in every mode; they are not board state. See
+ordinary background delegation still function. On V2, off also skips the
+session-preset store, child profile bridge and executor wrapper: no OMOS read
+or model injection precedes native dispatch or continuation. Agent inference
+settings from the configured global preset still register at startup; per-session
+preset binding requires `native` or `managed`. See
 [Configuration](configuration.md).
 
 `backgroundJobs.mode: "native"` keeps the managed layer off but registers the
