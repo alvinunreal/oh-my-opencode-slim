@@ -241,6 +241,8 @@ const REQUEST_ERROR_PATTERNS = [
   /\bmodel is not available\b/i,
   /\bunsupported model\b/i,
   /\bunknown model\b/i,
+  /\bmodel unavailable\b/i,
+  /\bvariant unavailable\b/i,
   // OpenCode's ProviderModelNotFoundError uses "Model not found" wording; the
   // model may exist on a later entry in the configured chain.
   /\bmodel not found\b/i,
@@ -1631,6 +1633,7 @@ export class ForegroundFallbackManager {
   /** Drop all per-session state once the session is deleted. */
   private forgetSession(id: string): void {
     this.sessionModel.delete(id);
+    this.sessionParent.delete(id);
     this.activeFallback.delete(id);
     this.downProviders.delete(id);
     this.sessionAgent.delete(id);
