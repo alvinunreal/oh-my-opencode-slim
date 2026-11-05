@@ -87,6 +87,7 @@
     "check": "biome check --write .",
     "check:ci": "biome check .",
     "mutation": "bun install --cwd tools/mutation --frozen-lockfile && bun tools/mutation/node_modules/@stryker-mutator/core/bin/stryker.js run",
+    "mutation:foreground-fallback": "bun install --cwd tools/mutation --frozen-lockfile && bun tools/mutation/node_modules/@stryker-mutator/core/bin/stryker.js run stryker.foreground-fallback.conf.mjs && node scripts/check-mutation-targets.mjs",
     "knip": "knip",
     "eval": "bun run src/cli/eval.ts",
     "eval:smoke": "bun run src/cli/eval.ts --smoke",
@@ -129,6 +130,7 @@
     "@types/turndown": "^5.0.6",
     "all-contributors-cli": "^6.26.1",
     "bun-types": "^1.4.2",
+    "fast-check": "^4.10.2",
     "knip": "^6.44.0",
     "typescript": "7.0"
   },
