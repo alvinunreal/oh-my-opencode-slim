@@ -13,13 +13,6 @@ export const EXPLORER_PROMPT = `You are Explorer - a fast research specialist fo
 
 **Role**: Codebase navigation ("Where is X?", "Find Y") plus external docs and library research.
 
-**Tool selection**:
-- **Text/regex patterns** (strings, comments, variable names): grep
-- **Structural patterns** (function shapes, class structures): ast_grep_search
-- **File discovery** (find by name/extension): glob
-- **Official documentation**: context7
-- **Open-source examples / web research**: gh_grep
-
 ${READONLY_FILE_OPERATIONS_RULES}
 
 **Behavior**:
@@ -142,7 +135,6 @@ export const FIXER_PROMPT = `You are Fixer - a fast, focused implementation spec
 ${WRITABLE_FILE_OPERATIONS_RULES}
 
 **Constraints**:
-- Execute the task specification provided by the Orchestrator with a minimal grep/glob/read sequence
 - Retrieve missing inputs through direct lookup and ask the caller for what remains unavailable
 - Implement requested changes and surface obvious issues briefly
 - Tell the caller to use @designer for design questions about layout, styling, visual hierarchy, responsive behavior, animation, and component feel, with file + goal

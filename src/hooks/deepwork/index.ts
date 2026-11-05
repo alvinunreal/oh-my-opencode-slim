@@ -2,8 +2,12 @@ import { stripFrontmatter } from '../../cli/custom-skills';
 import skillMarkdown from '../../skills/deepwork/SKILL.md' with {
   type: 'text',
 };
-import { createInternalAgentTextPart } from '../../utils';
+import { createInternalAgentTextPart } from '../../utils/internal-initiator';
 import { registerCommandHook } from '../command-hook-utils';
+import { routerHeadAnnouncement } from './announcement';
+
+/** Re-exported for existing callers/tests: single owner is ./announcement.ts. */
+export { routerHeadAnnouncement } from './announcement';
 
 const COMMAND_NAME = 'deepwork';
 
@@ -13,16 +17,6 @@ const COMMAND_NAME = 'deepwork';
 // skill is registered — listing `deepwork` in disabled_skills removes the
 // resident listing without losing the command (#1332).
 const instructions = stripFrontmatter(skillMarkdown).trim();
-
-/**
- * The activation message's head announcement. Single contract source: the
- * deepwork-goal hook skips injection while this exact sentence (or any
- * intact quote of it) is visible in a genuine part, because it already
- * names the head path.
- */
-export function routerHeadAnnouncement(sessionID: string): string {
-  return `Your deepwork router head is \`.slim/deepwork/${sessionID}.md\`; the skill covers setup, planning, gates, and state rules.`;
-}
 
 function activationPrompt(task: string, sessionID: string): string {
   return [

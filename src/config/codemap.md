@@ -148,7 +148,7 @@ This allows consumers to import directly from `src/config` rather than individua
 
 - `getAgentOverride(config, name)`: Get agent-specific override with alias support
 - `getCustomAgentNames(config)`: List custom agents declared in config.agents
-- `getAcpAgentNames(config)`: List ACP agent names from config.acpAgents
+- `getAcpAgentNames(config)`: List raw configured ACP agent names; runtime registration uses `RuntimeConfig.acpAgents` (active projection)
 - `loadAgentPrompt(agentName, preset?)`: Load custom prompt files for agents, searching current and ancestor locations before global directories
 - `stripOrchestratorModel` / `applyOrchestratorModelConfig` (strip-orchestrator-model.ts): Strip the orchestrator's single model/variant when a fallback chain is configured
 
@@ -188,7 +188,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `fallback`: Failover/retry configuration
 - `council`: Council configuration with councillor presets and a default preset
 - `companion`: Companion animation configuration
-- `acpAgents`: ACP agent configurations
+- `acpAgents`: active ACP wrapper projection (empty when `acp_run` or every wrapper is disabled; raw config remains `plugin.acpAgents`)
 
 ### AgentOverrideConfig
 - `model`: Model ID or array of model IDs

@@ -29,7 +29,7 @@ import { InterviewConfigSchema } from '../config/schema';
 import type { PluginConfigSnapshot } from '../config/snapshot';
 import { readPluginConfigSnapshot } from '../config/snapshot';
 import { getBuildInfo } from '../generated/build-info';
-import { getCurrentRuntimePackageJsonPath } from '../hooks/auto-update-checker/checker';
+import { getCurrentRuntimePackageJsonPath } from '../hooks/auto-update-checker/runtime-package';
 import {
   isTaggedPart,
   isVolatileTaggedMessage,
@@ -48,7 +48,7 @@ import { PHASE_REMINDER_METADATA_KEY } from '../hooks/phase-reminder';
 import {
   appendRefusalCorrections,
   BACKGROUND_JOB_BOARD_METADATA_KEY,
-} from '../hooks/task-session-manager/board-injection';
+} from '../hooks/task-session-manager/refusal-corrections';
 import { OhMyOpenCodeLite } from '../index';
 import { MarketplaceBusyError } from '../marketplace/errors';
 import {
@@ -63,10 +63,6 @@ import {
   recordTuiAgentDisplayNames,
   withTuiSnapshotBatch,
 } from '../tui-state';
-import {
-  configureBackgroundJobPersistence,
-  loadInitialBackgroundJobPersistence,
-} from '../utils/background-job-persistence';
 import { isPluginDisabledByEnv } from '../utils/env';
 import { createEventDirectoryScope } from '../utils/event-directory-scope';
 import { isRecord } from '../utils/guards';
@@ -134,10 +130,6 @@ import {
   type V1CommandBeforeHook,
   type V2CommandSubmit,
 } from './session-submit';
-import {
-  createSubagentExecutorWrapper,
-  readRefusalOutcome,
-} from './subagent-executor-wrapper';
 import type {
   V2AgentDraft,
   V2Cleanup,
@@ -588,6 +580,9 @@ export function createSessionContextHandler(
           deps.refusalOutcome &&
           deps.sessionContext
         ) {
+          const { readRefusalOutcome } = await import(
+            './subagent-executor-wrapper'
+          );
           for (const message of v1messages) {
             if (message.info.role !== 'user') continue;
             for (const part of message.parts) {
@@ -2359,6 +2354,14 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
     const lifecycleEnabled = featureGates.managedJobs;
     if (lifecycleEnabled) {
       try {
+        // Persistence is imported inside the gate (and before any board
+        // factory) so off/native modes never load the persistence module,
+        // and the board the v1 factory seeds is constructed after the
+        // backend is configured.
+        const {
+          configureBackgroundJobPersistence,
+          loadInitialBackgroundJobPersistence,
+        } = await import('../utils/background-job-persistence');
         const storage = ctx.storage;
         if (
           storage &&
@@ -3801,8 +3804,16 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           // `before`; only the board halves below stay managed-only.
           if (before) {
             try {
+              // Managed-only and v2-only: the executor wrapper (and with it
+              // the foreground-fallback constants it re-exports) loads only
+              // for a managed lifecycle install.
+              const { createSubagentExecutorWrapper } = lifecycleEnabled
+                ? await import('./subagent-executor-wrapper')
+                : { createSubagentExecutorWrapper: undefined };
               const wrapper =
-                lifecycleEnabled && registerStructuredLaunch
+                lifecycleEnabled &&
+                registerStructuredLaunch &&
+                createSubagentExecutorWrapper
                   ? createSubagentExecutorWrapper({
                       context: sessionContextRead,
                       refusalOutcome: v1Hooks[

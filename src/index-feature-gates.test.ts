@@ -16,7 +16,8 @@ import {
   companionSessionIdForDirectory,
   stateFilePath,
 } from './companion/manager';
-import * as hookFactories from './hooks';
+import * as autoUpdateFactories from './hooks/auto-update-checker';
+import * as foregroundFallbackFactories from './hooks/foreground-fallback';
 import * as handoffFactories from './hooks/task-session-manager/fallback-observation-transfer';
 import { OhMyOpenCodeLite as plugin } from './index';
 import * as interviewFactories from './interview';
@@ -105,7 +106,7 @@ describe('plugin feature gates through exported hooks', () => {
         },
       });
       const retrySpy = spyOn(
-        hookFactories.ForegroundFallbackManager.prototype,
+        foregroundFallbackFactories.ForegroundFallbackManager.prototype,
         'handleV2Retry',
       );
       const handoffSpy = spyOn(
@@ -124,6 +125,7 @@ describe('plugin feature gates through exported hooks', () => {
         ]) {
           expect(hooks.tool?.[name]).toBeUndefined();
         }
+        expect(hooks['v2.backgroundGeneration']).toBeUndefined();
         expect(hooks['chat.headers']).toBeFunction();
         expect(handoffSpy).not.toHaveBeenCalled();
 
@@ -167,6 +169,7 @@ describe('plugin feature gates through exported hooks', () => {
         ]) {
           expect(hooks.tool?.[name]).toBeUndefined();
         }
+        expect(hooks['v2.backgroundGeneration']).toBeUndefined();
       } finally {
         await hooks?.dispose?.();
       }
@@ -187,6 +190,7 @@ describe('plugin feature gates through exported hooks', () => {
         ]) {
           expect(hooks.tool?.[name]).toBeUndefined();
         }
+        expect(hooks['v2.backgroundGeneration']).toBeUndefined();
       } finally {
         await hooks?.dispose?.();
       }
@@ -203,7 +207,7 @@ describe('plugin feature gates through exported hooks', () => {
       },
     });
     const retrySpy = spyOn(
-      hookFactories.ForegroundFallbackManager.prototype,
+      foregroundFallbackFactories.ForegroundFallbackManager.prototype,
       'handleV2Retry',
     );
     let hooks: PluginHooks | undefined;
@@ -412,7 +416,7 @@ describe('plugin feature gates through exported hooks', () => {
   test('auto-update checker is cold-gated by the disabled hook in every lifecycle mode', async () => {
     const checkerEvent = mock(() => undefined);
     const factorySpy = spyOn(
-      hookFactories,
+      autoUpdateFactories,
       'createAutoUpdateCheckerHook',
     ).mockImplementation(() => ({ event: checkerEvent }));
     try {
@@ -461,7 +465,7 @@ describe('plugin feature gates through exported hooks', () => {
   test('autoUpdate false alone keeps the server hook unconstructed', async () => {
     const checkerEvent = mock(() => undefined);
     const factorySpy = spyOn(
-      hookFactories,
+      autoUpdateFactories,
       'createAutoUpdateCheckerHook',
     ).mockImplementation(() => ({ event: checkerEvent }));
     let hooks: PluginHooks | undefined;

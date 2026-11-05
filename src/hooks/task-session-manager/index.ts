@@ -40,7 +40,7 @@ import {
   type MessageTransformView,
   resolveView,
 } from '../message-transform-view';
-import { isGenuineOperatorMessage } from '../orchestrator-wake/index';
+import { isGenuineOperatorMessage } from '../orchestrator-wake/operator-text';
 import type { SessionLifecycle } from '../session-lifecycle';
 import { isMessageWithParts } from '../types';
 import {

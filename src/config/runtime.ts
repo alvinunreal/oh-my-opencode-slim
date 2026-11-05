@@ -115,6 +115,9 @@ const DEFAULT_FALLBACK: FailoverConfig = {
   continuationPolicy: 'retry-primary',
 };
 
+/** Shared frozen empty projection so no-ACP generations return one ref. */
+const EMPTY_ACP_AGENTS: AcpAgentsConfig = Object.freeze({});
+
 /** First model from an override's model field (string or array). */
 function primaryModelFromOverride(
   override: AgentOverrideConfig | undefined,
@@ -264,6 +267,7 @@ export class RuntimeConfig {
   private disabledAgentsCache: ReadonlySet<string> | undefined;
   private disabledHooksCache: ReadonlySet<string> | undefined;
   private disabledCommandsCache: ReadonlySet<string> | undefined;
+  private acpAgentsCache: AcpAgentsConfig | undefined;
 
   private seedPlugin(pluginConfig: ResolvedPluginConfig): void {
     this.pluginConfig = deepFreeze(clonePlain(pluginConfig));
@@ -273,6 +277,7 @@ export class RuntimeConfig {
     this.disabledAgentsCache = undefined;
     this.disabledHooksCache = undefined;
     this.disabledCommandsCache = undefined;
+    this.acpAgentsCache = undefined;
   }
 
   /**
@@ -472,8 +477,41 @@ export class RuntimeConfig {
     return this.pluginConfig?.webfetch ?? { enabled: true };
   }
 
+  /**
+   * Active ACP wrapper projection for the current generation: configured
+   * agents whose normalized name is not disabled, or a frozen empty object
+   * when `acp_run` itself is disabled or no wrapper remains. The raw
+   * configured record stays available at `plugin.acpAgents`.
+   *
+   * Consumers gate ACP registration/roster/catalog on this projection, so a
+   * generation with no callable wrapper never constructs the ACP tool or
+   * exposes wrapper entries. Names are trimmed exactly like the agent factory
+   * (`normalizeCustomAgentName`) so `acpAgents[name]` lookups and disabled
+   * matching agree; the configured values are kept as authored.
+   */
   get acpAgents(): AcpAgentsConfig {
-    return this.pluginConfig?.acpAgents ?? {};
+    if (this.acpAgentsCache !== undefined) return this.acpAgentsCache;
+    if (this.disabledTools.includes('acp_run')) {
+      this.acpAgentsCache = EMPTY_ACP_AGENTS;
+      return this.acpAgentsCache;
+    }
+    const disabled = this.disabledAgents;
+    const active: Record<string, AcpAgentsConfig[string]> = {};
+    for (const [rawName, config] of Object.entries(
+      this.pluginConfig?.acpAgents ?? {},
+    )) {
+      // Normalize exactly like the agent factory's wrapper names so
+      // `acpAgents[name]` lookups and disabled matching agree; configured
+      // values stay untouched.
+      const name = rawName.trim();
+      if (name.length === 0 || disabled.has(name)) continue;
+      active[name] = config;
+    }
+    this.acpAgentsCache =
+      Object.keys(active).length === 0
+        ? EMPTY_ACP_AGENTS
+        : Object.freeze(active);
+    return this.acpAgentsCache;
   }
 
   get companion(): CompanionConfig | undefined {

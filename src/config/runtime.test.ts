@@ -416,6 +416,101 @@ describe('RuntimeConfig', () => {
     expect(cleared).toEqual(new Set());
   });
 
+  describe('acpAgents runtime projection', () => {
+    test('projects configured wrappers with a stable per-generation ref', () => {
+      resetRegistry();
+      const runtime = RuntimeConfig.init(DIRECTORY, {
+        acpAgents: {
+          bridge: { command: 'bridge-acp' },
+          research: { command: 'research-acp', timeoutMs: 5_000 },
+        },
+      });
+      const first = runtime.acpAgents;
+      expect(Object.keys(first)).toEqual(['bridge', 'research']);
+      expect(first.research).toMatchObject({
+        command: 'research-acp',
+        timeoutMs: 5_000,
+      });
+      expect(Object.isFrozen(first)).toBe(true);
+      expect(runtime.acpAgents).toBe(first);
+
+      const detached = RuntimeConfig.createDetached(
+        DIRECTORY,
+        runtime.plugin ?? {},
+      );
+      expect(detached.acpAgents).not.toBe(first);
+      expect(detached.acpAgents).toEqual(first);
+    });
+
+    test('re-seeding starts a new generation', () => {
+      resetRegistry();
+      const runtime = RuntimeConfig.init(DIRECTORY, {
+        acpAgents: { bridge: { command: 'bridge-acp' } },
+      });
+      const first = runtime.acpAgents;
+      RuntimeConfig.init(DIRECTORY, {
+        acpAgents: { bridge: { command: 'bridge-acp' } },
+      });
+      expect(runtime.acpAgents).not.toBe(first);
+      expect(runtime.acpAgents).toEqual(first);
+      // Raw configured record survives the projection.
+      expect(runtime.plugin?.acpAgents).toEqual({
+        bridge: { command: 'bridge-acp' },
+      });
+    });
+
+    test('disabled_tools with acp_run returns one frozen empty object', () => {
+      resetRegistry();
+      const runtime = RuntimeConfig.init(DIRECTORY, {
+        disabled_tools: ['acp_run', 'task_cancel'],
+        acpAgents: { bridge: { command: 'bridge-acp' } },
+      });
+      const projected = runtime.acpAgents;
+      expect(projected).toEqual({});
+      expect(Object.isFrozen(projected)).toBe(true);
+      expect(runtime.acpAgents).toBe(projected);
+      // Unrelated tool lists leave the projection untouched.
+      RuntimeConfig.reset(DIRECTORY);
+      const unrelated = RuntimeConfig.init(DIRECTORY, {
+        disabled_tools: ['task_cancel'],
+        acpAgents: { bridge: { command: 'bridge-acp' } },
+      });
+      expect(Object.keys(unrelated.acpAgents)).toEqual(['bridge']);
+    });
+
+    test('disabled agents are dropped from the projection', () => {
+      resetRegistry();
+      const runtime = RuntimeConfig.init(DIRECTORY, {
+        disabled_agents: ['observer', 'second'],
+        acpAgents: {
+          observer: { command: 'observer-acp' },
+          second: { command: 'second-acp' },
+        },
+      });
+      expect(runtime.acpAgents).toEqual({});
+      expect(runtime.plugin?.acpAgents?.second).toMatchObject({
+        command: 'second-acp',
+      });
+    });
+
+    test('names are trimmed like the agent factory', () => {
+      resetRegistry();
+      const runtime = RuntimeConfig.init(DIRECTORY, {
+        disabled_agents: ['bridge'],
+        acpAgents: {
+          ' bridge ': { command: 'bridge-acp' },
+          other: { command: 'other-acp' },
+        },
+      });
+      expect(Object.keys(runtime.acpAgents)).toEqual(['other']);
+    });
+
+    test('an unseeded runtime exposes an empty projection', () => {
+      resetRegistry();
+      expect(RuntimeConfig.get(DIRECTORY).acpAgents).toEqual({});
+    });
+  });
+
   test('disabled collection defaults with an empty config', () => {
     resetRegistry();
     const runtime = RuntimeConfig.init(DIRECTORY, {});

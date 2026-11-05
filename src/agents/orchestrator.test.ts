@@ -13,31 +13,25 @@ const v2 = (options = {}) =>
   buildOrchestratorPrompt({ ...options, hostFlavor: 'v2' });
 
 describe('orchestrator prompt: host vocabulary', () => {
-  test('v2 uses subagent and never names the retired task_message', () => {
-    const prompt = v2();
-
-    expect(prompt).toContain('`subagent` calls in one message');
-    expect(prompt).toContain('look up IDs with the models tool');
-    expect(prompt).not.toContain('task_id');
-    expect(prompt).not.toContain('task_message');
-  });
-
-  test('v1 uses the task vocabulary and restates no tool mechanics', () => {
-    const prompt = v1();
-
-    expect(prompt).toContain('`task` calls in one message');
-    expect(prompt).not.toContain('delivery:');
-    expect(prompt).not.toContain('subagent(');
-    expect(prompt).not.toContain('models tool');
-    // Tool usage lives in the tool descriptions, not in the prompt.
-    expect(prompt).not.toContain('task_message');
-    expect(prompt).not.toContain('task_revive');
-  });
-
-  test('result reads go through task_status, not a task_result tool', () => {
+  test('default prompts name no optional delegation, model, or prompt tools', () => {
     for (const prompt of [v1(), v2()]) {
+      // Tool usage lives in the tool descriptions, not in the prompt.
+      expect(prompt).not.toContain('`task`');
+      expect(prompt).not.toContain('`subagent`');
+      expect(prompt).not.toContain('models tool');
+      expect(prompt).not.toContain('wait_for_user');
+      expect(prompt).not.toContain('`question`');
+      expect(prompt).not.toContain('task_id');
+      expect(prompt).not.toContain('task_message');
+      expect(prompt).not.toContain('task_revive');
       expect(prompt).not.toContain('task_result');
     }
+  });
+
+  test('v1 without the scheduler renders the same bytes as v2', () => {
+    // Host vocabulary no longer reaches the prompt; only the resume channel
+    // differs.
+    expect(v1({ wakeScheduler: false })).toBe(v2());
   });
 
   test('unknown flavors render the v1 vocabulary', () => {
@@ -51,7 +45,7 @@ describe('orchestrator prompt: host vocabulary', () => {
       expect(prompt).toContain('Value productivity');
       expect(prompt).toContain('Build in passes');
       expect(prompt).toContain('Subagent summaries are claims, not evidence');
-      expect(prompt).toContain('## File operations');
+      expect(prompt).not.toContain('## File operations');
     }
   });
 });
@@ -85,23 +79,15 @@ describe('orchestrator prompt: scoped catalog', () => {
 });
 
 describe('orchestrator prompt: blocking on the user', () => {
-  test('v1 with wait_for_user enabled ends manual steps with wait_for_user', () => {
-    const prompt = v1();
-
-    expect(prompt).toContain('then call `wait_for_user`');
-    expect(prompt).toContain('Never use it to wait for');
-  });
-
-  test('v1 with wait_for_user disabled falls back to question', () => {
-    const prompt = v1({ waitForUser: false });
-
-    expect(prompt).not.toContain('wait_for_user');
-    expect(prompt).toContain('then ask with `question`');
-  });
-
-  test('v2 never mentions wait_for_user, whatever the flag', () => {
-    expect(v2()).not.toContain('wait_for_user');
-    expect(v2({ waitForUser: false })).toBe(v2());
+  test('manual-step guidance is tool-neutral on every host', () => {
+    for (const prompt of [v1(), v2()]) {
+      expect(prompt).not.toContain('wait_for_user');
+      expect(prompt).not.toContain('`question`');
+      expect(prompt).toContain('external manual step, give concrete steps');
+      expect(prompt).toContain(
+        'Do not ask the user to wait for background tasks.',
+      );
+    }
   });
 });
 
@@ -160,7 +146,7 @@ describe('orchestrator prompt: cache safety', () => {
       expect(first).toBe(second);
     }
 
-    const opts = { disabledAgents: new Set(['explorer']), waitForUser: false };
+    const opts = { disabledAgents: new Set(['explorer']) };
     const scoped1 = v2(opts);
     const scoped2 = v2(opts);
     expect(scoped1).not.toContain('@explorer');
@@ -202,11 +188,10 @@ describe('createAgents orchestrator prompt gates', () => {
     return RuntimeConfig.get(TEST_DIRECTORY);
   }
 
-  /** Menus a tool that the lifecycle registers, so the prompt may name it. */
+  /** What the compact prompt may name: only the wake promise plus the
+   * host-neutral correction policy; no optional lifecycle tool. */
   const capabilities = (prompt: string) => ({
-    waitForUser: prompt.includes('wait_for_user'),
     wakeScheduler: prompt.includes('wake scheduler'),
-    // The correction policy is host-neutral: amend, never respawn.
     amend: prompt.includes('Amend the same child, never respawn it.'),
   });
 
@@ -218,17 +203,17 @@ describe('createAgents orchestrator prompt gates', () => {
     RuntimeConfig.reset(TEST_DIRECTORY);
   });
 
-  test('v1 lifecycle off names no wait_for_user, no wake scheduler', () => {
+  test('v1 lifecycle off keeps tool-neutral manual guidance and no scheduler', () => {
     const agents = createAgents(
       runtimeFor({ backgroundJobs: { mode: 'off' } }),
     );
     const prompt = agents.find((a) => a.name === 'orchestrator')?.config
       .prompt as string;
     expect(capabilities(prompt)).toEqual({
-      waitForUser: false,
       wakeScheduler: false,
       amend: true,
     });
+    expect(prompt).not.toContain('wait_for_user');
     expect(prompt).not.toContain('task_message');
   });
 
@@ -244,21 +229,22 @@ describe('createAgents orchestrator prompt gates', () => {
     expect(prompt).not.toContain('task_message');
     // The v2 resume promise never included the scheduler.
     expect(prompt).toContain('completion notifications resume you');
-    expect(prompt).toContain('`subagent` calls in one message');
+    expect(prompt).toContain('dispatch in parallel');
+    expect(prompt).not.toContain('`subagent`');
   });
 
-  test('the default v1 prompt carries the correction policy', () => {
+  test('the default v1 prompt keeps the correction policy', () => {
     const agents = createAgents(runtimeFor());
     const prompt = agents.find((a) => a.name === 'orchestrator')?.config
       .prompt as string;
     expect(capabilities(prompt)).toEqual({
-      waitForUser: true,
       wakeScheduler: true,
       amend: true,
     });
+    expect(prompt).not.toContain('wait_for_user');
   });
 
-  test('v1 lifecycle off with both tools disabled still renders the fallback channel', () => {
+  test('v1 lifecycle off with the optional wait tool disabled renders the same tool-neutral prompt', () => {
     const agents = createAgents(
       runtimeFor({
         backgroundJobs: { mode: 'off' },
@@ -268,10 +254,10 @@ describe('createAgents orchestrator prompt gates', () => {
     const prompt = agents.find((a) => a.name === 'orchestrator')?.config
       .prompt as string;
     expect(capabilities(prompt)).toEqual({
-      waitForUser: false,
       wakeScheduler: false,
       amend: true,
     });
+    expect(prompt).not.toContain('wait_for_user');
     expect(prompt).not.toContain('task_message');
   });
 
@@ -308,7 +294,7 @@ describe('createAgents orchestrator prompt gates', () => {
     expect(fixerSkill?.['custom-review']).toBe('allow');
   });
 
-  test('defaults keep the registered-tool prompt bytes unchanged', () => {
+  test('defaults keep the snapshot-pinned builder bytes', () => {
     // No cold-gate is set: the default render must lead to the same bytes
     // the snapshot-pinned builder produces with the same option defaults.
     for (const hostFlavor of [undefined, 'v2'] as const) {
@@ -326,5 +312,17 @@ describe('createAgents orchestrator prompt gates', () => {
         }),
       );
     }
+  });
+
+  test('disabled_tools no longer changes orchestrator prompt bytes', () => {
+    const prompt = (config: PluginConfig | undefined) =>
+      createAgents(runtimeFor(config)).find((a) => a.name === 'orchestrator')
+        ?.config.prompt as string;
+    // The prompt is tool-neutral, so a disabled optional tool cannot be
+    // duplicated in (or removed from) the rendered text.
+    expect(prompt(undefined)).not.toContain('wait_for_user');
+    expect(prompt({ disabled_tools: ['wait_for_user'] })).toBe(
+      prompt(undefined),
+    );
   });
 });

@@ -20,37 +20,47 @@ import type {
   BackgroundJobSyntheticTerminalOccurrence,
   BackgroundJobSyntheticTerminalOccurrencePhase,
   ContextFile,
-  TaskStatusOutput,
-} from '../../utils';
+} from '../../utils/background-job-board';
+import { markPersistedBackgroundChildDelivered } from '../../utils/background-job-persistence';
+import type { BackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
+import { isRecord } from '../../utils/guards';
 import {
   isInternalInitiatorPart,
-  markPersistedBackgroundChildDelivered,
+  TERMINAL_DELTA_METADATA_KEY,
+} from '../../utils/internal-initiator';
+import { KILL_ALL_STOP_NOTICE } from '../../utils/kill-all-stop';
+import { log } from '../../utils/logger';
+import {
   parseTaskOutputHeader,
   parseTaskStatusOutput,
   renderRunningTaskPlaceholder,
-  TERMINAL_DELTA_METADATA_KEY,
-} from '../../utils';
-import type { BackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
-import { isRecord } from '../../utils/guards';
-import { KILL_ALL_STOP_NOTICE } from '../../utils/kill-all-stop';
-import { log } from '../../utils/logger';
+  type TaskStatusOutput,
+} from '../../utils/task';
 import {
   appendTrailingVolatileMessage,
   isTaggedPart,
   stripTaggedContent,
 } from '../cache-safe-injection';
-import { HOST_ATTRIBUTED_STOP_OUTCOME } from '../orchestrator-wake/index';
+import { HOST_ATTRIBUTED_STOP_OUTCOME } from '../orchestrator-wake/operator-text';
 import type { MessagePart, MessageWithParts } from '../types';
-import { isMessageWithParts, isUserMessageWithParts } from '../types';
+import { isMessageWithParts } from '../types';
 import { messageCreatedAt, parseNativeDelivery } from './native-delivery';
+import {
+  BACKGROUND_JOB_BOARD_METADATA_KEY,
+  findTriggeringUserMessage,
+} from './refusal-corrections';
 import { extractTaskSummary, isLateCancelledTaskError } from './status-utils';
 
-// ── Constants ──────────────────────────────────────────────────────────
+// Refusal corrections and the shared board metadata key live in a
+// dependency-light leaf (see ./refusal-corrections.ts) so light consumers can
+// import them without this module's board graph. Re-exported here for
+// existing callers/tests.
+export {
+  appendRefusalCorrections,
+  BACKGROUND_JOB_BOARD_METADATA_KEY,
+  formatRefusalCorrectionText,
+} from './refusal-corrections';
 
-export const BACKGROUND_JOB_BOARD_METADATA_KEY =
-  'oh-my-opencode-slim.backgroundJobBoard';
-const REFUSAL_CORRECTION_METADATA_KEY =
-  'oh-my-opencode-slim.refusalContinuation';
 const KILL_ALL_STOP_METADATA_KEY = 'oh-my-opencode-slim.killAllStop';
 
 const BACKGROUND_COMPLETION_COMPLETED = /^Background task completed: /;
@@ -115,44 +125,6 @@ export function formatReopenCorrectionText(
       `- ${correction.alias} / ${correction.taskID} / run ${correction.generation} / previously ${correction.priorTerminalState}, now running`,
       'Check `task_status` for the current state before acting on the earlier result.',
     ].join('\n'),
-  );
-}
-
-export function formatRefusalCorrectionText(
-  corrections: Array<{ taskID: string; model: string }>,
-): string {
-  return formatSystemReminder(
-    [
-      '### Child task — Continuing after fallback',
-      ...corrections.map(
-        ({ taskID, model }) =>
-          `- ${taskID}: the previous error is superseded; the child continues on ${model}.`,
-      ),
-      'Do not relaunch, cancel, or replace these tasks; their results will arrive.',
-    ].join('\n'),
-  );
-}
-
-export function appendRefusalCorrections(
-  messages: unknown[],
-  corrections: Array<{ taskID: string; model: string }>,
-): void {
-  stripTaggedContent(messages, REFUSAL_CORRECTION_METADATA_KEY);
-  if (corrections.length === 0) return;
-  const anchor = findTriggeringUserMessage(
-    messages,
-    BACKGROUND_JOB_BOARD_METADATA_KEY,
-  );
-  if (!anchor) return;
-  const unique = new Map(corrections.map((item) => [item.taskID, item]));
-  appendTrailingVolatileMessage(
-    messages,
-    { ...anchor.info, id: `${anchor.info.id ?? 'board'}-refusal-correction` },
-    {
-      text: formatRefusalCorrectionText([...unique.values()]),
-      metadataKey: BACKGROUND_JOB_BOARD_METADATA_KEY,
-      extraMetadata: { [REFUSAL_CORRECTION_METADATA_KEY]: true },
-    },
   );
 }
 
@@ -1758,30 +1730,5 @@ function deliverReopenCorrectionsForTurn(
 
 /**
  * The most recent real (non-board) user message that carries a text part —
- * used only to validate injection eligibility and derive session/text context.
- * Tool-result-only user turns (no text part) are skipped so a long tool loop
- * still resolves the triggering managed turn. Board placement targets the
- * tail (see injectBackgroundJobBoard).
+ * shared leaf implementation in ./refusal-corrections.ts (single owner).
  */
-function findTriggeringUserMessage(
-  messages: unknown[],
-  metadataKey: string,
-): MessageWithParts | undefined {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (!isMessageWithParts(message)) continue;
-    if (
-      message.parts.length > 0 &&
-      message.parts.every((part) => isTaggedPart(part, metadataKey))
-    ) {
-      continue;
-    }
-    if (!isUserMessageWithParts(message)) continue;
-    const hasText = message.parts.some(
-      (part) => part.type === 'text' && typeof part.text === 'string',
-    );
-    if (!hasText) continue;
-    return message;
-  }
-  return undefined;
-}

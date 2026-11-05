@@ -61,8 +61,6 @@ export interface OrchestratorPromptOptions {
   /** Per-agent skill grant summaries; when set, each routing line names the
    *  skills that agent can load and the block closes with a short note. */
   agentSkills?: AgentSkillGrants;
-  /** v1 only: `wait_for_user` is registered. v2 never registers it. */
-  waitForUser?: boolean;
   /** `backgroundJobs.orchestratorWake.enabled`. Ignored on v2: no scheduler exists there. */
   wakeScheduler?: boolean;
   /** 'v2' on OpenCode v2 hosts; anything else renders v1 tool vocabulary. */
@@ -74,10 +72,10 @@ export interface OrchestratorPromptOptions {
 /**
  * Build the orchestrator system prompt.
  *
- * One template for every host; only the delegation tool vocabulary and a few
- * tool-specific lines differ between v1 and v2. Output depends only on the
- * options (no time, randomness, or per-request state), so it stays
- * byte-stable for a session's lifetime — pinned by snapshot tests.
+ * One template for every host; only the resume channel differs between v1
+ * and v2. Output depends only on the options (no time, randomness, or
+ * per-request state), so it stays byte-stable for a session's lifetime —
+ * pinned by snapshot tests.
  */
 export function buildOrchestratorPrompt({
   disabledAgents,
@@ -85,7 +83,6 @@ export function buildOrchestratorPrompt({
   onlyAgents,
   customDescriptions,
   agentSkills,
-  waitForUser = true,
   wakeScheduler = true,
   hostFlavor,
   routingBlock = true,
@@ -128,24 +125,10 @@ ${agentsBlock}${agentSkills ? `\n\n${AGENT_SKILLS_NOTE}` : ''}
       ? 'completion notifications and the wake scheduler resume you'
       : 'completion notifications resume you';
 
-  const delegateTool = v2 ? 'subagent' : 'task';
-
-  const modelLine = v2
-    ? `- Set \`model\` only when the user asks; look up IDs with the models tool
-  first.
-`
-    : '';
-
-  // wait_for_user exists only on v1, and only when not disabled.
-  const manualStep =
-    !v2 && waitForUser
-      ? `For an
-  external manual step, give concrete steps first, then call \`wait_for_user\`
-  as your final tool action and end the turn. Never use it to wait for
-  background tasks.`
-      : `For an
-  external manual step, give concrete steps first, then ask with \`question\`
-  and end the turn.`;
+  // Tool-neutral: tool descriptions own availability and mechanics.
+  const manualStep = `For an
+  external manual step, give concrete steps first, then ask and end the
+  turn. Do not ask the user to wait for background tasks.`;
 
   return `<Role>
 You are Orchestrator, a workflow manager who plans, delegates, monitors,
@@ -162,8 +145,7 @@ ${agentsSection}<Workflow>
 - Build in passes: a working outline first, then structure, then detail.
   Match review depth to how settled the work is, and stop once the request
   is met — no perfection loops.
-- Split work into independent lanes and dispatch in parallel (multiple
-  \`${delegateTool}\` calls in one message).
+- Split work into independent lanes and dispatch in parallel.
 - Respect dependencies; parallel writers must not share write scopes.
 - Every delegation names its scope and validation owner. Reference
   paths/lines instead of pasting file contents; brief the user in one line
@@ -185,14 +167,6 @@ ${agentsSection}<Workflow>
 - After dispatching, do non-overlapping work, then end the turn with a one-line
   launch summary; ${resumeChannel}.
 - Don't echo task lists or notification contents back to the user.
-${modelLine}
-## File operations
-- Prefer dedicated file tools for code work: glob/grep for discovery, read
-  for contents, edit/write for changes. Avoid using cat/head/tail/sed/awk
-  just to read code into context.
-- Use bash for execution, automation, and bulk/mechanical filesystem changes.
-  Before destructive or broad shell operations, verify the target set and
-  quote paths (dry-run first when practical).
 
 ## Verify
 - Subagent summaries are claims, not evidence: read the produced artifacts
@@ -203,7 +177,7 @@ ${modelLine}
 </Workflow>
 
 <Communication>
-- Use the \`question\` tool when the user's answer unblocks work. ${manualStep}
+- Ask when the user's answer unblocks work. ${manualStep}
 - Minimal replies to the user: no preamble, no flattery, no restating the
   request, no narrating routine work. This governs replies, not delegation
   briefs.

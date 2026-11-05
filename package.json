@@ -79,6 +79,7 @@
     "sync:companion-manifest": "node scripts/sync-companion-manifest.mjs",
     "verify:host-smoke": "bun run scripts/verify-opencode-host-smoke.ts",
     "verify:cache-stability": "bun run scripts/verify-opencode-cache-stability.ts",
+    "verify:optional-loading": "bun run scripts/verify-optional-loading.ts",
     "cache:smoke": "bun run scripts/cache-smoke.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
