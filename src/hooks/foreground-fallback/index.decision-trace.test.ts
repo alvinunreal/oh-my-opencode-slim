@@ -80,34 +80,21 @@ beforeEach(() => {
   clock = createTestClock();
 });
 
-function timedManager(
-  ...args: ConstructorParameters<typeof ForegroundFallbackManager>
-) {
-  const wired: unknown[] = [...args];
-  while (wired.length < 12) wired.push(undefined);
-  wired.push(clock);
-  return new ForegroundFallbackManager(
-    ...(wired as unknown as ConstructorParameters<
-      typeof ForegroundFallbackManager
-    >),
-  );
-}
-
 describe('foreground fallback replay routing', () => {
   test('decision trace: an abandoned head provider is skipped', async () => {
     const onChanged = mock((_sessionID: string, _model: string) => {});
     const { mocks } = createMockClient();
-    const manager = timedManager(
-      {
+    const manager = new ForegroundFallbackManager({
+      chains: {
         orchestrator: ['primary/a', 'backup/b'],
         explorer: ['primary/head', 'backup/child'],
       },
-      true,
-      { directory: '/test' } as never,
-      0,
-      undefined,
-      onChanged,
-    );
+      enabled: true,
+      input: { directory: '/test' } as never,
+      maxRetries: 0,
+      onSessionModelChanged: onChanged,
+      timers: clock,
+    });
     const parentID = 'decision-trace-parent';
     const childID = 'decision-trace-child';
     manager.registerSessionAgent(parentID, 'orchestrator');
