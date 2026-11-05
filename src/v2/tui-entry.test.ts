@@ -14,7 +14,7 @@
  * render stack for other test files, so nothing here may import the entry —
  * the entry path is passed to the child as a string, and the child reports
  * `require.cache` back as JSON. Each scenario gets its own config/project
- * tree under /tmp/opencode (never inside the repository), and the child
+ * tree under the OS temp directory (never inside the repository), and the child
  * installs a `Bun.plugin` loader hook for `./tui-impl` that records the
  * import the entry actually issues and substitutes a recorder implementation,
  * so the disabled assertions watch the real loader instead of a module mock
@@ -29,10 +29,10 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-/** Shared, pre-approved scratch root; the repo tree stays untouched. */
-const FIXTURE_ROOT = '/tmp/opencode';
+/** OS scratch root; the repo tree stays untouched. */
 
 const ENTRY_PATH = JSON.stringify(join(import.meta.dir, 'tui.ts'));
 
@@ -166,7 +166,7 @@ function buildFixture(root: string, scenario: Scenario): string {
  * surfaces its stderr instead of a bare exit code.
  */
 function runProbe(scenario: Scenario): ProbeReport {
-  const root = mkdtempSync(join(FIXTURE_ROOT, 'omos-tui-entry-'));
+  const root = mkdtempSync(join(tmpdir(), 'omos-tui-entry-'));
   const project = buildFixture(root, scenario);
   const scriptPath = join(root, 'probe.ts');
   writeFileSync(scriptPath, PROBE_SCRIPT);

@@ -32,13 +32,14 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
-const TEMP_BASE = '/tmp/opencode';
+const TEMP_BASE = tmpdir();
 // Children must be Node: NODE_V8_COVERAGE is Node's switch and bun does not
 // produce the same coverage files.
 const NODE_BIN = 'node';
