@@ -22,6 +22,7 @@ import { stringifyError } from '../../utils/child-transcript';
 import { isRecord as isObjectRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
 import type { SessionSelection } from '../../utils/session-selection';
+import type { TimerHandle, TimerSeam } from '../../utils/timer-seam';
 import type { SessionLifecycle } from '../session-lifecycle';
 import type { ChildInputWaitKind } from '../task-session-manager/child-input-wait';
 import {
@@ -382,7 +383,7 @@ type SnapshotVerdict = 'parent-active' | 'children-active' | 'no-work' | 'wake';
 type LocalSessionState = {
   /** Invalidates local timers/async work for this hook instance. */
   generation: symbol;
-  timer: ReturnType<typeof setTimeout> | undefined;
+  timer: TimerHandle | undefined;
   continuousIdle: boolean;
   archived: boolean;
   /** Retry a failed forced wake with its original classification. */
@@ -417,14 +418,6 @@ export type OrchestratorWakeConfig = {
    * test-only runtime path). Absent means
    * `DEFAULT_PUBLICATION_WAKE_MIN_INTERVAL_MS`. */
   publicationWakeMinIntervalMs?: number;
-};
-
-export type WakeSchedulerTimers = {
-  setTimeout: (
-    callback: () => void,
-    delay: number,
-  ) => ReturnType<typeof setTimeout>;
-  clearTimeout: (timer: ReturnType<typeof setTimeout>) => void;
 };
 
 export type OrchestratorWakeOptions = {
@@ -463,8 +456,8 @@ export type OrchestratorWakeOptions = {
   intervalMs?: number;
   /** Scheduling seam for deterministic tests. Defaults to the global timer
    * functions, resolved at call time. */
-  setTimeout?: WakeSchedulerTimers['setTimeout'];
-  clearTimeout?: WakeSchedulerTimers['clearTimeout'];
+  setTimeout?: TimerSeam['setTimeout'];
+  clearTimeout?: TimerSeam['clearTimeout'];
   /** Observation clock for publication spacing; independent of scheduling. */
   now?: () => number;
   /** Which child ask kinds may wake the parent (config
@@ -974,11 +967,9 @@ export function createOrchestratorWakeScheduler(
     options.childInputWakeKinds ?? DEFAULT_CHILD_INPUT_WAKE_KINDS;
   const directory = ctx.directory;
   const sessionSdk = (ctx.client as OpencodeClient).session;
-  const scheduleTimeout: WakeSchedulerTimers['setTimeout'] =
-    options.setTimeout ??
-    ((callback, delay) =>
-      setTimeout(callback, delay) as ReturnType<typeof setTimeout>);
-  const cancelTimeout: WakeSchedulerTimers['clearTimeout'] =
+  const scheduleTimeout: TimerSeam['setTimeout'] =
+    options.setTimeout ?? ((callback, delay) => setTimeout(callback, delay));
+  const cancelTimeout: TimerSeam['clearTimeout'] =
     options.clearTimeout ?? ((timer) => clearTimeout(timer));
 
   /** Static host-surface capability record (the client never changes). */
@@ -1153,7 +1144,7 @@ export function createOrchestratorWakeScheduler(
       : undefined,
   });
   const pendingChildInputWakes = childInputQueue.batches;
-  const childInputTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const childInputTimers = new Map<string, TimerHandle>();
 
   function clearChildInputTimer(sessionID: string): void {
     const timer = childInputTimers.get(sessionID);
@@ -1166,10 +1157,7 @@ export function createOrchestratorWakeScheduler(
    * `publicationWakeMinIntervalMs` spacing. The queued deltas stay in
    * `completedJobQueue`; the timer only re-drives delivery once the window
    * has elapsed, so a burst of results coalesces into one wake. */
-  const completedSpacingTimers = new Map<
-    string,
-    ReturnType<typeof setTimeout>
-  >();
+  const completedSpacingTimers = new Map<string, TimerHandle>();
 
   function clearCompletedSpacingTimer(sessionID: string): void {
     const timer = completedSpacingTimers.get(sessionID);
@@ -1458,7 +1446,7 @@ export function createOrchestratorWakeScheduler(
       if (reason === 'periodic' && !periodicWakeEnabled) return;
       void evaluate(sessionID, generation, reason);
     }, delayMs);
-    timer.unref?.();
+    if (typeof timer !== 'number') timer.unref();
     state.timer = timer;
     log('[orchestrator-wake] backstop armed', { sessionID, intervalMs });
     reportedScheduleBlockers.delete(sessionID);
@@ -2654,7 +2642,7 @@ export function createOrchestratorWakeScheduler(
         triggerDeltaWake(queue, sessionID);
       }, settleDelayMs);
       childInputTimers.set(sessionID, timer);
-      timer.unref?.();
+      if (typeof timer !== 'number') timer.unref();
       return;
     }
     if (queue === completedJobQueue) {
@@ -2683,7 +2671,7 @@ export function createOrchestratorWakeScheduler(
           triggerDeltaWake(queue, sessionID);
         }, remaining);
         completedSpacingTimers.set(sessionID, timer);
-        timer.unref?.();
+        if (typeof timer !== 'number') timer.unref();
         return;
       }
     }

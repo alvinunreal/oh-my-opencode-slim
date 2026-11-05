@@ -1020,8 +1020,7 @@ function createTrackedClock(base?: Clock): {
   const source: Clock = base ?? {
     now: () => Date.now(),
     setTimeout: (handler, delayMs) => setTimeout(handler, delayMs),
-    clearTimeout: (handle) =>
-      clearTimeout(handle as ReturnType<typeof setTimeout>),
+    clearTimeout: (handle) => clearTimeout(handle),
   };
   const handles = new Set<ClockTimerHandle>();
   return {

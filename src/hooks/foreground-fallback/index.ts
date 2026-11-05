@@ -55,10 +55,9 @@ import {
   abortSessionWithTimeout,
   OperationTimeoutError,
   parseModelReference,
-  type TimerHandle,
-  type TimerSeam,
   withTimeout,
 } from '../../utils/session';
+import type { TimerHandle, TimerSeam } from '../../utils/timer-seam';
 import type { ExperimentalV2, V2GenerateModelRef } from '../../v2/client-shim';
 import { isInternalAdmission } from '../../v2/internal-admissions';
 import {
