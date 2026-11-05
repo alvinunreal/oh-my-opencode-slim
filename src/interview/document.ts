@@ -364,7 +364,7 @@ export function resolveExistingInterviewPath(
 
 // ─── String Utilities ────────────────────────────────────────────────
 
-export function slugify(value: string): string {
+function slugify(value: string): string {
   return value
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
@@ -411,7 +411,7 @@ export function extractTitle(document: string): string {
   return match?.[1]?.trim() ?? '';
 }
 
-export function buildInterviewDocument(
+function buildInterviewDocument(
   idea: string,
   summary: string,
   history: string,

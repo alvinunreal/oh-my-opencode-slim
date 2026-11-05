@@ -79,7 +79,7 @@ function readLockSnapshot(lock: string): LockSnapshot {
 
 /**
  * Judges liveness from a snapshot (same rules as
- * {@link pidFileLockHasLiveOwner}): an unreadable owner with a young dir is
+ * {@link snapshotHasLiveOwner}): an unreadable owner with a young dir is
  * live; an unstattable dir with no owner bytes is stale.
  */
 function snapshotHasLiveOwner(
@@ -304,22 +304,4 @@ export async function acquirePidFileLockWithRetryAsync(
     if (Date.now() >= deadline) return null;
     await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL_MS));
   }
-}
-
-/**
- * A lock counts as live when its owner PID is running. Two guards keep a
- * dead or wedged holder from blocking peers forever:
- *
- * - If the owner file is unreadable (holder crashed between mkdirSync and
- *   writeFileSync), a lock dir younger than {@link YOUNG_LOCK_MS} counts as
- *   live; older ones are stale.
- * - With `maxAgeMs` set, a lock dir older than that is stale even when the
- *   owner PID answers: the PID was recycled by an unrelated process, or the
- *   holder wedged past its own install timeout.
- */
-export function pidFileLockHasLiveOwner(
-  lock: string,
-  maxAgeMs?: number,
-): boolean {
-  return snapshotHasLiveOwner(readLockSnapshot(lock), maxAgeMs);
 }
