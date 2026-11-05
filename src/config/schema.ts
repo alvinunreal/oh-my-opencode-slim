@@ -946,7 +946,7 @@ export const WebfetchConfigSchema = z
       .boolean()
       .default(true)
       .describe(
-        'When false, skip registering this enhanced webfetch so OpenCode uses its built-in version.',
+        'When false, skip loading this enhanced webfetch and its JSDOM probe so OpenCode uses its built-in version. disabled_tools: ["webfetch"] has the same cold behavior.',
       ),
   })
   .strict();

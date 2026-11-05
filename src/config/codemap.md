@@ -159,7 +159,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `RuntimeConfig.reset(directory)`: Clear the singleton for a directory
 - `RuntimeConfig.captureHostConfig(opencodeConfig)`: Capture host-side config before the config hook mutates it
 - `setRuntimePreset(name)` / `getRuntimePreset()`: Runtime preset override (stale names clear it)
-- Derived getters: `plugin`, `preset`, `featureGates`, `agents()`, `agent(name)`, `disabledAgents`, `disabledTools`, `disabledSkills`, `disabledHooks`, `disabledCommands`, `customAgentNames`, `disabledMcps`, `imageRouting`, `multiplexer`, `backgroundJobs` (incl. `orchestratorWake`), `fallback`, `webfetch`, `acpAgents`, `companion`, `council`, `updateCheckerEnabled`, `stripOrchestratorModel`, `setDefaultAgent`, `compactSidebar`, `modelArrays` (incl. councillor chains), `runtimeChains`, `primaryModel`, `smallModel()`, `hostAgent(name)`
+- Derived getters: `plugin`, `preset`, `featureGates`, `agents()`, `agent(name)`, `disabledAgents`, `disabledTools`, `disabledSkills`, `disabledHooks`, `disabledCommands`, `customAgentNames`, `disabledMcps`, `imageRouting`, `multiplexer`, `backgroundJobs` (incl. `orchestratorWake`), `fallback`, `acpAgents`, `companion`, `council`, `updateCheckerEnabled`, `stripOrchestratorModel`, `setDefaultAgent`, `compactSidebar`, `modelArrays` (incl. councillor chains), `runtimeChains`, `primaryModel`, `smallModel()`, `hostAgent(name)`
 
 ### MCP Management
 

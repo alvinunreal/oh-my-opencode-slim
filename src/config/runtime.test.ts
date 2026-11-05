@@ -258,6 +258,7 @@ describe('RuntimeConfig', () => {
       sidebar: true,
       interview: true,
       marketplace: true,
+      webfetch: true,
       liveConfigRefresh: true,
       updateChecker: true,
     });
@@ -360,6 +361,26 @@ describe('RuntimeConfig', () => {
     expect(unrelatedHook.updateCheckerEnabled).toBe(true);
   });
 
+  test('webfetch is gated by its config switch and disabled_tools entry', () => {
+    resetRegistry();
+    const toolDisabled = RuntimeConfig.init(DIRECTORY, {
+      disabled_tools: ['webfetch'],
+    });
+    expect(toolDisabled.featureGates.webfetch).toBe(false);
+
+    RuntimeConfig.reset(DIRECTORY);
+    const switchOff = RuntimeConfig.init(DIRECTORY, {
+      webfetch: { enabled: false },
+    });
+    expect(switchOff.featureGates.webfetch).toBe(false);
+
+    RuntimeConfig.reset(DIRECTORY);
+    const unrelated = RuntimeConfig.init(DIRECTORY, {
+      disabled_tools: ['task_cancel'],
+    });
+    expect(unrelated.featureGates.webfetch).toBe(true);
+  });
+
   test('marketplaceEnabled defaults on and reads an explicit root kill switch', () => {
     resetRegistry();
     const runtime = RuntimeConfig.init(DIRECTORY, {});
@@ -458,7 +479,7 @@ describe('RuntimeConfig', () => {
       retryDelayMs: 500,
       continuationPolicy: 'retry-primary',
     });
-    expect(runtime.webfetch.enabled).toBe(true);
+    expect(runtime.featureGates.webfetch).toBe(true);
     expect(runtime.acpAgents).toEqual({});
   });
 
@@ -519,7 +540,7 @@ describe('RuntimeConfig', () => {
     );
     expect(runtime.fallback.enabled).toBe(false);
     expect(runtime.fallback.maxRetries).toBe(5);
-    expect(runtime.webfetch.enabled).toBe(false);
+    expect(runtime.featureGates.webfetch).toBe(false);
     expect(runtime.acpAgents.myAcp.command).toBe('echo');
     expect(runtime.backgroundJobs.maxSessionsPerAgent).toBe(7);
     expect(runtime.multiplexer.type).toBe('tmux');

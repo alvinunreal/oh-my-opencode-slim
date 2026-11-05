@@ -45,7 +45,6 @@ import {
   type MultiplexerConfig,
   MultiplexerConfigStrictSchema,
   type ResolvedPluginConfig,
-  type WebfetchConfig,
 } from './schema';
 import {
   getCustomAgentNames,
@@ -466,10 +465,6 @@ export class RuntimeConfig {
 
   get fallback(): FailoverConfig {
     return this.pluginConfig?.fallback ?? DEFAULT_FALLBACK;
-  }
-
-  get webfetch(): WebfetchConfig {
-    return this.pluginConfig?.webfetch ?? { enabled: true };
   }
 
   get acpAgents(): AcpAgentsConfig {

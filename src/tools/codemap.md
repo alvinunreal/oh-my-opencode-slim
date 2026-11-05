@@ -229,11 +229,13 @@ export { createAcpRunTool } from './acp-run';
 export { ast_grep_replace, ast_grep_search } from './ast-grep';
 export { createCancelTaskTool } from './cancel-task';
 export { createNativeTaskControlTools } from './native-task-control';
-export { createWebfetchTool } from './smartfetch';
 export { createTaskReviveTool } from './task-revive';
 export { createTaskStatusTool } from './task-status';
 export { createWaitForUserTool } from './wait-for-user';
 ```
+
+The enhanced webfetch factory is loaded directly from `./smartfetch` after its
+feature gate; it is not re-exported by the eager tool barrel.
 
 Preset switching is not a tool: `preset-switch.ts` exposes on-disk helpers
 (`switchPresetOnDisk`, `writePreset`, `deletePreset`, `setAgentOverride`,

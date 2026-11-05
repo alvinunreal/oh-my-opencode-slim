@@ -128,8 +128,8 @@ import {
   createTaskReviveTool,
   createTaskStatusTool,
   createWaitForUserTool,
-  createWebfetchTool,
 } from './tools';
+import type { createWebfetchTool } from './tools/smartfetch';
 import {
   applyActivityEvent,
   resolveEventSessionID,
@@ -1029,10 +1029,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       Object.keys(runtime.acpAgents ?? {}).length > 0
         ? { acp_run: createAcpRunTool(runtime.acpAgents) }
         : {};
-    webfetch =
-      runtime.webfetch.enabled !== false
-        ? createWebfetchTool(ctx, { binaryDir: undefined })
-        : undefined;
+    if (runtime.featureGates.webfetch) {
+      const { createWebfetchTool } = await import('./tools/smartfetch');
+      webfetch = createWebfetchTool(ctx);
+    }
     sessionLifecycle = new SessionLifecycle(log);
     sessionLifecycle.onSessionDeleted((sessionID) => {
       compactingSessionIds.delete(sessionID);
@@ -1980,7 +1980,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // v1 registration is unchanged; the generic disabled_tools filter below
     // still removes either tool when listed. The interview tool follows the
     // interviewEnabled master switch in addition to disabled_commands.
-    const shouldRegisterWebfetch = runtime.webfetch.enabled !== false;
     const shouldRegisterInterview =
       runtime.interviewEnabled && !runtime.disabledCommands.has('interview');
     const interviewTools = shouldRegisterInterview
@@ -1999,7 +1998,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ...nativeTaskTools,
       ...interviewTools,
       ...acpRunTools,
-      ...(shouldRegisterWebfetch && webfetch ? { webfetch } : {}),
+      ...(webfetch ? { webfetch } : {}),
       ast_grep_search,
       ast_grep_replace,
     };
@@ -2031,9 +2030,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   // ── Probe jsdom (async, non-blocking) ───────────────────────────────
   // Don't await this; we don't want to block init. The warning will
   // appear shortly after startup if jsdom is broken. Skipped entirely when
-  // the enhanced webfetch is disabled: a disabled feature must not pay for
-  // the JSDOM load (the probe is the only startup importer of jsdom).
-  if (runtime.webfetch.enabled !== false) {
+  // the enhanced webfetch is unavailable (config switch or disabled_tools):
+  // a disabled feature must not pay for the JSDOM load (the probe is the only
+  // startup importer of jsdom).
+  if (webfetch) {
     probeJSDOM().then((err) => {
       if (err) {
         const msg = `jsdom probe failed; webfetch tool will not work: ${err}`;
@@ -2419,7 +2419,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   );
   const toolThreshold = minimumExpectedToolCount(
     runtime.disabledTools,
-    runtime.webfetch.enabled !== false,
+    Boolean(webfetch),
     hostFlavor,
     runtime.backgroundJobsMode,
   );

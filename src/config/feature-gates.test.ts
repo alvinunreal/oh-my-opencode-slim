@@ -13,6 +13,7 @@ describe('resolveFeatureGates', () => {
       sidebar: true,
       interview: true,
       marketplace: true,
+      webfetch: true,
       liveConfigRefresh: true,
       updateChecker: true,
     });
@@ -91,12 +92,52 @@ describe('resolveFeatureGates', () => {
     ).toBe(true);
   });
 
+  test('keeps webfetch enabled by default', () => {
+    expect(resolveFeatureGates().webfetch).toBe(true);
+    expect(resolveFeatureGates({ webfetch: {} }).webfetch).toBe(true);
+    expect(resolveFeatureGates({ webfetch: { enabled: true } }).webfetch).toBe(
+      true,
+    );
+  });
+
+  test('disables webfetch on the config switch', () => {
+    expect(resolveFeatureGates({ webfetch: { enabled: false } }).webfetch).toBe(
+      false,
+    );
+  });
+
+  test('disables webfetch when disabled_tools lists it', () => {
+    expect(resolveFeatureGates({ disabled_tools: ['webfetch'] }).webfetch).toBe(
+      false,
+    );
+  });
+
+  test('keeps webfetch enabled for unrelated disabled tools', () => {
+    expect(
+      resolveFeatureGates({
+        disabled_tools: ['ast_grep_search', 'task_cancel'],
+      }).webfetch,
+    ).toBe(true);
+  });
+
+  test('ignores malformed disabled lists like the runtime getters', () => {
+    for (const value of [{}, null, 42, 'webfetch']) {
+      const gates = resolveFeatureGates({
+        disabled_tools: value as unknown as readonly string[],
+        disabled_hooks: value as unknown as readonly string[],
+      });
+      expect(gates.webfetch).toBe(true);
+      expect(gates.updateChecker).toBe(true);
+    }
+  });
+
   test('accepts a resolved plugin config and freezes the projection', () => {
     const config: PluginConfig = {
       tui: false,
       sidebar: true,
       interview: { enabled: false },
       marketplace: { enabled: false },
+      webfetch: { enabled: false },
       liveConfigRefresh: false,
       autoUpdate: false,
       backgroundJobs: { mode: 'native' },
@@ -111,6 +152,7 @@ describe('resolveFeatureGates', () => {
       sidebar: false,
       interview: false,
       marketplace: false,
+      webfetch: false,
       liveConfigRefresh: false,
       updateChecker: false,
     });
