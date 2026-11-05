@@ -3527,9 +3527,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       marketplaceLeaseAbort.abort();
       registryBridge.retire();
       terminalGate?.dispose();
-      // Cancel pending initial-delay fallback timers so a reloaded
-      // generation cannot observe one stale fallback call.
-      foregroundFallback?.dispose();
+      // Retire/cancel timers immediately, but keep cleaning other resources
+      // while real native switches drain. Even a cleanup error must await them.
+      const fallbackDrain = foregroundFallback?.dispose();
       try {
         await taskSessionManagerHook?.event({
           event: { type: 'server.instance.disposed' },
@@ -3558,8 +3558,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // defers final scheduler/tracker teardown by one macrotask so an
         // immediate config-update re-init can retain active and queued calls.
       } finally {
-        admissionRuntimeLease?.release();
-        releaseRuntimeConfig?.();
+        try {
+          await fallbackDrain;
+        } finally {
+          admissionRuntimeLease?.release();
+          releaseRuntimeConfig?.();
+        }
       }
     },
 

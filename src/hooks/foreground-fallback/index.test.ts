@@ -19,7 +19,7 @@ import {
   SLIM_INTERNAL_INITIATOR_MARKER,
 } from '../../utils/internal-initiator';
 import * as logger from '../../utils/logger';
-import { createTimerHarness } from '../../utils/test-timers';
+import { createTimerHarness, tick } from '../../utils/test-timers';
 import { buildPluginInput } from '../../v2/client-shim';
 import { mapV2EventToV1 } from '../../v2/event-adapter';
 import { recordInternalAdmission } from '../../v2/internal-admissions';
@@ -11399,6 +11399,79 @@ describe('ForegroundFallbackManager disableChain', () => {
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager dispose', () => {
+  const nativeEvent = (sessionID: string) => ({
+    sessionID,
+    agent: 'orchestrator',
+    model: { providerID: 'test', id: 'a' },
+    error: { type: 'provider.rate-limit', status: 429, message: '429' },
+    decision: { retry: true },
+  });
+
+  test('dispose waits for this generation native switch, not another location', async () => {
+    const { manager } = makeManager({
+      chain: ['test/a', 'test/b'],
+      hostFlavor: 'v2',
+      maxRetries: 0,
+    });
+    const { manager: other } = makeManager({
+      chain: ['test/a', 'test/b'],
+      hostFlavor: 'v2',
+      maxRetries: 0,
+    });
+    const sessionID = 'sess-dispose-drain';
+    const entered = Promise.withResolvers<void>();
+    const native = Promise.withResolvers<void>();
+    let writes = 0;
+    const work = manager.handleV2Retry(nativeEvent(sessionID), async () => {
+      writes++;
+      entered.resolve();
+      await native.promise;
+    });
+    await entered.promise;
+
+    let drained = false;
+    const drain = manager.dispose().then(() => {
+      drained = true;
+    });
+    await other.dispose(); // an unrelated location must not drain this flight
+    await tick();
+    expect(drained).toBe(false);
+    expect(manager.isFallbackInProgress(sessionID)).toBe(true);
+
+    native.resolve();
+    await drain;
+    await work;
+    expect(drained).toBe(true);
+    expect(writes).toBe(1);
+  });
+
+  test('dispose still waits for a native switch whose admission timed out', async () => {
+    const { manager } = makeManager({
+      chain: ['test/a', 'test/b'],
+      hostFlavor: 'v2',
+      maxRetries: 0,
+    });
+    const sessionID = 'sess-dispose-timed-out';
+    const native = Promise.withResolvers<void>();
+    const work = manager.handleV2Retry(nativeEvent(sessionID), () => {
+      return native.promise;
+    });
+    await clock.advance(2_500); // past HOST_CALL_TIMEOUT_MS
+    await work;
+    expect(manager.isFallbackInProgress(sessionID)).toBe(false);
+
+    let drained = false;
+    const drain = manager.dispose().then(() => {
+      drained = true;
+    });
+    await tick();
+    expect(drained).toBe(false);
+
+    native.resolve();
+    await drain;
+    expect(drained).toBe(true);
+  });
+
   test('dispose cancels pending initial-delay timers and empties the map', async () => {
     // `opencode reload` destroys the plugin instance while an initial
     // fallback delay may still be scheduled. The stale timer must not
