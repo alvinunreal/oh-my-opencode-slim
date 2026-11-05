@@ -232,6 +232,7 @@ describe('optional implementation loading', () => {
       'utils/background-job-terminal-gate.ts',
       'tools/acp-run.ts',
       'tools/ast-grep/tools.ts',
+      'tools/marketplace.ts',
       'tools/cancel-task.ts',
       'tools/task-status.ts',
       'tools/task-reply.ts',

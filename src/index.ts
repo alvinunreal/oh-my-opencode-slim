@@ -2085,15 +2085,25 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // native delegation surface has no model-facing status/cancel, so a lost
     // completion notice and a stuck child have no agent-side channel. Two
     // thin host-read controls cover exactly that; `off` registers none, and
-    // managed mode keeps its own board-backed tools.
+    // managed mode keeps its own board-backed tools. If disabled_tools removes
+    // both controls, skip the implementation import entirely; a single
+    // remaining control still loads the shared module and filters the other.
     const nativeTaskTools =
-      runtime.backgroundJobsMode === 'native'
-        ? (
-            await import('./tools/native-task-control')
-          ).createNativeTaskControlTools({
-            input: ctx,
-            isDisposed: () => instanceDisposed,
-          })
+      runtime.backgroundJobsMode === 'native' &&
+      !(
+        disabledToolNames.has('task_cancel') &&
+        disabledToolNames.has('task_status')
+      )
+        ? Object.fromEntries(
+            Object.entries(
+              (
+                await import('./tools/native-task-control')
+              ).createNativeTaskControlTools({
+                input: ctx,
+                isDisposed: () => instanceDisposed,
+              }),
+            ).filter(([name]) => !disabledToolNames.has(name)),
+          )
         : {};
 
     // v2 hosts skip wait_for_user: the native `question` tool covers the
@@ -2101,10 +2111,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // v2 resumes retained sessions through native subagent(sessionID, prompt).
     // v1 registration is unchanged; the generic disabled_tools filter below
     // still removes either tool when listed. The interview tool follows the
-    // interviewEnabled master switch in addition to disabled_commands.
+    // interviewEnabled master switch, disabled_commands and disabled_tools; a
+    // tool-level off skips the implementation import below.
     const shouldRegisterWebfetch = runtime.webfetch.enabled !== false;
     const shouldRegisterInterview =
-      runtime.interviewEnabled && !runtime.disabledCommands.has('interview');
+      runtime.interviewEnabled &&
+      !runtime.disabledCommands.has('interview') &&
+      !disabledToolNames.has('interview_submit_state');
     const interviewTools = shouldRegisterInterview
       ? (
           await import('./tools/interview-submit-state')
@@ -2531,7 +2544,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       registryRetired = true;
     },
   };
-  if (marketplaceEnabled && marketplaceService) {
+  // Tool-level off for both controls skips the tool module; the marketplace
+  // service and registry remain loaded because the feature itself is on.
+  const marketplaceToolNamesEnabled =
+    !runtime.disabledTools.includes('marketplace_inspect') ||
+    !runtime.disabledTools.includes('marketplace_manage');
+  if (marketplaceEnabled && marketplaceService && marketplaceToolNamesEnabled) {
     const { createMarketplaceTools, resolveFinalizedOrchestratorIdentities } =
       await import('./tools/marketplace');
     const marketplaceTools = createMarketplaceTools({
