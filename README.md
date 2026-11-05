@@ -214,8 +214,9 @@ The default generated configuration includes both `openai` and `opencode-go` pre
 
 Presets can inherit from one base preset with `extends`: a `design` preset can
 extend `base` and override only its designer model. On v2, `/preset` lets you
-apply subagent inference settings to **Current session** or change the
-**Global default**. `/preset <name>` applies the preset to the session you are
+apply subagent inference settings to **Current session**, start an empty
+**New session** bound to a preset, or change the **Global default**.
+`/preset <name>` applies the preset to the session you are
 in — no restart — while manual configuration edits change the default for
 future sessions; existing work and its future subagents retain their saved
 configuration until you explicitly reapply a preset to that session.
