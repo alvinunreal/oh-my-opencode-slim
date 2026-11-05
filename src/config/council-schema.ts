@@ -1,11 +1,6 @@
 import { z } from 'zod';
-import {
-  type CouncillorModelEntry,
-  normalizeCouncillorModels,
-} from '../utils/councillor-models';
+import { normalizeCouncillorModels } from '../utils/councillor-models';
 import { ProviderModelIdSchema } from './model-id-schema';
-
-export type { CouncillorModelEntry };
 
 const CouncillorModelEntrySchema = z.object({
   id: ProviderModelIdSchema,

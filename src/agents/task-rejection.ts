@@ -8,7 +8,7 @@ export function appendTaskRejectionInstruction(prompt: string): string {
 /** Advisory-role line enabling the observer dispatch route. Injected only
  * when the observer agent is enabled; capability-neutral so it stays true
  * for both vision and non-vision models. */
-export const OBSERVER_DISPATCH_INSTRUCTION =
+const OBSERVER_DISPATCH_INSTRUCTION =
   'When you cannot view an image or visual file directly, dispatch @observer with the file path and a precise goal, then work from its reported observations.';
 
 export const OBSERVER_DISPATCH_ROLES = new Set<string>([
