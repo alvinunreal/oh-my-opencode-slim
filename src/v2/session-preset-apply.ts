@@ -40,7 +40,7 @@ export function readAvailablePresets(
   return { names, active: config.preset };
 }
 
-export function sessionPresetAppliedMessage(presetName: string): string {
+function sessionPresetAppliedMessage(presetName: string): string {
   return `Applied preset "${presetName}" to this session's team.`;
 }
 
