@@ -1984,9 +1984,15 @@ interface V2TuiThemeTokens {
     muted?: unknown;
     default?: unknown;
     subdued?: unknown;
+    action?: {
+      primary?: { base: unknown };
+      secondary?: { base: unknown };
+    };
     feedback?: {
       success?: { base: unknown };
       warning?: { base: unknown };
+      error?: { base: unknown };
+      info?: { base: unknown };
     };
   };
   background: {
@@ -2047,15 +2053,26 @@ function v2ThemeView(theme: V2TuiThemeTokens): {
   textMuted: unknown;
   success?: unknown;
   warning?: unknown;
+  primary?: unknown;
+  secondary?: unknown;
+  error?: unknown;
+  info?: unknown;
 } {
+  const feedback = theme.text.feedback;
   return {
     accent: theme.hue?.interactive[200],
     background: theme.background.base ?? theme.background.default,
     borderActive: theme.border.base ?? theme.border.default,
     text: theme.text.base ?? theme.text.default,
     textMuted: theme.text.muted ?? theme.text.subdued,
-    success: theme.text.feedback?.success?.base ?? theme.success,
-    warning: theme.text.feedback?.warning?.base ?? theme.warning,
+    success: feedback?.success?.base ?? theme.success,
+    warning: feedback?.warning?.base ?? theme.warning,
+    // Documented agent colors (`agents.<name>.color`) resolve against these
+    // flat tokens; v2 splits them across text.action and text.feedback.
+    primary: theme.text.action?.primary?.base,
+    secondary: theme.text.action?.secondary?.base,
+    error: feedback?.error?.base,
+    info: feedback?.info?.base,
   };
 }
 

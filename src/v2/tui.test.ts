@@ -620,9 +620,15 @@ describe('v2 tui preset plugin', () => {
           text: {
             base: '#f0f0f0',
             muted: '#8a8a8a',
+            action: {
+              primary: { base: RGBA.fromInts(10, 20, 30) },
+              secondary: { base: RGBA.fromInts(40, 50, 60) },
+            },
             feedback: {
               success: { base: '#12ab34' },
               warning: { base: '#de9b21' },
+              error: { base: '#e11d48' },
+              info: { base: '#0ea5e9' },
             },
           },
           background: { base: '#101010', raised: { base: '#202020' } },
@@ -1375,6 +1381,82 @@ describe('v2 tui preset plugin', () => {
         expect(brand?.bg.b).toBeCloseTo(210 / 255);
         expect(brand?.fg.r).toBeCloseTo(240 / 255);
         expect(activeIndicator?.fg.g).toBeCloseTo(171 / 255);
+      } finally {
+        cleanup?.();
+        screen?.renderer.destroy();
+      }
+    });
+
+    test('resolves documented theme-token agent colors on v2 hosts', async () => {
+      const stub = makeSetupCtx();
+      writeUserConfig(makeConfig() as unknown as Record<string, unknown>);
+      recordTuiSessionParent('oracle-live', 'root', projectDir);
+      recordTuiAgentActivity(
+        {
+          sessionID: 'oracle-live',
+          agentName: 'oracle',
+          active: true,
+          details: { status: 'busy' },
+        },
+        projectDir,
+      );
+      recordTuiAgentModels(
+        {
+          agentModels: {
+            oracle: 'openai/gpt-5-mini',
+            explorer: 'anthropic/claude-haiku',
+            fixer: 'anthropic/claude-sonnet',
+            designer: 'anthropic/claude-opus',
+          },
+          agentDisplayNames: { oracle: 'Oracle' },
+          agentColors: {
+            oracle: 'info',
+            explorer: 'error',
+            fixer: 'primary',
+            designer: 'secondary',
+          },
+        },
+        projectDir,
+      );
+      let cleanup: (() => void) | undefined;
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        (stub.ctx.ui as { router: { current: () => unknown } }).router.current =
+          () => ({ type: 'session', sessionID: 'root' });
+        const sidebarSlot = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        expect(sidebarSlot).toBeDefined();
+        screen = await testRender(() => sidebarSlot?.render?.() as never, {
+          width: 160,
+          height: 24,
+        });
+        await screen.renderOnce();
+
+        const spans = screen.captureSpans().lines.flatMap((line) => line.spans);
+        const style = (needle: string) =>
+          spans.find((span) => span.text.includes(needle))?.fg;
+        // `primary`/`secondary` resolve from text.action and `info`/`error`
+        // from text.feedback instead of falling back to muted text.
+        expect(style('Oracle')).toEqual(
+          expect.objectContaining({
+            r: 14 / 255,
+            g: 165 / 255,
+            b: 233 / 255,
+          }),
+        );
+        expect(style('explorer')).toEqual(
+          expect.objectContaining({ r: 225 / 255, g: 29 / 255, b: 72 / 255 }),
+        );
+        expect(style('fixer')).toEqual(
+          expect.objectContaining({ r: 10 / 255, g: 20 / 255, b: 30 / 255 }),
+        );
+        expect(style('designer')).toEqual(
+          expect.objectContaining({ r: 40 / 255, g: 50 / 255, b: 60 / 255 }),
+        );
       } finally {
         cleanup?.();
         screen?.renderer.destroy();
