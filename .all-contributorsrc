@@ -1334,6 +1334,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "wsmajt",
+      "name": "Kacper Muszyński",
+      "avatar_url": "https://avatars.githubusercontent.com/u/70204246?v=4",
+      "profile": "https://github.com/wsmajt",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"
