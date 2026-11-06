@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -10,6 +10,7 @@ import {
 
 const EMPTY_MANAGED_HASH =
   'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+const initialHome = os.homedir();
 
 function tmpDir(): string {
   return fs.realpathSync(
@@ -26,12 +27,19 @@ function writeSkill(root: string, name: string, skillMd: string): void {
 describe('getV1BundledSkillPaths', () => {
   const originalEnv = { ...process.env };
   afterEach(() => {
+    mock.restore();
     process.env = { ...originalEnv };
   });
 
-  function setup(): { root: string; project: string } {
+  function setup(): { root: string; project: string; home: string } {
     const root = tmpDir();
     const project = tmpDir();
+    const home = tmpDir();
+    process.env.HOME = home;
+    delete process.env.OPENCODE_DISABLE_CLAUDE_CODE;
+    delete process.env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS;
+    delete process.env.OPENCODE_DISABLE_EXTERNAL_SKILLS;
+    spyOn(os, 'homedir').mockReturnValue(home);
     fs.mkdirSync(path.join(project, '.git'));
     for (const name of ['codemap', 'deepwork', 'reflect']) {
       writeSkill(root, name, `---\nname: ${name}\ndescription: d\n---\n`);
@@ -43,13 +51,25 @@ describe('getV1BundledSkillPaths', () => {
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, 'SKILL.md'), 'user skill');
     }
-    return { root, project };
+    return { root, project, home };
   }
 
   const names = (paths: string[]) => paths.map((item) => path.basename(item));
 
   test('skips names supplied by .claude and .agents skill directories', () => {
     const { root, project } = setup();
+    expect(names(getV1BundledSkillPaths(root, project, []))).toEqual([
+      'reflect',
+    ]);
+  });
+
+  test('honors a skill in the isolated user home', () => {
+    const { root, project, home } = setup();
+    process.env.OPENCODE_DISABLE_CLAUDE_CODE = '1';
+    const homeSkillDir = path.join(home, '.agents', 'skills', 'codemap');
+    fs.mkdirSync(homeSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(homeSkillDir, 'SKILL.md'), 'user skill');
+
     expect(names(getV1BundledSkillPaths(root, project, []))).toEqual([
       'reflect',
     ]);
@@ -69,6 +89,10 @@ describe('getV1BundledSkillPaths', () => {
       'reflect',
     ]);
   });
+});
+
+test('restores homedir after bundled skill path tests', () => {
+  expect(os.homedir()).toBe(initialHome);
 });
 
 describe('buildBundledSkillInfos', () => {
