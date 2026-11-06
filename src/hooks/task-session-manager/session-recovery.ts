@@ -99,7 +99,7 @@ export type RetainedRecoveryResult =
   | {
       kind: 'refused';
       reason: string;
-      reasonCode?: 'agent-unavailable' | 'host-missing';
+      reasonCode?: 'agent-unavailable' | 'host-missing' | 'foreign-parent';
     };
 
 export interface RetainedRecoveryRequest {
@@ -256,7 +256,13 @@ async function recoverRetainedSession(
     return refuse(generic);
   }
   if (hosted.parentID !== parentSessionID) {
-    if (request.purpose === 'revive') return refuse(generic);
+    if (request.purpose === 'revive') {
+      // Native v2 `subagent` owns the same parent check; the reason code lets
+      // the bridge defer to it instead of restating the refusal (see #1823).
+      return options.hostFlavor === 'v2'
+        ? { kind: 'refused', reason: generic, reasonCode: 'foreign-parent' }
+        : refuse(generic);
+    }
     return refuse(
       `Task ${sessionID} belongs to a different parent session; no prompt was sent`,
     );
@@ -1876,6 +1882,16 @@ export function aliasMultipleTargetsMessage(
   return `Alias ${alias} matches multiple saved targets: ${[...sessions].sort().join(', ')}. No action was sent. Use the exact session id.`;
 }
 
+/** A `ses`-prefixed value that is neither a complete id nor a numbered alias.
+ * Aliases always end `-<number>`, so custom `ses-1` aliases still resolve. */
+export function looksLikeBrokenSessionId(value: string): boolean {
+  return (
+    !SESSION_ID_PATTERN.test(value) &&
+    value.startsWith('ses') &&
+    !/-[0-9]+$/.test(value)
+  );
+}
+
 /** Model-visible degrade note. Stays before the outer close so the child-ref tail is unchanged. */
 export function noteExactSessionAlias(output: string, taskID: string): string {
   const note = `Refer by the exact session id ${taskID}.`;
@@ -1893,14 +1909,21 @@ export function createAliasAuthority(options: {
   board: BackgroundJobBoard;
   isDisposed?: () => boolean;
 }): AliasAuthority {
+  const hostFlavor = (options.input as { hostFlavor?: string }).hostFlavor;
   /** Exact IDs and board aliases resolve locally; otherwise one bounded
-   * parent read must pair the alias's marked outputs with one session. */
+   * parent read must pair the alias's marked outputs with one session. On v2,
+   * a `ses`-prefixed value that is not a numbered alias is an id candidate:
+   * the native `subagent` schema accepts it and owns the missing/foreign
+   * session decision, so no plugin-side wording is invented here (#1823). */
   async function resolveCanonical(
     parentSessionID: string,
     requested: string,
   ): Promise<CanonicalTaskReference> {
     const alias = requested.trim();
-    if (SESSION_ID_PATTERN.test(alias)) {
+    if (
+      SESSION_ID_PATTERN.test(alias) ||
+      (hostFlavor === 'v2' && looksLikeBrokenSessionId(alias))
+    ) {
       return { kind: 'exact', taskID: alias };
     }
     const known = options.board.resolve(parentSessionID, alias);
@@ -1912,7 +1935,7 @@ export function createAliasAuthority(options: {
       getClient(options.input),
       options.input.directory,
       parentSessionID,
-      (options.input as { hostFlavor?: string }).hostFlavor,
+      hostFlavor,
       ALIAS_READ_TIMEOUT_MS,
     ).catch(() => undefined);
     if (
