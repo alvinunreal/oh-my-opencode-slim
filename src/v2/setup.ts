@@ -116,13 +116,13 @@ import {
   createSessionProfileBridge,
   reconcileRuntimeProfileOptionKeys,
   resolveV2EventPayload,
+  type SessionProfileBridge,
   type V2AgentRuntimeProfiles,
 } from './runtime-profiles';
-import {
-  createSessionPresets,
-  type SessionTeamAdmission,
-  type SessionTeamBundle,
-  wrapSessionPresetSubagent,
+import type {
+  SessionPresets,
+  SessionTeamAdmission,
+  SessionTeamBundle,
 } from './session-presets';
 import {
   createSessionSubmit,
@@ -2352,6 +2352,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
     // wrapper.
     const featureGates = resolveFeatureGates(preFlightConfig);
     const lifecycleEnabled = featureGates.managedJobs;
+    const presetRoutingEnabled = featureGates.presetRouting;
     if (lifecycleEnabled) {
       try {
         // Persistence is imported inside the gate (and before any board
@@ -2874,71 +2875,80 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         }
         return result;
       };
-      const sessionPresets = createSessionPresets({
-        storage: ctx.storage,
-        session: ctx.session,
-        directory,
-        location: ctx.location && {
-          directory: ctx.location.directory,
-          workspaceID: ctx.location.workspaceID,
-        },
-        current: () => {
-          if (!currentBundle)
-            throw new Error('Session team snapshot unavailable');
-          return currentBundle;
-        },
-        named: async (presetName) => {
-          await withTimeout(
-            permissionSnapshotReadiness,
-            PERMISSION_RULES_OPERATION_TIMEOUT_MS,
-            'Agent registry readiness timed out',
-          );
-          if (permissionSnapshotFailure) throw permissionSnapshotFailure;
-          await ensureFinalizedProfiles();
-          if (!factoryRefreshProfiles)
-            throw new Error('Runtime profiles unavailable');
-          const result = await factoryRefreshProfiles({
-            presetName,
-            detached: true,
-          });
-          if (!result.ok) throw new Error(result.reason);
-          return {
-            ...result.bundle,
-            profiles: reconcileRuntimeProfileOptionKeys(
-              registeredProfiles,
-              result.profiles,
-            ),
-          };
-        },
-      });
-      disposers.push(() => sessionPresets.dispose());
-      retireSessionPresets = () => sessionPresets.dispose();
-      const setSessionTeamResolver = v1Hooks['v2.setSessionTeamResolver'] as
-        | ((
-            resolver: (sessionID: string) => SessionTeamBundle | undefined,
-          ) => void)
-        | undefined;
-      setSessionTeamResolver?.(
-        (sessionID) => sessionPresets.peek(sessionID)?.bundle,
-      );
-      if (sessionPresets.available && ctx.rpc?.register) {
-        const registration = await ctx.rpc.register(sessionPresetRpc, {
-          read: ({ sessionID }) => sessionPresets.readState(sessionID),
-          apply: ({ sessionID, presetName }, { signal }) =>
-            sessionPresets.apply(sessionID, presetName, signal),
-          createBound: async ({ presetName }, { signal, error }) => {
-            try {
-              return await sessionPresets.createBound(presetName, signal);
-            } catch (cause) {
-              throw error(
-                'create_failed',
-                cause instanceof Error ? cause.message : String(cause),
-                null,
-              );
-            }
+      // ── Session presets (routing modes only) ──
+      // `off` leaves delegation entirely native: no preset store, no KV
+      // reads/writes, no RPC bundle and no server `/preset` command. The
+      // preset module loads only when routing is enabled.
+      let sessionPresets: SessionPresets | undefined;
+      if (presetRoutingEnabled) {
+        const { createSessionPresets } = await import('./session-presets');
+        const presets = createSessionPresets({
+          storage: ctx.storage,
+          session: ctx.session,
+          directory,
+          location: ctx.location && {
+            directory: ctx.location.directory,
+            workspaceID: ctx.location.workspaceID,
+          },
+          current: () => {
+            if (!currentBundle)
+              throw new Error('Session team snapshot unavailable');
+            return currentBundle;
+          },
+          named: async (presetName) => {
+            await withTimeout(
+              permissionSnapshotReadiness,
+              PERMISSION_RULES_OPERATION_TIMEOUT_MS,
+              'Agent registry readiness timed out',
+            );
+            if (permissionSnapshotFailure) throw permissionSnapshotFailure;
+            await ensureFinalizedProfiles();
+            if (!factoryRefreshProfiles)
+              throw new Error('Runtime profiles unavailable');
+            const result = await factoryRefreshProfiles({
+              presetName,
+              detached: true,
+            });
+            if (!result.ok) throw new Error(result.reason);
+            return {
+              ...result.bundle,
+              profiles: reconcileRuntimeProfileOptionKeys(
+                registeredProfiles,
+                result.profiles,
+              ),
+            };
           },
         });
-        disposers.push(() => registration.dispose());
+        sessionPresets = presets;
+        disposers.push(() => presets.dispose());
+        retireSessionPresets = () => presets.dispose();
+        const setSessionTeamResolver = v1Hooks['v2.setSessionTeamResolver'] as
+          | ((
+              resolver: (sessionID: string) => SessionTeamBundle | undefined,
+            ) => void)
+          | undefined;
+        setSessionTeamResolver?.(
+          (sessionID) => presets.peek(sessionID)?.bundle,
+        );
+        if (presets.available && ctx.rpc?.register) {
+          const registration = await ctx.rpc.register(sessionPresetRpc, {
+            read: ({ sessionID }) => presets.readState(sessionID),
+            apply: ({ sessionID, presetName }, { signal }) =>
+              presets.apply(sessionID, presetName, signal),
+            createBound: async ({ presetName }, { signal, error }) => {
+              try {
+                return await presets.createBound(presetName, signal);
+              } catch (cause) {
+                throw error(
+                  'create_failed',
+                  cause instanceof Error ? cause.message : String(cause),
+                  null,
+                );
+              }
+            },
+          });
+          disposers.push(() => registration.dispose());
+        }
       }
       try {
         if (typeof factoryRefreshProfiles === 'function') {
@@ -3087,9 +3097,16 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         log('[v2] command.transform failed', String(err));
       }
 
-      // ── /preset (server-side, non-TUI clients) ──
+      // ── /preset (server-side, non-TUI clients; routing modes only) ──
+      // Absent in `off`: no store backs it, so the command must not exist
+      // (a no-store registration would only report failure).
       try {
-        if (isCommandEnabled('preset', { disabledCommands })) {
+        const presets = sessionPresets;
+        if (
+          presetRoutingEnabled &&
+          presets &&
+          isCommandEnabled('preset', { disabledCommands })
+        ) {
           const reg = await ctx.command.transform((draft) => {
             if (typeof draft.add !== 'function') {
               log('[v2] command draft has no add', {
@@ -3101,9 +3118,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
               createPresetCommand({
                 directory,
                 applyToSession: (sessionID: string, presetName: string) =>
-                  sessionPresets.apply(sessionID, presetName),
+                  presets.apply(sessionID, presetName),
                 readSessionPreset: (sessionID: string) =>
-                  sessionPresets.readState(sessionID),
+                  presets.readState(sessionID),
               }),
             );
           });
@@ -3273,10 +3290,15 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         ) => void;
         'v2.releaseSessionChains'?: (sessionID: string) => void;
       };
+      // Session-frozen profiles exist only with preset routing; `off` never
+      // captures or switches a child profile, so the bridge is not built.
+      let sessionProfileBridge: SessionProfileBridge | undefined;
       const pinBoundSessionChains = (sessionID: string) => {
+        const presets = sessionPresets;
+        const profiles = sessionProfileBridge;
+        if (!presets || !profiles) return;
         const record =
-          sessionProfileBridge.effectiveBinding(sessionID) ??
-          sessionPresets.peek(sessionID);
+          profiles.effectiveBinding(sessionID) ?? presets.peek(sessionID);
         pinSessionChainsHook['v2.pinSessionChains']?.(
           sessionID,
           record?.explicitModel
@@ -3287,30 +3309,34 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             : (record?.execution ?? record?.bundle)?.fallbackEnabled,
         );
       };
-      const sessionProfileBridge = createSessionProfileBridge({
-        profiles: () => currentProfiles,
-        profilesForSession: async (sessionID) =>
-          sessionAdmissionProfiles(
-            await sessionPresets.ensure(sessionID),
-            currentProfiles,
-            registeredProfiles,
-          ),
-        preserveSessionModel: (sessionID) =>
-          sessionPresets.peek(sessionID)?.preserveModel === true,
-        isModelAvailable: (ref) =>
-          modelExistsInCatalog(ref, {
-            ...(ctx.model?.list ? { modelDomain: ctx.model } : {}),
-            cache: modelCatalogCache,
-          }),
-        registeredProfiles,
-        pluginAgents,
-        session: ctx.session,
-        knownAgent: (sessionID) => promptBridge?.agentForSession(sessionID),
-        onSessionCaptured: pinBoundSessionChains,
-        onSessionCaptureFailed: (sessionID) => {
-          pinSessionChainsHook['v2.releaseSessionChains']?.(sessionID);
-        },
-      });
+      if (presetRoutingEnabled) {
+        const presets = sessionPresets;
+        if (!presets) throw new Error('Session preset routing unavailable');
+        sessionProfileBridge = createSessionProfileBridge({
+          profiles: () => currentProfiles,
+          profilesForSession: async (sessionID) =>
+            sessionAdmissionProfiles(
+              await presets.ensure(sessionID),
+              currentProfiles,
+              registeredProfiles,
+            ),
+          preserveSessionModel: (sessionID) =>
+            presets.peek(sessionID)?.preserveModel === true,
+          isModelAvailable: (ref) =>
+            modelExistsInCatalog(ref, {
+              ...(ctx.model?.list ? { modelDomain: ctx.model } : {}),
+              cache: modelCatalogCache,
+            }),
+          registeredProfiles,
+          pluginAgents,
+          session: ctx.session,
+          knownAgent: (sessionID) => promptBridge?.agentForSession(sessionID),
+          onSessionCaptured: pinBoundSessionChains,
+          onSessionCaptureFailed: (sessionID) => {
+            pinSessionChainsHook['v2.releaseSessionChains']?.(sessionID);
+          },
+        });
+      }
 
       // Skip session hook registration if ctx.session is unavailable (v1 host
       // embedded v2 core with limited context). On full v2 contexts, session
@@ -3370,30 +3396,32 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
               await permissionBridge.ensurePromptPermission(event.sessionID);
             }
             await ensureFinalizedProfiles();
-            // Freeze and switch the inference profile before the admitted
-            // input's first model request; the event stream is only a prewarm.
-            const admission = await sessionPresets.ensureAdmission(
-              event.sessionID,
-            );
-            const binding =
-              sessionProfileBridge.effectiveBinding(event.sessionID) ??
-              admission?.record;
-            // A resumed, already-profiled child may acquire an explicit
-            // per-call model. Re-pin its execution policy on every admission.
-            if (binding?.parentID) pinBoundSessionChains(event.sessionID);
-            await sessionProfileBridge.ensureSessionProfile(
-              event.sessionID,
-              admission?.identity,
-              admission
-                ? {
-                    profiles: sessionAdmissionProfiles(
-                      binding,
-                      currentProfiles,
-                      registeredProfiles,
-                    ),
-                  }
-                : undefined,
-            );
+            const presets = sessionPresets;
+            const profiles = sessionProfileBridge;
+            if (presets && profiles) {
+              // Freeze and switch the inference profile before the admitted
+              // input's first model request; the event stream is only a
+              // prewarm.
+              const admission = await presets.ensureAdmission(event.sessionID);
+              const binding =
+                profiles.effectiveBinding(event.sessionID) ?? admission?.record;
+              // A resumed, already-profiled child may acquire an explicit
+              // per-call model. Re-pin its execution policy on every admission.
+              if (binding?.parentID) pinBoundSessionChains(event.sessionID);
+              await profiles.ensureSessionProfile(
+                event.sessionID,
+                admission?.identity,
+                admission
+                  ? {
+                      profiles: sessionAdmissionProfiles(
+                        binding,
+                        currentProfiles,
+                        registeredProfiles,
+                      ),
+                    }
+                  : undefined,
+              );
+            }
             await bridge.handlePrompt(event);
           });
           stopPermissionPromptAdmission = boundedPermissionStop(
@@ -3502,47 +3530,52 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           systemTransform,
           messagesTransform,
           // Primaries use the startup registry; child profiles stay session-frozen.
-          applyRuntimeProfile: async (event) => {
-            const binding =
-              sessionProfileBridge.effectiveBinding(event.sessionID) ??
-              sessionPresets.peek(event.sessionID);
-            const profile =
-              sessionProfileBridge.profileForSession(
-                event.sessionID,
-                event.agent,
-              ) ??
-              (binding?.parentID && pluginAgents.has(event.agent)
-                ? sessionAdmissionProfiles(
-                    binding,
-                    currentProfiles,
-                    registeredProfiles,
-                  )[event.agent]
-                : undefined);
-            if (profile) {
-              const providerOptions = await variantCompatibleOptions(
-                profile.providerOptions ?? {},
-                event.model,
-                'child',
-              );
-              applyRuntimeProfileOptions(
-                event,
-                { ...profile, providerOptions },
-                binding,
-              );
-            } else if (!binding?.parentID && isRecord(event.options)) {
-              const primary = primaryRequestOptions.get(event.agent);
-              if (!primary) return;
-              const options = await variantCompatibleOptions(
-                primary.options,
-                event.model,
-                'primary',
-              );
-              Object.assign(event.options, options);
-              if (primary.temperature !== undefined) {
-                event.options.temperature = primary.temperature;
+          // Absent in `off`: no bridge exists, and the native agent request
+          // already carries the startup-registered static settings.
+          ...(presetRoutingEnabled && sessionProfileBridge
+            ? {
+                applyRuntimeProfile: async (event: V2SessionContextEvent) => {
+                  const profiles = sessionProfileBridge;
+                  if (!profiles) return;
+                  const binding =
+                    profiles.effectiveBinding(event.sessionID) ??
+                    sessionPresets?.peek(event.sessionID);
+                  const profile =
+                    profiles.profileForSession(event.sessionID, event.agent) ??
+                    (binding?.parentID && pluginAgents.has(event.agent)
+                      ? sessionAdmissionProfiles(
+                          binding,
+                          currentProfiles,
+                          registeredProfiles,
+                        )[event.agent]
+                      : undefined);
+                  if (profile) {
+                    const providerOptions = await variantCompatibleOptions(
+                      profile.providerOptions ?? {},
+                      event.model,
+                      'child',
+                    );
+                    applyRuntimeProfileOptions(
+                      event,
+                      { ...profile, providerOptions },
+                      binding,
+                    );
+                  } else if (!binding?.parentID && isRecord(event.options)) {
+                    const primary = primaryRequestOptions.get(event.agent);
+                    if (!primary) return;
+                    const options = await variantCompatibleOptions(
+                      primary.options,
+                      event.model,
+                      'primary',
+                    );
+                    Object.assign(event.options, options);
+                    if (primary.temperature !== undefined) {
+                      event.options.temperature = primary.temperature;
+                    }
+                  }
+                },
               }
-            }
-          },
+            : {}),
         });
         const reg = await ctx.session.hook('context', handler);
         disposers.push(() => reg.dispose());
@@ -3641,14 +3674,17 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                 };
               }) => string | undefined)
             | undefined;
-          const captures = new Map<string, SessionTeamAdmission>();
+          const captures = presetRoutingEnabled
+            ? new Map<string, SessionTeamAdmission>()
+            : undefined;
           const captureKey = (parentID: string, callID: string) =>
             JSON.stringify([parentID, callID]);
           let nativePresetWrapperReady = false;
-          disposers.push(() => captures.clear());
+          if (captures) disposers.push(() => captures.clear());
           const captureTeam = async (callID: string, parentID: string) => {
             if (generationDisposed)
               throw new Error('Session preset generation retired');
+            if (!captures) throw new Error('Session preset routing disabled');
             const key = captureKey(parentID, callID);
             const captured = captures.get(key);
             captures.delete(key);
@@ -3658,102 +3694,126 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
               );
             return captured;
           };
+          const resolvePresetRouting = presetRoutingEnabled
+            ? (() => {
+                const presets = sessionPresets;
+                const profiles = sessionProfileBridge;
+                if (!presets || !profiles)
+                  throw new Error('Session preset routing unavailable');
+                return async ({
+                  agentType,
+                  parentSessionID,
+                  callID,
+                  args,
+                }: {
+                  agentType: string;
+                  parentSessionID: string;
+                  callID: string;
+                  args: Record<string, unknown>;
+                }) => {
+                  if (presets.available && !nativePresetWrapperReady)
+                    throw new Error(
+                      'Native subagent session preset wrapper unavailable',
+                    );
+                  await ensureFinalizedProfiles();
+                  const binding = await presets.ensure(parentSessionID);
+                  // A child's independent Apply wins over its in-flight
+                  // execution.
+                  const bundle =
+                    (binding?.execution
+                      ? binding.bundle
+                      : (profiles.effectiveBinding(parentSessionID)?.bundle ??
+                        binding?.bundle)) ?? null;
+                  const explicitModel = typeof args.model === 'string';
+                  const targetAgent =
+                    !agentType && typeof args.task_id === 'string'
+                      ? ((await presets.ensureAdmission(args.task_id))?.identity
+                          .agent ?? agentType)
+                      : agentType;
+                  let parentModel:
+                    | { providerID: string; id: string; variant?: string }
+                    | undefined;
+                  if (
+                    bundle?.inheritance[targetAgent] ??
+                    bundle?.inheritance[
+                      AGENT_ALIASES[targetAgent] ?? targetAgent
+                    ]
+                  ) {
+                    const response = await ctx.session.get?.({
+                      sessionID: parentSessionID,
+                    });
+                    const info =
+                      isRecord(response) && isRecord(response.data)
+                        ? response.data
+                        : response;
+                    const model = isRecord(info) ? info.model : undefined;
+                    if (
+                      !isRecord(model) ||
+                      typeof model.providerID !== 'string' ||
+                      typeof model.id !== 'string'
+                    ) {
+                      if (!explicitModel && typeof args.task_id !== 'string')
+                        throw new Error(
+                          'Inherited subagent parent model unavailable',
+                        );
+                    } else
+                      parentModel = {
+                        providerID: model.providerID,
+                        id: model.id,
+                        // Native 2.1.2 session/info.fromRow projects an absent
+                        // stored variant as "default". That is a
+                        // default-selection sentinel, not an explicit
+                        // subagent #variant. Keep named variants, and leave
+                        // explicit per-call/profile variants untouched by
+                        // normalizing only this observed parent ref.
+                        ...(typeof model.variant === 'string' &&
+                        model.variant !== 'default'
+                          ? { variant: model.variant }
+                          : {}),
+                      };
+                  }
+                  const model = explicitModel
+                    ? undefined
+                    : resolveDelegatedModel?.({
+                        agentType: targetAgent,
+                        parentSessionID,
+                        bundle,
+                        ...(parentModel ? { parentModel } : {}),
+                      });
+                  captures?.set(captureKey(parentSessionID, callID), {
+                    bundle,
+                    explicitModel,
+                    ...(model ? { model } : {}),
+                    ...(parentModel
+                      ? { inheritedProviderID: parentModel.providerID }
+                      : {}),
+                  });
+                  // The host has no interruption-finalized after hook, and can
+                  // reject availability after before without entering execute.
+                  // Evict oldest abandoned admissions; an evicted active call
+                  // fails closed at capture rather than recapturing global
+                  // state.
+                  if (captures && captures.size > 1024) {
+                    const oldest = captures.keys().next().value;
+                    if (oldest !== undefined) captures.delete(oldest);
+                  }
+                  if (typeof args.task_id === 'string' || explicitModel)
+                    return undefined;
+                  return model;
+                };
+              })()
+            : undefined;
           const bridges = createToolExecuteBridges(
             before,
             after,
-            async ({ agentType, parentSessionID, callID, args }) => {
-              if (sessionPresets.available && !nativePresetWrapperReady)
-                throw new Error(
-                  'Native subagent session preset wrapper unavailable',
-                );
-              await ensureFinalizedProfiles();
-              const binding = await sessionPresets.ensure(parentSessionID);
-              // A child's independent Apply wins over its in-flight execution.
-              const bundle =
-                (binding?.execution
-                  ? binding.bundle
-                  : (sessionProfileBridge.effectiveBinding(parentSessionID)
-                      ?.bundle ?? binding?.bundle)) ?? null;
-              const explicitModel = typeof args.model === 'string';
-              const targetAgent =
-                !agentType && typeof args.task_id === 'string'
-                  ? ((await sessionPresets.ensureAdmission(args.task_id))
-                      ?.identity.agent ?? agentType)
-                  : agentType;
-              let parentModel:
-                | { providerID: string; id: string; variant?: string }
-                | undefined;
-              if (
-                bundle?.inheritance[targetAgent] ??
-                bundle?.inheritance[AGENT_ALIASES[targetAgent] ?? targetAgent]
-              ) {
-                const response = await ctx.session.get?.({
-                  sessionID: parentSessionID,
-                });
-                const info =
-                  isRecord(response) && isRecord(response.data)
-                    ? response.data
-                    : response;
-                const model = isRecord(info) ? info.model : undefined;
-                if (
-                  !isRecord(model) ||
-                  typeof model.providerID !== 'string' ||
-                  typeof model.id !== 'string'
-                ) {
-                  if (!explicitModel && typeof args.task_id !== 'string')
-                    throw new Error(
-                      'Inherited subagent parent model unavailable',
-                    );
-                } else
-                  parentModel = {
-                    providerID: model.providerID,
-                    id: model.id,
-                    // Native 2.1.2 session/info.fromRow projects an absent
-                    // stored variant as "default". That is a default-selection
-                    // sentinel, not an explicit subagent #variant. Keep named
-                    // variants, and leave explicit per-call/profile variants
-                    // untouched by normalizing only this observed parent ref.
-                    ...(typeof model.variant === 'string' &&
-                    model.variant !== 'default'
-                      ? { variant: model.variant }
-                      : {}),
-                  };
-              }
-              const model = explicitModel
-                ? undefined
-                : resolveDelegatedModel?.({
-                    agentType: targetAgent,
-                    parentSessionID,
-                    bundle,
-                    ...(parentModel ? { parentModel } : {}),
-                  });
-              captures.set(captureKey(parentSessionID, callID), {
-                bundle,
-                explicitModel,
-                ...(model ? { model } : {}),
-                ...(parentModel
-                  ? { inheritedProviderID: parentModel.providerID }
-                  : {}),
-              });
-              // The host has no interruption-finalized after hook, and can
-              // reject availability after before without entering execute.
-              // Evict oldest abandoned admissions; an evicted active call
-              // fails closed at capture rather than recapturing global state.
-              if (captures.size > 1024) {
-                const oldest = captures.keys().next().value;
-                if (oldest !== undefined) captures.delete(oldest);
-              }
-              if (typeof args.task_id === 'string' || explicitModel)
-                return undefined;
-              return model;
-            },
+            resolvePresetRouting,
           );
           if (before) {
             const reg = await ctx.tool.hook('execute.before', async (event) => {
               try {
                 await bridges.beforeBridge(event as never);
               } catch (err) {
-                captures.delete(captureKey(event.sessionID, event.id));
+                captures?.delete(captureKey(event.sessionID, event.id));
                 log('[v2] tool.execute.before rejected call', String(err));
                 throw err; // v2 refuses the call (see createToolExecuteBridges)
               }
@@ -3767,7 +3827,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
               } catch (err) {
                 log('[v2] tool.execute.after bridge failed', String(err));
               } finally {
-                captures.delete(captureKey(event.sessionID, event.id));
+                captures?.delete(captureKey(event.sessionID, event.id));
               }
             });
             disposers.push(() => reg.dispose());
@@ -3814,10 +3874,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                 exactCallConfirmed: boolean;
               }) => Promise<unknown>)
             | undefined;
-          // The preset wrapper consumes the admission the bridge captures and
-          // the preset subsystem runs in every mode, so it installs with
-          // `before`; only the board halves below stay managed-only.
-          if (before) {
+          // Off leaves the native executor untouched: no preset wrapper, no
+          // description flip, no interceptor of any kind. Managed and native
+          // modes keep preset routing; only the board halves stay managed-only.
+          if (before && presetRoutingEnabled) {
             try {
               // Managed-only and v2-only: the executor wrapper (and with it
               // the foreground-fallback constants it re-exports) loads only
@@ -3825,6 +3885,13 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
               const { createSubagentExecutorWrapper } = lifecycleEnabled
                 ? await import('./subagent-executor-wrapper')
                 : { createSubagentExecutorWrapper: undefined };
+              const { wrapSessionPresetSubagent } = await import(
+                './session-presets'
+              );
+              const presets = sessionPresets;
+              const profiles = sessionProfileBridge;
+              if (!presets || !profiles)
+                throw new Error('Session preset routing unavailable');
               const wrapper =
                 lifecycleEnabled &&
                 registerStructuredLaunch &&
@@ -3864,11 +3931,11 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                       if (wrapper) execute = wrapper.wrap(execute);
                       execute = wrapSessionPresetSubagent({
                         execute,
-                        presets: sessionPresets,
+                        presets,
                         capture: captureTeam,
-                        effectiveBinding: sessionProfileBridge.effectiveBinding,
+                        effectiveBinding: profiles.effectiveBinding,
                         replaceProfile: (sessionID, identity, record) =>
-                          sessionProfileBridge.replaceSessionProfile(
+                          profiles.replaceSessionProfile(
                             sessionID,
                             identity,
                             {
@@ -4066,6 +4133,8 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                       // With persistence, native progress must bind before the
                       // first capture; a created event may precede that barrier.
                       if (
+                        sessionPresets &&
+                        sessionProfileBridge &&
                         rawType === 'session.created' &&
                         !sessionPresets.available
                       ) {
@@ -4078,7 +4147,11 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                           await ensureFinalizedProfiles();
                           await sessionProfileBridge.observeEvent(next.value);
                         }
-                      } else if (rawType === 'session.deleted') {
+                      } else if (
+                        sessionPresets &&
+                        sessionProfileBridge &&
+                        rawType === 'session.deleted'
+                      ) {
                         await sessionProfileBridge.observeEvent(next.value);
                         const payload =
                           next.value.data ?? next.value.properties;
