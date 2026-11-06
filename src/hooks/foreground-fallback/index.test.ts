@@ -5178,6 +5178,16 @@ describe('isFailoverError', () => {
     ).toBe(true);
   });
 
+  test('returns true for disposed provider plugin errors', () => {
+    expect(isFailoverError('Antigravity plugin has been disposed')).toBe(true);
+    expect(
+      isFailoverError({
+        name: 'UnknownError',
+        data: { message: 'Error: Antigravity plugin has been disposed' },
+      }),
+    ).toBe(true);
+  });
+
   test('returns false for non-API connection errors', () => {
     expect(isFailoverError('Cannot connect to database')).toBe(false);
   });
