@@ -37,6 +37,7 @@ import { convertSameProviderBackgroundTask } from './same-provider-policy';
 import {
   appendChildRefSuffix,
   type CanonicalTaskReference,
+  looksLikeBrokenSessionId,
   noteExactSessionAlias,
   pluginDisposedMessage,
   type RetainedRecoveryResult,
@@ -354,8 +355,22 @@ export async function handleToolExecuteBefore(
         requested,
         agentType,
       );
-
-    if (!remembered) {
+    const nativeOwnedSessionId =
+      deps.hostFlavor === 'v2' && looksLikeBrokenSessionId(requested);
+    if (!remembered && nativeOwnedSessionId) {
+      // Native v2 `subagent` owns session-id validity. Its schema accepts any
+      // `ses`-prefixed value and reports the missing session itself; routing
+      // it through alias resolution would invent an alias refusal for a
+      // truncated id (#1823). No board row can exist for it.
+      pendingCall.resumedTaskId = requested;
+      log(
+        '[task-session-manager] delegated malformed session id to native subagent',
+        {
+          requested,
+          sessionID: input.sessionID,
+        },
+      );
+    } else if (!remembered) {
       const knownManagedTask = deps.backgroundJobBoard.resolve(
         input.sessionID,
         requested,
@@ -484,6 +499,18 @@ export async function handleToolExecuteBefore(
             remembered = restored;
           } else if (restored) {
             refuseKnownTaskResume(requested, restored, agentType, delegation);
+          } else if (
+            recovery.kind === 'refused' &&
+            recovery.reasonCode === 'foreign-parent'
+          ) {
+            // Native v2 `subagent` applies the same `parentID` check. Let its
+            // refusal stand instead of restating it with a plugin guess about
+            // forks or host restarts (#1823).
+            pendingCall.resumedTaskId = requested;
+            log(
+              '[task-session-manager] delegated foreign-parent resume to native subagent',
+              { requested, sessionID: input.sessionID },
+            );
           } else {
             const reason =
               recovery.kind === 'refused'
@@ -496,7 +523,7 @@ export async function handleToolExecuteBefore(
             );
           }
         }
-        if (!remembered) {
+        if (!remembered && pendingCall.resumedTaskId === undefined) {
           refuseExplicitTaskId(
             requested,
             adoption === 'rejected' ||
