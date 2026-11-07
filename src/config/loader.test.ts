@@ -355,19 +355,19 @@ describe('loadPluginConfig', () => {
     expect(new Set(project).size).toBe(project.length);
   });
 
-  test('loads autoUpdate flag when configured', () => {
+  test('loads setDefaultAgent flag when configured', () => {
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
     fs.mkdirSync(projectConfigDir, { recursive: true });
     fs.writeFileSync(
       path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
-        autoUpdate: false,
+        setDefaultAgent: false,
       }),
     );
 
     const config = loadPluginConfig(projectDir);
-    expect(config.autoUpdate).toBe(false);
+    expect(config.setDefaultAgent).toBe(false);
   });
 
   test('loads config with a UTF-8 BOM prefix (same result as no BOM)', () => {
@@ -380,7 +380,7 @@ describe('loadPluginConfig', () => {
         preset: 'fast',
         presets: { fast: { oracle: { model: 'fast-model' } } },
         agents: { oracle: { temperature: 0.9 } },
-        autoUpdate: false,
+        setDefaultAgent: false,
       })}`,
     );
 
@@ -388,35 +388,9 @@ describe('loadPluginConfig', () => {
 
     // The BOM is stripped silently (RFC 8259 permits one); every setting
     // survives, including preset resolution.
-    expect(config.autoUpdate).toBe(false);
+    expect(config.setDefaultAgent).toBe(false);
     expect(config.agents?.oracle?.model).toBe('fast-model');
     expect(config.agents?.oracle?.temperature).toBe(0.9);
-  });
-
-  test('deep-merges webfetch settings across user and project configs', () => {
-    const userConfigPath = path.join(userConfigDir, 'opencode');
-    const projectDir = path.join(tempDir, 'project');
-    const projectConfigDir = path.join(projectDir, '.opencode');
-    fs.mkdirSync(userConfigPath, { recursive: true });
-    fs.mkdirSync(projectConfigDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(userConfigPath, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        webfetch: { enabled: false },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        webfetch: { enabled: true },
-      }),
-    );
-
-    const config = loadPluginConfig(projectDir, { silent: true });
-
-    expect(config.webfetch).toEqual({
-      enabled: true,
-    });
   });
 
   test('retains user interview settings when project partially overrides them', () => {
@@ -520,7 +494,7 @@ describe('loadPluginConfig', () => {
     expect(config.marketplace).toEqual({ enabled: false });
   });
 
-  test('does not let a defaulted project webfetch enabled override user false', () => {
+  test('a removed project switch does not re-enable the disabled update hook', () => {
     const userConfigPath = path.join(userConfigDir, 'opencode');
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
@@ -528,22 +502,16 @@ describe('loadPluginConfig', () => {
     fs.mkdirSync(projectConfigDir, { recursive: true });
     fs.writeFileSync(
       path.join(userConfigPath, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        webfetch: { enabled: false },
-      }),
+      JSON.stringify({ disabled_hooks: ['auto-update-checker'] }),
     );
     fs.writeFileSync(
       path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        webfetch: {},
-      }),
+      JSON.stringify({ autoUpdate: true }),
     );
 
     const config = loadPluginConfig(projectDir, { silent: true });
 
-    expect(config.webfetch).toEqual({
-      enabled: false,
-    });
+    expect(config.disabled_hooks).toEqual(['auto-update-checker']);
   });
 
   test('a project-layer backgroundJobs bad key sanitizes away without overriding a valid user value (#1291)', () => {
@@ -666,7 +634,7 @@ describe('loadPluginConfig', () => {
     fs.writeFileSync(
       path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
-        autoUpdate: false,
+        setDefaultAgent: false,
         disabled_agents: ['observer'],
       }),
     );
@@ -677,7 +645,7 @@ describe('loadPluginConfig', () => {
       onWarning: (warning) => warnings.push(warning),
     });
     expect(config.image_routing).toBe('auto');
-    expect(config.autoUpdate).toBe(false);
+    expect(config.setDefaultAgent).toBe(false);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.message).toContain(
       'image_routing "auto" requires observer to be enabled',
@@ -1760,7 +1728,7 @@ describe('disabled_* key normalization', () => {
       path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
         disabled_agents: 'explorer',
-        autoUpdate: false,
+        setDefaultAgent: false,
         agents: { oracle: { model: 'test/model' } },
       }),
     );
@@ -1771,7 +1739,7 @@ describe('disabled_* key normalization', () => {
     });
 
     expect(config.disabled_agents).toEqual(['explorer']);
-    expect(config.autoUpdate).toBe(false);
+    expect(config.setDefaultAgent).toBe(false);
     expect(config.agents?.oracle?.model).toBe('test/model');
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.kind).toBe('normalized');
@@ -1837,7 +1805,7 @@ describe('disabled_* key normalization', () => {
       JSON.stringify({
         disabled_mcps: 123,
         disabled_agents: { invalid: 'object' },
-        autoUpdate: false,
+        setDefaultAgent: false,
         agents: { oracle: { model: 'test/model' } },
       }),
     );
@@ -1849,7 +1817,7 @@ describe('disabled_* key normalization', () => {
 
     expect(config.disabled_mcps).toBeUndefined();
     expect(config.disabled_agents).toBeUndefined();
-    expect(config.autoUpdate).toBe(false);
+    expect(config.setDefaultAgent).toBe(false);
     expect(config.agents?.oracle?.model).toBe('test/model');
     expect(warnings).toHaveLength(2);
     for (const warning of warnings) {
@@ -1867,7 +1835,7 @@ describe('disabled_* key normalization', () => {
     fs.writeFileSync(
       path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
-        autoUpdate: false,
+        setDefaultAgent: false,
         agents: { oracle: { model: 'test/model' } },
       }),
     );
@@ -1877,7 +1845,7 @@ describe('disabled_* key normalization', () => {
       onWarning: (warning) => warnings.push(warning),
     });
 
-    expect(config.autoUpdate).toBe(false);
+    expect(config.setDefaultAgent).toBe(false);
     expect(config.agents?.oracle?.model).toBe('test/model');
     expect(warnings).toHaveLength(0);
   });
@@ -3395,14 +3363,38 @@ describe('removed config keys', () => {
     expect(config.backgroundJobs?.mode).toBe('native');
   });
 
-  test('SF-01: drops webfetch.model without losing the other file settings', () => {
+  test('duplicate switches are absent and are not translated to new controls', () => {
     const { config, warnings } = load({
-      webfetch: { model: 'test/retired-model', enabled: false },
+      autoUpdate: false,
+      webfetch: { enabled: false },
+      backgroundJobs: {
+        childInputWake: false,
+        childInputWakeKinds: { permission: true, question: false },
+      },
       sidebar: false,
     });
 
     expect(config.agents?.oracle?.model).toBe('test/preset-oracle');
-    expect(config.webfetch).toEqual({ enabled: false });
+    expect(config.sidebar).toBe(false);
+    expect(config).not.toHaveProperty('autoUpdate');
+    expect(config).not.toHaveProperty('webfetch');
+    expect(config.backgroundJobs).not.toHaveProperty('childInputWake');
+    expect(config.backgroundJobs?.childInputWakeKinds).toEqual({
+      permission: true,
+      question: false,
+    });
+    expect(config.disabled_hooks).toBeUndefined();
+    expect(config.disabled_tools).toBeUndefined();
+    expect(warnings).toEqual([]);
+  });
+
+  test('SF-01: drops webfetch.model without losing the other file settings', () => {
+    const { config, warnings } = load({
+      webfetch: { model: 'test/retired-model' },
+      sidebar: false,
+    });
+
+    expect(config.agents?.oracle?.model).toBe('test/preset-oracle');
     expect(config.sidebar).toBe(false);
     expect(warnings.map((warning) => warning.kind)).toEqual(['removed-key']);
     expect(warnings[0]?.message).toContain('"webfetch.model" was removed');

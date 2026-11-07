@@ -206,7 +206,11 @@ describe('TUI feature gates', () => {
   });
 
   test('tui false implies sidebar off and the update switch is shared', () => {
-    writeUserConfig({ tui: false, sidebar: true, autoUpdate: false });
+    writeUserConfig({
+      tui: false,
+      sidebar: true,
+      disabled_hooks: ['auto-update-checker'],
+    });
     const off = readTuiGates(env.projectDir).gates;
     expect(off.tuiEnabled).toBe(false);
     expect(off.sidebarEnabled).toBe(false);
@@ -222,7 +226,7 @@ describe('TUI feature gates', () => {
     expect(hookOff.sidebarEnabled).toBe(true);
     expect(hookOff.updateCheckerEnabled).toBe(false);
 
-    writeUserConfig({ autoUpdate: true });
+    writeUserConfig({ disabled_hooks: [] });
     expect(readTuiGates(env.projectDir).gates.updateCheckerEnabled).toBe(true);
   });
 

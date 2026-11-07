@@ -184,7 +184,7 @@ test('ignores schema-invalid ancestor pins and presets just like runtime loading
   fs.writeFileSync(
     path.join(workspace, '.opencode', 'oh-my-opencode-slim.json'),
     JSON.stringify({
-      autoUpdate: 'not-a-boolean',
+      setDefaultAgent: 'not-a-boolean',
       preset: 'shared',
       presets: { discarded: { fixer: { model: 'test/discarded' } } },
     }),

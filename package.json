@@ -123,8 +123,8 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
-    "@opencode/client": "2.2.0",
-    "@opencode/plugin": "2.2.0",
+    "@opencode/client": "2.2.6",
+    "@opencode/plugin": "2.2.6",
     "@types/jsdom": "30",
     "@types/node": "^26.6.2",
     "@types/semver": "^7.7.1",

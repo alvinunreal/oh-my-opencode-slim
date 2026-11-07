@@ -68,25 +68,15 @@ describe('resolveFeatureGates', () => {
     ).toBe(false);
   });
 
-  test('disables the update checker via autoUpdate or the disabled hook', () => {
-    expect(resolveFeatureGates({ autoUpdate: false }).updateChecker).toBe(
-      false,
-    );
+  test('disables the update checker via the disabled hook', () => {
     expect(
       resolveFeatureGates({ disabled_hooks: ['auto-update-checker'] })
         .updateChecker,
     ).toBe(false);
-    expect(
-      resolveFeatureGates({
-        autoUpdate: false,
-        disabled_hooks: ['auto-update-checker'],
-      }).updateChecker,
-    ).toBe(false);
 
-    // Unrelated hooks and an explicit autoUpdate: true keep checking on.
+    // Unrelated hooks keep checking on.
     expect(
       resolveFeatureGates({
-        autoUpdate: true,
         disabled_hooks: ['cache-monitor'],
       }).updateChecker,
     ).toBe(true);
@@ -94,16 +84,6 @@ describe('resolveFeatureGates', () => {
 
   test('keeps webfetch enabled by default', () => {
     expect(resolveFeatureGates().webfetch).toBe(true);
-    expect(resolveFeatureGates({ webfetch: {} }).webfetch).toBe(true);
-    expect(resolveFeatureGates({ webfetch: { enabled: true } }).webfetch).toBe(
-      true,
-    );
-  });
-
-  test('disables webfetch on the config switch', () => {
-    expect(resolveFeatureGates({ webfetch: { enabled: false } }).webfetch).toBe(
-      false,
-    );
   });
 
   test('disables webfetch when disabled_tools lists it', () => {
@@ -137,9 +117,8 @@ describe('resolveFeatureGates', () => {
       sidebar: true,
       interview: { enabled: false },
       marketplace: { enabled: false },
-      webfetch: { enabled: false },
+      disabled_tools: ['webfetch'],
       liveConfigRefresh: false,
-      autoUpdate: false,
       backgroundJobs: { mode: 'native' },
       disabled_hooks: ['auto-update-checker'],
     };

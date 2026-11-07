@@ -422,6 +422,18 @@ describe('applyAgentToDraft', () => {
     });
   });
 
+  test('theme tokens do not replace the native host color', () => {
+    const agent: Record<string, unknown> = { color: '#654321' };
+    const { draft } = recorder();
+    draft.update = (_id, update) => update(agent);
+    applyAgentToDraft(draft, 'oracle', { color: 'info' });
+    expect(agent.color).toBe('#654321');
+
+    delete agent.color;
+    applyAgentToDraft(draft, 'oracle', { color: 'primary' });
+    expect(agent).not.toHaveProperty('color');
+  });
+
   test('defaults orchestrator to primary mode', () => {
     const { draft, calls } = recorder();
     applyAgentToDraft(draft, 'orchestrator', {});
@@ -458,27 +470,15 @@ describe('applyAgentToDraft', () => {
     expect((request.settings as Record<string, unknown>).temperature).toBe(0);
   });
 
-  test('maps options into request.body (provider options are not dropped)', () => {
+  test('keeps provider options out of the native HTTP body', () => {
     const { draft, calls } = recorder();
     applyAgentToDraft(draft, 'a', {
       options: { thinking: { type: 'enabled', budgetTokens: 4096 } },
+      request: { body: { nativeOption: true } },
     });
 
     const request = calls[0].agent.request as Record<string, unknown>;
-    expect(request.body).toEqual({
-      thinking: { type: 'enabled', budgetTokens: 4096 },
-    });
-  });
-
-  test('ignores array/null options in request.body', () => {
-    const { draft, calls } = recorder();
-    applyAgentToDraft(draft, 'a', { options: [1, 2] as never });
-    applyAgentToDraft(draft, 'b', { options: null as never });
-
-    for (const call of calls) {
-      const request = call.agent.request as Record<string, unknown>;
-      expect(request.body).toBeUndefined();
-    }
+    expect(request.body).toEqual({ nativeOption: true });
   });
 
   test('clears an existing model when the finalized config inherits it', () => {

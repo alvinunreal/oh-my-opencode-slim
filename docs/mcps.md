@@ -31,7 +31,7 @@ The built-in tool is Exa-backed (optionally Parallel), needs no API key, and is 
 
 ### User-defined entries win
 
-If you define an MCP server with the same name in `opencode.json` / `opencode.jsonc` (for example `mcp.gh_grep`), your entry is used as-is and the plugin does not inject its built-in for that key. A partial entry is used as-is too: fields missing from your entry are not back-filled from the built-in. To disable a built-in entirely without defining your own, use `disabled_mcps` in the oh-my-opencode-slim config.
+If you define an MCP server with the same name in `opencode.json` / `opencode.jsonc` (for example `mcp.gh_grep`), your entry is used as-is and the plugin does not inject its built-in for that key. A partial entry is used as-is too: fields missing from your entry are not back-filled from the built-in. `disabled_mcps` omits the built-in and filters Slim's agent capability selection; it does not remove an existing user server. Disable that server in the host MCP configuration (`mcp.servers.<name>.disabled` on v2, `mcp.<name>.enabled: false` on v1).
 
 ---
 

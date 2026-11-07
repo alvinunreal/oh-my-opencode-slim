@@ -372,27 +372,6 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
   });
 });
 
-describe('PluginConfigSchema webfetch', () => {
-  it('defaults the enhanced webfetch tool to enabled', () => {
-    const result = PluginConfigSchema.safeParse({ webfetch: {} });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.webfetch?.enabled).toBe(true);
-    }
-  });
-
-  it('rejects the removed dedicated model key (strict schema)', () => {
-    const result = PluginConfigSchema.safeParse({
-      webfetch: {
-        model: 'openai/gpt-4o-mini',
-      },
-    });
-
-    expect(result.success).toBe(false);
-  });
-});
-
 describe('MultiplexerConfigSchema', () => {
   let warnSpy: Mock<typeof console.warn>;
 
@@ -1422,26 +1401,6 @@ describe('PluginConfigSchema backgroundJobs', () => {
       if (result.success) {
         expect(result.data.backgroundJobs?.sameProviderPolicy).toEqual({});
       }
-    }
-  });
-
-  it('defaults childInputWake to enabled', () => {
-    const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.childInputWake).toBe(true);
-    }
-  });
-
-  it('accepts an explicit childInputWake override', () => {
-    const result = PluginConfigSchema.safeParse({
-      backgroundJobs: { childInputWake: false },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.childInputWake).toBe(false);
     }
   });
 

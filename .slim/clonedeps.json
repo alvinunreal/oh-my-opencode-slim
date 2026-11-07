@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "updatedAt": "2026-10-27T00:00:00.000Z",
+  "updatedAt": "2026-11-07T00:00:00.000Z",
   "dependencies": [
     {
       "name": "@opencode-ai/plugin",
@@ -31,9 +31,9 @@
     },
     {
       "name": "anomalyco/opencode",
-      "resolvedVersion": "v2.2.0",
+      "resolvedVersion": "v2.2.6",
       "repoUrl": "https://github.com/anomalyco/opencode.git",
-      "ref": "v2.2.0@1097e2668b1e08ad63bdf0b1c4860b9bc01e420c",
+      "ref": "v2.2.6@dc2ffcf8bf26f9e669b6aa22b95f50e12be15e06",
       "path": ".slim/clonedeps/repos/opencode",
       "packagePath": ".",
       "reason": "OpenCode v2 TypeScript runtime source (split into packages/core, packages/server, packages/plugin, packages/sdk, packages/client) with background subagent support."

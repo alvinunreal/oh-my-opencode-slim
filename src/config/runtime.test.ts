@@ -343,12 +343,8 @@ describe('RuntimeConfig', () => {
     expect(managed.backgroundJobsEnabled).toBe(true);
   });
 
-  test('updateCheckerEnabled is off for autoUpdate false or the disabled hook', () => {
+  test('updateCheckerEnabled is off for the disabled hook', () => {
     resetRegistry();
-    const autoUpdateOff = RuntimeConfig.init(DIRECTORY, { autoUpdate: false });
-    expect(autoUpdateOff.updateCheckerEnabled).toBe(false);
-
-    RuntimeConfig.reset(DIRECTORY);
     const hookOff = RuntimeConfig.init(DIRECTORY, {
       disabled_hooks: ['auto-update-checker'],
     });
@@ -361,18 +357,12 @@ describe('RuntimeConfig', () => {
     expect(unrelatedHook.updateCheckerEnabled).toBe(true);
   });
 
-  test('webfetch is gated by its config switch and disabled_tools entry', () => {
+  test('webfetch is gated by the disabled_tools entry', () => {
     resetRegistry();
     const toolDisabled = RuntimeConfig.init(DIRECTORY, {
       disabled_tools: ['webfetch'],
     });
     expect(toolDisabled.featureGates.webfetch).toBe(false);
-
-    RuntimeConfig.reset(DIRECTORY);
-    const switchOff = RuntimeConfig.init(DIRECTORY, {
-      webfetch: { enabled: false },
-    });
-    expect(switchOff.featureGates.webfetch).toBe(false);
 
     RuntimeConfig.reset(DIRECTORY);
     const unrelated = RuntimeConfig.init(DIRECTORY, {
@@ -598,7 +588,6 @@ describe('RuntimeConfig', () => {
   test('explicit config values override defaults', () => {
     resetRegistry();
     const runtime = RuntimeConfig.init(DIRECTORY, {
-      autoUpdate: false,
       stripOrchestratorModel: true,
       routingBlock: false,
       setDefaultAgent: false,
@@ -609,10 +598,9 @@ describe('RuntimeConfig', () => {
       disabled_tools: ['webfetch'],
       disabled_mcps: ['context7'],
       disabled_skills: ['clonedeps'],
-      disabled_hooks: ['foreground-fallback'],
+      disabled_hooks: ['foreground-fallback', 'auto-update-checker'],
       disabled_commands: ['interview', 'deepwork'],
       fallback: { enabled: false, maxRetries: 5 },
-      webfetch: { enabled: false },
       acpAgents: { myAcp: { command: 'echo' } },
       backgroundJobs: { maxSessionsPerAgent: 7 },
       multiplexer: { type: 'tmux', layout: 'main-vertical' },
@@ -629,7 +617,9 @@ describe('RuntimeConfig', () => {
     expect(runtime.disabledTools).toEqual(['webfetch']);
     expect(runtime.disabledMcps).toEqual(['context7']);
     expect(runtime.disabledSkills).toEqual(['clonedeps']);
-    expect(runtime.disabledHooks).toEqual(new Set(['foreground-fallback']));
+    expect(runtime.disabledHooks).toEqual(
+      new Set(['foreground-fallback', 'auto-update-checker']),
+    );
     expect(runtime.disabledCommands).toEqual(
       new Set(['interview', 'deepwork']),
     );
@@ -641,26 +631,23 @@ describe('RuntimeConfig', () => {
     expect(runtime.multiplexer.type).toBe('tmux');
   });
 
-  test('backgroundJobs folds childInputWake off into all-false kinds', () => {
+  test('backgroundJobs can silence both child-input wake kinds', () => {
     resetRegistry();
     const runtime = RuntimeConfig.init(DIRECTORY, {
       backgroundJobs: {
-        childInputWake: false,
-        childInputWakeKinds: { question: true },
+        childInputWakeKinds: { permission: false, question: false },
       },
     });
-    expect(runtime.backgroundJobs.childInputWake).toBe(false);
     expect(runtime.backgroundJobs.childInputWakeKinds).toEqual({
       permission: false,
       question: false,
     });
   });
 
-  test('backgroundJobs passes childInputWakeKinds through when enabled', () => {
+  test('backgroundJobs passes childInputWakeKinds through', () => {
     resetRegistry();
     const runtime = RuntimeConfig.init(DIRECTORY, {
       backgroundJobs: {
-        childInputWake: true,
         childInputWakeKinds: { permission: true, question: false },
       },
     });

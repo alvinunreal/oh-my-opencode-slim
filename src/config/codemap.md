@@ -168,8 +168,8 @@ This allows consumers to import directly from `src/config` rather than individua
 
 ### PluginConfig (Root Schema)
 - `preset`: Active preset name
-- `setDefaultAgent`: Whether to set default agent model
-- `autoUpdate`: Master switch for OMOS plugin update checks, notices, and automatic installs; `disabled_hooks: ["auto-update-checker"]` is the per-hook form of the same off switch
+- `setDefaultAgent`: Whether the plugin selects its orchestrator as the host default agent
+- `disabled_hooks: ["auto-update-checker"]`: the only update-checker switch; stops OMOS update checks, notices, and automatic installs
 - `presets`: Named preset groupings (map of presetName → AgentOverrideConfig)
 - `agents`: Per-agent overrides (map of agentName → AgentOverrideConfig)
 - `disabled_agents`: List of agents to disable
@@ -221,6 +221,7 @@ This allows consumers to import directly from `src/config` rather than individua
 ## Backward Compatibility
 
 - Removed keys (`REMOVED_CONFIG_KEYS` in `removed-keys.ts`: top-level `tmux`, `council.master*`, council preset `master` / `councillors`, `backgroundJobs.continueOnIdle`, `fallback.timeoutMs|retry_on_empty|runtimeOverride`, `multiplexer.zellij_pane_mode`, `webfetch.model`): stripped from each raw layer before validation with a `removed-key` warning; the schema itself still rejects them
+- Duplicate switches `autoUpdate`, `webfetch.enabled`, and `backgroundJobs.childInputWake` have no parser or translation; use the disabled hook/tool and `childInputWakeKinds` directly
 - Invalid `multiplexer` values disable pane management (`type: "none"`) with one diagnostic
 
 ## Error Handling

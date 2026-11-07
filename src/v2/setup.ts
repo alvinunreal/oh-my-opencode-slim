@@ -2921,7 +2921,11 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       setSessionTeamResolver?.(
         (sessionID) => sessionPresets.peek(sessionID)?.bundle,
       );
-      if (sessionPresets.available && ctx.rpc?.register) {
+      if (
+        sessionPresets.available &&
+        ctx.rpc?.register &&
+        isCommandEnabled('preset', { disabledCommands })
+      ) {
         const registration = await ctx.rpc.register(sessionPresetRpc, {
           read: ({ sessionID }) => sessionPresets.readState(sessionID),
           apply: ({ sessionID, presetName }, { signal }) =>
@@ -3760,7 +3764,8 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             });
             disposers.push(() => reg.dispose());
           }
-          if (after) {
+          // Before owns admission captures; retain cleanup without v1 consumers.
+          if (after || before) {
             const reg = await ctx.tool.hook('execute.after', async (event) => {
               try {
                 await bridges.afterBridge(event as never);

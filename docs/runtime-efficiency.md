@@ -17,7 +17,7 @@ project reads.
 The sidebar keeps its 1s render poll. With `sidebar: false`, the 5s config poll
 still detects external multiplexer edits, but unchanged files are not parsed
 again. `tui: false` also stops the server-side sidebar recorder: no state-file
-writes and no parent-hydration `session.get` reads. `webfetch.enabled: false` or
+writes and no parent-hydration `session.get` reads.
 `disabled_tools: ["webfetch"]` skips the enhanced implementation and its JSDOM
 startup probe. Companion request detection keeps its 250ms interval; its
 config refresh is a separate once-per-second duty.
@@ -45,8 +45,11 @@ hook, tool or utility barrels:
   recovery and managed tools. `"native"` loads only the thin host-read controls;
   `"off"` loads neither implementation. The v1 wake scheduler is separate from
   the pure message helpers used on both hosts.
-- `autoUpdate: false` or the disabled `auto-update-checker` hook skips loading
-  the update implementation. Tool guards follow their existing hook switches.
+- V2 skips the v1 server updater: the host owns package management and Slim's
+  TUI owns its notice. The disabled `auto-update-checker` hook also stops that
+  notice; on v1 it skips the updater implementation. Tool guards keep their
+  existing switches. When every post-tool consumer is disabled, the shared
+  v1 after-hook is absent; v2 keeps its admission cleanup separately.
 - Disabling both AST tools skips their shared implementation. ACP loads only
   when at least one enabled wrapper can use `acp_run`; disabling that tool also
   removes its unusable wrapper agents.

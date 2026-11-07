@@ -10,23 +10,37 @@ v3.0.5**, with historical live host verification on **OpenCode v2.0.7**. The
 plugin requires OpenCode v2.0.7+ on v2 hosts; older v2 hosts are unsupported.
 Bundled skills use the host's in-process registration channel (`ctx.skill` with
 `add`) on v2. On v1 the config hook adds package skill paths to the host's disk
-scanner, excluding disabled skills and names supplied by the user.
+scanner, excluding disabled skills and names supplied by the user. MCPs also
+use the host transform, with existing configured namespaces taking priority.
+Slim does not start a second MCP client or skill loader.
 The adapter targets the v2 plugin API surface (see
 [The v2 plugin API surface](#the-v2-plugin-api-surface-this-adapter-uses)),
 and the compile-time mirror guard below is pinned to `@opencode/plugin`
-2.2.0. Typecheck covers the consumed listing filters, nullable continuation
+2.2.6. Typecheck covers the consumed listing filters, nullable continuation
 cursors, native execution event envelope, compaction result names and the
-existing hook/permission contracts. This is source-contract coverage against
-v2.2.0; the latest live-host smoke baseline remains the version stated below.
+existing hook/permission contracts. Source review uses the v2.2.6 release
+(`dc2ffcf8`); this does not change the historical live-host baseline below.
 
 The 2.2.0 release adds the Desktop GUI plugin SDK, per-session
 `session.instructions.entry.*`, type-filtered event subscriptions,
 `experimental.generate`, and richer media endpoints. OMOS freezes its required
 event-type union at setup and subscribes to Interview text streams only when
 Interview is enabled. It consumes none of the GUI surface and retains the
-existing promise-adapter bridges. The native patch tool is
-still named `patch` with a `{ patchText }` input, and the apply-patch preflight
-now serves both that name and v1's `apply_patch`.
+existing promise-adapter bridges. Provider options (`agents.*.options`) are
+applied only through the session context's request-options surface, not
+duplicated into raw HTTP body fields. Native host `request` fields still pass
+through unchanged.
+
+The native patch tool is still named `patch` with a `{ patchText }` input, and
+the apply-patch preflight
+now serves both that name and v1's `apply_patch`. Native schema input repair
+and Slim's invalid-JSON failure reminder have different triggers. Likewise,
+`/goal` owns its idle judge loop; `deepwork-goal` only restores a disk progress
+pointer lost to compaction. Their existing switches and defaults are retained.
+
+On v2, package checks and installation remain host-owned. Slim does not load
+its v1 server updater through the v2 shim; the TUI keeps its update toast/badge
+because the host does not publish the latest version string.
 
 The 2.1 replay renames do not require rewriting host-owned data here: the
 compaction bridge leaves `result.native` and `metadata.keepID` untouched.
@@ -117,12 +131,12 @@ Three host entry builds are produced:
 | `./server` | `dist/server/index.js` + chunks | `build:v2` | jsdom, jsonc-parser (other runtime dependencies bundled) |
 | `./tui` | `dist/tui2.js` | `build:tui` | same external set as `build:plugin` (thin gate entry + deferred `dist/tui-impl` chunk composing the v1 TUI entry; inlines zod) |
 
-The optional `@opentui/*` dependencies provide the v2 TUI entry's rendering
-stack. The development-only `@opencode/plugin` 2.2.0 contract declares an
-optional OpenTUI peer floor of `0.7.0`; the runtime pins track that family
-(`@opentui/core`/`@opentui/solid` 0.7.0) so the dependency-contract test and
-the host agree. `@opentui/solid` pins `solid-js` exactly (0.7.0 requires
-1.9.12), so any future OpenTUI bump must re-check that pin.
+The optional `@opentui/*` runtime dependencies remain on 0.7.0 for the
+`@opencode-ai/plugin` v1 contract, with its exact `solid-js` 1.9.12 pin.
+The development-only `@opencode/plugin` 2.2.6 type contract declares an
+optional OpenTUI peer floor of 0.8.1; it is not imported at runtime. The v2
+adapter composes the host's slot/dialog interface instead of installing a
+second v2 TUI SDK. A future runtime OpenTUI bump must check both host contracts.
 
 v2's plugin resolver tries the `server` subpath first
 (`subpaths: ["server", ""]`), which the exports map resolves directly to
@@ -156,7 +170,7 @@ name for the chat.headers bridge; the event stream and bridges are exercised end
 since the council 2026-10-23 removal the plugin creates no wake scheduler on
 v2; the host delivers first terminal results and the tracker delivers later
 publications). v2 conformance is compile-time-pinned by the
-mirror-conformance guard against the `@opencode/plugin` 2.2.0
+mirror-conformance guard against the `@opencode/plugin` 2.2.6
 devDependency and exercised by the mock-driven bridge tests. Every v2
 API the adapter touches is
 capability-probed at runtime (`s.switchModel`, `ctx.generate`, …), so a host

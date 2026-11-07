@@ -68,6 +68,7 @@ const BASE_DISABLED_TOOLS = [
   'marketplace_inspect',
   'marketplace_manage',
   'interview_submit_state',
+  'webfetch',
 ] as const;
 
 const BASE_DISABLED_COMMANDS = [
@@ -98,12 +99,10 @@ const without = (values: readonly string[], drop: string[]) =>
 const baseConfig: CaseConfig = {
   tui: false,
   sidebar: false,
-  autoUpdate: false,
   liveConfigRefresh: false,
   interview: { enabled: false },
   marketplace: { enabled: false },
   companion: { enabled: false },
-  webfetch: { enabled: false },
   multiplexer: { type: 'none' },
   disabled_mcps: ['context7', 'gh_grep'],
   disabled_commands: BASE_DISABLED_COMMANDS,
@@ -156,7 +155,6 @@ const CASES: readonly Case[] = [
     name: 'update',
     config: {
       ...baseConfig,
-      autoUpdate: true,
       disabled_hooks: without(ALL_HOOKS, ['auto-update-checker']),
     },
     note: 'updater armed, session.created never delivered',
@@ -225,7 +223,10 @@ const CASES: readonly Case[] = [
   },
   {
     name: 'webfetch',
-    config: { ...baseConfig, webfetch: { enabled: true } },
+    config: {
+      ...baseConfig,
+      disabled_tools: without(BASE_DISABLED_TOOLS, ['webfetch']),
+    },
     note: 'enhanced webfetch and its JSDOM startup probe',
   },
 ];

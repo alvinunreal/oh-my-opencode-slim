@@ -693,12 +693,6 @@ const BackgroundJobsConfigStrictSchema = z.object({
     .describe(
       'When true, intercept wait_for_user calls made while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. Default enabled.',
     ),
-  childInputWake: z
-    .boolean()
-    .default(true)
-    .describe(
-      'When true, a background child ask wakes its parent with the ask content. Default enabled.',
-    ),
   childInputWakeKinds: z
     .object({
       permission: z.boolean().default(false).catch(false),
@@ -933,19 +927,6 @@ const CompanionConfigSchema = z.object({
 
 export type CompanionConfig = z.infer<typeof CompanionConfigSchema>;
 
-export const WebfetchConfigSchema = z
-  .object({
-    enabled: z
-      .boolean()
-      .default(true)
-      .describe(
-        'When false, skip loading this enhanced webfetch and its JSDOM probe so OpenCode uses its built-in version. disabled_tools: ["webfetch"] has the same cold behavior.',
-      ),
-  })
-  .strict();
-
-export type WebfetchConfig = z.infer<typeof WebfetchConfigSchema>;
-
 const AcpAgentPermissionModeSchema = z.enum(['ask', 'allow', 'reject']);
 
 export const MAX_ACP_TIMEOUT_MS = 2_147_483_647;
@@ -1062,12 +1043,6 @@ const RawPluginConfigSchema = z
       .describe(
         "When false, removes the <Agents> routing block from the built-in orchestrator prompt. The host's native subagent roster (appended to the subagent tool description) still lists every enabled agent, but it carries no Delegate/Don't routing criteria — set false only to drop stock routing claims that drift against custom agent prompts, or to trim tokens. No effect when an orchestrator.md override already replaces the whole prompt. Defaults to true.",
       ),
-    autoUpdate: z
-      .boolean()
-      .optional()
-      .describe(
-        'Master switch for OMOS plugin updates: when false, all update checks, update notices, and automatic installation stay off. Listing "auto-update-checker" in disabled_hooks independently disables the same update hook — neither setting strengthens or weakens the other. Defaults to true.',
-      ),
     presets: z.record(z.string(), PresetSchema).optional(),
     agents: z.record(z.string(), AgentOverrideConfigSchema).optional(),
     disabled_agents: z
@@ -1094,14 +1069,13 @@ const RawPluginConfigSchema = z
       .array(z.string())
       .optional()
       .describe(
-        'MCP server names to disable completely. Disabled servers are not ' +
-          'started and cannot be used by agents.',
+        'MCP names excluded from Slim built-in registration and agent capability selection. Host/user-configured server definitions are not removed; use the host MCP configuration to disable the server itself.',
       ),
     disabled_tools: z
       .array(z.string())
       .optional()
       .describe(
-        'Tool names to disable completely. Disabled tools are not registered with OpenCode and cannot be used by agents.',
+        'Slim tool names to omit from registration and loading. Native host tools are unaffected. Disabling acp_run also removes its wrapper agents.',
       ),
     disabled_skills: z
       .array(z.string())
@@ -1115,7 +1089,7 @@ const RawPluginConfigSchema = z
       .describe(
         'Hook names to disable completely. Valid values: ' +
           DISABLED_HOOKS_VALUES.join(', ') +
-          '. "phase-reminder" is not registered, so orchestrator phase reminders are never injected; "foreground-fallback" prevents the fallback manager and its retry hook from being constructed at all, so no automatic intervention runs on any host (fallback.enabled = false still leaves the retry bookkeeping registered on v2 hosts, where a live per-session enable can switch it back on); "chat-headers" is not registered, so the Copilot x-initiator header is never stamped (v1 chat.headers and the v2 model.request bridge); "cache-monitor" stops the prompt-cache bust watchdog, so cache warnings are never logged; the on-demand tool guards ("json-error-recovery", "tool-loop-guard", "search-path-guard", "absolute-path-rescue", "apply-patch" — v1 apply_patch / v2 patch) stop intercepting tool calls entirely, so malformed output, repeated identical calls, and invalid or guessed paths surface raw to the model; "council-inject" is not registered, so the keyword-triggered Council Mode injection is never appended to orchestrator messages; "auto-update-checker" stops the same OMOS update hook that autoUpdate: false covers — all update checks, update notices, and automatic installation — so either switch alone turns it off. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer\'s list still applies.',
+          '. "phase-reminder" is not registered, so orchestrator phase reminders are never injected; "foreground-fallback" prevents the fallback manager and its retry hook from being constructed at all, so no automatic intervention runs on any host (fallback.enabled = false still leaves the retry bookkeeping registered on v2 hosts, where a live per-session enable can switch it back on); "chat-headers" is not registered, so the Copilot x-initiator header is never stamped (v1 chat.headers and the v2 model.request bridge); "cache-monitor" stops the prompt-cache bust watchdog, so cache warnings are never logged; the on-demand tool guards ("json-error-recovery", "tool-loop-guard", "search-path-guard", "absolute-path-rescue", "apply-patch" — v1 apply_patch / v2 patch) stop intercepting tool calls entirely, so malformed output, repeated identical calls, and invalid or guessed paths surface raw to the model; "council-inject" is not registered, so the keyword-triggered Council Mode injection is never appended to orchestrator messages; "auto-update-checker" stops all OMOS update checks, update notices, and automatic installation. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer\'s list still applies.',
       ),
     disabled_commands: z
       .array(z.enum(DISABLED_COMMANDS_VALUES))
@@ -1123,7 +1097,7 @@ const RawPluginConfigSchema = z
       .describe(
         'Slash-command names to disable completely. Valid values: ' +
           DISABLED_COMMANDS_VALUES.join(', ') +
-          '. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. The /reflect command is also disabled when "reflect" is listed in disabled_skills. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer\'s list still applies.',
+          '. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. Disabling "preset" also removes its v2 client RPC and sidebar editor entry, while inference bindings stay active. The /reflect command is also disabled when "reflect" is listed in disabled_skills. Unknown values are stripped with a warning when the config loads. A value consisting only of unknown names is treated as unset, so a lower config layer\'s list still applies.',
       ),
     // Multiplexer config
     multiplexer: MultiplexerConfigSchema.optional(),
@@ -1132,7 +1106,6 @@ const RawPluginConfigSchema = z
     fallback: FailoverConfigSchema.optional(),
     council: CouncilConfigSchema.optional(),
     companion: CompanionConfigSchema.optional(),
-    webfetch: WebfetchConfigSchema.optional(),
     acpAgents: AcpAgentsConfigSchema.optional(),
     // `marketplace: false` is the natural guess for the kill switch; read
     // it as `{ enabled: false }` instead of rejecting the whole file.
