@@ -200,8 +200,8 @@ All config files support **JSONC** (JSON with Comments):
 
 ## Minimal Setup
 
-Every optional subsystem has one switch, all defaulting to on. A
-council-and-observer-only setup turns off the rest:
+Each optional subsystem has one canonical control. A council-and-observer-only
+setup can disable the extra surfaces and tools:
 
 ```jsonc
 {
@@ -209,10 +209,8 @@ council-and-observer-only setup turns off the rest:
   "interview": { "enabled": false },
   "marketplace": { "enabled": false },
   "tui": false,
-  "autoUpdate": false,
   "liveConfigRefresh": false,
   "fallback": { "enabled": false },
-  "webfetch": { "enabled": false },
   "multiplexer": { "type": "none" },
   "companion": { "enabled": false },
   // Keep council + observer; enable observer by naming only the other
@@ -225,14 +223,15 @@ council-and-observer-only setup turns off the rest:
     "councillor": { "skills": [] }
   },
   "disabled_mcps": ["context7", "gh_grep"],
-  "disabled_commands": ["interview", "implement", "deepwork", "reflect"],
+  "disabled_commands": ["interview", "implement", "deepwork", "reflect", "preset"],
   "disabled_hooks": [
     "phase-reminder", "foreground-fallback", "deepwork-goal",
     "cache-monitor", "json-error-recovery", "tool-loop-guard",
-    "search-path-guard", "absolute-path-rescue", "apply-patch"
+    "search-path-guard", "absolute-path-rescue", "apply-patch",
+    "auto-update-checker"
   ],
   "disabled_tools": [
-    "ast_grep_search", "ast_grep_replace", "acp_run",
+    "ast_grep_search", "ast_grep_replace", "acp_run", "webfetch",
     "marketplace_inspect", "marketplace_manage",
     "task_cancel", "task_message", "task_status", "task_reply"
   ]
@@ -286,7 +285,7 @@ and [Council](council.md) for what remains.
 | `agents.<customAgent>.model` | string\|array | - | Required for custom agents inferred from unknown `agents` keys |
 | `agents.<customAgent>.prompt` | string | - | Full execution prompt for a custom agent |
 | `agents.<customAgent>.orchestratorPrompt` | string | - | Exact `@agent` block injected into the orchestrator prompt; must start with `@<agent-name>` |
-| `agents.<agent>.permission` | object \| string | - | Tool-level permission rules enforced by the SDK. See [Agent Permissions](#agent-permissions) |
+| `agents.<agent>.permission` | object \| string | - | Tool-level restrictions enforced by the host. The v2 adapter compiles these to native ordered `permissions` rules. See [Agent Permissions](#agent-permissions) |
 | `agents.<agent>.mcps` | string[] | - | Plugin MCP allow-list (`"*"`, `"!item"`, explicit list); this is plugin configuration, not a host agent `mcps` field |
 | `agents.<agent>.displayName` | string | - | Custom user-facing alias for the agent in the active config |
 | `agents.<agent>.color` | string | - | Agent display color as `#RRGGBB` or a theme color: `primary`, `secondary`, `accent`, `success`, `warning`, `error`, or `info` |
@@ -294,6 +293,7 @@ and [Council](council.md) for what remains.
 | `agents.<agent>.primary` | boolean | - | Registers this custom agent as a peer primary orchestrator (mode `primary`) instead of a subagent: delegation, task monitoring/cancellation, the ask channel, `wait_for_user`, and marketplace tool permissions, plus a delegating default prompt (its own `prompt`/prompt file wins). Ignored with a warning on built-in agents and on keys that override an installed marketplace agent (marketplace agents are never primary). See [Custom Agents](#custom-agents) |
 | `agents.<agent>.subagents` | string[] | - | Primary agents only (including the built-in orchestrator): delegation scope allowlist of specialist names. Compiled into the `task` permission stance (`{"*": "deny", "<name>": "allow"}`); an explicit `permission.task` entry wins. Also renders as the agent's scoped `<Agents>` routing catalog (rendered into the default prompt; a custom `prompt`/prompt file replaces it, and an explicit `permission.task` entry skips the catalog). Entries accept internal names, display names, or `@`-mentions (normalized internally); configured ACP wrappers and active council seat names are valid, whereas installed marketplace agents are not (the scope normalizes against the plugin roster only); unknown entries are dropped with a warning, as are entries naming a primary agent or a disabled agent; `'*'` is reserved. On a non-primary agent the key warns and is ignored. An absent list keeps unrestricted delegation |
 | `agents.<agent>.skills_include_local` | boolean | - | Adds valid skills from the project's and ancestors' `.opencode/skills/**/SKILL.md` and `.agents/skills/**/SKILL.md` trees before `skills_remove` applies |
+| `acpAgents` | object | `{}` | ACP wrapper agents keyed by name. The kill switch is `disabled_tools: ["acp_run"]`: it removes the tool and every wrapper agent that could not run. See [ACP-connected agents](#acp-connected-agents). |
 | `acpAgents.<name>.command` | string | - | Command for an external ACP-compatible agent; creates a wrapper subagent named `<name>` See [ACP-connected agents](#acp-connected-agents). |
 | `acpAgents.<name>.args` | string[] | `[]` | Arguments for the ACP agent command See [ACP-connected agents](#acp-connected-agents). |
 | `acpAgents.<name>.env` | object | `{}` | Extra environment variables for the ACP subprocess See [ACP-connected agents](#acp-connected-agents). |
@@ -306,7 +306,8 @@ and [Council](council.md) for what remains.
 | `acpAgents.<name>.timeoutMs` | integer | `0` | Timeout for a single ACP run in milliseconds. `0` disables the timeout so external agents can run indefinitely. Finite values can be up to `2147483647`ms (~24.8 days) See [ACP-connected agents](#acp-connected-agents). |
 | `disabled_agents` | string[] | `["observer"]` | Agent names to disable globally. Set to `[]` to enable Observer; this is global, not per-preset See [Custom Agents](#custom-agents). |
 | `image_routing` | `"auto"` \| `"direct"` | omitted (legacy conditional) | Optional. When omitted, resolves to `"auto"` if Observer is enabled, otherwise `"direct"`. Explicit `"auto"` saves image attachments under `.opencode/images/<session>/` and nudges delegation to @observer; saved images remain until you remove them. `"direct"` always passes image parts to the orchestrator. Remove saved images with `rm -rf .opencode/images/` (or a single session subdirectory) when they are no longer needed; session-less messages save images at the top level. |
-| `autoUpdate` | boolean | `true` | Master switch for OMOS plugin updates. When `false`, no update check, notification, or automatic installation runs. Either this or `disabled_hooks: ["auto-update-checker"]` disables the same update path. |
+| `webfetch` | — | — | Removed duplicate switch; use `disabled_tools: ["webfetch"]`. No value translation. |
+| `autoUpdate` | — | — | Removed duplicate switch; use `disabled_hooks: ["auto-update-checker"]`. No value translation. |
 | `multiplexer.type` | string | `"none"` | Multiplexer mode: `auto`, `tmux`, `zellij`, `herdr`, `cmux-tui`, `kitty`, `wezterm`, `orca`, or `none` See [Multiplexer Integration](multiplexer-integration.md). On OpenCode v2 hosts, panes work with the shared background service or an explicit `--server`; `--standalone` hosts ignore the setting (one diagnostic per process). |
 | `multiplexer.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Each adapter maps it to its nearest native expression (tmux full layouts; split directions for Zellij/Herdr; built-in layouts for kitty; split order for WezTerm); cmux-tui has no layout expression and ignores it. Herdr builds an agent area for both `main-*` layouts (`main-vertical` agent column, `main-horizontal` agent row) and re-equalizes only its agent panes after each spawn/close. See [Multiplexer Integration](multiplexer-integration.md#layouts). |
 | `multiplexer.main_pane_size` | number | `60` | Main pane size as percentage (20–80) for tmux main layouts and the first Herdr/WezTerm agent split of the `main-*` layouts; Herdr then equalizes the agent panes in the agent column (`main-vertical`) or row (`main-horizontal`) after each spawn/close while the main pane keeps this share. Ignored by Zellij, kitty, and cmux-tui See [Multiplexer Integration](multiplexer-integration.md#layouts). |
@@ -331,16 +332,15 @@ and [Council](council.md) for what remains.
 | `backgroundJobs.concurrency.providerConcurrency` | object | `{}` | Per-provider caps keyed by provider ID. Each value must be `0`–`1000`, where `0` means unlimited for that provider. The most specific configured cap wins: model > provider > default See [Background Job Management](#background-job-management). |
 | `backgroundJobs.concurrency.modelConcurrency` | object | `{}` | Per-model caps keyed by `provider/model` ID. Each value must be `0`–`1000`, where `0` means unlimited for that model. The most specific configured cap wins: model > provider > default See [Background Job Management](#background-job-management). |
 | `backgroundJobs.sameProviderPolicy` | object | `{}` | Opt-in per-provider policy keyed by provider ID; the only value is `"foreground"`. When the parent session's current model and the child agent's resolved model both resolve to a configured provider, an explicit background call (`task(..., background: true)` on v1, `subagent(..., background: true)` on v2) is converted to the existing foreground execution path. On v2 hosts, when the background-default flip is active, calls that omit `background` are first defaulted to background, so they are converted too. Unconfigured, different, or undeterminable providers keep background behavior. See [Background Job Management](#background-job-management). |
-| `backgroundJobs.childInputWake` | boolean | `true` | Master switch for child-input wakes: when true, each ask kind wakes its parent only if enabled in `backgroundJobs.childInputWakeKinds` (default: questions wake, permissions do not). When false, no child ask wakes the parent — equivalent to setting every kind in `backgroundJobs.childInputWakeKinds` to false. v1 hosts only. |
-| `backgroundJobs.childInputWakeKinds` | object | `{ permission: false, question: true }` | Which child ask kinds may wake the parent. Permission asks default off (#1504) because their replies carry no host wake and are resolved by the UI or an external responder. Invalid or partial values fall back to per-field defaults silently. v1 hosts only. See [Background Job Management](#background-job-management). |
+| `backgroundJobs.childInputWake` | — | — | Removed duplicate switch; set `backgroundJobs.childInputWakeKinds`. No value translation. |
+| `backgroundJobs.childInputWakeKinds` | object | `{ permission: false, question: true }` | Which child ask kinds may wake the parent. Permission asks default off (#1504) because their replies carry no host wake and are resolved by the UI or an external responder. Set both to `false` to silence every child-input wake. Invalid or partial values fall back to per-field defaults silently. v1 hosts only. See [Background Job Management](#background-job-management). |
 | `backgroundJobs.waitForUserGuard` | boolean | `true` | v1 only (`wait_for_user` is not registered on v2). When true, intercepts `wait_for_user` calls while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. See [Background Job Management](#background-job-management). |
 | `backgroundJobs.pruneEvictedSessions` | boolean | `false` | When true, removes the host child session when a retention trim (per-agent count cap or context budget, reusable or retained-stopped) evicts its terminal or retained-stopped background job record. Only background children this plugin launched itself through a tracked `task(..., background: true)` call are eligible: foreground task children, unattributed placeholder sessions, and adopted, restored, or rehydrated sessions are never deleted. Bounded host reads must also confirm the session's `parentID` still matches the record's parent and that the session is idle; a session the board tracks again (revived, re-registered, or leased) or with a parked child-input wait is never removed, and the delete itself has a deadline; parent deletion (`session.deleted`) and explicit drops never remove host sessions. v1 hosts only for now: v2 has no live session-status map, so every prune is skipped there (logged, no warning). See [Background Job Management](#background-job-management). |
-| `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
+| `disabled_mcps` | string[] | `[]` | MCP IDs excluded from Slim's built-in registration and agent capability selection. User-configured server definitions remain host-owned; disable the server itself in the host MCP configuration. |
 | `disabled_tools` | string[] | `[]` | Slim tool names to disable globally. Disabled Slim tools are not registered and their implementations are not loaded; OpenCode built-in tools are not affected. Disabling `acp_run` also omits ACP wrapper agents that would be unusable. |
 | `disabled_skills` | string[] | `[]` | Skill names to disable globally. Disabled skills are not granted to agents, and disabled bundled skills are not registered; listing `reflect` here also disables the `/reflect` command |
-| `disabled_hooks` | string[] | `[]` | Hook names to disable globally: `phase-reminder`, `foreground-fallback`, `deepwork-goal`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`, `auto-update-checker`. Either `auto-update-checker` here or `autoUpdate: false` turns the whole update feature off (check, notice, install); the hook entry also keeps the hook off if the feature switch is later re-enabled. Unknown values are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies. See [Hooks](#hooks) |
+| `disabled_hooks` | string[] | `[]` | Hook names to disable globally: `phase-reminder`, `foreground-fallback`, `deepwork-goal`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`, `auto-update-checker`. `auto-update-checker` turns the whole update feature off (check, notice, install). Unknown values are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies. See [Hooks](#hooks) |
 | `disabled_commands` | string[] | `[]` | Slash commands to disable globally: `interview`, `implement`, `deepwork`, `reflect`, `preset`, `killall`, `subagent`. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. Listing `reflect` in `disabled_skills` also disables the `/reflect` command. See [Slash Commands](#slash-commands) |
-| `webfetch.enabled` | boolean | `true` | When `false`, the enhanced `webfetch` is not loaded or registered and OpenCode's built-in is used. Listing `webfetch` in `disabled_tools` has the same cold behavior without changing the feature config. See [Webfetch](webfetch.md) |
 | `fallback.enabled` | boolean | `true` | Enable Slim's foreground model-chain failover. It does not configure OpenCode provider/AI-SDK retries. On **v2 hosts** the replay path (abort + re-prompt) stays disabled — the v2 `switchModel` has no per-turn/atomic conditional form, so an in-flight replay could commit after a newer user turn has taken over — while the retry-hook steering path runs: host retry events are absorbed up to `fallback.maxRetries`, then the model is switched in place via the host `session.switchModel` and the host retries the current turn on the new model. The same switch disables both paths. |
 | `fallback.maxRetries` | integer | `3` | Number of host retry events Slim absorbs before advancing the foreground model chain. The budget stays spent across model switches. Recovery re-arms it: a completed successful assistant response on v1, or a raw `session.step.ended` with `finish` `stop`, `tool-calls` or `length`, or `session.execution.succeeded` on v2. A confirmed new v1 user turn, an observed return to the configured primary outside our committed fallback for a fresh descent, or session deletion also re-arms it. A new v2 user turn alone does not reset the budget; an explicit model change is recorded so returning to the configured primary can re-arm the descent. Landing on the configured head through a committed fallback does not re-arm this budget, including for inherit+chain agents. Terminal `session.error` and `message.updated` failures advance immediately without charging it. On v1, three distinct consecutive completed, error-free `finish: 'unknown'` messages with verified tool-free parts also trigger request-scoped abort and replay without charging retries. `0` advances on the first retry event. This does not configure OpenCode provider or background subagent retries. |
 | `fallback.initialRetryDelayMs` | number | `0` | Delay in milliseconds before triggering the first fallback on a failover-worthy error. Gives intercepting plugins time to recover the current model before the fallback chain advances. 0 disables. v1 replay only: the v2 steering path performs no replay, so it ignores this delay. When the delay is nonzero, v2 logs that it is ignored; the notice can repeat after recovery. |
@@ -381,6 +381,11 @@ the key is dropped before validation and a warning names it, for example
 see docs/configuration.md`. Values are **not** migrated (the one exception is
 `backgroundJobs.enabled: false`, still applied as `mode: "off"`), so set the
 replacement yourself where one exists.
+
+The duplicate `autoUpdate`, `webfetch.enabled` and `backgroundJobs.childInputWake`
+switches have no parser or value translation. Use
+`disabled_hooks: ["auto-update-checker"]`, `disabled_tools: ["webfetch"]`, and
+`childInputWakeKinds` respectively. Set both wake kinds to `false` for no wakes.
 
 | Removed key | Use instead |
 |-------------|-------------|
@@ -593,18 +598,9 @@ ambiguous, not omitted or guessed. See
 
 ### Manual Update Mode
 
-Set `autoUpdate` to `false` to turn the whole OMOS plugin update feature off:
-no startup check, no update notice, and no automatic package install.
-
-```jsonc
-{
-  "autoUpdate": false
-}
-```
-
-Alternatively, list the checker in `disabled_hooks` (on both v1 and v2,
-including the v2 TUI notice). Either switch disables the same feature; the hook
-entry is the per-hook form and stays effective if `autoUpdate` is re-enabled:
+List the checker in `disabled_hooks` (on both v1 and v2, including the v2 TUI
+notice) to turn the whole OMOS plugin update feature off: no startup check, no
+update notice, and no automatic package install.
 
 ```jsonc
 {
@@ -612,8 +608,9 @@ entry is the per-hook form and stays effective if `autoUpdate` is re-enabled:
 }
 ```
 
-Pinned versions and unsupported install layouts retain their existing
-notification behavior when update checking is enabled.
+On v2 the host owns package checks and installation; Slim only adds its TUI
+notice. The v1 server checker remains responsible for its supported install
+layouts. Pinned versions are never automatically replaced.
 
 Auto-update never crosses major versions. For example, a 1.x install can
 auto-update to a newer 1.x release, but it won't auto-install 2.x. When a newer
@@ -629,7 +626,7 @@ process, not once per session).
 
 > Pinned plugin entries in `opencode.json` (for example
 > `"oh-my-opencode-slim@1.0.1"`) are the true version lock. Those stay pinned
-> regardless of `autoUpdate`.
+> regardless of the update checker.
 
 ### Background Job Management
 
@@ -1098,8 +1095,9 @@ the configured `council` color unless `agents.councillor.color` overrides it.
 
 The OMO-Slim sidebar uses the same setting: an agent with a configured `color`
 shows its name and model in that color, and agents without one stay in muted
-text. Hex values work on every host; theme colors fall back to muted text when
-the active host theme does not expose that token.
+text. Hex values work on every host. Theme tokens are v1-only for the host
+agent entry: on OpenCode v2 they leave the host color unchanged (or unset so
+the host palette applies), while the OMOS sidebar still uses the token.
 
 ### Per-preset agent configuration
 
@@ -1244,7 +1242,10 @@ Notes:
 
 ### Agent Permissions
 
-The `permission` field provides deterministic, tool-level permission restrictions on custom agents, built-in agent overrides, and presets. Unlike prompt instructions ("do not edit files"), these rules are enforced by the OpenCode SDK at the tool-call level.
+The `permission` field sets tool-level restrictions on custom agents, built-in
+agent overrides, and presets. The host enforces them at tool execution; on v2
+Slim compiles the map to native ordered `permissions` rules instead of running
+a second permission evaluator.
 
 The field accepts either:
 
@@ -1352,14 +1353,14 @@ Available hooks:
 - **Model failover**: `foreground-fallback` — removes the fallback manager and retry hook entirely. `fallback.enabled: false` disables intervention too, but on v2 it keeps the retry bookkeeping registered so a live per-session enable can switch it back on.
 - **Tool guards**: `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch` (v1 `apply_patch`, v2 `patch`) — each stops intercepting tool calls entirely, so malformed output, repeated identical calls, and invalid or guessed paths surface raw to the model.
 - **Deepwork**: `deepwork-goal` turns the post-compaction goal pointer off (the model then relies on the skill's resume discipline alone).
-- **Update checking**: `auto-update-checker` — stops the startup update check, notification, and automatic installation. `autoUpdate: false` has the same effect for the feature; this entry is the per-hook form and also stays effective if the feature switch is re-enabled.
+- **Update checking**: `auto-update-checker` — stops the startup update check, notification, and automatic installation.
 - **Telemetry / headers**: `cache-monitor` (prompt-cache bust watchdog; warnings stop), `chat-headers` (Copilot `x-initiator` header on both the v1 `chat.headers` hook and the v2 `model.request` bridge).
 
 Guards such as `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, and `apply-patch` protect against model-side loops, bad paths, and malformed patches. Disable them only when you want raw upstream behavior.
 
 Notes:
 
-- Injection surfaces that have dedicated switches are not listed here: wake prompts (`backgroundJobs.orchestratorWake.enabled`, `backgroundJobs.childInputWake`), the whole managed background-task lifecycle (`backgroundJobs.mode`), the interview subsystem (`interview.enabled`), the TUI surface (`tui`, `sidebar`), and image routing (`image_routing`). `autoUpdate: false` and `disabled_hooks: ["auto-update-checker"]` both stop the update feature; use whichever granularity you need.
+- Injection surfaces that have dedicated switches are not listed here: wake prompts (`backgroundJobs.orchestratorWake.enabled`, `backgroundJobs.childInputWakeKinds`), the whole managed background-task lifecycle (`backgroundJobs.mode`), the interview subsystem (`interview.enabled`), the TUI surface (`tui`, `sidebar`), and image routing (`image_routing`). Use `disabled_hooks: ["auto-update-checker"]` to stop the update feature.
 - Invalid entries are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies.
 
 ### Slash Commands
@@ -1370,7 +1371,7 @@ Disable built-in commands via `disabled_commands`:
 { "disabled_commands": ["interview", "deepwork"] }
 ```
 
-Available commands: `interview`, `implement`, `deepwork`, `reflect`, `preset`, `killall`, `subagent`. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. Listing `reflect` in `disabled_skills` also disables the `/reflect` command. `/killall` and `/subagent` are TUI commands; `tui: false` removes the whole TUI surface, while `disabled_commands` removes only the named command.
+Available commands: `interview`, `implement`, `deepwork`, `reflect`, `preset`, `killall`, `subagent`. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. On v2, disabling `preset` also removes its client RPC; configured inference presets and child admission remain active. Listing `reflect` in `disabled_skills` also disables the `/reflect` command. `/killall` and `/subagent` are TUI commands; `tui: false` removes the whole TUI surface, while `disabled_commands` removes only the named command.
 
 Invalid entries are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies — it is not an explicit empty override.
 

@@ -33,7 +33,6 @@ import {
   type ResolvedPluginConfig,
   sanitizeBackgroundJobsConfig,
   sanitizeMultiplexerConfig,
-  WebfetchConfigSchema,
 } from './schema';
 import { legacyAliasesFor } from './utils';
 
@@ -541,26 +540,6 @@ export function loadRawPluginConfigFromPath(
     // layer can masquerade as an explicit override; the merged marketplace
     // config is normalized to the switch shape after all layers are merged.
 
-    // Zod applies webfetch.enabled's default while parsing each layer. Keep
-    // that default from masquerading as an explicitly configured override;
-    // the merged webfetch config is normalized after all layers are merged.
-    if (
-      layerConfig.webfetch &&
-      typeof rawConfig === 'object' &&
-      rawConfig !== null &&
-      'webfetch' in rawConfig &&
-      typeof rawConfig.webfetch === 'object' &&
-      rawConfig.webfetch !== null &&
-      !Array.isArray(rawConfig.webfetch) &&
-      !Object.hasOwn(rawConfig.webfetch, 'enabled')
-    ) {
-      const { enabled: _enabled, ...webfetch } = layerConfig.webfetch;
-      layerConfig = {
-        ...layerConfig,
-        webfetch: webfetch as RawPluginConfig['webfetch'],
-      };
-    }
-
     return layerConfig;
   } catch (error) {
     // File doesn't exist or isn't readable - this is expected and fine
@@ -791,10 +770,6 @@ export function mergePluginConfigs(
     backgroundJobs: deepMerge(base.backgroundJobs, override.backgroundJobs),
     fallback: deepMerge(base.fallback, override.fallback),
     council: deepMerge(base.council, override.council),
-    webfetch: deepMerge(
-      base.webfetch as Record<string, unknown> | undefined,
-      override.webfetch as Record<string, unknown> | undefined,
-    ) as RawPluginConfig['webfetch'],
     marketplace: deepMerge(
       base.marketplace as Record<string, unknown> | undefined,
       override.marketplace as Record<string, unknown> | undefined,
@@ -896,9 +871,6 @@ export function loadPluginConfig(
     }
   }
 
-  if (config.webfetch) {
-    config.webfetch = WebfetchConfigSchema.parse(config.webfetch);
-  }
   if (config.marketplace) {
     // Normalize to the switch shape: a misplaced activation-shaped root
     // block (baseline-inert) loses its directive keys here so only

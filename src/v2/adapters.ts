@@ -282,7 +282,15 @@ export function applyAgentToDraft(
       (v1.mode as string) ?? (name === 'orchestrator' ? 'primary' : 'subagent');
     agent.hidden = v1.hidden === true;
     if (typeof v1.description === 'string') agent.description = v1.description;
-    if (typeof v1.color === 'string') agent.color = v1.color;
+    // Native v2 colors are hex-only; theme tokens stay sidebar-local.
+    if (typeof v1.color === 'string') {
+      if (/^#[0-9a-fA-F]{6}$/.test(v1.color)) agent.color = v1.color;
+      else {
+        log('[v2] theme color kept sidebar-local; host color unchanged', {
+          color: v1.color,
+        });
+      }
+    }
     if (typeof v1.prompt === 'string') agent.system = v1.prompt;
     if (model) {
       agent.model = {
@@ -308,18 +316,7 @@ export function applyAgentToDraft(
     if (typeof v1.temperature === 'number') {
       settings.temperature = v1.temperature;
     }
-    // Keep provider options on the native agent projection. The context hook
-    // separately applies inference options to actual requests.
-    if (
-      v1.options &&
-      typeof v1.options === 'object' &&
-      !Array.isArray(v1.options)
-    ) {
-      request.body = {
-        ...(asRecord(request.body) ?? {}),
-        ...(v1.options as Record<string, unknown>),
-      };
-    }
+    // Provider options use the session context hook, never raw HTTP body.
     if (Object.keys(settings).length > 0) request.settings = settings;
     agent.request = request;
     // v2 permission evaluation is last-match-wins (findLast). v1 `tools` lists

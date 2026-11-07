@@ -101,7 +101,6 @@ const DEFAULT_BACKGROUND_JOBS: BackgroundJobsConfig = {
   },
   sameProviderPolicy: {},
   waitForUserGuard: true,
-  childInputWake: true,
   childInputWakeKinds: { ...DEFAULT_CHILD_INPUT_WAKE_KINDS },
   pruneEvictedSessions: false,
 };
@@ -446,25 +445,8 @@ export class RuntimeConfig {
 
   get backgroundJobs(): BackgroundJobsConfig {
     return {
-      ...this.resolveChildInputWake(
-        this.pluginConfig?.backgroundJobs ?? DEFAULT_BACKGROUND_JOBS,
-      ),
+      ...(this.pluginConfig?.backgroundJobs ?? DEFAULT_BACKGROUND_JOBS),
       mode: this.featureGates.backgroundJobsMode,
-    };
-  }
-
-  private resolveChildInputWake(
-    backgroundJobs: BackgroundJobsConfig,
-  ): BackgroundJobsConfig {
-    if (backgroundJobs.childInputWake !== false) return backgroundJobs;
-    // #1504: master switch off silences every kind. The scheduler's per-kind
-    // gate stays the only runtime gate; the stored config stays raw.
-    return {
-      ...backgroundJobs,
-      childInputWakeKinds: {
-        permission: false,
-        question: false,
-      },
     };
   }
 
@@ -517,11 +499,7 @@ export class RuntimeConfig {
     return this.pluginConfig?.council;
   }
 
-  /**
-   * Update checker switch: enabled unless `autoUpdate: false` or the
-   * `auto-update-checker` hook is disabled. Both are independent off
-   * switches for the same update hook.
-   */
+  /** Update checker switch: on unless `auto-update-checker` is disabled. */
   get updateCheckerEnabled(): boolean {
     return this.featureGates.updateChecker;
   }

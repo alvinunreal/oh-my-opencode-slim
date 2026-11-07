@@ -84,7 +84,7 @@ describe('plugin feature gates through exported hooks', () => {
       path.join(projectDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
         companion: { enabled: false },
-        webfetch: { enabled: false },
+        disabled_tools: ['webfetch'],
         disabled_hooks: ['auto-update-checker'],
         ...overrides,
       }),
@@ -101,18 +101,8 @@ describe('plugin feature gates through exported hooks', () => {
     } as never);
 
   for (const [label, options, enabled] of [
-    ['enabled', { webfetch: { enabled: true } }, true],
-    ['feature disabled', { webfetch: { enabled: false } }, false],
-    [
-      'tool disabled',
-      { webfetch: { enabled: true }, disabled_tools: ['webfetch'] },
-      false,
-    ],
-    [
-      'both disabled',
-      { webfetch: { enabled: false }, disabled_tools: ['webfetch'] },
-      false,
-    ],
+    ['enabled', { disabled_tools: [] }, true],
+    ['disabled', { disabled_tools: ['webfetch'] }, false],
   ] as const) {
     test(`webfetch ${label}: registration and JSDOM probe agree`, async () => {
       await configure({ backgroundJobs: { mode: 'off' }, ...options });
@@ -213,8 +203,7 @@ describe('plugin feature gates through exported hooks', () => {
       // assertion is about the native-control gate, not init cost.
       await configure({
         backgroundJobs: { mode: 'native' },
-        disabled_tools: ['task_cancel', 'task_status'],
-        webfetch: { enabled: false },
+        disabled_tools: ['task_cancel', 'task_status', 'webfetch'],
         marketplace: { enabled: false },
         disabled_hooks: ['auto-update-checker', 'foreground-fallback'],
         disabled_commands: ['deepwork', 'reflect'],
@@ -253,6 +242,25 @@ describe('plugin feature gates through exported hooks', () => {
         expect(hooks['v2.backgroundGeneration']).toBeUndefined();
       } finally {
         await hooks?.dispose?.();
+      }
+    });
+  }
+
+  for (const flavor of ['v1', 'v2'] as const) {
+    test(`${flavor}: no post-tool consumers means no v1 after hook`, async () => {
+      await configure({
+        backgroundJobs: { mode: 'off' },
+        disabled_hooks: [
+          'auto-update-checker',
+          'json-error-recovery',
+          'tool-loop-guard',
+        ],
+      });
+      const hooks = await createHooks(flavor);
+      try {
+        expect(hooks['tool.execute.after']).toBeUndefined();
+      } finally {
+        await hooks.dispose?.();
       }
     });
   }
@@ -417,8 +425,7 @@ describe('plugin feature gates through exported hooks', () => {
     await configure({
       backgroundJobs: { mode: 'off' },
       interview: { enabled: true },
-      disabled_tools: ['interview_submit_state'],
-      webfetch: { enabled: false },
+      disabled_tools: ['interview_submit_state', 'webfetch'],
       marketplace: { enabled: false },
       disabled_hooks: ['auto-update-checker', 'foreground-fallback'],
       disabled_commands: ['deepwork', 'reflect'],
@@ -588,59 +595,26 @@ describe('plugin feature gates through exported hooks', () => {
     }
   });
 
-  test('autoUpdate false alone keeps the server hook unconstructed', async () => {
-    const checkerEvent = mock(() => undefined);
-    const factorySpy = spyOn(
-      autoUpdateFactories,
-      'createAutoUpdateCheckerHook',
-    ).mockImplementation(() => ({ event: checkerEvent }));
-    let hooks: PluginHooks | undefined;
-    try {
-      await configure({
-        backgroundJobs: { mode: 'managed' },
-        disabled_hooks: [],
-        autoUpdate: false,
-      });
-      hooks = await createHooks();
+  for (const mode of ['managed', 'native', 'off'] as const) {
+    test(`v2 ${mode}: native updates replace the unused server checker`, async () => {
+      await configure({ backgroundJobs: { mode }, disabled_hooks: [] });
+      const factory = spyOn(autoUpdateFactories, 'createAutoUpdateCheckerHook');
+      let hooks: PluginHooks | undefined;
       try {
+        hooks = await createHooks('v2');
         await hooks.event?.({
           event: {
             type: 'session.created',
-            properties: { info: { id: 'ses_autoupdate_off' } },
+            properties: { info: { id: 'ses_native_update' } },
           },
         } as never);
-        // `autoUpdate: false` is the whole switch here: the disabled_hooks
-        // mask is empty, yet the hook factory must never be constructed.
-        expect(factorySpy).not.toHaveBeenCalled();
-        expect(checkerEvent).not.toHaveBeenCalled();
+        expect(factory).not.toHaveBeenCalled();
       } finally {
-        await hooks.dispose?.();
-        hooks = undefined;
+        await hooks?.dispose?.();
+        factory.mockRestore();
       }
-
-      await configure({
-        backgroundJobs: { mode: 'managed' },
-        disabled_hooks: [],
-        autoUpdate: true,
-      });
-      hooks = await createHooks();
-      try {
-        expect(factorySpy).toHaveBeenCalledTimes(1);
-        await hooks.event?.({
-          event: {
-            type: 'session.created',
-            properties: { info: { id: 'ses_autoupdate_on' } },
-          },
-        } as never);
-        expect(checkerEvent).toHaveBeenCalledTimes(1);
-      } finally {
-        await hooks.dispose?.();
-        hooks = undefined;
-      }
-    } finally {
-      factorySpy.mockRestore();
-    }
-  });
+    });
+  }
 
   async function exerciseSidebar(hooks: PluginHooks, externalDir: string) {
     const call = { tool: 'task', sessionID: 'ses_p', callID: 'call_1' };

@@ -377,9 +377,8 @@ export async function runSetup(
   // but has no UI channel on V2 — `client.tui.showToast` is a no-op in the
   // shim — so the TUI owns the message. Scheduled off the startup path and
   // silent on every failure; see ./update-notice.
-  // The shared update-checker gate is off for `autoUpdate: false` or
-  // `disabled_hooks: ["auto-update-checker"]`: no timer, no notice, no
-  // network.
+  // The shared update-checker gate is off when `disabled_hooks` lists
+  // "auto-update-checker": no timer, no notice, no network.
   if (
     process.env[PANE_VIEWER_ENV] !== '1' &&
     gatesRead.gates.updateCheckerEnabled

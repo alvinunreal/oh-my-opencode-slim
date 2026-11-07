@@ -25,11 +25,7 @@ export interface FeatureGateConfig {
   readonly marketplace?: {
     readonly enabled?: boolean;
   };
-  readonly webfetch?: {
-    readonly enabled?: boolean;
-  };
   readonly liveConfigRefresh?: boolean;
-  readonly autoUpdate?: boolean;
   readonly disabled_hooks?: readonly string[];
   readonly disabled_tools?: readonly string[];
 }
@@ -72,11 +68,8 @@ export function resolveFeatureGates(
     sidebar: tui && config.sidebar !== false,
     interview: config.interview?.enabled !== false,
     marketplace: config.marketplace?.enabled !== false,
-    webfetch:
-      config.webfetch?.enabled !== false && !disabledTools.includes('webfetch'),
+    webfetch: !disabledTools.includes('webfetch'),
     liveConfigRefresh: config.liveConfigRefresh !== false,
-    updateChecker:
-      config.autoUpdate !== false &&
-      !disabledHooks.includes('auto-update-checker'),
+    updateChecker: !disabledHooks.includes('auto-update-checker'),
   });
 }

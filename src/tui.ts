@@ -2529,6 +2529,9 @@ async function setup(
     log('[tui] tui disabled by config (tui: false); registering nothing');
     return;
   }
+  const presetCommandEnabled = isCommandEnabled('preset', {
+    disabledCommands: gatesRead.gates.disabledCommands,
+  });
   const presetManagerCtx = (directory: string): V2TuiContext => {
     const augmented = Object.create(ctx as object) as V2TuiContext;
     augmented.onConfigChanged = () =>
@@ -2537,6 +2540,10 @@ async function setup(
       resolveRouteSessionId(ctx.ui.router.current());
     return augmented;
   };
+  // The sidebar preset entry follows `disabled_commands` exactly like the
+  // `/preset` keymap command and the session-preset RPC: a disabled command
+  // opens no picker and reads no binding. The row itself stays visible as an
+  // informational line, matching a host without the dialog capability.
   // Tracks the runtime's effective `multiplexer.type` (onMultiplexerConfig).
   let multiplexerType: MultiplexerType = 'none';
   // Client-side pane lifecycle: the v2 host adapter classifies this process's
@@ -2701,11 +2708,13 @@ async function setup(
         warnPaneUnsupported();
         void reconcilePaneWiring();
       },
-      readSessionPreset: (directory, sessionID) =>
-        readSessionPreset(ctx, sessionID, directory),
+      readSessionPreset: presetCommandEnabled
+        ? (directory, sessionID) => readSessionPreset(ctx, sessionID, directory)
+        : undefined,
       getPresetRow: (directory, presetName, sessionPreset) => {
         const name = presetName ?? '(none)';
-        if (!canOpenPresetManagerV2(ctx)) return { name, sessionPreset };
+        if (!presetCommandEnabled || !canOpenPresetManagerV2(ctx))
+          return { name, sessionPreset };
         return {
           name,
           sessionPreset,
