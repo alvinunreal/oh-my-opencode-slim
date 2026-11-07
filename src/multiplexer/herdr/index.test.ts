@@ -381,6 +381,8 @@ describe('HerdrMultiplexer', () => {
     await clock.tick();
     const beforeGrace = commands();
     await clock.advance(250);
+    await clock.advance(250);
+    await clock.advance(250);
     await Promise.all([...closes, spawn]);
 
     expect(beforeGrace.filter((c) => c.includes('send-keys'))).toHaveLength(3);
