@@ -326,6 +326,7 @@ export class PaneLifecycle {
     // Only records belonging to the parent being reconciled are judged here:
     // a pane for a previously displayed session stays tracked (FR-3) and must
     // not be closed just because this parent's child list does not name it.
+    const closes: Promise<void>[] = [];
     for (const [childSessionId, record] of [...this.panes]) {
       if (
         record.parentSessionId !== parentSessionId ||
@@ -334,9 +335,10 @@ export class PaneLifecycle {
         continue;
       if (!heldAtStart.has(childSessionId)) continue;
       if (!serverChildIds.has(childSessionId)) {
-        await this.closePane(childSessionId, record, 'backfill-gone');
+        closes.push(this.closePane(childSessionId, record, 'backfill-gone'));
       }
     }
+    await Promise.all(closes);
 
     // Revalidate quiescent held panes provisionally: their idle edge may be
     // lost, but a busy/retry snapshot must not arm a new deadline.
@@ -439,6 +441,7 @@ export class PaneLifecycle {
       if (list.error) continue;
       const statuses = await this.readStatus(first.directory);
       const children = new Set(list.sessions.map((entry) => entry.sessionId));
+      const closes: Promise<void>[] = [];
       for (const { record, epoch } of records) {
         const id = record.childSessionId;
         if (
@@ -448,7 +451,7 @@ export class PaneLifecycle {
         )
           continue;
         if (!children.has(id))
-          await this.closePane(id, record, 'backfill-gone');
+          closes.push(this.closePane(id, record, 'backfill-gone'));
         else if (
           !statuses.error &&
           statuses.statuses.get(id) !== 'busy' &&
@@ -456,6 +459,7 @@ export class PaneLifecycle {
         )
           this.scheduleStableIdleClose(id, record, true);
       }
+      await Promise.all(closes);
     }
   }
 

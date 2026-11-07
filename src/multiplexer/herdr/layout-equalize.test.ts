@@ -376,6 +376,32 @@ describe('equalizeAgentPanes (socket)', () => {
     }
   });
 
+  test('does not rewrite the boundary when pruning removes the last agent', async () => {
+    const fake = await startFakeHerdr(() =>
+      layoutExport(split('right', pane('main'), pane('user'))),
+    );
+    try {
+      const agents = new Set(['stale']);
+      const ok = await equalizeAgentPanes({
+        socketPath: fake.socketPath,
+        tabId: 't1',
+        mainPaneId: 'main',
+        mainPaneShare: 0.6,
+        agentPaneIds: agents,
+        onPanesSeen: (ids) => {
+          for (const id of agents) if (!ids.has(id)) agents.delete(id);
+        },
+      });
+      expect(ok).toBe(true);
+      expect(agents.size).toBe(0);
+      expect(fake.received.map((request) => request.method)).toEqual([
+        'layout.export',
+      ]);
+    } finally {
+      await fake.close();
+    }
+  });
+
   test('returns false when a ratio write is rejected', async () => {
     const fake = await startFakeHerdr((request) =>
       request.method === 'layout.export'

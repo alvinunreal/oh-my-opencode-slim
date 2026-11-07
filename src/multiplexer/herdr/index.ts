@@ -21,8 +21,9 @@ import { isRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
 import {
   buildViewCommand,
+  closePaneCommand,
   findBinary,
-  gracefulClosePane,
+  interruptPane,
   normalizePathForShell,
   PANE_VIEWER_ENV,
   type PaneShell,
@@ -44,6 +45,8 @@ export interface HerdrMultiplexerOptions {
   equalizer?: LayoutEqualizer;
   /** Gates equalization and the main-boundary re-assert. Defaults to true. */
   equalizePanes?: boolean;
+  /** Injectable grace period (tests). */
+  waitForGrace?: () => Promise<void>;
 }
 
 interface HerdrCliResponse {
@@ -68,6 +71,7 @@ export class HerdrMultiplexer implements Multiplexer {
   private agentPaneIds = new Set<string>();
   private equalize: LayoutEqualizer;
   private equalizePanes: boolean;
+  private waitForGrace?: () => Promise<void>;
   // Latch: herdr builds without `pane split --ratio` must keep creating panes.
   private ratioSupported = true;
   private loggedMissingEqualizeEnv = false;
@@ -87,6 +91,7 @@ export class HerdrMultiplexer implements Multiplexer {
     this.mainPaneSize = mainPaneSize;
     this.equalize = options.equalizer ?? equalizeAgentPanes;
     this.equalizePanes = options.equalizePanes ?? true;
+    this.waitForGrace = options.waitForGrace;
   }
 
   async isAvailable(): Promise<boolean> {
@@ -305,7 +310,16 @@ export class HerdrMultiplexer implements Multiplexer {
         // paneId on failure, so we must clean it up here.
         try {
           // Already inside the spawn mutex: use the unlocked variant.
-          await this.closePaneInner(paneId);
+          if (
+            await interruptPane(
+              herdr,
+              ['pane', 'send-keys', paneId, 'ctrl+c'],
+              undefined,
+              this.waitForGrace,
+            )
+          ) {
+            await this.closePaneInner(herdr, paneId);
+          }
         } catch (closeErr) {
           log('[herdr] spawnPane: failed to close orphaned pane', {
             paneId,
@@ -341,49 +355,60 @@ export class HerdrMultiplexer implements Multiplexer {
     Array<{ paneId: string; title: string }>
   > {
     const herdr = await this.getBinary();
-    if (!herdr) return [];
+    if (!herdr) throw new Error('herdr binary not found');
 
-    try {
-      const proc = crossSpawn([herdr, 'pane', 'list'], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      const [exitCode, stdout] = await Promise.all([
-        proc.exited,
-        proc.stdout(),
-      ]);
-      if (exitCode !== 0) return [];
-
-      const panes: Array<{ paneId: string; title: string }> = [];
-      for (const line of stdout.split('\n')) {
-        const candidate = line.trim();
-        if (!candidate) continue;
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(candidate);
-        } catch {
-          continue; // progress/diagnostic line
-        }
-        const result = isRecord(parsed) ? parsed.result : undefined;
-        const entries =
-          isRecord(result) && Array.isArray(result.panes) ? result.panes : [];
-        for (const entry of entries) {
-          if (!isRecord(entry)) continue;
-          const paneId = entry.pane_id;
-          if (typeof paneId !== 'string' || paneId.length === 0) continue;
-          panes.push({
-            paneId,
-            title: typeof entry.label === 'string' ? entry.label : '',
-          });
-        }
-      }
-      return panes;
-    } catch {
-      return [];
+    const proc = crossSpawn([herdr, 'pane', 'list'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const [exitCode, stdout] = await Promise.all([proc.exited, proc.stdout()]);
+    if (exitCode !== 0) {
+      throw new Error(
+        `herdr pane list failed: ${(await proc.stderr()).trim()}`,
+      );
     }
+
+    const panes: Array<{ paneId: string; title: string }> = [];
+    for (const line of stdout.split('\n')) {
+      const candidate = line.trim();
+      if (!candidate) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(candidate);
+      } catch {
+        continue; // progress/diagnostic line
+      }
+      const result = isRecord(parsed) ? parsed.result : undefined;
+      const entries =
+        isRecord(result) && Array.isArray(result.panes) ? result.panes : [];
+      for (const entry of entries) {
+        if (!isRecord(entry)) continue;
+        const paneId = entry.pane_id;
+        if (typeof paneId !== 'string' || paneId.length === 0) continue;
+        panes.push({
+          paneId,
+          title: typeof entry.label === 'string' ? entry.label : '',
+        });
+      }
+    }
+    return panes;
   }
 
   async closePane(paneId: string): Promise<boolean> {
+    const herdr = await this.getBinary();
+    if (!herdr) return false;
+    if (!paneId || paneId === 'unknown') return true;
+    if (
+      !(await interruptPane(
+        herdr,
+        ['pane', 'send-keys', paneId, 'ctrl+c'],
+        undefined,
+        this.waitForGrace,
+      ))
+    ) {
+      return false;
+    }
+
     // Serialize with spawn: a close must not collapse a branch between another
     // pass's export and its path-based ratio writes.
     const prev = this.spawnMutex;
@@ -391,28 +416,35 @@ export class HerdrMultiplexer implements Multiplexer {
     this.spawnMutex = new Promise<void>((r) => (release = r));
     await prev;
     try {
-      return await this.closePaneInner(paneId);
+      return await this.closePaneInner(herdr, paneId);
     } finally {
       release();
     }
   }
 
-  private async closePaneInner(paneId: string): Promise<boolean> {
-    const herdr = await this.getBinary();
-    const closed = await gracefulClosePane(herdr, paneId, {
-      ctrlC: ['pane', 'send-keys', paneId, 'ctrl+c'],
+  private async closePaneInner(
+    herdr: string,
+    paneId: string,
+  ): Promise<boolean> {
+    const closed = await closePaneCommand(herdr, {
       close: ['pane', 'close', paneId],
-      acceptExitCode1: true,
-      emptyPaneReturnsTrue: true,
+      isAlreadyClosed: (stderr) => {
+        const response: unknown = JSON.parse(stderr);
+        return (
+          isRecord(response) &&
+          isRecord(response.error) &&
+          response.error.code === 'pane_not_found'
+        );
+      },
     });
     if (!closed) return false;
 
-    if (paneId === this.agentAreaPaneId) {
-      this.agentAreaPaneId = null;
-    }
     // Only panes this client spawned live in this set; a sweep-closed
     // leftover must not trigger a rebalance of somebody else's layout.
     const wasAgentPane = this.agentPaneIds.delete(paneId);
+    if (paneId === this.agentAreaPaneId) {
+      this.agentAreaPaneId = this.agentPaneIds.values().next().value ?? null;
+    }
     if (wasAgentPane) {
       await this.equalizeAgentArea();
     }
@@ -490,7 +522,8 @@ export class HerdrMultiplexer implements Multiplexer {
   private async equalizeAgentArea(): Promise<void> {
     // even-*/tiled have no agent area and no main_pane_size share, so
     // correcting them would turn their even split into an 80/20 one.
-    if (!this.equalizePanes || !this.isMainLayout()) return;
+    if (!this.equalizePanes || !this.isMainLayout() || !this.agentPaneIds.size)
+      return;
 
     const mainPaneId = this.mainPaneId;
     const tabId = process.env.HERDR_TAB_ID?.trim();
@@ -526,6 +559,12 @@ export class HerdrMultiplexer implements Multiplexer {
           for (const id of this.agentPaneIds) {
             if (!paneIds.has(id)) this.agentPaneIds.delete(id);
           }
+          if (
+            !this.agentAreaPaneId ||
+            !this.agentPaneIds.has(this.agentAreaPaneId)
+          )
+            this.agentAreaPaneId =
+              this.agentPaneIds.values().next().value ?? null;
         },
       });
     } catch (error) {
