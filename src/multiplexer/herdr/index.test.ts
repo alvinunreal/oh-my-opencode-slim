@@ -981,6 +981,45 @@ describe('HerdrMultiplexer', () => {
     expect(split).not.toContain('--ratio');
   });
 
+  test('main-vertical: promotes an anchor that survives layout pruning', async () => {
+    process.env.HERDR_TAB_ID = 'w1:t1';
+    process.env.HERDR_SOCKET_PATH = '/tmp/herdr-test.sock';
+    const live = new Set(['w1:p1']);
+    let nextPane = 2;
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === lookupCommand)
+        return createSpawnResult(0, '/usr/bin/herdr\n');
+      if (command.includes('split')) {
+        const paneId = `w1:p${nextPane++}`;
+        live.add(paneId);
+        return createSpawnResult(0, createSplitResponse(paneId));
+      }
+      if (command.includes('close')) live.delete(command[3]);
+      return createSpawnResult();
+    });
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer('main-vertical', 60, {
+      waitForGrace,
+      equalizer: async (options) => {
+        options.onPanesSeen?.(new Set(live));
+        return true;
+      },
+    });
+
+    await herdr.spawnPane('s1', 'A1', 'http://localhost:4096', '/repo');
+    await herdr.spawnPane('s2', 'A2', 'http://localhost:4096', '/repo');
+    await herdr.spawnPane('s3', 'A3', 'http://localhost:4096', '/repo');
+    live.delete('w1:p3');
+    await herdr.closePane('w1:p2');
+    await herdr.spawnPane('s4', 'A4', 'http://localhost:4096', '/repo');
+
+    const split = commands()
+      .filter((c) => c.includes('split'))
+      .at(-1);
+    expect(split?.[3]).toBe('w1:p4');
+    expect(split).toContain('down');
+  });
+
   test('main-vertical: fallback to parent when agent area closed', async () => {
     const { HerdrMultiplexer } = await importFreshHerdr();
     const herdr = new HerdrMultiplexer('main-vertical', 60);

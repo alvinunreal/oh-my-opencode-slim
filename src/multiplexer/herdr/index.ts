@@ -559,6 +559,12 @@ export class HerdrMultiplexer implements Multiplexer {
           for (const id of this.agentPaneIds) {
             if (!paneIds.has(id)) this.agentPaneIds.delete(id);
           }
+          if (
+            !this.agentAreaPaneId ||
+            !this.agentPaneIds.has(this.agentAreaPaneId)
+          )
+            this.agentAreaPaneId =
+              this.agentPaneIds.values().next().value ?? null;
         },
       });
     } catch (error) {
