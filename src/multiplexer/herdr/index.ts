@@ -341,46 +341,43 @@ export class HerdrMultiplexer implements Multiplexer {
     Array<{ paneId: string; title: string }>
   > {
     const herdr = await this.getBinary();
-    if (!herdr) return [];
+    if (!herdr) throw new Error('herdr binary not found');
 
-    try {
-      const proc = crossSpawn([herdr, 'pane', 'list'], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      const [exitCode, stdout] = await Promise.all([
-        proc.exited,
-        proc.stdout(),
-      ]);
-      if (exitCode !== 0) return [];
-
-      const panes: Array<{ paneId: string; title: string }> = [];
-      for (const line of stdout.split('\n')) {
-        const candidate = line.trim();
-        if (!candidate) continue;
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(candidate);
-        } catch {
-          continue; // progress/diagnostic line
-        }
-        const result = isRecord(parsed) ? parsed.result : undefined;
-        const entries =
-          isRecord(result) && Array.isArray(result.panes) ? result.panes : [];
-        for (const entry of entries) {
-          if (!isRecord(entry)) continue;
-          const paneId = entry.pane_id;
-          if (typeof paneId !== 'string' || paneId.length === 0) continue;
-          panes.push({
-            paneId,
-            title: typeof entry.label === 'string' ? entry.label : '',
-          });
-        }
-      }
-      return panes;
-    } catch {
-      return [];
+    const proc = crossSpawn([herdr, 'pane', 'list'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const [exitCode, stdout] = await Promise.all([proc.exited, proc.stdout()]);
+    if (exitCode !== 0) {
+      throw new Error(
+        `herdr pane list failed: ${(await proc.stderr()).trim()}`,
+      );
     }
+
+    const panes: Array<{ paneId: string; title: string }> = [];
+    for (const line of stdout.split('\n')) {
+      const candidate = line.trim();
+      if (!candidate) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(candidate);
+      } catch {
+        continue; // progress/diagnostic line
+      }
+      const result = isRecord(parsed) ? parsed.result : undefined;
+      const entries =
+        isRecord(result) && Array.isArray(result.panes) ? result.panes : [];
+      for (const entry of entries) {
+        if (!isRecord(entry)) continue;
+        const paneId = entry.pane_id;
+        if (typeof paneId !== 'string' || paneId.length === 0) continue;
+        panes.push({
+          paneId,
+          title: typeof entry.label === 'string' ? entry.label : '',
+        });
+      }
+    }
+    return panes;
   }
 
   async closePane(paneId: string): Promise<boolean> {

@@ -1419,6 +1419,33 @@ describe('HerdrMultiplexer', () => {
     ]);
   });
 
+  test('sweep reports failed herdr scans rather than an empty scan', async () => {
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === lookupCommand) {
+        return createSpawnResult(0, '/usr/bin/herdr\n');
+      }
+      if (command.includes('list')) return createSpawnResult(1, '', 'offline');
+      return createSpawnResult();
+    });
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const { sweepLeftoverPanes } = await import('../client/sweep');
+    const herdr = new HerdrMultiplexer();
+
+    const stats = await sweepLeftoverPanes({
+      adapter: herdr,
+      isProcessAlive: () => false,
+      isSessionTerminal: async () => true,
+    });
+    expect(stats.scanFailed).toBe(true);
+
+    crossSpawnMock.mockImplementation(() => {
+      throw new Error('cannot start herdr');
+    });
+    await expect(herdr.listPanesWithTitles()).rejects.toThrow(
+      'cannot start herdr',
+    );
+  });
+
   test('sweep closes only the dead-owner terminal pane (FR-8)', async () => {
     crossSpawnMock.mockImplementation((command: string[]) => {
       if (command[0] === lookupCommand) {
