@@ -240,6 +240,32 @@ describe('TmuxMultiplexer', () => {
     expect(commandContaining('list-panes')).not.toContain('-a');
   });
 
+  test('serializes concurrent spawns so each split sees the earlier panes', async () => {
+    const panes = ['%1'];
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which' || command[0] === 'where')
+        return createSpawnResult(0, '/usr/bin/tmux\n');
+      if (command.includes('-V')) return createSpawnResult(0, 'tmux 3.6a');
+      if (command.includes('list-panes'))
+        return createSpawnResult(0, `${panes.join('\n')}\n`);
+      if (command.includes('split-window')) {
+        panes.push(`%${panes.length + 1}`);
+        return createSpawnResult(0, `${panes.at(-1)}\n`);
+      }
+      return createSpawnResult();
+    });
+    const { TmuxMultiplexer } = await importFreshTmux();
+    const tmux = new TmuxMultiplexer('main-vertical', 60);
+    await Promise.all([
+      tmux.spawnPane('a', 'a', 'http://host', '/repo'),
+      tmux.spawnPane('b', 'b', 'http://host', '/repo'),
+    ]);
+    const targets = tmuxCommands()
+      .filter((command) => command.includes('split-window'))
+      .map((command) => command[command.indexOf('-t') + 1]);
+    expect(targets).toEqual(['%1', '%2']);
+  });
+
   test('isInsideSession follows TMUX_PANE, not TMUX', async () => {
     const { TmuxMultiplexer } = await importFreshTmux();
     const tmux = new TmuxMultiplexer();

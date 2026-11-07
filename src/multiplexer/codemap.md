@@ -241,6 +241,7 @@ has no cwd flag (the split inherits the anchor's working directory).
 - Split and layout run in one invocation. Main layouts split before the pane
   following the anchor when available; close sends Ctrl+C before a combined
   `kill-pane` and layout command for panes this instance created.
+- Spawns are serialized so each split sees the earlier panes.
 
 ### Zellij Implementation
 

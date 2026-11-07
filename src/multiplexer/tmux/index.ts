@@ -30,6 +30,7 @@ export class TmuxMultiplexer implements Multiplexer {
   private binaryPath: string | null = null;
   private hasChecked = false;
   private isPsmux = false;
+  private splitMutex: Promise<unknown> = Promise.resolve();
   private supportsSplitEnv = false;
   private supportsPaneOptions = false;
   private storedLayout: MultiplexerLayout;
@@ -394,12 +395,39 @@ export class TmuxMultiplexer implements Multiplexer {
     return this.binaryPath;
   }
 
+  /** Serializes splits so concurrent spawns see each other's panes. */
+  private async splitPane(
+    tmux: string,
+    socket: string,
+    anchor: string,
+    opencodeCmd: string,
+    viewerSecretArgs: string[] = [],
+    miniCwdArgs: string[] = [],
+  ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+    const prev = this.splitMutex;
+    let release!: () => void;
+    this.splitMutex = new Promise<void>((resolve) => (release = resolve));
+    await prev;
+    try {
+      return await this.doSplit(
+        tmux,
+        socket,
+        anchor,
+        opencodeCmd,
+        viewerSecretArgs,
+        miniCwdArgs,
+      );
+    } finally {
+      release();
+    }
+  }
+
   /**
    * Splits and rebalances in one invocation. Main layouts stack each new
    * pane before the newest child (same order as splitting the anchor), so
    * the parent pane keeps its size; a gone child falls back to the anchor.
    */
-  private async splitPane(
+  private async doSplit(
     tmux: string,
     socket: string,
     anchor: string,

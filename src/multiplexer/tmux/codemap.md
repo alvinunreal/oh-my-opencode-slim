@@ -41,6 +41,7 @@ Implements the `Multiplexer` interface contract defined in `src/multiplexer/type
    ├─ Validates tmux binary availability
    ├─ Constructs opencode attach command with quoted arguments
    ├─ Re-resolves socket (TMUX) and anchor (TMUX_PANE); either missing → fail closed
+   ├─ Serializes spawns so each split sees the earlier panes
    ├─ For main-* layouts, lists panes in the anchor's window
    ├─ Splits before the pane following the anchor, or splits the anchor itself
    ├─ Applies the layout in the same invocation as split-window
