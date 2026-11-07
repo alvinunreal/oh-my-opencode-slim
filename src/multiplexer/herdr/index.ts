@@ -404,12 +404,12 @@ export class HerdrMultiplexer implements Multiplexer {
     });
     if (!closed) return false;
 
-    if (paneId === this.agentAreaPaneId) {
-      this.agentAreaPaneId = null;
-    }
     // Only panes this client spawned live in this set; a sweep-closed
     // leftover must not trigger a rebalance of somebody else's layout.
     const wasAgentPane = this.agentPaneIds.delete(paneId);
+    if (paneId === this.agentAreaPaneId) {
+      this.agentAreaPaneId = this.agentPaneIds.values().next().value ?? null;
+    }
     if (wasAgentPane) {
       await this.equalizeAgentArea();
     }
@@ -487,7 +487,8 @@ export class HerdrMultiplexer implements Multiplexer {
   private async equalizeAgentArea(): Promise<void> {
     // even-*/tiled have no agent area and no main_pane_size share, so
     // correcting them would turn their even split into an 80/20 one.
-    if (!this.equalizePanes || !this.isMainLayout()) return;
+    if (!this.equalizePanes || !this.isMainLayout() || !this.agentPaneIds.size)
+      return;
 
     const mainPaneId = this.mainPaneId;
     const tabId = process.env.HERDR_TAB_ID?.trim();
