@@ -375,6 +375,54 @@ describe('HerdrMultiplexer', () => {
     ]);
   });
 
+  test('concurrent close grace periods do not block a spawn', async () => {
+    let nextPane = 2;
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === lookupCommand) {
+        return createSpawnResult(0, '/usr/bin/herdr\n');
+      }
+      if (command.includes('split')) {
+        return createSpawnResult(0, createSplitResponse(`w1:p${nextPane++}`));
+      }
+      return createSpawnResult();
+    });
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const herdr = new HerdrMultiplexer();
+    await herdr.spawnPane('s1', 'A1', 'http://localhost:4096', '/repo');
+    await herdr.spawnPane('s2', 'A2', 'http://localhost:4096', '/repo');
+    await herdr.spawnPane('s3', 'A3', 'http://localhost:4096', '/repo');
+
+    const clock = createTimerHarness();
+    const timer = spyOn(globalThis, 'setTimeout').mockImplementation(((
+      callback: () => void,
+      delay: number,
+    ) => clock.setTimeout(callback, delay)) as unknown as typeof setTimeout);
+    let beforeGrace: string[][];
+    try {
+      const closes = ['w1:p2', 'w1:p3', 'w1:p4'].map((pane) =>
+        herdr.closePane(pane),
+      );
+      const spawn = herdr.spawnPane(
+        's4',
+        'A4',
+        'http://localhost:4096',
+        '/repo',
+      );
+      await clock.tick();
+      beforeGrace = commands();
+      await clock.advance(250);
+      await clock.advance(250);
+      await clock.advance(250);
+      await Promise.all([...closes, spawn]);
+    } finally {
+      timer.mockRestore();
+    }
+
+    expect(beforeGrace.filter((c) => c.includes('send-keys'))).toHaveLength(3);
+    expect(beforeGrace.filter((c) => c.includes('split'))).toHaveLength(4);
+    expect(beforeGrace.filter((c) => c.includes('close'))).toHaveLength(0);
+  });
+
   test('returns true when closing unknown pane id', async () => {
     const { HerdrMultiplexer } = await importFreshHerdr();
     const herdr = new HerdrMultiplexer('main-vertical', 60);
@@ -383,7 +431,7 @@ describe('HerdrMultiplexer', () => {
     expect(success).toBe(true);
   });
 
-  test('returns true when pane close exits with code 1 (already closed)', async () => {
+  test('returns true when pane close reports pane_not_found', async () => {
     const { HerdrMultiplexer } = await importFreshHerdr();
     const herdr = new HerdrMultiplexer('main-vertical', 60);
 
@@ -392,16 +440,20 @@ describe('HerdrMultiplexer', () => {
         return createSpawnResult(0, '/usr/bin/herdr\n');
       }
       if (command.includes('close')) {
-        return createSpawnResult(1, '', 'pane not found');
+        return createSpawnResult(
+          1,
+          '',
+          '{"error":{"code":"pane_not_found","message":"pane w1:p2 not found"},"id":"cli:pane:close"}\n',
+        );
       }
       return createSpawnResult();
     });
 
-    const success = await herdr.closePane('w1:p2');
+    const success = await withCloseClock(() => herdr.closePane('w1:p2'));
     expect(success).toBe(true);
   });
 
-  test('returns false when pane close exits with code 2 (real failure)', async () => {
+  test('returns false when pane close reports a transport failure', async () => {
     const { HerdrMultiplexer } = await importFreshHerdr();
     const herdr = new HerdrMultiplexer('main-vertical', 60);
 
@@ -410,12 +462,16 @@ describe('HerdrMultiplexer', () => {
         return createSpawnResult(0, '/usr/bin/herdr\n');
       }
       if (command.includes('close')) {
-        return createSpawnResult(2, '', 'fatal error');
+        return createSpawnResult(
+          1,
+          '',
+          '{"id":"cli:pane:close","error":{"code":"server_not_running","message":"no herdr server is running"}}\n',
+        );
       }
       return createSpawnResult();
     });
 
-    const success = await herdr.closePane('w1:p2');
+    const success = await withCloseClock(() => herdr.closePane('w1:p2'));
     expect(success).toBe(false);
   });
 

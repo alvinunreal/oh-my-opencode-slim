@@ -448,7 +448,7 @@ export interface GracefulClosePaneOptions {
   ctrlC: string[];
   /** Backend-specific close/kill command args (binary prepended by caller). */
   close: string[];
-  /** Accept exit code 1 as success (zellij/herdr treat "already closed" as 1). */
+  /** Accept exit code 1 as success. */
   acceptExitCode1?: boolean;
   /** Return true for empty/unknown paneId instead of false (zellij/herdr behavior). */
   emptyPaneReturnsTrue?: boolean;
@@ -473,16 +473,35 @@ export async function gracefulClosePane(
   const isEmpty = !paneId || paneId === 'unknown';
   if (isEmpty) return options.emptyPaneReturnsTrue ?? false;
 
+  if (!(await interruptPane(binary, options.ctrlC, options.env))) return false;
+  return closePaneCommand(binary, options);
+}
+
+export async function interruptPane(
+  binary: string,
+  ctrlC: string[],
+  env?: Record<string, string | undefined>,
+): Promise<boolean> {
   try {
-    const ctrlCProc = crossSpawn([binary, ...options.ctrlC], {
+    const ctrlCProc = crossSpawn([binary, ...ctrlC], {
       stdout: 'ignore',
       stderr: 'ignore',
-      env: options.env,
+      env,
     });
     await ctrlCProc.exited;
 
     await new Promise((r) => setTimeout(r, GRACEFUL_SHUTDOWN_DELAY_MS));
+    return true;
+  } catch {
+    return false;
+  }
+}
 
+export async function closePaneCommand(
+  binary: string,
+  options: Omit<GracefulClosePaneOptions, 'ctrlC' | 'emptyPaneReturnsTrue'>,
+): Promise<boolean> {
+  try {
     const inspectStderr = options.isAlreadyClosed !== undefined;
     const proc = crossSpawn([binary, ...options.close], {
       stdout: 'ignore',

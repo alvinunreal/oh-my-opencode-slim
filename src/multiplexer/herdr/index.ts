@@ -21,8 +21,9 @@ import { isRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
 import {
   buildViewCommand,
+  closePaneCommand,
   findBinary,
-  gracefulClosePane,
+  interruptPane,
   normalizePathForShell,
   PANE_VIEWER_ENV,
   type PaneShell,
@@ -305,7 +306,11 @@ export class HerdrMultiplexer implements Multiplexer {
         // paneId on failure, so we must clean it up here.
         try {
           // Already inside the spawn mutex: use the unlocked variant.
-          await this.closePaneInner(paneId);
+          if (
+            await interruptPane(herdr, ['pane', 'send-keys', paneId, 'ctrl+c'])
+          ) {
+            await this.closePaneInner(herdr, paneId);
+          }
         } catch (closeErr) {
           log('[herdr] spawnPane: failed to close orphaned pane', {
             paneId,
@@ -381,6 +386,15 @@ export class HerdrMultiplexer implements Multiplexer {
   }
 
   async closePane(paneId: string): Promise<boolean> {
+    const herdr = await this.getBinary();
+    if (!herdr) return false;
+    if (!paneId || paneId === 'unknown') return true;
+    if (
+      !(await interruptPane(herdr, ['pane', 'send-keys', paneId, 'ctrl+c']))
+    ) {
+      return false;
+    }
+
     // Serialize with spawn: a close must not collapse a branch between another
     // pass's export and its path-based ratio writes.
     const prev = this.spawnMutex;
@@ -388,19 +402,26 @@ export class HerdrMultiplexer implements Multiplexer {
     this.spawnMutex = new Promise<void>((r) => (release = r));
     await prev;
     try {
-      return await this.closePaneInner(paneId);
+      return await this.closePaneInner(herdr, paneId);
     } finally {
       release();
     }
   }
 
-  private async closePaneInner(paneId: string): Promise<boolean> {
-    const herdr = await this.getBinary();
-    const closed = await gracefulClosePane(herdr, paneId, {
-      ctrlC: ['pane', 'send-keys', paneId, 'ctrl+c'],
+  private async closePaneInner(
+    herdr: string,
+    paneId: string,
+  ): Promise<boolean> {
+    const closed = await closePaneCommand(herdr, {
       close: ['pane', 'close', paneId],
-      acceptExitCode1: true,
-      emptyPaneReturnsTrue: true,
+      isAlreadyClosed: (stderr) => {
+        const response: unknown = JSON.parse(stderr);
+        return (
+          isRecord(response) &&
+          isRecord(response.error) &&
+          response.error.code === 'pane_not_found'
+        );
+      },
     });
     if (!closed) return false;
 
