@@ -605,6 +605,49 @@ describe('tui sidebar agents', () => {
     expect(remote).toEqual({ explorer: 'openai/gpt-6-luna' });
   });
 
+  test('keeps dynamic Council seats from the remote list for the sidebar opt-in (#1672)', async () => {
+    const client = {
+      agent: {
+        async list() {
+          return {
+            data: {
+              data: [
+                {
+                  id: 'explorer',
+                  model: { providerID: 'openai', id: 'gpt-6-luna' },
+                },
+                {
+                  id: 'council',
+                  model: { providerID: 'openai', id: 'gpt-6' },
+                },
+                {
+                  id: 'councillor-alpha',
+                  model: { providerID: 'anthropic', id: 'claude-x' },
+                },
+                { id: 'unrelated', model: { providerID: 'x', id: 'y' } },
+              ],
+            },
+          };
+        },
+      },
+    };
+
+    const remote = await fetchRemoteAgentModels(client, '/srv/project');
+    expect(remote).toEqual({
+      explorer: 'openai/gpt-6-luna',
+      council: 'openai/gpt-6',
+      'councillor-alpha': 'anthropic/claude-x',
+    });
+
+    const snapshot = applyRemoteAgentModels(createSnapshot({}), remote);
+    expect(getSidebarAgentNames(snapshot)).toEqual(['explorer']);
+    expect(getSidebarAgentNames(snapshot, true)).toEqual([
+      'explorer',
+      'council',
+      'councillor-alpha',
+    ]);
+  });
+
   test('remote model fetch is a no-op without a host client', async () => {
     expect(await fetchRemoteAgentModels(undefined, '/tmp/project')).toEqual({});
     expect(applyRemoteAgentModels(createSnapshot({}), {}).agentModels).toEqual(

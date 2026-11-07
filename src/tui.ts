@@ -327,6 +327,18 @@ function remoteModelId(model: unknown): string | undefined {
   return id ? `${rec.providerID}/${id}` : undefined;
 }
 
+/**
+ * Names the remote host list may contribute. Mirrors the local snapshot,
+ * which also carries dynamic `councillor-<seat>` agents: they stay hidden
+ * by default and only render under `sidebarShowHiddenAgents`.
+ */
+function isRemoteSidebarAgent(name: string): boolean {
+  return (
+    (ALL_AGENT_NAMES as readonly string[]).includes(name) ||
+    isCouncilSidebarAgent(name)
+  );
+}
+
 function modelsFromAgentList(response: unknown): Record<string, string> {
   const models: Record<string, string> = {};
   for (const entry of unwrapAgentList(response)) {
@@ -335,7 +347,7 @@ function modelsFromAgentList(response: unknown): Record<string, string> {
       (entry as { model?: unknown } | undefined)?.model,
     );
     if (!name || !model) continue;
-    if ((ALL_AGENT_NAMES as readonly string[]).includes(name)) {
+    if (isRemoteSidebarAgent(name)) {
       models[name] = model;
     }
   }
