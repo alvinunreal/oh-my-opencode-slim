@@ -468,6 +468,40 @@ describe('tui sidebar agents', () => {
     expect(agentNames).not.toContain('councillor-alpha');
   });
 
+  test('sidebarShowHiddenAgents reveals persisted council models (#1672)', () => {
+    const agentNames = getSidebarAgentNames(
+      createSnapshot({
+        agentModels: {
+          oracle: 'openai/gpt-6',
+          council: 'openai/gpt-6',
+          councillor: 'openai/gpt-6',
+          'councillor-alpha': 'anthropic/claude-x',
+          'councillor-beta': 'openai/gpt-6',
+          explorer: 'openai/gpt-6-luna',
+        },
+      }),
+      true,
+    );
+
+    // Snapshot order is preserved; the opt-in only stops the name filter.
+    expect(agentNames).toEqual([
+      'oracle',
+      'council',
+      'councillor',
+      'councillor-alpha',
+      'councillor-beta',
+      'explorer',
+    ]);
+  });
+
+  test('sidebarShowHiddenAgents fallback keeps disabled agents hidden', () => {
+    const agentNames = getSidebarAgentNames(createSnapshot({}), true);
+
+    expect(agentNames).toContain('council');
+    expect(agentNames).toContain('councillor');
+    expect(agentNames).not.toContain('observer');
+  });
+
   test('fills empty snapshot models from the v1 host agent list (#1133)', async () => {
     const seen: unknown[] = [];
     const client = {
@@ -569,6 +603,49 @@ describe('tui sidebar agents', () => {
     const remote = await fetchRemoteAgentModels(client, '/srv/project');
     expect(seen).toEqual([{ location: { directory: '/srv/project' } }]);
     expect(remote).toEqual({ explorer: 'openai/gpt-6-luna' });
+  });
+
+  test('keeps dynamic Council seats from the remote list for the sidebar opt-in (#1672)', async () => {
+    const client = {
+      agent: {
+        async list() {
+          return {
+            data: {
+              data: [
+                {
+                  id: 'explorer',
+                  model: { providerID: 'openai', id: 'gpt-6-luna' },
+                },
+                {
+                  id: 'council',
+                  model: { providerID: 'openai', id: 'gpt-6' },
+                },
+                {
+                  id: 'councillor-alpha',
+                  model: { providerID: 'anthropic', id: 'claude-x' },
+                },
+                { id: 'unrelated', model: { providerID: 'x', id: 'y' } },
+              ],
+            },
+          };
+        },
+      },
+    };
+
+    const remote = await fetchRemoteAgentModels(client, '/srv/project');
+    expect(remote).toEqual({
+      explorer: 'openai/gpt-6-luna',
+      council: 'openai/gpt-6',
+      'councillor-alpha': 'anthropic/claude-x',
+    });
+
+    const snapshot = applyRemoteAgentModels(createSnapshot({}), remote);
+    expect(getSidebarAgentNames(snapshot)).toEqual(['explorer']);
+    expect(getSidebarAgentNames(snapshot, true)).toEqual([
+      'explorer',
+      'council',
+      'councillor-alpha',
+    ]);
   });
 
   test('remote model fetch is a no-op without a host client', async () => {
@@ -1571,6 +1648,39 @@ describe('clickable sidebar sessions', () => {
     expect(frame).toContain('exp-1 1/2');
     expect(frame).toContain('exp-2 2/2');
     expect(frame).not.toContain('via');
+  });
+
+  test('sidebar frame renders hidden council rows only when opted in', async () => {
+    const snapshot = createSnapshot({
+      agentModels: {
+        council: 'anthropic/claude-x',
+        'councillor-alpha': 'openai/gpt-6',
+        explorer: 'openai/gpt-6-luna',
+      },
+    });
+    const render = (showHiddenAgents: boolean) =>
+      renderSidebar(
+        snapshot,
+        'test',
+        attributionTheme,
+        false,
+        false,
+        () => 0,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        showHiddenAgents,
+      );
+
+    const defaultFrame = await renderAttributionFrame(() => render(false));
+    expect(defaultFrame).toContain('explorer');
+    expect(defaultFrame).not.toContain('council');
+
+    const optedInFrame = await renderAttributionFrame(() => render(true));
+    expect(optedInFrame).toContain('council');
+    expect(optedInFrame).toContain('councillor-alpha');
   });
 
   test('sidebar frame marks depth-2 rows with their intermediate parent', async () => {
