@@ -481,6 +481,7 @@ export async function interruptPane(
   binary: string,
   ctrlC: string[],
   env?: Record<string, string | undefined>,
+  waitForGrace?: () => Promise<void>,
 ): Promise<boolean> {
   try {
     const ctrlCProc = crossSpawn([binary, ...ctrlC], {
@@ -490,7 +491,8 @@ export async function interruptPane(
     });
     await ctrlCProc.exited;
 
-    await new Promise((r) => setTimeout(r, GRACEFUL_SHUTDOWN_DELAY_MS));
+    await (waitForGrace?.() ??
+      new Promise((r) => setTimeout(r, GRACEFUL_SHUTDOWN_DELAY_MS)));
     return true;
   } catch {
     return false;

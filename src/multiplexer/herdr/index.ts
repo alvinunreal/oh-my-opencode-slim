@@ -45,6 +45,8 @@ export interface HerdrMultiplexerOptions {
   equalizer?: LayoutEqualizer;
   /** Gates equalization and the main-boundary re-assert. Defaults to true. */
   equalizePanes?: boolean;
+  /** Injectable grace period (tests). */
+  waitForGrace?: () => Promise<void>;
 }
 
 interface HerdrCliResponse {
@@ -69,6 +71,7 @@ export class HerdrMultiplexer implements Multiplexer {
   private agentPaneIds = new Set<string>();
   private equalize: LayoutEqualizer;
   private equalizePanes: boolean;
+  private waitForGrace?: () => Promise<void>;
   // Latch: herdr builds without `pane split --ratio` must keep creating panes.
   private ratioSupported = true;
   private loggedMissingEqualizeEnv = false;
@@ -88,6 +91,7 @@ export class HerdrMultiplexer implements Multiplexer {
     this.mainPaneSize = mainPaneSize;
     this.equalize = options.equalizer ?? equalizeAgentPanes;
     this.equalizePanes = options.equalizePanes ?? true;
+    this.waitForGrace = options.waitForGrace;
   }
 
   async isAvailable(): Promise<boolean> {
@@ -307,7 +311,12 @@ export class HerdrMultiplexer implements Multiplexer {
         try {
           // Already inside the spawn mutex: use the unlocked variant.
           if (
-            await interruptPane(herdr, ['pane', 'send-keys', paneId, 'ctrl+c'])
+            await interruptPane(
+              herdr,
+              ['pane', 'send-keys', paneId, 'ctrl+c'],
+              undefined,
+              this.waitForGrace,
+            )
           ) {
             await this.closePaneInner(herdr, paneId);
           }
@@ -390,7 +399,12 @@ export class HerdrMultiplexer implements Multiplexer {
     if (!herdr) return false;
     if (!paneId || paneId === 'unknown') return true;
     if (
-      !(await interruptPane(herdr, ['pane', 'send-keys', paneId, 'ctrl+c']))
+      !(await interruptPane(
+        herdr,
+        ['pane', 'send-keys', paneId, 'ctrl+c'],
+        undefined,
+        this.waitForGrace,
+      ))
     ) {
       return false;
     }

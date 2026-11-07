@@ -1,12 +1,4 @@
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  spyOn,
-  test,
-} from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -118,21 +110,7 @@ function createEqualizer() {
   );
 }
 
-async function withCloseClock<T>(run: () => Promise<T>): Promise<T> {
-  const clock = createTimerHarness();
-  const timer = spyOn(globalThis, 'setTimeout').mockImplementation(((
-    callback: () => void,
-    delay: number,
-  ) => clock.setTimeout(callback, delay)) as unknown as typeof setTimeout);
-  try {
-    const result = run();
-    await clock.tick();
-    await clock.advance(250);
-    return await result;
-  } finally {
-    timer.mockRestore();
-  }
-}
+const waitForGrace = async () => {};
 
 describe('HerdrMultiplexer', () => {
   const originalHerdrEnv = process.env.HERDR_ENV;
@@ -387,36 +365,23 @@ describe('HerdrMultiplexer', () => {
       return createSpawnResult();
     });
     const { HerdrMultiplexer } = await importFreshHerdr();
-    const herdr = new HerdrMultiplexer();
+    const clock = createTimerHarness();
+    const herdr = new HerdrMultiplexer('main-vertical', 60, {
+      waitForGrace: () =>
+        new Promise((resolve) => clock.setTimeout(resolve, 250)),
+    });
     await herdr.spawnPane('s1', 'A1', 'http://localhost:4096', '/repo');
     await herdr.spawnPane('s2', 'A2', 'http://localhost:4096', '/repo');
     await herdr.spawnPane('s3', 'A3', 'http://localhost:4096', '/repo');
 
-    const clock = createTimerHarness();
-    const timer = spyOn(globalThis, 'setTimeout').mockImplementation(((
-      callback: () => void,
-      delay: number,
-    ) => clock.setTimeout(callback, delay)) as unknown as typeof setTimeout);
-    let beforeGrace: string[][];
-    try {
-      const closes = ['w1:p2', 'w1:p3', 'w1:p4'].map((pane) =>
-        herdr.closePane(pane),
-      );
-      const spawn = herdr.spawnPane(
-        's4',
-        'A4',
-        'http://localhost:4096',
-        '/repo',
-      );
-      await clock.tick();
-      beforeGrace = commands();
-      await clock.advance(250);
-      await clock.advance(250);
-      await clock.advance(250);
-      await Promise.all([...closes, spawn]);
-    } finally {
-      timer.mockRestore();
-    }
+    const closes = ['w1:p2', 'w1:p3', 'w1:p4'].map((pane) =>
+      herdr.closePane(pane),
+    );
+    const spawn = herdr.spawnPane('s4', 'A4', 'http://localhost:4096', '/repo');
+    await clock.tick();
+    const beforeGrace = commands();
+    await clock.advance(250);
+    await Promise.all([...closes, spawn]);
 
     expect(beforeGrace.filter((c) => c.includes('send-keys'))).toHaveLength(3);
     expect(beforeGrace.filter((c) => c.includes('split'))).toHaveLength(4);
@@ -433,7 +398,7 @@ describe('HerdrMultiplexer', () => {
 
   test('returns true when pane close reports pane_not_found', async () => {
     const { HerdrMultiplexer } = await importFreshHerdr();
-    const herdr = new HerdrMultiplexer('main-vertical', 60);
+    const herdr = new HerdrMultiplexer('main-vertical', 60, { waitForGrace });
 
     crossSpawnMock.mockImplementation((command: string[]) => {
       if (command[0] === lookupCommand) {
@@ -449,13 +414,13 @@ describe('HerdrMultiplexer', () => {
       return createSpawnResult();
     });
 
-    const success = await withCloseClock(() => herdr.closePane('w1:p2'));
+    const success = await herdr.closePane('w1:p2');
     expect(success).toBe(true);
   });
 
   test('returns false when pane close reports a transport failure', async () => {
     const { HerdrMultiplexer } = await importFreshHerdr();
-    const herdr = new HerdrMultiplexer('main-vertical', 60);
+    const herdr = new HerdrMultiplexer('main-vertical', 60, { waitForGrace });
 
     crossSpawnMock.mockImplementation((command: string[]) => {
       if (command[0] === lookupCommand) {
@@ -471,7 +436,7 @@ describe('HerdrMultiplexer', () => {
       return createSpawnResult();
     });
 
-    const success = await withCloseClock(() => herdr.closePane('w1:p2'));
+    const success = await herdr.closePane('w1:p2');
     expect(success).toBe(false);
   });
 
@@ -998,12 +963,12 @@ describe('HerdrMultiplexer', () => {
       return createSpawnResult();
     });
     const { HerdrMultiplexer } = await importFreshHerdr();
-    const herdr = new HerdrMultiplexer('main-vertical', 60);
+    const herdr = new HerdrMultiplexer('main-vertical', 60, { waitForGrace });
 
     await herdr.spawnPane('s1', 'A1', 'http://localhost:4096', '/repo');
     await herdr.spawnPane('s2', 'A2', 'http://localhost:4096', '/repo');
     await herdr.spawnPane('s3', 'A3', 'http://localhost:4096', '/repo');
-    await withCloseClock(() => herdr.closePane('w1:p2'));
+    await herdr.closePane('w1:p2');
     await herdr.spawnPane('s4', 'A4', 'http://localhost:4096', '/repo');
 
     const split = commands()
@@ -1285,11 +1250,12 @@ describe('HerdrMultiplexer', () => {
       const equalize = createEqualizer();
       const herdr = new HerdrMultiplexer('main-vertical', 60, {
         equalizer: equalize,
+        waitForGrace,
       });
 
       await herdr.spawnPane('s1', 'A1', 'http://localhost:4096', '/repo');
       await herdr.spawnPane('s2', 'A2', 'http://localhost:4096', '/repo');
-      await withCloseClock(() => herdr.closePane('w1:p2'));
+      await herdr.closePane('w1:p2');
 
       expect(equalize.mock.calls).toHaveLength(3);
       expect(equalize.mock.calls[2][0]).toMatchObject({
@@ -1307,10 +1273,11 @@ describe('HerdrMultiplexer', () => {
       const equalize = createEqualizer();
       const herdr = new HerdrMultiplexer('main-vertical', 60, {
         equalizer: equalize,
+        waitForGrace,
       });
 
       await herdr.spawnPane('s1', 'A1', 'http://localhost:4096', '/repo');
-      await withCloseClock(() => herdr.closePane('w1:p2'));
+      await herdr.closePane('w1:p2');
 
       expect(equalize.mock.calls).toHaveLength(1);
     });
