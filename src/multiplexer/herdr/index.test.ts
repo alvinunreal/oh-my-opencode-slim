@@ -63,6 +63,7 @@ function commands(): string[][] {
 }
 
 const originalPlatform = process.platform;
+const lookupCommand = originalPlatform === 'win32' ? 'where' : 'which';
 
 async function spawnRunCommand(platform: NodeJS.Platform): Promise<string> {
   Object.defineProperty(process, 'platform', {
@@ -125,7 +126,7 @@ describe('HerdrMultiplexer', () => {
 
     crossSpawnMock.mockReset();
     crossSpawnMock.mockImplementation((command: string[]) => {
-      if (command[0] === 'which') {
+      if (command[0] === lookupCommand) {
         return createSpawnResult(0, '/usr/bin/herdr\n');
       }
       if (command.includes('split')) {
@@ -170,7 +171,9 @@ describe('HerdrMultiplexer', () => {
       '/repo',
     );
 
-    expect(commands().some((command) => command[0] === 'which')).toBe(false);
+    expect(commands().some((command) => command[0] === lookupCommand)).toBe(
+      false,
+    );
     expect(commands()[0]).toEqual([
       configuredBinaryPath,
       'pane',
@@ -196,7 +199,7 @@ describe('HerdrMultiplexer', () => {
 
     await herdr.isAvailable();
 
-    expect(commands()).toEqual([['which', 'herdr']]);
+    expect(commands()).toEqual([[lookupCommand, 'herdr']]);
   });
 
   test('spawns an opencode attach process in a herdr split pane', async () => {
@@ -214,8 +217,8 @@ describe('HerdrMultiplexer', () => {
 
     const allCommands = commands();
 
-    // 1. which herdr
-    expect(allCommands[0]).toEqual(['which', 'herdr']);
+    // 1. Find herdr on PATH.
+    expect(allCommands[0]).toEqual([lookupCommand, 'herdr']);
 
     // 2. pane split
     expect(allCommands[1]).toEqual([
@@ -341,7 +344,7 @@ describe('HerdrMultiplexer', () => {
 
     expect(success).toBe(true);
     expect(commands()).toEqual([
-      ['which', 'herdr'],
+      [lookupCommand, 'herdr'],
       ['/usr/bin/herdr', 'pane', 'send-keys', 'w1:p2', 'ctrl+c'],
       ['/usr/bin/herdr', 'pane', 'close', 'w1:p2'],
     ]);
@@ -360,7 +363,7 @@ describe('HerdrMultiplexer', () => {
     const herdr = new HerdrMultiplexer('main-vertical', 60);
 
     crossSpawnMock.mockImplementation((command: string[]) => {
-      if (command[0] === 'which') {
+      if (command[0] === lookupCommand) {
         return createSpawnResult(0, '/usr/bin/herdr\n');
       }
       if (command.includes('close')) {
@@ -378,7 +381,7 @@ describe('HerdrMultiplexer', () => {
     const herdr = new HerdrMultiplexer('main-vertical', 60);
 
     crossSpawnMock.mockImplementation((command: string[]) => {
-      if (command[0] === 'which') {
+      if (command[0] === lookupCommand) {
         return createSpawnResult(0, '/usr/bin/herdr\n');
       }
       if (command.includes('close')) {
@@ -402,7 +405,7 @@ describe('HerdrMultiplexer', () => {
     const paneLine = createSplitResponse('w1:p9');
 
     crossSpawnMock.mockImplementation((command: string[]) => {
-      if (command[0] === 'which') {
+      if (command[0] === lookupCommand) {
         return createSpawnResult(0, '/usr/bin/herdr\n');
       }
       if (command.includes('split')) {
@@ -431,7 +434,7 @@ describe('HerdrMultiplexer', () => {
     });
 
     crossSpawnMock.mockImplementation((command: string[]) => {
-      if (command[0] === 'which') {
+      if (command[0] === lookupCommand) {
         return createSpawnResult(0, '/usr/bin/herdr\n');
       }
       if (command.includes('split')) {
@@ -455,7 +458,7 @@ describe('HerdrMultiplexer', () => {
     const herdr = new HerdrMultiplexer('main-vertical', 60);
 
     crossSpawnMock.mockImplementation((command: string[]) => {
-      if (command[0] === 'which') {
+      if (command[0] === lookupCommand) {
         return createSpawnResult(0, '/usr/bin/herdr\n');
       }
       if (command.includes('split')) {
@@ -479,7 +482,7 @@ describe('HerdrMultiplexer', () => {
     const herdr = new HerdrMultiplexer('main-vertical', 60);
 
     crossSpawnMock.mockImplementation((command: string[]) => {
-      if (command[0] === 'which') {
+      if (command[0] === lookupCommand) {
         return createSpawnResult(0, '/usr/bin/herdr\n');
       }
       if (command.includes('split')) {
@@ -503,7 +506,7 @@ describe('HerdrMultiplexer', () => {
     const herdr = new HerdrMultiplexer('main-vertical', 60);
 
     crossSpawnMock.mockImplementation((command: string[]) => {
-      if (command[0] === 'which') {
+      if (command[0] === lookupCommand) {
         return createSpawnResult(0, '/usr/bin/herdr\n');
       }
       if (command.includes('split')) {
@@ -530,7 +533,7 @@ describe('HerdrMultiplexer', () => {
     const herdr = new HerdrMultiplexer('main-vertical', 60);
 
     crossSpawnMock.mockImplementation((command: string[]) => {
-      if (command[0] === 'which') {
+      if (command[0] === lookupCommand) {
         return createSpawnResult(0, '/usr/bin/herdr\n');
       }
       if (command.includes('split')) {
@@ -949,7 +952,7 @@ describe('HerdrMultiplexer', () => {
     // Mock so split targeting w1:p2 (agent area, direction=down) fails
     // but split targeting w1:p1 (parent, direction=right) succeeds
     crossSpawnMock.mockImplementation((command: string[]) => {
-      if (command[0] === 'which') {
+      if (command[0] === lookupCommand) {
         return createSpawnResult(0, '/usr/bin/herdr\n');
       }
       if (
@@ -1297,7 +1300,7 @@ describe('HerdrMultiplexer', () => {
       process.env.HERDR_SOCKET_PATH = '/tmp/herdr-test.sock';
 
       crossSpawnMock.mockImplementation((command: string[]) => {
-        if (command[0] === 'which') {
+        if (command[0] === lookupCommand) {
           return createSpawnResult(0, '/usr/bin/herdr\n');
         }
         if (command.includes('split')) {
@@ -1328,7 +1331,7 @@ describe('HerdrMultiplexer', () => {
   test('main-vertical: concurrent spawns produce one parent split + down splits', async () => {
     let splitCount = 0;
     crossSpawnMock.mockImplementation((command: string[]) => {
-      if (command[0] === 'which') {
+      if (command[0] === lookupCommand) {
         return createSpawnResult(0, '/usr/bin/herdr\n');
       }
       if (command.includes('split')) {
@@ -1387,7 +1390,7 @@ describe('HerdrMultiplexer', () => {
 
   test('listPanesWithTitles reads the label field from pane list', async () => {
     crossSpawnMock.mockImplementation((command: string[]) => {
-      if (command[0] === 'which') {
+      if (command[0] === lookupCommand) {
         return createSpawnResult(0, '/usr/bin/herdr\n');
       }
       if (command.includes('list')) {
@@ -1418,7 +1421,7 @@ describe('HerdrMultiplexer', () => {
 
   test('sweep closes only the dead-owner terminal pane (FR-8)', async () => {
     crossSpawnMock.mockImplementation((command: string[]) => {
-      if (command[0] === 'which') {
+      if (command[0] === lookupCommand) {
         return createSpawnResult(0, '/usr/bin/herdr\n');
       }
       if (command.includes('list')) {
@@ -1459,7 +1462,7 @@ describe('HerdrMultiplexer', () => {
   test('retries a sized split without --ratio and latches for the process', async () => {
     let sizedFailures = 0;
     crossSpawnMock.mockImplementation((command: string[]) => {
-      if (command[0] === 'which') {
+      if (command[0] === lookupCommand) {
         return createSpawnResult(0, '/usr/bin/herdr\n');
       }
       if (command.includes('split')) {
@@ -1537,7 +1540,7 @@ describe('HerdrMultiplexer', () => {
     ] as const) {
       crossSpawnMock.mockReset();
       crossSpawnMock.mockImplementation((command: string[]) => {
-        if (command[0] === 'which') {
+        if (command[0] === lookupCommand) {
           return createSpawnResult(0, '/usr/bin/herdr\n');
         }
         if (command.includes('split')) {
@@ -1564,7 +1567,7 @@ describe('HerdrMultiplexer', () => {
   test('does not latch ratio support on an unrelated split failure', async () => {
     let sizedAttempts = 0;
     crossSpawnMock.mockImplementation((command: string[]) => {
-      if (command[0] === 'which') {
+      if (command[0] === lookupCommand) {
         return createSpawnResult(0, '/usr/bin/herdr\n');
       }
       if (command.includes('split')) {
