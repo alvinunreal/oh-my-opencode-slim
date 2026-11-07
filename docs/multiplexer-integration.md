@@ -176,6 +176,9 @@ opencode attach http://127.0.0.1:4096
 
 **Tmux** — no setup. The client is detected via `TMUX_PANE` and addresses its
 own tmux server with `-S <socket>` taken from `TMUX`.
+On Windows, psmux 3.4.0 or newer uses this adapter with `type: "tmux"` or
+`"auto"`; pane targets are scoped to the client's psmux session. Viewers run
+in PowerShell, so keep psmux's `default-shell` set to PowerShell.
 
 **Zellij** — requires Zellij **0.44.1 or newer**. Detected via
 `ZELLIJ_PANE_ID`; every command is addressed with `--session <name>` from
