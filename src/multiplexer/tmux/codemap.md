@@ -19,7 +19,8 @@ Implements the `Multiplexer` interface contract defined in `src/multiplexer/type
   there is no pane registry and no startup-pane fallback
 - **psmux**: Detects its extra `tmux -V` version line, scopes pane targets and
   sweeps to the client's session, and launches viewers with PowerShell quoting
-  and spawn-time environment entries. psmux's default shell must be PowerShell.
+  and spawn-time environment entries. A refused split reporting its target's
+  id counts as no pane. psmux's default shell must be PowerShell.
 
 ### Core Abstractions
 

@@ -471,6 +471,11 @@ export class TmuxMultiplexer implements Multiplexer {
         proc.stdout(),
         proc.stderr(),
       ]);
+      // psmux returns the target with exit 0 when it refuses a split.
+      if (stdout.trim() === (target ?? anchor)) {
+        log('[tmux] spawnPane: split refused', { target: target ?? anchor });
+        return { exitCode, stdout: '', stderr };
+      }
       return { exitCode, stdout, stderr };
     };
     const result = await run(stackOn);

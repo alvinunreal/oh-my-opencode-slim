@@ -240,6 +240,28 @@ describe('TmuxMultiplexer', () => {
     expect(commandContaining('list-panes')).not.toContain('-a');
   });
 
+  test('psmux: never adopts the target of a refused split', async () => {
+    installPsmuxMock((command) => {
+      if (command.includes('list-panes'))
+        return createSpawnResult(0, '%1\n%8\n');
+      if (command.includes('split-window'))
+        return createSpawnResult(0, command.includes('-b') ? '%8\n' : '%1\n');
+    });
+    const { TmuxMultiplexer } = await importFreshTmux();
+    expect(
+      await new TmuxMultiplexer().spawnPane(
+        'child',
+        'child',
+        'http://host',
+        '/repo',
+      ),
+    ).toEqual({ success: false, error: 'hard' });
+    expect(
+      tmuxCommands().filter((command) => command.includes('split-window')),
+    ).toHaveLength(2);
+    expect(commandContaining('select-pane')).toBeUndefined();
+  });
+
   test('serializes concurrent spawns so each split sees the earlier panes', async () => {
     const panes = ['%1'];
     crossSpawnMock.mockImplementation((command: string[]) => {
