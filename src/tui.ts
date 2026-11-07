@@ -71,8 +71,8 @@ const CONFIG_WARNING_COLOR = 'orange';
 /**
  * Council agents are internal orchestration surfaces: `council`,
  * `councillor`, and the dynamic `councillor-<name>` agents (v3 registry
- * writes them into `snapshot.agentModels`). They must never appear as
- * sidebar rows (#1672).
+ * writes them into `snapshot.agentModels`). They stay out of the sidebar
+ * by default (#1672); `sidebarShowHiddenAgents: true` opts them back in.
  */
 function isCouncilSidebarAgent(agent: string): boolean {
   return (
@@ -85,6 +85,10 @@ function isCouncilSidebarAgent(agent: string): boolean {
 const FALLBACK_SIDEBAR_AGENTS = SUBAGENT_NAMES.filter(
   (agent) =>
     !isCouncilSidebarAgent(agent) && !DEFAULT_DISABLED_AGENTS.includes(agent),
+);
+/** Fallback for `sidebarShowHiddenAgents: true`; internal Council included. */
+const FALLBACK_SIDEBAR_AGENTS_WITH_HIDDEN = SUBAGENT_NAMES.filter(
+  (agent) => !DEFAULT_DISABLED_AGENTS.includes(agent),
 );
 const BORDER = { type: 'single' };
 const ACTIVITY_FRAME_MS = 100;
@@ -263,13 +267,18 @@ export function splitSidebarModelId(model: string): {
   };
 }
 
-export function getSidebarAgentNames(snapshot: TuiSnapshot): string[] {
+export function getSidebarAgentNames(
+  snapshot: TuiSnapshot,
+  showHiddenAgents = false,
+): string[] {
   const configuredAgents = Object.keys(snapshot.agentModels).filter(
-    (agent) => !isCouncilSidebarAgent(agent),
+    (agent) => showHiddenAgents || !isCouncilSidebarAgent(agent),
   );
   return configuredAgents.length > 0
     ? configuredAgents
-    : FALLBACK_SIDEBAR_AGENTS;
+    : showHiddenAgents
+      ? FALLBACK_SIDEBAR_AGENTS_WITH_HIDDEN
+      : FALLBACK_SIDEBAR_AGENTS;
 }
 
 type AgentListFn = (
@@ -1518,6 +1527,7 @@ function projectSidebarSessionModels(
 export function projectSidebarTeam(
   snapshot: TuiSnapshot,
   state?: SessionPresetState,
+  showHiddenAgents = false,
 ): TuiSnapshot {
   // Older backends omit team; retain their existing sidebar behavior.
   const team = state?.team;
@@ -1535,10 +1545,12 @@ export function projectSidebarTeam(
   else variants.orchestrator = rootVariant;
   const names = new Set(
     [
-      ...getSidebarAgentNames(snapshot),
+      ...getSidebarAgentNames(snapshot, showHiddenAgents),
       ...Object.keys(team.agentModels),
       ...Object.keys(team.inheritance),
-    ].map(canonicalName),
+    ]
+      .filter((name) => showHiddenAgents || !isCouncilSidebarAgent(name))
+      .map(canonicalName),
   );
   if (rootModel === undefined) names.delete('orchestrator');
   return {
@@ -1610,6 +1622,8 @@ export function renderSidebar(
   presetRow?: SidebarPresetRow,
   modelNames?: ReadonlyMap<string, string>,
   resolveSessionTitle?: (sessionID: string) => string | undefined,
+  /** `sidebarShowHiddenAgents`: include internal Council agents as rows. */
+  showHiddenAgents = false,
 ): JSX.Element {
   const configStatusRow = buildConfigStatusRow(configInvalid, theme);
   const hoverBackground = resolveHoverBackground({
@@ -1626,6 +1640,7 @@ export function renderSidebar(
       )
     : null;
   const activeAgents = getActiveSidebarAgentNames(snapshot, visibleRootID);
+  const sidebarAgentNames = getSidebarAgentNames(snapshot, showHiddenAgents);
   const targetsByAgent = new Map(
     getSidebarAgentTargets(snapshot, visibleRootID).map((group) => [
       group.agentName,
@@ -1687,7 +1702,7 @@ export function renderSidebar(
       header,
       ...(sidebarOpen ? [configStatusRow, presetRowEl] : []),
       ...(sidebarOpen
-        ? getSidebarAgentNames(snapshot).flatMap((agentName) => {
+        ? sidebarAgentNames.flatMap((agentName) => {
             const model = snapshot.agentModels[agentName] ?? 'pending';
             const variant = snapshot.agentVariants[agentName];
             const active = activeAgents.has(agentName);
@@ -2232,8 +2247,13 @@ function createSidebarRuntime(
   let configDirectory = adapter.getDirectory();
   let gatesRead = initial ?? readTuiGates(configDirectory, adapter.hostFlavor);
   const sidebarEnabled = gatesRead.gates.sidebarEnabled;
-  let { configInvalid, compactSidebar, multiplexerType, presetName } =
-    configStateOfGates(gatesRead.gates);
+  let {
+    configInvalid,
+    compactSidebar,
+    showHiddenAgents,
+    multiplexerType,
+    presetName,
+  } = configStateOfGates(gatesRead.gates);
   adapter.onMultiplexerConfig?.(multiplexerType, gatesRead.paneConfig);
   let configRenderPending = false;
   const applyConfigState = (fresh = false): boolean => {
@@ -2248,17 +2268,25 @@ function createSidebarRuntime(
     }
     gatesRead = read;
     const next = retainLastGoodConfigState(
-      { configInvalid, compactSidebar, multiplexerType, presetName },
+      {
+        configInvalid,
+        compactSidebar,
+        showHiddenAgents,
+        multiplexerType,
+        presetName,
+      },
       configStateOfGates(read.gates),
     );
     const changed =
       next.configInvalid !== configInvalid ||
       next.compactSidebar !== compactSidebar ||
+      next.showHiddenAgents !== showHiddenAgents ||
       next.multiplexerType !== multiplexerType ||
       next.presetName !== presetName;
     if (changed) {
       configInvalid = next.configInvalid;
       compactSidebar = next.compactSidebar;
+      showHiddenAgents = next.showHiddenAgents;
       multiplexerType = next.multiplexerType;
       presetName = next.presetName;
       configRenderPending = true;
@@ -2286,8 +2314,13 @@ function createSidebarRuntime(
     if (currentDirectory === configDirectory) return false;
     configDirectory = currentDirectory;
     gatesRead = readTuiGates(configDirectory, adapter.hostFlavor);
-    ({ configInvalid, compactSidebar, multiplexerType, presetName } =
-      configStateOfGates(gatesRead.gates));
+    ({
+      configInvalid,
+      compactSidebar,
+      showHiddenAgents,
+      multiplexerType,
+      presetName,
+    } = configStateOfGates(gatesRead.gates));
     configRenderPending = true;
     adapter.onMultiplexerConfig?.(multiplexerType, gatesRead.paneConfig);
     // Never carry one project's last-good config state into another.
@@ -2473,6 +2506,7 @@ function createSidebarRuntime(
               projectSidebarTeam(
                 projectSidebarSessionModels(currentSnapshot, visible),
                 isCurrentProjection ? projection.state : undefined,
+                showHiddenAgents,
               ),
               adapter.getSelectedRootModel?.(currentSnapshot),
             ),
@@ -2490,6 +2524,7 @@ function createSidebarRuntime(
             ),
             modelNames(),
             adapter.resolveSessionTitle,
+            showHiddenAgents,
           );
         }),
       )

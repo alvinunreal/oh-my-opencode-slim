@@ -1038,6 +1038,12 @@ const RawPluginConfigSchema = z
       .describe(
         'Use the compact TUI sidebar layout. Defaults to true; set false to use the expanded layout.',
       ),
+    sidebarShowHiddenAgents: z
+      .boolean()
+      .optional()
+      .describe(
+        'Render internal Council agents (council, councillor, and the dynamic councillor-<seat> agents) as rows in the OMOS TUI sidebar. Defaults to false: those agents stay hidden from the sidebar because their seats are internal orchestration surfaces. When true, each row shows its model and status dot like any other agent; agent registration, availability, and the host agent picker are unchanged.',
+      ),
     sidebar: z
       .boolean()
       .optional()

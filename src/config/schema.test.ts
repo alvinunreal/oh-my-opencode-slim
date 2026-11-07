@@ -744,6 +744,29 @@ describe('PluginConfigSchema sidebar', () => {
     }
   });
 
+  it('keeps sidebarShowHiddenAgents optional and accepts both values', () => {
+    const omitted = PluginConfigSchema.safeParse({});
+    const shown = PluginConfigSchema.safeParse({
+      sidebarShowHiddenAgents: true,
+    });
+    const hidden = PluginConfigSchema.safeParse({
+      sidebarShowHiddenAgents: false,
+    });
+
+    expect(omitted.success).toBe(true);
+    expect(shown.success).toBe(true);
+    expect(hidden.success).toBe(true);
+    if (omitted.success) {
+      expect(omitted.data.sidebarShowHiddenAgents).toBeUndefined();
+    }
+    if (shown.success) {
+      expect(shown.data.sidebarShowHiddenAgents).toBe(true);
+    }
+    if (hidden.success) {
+      expect(hidden.data.sidebarShowHiddenAgents).toBe(false);
+    }
+  });
+
   it('keeps liveConfigRefresh optional and defaults to enabled', () => {
     const omitted = PluginConfigSchema.safeParse({});
     const explicit = PluginConfigSchema.safeParse({ liveConfigRefresh: false });

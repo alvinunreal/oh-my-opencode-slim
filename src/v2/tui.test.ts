@@ -1153,6 +1153,68 @@ describe('v2 tui preset plugin', () => {
       }
     });
 
+    test('sidebarShowHiddenAgents reveals internal Council rows and a config edit hides them', async () => {
+      writeUserConfig({
+        ...makeConfig(),
+        compactSidebar: false,
+        sidebarShowHiddenAgents: true,
+      } as unknown as Record<string, unknown>);
+      process.env.XDG_DATA_HOME = path.join(configHome, 'hidden-agents-data');
+      process.env.OPENCODE_LOG_DIR = path.join(configHome, 'logs');
+      process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '60000';
+      recordTuiAgentModels(
+        {
+          agentModels: {
+            orchestrator: 'openai/gpt-6',
+            explorer: 'openai/gpt-6-mini',
+            council: 'anthropic/claude-x',
+            'councillor-alpha': 'anthropic/claude-y',
+          },
+          agentVariants: {},
+        },
+        projectDir,
+      );
+      const stub = makeSetupCtx();
+      let cleanup: (() => void) | undefined;
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        const sidebarSlot = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        if (!sidebarSlot?.render) throw new Error('Sidebar slot missing');
+        screen = await testRender(() => sidebarSlot.render?.() as never, {
+          width: 80,
+          height: 32,
+        });
+        await screen.renderOnce();
+        const optedIn = screen.captureCharFrame();
+        expect(optedIn).toContain('council');
+        expect(optedIn).toContain('councillor-alpha');
+        expect(optedIn).toContain('explorer');
+
+        // The same config file without the switch: the listener re-reads the
+        // gates and the next render drops the council rows again.
+        writeUserConfig({
+          ...makeConfig(),
+          compactSidebar: false,
+        } as unknown as Record<string, unknown>);
+        await notifyConfigChanged(projectDir, 'hidden-agents-off');
+        await waitFor(async () => {
+          await screen?.renderOnce();
+          return screen?.captureCharFrame().includes('council') === false;
+        });
+        const optedOut = screen?.captureCharFrame() ?? '';
+        expect(optedOut).not.toContain('council');
+        expect(optedOut).toContain('explorer');
+      } finally {
+        cleanup?.();
+        screen?.renderer.destroy();
+      }
+    });
+
     test('sidebar overlays the picker selection on a root session under the orchestrator displayName', async () => {
       writeUserConfig({ ...makeConfig(), compactSidebar: false });
       process.env.XDG_DATA_HOME = path.join(configHome, 'display-identity');
