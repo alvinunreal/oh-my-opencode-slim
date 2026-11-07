@@ -106,6 +106,26 @@ function installDefaultMock(): void {
   });
 }
 
+function installPsmuxMock(
+  response: (command: string[]) => SpawnResult | undefined = () => undefined,
+): void {
+  crossSpawnMock.mockImplementation((command: string[]) => {
+    if (command[0] === 'which' || command[0] === 'where')
+      return createSpawnResult(0, '/usr/bin/tmux\n');
+    if (command.includes('-V'))
+      return createSpawnResult(
+        0,
+        'tmux 3.4.0\npsmux 3.4.0 (20aa1d7 2026-10-13)',
+      );
+    return (
+      response(command) ??
+      (command.includes('split-window')
+        ? createSpawnResult(0, '%2\n')
+        : createSpawnResult())
+    );
+  });
+}
+
 /** Default discovery/split mock, but the close backstop exits with `code`. */
 function installMockWithKillExit(code: number): void {
   crossSpawnMock.mockImplementation((command: string[]) => {
@@ -133,6 +153,91 @@ describe('TmuxMultiplexer', () => {
   afterEach(() => {
     process.env.TMUX = originalTmux;
     process.env.TMUX_PANE = originalTmuxPane;
+  });
+
+  test('psmux: injects viewer markers and quotes the command for PowerShell', async () => {
+    installPsmuxMock();
+    const { TmuxMultiplexer } = await importFreshTmux();
+    await new TmuxMultiplexer().spawnPane(
+      'child',
+      'child',
+      'http://host',
+      "/repo/O'Brien",
+    );
+
+    const split = commandContaining('split-window') ?? [];
+    for (const marker of [
+      'OPENCODE_DISABLE_TERMINAL_TITLE=1',
+      'OH_MY_OPENCODE_SLIM_PANE_VIEWER=1',
+    ]) {
+      const index = split.indexOf(marker);
+      expect(index).toBeGreaterThan(0);
+      expect(split[index - 1]).toBe('-e');
+    }
+    const command = split[split.indexOf(';') - 1];
+    expect(command).not.toStartWith('env ');
+    expect(command).toContain("--dir '/repo/O''Brien'");
+  });
+
+  test('psmux: scopes created and neighbouring pane targets to the session', async () => {
+    installPsmuxMock((command) => {
+      if (command.includes('list-panes'))
+        return createSpawnResult(0, '%1\n%2\n');
+      if (command.includes('split-window')) return createSpawnResult(0, '%3\n');
+    });
+    const { TmuxMultiplexer } = await importFreshTmux();
+    const tmux = new TmuxMultiplexer();
+    expect(
+      await tmux.spawnPane('child', 'child', 'http://host', '/repo'),
+    ).toEqual({ success: true, paneId: '%3' });
+    expect(await withCloseClock(() => tmux.closePane('%3'))).toBe(true);
+
+    const target = (command: string[] | undefined, operation: string) => {
+      expect(command).toBeDefined();
+      const start = command?.indexOf(operation) ?? -1;
+      expect(start).toBeGreaterThanOrEqual(0);
+      const flag = command?.indexOf('-t', start) ?? -1;
+      expect(flag).toBeGreaterThan(start);
+      return command?.[flag + 1];
+    };
+    expect(target(commandContaining('split-window'), 'split-window')).toBe(
+      ':.%2',
+    );
+    const metadata = commandContaining('select-pane');
+    expect(target(metadata, 'select-pane')).toBe(':.%3');
+    expect(target(metadata, 'set-option')).toBe(':.%3');
+    expect(target(commandContaining('send-keys'), 'send-keys')).toBe(':.%3');
+    expect(target(commandContaining('kill-pane'), 'kill-pane')).toBe(':.%3');
+  });
+
+  test('psmux: treats an already-gone pane as closed and reapplies the layout', async () => {
+    installPsmuxMock((command) => {
+      if (command.includes('kill-pane'))
+        return createSpawnResult(1, '', "psmux: can't find pane: %2\n");
+    });
+    const { TmuxMultiplexer } = await importFreshTmux();
+    const tmux = new TmuxMultiplexer();
+    await tmux.spawnPane('child', 'child', 'http://host', '/repo');
+    crossSpawnMock.mockClear();
+
+    expect(await withCloseClock(() => tmux.closePane('%2'))).toBe(true);
+    expect(commands().at(-1)).toEqual([
+      '/usr/bin/tmux',
+      '-S',
+      SOCKET,
+      'select-layout',
+      '-t',
+      '%1',
+      'main-vertical',
+    ]);
+  });
+
+  test('psmux: limits the pane sweep to the current session', async () => {
+    installPsmuxMock();
+    const { TmuxMultiplexer } = await importFreshTmux();
+    await new TmuxMultiplexer().listPanesWithTitles();
+    expect(commandContaining('list-panes')).toContain('-s');
+    expect(commandContaining('list-panes')).not.toContain('-a');
   });
 
   test('isInsideSession follows TMUX_PANE, not TMUX', async () => {

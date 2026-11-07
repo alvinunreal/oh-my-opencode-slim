@@ -29,6 +29,7 @@ export class TmuxMultiplexer implements Multiplexer {
 
   private binaryPath: string | null = null;
   private hasChecked = false;
+  private isPsmux = false;
   private supportsSplitEnv = false;
   private supportsPaneOptions = false;
   private storedLayout: MultiplexerLayout;
@@ -49,6 +50,8 @@ export class TmuxMultiplexer implements Multiplexer {
     this.binaryPath = await findBinary('tmux', {
       verify: true,
       onVerified: (version) => {
+        // psmux appends its own version line to the tmux version.
+        this.isPsmux = /^psmux\s/m.test(version);
         const match = /^tmux\s+(\d+)\.(\d+)([a-z]?)/i.exec(version);
         if (!match) return;
         const major = Number(match[1]);
@@ -109,12 +112,20 @@ export class TmuxMultiplexer implements Multiplexer {
         text,
       );
     try {
-      const opencodeCmd = `env OPENCODE_DISABLE_TERMINAL_TITLE=1 ${PANE_VIEWER_ENV}=1 ${buildViewCommand(
+      const viewerEnv = [
+        'OPENCODE_DISABLE_TERMINAL_TITLE=1',
+        `${PANE_VIEWER_ENV}=1`,
+      ];
+      const viewCommand = buildViewCommand(
         sessionId,
         serverUrl,
         directory,
-        options,
-      )}`;
+        this.isPsmux ? { ...options, shell: 'powershell' } : options,
+      );
+      // psmux's env translation is lossy; its viewers run in PowerShell.
+      const opencodeCmd = this.isPsmux
+        ? viewCommand
+        : `env ${viewerEnv.join(' ')} ${viewCommand}`;
 
       // v2 remote hosts: the viewer must authenticate with
       // OPENCODE_PASSWORD. Inject it as a spawn-time tmux environment entry
@@ -138,7 +149,12 @@ export class TmuxMultiplexer implements Multiplexer {
         socket,
         anchor,
         opencodeCmd,
-        viewerSecretArgs,
+        this.isPsmux
+          ? [
+              ...viewerEnv.flatMap((entry) => ['-e', entry]),
+              ...viewerSecretArgs,
+            ]
+          : viewerSecretArgs,
         // v2 mini commands omit the directory, so the split pins the child
         // session's project directory itself.
         viewerNeedsPaneCwd(options) ? ['-c', directory] : [],
@@ -164,12 +180,18 @@ export class TmuxMultiplexer implements Multiplexer {
         try {
           await this.runTmux(tmux, socket, [
             'select-pane',
-            '-t',
-            paneId,
+            ...this.targetArgs(paneId),
             '-T',
             description,
             ...(this.supportsPaneOptions
-              ? [';', 'set-option', '-p', '-t', paneId, '@omosc', description]
+              ? [
+                  ';',
+                  'set-option',
+                  '-p',
+                  ...this.targetArgs(paneId),
+                  '@omosc',
+                  description,
+                ]
               : []),
           ]);
         } catch (err) {
@@ -209,7 +231,8 @@ export class TmuxMultiplexer implements Multiplexer {
           '-S',
           socket,
           'list-panes',
-          '-a',
+          // psmux pane IDs are session-scoped; do not sweep other sessions.
+          this.isPsmux ? '-s' : '-a',
           '-F',
           this.supportsPaneOptions
             ? '#{pane_id}|#{?@omosc,#{@omosc},#{pane_title}}'
@@ -259,19 +282,18 @@ export class TmuxMultiplexer implements Multiplexer {
       : [];
     let alreadyClosed = false;
     const closed = await gracefulClosePane(tmux, paneId, {
-      ctrlC: ['-S', socket, 'send-keys', '-t', paneId, 'C-c'],
+      ctrlC: ['-S', socket, 'send-keys', ...this.targetArgs(paneId), 'C-c'],
       // Kill and rebalance in one invocation: each pane is resized once.
       close: [
         '-S',
         socket,
         'kill-pane',
-        '-t',
-        paneId,
+        ...this.targetArgs(paneId),
         ...(anchor ? [';', ...layout] : []),
       ],
       // tmux stops at the first failing command and names the missing target.
       isAlreadyClosed: (stderr) => {
-        const error = stderr.trim();
+        const error = stderr.trim().replace(/^psmux: /, '');
         alreadyClosed = error === `can't find pane: ${paneId}`;
         return (
           alreadyClosed ||
@@ -431,7 +453,9 @@ export class TmuxMultiplexer implements Multiplexer {
   }
 
   private targetArgs(targetPane: string): string[] {
-    return ['-t', targetPane];
+    // psmux numbers panes per session and reroutes missing IDs to other sessions.
+    // The :. prefix pins each target to this client's session.
+    return ['-t', this.isPsmux ? `:.${targetPane}` : targetPane];
   }
 
   /**

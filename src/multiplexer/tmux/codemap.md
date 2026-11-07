@@ -17,6 +17,9 @@ Implements the `Multiplexer` interface contract defined in `src/multiplexer/type
   `process.env.TMUX_PANE` at spawn time and explicitly addresses the tmux
   server with `-S <socket>` taken from the first segment of `process.env.TMUX`;
   there is no pane registry and no startup-pane fallback
+- **psmux**: Detects its extra `tmux -V` version line, scopes pane targets and
+  sweeps to the client's session, and launches viewers with PowerShell quoting
+  and spawn-time environment entries. psmux's default shell must be PowerShell.
 
 ### Core Abstractions
 
