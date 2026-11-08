@@ -2162,6 +2162,144 @@ describe('HerdrMultiplexer', () => {
     expect(commands().some((command) => command[1] === 'kill')).toBe(false);
   });
 
+  test('desktop sweep recovers a journaled unverified spawn with verified ownership', async () => {
+    process.env.HC_TERMINAL_ID = 't-parent';
+    const dir = mkdtempSync(join(tmpdir(), 'omos-herdr-journal-'));
+    const journalPath = join(dir, 'recovery.json');
+    const spawnToken = '11111111-1111-4111-8111-111111111111';
+    const title = `omosc:${process.pid - 1}:session-old`;
+    writeFileSync(
+      journalPath,
+      JSON.stringify([
+        {
+          spawnToken,
+          parentId: 't-parent',
+          title,
+          spaceId: 'space-1',
+          tabId: 'tab-1',
+          createdAt: Date.now(),
+        },
+      ]),
+    );
+
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which') {
+        return createSpawnResult(0, `/usr/bin/${command[1]}\n`);
+      }
+      if (
+        command[1] === 'ls' &&
+        command.includes('--label') &&
+        command.includes('omosc.owner=t-parent')
+      ) {
+        return createSpawnResult(0, JSON.stringify({ terminals: [] }));
+      }
+      if (
+        command[1] === 'ls' &&
+        command.includes(`omosc.spawn=${spawnToken}`)
+      ) {
+        return createSpawnResult(
+          0,
+          JSON.stringify({ terminals: [{ address: 't-orphan' }] }),
+        );
+      }
+      if (command[1] === 'get' && command[2] === 't-orphan') {
+        return createSpawnResult(
+          0,
+          JSON.stringify({
+            address: 't-orphan',
+            parent: 't-parent',
+            state: 'live',
+            labels: {
+              'herdr.space': 'space-1',
+              'herdr.tab': 'tab-1',
+              'omosc.owner': 't-parent',
+              omosc: title,
+              'omosc.spawn': spawnToken,
+            },
+          }),
+        );
+      }
+      return createSpawnResult();
+    });
+
+    try {
+      const { HerdrMultiplexer } = await importFreshHerdr();
+      const adapter = new HerdrMultiplexer(undefined, undefined, {
+        desktopAdoptionWait: async () => {},
+        recoveryJournalPath: journalPath,
+      });
+      const panes = await adapter.listPanesWithTitles();
+      expect(panes).toEqual([{ paneId: 't-orphan', title }]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('desktop sweep journal recovery ignores candidates without verified ownership', async () => {
+    process.env.HC_TERMINAL_ID = 't-parent';
+    const dir = mkdtempSync(join(tmpdir(), 'omos-herdr-journal-'));
+    const journalPath = join(dir, 'recovery.json');
+    const spawnToken = '22222222-2222-4222-8222-222222222222';
+    writeFileSync(
+      journalPath,
+      JSON.stringify([
+        {
+          spawnToken,
+          parentId: 't-parent',
+          title: `omosc:${process.pid - 1}:session-old`,
+          spaceId: 'space-1',
+          tabId: 'tab-1',
+          createdAt: Date.now(),
+        },
+      ]),
+    );
+
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which') {
+        return createSpawnResult(0, `/usr/bin/${command[1]}\n`);
+      }
+      if (command[1] === 'ls' && command.includes('omosc.owner=t-parent')) {
+        return createSpawnResult(0, JSON.stringify({ terminals: [] }));
+      }
+      if (command[1] === 'ls' && command.includes(`omosc.spawn=${spawnToken}`)) {
+        return createSpawnResult(
+          0,
+          JSON.stringify({ terminals: [{ address: 't-foreign' }] }),
+        );
+      }
+      if (command[1] === 'get' && command[2] === 't-foreign') {
+        return createSpawnResult(
+          0,
+          JSON.stringify({
+            address: 't-foreign',
+            parent: 't-other',
+            state: 'live',
+            labels: {
+              'herdr.space': 'space-1',
+              'herdr.tab': 'tab-1',
+              'omosc.owner': 't-other',
+              omosc: `omosc:${process.pid - 1}:someone-else`,
+              'omosc.spawn': spawnToken,
+            },
+          }),
+        );
+      }
+      return createSpawnResult();
+    });
+
+    try {
+      const { HerdrMultiplexer } = await importFreshHerdr();
+      const adapter = new HerdrMultiplexer(undefined, undefined, {
+        desktopAdoptionWait: async () => {},
+        recoveryJournalPath: journalPath,
+      });
+      expect(await adapter.listPanesWithTitles()).toEqual([]);
+      expect(commands().some((command) => command[1] === 'kill')).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('desktop close keeps ownership metadata after a temporary get failure', async () => {
     process.env.HC_TERMINAL_ID = 't-parent';
     let childGets = 0;

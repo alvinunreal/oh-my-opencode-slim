@@ -108,8 +108,9 @@ export interface HerdrMultiplexerOptions {
   desktopAdoptionWait?: DesktopAdoptionWait;
   /**
    * Best-effort journal for unverified desktop spawns (cross-restart
-   * recovery). Off by default; pass a stable path under /tmp/opencode to
-   * enable. Fail-soft: journal errors never block or kill terminals.
+   * recovery). Enabled by default in desktop mode with a stable per-parent
+   * path under /tmp/opencode; pass `null` to disable or a string to override.
+   * Fail-soft: journal errors never block or kill terminals.
    */
   recoveryJournalPath?: string | null;
 }
@@ -152,6 +153,7 @@ export class HerdrMultiplexer implements Multiplexer {
   private equalizePanes: boolean;
   private desktopAdoptionWait: DesktopAdoptionWait;
   private recoveryJournalPath: string | null;
+  private recoveryJournalExplicitlyDisabled: boolean;
   private readonly desktopOwnedTerminals = new Map<string, DesktopOwnership>();
   private readonly desktopSweepCandidates = new Map<string, DesktopOwnership>();
   private readonly pendingDesktopRollbacks = new Map<
@@ -179,14 +181,17 @@ export class HerdrMultiplexer implements Multiplexer {
     this.equalizePanes = options.equalizePanes ?? true;
     this.desktopAdoptionWait =
       options.desktopAdoptionWait ?? defaultDesktopAdoptionWait;
-    this.recoveryJournalPath =
-      options.recoveryJournalPath === undefined
-        ? null
-        : options.recoveryJournalPath;
+    this.recoveryJournalExplicitlyDisabled = options.recoveryJournalPath === null;
+    this.recoveryJournalPath = options.recoveryJournalPath ?? null;
   }
 
   private desktopRecoveryJournalPath(): string | null {
-    return this.recoveryJournalPath;
+    if (this.recoveryJournalExplicitlyDisabled) return null;
+    if (this.recoveryJournalPath) return this.recoveryJournalPath;
+    const parentId = process.env.HC_TERMINAL_ID?.trim();
+    if (!parentId) return null;
+    const safe = parentId.replace(/[^a-zA-Z0-9_-]+/g, '_');
+    return `/tmp/opencode/herdr-desktop-recovery-${safe}.json`;
   }
 
   private async markUnverifiedDesktopSpawn(
