@@ -1092,78 +1092,62 @@ export class HerdrMultiplexer implements Multiplexer {
     sessionId: string,
   ): Promise<boolean> {
     try {
-      const previous = this.pendingDesktopRollbacks.get(sessionId);
-      if (previous?.emptyScans !== undefined) {
-        await this.desktopAdoptionWait(DESKTOP_ADOPTION_POLL_MS);
-      }
-      const listRead = await readCoreTerminalListWithRetry(
-        hc,
-        ['--all', '--label', `omosc.spawn=${ownership.spawnToken}`],
-        this.desktopAdoptionWait,
-      );
-      if (listRead.kind !== 'found') {
-        log('[herdr] desktop orphan scan could not verify candidates', {
-          spawnToken: ownership.spawnToken,
-          readKind: listRead.kind,
-          detail: listRead.message,
-        });
-        this.pendingDesktopRollbacks.set(sessionId, {
+      for (let scan = 1; scan <= DESKTOP_ROLLBACK_EMPTY_SCANS; scan += 1) {
+        if (scan > 1) await this.desktopAdoptionWait(DESKTOP_ADOPTION_POLL_MS);
+        const listRead = await readCoreTerminalListWithRetry(
           hc,
-          ownership,
-          ...(previous?.emptyScans !== undefined
-            ? { emptyScans: previous.emptyScans }
-            : {}),
-        });
-        return false;
-      }
-      if (listRead.addresses.length === 0) {
-        const emptyScans = (previous?.emptyScans ?? 0) + 1;
-        if (emptyScans >= DESKTOP_ROLLBACK_EMPTY_SCANS) {
-          log(
-            '[herdr] desktop rollback scan window elapsed; no candidate found',
-            {
-              spawnToken: ownership.spawnToken,
-              emptyScans,
-            },
-          );
-          return true;
+          ['--all', '--label', `omosc.spawn=${ownership.spawnToken}`],
+          this.desktopAdoptionWait,
+        );
+        if (listRead.kind !== 'found') {
+          log('[herdr] desktop orphan scan could not verify candidates', {
+            spawnToken: ownership.spawnToken,
+            readKind: listRead.kind,
+            detail: listRead.message,
+            scan,
+          });
+          this.pendingDesktopRollbacks.set(sessionId, { hc, ownership });
+          return false;
         }
-        this.pendingDesktopRollbacks.set(sessionId, {
-          hc,
-          ownership,
-          emptyScans,
-        });
-        return false;
-      }
-      if (listRead.addresses.length !== 1) {
-        log('[herdr] desktop orphan scan did not identify one child', {
-          candidateCount: listRead.addresses.length,
+        if (listRead.addresses.length === 0) {
+          if (scan === DESKTOP_ROLLBACK_EMPTY_SCANS) {
+            log(
+              '[herdr] desktop rollback scan window elapsed; no candidate found',
+              {
+                spawnToken: ownership.spawnToken,
+                emptyScans: scan,
+              },
+            );
+            return true;
+          }
+          continue;
+        }
+        if (listRead.addresses.length !== 1) {
+          log('[herdr] desktop orphan scan did not identify one child', {
+            candidateCount: listRead.addresses.length,
+            spawnToken: ownership.spawnToken,
+            scan,
+          });
+          this.pendingDesktopRollbacks.set(sessionId, { hc, ownership });
+          return false;
+        }
+
+        const address = listRead.addresses[0];
+        const rollback = await this.rollbackDesktopTerminal(address, ownership);
+        if (rollback !== true) {
+          this.pendingDesktopRollbacks.set(sessionId, {
+            hc,
+            ownership,
+            ...(rollback === 'not-owned' ? {} : { address }),
+          });
+          return false;
+        }
+        log('[herdr] desktop orphan removed after ownership verification', {
+          address,
           spawnToken: ownership.spawnToken,
         });
-        this.pendingDesktopRollbacks.set(sessionId, {
-          hc,
-          ownership,
-          ...(previous?.emptyScans !== undefined
-            ? { emptyScans: previous.emptyScans }
-            : {}),
-        });
-        return false;
+        return true;
       }
-
-      const address = listRead.addresses[0];
-      const rollback = await this.rollbackDesktopTerminal(address, ownership);
-      if (rollback !== true) {
-        this.pendingDesktopRollbacks.set(sessionId, {
-          hc,
-          ownership,
-          ...(rollback === 'not-owned' ? {} : { address }),
-        });
-        return false;
-      }
-      log('[herdr] desktop orphan removed after ownership verification', {
-        address,
-        spawnToken: ownership.spawnToken,
-      });
       return true;
     } catch (error) {
       log('[herdr] desktop orphan cleanup threw', {

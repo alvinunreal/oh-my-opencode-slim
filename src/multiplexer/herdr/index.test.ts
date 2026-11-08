@@ -850,28 +850,23 @@ describe('HerdrMultiplexer', () => {
     const adapter = new HerdrMultiplexer(undefined, undefined, {
       desktopAdoptionWait: async () => {},
     });
-    const result = await adapter.spawnPane(
+    const args = [
       'session-1',
       'Worker',
       'http://localhost:4096',
       '/repo',
-    );
-    await adapter.spawnPane(
-      'session-1',
-      'Worker',
-      'http://localhost:4096',
-      '/repo',
-    );
-    await adapter.spawnPane(
-      'session-1',
-      'Worker',
-      'http://localhost:4096',
-      '/repo',
-    );
+    ] as const;
+    const first = await adapter.spawnPane(...args);
+    const blocked = await adapter.spawnPane(...args);
+    const afterCandidateGone = await adapter.spawnPane(...args);
 
-    expect(result).toEqual({ success: false, error: 'hard' });
-    expect(runCount).toBe(1);
-    expect(scanCount).toBe(3);
+    expect(first).toEqual({ success: false, error: 'hard' });
+    expect(blocked).toEqual({ success: false, error: 'hard' });
+    // Candidate disappears: bounded scan window elapses, then a new spawn is
+    // attempted (it still fails in this mock), but the foreign terminal is
+    // never killed.
+    expect(afterCandidateGone).toEqual({ success: false, error: 'hard' });
+    expect(runCount).toBe(2);
     expect(calls.some((command) => command[1] === 'kill')).toBe(false);
     expect(calls.some((command) => command[1] === 'rm')).toBe(false);
     expect(loggerEntries).toContainEqual({
