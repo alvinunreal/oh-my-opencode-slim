@@ -300,7 +300,9 @@ describe('HerdrMultiplexer', () => {
     });
 
     const { HerdrMultiplexer } = await importFreshHerdr();
-    const adapter = new HerdrMultiplexer();
+    const adapter = new HerdrMultiplexer(undefined, undefined, {
+      desktopAdoptionWait: async () => {},
+    });
     const result = await adapter.spawnPane(
       'session-1',
       'Worker',
@@ -529,9 +531,264 @@ describe('HerdrMultiplexer', () => {
     ).toBe(true);
   });
 
+  test('desktop blocks a duplicate spawn while rollback lookup keeps failing', async () => {
+    process.env.HC_TERMINAL_ID = 't-parent';
+    let runCount = 0;
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      if (command[0] === 'which')
+        return createSpawnResult(0, `/usr/bin/${command[1]}\n`);
+      if (command[1] === 'get' && command[2] === 't-parent')
+        return createSpawnResult(
+          0,
+          JSON.stringify({
+            address: 't-parent',
+            parent: null,
+            state: 'live',
+            labels: { 'herdr.space': 'space-1', 'herdr.tab': 'tab-1' },
+          }),
+        );
+      if (command[1] === 'run') {
+        runCount += 1;
+        return createSpawnResult(0, '{invalid');
+      }
+      if (command[1] === 'ls') return createSpawnResult(1, '', 'lookup failed');
+      return createSpawnResult();
+    });
+
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const adapter = new HerdrMultiplexer(undefined, undefined, {
+      desktopAdoptionWait: async () => {},
+    });
+    const args = [
+      'session-1',
+      'Worker',
+      'http://localhost:4096',
+      '/repo',
+    ] as const;
+    expect(await adapter.spawnPane(...args)).toEqual({
+      success: false,
+      error: 'hard',
+    });
+    expect(
+      await adapter.spawnPane(
+        'session-2',
+        'Worker',
+        'http://localhost:4096',
+        '/repo',
+      ),
+    ).toEqual({
+      success: false,
+      error: 'hard',
+    });
+    expect(await adapter.spawnPane(...args)).toEqual({
+      success: false,
+      error: 'hard',
+    });
+    expect(runCount).toBe(2);
+  });
+
+  test('desktop retries a failed rollback before spawning the same child', async () => {
+    process.env.HC_TERMINAL_ID = 't-parent';
+    const calls: string[][] = [];
+    let spawnToken = '';
+    let state: 'live' | 'finished' = 'live';
+    let killCount = 0;
+    let rmCount = 0;
+    let runCount = 0;
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      calls.push(command);
+      if (command[0] === 'which')
+        return createSpawnResult(0, `/usr/bin/${command[1]}\n`);
+      if (command[1] === 'get' && command[2] === 't-parent')
+        return createSpawnResult(
+          0,
+          JSON.stringify({
+            address: 't-parent',
+            parent: null,
+            state: 'live',
+            labels: { 'herdr.space': 'space-1', 'herdr.tab': 'tab-1' },
+          }),
+        );
+      if (command[1] === 'run') {
+        runCount += 1;
+        spawnToken =
+          command
+            .find((arg) => arg.startsWith('omosc.spawn='))
+            ?.slice('omosc.spawn='.length) ?? '';
+        return createSpawnResult(0, '{invalid');
+      }
+      if (command[1] === 'ls' && command.includes(`omosc.spawn=${spawnToken}`))
+        return createSpawnResult(
+          0,
+          JSON.stringify({ terminals: [{ address: 't-orphan' }] }),
+        );
+      if (command[1] === 'get' && command[2] === 't-orphan')
+        return createSpawnResult(
+          0,
+          JSON.stringify({
+            address: 't-orphan',
+            parent: 't-parent',
+            state,
+            labels: {
+              'herdr.space': 'space-1',
+              'herdr.tab': 'tab-1',
+              'omosc.owner': 't-parent',
+              omosc: `omosc:${process.pid}:session-1`,
+              'omosc.spawn': spawnToken,
+            },
+          }),
+        );
+      if (command[1] === 'kill' && command[2] === 't-orphan') {
+        killCount += 1;
+        if (killCount === 1) return createSpawnResult(1, '', 'kill failed');
+        state = 'finished';
+      }
+      if (command[1] === 'rm' && command[2] === 't-orphan') {
+        rmCount += 1;
+        if (rmCount === 1) return createSpawnResult(1, '', 'rm failed');
+        return createSpawnResult();
+      }
+      return createSpawnResult();
+    });
+
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const adapter = new HerdrMultiplexer(undefined, undefined, {
+      desktopAdoptionWait: async () => {},
+    });
+    const args = [
+      'session-1',
+      'Worker',
+      'http://localhost:4096',
+      '/repo',
+    ] as const;
+    expect(await adapter.spawnPane(...args)).toEqual({
+      success: false,
+      error: 'hard',
+    });
+    expect(await adapter.spawnPane(...args)).toEqual({
+      success: false,
+      error: 'hard',
+    });
+    expect(await adapter.spawnPane(...args)).toEqual({
+      success: false,
+      error: 'hard',
+    });
+    const nextRun = calls.findIndex(
+      (command, index) => index > 0 && command[1] === 'run',
+    );
+    const secondRun = calls.findIndex(
+      (command, index) => index > nextRun && command[1] === 'run',
+    );
+    expect(
+      calls.findIndex(
+        (command) => command[1] === 'rm' && command[2] === 't-orphan',
+      ),
+    ).toBeLessThan(secondRun);
+    expect(killCount).toBe(2);
+    expect(rmCount).toBe(3);
+    expect(runCount).toBe(2);
+  });
+
+  test('desktop retries an empty rollback scan before another spawn', async () => {
+    process.env.HC_TERMINAL_ID = 't-parent';
+    const calls: string[][] = [];
+    let token = '';
+    let listCount = 0;
+    let waitCount = 0;
+    let childState: 'live' | 'finished' = 'live';
+    crossSpawnMock.mockImplementation((command: string[]) => {
+      calls.push(command);
+      if (command[0] === 'which')
+        return createSpawnResult(0, `/usr/bin/${command[1]}\n`);
+      if (command[1] === 'get' && command[2] === 't-parent')
+        return createSpawnResult(
+          0,
+          JSON.stringify({
+            address: 't-parent',
+            parent: null,
+            state: childState,
+            labels: { 'herdr.space': 'space-1', 'herdr.tab': 'tab-1' },
+          }),
+        );
+      if (command[1] === 'run') {
+        token =
+          command
+            .find((arg) => arg.startsWith('omosc.spawn='))
+            ?.slice('omosc.spawn='.length) ?? '';
+        return createSpawnResult(0, '{invalid');
+      }
+      if (command[1] === 'ls' && command.includes(`omosc.spawn=${token}`)) {
+        listCount += 1;
+        return createSpawnResult(
+          0,
+          JSON.stringify({
+            terminals: listCount === 1 ? [] : [{ address: 't-late' }],
+          }),
+        );
+      }
+      if (command[1] === 'get' && command[2] === 't-late')
+        return createSpawnResult(
+          0,
+          JSON.stringify({
+            address: 't-late',
+            parent: 't-parent',
+            state: childState,
+            labels: {
+              'herdr.space': 'space-1',
+              'herdr.tab': 'tab-1',
+              'omosc.owner': 't-parent',
+              omosc: `omosc:${process.pid}:session-1`,
+              'omosc.spawn': token,
+            },
+          }),
+        );
+      if (command[1] === 'kill' && command[2] === 't-late')
+        childState = 'finished';
+      if (command[1] === 'kill' && command[2] === 't-late')
+        return createSpawnResult();
+      if (command[1] === 'rm' && command[2] === 't-late')
+        return createSpawnResult();
+      return createSpawnResult();
+    });
+
+    const { HerdrMultiplexer } = await importFreshHerdr();
+    const adapter = new HerdrMultiplexer(undefined, undefined, {
+      desktopAdoptionWait: async (milliseconds) => {
+        expect(milliseconds).toBe(500);
+        waitCount += 1;
+      },
+    });
+    const args = [
+      'session-1',
+      'Worker',
+      'http://localhost:4096',
+      '/repo',
+    ] as const;
+    expect(await adapter.spawnPane(...args)).toEqual({
+      success: false,
+      error: 'hard',
+    });
+    expect(await adapter.spawnPane(...args)).toEqual({
+      success: false,
+      error: 'hard',
+    });
+    const runs = calls
+      .map((command, index) => (command[1] === 'run' ? index : -1))
+      .filter((index) => index >= 0);
+    expect(runs).toHaveLength(2);
+    expect(waitCount).toBeGreaterThan(0);
+    expect(
+      calls
+        .slice(runs[0] + 1, runs[1])
+        .some((command) => command[1] === 'kill'),
+    ).toBe(true);
+  });
+
   test('desktop does not clean a malformed-run candidate with different ownership', async () => {
     process.env.HC_TERMINAL_ID = 't-parent';
     let spawnToken = '';
+    let scanCount = 0;
+    let runCount = 0;
     const calls: string[][] = [];
     crossSpawnMock.mockImplementation((command: string[]) => {
       calls.push(command);
@@ -550,6 +807,7 @@ describe('HerdrMultiplexer', () => {
         );
       }
       if (command[1] === 'run') {
+        runCount += 1;
         spawnToken =
           command
             .find((arg) => arg.startsWith('omosc.spawn='))
@@ -560,9 +818,12 @@ describe('HerdrMultiplexer', () => {
         command[1] === 'ls' &&
         command.includes(`omosc.spawn=${spawnToken}`)
       ) {
+        scanCount += 1;
         return createSpawnResult(
           0,
-          JSON.stringify({ terminals: [{ address: 't-unowned' }] }),
+          JSON.stringify({
+            terminals: scanCount < 3 ? [{ address: 't-unowned' }] : [],
+          }),
         );
       }
       if (command[1] === 'get' && command[2] === 't-unowned') {
@@ -586,7 +847,22 @@ describe('HerdrMultiplexer', () => {
     });
 
     const { HerdrMultiplexer } = await importFreshHerdr();
-    const result = await new HerdrMultiplexer().spawnPane(
+    const adapter = new HerdrMultiplexer(undefined, undefined, {
+      desktopAdoptionWait: async () => {},
+    });
+    const result = await adapter.spawnPane(
+      'session-1',
+      'Worker',
+      'http://localhost:4096',
+      '/repo',
+    );
+    await adapter.spawnPane(
+      'session-1',
+      'Worker',
+      'http://localhost:4096',
+      '/repo',
+    );
+    await adapter.spawnPane(
       'session-1',
       'Worker',
       'http://localhost:4096',
@@ -594,6 +870,8 @@ describe('HerdrMultiplexer', () => {
     );
 
     expect(result).toEqual({ success: false, error: 'hard' });
+    expect(runCount).toBe(1);
+    expect(scanCount).toBe(3);
     expect(calls.some((command) => command[1] === 'kill')).toBe(false);
     expect(calls.some((command) => command[1] === 'rm')).toBe(false);
     expect(loggerEntries).toContainEqual({

@@ -42,6 +42,7 @@ export type DesktopAdoptionWait = (milliseconds: number) => Promise<void>;
 
 const DESKTOP_ADOPTION_RETRIES = 3;
 const DESKTOP_ADOPTION_POLL_MS = 500;
+const DESKTOP_ROLLBACK_EMPTY_SCANS = 4;
 
 const defaultDesktopAdoptionWait: DesktopAdoptionWait = (milliseconds) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -75,6 +76,13 @@ interface DesktopOwnership {
   spawnToken?: string;
 }
 
+interface PendingDesktopRollback {
+  hc: string;
+  ownership: DesktopOwnership;
+  address?: string;
+  emptyScans?: number;
+}
+
 export class HerdrMultiplexer implements Multiplexer {
   readonly type = 'herdr' as const;
 
@@ -92,6 +100,10 @@ export class HerdrMultiplexer implements Multiplexer {
   private desktopAdoptionWait: DesktopAdoptionWait;
   private readonly desktopOwnedTerminals = new Map<string, DesktopOwnership>();
   private readonly desktopSweepCandidates = new Map<string, DesktopOwnership>();
+  private readonly pendingDesktopRollbacks = new Map<
+    string,
+    PendingDesktopRollback
+  >();
   // Latch: herdr builds without `pane split --ratio` must keep creating panes.
   private ratioSupported = true;
   private loggedMissingEqualizeEnv = false;
@@ -813,6 +825,29 @@ export class HerdrMultiplexer implements Multiplexer {
     directory: string,
     options?: PaneSpawnOptions,
   ): Promise<PaneResult> {
+    const pending = this.pendingDesktopRollbacks.get(sessionId);
+    if (pending) {
+      let cleaned = pending.address
+        ? await this.rollbackDesktopTerminal(pending.address, pending.ownership)
+        : await this.rollbackUnreportedDesktopSpawn(
+            pending.hc,
+            pending.ownership,
+            sessionId,
+          );
+      if (cleaned === 'not-owned') {
+        this.pendingDesktopRollbacks.set(sessionId, {
+          hc: pending.hc,
+          ownership: pending.ownership,
+        });
+        cleaned = await this.rollbackUnreportedDesktopSpawn(
+          pending.hc,
+          pending.ownership,
+          sessionId,
+        );
+      }
+      if (!cleaned) return { success: false, error: 'hard' };
+      this.pendingDesktopRollbacks.delete(sessionId);
+    }
     const hc = await findBinary('hc');
     const app = await findBinary('herdr-app');
     if (!hc || !app) return { success: false, error: 'unavailable' };
@@ -928,7 +963,7 @@ export class HerdrMultiplexer implements Multiplexer {
           stdout: runOutput.trim().slice(0, 512),
           stderr: runStderr.trim(),
         });
-        await this.rollbackUnreportedDesktopSpawn(hc, ownership);
+        await this.rollbackUnreportedDesktopSpawn(hc, ownership, sessionId);
         return { success: false, error: 'hard' };
       }
 
@@ -944,7 +979,7 @@ export class HerdrMultiplexer implements Multiplexer {
           stderr: runStderr.trim(),
           error: String(error),
         });
-        await this.rollbackUnreportedDesktopSpawn(hc, ownership);
+        await this.rollbackUnreportedDesktopSpawn(hc, ownership, sessionId);
         return { success: false, error: 'hard' };
       }
       const address = terminal.address;
@@ -959,7 +994,7 @@ export class HerdrMultiplexer implements Multiplexer {
           hasAddress: typeof address === 'string',
           hasExpectedParent: terminal.parent === parentId,
         });
-        await this.rollbackUnreportedDesktopSpawn(hc, ownership);
+        await this.rollbackUnreportedDesktopSpawn(hc, ownership, sessionId);
         return { success: false, error: 'hard' };
       }
       spawnedAddress = address;
@@ -982,7 +1017,7 @@ export class HerdrMultiplexer implements Multiplexer {
             createdRead.kind === 'found' ? undefined : createdRead.message,
           state: created?.state,
         });
-        await this.rollbackUnreportedDesktopSpawn(hc, ownership);
+        await this.rollbackUnreportedDesktopSpawn(hc, ownership, sessionId);
         return { success: false, error: 'hard' };
       }
       this.desktopOwnedTerminals.set(address, ownership);
@@ -1000,7 +1035,16 @@ export class HerdrMultiplexer implements Multiplexer {
           spaceId,
           tabId,
         });
-        await this.rollbackDesktopTerminal(address, ownership);
+        const rollback = await this.rollbackDesktopTerminal(address, ownership);
+        if (rollback === 'not-owned') {
+          await this.rollbackUnreportedDesktopSpawn(hc, ownership, sessionId);
+        } else if (rollback !== true) {
+          this.pendingDesktopRollbacks.set(sessionId, {
+            hc,
+            ownership,
+            address,
+          });
+        }
         return { success: false, error: 'hard' };
       }
 
@@ -1008,21 +1052,35 @@ export class HerdrMultiplexer implements Multiplexer {
     } catch (error) {
       log('[herdr] desktop spawn failed', { error: String(error) });
       if (spawnedAddress) {
-        await this.rollbackDesktopTerminal(spawnedAddress, {
+        const ownership: DesktopOwnership = {
           parentId,
           title: ownTitle,
           spaceId: parentSpaceId,
           tabId: parentTabId,
           spawnToken,
-        });
+        };
+        const rollback = await this.rollbackDesktopTerminal(
+          spawnedAddress,
+          ownership,
+        );
+        if (rollback === 'not-owned') {
+          await this.rollbackUnreportedDesktopSpawn(hc, ownership, sessionId);
+        } else if (rollback !== true) {
+          this.pendingDesktopRollbacks.set(sessionId, {
+            hc,
+            ownership,
+            address: spawnedAddress,
+          });
+        }
       } else if (runAttempted) {
-        await this.rollbackUnreportedDesktopSpawn(hc, {
+        const ownership: DesktopOwnership = {
           parentId,
           title: ownTitle,
           spaceId: parentSpaceId,
           tabId: parentTabId,
           spawnToken,
-        });
+        };
+        await this.rollbackUnreportedDesktopSpawn(hc, ownership, sessionId);
       }
       return { success: false, error: 'hard' };
     }
@@ -1031,8 +1089,13 @@ export class HerdrMultiplexer implements Multiplexer {
   private async rollbackUnreportedDesktopSpawn(
     hc: string,
     ownership: DesktopOwnership,
-  ): Promise<void> {
+    sessionId: string,
+  ): Promise<boolean> {
     try {
+      const previous = this.pendingDesktopRollbacks.get(sessionId);
+      if (previous?.emptyScans !== undefined) {
+        await this.desktopAdoptionWait(DESKTOP_ADOPTION_POLL_MS);
+      }
       const listRead = await readCoreTerminalListWithRetry(
         hc,
         ['--all', '--label', `omosc.spawn=${ownership.spawnToken}`],
@@ -1044,34 +1107,78 @@ export class HerdrMultiplexer implements Multiplexer {
           readKind: listRead.kind,
           detail: listRead.message,
         });
-        return;
+        this.pendingDesktopRollbacks.set(sessionId, {
+          hc,
+          ownership,
+          ...(previous?.emptyScans !== undefined
+            ? { emptyScans: previous.emptyScans }
+            : {}),
+        });
+        return false;
+      }
+      if (listRead.addresses.length === 0) {
+        const emptyScans = (previous?.emptyScans ?? 0) + 1;
+        if (emptyScans >= DESKTOP_ROLLBACK_EMPTY_SCANS) {
+          log(
+            '[herdr] desktop rollback scan window elapsed; no candidate found',
+            {
+              spawnToken: ownership.spawnToken,
+              emptyScans,
+            },
+          );
+          return true;
+        }
+        this.pendingDesktopRollbacks.set(sessionId, {
+          hc,
+          ownership,
+          emptyScans,
+        });
+        return false;
       }
       if (listRead.addresses.length !== 1) {
         log('[herdr] desktop orphan scan did not identify one child', {
           candidateCount: listRead.addresses.length,
           spawnToken: ownership.spawnToken,
         });
-        return;
+        this.pendingDesktopRollbacks.set(sessionId, {
+          hc,
+          ownership,
+          ...(previous?.emptyScans !== undefined
+            ? { emptyScans: previous.emptyScans }
+            : {}),
+        });
+        return false;
       }
 
       const address = listRead.addresses[0];
-      if (!(await this.rollbackDesktopTerminal(address, ownership))) return;
+      const rollback = await this.rollbackDesktopTerminal(address, ownership);
+      if (rollback !== true) {
+        this.pendingDesktopRollbacks.set(sessionId, {
+          hc,
+          ownership,
+          ...(rollback === 'not-owned' ? {} : { address }),
+        });
+        return false;
+      }
       log('[herdr] desktop orphan removed after ownership verification', {
         address,
         spawnToken: ownership.spawnToken,
       });
+      return true;
     } catch (error) {
       log('[herdr] desktop orphan cleanup threw', {
         spawnToken: ownership.spawnToken,
         error: String(error),
       });
+      this.pendingDesktopRollbacks.set(sessionId, { hc, ownership });
+      return false;
     }
   }
 
   private async rollbackDesktopTerminal(
     address: string,
     ownership: DesktopOwnership,
-  ): Promise<boolean> {
+  ): Promise<boolean | 'not-owned'> {
     try {
       if (!this.desktopOwnedTerminals.has(address)) {
         const hc = await findBinary('hc');
@@ -1106,29 +1213,59 @@ export class HerdrMultiplexer implements Multiplexer {
         if (
           !parentId ||
           ownership.parentId !== parentId ||
-          !matchesDesktopTerminal(terminal, address, ownership)
+          terminal.address !== address ||
+          !matchesDesktopOwnershipMarkers(terminal, ownership)
         ) {
           log('[herdr] desktop spawn: rollback ownership check failed', {
             paneId: address,
             hasParent: parentId !== undefined,
             state: terminal.state,
           });
-          return false;
+          return 'not-owned';
         }
         this.desktopOwnedTerminals.set(address, {
           ...ownership,
         });
       }
       const closed = await this.closePane(address);
-      if (!closed) {
-        log(
-          '[herdr] desktop spawn: rollback skipped or failed ownership check',
-          {
-            paneId: address,
-          },
-        );
+      if (closed) {
+        log('[herdr] desktop rollback: owned terminal closed', {
+          paneId: address,
+        });
+        return true;
       }
-      return closed;
+      const hc = await findBinary('hc');
+      if (hc) {
+        const read = await readCoreTerminalWithRetry(
+          hc,
+          address,
+          this.desktopAdoptionWait,
+        );
+        if (read.kind === 'missing') {
+          this.desktopOwnedTerminals.delete(address);
+          this.desktopSweepCandidates.delete(address);
+          return true;
+        }
+        if (read.kind === 'found') {
+          const parentId = process.env.HC_TERMINAL_ID?.trim();
+          if (
+            !parentId ||
+            ownership.parentId !== parentId ||
+            read.terminal.address !== address ||
+            !matchesDesktopOwnershipMarkers(read.terminal, ownership)
+          ) {
+            log(
+              '[herdr] desktop rollback: terminal no longer owned by this session',
+              { paneId: address },
+            );
+            return 'not-owned';
+          }
+        }
+      }
+      log('[herdr] desktop spawn: rollback skipped or failed ownership check', {
+        paneId: address,
+      });
+      return false;
     } catch (error) {
       log('[herdr] desktop spawn: rollback threw', {
         paneId: address,
@@ -1172,6 +1309,19 @@ interface CoreTerminal {
   state: 'live' | 'finished';
 }
 
+function matchesDesktopOwnershipMarkers(
+  terminal: CoreTerminal,
+  ownership: DesktopOwnership,
+): boolean {
+  return (
+    terminal.parent === ownership.parentId &&
+    terminal.labels['omosc.owner'] === ownership.parentId &&
+    terminal.labels.omosc === ownership.title &&
+    (ownership.spawnToken === undefined ||
+      terminal.labels['omosc.spawn'] === ownership.spawnToken)
+  );
+}
+
 function matchesDesktopTerminal(
   terminal: CoreTerminal,
   address: string,
@@ -1179,13 +1329,9 @@ function matchesDesktopTerminal(
 ): boolean {
   return (
     terminal.address === address &&
-    terminal.parent === ownership.parentId &&
     terminal.labels['herdr.space'] === ownership.spaceId &&
     terminal.labels['herdr.tab'] === ownership.tabId &&
-    terminal.labels['omosc.owner'] === ownership.parentId &&
-    terminal.labels.omosc === ownership.title &&
-    (ownership.spawnToken === undefined ||
-      terminal.labels['omosc.spawn'] === ownership.spawnToken)
+    matchesDesktopOwnershipMarkers(terminal, ownership)
   );
 }
 
