@@ -1350,8 +1350,10 @@ export default Plugin.define({
       if (entries.length === 0) return;
       setPendingDeletes([]);
       setDeleteConfirmName(null);
-      const refreshed = new Set<string>();
+      const affectedTargets = new Map<string, WorkspaceTarget>();
+
       for (const { name, target } of entries) {
+        affectedTargets.set(target.key, target);
         try {
           const result = asResult(
             await target.client.rpc(OmosConfig).deletePreset(
@@ -1376,10 +1378,12 @@ export default Plugin.define({
             notify('error', errorText(cause));
           }
         }
-        if (target.directory && !refreshed.has(target.key)) {
-          refreshed.add(target.key);
-          await requestSnapshot(target, true);
-        }
+      }
+
+      // Refresh once per workspace after its whole batch so a later deletion
+      // cannot leave an earlier snapshot cached.
+      for (const target of affectedTargets.values()) {
+        await requestSnapshot(target, true);
       }
     };
 

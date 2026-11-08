@@ -514,6 +514,86 @@ test('top-level agent variant wins over an embedded chain variant when the model
   assert.equal(oracle?.variant, 'low');
 });
 
+test('editing a variant inherited from a parent writes it at agent level', async (t) => {
+  const fixture = await makeFixture(t);
+  await writeJson(fixture.userFile, {
+    presets: {
+      base: {
+        agents: {
+          oracle: {
+            model: ['base/a', 'base/b'],
+            variant: 'high',
+          },
+        },
+      },
+      child: {
+        extends: 'base',
+        agents: {
+          oracle: { model: ['child/a', 'child/b'] },
+        },
+      },
+    },
+  });
+  const subject = backend(fixture);
+
+  const result = await subject.setAgentOverride({
+    preset: 'child',
+    agent: 'oracle',
+    patch: { variant: 'max' },
+  });
+  assert.equal(result.ok, true, result.message);
+
+  // The local chain keeps its shape; the edited variant overrides the
+  // parent's agent-level variant at runtime.
+  const parsed = await readJson(fixture.userFile);
+  const child = asRecord(presetOf(parsed, 'child'));
+  const entry = asRecord(asRecord(child.agents).oracle);
+  assert.deepEqual(entry.model, ['child/a', 'child/b']);
+  assert.equal(entry.variant, 'max');
+
+  const snapshot = await subject.getSnapshot();
+  const childInfo = snapshot.presets.find((preset) => preset.name === 'child');
+  const oracle = childInfo?.agents.find((agent) => agent.name === 'oracle');
+  assert.equal(oracle?.variant, 'max');
+  assert.deepEqual(oracle?.modelChain, ['child/a', 'child/b']);
+});
+
+test('environment-based parents resolve for snapshots and preset switches', async (t) => {
+  const fixture = await makeFixture(t);
+  await writeJson(fixture.userFile, {
+    presets: {
+      base: {
+        agents: {
+          oracle: { model: 'base/model', variant: 'high' },
+        },
+      },
+      child: {
+        extends: '{env:OMOS_TEST_BASE}',
+        agents: {
+          fixer: { model: 'child/fixer' },
+        },
+      },
+    },
+  });
+  const subject = backend(fixture, { OMOS_TEST_BASE: 'base' });
+
+  const snapshot = await subject.getSnapshot();
+  const child = snapshot.presets.find((preset) => preset.name === 'child');
+  assert.ok(child);
+  assert.equal(child.validationError, undefined);
+  assert.deepEqual(child.extends, ['base']);
+  const oracle = child.agents.find((agent) => agent.name === 'oracle');
+  assert.equal(oracle?.model, 'base/model');
+  assert.equal(oracle?.variant, 'high');
+
+  const switched = await subject.switchPreset({ name: 'child' });
+  assert.equal(switched.ok, true, switched.message);
+
+  // The placeholder stays in the file so the environment still owns it.
+  const parsed = await readJson(fixture.userFile);
+  assert.equal(presetOf(parsed, 'child').extends, '{env:OMOS_TEST_BASE}');
+});
+
 test('JSONC edits preserve comments, BOM, CRLF, top-level fields and fallback variants', async (t) => {
   const fixture = await makeFixture(t);
   await writeText(fixture.userFile, MUTATION_FIXTURE);
@@ -537,9 +617,10 @@ test('JSONC edits preserve comments, BOM, CRLF, top-level fields and fallback va
   let parsed = await readJson(fixture.userFile);
   let oracleEntry = asRecord(asRecord(presetOf(parsed, 'work').agents).oracle);
   assert.deepEqual(oracleEntry.model, [
-    { id: 'openai/o1', variant: 'max' },
+    { id: 'openai/o1', variant: 'high' },
     { id: 'openai/o2', variant: 'low' },
   ]);
+  assert.equal(oracleEntry.variant, 'max');
 
   result = await subject.setAgentOverride({
     preset: 'work',
@@ -553,7 +634,7 @@ test('JSONC edits preserve comments, BOM, CRLF, top-level fields and fallback va
   assert.deepEqual(oracleEntry.options, { a: 1 });
 
   // Changing the model without an explicit variant patch scalarizes the chain
-  // and keeps the first entry's embedded variant.
+  // and keeps the explicit agent-level variant.
   result = await subject.setAgentOverride({
     preset: 'work',
     agent: 'oracle',
@@ -761,10 +842,8 @@ test('legacy flat presets stay flat and model chains survive variant edits', asy
   assert.equal(result.ok, true, result.message);
   parsed = await readJson(fixture.userFile);
   let fixer = asRecord(presetOf(parsed, 'chain').fixer);
-  assert.deepEqual(fixer.model, [
-    { id: 'openai/f-a', variant: 'high' },
-    'openai/f-b',
-  ]);
+  assert.deepEqual(fixer.model, ['openai/f-a', 'openai/f-b']);
+  assert.equal(fixer.variant, 'high');
 
   result = await subject.setAgentOverride({
     preset: 'chain',
@@ -774,10 +853,8 @@ test('legacy flat presets stay flat and model chains survive variant edits', asy
   assert.equal(result.ok, true, result.message);
   parsed = await readJson(fixture.userFile);
   fixer = asRecord(presetOf(parsed, 'chain').fixer);
-  assert.deepEqual(fixer.model, [
-    { id: 'openai/f-a', variant: 'high' },
-    'openai/f-b',
-  ]);
+  assert.deepEqual(fixer.model, ['openai/f-a', 'openai/f-b']);
+  assert.equal(fixer.variant, 'high');
   assert.deepEqual(fixer.options, { thinking: { type: 'enabled' } });
 
   const snapshot = await subject.getSnapshot();

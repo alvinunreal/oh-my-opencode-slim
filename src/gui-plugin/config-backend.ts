@@ -361,10 +361,42 @@ function safeNormalizePreset(value: PresetInput): PresetDefinition | undefined {
   }
 }
 
+/**
+ * Resolution-only copy of the preset map: `{env:...}` placeholders in
+ * `extends` are expanded the way the runtime config loader expands them.
+ * Writes still read the raw map, so placeholders survive edits.
+ */
+function expandedPresetDefinitions(presets: PresetMap): PresetMap {
+  const expanded: PresetMap = {};
+  for (const [name, definition] of Object.entries(presets)) {
+    if (!isRecord(definition)) {
+      defineOwn(expanded, name, definition);
+      continue;
+    }
+    const extendsValue = definition.extends;
+    const expandedExtends =
+      typeof extendsValue === 'string'
+        ? interpolateEnvironmentVariables(extendsValue)
+        : Array.isArray(extendsValue)
+          ? extendsValue.map((value) =>
+              typeof value === 'string'
+                ? interpolateEnvironmentVariables(value)
+                : value,
+            )
+          : extendsValue;
+    defineOwn(expanded, name, {
+      ...definition,
+      ...(expandedExtends !== undefined ? { extends: expandedExtends } : {}),
+    });
+  }
+  return expanded;
+}
+
 function inspectPreset(name: string, state: PresetState): PresetInspection {
   const raw = ownValue(state.effectivePresets, name);
+  const resolvedPresets = expandedPresetDefinitions(state.effectivePresets);
   const normalized = raw !== undefined ? safeNormalizePreset(raw) : undefined;
-  const extendsList = declaredExtends(raw);
+  const extendsList = declaredExtends(ownValue(resolvedPresets, name));
   if (raw === undefined) {
     return { raw, resolved: {}, local: {}, extendsList };
   }
@@ -375,10 +407,8 @@ function inspectPreset(name: string, state: PresetState): PresetInspection {
   let resolved: AgentMap = mergeAgentOverrides({}, normalized?.agents ?? {});
   if (!validationError) {
     try {
-      resolved = resolvePresetDefinition(
-        name,
-        state.effectivePresets as Record<string, PresetInput>,
-      ).agents as AgentMap;
+      resolved = resolvePresetDefinition(name, resolvedPresets)
+        .agents as AgentMap;
     } catch (error) {
       validationError = errorMessage(error);
     }
@@ -662,12 +692,10 @@ function parentProvidesAgent(
   agentKey: string,
 ): boolean {
   const inspection = inspectPreset(preset, state);
+  const resolvedPresets = expandedPresetDefinitions(state.effectivePresets);
   for (const parentName of inspection.extendsList) {
     try {
-      const parent = resolvePresetDefinition(
-        parentName,
-        state.effectivePresets as Record<string, PresetInput>,
-      );
+      const parent = resolvePresetDefinition(parentName, resolvedPresets);
       if (hasOwn(parent.agents, agentKey)) return true;
     } catch {
       // An unresolved parent cannot be claimed as the source.
@@ -827,19 +855,7 @@ function applyVariantPatch(entry: UnknownRecord, variant: string): void {
     }
     return;
   }
-  if (Array.isArray(entry.model) && entry.model.length > 0) {
-    const first = entry.model[0];
-    if (typeof first === 'string') {
-      entry.model[0] = { id: first, variant };
-      delete entry.variant;
-    } else if (isRecord(first)) {
-      first.variant = variant;
-      delete entry.variant;
-    } else {
-      entry.variant = variant;
-    }
-    return;
-  }
+  // Runtime precedence is agent-level variant over model-entry variant.
   entry.variant = variant;
 }
 
@@ -947,7 +963,11 @@ export function createOmosConfigBackend(
           const result = switchPresetOnDisk(
             directory,
             name,
-            {} as PluginConfig,
+            {
+              // The disk helpers read raw config; hand them the same
+              // environment-expanded definitions the runtime resolves.
+              presets: expandedPresetDefinitions(state.effectivePresets),
+            } as PluginConfig,
             {
               hostFlavor: HOST_FLAVOR,
             },
@@ -1074,7 +1094,7 @@ export function createOmosConfigBackend(
           }
           const dependents = findPresetDependents(
             name,
-            state.effectivePresets as Record<string, PresetInput>,
+            expandedPresetDefinitions(state.effectivePresets),
           );
           if (dependents.length > 0) {
             return fail(
