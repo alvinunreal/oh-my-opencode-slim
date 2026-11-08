@@ -179,17 +179,23 @@ export class HerdrMultiplexer implements Multiplexer {
     this.equalizePanes = options.equalizePanes ?? true;
     this.desktopAdoptionWait =
       options.desktopAdoptionWait ?? defaultDesktopAdoptionWait;
-    this.recoveryJournalPath = options.recoveryJournalPath ?? null;
+    this.recoveryJournalPath =
+      options.recoveryJournalPath === undefined
+        ? null
+        : options.recoveryJournalPath;
+  }
+
+  private desktopRecoveryJournalPath(): string | null {
+    return this.recoveryJournalPath;
   }
 
   private async markUnverifiedDesktopSpawn(
     ownership: DesktopOwnership,
   ): Promise<void> {
-    if (!this.recoveryJournalPath) return;
+    const journalPath = this.desktopRecoveryJournalPath();
+    if (!journalPath) return;
     try {
-      const records = await readDesktopRecoveryRecords(
-        this.recoveryJournalPath,
-      );
+      const records = await readDesktopRecoveryRecords(journalPath);
       if (records.some((r) => r.spawnToken === ownership.spawnToken)) return;
       records.push({
         spawnToken: ownership.spawnToken ?? '',
@@ -199,7 +205,7 @@ export class HerdrMultiplexer implements Multiplexer {
         tabId: ownership.tabId,
         createdAt: Date.now(),
       });
-      await writeDesktopRecoveryRecords(this.recoveryJournalPath, records);
+      await writeDesktopRecoveryRecords(journalPath, records);
     } catch {
       // best-effort recovery journal
     }
@@ -208,14 +214,66 @@ export class HerdrMultiplexer implements Multiplexer {
   private async resolveUnverifiedDesktopSpawn(
     spawnToken?: string,
   ): Promise<void> {
-    if (!this.recoveryJournalPath || !spawnToken) return;
+    const journalPath = this.desktopRecoveryJournalPath();
+    if (!journalPath || !spawnToken) return;
     try {
-      const records = await readDesktopRecoveryRecords(
-        this.recoveryJournalPath,
-      );
+      const records = await readDesktopRecoveryRecords(journalPath);
       const next = records.filter((r) => r.spawnToken !== spawnToken);
       if (next.length !== records.length) {
-        await writeDesktopRecoveryRecords(this.recoveryJournalPath, next);
+        await writeDesktopRecoveryRecords(journalPath, next);
+      }
+    } catch {
+      // best-effort recovery journal
+    }
+  }
+
+  private async recoverJournalSweepCandidates(
+    hc: string,
+    parentId: string,
+    foundCandidates: Map<string, DesktopOwnership>,
+    panes: Array<{ paneId: string; title: string }>,
+  ): Promise<void> {
+    const journalPath = this.desktopRecoveryJournalPath();
+    if (!journalPath) return;
+    try {
+      const staleBefore = Date.now() - 24 * 60 * 60 * 1000;
+      const records = (await readDesktopRecoveryRecords(journalPath)).filter(
+        (r) => r.parentId === parentId && (r.createdAt ?? 0) >= staleBefore,
+      );
+      for (const record of records) {
+        if (!record.spawnToken) continue;
+        const listRead = await readCoreTerminalListWithRetry(
+          hc,
+          ['--all', '--label', `omosc.spawn=${record.spawnToken}`],
+          this.desktopAdoptionWait,
+        );
+        if (listRead.kind !== 'found' || listRead.addresses.length !== 1)
+          continue;
+        const address = listRead.addresses[0];
+        if (foundCandidates.has(address)) continue;
+        const detailRead = await readCoreTerminalWithRetry(
+          hc,
+          address,
+          this.desktopAdoptionWait,
+        );
+        if (detailRead.kind !== 'found') continue;
+        const detail = detailRead.terminal;
+        const ownership: DesktopOwnership = {
+          parentId,
+          title: record.title,
+          spaceId: record.spaceId,
+          tabId: record.tabId,
+          spawnToken: record.spawnToken,
+        };
+        if (
+          detail.address !== address ||
+          !matchesDesktopOwnershipMarkers(detail, ownership) ||
+          !isSweepTitle(detail.labels.omosc)
+        ) {
+          continue;
+        }
+        foundCandidates.set(address, ownership);
+        panes.push({ paneId: address, title: detail.labels.omosc });
       }
     } catch {
       // best-effort recovery journal
@@ -561,6 +619,12 @@ export class HerdrMultiplexer implements Multiplexer {
           });
           panes.push({ paneId: address, title: detail.labels.omosc });
         }
+        await this.recoverJournalSweepCandidates(
+          hc,
+          parentId,
+          foundCandidates,
+          panes,
+        );
         if (!incomplete) this.desktopSweepCandidates.clear();
         for (const [address, ownership] of foundCandidates) {
           this.desktopSweepCandidates.set(address, ownership);
