@@ -74,6 +74,7 @@ describe('v2 tui preset plugin', () => {
 
   beforeEach(() => {
     originalEnv = { ...process.env };
+    delete process.env.OH_MY_OPENCODE_SLIM_PANE_VIEWER;
     configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-tui2-cfg-'));
     projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-tui2-proj-'));
     process.env.OPENCODE_CONFIG_DIR = configHome;

@@ -182,7 +182,26 @@ own tmux server with `-S <socket>` taken from `TMUX`.
 `ZELLIJ_SESSION_NAME`. Child panes always open in the tab containing the parent
 pane — there is no dedicated agents tab and no tab switching.
 
-**Herdr** — detected via `HERDR_PANE_ID`. Herdr's own OpenCode lifecycle
+**Herdr Desktop** — detected via `HC_TERMINAL_ID`. The adapter checks the
+current core terminal's `herdr.space` and `herdr.tab` labels, starts each
+viewer as its child with `hc run --parent`, and copies the parent's Herdr
+space/tab labels so the app places the pane beside that terminal. `hc run
+--no-notify` prevents core notes from being typed into the parent. The adapter
+waits for the app's terminal list to report the pane before it returns success.
+It rechecks the parent and ownership labels before `hc kill` on a live child or
+`hc rm` on a finished record. Each child has a unique `omosc.spawn` label. If
+`hc run` returns malformed output, cleanup scans by that label and verifies the
+parent, owner, and session marker before it closes a candidate. The sweep lists
+terminals scoped to the current parent and verifies each terminal's parent and
+`omosc` marker. Herdr checks core events every 500 ms, so the adapter polls for
+pane adoption up to three times at that interval. If the current
+terminal lacks Herdr's space/tab labels, it creates no pane. Windows and remote
+v2 viewer credentials
+are not supported by this MVP, so those modes fail closed.
+Herdr Desktop ignores `multiplexer.layout` and `main_pane_size`. The adapter
+does not resize or rebalance other panes.
+
+**Legacy Herdr** — detected via `HERDR_PANE_ID`. Herdr's own OpenCode lifecycle
 integration can be installed separately:
 
 ```bash
@@ -470,7 +489,16 @@ produces one `multiplexer.host-unsupported` record per process; shared and
   `cmd.exe` shell, where the data marker cannot be written as a comment and is
   omitted (so the sweep cannot identify them), and legacy cmux-tui leftovers
   from the previous implementation. Cross-multiplexer leftovers are always
-  manual.
+   manual.
+- **Herdr recovery is scoped to the current parent.** A desktop sweep only lists
+  terminals owned by the current `HC_TERMINAL_ID`; it cannot recover leftovers
+  owned by another or unavailable parent. The sweep skips panes whose child
+  session still appears active. Probe errors and live owner PIDs both cause a
+  skip. PID reuse can therefore leave an orphan behind. It closes a pane only
+  when the owner PID appears dead and the child session is gone. The sweep is
+  best-effort.
+  Concurrent plugin processes do not share a deduplication registry, so they
+  may inspect the same leftovers.
 - **cmux-tui child views occupy the parent pane's tab bar.** Each subagent gets
   a tab in the parent pane, appended at the end and never reordered; tabs are
   reclaimed when the child is deleted or closes on stable idle. This is the
