@@ -181,7 +181,8 @@ export class HerdrMultiplexer implements Multiplexer {
     this.equalizePanes = options.equalizePanes ?? true;
     this.desktopAdoptionWait =
       options.desktopAdoptionWait ?? defaultDesktopAdoptionWait;
-    this.recoveryJournalExplicitlyDisabled = options.recoveryJournalPath === null;
+    this.recoveryJournalExplicitlyDisabled =
+      options.recoveryJournalPath === null;
     this.recoveryJournalPath = options.recoveryJournalPath ?? null;
   }
 

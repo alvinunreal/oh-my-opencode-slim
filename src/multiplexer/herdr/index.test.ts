@@ -2261,7 +2261,10 @@ describe('HerdrMultiplexer', () => {
       if (command[1] === 'ls' && command.includes('omosc.owner=t-parent')) {
         return createSpawnResult(0, JSON.stringify({ terminals: [] }));
       }
-      if (command[1] === 'ls' && command.includes(`omosc.spawn=${spawnToken}`)) {
+      if (
+        command[1] === 'ls' &&
+        command.includes(`omosc.spawn=${spawnToken}`)
+      ) {
         return createSpawnResult(
           0,
           JSON.stringify({ terminals: [{ address: 't-foreign' }] }),
