@@ -47,6 +47,54 @@ const DESKTOP_ROLLBACK_EMPTY_SCANS = 4;
 const defaultDesktopAdoptionWait: DesktopAdoptionWait = (milliseconds) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+interface DesktopRecoveryRecord {
+  spawnToken: string;
+  parentId: string;
+  title: string;
+  spaceId: string;
+  tabId: string;
+  createdAt: number;
+}
+
+function isDesktopRecoveryRecord(
+  value: unknown,
+): value is DesktopRecoveryRecord {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.spawnToken === 'string' &&
+    value.spawnToken.length > 0 &&
+    typeof value.parentId === 'string' &&
+    typeof value.title === 'string' &&
+    typeof value.spaceId === 'string' &&
+    typeof value.tabId === 'string'
+  );
+}
+
+async function readDesktopRecoveryRecords(
+  path: string,
+): Promise<DesktopRecoveryRecord[]> {
+  try {
+    const parsed = JSON.parse(await Bun.file(path).text()) as unknown;
+    return Array.isArray(parsed) ? parsed.filter(isDesktopRecoveryRecord) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeDesktopRecoveryRecords(
+  path: string,
+  records: DesktopRecoveryRecord[],
+): Promise<void> {
+  try {
+    const { mkdir } = await import('node:fs/promises');
+    const { dirname } = await import('node:path');
+    await mkdir(dirname(path), { recursive: true });
+    await Bun.write(path, `${JSON.stringify(records)}\n`);
+  } catch {
+    // best-effort recovery journal
+  }
+}
+
 export type LayoutEqualizer = (
   opts: EqualizeAgentPanesOptions,
 ) => Promise<boolean>;
@@ -58,6 +106,12 @@ export interface HerdrMultiplexerOptions {
   equalizePanes?: boolean;
   /** Waits between bounded Herdr Desktop pane-adoption checks. */
   desktopAdoptionWait?: DesktopAdoptionWait;
+  /**
+   * Best-effort journal for unverified desktop spawns (cross-restart
+   * recovery). Off by default; pass a stable path under /tmp/opencode to
+   * enable. Fail-soft: journal errors never block or kill terminals.
+   */
+  recoveryJournalPath?: string | null;
 }
 
 interface HerdrCliResponse {
@@ -80,7 +134,6 @@ interface PendingDesktopRollback {
   hc: string;
   ownership: DesktopOwnership;
   address?: string;
-  emptyScans?: number;
 }
 
 export class HerdrMultiplexer implements Multiplexer {
@@ -98,6 +151,7 @@ export class HerdrMultiplexer implements Multiplexer {
   private equalize: LayoutEqualizer;
   private equalizePanes: boolean;
   private desktopAdoptionWait: DesktopAdoptionWait;
+  private recoveryJournalPath: string | null;
   private readonly desktopOwnedTerminals = new Map<string, DesktopOwnership>();
   private readonly desktopSweepCandidates = new Map<string, DesktopOwnership>();
   private readonly pendingDesktopRollbacks = new Map<
@@ -125,6 +179,47 @@ export class HerdrMultiplexer implements Multiplexer {
     this.equalizePanes = options.equalizePanes ?? true;
     this.desktopAdoptionWait =
       options.desktopAdoptionWait ?? defaultDesktopAdoptionWait;
+    this.recoveryJournalPath = options.recoveryJournalPath ?? null;
+  }
+
+  private async markUnverifiedDesktopSpawn(
+    ownership: DesktopOwnership,
+  ): Promise<void> {
+    if (!this.recoveryJournalPath) return;
+    try {
+      const records = await readDesktopRecoveryRecords(
+        this.recoveryJournalPath,
+      );
+      if (records.some((r) => r.spawnToken === ownership.spawnToken)) return;
+      records.push({
+        spawnToken: ownership.spawnToken ?? '',
+        parentId: ownership.parentId,
+        title: ownership.title,
+        spaceId: ownership.spaceId,
+        tabId: ownership.tabId,
+        createdAt: Date.now(),
+      });
+      await writeDesktopRecoveryRecords(this.recoveryJournalPath, records);
+    } catch {
+      // best-effort recovery journal
+    }
+  }
+
+  private async resolveUnverifiedDesktopSpawn(
+    spawnToken?: string,
+  ): Promise<void> {
+    if (!this.recoveryJournalPath || !spawnToken) return;
+    try {
+      const records = await readDesktopRecoveryRecords(
+        this.recoveryJournalPath,
+      );
+      const next = records.filter((r) => r.spawnToken !== spawnToken);
+      if (next.length !== records.length) {
+        await writeDesktopRecoveryRecords(this.recoveryJournalPath, next);
+      }
+    } catch {
+      // best-effort recovery journal
+    }
   }
 
   async isAvailable(): Promise<boolean> {
@@ -920,6 +1015,7 @@ export class HerdrMultiplexer implements Multiplexer {
       );
       const name = desktopTerminalName(description, sessionId);
       runAttempted = true;
+      await this.markUnverifiedDesktopSpawn(ownership);
       const runProc = crossSpawn(
         [
           hc,
@@ -1044,10 +1140,13 @@ export class HerdrMultiplexer implements Multiplexer {
             ownership,
             address,
           });
+        } else {
+          await this.resolveUnverifiedDesktopSpawn(spawnToken);
         }
         return { success: false, error: 'hard' };
       }
 
+      await this.resolveUnverifiedDesktopSpawn(spawnToken);
       return { success: true, paneId: address };
     } catch (error) {
       log('[herdr] desktop spawn failed', { error: String(error) });
@@ -1118,6 +1217,7 @@ export class HerdrMultiplexer implements Multiplexer {
                 emptyScans: scan,
               },
             );
+            await this.resolveUnverifiedDesktopSpawn(ownership.spawnToken);
             return true;
           }
           continue;
@@ -1146,8 +1246,10 @@ export class HerdrMultiplexer implements Multiplexer {
           address,
           spawnToken: ownership.spawnToken,
         });
+        await this.resolveUnverifiedDesktopSpawn(ownership.spawnToken);
         return true;
       }
+      await this.resolveUnverifiedDesktopSpawn(ownership.spawnToken);
       return true;
     } catch (error) {
       log('[herdr] desktop orphan cleanup threw', {
