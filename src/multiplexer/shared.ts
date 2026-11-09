@@ -33,11 +33,12 @@ export function quoteShellArg(value: string): string {
  * Quotes one argument for the shell that will interpret the command.
  * PowerShell escapes an embedded apostrophe by doubling it inside a
  * single-quoted string (`'O''Brien'`); the POSIX `'\''` form is not readable
- * to it.
+ * to it. PowerShell also reads the typographic quotes U+2018-U+201B as
+ * apostrophes, so each of them is doubled the same way.
  */
 function quoteForShell(value: string, shell?: PaneShell): string {
   return shell === 'powershell'
-    ? `'${value.replace(/'/g, "''")}'`
+    ? `'${value.replace(/['\u2018-\u201B]/g, '$&$&')}'`
     : quoteShellArg(value);
 }
 

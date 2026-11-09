@@ -388,6 +388,24 @@ describe('buildViewCommand', () => {
     );
   });
 
+  test('a PowerShell pane doubles typographic single quotes too', async () => {
+    const { buildViewCommand } = await importShared();
+    // PowerShell also ends a single-quoted string at U+2018-U+201B.
+    const cmd = buildViewCommand(
+      'ses_x',
+      'http://x',
+      'C:/repo/\u2018a\u2019 \u201Ab\u201B',
+      {
+        executable: 'C:/Users/John\u2019s/opencode.exe',
+        viewerFlavor: 'v2-shared',
+        shell: 'powershell',
+      },
+    );
+    expect(cmd).toBe(
+      "& 'C:/Users/John\u2019\u2019s/opencode.exe' --session 'ses_x' 'C:/repo/\u2018\u2018a\u2019\u2019 \u201A\u201Ab\u201B\u201B'",
+    );
+  });
+
   test('defaults to the resolved absolute host executable (#514)', async () => {
     const { buildViewCommand } = await importShared();
     const dir = mkdtempSync(join(tmpdir(), 'omos-514-'));
