@@ -743,6 +743,7 @@ export async function handleToolExecuteAfter(
   deps: {
     directory: string;
     backgroundJobBoard: BackgroundJobBoard;
+    onLaunchConfirmed?: (taskID: string) => void;
     terminalGate: BackgroundJobTerminalGate;
     pendingCallTracker: {
       take(
@@ -1326,6 +1327,7 @@ function registerTaskOutputLaunch(
 export interface RegisterDelegatedLaunchDeps {
   directory: string;
   backgroundJobBoard: BackgroundJobBoard;
+  onLaunchConfirmed?: (taskID: string) => void;
   terminalGate: BackgroundJobTerminalGate;
   backgroundJobSupervisor?: BackgroundJobSupervisor;
   backgroundTaskConcurrency?: BackgroundTaskConcurrency;
@@ -1420,6 +1422,7 @@ export async function registerDelegatedLaunchFromStructured(
       deps,
     );
     if (!record) return undefined;
+    deps.onLaunchConfirmed?.(record.taskID);
     if (input.handledByWrapper === true) {
       input.pending.registeredByWrapper = true;
     }

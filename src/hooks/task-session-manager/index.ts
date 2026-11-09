@@ -55,7 +55,11 @@ import {
 } from './board-injection';
 import type { ChildInputWaitNotification } from './child-input-wait';
 import { clearChildInputWaitsForSession } from './child-input-wait';
-import { handleEvent } from './event-router';
+import {
+  handleEvent,
+  type PendingChildAsks,
+  promoteChildInputWaits,
+} from './event-router';
 import { createIdleReconciler } from './idle-reconciliation';
 import { createIdleSessionTokens } from './idle-session-tokens';
 import { createInputWaitTracker } from './input-wait-tracker';
@@ -699,9 +703,17 @@ export function createTaskSessionManagerHook(
 
   const inputWaits = createInputWaitTracker({
     shouldManageSession: options.shouldManageSession,
+    hostFlavor: options.hostFlavor,
     invalidateIdle: (sessionID) => idleSessionTokens.invalidate(sessionID),
   });
   hasInputWait = (s) => inputWaits.hasInputWait(s);
+  const pendingChildAsks: PendingChildAsks = new Map();
+  const onLaunchConfirmed = (taskID: string) =>
+    promoteChildInputWaits(taskID, {
+      backgroundJobBoard,
+      pendingChildAsks,
+      onChildInputWait: options.onChildInputWait,
+    });
 
   // A background child's open question/permission must wake the parent even
   // though the parent session itself has no input wait. The event router
@@ -830,6 +842,7 @@ export function createTaskSessionManagerHook(
         {
           directory: _ctx.directory,
           backgroundJobBoard,
+          onLaunchConfirmed,
           terminalGate,
           backgroundJobSupervisor: options.backgroundJobSupervisor,
           backgroundTaskConcurrency: options.backgroundTaskConcurrency,
@@ -962,6 +975,7 @@ export function createTaskSessionManagerHook(
       await handleToolExecuteAfter(input, output, {
         directory: _ctx.directory,
         backgroundJobBoard,
+        onLaunchConfirmed,
         terminalGate,
         backgroundJobSupervisor: options.backgroundJobSupervisor,
         backgroundTaskConcurrency: options.backgroundTaskConcurrency,
@@ -1208,6 +1222,7 @@ export function createTaskSessionManagerHook(
           observeSyntheticTerminalPart(injectionState, part),
         revivedRunTracker: options.revivedRunTracker,
         onChildInputWait: options.onChildInputWait,
+        pendingChildAsks,
       }).then(() => runtimeStatusReconciler.schedule());
     },
   };

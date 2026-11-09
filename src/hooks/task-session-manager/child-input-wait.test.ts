@@ -78,6 +78,140 @@ function questionAskedEvent(childID: string, requestID: string) {
 }
 
 describe('background child input wait surfacing (RED)', () => {
+  test('a still-open foreground question is surfaced when promoted', async () => {
+    // Mutation: discard asks before the child is confirmed background.
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    const notified: unknown[] = [];
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      onChildInputWait: (n) => notified.push(n),
+    });
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-promote' },
+      {
+        args: {
+          subagent_type: 'fixer',
+          description: 'work',
+          background: false,
+        },
+      },
+    );
+    await hook.event({
+      event: {
+        type: 'session.created',
+        properties: {
+          info: {
+            id: 'ses_child',
+            parentID: 'parent-1',
+            agent: 'fixer',
+            title: 'work (@fixer subagent)',
+          },
+        },
+      },
+    });
+    await hook.event(questionAskedEvent('ses_child', 'que_promote'));
+    expect(getChildInputWait('ses_child', 'que_promote')).toBeUndefined();
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-promote' },
+      {
+        output:
+          'task_id: ses_child\nstate: running\n\n<task_result>\nBackground task started.\n</task_result>',
+        metadata: { background: true },
+      },
+    );
+    expect(getChildInputWait('ses_child', 'que_promote')?.requestID).toBe(
+      'que_promote',
+    );
+    expect(notified).toHaveLength(1);
+  });
+
+  test('a foreground question resolved before promotion stays resolved', async () => {
+    // Mutation: replay settled provisional asks on promotion.
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    const notified: unknown[] = [];
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      onChildInputWait: (n) => notified.push(n),
+    });
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-promote' },
+      {
+        args: {
+          subagent_type: 'fixer',
+          description: 'work',
+          background: false,
+        },
+      },
+    );
+    await hook.event({
+      event: {
+        type: 'session.created',
+        properties: {
+          info: {
+            id: 'ses_child',
+            parentID: 'parent-1',
+            agent: 'fixer',
+            title: 'work (@fixer subagent)',
+          },
+        },
+      },
+    });
+    await hook.event(questionAskedEvent('ses_child', 'que_settled'));
+    await hook.event({
+      event: {
+        type: 'question.replied',
+        properties: { sessionID: 'ses_child', requestID: 'que_settled' },
+      },
+    });
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-promote' },
+      {
+        output:
+          'task_id: ses_child\nstate: running\n\n<task_result>\nBackground task started.\n</task_result>',
+        metadata: { background: true },
+      },
+    );
+    expect(getChildInputWait('ses_child', 'que_settled')).toBeUndefined();
+    expect(notified).toHaveLength(0);
+  });
+
+  test('an aborted v1 turn clears its question without clearing unrelated permission waits', async () => {
+    // Mutation: only replied/rejected events clear the root question.
+    resetUserWaitGateForTests();
+    const { hook } = createHook();
+    await hook.event(questionAskedEvent('parent-1', 'que_abort'));
+    await hook.event({
+      event: {
+        type: 'permission.asked',
+        properties: { sessionID: 'parent-1', id: 'per_other' },
+      },
+    });
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'parent-1',
+          error: { name: 'MessageAbortedError' },
+        },
+      },
+    });
+    expect(hook.hasInputWait('parent-1')).toBe(true);
+    await hook.event({
+      event: {
+        type: 'permission.replied',
+        properties: { sessionID: 'parent-1', requestID: 'per_other' },
+      },
+    });
+    expect(hook.hasInputWait('parent-1')).toBe(false);
+    await hook.event(questionAskedEvent('parent-1', 'que_new'));
+    await hook.event({
+      event: { type: 'session.idle', properties: { sessionID: 'parent-1' } },
+    });
+    expect(hook.hasInputWait('parent-1')).toBe(true);
+  });
+
   test('a background child question notifies the parent with the question content', async () => {
     resetUserWaitGateForTests();
     resetChildInputWaitForTests();
