@@ -38,6 +38,7 @@ export interface FeatureGateConfig {
 export interface FeatureGates {
   readonly backgroundJobsMode: BackgroundJobsMode;
   readonly managedJobs: boolean;
+  readonly presetRouting: boolean;
   readonly tui: boolean;
   readonly sidebar: boolean;
   readonly interview: boolean;
@@ -68,6 +69,7 @@ export function resolveFeatureGates(
   return Object.freeze({
     backgroundJobsMode,
     managedJobs: backgroundJobsMode === 'managed',
+    presetRouting: backgroundJobsMode !== 'off',
     tui,
     sidebar: tui && config.sidebar !== false,
     interview: config.interview?.enabled !== false,

@@ -329,6 +329,44 @@ describe('ensureAdmission', () => {
     expect(admission?.record?.parentID).toBe('root-1');
   });
 
+  test('a continuation the host does not know reports absence, not a failure', async () => {
+    const h = makeHarness();
+    // The host's tagged not-found carries an EMPTY message; surfacing it as
+    // the tool rejection is the empty "tool.execution" error this guards.
+    const notFound = Object.assign(new Error(''), {
+      _tag: 'Session.NotFoundError',
+      sessionID: 'ses_unused',
+    });
+    h.setGetResponse(Promise.reject(notFound));
+    // Absent identity, so the caller keeps its own agent and the host's own
+    // lookup owns the refusal wording.
+    expect(await h.presets.ensureAdmission('ses_unused')).toBeUndefined();
+    expect([...h.storage.keys()]).toEqual([]);
+  });
+
+  test('a continuation read that fails for another reason still rejects', async () => {
+    const h = makeHarness();
+    h.setGetResponse(
+      Promise.reject(
+        Object.assign(new Error('host unavailable'), { _tag: 'Host.Timeout' }),
+      ),
+    );
+    await expect(h.presets.ensureAdmission('ses_child')).rejects.toThrow(
+      'host unavailable',
+    );
+  });
+
+  test('a snapshot/model re-pin for an unknown continuation stays absent instead of failing', async () => {
+    const h = makeHarness();
+    const notFound = Object.assign(new Error(''), {
+      _tag: 'Session.NotFoundError',
+      sessionID: 'ses_unused',
+    });
+    h.setGetResponse(Promise.reject(notFound));
+    expect(await h.presets.ensure('ses_unused')).toBeUndefined();
+    expect([...h.storage.keys()]).toEqual([]);
+  });
+
   test('parent identity mismatch still rejects inside an admission', async () => {
     const h = makeHarness();
     h.storage.set(storageKey('child-2'), {
@@ -346,5 +384,22 @@ describe('ensureAdmission', () => {
     await expect(h.presets.ensureAdmission('child-2')).rejects.toThrow(
       'Session preset parent identity mismatch',
     );
+  });
+
+  test('strict bindChild rejects an unknown child with the host not-found', async () => {
+    const h = makeHarness();
+    h.setGetResponse(
+      Promise.reject(
+        Object.assign(new Error(''), {
+          _tag: 'Session.NotFoundError',
+          sessionID: 'ses_unused',
+        }),
+      ),
+    );
+    // bindChild is strict: the parent link is verified, never inferred.
+    await expect(
+      h.presets.bindChild('ses_unused', 'root-1', BUNDLE),
+    ).rejects.toMatchObject({ _tag: 'Session.NotFoundError' });
+    expect([...h.storage.keys()]).toEqual([]);
   });
 });

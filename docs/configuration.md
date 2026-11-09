@@ -252,7 +252,15 @@ delegation, completion delivery, session continuation, and council seat
 assembly keep working. `backgroundJobs.mode: "native"` is the middle ground:
 it skips every board-shaped component but keeps two thin host-read controls
 (`task_status` reads a child's state and trailing result; `task_cancel` aborts
-a stuck child), which is what a native-delegation setup otherwise loses. See
+a stuck child), which is what a native-delegation setup otherwise loses.
+
+`backgroundJobs.mode: "off"` is stricter: the plugin does not wrap the host's
+`subagent` executor, does not read child sessions before the host validates a
+call, and does not bind session-level presets. Delegated children use the
+models, variants, temperature and provider options from the registered agent
+configuration (the `preset` default still selects those at startup). Session
+`/preset` bindings and the related RPC are unavailable in this mode; the
+global default remains configurable. See
 [Background Orchestration](background-orchestration.md)
 and [Council](council.md) for what remains.
 
@@ -315,7 +323,7 @@ and [Council](council.md) for what remains.
 | `multiplexer.viewer` | string | `"tui"` on v1, `"mini"` on v2 | Subagent pane surface: `"tui"` (full interface) or `"mini"` (lightweight interface). Explicit values override the host default. On v1, `"mini"` requires OpenCode >= 1.17.10 and runs `attach ... --dir <dir> --mini`; on v2 it runs `opencode mini` without a positional directory. Changes take effect on the next opencode start. See [Multiplexer Integration](multiplexer-integration.md). |
 | `multiplexer.zellij_pane_mode` | — | — | Removed: ignored with a warning. See [Removed config keys](#removed-config-keys). |
 | `tmux` (top-level) | — | — | Removed: ignored with a warning. Use `multiplexer.*`. See [Removed config keys](#removed-config-keys). |
-| `backgroundJobs.mode` | string | `"managed"` | Background-task lifecycle mode. `"managed"` runs the OMOS job board, retention, wake scheduler, wall-clock watchdog, terminal gate, and the `task_cancel`/`task_status`/`task_reply` tools. `"native"` skips every board-shaped component and registers only two thin host-read controls: `task_status` (parent-scoped `session.get` plus the trailing result) and `task_cancel` (`session.abort`, session retained). `"off"` registers no OMOS task tool and leaves native OpenCode delegation completely untouched (session presets still bind delegated children; they are not board state). See [Background Job Management](#background-job-management). |
+| `backgroundJobs.mode` | string | `"managed"` | Background-task lifecycle mode. `"managed"` runs the OMOS job board, retention, wake scheduler, wall-clock watchdog, terminal gate, and the `task_cancel`/`task_status`/`task_reply` tools. `"native"` skips every board-shaped component and registers only two thin host-read controls: `task_status` (parent-scoped `session.get` plus the trailing result) and `task_cancel` (`session.abort`, session retained). `"off"` registers no OMOS task tool and leaves native OpenCode delegation completely untouched: the native `subagent` executor is not wrapped, no child session is read before native validation, and session-level preset bindings do not apply (agent models, variants, temperature and provider options still come from the registered agent configuration, and the `preset` default still selects them at startup). See [Background Job Management](#background-job-management). |
 | `backgroundJobs.maxSessionsPerAgent` | integer | `2` | Maximum completed/reconciled reusable child sessions per specialist type in the current orchestrator session (1–10) See [Background Job Management](#background-job-management). |
 | `backgroundJobs.maxRetainedSnapshots` | — | — | Removed: ignored with a warning. See [Removed config keys](#removed-config-keys). |
 | `backgroundJobs.strategy` | — | — | Removed: board placement is change-only. See [Removed config keys](#removed-config-keys). |

@@ -52,10 +52,17 @@ fails; the TUI reads the client's error `message`.
 
 `setup.ts` shares one startup config snapshot with the factory, switches, skills
 and initial profile seed; deliberate refreshes revalidate source identity.
-`session-presets.ensureAdmission` returns the record and validated host identity
-from one binding transaction. `admission-view.ts` supplies profile facts to the
-existing capture seam without a second binding read. Later admissions still
-check directory/parent/storage. Attributed messages skip stored-history reads.
+`backgroundJobs.mode: "off"` cold-gates the whole session-preset subsystem:
+no preset store, profile bridge, RPC, server `/preset`, executor wrapper, or
+child-session reads. Native agents keep the startup model/variant/request
+settings, and the native executor owns delegation.
+When preset routing is enabled, `session-presets.ensureAdmission` returns the
+record and validated host identity from one binding transaction, or `undefined`
+for an id the host reports as not found (advisory absence) or an unavailable
+service. `admission-view.ts` supplies
+profile facts to the existing capture seam without a second binding read. Later
+admissions still check directory/parent/storage. Attributed messages skip
+stored-history reads.
 
 For a changed parent team, `wrapSessionPresetSubagent` retains native model
 selection and installs the child's replacement inference profile at awaited
