@@ -33,11 +33,12 @@ export function quoteShellArg(value: string): string {
  * Quotes one argument for the shell that will interpret the command.
  * PowerShell escapes an embedded apostrophe by doubling it inside a
  * single-quoted string (`'O''Brien'`); the POSIX `'\''` form is not readable
- * to it.
+ * to it. PowerShell also reads the typographic quotes U+2018-U+201B as
+ * apostrophes, so each of them is doubled the same way.
  */
 function quoteForShell(value: string, shell?: PaneShell): string {
   return shell === 'powershell'
-    ? `'${value.replace(/'/g, "''")}'`
+    ? `'${value.replace(/['\u2018-\u201B]/g, '$&$&')}'`
     : quoteShellArg(value);
 }
 
@@ -401,7 +402,8 @@ export async function findBinary(
     }
 
     const stdout = await proc.stdout();
-    const path = stdout.trim().split('\n')[0];
+    // where lists every match with CRLF line endings.
+    const path = stdout.trim().split(/\r?\n/)[0];
     if (!path) {
       log(`${logPrefix} findBinary: no path in output`);
       return null;
@@ -448,7 +450,7 @@ export interface GracefulClosePaneOptions {
   ctrlC: string[];
   /** Backend-specific close/kill command args (binary prepended by caller). */
   close: string[];
-  /** Accept exit code 1 as success (zellij/herdr treat "already closed" as 1). */
+  /** Accept exit code 1 as success. */
   acceptExitCode1?: boolean;
   /** Return true for empty/unknown paneId instead of false (zellij/herdr behavior). */
   emptyPaneReturnsTrue?: boolean;
@@ -473,16 +475,37 @@ export async function gracefulClosePane(
   const isEmpty = !paneId || paneId === 'unknown';
   if (isEmpty) return options.emptyPaneReturnsTrue ?? false;
 
+  if (!(await interruptPane(binary, options.ctrlC, options.env))) return false;
+  return closePaneCommand(binary, options);
+}
+
+export async function interruptPane(
+  binary: string,
+  ctrlC: string[],
+  env?: Record<string, string | undefined>,
+  waitForGrace?: () => Promise<void>,
+): Promise<boolean> {
   try {
-    const ctrlCProc = crossSpawn([binary, ...options.ctrlC], {
+    const ctrlCProc = crossSpawn([binary, ...ctrlC], {
       stdout: 'ignore',
       stderr: 'ignore',
-      env: options.env,
+      env,
     });
     await ctrlCProc.exited;
 
-    await new Promise((r) => setTimeout(r, GRACEFUL_SHUTDOWN_DELAY_MS));
+    await (waitForGrace?.() ??
+      new Promise((r) => setTimeout(r, GRACEFUL_SHUTDOWN_DELAY_MS)));
+    return true;
+  } catch {
+    return false;
+  }
+}
 
+export async function closePaneCommand(
+  binary: string,
+  options: Omit<GracefulClosePaneOptions, 'ctrlC' | 'emptyPaneReturnsTrue'>,
+): Promise<boolean> {
+  try {
     const inspectStderr = options.isAlreadyClosed !== undefined;
     const proc = crossSpawn([binary, ...options.close], {
       stdout: 'ignore',

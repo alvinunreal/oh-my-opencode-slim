@@ -99,6 +99,20 @@ The TUI sidebar uses the compact layout by default. Set `compactSidebar` to
 }
 ```
 
+Internal Council agents (`council`, `councillor`, and the dynamic
+`councillor-<seat>` agents) stay out of the sidebar because their seats are
+internal orchestration surfaces. Set `sidebarShowHiddenAgents` to `true` to
+render them as ordinary rows — model, variant, status dot, and session
+expansion behave exactly as they do for any other agent. The default is
+`false`; the switch affects the sidebar only, not agent registration or the
+host agent picker:
+
+```jsonc
+{
+  "sidebarShowHiddenAgents": true
+}
+```
+
 Click the `OMO-Slim` heading to collapse or expand its sidebar section. It
 starts expanded; the choice lasts for the current TUI window only. An idle
 agent has a `•` before its name. While an agent session reports `busy` or
@@ -252,7 +266,15 @@ delegation, completion delivery, session continuation, and council seat
 assembly keep working. `backgroundJobs.mode: "native"` is the middle ground:
 it skips every board-shaped component but keeps two thin host-read controls
 (`task_status` reads a child's state and trailing result; `task_cancel` aborts
-a stuck child), which is what a native-delegation setup otherwise loses. See
+a stuck child), which is what a native-delegation setup otherwise loses.
+
+`backgroundJobs.mode: "off"` is stricter: the plugin does not wrap the host's
+`subagent` executor, does not read child sessions before the host validates a
+call, and does not bind session-level presets. Delegated children use the
+models, variants, temperature and provider options from the registered agent
+configuration (the `preset` default still selects those at startup). Session
+`/preset` bindings and the related RPC are unavailable in this mode; the
+global default remains configurable. See
 [Background Orchestration](background-orchestration.md)
 and [Council](council.md) for what remains.
 
@@ -265,6 +287,7 @@ and [Council](council.md) for what remains.
 | `preset` | string | - | Active preset name (e.g. `"openai"`, `"best"`) |
 | `setDefaultAgent` | boolean | `true` | When `true`, sets OpenCode's `default_agent` to the orchestrator if unset or pointing at a subagent; `false` leaves it untouched |
 | `sidebar` | boolean | `true` | Master switch for the OMOS TUI sidebar surface (the agent list it renders and its state file). When `false`, the plugin never registers or renders the sidebar and writes no sidebar state; the native host sidebar is untouched, and pane management keeps following `multiplexer` config changes. `tui: false` implies this off. |
+| `sidebarShowHiddenAgents` | boolean | `false` | Render internal Council agents (`council`, `councillor`, and the dynamic `councillor-<seat>` agents) as OMOS TUI sidebar rows. When `true`, each row carries the same model, variant, status dot, and session expansion as any other agent. Affects the sidebar only: agent registration, availability, and the host agent picker are unchanged. |
 | `tui` | boolean | `true` | Master switch for all OMOS TUI surfaces: the sidebar and its server-side state, `/preset`, `/killall`, `/subagent`, and the update notice. When `false`, the TUI entry registers nothing and never loads the TUI render stack, and the server writes no sidebar state; server-side agents, council, observer, hooks, and tools remain active. |
 | `liveConfigRefresh` | boolean | `true` | v2 only: master switch for the live config-file watcher that reloads runtime model/preset profiles when `oh-my-opencode-slim.json(c)` changes on disk. When `false`, v2 does not watch config files and file edits apply only after a restart; explicit `/preset` writes still refresh the current generation where applicable |
 | `stripOrchestratorModel` | boolean | `false` | Preserve a runtime `/model` selection for the orchestrator after subagent dispatch by omitting its configured model from the SDK config. A selected preset's explicit `orchestrator.model` is retained. Without a runtime selection, this opt-in delegates the initial orchestrator choice to OpenCode's session default. |
@@ -315,7 +338,7 @@ and [Council](council.md) for what remains.
 | `multiplexer.viewer` | string | `"tui"` on v1, `"mini"` on v2 | Subagent pane surface: `"tui"` (full interface) or `"mini"` (lightweight interface). Explicit values override the host default. On v1, `"mini"` requires OpenCode >= 1.17.10 and runs `attach ... --dir <dir> --mini`; on v2 it runs `opencode mini` without a positional directory. Changes take effect on the next opencode start. See [Multiplexer Integration](multiplexer-integration.md). |
 | `multiplexer.zellij_pane_mode` | — | — | Removed: ignored with a warning. See [Removed config keys](#removed-config-keys). |
 | `tmux` (top-level) | — | — | Removed: ignored with a warning. Use `multiplexer.*`. See [Removed config keys](#removed-config-keys). |
-| `backgroundJobs.mode` | string | `"managed"` | Background-task lifecycle mode. `"managed"` runs the OMOS job board, retention, wake scheduler, wall-clock watchdog, terminal gate, and the `task_cancel`/`task_status`/`task_reply` tools. `"native"` skips every board-shaped component and registers only two thin host-read controls: `task_status` (parent-scoped `session.get` plus the trailing result) and `task_cancel` (`session.abort`, session retained). `"off"` registers no OMOS task tool and leaves native OpenCode delegation completely untouched (session presets still bind delegated children; they are not board state). See [Background Job Management](#background-job-management). |
+| `backgroundJobs.mode` | string | `"managed"` | Background-task lifecycle mode. `"managed"` runs the OMOS job board, retention, wake scheduler, wall-clock watchdog, terminal gate, and the `task_cancel`/`task_status`/`task_reply` tools. `"native"` skips every board-shaped component and registers only two thin host-read controls: `task_status` (parent-scoped `session.get` plus the trailing result) and `task_cancel` (`session.abort`, session retained). `"off"` registers no OMOS task tool and leaves native OpenCode delegation completely untouched: the native `subagent` executor is not wrapped, no child session is read before native validation, and session-level preset bindings do not apply (agent models, variants, temperature and provider options still come from the registered agent configuration, and the `preset` default still selects them at startup). See [Background Job Management](#background-job-management). |
 | `backgroundJobs.maxSessionsPerAgent` | integer | `2` | Maximum completed/reconciled reusable child sessions per specialist type in the current orchestrator session (1–10) See [Background Job Management](#background-job-management). |
 | `backgroundJobs.maxRetainedSnapshots` | — | — | Removed: ignored with a warning. See [Removed config keys](#removed-config-keys). |
 | `backgroundJobs.strategy` | — | — | Removed: board placement is change-only. See [Removed config keys](#removed-config-keys). |

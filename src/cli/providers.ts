@@ -4,7 +4,7 @@ import type { InstallConfig } from './types';
 const SCHEMA_URL =
   'https://unpkg.com/oh-my-opencode-slim@latest/oh-my-opencode-slim.schema.json';
 
-export const GENERATED_PRESETS = ['openai', 'opencode-go'] as const;
+const GENERATED_PRESETS = ['openai', 'opencode-go'] as const;
 
 // Model mappings by provider/preset.
 export const MODEL_MAPPINGS = {

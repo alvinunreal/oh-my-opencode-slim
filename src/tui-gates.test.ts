@@ -242,6 +242,17 @@ describe('TUI feature gates', () => {
     expect(repaired.gates.tuiEnabled).toBe(true);
   });
 
+  test('sidebarShowHiddenAgents defaults off and follows the config', () => {
+    writeUserConfig({});
+    expect(readTuiGates(env.projectDir).gates.showHiddenAgents).toBe(false);
+
+    writeUserConfig({ sidebarShowHiddenAgents: true });
+    expect(readTuiGates(env.projectDir).gates.showHiddenAgents).toBe(true);
+
+    writeUserConfig({ sidebarShowHiddenAgents: false });
+    expect(readTuiGates(env.projectDir).gates.showHiddenAgents).toBe(false);
+  });
+
   test('render-path gate read includes pane-wiring admission from the same snapshot', () => {
     writeUserConfig({ multiplexer: { type: 'tmux' } });
     const full = readTuiGates(env.projectDir);

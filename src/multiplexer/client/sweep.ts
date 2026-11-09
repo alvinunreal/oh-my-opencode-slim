@@ -50,8 +50,9 @@ export interface SweepPane {
  * Discovery result for adapters that can inspect only part of the candidate
  * set (cmux reads one launch argv per terminal): the panes that could be
  * inspected are still processed, and `incomplete` tells the caller that the
- * scan must be retried. A plain `SweepPane[]` (the four non-cmux adapters)
- * means a complete scan.
+ * scan must be retried. A plain `SweepPane[]` means the adapter completed its
+ * scan. cmux and Herdr Desktop use this shape when terminal details are
+ * unreadable.
  */
 export interface SweepScanResult {
   panes: SweepPane[];

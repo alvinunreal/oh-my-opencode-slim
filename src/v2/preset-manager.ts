@@ -243,7 +243,7 @@ export function sessionPresetClient(ctx: V2PresetManagerContext) {
     | undefined;
   if (typeof client?.rpc !== 'function') {
     throw new Error(
-      'Session presets are unavailable on this server. Update the server and reconnect.',
+      'Session presets are unavailable on this server. Set "preset" in config to change the global default.',
     );
   }
   return client.rpc(sessionPresetRpc);

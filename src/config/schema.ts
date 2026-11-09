@@ -565,7 +565,7 @@ const BackgroundJobsConfigStrictSchema = z.object({
     .enum(['managed', 'native', 'off'])
     .optional()
     .describe(
-      'Background-task lifecycle mode. "managed" (default) runs the OMOS managed lifecycle and its task_cancel/task_status/task_reply tools. "native" skips every board-shaped component and registers only two thin host-read tools — task_status (parent-checked host read plus trailing result) and task_cancel (the host atomic interruption) — for agents driving native subagent/task delegation. "off" registers no OMOS task tool at all and leaves native OpenCode delegation completely untouched.',
+      'Background-task lifecycle mode. "managed" (default) runs the OMOS managed lifecycle and its task_cancel/task_status/task_reply tools. "native" skips every board-shaped component and registers only two thin host-read tools — task_status (parent-checked host read plus trailing result) and task_cancel (the host atomic interruption) — for agents driving native subagent/task delegation. "off" registers no OMOS task tool. On v2 it also disables session-preset routing and leaves the native subagent executor untouched; agent inference settings still register normally.',
     ),
   enabled: z
     .never({
@@ -944,8 +944,6 @@ export const WebfetchConfigSchema = z
   })
   .strict();
 
-export type WebfetchConfig = z.infer<typeof WebfetchConfigSchema>;
-
 const AcpAgentPermissionModeSchema = z.enum(['ask', 'allow', 'reject']);
 
 export const MAX_ACP_TIMEOUT_MS = 2_147_483_647;
@@ -1037,6 +1035,12 @@ const RawPluginConfigSchema = z
       .optional()
       .describe(
         'Use the compact TUI sidebar layout. Defaults to true; set false to use the expanded layout.',
+      ),
+    sidebarShowHiddenAgents: z
+      .boolean()
+      .optional()
+      .describe(
+        'Render internal Council agents (council, councillor, and the dynamic councillor-<seat> agents) as rows in the OMOS TUI sidebar. Defaults to false: those agents stay hidden from the sidebar because their seats are internal orchestration surfaces. When true, each row shows its model and status dot like any other agent; agent registration, availability, and the host agent picker are unchanged.',
       ),
     sidebar: z
       .boolean()

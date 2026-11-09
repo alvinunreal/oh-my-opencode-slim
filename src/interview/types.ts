@@ -55,7 +55,7 @@ export interface InterviewRecord {
   baseMessageID?: string;
 }
 
-export interface InterviewMessagePart {
+interface InterviewMessagePart {
   type?: string;
   text?: string;
 }

@@ -210,6 +210,10 @@ const TRANSPORT_MESSAGE_PATTERNS = [
   // transport code. Match the narrow phrase only.
   /cannot connect to api/i,
   /did not begin a response within the pre-response time limit/i,
+  // Provider auth plugins throw this once their lifecycle ends (e.g.
+  // "Antigravity plugin has been disposed" after a host reload). The
+  // provider is gone for this request, so the next model should be tried.
+  /\bplugin has been disposed\b/i,
 ];
 const PROVIDER_OUTAGE_PATTERNS = [
   /\binternal server error\b/i,

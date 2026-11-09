@@ -435,7 +435,7 @@ describe('v2 setup feature gates', () => {
     const { ctx, toolUpdates } = makeCtx(projectDir);
     const cleanup = await createV2Setup()(ctx);
     try {
-      expectPresetOnlyWrap(toolUpdates);
+      expect(toolUpdates.filter((tool) => tool.id === 'subagent')).toEqual([]);
       // No persisted board state was seeded for this project directory.
       const stateDir = path.join(
         fixtureRoot,
@@ -460,7 +460,11 @@ describe('v2 setup feature gates', () => {
       const { ctx, toolUpdates } = makeCtx(projectDir);
       const cleanup = await createV2Setup()(ctx);
       try {
-        expectPresetOnlyWrap(toolUpdates);
+        if (mode === 'native') expectPresetOnlyWrap(toolUpdates);
+        else
+          expect(toolUpdates.filter((tool) => tool.id === 'subagent')).toEqual(
+            [],
+          );
         const stateDir = path.join(
           fixtureRoot,
           'xdg-data',
@@ -542,6 +546,38 @@ describe('v2 setup feature gates', () => {
       }
     }, 20_000);
   }
+
+  test('off constructs no preset RPC, server command, or storage access', async () => {
+    await writeProjectConfig({
+      companion: { enabled: false },
+      backgroundJobs: { mode: 'off' },
+    });
+    const { ctx, rpcHandlers, commandAdds, storageCalls } = makeCtx(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      // Only the Desktop config editor RPC remains: it edits config files
+      // and never routes sessions, so it stays available with routing off.
+      expect(
+        rpcHandlers.map((handlers) => Object.keys(handlers).sort()),
+      ).toEqual([
+        [
+          'clearPresetDefault',
+          'createPreset',
+          'deletePreset',
+          'getGoMonthlyLimits',
+          'getSnapshot',
+          'removeAgent',
+          'setAgentDisabled',
+          'setAgentOverride',
+          'switchPreset',
+        ],
+      ]);
+      expect(commandAdds.map((entry) => entry.name)).not.toContain('preset');
+      expect(storageCalls).toEqual({ get: 0, set: 0, remove: 0, scan: 0 });
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
 
   test('managed: a resume without agent is refused by the explicit-agent guard', async () => {
     await writeProjectConfig({

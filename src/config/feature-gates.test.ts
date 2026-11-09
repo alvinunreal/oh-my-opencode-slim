@@ -9,6 +9,7 @@ describe('resolveFeatureGates', () => {
     expect(gates).toEqual({
       backgroundJobsMode: 'managed',
       managedJobs: true,
+      presetRouting: true,
       tui: true,
       sidebar: true,
       interview: true,
@@ -31,6 +32,11 @@ describe('resolveFeatureGates', () => {
     const off = resolveFeatureGates({ backgroundJobs: { mode: 'off' } });
     expect(off.backgroundJobsMode).toBe('off');
     expect(off.managedJobs).toBe(false);
+    // Off hands delegation to the host: no session preset routing either.
+    expect(off.presetRouting).toBe(false);
+    expect(
+      resolveFeatureGates({ backgroundJobs: { mode: 'native' } }).presetRouting,
+    ).toBe(true);
   });
 
   test('keeps the sidebar off whenever the TUI master switch is off', () => {
@@ -148,6 +154,7 @@ describe('resolveFeatureGates', () => {
     expect(gates).toEqual({
       backgroundJobsMode: 'native',
       managedJobs: false,
+      presetRouting: true,
       tui: false,
       sidebar: false,
       interview: false,
