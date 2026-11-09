@@ -806,6 +806,14 @@ export class ForegroundFallbackManager {
    *  message.updated events for another model without changing the model
    *  serving the user's active turn. */
   private readonly activeFallback = new Map<string, string>();
+  private readonly descent = new Map<
+    string,
+    { model: string; variant?: string; fallbackVariant?: string; since: number }
+  >();
+  private readonly busy = new Set<string>();
+  private readonly failedIdle = new Map<string, number>();
+  private readonly restoreTimers = new Map<string, TimerHandle>();
+  private readonly restoring = new Set<string>();
   /** Provider failure timestamps survive internal returns to the primary. */
   private readonly downProviders = new Map<string, Map<string, number>>();
   /** sessionID → agent name (populated from message.updated info.agent field) */
@@ -1179,6 +1187,11 @@ export class ForegroundFallbackManager {
    *  transcript read runs through the destroyed generation's client. */
   dispose(): void {
     this.disposed = true;
+    for (const timer of this.restoreTimers.values()) this.clearTimer(timer);
+    this.restoreTimers.clear();
+    this.descent.clear();
+    this.busy.clear();
+    this.failedIdle.clear();
     for (const finish of this.v1Waiters.values()) finish();
     this.v1Waiters.clear();
     this.v1InterviewRefusals.clear();
@@ -1386,6 +1399,18 @@ export class ForegroundFallbackManager {
   ): void {
     if (messageID && this.observedUserMessageIds.get(sessionID)?.has(messageID))
       return;
+    const descent = this.descent.get(sessionID);
+    if (descent && model !== undefined) {
+      if (model === descent.model) this.commitRestore(sessionID, descent);
+      else if (
+        (this.input as PluginInput & { hostFlavor?: string }).hostFlavor !==
+          'v2' ||
+        model !== this.activeFallback.get(sessionID)
+      ) {
+        this.descent.delete(sessionID);
+        this.clearRestoreTimer(sessionID);
+      }
+    }
     if (model !== undefined && this.activeFallback.get(sessionID) !== model) {
       this.activeFallback.delete(sessionID);
       this.downProviders.delete(sessionID);
@@ -1662,6 +1687,10 @@ export class ForegroundFallbackManager {
 
   /** Drop all per-session state once the session is deleted. */
   private forgetSession(id: string): void {
+    this.clearRestoreTimer(id);
+    this.descent.delete(id);
+    this.busy.delete(id);
+    this.failedIdle.delete(id);
     this.sessionModel.delete(id);
     this.sessionParent.delete(id);
     this.activeFallback.delete(id);
@@ -1718,6 +1747,160 @@ export class ForegroundFallbackManager {
     return downProviders;
   }
 
+  restoreTarget(
+    sessionID: string,
+  ): { model: string; variant?: string } | undefined {
+    const descent = this.descent.get(sessionID);
+    if (
+      !descent ||
+      !this.activeFallback.has(sessionID) ||
+      this.disposed ||
+      this.busy.has(sessionID) ||
+      this.isFallbackInProgress(sessionID) ||
+      this.reattachPending.has(sessionID) ||
+      this.getDownProviders(sessionID).has(
+        parseModelReference(descent.model)?.providerID ?? '',
+      )
+    )
+      return;
+    return {
+      model: descent.model,
+      ...(descent.variant ? { variant: descent.variant } : {}),
+    };
+  }
+
+  private clearRestoreTimer(sessionID: string): void {
+    const timer = this.restoreTimers.get(sessionID);
+    if (timer !== undefined) this.clearTimer(timer);
+    this.restoreTimers.delete(sessionID);
+  }
+
+  private commitRestore(
+    sessionID: string,
+    descent: { model: string; variant?: string },
+  ): void {
+    this.descent.delete(sessionID);
+    this.activeFallback.delete(sessionID);
+    this.sessionModel.set(sessionID, descent.model);
+    this.resetRecoveryState(sessionID);
+    this.clearRestoreTimer(sessionID);
+    this.onSessionModelChanged?.(sessionID, descent.model, {
+      agentName: this.sessionAgent.get(sessionID),
+      variant: descent.variant,
+    });
+    log('[foreground-fallback] restored original model', {
+      sessionID,
+      model: descent.model,
+    });
+  }
+
+  private async restoreV2(
+    sessionID: string,
+    activityAt?: number,
+  ): Promise<void> {
+    const descent = this.descent.get(sessionID);
+    if (
+      !descent ||
+      this.disposed ||
+      this.restoring.has(sessionID) ||
+      (activityAt !== undefined && activityAt < descent.since)
+    )
+      return;
+    const target = this.restoreTarget(sessionID);
+    if (!target) {
+      const provider = parseModelReference(descent.model)?.providerID;
+      const markedAt = provider
+        ? this.downProviders.get(sessionID)?.get(provider)
+        : undefined;
+      if (
+        !this.busy.has(sessionID) &&
+        markedAt !== undefined &&
+        markedAt + PROVIDER_MARK_TTL_MS > this.now() &&
+        !this.restoreTimers.has(sessionID)
+      ) {
+        this.restoreTimers.set(
+          sessionID,
+          this.setTimer(
+            () => {
+              this.restoreTimers.delete(sessionID);
+              void this.restoreV2(sessionID);
+            },
+            markedAt + PROVIDER_MARK_TTL_MS - this.now(),
+          ),
+        );
+      }
+      return;
+    }
+    const switchModel = (
+      this.input as PluginInput & { experimental_v2?: ExperimentalV2 }
+    ).experimental_v2?.switchModel;
+    const session = getClient(this.input).session;
+    if (!switchModel || typeof session.get !== 'function') return;
+    this.restoring.add(sessionID);
+    try {
+      const result = await withTimeout(
+        session.get({ path: { id: sessionID } }),
+        HOST_CALL_TIMEOUT_MS,
+        'foreground restore session lookup timed out',
+        this.timerSeam,
+      );
+      const data: unknown = result.data;
+      if (
+        result.error ||
+        !isRecord(data) ||
+        !isRecord(data.model) ||
+        this.descent.get(sessionID) !== descent ||
+        !this.restoreTarget(sessionID)
+      )
+        return;
+      const current = data.model;
+      const hostModel =
+        typeof current.providerID === 'string' && typeof current.id === 'string'
+          ? `${current.providerID}/${current.id}`
+          : undefined;
+      if (!hostModel) return;
+      if (
+        hostModel === descent.model &&
+        (current.variant ?? 'default') === (descent.variant ?? 'default')
+      ) {
+        this.commitRestore(sessionID, descent);
+        return;
+      }
+      if (
+        hostModel !== this.activeFallback.get(sessionID) ||
+        (current.variant ?? 'default') !==
+          (descent.fallbackVariant ?? 'default')
+      ) {
+        this.descent.delete(sessionID);
+        this.activeFallback.delete(sessionID);
+        this.sessionModel.set(sessionID, hostModel);
+        this.clearRestoreTimer(sessionID);
+        return;
+      }
+      const ref = parseModelReference(target.model);
+      if (!ref) return;
+      await withTimeout(
+        switchModel(sessionID, {
+          providerID: ref.providerID,
+          id: ref.modelID,
+          ...(target.variant ? { variant: target.variant } : {}),
+        }),
+        HOST_CALL_TIMEOUT_MS,
+        'foreground restore model switch timed out',
+        this.timerSeam,
+      );
+      if (!this.disposed && this.descent.get(sessionID) === descent)
+        this.commitRestore(sessionID, descent);
+    } catch (error) {
+      log('[foreground-fallback] v2 restore failed', {
+        sessionID,
+        error: stringifyError(error),
+      });
+    } finally {
+      this.restoring.delete(sessionID);
+    }
+  }
+
   /** Restart the count with a new record so replies still being read are
    *  dropped; the seen IDs stay deduped until the next user turn. */
   private resetUnknownFinishStreak(sessionID: string): void {
@@ -1732,7 +1915,18 @@ export class ForegroundFallbackManager {
     model: string,
     error: unknown,
     detail?: V2SwitchDetail,
+    fromVariant?: string,
   ): void {
+    if (from) {
+      const previous = this.descent.get(sessionID);
+      this.descent.set(sessionID, {
+        model: previous?.model ?? from,
+        variant: previous ? previous.variant : fromVariant,
+        fallbackVariant: detail?.variant,
+        since: this.now(),
+      });
+      this.clearRestoreTimer(sessionID);
+    }
     const downProviders = new Map(this.downProviders.get(sessionID));
     const fromProvider = from
       ? parseModelReference(from)?.providerID
@@ -1757,6 +1951,11 @@ export class ForegroundFallbackManager {
 
   /** Reconcile an internal continuation without discarding provider marks. */
   observeContinuationModel(sessionID: string, model: string): void {
+    const descent = this.descent.get(sessionID);
+    if (descent?.model === model) {
+      this.commitRestore(sessionID, descent);
+      return;
+    }
     const previousModel = this.sessionModel.get(sessionID);
     this.sessionModel.set(sessionID, model);
     if (this.activeFallback.get(sessionID) !== model) {
@@ -1841,12 +2040,31 @@ export class ForegroundFallbackManager {
           isRecord(props) &&
           typeof props.sessionID === 'string' &&
           isRecord(props.error) &&
-          props.error.type === 'provider.no-route' &&
           typeof (rawEvent as { created?: unknown }).created === 'number'
         ) {
-          await this.handleV2NoRoute(props.sessionID, props.error, {
-            time: { completed: (rawEvent as { created: number }).created },
-          });
+          const failedAt = (rawEvent as { created: number }).created;
+          if (props.error.type !== 'provider.no-route') {
+            if (
+              failoverScope(props.error) === 'request' &&
+              this.descent.get(props.sessionID)?.since === failedAt
+            )
+              this.failedIdle.set(props.sessionID, failedAt);
+            break;
+          }
+          const recovered = await this.handleV2NoRoute(
+            props.sessionID,
+            props.error,
+            {
+              time: { completed: (rawEvent as { created: number }).created },
+            },
+          );
+          if (
+            recovered ||
+            (this.activeFallback.has(props.sessionID) &&
+              this.sessionParent.has(props.sessionID) &&
+              this.readBackgroundGeneration?.(props.sessionID) === undefined)
+          )
+            this.failedIdle.set(props.sessionID, failedAt);
         }
         break;
       }
@@ -2176,6 +2394,8 @@ export class ForegroundFallbackManager {
         if (!props) break;
         const sessionID = eventSessionID(props);
         if (!sessionID) break;
+        if (props.status?.type === 'busy' || props.status?.type === 'retry')
+          this.busy.add(sessionID);
         if (this.separateCompaction.get(sessionID)?.active) break;
         const isFailoverRetry =
           props.status?.type === 'retry' &&
@@ -2292,6 +2512,30 @@ export class ForegroundFallbackManager {
         break;
       }
 
+      case 'session.idle': {
+        const props = event.properties as
+          | { sessionID?: string; activityAt?: number }
+          | undefined;
+        const sessionID = props?.sessionID;
+        if (!sessionID) break;
+        const failedAt = this.failedIdle.get(sessionID);
+        if (failedAt !== undefined && failedAt === props.activityAt) {
+          this.failedIdle.delete(sessionID);
+          break;
+        }
+        const descent = this.descent.get(sessionID);
+        if (
+          isV2Host &&
+          descent &&
+          props.activityAt !== undefined &&
+          props.activityAt < descent.since
+        )
+          break;
+        this.busy.delete(sessionID);
+        if (isV2Host) await this.restoreV2(sessionID, props.activityAt);
+        break;
+      }
+
       case 'session.created': {
         const info = (
           event.properties as
@@ -2346,7 +2590,7 @@ export class ForegroundFallbackManager {
     event: {
       sessionID: string;
       agent?: string;
-      model: { providerID: string; id: string };
+      model: { providerID: string; id: string; variant?: string };
       error: unknown;
       decision?: { retry: boolean; delay?: number };
     },
@@ -2429,6 +2673,7 @@ export class ForegroundFallbackManager {
           event.error,
           switchModel,
           epoch,
+          event.model.variant,
         );
         if (nextModel)
           event.decision = { retry: true, delay: this.retryDelayMs };
@@ -2472,6 +2717,7 @@ export class ForegroundFallbackManager {
      *  durable selection change that a newer prompt still runs on, so only
      *  its continuation is epoch-fenced (by the caller). */
     epoch?: number,
+    fromVariant?: string,
   ): Promise<string | undefined> {
     const live = () =>
       epoch === undefined
@@ -2500,7 +2746,7 @@ export class ForegroundFallbackManager {
       );
       if (!live()) return;
       confirmed = true;
-      this.commitSwitch(sessionID, from, nextModel, error, detail);
+      this.commitSwitch(sessionID, from, nextModel, error, detail, fromVariant);
       this.showFallbackToast(agentName, nextModel, error);
       log('[foreground-fallback] v2 switched model in place', {
         sessionID,
@@ -2541,7 +2787,14 @@ export class ForegroundFallbackManager {
                 (observedModel !== from && observedModel !== target)
               )
                 return;
-              this.commitSwitch(sessionID, from, target, error, detail);
+              this.commitSwitch(
+                sessionID,
+                from,
+                target,
+                error,
+                detail,
+                fromVariant,
+              );
               log('[foreground-fallback] v2 reconciled a late model switch', {
                 sessionID,
                 from,
@@ -2795,6 +3048,8 @@ export class ForegroundFallbackManager {
         from,
         error,
         switchModel,
+        undefined,
+        step.model?.variant,
       );
       if (
         !nextModel ||
@@ -2840,6 +3095,8 @@ export class ForegroundFallbackManager {
           this.backgroundFallbackHandoff?.reject(sessionID, preparedGeneration);
         return;
       }
+      const descent = this.descent.get(sessionID);
+      if (descent) descent.since = this.now();
       if (handoffArmed)
         this.backgroundFallbackHandoff?.admit(sessionID, preparedGeneration, {
           from,
@@ -4138,7 +4395,22 @@ export class ForegroundFallbackManager {
       }
       interviewModel = nextModel;
 
-      this.commitSwitch(sessionID, currentModel, nextModel, error);
+      const userModel = nestedField(lastUser.info, 'model');
+      const userRef = isRecord(userModel) ? userModel : undefined;
+      const fromVariant =
+        userRef &&
+        `${userRef.providerID}/${userRef.modelID}` === currentModel &&
+        typeof userRef.variant === 'string'
+          ? userRef.variant
+          : undefined;
+      this.commitSwitch(
+        sessionID,
+        currentModel,
+        nextModel,
+        error,
+        undefined,
+        fromVariant,
+      );
       // Admission accepted: convert the
       // prepared handoff into a tracked run (register + immediate
       // probe) so the substituted run's result is observed and
