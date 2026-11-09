@@ -57,6 +57,7 @@ import type { ChildInputWaitNotification } from './child-input-wait';
 import { clearChildInputWaitsForSession } from './child-input-wait';
 import {
   handleEvent,
+  observePendingChildAsks,
   type PendingChildAsks,
   promoteChildInputWaits,
 } from './event-router';
@@ -707,6 +708,10 @@ export function createTaskSessionManagerHook(
   });
   hasInputWait = (s) => inputWaits.hasInputWait(s);
   const pendingChildAsks: PendingChildAsks = new Map();
+  const stopObservingPendingChildAsks = observePendingChildAsks(
+    backgroundJobBoard,
+    pendingChildAsks,
+  );
   const onLaunchConfirmed = (taskID: string) =>
     promoteChildInputWaits(taskID, {
       backgroundJobBoard,
@@ -1200,6 +1205,7 @@ export function createTaskSessionManagerHook(
       }
 
       if (input.event.type === 'server.instance.disposed') {
+        stopObservingPendingChildAsks();
         runtimeStatusReconciler.dispose();
         if (!options.terminalGate) terminalGate.dispose();
       }

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { BackgroundJobBoard } from '../../utils/background-job-board';
 import {
   formatChildInputWaitDetail,
@@ -80,6 +80,18 @@ function questionAskedEvent(childID: string, requestID: string) {
 }
 
 describe('background child input wait surfacing (RED)', () => {
+  test('manager disposal detaches its pending-ask board observer', async () => {
+    // Mutation: fail to detach the pending-ask observer at instance disposal.
+    const board = new BackgroundJobBoard();
+    const add = spyOn(board, 'addMutationListener');
+    const remove = spyOn(board, 'removeMutationListener');
+    const { hook } = createHook({ backgroundJobBoard: board });
+    expect(add).toHaveBeenCalledTimes(1);
+    const listener = add.mock.calls[0]?.[0];
+    await hook.event({ event: { type: 'server.instance.disposed' } });
+    expect(remove).toHaveBeenCalledWith(listener);
+  });
+
   test('a still-open foreground question is surfaced when promoted', async () => {
     // Mutation: discard asks before the child is confirmed background.
     resetChildInputWaitForTests();

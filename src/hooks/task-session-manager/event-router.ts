@@ -49,6 +49,27 @@ export type PendingChildAsks = Map<
   Map<string, { generation: number; input: ChildAsk }>
 >;
 
+export function observePendingChildAsks(
+  board: BackgroundJobBoard,
+  pending: PendingChildAsks,
+): () => void {
+  const listener = () => {
+    for (const [taskID, asks] of pending) {
+      const job = board.get(taskID);
+      if (!job || job.state !== 'running') {
+        pending.delete(taskID);
+        continue;
+      }
+      for (const [requestID, ask] of asks) {
+        if (ask.generation !== job.generation) asks.delete(requestID);
+      }
+      if (asks.size === 0) pending.delete(taskID);
+    }
+  };
+  board.addMutationListener(listener);
+  return () => board.removeMutationListener(listener);
+}
+
 interface SessionEventGenerationFence {
   generation: number;
   /** A new generation must see a live activity fence before lifecycle events. */
