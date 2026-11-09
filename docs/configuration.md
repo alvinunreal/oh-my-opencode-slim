@@ -99,6 +99,20 @@ The TUI sidebar uses the compact layout by default. Set `compactSidebar` to
 }
 ```
 
+Internal Council agents (`council`, `councillor`, and the dynamic
+`councillor-<seat>` agents) stay out of the sidebar because their seats are
+internal orchestration surfaces. Set `sidebarShowHiddenAgents` to `true` to
+render them as ordinary rows — model, variant, status dot, and session
+expansion behave exactly as they do for any other agent. The default is
+`false`; the switch affects the sidebar only, not agent registration or the
+host agent picker:
+
+```jsonc
+{
+  "sidebarShowHiddenAgents": true
+}
+```
+
 Click the `OMO-Slim` heading to collapse or expand its sidebar section. It
 starts expanded; the choice lasts for the current TUI window only. An idle
 agent has a `•` before its name. While an agent session reports `busy` or
@@ -273,6 +287,7 @@ and [Council](council.md) for what remains.
 | `preset` | string | - | Active preset name (e.g. `"openai"`, `"best"`) |
 | `setDefaultAgent` | boolean | `true` | When `true`, sets OpenCode's `default_agent` to the orchestrator if unset or pointing at a subagent; `false` leaves it untouched |
 | `sidebar` | boolean | `true` | Master switch for the OMOS TUI sidebar surface (the agent list it renders and its state file). When `false`, the plugin never registers or renders the sidebar and writes no sidebar state; the native host sidebar is untouched, and pane management keeps following `multiplexer` config changes. `tui: false` implies this off. |
+| `sidebarShowHiddenAgents` | boolean | `false` | Render internal Council agents (`council`, `councillor`, and the dynamic `councillor-<seat>` agents) as OMOS TUI sidebar rows. When `true`, each row carries the same model, variant, status dot, and session expansion as any other agent. Affects the sidebar only: agent registration, availability, and the host agent picker are unchanged. |
 | `tui` | boolean | `true` | Master switch for all OMOS TUI surfaces: the sidebar and its server-side state, `/preset`, `/killall`, `/subagent`, and the update notice. When `false`, the TUI entry registers nothing and never loads the TUI render stack, and the server writes no sidebar state; server-side agents, council, observer, hooks, and tools remain active. |
 | `liveConfigRefresh` | boolean | `true` | v2 only: master switch for the live config-file watcher that reloads runtime model/preset profiles when `oh-my-opencode-slim.json(c)` changes on disk. When `false`, v2 does not watch config files and file edits apply only after a restart; explicit `/preset` writes still refresh the current generation where applicable |
 | `stripOrchestratorModel` | boolean | `false` | Preserve a runtime `/model` selection for the orchestrator after subagent dispatch by omitting its configured model from the SDK config. A selected preset's explicit `orchestrator.model` is retained. Without a runtime selection, this opt-in delegates the initial orchestrator choice to OpenCode's session default. |
