@@ -99,12 +99,17 @@ export function createTaskReplyTool(options: {
       .string()
       .describe('Open question/permission request ID to answer'),
     answers: z
-      .array(z.string().max(MAX_ANSWER_LENGTH))
+      .array(
+        z.union([
+          z.string().max(MAX_ANSWER_LENGTH),
+          z.array(z.string().max(MAX_ANSWER_LENGTH)),
+        ]),
+      )
       .optional()
       .describe(
         hostFlavor === 'v2'
-          ? 'Answers for a question request, in question order (each entry selects option labels).'
-          : 'Answers for a question request, in question order (each entry selects option labels). Omit to reject the request instead of answering it.',
+          ? 'Answers in question order: a string per question, or an array of strings for multiple selections.'
+          : 'Answers in question order: a string per question, or an array of strings for multiple selections. Omit to reject the request instead of answering it.',
       ),
     reply: z
       .enum(['once', 'always', 'reject'])
@@ -361,7 +366,11 @@ export function createTaskReplyTool(options: {
             return `Rejected pending question ${openWait.requestID} for ${targetJob.alias} (${targetJob.taskID}).`;
           }
           const result = await withTimeout(
-            replyQuestion(args.answers.map((answer) => [answer])),
+            replyQuestion(
+              args.answers.map((answer) =>
+                Array.isArray(answer) ? answer : [answer],
+              ),
+            ),
             timeoutMs,
             `Question reply timed out after ${timeoutMs}ms`,
           );
