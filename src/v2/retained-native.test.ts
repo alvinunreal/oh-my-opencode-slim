@@ -8,7 +8,10 @@ import {
   createSessionRecovery,
   readAuthoritativeChildRef,
 } from '../hooks/task-session-manager/session-recovery';
-import { handleToolExecuteBefore } from '../hooks/task-session-manager/tool-execute-hooks';
+import {
+  handleToolExecuteAfter,
+  handleToolExecuteBefore,
+} from '../hooks/task-session-manager/tool-execute-hooks';
 import { BackgroundJobBoard } from '../utils/background-job-board';
 import { BackgroundJobBoard as FixtureBoard } from '../utils/background-job-fixture';
 import { parseTaskIdFromTaskOutput } from '../utils/task';
@@ -75,11 +78,15 @@ function host(options?: {
   } as never);
 }
 
-function deps(board: BackgroundJobBoard, input: ReturnType<typeof host>) {
+function deps(
+  board: BackgroundJobBoard,
+  input: ReturnType<typeof host>,
+  pendingCallTracker = createPendingCallTracker(),
+) {
   return {
     shouldManageSession: () => true,
     backgroundJobBoard: board,
-    pendingCallTracker: createPendingCallTracker(),
+    pendingCallTracker,
     taskContextTracker: { pendingManagedTaskIds: new Set<string>() },
     hostFlavor: 'v2',
     recoverRetainedSession: createSessionRecovery({
@@ -464,37 +471,128 @@ describe('v2 native resume through the setup bridge', () => {
     expect(missing.list(PARENT)).toEqual([]);
 
     const wrong = new BackgroundJobBoard();
-    await expect(
-      createToolExecuteBridges(
-        (hookInput, output) =>
-          handleToolExecuteBefore(
-            hookInput,
-            output,
-            deps(
-              wrong,
-              host({
-                get: () => ({
-                  id: CHILD,
-                  parentID: 'ses_other',
-                  agent: 'fixer',
-                }),
+    const wrongParentEvent = {
+      tool: 'subagent',
+      sessionID: PARENT,
+      id: 'call_5',
+      input: {
+        agent: 'fixer',
+        sessionID: CHILD,
+        prompt: 'next',
+        description: 'next',
+      },
+    };
+    await createToolExecuteBridges(
+      (hookInput, output) =>
+        handleToolExecuteBefore(
+          hookInput,
+          output,
+          deps(
+            wrong,
+            host({
+              get: () => ({
+                id: CHILD,
+                parentID: 'ses_other',
+                agent: 'fixer',
               }),
-            ),
+            }),
           ),
-        undefined,
-      ).beforeBridge({
-        tool: 'subagent',
-        sessionID: PARENT,
-        id: 'call_5',
-        input: {
-          agent: 'fixer',
-          sessionID: CHILD,
-          prompt: 'next',
-          description: 'next',
-        },
-      }),
-    ).rejects.toThrow(/cannot resolve this sessionID/);
+        ),
+      undefined,
+    ).beforeBridge(wrongParentEvent);
+    // Native v2 `subagent` owns the parent-ownership refusal. The bridge
+    // leaves the call intact and registers no board row.
+    expect(wrongParentEvent.input.sessionID).toBe(CHILD);
     expect(wrong.get(CHILD)).toBeUndefined();
+  });
+
+  test('a malformed ses id is left to native subagent, not alias history', async () => {
+    const board = new BackgroundJobBoard();
+    const tracker = createPendingCallTracker();
+    const malformed = {
+      tool: 'subagent',
+      sessionID: PARENT,
+      id: 'call_malformed',
+      input: {
+        agent: 'fixer',
+        sessionID: 'ses',
+        prompt: 'next',
+        description: 'next',
+      },
+    };
+    await createToolExecuteBridges(
+      (hookInput, output) =>
+        handleToolExecuteBefore(
+          hookInput,
+          output,
+          deps(board, host(), tracker),
+        ),
+      undefined,
+    ).beforeBridge(malformed);
+    expect(malformed.input.sessionID).toBe('ses');
+    // The pending is delegated without a lease or admission ticket: native
+    // owns the session-id decision, and the existing no-lease guard prevents
+    // the executor wrapper/after-hook from registering a phantom row.
+    const pending = tracker.peekByCallId('call_malformed', PARENT);
+    expect(pending?.resumedTaskId).toBe('ses');
+    expect(pending?.relaunchLease).toBeUndefined();
+    expect(pending?.concurrencyTicket).toBeUndefined();
+    expect(board.list(PARENT)).toEqual([]);
+    await handleToolExecuteAfter(
+      { tool: 'task', sessionID: PARENT, callID: 'call_malformed' },
+      { output: 'Subagent session not found: ses' },
+      {
+        ...deps(board, host(), tracker),
+        terminalGate: {
+          reconcile: async () => undefined,
+        } as never,
+      },
+    );
+    expect(tracker.peekByCallId('call_malformed', PARENT)).toBeUndefined();
+  });
+
+  test('a ses-prefixed custom agent alias still composes with the handler', async () => {
+    const board = new BackgroundJobBoard();
+    const tracker = createPendingCallTracker();
+    board.registerLaunch({
+      taskID: CHILD,
+      parentSessionID: PARENT,
+      agent: 'ses-agent',
+    });
+    const running = board.get(CHILD);
+    if (!running) throw new Error('expected a registered alias');
+    expect(running.alias).toBe('ses-1');
+    const input = host();
+    const authority = createAliasAuthority({
+      input: input as never,
+      board,
+      hostFlavor: 'v2',
+    });
+    const event = {
+      tool: 'subagent',
+      sessionID: PARENT,
+      id: 'call_custom_alias',
+      input: {
+        agent: 'ses-agent',
+        sessionID: 'ses-1',
+        prompt: 'next',
+        description: 'next',
+      },
+    };
+    await createToolExecuteBridges(
+      (hookInput, output) =>
+        handleToolExecuteBefore(hookInput, output, {
+          ...deps(board, input, tracker),
+          resolveCanonicalTaskRef: authority.resolveCanonical,
+        }),
+      undefined,
+    ).beforeBridge(event);
+    // The authority resolves the numbered alias to its real id; the handler
+    // must not treat `ses-1` as a broken session id.
+    expect(event.input.sessionID).toBe(CHILD);
+    expect(
+      tracker.peekByCallId('call_custom_alias', PARENT)?.resumedTaskId,
+    ).toBe(CHILD);
   });
 
   test('an untracked incomplete session is adopted instead of refused', async () => {
