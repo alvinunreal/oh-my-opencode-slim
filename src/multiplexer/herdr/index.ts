@@ -113,7 +113,7 @@ export interface HerdrMultiplexerOptions {
   /**
    * Best-effort journal for unverified desktop spawns (cross-restart
    * recovery). Enabled by default in desktop mode with a stable per-parent
-   * path under /tmp/opencode; pass `null` to disable or a string to override.
+   * path under the OS temp directory; pass `null` to disable or a string to override.
    * Fail-soft: journal errors never block or kill terminals.
    */
   recoveryJournalPath?: string | null;
