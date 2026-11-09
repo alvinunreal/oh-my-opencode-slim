@@ -250,6 +250,158 @@ afterEach(() => {
 
 describe('startup subagent recovery', () => {
   test.each([
+    ['failed', 'error'],
+    ['interrupted', 'cancelled'],
+    ['succeeded', 'completed'],
+  ] as const)(
+    'timestamp-attributed %s host outcome does not occupy startup capacity',
+    async (outcome, expected) => {
+      await seedPersistence(memoryStorage(), [persistedChild(RUNNING)]);
+      const board = new BackgroundJobBoard();
+      const concurrency = new BackgroundTaskConcurrency({
+        defaultConcurrency: 1,
+        providerConcurrency: {},
+        modelConcurrency: {},
+      });
+      const transcript = runningChildTranscript(12);
+      if (outcome === 'succeeded') {
+        transcript.data.push({
+          info: { id: 'a', role: 'assistant', time: { created: 13 } },
+          parts: [{ type: 'text', text: 'answer' }],
+        });
+      }
+      await recoverSubagentSessionsAtStartup({
+        input: input({
+          sessions: [
+            { id: RUNNING, parentID: PARENT, outcome, time: { idle: 14 } },
+          ],
+          parent: parentTranscript([]),
+          children: { [RUNNING]: transcript },
+        }),
+        backgroundJobBoard: board,
+        backgroundTaskConcurrency: concurrency,
+        hostFlavor: 'v2',
+        shouldManageSession: () => true,
+      });
+
+      expect(board.get(RUNNING)?.state).toBe(expected);
+      expect(concurrency.snapshot()).toEqual({ active: 0, queued: 0 });
+      const ticket = concurrency.acquire({});
+      await ticket.ready;
+      ticket.release();
+      concurrency.dispose();
+    },
+  );
+
+  test.each([
+    ['stale', { outcome: 'failed', time: { idle: 11 } }],
+    ['partial', { outcome: 'failed' }],
+    ['running', {}],
+  ])('startup %s evidence keeps running capacity', async (_name, evidence) => {
+    await seedPersistence(memoryStorage(), [persistedChild(RUNNING)]);
+    const board = new BackgroundJobBoard();
+    const concurrency = new BackgroundTaskConcurrency({
+      defaultConcurrency: 1,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    await recoverSubagentSessionsAtStartup({
+      input: input({
+        sessions: [{ id: RUNNING, parentID: PARENT, ...evidence }],
+        parent: parentTranscript([]),
+        children: { [RUNNING]: runningChildTranscript(12) },
+      }),
+      backgroundJobBoard: board,
+      backgroundTaskConcurrency: concurrency,
+      hostFlavor: 'v2',
+      shouldManageSession: () => true,
+    });
+    expect(board.get(RUNNING)?.state).toBe('running');
+    const ticket = concurrency.acquire({});
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 1 });
+    concurrency.releaseTask(RUNNING);
+    await ticket.ready;
+    ticket.release();
+    concurrency.dispose();
+  });
+
+  test('reads timestamped host outcome when listing omits idle time', async () => {
+    await seedPersistence(memoryStorage(), [persistedChild(RUNNING)]);
+    const board = new BackgroundJobBoard();
+    const scanInput = input({
+      sessions: [{ id: RUNNING, parentID: PARENT, outcome: 'failed' }],
+      parent: parentTranscript([]),
+      children: { [RUNNING]: runningChildTranscript(12) },
+    });
+    (scanInput.client as ReturnType<typeof client>).session.get = mock(
+      async ({ path }: { path: { id: string } }) => ({
+        data: {
+          id: path.id,
+          parentID: PARENT,
+          outcome: 'failed',
+          time: { idle: 14 },
+        },
+      }),
+    );
+    const concurrency = new BackgroundTaskConcurrency({
+      defaultConcurrency: 1,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    await recoverSubagentSessionsAtStartup({
+      input: scanInput,
+      backgroundJobBoard: board,
+      backgroundTaskConcurrency: concurrency,
+      hostFlavor: 'v2',
+      shouldManageSession: () => true,
+    });
+    expect(board.get(RUNNING)?.state).toBe('error');
+    expect(concurrency.snapshot()).toEqual({ active: 0, queued: 0 });
+    concurrency.dispose();
+  });
+
+  test.each(['newer assistant', 'textless success'] as const)(
+    'startup %s does not settle from host idle',
+    async (scenario) => {
+      await seedPersistence(memoryStorage(), [persistedChild(RUNNING)]);
+      const board = new BackgroundJobBoard();
+      const transcript = runningChildTranscript(12);
+      if (scenario === 'newer assistant') {
+        transcript.data.push({
+          info: { id: 'a', role: 'assistant', time: { created: 15 } },
+          parts: [{ type: 'text', text: 'new activity' }],
+        });
+      }
+      const concurrency = new BackgroundTaskConcurrency({
+        defaultConcurrency: 1,
+        providerConcurrency: {},
+        modelConcurrency: {},
+      });
+      await recoverSubagentSessionsAtStartup({
+        input: input({
+          sessions: [
+            {
+              id: RUNNING,
+              parentID: PARENT,
+              outcome: scenario === 'newer assistant' ? 'failed' : 'succeeded',
+              time: { idle: 14 },
+            },
+          ],
+          parent: parentTranscript([]),
+          children: { [RUNNING]: transcript },
+        }),
+        backgroundJobBoard: board,
+        backgroundTaskConcurrency: concurrency,
+        hostFlavor: 'v2',
+        shouldManageSession: () => true,
+      });
+      expect(board.get(RUNNING)?.state).toBe('running');
+      expect(concurrency.snapshot()).toEqual({ active: 1, queued: 0 });
+      concurrency.dispose();
+    },
+  );
+
+  test.each([
     ['empty', false],
     ['running', true],
   ] as const)(
@@ -482,7 +634,9 @@ describe('startup subagent recovery', () => {
         void recoverSubagentSessionsAtStartup(options);
         await clock.tick();
         await clock.advance(20);
-        expect(get).toHaveBeenCalledTimes(1);
+        expect(
+          get.mock.calls.filter(([args]) => args.path.id === RUNNING),
+        ).toHaveLength(1);
         expect(wake).toHaveBeenCalledTimes(1);
       }
     },

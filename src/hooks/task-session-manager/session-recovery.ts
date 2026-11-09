@@ -4,7 +4,7 @@
  * Reads the host session, verifies parent and agent, classifies only the
  * latest delivered round, then imports a terminal cache row. On v2 the host
  * outcome/idle owns terminality and transcript text is bound to that idle;
- * the startup recovery path below keeps its transcript-idle classifier.
+ * startup recovery also accepts timestamp-attributed host terminal evidence.
  * It does not scan at startup, send a prompt, or keep a recovery claim.
  */
 import type { PluginInput } from '@opencode-ai/plugin';
@@ -574,6 +574,7 @@ interface StartupSessionRow {
   parentID?: string;
   agent?: string;
   outcome?: string;
+  hostInfo?: Record<string, unknown>;
 }
 
 interface StartupCandidate {
@@ -581,6 +582,7 @@ interface StartupCandidate {
   parentID?: string;
   agent?: string;
   outcome?: string;
+  hostInfo?: Record<string, unknown>;
   persisted?: PersistedBackgroundChild;
 }
 
@@ -685,6 +687,7 @@ export async function recoverSubagentSessionsAtStartup(
       parentID: row.parentID,
       ...(row.agent ? { agent: row.agent } : {}),
       ...(row.outcome ? { outcome: row.outcome } : {}),
+      ...(row.hostInfo ? { hostInfo: row.hostInfo } : {}),
     });
   }
   for (const [taskID, child] of persisted) {
@@ -695,6 +698,7 @@ export async function recoverSubagentSessionsAtStartup(
       parentID: current?.parentID ?? child.parentSessionID,
       ...(current?.agent ? { agent: current.agent } : {}),
       ...(current?.outcome ? { outcome: current.outcome } : {}),
+      ...(current?.hostInfo ? { hostInfo: current.hostInfo } : {}),
       persisted: child,
     });
   }
@@ -736,8 +740,18 @@ export async function recoverSubagentSessionsAtStartup(
     const epoch = ledger.deletionEpochs.get(taskID);
     let parentSessionID = candidate.parentID;
     let hostOutcome = candidate.outcome;
-    let hasV2Lifecycle = hostOutcome !== undefined;
-    if (!parentSessionID || hostOutcome === undefined) {
+    let hostInfo = candidate.hostInfo;
+    const listedTime = isRecord(hostInfo?.time) ? hostInfo.time : undefined;
+    let hasV2Lifecycle =
+      hostOutcome !== undefined ||
+      listedTime?.busy !== undefined ||
+      listedTime?.idle !== undefined;
+    if (
+      !parentSessionID ||
+      hostOutcome === undefined ||
+      (options.hostFlavor === 'v2' &&
+        hostRoundStateOf(hostInfo).kind === 'unknown')
+    ) {
       const response = await raceEvidenceDeadline(
         readHostSessionInfo(options.input, {
           taskID,
@@ -758,6 +772,7 @@ export async function recoverSubagentSessionsAtStartup(
         if (parentSessionID && hosted.parentID !== parentSessionID) continue;
         parentSessionID ??= hosted.parentID;
         hostOutcome ??= hosted.outcome;
+        hostInfo = hosted.hostInfo;
         const hostTime = isRecord(hosted.hostInfo.time)
           ? hosted.hostInfo.time
           : undefined;
@@ -810,6 +825,7 @@ export async function recoverSubagentSessionsAtStartup(
       taskID,
       hostOutcome,
       hasV2Lifecycle,
+      hostInfo,
     );
     if (state.kind === 'unknown') continue;
     // A run can already have relaunched before this scan starts, while the
@@ -1101,6 +1117,7 @@ async function classifyStartupChild(
   taskID: string,
   outcome: string | undefined,
   hasV2Lifecycle: boolean,
+  hostInfo: Record<string, unknown> | undefined,
 ): Promise<StartupChildState> {
   const terminalFromOutcome = startupTerminalState(outcome);
   let round: ReturnType<typeof classifyCurrentDeliveredRound> | undefined;
@@ -1119,6 +1136,21 @@ async function classifyStartupChild(
       options.hostFlavor === 'v2'
         ? classifyV2HistoricalRound(transcript, hasV2Lifecycle)
         : classifyCurrentDeliveredRound(transcript);
+    if (options.hostFlavor === 'v2' && round.verdict === 'incomplete') {
+      const hostState = attributeHostRoundToTranscript(
+        hostRoundStateOf(hostInfo),
+        transcript,
+      );
+      const latestInputAt = latestInputAtOf(transcript);
+      if (hostRoundVerdict(hostState, latestInputAt) === 'terminal') {
+        const hostRound = composeHostRound(hostState, latestInputAt);
+        const text = terminalTextOf(transcript);
+        if (hostRound.verdict !== 'completed' || text) {
+          if (text) hostRound.text = text;
+          round = hostRound;
+        }
+      }
+    }
   } catch {
     return { kind: 'unknown' };
   }
@@ -1152,9 +1184,8 @@ async function classifyStartupChild(
       };
     }
     if (round.verdict === 'incomplete') {
-      // Session-level outcomes can outlive the round they describe. They
-      // cannot override positive evidence of an unfinished latest input (or
-      // a succeeded round whose answer is not readable yet).
+      // An outcome without an attributable boundary cannot settle this input,
+      // nor can a succeeded round whose answer is not readable yet.
       return {
         kind: 'running',
         ...(round.startedAt !== undefined
@@ -1233,6 +1264,7 @@ async function listStartupSessions(
           ...(stringField(row.outcome)
             ? { outcome: stringField(row.outcome) }
             : {}),
+          hostInfo: row,
         },
       ];
     });
