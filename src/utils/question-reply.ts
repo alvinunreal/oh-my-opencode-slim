@@ -9,7 +9,10 @@ export function errorText(error: unknown): string {
 }
 
 /** Fail when an SDK reply reports an error rather than throwing. */
-export function assertHostReplyResult(result: unknown, operation: string): void {
+export function assertHostReplyResult(
+  result: unknown,
+  operation: string,
+): void {
   if (typeof result !== 'object' || result === null) return;
   const record = result as {
     error?: unknown;
@@ -31,12 +34,14 @@ export function assertHostReplyResult(result: unknown, operation: string): void 
 /** Fold v1 question selections into a v2 form reply using the host field keys. */
 export function toFormAnswer(
   answers: string[][],
-  questions: Array<{
-    key?: string;
-    multiple?: boolean;
-    header?: string;
-    question?: string;
-  }> | undefined,
+  questions:
+    | Array<{
+        key?: string;
+        multiple?: boolean;
+        header?: string;
+        question?: string;
+      }>
+    | undefined,
 ): Record<string, string | number | boolean | string[]> {
   const answer: Record<string, string | number | boolean | string[]> = {};
   answers.forEach((selections, index) => {

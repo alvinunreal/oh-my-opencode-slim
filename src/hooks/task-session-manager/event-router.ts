@@ -1043,8 +1043,7 @@ export function promoteChildInputWaits(
   },
 ): void {
   const job = deps.backgroundJobBoard.get(taskID);
-  if (job?.state !== 'running' || !job.background || job.provisional)
-    return;
+  if (job?.state !== 'running' || !job.background || job.provisional) return;
   const pending = deps.pendingChildAsks.get(taskID);
   deps.pendingChildAsks.delete(taskID);
   for (const ask of pending?.values() ?? []) {
