@@ -26,8 +26,10 @@ multiplexer-specific command translation.
   - `ZellijMultiplexer`: `new-pane --tab-id <parent tab> --direction <dir>`,
     always same-tab (no dedicated agents tab), `--session` from
     `ZELLIJ_SESSION_NAME`
-  - `HerdrMultiplexer`: `pane split --direction`, `pane rename` (label),
-    `pane run`, `HERDR_PANE_ID` required (no `--current` fallback)
+  - `HerdrMultiplexer`: Herdr Desktop uses `hc run --parent HC_TERMINAL_ID`
+    and closes owned children with `hc kill` or finished records with `hc rm`;
+    legacy Herdr uses `pane split`, `pane rename`, `pane run` and requires
+    `HERDR_PANE_ID`
   - `KittyMultiplexer`: `kitten @` CLI, parent-window anchoring from
     `KITTY_WINDOW_ID`, `--next-to=id:<parent>`, layout via
     `goto-layout --match=window_id:<id>`
@@ -221,7 +223,7 @@ has no cwd flag (the split inherits the anchor's working directory).
 
 - **Auto / admission order**: cmux-tui (`CMUX_TUI_SOCKET` or legacy
   `CMUX_MUX_SOCKET`) → tmux (`TMUX_PANE`) → Zellij (`ZELLIJ_PANE_ID`) → Herdr
-  (`HERDR_PANE_ID`) → kitty (`KITTY_WINDOW_ID`) → WezTerm (`WEZTERM_PANE`,
+  Desktop (`HC_TERMINAL_ID`) or legacy Herdr (`HERDR_PANE_ID`) → kitty (`KITTY_WINDOW_ID`) → WezTerm (`WEZTERM_PANE`,
   so tmux/Zellij nested inside WezTerm win) → Orca (`ORCA_TERMINAL_HANDLE`,
   last).
 - **Explicit adapter**: only enabled when it matches the detected adapter;
@@ -255,6 +257,18 @@ has no cwd flag (the split inherits the anchor's working directory).
 
 ### Herdr Implementation
 
+- Herdr Desktop reads the exact parent from `HC_TERMINAL_ID`, verifies that
+  its core labels contain `herdr.space` and `herdr.tab`, then starts the
+  attached viewer with `hc run --parent --no-notify`, copies the Herdr
+  placement labels, and waits for Herdr Desktop to show its pane in that tab.
+  It polls at the app's 500 ms event cadence, at most three times. Close
+  re-reads terminal metadata before `hc kill` or, for a finished record,
+  `hc rm`; sweep verifies the parent and metadata.
+  Viewer commands use `buildViewCommand`; `viewerNeedsPaneCwd` pins the cwd
+  for v2 mini and avoids its invalid positional directory.
+  Windows and remote v2 viewers fail closed
+  because this CLI path needs POSIX `env` and remote credential injection.
+  Desktop does not apply configured layout, size panes, or rebalance them.
 - Detection `HERDR_PANE_ID` (required; no `--current` fallback).
 - `pane split --direction`, `pane rename` (label) for FR-8 metadata,
   `pane run` for the attach command; spawns are serialized to protect the
