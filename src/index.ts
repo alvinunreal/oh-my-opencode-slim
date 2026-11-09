@@ -400,6 +400,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   /** Managed lifecycle gate; survives init for the v2 extension hooks below. */
   let lifecycleEnabled = false;
   let instanceDisposed = false;
+  let questionTimeoutHook:
+    | ReturnType<
+        typeof import('./hooks/question-timeout')['createQuestionTimeoutHook']
+      >
+    | undefined;
   let companionStartupAbort: AbortController | undefined;
   const marketplaceLeaseAbort = new AbortController();
   // v1 task() has no model override. Prompts claim these bounded intentions
@@ -916,6 +921,17 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       );
     }
     config = cloneConfigValue(startupConfigSnapshot.config);
+    if (hostFlavor !== 'v2' && (config.questionTimeoutMs ?? 0) > 0) {
+      const { createQuestionTimeoutHook } = await import(
+        './hooks/question-timeout'
+      );
+      questionTimeoutHook = createQuestionTimeoutHook({
+        ctx,
+        timeoutMs: config.questionTimeoutMs,
+        hostFlavor,
+        isDisposed: () => instanceDisposed,
+      });
+    }
     // Seed the per-directory runtime registry with the raw plugin file
     // config. The runtime preset reapplication below mutates `config` for
     // legacy consumers; RuntimeConfig keeps the pre-mutation snapshot and
@@ -2162,6 +2178,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       );
     }
   } catch (err) {
+    questionTimeoutHook?.dispose();
     terminalGate?.dispose();
     backgroundJobSupervisor?.dispose();
     admissionRuntimeLease?.release();
@@ -3277,6 +3294,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       withTuiSnapshotBatch(async () => {
         if (input.event.type === 'server.instance.disposed') {
           instanceDisposed = true;
+          questionTimeoutHook?.dispose();
           companionStartupAbort?.abort();
           marketplaceLeaseAbort.abort();
           terminalGate?.dispose();
@@ -3295,6 +3313,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           await observeForeignTaskEvent(input);
           return;
         }
+        questionTimeoutHook?.event(
+          input.event as Parameters<
+            NonNullable<typeof questionTimeoutHook>['event']
+          >[0],
+        );
 
         const event = input.event as {
           type: string;
@@ -3682,6 +3705,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     dispose: async () => {
       eventDirectoryScope?.release();
+      questionTimeoutHook?.dispose();
       // Synchronous: v2 setup calls this directly and does not emit the
       // public server.instance.disposed event first.
       instanceDisposed = true;
