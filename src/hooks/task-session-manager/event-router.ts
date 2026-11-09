@@ -56,7 +56,7 @@ export function observePendingChildAsks(
   const listener = () => {
     for (const [taskID, asks] of pending) {
       const job = board.get(taskID);
-      if (!job || job.state !== 'running') {
+      if (job?.state !== 'running') {
         pending.delete(taskID);
         continue;
       }
