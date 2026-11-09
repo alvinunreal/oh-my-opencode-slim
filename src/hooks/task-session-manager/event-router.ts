@@ -915,8 +915,7 @@ export async function handleEvent(
  * already ended. When the asking session is a RUNNING board-tracked
  * BACKGROUND child, record the ask in the child-input-wait sidecar
  * (idempotent per request id) and notify so the parent can be woken with
- * the ask content. Replies/rejections clear the entry. Foreground children
- * (background !== true), unknown sessions, and id-less asks are ignored.
+ * the ask content. Replies/rejections clear the entry.
  */
 export function routeChildInputWait(
   input: ChildAsk,
