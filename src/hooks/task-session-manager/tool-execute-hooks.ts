@@ -981,6 +981,7 @@ export async function handleToolExecuteAfter(
         deps,
       );
       if (!record) return;
+      deps.onLaunchConfirmed?.(record.taskID);
       deps.bindConcurrencyTicket?.(record.taskID, pending);
       deps.clearRehydrateTombstone?.(status.taskID);
       normalizeLateCancelledTaskOutput(
@@ -1089,6 +1090,7 @@ export async function handleToolExecuteAfter(
           },
     );
     if (promoted && !promoted.provisional) {
+      deps.onLaunchConfirmed?.(promoted.taskID);
       deps.bindConcurrencyTicket?.(promoted.taskID, pending);
       if (exactCallConfirmed) {
         deps.backgroundJobSupervisor?.onLaunch(promoted);
