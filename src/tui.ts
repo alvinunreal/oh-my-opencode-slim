@@ -2267,6 +2267,13 @@ function createSidebarRuntime(
     presetName,
   } = configStateOfGates(gatesRead.gates);
   adapter.onMultiplexerConfig?.(multiplexerType, gatesRead.paneConfig);
+  // The `/preset` command gate is config state like the rows above: the
+  // sidebar re-reads project config while idle, so a change to
+  // `disabled_commands` must repaint the row instead of leaving the old
+  // clickable control in place.
+  let presetEnabled = isCommandEnabled('preset', {
+    disabledCommands: gatesRead.gates.disabledCommands,
+  });
   let configRenderPending = false;
   const applyConfigState = (fresh = false): boolean => {
     const read = readTuiGates(configDirectory, adapter.hostFlavor, fresh);
@@ -2289,18 +2296,25 @@ function createSidebarRuntime(
       },
       configStateOfGates(read.gates),
     );
+    const nextPresetEnabled = next.configInvalid
+      ? presetEnabled
+      : isCommandEnabled('preset', {
+          disabledCommands: read.gates.disabledCommands,
+        });
     const changed =
       next.configInvalid !== configInvalid ||
       next.compactSidebar !== compactSidebar ||
       next.showHiddenAgents !== showHiddenAgents ||
       next.multiplexerType !== multiplexerType ||
-      next.presetName !== presetName;
+      next.presetName !== presetName ||
+      nextPresetEnabled !== presetEnabled;
     if (changed) {
       configInvalid = next.configInvalid;
       compactSidebar = next.compactSidebar;
       showHiddenAgents = next.showHiddenAgents;
       multiplexerType = next.multiplexerType;
       presetName = next.presetName;
+      presetEnabled = nextPresetEnabled;
       configRenderPending = true;
       adapter.onMultiplexerConfig?.(multiplexerType, gatesRead.paneConfig);
     }
@@ -2333,12 +2347,24 @@ function createSidebarRuntime(
       multiplexerType,
       presetName,
     } = configStateOfGates(gatesRead.gates));
+    presetEnabled = isCommandEnabled('preset', {
+      disabledCommands: gatesRead.gates.disabledCommands,
+    });
     configRenderPending = true;
     adapter.onMultiplexerConfig?.(multiplexerType, gatesRead.paneConfig);
     // Never carry one project's last-good config state into another.
     bindConfigListener();
     return true;
   };
+  // A disabled `preset` command keeps the row as information only: the
+  // runtime owns this gate because it re-reads project config (both on a
+  // directory switch and while idle), unlike a value captured during setup.
+  // The session binding is dropped with the action so a gate change cannot
+  // leave a stale team name on an informational row.
+  const gatedPresetRow = (
+    row: SidebarPresetRow | undefined,
+  ): SidebarPresetRow | undefined =>
+    row && !presetEnabled ? { name: row.name } : row;
   const refreshSidebar = async () => {
     if (disposed) return;
     if (!sidebarEnabled) return;
@@ -2384,7 +2410,7 @@ function createSidebarRuntime(
     if (modelNamesCache.names !== namesBefore) {
       setModelNames(modelNamesCache.names);
     }
-    if (adapter.readSessionPreset && currentSession) {
+    if (adapter.readSessionPreset && currentSession && presetEnabled) {
       let state: SessionPresetState | undefined;
       try {
         state = await adapter.readSessionPreset(
@@ -2529,10 +2555,12 @@ function createSidebarRuntime(
             animationNow,
             visible,
             interaction,
-            adapter.getPresetRow?.(
-              configDirectory,
-              presetName,
-              sessionOverride,
+            gatedPresetRow(
+              adapter.getPresetRow?.(
+                configDirectory,
+                presetName,
+                sessionOverride,
+              ),
             ),
             modelNames(),
             adapter.resolveSessionTitle,
@@ -2576,6 +2604,10 @@ async function setup(
     log('[tui] tui disabled by config (tui: false); registering nothing');
     return;
   }
+  // The sidebar preset entry follows `disabled_commands` exactly like the
+  // `/preset` keymap command and the session-preset RPC: a disabled command
+  // opens no picker and reads no binding. The row itself stays visible as an
+  // informational line, matching a host without the dialog capability.
   const presetManagerCtx = (directory: string): V2TuiContext => {
     const augmented = Object.create(ctx as object) as V2TuiContext;
     augmented.onConfigChanged = () =>
@@ -2752,6 +2784,8 @@ async function setup(
         readSessionPreset(ctx, sessionID, directory),
       getPresetRow: (directory, presetName, sessionPreset) => {
         const name = presetName ?? '(none)';
+        // `disabled_commands` is applied by the sidebar runtime, which
+        // re-reads it per project; only the host capability is static here.
         if (!canOpenPresetManagerV2(ctx)) return { name, sessionPreset };
         return {
           name,
