@@ -13,7 +13,6 @@ export function createQuestionTimeoutHook(options: {
   ctx: PluginInput;
   timeoutMs?: number;
   hostFlavor?: string;
-  isDisposed?: () => boolean;
   timers?: TimerSeamOptions;
 }) {
   const timeoutMs = options.timeoutMs ?? 0;
@@ -23,7 +22,6 @@ export function createQuestionTimeoutHook(options: {
     ...options.timers,
     log,
     reply: async (requestID, _sessionID, count) => {
-      if (options.isDisposed?.()) return;
       const text = autoAnswerText(timeoutMs);
       const answers = Array.from({ length: count }, () => [text]);
       const client = getClient(options.ctx) as unknown as Parameters<
@@ -81,8 +79,6 @@ export function createQuestionTimeoutHook(options: {
     } else if (event.type === 'session.deleted') {
       const sessionID = props?.info?.id ?? props?.sessionID;
       if (sessionID) core.sessionGone(sessionID);
-    } else if (event.type === 'server.instance.disposed') {
-      core.dispose();
     }
   }
   return { event, dispose: core.dispose };

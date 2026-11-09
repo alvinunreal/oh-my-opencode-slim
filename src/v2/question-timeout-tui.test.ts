@@ -73,9 +73,11 @@ test('v2 replies using exact field keys and multiselect arrays', async () => {
 });
 
 test('v2 leaves unrelated, global and closed forms unanswered', async () => {
-  // Mutation: remove a form eligibility guard.
+  // Mutation: remove the metadata kind, global session, or custom field guard.
   const h = setup();
-  h.emit('form.created', { form: { ...form, metadata: undefined } });
+  h.emit('form.created', {
+    form: { ...form, metadata: { kind: 'websearch.provider' } },
+  });
   h.emit('form.created', {
     form: { ...form, id: 'frm_2', sessionID: 'global' },
   });

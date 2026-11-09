@@ -22,7 +22,7 @@ test('replies once at the deadline with the configured minutes', async () => {
 });
 
 test('settlement cancels the timer', async () => {
-  // Mutation: omit clearTimeout or map deletion.
+  // Mutation: omit clearTimeout or keep the settled request ID in the map.
   const timers = createTimerHarness();
   const reply = mock(async () => {});
   const core = createQuestionTimeout({ timeoutMs: 60_000, reply, ...timers });
@@ -31,6 +31,9 @@ test('settlement cancels the timer', async () => {
   await timers.advance(60_000);
   expect(reply).not.toHaveBeenCalled();
   expect(timers.pending()).toBe(0);
+  core.asked('q1', 's1', 'replacement');
+  await timers.advance(60_000);
+  expect(reply).toHaveBeenCalledTimes(1);
 });
 
 test('duplicate asks do not reset the deadline or send twice', async () => {
@@ -75,8 +78,20 @@ test('disposal cancels every timer', async () => {
   expect(timers.pending()).toBe(0);
 });
 
+test('questions asked after disposal do not arm a timer', async () => {
+  // Mutation: remove the disposed guard in asked.
+  const timers = createTimerHarness();
+  const reply = mock(async () => {});
+  const core = createQuestionTimeout({ timeoutMs: 60_000, reply, ...timers });
+  core.dispose();
+  core.asked('q1', 's1', 'a');
+  expect(timers.pending()).toBe(0);
+  await timers.advance(60_000);
+  expect(reply).not.toHaveBeenCalled();
+});
+
 test('a failed reply is benign and never retried', async () => {
-  // Mutation: rethrow or rearm after reply failure.
+  // Mutation: rearm after reply failure.
   const timers = createTimerHarness();
   const reply = mock(async () => {
     throw new Error('already settled');
@@ -90,9 +105,26 @@ test('a failed reply is benign and never retried', async () => {
   });
   core.asked('q1', 's1', 'a');
   await timers.advance(60_000);
-  core.settled('q1');
   await timers.advance(60_000);
   expect(reply).toHaveBeenCalledTimes(1);
   expect(log).toHaveBeenCalled();
   expect(timers.pending()).toBe(0);
+});
+
+test('a successful reply is logged as sent rather than answered', async () => {
+  // Mutation: report the request as auto-answered when the host may have ignored it.
+  const timers = createTimerHarness();
+  const log = mock(() => {});
+  const core = createQuestionTimeout({
+    timeoutMs: 60_000,
+    reply: async () => {},
+    log,
+    ...timers,
+  });
+  core.asked('q1', 's1', 'a');
+  await timers.advance(60_000);
+  expect(log).toHaveBeenCalledWith('[question-timeout] reply sent', {
+    requestID: 'q1',
+    sessionID: 's1',
+  });
 });

@@ -47,7 +47,7 @@ from `index.ts`) that returns the hook points OpenCode invokes.
 | Prompt transforms | `createPhaseReminderHook`, `createCouncilInjectHook`, `createChatHeadersHook`, task-session-manager delivery observation, `processImageAttachments` | `experimental.chat.messages.transform`, `chat.headers` |
 | Tool interception | `createApplyPatchHook` (tool), `createSearchPathGuardHook`, `createCouncilSeatHook`, task-session-manager | `tool.execute.before` / `tool.execute.after` |
 | Error recovery | `createJsonErrorRecoveryHook`, `createAutoUpdateCheckerHook` | message transform, tool-execute after |
-| Lifecycle/event | task-session-manager, `createCacheMonitorHook`, `createOrchestratorWakeScheduler` | `event` |
+| Lifecycle/event | task-session-manager, `createCacheMonitorHook`, `createOrchestratorWakeScheduler`, `createQuestionTimeoutHook` (v1) | `event` |
 | Runtime commands | `createDeepworkCommandHook`, `createReflectCommandHook` | `command.execute.before` |
 | Model fallback | `ForegroundFallbackManager` | event-driven (message.updated/session.error/session.status) |
 
@@ -110,6 +110,9 @@ with one equivalent pass; the cache-safety harness mirrors this wiring.
   (observation only, fails open).
 - `createOrchestratorWakeScheduler` tracks continuous parent idle and triggers
   periodic wake prompts (see its sub-map).
+- `question-timeout/` owns the shared request timer and the opt-in v1 hook.
+  It skips questions that disallow custom answers; replies, rejections, session
+  deletion and plugin disposal clear timers. A turn abort alone does not.
 
 ## Integration
 

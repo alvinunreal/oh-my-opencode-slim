@@ -929,7 +929,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         ctx,
         timeoutMs: config.questionTimeoutMs,
         hostFlavor,
-        isDisposed: () => instanceDisposed,
       });
     }
     // Seed the per-directory runtime registry with the raw plugin file

@@ -46,7 +46,7 @@ export function createQuestionTimeout<Payload>(
       void (async () => {
         try {
           await options.reply(requestID, sessionID, payload);
-          options.log?.('[question-timeout] auto-answered', {
+          options.log?.('[question-timeout] reply sent', {
             requestID,
             sessionID,
           });
