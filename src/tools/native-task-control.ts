@@ -36,6 +36,7 @@ const STATUS_OUTPUT_MAX_BYTES = 4_096;
 const PENDING_PERMISSION_LIMIT = 5;
 const PENDING_PERMISSION_RESOURCE_LIMIT = 3;
 const PENDING_PERMISSION_TEXT_LIMIT = 120;
+const PENDING_PERMISSION_OUTPUT_MAX_BYTES = 1_024;
 const PERMISSION_TIMEOUT_MS = 10_000;
 
 type PermissionDecision = 'once' | 'always' | 'reject';
@@ -344,9 +345,37 @@ function utf8Prefix(value: string, maxBytes: number): string {
   return output;
 }
 
-/** Keep the complete status response bounded, including pending permissions. */
-function boundedStatusOutput(lines: string[], resultText?: string): string {
-  const prefix = lines.join('\n');
+/** Keep permission details bounded while preserving their truncation marker. */
+function boundedPermissionLines(lines: string[], maxBytes: number): string[] {
+  if (utf8Bytes(lines.join('\n')) <= maxBytes) return lines;
+  const marker = '- … permission details truncated';
+  if (maxBytes < utf8Bytes(marker)) return [];
+  const output: string[] = [];
+  let used = 0;
+  for (const line of lines) {
+    const separatorBytes = output.length > 0 ? utf8Bytes('\n') : 0;
+    const nextBytes = separatorBytes + utf8Bytes(line);
+    const markerBytes = utf8Bytes('\n') + utf8Bytes(marker);
+    if (used + nextBytes + markerBytes > maxBytes) break;
+    output.push(line);
+    used += nextBytes;
+  }
+  return [...output, marker];
+}
+
+/** Keep child state ahead of bounded permission details and result text. */
+function boundedStatusOutput(
+  stateLines: string[],
+  permissionLines: string[],
+  resultText?: string,
+): string {
+  const state = stateLines.join('\n');
+  const permissionBudget = Math.min(
+    PENDING_PERMISSION_OUTPUT_MAX_BYTES,
+    Math.max(0, STATUS_OUTPUT_MAX_BYTES - utf8Bytes(state) - utf8Bytes('\n\n')),
+  );
+  const permissions = boundedPermissionLines(permissionLines, permissionBudget);
+  const prefix = [state, ...permissions].filter(Boolean).join('\n');
   if (!resultText) return utf8Prefix(prefix, STATUS_OUTPUT_MAX_BYTES);
   const separator = '\n\n';
   const available =
@@ -391,10 +420,12 @@ export function createNativeTaskControlTools(
       if (options.isDisposed?.()) {
         throw new Error('Plugin instance disposed');
       }
-      const lines = [`Session ${child.identity}`];
-      if (child.agent) lines.push(`agent: ${child.agent}`);
-      lines.push(
-        ...(await pendingPermissionLines(options, child.identity, hostFlavor)),
+      const stateLines = [`Session ${child.identity}`];
+      if (child.agent) stateLines.push(`agent: ${child.agent}`);
+      const permissionLines = await pendingPermissionLines(
+        options,
+        child.identity,
+        hostFlavor,
       );
       if (options.isDisposed?.()) {
         throw new Error('Plugin instance disposed');
@@ -403,45 +434,45 @@ export function createNativeTaskControlTools(
       // v1's live status map is real evidence of execution; v2 has no
       // equivalent (the shim omits `status`), so this probe is v1 only.
       if (evidence.live.status === 'busy' || evidence.live.status === 'retry') {
-        lines.push(`state: ${evidence.live.status} (live)`);
-        lines.push(
+        stateLines.push(`state: ${evidence.live.status} (live)`);
+        stateLines.push(
           '',
           'It is still working; the host notifies on completion. Do not poll.',
         );
       } else if (evidence.round) {
         const round = evidence.round;
         if (round.verdict === 'completed') {
-          lines.push('state: completed');
+          stateLines.push('state: completed');
           if (round.text?.trim()) resultText = round.text;
         } else if (round.verdict === 'error') {
-          lines.push('state: error');
+          stateLines.push('state: error');
           if (round.text) resultText = round.text;
         } else if (round.verdict === 'interrupted') {
-          lines.push('state: stopped (interrupted)');
+          stateLines.push('state: stopped (interrupted)');
         } else {
           // incomplete / retry / absent / unreadable: history proves no
           // terminal round, not that the child is working. The host may also
           // have overwritten a textless success to `incomplete`.
-          lines.push(
+          stateLines.push(
             `state: unknown (incomplete: no terminal evidence in the current round${'reason' in round && round.reason ? `: ${round.reason}` : ''})`,
           );
-          lines.push(
+          stateLines.push(
             '',
             'The host notifies on completion; re-check later if no notice arrives.',
           );
         }
       } else {
-        lines.push(
+        stateLines.push(
           `state: unknown (incomplete: transcript could not be read${
             evidence.roundError ? `: ${String(evidence.roundError)}` : ''
           })`,
         );
-        lines.push(
+        stateLines.push(
           '',
           'The host notifies on completion; re-check later if no notice arrives.',
         );
       }
-      return boundedStatusOutput(lines, resultText);
+      return boundedStatusOutput(stateLines, permissionLines, resultText);
     },
   });
 

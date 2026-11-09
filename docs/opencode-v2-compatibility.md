@@ -807,7 +807,10 @@ re-delivery by the plugin. See [Tools](tools.md#background-task-control).
 ### Pending permissions
 
 `task_status` may list pending permission requests for the exact owned child
-through the host `permission.list`/`get` surface. `task_reply` revalidates
+through the host `permission.list`/`get` surface. State is reported before
+permission details; when long paths exhaust the separate permission-details
+budget, the list ends with `permission details truncated` instead of hiding
+the child state. `task_reply` revalidates
 request ownership with the host before replying; a request answered elsewhere
 reports that it is no longer pending. The plugin keeps no request mirror, wait
 map, or lease, and OpenCode cancels pending permissions on reload.

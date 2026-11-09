@@ -425,6 +425,37 @@ describe('native task controls', () => {
     expect(output).toContain('state: unknown (incomplete');
   });
 
+  test('task_status preserves child state before long permission details', async () => {
+    const longResource = '界'.repeat(120);
+    const list = mock(async () =>
+      Array.from({ length: 5 }, (_, index) => ({
+        ...permissionRequest('ses_child', `per_${index}`),
+        resources: [longResource, longResource, longResource],
+      })),
+    );
+    const { tools } = createTools(
+      { outcome: 'succeeded', assistantText: 'completed result' },
+      {
+        permission: permissionBridge({
+          list: list as unknown as NativePermissionBridge['list'],
+        }),
+      },
+    );
+    const output = await tools.task_status.execute(
+      { sessionID: 'ses_child' },
+      v2Context,
+    );
+    expect(output).toContain('state: completed');
+    expect(output.indexOf('state: completed')).toBeLessThan(
+      output.indexOf('pending permissions: 5'),
+    );
+    expect(output).toContain('permission details truncated');
+    expect(output).toContain('completed result');
+    expect(new TextEncoder().encode(output).byteLength).toBeLessThanOrEqual(
+      4096,
+    );
+  });
+
   test('task_status keeps the whole result inside the UTF-8 byte cap', async () => {
     const long = 'x'.repeat(20_000);
     const { tools } = createTools(
