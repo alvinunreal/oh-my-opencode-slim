@@ -3949,6 +3949,8 @@ describe('HerdrMultiplexer', () => {
     await expect(herdr.listPanesWithTitles()).rejects.toThrow(
       'cannot start herdr',
     );
+  });
+
   test('legacy sweep throws on a failed pane list and keeps stderr', async () => {
     crossSpawnMock.mockImplementation((command: string[]) => {
       if (command[0] === 'which') {
