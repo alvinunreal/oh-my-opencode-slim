@@ -944,8 +944,6 @@ export const WebfetchConfigSchema = z
   })
   .strict();
 
-export type WebfetchConfig = z.infer<typeof WebfetchConfigSchema>;
-
 const AcpAgentPermissionModeSchema = z.enum(['ask', 'allow', 'reject']);
 
 export const MAX_ACP_TIMEOUT_MS = 2_147_483_647;
