@@ -16,7 +16,6 @@ type SessionInfo = {
   id?: string;
   parentID?: string;
   agent: string;
-  outcome?: string;
 };
 
 function unwrapSessionInfo(response: unknown, label: string): SessionInfo {
@@ -51,12 +50,11 @@ function assertPromptAccepted(response: unknown): void {
 
 export function createTaskReportTool(options: {
   input: PluginInput;
-  hasInputWait?: (sessionID: string) => boolean;
   isDisposed?: () => boolean;
 }): Record<'task_report', ToolDefinition> {
   const task_report = tool({
     description:
-      'Send a bounded progress update or blocker to this running subagent’s owning parent. Use for material milestones, consequential findings, blockers, or decisions the parent must make. The host queues it without starting an overlapping parent turn; the result confirms queue acceptance, not that the parent has processed it.',
+      'Queue a bounded progress update or blocker for the calling child’s verified parent. The host does not wake the parent; processing is not confirmed.',
     args: {
       kind: z
         .enum(['progress', 'escalation'])
@@ -105,12 +103,10 @@ export function createTaskReportTool(options: {
       }
       if (options.isDisposed?.()) throw new Error('Plugin is disposing');
 
-      // A pending user/question wait or an interrupted parent must remain
-      // dormant. Store the update in the host inbox without resuming it; the
-      // next real user action can consume it.
-      const dormant =
-        parent.outcome === 'interrupted' ||
-        options.hasInputWait?.(parent.id) === true;
+      // Queue-only delivery: the update lands in the host inbox and never
+      // resumes the parent. The parent's own state (busy, idle, interrupted,
+      // pending asks) is never inspected — the host owns when the parent
+      // consumes the update.
       const updateID = randomUUID();
       const message = [
         `<subagent-update id="${updateID}" kind="${args.kind}">`,
@@ -130,18 +126,13 @@ export function createTaskReportTool(options: {
       const response = await promptAsync({
         path: { id: parent.id },
         query: { directory: options.input.directory },
-        // Keep the report in the same FIFO steer lane as the host's native
-        // completion notice. A paused parent receives it only after a real
-        // user action because resume stays false.
-        delivery: 'steer',
-        resume: !dormant,
+        delivery: 'queue',
+        resume: false,
         body,
       });
       assertPromptAccepted(response);
 
-      return dormant
-        ? `Update ${updateID} queued for the parent without waking it. The host accepted the update; processing is not confirmed.`
-        : `Update ${updateID} queued for the parent. The host accepted the update; processing is not confirmed.`;
+      return `Update ${updateID} queued for the parent without waking it. The host accepted the update; processing is not confirmed.`;
     },
   });
 

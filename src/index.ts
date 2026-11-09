@@ -88,13 +88,8 @@ import type { createSearchPathGuardHook } from './hooks/search-path-guard';
 import { SessionLifecycle } from './hooks/session-lifecycle';
 import type { createTaskSessionManagerHook } from './hooks/task-session-manager';
 import type { ChildInputWaitRecord } from './hooks/task-session-manager/child-input-wait';
-import {
-  clearChildInputWaitsForSession,
-  formatChildInputWaitDetail,
-  getChildInputWait,
-  listChildInputWaits,
-} from './hooks/task-session-manager/child-input-wait';
 import type { createRevivedRunTracker } from './hooks/task-session-manager/revived-run-tracker';
+import { convertSameProviderBackgroundTask } from './hooks/task-session-manager/same-provider-policy';
 import type {
   createAliasAuthority,
   createSessionRecovery,
@@ -692,6 +687,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let getRevivedContextFiles = (_taskID: string): ContextFile[] => [];
   let pruneRevivedContext = () => {};
   let taskActivityTracker: TaskActivityTracker | undefined;
+  let childInputWaitModule:
+    | typeof import('./hooks/task-session-manager/child-input-wait')
+    | undefined;
   let interviewSubmitService:
     | ReturnType<typeof createInterviewManager>['service']
     | undefined;
@@ -736,7 +734,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         taskID: record.taskID,
         kind: wait.kind,
         requestID: wait.requestID,
-        detail: formatChildInputWaitDetail(wait, hostFlavor),
+        detail: childInputWaitModule!.formatChildInputWaitDetail(
+          wait,
+          hostFlavor,
+        ),
       }),
       `${record.taskID}:${wait.requestID}`,
       wait.kind,
@@ -971,8 +972,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // recovery, alias authority, task-session-manager hook, wake scheduler,
     // or task_* / wait_for_user tool factories. Native OpenCode task/subagent
     // delegation stays completely untouched; `native` mode separately
-    // registers the two thin host-read controls below.
-    lifecycleEnabled = runtime.backgroundJobsEnabled;
+    // registers the thin host-read controls below.
+    lifecycleEnabled = hostFlavor !== 'v2' && runtime.backgroundJobsEnabled;
     // One predicate set for every per-tool gate in this init (managed
     // lifecycle, native controls, AST-grep, final registration filter).
     const disabledToolNames = new Set(runtime.disabledTools);
@@ -1031,8 +1032,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       compactingSessionIds.delete(sessionID);
     });
 
-    if (runtime.backgroundJobsEnabled) {
-      // Managed-lifecycle implementations load here — concurrently and
+    if (lifecycleEnabled) {
+      // V1 managed-lifecycle implementations load here — concurrently and
       // BEFORE any board resource, timer, or admission lease exists — so
       // `off`/`native` never evaluate the board, supervisor,
       // task-session-manager, terminal gate, or persistence modules. A load
@@ -1065,15 +1066,19 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         import('./hooks/task-session-manager'),
         import('./admission-runtime'),
         import('./utils/background-job-persistence'),
-        // The v1 wake scheduler is managed-only and never exists on v2
-        // hosts; do not even resolve its module there.
-        hostFlavor === 'v2'
-          ? Promise.resolve(undefined)
-          : import('./hooks/orchestrator-wake'),
+        import('./hooks/orchestrator-wake'),
         runtime.sidebarEnabled
           ? import('./utils/tui-reusable-projection')
           : Promise.resolve(undefined),
       ]);
+      childInputWaitModule = await import(
+        './hooks/task-session-manager/child-input-wait'
+      );
+      const {
+        clearChildInputWaitsForSession,
+        getChildInputWait,
+        listChildInputWaits,
+      } = childInputWaitModule;
       backgroundJobBoard = new BackgroundJobBoard({
         maxReusablePerAgent: runtime.backgroundJobs.maxSessionsPerAgent,
         deferNumberedAliases: true,
@@ -1370,9 +1375,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       getRevivedContextFiles = taskSessionManagerHook!.contextFilesForTask;
       pruneRevivedContext = taskSessionManagerHook!.pruneTaskContext;
 
-      // v2 has no wake scheduler; later child executions without a host job
-      // are delivered by the tracker. Child asks remain available via task_status.
-      if (hostFlavor !== 'v2' && orchestratorWakeModule) {
+      if (orchestratorWakeModule) {
         orchestratorWakeScheduler =
           orchestratorWakeModule.createOrchestratorWakeScheduler(ctx, {
             // v1 honors the configured key.
@@ -1475,7 +1478,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         },
       })
         .then((recovered) => {
-          if (hostFlavor !== 'v2' && recovered.length > 0)
+          if (recovered.length > 0)
             taskSessionManagerHook?.scheduleRuntimeStatusReconciliation();
         })
         .catch((error: unknown) => {
@@ -1492,10 +1495,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // task_status must not show it after a restart. Runs on both hosts —
         // the ask store has no run-generation fence of its own.
         clearChildInputWaitsForSession(record.taskID);
-        // v2 has no wake scheduler: native delivery owns
-        // stops for job-backed runs, and the plugin does not push one for
-        // a non-job run (council 2026-10-23).
-        if (hostFlavor === 'v2') return;
         if (record.state !== 'stopped' || !record.terminalUnreconciled) return;
         // Symmetric tracker suppression (M4): when the revived-run tracker
         // owns this generation's delivery it sends the stop as its own
@@ -1556,10 +1555,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // double-notify.
       backgroundJobBoard!.addTerminalOutcomeListener((record) => {
         revivedRunTracker!.onTerminal(record);
-        if (hostFlavor === 'v2') {
-          revivedRunTracker!.deliverContinuation(record);
-          return;
-        }
         // Unattributed child sessions are not delegated work, just as in
         // stopped-job recovery; their owner controls parent notifications.
         if (record.provisional === true) return;
@@ -1957,17 +1952,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           'managed lifecycle enabled without recovery/alias state',
         );
       }
-      // Managed control tools load here — each implementation only when it
-      // is actually registrable. v2 registers neither task_revive,
-      // wait_for_user, nor task_message, so those modules never load there;
-      // task_report is the inverse (v2 only); a disabled_tools entry skips
-      // its own implementation as well.
-      const v1Flavor = hostFlavor !== 'v2';
+      // V1 managed tools load only when registered.
       const wants = (name: string) => !disabledToolNames.has(name);
       const [
         cancelToolModule,
         replyToolModule,
-        taskReportToolModule,
         statusToolModule,
         reviveToolModule,
         waitForUserToolModule,
@@ -1975,19 +1964,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ] = await Promise.all([
         wants('task_cancel') ? import('./tools/cancel-task') : undefined,
         wants('task_reply') ? import('./tools/task-reply') : undefined,
-        hostFlavor === 'v2' && wants('task_report')
-          ? import('./tools/task-report')
-          : undefined,
         wants('task_status') ? import('./tools/task-status') : undefined,
-        v1Flavor && wants('task_revive')
-          ? import('./tools/task-revive')
-          : undefined,
-        v1Flavor && wants('wait_for_user')
-          ? import('./tools/wait-for-user')
-          : undefined,
-        v1Flavor && wants('task_message')
-          ? import('./tools/task-message')
-          : undefined,
+        wants('task_revive') ? import('./tools/task-revive') : undefined,
+        wants('wait_for_user') ? import('./tools/wait-for-user') : undefined,
+        wants('task_message') ? import('./tools/task-message') : undefined,
       ]);
       const taskCancelTools = cancelToolModule
         ? cancelToolModule.createCancelTaskTool({
@@ -2008,14 +1988,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             isDisposed: () => instanceDisposed,
           })
         : {};
-      const taskReportTools = taskReportToolModule
-        ? taskReportToolModule.createTaskReportTool({
-            input: ctx,
-            hasInputWait: (sessionID) =>
-              taskSessionManagerHook?.hasInputWait(sessionID) ?? false,
-            isDisposed: () => instanceDisposed,
-          })
-        : {};
       const taskStatusTools = statusToolModule
         ? statusToolModule.createTaskStatusTool({
             input: ctx,
@@ -2029,9 +2001,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       const taskReviveTools = reviveToolModule
         ? reviveToolModule.createTaskReviveTool({
             isFallbackPending,
-            ...(hostFlavor !== 'v2' && {
-              registerIntent: registerV1DelegatedIntent,
-            }),
+            registerIntent: registerV1DelegatedIntent,
             terminalGate,
             input: ctx,
             backgroundJobBoard: backgroundJobBoard!,
@@ -2072,39 +2042,48 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         : {};
       lifecycleTaskTools = {
         ...taskCancelTools,
-        ...taskReportTools,
         ...taskMessageTools,
         ...taskReplyTools,
         // Keep master's v1 registration order (cache-stable tool list).
-        ...(hostFlavor !== 'v2' ? taskReviveTools : {}),
+        ...taskReviveTools,
         ...taskStatusTools,
-        ...(hostFlavor !== 'v2' ? waitForUserTools : {}),
+        ...waitForUserTools,
       };
     }
-    // `backgroundJobs.mode: "native"`: the managed lifecycle is off, but the
-    // native delegation surface has no model-facing status/cancel, so a lost
-    // completion notice and a stuck child have no agent-side channel. Two
-    // thin host-read controls cover exactly that; `off` registers none, and
-    // managed mode keeps its own board-backed tools. If disabled_tools removes
-    // both controls, skip the implementation import entirely; a single
-    // remaining control still loads the shared module and filters the other.
-    const nativeTaskTools =
-      runtime.backgroundJobsMode === 'native' &&
-      !(
-        disabledToolNames.has('task_cancel') &&
-        disabledToolNames.has('task_status')
-      )
-        ? Object.fromEntries(
+    const nativeControlNames = [
+      'task_cancel',
+      'task_status',
+      ...(hostFlavor === 'v2' ? ['task_reply'] : []),
+    ];
+    const nativeTaskTools: Record<string, ToolDefinition> = {};
+    if (runtime.backgroundJobsMode === 'native') {
+      if (nativeControlNames.some((name) => !disabledToolNames.has(name))) {
+        const { createNativeTaskControlTools } = await import(
+          './tools/native-task-control'
+        );
+        Object.assign(
+          nativeTaskTools,
+          Object.fromEntries(
             Object.entries(
-              (
-                await import('./tools/native-task-control')
-              ).createNativeTaskControlTools({
+              createNativeTaskControlTools({
                 input: ctx,
                 isDisposed: () => instanceDisposed,
               }),
             ).filter(([name]) => !disabledToolNames.has(name)),
-          )
-        : {};
+          ),
+        );
+      }
+      if (hostFlavor === 'v2' && !disabledToolNames.has('task_report')) {
+        const { createTaskReportTool } = await import('./tools/task-report');
+        Object.assign(
+          nativeTaskTools,
+          createTaskReportTool({
+            input: ctx,
+            isDisposed: () => instanceDisposed,
+          }),
+        );
+      }
+    }
 
     // v2 hosts skip wait_for_user: the native `question` tool covers the
     // blocking boundary there. task_revive remains a v1-only recovery tool;
@@ -2973,11 +2952,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     return entry?.variant ? `${entry.id}#${entry.variant}` : entry?.id;
   };
 
-  // A child can move to another live location while its task board stays
-  // with the delegating parent. Only task observation crosses that boundary;
-  // the destination retains ownership of permissions, profiles and tools.
-  // Without the managed lifecycle there is no board to track, so the
-  // handler stays inert.
+  // V1 managed children can move to another live location while their board
+  // stays with the parent. Only task observation crosses that boundary; this
+  // handler stays inert on V2, which never constructs the managed lifecycle.
   const observeForeignTaskEvent: NonNullable<Hooks['event']> = async (
     input,
   ) => {
@@ -2999,7 +2976,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // inference/runtime profiles for new child sessions + the sidebar.
     // Unknown to v1 hosts, consumed by src/v2/setup.ts.
     'v2.refreshProfiles': refreshProfilesFromDisk,
-    'v2.foreignTaskEvent': observeForeignTaskEvent,
     'v2.resolveDelegatedModel': resolveV2DelegatedModel,
     'v2.setSessionTeamResolver': (resolver: typeof sessionTeamFor) => {
       sessionTeamFor = resolver;
@@ -3007,26 +2983,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // Per-instance background-default flip handle: v2 setup arms it after
     // its description rewrite verifies and disarms it with its teardown.
     'v2.backgroundDefaultFlip': backgroundDefaultFlip,
-    'v2.refusalOutcome':
-      foregroundFallback?.refusedChildOutcome.bind(foregroundFallback),
     'v2.pendingRefusalOutcome':
       foregroundFallback?.pendingRefusalOutcome.bind(foregroundFallback),
-    'v2.backgroundGeneration': lifecycleEnabled
-      ? (
-          parentID: string,
-          childID: string,
-          runningOnly = false,
-          refusalTime?: number,
-        ) => {
-          const record = backgroundJobBoard?.get(childID);
-          return record?.background &&
-            record.parentSessionID === parentID &&
-            (!runningOnly || record.state === 'running') &&
-            (refusalTime === undefined || refusalTime >= record.runStartedAt)
-            ? record.generation
-            : undefined;
-        }
-      : undefined,
     'v2.session.retry': fallbackRetryHookEnabled
       ? (input: never, switchModel: never) =>
           foregroundFallback?.handleV2Retry(input, switchModel)
@@ -3053,48 +3011,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     ) => {
       interviewSubmitService = service;
     },
-    // v2-only extension handle (consumed by src/v2/setup.ts's executor
-    // wrapper): register a delegated `subagent` launch from its STRUCTURED
-    // executor result, forwarding to the task-session-manager's shared fence
-    // pipeline (marks the pending handled-by-wrapper for the exact-once gate).
-    // No-op when the managed lifecycle is disabled (no fence pipeline).
-    'v2.registerDelegatedLaunchFromStructured': (
-      input: Parameters<
-        NonNullable<
-          NonNullable<
-            typeof taskSessionManagerHook
-          >['v2.registerDelegatedLaunchFromStructured']
-        >
-      >[0],
-    ) =>
-      taskSessionManagerHook?.['v2.registerDelegatedLaunchFromStructured'](
-        input,
-      ),
-    // v2-only extension handle (consumed by src/v2/setup.ts's prompt
-    // bridge): feed the prompt identity the host prepared for a session
-    // into the shared pending-call tracker. The awaited `session.prompt`
-    // hook carries the eventual inbox messageID and precedes every delayed
-    // chat.message / context forward, but it runs BEFORE the admission
-    // commits — so this is earliest capture, not proof of admission. Only
-    // the native outcome lane may stamp from it. No-op when the managed
-    // lifecycle is disabled (no lease).
-    'v2.notePromptAdmission': (sessionID: string, messageID: string) =>
-      admissionRuntimeLease?.pendingCallTracker.noteAdmission(
-        sessionID,
-        messageID,
-      ),
     'v2.noteExternalPromptIntent': (sessionID: string, messageID: string) =>
       foregroundFallback?.observeExternalPromptIntent(sessionID, messageID),
-    'v2.coverSteer': (
-      callID: string,
-      parentSessionID: string,
-      childSessionID: string,
-    ) =>
-      taskSessionManagerHook?.['v2.coverSteer'](
-        callID,
-        parentSessionID,
-        childSessionID,
-      ),
 
     agent: agents,
 
@@ -3288,8 +3206,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           return;
         }
 
-        // Directory-local handling stays scoped; moved children still reach
-        // their task owner. Unresolved events fall through (fail-open).
+        // Directory-local handling stays scoped; V1 managed children still
+        // reach their task owner after moving to another live location.
         eventDirectoryScope?.note(input.event);
         if (eventDirectoryScope?.isForeign(input.event)) {
           await observeForeignTaskEvent(input);
@@ -3745,6 +3663,29 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         input as never,
         output as never,
       );
+      if (
+        hostFlavor === 'v2' &&
+        runtime.backgroundJobsMode === 'native' &&
+        input.tool.toLowerCase() === 'task' &&
+        output.args !== null &&
+        typeof output.args === 'object' &&
+        !Array.isArray(output.args)
+      ) {
+        const args = output.args as Record<string, unknown>;
+        if (backgroundDefaultFlip.isArmed() && args.background === undefined) {
+          args.background = true;
+        }
+        if (typeof args.subagent_type === 'string') {
+          convertSameProviderBackgroundTask({
+            agentType: args.subagent_type,
+            parentSessionID: input.sessionID,
+            args,
+            policy: runtime.backgroundJobs.sameProviderPolicy,
+            getParentModel: liveSessionModel,
+            getChildModel: getModelForAgent,
+          });
+        }
+      }
       await taskSessionManagerHook?.['tool.execute.before'](
         input as never,
         output as never,
@@ -4458,18 +4399,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'v2.pendingRefusalOutcome':
       | ForegroundFallbackManager['pendingRefusalOutcome']
       | undefined;
-    'v2.refusalOutcome':
-      | ForegroundFallbackManager['refusedChildOutcome']
-      | undefined;
-    'v2.backgroundGeneration':
-      | ((
-          parentID: string,
-          childID: string,
-          runningOnly?: boolean,
-          refusalTime?: number,
-        ) => number | undefined)
-      | undefined;
-    'v2.foreignTaskEvent': typeof observeForeignTaskEvent;
     'v2.refreshProfiles': typeof refreshProfilesFromDisk;
     'v2.resolveDelegatedModel': typeof resolveV2DelegatedModel;
     'v2.setSessionTeamResolver': (resolver: typeof sessionTeamFor) => void;
@@ -4480,15 +4409,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       enabled?: boolean,
     ) => void;
     'v2.releaseSessionChains': (sessionID: string) => void;
-    'v2.registerDelegatedLaunchFromStructured': NonNullable<
-      NonNullable<
-        typeof taskSessionManagerHook
-      >['v2.registerDelegatedLaunchFromStructured']
-    >;
-    'v2.notePromptAdmission': (sessionID: string, messageID: string) => void;
-    'v2.coverSteer': NonNullable<
-      typeof taskSessionManagerHook
-    >['v2.coverSteer'];
     'v2.noteExternalPromptIntent'?: (
       sessionID: string,
       messageID: string,

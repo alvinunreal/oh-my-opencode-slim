@@ -99,32 +99,94 @@ describe('v2 client shim delegation', () => {
     ]);
   });
 
-  test('exposes pinned v2 permission.reply through the v1-shaped client when supported', async () => {
-    const calls: unknown[] = [];
+  test('forwards native flat permission calls and preserves host identity', async () => {
+    const calls: Array<[string, unknown]> = [];
+    const pending = {
+      id: 'per_1',
+      sessionID: 'ses_child1',
+      action: 'shell',
+      resources: ['git status'],
+    };
+    const permission = {
+      list: async function (args: { sessionID: string }) {
+        expect(this).toBe(permission);
+        calls.push(['list', args]);
+        return [pending];
+      },
+      get: async function (args: { sessionID: string; requestID: string }) {
+        expect(this).toBe(permission);
+        calls.push(['get', args]);
+        return pending;
+      },
+      reply: async function (args: {
+        sessionID: string;
+        requestID: string;
+        decision: 'once' | 'always' | 'reject';
+      }) {
+        expect(this).toBe(permission);
+        calls.push(['reply', args]);
+      },
+    };
+    const input = buildPluginInput(makeCtxWithPermission({ permission }));
+    const forwarded = (input.client as { permission: typeof permission })
+      .permission;
+    expect(await forwarded.list({ sessionID: 'ses_child1' })).toEqual([
+      pending,
+    ]);
+    expect(
+      await forwarded.get({ sessionID: 'ses_child1', requestID: 'per_1' }),
+    ).toBe(pending);
+    await forwarded.reply({
+      sessionID: 'ses_child1',
+      requestID: 'per_1',
+      decision: 'always',
+    });
+    expect(calls).toEqual([
+      ['list', { sessionID: 'ses_child1' }],
+      ['get', { sessionID: 'ses_child1', requestID: 'per_1' }],
+      [
+        'reply',
+        { sessionID: 'ses_child1', requestID: 'per_1', decision: 'always' },
+      ],
+    ]);
+  });
+
+  test('exposes only permission capabilities actually provided by the host', async () => {
+    expect(
+      (buildPluginInput(makeCtx()).client as { permission?: unknown })
+        .permission,
+    ).toBeUndefined();
+    expect(
+      (
+        buildPluginInput(
+          makeCtxWithPermission({ permission: { assert: async () => {} } }),
+        ).client as { permission?: unknown }
+      ).permission,
+    ).toBeUndefined();
+    const failure = new Error('Permission request not found');
     const input = buildPluginInput(
       makeCtxWithPermission({
         permission: {
-          reply: async (args) => {
-            calls.push(args);
-            return { data: true };
+          get: async () => {
+            throw failure;
           },
         },
       }),
     );
-
-    await (
+    const permission = (
       input.client as {
-        permission: { reply: (args: unknown) => Promise<unknown> };
+        permission: {
+          get: (args: unknown) => Promise<unknown>;
+          list?: unknown;
+          reply?: unknown;
+        };
       }
-    ).permission.reply({
-      path: { id: 'ses_child1' },
-      requestID: 'per_1',
-      reply: 'always',
-    });
-
-    expect(calls).toEqual([
-      { sessionID: 'ses_child1', requestID: 'per_1', decision: 'always' },
-    ]);
+    ).permission;
+    expect(permission.list).toBeUndefined();
+    expect(permission.reply).toBeUndefined();
+    await expect(
+      permission.get({ sessionID: 'ses_child1', requestID: 'missing' }),
+    ).rejects.toBe(failure);
   });
 
   test('does not invent unsupported v2 question/form reply domains', () => {

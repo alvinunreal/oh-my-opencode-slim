@@ -195,6 +195,14 @@ export interface V2PermissionRule {
   readonly resource: string;
   readonly effect: 'allow' | 'deny' | 'ask';
 }
+/** Pending native permission request fields consumed by the thin controls. */
+export interface V2PermissionRequest {
+  readonly id: string;
+  readonly sessionID: string;
+  readonly action: string;
+  readonly resources: readonly string[];
+  readonly message?: string;
+}
 /** v2 mcp transform draft (used after capability probing; RemoteConfig
  * shape see packages/schema/src/mcp.ts — no `enabled`, it uses
  * `disabled?: boolean`; the name is the map key, not in the config). */
@@ -393,6 +401,13 @@ export interface V2Context {
     ): AsyncIterable<Record<string, unknown>>;
   };
   permission?: {
+    list?(input: {
+      sessionID: string;
+    }): Promise<readonly V2PermissionRequest[]>;
+    get?(input: {
+      sessionID: string;
+      requestID: string;
+    }): Promise<V2PermissionRequest>;
     assert?(input: {
       sessionID: string;
       agent?: string;

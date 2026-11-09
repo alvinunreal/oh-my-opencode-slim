@@ -78,54 +78,52 @@ conservatively passes the path through. Disable with
 
 | Tool | Description |
 |------|-------------|
-| `task_status` | Check task status; `result: true` retrieves a completed result; `diagnostic: true` reads an unsuccessful child's partial excerpt |
-| `task_report` | In managed v2 mode, send a bounded progress update or blocker from a running subagent to its owning parent |
-| `task_message` | Queue a bounded instruction into a running child's context without starting a new run (v1 only; on v2 steer with `subagent(sessionID, prompt)`) |
-| `task_reply` | Answer a child's pending question or permission request by task ID/alias and request ID. On v2, question replies require `session.form.reply`; otherwise answer questions in the host UI |
-| `task_cancel` | Stop a generation while retaining its session |
-| `task_revive` | Resume a retained session with a new instruction (v1 only; on v2 continue with `subagent(sessionID, prompt)`) |
-| `wait_for_user` | Pause automatic orchestrator wake prompts until the next distinct external user message (v1 only; not registered on v2 — use the native `question` tool there) |
+| `task_status` | Read a child's state and latest result; on V1 managed also resolves aliases and `diagnostic: true` excerpts |
+| `task_report` | (V2 native) Send a bounded progress update or blocker from a running subagent to its owning parent; queue-only |
+| `task_message` | Queue a bounded instruction into a running child's context without starting a new run (V1 managed only; on V2 steer with `subagent(sessionID, prompt)`) |
+| `task_reply` | Answer a child's pending control request by exact session ID and request ID. On V2 it is a permission-only host bridge; answer questions in the host UI |
+| `task_cancel` | Ask the host to interrupt the child's active execution while retaining its session |
+| `task_revive` | Resume a retained session with a new instruction (V1 managed only; on V2 continue with `subagent(sessionID, prompt)`) |
+| `wait_for_user` | Pause automatic orchestrator wake prompts until the next distinct external user message (V1 managed only; not registered on V2 — use the native `question` tool there) |
 
-With `backgroundJobs.mode: "native"` the board-backed table above is replaced
-by two host-read controls of the same name. Both take an exact child session ID
-(the v2 `sessionID` parameter, the v1 `task_id`), verify `parentID`, and expose
-no aliases, history recovery, diagnostics, or board state. `mode: "off"`
-registers neither.
+`backgroundJobs.mode: "native"` is the V2 default. It leaves child execution,
+continuation, completion delivery, and restart recovery to the host and
+registers a thin control surface instead of the board-backed one:
+`task_status`, `task_cancel`, and `task_reply` on the parent, plus the
+child-only `task_report`. They take an exact child session ID (the V2
+`sessionID` parameter; V1 native uses `task_id`), verify `parentID` with a
+bounded host read, and expose no aliases, history reconstruction, adoption,
+diagnostics, or board state. `mode: "off"` registers no OMOS task tool at all.
 
-`task_status` reports what the host round and trailing transcript prove; on v2
-that evidence is reconstructed from history, so an unfinished round is
-`unconfirmed` rather than a live status claim. `task_cancel` sends the host's
-own atomic interrupt without a status pre-check: it is a no-op for an idle
-session, returns whether it actually interrupted anything, and leaves cleanup
-plus the terminal notification to the host. The session is never deleted and
-stays continuable.
+`task_status` reports what the host round and trailing transcript prove. On V2
+that evidence is reconstructed from the child transcript, so an unfinished round
+is `unconfirmed` rather than a live status claim. It also lists pending
+permission requests for that exact child, bounded, when the host exposes
+`permission.list`; a host without the capability reports `unavailable` instead
+of inventing an empty list. This is an on-demand pull after a missing notice,
+not a poll loop. `task_cancel` sends the host's own interrupt without a status
+pre-check: it is a no-op for an idle session, reports whether the host reported
+interruption, and leaves cleanup plus the terminal notification to the host. The
+session is never deleted and stays continuable.
 
-On v2, a child can use `task_report` for a material milestone, consequential
-finding, blocker, or decision request. The recipient is always read from the
-child session's host-owned `parentID`; callers cannot choose another session.
-Reports enter the host's serialized inbox and are attributed to the child. The
-tool confirms that the host accepted a report, not that the parent has read or
-acted on it. If the parent is waiting for input or its last run was interrupted,
-the report remains queued without waking it. The parent can reply by continuing
-the same child session with the native v2 `subagent(sessionID, prompt)` tool.
+On V2 native, a child can use `task_report` for a material milestone,
+consequential finding, blocker, or decision request. The recipient is always
+read from the child session's host-owned `parentID`; callers cannot choose
+another session. Reports enter the host's serialized inbox with
+`delivery: "queue"` and `resume: false`: the tool confirms that the host queued
+the report, not that the parent read it, started a turn, or woke. The parent can
+reply by continuing the same child session with the native V2
+`subagent(sessionID, prompt)` tool.
 
-The task controls use the task ID or its parent-scoped alias for the task being
-managed. `task_status` with an unknown or placeholder ID enumerates the
+On V1 managed, the task controls use the task ID or its parent-scoped alias for
+the task being managed. `task_status` with an unknown or placeholder ID enumerates the
 session's recent task handles, including recently finished sessions, so a
 handle lost to compaction is recoverable from the error itself. `task_cancel`
 stops the generation but retains its session; it does not roll back partial edits.
 After cancelling a write-capable task, inspect and reconcile file changes before
 launching replacement work.
 
-For a tracked v2 task whose live status is unavailable, `task_status` may show
-`last_host_outcome` and `last_host_idle_at` from an identity-checked host record.
-These describe a past execution. They do not prove the worker is currently idle,
-that its admission is released, or that its files are safe for another writer.
-The status remains `unconfirmed` until the existing terminal checks establish it.
-If the plugin is disposed during a result read, the read is refused without
-acknowledging the result; a fresh plugin instance can retrieve it later.
-
-`task_cancel` and `task_revive` admit managed parent sessions, including Build
+On V1 managed, `task_cancel` and `task_revive` admit managed parent sessions, including Build
 and custom primary agents that have delegated work. Host tool permissions still
 apply, and a parent can only control its own children. Switching primary agents
 does not transfer child ownership. Completed results are surfaced and
@@ -139,10 +137,6 @@ uncertainty and retains its cancellation lease: a late abort must not affect a
 reused session. There is no lease TTL; an abort that never settles keeps reuse
 blocked. Late settlement releases the token but does not resume verification or
 publish confirmed cancellation; recovery depends on subsequent observation.
-After abort settles, verification has its own time budget. The v2 session-info
-read uses only the remaining budget: timeout leaves the task uncertain and
-releases the lease without confirming cancellation or consuming late evidence.
-
 `task_message` (v1 only) does not interrupt the current generation. It retains
 its per-task message lease when the local timeout expires but the write
 transport is still pending. `noReply: true` prevents starting a turn, not
@@ -188,9 +182,8 @@ retained state has been verified safe. Acknowledgement controls parent and
 job-board consumption and reusable-pool display, not same-session revival.
 On v1 a confirmed parent fallback routes that child's next prompt, like a
 `task_id` resume; with explicit model inheritance it follows the parent's live
-model, whether selected by fallback or a manual change. V2 retains the session
-model. A failed send may leave the v1
-intention pending until claimed or evicted by the
+model, whether selected by fallback or a manual change. A failed send may leave
+the v1 intention pending until claimed or evicted by the
 bounded FIFO.
 For existing tracked sessions, baseline capture has a 5-second deadline: expiry fails without sending a prompt
 and releases the relaunch lease. The local admission wait has a 10-second deadline;
@@ -205,31 +198,6 @@ Observation does not reserve the generation: if another `task_revive` replaces i
 while the first caller awaits its probe, the first call rejects with
 `revive became stale`. This supersession rejection does not invalidate the newer
 launch; use `task_status` to inspect the current generation.
-
-V2 untracked adoption uses a different result boundary: it queues a caller-ID
-input after verifying parent ownership, agent evidence, and readable history,
-without requiring status/idle APIs. Host-proven aliases retain the upstream
-ambiguity and ownership checks. Recovery consults the session's host outcome:
-successful rounds require nonempty answer text; textless failed or interrupted
-rounds retain their proven error or stopped state. Host terminal outcomes must
-cover the latest delivered input and all subsequent assistant activity: an
-assistant created or completed after the host's `time.idle` keeps the round
-unconfirmed, while unreadable assistant timestamps fail closed. No transcript
-idle marker is required. Explicit queued continuation may still adopt a newer
-incomplete round without importing the older outcome or partial answer.
-Work without a terminal outcome (still running,
-or awaiting restart resume) is refused except for explicit queued
-continuation, and partial or unverifiable state fails closed.
-Startup tracking recovery remains separately run-fenced: a historical idle
-cannot settle a newer persisted execution, and queued adoption never serves
-as terminal evidence for the previous round.
-The new generation is registered before the write and is not replaced by late
-acknowledgement. Only that input's completed answer is delivered to the parent;
-old execution outcomes are ignored. Transport uncertainty retains exclusion and
-returns `admission_unknown`; an attributable answer can retire the lease even
-when acknowledgement was lost. Automatic session-wide timeout aborts are not
-armed for queued adoption. If the queued input disappears from context (for
-example through compaction) before it is observed, the result stays unconfirmed.
 
 Deletion wins over pending admission: deleting the child or its parent never
 recreates either record when acceptance arrives. If the original relaunch lease
@@ -248,28 +216,29 @@ ID excluded indefinitely: no automatic retry or recovery. Historical outcomes
 are not stop evidence; live quiescence does not guarantee queued prompts were
 purged, so future queued execution remains uncertain even after lease release.
 
-The delegation tool (`task()` on v1, `subagent()` on v2) refuses an explicit
-resume id (`task_id` on v1, `sessionID` on v2) it cannot resume instead of
-dropping it and spawning another session. On v1, an id the local board does
-not know is not a cue to omit `task_id` and start another session. Call
-`task_revive` with that same id directly on v1. On v2, a completed session
-continues with `subagent(sessionID, prompt)` even when it is not listed; an unknown
-id is read from the host and imported before that native call. Cancelled,
-errored, and stopped sessions resume the same way on v2 (the plugin retires
-`task_revive` there). A failed lookup keeps
-the id and does not start another child. It verifies the original host
-session and continues there. A `task_status` result read only retrieves a
-finished result and is not required before that continuation.
+The V1 delegation tool (`task()`) refuses an explicit `task_id` it cannot
+resume instead of dropping it and spawning another session. An id the local
+board does not know is not a cue to omit `task_id` and start another session;
+call `task_revive` with that same id directly. A failed lookup keeps the id and
+does not start another child; it verifies the original host session and
+continues there. A `task_status` result read only retrieves a finished result
+and is not required before that continuation.
 
-A successful native delegation result may end with a `slim-child-ref:v1`
-marker so a later restart can resolve the alias. The marker is trusted only
-on the parent's real native tool result, after the outer task closes — or,
-for a native background plaintext launch result with no closing tag, only
-when the marker is that output's final non-empty line —
-and only when it matches that result's session ID and original agent argument.
-A numbered alias is issued only to children of a parent created while the
-plugin instance runs (see [Background Orchestration](background-orchestration.md));
-any other new task is still created and is referred to by its exact session ID.
+On V2, `subagent()` is the host's native tool: an explicit `sessionID` is
+resolved by the host, and a rejected id comes back as a readable host refusal.
+The plugin does not import, alias, or adopt the session. A completed, errored,
+interrupted, or stopped session continues with `subagent(sessionID, prompt)`;
+`task_revive` is not registered on V2.
+
+On V1 managed, a successful native delegation result may end with a
+`slim-child-ref:v1` marker so a later restart can resolve the alias. The marker
+is trusted only on the parent's real native tool result, after the outer task
+closes — or, for a native background plaintext launch result with no closing
+tag, only when the marker is that output's final non-empty line — and only when
+it matches that result's session ID and original agent argument. A numbered
+alias is issued only to children of a parent created while the plugin instance
+runs (see [Background Orchestration](background-orchestration.md)); any other
+new task is still created and is referred to by its exact session ID.
 
 `task_status` reports `last_activity_source` alongside tracked activity time:
 `observed-activity` means a tracker event (completed assistant/step or host
@@ -290,10 +259,7 @@ The tool's rendered diagnostic response is capped at 6,144 UTF-8 bytes,
 including headers, errors, and truncation markers; plugin
 warnings may be appended separately. The fetch requests the newest 100 messages.
 Our own scanning is bounded to 40 trailing messages, 100 trailing parts per
-message, and 2,000 excerpt characters per message. On v2 the paged messages route
-honours the limit. Without that route the shim fetches full context, checks it
-for compaction, then selects the newest requested entries before conversion;
-dropped context or compaction is marked incomplete. A v1 host may ignore the
+message, and 2,000 excerpt characters per message. A v1 host may ignore the
 limit; the excerpt scan still stays bounded. Attribution outside the scan window
 is reported as uncertain or unavailable, not guessed. Truncation and unavailable
 evidence are explicit.
@@ -352,13 +318,14 @@ separate decision. Diagnostic reads do not reconcile or resume a child.
 The fixed next-step line reminds callers to treat the excerpt as non-final
 evidence and await or re-delegate, not mark the task accepted.
 
-`task_status`, `task_message`, `task_reply`, `task_cancel`,
+On V1 managed, `task_status`, `task_message`, `task_reply`, `task_cancel`,
 `task_revive`, and an explicit resume ID resolve a non-exact alias from the
-tracked job records first, else from the markers in one read of the parent's readable history,
-before reading or sending anything. On v1, the read covers the 1,000 most recent
-messages; a longer history counts as cut. Multiple saved targets, no marked
-target, or a cut or unreadable history produce no action: use the exact session
-ID. Exact IDs do not require alias-history scans.
+tracked job records first, else from the markers in one read of the parent's
+readable history, before reading or sending anything. The read covers the 1,000
+most recent messages; a longer history counts as cut. Multiple saved targets, no
+marked target, or a cut or unreadable history produce no action: use the exact
+session ID. Exact IDs do not require alias-history scans. On V2 native, every
+control takes the exact session ID; there are no aliases or history scans.
 
 On v1, `task_revive` retains the upstream exact-ID adoption path only when
 no child transcript is available; conflicting or unreadable evidence never
@@ -368,18 +335,15 @@ sending a prompt; its suppression tombstone is cleared, not its deletion
 epoch. A later attempt can continue that same child.
 
 Revive checks for an idle-verification mechanism before aborting an active child:
-the live status map on v1, or the host's idle wait on v2. Missing capability fails
-before abort, baseline capture, or prompt; retrying cannot supply that capability.
-The v2 wait has a 5-second local budget. Timeout, rejection, invalid completion,
-or completion processed after the deadline sends no prompt and releases the
-preparation lease. A late settlement does not resume the finished revive flow.
+the live status map on v1. Missing capability fails before abort, baseline
+capture, or prompt; retrying cannot supply that capability.
 Waiting is not an instantaneous snapshot: it may wait for a busy child to idle,
 and cannot prevent an independent resume after verification. The final board
 ownership/activity guard and queued delivery remain in force.
 
 An accepted revive can return `status: started` with `status_uncertain: true` and
 an observation diagnostic. A historical or unattributable `session.get` outcome
-is not a failure of the new generation, on either v1 or v2. Attribution uses the
+is not a failure of the new generation. Attribution uses the
 admission boundary (not its delayed ACK), the current observation attempt and
 the latest live activity. Uncertainty alone never becomes terminal on retry
 exhaustion; existing events/probes and independent valid evidence can resolve it,

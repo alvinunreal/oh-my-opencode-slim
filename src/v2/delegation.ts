@@ -1,7 +1,5 @@
-/** v2↔v1 delegation tool normalization. The v2 host's built-in `subagent`
- * tool corresponds to v1's `task`: the v2 setup tool-execute bridge
- * translates names/args so the whole v1 pipeline (task-session-manager,
- * job board, task_* tools) is reused with zero changes. */
+/** Normalize native v2 delegation for shared tool guards and inference policy.
+ * The host remains the sole owner of child jobs and completion delivery. */
 
 import { log } from '../utils/logger';
 import { type DelegationVocabulary, delegationVocabulary } from './adapters';
@@ -115,7 +113,7 @@ export const SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION = [
  * landed. One instance per plugin setup — the host loads one plugin per
  * project, so process-global state would let one location's teardown
  * disarm another's flip. The v1 factory creates it, threads the getter
- * into the task-session-manager deps, and hands the handle to v2 setup
+ * into the native tool-before policy, and hands the handle to v2 setup
  * through the hooks bag ('v2.backgroundDefaultFlip'). */
 export interface BackgroundDefaultFlipState {
   arm(): void;

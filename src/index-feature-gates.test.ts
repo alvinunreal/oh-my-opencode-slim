@@ -16,15 +16,23 @@ import {
   companionSessionIdForDirectory,
   stateFilePath,
 } from './companion/manager';
+import { UnsupportedHostConfigError } from './config/feature-gates';
 import * as autoUpdateFactories from './hooks/auto-update-checker';
 import * as foregroundFallbackFactories from './hooks/foreground-fallback';
+import * as taskSessionFactories from './hooks/task-session-manager';
 import * as handoffFactories from './hooks/task-session-manager/fallback-observation-transfer';
-import { OhMyOpenCodeLite as plugin } from './index';
+import * as revivedRunTrackerFactories from './hooks/task-session-manager/revived-run-tracker';
+import pluginModuleDefault, { OhMyOpenCodeLite as plugin } from './index';
 import * as interviewFactories from './interview';
 import * as interviewSubmitStateFactories from './tools/interview-submit-state';
 import * as nativeTaskControlFactories from './tools/native-task-control';
+import * as taskActivityFactories from './tools/task-activity';
+import * as taskReportFactories from './tools/task-report';
 import { getTuiStatePath, readTuiSnapshot } from './tui-state';
 import type { BackgroundJobRecord } from './utils/background-job-board';
+import * as boardFactories from './utils/background-job-board';
+import * as persistenceFactories from './utils/background-job-persistence';
+import * as supervisorFactories from './utils/background-job-supervisor';
 import * as gateFactories from './utils/background-job-terminal-gate';
 import { BackgroundTaskConcurrency } from './utils/background-task-concurrency';
 import * as jsdom from './utils/jsdom';
@@ -186,34 +194,288 @@ describe('plugin feature gates through exported hooks', () => {
     });
   }
 
+  test('v2 explicit managed mode rejects before managed factories load or run', async () => {
+    await configure({ backgroundJobs: { mode: 'managed' } });
+    const board = spyOn(boardFactories, 'BackgroundJobBoard');
+    const supervisor = spyOn(supervisorFactories, 'BackgroundJobSupervisor');
+    const terminalGate = spyOn(
+      gateFactories,
+      'createBackgroundJobTerminalGate',
+    );
+    const manager = spyOn(taskSessionFactories, 'createTaskSessionManagerHook');
+    const tracker = spyOn(
+      revivedRunTrackerFactories,
+      'createRevivedRunTracker',
+    );
+    try {
+      await expect(createHooks('v2')).rejects.toBeInstanceOf(
+        UnsupportedHostConfigError,
+      );
+      expect(board).not.toHaveBeenCalled();
+      expect(supervisor).not.toHaveBeenCalled();
+      expect(terminalGate).not.toHaveBeenCalled();
+      expect(manager).not.toHaveBeenCalled();
+      expect(tracker).not.toHaveBeenCalled();
+    } finally {
+      board.mockRestore();
+      supervisor.mockRestore();
+      terminalGate.mockRestore();
+      manager.mockRestore();
+      tracker.mockRestore();
+    }
+  });
+
+  test.each([{ mode: 'managed' }, { concurrency: { defaultConcurrency: 2 } }])(
+    'V1 dual entry keeps managed config %j out of the embedded V2 pass',
+    async (backgroundJobs) => {
+      await configure({ backgroundJobs });
+      const transform = mock(async () => ({ dispose() {} }));
+      const cleanup = await pluginModuleDefault.setup({
+        location: { directory: projectDir },
+        agent: { transform },
+      } as never);
+      try {
+        expect(transform).not.toHaveBeenCalled();
+        const hooks = await pluginModuleDefault.server({
+          client: createClient(),
+          directory: projectDir,
+          worktree: projectDir,
+          serverUrl: new URL('http://127.0.0.1:4096'),
+        } as never);
+        try {
+          expect(hooks.tool?.task_status).toBeDefined();
+          expect(hooks.tool?.task_reply).toBeDefined();
+          expect(hooks.tool?.task_revive).toBeDefined();
+          expect(hooks.tool?.wait_for_user).toBeDefined();
+        } finally {
+          await hooks.dispose?.();
+        }
+      } finally {
+        await cleanup();
+      }
+    },
+  );
+
+  test('v2 default mode is native, registers four tools, and constructs no managed owner', async () => {
+    await configure({});
+    const board = spyOn(boardFactories, 'BackgroundJobBoard');
+    const supervisor = spyOn(supervisorFactories, 'BackgroundJobSupervisor');
+    const terminalGate = spyOn(
+      gateFactories,
+      'createBackgroundJobTerminalGate',
+    );
+    const manager = spyOn(taskSessionFactories, 'createTaskSessionManagerHook');
+    const tracker = spyOn(
+      revivedRunTrackerFactories,
+      'createRevivedRunTracker',
+    );
+    const recordChild = spyOn(
+      persistenceFactories,
+      'recordPersistedBackgroundChild',
+    );
+    const markDelivered = spyOn(
+      persistenceFactories,
+      'markPersistedBackgroundChildDelivered',
+    );
+    const activity = spyOn(taskActivityFactories, 'TaskActivityTracker');
+    let hooks: PluginHooks | undefined;
+    try {
+      hooks = await createHooks('v2');
+      for (const name of [
+        'task_status',
+        'task_cancel',
+        'task_reply',
+        'task_report',
+      ]) {
+        expect(hooks.tool?.[name]).toBeDefined();
+      }
+      for (const name of ['task_revive', 'task_message', 'wait_for_user']) {
+        expect(hooks.tool?.[name]).toBeUndefined();
+      }
+      for (const name of [
+        'v2.backgroundGeneration',
+        'v2.foreignTaskEvent',
+        'v2.registerDelegatedLaunchFromStructured',
+        'v2.notePromptAdmission',
+        'v2.coverSteer',
+      ]) {
+        expect((hooks as Record<string, unknown>)[name]).toBeUndefined();
+      }
+      expect(board).not.toHaveBeenCalled();
+      expect(supervisor).not.toHaveBeenCalled();
+      expect(terminalGate).not.toHaveBeenCalled();
+      expect(manager).not.toHaveBeenCalled();
+      expect(tracker).not.toHaveBeenCalled();
+      expect(recordChild).not.toHaveBeenCalled();
+      expect(markDelivered).not.toHaveBeenCalled();
+      expect(activity).not.toHaveBeenCalled();
+    } finally {
+      await hooks?.dispose?.();
+      board.mockRestore();
+      supervisor.mockRestore();
+      terminalGate.mockRestore();
+      manager.mockRestore();
+      tracker.mockRestore();
+      recordChild.mockRestore();
+      markDelivered.mockRestore();
+      activity.mockRestore();
+    }
+  });
+
+  test('v2 native disabled task_reply and task_report skip their own factories', async () => {
+    await configure({
+      backgroundJobs: { mode: 'native' },
+      disabled_tools: ['task_reply', 'task_report', 'webfetch'],
+      marketplace: { enabled: false },
+      disabled_hooks: ['auto-update-checker', 'foreground-fallback'],
+      disabled_commands: ['deepwork', 'reflect'],
+    });
+    const nativeControl = spyOn(
+      nativeTaskControlFactories,
+      'createNativeTaskControlTools',
+    );
+    const report = spyOn(taskReportFactories, 'createTaskReportTool');
+    let hooks: PluginHooks | undefined;
+    try {
+      hooks = await createHooks('v2');
+      // The shared native factory remains necessary for status/cancel; the
+      // disabled permission reply is filtered from its returned tools.
+      expect(nativeControl).toHaveBeenCalledTimes(1);
+      expect(report).not.toHaveBeenCalled();
+      expect(hooks.tool?.task_cancel).toBeDefined();
+      expect(hooks.tool?.task_status).toBeDefined();
+      expect(hooks.tool?.task_reply).toBeUndefined();
+      expect(hooks.tool?.task_report).toBeUndefined();
+    } finally {
+      await hooks?.dispose?.();
+      nativeControl.mockRestore();
+      report.mockRestore();
+    }
+  });
+
+  test('v2 native applies the armed background default and same-provider policy', async () => {
+    await configure({
+      backgroundJobs: {
+        mode: 'native',
+        sameProviderPolicy: { 'lm-nexus': 'foreground' },
+      },
+    });
+    let hooks: PluginHooks | undefined;
+    try {
+      hooks = await createHooks('v2');
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'ses_policy',
+          agent: 'orchestrator',
+          model: { providerID: 'lm-nexus', modelID: 'parent-model' },
+        } as never,
+        {} as never,
+      );
+      const flip = hooks['v2.backgroundDefaultFlip'];
+      const call = {
+        tool: 'task',
+        sessionID: 'ses_policy',
+        callID: 'call_policy',
+      };
+      const args: Record<string, unknown> = {
+        subagent_type: 'oracle',
+        description: 'policy',
+        prompt: 'work',
+      };
+      flip.arm();
+      await hooks['tool.execute.before']?.(call as never, { args } as never);
+      // Omitted -> armed default true -> same-provider foreground conversion.
+      expect(args.background).toBe(false);
+
+      const explicitFalse: Record<string, unknown> = {
+        subagent_type: 'oracle',
+        description: 'policy',
+        prompt: 'work',
+        background: false,
+      };
+      await hooks['tool.execute.before']?.(
+        { ...call, callID: 'call_explicit' } as never,
+        { args: explicitFalse } as never,
+      );
+      expect(explicitFalse.background).toBe(false);
+
+      flip.disarm();
+      const omitted: Record<string, unknown> = {
+        subagent_type: 'oracle',
+        description: 'policy',
+        prompt: 'work',
+      };
+      await hooks['tool.execute.before']?.(
+        { ...call, callID: 'call_unarmed' } as never,
+        { args: omitted } as never,
+      );
+      expect('background' in omitted).toBe(false);
+    } finally {
+      await hooks?.dispose?.();
+    }
+  });
+
+  test('v1 keeps managed task tool registration when mode is unset', async () => {
+    await configure({});
+    const originalBoard = boardFactories.BackgroundJobBoard;
+    const board = spyOn(
+      boardFactories,
+      'BackgroundJobBoard',
+    ).mockImplementation(function BoardSpy(this: unknown, ...args: unknown[]) {
+      return Reflect.construct(originalBoard, args as []);
+    } as unknown as typeof originalBoard);
+    let hooks: PluginHooks | undefined;
+    try {
+      hooks = await createHooks('v1');
+      for (const name of [
+        'task_status',
+        'task_cancel',
+        'task_reply',
+        'task_revive',
+        'task_message',
+        'wait_for_user',
+      ]) {
+        expect(hooks.tool?.[name]).toBeDefined();
+      }
+      expect(hooks.tool?.task_report).toBeUndefined();
+      expect(board).toHaveBeenCalledTimes(1);
+    } finally {
+      await hooks?.dispose?.();
+      board.mockRestore();
+    }
+  });
+
   for (const flavor of ['v1', 'v2'] as const) {
-    test(`${flavor}: native mode registers exactly the two host-read controls`, async () => {
+    test(`${flavor}: native mode registers the host-supported task tools`, async () => {
       await configure({ backgroundJobs: { mode: 'native' } });
       let hooks: PluginHooks | undefined;
       try {
         hooks = await createHooks(flavor);
         expect(hooks.tool?.task_status).toBeDefined();
         expect(hooks.tool?.task_cancel).toBeDefined();
-        for (const name of [
-          'task_reply',
-          'task_revive',
-          'task_message',
-          'wait_for_user',
-        ]) {
+        if (flavor === 'v2') {
+          expect(hooks.tool?.task_reply).toBeDefined();
+          expect(hooks.tool?.task_report).toBeDefined();
+        } else {
+          expect(hooks.tool?.task_reply).toBeUndefined();
+          expect(hooks.tool?.task_report).toBeUndefined();
+        }
+        for (const name of ['task_revive', 'task_message', 'wait_for_user']) {
           expect(hooks.tool?.[name]).toBeUndefined();
         }
-        expect(hooks['v2.backgroundGeneration']).toBeUndefined();
       } finally {
         await hooks?.dispose?.();
       }
     });
 
-    test(`${flavor}: native mode returns nothing when both host-read controls are disabled`, async () => {
-      // Startup-only case: keep unrelated optional subsystems cold so the
-      // assertion is about the native-control gate, not init cost.
+    test(`${flavor}: native mode returns no tool whose registered native controls are disabled`, async () => {
       await configure({
         backgroundJobs: { mode: 'native' },
-        disabled_tools: ['task_cancel', 'task_status'],
+        disabled_tools: [
+          'task_cancel',
+          'task_status',
+          ...(flavor === 'v2' ? ['task_reply', 'task_report'] : []),
+        ],
         webfetch: { enabled: false },
         marketplace: { enabled: false },
         disabled_hooks: ['auto-update-checker', 'foreground-fallback'],
@@ -223,15 +485,24 @@ describe('plugin feature gates through exported hooks', () => {
         nativeTaskControlFactories,
         'createNativeTaskControlTools',
       );
+      const reportSpy = spyOn(taskReportFactories, 'createTaskReportTool');
       let hooks: PluginHooks | undefined;
       try {
         hooks = await createHooks(flavor);
         expect(nativeControlSpy).not.toHaveBeenCalled();
-        expect(hooks.tool?.task_cancel).toBeUndefined();
-        expect(hooks.tool?.task_status).toBeUndefined();
+        expect(reportSpy).not.toHaveBeenCalled();
+        for (const name of [
+          'task_cancel',
+          'task_status',
+          'task_reply',
+          'task_report',
+        ]) {
+          expect(hooks.tool?.[name]).toBeUndefined();
+        }
       } finally {
         await hooks?.dispose?.();
         nativeControlSpy.mockRestore();
+        reportSpy.mockRestore();
       }
     });
 
@@ -244,13 +515,13 @@ describe('plugin feature gates through exported hooks', () => {
           'task_status',
           'task_cancel',
           'task_reply',
+          'task_report',
           'task_revive',
           'task_message',
           'wait_for_user',
         ]) {
           expect(hooks.tool?.[name]).toBeUndefined();
         }
-        expect(hooks['v2.backgroundGeneration']).toBeUndefined();
       } finally {
         await hooks?.dispose?.();
       }
@@ -778,6 +1049,8 @@ describe('plugin feature gates through exported hooks', () => {
   });
 
   test('terminal live foreground recovery never restores background admission', async () => {
+    // The terminal gate is a v1 managed-lifecycle component: on v2 it is
+    // never constructed, so this proof belongs to the v1 host.
     await configure({
       backgroundJobs: { mode: 'managed', wallClockTimeoutMs: 0 },
     });
@@ -796,7 +1069,7 @@ describe('plugin feature gates through exported hooks', () => {
     );
     let hooks: PluginHooks | undefined;
     try {
-      hooks = await createHooks('v2');
+      hooks = await createHooks('v1');
       expect(onRunning).toBeFunction();
       const common = {
         parentSessionID: 'ses_p',

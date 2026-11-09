@@ -1247,55 +1247,6 @@ export class ForegroundFallbackManager {
     finish?.(model);
   }
 
-  refusedChildOutcome(
-    sessionID: string,
-    entry: Record<string, unknown>,
-  ): Promise<string | undefined> {
-    if (typeof entry.id !== 'string') return Promise.resolve(undefined);
-    const existing = this.childOutcomes.get(`${sessionID}\0${entry.id}`);
-    if (existing) return existing;
-    if (entry.type === 'no-route' && isRecord(entry.error)) {
-      return this.handleV2NoRoute(sessionID, entry.error, entry, true);
-    }
-    if (
-      entry.type !== 'assistant' ||
-      entry.finish !== 'content-filter' ||
-      typeof entry.agent !== 'string' ||
-      !isRecord(entry.model) ||
-      typeof entry.model.providerID !== 'string' ||
-      typeof entry.model.id !== 'string' ||
-      (entry.model.variant !== undefined &&
-        typeof entry.model.variant !== 'string') ||
-      !isRecord(entry.time) ||
-      typeof entry.time.completed !== 'number' ||
-      !Number.isFinite(entry.time.completed) ||
-      entry.time.completed < this.startedAt
-    )
-      return Promise.resolve(undefined);
-    const step = this.v2Steps.get(sessionID);
-    return this.refusalOutcome(
-      sessionID,
-      {
-        assistantMessageID: entry.id,
-        agent: entry.agent,
-        model: {
-          providerID: entry.model.providerID,
-          id: entry.model.id,
-          ...(typeof entry.model.variant === 'string'
-            ? { variant: entry.model.variant }
-            : {}),
-        },
-        // The pump's epoch is from step start; a later prompt must win.
-        epoch:
-          step?.assistantMessageID === entry.id
-            ? step.epoch
-            : (this.turnEpoch.get(sessionID) ?? 0),
-      },
-      entry.error,
-      entry.rawFinish,
-    );
-  }
-
   private createV1Outcome(key: string, timeout: number) {
     const existing = this.childOutcomes.get(key);
     if (existing) return existing;

@@ -787,7 +787,11 @@ function registeredDefaultToolNames(
             : (['task_revive', 'task_message', 'wait_for_user'] as const)),
         ]
       : runtime.backgroundJobsMode === 'native'
-        ? ['task_cancel', 'task_status']
+        ? [
+            'task_cancel',
+            'task_status',
+            ...(hostFlavor === 'v2' ? ['task_reply', 'task_report'] : []),
+          ]
         : [];
   for (const toolName of taskControls) register(toolName);
   if (runtime.interviewEnabled && !runtime.disabledCommands.has('interview')) {
@@ -909,7 +913,11 @@ function applyDefaultPermissions(
     // need the tool, and the tool also rejects parentless sessions at runtime.
     task_report:
       existing.task_report ??
-      (isPrimary || existing['*'] === 'deny' ? 'deny' : 'allow'),
+      (isPrimary ||
+      existing['*'] === 'deny' ||
+      !registeredTools.has('task_report')
+        ? 'deny'
+        : 'allow'),
     // Stance defaults above: an explicit `task` entry wins, then the
     // compiled scope, then the nested-dispatch deny for non-primaries —
     // the compiled v2 permission base allows every unmatched action, so an

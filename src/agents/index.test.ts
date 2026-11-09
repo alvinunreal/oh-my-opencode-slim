@@ -25,9 +25,12 @@ import { TASK_NO_NESTED_DISPATCH } from './permissions';
 import { TASK_REJECTION_INSTRUCTION } from './task-rejection';
 
 const TEST_DIRECTORY = 'runtime-test-agents-index';
-function runtimeFor(config: PluginConfig | undefined = {}) {
+function runtimeFor(
+  config: PluginConfig | undefined = {},
+  hostFlavor?: 'v1' | 'v2',
+) {
   RuntimeConfig.reset(TEST_DIRECTORY);
-  RuntimeConfig.init(TEST_DIRECTORY, config ?? {});
+  RuntimeConfig.init(TEST_DIRECTORY, config ?? {}, hostFlavor);
   return RuntimeConfig.get(TEST_DIRECTORY);
 }
 
@@ -851,29 +854,65 @@ describe('orchestrator agent', () => {
     expect(permission('bridge')).toBe('deny');
   });
 
-  test('task_report is available to subagents and denied to primaries', () => {
-    const agents = createAgents(runtimeFor({ council: councilConfig() }), {
-      hostFlavor: 'v2',
-    });
-    expect(permissionsOf(agents, 'orchestrator').task_report).toBe('deny');
-    expect(permissionsOf(agents, 'explorer').task_report).toBe('allow');
-    // Preserve explicit deny-all agents such as council synthesis.
-    expect(permissionsOf(agents, 'council').task_report).toBe('deny');
-    expect(permissionsOf(agents, 'councillor').task_report).toBe('deny');
+  test('task_report is available only to actually registered V2 native subagents', () => {
+    // V2 native registers task_report by default.
+    const v2Native = createAgents(
+      runtimeFor({ council: councilConfig() }, 'v2'),
+      { hostFlavor: 'v2' },
+    );
+    expect(permissionsOf(v2Native, 'orchestrator').task_report).toBe('deny');
+    expect(permissionsOf(v2Native, 'explorer').task_report).toBe('allow');
+    expect(permissionsOf(v2Native, 'council').task_report).toBe('deny');
+    expect(permissionsOf(v2Native, 'councillor').task_report).toBe('deny');
+
+    // V2 mode: off registers no task tools, so task_report is unregistered.
+    const v2Off = createAgents(
+      runtimeFor(
+        { council: councilConfig(), backgroundJobs: { mode: 'off' } },
+        'v2',
+      ),
+      { hostFlavor: 'v2' },
+    );
+    expect(permissionsOf(v2Off, 'explorer').task_report).toBe('deny');
+
+    // V1 keeps managed lifecycle and never registers task_report.
+    const v1Managed = createAgents(
+      runtimeFor({ council: councilConfig() }, 'v1'),
+      { hostFlavor: 'v1' },
+    );
+    expect(permissionsOf(v1Managed, 'explorer').task_report).toBe('deny');
   });
 
-  test('task_report honors explicit agent permissions', () => {
+  test('task_report honors explicit agent permissions but nonexistent tools stay unregistered', () => {
     const agents = createAgents(
-      runtimeFor({
-        agents: {
-          explorer: { permission: { task_report: 'deny' } },
-          orchestrator: { permission: { task_report: 'allow' } },
+      runtimeFor(
+        {
+          agents: {
+            explorer: { permission: { task_report: 'deny' } },
+            orchestrator: { permission: { task_report: 'allow' } },
+          },
         },
-      }),
+        'v2',
+      ),
       { hostFlavor: 'v2' },
     );
     expect(permissionsOf(agents, 'explorer').task_report).toBe('deny');
     expect(permissionsOf(agents, 'orchestrator').task_report).toBe('allow');
+
+    // Explicit allow on V1 or disabled tool still keeps user stance in definition
+    // without claiming registration.
+    const v1Explicit = createAgents(
+      runtimeFor(
+        {
+          agents: {
+            explorer: { permission: { task_report: 'allow' } },
+          },
+        },
+        'v1',
+      ),
+      { hostFlavor: 'v1' },
+    );
+    expect(permissionsOf(v1Explicit, 'explorer').task_report).toBe('allow');
   });
 
   test('interview_submit_state honors an explicit agent permission', () => {
@@ -1400,10 +1439,11 @@ describe('generated default permission availability', () => {
   });
 
   test('v2 omits v1-only controls and wait_for_user defaults', () => {
-    const agents = createAgents(runtimeFor(), { hostFlavor: 'v2' });
+    const agents = createAgents(runtimeFor({}, 'v2'), { hostFlavor: 'v2' });
     const orchestrator = permissionsOf(agents, 'orchestrator');
     expect(orchestrator.task_cancel).toBe('allow');
     expect(orchestrator.task_status).toBe('allow');
+    expect(orchestrator.task_reply).toBe('allow');
     expect(Object.hasOwn(orchestrator, 'task_revive')).toBe(false);
     expect(Object.hasOwn(orchestrator, 'task_message')).toBe(false);
     expect(Object.hasOwn(orchestrator, 'wait_for_user')).toBe(false);
@@ -1412,7 +1452,102 @@ describe('generated default permission availability', () => {
     // denies on cross-host controls are retained.
     expect(Object.hasOwn(oracle, 'task_revive')).toBe(false);
     expect(Object.hasOwn(oracle, 'task_message')).toBe(false);
+    expect(oracle.task_reply).toBe('deny');
     expect(oracle.wait_for_user).toBe('deny');
+  });
+
+  test.each([
+    {
+      hostFlavor: 'v2',
+      mode: 'native',
+      disabled: [],
+      reply: true,
+      report: true,
+    },
+    {
+      hostFlavor: 'v2',
+      mode: 'native',
+      disabled: ['task_reply'],
+      reply: false,
+      report: true,
+    },
+    {
+      hostFlavor: 'v2',
+      mode: 'native',
+      disabled: ['task_report'],
+      reply: true,
+      report: false,
+    },
+    {
+      hostFlavor: 'v2',
+      mode: 'off',
+      disabled: [],
+      reply: false,
+      report: false,
+    },
+    {
+      hostFlavor: 'v1',
+      mode: 'native',
+      disabled: [],
+      reply: false,
+      report: false,
+    },
+    {
+      hostFlavor: 'v1',
+      mode: 'managed',
+      disabled: [],
+      reply: true,
+      report: false,
+    },
+  ] as const)(
+    '$hostFlavor $mode reply/report grants follow actual tool availability ($disabled)',
+    ({ hostFlavor, mode, disabled, reply, report }) => {
+      const agents = createAgents(
+        runtimeFor(
+          PluginConfigSchema.parse({
+            backgroundJobs: { mode },
+            disabled_tools: [...disabled],
+            agents: {
+              coworker: { primary: true, model: 'test/coworker' },
+              reviewer: { model: 'test/reviewer' },
+            },
+          }),
+          hostFlavor,
+        ),
+        { hostFlavor },
+      );
+      for (const name of ['orchestrator', 'coworker']) {
+        expect(permissionsOf(agents, name).task_reply).toBe(
+          reply ? 'allow' : undefined,
+        );
+        expect(permissionsOf(agents, name).task_report).toBe('deny');
+      }
+      for (const name of ['explorer', 'reviewer']) {
+        expect(permissionsOf(agents, name).task_reply).toBe('deny');
+        expect(permissionsOf(agents, name).task_report).toBe(
+          report ? 'allow' : 'deny',
+        );
+      }
+    },
+  );
+
+  test('explicit reply/report permissions survive disabled V2 native tools', () => {
+    const agents = createAgents(
+      runtimeFor(
+        {
+          backgroundJobs: { mode: 'native' },
+          disabled_tools: ['task_reply', 'task_report'],
+          agents: {
+            orchestrator: { permission: { task_reply: 'ask' } },
+            explorer: { permission: { task_report: 'allow' } },
+          },
+        },
+        'v2',
+      ),
+      { hostFlavor: 'v2' },
+    );
+    expect(permissionsOf(agents, 'orchestrator').task_reply).toBe('ask');
+    expect(permissionsOf(agents, 'explorer').task_report).toBe('allow');
   });
 
   test('interview defaults follow the feature gate and disabled command', () => {

@@ -1465,7 +1465,7 @@
           "not": {}
         },
         "mode": {
-          "description": "Background-task lifecycle mode. \"managed\" (default) runs the OMOS managed lifecycle and its task_cancel/task_status/task_reply tools. \"native\" skips every board-shaped component and registers only two thin host-read tools — task_status (parent-checked host read plus trailing result) and task_cancel (the host atomic interruption) — for agents driving native subagent/task delegation. \"off\" registers no OMOS task tool. On v2 it also disables session-preset routing and leaves the native subagent executor untouched; agent inference settings still register normally.",
+          "description": "Background-task lifecycle mode. \"managed\" (default on V1 hosts) runs the OMOS managed lifecycle; it is unsupported and rejected on OpenCode v2. \"native\" (default on OpenCode v2 hosts) skips every board-shaped component and relies on host delegation, with four OMOS tools: task_status and task_cancel for host reads and stop requests, plus independent task_reply for the orchestrator and task_report for child subagents. Cancellation reports request acceptance, not confirmed interruption. \"off\" registers no OMOS task tools; on v2 it also disables session-preset routing and leaves the host delegation executor untouched. Agent inference settings still register normally.",
           "type": "string",
           "enum": [
             "managed",
@@ -1478,6 +1478,7 @@
         },
         "maxSessionsPerAgent": {
           "default": 2,
+          "description": "Per-parent retention cap for reusable or retained-stopped background sessions of each agent (1–10), not a running-task concurrency limit. V1 managed lifecycle only; unsupported and rejected on OpenCode v2. Default 2.",
           "type": "integer",
           "minimum": 1,
           "maximum": 10
@@ -1555,7 +1556,7 @@
         },
         "wallClockTimeoutMs": {
           "default": 0,
-          "description": "Explicit opt-in wall-clock deadline for native task(..., background: true) child sessions. On expiry the plugin asks the host to stop the child (session abort) and lets the host report the real terminal. 0 disables supervision; finite values are 60,000–2,147,483,647ms.",
+          "description": "Explicit opt-in wall-clock deadline for native task(..., background: true) child sessions. V1 managed lifecycle only; unsupported and rejected on OpenCode v2. On expiry the plugin asks the host to stop the child and lets the host report the real terminal. 0 disables supervision; finite values are 60,000–2,147,483,647ms.",
           "anyOf": [
             {
               "type": "number",
@@ -1570,7 +1571,7 @@
         },
         "stopConfirmationMs": {
           "default": 5000,
-          "description": "Terminal-gate grace period the background-job terminal gate waits for stop confirmation evidence before publishing a stopped job (1,000–60,000ms). Default 5,000 (5 seconds).",
+          "description": "Terminal-gate grace period for stop confirmation evidence before publishing a stopped job (1,000–60,000ms). V1 managed lifecycle only; unsupported and rejected on OpenCode v2. Default 5,000 (5 seconds).",
           "type": "integer",
           "minimum": 1000,
           "maximum": 60000
@@ -1581,6 +1582,7 @@
             "providerConcurrency": {},
             "modelConcurrency": {}
           },
+          "description": "Plugin concurrency admission limits. V1 managed lifecycle only; unsupported and rejected on OpenCode v2, even when every limit is zero. Configure delegation limits through the native host instead.",
           "type": "object",
           "properties": {
             "defaultConcurrency": {
@@ -1623,7 +1625,7 @@
         },
         "sameProviderPolicy": {
           "default": {},
-          "description": "Opt-in per-provider policy for native background tasks: when the parent session and the child agent both resolve to a provider listed here with value \"foreground\", the background request is converted to foreground execution (existing foreground path, no concurrency admission). Unlisted or unknown providers keep background behavior. Default {} (no conversion).",
+          "description": "Opt-in per-provider policy for native background tasks on V1 managed and V2 native lifecycles (inert when backgroundJobs.mode is \"off\"): when the parent session and child agent resolve to a provider listed here as \"foreground\", the background task request is converted to foreground execution. Unlisted providers keep background behavior. Default {} (no conversion).",
           "type": "object",
           "propertyNames": {
             "type": "string",
@@ -1636,12 +1638,12 @@
         },
         "waitForUserGuard": {
           "default": true,
-          "description": "When true, intercept wait_for_user calls made while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. Default enabled.",
+          "description": "Intercept wait_for_user calls made while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input (v1 hosts only; ignored with a warning on OpenCode v2 hosts). Default enabled.",
           "type": "boolean"
         },
         "childInputWake": {
           "default": true,
-          "description": "When true, a background child ask wakes its parent with the ask content. Default enabled.",
+          "description": "When true, a background child ask wakes its parent with the ask content. V1 managed only; ignored with a warning on OpenCode v2 hosts. Default enabled.",
           "type": "boolean"
         },
         "childInputWakeKinds": {
@@ -1649,7 +1651,7 @@
             "permission": false,
             "question": true
           },
-          "description": "Which background child ask kinds may wake the parent. Permission asks default off (#1504): their replies carry no host wake and are resolved by the UI or an external responder, so a parent turn is wasted. Question asks default on.",
+          "description": "Which background child ask kinds may wake the parent (v1 hosts only; ignored with a warning on OpenCode v2 hosts). Permission asks default off (#1504): their replies carry no host wake and are resolved by the UI or an external responder, so a parent turn is wasted. Question asks default on.",
           "type": "object",
           "properties": {
             "permission": {

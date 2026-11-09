@@ -46,9 +46,12 @@ The server entry keeps shared coordination in small leaf modules. Optional
 implementations load inside their existing activation gates instead of through
 hook, tool or utility barrels:
 
-- `backgroundJobs.mode: "managed"` loads the board, supervisor, admission state,
-  recovery and managed tools. `"native"` loads only the thin host-read controls;
-  `"off"` loads neither implementation. The v1 wake scheduler is separate from
+- `backgroundJobs.mode: "managed"` (V1 only) loads the board, supervisor,
+  admission state, recovery and managed tools. `"native"` (the V2 default) loads
+  only the thin host-read controls and, on V2, the queue-only report; `"off"`
+  loads neither implementation. On V2 the managed gates are structurally false,
+  so the board, persistence, recovery, adoption and wake modules are never
+  resolved, independent of configuration. The v1 wake scheduler is separate from
   the pure message helpers used on both hosts.
 - `autoUpdate: false` or the disabled `auto-update-checker` hook skips loading
   the update implementation. Tool guards follow their existing hook switches.

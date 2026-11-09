@@ -209,6 +209,32 @@ type _permissionRulesGone = Expect<
   Equal<'rules' extends keyof PermissionDomain ? true : false, false>
 >;
 
+/** Pending request lookup and reply use the host's flat, session-owned API. */
+type MirrorPermission = NonNullable<V2Context['permission']>;
+type _permissionLookupCompatible = Expect<
+  PermissionDomain extends Pick<MirrorPermission, 'list' | 'get' | 'reply'>
+    ? true
+    : false
+>;
+type _permissionListInput = Expect<
+  Equal<
+    Readonly<Parameters<NonNullable<MirrorPermission['list']>>[0]>,
+    Parameters<PermissionDomain['list']>[0]
+  >
+>;
+type _permissionGetInput = Expect<
+  Equal<
+    Readonly<Parameters<NonNullable<MirrorPermission['get']>>[0]>,
+    Parameters<PermissionDomain['get']>[0]
+  >
+>;
+type _permissionReplyInput = Expect<
+  Equal<
+    Readonly<Parameters<MirrorPermission['reply']>[0]>,
+    Parameters<PermissionDomain['reply']>[0]
+  >
+>;
+
 /** Creation consumes only native root location and the returned session ID. */
 type _sessionCreateCompatible = Expect<
   SessionDomain['create'] extends NonNullable<V2Context['session']['create']>

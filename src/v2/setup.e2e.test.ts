@@ -13,8 +13,8 @@
  *   (empty plugin config, companion disabled), mirroring src/index.test.ts.
  *
  * Assertion approaches (documented per the plan):
- * - Job-board side effects are observed through the board's public tool
- *   surface: the `task_status` v2 tool captured from the tool draft.
+ * - Native task controls are observed through their registered tool surface;
+ *   no plugin job board or background-job persistence is constructed.
  * - Event-pump mapping is proven name-specifically via cache-monitor: only
  *   the SYNTHESIZED `message.updated` (from v2 `session.step.ended`) can
  *   trip its bust warning, which is written to the plugin log
@@ -39,7 +39,6 @@ import { stateFilePath } from '../companion/manager';
 import { RuntimeConfig } from '../config/runtime';
 import { acquireMarketplaceLease } from '../marketplace/lease';
 import { MarketplaceStore } from '../marketplace/store';
-import { createEventDirectoryScope } from '../utils/event-directory-scope';
 import { flushLoggerForTesting } from '../utils/logger';
 import { compilePermissionPolicy } from './permissions';
 import { createV2Setup } from './setup';
@@ -152,6 +151,10 @@ function makeMockV2Context(
   ctx: V2Context;
   calls: MockCalls;
   events: ReturnType<typeof createEventQueue>;
+  nativeSubagent: {
+    description: string;
+    execute: (input: unknown, context: unknown) => Promise<unknown>;
+  };
 } {
   const skillCallbacks = new Set<(draft: unknown) => void>();
   const agentCallbacks = new Set<(draft: unknown) => void>();
@@ -378,7 +381,7 @@ function makeMockV2Context(
     });
   }
 
-  return { ctx, calls, events };
+  return { ctx, calls, events, nativeSubagent };
 }
 
 /** v2 per-step usage telemetry event (cache-monitor bust signature). */
@@ -1911,15 +1914,12 @@ describe('createV2Setup e2e', () => {
       replay?.(draft());
       expect((await sendLaunch()).background).toBe(true);
       await flushLoggerForTesting();
-      expect(readPluginLog()).toContain('v2 background default applied');
+      expect(nativeTool.description).toContain('Background (default)');
 
       // (3) Explicit values pass through untouched in both lanes.
       expect((await sendLaunch(true)).background).toBe(true);
       expect((await sendLaunch(false)).background).toBe(false);
       await flushLoggerForTesting();
-      expect(readPluginLog()).toContain(
-        '[task-session-manager] v2 background explicit',
-      );
 
       // (4) A later replay without the native tool disarms again, and a
       // subsequent replay with it re-arms (replays are idempotent).
@@ -4230,7 +4230,7 @@ describe('createV2Setup e2e', () => {
     expect(calls.disposed).toContain('marketplace-mcp-transform');
   }, 20_000);
 
-  test('batch-deferred MCP and agent transforms finalize before managed prompts', async () => {
+  test('batch-deferred MCP and agent transforms finalize before child prompts', async () => {
     const { ctx, calls, events } = makeMockV2Context(projectDir);
     // Permission readiness still protects reduced hosts, but their legacy
     // created prewarm must not hold the shared event pump behind the roster.
@@ -4349,7 +4349,7 @@ describe('createV2Setup e2e', () => {
       await calls.promptHookCb?.({
         sessionID: 'ses_deferred_mcp_child',
         messageID: 'msg_deferred_child',
-        prompt: { text: 'managed child prompt after flush' },
+        prompt: { text: 'child prompt after flush' },
       });
       await calls.promptHookCb?.({
         sessionID: 'ses_deferred_mcp',
@@ -4579,7 +4579,7 @@ describe('createV2Setup e2e', () => {
     },
   );
 
-  test('missing MCP draft callback keeps managed prompts behind readiness', async () => {
+  test('missing MCP draft callback keeps child prompts behind readiness', async () => {
     const { ctx, calls } = makeMockV2Context(projectDir);
     const mcp = ctx.mcp as unknown as {
       transform: (callback: (draft: unknown) => void) => Promise<{
@@ -4622,112 +4622,60 @@ describe('createV2Setup e2e', () => {
     await cleanup();
   }, 20_000);
 
-  test('subagent launch flows into the job board through the tool bridges', async () => {
+  test('backgroundJobs.mode off still applies configured agent options to requests', async () => {
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        backgroundJobs: { mode: 'off' },
+        agents: {
+          orchestrator: {
+            temperature: 0.2,
+            options: { textVerbosity: 'high' },
+          },
+          explorer: {
+            temperature: 0.3,
+            options: {
+              thinking: { type: 'enabled', budgetTokens: 4096 },
+              textVerbosity: 'low',
+            },
+          },
+        },
+      }),
+    );
     const { ctx, calls } = makeMockV2Context(projectDir);
     const cleanup = await createV2Setup()(ctx);
     try {
-      // (1) v2 subagent spawn (background). The before-bridge must hand
-      // the v1 hook tool 'task' with v1 args (agent→subagent_type).
-      const beforeEvent = {
-        tool: 'subagent',
-        sessionID: 'ses_parent',
-        agent: 'orchestrator',
-        messageID: 'msg_1',
-        id: 'call_1',
-        input: {
-          agent: 'fixer',
-          description: 'e2e delegation',
-          prompt: 'Do the work',
-          background: true,
-        },
-      };
-      const beforeHook = calls.toolBeforeCb;
-      if (!beforeHook) throw new Error('tool:execute.before not captured');
-      await beforeHook(beforeEvent);
-
-      // Args write-back: v2 naming preserved, nothing invented. The v1
-      // hook saw `subagent_type: 'fixer'` (proved below by the board
-      // record's agent), and no v1 field names leak into the v2 input.
-      expect(beforeEvent.input).toEqual({
-        agent: 'fixer',
-        description: 'e2e delegation',
-        prompt: 'Do the work',
-        background: true,
-      });
-
-      // (2) An explicit sessionID the board cannot resolve is refused.
-      // The before-hook throws before write-back, so the original
-      // sessionID stays and the host does not spawn a replacement.
-      const resumeEvent = {
-        tool: 'subagent',
-        sessionID: 'ses_parent',
-        agent: 'orchestrator',
-        messageID: 'msg_1',
-        id: 'call_2',
-        input: {
-          agent: 'fixer',
-          description: 'e2e delegation 2',
-          prompt: 'More work',
-          background: true,
-          sessionID: 'resume_me',
-        },
-      };
-      const resumeHook = calls.toolBeforeCb;
-      if (!resumeHook) throw new Error('tool:execute.before not captured');
-      await expect(resumeHook(resumeEvent)).rejects.toThrow(
-        /could not be verified from host history/,
-      );
-      expect(resumeEvent.input.sessionID).toBe('resume_me');
-
-      const emptyEvent = {
-        tool: 'subagent',
-        sessionID: 'ses_parent',
-        agent: 'orchestrator',
-        messageID: 'msg_1',
-        id: 'call_empty',
-        input: {
-          agent: 'fixer',
-          description: 'e2e empty id',
-          prompt: 'More work',
-          background: true,
-          sessionID: '',
-        },
-      };
-      await expect(beforeHook(emptyEvent)).rejects.toThrow(/empty sessionID/);
-      expect(emptyEvent.input.sessionID).toBe('');
-
-      // (3) v2 subagent result: plain-text background output. The
-      // after-bridge maps content → v1 `output` under tool 'task'; the
-      // v1 after-hook parses it and registers the launch on the board.
-      const backgroundText =
-        'The subagent is working in the background (sessionID: ses_kid_1). ' +
-        'You will be notified automatically when it finishes.';
-      const afterHook = calls.toolAfterCb;
-      if (!afterHook) throw new Error('tool:execute.after not captured');
-      await afterHook({
-        tool: 'subagent',
-        sessionID: 'ses_parent',
-        agent: 'orchestrator',
-        messageID: 'msg_1',
-        id: 'call_1',
-        input: beforeEvent.input,
-        status: 'completed',
-        result: { content: backgroundText },
-      });
-
-      // Board observable: the task_status v2 tool captured from the
-      // tool draft reads the registered job through the real board.
-      const taskStatus = calls.toolAdds.find((t) => t.name === 'task_status');
-      if (!taskStatus) throw new Error('task_status tool not registered');
-      const status = (await taskStatus.execute(
-        { task_id: 'ses_kid_1' },
-        { sessionID: 'ses_parent' },
-      )) as { content: string };
-      expect(status.content).toContain('state: running');
-      // 'agent: fixer' proves the before-hook observed the v1 arg shape
-      // (subagent_type derived from the v2 `agent` field).
-      expect(status.content).toContain('agent: fixer');
-      expect(status.content).toContain('ses_kid_1');
+      expect(calls.contextHookCb).toBeFunction();
+      for (const [agent, expected] of [
+        ['orchestrator', { textVerbosity: 'high', temperature: 0.2 }],
+        [
+          'explorer',
+          {
+            thinking: { type: 'enabled', budgetTokens: 4096 },
+            textVerbosity: 'low',
+            temperature: 0.3,
+          },
+        ],
+      ] as const) {
+        const options: Record<string, unknown> = {};
+        await calls.contextHookCb?.({
+          sessionID: `ses_off_options_${agent}`,
+          agent,
+          model: { providerID: 'test', id: 'model' },
+          options,
+          system: [],
+          tools: {},
+          messages: [
+            {
+              id: `user-off-options-${agent}`,
+              role: 'user',
+              content: [{ type: 'text', text: 'hello' }],
+            },
+          ],
+        });
+        expect(options).toEqual(expected);
+      }
     } finally {
       await cleanup();
     }
@@ -4860,109 +4808,6 @@ describe('createV2Setup e2e', () => {
     20_000,
   );
 
-  test('moved child completion reaches its owning task board without foreign permission updates', async () => {
-    const { ctx, calls, events } = makeMockV2Context(projectDir);
-    const worktreeDir = path.join(projectDir, '.slim', 'worktrees', 'child');
-    const worktreeScope = createEventDirectoryScope(worktreeDir);
-    const childID = 'ses_moved_child';
-    const permissionUpdates: unknown[] = [];
-    let completedAt: number | undefined;
-    const session = ctx.session as unknown as Record<string, unknown>;
-    session.update = async (input: unknown) => {
-      permissionUpdates.push(input);
-    };
-    session.get = async ({ sessionID }: { sessionID: string }) => ({
-      id: sessionID,
-      directory: projectDir,
-      agent: sessionID === childID ? 'fixer' : 'orchestrator',
-      ...(sessionID === childID ? { parentID: 'ses_parent' } : {}),
-      ...(completedAt ? { outcome: 'succeeded' } : {}),
-      time: { created: 1, ...(completedAt ? { idle: completedAt } : {}) },
-    });
-    session.context = async () =>
-      completedAt
-        ? [
-            {
-              id: 'msg_moved_result',
-              type: 'assistant',
-              time: { created: completedAt, completed: completedAt },
-              finish: 'stop',
-              content: [{ type: 'text', text: 'Moved child result' }],
-            },
-            {
-              id: 'msg_moved_idle',
-              type: 'idle',
-              time: { created: completedAt },
-              outcome: 'succeeded',
-            },
-          ]
-        : [];
-    const cleanup = await createV2Setup()(ctx);
-    try {
-      const launch = {
-        tool: 'subagent',
-        sessionID: 'ses_parent',
-        agent: 'orchestrator',
-        messageID: 'msg_launch',
-        id: 'call_moved_child',
-        input: {
-          agent: 'fixer',
-          description: 'moved child',
-          prompt: 'Work in a worktree',
-          background: true,
-        },
-      };
-      await calls.toolBeforeCb?.(launch);
-      await calls.toolAfterCb?.({
-        ...launch,
-        status: 'completed',
-        result: {
-          content: `The subagent is working in the background (sessionID: ${childID}).`,
-        },
-      });
-
-      // The child now runs in another live location. Its task record still
-      // belongs to this parent, not to the worktree's plugin instance.
-      const foreignEvent = (type: string, sessionID = childID) => ({
-        type,
-        created: Date.now(),
-        location: { directory: worktreeDir },
-        data: { sessionID },
-      });
-      const updatesBeforeCompletion = permissionUpdates.length;
-      events.push(foreignEvent('session.execution.started'));
-      events.push({
-        ...foreignEvent('session.created', 'ses_unrelated'),
-        data: {
-          sessionID: 'ses_unrelated',
-          parentID: 'ses_foreign_parent',
-          agent: 'fixer',
-        },
-      });
-      await settlePump();
-      completedAt = Date.now();
-      events.push(foreignEvent('session.execution.succeeded'));
-      events.push(foreignEvent('session.execution.succeeded', 'ses_unrelated'));
-      await settlePump(100);
-
-      const taskStatus = calls.toolAdds.find((t) => t.name === 'task_status');
-      if (!taskStatus) throw new Error('task_status not registered');
-      const status = (await taskStatus.execute(
-        { task_id: childID },
-        { sessionID: 'ses_parent' },
-      )) as { content: string };
-      expect(status.content).toContain('state: completed');
-      expect(permissionUpdates).toHaveLength(updatesBeforeCompletion);
-      const logText = readPluginLog();
-      expect(logText).toContain('"taskID":"ses_moved_child"');
-      expect(logText).toContain('[terminal-gate] terminal published');
-      expect(logText).not.toContain('ses_unrelated');
-    } finally {
-      await cleanup();
-      worktreeScope.release();
-    }
-  }, 20_000);
-
   test('admission uses the finalized v2 child model instead of its parent', async () => {
     await Bun.write(
       path.join(configDir, 'oh-my-opencode-slim.json'),
@@ -5061,8 +4906,8 @@ describe('createV2Setup e2e', () => {
     events.push(v2UsageEvent('ses_cache', { input: 500, read: 9000 }));
     events.push(v2UsageEvent('ses_cache', { input: 12000, read: 0 }));
 
-    // Terminal execution.succeeded → synthesized idle pair reaches the
-    // v1 event-router (which logs the observation for any session id).
+    // Native terminal events remain host-owned. No managed reconciler is
+    // installed beside the cache telemetry observer.
     events.push({
       type: 'session.execution.succeeded',
       properties: { sessionID: 'ses_cache' },
@@ -5071,9 +4916,7 @@ describe('createV2Setup e2e', () => {
     await settlePump();
     const logDuringRun = readPluginLog();
     expect(logDuringRun).toContain('prompt-cache bust');
-    expect(logDuringRun).toContain(
-      '[task-session-manager] idle/status idle observed',
-    );
+    expect(logDuringRun).not.toContain('[task-session-manager]');
 
     const pullsAtDispose = events.pulled();
     const bustWarningsAtDispose = (
@@ -5111,9 +4954,8 @@ describe('createV2Setup e2e', () => {
 
     try {
       // Live wire shape: payload keyed under `data` (verified live).
-      // Only the SYNTHESIZED dual-spelling session.deleted
-      // reaches the v1 event-router cleanup path — the raw passthrough is
-      // inert there — so this log line is name-specific to the mapping.
+      // The shared fallback observer consumes the synthesized v1 identity;
+      // no task-manager cleanup path exists on V2.
       events.push({
         id: 'evt_session_deleted',
         created: 1_788_961_637_000,
@@ -5125,7 +4967,7 @@ describe('createV2Setup e2e', () => {
       await settlePump();
       const logText = readPluginLog();
       expect(logText).toContain(
-        '[task-session-manager] session.deleted observed',
+        '[foreground-fallback] session.deleted observed',
       );
       expect(logText).toContain('ses_gone');
     } finally {
@@ -5133,70 +4975,14 @@ describe('createV2Setup e2e', () => {
     }
   }, 20_000);
 
-  test('ctx.storage (when present) enables background-job persistence before the v1 factory runs', async () => {
-    const { ctx } = makeMockV2Context(projectDir);
-    // Pre-seeded persisted tombstone: proves the storage activation
-    // loads backend state, and later that a storage-less reactivation
-    // resets it instead of retaining the previous activation.
-    const seeded = new Map<string, unknown>([
-      [
-        'omo/bgj/tombstone/ses_seeded_before_setup',
-        { taskID: 'ses_seeded_before_setup', epoch: 1, recordedAt: 1 },
-      ],
-    ]);
-    (ctx as { storage?: unknown }).storage = {
-      get: async (key: string) => seeded.get(key),
-      set: async () => {},
-      remove: async () => {},
-      scan: async () => ({
-        entries: [...seeded.entries()].map(([key, value]) => ({
-          key,
-          value,
-        })),
-      }),
-    };
-    const cleanup = await createV2Setup()(ctx);
-
-    try {
-      await flushLoggerForTesting();
-      const logText = readPluginLog();
-      expect(logText).toContain(
-        '[v2] background-job persistence enabled via ctx.storage',
-      );
-      const persistence = await import('../utils/background-job-persistence');
-      expect(
-        persistence
-          .persistedBackgroundJobState()
-          .tombstones.has('ses_seeded_before_setup'),
-      ).toBe(true);
-
-      // A storage-less reactivation resets to the documented
-      // process-local fallback instead of retaining this activation's
-      // backend/seed state.
-      const { ctx: bareCtx } = makeMockV2Context(projectDir);
-      await (await createV2Setup()(bareCtx))();
-      expect(persistence.persistedBackgroundJobState().tombstones.size).toBe(0);
-    } finally {
-      // Reset the persistence singleton so later test files in this
-      // process see the pure memory fallback.
-      const { configureBackgroundJobPersistence } = await import(
-        '../utils/background-job-persistence'
-      );
-      configureBackgroundJobPersistence(undefined);
-      await cleanup();
-    }
-  }, 30_000);
-
-  test('dispose runs the v1 dispose hook (server.instance.disposed synthesis for wake timers)', async () => {
+  test('dispose runs the shared factory cleanup', async () => {
     const { ctx } = makeMockV2Context(projectDir);
     const cleanup = await createV2Setup()(ctx);
     await cleanup();
     await flushLoggerForTesting();
 
-    // The v1 dispose hook synthesizes `server.instance.disposed` into the
-    // v1 event consumers — orchestrator-wake scheduler timers/state,
-    // task-session manager. Without this wiring, host teardown would leak
-    // the scheduler's unref'd wake timers.
+    // Shared factory consumers still need disposal even though no V2 job
+    // ledger, wake scheduler, or publication timer exists.
     const logText = readPluginLog();
     expect(logText).toContain('[v2] v1 dispose hook invoked');
     expect(logText).not.toContain('[v2] v1 dispose failed');
@@ -5279,8 +5065,8 @@ describe('createV2Setup e2e', () => {
     expect(logText).toContain('[v2] v1 dispose hook invoked (abort path)');
   }, 20_000);
 
-  test('root dispose during a paused v2 native-resume read does not send or import', async () => {
-    const { ctx, calls } = makeMockV2Context(projectDir);
+  test('root dispose fences a paused native preset-continuation read without sending', async () => {
+    const { ctx, calls, nativeSubagent } = makeMockV2Context(projectDir);
     let releaseRead: (value: Record<string, unknown>) => void = () => {};
     let started: () => void = () => {};
     const seen = new Promise<void>((resolve) => {
@@ -5333,7 +5119,7 @@ describe('createV2Setup e2e', () => {
       ).toBeUndefined();
       const beforeHook = calls.toolBeforeCb;
       if (!beforeHook) throw new Error('tool:execute.before not captured');
-      const pending = beforeHook({
+      const event = {
         tool: 'subagent',
         sessionID: 'ses_parent',
         agent: 'orchestrator',
@@ -5346,9 +5132,16 @@ describe('createV2Setup e2e', () => {
           background: true,
           sessionID: 'ses_child',
         },
+      };
+      await beforeHook(event);
+      const pending = nativeSubagent.execute(event.input, {
+        sessionID: event.sessionID,
+        id: event.id,
+        signal: new AbortController().signal,
+        progress: async () => {},
       });
       await seen;
-      await cleanup();
+      const disposing = cleanup();
       releaseRead({
         id: 'ses_child',
         parentID: 'ses_parent',
@@ -5358,6 +5151,7 @@ describe('createV2Setup e2e', () => {
       await expect(pending).rejects.toThrow(
         /disposed|retired|could not|not found/i,
       );
+      await disposing;
       expect(prompts).toHaveLength(0);
     } finally {
       await cleanup();

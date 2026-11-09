@@ -15,7 +15,7 @@
  * The decision is fail-open at every step: any unknown or undeterminable
  * model or provider leaves `background: true` untouched.
  */
-import { providerFromModel } from '../../utils/background-task-concurrency';
+import { parseModelReference } from '../../utils/session';
 
 export type SameProviderPolicy = 'foreground';
 
@@ -53,8 +53,12 @@ export function convertSameProviderBackgroundTask(
     input.agentType,
     input.parentSessionID,
   );
-  const parentProvider = providerFromModel(parentModel);
-  const childProvider = providerFromModel(childModel);
+  const parentProvider = parentModel
+    ? parseModelReference(parentModel)?.providerID
+    : undefined;
+  const childProvider = childModel
+    ? parseModelReference(childModel)?.providerID
+    : undefined;
 
   if (
     parentProvider === undefined ||

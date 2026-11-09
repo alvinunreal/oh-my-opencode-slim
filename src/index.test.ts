@@ -1277,116 +1277,117 @@ describe('plugin tool registration', () => {
     }
   });
 
-  test.each(['v1', 'v2'] as const)(
-    '%s generation teardown preserves deadline aborts without a v2 wake scheduler',
-    async (hostFlavor) => {
-      const originalEnv = { ...process.env };
-      const originalSetTimeout = globalThis.setTimeout;
-      const originalClearTimeout = globalThis.clearTimeout;
-      const originalNow = Date.now;
-      const clock = createHostTimerHarness();
-      const abortCalls: string[] = [];
-      const scheduler = spyOn(wakeHooks, 'createOrchestratorWakeScheduler');
-      const noop = async () => ({});
-      const client = createPluginClient(noop, async ({ path }) => {
-        abortCalls.push(path.id);
-        return {};
-      });
-      const configDir = await mkdtemp('/tmp/oh-my-opencode-slim-phase-2r-');
-      await Bun.write(
-        `${configDir}/oh-my-opencode-slim.json`,
-        JSON.stringify({
-          backgroundJobs: {
-            wallClockTimeoutMs: 60_000,
+  // V1-managed proof: the wall-clock watchdog is a V1 managed-lifecycle
+  // component (V2 rejects `wallClockTimeoutMs` before any managed factory
+  // runs), so the deadline-abort guarantee belongs to the V1 assembly only.
+  test('v1 generation teardown preserves deadline aborts', async () => {
+    const hostFlavor = 'v1';
+    const originalEnv = { ...process.env };
+    const originalSetTimeout = globalThis.setTimeout;
+    const originalClearTimeout = globalThis.clearTimeout;
+    const originalNow = Date.now;
+    const clock = createHostTimerHarness();
+    const abortCalls: string[] = [];
+    const scheduler = spyOn(wakeHooks, 'createOrchestratorWakeScheduler');
+    const noop = async () => ({});
+    const client = createPluginClient(noop, async ({ path }) => {
+      abortCalls.push(path.id);
+      return {};
+    });
+    const configDir = await mkdtemp('/tmp/oh-my-opencode-slim-phase-2r-');
+    await Bun.write(
+      `${configDir}/oh-my-opencode-slim.json`,
+      JSON.stringify({
+        backgroundJobs: {
+          wallClockTimeoutMs: 60_000,
+        },
+      }),
+    );
+    process.env = {
+      ...originalEnv,
+      OPENCODE_CONFIG_DIR: configDir,
+    };
+    delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
+    globalThis.setTimeout = clock.setTimeout as typeof globalThis.setTimeout;
+    globalThis.clearTimeout =
+      clock.clearTimeout as typeof globalThis.clearTimeout;
+    Date.now = clock.now;
+
+    const launch = async (
+      hooks: Awaited<ReturnType<typeof plugin>>,
+      callID: string,
+      taskID: string,
+    ) => {
+      await hooks['tool.execute.before']?.(
+        { tool: 'task', sessionID: 'parent-1', callID },
+        {
+          args: {
+            subagent_type: 'explorer',
+            background: true,
+            description: taskID,
           },
-        }),
+        },
       );
-      process.env = {
-        ...originalEnv,
-        OPENCODE_CONFIG_DIR: configDir,
-      };
-      delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
-      globalThis.setTimeout = clock.setTimeout as typeof globalThis.setTimeout;
-      globalThis.clearTimeout =
-        clock.clearTimeout as typeof globalThis.clearTimeout;
-      Date.now = clock.now;
+      await hooks['tool.execute.after']?.(
+        { tool: 'task', sessionID: 'parent-1', callID },
+        {
+          output: [
+            `task_id: ${taskID}`,
+            'state: running',
+            '',
+            '<task_result>',
+            'started',
+            '</task_result>',
+          ].join('\n'),
+        },
+      );
+    };
 
-      const launch = async (
-        hooks: Awaited<ReturnType<typeof plugin>>,
-        callID: string,
-        taskID: string,
-      ) => {
-        await hooks['tool.execute.before']?.(
-          { tool: 'task', sessionID: 'parent-1', callID },
-          {
-            args: {
-              subagent_type: 'explorer',
-              background: true,
-              description: taskID,
-            },
-          },
-        );
-        await hooks['tool.execute.after']?.(
-          { tool: 'task', sessionID: 'parent-1', callID },
-          {
-            output: [
-              `task_id: ${taskID}`,
-              'state: running',
-              '',
-              '<task_result>',
-              'started',
-              '</task_result>',
-            ].join('\n'),
-          },
-        );
-      };
+    let generationOne: Awaited<ReturnType<typeof plugin>> | undefined;
+    let generationTwo: Awaited<ReturnType<typeof plugin>> | undefined;
+    try {
+      generationOne = await plugin({
+        client,
+        directory: configDir,
+        worktree: configDir,
+        serverUrl: new URL('http://127.0.0.1:4096'),
+        hostFlavor,
+      } as never);
+      expect(generationOne.dispose).toBeFunction();
+      await launch(generationOne, 'call-1', 'child-generation-1');
 
-      let generationOne: Awaited<ReturnType<typeof plugin>> | undefined;
-      let generationTwo: Awaited<ReturnType<typeof plugin>> | undefined;
-      try {
-        generationOne = await plugin({
-          client,
-          directory: configDir,
-          worktree: configDir,
-          serverUrl: new URL('http://127.0.0.1:4096'),
-          hostFlavor,
-        } as never);
-        expect(generationOne.dispose).toBeFunction();
-        await launch(generationOne, 'call-1', 'child-generation-1');
+      await clock.advanceTo(59_999);
+      expect(abortCalls).toEqual([]);
+      await generationOne.dispose?.();
+      await generationOne.dispose?.();
+      await clock.advanceTo(60_000);
+      expect(abortCalls).toEqual([]);
 
-        await clock.advanceTo(59_999);
-        expect(abortCalls).toEqual([]);
-        await generationOne.dispose?.();
-        await generationOne.dispose?.();
-        await clock.advanceTo(60_000);
-        expect(abortCalls).toEqual([]);
-
-        generationTwo = await plugin({
-          client,
-          directory: configDir,
-          worktree: configDir,
-          serverUrl: new URL('http://127.0.0.1:4096'),
-          hostFlavor,
-        } as never);
-        expect(generationTwo.dispose).toBeFunction();
-        await launch(generationTwo, 'call-2', 'child-generation-2');
-        await clock.advanceTo(119_999);
-        expect(abortCalls).toEqual([]);
-        await clock.advanceTo(120_000);
-        expect(abortCalls).toEqual(['child-generation-2']);
-        expect(scheduler).toHaveBeenCalledTimes(hostFlavor === 'v2' ? 0 : 2);
-      } finally {
-        await generationTwo?.dispose?.();
-        await generationOne?.dispose?.();
-        scheduler.mockRestore();
-        process.env = originalEnv;
-        globalThis.setTimeout = originalSetTimeout;
-        globalThis.clearTimeout = originalClearTimeout;
-        Date.now = originalNow;
-        await rm(configDir, { recursive: true, force: true });
-      }
-    },
-  );
+      generationTwo = await plugin({
+        client,
+        directory: configDir,
+        worktree: configDir,
+        serverUrl: new URL('http://127.0.0.1:4096'),
+        hostFlavor,
+      } as never);
+      expect(generationTwo.dispose).toBeFunction();
+      await launch(generationTwo, 'call-2', 'child-generation-2');
+      await clock.advanceTo(119_999);
+      expect(abortCalls).toEqual([]);
+      await clock.advanceTo(120_000);
+      expect(abortCalls).toEqual(['child-generation-2']);
+      expect(scheduler).toHaveBeenCalledTimes(2);
+    } finally {
+      await generationTwo?.dispose?.();
+      await generationOne?.dispose?.();
+      scheduler.mockRestore();
+      process.env = originalEnv;
+      globalThis.setTimeout = originalSetTimeout;
+      globalThis.clearTimeout = originalClearTimeout;
+      Date.now = originalNow;
+      await rm(configDir, { recursive: true, force: true });
+    }
+  });
 
   test('disposing a plugin generation retracts its board spinner before same-PID re-init', async () => {
     const originalEnv = { ...process.env };
@@ -2286,45 +2287,45 @@ describe('plugin reload generation cleanup', () => {
     },
   );
 
-  test.each(['v1', 'v2'] as const)(
-    "%s terminal outcome clears the child's open input waits",
-    async (hostFlavor) => {
-      const subscriptions = spyOn(
-        ProductionBoard.prototype,
-        'addTerminalOutcomeListener',
-      );
-      let hooks: Awaited<ReturnType<typeof plugin>> | undefined;
-      try {
-        hooks = await createHooks({ hostFlavor });
-        const board = new BackgroundJobBoard();
-        board.registerLaunch({
-          taskID: 'child-ask',
-          parentSessionID: 'parent-1',
-          agent: 'fixer',
-          description: 'child with an open ask',
-          now: 100,
-        });
-        noteChildInputWait({
-          taskID: 'child-ask',
-          parentSessionID: 'parent-1',
-          kind: 'question',
-          requestID: 'req_old',
-          questions: [{ question: 'continue?', header: 'Ask', options: [] }],
-          now: 150,
-        });
-        const stopped = board.markStopped('child-ask', 'no outcome', 200);
-        if (!stopped) throw new Error('missing stopped record');
-        for (const [listener] of subscriptions.mock.calls) listener(stopped);
-        // The ask died with the run: a restarted child must not inherit it
-        // in task_status (the store has no generation fence of its own).
-        expect(listChildInputWaits('child-ask')).toHaveLength(0);
-      } finally {
-        await hooks?.dispose?.();
-        subscriptions.mockRestore();
-        resetChildInputWaitForTests();
-      }
-    },
-  );
+  // The open-ask cleanup rides the V1 managed board's terminal-outcome
+  // listener. V2 has no managed board (and no managed wait bookkeeping), so
+  // this proof belongs to the V1 assembly only.
+  test("v1 terminal outcome clears the child's open input waits", async () => {
+    const subscriptions = spyOn(
+      ProductionBoard.prototype,
+      'addTerminalOutcomeListener',
+    );
+    let hooks: Awaited<ReturnType<typeof plugin>> | undefined;
+    try {
+      hooks = await createHooks({ hostFlavor: 'v1' });
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'child-ask',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        description: 'child with an open ask',
+        now: 100,
+      });
+      noteChildInputWait({
+        taskID: 'child-ask',
+        parentSessionID: 'parent-1',
+        kind: 'question',
+        requestID: 'req_old',
+        questions: [{ question: 'continue?', header: 'Ask', options: [] }],
+        now: 150,
+      });
+      const stopped = board.markStopped('child-ask', 'no outcome', 200);
+      if (!stopped) throw new Error('missing stopped record');
+      for (const [listener] of subscriptions.mock.calls) listener(stopped);
+      // The ask died with the run: a restarted child must not inherit it
+      // in task_status (the store has no generation fence of its own).
+      expect(listChildInputWaits('child-ask')).toHaveLength(0);
+    } finally {
+      await hooks?.dispose?.();
+      subscriptions.mockRestore();
+      resetChildInputWaitForTests();
+    }
+  });
 
   // ── Terminal publication push (issue #1647) ─────────────────────────────
   //
@@ -6846,17 +6847,14 @@ describe('plugin foreground fallback host gating', () => {
           },
         },
       } as never);
-      expect(
-        await hooks['v2.refusalOutcome']?.(data.sessionID, {
-          id: data.assistantMessageID,
-          type: 'assistant',
-          agent: data.agent,
-          model: data.model,
-          finish: 'content-filter',
-          error: { type: 'provider.content-filter', message: 'blocked' },
-          time: { created: Date.now(), completed: Date.now() },
-        }),
-      ).toBe('anthropic/claude-backup');
+      // The refusal outcome is created by the failed step event itself; the
+      // pending-outcome read only observes it.
+      const pending = hooks['v2.pendingRefusalOutcome']?.(
+        data.sessionID,
+        data.assistantMessageID,
+      );
+      expect(pending).toBeDefined();
+      expect(await pending).toBe('anthropic/claude-backup');
       expect(switchModel).toHaveBeenCalledWith(data.sessionID, {
         providerID: 'anthropic',
         id: 'claude-backup',

@@ -1,14 +1,37 @@
 import { describe, expect, test } from 'bun:test';
-import { resolveFeatureGates } from './feature-gates';
+import {
+  resolveFeatureGates,
+  UnsupportedHostConfigError,
+} from './feature-gates';
 import type { PluginConfig } from './schema';
 
 describe('resolveFeatureGates', () => {
-  test('defaults every optional subsystem on with managed background jobs', () => {
-    const gates = resolveFeatureGates();
+  test('defaults every optional subsystem on with managed background jobs on v1 / undefined host', () => {
+    for (const host of [undefined, 'v1']) {
+      const gates = resolveFeatureGates({}, host);
+
+      expect(gates).toEqual({
+        backgroundJobsMode: 'managed',
+        managedJobs: true,
+        presetRouting: true,
+        tui: true,
+        sidebar: true,
+        interview: true,
+        marketplace: true,
+        webfetch: true,
+        liveConfigRefresh: true,
+        updateChecker: true,
+      });
+      expect(Object.isFrozen(gates)).toBe(true);
+    }
+  });
+
+  test('defaults background jobs to native on v2 with managedJobs false', () => {
+    const gates = resolveFeatureGates({}, 'v2');
 
     expect(gates).toEqual({
-      backgroundJobsMode: 'managed',
-      managedJobs: true,
+      backgroundJobsMode: 'native',
+      managedJobs: false,
       presetRouting: true,
       tui: true,
       sidebar: true,
@@ -21,22 +44,42 @@ describe('resolveFeatureGates', () => {
     expect(Object.isFrozen(gates)).toBe(true);
   });
 
-  test('resolves the background-jobs lifecycle mode and managed flag', () => {
-    expect(resolveFeatureGates().backgroundJobsMode).toBe('managed');
-    expect(resolveFeatureGates().managedJobs).toBe(true);
+  test('throws UnsupportedHostConfigError when mode is explicitly managed on v2', () => {
+    expect(() =>
+      resolveFeatureGates({ backgroundJobs: { mode: 'managed' } }, 'v2'),
+    ).toThrow(UnsupportedHostConfigError);
+    expect(() =>
+      resolveFeatureGates({ backgroundJobs: { mode: 'managed' } }, 'v2'),
+    ).toThrow(/Unsupported backgroundJobs\.mode "managed" on OpenCode v2/);
 
-    const native = resolveFeatureGates({ backgroundJobs: { mode: 'native' } });
-    expect(native.backgroundJobsMode).toBe('native');
-    expect(native.managedJobs).toBe(false);
-
-    const off = resolveFeatureGates({ backgroundJobs: { mode: 'off' } });
-    expect(off.backgroundJobsMode).toBe('off');
-    expect(off.managedJobs).toBe(false);
-    // Off hands delegation to the host: no session preset routing either.
-    expect(off.presetRouting).toBe(false);
+    // v1 and undefined host still accept managed normally
     expect(
-      resolveFeatureGates({ backgroundJobs: { mode: 'native' } }).presetRouting,
+      resolveFeatureGates({ backgroundJobs: { mode: 'managed' } }, 'v1')
+        .managedJobs,
     ).toBe(true);
+    expect(
+      resolveFeatureGates({ backgroundJobs: { mode: 'managed' } }).managedJobs,
+    ).toBe(true);
+  });
+
+  test('accepts explicit native and off modes across v1 and v2', () => {
+    for (const host of [undefined, 'v1', 'v2']) {
+      const native = resolveFeatureGates(
+        { backgroundJobs: { mode: 'native' } },
+        host,
+      );
+      expect(native.backgroundJobsMode).toBe('native');
+      expect(native.managedJobs).toBe(false);
+      expect(native.presetRouting).toBe(true);
+
+      const off = resolveFeatureGates(
+        { backgroundJobs: { mode: 'off' } },
+        host,
+      );
+      expect(off.backgroundJobsMode).toBe('off');
+      expect(off.managedJobs).toBe(false);
+      expect(off.presetRouting).toBe(false);
+    }
   });
 
   test('keeps the sidebar off whenever the TUI master switch is off', () => {

@@ -1409,7 +1409,10 @@ describe('createV2Setup permission rules wiring', () => {
         },
       ];
       let transformsApplied = false;
-      let publishEvent!: (event: Record<string, unknown>) => void;
+      let publishEvent!: (
+        event: Record<string, unknown>,
+        onProcessed?: () => void,
+      ) => void;
       let promptHandler:
         | ((event: V2SessionPromptEvent) => Promise<void>)
         | undefined;
@@ -1423,7 +1426,11 @@ describe('createV2Setup permission rules wiring', () => {
       let rejectPendingLookup!: (error: Error) => void;
       let registrationDisposals = 0;
       let cleanedUp = false;
-      const eventQueue: Record<string, unknown>[] = [];
+      const eventQueue: Array<{
+        event: Record<string, unknown>;
+        onProcessed?: () => void;
+      }> = [];
+      let acknowledgePreviousEvent: (() => void) | undefined;
       let wakeEvent: (() => void) | undefined;
       let eventStreamStopped = false;
       const requiredRegistrationError = new Error(
@@ -1540,14 +1547,19 @@ describe('createV2Setup permission rules wiring', () => {
               next: async (): Promise<
                 IteratorResult<Record<string, unknown>>
               > => {
+                // The pump requests the next event only after it has finished
+                // dispatching the previous one through every consumer.
+                acknowledgePreviousEvent?.();
+                acknowledgePreviousEvent = undefined;
                 while (eventQueue.length === 0 && !eventStreamStopped) {
                   await new Promise<void>((resolve) => {
                     wakeEvent = resolve;
                   });
                 }
-                const event = eventQueue.shift();
-                return event
-                  ? { value: event, done: false }
+                const queued = eventQueue.shift();
+                acknowledgePreviousEvent = queued?.onProcessed;
+                return queued
+                  ? { value: queued.event, done: false }
                   : { value: undefined, done: true };
               },
               return: async () => {
@@ -1561,8 +1573,8 @@ describe('createV2Setup permission rules wiring', () => {
           }),
         },
       } as unknown as V2Context;
-      publishEvent = (event) => {
-        eventQueue.push(event);
+      publishEvent = (event, onProcessed) => {
+        eventQueue.push({ event, onProcessed });
         wakeEvent?.();
         wakeEvent = undefined;
       };
@@ -1841,11 +1853,15 @@ describe('createV2Setup permission rules wiring', () => {
           }
           expect(calls).toHaveLength(updatesBeforeAgentSelection + 1);
           const lookupsBeforeDeletedPrompt = getCalls.length;
-          publishEvent({
-            type: 'session.deleted',
-            data: { sessionID: 'ses_probe_child' },
-          });
-          await Bun.sleep(10);
+          const deleted = Promise.withResolvers<void>();
+          publishEvent(
+            {
+              type: 'session.deleted',
+              data: { sessionID: 'ses_probe_child' },
+            },
+            deleted.resolve,
+          );
+          await deleted.promise;
           await (promptHandler as NonNullable<typeof promptHandler>)({
             sessionID: 'ses_probe_child',
             messageID: 'msg_after_delete',
