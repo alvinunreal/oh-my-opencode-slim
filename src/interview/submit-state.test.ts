@@ -102,6 +102,50 @@ function blockText(json: string): string {
 }
 
 describe('interview submitState (tool path)', () => {
+  test('rejects duplicate normalized question IDs in tool and text states', async () => {
+    // Mutation: omit the normalized ID uniqueness check.
+    const harness = await createHarness();
+    await startInterview(harness);
+    const raw = {
+      summary: 'Specification',
+      questions: [
+        { id: 'q1', question: 'Platform?' },
+        { id: ' q1 ', question: 'Database?' },
+      ],
+    };
+    const result = await harness.service.submitState('ses-submit', raw);
+    expect(result.ok).toBe(false);
+    expect(result.message).toMatch(/duplicate/i);
+    expect(
+      parseAssistantState(blockText(JSON.stringify(raw))).state,
+    ).toBeNull();
+  });
+
+  test('rejects duplicate answers without consuming the unanswered question', async () => {
+    // Mutation: accept equal-length answers without checking ID uniqueness.
+    const harness = await createHarness();
+    const interviewId = await startInterview(harness);
+    await harness.service.submitState('ses-submit', {
+      summary: 'Specification',
+      questions: [
+        { id: 'q1', question: 'Platform?' },
+        { id: 'q2', question: 'Database?' },
+      ],
+    });
+    await expect(
+      harness.service.submitAnswers(interviewId, [
+        { questionId: 'q1', answer: 'Web' },
+        { questionId: 'q1', answer: 'Mobile' },
+      ]),
+    ).rejects.toThrow();
+    expect(
+      (await harness.service.getInterviewState(interviewId)).questions.map(
+        (q) => q.id,
+      ),
+    ).toEqual(['q1', 'q2']);
+    expect(harness.continued).toHaveLength(0);
+  });
+
   test('state captured via the tool equals parser output for the same fixture', async () => {
     const harness = await createHarness();
     const interviewId = await startInterview(harness);
