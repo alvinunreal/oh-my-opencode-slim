@@ -339,6 +339,7 @@ export async function equalizeAgentPanes(
     }
 
     opts.onPanesSeen?.(collectPaneIds(root));
+    if (opts.agentPaneIds?.size === 0) return true;
 
     const boundary =
       opts.mainPaneShare === undefined

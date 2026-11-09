@@ -323,6 +323,42 @@ function uniquePaneIds(h: Harness): void {
   };
 }
 
+test('reconnect closes missing panes concurrently for displayed and other parents', async () => {
+  const h = createHarness();
+  uniquePaneIds(h);
+  for (const sessionId of ['a1', 'a2']) {
+    h.reader.statuses.set(sessionId, 'busy');
+    await h.lifecycle.handleEvent(createdEvent({ sessionId }));
+  }
+  h.lifecycle.setDisplayedSession('parent-2');
+  for (const sessionId of ['b1', 'b2']) {
+    h.reader.statuses.set(sessionId, 'busy');
+    await h.lifecycle.handleEvent(
+      createdEvent({ sessionId, parentSessionId: 'parent-2' }),
+    );
+  }
+  h.adapter.closePane = async (paneId) => {
+    h.adapter.closeCalls.push(paneId);
+    await new Promise<void>((resolve) => h.clock.setTimeout(resolve, 250));
+    return true;
+  };
+
+  const reconnect = h.lifecycle.onReconnect();
+  await flushAsync();
+  const displayedCloses = h.adapter.closeCalls.length;
+  h.clock.advance(250);
+  await flushAsync();
+  const allCloses = h.adapter.closeCalls.length;
+  for (let i = 0; i < 4; i++) {
+    h.clock.advance(250);
+    await flushAsync();
+  }
+  await reconnect;
+  expect(displayedCloses).toBe(2);
+  expect(allCloses).toBe(4);
+  expect(h.lifecycle.getPanes().size).toBe(0);
+});
+
 describe('event filtering and readiness (2.2)', () => {
   test('a held pane still closes using its own directory after a route switch', async () => {
     const h = createHarness();
