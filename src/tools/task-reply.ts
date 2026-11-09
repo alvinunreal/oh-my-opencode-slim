@@ -4,7 +4,6 @@ import {
   tool,
 } from '@opencode-ai/plugin';
 import {
-  type ChildInputWaitQuestion,
   clearChildInputWait,
   getChildInputWait,
   listChildInputWaits,
@@ -13,6 +12,12 @@ import { pluginDisposedMessage } from '../hooks/task-session-manager/session-rec
 import type { BackgroundJobBoard } from '../utils/background-job-board';
 import { log } from '../utils/logger';
 import { getClient } from '../utils/opencode-client';
+import {
+  assertHostReplyResult,
+  errorText,
+  replyV1Question,
+  toFormAnswer,
+} from '../utils/question-reply';
 import { OperationTimeoutError, withTimeout } from '../utils/session';
 import {
   delegationWording,
@@ -30,81 +35,6 @@ import {
 const z = tool.schema;
 const DEFAULT_REPLY_TIMEOUT_MS = 10_000;
 const MAX_ANSWER_LENGTH = 2000;
-
-function errorText(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'string') return error;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
-}
-
-/**
- * Fail a reply when the host transport reports an error result.
- *
- * Host SDK calls return `{ data, error, response }` and do NOT throw on
- * HTTP errors by default, so a bare `await` would treat a 404/validation
- * failure as success. Treat a set `error` or a non-2xx response as
- * failure; results that carry neither (including domain-mock shapes like
- * `{ data: true }` or `{}`) pass.
- */
-function assertHostReplyResult(result: unknown, operation: string): void {
-  if (typeof result !== 'object' || result === null) return;
-  const record = result as {
-    error?: unknown;
-    response?: { ok?: unknown; status?: unknown };
-  };
-  if (record.error !== undefined && record.error !== null) {
-    throw new Error(`${operation} failed: ${errorText(record.error)}`);
-  }
-  const response = record.response;
-  if (response && typeof response.ok === 'boolean' && !response.ok) {
-    const status =
-      typeof response.status === 'number'
-        ? ` with HTTP ${response.status}`
-        : '';
-    throw new Error(`${operation} failed${status}`);
-  }
-}
-
-/**
- * Fold v1 question answers (`string[][]`: selected option labels per
- * question, in question order) into the v2 form-reply `answer` map
- * (`{ [fieldKey]: string | number | boolean | string[] }` per
- * SessionFormReplyInput).
- *
- * The open wait stores the form's fields as v1 questions in adapter order
- * (form.created → question.asked; see event-adapter.ts), and the adapter
- * never reorders the surviving fields — so the i-th answer fills the i-th
- * stored question. The adapter also carries each field's original key
- * (`ChildInputWaitQuestion.key`): the host requires answers keyed by that
- * exact value (`answer[field.key]` — anything else is "Unknown form
- * field"), while `header` is display text truncated to 30 chars. Keyless
- * asks (v1-native or older records) fall back to the stored question text.
- */
-function toFormAnswer(
-  answers: string[][],
-  questions: ChildInputWaitQuestion[] | undefined,
-): Record<string, string | number | boolean | string[]> {
-  const answer: Record<string, string | number | boolean | string[]> = {};
-  answers.forEach((selections, index) => {
-    const question = questions?.[index];
-    // The key is used verbatim: the host matches it exactly.
-    const key =
-      question?.key ||
-      question?.header.trim() ||
-      question?.question.trim() ||
-      `question_${index}`;
-    // Multiselect fields require a string[] even for a single selection.
-    answer[key] =
-      question?.multiple || selections.length !== 1
-        ? [...selections]
-        : selections[0];
-  });
-  return answer;
-}
 
 /**
  * Answer (or reject) a background child's pending question/permission when
@@ -361,25 +291,10 @@ export function createTaskReplyTool(options: {
         }
         const question = client.question;
         if (answers !== undefined) {
-          if (typeof question?.reply === 'function') {
-            return await question.reply({
-              requestID: openWait.requestID,
-              directory: options.input.directory,
-              answers,
-            });
-          }
-          const post = client._client?.post;
-          if (typeof post !== 'function') {
-            throw new Error(
-              'Host client has no question.reply API; cannot answer the pending question',
-            );
-          }
-          return await post({
-            url: '/question/{requestID}/reply',
-            path: { requestID: openWait.requestID },
-            query: { directory: options.input.directory },
-            body: { answers },
-            headers: { 'Content-Type': 'application/json' },
+          return await replyV1Question(client, {
+            requestID: openWait.requestID,
+            directory: options.input.directory,
+            answers,
           });
         }
         if (typeof question?.reject === 'function') {
