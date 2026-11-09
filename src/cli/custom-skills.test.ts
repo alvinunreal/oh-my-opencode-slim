@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -26,12 +26,20 @@ function writeSkill(root: string, name: string, skillMd: string): void {
 describe('getV1BundledSkillPaths', () => {
   const originalEnv = { ...process.env };
   afterEach(() => {
+    mock.restore();
     process.env = { ...originalEnv };
   });
 
   function setup(): { root: string; project: string } {
     const root = tmpDir();
     const project = tmpDir();
+    process.env.HOME = root;
+    spyOn(os, 'homedir').mockReturnValue(root);
+    process.env.XDG_CONFIG_HOME = path.join(root, 'config');
+    process.env.OPENCODE_CONFIG_DIR = path.join(root, 'opencode');
+    delete process.env.OPENCODE_DISABLE_EXTERNAL_SKILLS;
+    delete process.env.OPENCODE_DISABLE_CLAUDE_CODE;
+    delete process.env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS;
     fs.mkdirSync(path.join(project, '.git'));
     for (const name of ['codemap', 'deepwork', 'reflect']) {
       writeSkill(root, name, `---\nname: ${name}\ndescription: d\n---\n`);
