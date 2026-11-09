@@ -16,6 +16,9 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import type { MultiplexerLayout } from '../../config/schema';
 import { crossSpawn } from '../../utils/compat';
 import { isRecord } from '../../utils/guards';
@@ -74,7 +77,7 @@ async function readDesktopRecoveryRecords(
   path: string,
 ): Promise<DesktopRecoveryRecord[]> {
   try {
-    const parsed = JSON.parse(await Bun.file(path).text()) as unknown;
+    const parsed = JSON.parse(await readFile(path, 'utf8')) as unknown;
     return Array.isArray(parsed) ? parsed.filter(isDesktopRecoveryRecord) : [];
   } catch {
     return [];
@@ -86,10 +89,8 @@ async function writeDesktopRecoveryRecords(
   records: DesktopRecoveryRecord[],
 ): Promise<void> {
   try {
-    const { mkdir } = await import('node:fs/promises');
-    const { dirname } = await import('node:path');
     await mkdir(dirname(path), { recursive: true });
-    await Bun.write(path, `${JSON.stringify(records)}\n`);
+    await writeFile(path, `${JSON.stringify(records)}\n`);
   } catch {
     // best-effort recovery journal
   }
@@ -192,7 +193,7 @@ export class HerdrMultiplexer implements Multiplexer {
     const parentId = process.env.HC_TERMINAL_ID?.trim();
     if (!parentId) return null;
     const safe = parentId.replace(/[^a-zA-Z0-9_-]+/g, '_');
-    return `/tmp/opencode/herdr-desktop-recovery-${safe}.json`;
+    return join(tmpdir(), 'opencode', `herdr-desktop-recovery-${safe}.json`);
   }
 
   private async markUnverifiedDesktopSpawn(
