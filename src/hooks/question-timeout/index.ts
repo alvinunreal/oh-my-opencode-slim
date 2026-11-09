@@ -25,9 +25,7 @@ export function createQuestionTimeoutHook(options: {
     reply: async (requestID, _sessionID, count) => {
       if (options.isDisposed?.()) return;
       const text = autoAnswerText(timeoutMs);
-      const answers = Array.from({ length: count }, (_, index) => [
-        index ? text.short : text.full,
-      ]);
+      const answers = Array.from({ length: count }, () => [text]);
       const client = getClient(options.ctx) as unknown as Parameters<
         typeof replyV1Question
       >[0];

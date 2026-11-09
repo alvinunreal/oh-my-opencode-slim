@@ -16,7 +16,9 @@ test('replies once at the deadline with the configured minutes', async () => {
   expect(reply).not.toHaveBeenCalled();
   await timers.advance(1);
   expect(reply).toHaveBeenCalledTimes(1);
-  expect(autoAnswerText(1_200_000).full).toContain('20 minutes');
+  expect(autoAnswerText(1_200_000)).toBe(
+    'No user response within 20 minutes; decide yourself and continue.',
+  );
 });
 
 test('settlement cancels the timer', async () => {

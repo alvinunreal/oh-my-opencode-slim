@@ -4,7 +4,7 @@ import {
 } from '../hooks/question-timeout/core';
 import { PANE_VIEWER_ENV } from '../multiplexer/shared';
 import { isRecord } from '../utils/guards';
-import { log } from '../utils/logger';
+import { initLogger, log } from '../utils/logger';
 import { assertHostReplyResult, toFormAnswer } from '../utils/question-reply';
 import type { TimerSeamOptions } from '../utils/timer-seam';
 
@@ -44,6 +44,7 @@ export function registerQuestionTimeout(
     (options.env ?? process.env)[PANE_VIEWER_ENV] === '1'
   )
     return;
+  initLogger('tui');
   const data = ctx.data;
   if (
     typeof data?.on !== 'function' ||
@@ -60,9 +61,7 @@ export function registerQuestionTimeout(
     log,
     reply: async (formID, sessionID, form) => {
       const text = autoAnswerText(options.timeoutMs);
-      const answers = form.fields.map((_, index) => [
-        index ? text.short : text.full,
-      ]);
+      const answers = form.fields.map(() => [text]);
       const answer = toFormAnswer(
         answers,
         form.fields.map((field) => ({

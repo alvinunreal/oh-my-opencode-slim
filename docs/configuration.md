@@ -100,9 +100,8 @@ disables it; enabled values range from `60000` to `2147483647`.
 }
 ```
 
-The reply asks the model to choose its recommended option, state its assumption,
-and leave irreversible or external actions for user confirmation. Permission
-requests and questions that disallow custom answers remain pending. On v1 the
+The reply tells the model how long it waited and asks it to decide and continue.
+Permission requests and questions that disallow custom answers remain pending. On v1 the
 server owns the timer. On v2 an OMOS TUI must be attached and `tui` must be
 enabled; a server without that TUI does not auto-answer. Restart the TUI after
 changing the setting. A TUI restarted while a question is already open does not

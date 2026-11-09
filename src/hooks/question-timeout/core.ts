@@ -1,15 +1,8 @@
 import type { TimerHandle, TimerSeamOptions } from '../../utils/timer-seam';
 
-export function autoAnswerText(timeoutMs: number): {
-  full: string;
-  short: string;
-} {
+export function autoAnswerText(timeoutMs: number): string {
   const minutes = Math.round(timeoutMs / 60_000);
-  return {
-    full: `[Auto-answer] No user response within ${minutes} minutes. Decide yourself: pick the option you would recommend and state that assumption in your reply. Prefer reversible actions; leave irreversible or external actions (push, publishing, deleting data, PR/issue/comment actions) pending for the user to confirm.`,
-    short:
-      '[Auto-answer] No user response; use the option you would recommend (see first answer).',
-  };
+  return `No user response within ${minutes} minute${minutes === 1 ? '' : 's'}; decide yourself and continue.`;
 }
 
 export function createQuestionTimeout<Payload>(

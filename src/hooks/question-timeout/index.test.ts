@@ -1,6 +1,5 @@
 import { expect, mock, test } from 'bun:test';
 import { createTimerHarness } from '../../utils/test-timers';
-import { autoAnswerText } from './core';
 import { createQuestionTimeoutHook } from './index';
 
 function setup(hostFlavor?: string, timeoutMs = 60_000) {
@@ -23,11 +22,12 @@ test('v1 answers every free-text question in native two-dimensional shape', asyn
     properties: { id: 'q1', sessionID: 's1', questions: [{}, {}] },
   });
   await timers.advance(60_000);
-  const text = autoAnswerText(60_000);
+  const text =
+    'No user response within 1 minute; decide yourself and continue.';
   expect(reply).toHaveBeenCalledWith({
     requestID: 'q1',
     directory: '/test',
-    answers: [[text.full], [text.short]],
+    answers: [[text], [text]],
   });
 });
 
@@ -72,6 +72,7 @@ test('v1 resolution events cancel by requestID', async () => {
 
 test('disabled or v2 hosts do not create a v1 owner', () => {
   // Mutation: enable by default or create two owners on v2.
+  expect(createQuestionTimeoutHook({ ctx: {} as never })).toBeUndefined();
   expect(setup(undefined, 0).hook).toBeUndefined();
   expect(setup('v2').hook).toBeUndefined();
 });
