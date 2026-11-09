@@ -7084,6 +7084,7 @@ describe('task-session-manager hook', () => {
       state: 'running',
       statusUncertain: true,
     });
+    await hook.event({ event: { type: 'server.instance.disposed' } });
   });
 
   test('ignores session.idle for already reconciled job', async () => {

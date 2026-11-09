@@ -333,6 +333,35 @@ describe('findBinaryLogPrefix', () => {
   });
 });
 
+describe('findBinary', () => {
+  afterEach(() => {
+    crossSpawnMock.mockReset();
+  });
+
+  test('returns the first Windows where match without CRLF', async () => {
+    const original = process.platform;
+    Object.defineProperty(process, 'platform', {
+      value: 'win32',
+      configurable: true,
+    });
+    crossSpawnMock.mockImplementation(() => ({
+      exited: Promise.resolve(0),
+      stdout: () =>
+        Promise.resolve('C:\\first\\tmux.exe\r\nC:\\second\\tmux.exe\r\n'),
+      stderr: () => Promise.resolve(''),
+    }));
+    try {
+      const { findBinary } = await importShared();
+      expect(await findBinary('tmux')).toBe('C:\\first\\tmux.exe');
+    } finally {
+      Object.defineProperty(process, 'platform', {
+        value: original,
+        configurable: true,
+      });
+    }
+  });
+});
+
 describe('buildViewCommand', () => {
   test('a PowerShell pane invokes the quoted executable behind the call operator', async () => {
     const { buildViewCommand } = await importShared();

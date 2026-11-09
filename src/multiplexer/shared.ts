@@ -401,7 +401,8 @@ export async function findBinary(
     }
 
     const stdout = await proc.stdout();
-    const path = stdout.trim().split('\n')[0];
+    // where lists every match with CRLF line endings.
+    const path = stdout.trim().split(/\r?\n/)[0];
     if (!path) {
       log(`${logPrefix} findBinary: no path in output`);
       return null;

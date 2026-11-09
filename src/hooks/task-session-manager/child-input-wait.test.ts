@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { BackgroundJobBoard } from '../../utils/background-job-board';
 import {
   formatChildInputWaitDetail,
@@ -13,6 +13,12 @@ import { resetUserWaitGateForTests } from './user-wait-gate';
 mock.module('../../utils/opencode-client', () => ({
   getClient: (input: { client: unknown }) => input.client as never,
 }));
+
+const hooks: ReturnType<typeof createTaskSessionManagerHook>[] = [];
+afterEach(async () => {
+  for (const hook of hooks.splice(0))
+    await hook.event({ event: { type: 'server.instance.disposed' } });
+});
 
 function createHook(options?: {
   backgroundJobBoard?: BackgroundJobBoard;
@@ -45,6 +51,7 @@ function createHook(options?: {
       onChildInputWait: options?.onChildInputWait,
     },
   );
+  hooks.push(hook);
   return { hook };
 }
 
