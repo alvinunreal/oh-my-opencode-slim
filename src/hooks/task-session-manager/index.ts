@@ -703,7 +703,6 @@ export function createTaskSessionManagerHook(
 
   const inputWaits = createInputWaitTracker({
     shouldManageSession: options.shouldManageSession,
-    hostFlavor: options.hostFlavor,
     invalidateIdle: (sessionID) => idleSessionTokens.invalidate(sessionID),
   });
   hasInputWait = (s) => inputWaits.hasInputWait(s);

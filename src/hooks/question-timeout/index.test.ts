@@ -70,6 +70,19 @@ test('v1 resolution events cancel by requestID', async () => {
   expect(timers.pending()).toBe(0);
 });
 
+test('v1 session deletion cancels timers using info.id', async () => {
+  // Mutation: ignore the host's session.deleted info.id shape.
+  const { hook, timers, reply } = setup();
+  hook?.event({
+    type: 'question.asked',
+    properties: { id: 'q1', sessionID: 's1', questions: [{}] },
+  });
+  hook?.event({ type: 'session.deleted', properties: { info: { id: 's1' } } });
+  await timers.advance(60_000);
+  expect(reply).not.toHaveBeenCalled();
+  expect(timers.pending()).toBe(0);
+});
+
 test('disabled or v2 hosts do not create a v1 owner', () => {
   // Mutation: enable by default or create two owners on v2.
   expect(createQuestionTimeoutHook({ ctx: {} as never })).toBeUndefined();
@@ -77,17 +90,25 @@ test('disabled or v2 hosts do not create a v1 owner', () => {
   expect(setup('v2').hook).toBeUndefined();
 });
 
-test('aborted v1 turns cancel the stale question timer', async () => {
-  // Mutation: ignore MessageAbortedError.
+test('aborted v1 turns retain the question timer until it replies', async () => {
+  // Mutation: cancel the session timer on MessageAbortedError.
   const { hook, timers, reply } = setup();
   hook?.event({
     type: 'question.asked',
     properties: { id: 'q1', sessionID: 's1', questions: [{}] },
   });
-  hook?.event({
+  const abortEvent = {
     type: 'session.error',
     properties: { sessionID: 's1', error: { name: 'MessageAbortedError' } },
-  });
+  };
+  hook?.event(abortEvent);
   await timers.advance(60_000);
-  expect(reply).not.toHaveBeenCalled();
+  expect(reply).toHaveBeenCalledTimes(1);
+  expect(reply).toHaveBeenCalledWith({
+    requestID: 'q1',
+    directory: '/test',
+    answers: [
+      ['No user response within 1 minute; decide yourself and continue.'],
+    ],
+  });
 });

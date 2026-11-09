@@ -330,11 +330,7 @@ export async function handleEvent(
 
   if (input.event.type === 'server.instance.disposed')
     deps.pendingChildAsks?.clear();
-  if (
-    input.event.type === 'session.deleted' ||
-    (input.event.type === 'session.error' &&
-      input.event.properties?.error?.name === 'MessageAbortedError')
-  ) {
+  if (input.event.type === 'session.deleted') {
     const sessionID =
       input.event.properties?.info?.id ?? input.event.properties?.sessionID;
     if (sessionID) deps.pendingChildAsks?.delete(sessionID);

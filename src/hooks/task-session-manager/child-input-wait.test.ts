@@ -23,6 +23,7 @@ afterEach(async () => {
 function createHook(options?: {
   backgroundJobBoard?: BackgroundJobBoard;
   shouldManageSession?: (sessionID: string) => boolean;
+  isFallbackInProgress?: (sessionID: string) => boolean;
   onChildInputWait?: (notification: {
     parentSessionID: string;
     taskID: string;
@@ -49,6 +50,7 @@ function createHook(options?: {
       idleReconcileDelayMs: 0,
       runtimeStatusReconcileDelayMs: 0,
       onChildInputWait: options?.onChildInputWait,
+      isFallbackInProgress: options?.isFallbackInProgress,
     },
   );
   hooks.push(hook);
@@ -177,8 +179,60 @@ describe('background child input wait surfacing (RED)', () => {
     expect(notified).toHaveLength(0);
   });
 
-  test('an aborted v1 turn clears its question without clearing unrelated permission waits', async () => {
-    // Mutation: only replied/rejected events clear the root question.
+  test('a foreground question survives an aborted turn until promotion', async () => {
+    // Mutation: delete pending foreground asks on MessageAbortedError.
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      isFallbackInProgress: () => true,
+    });
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-abort' },
+      {
+        args: {
+          subagent_type: 'fixer',
+          description: 'work',
+          background: false,
+        },
+      },
+    );
+    await hook.event({
+      event: {
+        type: 'session.created',
+        properties: {
+          info: { id: 'ses_abort', parentID: 'parent-1', agent: 'fixer' },
+        },
+      },
+    });
+    await hook.event(questionAskedEvent('ses_abort', 'que_abort'));
+    expect(board.get('ses_abort')?.state).toBe('running');
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'ses_abort',
+          error: { name: 'MessageAbortedError' },
+        },
+      },
+    });
+    expect(board.get('ses_abort')?.state).toBe('running');
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-abort' },
+      {
+        output:
+          'task_id: ses_abort\nstate: running\n\n<task_result>\nBackground task started.\n</task_result>',
+        metadata: { background: true },
+      },
+    );
+    expect(board.get('ses_abort')?.background).toBe(true);
+    expect(getChildInputWait('ses_abort', 'que_abort')?.requestID).toBe(
+      'que_abort',
+    );
+  });
+
+  test('an aborted v1 turn preserves its question until the host answers it', async () => {
+    // Mutation: clear question waits on MessageAbortedError.
     resetUserWaitGateForTests();
     const { hook } = createHook();
     await hook.event(questionAskedEvent('parent-1', 'que_abort'));
@@ -204,12 +258,14 @@ describe('background child input wait surfacing (RED)', () => {
         properties: { sessionID: 'parent-1', requestID: 'per_other' },
       },
     });
-    expect(hook.hasInputWait('parent-1')).toBe(false);
-    await hook.event(questionAskedEvent('parent-1', 'que_new'));
-    await hook.event({
-      event: { type: 'session.idle', properties: { sessionID: 'parent-1' } },
-    });
     expect(hook.hasInputWait('parent-1')).toBe(true);
+    await hook.event({
+      event: {
+        type: 'question.replied',
+        properties: { sessionID: 'parent-1', requestID: 'que_abort' },
+      },
+    });
+    expect(hook.hasInputWait('parent-1')).toBe(false);
   });
 
   test('a background child question notifies the parent with the question content', async () => {

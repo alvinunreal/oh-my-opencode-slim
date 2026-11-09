@@ -32,7 +32,6 @@ function inputWaitKey(kind: 'permission' | 'question', requestID: string) {
 
 export function createInputWaitTracker(options: {
   shouldManageSession: (sessionID: string) => boolean;
-  hostFlavor?: string;
   /** Cancel delayed idle work when an input wait arms. */
   invalidateIdle: (sessionID: string) => void;
 }) {
@@ -65,27 +64,10 @@ export function createInputWaitTracker(options: {
       id?: string;
       requestID?: string;
       sessionID?: string;
-      error?: { name?: string };
     };
   }): void {
     const sessionID = event.properties?.sessionID;
     if (!sessionID || !options.shouldManageSession(sessionID)) {
-      return;
-    }
-
-    if (
-      options.hostFlavor !== 'v2' &&
-      event.type === 'session.error' &&
-      event.properties?.error?.name === 'MessageAbortedError'
-    ) {
-      const waits = inputWaitsByParent.get(sessionID);
-      if (waits) {
-        for (const key of waits) {
-          if (typeof key === 'string' && key.startsWith('question:'))
-            waits.delete(key);
-        }
-        if (waits.size === 0) clearInputWaits(sessionID);
-      }
       return;
     }
 

@@ -50,7 +50,6 @@ export function createQuestionTimeoutHook(options: {
       sessionID?: string;
       questions?: unknown;
       info?: { id?: string };
-      error?: { name?: string };
     };
   }): void {
     const props = event.properties;
@@ -79,11 +78,7 @@ export function createQuestionTimeoutHook(options: {
       ].includes(event.type)
     ) {
       if (props?.requestID) core.settled(props.requestID);
-    } else if (
-      event.type === 'session.deleted' ||
-      (event.type === 'session.error' &&
-        props?.error?.name === 'MessageAbortedError')
-    ) {
+    } else if (event.type === 'session.deleted') {
       const sessionID = props?.info?.id ?? props?.sessionID;
       if (sessionID) core.sessionGone(sessionID);
     } else if (event.type === 'server.instance.disposed') {
