@@ -7,6 +7,7 @@ import {
   goCapForModel,
   groupModels,
   isExplicitBindingFor,
+  isUnsupportedSessionRpc,
   type ModelShapeLike,
   sessionBinding,
   sessionStateKey,
@@ -321,5 +322,39 @@ describe('workspace routing keys', () => {
     expect(key).not.toBe(sessionStateKey('remote', '/work', 'session-1'));
     expect(key).not.toBe(sessionStateKey('sidecar', '/other', 'session-1'));
     expect(key).not.toBe(sessionStateKey('sidecar', '/work', 'session-2'));
+  });
+});
+
+describe('isUnsupportedSessionRpc', () => {
+  test('recognises the host errors for a missing contract or method', () => {
+    expect(
+      isUnsupportedSessionRpc({
+        type: 'rpc.unavailable',
+        message: 'RPC is unavailable: oh-my-opencode-slim.session-preset.v1',
+      }),
+    ).toBe(true);
+    expect(
+      isUnsupportedSessionRpc(
+        new Error('RPC is unavailable: oh-my-opencode-slim.gui-config.v1'),
+      ),
+    ).toBe(true);
+    expect(
+      isUnsupportedSessionRpc(
+        new Error(
+          'Unknown RPC method: oh-my-opencode-slim.session-preset.v1.unbind',
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isUnsupportedSessionRpc({ type: 'rpc.method_not_found', message: '' }),
+    ).toBe(true);
+  });
+
+  test('keeps real failures as errors', () => {
+    expect(isUnsupportedSessionRpc(new Error('Request timed out'))).toBe(false);
+    expect(isUnsupportedSessionRpc(new Error('Session not found'))).toBe(false);
+    expect(
+      isUnsupportedSessionRpc({ type: 'rpc.invalid_input', message: 'bad' }),
+    ).toBe(false);
   });
 });

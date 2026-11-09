@@ -409,3 +409,75 @@ export function sessionStateKey(
 ): string {
   return `${workspaceKey(serverID, directory)}\u0000${sessionID}`;
 }
+
+export const errorText = (cause: unknown): string => {
+  if (cause instanceof Error) {
+    const nested =
+      cause.cause !== undefined && cause.cause !== cause
+        ? errorText(cause.cause)
+        : '';
+    return nested && !cause.message.includes(nested)
+      ? `${cause.message}: ${nested}`
+      : cause.message;
+  }
+  if (typeof cause === 'string') return cause;
+  if (cause && typeof cause === 'object') {
+    const record = cause as Record<string, unknown>;
+    for (const key of ['message', 'error', 'detail', '_tag', 'code']) {
+      const value = record[key];
+      if (typeof value === 'string' && value.length > 0) return value;
+    }
+    try {
+      return JSON.stringify(cause);
+    } catch {
+      return String(cause);
+    }
+  }
+  return String(cause);
+};
+
+/**
+ * An old OMOS build answers an unknown RPC with a not-found style error. Only
+ * those errors become a config-only UI. Timeouts, aborts, transport failures,
+ * and missing sessions stay errors, so they are never silently treated as
+ * "this version does not support session teams".
+ */
+const HOST_MISSING_RPC_TYPES = new Set([
+  'rpc.unavailable',
+  'rpc.method_not_found',
+]);
+
+/** The host's typed RPC error (`{ type, message }`), possibly wrapped in `cause`. */
+const hostRpcErrorType = (cause: unknown, depth = 0): string | undefined => {
+  if (!cause || typeof cause !== 'object' || depth > 4) return undefined;
+  const record = cause as Record<string, unknown>;
+  if (typeof record.type === 'string') return record.type;
+  return hostRpcErrorType(record.cause, depth + 1);
+};
+
+export const isUnsupportedSessionRpc = (cause: unknown) => {
+  const type = hostRpcErrorType(cause);
+  if (type && HOST_MISSING_RPC_TYPES.has(type)) return true;
+  const text = errorText(cause).toLowerCase();
+  if (!text) return false;
+  // The host's own wording for an unregistered contract or method. Checked
+  // first: the contract id itself contains "session".
+  if (/^rpc is unavailable: |^unknown rpc method: /.test(text)) return true;
+  if (
+    /(timed? ?out|abort|network|fetch|connect|econn|enotfound|401|403|500|502|503)/.test(
+      text,
+    )
+  ) {
+    return false;
+  }
+  if (/session/.test(text) && /(not[ _-]?found|unknown|missing)/.test(text))
+    return false;
+  if (
+    /method[ _-]?not[ _-]?found|not[ _-]?registered|unimplemented/.test(text)
+  ) {
+    return true;
+  }
+  return /(?:unknown|not found|not registered|unsupported|not supported|no such|missing).*(?:rpc|method|procedure|endpoint|handler|route|request)|(?:rpc|method|procedure|endpoint|handler|route|request).*(?:unknown|not found|not registered|unsupported|not supported|no such|missing)|(?:^|\D)404(?:\D|$)|(?:^|\D)405(?:\D|$)/.test(
+    text,
+  );
+};

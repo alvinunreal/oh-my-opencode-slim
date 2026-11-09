@@ -16,6 +16,7 @@ import {
   type ConfigLoadWarning,
   findPluginConfigPaths,
   getPluginConfigCandidates,
+  interpolateEnvironmentVariables,
   isProjectConfigDisabled,
   loadRawPluginConfigFromPath,
 } from '../config/loader';
@@ -130,9 +131,20 @@ type PresetMap = Record<string, PresetInput>;
 
 interface PresetState {
   userPath: string | null;
+  /** Raw editable layers: writes and edit guards use these. */
   userPresets: PresetMap;
   projectPresets: PresetMap;
   effectivePresets: PresetMap;
+  /**
+   * The runtime loader's view: each layer parsed by
+   * `loadRawPluginConfigFromPath` ({env:...} interpolated, schema-checked)
+   * and merged like `loadPluginConfig`. Display, validation and resolution
+   * use this map. A layer the loader rejects contributes its raw presets so
+   * the per-preset schema error stays visible.
+   */
+  loadedPresets: PresetMap;
+  /** Loader-visible presets whose file the editor cannot parse as plain JSONC. */
+  unreadablePresets: Set<string>;
   projectPreset: string;
 }
 
@@ -223,13 +235,6 @@ function withEnvironment<T>(
   }
 }
 
-function interpolateEnvironmentVariables(value: string): string {
-  return value.replace(
-    /\{env:([^}]+)\}/g,
-    (_, variableName: string) => process.env[variableName] ?? '',
-  );
-}
-
 function envPresetName(): string {
   return process.env.OH_MY_OPENCODE_SLIM_PRESET?.trim() ?? '';
 }
@@ -268,32 +273,60 @@ function readRawJsonObject(configPath: string): UnknownRecord | null {
   }
 }
 
-/** Raw editable preset layers; each definition is checked against PresetSchema for the runtime view. */
+interface PresetLayer {
+  /** Raw JSONC presets for writes; empty when the file is not plain JSONC. */
+  raw: PresetMap;
+  /** The runtime loader's presets for this file (raw when it rejects the file). */
+  loaded: PresetMap;
+  /** Names only the loader can read (e.g. unquoted {env:...} tokens). */
+  unreadable: string[];
+  preset?: string;
+}
+
+function readPresetLayer(configPath: string): PresetLayer {
+  const rawData = readRawJsonObject(configPath);
+  const raw = presetMapOf(rawData?.presets);
+  const parsed = loadRawPluginConfigFromPath(configPath, { silent: true });
+  const loaded = parsed ? presetMapOf(parsed.presets) : raw;
+  const unreadable = rawData ? [] : Object.keys(loaded);
+  const preset =
+    typeof parsed?.preset === 'string'
+      ? parsed.preset
+      : typeof rawData?.preset === 'string'
+        ? interpolateEnvironmentVariables(rawData.preset)
+        : undefined;
+  return { raw, loaded, unreadable, ...(preset ? { preset } : {}) };
+}
+
+/**
+ * Preset layers in loader precedence. Raw maps back edits; the loader view
+ * (interpolated exactly as the runtime reads it) backs display and checks.
+ */
 function readPresetState(directory: string): PresetState {
   const { userConfigPath, projectConfigPaths } = findPluginConfigPaths(
     directory,
     HOST_FLAVOR,
   );
-  const userData = userConfigPath ? readRawJsonObject(userConfigPath) : null;
-  const userPresets = presetMapOf(userData?.presets);
+  const user = userConfigPath ? readPresetLayer(userConfigPath) : undefined;
+  const userPresets = user?.raw ?? {};
+  let loadedPresets = user?.loaded ?? {};
+  const unreadablePresets = new Set(user?.unreadable ?? []);
   let projectPresets: PresetMap = {};
   let projectPreset = '';
   for (const configPath of projectConfigPaths) {
-    const layer = readRawJsonObject(configPath);
-    if (!layer) continue;
-    projectPresets = mergePresetLayers(
-      projectPresets,
-      presetMapOf(layer.presets),
-    );
-    if (typeof layer.preset === 'string') {
-      projectPreset = interpolateEnvironmentVariables(layer.preset).trim();
-    }
+    const layer = readPresetLayer(configPath);
+    projectPresets = mergePresetLayers(projectPresets, layer.raw);
+    loadedPresets = mergePresetLayers(loadedPresets, layer.loaded);
+    for (const name of layer.unreadable) unreadablePresets.add(name);
+    if (layer.preset !== undefined) projectPreset = layer.preset.trim();
   }
   return {
     userPath: userConfigPath,
     userPresets,
     projectPresets,
     effectivePresets: mergePresetLayers(userPresets, projectPresets),
+    loadedPresets,
+    unreadablePresets,
     projectPreset,
   };
 }
@@ -361,42 +394,12 @@ function safeNormalizePreset(value: PresetInput): PresetDefinition | undefined {
   }
 }
 
-/**
- * Resolution-only copy of the preset map: `{env:...}` placeholders in
- * `extends` are expanded the way the runtime config loader expands them.
- * Writes still read the raw map, so placeholders survive edits.
- */
-function expandedPresetDefinitions(presets: PresetMap): PresetMap {
-  const expanded: PresetMap = {};
-  for (const [name, definition] of Object.entries(presets)) {
-    if (!isRecord(definition)) {
-      defineOwn(expanded, name, definition);
-      continue;
-    }
-    const extendsValue = definition.extends;
-    const expandedExtends =
-      typeof extendsValue === 'string'
-        ? interpolateEnvironmentVariables(extendsValue)
-        : Array.isArray(extendsValue)
-          ? extendsValue.map((value) =>
-              typeof value === 'string'
-                ? interpolateEnvironmentVariables(value)
-                : value,
-            )
-          : extendsValue;
-    defineOwn(expanded, name, {
-      ...definition,
-      ...(expandedExtends !== undefined ? { extends: expandedExtends } : {}),
-    });
-  }
-  return expanded;
-}
-
+/** Effective view of one preset, from the runtime loader's parsed layers. */
 function inspectPreset(name: string, state: PresetState): PresetInspection {
-  const raw = ownValue(state.effectivePresets, name);
-  const resolvedPresets = expandedPresetDefinitions(state.effectivePresets);
+  const raw = ownValue(state.loadedPresets, name);
+  const resolvedPresets = state.loadedPresets;
   const normalized = raw !== undefined ? safeNormalizePreset(raw) : undefined;
-  const extendsList = declaredExtends(ownValue(resolvedPresets, name));
+  const extendsList = declaredExtends(raw);
   if (raw === undefined) {
     return { raw, resolved: {}, local: {}, extendsList };
   }
@@ -534,9 +537,10 @@ function describePresetInfo(
 
 function buildPresetInfos(state: PresetState): PresetInfo[] {
   const presets: PresetInfo[] = [];
-  for (const name of Object.keys(state.effectivePresets)) {
+  for (const name of Object.keys(state.loadedPresets)) {
     const inspection = inspectPreset(name, state);
     if (inspection.raw === undefined) continue;
+    const unreadable = state.unreadablePresets.has(name);
     const agents = agentEntriesForPreset(inspection.resolved, inspection.local);
     presets.push({
       name,
@@ -548,7 +552,7 @@ function buildPresetInfos(state: PresetState): PresetInfo[] {
       inUserConfig: hasOwn(state.userPresets, name),
       inProjectConfig: hasOwn(state.projectPresets, name),
       agents,
-      editable: !hasOwn(state.projectPresets, name),
+      editable: !hasOwn(state.projectPresets, name) && !unreadable,
       extends: inspection.extendsList,
       ...(inspection.validationError
         ? { validationError: inspection.validationError }
@@ -652,9 +656,15 @@ function presetSourceFor(
 }
 
 function assertKnownPreset(state: PresetState, preset: string): void {
+  if (state.unreadablePresets.has(preset))
+    throw new Error(unreadableMessage(preset));
   if (ownValue(state.effectivePresets, preset) === undefined) {
     throw new Error(`Unknown preset "${preset}".`);
   }
+}
+
+function unreadableMessage(preset: string): string {
+  return `Preset "${preset}" is in a config file that uses unquoted {env:...} values, which the editor cannot rewrite safely. Edit that file directly.`;
 }
 
 function assertEditablePreset(
@@ -692,10 +702,9 @@ function parentProvidesAgent(
   agentKey: string,
 ): boolean {
   const inspection = inspectPreset(preset, state);
-  const resolvedPresets = expandedPresetDefinitions(state.effectivePresets);
   for (const parentName of inspection.extendsList) {
     try {
-      const parent = resolvePresetDefinition(parentName, resolvedPresets);
+      const parent = resolvePresetDefinition(parentName, state.loadedPresets);
       if (hasOwn(parent.agents, agentKey)) return true;
     } catch {
       // An unresolved parent cannot be claimed as the source.
@@ -900,11 +909,18 @@ export function createOmosConfigBackend(
           projectPreset,
           envPreset,
           liveConfigRefresh: rootSnapshot.config.liveConfigRefresh !== false,
-          warnings: rootSnapshot.warnings.map((warning) =>
-            warning.path
-              ? `${warning.path}: ${warning.message}`
-              : warning.message,
-          ),
+          warnings: [
+            ...rootSnapshot.warnings.map((warning) =>
+              warning.path
+                ? `${warning.path}: ${warning.message}`
+                : warning.message,
+            ),
+            ...(state.unreadablePresets.size > 0
+              ? [
+                  `Read-only: ${[...state.unreadablePresets].map((name) => `"${name}"`).join(', ')} come from a config file with unquoted {env:...} values; edit that file directly.`,
+                ]
+              : []),
+          ],
           projectConfigPaths: [...rootSnapshot.paths.projectConfigPaths],
           roster: buildRoster(rootSnapshot.config.agents ?? {}),
         };
@@ -922,7 +938,7 @@ export function createOmosConfigBackend(
           const state = readPresetState(directory);
           const inspection = inspectPreset(name, state);
           if (inspection.raw === undefined) {
-            const available = Object.keys(state.effectivePresets);
+            const available = Object.keys(state.loadedPresets);
             const hint =
               available.length > 0
                 ? ` Available presets: ${available.join(', ')}.`
@@ -963,11 +979,9 @@ export function createOmosConfigBackend(
           const result = switchPresetOnDisk(
             directory,
             name,
-            {
-              // The disk helpers read raw config; hand them the same
-              // environment-expanded definitions the runtime resolves.
-              presets: expandedPresetDefinitions(state.effectivePresets),
-            } as PluginConfig,
+            // Loader-parsed definitions (interpolated like the runtime),
+            // keeping `extends` and marketplace directives for the guards.
+            { presets: state.loadedPresets } as PluginConfig,
             {
               hostFlavor: HOST_FLAVOR,
             },
@@ -1082,6 +1096,8 @@ export function createOmosConfigBackend(
           if (isPrototypeSensitiveName(name))
             return fail(`"${name}" cannot be used as a preset name.`);
           const state = readPresetState(directory);
+          if (state.unreadablePresets.has(name))
+            return fail(unreadableMessage(name));
           if (hasOwn(state.projectPresets, name)) {
             return fail(
               `Preset "${name}" is defined in project config and is read-only.`,
@@ -1092,10 +1108,7 @@ export function createOmosConfigBackend(
               `"${name}" is not in the user config (project presets are read-only).`,
             );
           }
-          const dependents = findPresetDependents(
-            name,
-            expandedPresetDefinitions(state.effectivePresets),
-          );
+          const dependents = findPresetDependents(name, state.loadedPresets);
           if (dependents.length > 0) {
             return fail(
               `Cannot delete "${name}": it is the base preset for ${dependents.map((item) => `"${item}"`).join(', ')}.`,

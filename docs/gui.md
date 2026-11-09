@@ -32,6 +32,10 @@ command palette, or the composer pill above the prompt.
 
 - OMOS's config watcher applies edited inference settings to **new** child
   sessions; existing session teams keep their frozen team until reapplied.
+- Values shown and validated come from the runtime config loader, so
+  `{env:...}` placeholders display their expanded value; edits keep the
+  placeholder in the file. Presets in a file that uses unquoted `{env:...}`
+  tokens are shown read-only.
 - Favorites are read read-only from the Desktop app's local model store;
   availability failures never block model selection.
 - The GUI plugin API is experimental and may change between OpenCode releases.

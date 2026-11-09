@@ -594,6 +594,71 @@ test('environment-based parents resolve for snapshots and preset switches', asyn
   assert.equal(presetOf(parsed, 'child').extends, '{env:OMOS_TEST_BASE}');
 });
 
+test('environment placeholders in agent fields show the runtime value and survive edits', async (t) => {
+  const fixture = await makeFixture(t);
+  await writeJson(fixture.userFile, {
+    presets: {
+      work: {
+        agents: {
+          explorer: { model: '{env:REVIEW_MODEL}' },
+          oracle: {
+            model: [{ id: '{env:REVIEW_MODEL}', variant: 'high' }, 'b/two'],
+          },
+        },
+      },
+    },
+  });
+  const subject = backend(fixture, { REVIEW_MODEL: 'test/model' });
+
+  const snapshot = await subject.getSnapshot();
+  const work = snapshot.presets.find((preset) => preset.name === 'work');
+  assert.ok(work);
+  assert.equal(work.validationError, undefined);
+  const explorer = work.agents.find((agent) => agent.name === 'explorer');
+  assert.equal(explorer?.model, 'test/model');
+  const oracle = work.agents.find((agent) => agent.name === 'oracle');
+  assert.equal(oracle?.model, 'test/model');
+  assert.deepEqual(oracle?.modelChain, ['test/model', 'b/two']);
+
+  const result = await subject.setAgentOverride({
+    preset: 'work',
+    agent: 'explorer',
+    patch: { temperature: 0.2 },
+  });
+  assert.equal(result.ok, true, result.message);
+  const parsed = await readJson(fixture.userFile);
+  const entry = asRecord(asRecord(presetOf(parsed, 'work').agents).explorer);
+  assert.equal(entry.model, '{env:REVIEW_MODEL}');
+  assert.equal(entry.temperature, 0.2);
+});
+
+test('presets in a file with unquoted env tokens are visible but read-only', async (t) => {
+  const fixture = await makeFixture(t);
+  const text =
+    '{ "presets": { "work": { "agents": { "explorer": { "model": "a/b", "temperature": {env:REVIEW_TEMP} } } } } }';
+  await writeText(fixture.userFile, text);
+  const subject = backend(fixture, { REVIEW_TEMP: '0.3' });
+
+  const snapshot = await subject.getSnapshot();
+  const work = snapshot.presets.find((preset) => preset.name === 'work');
+  assert.ok(work);
+  assert.equal(work.editable, false);
+  const explorer = work.agents.find((agent) => agent.name === 'explorer');
+  assert.equal(explorer?.temperature, 0.3);
+  assert.ok(snapshot.warnings.some((warning) => warning.includes('Read-only')));
+
+  const edit = await subject.setAgentOverride({
+    preset: 'work',
+    agent: 'explorer',
+    patch: { temperature: 0.5 },
+  });
+  assert.equal(edit.ok, false);
+  assert.ok(edit.message.includes('unquoted {env:...}'));
+  const removed = await subject.deletePreset({ name: 'work' });
+  assert.equal(removed.ok, false);
+  assert.equal(await fs.readFile(fixture.userFile, 'utf8'), text);
+});
+
 test('JSONC edits preserve comments, BOM, CRLF, top-level fields and fallback variants', async (t) => {
   const fixture = await makeFixture(t);
   await writeText(fixture.userFile, MUTATION_FIXTURE);

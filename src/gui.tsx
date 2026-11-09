@@ -29,10 +29,12 @@ import {
   type DraftField,
   diffDraft,
   draftConflicts,
+  errorText,
   type GuiSessionPresetState,
   goCapForModel,
   groupModels,
   isExplicitBindingFor,
+  isUnsupportedSessionRpc,
   type ModelGroup,
   type ModelShapeLike,
   modelValue,
@@ -157,60 +159,6 @@ const uniqueCopyName = (source: string, taken: Set<string>) => {
   let index = 2;
   while (taken.has(`${base}-${index}`)) index++;
   return `${base}-${index}`;
-};
-
-const errorText = (cause: unknown): string => {
-  if (cause instanceof Error) {
-    const nested =
-      cause.cause !== undefined && cause.cause !== cause
-        ? errorText(cause.cause)
-        : '';
-    return nested && !cause.message.includes(nested)
-      ? `${cause.message}: ${nested}`
-      : cause.message;
-  }
-  if (typeof cause === 'string') return cause;
-  if (cause && typeof cause === 'object') {
-    const record = cause as Record<string, unknown>;
-    for (const key of ['message', 'error', 'detail', '_tag', 'code']) {
-      const value = record[key];
-      if (typeof value === 'string' && value.length > 0) return value;
-    }
-    try {
-      return JSON.stringify(cause);
-    } catch {
-      return String(cause);
-    }
-  }
-  return String(cause);
-};
-
-/**
- * An old OMOS build answers an unknown RPC with a not-found style error. Only
- * those errors become a config-only UI. Timeouts, aborts, transport failures,
- * and missing sessions stay errors, so they are never silently treated as
- * "this version does not support session teams".
- */
-const isUnsupportedSessionRpc = (cause: unknown) => {
-  const text = errorText(cause).toLowerCase();
-  if (!text) return false;
-  if (
-    /(timed? ?out|abort|network|fetch|connect|econn|enotfound|401|403|500|502|503)/.test(
-      text,
-    )
-  ) {
-    return false;
-  }
-  if (/session/.test(text) && /(not[ _-]?found|unknown|missing)/.test(text))
-    return false;
-  if (
-    /method[ _-]?not[ _-]?found|not[ _-]?registered|unimplemented/.test(text)
-  ) {
-    return true;
-  }
-  return /(?:unknown|not found|not registered|unsupported|not supported|no such|missing).*(?:rpc|method|procedure|endpoint|handler|route|request)|(?:rpc|method|procedure|endpoint|handler|route|request).*(?:unknown|not found|not registered|unsupported|not supported|no such|missing)|(?:^|\D)404(?:\D|$)|(?:^|\D)405(?:\D|$)/.test(
-    text,
-  );
 };
 
 const callWithSessionTimeout = async <T,>(
@@ -457,10 +405,10 @@ export default Plugin.define({
       'panel.session.unbinding': 'Unbinding session…',
       'panel.session.unboundTitle': 'Session unbound',
       'panel.session.unbound':
-        'Future child agents follow the effective default again.',
+        'Future child agents use the default team as it is now. Later default changes do not move this session.',
       'panel.session.resetTitle': 'Session reset',
       'panel.session.reset':
-        'Future child agents follow the effective default team again.',
+        'Future child agents use the default team as it is now. Later default changes do not move this session.',
       'panel.session.unbindUnsupported':
         "This OMOS version can't reset a session team. Apply another preset to change it.",
       'panel.defaultTeam': 'Default team',
