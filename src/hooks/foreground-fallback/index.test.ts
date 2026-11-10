@@ -25,6 +25,7 @@ import { mapV2EventToV1 } from '../../v2/event-adapter';
 import { recordInternalAdmission } from '../../v2/internal-admissions';
 import { createV2InterviewBridge, markerText } from '../../v2/interview-bridge';
 import { createSessionPromptBridge } from '../../v2/setup';
+import { noRouteOutcomeID } from '../../v2/terminal-fallback';
 import { SessionLifecycle } from '../session-lifecycle';
 import { createBackgroundFallbackHandoff } from '../task-session-manager/fallback-observation-transfer';
 import type { FallbackNotice } from '../task-session-manager/revived-run-tracker';
@@ -2850,6 +2851,7 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     switchModel?: (sessionID: string, model: unknown) => Promise<unknown>;
     promptAsyncImpl?: (args: unknown) => Promise<unknown>;
     messagesData?: unknown[];
+    messagesImpl?: (args: unknown) => Promise<unknown>;
     handoff?: ReturnType<typeof createBackgroundFallbackHandoff>;
     readBackgroundGeneration?: (sessionID: string) => number | undefined;
     retryEnabled?: boolean;
@@ -2867,6 +2869,7 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
       getData: info,
       promptAsyncImpl: options?.promptAsyncImpl,
       messagesData: options?.messagesData,
+      messagesImpl: options?.messagesImpl,
     });
     const switchModel = mock(
       options?.switchModel ??
@@ -3051,6 +3054,30 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     await settle();
     expect(switchModel).not.toHaveBeenCalled();
     expect(mocks.promptAsync).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  test('v2 refusedChildOutcome advances a no-route child with an observed failure time', async () => {
+    const { manager, mocks, switchModel } = fixture({ parentID: 'parent' });
+    const entry = {
+      id: noRouteOutcomeID('user-1', 'Model unavailable: test/a'),
+      baselineMessageID: 'user-1',
+      type: 'no-route',
+      time: { created: Date.now() - 1, completed: Date.now() },
+      error: {
+        type: 'provider.no-route',
+        message: 'Model unavailable: test/a',
+      },
+    };
+    const model = await manager.refusedChildOutcome('child', entry);
+    await settle();
+    expect(model).toBe('test/b');
+    expect(switchModel).toHaveBeenCalledWith('child', {
+      providerID: 'test',
+      id: 'b',
+      variant: 'high',
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
     manager.dispose();
   });
 
@@ -3593,6 +3620,10 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     await manager.handleEvent(failed('child'));
     await settle();
     await manager.handleEvent({
+      type: 'session.execution.started',
+      data: { sessionID: 'child' },
+    });
+    await manager.handleEvent({
       type: 'session.execution.succeeded',
       data: { sessionID: 'child' },
     });
@@ -3609,6 +3640,104 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
         ],
       },
     });
+  });
+
+  test.each(['failed', 'interrupted'] as const)(
+    'v2 background refusal clears a %s run so it cannot claim a later success',
+    async (ending) => {
+      const { manager, mocks } = fixture({
+        parentID: 'parent',
+        messagesData: [
+          {
+            info: { id: 'u1', role: 'user', time: { created: 1 } },
+            parts: [{ type: 'text', text: 'work' }],
+          },
+          {
+            info: { id: 'a1', role: 'assistant', time: { completed: 2 } },
+            parts: [{ type: 'text', text: 'STALE_RESULT' }],
+          },
+        ],
+      });
+      await manager.handleEvent(started('child'));
+      await manager.handleEvent(failed('child'));
+      await settle();
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+      await manager.handleEvent({
+        type: 'session.execution.started',
+        data: { sessionID: 'child' },
+      });
+      await manager.handleEvent({
+        type: `session.execution.${ending}`,
+        data:
+          ending === 'failed'
+            ? { sessionID: 'child', error: { message: 'boom' } }
+            : { sessionID: 'child', reason: 'user' },
+      });
+      await manager.handleEvent({
+        type: 'session.execution.succeeded',
+        data: { sessionID: 'child' },
+      });
+      await settle();
+      expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  test('v2 background refusal notice respects disposal', async () => {
+    const { manager, mocks } = fixture({
+      parentID: 'parent',
+      messagesData: [
+        {
+          info: { id: 'u1', role: 'user', time: { created: 1 } },
+          parts: [{ type: 'text', text: 'work' }],
+        },
+        {
+          info: { id: 'a1', role: 'assistant', time: { completed: 2 } },
+          parts: [{ type: 'text', text: 'STALE_RESULT' }],
+        },
+      ],
+    });
+    await manager.handleEvent(started('child'));
+    await manager.handleEvent(failed('child'));
+    await settle();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    await manager.handleEvent({
+      type: 'session.execution.started',
+      data: { sessionID: 'child' },
+    });
+    manager.dispose();
+    await manager.handleEvent({
+      type: 'session.execution.succeeded',
+      data: { sessionID: 'child' },
+    });
+    await settle();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('v2 background refusal delivery stops when disposed during the read', async () => {
+    let release!: (value: unknown) => void;
+    const pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    const { manager, mocks } = fixture({
+      parentID: 'parent',
+      messagesImpl: () => pending,
+    });
+    await manager.handleEvent(started('child'));
+    await manager.handleEvent(failed('child'));
+    await settle();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    await manager.handleEvent({
+      type: 'session.execution.started',
+      data: { sessionID: 'child' },
+    });
+    await manager.handleEvent({
+      type: 'session.execution.succeeded',
+      data: { sessionID: 'child' },
+    });
+    manager.dispose();
+    release({ data: [] });
+    await settle();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
   });
 
   test('v2 content-filter foreground child leaves re-attach to its wrapper', async () => {

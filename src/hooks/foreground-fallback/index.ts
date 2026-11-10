@@ -988,7 +988,7 @@ export class ForegroundFallbackManager {
    *  this one-shot entry lets the adapter deliver the continued result. */
   private readonly backgroundRefusalContinuations = new Map<
     string,
-    { parentID: string }
+    { parentID: string; started?: boolean }
   >();
   /** Synchronous board read returning the tracked generation for a
    *  confirmed BACKGROUND child only — undefined for foreground or
@@ -1196,6 +1196,7 @@ export class ForegroundFallbackManager {
     this.v1Waiters.clear();
     this.v1InterviewRefusals.clear();
     this.childOutcomes.clear();
+    this.backgroundRefusalContinuations.clear();
     for (const pending of this.pendingInitialDelay.values()) {
       this.clearTimer(pending.timer);
     }
@@ -1321,7 +1322,7 @@ export class ForegroundFallbackManager {
     childID: string,
   ): Promise<void> {
     const pending = this.backgroundRefusalContinuations.get(childID);
-    if (!pending) return;
+    if (!pending || this.disposed) return;
     this.backgroundRefusalContinuations.delete(childID);
     try {
       const session = getClient(this.input).session;
@@ -1335,6 +1336,7 @@ export class ForegroundFallbackManager {
         HOST_CALL_TIMEOUT_MS,
         'background refusal result read timed out',
       );
+      if (this.disposed) return;
       if (responseError(history) !== undefined) return;
       const text =
         terminalTextOf(history)?.trim() ||
@@ -1344,6 +1346,7 @@ export class ForegroundFallbackManager {
         pending.parentID,
         { directory: this.input.directory },
       );
+      if (this.disposed) return;
       if (!parentAgent) return;
       const result = await withTimeout(
         session.promptAsync({
@@ -1918,6 +1921,12 @@ export class ForegroundFallbackManager {
         if (
           isRecord(props) &&
           typeof props.sessionID === 'string' &&
+          this.backgroundRefusalContinuations.get(props.sessionID)?.started
+        )
+          this.backgroundRefusalContinuations.delete(props.sessionID);
+        if (
+          isRecord(props) &&
+          typeof props.sessionID === 'string' &&
           isRecord(props.error) &&
           props.error.type === 'provider.no-route' &&
           typeof (rawEvent as { created?: unknown }).created === 'number'
@@ -1925,6 +1934,28 @@ export class ForegroundFallbackManager {
           await this.handleV2NoRoute(props.sessionID, props.error, {
             time: { completed: (rawEvent as { created: number }).created },
           });
+        }
+        break;
+      }
+      case 'session.execution.interrupted': {
+        if (!isV2Host) break;
+        const props = isRecord(event.data) ? event.data : event.properties;
+        if (
+          isRecord(props) &&
+          typeof props.sessionID === 'string' &&
+          this.backgroundRefusalContinuations.get(props.sessionID)?.started
+        )
+          this.backgroundRefusalContinuations.delete(props.sessionID);
+        break;
+      }
+      case 'session.execution.started': {
+        if (!isV2Host) break;
+        const props = isRecord(event.data) ? event.data : event.properties;
+        if (isRecord(props) && typeof props.sessionID === 'string') {
+          const pending = this.backgroundRefusalContinuations.get(
+            props.sessionID,
+          );
+          if (pending) pending.started = true;
         }
         break;
       }
@@ -1989,8 +2020,12 @@ export class ForegroundFallbackManager {
             props.finish === 'tool-calls' ||
             props.finish === 'length')
         ) {
-          if (event.type === 'session.execution.succeeded')
-            void this.finishBackgroundRefusalContinuation(props.sessionID);
+          if (event.type === 'session.execution.succeeded') {
+            if (
+              this.backgroundRefusalContinuations.get(props.sessionID)?.started
+            )
+              void this.finishBackgroundRefusalContinuation(props.sessionID);
+          }
           this.resetRecoveryState(props.sessionID);
         }
         break;

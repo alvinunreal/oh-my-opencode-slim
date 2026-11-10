@@ -265,6 +265,15 @@ function createModel() {
         body.model === 'backup' &&
         transcript.includes('previous response was stopped')
       ) {
+        // Second model in the chain also refuses: each new refusal must be
+        // allowed to advance rather than escape to the parent.
+        requests.push({ body });
+        return response({ text: '', finish: 'content_filter' }, 'refusal');
+      }
+      if (
+        body.model === 'backup2' &&
+        transcript.includes('previous response was stopped')
+      ) {
         requests.push({ body });
         return response({ text: 'CHILD_FALLBACK_DONE' }, 'backup');
       }
@@ -454,7 +463,9 @@ function refusalConfig() {
   const config = pluginConfig('native') as RecordValue;
   const presets = config.presets as Record<string, RecordValue>;
   const local = presets['local-lifecycle'] as RecordValue;
-  local.explorer = { model: ['capture/child', 'capture/backup'] };
+  local.explorer = {
+    model: ['capture/child', 'capture/backup', 'capture/backup2'],
+  };
   config.fallback = { enabled: true };
   config.disabled_hooks = (config.disabled_hooks as string[]).filter(
     (name) => name !== 'foreground-fallback',
@@ -478,7 +489,7 @@ function hostConfig(installed: string, model: Model) {
           timeout: 120_000,
         },
         models: Object.fromEntries(
-          ['parent', 'child', 'backup'].map((id) => [
+          ['parent', 'child', 'backup', 'backup2'].map((id) => [
             id,
             {
               name: id,
@@ -1882,7 +1893,7 @@ async function main() {
       'Rendered catalogs cover orchestrator/explorer with this local test preset, across requested default/native/off modes. Other caller roles/presets, disabled-tool matrices, and before/after prompt byte comparisons require parent focused validation.',
       'Omitted/false foreground semantics are exercised in off mode; true-background and same-ID steering are exercised in every requested mode. Native/default same-provider foreground conversion requires source/unit validation.',
       'Progress report real-host coverage currently proves idle-parent queue/resume:false; running, interrupted, and form-waiting parents are not separately exercised.',
-      'Refusal fallback coverage uses native mode with a two-model chain: foreground re-attach and background result delivery are exercised; off mode intentionally leaves the native executor untouched.',
+      'Refusal fallback coverage uses native mode with a three-model chain: two consecutive content-filter refusals exercise foreground re-attach and background result delivery; off mode intentionally leaves the native executor untouched.',
       'Terminal-but-not-yet-admitted crash and admitted-but-unconsumed restart windows need a deterministic host-side fault seam. No host DB mutations or plugin recovery are used to fabricate those states.',
       ...(options.restart === 'none' || !options.modes.includes('native')
         ? [
