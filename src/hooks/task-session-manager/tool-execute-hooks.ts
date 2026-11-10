@@ -1257,10 +1257,12 @@ function registerTaskOutputLaunch(
   try {
     return deps.backgroundJobBoard.registerLaunch({
       taskID,
-      // Only a steer proves the resumed child is already running. A
-      // lease-backed revive registers before its host write is accepted, so
-      // it must keep waiting for a live activity fence.
-      ...(isSteeredCall(pending) ? { resumedRunProven: true as const } : {}),
+      // Reaching here with a resumed pending means the host returned the
+      // child's own native output, so the new round was accepted and this
+      // registration is itself activity proof. The relaunch lease is NOT
+      // proof: `task-revive` registers before its host write is accepted
+      // and that path supplies no flag, so it keeps the live fence.
+      ...(resumed ? { resumedRunProven: true as const } : {}),
       parentSessionID: pending.parentSessionId,
       agent: pending.agentType,
       // Identity was unresolved (no-ID drain or window-shifted take):
