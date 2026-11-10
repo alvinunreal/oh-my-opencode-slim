@@ -142,7 +142,7 @@ describe('foreground fallback replay routing', () => {
     expect(onChanged).toHaveBeenCalledWith(childID, 'backup/child');
   });
 
-  test('decision trace: a same-ID error from a new turn replays', async () => {
+  test('contract: decision trace: a same-ID error from a new turn replays', async () => {
     const { mocks } = createMockClient();
     const manager = new ForegroundFallbackManager({
       chains: { orchestrator: ['primary/a', 'backup/b'] },
@@ -182,7 +182,7 @@ describe('foreground fallback replay routing', () => {
     expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
   });
 
-  test('decision trace: a no-chain retry from a new turn charges the budget', async () => {
+  test('contract: decision trace: a no-chain retry from a new turn charges the budget', async () => {
     const { mocks } = createMockClient();
     const manager = new ForegroundFallbackManager({
       chains: { orchestrator: ['primary/a', 'backup/b'] },
@@ -264,7 +264,7 @@ describe('foreground fallback replay routing', () => {
   });
 
   test('decision trace: a no-chain retry after the dedup window charges the budget', async () => {
-    const { mocks } = createMockClient();
+    createMockClient();
     const manager = new ForegroundFallbackManager({
       chains: { orchestrator: ['primary/a', 'backup/b'] },
       enabled: true,

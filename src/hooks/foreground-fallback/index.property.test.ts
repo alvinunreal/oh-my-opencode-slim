@@ -93,18 +93,18 @@ describe('asHttpStatus properties', () => {
 });
 
 describe('asHttpStatus fixed examples', () => {
-  test('numeric and string 404 parse to 404', () => {
+  test('contract: numeric and string 404 parse to 404', () => {
     expect(asHttpStatus(404)).toBe(404);
     expect(asHttpStatus('404')).toBe(404);
   });
 
-  test('out-of-range and non-numeric strings are rejected', () => {
+  test('contract: out-of-range and non-numeric strings are rejected', () => {
     expect(asHttpStatus('600')).toBeUndefined();
     expect(asHttpStatus('099')).toBeUndefined();
     expect(asHttpStatus('abc')).toBeUndefined();
   });
 
-  test('non-string values that stringify to a status are rejected', () => {
+  test('contract: non-string values that stringify to a status are rejected', () => {
     expect(asHttpStatus(['404'])).toBeUndefined();
     expect(asHttpStatus({ toString: () => '404' })).toBeUndefined();
   });
