@@ -115,7 +115,12 @@ function rememberSessionGeneration(
   if (!previous || previous.generation !== job.generation) {
     fences.set(sessionID, {
       generation: job.generation,
-      awaitingActivity: previous !== undefined,
+      // A generation transition normally arms the fence, so a late
+      // generationless event for the *previous* generation cannot terminalize
+      // this one. A launch that is itself activity proof skips that wait —
+      // the same rule `observeSessionEvent` applies — otherwise a delayed
+      // `session.created` re-arms what registration just proved.
+      awaitingActivity: previous !== undefined && job.resumedRunProven !== true,
     });
   }
 }
