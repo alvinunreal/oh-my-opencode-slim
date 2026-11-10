@@ -3038,11 +3038,11 @@ export class ForegroundFallbackManager {
           this.backgroundFallbackHandoff?.reject(sessionID, preparedGeneration);
         return;
       }
+      this.awaitingRun.add(sessionID);
       if (data.parentID && preparedGeneration === undefined) {
         this.reattachPending.add(sessionID);
         return nextModel;
       }
-      this.awaitingRun.add(sessionID);
       handoffArmed ||=
         preparedGeneration !== undefined &&
         (this.backgroundFallbackHandoff?.prepare(
@@ -3051,7 +3051,10 @@ export class ForegroundFallbackManager {
           step.baselineMessageID ?? step.assistantMessageID,
         ) ??
           false);
-      if (preparedGeneration !== undefined && !handoffArmed) return;
+      if (preparedGeneration !== undefined && !handoffArmed) {
+        this.awaitingRun.delete(sessionID);
+        return;
+      }
       const promptResult = await withTimeout(
         session.promptAsync({
           path: { id: sessionID },
@@ -3070,6 +3073,7 @@ export class ForegroundFallbackManager {
         'foreground refusal continuation timed out',
       );
       if (isRecord(promptResult) && responseError(promptResult) !== undefined) {
+        this.awaitingRun.delete(sessionID);
         if (handoffArmed)
           this.backgroundFallbackHandoff?.reject(sessionID, preparedGeneration);
         return;
@@ -3093,6 +3097,9 @@ export class ForegroundFallbackManager {
       });
     } finally {
       this.inProgress.delete(sessionID);
+      // The failed run's idle may have arrived during this refusal.
+      if ((this.turnEpoch.get(sessionID) ?? 0) === epoch)
+        void this.restoreV2(sessionID);
     }
   }
 

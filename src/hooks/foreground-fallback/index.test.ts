@@ -144,6 +144,7 @@ function createMockClient(overrides?: {
       session,
       _client: { post },
     } as never,
+    session,
     mocks: { promptAsync, abort, messages, message, post },
   };
 }
@@ -12672,11 +12673,16 @@ describe('fallback restoration', () => {
     type: 'session.idle',
     properties: { sessionID: sid, activityAt },
   });
+  const busy = () => ({
+    type: 'session.status',
+    properties: { sessionID: sid, status: { type: 'busy' } },
+  });
 
   function fixture(options?: {
     parentID?: string;
     promptAsyncImpl?: (args: unknown) => Promise<unknown>;
     chain?: string[];
+    unarmedHandoff?: boolean;
   }) {
     const info: {
       model:
@@ -12689,7 +12695,7 @@ describe('fallback restoration', () => {
       agent: 'orchestrator',
       parentID: options?.parentID,
     };
-    const { client } = createMockClient({
+    const { client, session } = createMockClient({
       getData: info,
       promptAsyncImpl: options?.promptAsyncImpl,
     });
@@ -12714,34 +12720,53 @@ describe('fallback restoration', () => {
         experimental_v2: { switchModel },
       } as never,
       onSessionModelChanged: changed,
+      ...(options?.unarmedHandoff
+        ? {
+            readBackgroundGeneration: () => 1,
+            backgroundFallbackHandoff: {
+              prepare: () => false,
+              admit: () => false,
+              reject: () => {},
+              settleUnresolved: () => {},
+            },
+          }
+        : {}),
     });
     const retry = (model = origin, error: unknown = rejection) =>
       manager.handleV2Retry(
         { sessionID: sid, agent: 'orchestrator', model, error },
         switchModel,
       );
-    const refuse = async () => {
+    const refuse = async (id = 'refused', model: typeof info.model = origin) => {
       await manager.handleEvent({
         type: 'session.step.started',
         data: {
           sessionID: sid,
-          assistantMessageID: 'refused',
+          assistantMessageID: id,
           agent: 'orchestrator',
-          model: origin,
+          model,
         },
       });
       await manager.handleEvent({
         type: 'session.step.failed',
         data: {
           sessionID: sid,
-          assistantMessageID: 'refused',
+          assistantMessageID: id,
           finish: 'content-filter',
           error: rejection,
         },
       });
       for (let i = 0; i < 40; i++) await Promise.resolve();
     };
-    return { manager, info, switchModel, changed, retry, refuse };
+    return {
+      manager,
+      info,
+      switchModel,
+      changed,
+      retry,
+      refuse,
+      session,
+    };
   }
 
   async function replay(error: unknown = rejection) {
@@ -12853,6 +12878,87 @@ describe('fallback restoration', () => {
     await f.manager.handleEvent(idle());
     expect(f.switchModel).toHaveBeenCalledTimes(1);
     f.manager.noteV2Prompt(sid);
+    await f.manager.handleEvent(busy());
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('S5: foreground child waits for continuation busy after reattachment', async () => {
+    const f = fixture({ parentID: 'parent' });
+    await f.manager.handleEvent(busy());
+    await f.refuse();
+    f.manager.noteV2Prompt(sid);
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    await f.manager.handleEvent(busy());
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('S6: exhausted chain restores after an idle during refusal handling', async () => {
+    const f = fixture({ chain: ['primary/a', 'backup/b'] });
+    const fallback = { providerID: 'backup', id: 'b' };
+    await f.manager.handleEvent(busy());
+    await f.refuse('first', origin);
+    await f.manager.handleEvent(busy());
+    await f.refuse('second', fallback);
+    await f.manager.handleEvent(idle());
+    await f.manager.handleEvent(busy());
+    const pending = deferred<unknown>();
+    f.session.get = mock(() => pending.promise);
+    await f.refuse('exhausted', fallback);
+    await f.manager.handleEvent(idle());
+    pending.resolve({ data: f.info });
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('S7: a rejected continuation releases the fence', async () => {
+    const f = fixture({
+      promptAsyncImpl: async () => ({ error: { name: 'BadRequest' } }),
+    });
+    await f.manager.handleEvent(busy());
+    await f.refuse();
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('an unarmed background handoff releases the fence', async () => {
+    const f = fixture({ parentID: 'parent', unarmedHandoff: true });
+    await f.manager.handleEvent(busy());
+    await f.refuse();
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('S9: continuation busy before prompt acknowledgement releases the fence', async () => {
+    let manager!: ForegroundFallbackManager;
+    const f = fixture({
+      promptAsyncImpl: async () => {
+        await manager.handleEvent(idle());
+        await manager.handleEvent(busy());
+        return {};
+      },
+    });
+    manager = f.manager;
+    await manager.handleEvent(busy());
+    await f.refuse();
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    await manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('an uncertain continuation keeps the fence until busy', async () => {
+    const f = fixture({
+      promptAsyncImpl: async () => {
+        throw new Error('connection lost');
+      },
+    });
+    await f.manager.handleEvent(busy());
+    await f.refuse();
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    await f.manager.handleEvent(busy());
     await f.manager.handleEvent(idle());
     expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
   });
