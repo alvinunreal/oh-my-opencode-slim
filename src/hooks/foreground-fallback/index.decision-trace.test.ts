@@ -65,19 +65,23 @@ const redoEvents = {
   }),
 };
 
-function createTestClock(start = 1_000_000): ForegroundFallbackTimers {
+function createTestClock(start = 1_000_000) {
   const harness = createTimerHarness();
   const now = start;
   return {
-    now: () => now,
-    setTimeout: harness.setTimeout,
-    clearTimeout: harness.clearTimeout,
+    timers: {
+      now: () => now,
+      setTimeout: harness.setTimeout,
+      clearTimeout: harness.clearTimeout,
+    } as ForegroundFallbackTimers,
+    harness,
   };
 }
 
 let clock: ForegroundFallbackTimers;
+let harness: ReturnType<typeof createTestClock>['harness'];
 beforeEach(() => {
-  clock = createTestClock();
+  ({ timers: clock, harness } = createTestClock());
 });
 
 describe('foreground fallback replay routing', () => {
@@ -167,17 +171,56 @@ describe('foreground fallback replay routing', () => {
     );
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
 
-    // New user turn with the same model and the same incident ID, inside
-    // the 5s window: the prior turn's incident must not suppress it.
+    // New external prompt with the same incident ID at the same instant. It
+    // bumps the turn epoch without clearing incidents, so only the turn check
+    // stops the prior turn's incident from suppressing the replay.
+    manager.observeExternalPromptIntent(sessionID, 'user-2');
+    const second = manager.handleEvent(
+      redoEvents.error(sessionID, { message: 'rate limit' }, 'shared-id'),
+    );
+    await harness.advance(5_000);
+    await second;
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+  });
+
+  test('decision trace: a no-chain host retry from a new turn is not absorbed by the old incident', async () => {
+    const { mocks } = createMockClient();
+    const manager = new ForegroundFallbackManager({
+      chains: { orchestrator: ['primary/a', 'backup/b'] },
+      enabled: true,
+      input: { directory: '/test' } as never,
+      maxRetries: 3,
+      timers: clock,
+    });
+    const sessionID = 'decision-trace-no-chain';
+    manager.registerSessionAgent(sessionID, 'bare');
     await manager.handleEvent({
       type: 'message.updated',
       properties: {
-        info: { sessionID, id: 'user-2', role: 'user', agent: 'orchestrator' },
+        info: {
+          sessionID,
+          role: 'assistant',
+          agent: 'bare',
+          providerID: 'primary',
+          modelID: 'a',
+        },
       },
     });
     await manager.handleEvent(
       redoEvents.error(sessionID, { message: 'rate limit' }, 'shared-id'),
     );
-    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+    const before = mocks.promptAsync.mock.calls.length;
+    manager.observeExternalPromptIntent(sessionID, 'user-2');
+    const retry = manager.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID,
+        status: { type: 'retry', attempt: 1, message: 'rate limit' },
+      },
+    });
+    await harness.advance(5_000);
+    await retry;
+    expect(mocks.promptAsync.mock.calls.length).toBe(before);
+    expect((manager as any).sessionRetries.get(sessionID)).toBe(2);
   });
 });

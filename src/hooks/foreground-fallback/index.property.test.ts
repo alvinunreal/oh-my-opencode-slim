@@ -103,4 +103,9 @@ describe('asHttpStatus fixed examples', () => {
     expect(asHttpStatus('099')).toBeUndefined();
     expect(asHttpStatus('abc')).toBeUndefined();
   });
+
+  test('non-string values that stringify to a status are rejected', () => {
+    expect(asHttpStatus(['404'])).toBeUndefined();
+    expect(asHttpStatus({ toString: () => '404' })).toBeUndefined();
+  });
 });
