@@ -67,13 +67,12 @@ const redoEvents = {
 
 function createTestClock(start = 1_000_000) {
   const harness = createTimerHarness();
-  const now = start;
   return {
     timers: {
-      now: () => now,
+      now: () => start + harness.now(),
       setTimeout: harness.setTimeout,
       clearTimeout: harness.clearTimeout,
-    } as ForegroundFallbackTimers,
+    },
     harness,
   };
 }
@@ -171,19 +170,19 @@ describe('foreground fallback replay routing', () => {
     );
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
 
-    // New external prompt with the same incident ID at the same instant. It
-    // bumps the turn epoch without clearing incidents, so only the turn check
-    // stops the prior turn's incident from suppressing the replay.
+    // New external prompt with the same incident ID, still inside the dedup
+    // window. It bumps the turn epoch without clearing incidents, so the
+    // turn check in isDeduped is what lets the replay through.
     manager.observeExternalPromptIntent(sessionID, 'user-2');
     const second = manager.handleEvent(
       redoEvents.error(sessionID, { message: 'rate limit' }, 'shared-id'),
     );
-    await harness.advance(5_000);
+    await harness.advance(2_000);
     await second;
     expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
   });
 
-  test('decision trace: a no-chain host retry from a new turn is not absorbed by the old incident', async () => {
+  test('decision trace: a no-chain retry from a new turn charges the budget', async () => {
     const { mocks } = createMockClient();
     const manager = new ForegroundFallbackManager({
       chains: { orchestrator: ['primary/a', 'backup/b'] },
@@ -210,6 +209,7 @@ describe('foreground fallback replay routing', () => {
       redoEvents.error(sessionID, { message: 'rate limit' }, 'shared-id'),
     );
     const before = mocks.promptAsync.mock.calls.length;
+    expect((manager as any).sessionRetries.get(sessionID)).toBe(1);
     manager.observeExternalPromptIntent(sessionID, 'user-2');
     const retry = manager.handleEvent({
       type: 'session.status',
@@ -218,7 +218,7 @@ describe('foreground fallback replay routing', () => {
         status: { type: 'retry', attempt: 1, message: 'rate limit' },
       },
     });
-    await harness.advance(5_000);
+    await harness.advance(2_000);
     await retry;
     expect(mocks.promptAsync.mock.calls.length).toBe(before);
     expect((manager as any).sessionRetries.get(sessionID)).toBe(2);
