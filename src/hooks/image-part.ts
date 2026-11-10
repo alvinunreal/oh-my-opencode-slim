@@ -33,14 +33,14 @@
 
 import { detectInlineImageMime } from '../utils/image-signatures';
 
-interface ImageBytesView {
+export interface ImageBytesView {
   readonly view: 'bytes';
   readonly bytes: Buffer;
   readonly ext: string;
   readonly filename?: string;
 }
 
-interface ImageRemoteView {
+export interface ImageRemoteView {
   readonly view: 'remote';
 }
 
