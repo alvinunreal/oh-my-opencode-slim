@@ -31,10 +31,11 @@ import {
   getCompanionTarget,
 } from './companion/updater';
 import { RuntimeConfig } from './config/runtime';
-import * as wakeHooks from './hooks';
 import { isTaggedPart, stripTaggedContent } from './hooks/cache-safe-injection';
 import { COUNCIL_INJECT_METADATA_KEY } from './hooks/council-inject';
+import { ForegroundFallbackManager } from './hooks/foreground-fallback';
 import { JSON_ERROR_REMINDER } from './hooks/json-error-recovery/hook';
+import * as wakeHooks from './hooks/orchestrator-wake';
 import {
   getWakeProgress,
   resetOrchestratorWakeGateForTests,
@@ -5199,7 +5200,7 @@ describe('plugin config model inheritance', () => {
       agents: { explorer: { model: ['provider/first', 'provider/next'] } },
     };
     const disableChain = spyOn(
-      wakeHooks.ForegroundFallbackManager.prototype,
+      ForegroundFallbackManager.prototype,
       'disableChain',
     );
     let hooks = await loadConfiguredPlugin(config);
@@ -5279,7 +5280,7 @@ describe('plugin config model inheritance', () => {
       },
     });
     const disableChain = spyOn(
-      wakeHooks.ForegroundFallbackManager.prototype,
+      ForegroundFallbackManager.prototype,
       'disableChain',
     );
     try {

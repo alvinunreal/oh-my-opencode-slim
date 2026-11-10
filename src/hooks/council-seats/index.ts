@@ -18,25 +18,6 @@ import { log } from '../../utils/logger';
 import { assembleCouncilPrompt, parseSeatRefs } from './assemble';
 import type { SeatResultResolver } from './types';
 
-export {
-  assembleCouncilPrompt,
-  buildSeatPrompt,
-  parseSeatRefs,
-  SEAT_REASONS,
-  SEATS_LINE_PATTERN,
-  seatBodyOf,
-} from './assemble';
-export { createManagedSeatResolver } from './managed';
-export type {
-  NativeSeatResolverOptions,
-  NativeSeatTimers,
-} from './native';
-export {
-  createNativeSeatResolver,
-  DEFAULT_NATIVE_SEAT_TIMEOUT_MS,
-} from './native';
-export type { SeatRequest, SeatResult, SeatResultResolver } from './types';
-
 const COUNCIL_AGENT = 'council';
 const DELEGATION_TOOLS = new Set(['task', 'subagent']);
 
