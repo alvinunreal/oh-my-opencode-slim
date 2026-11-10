@@ -1257,6 +1257,9 @@ function registerTaskOutputLaunch(
   try {
     return deps.backgroundJobBoard.registerLaunch({
       taskID,
+      ...(pending.resumedTaskId !== undefined
+        ? { resumedRunProven: true as const }
+        : {}),
       parentSessionID: pending.parentSessionId,
       agent: pending.agentType,
       // Identity was unresolved (no-ID drain or window-shifted take):

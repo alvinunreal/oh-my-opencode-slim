@@ -145,7 +145,7 @@ function observeSessionEvent(
   const fence = generationChanged
     ? {
         generation: job.generation,
-        awaitingActivity: true,
+        awaitingActivity: job.resumedRunProven !== true,
       }
     : (previous ?? {
         generation: job.generation,
