@@ -36,6 +36,7 @@ const STATUS_OUTPUT_MAX_BYTES = 4_096;
 const PENDING_PERMISSION_LIMIT = 5;
 const PENDING_PERMISSION_RESOURCE_LIMIT = 3;
 const PENDING_PERMISSION_TEXT_LIMIT = 120;
+const PENDING_PERMISSION_LINE_MAX_BYTES = 180;
 const PENDING_PERMISSION_OUTPUT_MAX_BYTES = 1_024;
 const PERMISSION_TIMEOUT_MS = 10_000;
 
@@ -266,6 +267,32 @@ function shorten(value: string, max = PENDING_PERMISSION_TEXT_LIMIT): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+/** One permission line keeps the exact request ID; only resources shrink. */
+function permissionLine(request: NativePermissionRequest): {
+  line: string;
+  shortened: boolean;
+} {
+  const prefix = `- ${request.id}: ${shorten(request.action)}`;
+  const suffix =
+    request.resourceCount > PENDING_PERMISSION_RESOURCE_LIMIT ? ', …' : '';
+  const resources = request.resources
+    .slice(0, PENDING_PERMISSION_RESOURCE_LIMIT)
+    .map((resource) => shorten(resource))
+    .join(', ');
+  const overhead = utf8Bytes(prefix) + utf8Bytes(' []…') + utf8Bytes(suffix);
+  const room = Math.max(0, PENDING_PERMISSION_LINE_MAX_BYTES - overhead);
+  const fitted = utf8Prefix(resources, room);
+  const shortened = fitted !== resources;
+  // A pathological ID/action can exceed the line cap; never drop the ID to
+  // satisfy it. Normal host IDs are far below the cap.
+  const line = `${prefix} [${fitted}${shortened ? '…' : ''}${suffix}]`;
+  return {
+    line:
+      utf8Bytes(prefix) >= PENDING_PERMISSION_LINE_MAX_BYTES ? prefix : line,
+    shortened,
+  };
+}
+
 function permissionClient(
   options: NativeTaskControlOptions,
 ): NativePermissionBridge | undefined {
@@ -307,20 +334,16 @@ async function pendingPermissionLines(
     if (requests.length === 0) return ['pending permissions: none'];
 
     const lines = [`pending permissions: ${requests.length}`];
+    let shortened = false;
     for (const request of requests.slice(0, PENDING_PERMISSION_LIMIT)) {
-      const resources = request.resources
-        .slice(0, PENDING_PERMISSION_RESOURCE_LIMIT)
-        .map((resource) => shorten(resource))
-        .join(', ');
-      const suffix =
-        request.resourceCount > PENDING_PERMISSION_RESOURCE_LIMIT ? ', …' : '';
-      lines.push(
-        `- ${shorten(request.id)}: ${shorten(request.action)} [${resources}${suffix}]`,
-      );
+      const detail = permissionLine(request);
+      shortened ||= detail.shortened;
+      lines.push(detail.line);
     }
     if (requests.length > PENDING_PERMISSION_LIMIT) {
       lines.push(`- … ${requests.length - PENDING_PERMISSION_LIMIT} more`);
     }
+    if (shortened) lines.push('- … resource details shortened');
     return lines;
   } catch {
     return ['pending permissions: unavailable on this host'];

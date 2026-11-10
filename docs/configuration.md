@@ -913,11 +913,16 @@ observed selection is left untouched.
 Hosts up to v2.2.x end a step that finishes with `content-filter` without
 calling the `retry` hook. Slim observes `session.step.failed` instead,
 switches the model in place, and continues the run with one internal prompt:
-root sessions and board-tracked background children continue in place, and
-foreground children are re-attached inside the same `task` call. The host's
-own `state="error"` notice stays in the parent's history; while the child is
-still running, Slim appends a short trailing note telling the parent the
-child continues on the fallback model.
+root sessions and background children continue in place, while a foreground
+child is re-attached inside the same native `subagent` call by the v2
+continuation wrapper. `backgroundJobs.mode: "off"` leaves the native executor
+untouched: a refused child is continued in place and its result is delivered
+as the synthetic notice below, but an already-failed foreground parent call
+is not re-attached. A continued background child delivers its final text as
+one internal synthetic subagent notice to the parent, because the host's
+original subagent job already published the refusal error. The host's own
+`state="error"` notice stays in the parent's history; v2 does not append the
+v1 managed trailing correction.
 
 On v2, the host's `provider.transport` errors (response-header timeouts,
 dropped connections) walk the chain like other provider failures. A

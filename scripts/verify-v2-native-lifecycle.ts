@@ -41,7 +41,7 @@ type ModelRequest = {
   tools?: Array<{ function?: { name?: string; parameters?: unknown } }>;
 };
 type Action =
-  | { text: string; hold?: string }
+  | { text: string; hold?: string; finish?: string }
   | { tool: string; input: RecordValue; hold?: string };
 type Plan = { id: string; actions: Action[]; index: number };
 type Evidence = {
@@ -171,7 +171,10 @@ function chunk(delta: unknown, finish: string) {
 function response(action: Action, id: string) {
   return new Response(
     'text' in action
-      ? chunk({ role: 'assistant', content: action.text }, 'stop')
+      ? chunk(
+          { role: 'assistant', content: action.text },
+          action.finish ?? 'stop',
+        )
       : chunk(
           {
             role: 'assistant',
@@ -245,11 +248,27 @@ function createModel() {
       if (!new URL(request.url).pathname.endsWith('/chat/completions'))
         return new Response('Not found', { status: 404 });
       const body = (await request.json()) as ModelRequest;
-      const prefix = body.model === 'child' ? 'C' : 'P';
       const transcript = body.messages
         .filter((message) => message.role === 'user')
         .map((message) => JSON.stringify(message.content))
         .join('\n');
+      // Refusal fixture: only its marked prompts take these fixed responses;
+      // ordinary lifecycle cases keep their scripted plans.
+      if (
+        body.model === 'child' &&
+        transcript.includes('REFUSAL_CHILD_PROMPT')
+      ) {
+        requests.push({ body });
+        return response({ text: '', finish: 'content_filter' }, 'refusal');
+      }
+      if (
+        body.model === 'backup' &&
+        transcript.includes('previous response was stopped')
+      ) {
+        requests.push({ body });
+        return response({ text: 'CHILD_FALLBACK_DONE' }, 'backup');
+      }
+      const prefix = body.model === 'child' ? 'C' : 'P';
       const matches = [
         ...transcript.matchAll(
           new RegExp(`\\[HARNESS:(${prefix}[0-9]+)\\]`, 'g'),
@@ -431,6 +450,17 @@ function pluginConfig(mode: Mode | 'managed') {
     disabled_commands: ['interview', 'implement', 'deepwork', 'reflect'],
   };
 }
+function refusalConfig() {
+  const config = pluginConfig('native') as RecordValue;
+  const presets = config.presets as Record<string, RecordValue>;
+  const local = presets['local-lifecycle'] as RecordValue;
+  local.explorer = { model: ['capture/child', 'capture/backup'] };
+  config.fallback = { enabled: true };
+  config.disabled_hooks = (config.disabled_hooks as string[]).filter(
+    (name) => name !== 'foreground-fallback',
+  );
+  return config;
+}
 function hostConfig(installed: string, model: Model) {
   return {
     model: 'capture/parent',
@@ -448,7 +478,7 @@ function hostConfig(installed: string, model: Model) {
           timeout: 120_000,
         },
         models: Object.fromEntries(
-          ['parent', 'child'].map((id) => [
+          ['parent', 'child', 'backup'].map((id) => [
             id,
             {
               name: id,
@@ -500,7 +530,11 @@ class Host {
       OPENCODE_DISABLE_FFF: 'true',
     };
   }
-  async configure(installed: string, mode: Mode | 'managed') {
+  async configure(
+    installed: string,
+    mode: Mode | 'managed',
+    customConfig?: RecordValue,
+  ) {
     for (const directory of [
       'home',
       'tmp',
@@ -521,7 +555,7 @@ class Host {
         this.env.OPENCODE_CONFIG_DIR as string,
         'oh-my-opencode-slim.json',
       ),
-      JSON.stringify(pluginConfig(mode), null, 2),
+      JSON.stringify(customConfig ?? pluginConfig(mode), null, 2),
     );
     await writeFile(
       path.join(this.workspace, '.env'),
@@ -1560,6 +1594,65 @@ async function restartRunning(host: Host, results: Evidence[]) {
   );
 }
 
+async function refusalFallback(
+  root: string,
+  installed: string,
+  model: Model,
+  results: Evidence[],
+) {
+  const host = new Host(root, model);
+  await host.configure(installed, 'native', refusalConfig());
+  await host.start();
+  try {
+    const parent = await host.create('refusal fallback');
+    await checkCase(
+      results,
+      'native: content-filter refusal continues foreground child',
+      async () => {
+        const marker = model.plan('parent', [
+          subagent('REFUSAL_CHILD_PROMPT', { background: false }),
+          { text: 'PARENT_DONE' },
+        ]);
+        await host.prompt(parent.id, marker);
+        await poll('foreground refusal result', async () => {
+          const messages = await host.messages(parent.id);
+          return toolText(messages, 'subagent').includes('CHILD_FALLBACK_DONE')
+            ? true
+            : undefined;
+        });
+        await host.idle(parent.id);
+        const children = host.children(parent.id);
+        assert.equal(children.length, 1);
+        return { child: children[0]?.id };
+      },
+    );
+    const bgParent = await host.create('background refusal fallback');
+    await checkCase(
+      results,
+      'native: content-filter refusal continues background child',
+      async () => {
+        const marker = model.plan('parent', [
+          subagent('REFUSAL_CHILD_PROMPT_BG', { background: true }),
+          { text: 'BG_PARENT_DONE' },
+        ]);
+        await host.prompt(bgParent.id, marker);
+        await host.idle(bgParent.id);
+        await poll('background refusal result', async () => {
+          const messages = await host.messages(bgParent.id);
+          return renderedText(messages).includes('CHILD_FALLBACK_DONE')
+            ? true
+            : undefined;
+        });
+        const children = host.children(bgParent.id);
+        assert.equal(children.length, 1);
+        return { child: children[0]?.id };
+      },
+    );
+  } finally {
+    await host.stop();
+  }
+}
+
 async function strictManaged(
   root: string,
   installed: string,
@@ -1750,6 +1843,12 @@ async function main() {
         await restartRunning(host, results);
       await host.stop();
     }
+    await refusalFallback(
+      path.join(root, 'refusal-fallback'),
+      installed,
+      model,
+      results,
+    );
     await strictManaged(
       path.join(root, 'explicit-managed'),
       installed,
@@ -1783,6 +1882,7 @@ async function main() {
       'Rendered catalogs cover orchestrator/explorer with this local test preset, across requested default/native/off modes. Other caller roles/presets, disabled-tool matrices, and before/after prompt byte comparisons require parent focused validation.',
       'Omitted/false foreground semantics are exercised in off mode; true-background and same-ID steering are exercised in every requested mode. Native/default same-provider foreground conversion requires source/unit validation.',
       'Progress report real-host coverage currently proves idle-parent queue/resume:false; running, interrupted, and form-waiting parents are not separately exercised.',
+      'Refusal fallback coverage uses native mode with a two-model chain: foreground re-attach and background result delivery are exercised; off mode intentionally leaves the native executor untouched.',
       'Terminal-but-not-yet-admitted crash and admitted-but-unconsumed restart windows need a deterministic host-side fault seam. No host DB mutations or plugin recovery are used to fabricate those states.',
       ...(options.restart === 'none' || !options.modes.includes('native')
         ? [

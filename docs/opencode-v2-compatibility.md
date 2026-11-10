@@ -437,7 +437,7 @@ side cannot be observed.
 | Tool execute hooks (apply-patch recovery, task-session, json-recovery) | ✅ | ✅ `createToolExecuteBridges` with subagent→task normalization | — |
 | Built-in MCPs (context7, gh_grep) auto-registered | ✅ | ✅ `ctx.mcp.transform` | `ctx.mcp.transform` is present in all v2.0.x stable hosts; the runtime capability probe is belt-and-suspenders |
 | Background-job state persistence (tombstones, deletion epochs) | ➖ process-local | ❌ not used | The V2 managed persistence was retired with the board. OpenCode owns Job durability and restart recovery; its recovery is at-least-once and can repeat external side effects, not an exactly-once guarantee (see [Background Orchestration](background-orchestration.md)) |
-| Foreground model fallback (rate-limit failover) | ✅ | ⚠️ replay disabled; retry-hook steering active | v2's non-atomic `session.switchModel` + steer replay could alter/replay a newer turn, so only the in-place switch runs |
+| Foreground model fallback (rate-limit failover) | ✅ | ⚠️ replay disabled; retry-hook steering active | v2's non-atomic `session.switchModel` + steer replay could alter/replay a newer turn, so only the in-place switch runs. A content-filter/no-route child refusal continues on the next model: the native wrapper re-attaches foreground children inside the parent `subagent` call, while background children receive one internal result notice. `off` continues the child in place but does not re-attach the parent call |
 | `/preset` (preset manager) | ✅ configuration writes; reload to apply | ✅ TUI entry (`./tui` → `dist/tui2.js`), with **Current session** / **Global default** selection; `/preset <name>` binds the current session | The command layer registers from an `append: "app"` slot render because `keymap.layer` is provider-scoped; commands carry an `id` and `slash.arguments`. The manager needs `ui.dialog.select` + `prompt` + `confirm`; feedback uses `ui.toast.show`. Session scope is a server-registered RPC domain — `ctx.rpc.register` on the plugin side, `client.rpc` on the TUI side — whose snapshots live in `ctx.storage`; all three are required members of the v2 plugin contract, so no host-version gate is involved. It changes future subagent inference for the selected session, including best-effort adoption on explicit same-agent continuation of bound children; its main model is unchanged. User/project `.json` and `.jsonc` edits are watched (~300 ms debounce), including newly created candidates; they refresh defaults for future bindings, not saved snapshots. Global-write feedback acknowledges the refresh request, while session-apply feedback requires RPC confirmation. With persistence available, native subagent `progress` saves a new child's binding before its first prompt; same-ID continuation installs runtime inference there and saves the adopted snapshot after native execute succeeds. `session.created` is not used to capture its profile. Non-TUI clients also get a server-side `/preset <name>` command (apply-only): a name binds the invoking session, and the result is reported through the command error channel so the switch costs no model turn and adds no context. See [Preset switching](presets/preset-switching.md) for inheritance, reapplication and compatibility limits |
 | Default primary agent | ✅ finalized visible orchestrator identity | ✅ `draft.default(<visible orchestrator identity>)`; the canonical `orchestrator` entry remains a hidden alias when `displayName` is configured | v1 `default_agent` and v2 draft default target the same visible entry |
 | TUI default agent | ✅ orchestrator | ✅ host follows the default primary agent and hoists it to the head of the agent list | — |
@@ -808,9 +808,12 @@ re-delivery by the plugin. See [Tools](tools.md#background-task-control).
 
 `task_status` may list pending permission requests for the exact owned child
 through the host `permission.list`/`get` surface. State is reported before
-permission details; when long paths exhaust the separate permission-details
-budget, the list ends with `permission details truncated` instead of hiding
-the child state. `task_reply` revalidates
+permission details. Each request keeps its exact ID; long resource paths are
+shortened within a per-request budget and end with `…`, with one trailing
+`resource details shortened` note. Whole requests are omitted only when the
+request limit is exceeded, and the list ends with `permission details
+truncated` if the total permission-details budget is exhausted. `task_reply`
+revalidates
 request ownership with the host before replying; a request answered elsewhere
 reports that it is no longer pending. The plugin keeps no request mirror, wait
 map, or lease, and OpenCode cancels pending permissions on reload.

@@ -449,7 +449,18 @@ describe('native task controls', () => {
     expect(output.indexOf('state: completed')).toBeLessThan(
       output.indexOf('pending permissions: 5'),
     );
-    expect(output).toContain('permission details truncated');
+    for (let index = 0; index < 5; index++) {
+      expect(output).toContain(`per_${index}`);
+    }
+    for (const line of output
+      .split('\n')
+      .filter((entry) => entry.startsWith('- per_'))) {
+      expect(new TextEncoder().encode(line).byteLength).toBeLessThanOrEqual(
+        180,
+      );
+    }
+    expect(output).toContain('resource details shortened');
+    expect(output).not.toContain('permission details truncated');
     expect(output).toContain('completed result');
     expect(new TextEncoder().encode(output).byteLength).toBeLessThanOrEqual(
       4096,

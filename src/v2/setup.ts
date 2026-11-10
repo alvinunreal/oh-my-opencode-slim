@@ -2165,6 +2165,7 @@ export function adaptMcpServer(v1: McpConfig): Record<string, unknown> {
 export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
   return async (ctx: V2Context): Promise<V2Cleanup> => {
     let retireSessionPresets: (() => Promise<void>) | undefined;
+    const foregroundChildren = new Set<string>();
     initLogger();
     // First logged line: identify the build that produced every following
     // log entry (logging-only — build info never enters prompt payloads).
@@ -2264,6 +2265,13 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         pluginInput as never,
       )) as unknown as Record<string, unknown>;
       registryBridge = v1Hooks.registryBridge as RegistryFactoryBridge;
+      // Foreground `subagent` calls are re-attached by the refusal
+      // continuation wrapper below; background children continue directly.
+      (
+        v1Hooks['v2.setForegroundChildProbe'] as
+          | ((probe: (sessionID: string) => boolean) => void)
+          | undefined
+      )?.((sessionID) => foregroundChildren.has(sessionID));
       // Per-instance flip handle (the native tool-before policy reads its
       // isArmed getter; this side owns arm/disarm).
       backgroundFlip = v1Hooks['v2.backgroundDefaultFlip'] as
@@ -3670,10 +3678,30 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
               const { wrapSessionPresetSubagent } = await import(
                 './session-presets'
               );
+              const { createSubagentRefusalContinuation } = await import(
+                './refusal-continuation'
+              );
               const presets = sessionPresets;
               const profiles = sessionProfileBridge;
               if (!presets || !profiles)
                 throw new Error('Session preset routing unavailable');
+              const refusalOutcome = v1Hooks['v2.refusedChildOutcome'] as
+                | ((
+                    sessionID: string,
+                    entry: Record<string, unknown>,
+                  ) => Promise<string | undefined>)
+                | undefined;
+              const refusalContinuation =
+                sessionContextRead && refusalOutcome
+                  ? createSubagentRefusalContinuation({
+                      context: sessionContextRead,
+                      refusalOutcome,
+                      onForegroundChild: (sessionID, active) => {
+                        if (active) foregroundChildren.add(sessionID);
+                        else foregroundChildren.delete(sessionID);
+                      },
+                    })
+                  : undefined;
               const wrapped = new WeakSet<object>();
               const reg = await ctx.tool.transform((draft) => {
                 nativePresetWrapperReady = false;
@@ -3686,8 +3714,11 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                       nativePresetWrapperReady = true;
                     }
                     if (tool.execute && !wrapped.has(tool.execute)) {
-                      const execute = wrapSessionPresetSubagent({
-                        execute: tool.execute,
+                      let execute = tool.execute;
+                      if (refusalContinuation)
+                        execute = refusalContinuation.wrap(execute);
+                      execute = wrapSessionPresetSubagent({
+                        execute,
                         presets,
                         capture: captureTeam,
                         effectiveBinding: profiles.effectiveBinding,

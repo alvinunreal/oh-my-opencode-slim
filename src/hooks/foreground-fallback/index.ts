@@ -36,6 +36,7 @@ import {
   responseError,
   stringifyError,
   structuredErrorMessage,
+  terminalTextOf,
 } from '../../utils/child-transcript';
 import { isRecord } from '../../utils/guards';
 import {
@@ -49,6 +50,7 @@ import { getClient } from '../../utils/opencode-client';
 import {
   normalizeAgentHint,
   resolveSessionAgent,
+  withAgent,
 } from '../../utils/prompt-agent';
 import { redactSecretsForLog } from '../../utils/redact';
 import {
@@ -770,6 +772,9 @@ export type ForegroundFallbackOptions = {
    *  decision and calls session.switchModel, so it can run on v2 hosts.
    *  Defaults to `enabled` for hosts where both paths apply. */
   v2RetryEnabled?: boolean;
+  /** Set after construction by the v2 adapter: true while this child is
+   *  awaited by a foreground `subagent` call whose wrapper re-attaches it. */
+  isForegroundChild?: (sessionID: string) => boolean;
   timers?: ForegroundFallbackTimers;
 };
 
@@ -787,6 +792,7 @@ export class ForegroundFallbackManager {
   private readonly retryDelayMs: number;
   private readonly hasRunningChildren?: (sessionID: string) => boolean;
   private readonly v2RetryEnabled: boolean;
+  private foregroundChildProbe?: (sessionID: string) => boolean;
   private readonly chainSource: Record<
     string,
     ReadonlyArray<ForegroundFallbackModel>
@@ -977,6 +983,13 @@ export class ForegroundFallbackManager {
    *  fences relaunches: a generation change during the admission must not
    *  enroll the new run under the stale attempt's baseline. */
   private readonly backgroundFallbackHandoff?: BackgroundFallbackHandoff;
+  /** Child session → parent for a v2 background refusal continued in place.
+   *  The host's original subagent job already delivered its error notice;
+   *  this one-shot entry lets the adapter deliver the continued result. */
+  private readonly backgroundRefusalContinuations = new Map<
+    string,
+    { parentID: string }
+  >();
   /** Synchronous board read returning the tracked generation for a
    *  confirmed BACKGROUND child only — undefined for foreground or
    *  unmanaged sessions (that undefined means "handoff not
@@ -1221,6 +1234,60 @@ export class ForegroundFallbackManager {
     return this.childOutcomes.get(`${sessionID}\0${assistantMessageID}`);
   }
 
+  setForegroundChildProbe(probe: (sessionID: string) => boolean): void {
+    this.foregroundChildProbe = probe;
+  }
+
+  /** Recreate the refusal outcome from a child's transcript when the event
+   *  pump has not claimed it yet. Used by the v2 native continuation wrapper. */
+  refusedChildOutcome(
+    sessionID: string,
+    entry: Record<string, unknown>,
+  ): Promise<string | undefined> {
+    if (typeof entry.id !== 'string') return Promise.resolve(undefined);
+    const existing = this.childOutcomes.get(`${sessionID}\0${entry.id}`);
+    if (existing) return existing;
+    if (entry.type === 'no-route' && isRecord(entry.error)) {
+      return this.handleV2NoRoute(sessionID, entry.error, entry, true);
+    }
+    if (
+      entry.type !== 'assistant' ||
+      entry.finish !== 'content-filter' ||
+      typeof entry.agent !== 'string' ||
+      !isRecord(entry.model) ||
+      typeof entry.model.providerID !== 'string' ||
+      typeof entry.model.id !== 'string' ||
+      (entry.model.variant !== undefined &&
+        typeof entry.model.variant !== 'string') ||
+      !isRecord(entry.time) ||
+      typeof entry.time.completed !== 'number' ||
+      !Number.isFinite(entry.time.completed) ||
+      entry.time.completed < this.startedAt
+    )
+      return Promise.resolve(undefined);
+    const step = this.v2Steps.get(sessionID);
+    return this.refusalOutcome(
+      sessionID,
+      {
+        assistantMessageID: entry.id,
+        agent: entry.agent,
+        model: {
+          providerID: entry.model.providerID,
+          id: entry.model.id,
+          ...(typeof entry.model.variant === 'string'
+            ? { variant: entry.model.variant }
+            : {}),
+        },
+        epoch:
+          step?.assistantMessageID === entry.id
+            ? step.epoch
+            : (this.turnEpoch.get(sessionID) ?? 0),
+      },
+      entry.error,
+      entry.rawFinish,
+    );
+  }
+
   v1InterviewRefusal(sessionID: string, messageID: string) {
     if (!this.enabled || !this.hasFallbackChain(sessionID)) return;
     const key = `interview\0${sessionID}\0${messageID}`;
@@ -1245,6 +1312,63 @@ export class ForegroundFallbackManager {
     const finish = this.v1Waiters.get(key);
     this.v1Waiters.delete(key);
     finish?.(model);
+  }
+
+  /** Deliver the continued background child's result after its host job
+   *  already published the refusal error notice. One read, one synthetic
+   *  parent message, no persisted state. */
+  private async finishBackgroundRefusalContinuation(
+    childID: string,
+  ): Promise<void> {
+    const pending = this.backgroundRefusalContinuations.get(childID);
+    if (!pending) return;
+    this.backgroundRefusalContinuations.delete(childID);
+    try {
+      const session = getClient(this.input).session;
+      if (
+        typeof session.messages !== 'function' ||
+        typeof session.promptAsync !== 'function'
+      )
+        return;
+      const history = await withTimeout(
+        session.messages({ path: { id: childID } }),
+        HOST_CALL_TIMEOUT_MS,
+        'background refusal result read timed out',
+      );
+      if (responseError(history) !== undefined) return;
+      const text =
+        terminalTextOf(history)?.trim() ||
+        'Subagent completed without a text response.';
+      const parentAgent = await resolveSessionAgent(
+        getClient(this.input),
+        pending.parentID,
+        { directory: this.input.directory },
+      );
+      if (!parentAgent) return;
+      const result = await withTimeout(
+        session.promptAsync({
+          path: { id: pending.parentID },
+          body: withAgent(
+            {
+              parts: [
+                createInternalAgentTextPart(
+                  `<subagent sessionID="${childID}" state="completed">\n${text}\n</subagent>`,
+                ),
+              ],
+            },
+            parentAgent,
+          ),
+        }),
+        HOST_CALL_TIMEOUT_MS,
+        'background refusal result delivery timed out',
+      );
+      if (isRecord(result) && responseError(result) !== undefined) return;
+    } catch (error) {
+      log('[foreground-fallback] background refusal result delivery failed', {
+        sessionID: childID,
+        error: stringifyError(error),
+      });
+    }
   }
 
   private createV1Outcome(key: string, timeout: number) {
@@ -1575,6 +1699,7 @@ export class ForegroundFallbackManager {
       readBackgroundGeneration,
       hasRunningChildren,
       v2RetryEnabled = enabled,
+      isForegroundChild,
       timers,
     } = options;
     this.enabled = enabled;
@@ -1584,6 +1709,7 @@ export class ForegroundFallbackManager {
     this.retryDelayMs = retryDelayMs;
     this.hasRunningChildren = hasRunningChildren;
     this.v2RetryEnabled = v2RetryEnabled;
+    this.foregroundChildProbe = isForegroundChild;
     this.chainSource = chains;
     this.onSessionModelChanged = onSessionModelChanged;
     this.backgroundFallbackHandoff = backgroundFallbackHandoff;
@@ -1621,6 +1747,7 @@ export class ForegroundFallbackManager {
     this.sessionTried.delete(id);
     this.requestRejected.delete(id);
     this.reattachPending.delete(id);
+    this.backgroundRefusalContinuations.delete(id);
     this.sessionChains.delete(id);
     this.sessionRetryEnabled.delete(id);
     this.unknownFinishStreak.delete(id);
@@ -1862,6 +1989,8 @@ export class ForegroundFallbackManager {
             props.finish === 'tool-calls' ||
             props.finish === 'length')
         ) {
+          if (event.type === 'session.execution.succeeded')
+            void this.finishBackgroundRefusalContinuation(props.sessionID);
           this.resetRecoveryState(props.sessionID);
         }
         break;
@@ -2756,9 +2885,21 @@ export class ForegroundFallbackManager {
           this.backgroundFallbackHandoff?.reject(sessionID, preparedGeneration);
         return;
       }
-      if (data.parentID && preparedGeneration === undefined) {
-        this.reattachPending.add(sessionID);
-        return nextModel;
+      if (
+        typeof data.parentID === 'string' &&
+        data.parentID &&
+        preparedGeneration === undefined
+      ) {
+        // A foreground child's wrapper re-attaches inside the same parent
+        // call. A background child has no such waiter: continue it here
+        // and deliver the continued result when this run settles.
+        if (this.foregroundChildProbe?.(sessionID)) {
+          this.reattachPending.add(sessionID);
+          return nextModel;
+        }
+        this.backgroundRefusalContinuations.set(sessionID, {
+          parentID: data.parentID,
+        });
       }
       handoffArmed ||=
         preparedGeneration !== undefined &&
@@ -2787,6 +2928,7 @@ export class ForegroundFallbackManager {
         'foreground refusal continuation timed out',
       );
       if (isRecord(promptResult) && responseError(promptResult) !== undefined) {
+        this.backgroundRefusalContinuations.delete(sessionID);
         if (handoffArmed)
           this.backgroundFallbackHandoff?.reject(sessionID, preparedGeneration);
         return;
@@ -2799,6 +2941,7 @@ export class ForegroundFallbackManager {
         });
       return nextModel;
     } catch (err) {
+      this.backgroundRefusalContinuations.delete(sessionID);
       if (handoffArmed)
         this.backgroundFallbackHandoff?.settleUnresolved(
           sessionID,

@@ -2849,10 +2849,12 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     chains?: Record<string, Array<string | { id: string; variant: string }>>;
     switchModel?: (sessionID: string, model: unknown) => Promise<unknown>;
     promptAsyncImpl?: (args: unknown) => Promise<unknown>;
+    messagesData?: unknown[];
     handoff?: ReturnType<typeof createBackgroundFallbackHandoff>;
     readBackgroundGeneration?: (sessionID: string) => number | undefined;
     retryEnabled?: boolean;
     maxRetries?: number;
+    foregroundChild?: boolean;
   }) {
     const durable = { providerID: 'test', id: 'a', variant: 'source' };
     const info: { model?: typeof durable; parentID?: string; agent?: string } =
@@ -2864,6 +2866,7 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     const { client, mocks } = createMockClient({
       getData: info,
       promptAsyncImpl: options?.promptAsyncImpl,
+      messagesData: options?.messagesData,
     });
     const switchModel = mock(
       options?.switchModel ??
@@ -2889,6 +2892,7 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
         backgroundFallbackHandoff: options?.handoff,
         readBackgroundGeneration: options?.readBackgroundGeneration,
         v2RetryEnabled: options?.retryEnabled ?? true,
+        isForegroundChild: options?.foregroundChild ? () => true : undefined,
       }),
     );
     return { manager, mocks, switchModel, onChanged, durable, info };
@@ -3155,6 +3159,7 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     const { manager, switchModel } = fixture({
       parentID: 'parent',
       chains: { orchestrator: ['test/a', 'test/b', 'test/c'] },
+      foregroundChild: true,
     });
     const sessionID = 'foreground-reattach-policy';
     await manager.handleEvent(started(sessionID));
@@ -3561,8 +3566,56 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     expect(manager.isFallbackInProgress('root')).toBe(false);
   });
 
-  test('v2 content-filter child switches without an orphan continuation', async () => {
+  test('v2 content-filter background child continues in place', async () => {
     const { manager, mocks, switchModel } = fixture({ parentID: 'parent' });
+    await manager.handleEvent(started('child'));
+    await manager.handleEvent(failed('child'));
+    await settle();
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('v2 background refusal delivers the continued child result to its parent', async () => {
+    const { manager, mocks } = fixture({
+      parentID: 'parent',
+      messagesData: [
+        {
+          info: { id: 'u1', role: 'user', time: { created: 1 } },
+          parts: [{ type: 'text', text: 'work' }],
+        },
+        {
+          info: { id: 'a1', role: 'assistant', time: { completed: 2 } },
+          parts: [{ type: 'text', text: 'BACKGROUND_DONE' }],
+        },
+      ],
+    });
+    await manager.handleEvent(started('child'));
+    await manager.handleEvent(failed('child'));
+    await settle();
+    await manager.handleEvent({
+      type: 'session.execution.succeeded',
+      data: { sessionID: 'child' },
+    });
+    await settle();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+    expect(mocks.promptAsync.mock.calls[1]?.[0]).toMatchObject({
+      path: { id: 'parent' },
+      body: {
+        parts: [
+          expect.objectContaining({
+            type: 'text',
+            text: expect.stringContaining('BACKGROUND_DONE'),
+          }),
+        ],
+      },
+    });
+  });
+
+  test('v2 content-filter foreground child leaves re-attach to its wrapper', async () => {
+    const { manager, mocks, switchModel } = fixture({
+      parentID: 'parent',
+      foregroundChild: true,
+    });
     await manager.handleEvent(started('child'));
     await manager.handleEvent(failed('child'));
     await settle();

@@ -2985,6 +2985,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'v2.backgroundDefaultFlip': backgroundDefaultFlip,
     'v2.pendingRefusalOutcome':
       foregroundFallback?.pendingRefusalOutcome.bind(foregroundFallback),
+    'v2.refusedChildOutcome':
+      foregroundFallback?.refusedChildOutcome.bind(foregroundFallback),
+    'v2.setForegroundChildProbe':
+      foregroundFallback?.setForegroundChildProbe.bind(foregroundFallback),
     'v2.session.retry': fallbackRetryHookEnabled
       ? (input: never, switchModel: never) =>
           foregroundFallback?.handleV2Retry(input, switchModel)
@@ -4398,6 +4402,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   } as Hooks & {
     'v2.pendingRefusalOutcome':
       | ForegroundFallbackManager['pendingRefusalOutcome']
+      | undefined;
+    'v2.refusedChildOutcome':
+      | ForegroundFallbackManager['refusedChildOutcome']
+      | undefined;
+    'v2.setForegroundChildProbe':
+      | ForegroundFallbackManager['setForegroundChildProbe']
       | undefined;
     'v2.refreshProfiles': typeof refreshProfilesFromDisk;
     'v2.resolveDelegatedModel': typeof resolveV2DelegatedModel;
