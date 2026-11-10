@@ -104,8 +104,8 @@ Master sweep baseline: 76 mutants, 72 killed, 4 survived. Outcomes:
 | --- | --- | --- | --- |
 | `dedup.ts:4:7-4:32` | `typeof value === 'number'` → `true` | Equivalent (not killed) | `Number.isInteger` already rejects every non-number, so the guard is redundant; removing it changes nothing. |
 | `dedup.ts:7:7-7:32` | string-type guard → `true` | Killed | `contract: non-string values that stringify to a status are rejected` (`index.property.test.ts`). |
-| `index.ts:1559` | `previous.turn !== turn` → `false` | Killed | `contract: decision trace: a no-chain retry from a new turn charges the budget` (`index.decision-trace.test.ts`). |
-| `index.ts:3707` | `previous.turn !== turn` → `false` | Killed | `contract: decision trace: a same-ID error from a new turn replays` (`index.decision-trace.test.ts`). |
+| `index.ts:1559:11-1559:33` | `previous.turn !== turn` → `false` | Killed | `contract: decision trace: a no-chain retry from a new turn charges the budget` (`index.decision-trace.test.ts`). |
+| `index.ts:3707:13-3707:35` | `previous.turn !== turn` → `false` | Killed | `contract: decision trace: a same-ID error from a new turn replays` (`index.decision-trace.test.ts`). |
 
 Kill attribution is from source trace; a fresh Stryker sweep is still needed
 to confirm the three killed mutants.
