@@ -1920,7 +1920,14 @@ export class ForegroundFallbackManager {
   ): void {
     if (from) {
       const previous = this.descent.get(sessionID);
-      const extend = previous?.fallback === from ? previous : undefined;
+      // v2 records the fallback variant; a different one there is a manual pick.
+      const sameFallback =
+        previous?.fallback === from &&
+        ((this.input as PluginInput & { hostFlavor?: string }).hostFlavor !==
+          'v2' ||
+          (previous.fallbackVariant ?? 'default') ===
+            (fromVariant ?? 'default'));
+      const extend = sameFallback ? previous : undefined;
       this.descent.set(sessionID, {
         model: extend?.model ?? from,
         variant: extend ? extend.variant : fromVariant,
