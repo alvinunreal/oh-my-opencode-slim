@@ -13,3 +13,6 @@ Users who want a stronger push have a path that needs no plugin change: an `{age
 ## Prior requests
 
 - #1845: "Add delegation.mode config option ("standard" / "aggressive") to force proactive delegation" (closed as not planned)
+- #1012: "[Bug]: Orchestrator forcing its usage" (closed as wontfix; triage: the orchestrator should act directly on small tasks)
+- PR #1555: "fix(agents): deny orchestrator file-mutation tools by default" (closed)
+- PR #1106 and PR #1108: "fix(orchestrator): strengthen delegation discipline for strong models" (closed)
