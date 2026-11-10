@@ -21,7 +21,7 @@ import type { SeatResultResolver } from './types';
 const COUNCIL_AGENT = 'council';
 const DELEGATION_TOOLS = new Set(['task', 'subagent']);
 
-/** v1/v2 tool.execute.before input shapes (see src/hooks/index.ts wiring
+/** v1/v2 tool.execute.before input shapes (see src/index.ts wiring
  * and the v2→v1 bridge in src/v2/setup.ts). */
 interface ToolExecuteBeforeInput {
   tool: string;
