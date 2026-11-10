@@ -13,25 +13,22 @@ import { registerDelegatedLaunchFromStructured } from './tool-execute-hooks';
 //
 // The resume drives the real structured-registration entry (the same one the
 // v2 executor wrapper calls) so the proof is exercised as production produces
-// it, not hand-seeded onto the board.
+// it, not hand-seeded onto the board. Both clocks are logical: the event
+// timestamps ride in the event properties so the router reads them directly,
+// and the launch stamps come from the injected `now` seam. Without that, the
+// board would stamp real wall time and the stale-busy ordering would silently
+// stop being stale.
 
 const TASK = 'ses_child';
 const PARENT = 'parent-1';
 
-/**
- * Logical-ms harness. The structured entry passes no `now`, so a lease-backed
- * launch stamps real wall time; `base` shifts every logical stamp onto that
- * clock and `at()` maps logical ms to the value the router observes.
- */
 function setup() {
-  const base = Date.now();
-  let clock = base;
+  let clock = 0;
   const board = new BackgroundJobBoard();
   const timers = createTimerHarness();
   const tracker = createPendingCallTracker({
     releaseLease: (lease) => board.releaseLease(lease),
   });
-  const at = (logicalMs: number) => base + logicalMs;
 
   const deps = {
     inputWaits: {
@@ -85,17 +82,25 @@ function setup() {
     terminalGate: deps.terminalGate,
     taskContextTracker: deps.taskContextTracker,
     firstAdmission: (sessionID: string) => tracker.firstAdmission(sessionID),
+    now: () => clock,
   };
 
-  const route = async (id: string, type: string, created: number) => {
-    clock = created;
+  /**
+   * Deliver one host event with an explicit host timestamp. The timestamp
+   * rides in the properties so `eventActivityAt` reads it directly and the
+   * router never falls back to the wall clock.
+   */
+  const route = async (id: string, type: string, at: number) => {
+    clock = at;
     for (const mapped of mapV2EventToV1({
       id,
-      created,
+      created: at,
       type,
       data: { sessionID: TASK },
     } as never)) {
-      await handleEvent({ event: mapped } as never, deps as never);
+      const event = mapped as { properties?: Record<string, unknown> };
+      event.properties = { ...event.properties, timestamp: at };
+      await handleEvent({ event } as never, deps as never);
     }
   };
 
@@ -103,17 +108,17 @@ function setup() {
     clock = v;
   };
 
-  return { board, tracker, deps, launchDeps, route, at, setClock };
+  return { board, tracker, deps, launchDeps, route, setClock };
 }
 
 describe('issue-1822: resumed child admission release', () => {
   test.each([
-    ['started before G2 registration', true],
-    ['G2 registered before stamped started delivered', false],
+    ['started delivered before G2 registration', true],
+    ['G2 registered before the stamped started is delivered', false],
   ] as const)(
     'terminal idle reconciles the resumed child (%s)',
     async (_label, startedFirst) => {
-      const { board, tracker, deps, launchDeps, route, at, setClock } = setup();
+      const { board, tracker, deps, launchDeps, route, setClock } = setup();
 
       // G1 runs and is observed busy, leaving a prior generation fence.
       board.registerLaunch({
@@ -121,9 +126,9 @@ describe('issue-1822: resumed child admission release', () => {
         parentSessionID: PARENT,
         agent: 'explorer',
         background: true,
-        now: at(0),
+        now: 0,
       });
-      await route('g1-busy', 'session.execution.started', at(50));
+      await route('g1-busy', 'session.execution.started', 50);
 
       // The parent resumes: a relaunch lease over G1, exactly as the
       // before-hook creates it, then the structured entry registers G2.
@@ -145,7 +150,7 @@ describe('issue-1822: resumed child admission release', () => {
       tracker.add(pending);
 
       const register = async () => {
-        setClock(at(210));
+        setClock(210);
         await registerDelegatedLaunchFromStructured(
           {
             callID: 'call_1',
@@ -159,8 +164,9 @@ describe('issue-1822: resumed child admission release', () => {
           launchDeps as never,
         );
       };
-      const started = () =>
-        route('g2-busy', 'session.execution.started', at(201));
+      // The incident's busy evidence: stamped at t=201, before G2's t=210
+      // run boundary.
+      const started = () => route('g2-busy', 'session.execution.started', 201);
       if (startedFirst) {
         await started();
         await register();
@@ -169,23 +175,28 @@ describe('issue-1822: resumed child admission release', () => {
         await started();
       }
 
-      // The registration itself is the proof: G2 must not be left waiting
-      // for a busy event stamped before its own run boundary.
-      expect(board.get(TASK)).toMatchObject({
+      // Pin the ordering this fixture claims: the busy event really is
+      // stamped before the new generation's run boundary. Without this the
+      // case would pass for the wrong reason (a busy observation after the
+      // boundary clears the fence by itself).
+      const resumedRecord = board.get(TASK);
+      expect(resumedRecord).toMatchObject({
         generation: 2,
         state: 'running',
         resumedRunProven: true,
+        runStartedAt: 210,
       });
+      expect(201).toBeLessThan(resumedRecord?.runStartedAt ?? 0);
 
       // Host reports the run finished (succeeded + idle, no generation).
-      await route('g2-done', 'session.execution.succeeded', at(400));
+      await route('g2-done', 'session.execution.succeeded', 400);
 
       // The generationless terminal idle must reach child reconciliation for
       // G2 so the gate can commit it and release the admission slot. Without
       // the launch proof this observation is rejected as fenced-stale.
       expect(
         deps.idleReconciler.scheduleChildIdleReconciliation,
-      ).toHaveBeenCalledWith(TASK, at(400), 2);
+      ).toHaveBeenCalledWith(TASK, 400, 2);
     },
   );
 });
