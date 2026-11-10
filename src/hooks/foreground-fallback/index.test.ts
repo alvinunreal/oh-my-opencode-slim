@@ -12737,7 +12737,10 @@ describe('fallback restoration', () => {
         { sessionID: sid, agent: 'orchestrator', model, error },
         switchModel,
       );
-    const refuse = async (id = 'refused', model: typeof info.model = origin) => {
+    const refuse = async (
+      id = 'refused',
+      model: typeof info.model = origin,
+    ) => {
       await manager.handleEvent({
         type: 'session.step.started',
         data: {
