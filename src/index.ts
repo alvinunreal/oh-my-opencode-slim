@@ -4108,17 +4108,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
       if (hostFlavor !== 'v2' && internalAdmission && output?.message?.model) {
         const restore = foregroundFallback?.restoreTarget(input.sessionID);
-        const model = modelFromMetadataString(restore?.model);
         if (
-          model &&
-          output.message.model.providerID === model.providerID &&
-          output.message.model.modelID === model.modelID &&
-          (output.message.model.variant ?? 'default') ===
-            (restore?.variant ?? 'default')
+          restore &&
+          `${output.message.model.providerID}/${output.message.model.modelID}` ===
+            restore.model
         ) {
           foregroundFallback?.observeContinuationModel(
             input.sessionID,
-            restore!.model,
+            restore.model,
           );
         }
       }

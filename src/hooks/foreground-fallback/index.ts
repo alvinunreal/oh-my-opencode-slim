@@ -808,10 +808,15 @@ export class ForegroundFallbackManager {
   private readonly activeFallback = new Map<string, string>();
   private readonly descent = new Map<
     string,
-    { model: string; variant?: string; fallbackVariant?: string; since: number }
+    {
+      model: string;
+      variant?: string;
+      fallback: string;
+      fallbackVariant?: string;
+    }
   >();
   private readonly busy = new Set<string>();
-  private readonly failedIdle = new Map<string, number>();
+  private readonly awaitingRun = new Set<string>();
   private readonly restoreTimers = new Map<string, TimerHandle>();
   private readonly restoring = new Set<string>();
   /** Provider failure timestamps survive internal returns to the primary. */
@@ -1191,7 +1196,7 @@ export class ForegroundFallbackManager {
     this.restoreTimers.clear();
     this.descent.clear();
     this.busy.clear();
-    this.failedIdle.clear();
+    this.awaitingRun.clear();
     for (const finish of this.v1Waiters.values()) finish();
     this.v1Waiters.clear();
     this.v1InterviewRefusals.clear();
@@ -1268,7 +1273,13 @@ export class ForegroundFallbackManager {
     const existing = this.childOutcomes.get(`${sessionID}\0${entry.id}`);
     if (existing) return existing;
     if (entry.type === 'no-route' && isRecord(entry.error)) {
-      return this.handleV2NoRoute(sessionID, entry.error, entry, true);
+      return this.handleV2NoRoute(sessionID, entry.error, entry, true).then(
+        (model) => {
+          if (!model && this.awaitingRun.delete(sessionID))
+            void this.restoreV2(sessionID);
+          return model;
+        },
+      );
     }
     if (
       entry.type !== 'assistant' ||
@@ -1400,13 +1411,13 @@ export class ForegroundFallbackManager {
     if (messageID && this.observedUserMessageIds.get(sessionID)?.has(messageID))
       return;
     const descent = this.descent.get(sessionID);
-    if (descent && model !== undefined) {
+    if (
+      descent &&
+      model !== undefined &&
+      (this.input as PluginInput & { hostFlavor?: string }).hostFlavor !== 'v2'
+    ) {
       if (model === descent.model) this.commitRestore(sessionID, descent);
-      else if (
-        (this.input as PluginInput & { hostFlavor?: string }).hostFlavor !==
-          'v2' ||
-        model !== this.activeFallback.get(sessionID)
-      ) {
+      else {
         this.descent.delete(sessionID);
         this.clearRestoreTimer(sessionID);
       }
@@ -1690,7 +1701,7 @@ export class ForegroundFallbackManager {
     this.clearRestoreTimer(id);
     this.descent.delete(id);
     this.busy.delete(id);
-    this.failedIdle.delete(id);
+    this.awaitingRun.delete(id);
     this.sessionModel.delete(id);
     this.sessionParent.delete(id);
     this.activeFallback.delete(id);
@@ -1753,9 +1764,9 @@ export class ForegroundFallbackManager {
     const descent = this.descent.get(sessionID);
     if (
       !descent ||
-      !this.activeFallback.has(sessionID) ||
       this.disposed ||
       this.busy.has(sessionID) ||
+      this.awaitingRun.has(sessionID) ||
       this.isFallbackInProgress(sessionID) ||
       this.reattachPending.has(sessionID) ||
       this.getDownProviders(sessionID).has(
@@ -1794,18 +1805,9 @@ export class ForegroundFallbackManager {
     });
   }
 
-  private async restoreV2(
-    sessionID: string,
-    activityAt?: number,
-  ): Promise<void> {
+  private async restoreV2(sessionID: string): Promise<void> {
     const descent = this.descent.get(sessionID);
-    if (
-      !descent ||
-      this.disposed ||
-      this.restoring.has(sessionID) ||
-      (activityAt !== undefined && activityAt < descent.since)
-    )
-      return;
+    if (!descent || this.disposed || this.restoring.has(sessionID)) return;
     const target = this.restoreTarget(sessionID);
     if (!target) {
       const provider = parseModelReference(descent.model)?.providerID;
@@ -1813,7 +1815,6 @@ export class ForegroundFallbackManager {
         ? this.downProviders.get(sessionID)?.get(provider)
         : undefined;
       if (
-        !this.busy.has(sessionID) &&
         markedAt !== undefined &&
         markedAt + PROVIDER_MARK_TTL_MS > this.now() &&
         !this.restoreTimers.has(sessionID)
@@ -1867,7 +1868,7 @@ export class ForegroundFallbackManager {
         return;
       }
       if (
-        hostModel !== this.activeFallback.get(sessionID) ||
+        hostModel !== descent.fallback ||
         (current.variant ?? 'default') !==
           (descent.fallbackVariant ?? 'default')
       ) {
@@ -1919,11 +1920,12 @@ export class ForegroundFallbackManager {
   ): void {
     if (from) {
       const previous = this.descent.get(sessionID);
+      const extend = previous?.fallback === from ? previous : undefined;
       this.descent.set(sessionID, {
-        model: previous?.model ?? from,
-        variant: previous ? previous.variant : fromVariant,
+        model: extend?.model ?? from,
+        variant: extend ? extend.variant : fromVariant,
+        fallback: model,
         fallbackVariant: detail?.variant,
-        since: this.now(),
       });
       this.clearRestoreTimer(sessionID);
     }
@@ -1960,6 +1962,7 @@ export class ForegroundFallbackManager {
     this.sessionModel.set(sessionID, model);
     if (this.activeFallback.get(sessionID) !== model) {
       this.activeFallback.delete(sessionID);
+      this.descent.delete(sessionID);
     }
     if (previousModel !== model) {
       this.onSessionModelChanged?.(sessionID, model);
@@ -2040,31 +2043,19 @@ export class ForegroundFallbackManager {
           isRecord(props) &&
           typeof props.sessionID === 'string' &&
           isRecord(props.error) &&
+          props.error.type === 'provider.no-route' &&
           typeof (rawEvent as { created?: unknown }).created === 'number'
         ) {
-          const failedAt = (rawEvent as { created: number }).created;
-          if (props.error.type !== 'provider.no-route') {
-            if (
-              failoverScope(props.error) === 'request' &&
-              this.descent.get(props.sessionID)?.since === failedAt
-            )
-              this.failedIdle.set(props.sessionID, failedAt);
-            break;
-          }
-          const recovered = await this.handleV2NoRoute(
-            props.sessionID,
-            props.error,
-            {
-              time: { completed: (rawEvent as { created: number }).created },
-            },
-          );
+          await this.handleV2NoRoute(props.sessionID, props.error, {
+            time: { completed: (rawEvent as { created: number }).created },
+          });
+          // A foreground child's waiter owns its next recovery attempt.
           if (
-            recovered ||
-            (this.activeFallback.has(props.sessionID) &&
-              this.sessionParent.has(props.sessionID) &&
-              this.readBackgroundGeneration?.(props.sessionID) === undefined)
+            this.descent.has(props.sessionID) &&
+            this.sessionParent.has(props.sessionID) &&
+            this.readBackgroundGeneration?.(props.sessionID) === undefined
           )
-            this.failedIdle.set(props.sessionID, failedAt);
+            this.awaitingRun.add(props.sessionID);
         }
         break;
       }
@@ -2394,8 +2385,10 @@ export class ForegroundFallbackManager {
         if (!props) break;
         const sessionID = eventSessionID(props);
         if (!sessionID) break;
-        if (props.status?.type === 'busy' || props.status?.type === 'retry')
+        if (props.status?.type === 'busy' || props.status?.type === 'retry') {
           this.busy.add(sessionID);
+          this.awaitingRun.delete(sessionID);
+        } else if (props.status?.type === 'idle') this.busy.delete(sessionID);
         if (this.separateCompaction.get(sessionID)?.active) break;
         const isFailoverRetry =
           props.status?.type === 'retry' &&
@@ -2513,26 +2506,11 @@ export class ForegroundFallbackManager {
       }
 
       case 'session.idle': {
-        const props = event.properties as
-          | { sessionID?: string; activityAt?: number }
-          | undefined;
+        const props = event.properties as { sessionID?: string } | undefined;
         const sessionID = props?.sessionID;
         if (!sessionID) break;
-        const failedAt = this.failedIdle.get(sessionID);
-        if (failedAt !== undefined && failedAt === props.activityAt) {
-          this.failedIdle.delete(sessionID);
-          break;
-        }
-        const descent = this.descent.get(sessionID);
-        if (
-          isV2Host &&
-          descent &&
-          props.activityAt !== undefined &&
-          props.activityAt < descent.since
-        )
-          break;
         this.busy.delete(sessionID);
-        if (isV2Host) await this.restoreV2(sessionID, props.activityAt);
+        if (isV2Host) await this.restoreV2(sessionID);
         break;
       }
 
@@ -3064,6 +3042,7 @@ export class ForegroundFallbackManager {
         this.reattachPending.add(sessionID);
         return nextModel;
       }
+      this.awaitingRun.add(sessionID);
       handoffArmed ||=
         preparedGeneration !== undefined &&
         (this.backgroundFallbackHandoff?.prepare(
@@ -3095,8 +3074,6 @@ export class ForegroundFallbackManager {
           this.backgroundFallbackHandoff?.reject(sessionID, preparedGeneration);
         return;
       }
-      const descent = this.descent.get(sessionID);
-      if (descent) descent.since = this.now();
       if (handoffArmed)
         this.backgroundFallbackHandoff?.admit(sessionID, preparedGeneration, {
           from,

@@ -12676,6 +12676,7 @@ describe('fallback restoration', () => {
   function fixture(options?: {
     parentID?: string;
     promptAsyncImpl?: (args: unknown) => Promise<unknown>;
+    chain?: string[];
   }) {
     const info: {
       model:
@@ -12699,7 +12700,9 @@ describe('fallback restoration', () => {
     );
     const changed = mock();
     const manager = timedManager({
-      chains: { orchestrator: ['primary/a', 'backup/b', 'third/c'] },
+      chains: {
+        orchestrator: options?.chain ?? ['primary/a', 'backup/b', 'third/c'],
+      },
       enabled: false,
       v2RetryEnabled: true,
       maxRetries: 0,
@@ -12798,13 +12801,9 @@ describe('fallback restoration', () => {
   });
 
   test('T2: v2 ignores the failed run idle after continuation admission', async () => {
-    const pending = deferred<unknown>();
-    const f = fixture({ promptAsyncImpl: () => pending.promise });
-    const failedAt = clock.now();
+    const f = fixture();
     await f.refuse();
-    clock.set(failedAt + 10);
-    pending.resolve({});
-    for (let i = 0; i < 40; i++) await Promise.resolve();
+    clock.set(clock.now() + 10);
     await f.manager.handleEvent({
       type: 'session.execution.failed',
       created: clock.now(),
@@ -12812,9 +12811,10 @@ describe('fallback restoration', () => {
     });
     await f.manager.handleEvent(idle());
     expect(f.switchModel).toHaveBeenCalledTimes(1);
-    await f.manager.handleEvent(idle(failedAt));
-    expect(f.switchModel).toHaveBeenCalledTimes(1);
-    clock.set(clock.now() + 1);
+    await f.manager.handleEvent({
+      type: 'session.status',
+      properties: { sessionID: sid, status: { type: 'busy' } },
+    });
     await f.manager.handleEvent(idle());
     expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
   });
@@ -12823,10 +12823,26 @@ describe('fallback restoration', () => {
     const pending = deferred<unknown>();
     const f = fixture({ promptAsyncImpl: () => pending.promise });
     await f.refuse();
+    expect(f.manager.isFallbackInProgress(sid)).toBe(true);
     await f.manager.handleEvent(idle());
     expect(f.switchModel).toHaveBeenCalledTimes(1);
     pending.resolve({});
     for (let i = 0; i < 40; i++) await Promise.resolve();
+    await f.manager.handleEvent({
+      type: 'session.status',
+      properties: { sessionID: sid, status: { type: 'busy' } },
+    });
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('v2 retry status releases the continuation fence', async () => {
+    const f = fixture();
+    await f.refuse();
+    await f.manager.handleEvent({
+      type: 'session.status',
+      properties: { sessionID: sid, status: { type: 'retry' } },
+    });
     await f.manager.handleEvent(idle());
     expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
   });
@@ -12862,6 +12878,78 @@ describe('fallback restoration', () => {
     expect(f.manager.restoreTarget(sid)).toBeUndefined();
   });
 
+  test('T6b: v2 preserves a manual model with the fallback variant', async () => {
+    const f = fixture();
+    await f.retry();
+    f.info.model = { providerID: 'third', id: 'c', variant: 'default' };
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    expect(f.manager.getActiveFallback(sid)).toBeUndefined();
+    expect(f.manager.restoreTarget(sid)).toBeUndefined();
+  });
+
+  test('v2 restores a manual model after that model fails over', async () => {
+    const f = fixture({
+      chain: ['primary/a', 'backup/b', 'third/c', 'fourth/d'],
+    });
+    await f.retry();
+    const manual = { providerID: 'third', id: 'c', variant: 'high' };
+    f.info.model = manual;
+    await f.retry(manual);
+    expect(f.info.model).toEqual({ providerID: 'fourth', id: 'd' });
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, manual);
+  });
+
+  test('v2 ignores a stale origin observed on a new prompt', async () => {
+    const f = fixture();
+    await f.retry();
+    f.manager.noteExternalTurn(sid, undefined, 'primary/a');
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+  });
+
+  test('a different continuation discards its old descent', async () => {
+    const f = fixture();
+    await f.retry();
+    f.manager.observeContinuationModel(sid, 'third/c');
+    expect(f.manager.restoreTarget(sid)).toBeUndefined();
+  });
+
+  test('v2 foreground child restores after its no-route waiter cannot recover', async () => {
+    const f = fixture({ parentID: 'parent' });
+    await f.manager.handleEvent({
+      type: 'session.created',
+      properties: { info: { id: sid, parentID: 'parent' } },
+    });
+    await f.retry();
+    await f.manager.handleEvent({
+      type: 'session.status',
+      properties: { sessionID: sid, status: { type: 'busy' } },
+    });
+    clock.set(clock.now() + 10);
+    const error = {
+      type: 'provider.no-route',
+      message: 'no route for backup/b',
+    };
+    await f.manager.handleEvent({
+      type: 'session.execution.failed',
+      created: clock.now(),
+      data: { sessionID: sid, error },
+    });
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    await f.manager.refusedChildOutcome(sid, {
+      type: 'no-route',
+      id: 'unrecoverable',
+      error,
+      time: { completed: clock.now() },
+    });
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
   test('T7: v1 replay retains the failed model and variant', async () => {
     const { manager } = await replay();
     await manager.handleEvent(idle());
@@ -12880,6 +12968,23 @@ describe('fallback restoration', () => {
     expect(manager.restoreTarget(sid)).toBeUndefined();
     await manager.handleEvent(idle());
     expect(manager.restoreTarget(sid)?.model).toBe('primary/a');
+  });
+
+  test('v1 status idle clears busy before session.idle', async () => {
+    const { manager } = await replay();
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: { sessionID: sid, status: { type: 'busy' } },
+    });
+    expect(manager.restoreTarget(sid)).toBeUndefined();
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: { sessionID: sid, status: { type: 'idle' } },
+    });
+    expect(manager.restoreTarget(sid)).toEqual({
+      model: 'primary/a',
+      variant: 'high',
+    });
   });
 
   test('T9: v1 cannot restore before the provider mark expires', async () => {
