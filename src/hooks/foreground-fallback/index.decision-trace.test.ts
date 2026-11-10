@@ -138,4 +138,46 @@ describe('foreground fallback replay routing', () => {
     expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
     expect(onChanged).toHaveBeenCalledWith(childID, 'backup/child');
   });
+
+  test('decision trace: a same-ID error from a new turn replays', async () => {
+    const { mocks } = createMockClient();
+    const manager = new ForegroundFallbackManager({
+      chains: { orchestrator: ['primary/a', 'backup/b'] },
+      enabled: true,
+      input: { directory: '/test' } as never,
+      maxRetries: 3,
+      timers: clock,
+    });
+    const sessionID = 'decision-trace-cross-turn';
+    manager.registerSessionAgent(sessionID, 'orchestrator');
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID,
+          role: 'assistant',
+          agent: 'orchestrator',
+          providerID: 'primary',
+          modelID: 'a',
+        },
+      },
+    });
+    await manager.handleEvent(
+      redoEvents.error(sessionID, { message: 'rate limit' }, 'shared-id'),
+    );
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+
+    // New user turn with the same model and the same incident ID, inside
+    // the 5s window: the prior turn's incident must not suppress it.
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: { sessionID, id: 'user-2', role: 'user', agent: 'orchestrator' },
+      },
+    });
+    await manager.handleEvent(
+      redoEvents.error(sessionID, { message: 'rate limit' }, 'shared-id'),
+    );
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+  });
 });
