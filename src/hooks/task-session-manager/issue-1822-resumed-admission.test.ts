@@ -303,8 +303,10 @@ describe('issue-1822: resumed child admission release', () => {
       }
 
       // The resumed child holds the only slot, so the next launch waits.
+      // One microtask tick is enough for an already-settled `ready` to run
+      // its callback, so this stays a real assertion without real time.
       expect(board.get(TASK)?.state).toBe('running');
-      await Bun.sleep(0);
+      await Promise.resolve();
       expect(admitted).toBe(false);
 
       // Terminal publication is what frees the slot in production
