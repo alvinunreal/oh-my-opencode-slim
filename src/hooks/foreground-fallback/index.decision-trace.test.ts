@@ -223,4 +223,84 @@ describe('foreground fallback replay routing', () => {
     expect(mocks.promptAsync.mock.calls.length).toBe(before);
     expect((manager as any).sessionRetries.get(sessionID)).toBe(2);
   });
+
+  test('decision trace: a same-ID error after the dedup window replays in the same turn', async () => {
+    const { mocks } = createMockClient();
+    const manager = new ForegroundFallbackManager({
+      chains: { orchestrator: ['primary/a', 'backup/b'] },
+      enabled: true,
+      input: { directory: '/test' } as never,
+      maxRetries: 3,
+      timers: clock,
+    });
+    const sessionID = 'decision-trace-window';
+    manager.registerSessionAgent(sessionID, 'orchestrator');
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID,
+          role: 'assistant',
+          agent: 'orchestrator',
+          providerID: 'primary',
+          modelID: 'a',
+        },
+      },
+    });
+    const first = manager.handleEvent(
+      redoEvents.error(sessionID, { message: 'rate limit' }, 'shared-id'),
+    );
+    await harness.advance(2_000);
+    await first;
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    // Move past the 5s window; the same incident ID must now replay.
+    await harness.advance(3_000);
+    const second = manager.handleEvent(
+      redoEvents.error(sessionID, { message: 'rate limit' }, 'shared-id'),
+    );
+    await harness.advance(2_000);
+    await second;
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(2);
+  });
+
+  test('decision trace: a no-chain retry after the dedup window charges the budget', async () => {
+    const { mocks } = createMockClient();
+    const manager = new ForegroundFallbackManager({
+      chains: { orchestrator: ['primary/a', 'backup/b'] },
+      enabled: true,
+      input: { directory: '/test' } as never,
+      maxRetries: 3,
+      timers: clock,
+    });
+    const sessionID = 'decision-trace-no-chain-window';
+    manager.registerSessionAgent(sessionID, 'bare');
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          sessionID,
+          role: 'assistant',
+          agent: 'bare',
+          providerID: 'primary',
+          modelID: 'a',
+        },
+      },
+    });
+    await manager.handleEvent(
+      redoEvents.error(sessionID, { message: 'rate limit' }, 'shared-id'),
+    );
+    expect((manager as any).sessionRetries.get(sessionID)).toBe(1);
+    // Same turn, same model, but past the 5s window: the incident is stale.
+    await harness.advance(5_000);
+    const retry = manager.handleEvent({
+      type: 'session.status',
+      properties: {
+        sessionID,
+        status: { type: 'retry', attempt: 1, message: 'rate limit' },
+      },
+    });
+    await harness.advance(2_000);
+    await retry;
+    expect((manager as any).sessionRetries.get(sessionID)).toBe(2);
+  });
 });
