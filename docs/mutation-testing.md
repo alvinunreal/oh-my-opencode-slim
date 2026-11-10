@@ -107,5 +107,5 @@ Master sweep baseline: 76 mutants, 72 killed, 4 survived. Outcomes:
 | `index.ts:1559:11-1559:33` | `previous.turn !== turn` → `false` | Killed | `contract: decision trace: a no-chain retry from a new turn charges the budget` (`index.decision-trace.test.ts`). |
 | `index.ts:3707:13-3707:35` | `previous.turn !== turn` → `false` | Killed | `contract: decision trace: a same-ID error from a new turn replays` (`index.decision-trace.test.ts`). |
 
-Kill attribution is from source trace; a fresh Stryker sweep is still needed
-to confirm the three killed mutants.
+Fresh scoped sweep (`bun run mutation:foreground-fallback`): 98.68%, 75 killed,
+1 survived (`dedup.ts:4:7`, the equivalent mutant above), 0 no-coverage.
