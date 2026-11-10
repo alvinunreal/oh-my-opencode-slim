@@ -28,7 +28,9 @@ describe('launch activity proof', () => {
     ).toBe(true);
   });
 
-  test('a validated relaunch lease is proven', () => {
+  test('a validated relaunch lease alone is not proof', () => {
+    // The lease is acquired before the host write, so it exists while a late
+    // event from the previous run could still be attributed to the new one.
     expect(
       proofOf((board) => {
         board.registerLaunch({ ...base } as never);
@@ -36,7 +38,7 @@ describe('launch activity proof', () => {
         if (!lease) throw new Error('lease unavailable');
         board.registerLaunch({ ...base, relaunchLease: lease } as never);
       }),
-    ).toBe(true);
+    ).toBeUndefined();
   });
 
   test('a plain relaunch without a lease is not proven', () => {

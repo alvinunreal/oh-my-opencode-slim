@@ -104,11 +104,15 @@ export interface BackgroundJobRecord {
   hostSteerCover?: { revision: number; calls: number };
   lastLiveBusyAt?: number;
   /**
-   * Derived by the board, never supplied by callers: this generation was
-   * registered with host launch evidence (a validated relaunch lease or a
-   * resume the native executor already reported running), so the event
-   * fence need not wait for a busy event. Absent on provisional/adopted
-   * observations, which have no launch evidence.
+   * This generation was registered from a resume whose native executor the
+   * caller already observed running, so registration itself is activity
+   * proof and the event fence need not wait for a busy event.
+   *
+   * A relaunch lease is deliberately NOT proof: it is this plugin's
+   * ownership token, acquired before the host write, so it exists during the
+   * window when a late generationless event from the previous run could be
+   * misattributed to this one. Absent on provisional, adopted, and
+   * lease-only relaunch observations.
    */
   resumedRunProven?: true;
   completedAt?: number;
@@ -229,13 +233,12 @@ export interface BackgroundJobLaunchInput {
   /** Host admission id of this run's opening input, when known. */
   runInputMessageID?: string;
   /**
-   * The caller knows the host already accepted this run and the native
-   * executor reported it running (a resumed background child). The
+   * The caller observed the host already running this resumed child. The
    * registration is itself activity proof, so the event fence need not wait
-   * for a host busy event that may be stamped before this registration.
+   * for a busy event that may be stamped before this registration.
    *
-   * A validated `relaunchLease` carries the same proof and does not need
-   * this flag.
+   * A relaunch lease is NOT an acceptable substitute: it is acquired before
+   * the host write, so it proves ownership, not that a new run began.
    */
   resumedRunProven?: true;
   /**
@@ -604,26 +607,6 @@ export class BackgroundJobBoard {
     return record;
   }
 
-  /**
-   * A generation transition is only safe to fence when some host evidence
-   * proves the new run started. Two launch kinds carry that proof:
-   *
-   * - a validated relaunch lease (the host accepted a new round), and
-   * - a resume whose native executor the host already reported running.
-   *
-   * Provisional and adopted observations carry no launch evidence, so they
-   * still wait for a live activity fence. Deriving this here keeps every
-   * caller honest: a new launch path cannot forget the flag, because the
-   * board reads it from what it already validated.
-   */
-  private launchIsActivityProven(
-    input: BackgroundJobLaunchInput,
-    requestedLease: BackgroundJobLease | undefined,
-  ): boolean {
-    if (requestedLease !== undefined) return true;
-    return input.resumedRunProven === true;
-  }
-
   /** State transition for an accepted launch; throws when the host has
    * refused it. The identity projection fires only for accepted records. */
   private insertLaunchRecord(
@@ -755,9 +738,7 @@ export class BackgroundJobBoard {
         hostSteerCover: undefined,
         lastLiveBusyAt: now,
         lastUsedAt: now,
-        resumedRunProven: this.launchIsActivityProven(input, requestedLease)
-          ? true
-          : undefined,
+        resumedRunProven: input.resumedRunProven === true ? true : undefined,
       } satisfies BackgroundJobRecord;
       this.setJob(updated);
       this.persistBackgroundChild(updated, {});
@@ -885,7 +866,7 @@ export class BackgroundJobBoard {
       runStartedAt: now,
       lastLiveBusyAt: now,
       lastUsedAt: now,
-      ...(this.launchIsActivityProven(input, input.relaunchLease)
+      ...(input.resumedRunProven === true
         ? { resumedRunProven: true as const }
         : {}),
       alias:
