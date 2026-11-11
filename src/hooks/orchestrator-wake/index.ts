@@ -138,16 +138,13 @@ export function wakeRepeatMarker(core: string, occurrence: number): string {
 export const ORCHESTRATOR_WAKE_UNCHANGED_CAP = 2;
 
 /** Ceiling on one host read inside `evaluate` (#1862). An evaluation holds
- * its session's in-flight slot until it returns, and eviction never takes a
- * live row, so a read that never settles would pin both forever. A read has
- * no side effects, so a timeout is just a failed read: it takes the ordinary
- * error path, which releases the slot. Three bounded reads stay under the
- * 60s minimum wake interval. The SDK exposes no abort signal, so a timed-out
- * read is abandoned, not cancelled. The send is deliberately unbounded: the
- * host acknowledges `promptAsync` without waiting for the turn, and holding
- * the slot while a send is in flight is what stops a duplicate wake.
- * `shortcut: a send the host never acknowledges pins the slot until the
- * process restarts; bound it if a hung prompt_async is ever observed. */
+ * its session's in-flight slot until it returns and eviction never takes a
+ * live row, so a read that never settles would pin both forever. Reads have
+ * no side effects, so a timeout is just a failed read: ordinary error path,
+ * slot released in `finally`. Three reads stay well under the 60s wake
+ * interval floor. `shortcut: a send the host never acknowledges pins the
+ * slot until the process restarts; bound it if a hung prompt_async is ever
+ * observed. */
 export const WAKE_HOST_READ_TIMEOUT_MS = 10_000;
 
 /**
