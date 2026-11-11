@@ -36,6 +36,7 @@ import {
   STOPPED_RECOVERY_OVERFLOW_TEXT,
   STOPPED_RECOVERY_QUEUE_CAP,
   STOPPED_RECOVERY_WAKE_CHUNK,
+  WAKE_HOST_READ_TIMEOUT_MS,
   WAKE_REPEAT_CORES,
   wakeRepeatMarker,
 } from './index';
@@ -3425,5 +3426,48 @@ describe('#1411 wake body dedupe', () => {
       ORCHESTRATOR_CHILDREN_WAKE_TEXT.length -
         wakeRepeatMarker(core ?? '', 2).length,
     ).toBeGreaterThan(0);
+  });
+});
+
+describe('#1862 host-read watchdog bounds the in-flight slot', () => {
+  test('a host read that never settles releases the slot at the watchdog', async () => {
+    const promptAsync = mock(async () => ({}));
+    const todo = mock(() => new Promise(() => {}));
+    const { scheduler } = createScheduler({
+      intervalMs: 60_000,
+      sessionClient: makeClient({ promptAsync, todo }),
+    });
+
+    await scheduler.event({
+      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+    });
+    await clock.advance(60_000);
+    expect(todo).toHaveBeenCalledTimes(1);
+    expect(promptAsync).not.toHaveBeenCalled();
+
+    // A held slot refuses the next evaluation, so a second read proves release.
+    await clock.advance(WAKE_HOST_READ_TIMEOUT_MS);
+    await clock.advance(60_000);
+    expect(todo).toHaveBeenCalledTimes(2);
+    expect(promptAsync).not.toHaveBeenCalled();
+  });
+
+  test('a send in flight keeps the slot past the read watchdog', async () => {
+    const promptAsync = mock(() => new Promise(() => {}));
+    const { scheduler } = createScheduler({
+      intervalMs: 60_000,
+      sessionClient: makeClient({ promptAsync }),
+    });
+
+    await scheduler.event({
+      event: { type: 'session.idle', properties: { sessionID: 'p1' } },
+    });
+    await clock.advance(60_000);
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+
+    // The host may already hold the wake; a second send would duplicate it.
+    await clock.advance(WAKE_HOST_READ_TIMEOUT_MS);
+    await clock.advance(60_000);
+    expect(promptAsync).toHaveBeenCalledTimes(1);
   });
 });

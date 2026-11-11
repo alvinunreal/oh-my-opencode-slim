@@ -21,6 +21,7 @@ import {
   TERMINAL_DELTA_METADATA_KEY,
 } from '../../utils/internal-initiator';
 import { log } from '../../utils/logger';
+import { withTimeout } from '../../utils/session';
 import type { SessionSelection } from '../../utils/session-selection';
 import type { TimerHandle, TimerSeam } from '../../utils/timer-seam';
 import type { SessionLifecycle } from '../session-lifecycle';
@@ -135,6 +136,19 @@ export function wakeRepeatMarker(core: string, occurrence: number): string {
 
 /** After this many successful wakes with an unchanged fingerprint, stop. */
 export const ORCHESTRATOR_WAKE_UNCHANGED_CAP = 2;
+
+/** Ceiling on one host read inside `evaluate` (#1862). An evaluation holds
+ * its session's in-flight slot until it returns, and eviction never takes a
+ * live row, so a read that never settles would pin both forever. A read has
+ * no side effects, so a timeout is just a failed read: it takes the ordinary
+ * error path, which releases the slot. Three bounded reads stay under the
+ * 60s minimum wake interval. The SDK exposes no abort signal, so a timed-out
+ * read is abandoned, not cancelled. The send is deliberately unbounded: the
+ * host acknowledges `promptAsync` without waiting for the turn, and holding
+ * the slot while a send is in flight is what stops a duplicate wake.
+ * `shortcut: a send the host never acknowledges pins the slot until the
+ * process restarts; bound it if a hung prompt_async is ever observed. */
+export const WAKE_HOST_READ_TIMEOUT_MS = 10_000;
 
 /**
  * Default per-parent throttle window for terminal-publication wakes
@@ -836,6 +850,13 @@ export function createOrchestratorWakeScheduler(
     options.setTimeout ?? ((callback, delay) => setTimeout(callback, delay));
   const cancelTimeout: TimerSeam['clearTimeout'] =
     options.clearTimeout ?? ((timer) => clearTimeout(timer));
+
+  /** Every host read inside an evaluation rides the watchdog (#1862). */
+  const boundHostRead = <T>(operation: Promise<T>, message: string) =>
+    withTimeout(operation, WAKE_HOST_READ_TIMEOUT_MS, message, {
+      setTimeout: scheduleTimeout,
+      clearTimeout: cancelTimeout,
+    });
 
   /** Static host-surface capability record (the client never changes). */
   const capabilities = probeSessionApis(sessionSdk);
@@ -1768,10 +1789,12 @@ export function createOrchestratorWakeScheduler(
     let accepted = false;
 
     try {
-      const snapshot =
+      const snapshot = await boundHostRead<WakeSnapshot | undefined>(
         wakeMode === 'children'
-          ? await readChildrenSnapshot(sessionID)
-          : await readHostSnapshot(sessionID);
+          ? readChildrenSnapshot(sessionID)
+          : readHostSnapshot(sessionID),
+        'orchestrator-wake: host snapshot read timed out',
+      );
       if (!snapshot || state.generation !== generation) return false;
       if (!state.continuousIdle) return false;
       if (applyArchiveState(sessionID, state, snapshot.archiveState))
@@ -1826,10 +1849,12 @@ export function createOrchestratorWakeScheduler(
       }
 
       // Recheck host status/waits immediately before promptAsync.
-      const latest =
+      const latest = await boundHostRead<WakeSnapshot | undefined>(
         wakeMode === 'children'
-          ? await readChildrenSnapshot(sessionID)
-          : await readHostSnapshot(sessionID);
+          ? readChildrenSnapshot(sessionID)
+          : readHostSnapshot(sessionID),
+        'orchestrator-wake: host recheck read timed out',
+      );
       if (!latest || state.generation !== generation) return false;
       if (!state.continuousIdle) return false;
       if (applyArchiveState(sessionID, state, latest.archiveState))
@@ -1930,7 +1955,10 @@ export function createOrchestratorWakeScheduler(
       // observable (matching the historical behavior for sessions that
       // always ran orchestrator).
       const selection = options.resolveSelection
-        ? await options.resolveSelection(sessionID).catch(() => undefined)
+        ? await boundHostRead(
+            options.resolveSelection(sessionID),
+            'orchestrator-wake: selection read timed out',
+          ).catch(() => undefined)
         : undefined;
       // The await above is a new race window: an external message can
       // bump generation / end idle, and a Plan/Build host selection
