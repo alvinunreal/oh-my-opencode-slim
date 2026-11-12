@@ -23,6 +23,7 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
     provider, including same-provider and sticky switches. Synthetic admissions
     cannot overwrite it implicitly. An external turn selecting a different model
     clears both; v2's persistent switch keeps the record live across turns.
+  - `switches` (`SwitchTracker`): in-flight native switches. `dispose()` waits up to 2 s for them to settle, then gives up because the host call cannot be cancelled.
     Only provider marks younger than 30 minutes are used
     (`PROVIDER_MARK_TTL_MS`), without expiring the model. A successful v1
     assistant clears its provider's marks for its session and direct parent
