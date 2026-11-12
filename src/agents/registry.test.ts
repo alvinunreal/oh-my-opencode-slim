@@ -3253,6 +3253,42 @@ describe('child permission payload stance tail', () => {
     expect(once.slice(0, payload.length)).toEqual(payload);
   });
 
+  test('child tail dedupe compacts a legacy duplicated opening deny from five edit rules to four', () => {
+    const registry = build(
+      runtimeFor({
+        disabled_agents: [],
+        agents: {
+          explorer: {
+            permission: {
+              edit: { 'src/private/*': 'deny', 'src/*': 'allow' },
+            },
+          },
+        },
+      }),
+      {},
+      { hostFlavor: 'v2' },
+    );
+    const host: V2PermissionRule[] = [
+      { action: 'edit', resource: '*', effect: 'allow' },
+      { action: 'edit', resource: 'src/private/*', effect: 'deny' },
+    ];
+    const fresh = registry.compileChildPermissions('explorer', host);
+    const legacy = [
+      ...host,
+      { action: 'edit', resource: 'src/private/*', effect: 'deny' as const },
+      ...fresh.slice(host.length),
+    ];
+    expect(legacy.filter((rule) => rule.action === 'edit')).toHaveLength(5);
+    const compact = registry.compileChildPermissions('explorer', legacy);
+    expect(compact.filter((rule) => rule.action === 'edit')).toHaveLength(4);
+    expect(compact).toEqual(fresh);
+    const twice = registry.compileChildPermissions('explorer', compact);
+    expect(twice.filter((rule) => rule.action === 'edit')).toHaveLength(4);
+    expect(twice).toEqual(compact);
+    expect(decideOf(compact)('edit', 'src/private/key.ts')).toBe('deny');
+    expect(decideOf(compact)('edit', 'src/index.ts')).toBe('allow');
+  });
+
   test('replayed allow never reopens a narrower host deny inside its pattern', () => {
     const runtime = runtimeFor({
       disabled_agents: [],

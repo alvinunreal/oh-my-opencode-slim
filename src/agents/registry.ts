@@ -1924,7 +1924,18 @@ export function buildResolvedAgentRegistry(
           return compiled;
         if (suffix.length > target.length) break;
       }
-      const tail = keepLastRules(buildChildTail(compiled, denyCeiling));
+      const rawTail = buildChildTail(compiled, denyCeiling);
+      const tail = keepLastRules(rawTail);
+      // A duplicate opening deny can hide the raw boundary from the scan.
+      if (rulesEndWithTail(compiled, rawTail)) {
+        const prefix = compiled.slice(0, compiled.length - rawTail.length);
+        const prefixTail = buildChildTail(prefix, denyCeiling);
+        if (
+          prefixTail.length === rawTail.length &&
+          rulesEndWithTail(rawTail, prefixTail)
+        )
+          return [...prefix, ...tail];
+      }
       if (rulesEndWithTail(compiled, tail)) return compiled;
       return [...compiled, ...tail];
     },
