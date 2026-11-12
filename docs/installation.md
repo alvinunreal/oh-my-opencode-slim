@@ -323,11 +323,11 @@ See the [Multiplexer Integration Guide](multiplexer-integration.md) for more det
 
 1. Remove the plugin from your OpenCode config:
 
-   Edit `~/.config/opencode/opencode.json` and remove `"oh-my-opencode-slim"` from the `plugin` array. If the installer enabled LSP (it only does so when no explicit `lsp` setting exists), set `"lsp": false` or remove the `"lsp"` key.
+   Edit `~/.config/opencode/opencode.json` and remove the Slim entry from `plugins` on v2 (`plugin` on v1). If the installer enabled LSP (it only does so when no explicit `lsp` setting exists), set `"lsp": false` or remove the `"lsp"` key.
 
 2. Remove the TUI badge:
 
-   Edit `~/.config/opencode/tui.json` and remove `"oh-my-opencode-slim"` from the `plugin` array.
+   Edit `~/.config/opencode/tui.json` and remove the Slim entry from `plugins` on v2 (`plugin` on v1).
 
 ### Optional Cleanup
 

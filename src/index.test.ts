@@ -31,10 +31,11 @@ import {
   getCompanionTarget,
 } from './companion/updater';
 import { RuntimeConfig } from './config/runtime';
-import * as wakeHooks from './hooks';
 import { isTaggedPart, stripTaggedContent } from './hooks/cache-safe-injection';
 import { COUNCIL_INJECT_METADATA_KEY } from './hooks/council-inject';
+import { ForegroundFallbackManager } from './hooks/foreground-fallback';
 import { JSON_ERROR_REMINDER } from './hooks/json-error-recovery/hook';
+import * as orchestratorWake from './hooks/orchestrator-wake';
 import {
   getWakeProgress,
   resetOrchestratorWakeGateForTests,
@@ -1277,117 +1278,127 @@ describe('plugin tool registration', () => {
     }
   });
 
-  // V1-managed proof: the wall-clock watchdog is a V1 managed-lifecycle
-  // component (V2 rejects `wallClockTimeoutMs` before any managed factory
-  // runs), so the deadline-abort guarantee belongs to the V1 assembly only.
-  test('v1 generation teardown preserves deadline aborts', async () => {
-    const hostFlavor = 'v1';
-    const originalEnv = { ...process.env };
-    const originalSetTimeout = globalThis.setTimeout;
-    const originalClearTimeout = globalThis.clearTimeout;
-    const originalNow = Date.now;
-    const clock = createHostTimerHarness();
-    const abortCalls: string[] = [];
-    const scheduler = spyOn(wakeHooks, 'createOrchestratorWakeScheduler');
-    const noop = async () => ({});
-    const client = createPluginClient(noop, async ({ path }) => {
-      abortCalls.push(path.id);
-      return {};
-    });
-    const configDir = await mkdtemp('/tmp/oh-my-opencode-slim-phase-2r-');
-    await Bun.write(
-      `${configDir}/oh-my-opencode-slim.json`,
-      JSON.stringify({
-        backgroundJobs: {
-          wallClockTimeoutMs: 60_000,
-        },
-      }),
-    );
-    process.env = {
-      ...originalEnv,
-      OPENCODE_CONFIG_DIR: configDir,
-    };
-    delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
-    globalThis.setTimeout = clock.setTimeout as typeof globalThis.setTimeout;
-    globalThis.clearTimeout =
-      clock.clearTimeout as typeof globalThis.clearTimeout;
-    Date.now = clock.now;
-
-    const launch = async (
-      hooks: Awaited<ReturnType<typeof plugin>>,
-      callID: string,
-      taskID: string,
-    ) => {
-      await hooks['tool.execute.before']?.(
-        { tool: 'task', sessionID: 'parent-1', callID },
-        {
-          args: {
-            subagent_type: 'explorer',
-            background: true,
-            description: taskID,
+  test.each(['v1', 'v2'] as const)(
+    '%s generation teardown preserves deadline aborts without a v2 wake scheduler',
+    async (hostFlavor) => {
+      const originalEnv = { ...process.env };
+      const originalSetTimeout = globalThis.setTimeout;
+      const originalClearTimeout = globalThis.clearTimeout;
+      const originalNow = Date.now;
+      const clock = createHostTimerHarness();
+      const abortCalls: string[] = [];
+      const scheduler = spyOn(
+        orchestratorWake,
+        'createOrchestratorWakeScheduler',
+      );
+      const noop = async () => ({});
+      const client = createPluginClient(noop, async ({ path }) => {
+        abortCalls.push(path.id);
+        return {};
+      });
+      const configDir = await mkdtemp('/tmp/oh-my-opencode-slim-phase-2r-');
+      await Bun.write(
+        `${configDir}/oh-my-opencode-slim.json`,
+        JSON.stringify({
+          backgroundJobs: {
+            // On v2 the deadline-abort watchdog is retired with the managed
+            // lifecycle; only the v1 pass reads wall-clock timeouts.
+            ...(hostFlavor === 'v2' ? {} : { wallClockTimeoutMs: 60_000 }),
           },
-        },
+          companion: { enabled: false },
+        }),
       );
-      await hooks['tool.execute.after']?.(
-        { tool: 'task', sessionID: 'parent-1', callID },
-        {
-          output: [
-            `task_id: ${taskID}`,
-            'state: running',
-            '',
-            '<task_result>',
-            'started',
-            '</task_result>',
-          ].join('\n'),
-        },
-      );
-    };
+      process.env = {
+        ...originalEnv,
+        OPENCODE_CONFIG_DIR: configDir,
+      };
+      delete process.env.OH_MY_OPENCODE_SLIM_DISABLE;
+      globalThis.setTimeout = clock.setTimeout as typeof globalThis.setTimeout;
+      globalThis.clearTimeout =
+        clock.clearTimeout as typeof globalThis.clearTimeout;
+      Date.now = clock.now;
 
-    let generationOne: Awaited<ReturnType<typeof plugin>> | undefined;
-    let generationTwo: Awaited<ReturnType<typeof plugin>> | undefined;
-    try {
-      generationOne = await plugin({
-        client,
-        directory: configDir,
-        worktree: configDir,
-        serverUrl: new URL('http://127.0.0.1:4096'),
-        hostFlavor,
-      } as never);
-      expect(generationOne.dispose).toBeFunction();
-      await launch(generationOne, 'call-1', 'child-generation-1');
+      const launch = async (
+        hooks: Awaited<ReturnType<typeof plugin>>,
+        callID: string,
+        taskID: string,
+      ) => {
+        await hooks['tool.execute.before']?.(
+          { tool: 'task', sessionID: 'parent-1', callID },
+          {
+            args: {
+              subagent_type: 'explorer',
+              background: true,
+              description: taskID,
+            },
+          },
+        );
+        await hooks['tool.execute.after']?.(
+          { tool: 'task', sessionID: 'parent-1', callID },
+          {
+            output: [
+              `task_id: ${taskID}`,
+              'state: running',
+              '',
+              '<task_result>',
+              'started',
+              '</task_result>',
+            ].join('\n'),
+          },
+        );
+      };
 
-      await clock.advanceTo(59_999);
-      expect(abortCalls).toEqual([]);
-      await generationOne.dispose?.();
-      await generationOne.dispose?.();
-      await clock.advanceTo(60_000);
-      expect(abortCalls).toEqual([]);
+      let generationOne: Awaited<ReturnType<typeof plugin>> | undefined;
+      let generationTwo: Awaited<ReturnType<typeof plugin>> | undefined;
+      try {
+        generationOne = await plugin({
+          client,
+          directory: configDir,
+          worktree: configDir,
+          serverUrl: new URL('http://127.0.0.1:4096'),
+          hostFlavor,
+        } as never);
+        expect(generationOne.dispose).toBeFunction();
+        await launch(generationOne, 'call-1', 'child-generation-1');
 
-      generationTwo = await plugin({
-        client,
-        directory: configDir,
-        worktree: configDir,
-        serverUrl: new URL('http://127.0.0.1:4096'),
-        hostFlavor,
-      } as never);
-      expect(generationTwo.dispose).toBeFunction();
-      await launch(generationTwo, 'call-2', 'child-generation-2');
-      await clock.advanceTo(119_999);
-      expect(abortCalls).toEqual([]);
-      await clock.advanceTo(120_000);
-      expect(abortCalls).toEqual(['child-generation-2']);
-      expect(scheduler).toHaveBeenCalledTimes(2);
-    } finally {
-      await generationTwo?.dispose?.();
-      await generationOne?.dispose?.();
-      scheduler.mockRestore();
-      process.env = originalEnv;
-      globalThis.setTimeout = originalSetTimeout;
-      globalThis.clearTimeout = originalClearTimeout;
-      Date.now = originalNow;
-      await rm(configDir, { recursive: true, force: true });
-    }
-  });
+        await clock.advanceTo(59_999);
+        expect(abortCalls).toEqual([]);
+        await generationOne.dispose?.();
+        await generationOne.dispose?.();
+        await clock.advanceTo(60_000);
+        expect(abortCalls).toEqual([]);
+
+        generationTwo = await plugin({
+          client,
+          directory: configDir,
+          worktree: configDir,
+          serverUrl: new URL('http://127.0.0.1:4096'),
+          hostFlavor,
+        } as never);
+        expect(generationTwo.dispose).toBeFunction();
+        await launch(generationTwo, 'call-2', 'child-generation-2');
+        await clock.advanceTo(119_999);
+        expect(abortCalls).toEqual([]);
+        await clock.advanceTo(120_000);
+        // v2 has no plugin-side wall-clock watchdog: the deadline-abort
+        // guarantee belongs to the v1 managed assembly only, so the v2 run
+        // must not abort anything at the deadline.
+        expect(abortCalls).toEqual(
+          hostFlavor === 'v2' ? [] : ['child-generation-2'],
+        );
+        expect(scheduler).toHaveBeenCalledTimes(hostFlavor === 'v2' ? 0 : 2);
+      } finally {
+        await generationTwo?.dispose?.();
+        await generationOne?.dispose?.();
+        scheduler.mockRestore();
+        process.env = originalEnv;
+        globalThis.setTimeout = originalSetTimeout;
+        globalThis.clearTimeout = originalClearTimeout;
+        Date.now = originalNow;
+        await rm(configDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test('disposing a plugin generation retracts its board spinner before same-PID re-init', async () => {
     const originalEnv = { ...process.env };
@@ -2197,9 +2208,9 @@ describe('plugin reload generation cleanup', () => {
   ] as const)(
     '$hostFlavor wake scheduler creation is structural (created=$schedulerCreated)',
     async ({ hostFlavor, schedulerCreated, periodicWakeEnabled }) => {
-      const createScheduler = wakeHooks.createOrchestratorWakeScheduler;
+      const createScheduler = orchestratorWake.createOrchestratorWakeScheduler;
       const scheduler = spyOn(
-        wakeHooks,
+        orchestratorWake,
         'createOrchestratorWakeScheduler',
       ).mockImplementation((...args: Parameters<typeof createScheduler>) =>
         createScheduler(...args),
@@ -2226,9 +2237,9 @@ describe('plugin reload generation cleanup', () => {
     'stopped recovery listener respects explicit provenance: %s',
     async (kind) => {
       const wake = mock(() => {});
-      const createScheduler = wakeHooks.createOrchestratorWakeScheduler;
+      const createScheduler = orchestratorWake.createOrchestratorWakeScheduler;
       const scheduler = spyOn(
-        wakeHooks,
+        orchestratorWake,
         'createOrchestratorWakeScheduler',
       ).mockImplementation((...args) => ({
         ...createScheduler(...args),
@@ -2343,9 +2354,9 @@ describe('plugin reload generation cleanup', () => {
   }) {
     const completedPush = mock(() => {});
     const publicationWake = mock(() => {});
-    const createScheduler = wakeHooks.createOrchestratorWakeScheduler;
+    const createScheduler = orchestratorWake.createOrchestratorWakeScheduler;
     const scheduler = spyOn(
-      wakeHooks,
+      orchestratorWake,
       'createOrchestratorWakeScheduler',
     ).mockImplementation((...args: Parameters<typeof createScheduler>) => ({
       ...createScheduler(...args),
@@ -2478,9 +2489,9 @@ describe('plugin reload generation cleanup', () => {
     republishAfterDirectPrompt?: boolean;
   }) {
     const wake = mock(() => {});
-    const createScheduler = wakeHooks.createOrchestratorWakeScheduler;
+    const createScheduler = orchestratorWake.createOrchestratorWakeScheduler;
     const scheduler = spyOn(
-      wakeHooks,
+      orchestratorWake,
       'createOrchestratorWakeScheduler',
     ).mockImplementation((...args: Parameters<typeof createScheduler>) => ({
       ...createScheduler(...args),
@@ -4116,6 +4127,9 @@ describe('plugin config model inheritance', () => {
   test('v1 exposes enabled bundled skills without overriding user skills', async () => {
     const hooks = await loadConfiguredPlugin({ disabled_skills: ['reflect'] });
     const configDir = lastConfigDir as string;
+    process.env.HOME = configDir;
+    process.env.XDG_CONFIG_HOME = path.join(configDir, 'config');
+    delete process.env.OPENCODE_DISABLE_EXTERNAL_SKILLS;
     const userSkill = path.join(configDir, 'skills', 'codemap');
     await mkdir(userSkill, { recursive: true });
     await Bun.write(
@@ -4134,9 +4148,20 @@ describe('plugin config model inheritance', () => {
       '---\nname: deepwork\ndescription: disabled external skill\n---\n',
     );
     process.env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS = '1';
-    const hostConfig = { skills: { paths: [] as string[] } };
+    const hostConfig = {
+      skills: {
+        paths: [userSkill],
+        urls: ['https://example.com/skills'],
+      },
+    };
+    const home = spyOn(os, 'homedir').mockReturnValue(configDir);
     try {
       await hooks.config?.(hostConfig as never);
+      const paths = [...hostConfig.skills.paths];
+      await hooks.config?.(hostConfig as never);
+      expect(hostConfig.skills.paths).toEqual(paths);
+      expect(hostConfig.skills.paths[0]).toBe(userSkill);
+      expect(hostConfig.skills.urls).toEqual(['https://example.com/skills']);
       expect(
         hostConfig.skills.paths.some((item) =>
           item.endsWith('/src/skills/deepwork'),
@@ -4153,6 +4178,7 @@ describe('plugin config model inheritance', () => {
         ),
       ).toBe(false);
     } finally {
+      home.mockRestore();
       await hooks.dispose?.();
     }
   });
@@ -5200,7 +5226,7 @@ describe('plugin config model inheritance', () => {
       agents: { explorer: { model: ['provider/first', 'provider/next'] } },
     };
     const disableChain = spyOn(
-      wakeHooks.ForegroundFallbackManager.prototype,
+      ForegroundFallbackManager.prototype,
       'disableChain',
     );
     let hooks = await loadConfiguredPlugin(config);
@@ -5280,7 +5306,7 @@ describe('plugin config model inheritance', () => {
       },
     });
     const disableChain = spyOn(
-      wakeHooks.ForegroundFallbackManager.prototype,
+      ForegroundFallbackManager.prototype,
       'disableChain',
     );
     try {

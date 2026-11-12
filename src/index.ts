@@ -652,10 +652,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     | ReturnType<typeof createAbsolutePathRescueHook>
     | undefined;
   let toolLoopGuard: ToolLoopGuardHook | undefined;
-  let jsonErrorRecoveryAfter: (i: unknown, o: unknown) => Promise<void> =
-    async () => {};
-  let taskSessionManagerAfter: (i: unknown, o: unknown) => Promise<void> =
-    async () => {};
+  let jsonErrorRecoveryAfter:
+    | ((i: unknown, o: unknown) => Promise<void>)
+    | undefined;
+  let taskSessionManagerAfter:
+    | ((i: unknown, o: unknown) => Promise<void>)
+    | undefined;
   let backgroundJobBoard: BackgroundJobBoard | undefined;
   // Shared by task management and control tools; initialized only with
   // managed lifecycle.
@@ -1726,9 +1728,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
     }
 
-    if (runtime.updateCheckerEnabled) {
-      // Initialize auto-update checker hook; the implementation (updater
-      // graph) loads only through this gate.
+    if (hostFlavor !== 'v2' && runtime.updateCheckerEnabled) {
+      // v2 owns package checks/installation; its TUI adds the Slim notice.
+      // The v1 updater cannot install or display feedback through the shim.
       const { createAutoUpdateCheckerHook } = await import(
         './hooks/auto-update-checker'
       );
@@ -3051,12 +3053,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
                 : {};
             removeLegacySkillSyncState(undefined, runtime.disabledSkills);
             skills.paths = [
-              ...(Array.isArray(skills.paths) ? skills.paths : []),
-              ...getV1BundledSkillPaths(
-                dirname(packageJson),
-                ctx.directory,
-                runtime.disabledSkills,
-              ),
+              ...new Set([
+                ...(Array.isArray(skills.paths) ? skills.paths : []),
+                ...getV1BundledSkillPaths(
+                  dirname(packageJson),
+                  ctx.directory,
+                  runtime.disabledSkills,
+                ),
+              ]),
             ];
             opencodeConfig.skills = skills;
           }
@@ -4249,6 +4253,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'experimental.chat.messages.transform': async (
       input: Record<string, never>,
       output: { messages: unknown[] },
+      hints?: { model?: { providerID: string; id: string } },
     ): Promise<void> => {
       const typedOutput = output as { messages: MessageWithParts[] };
       let view = createMessageTransformView(typedOutput.messages);
@@ -4282,19 +4287,25 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // input, the API call fails before the LLM can respond. We replace
       // image bytes with a text nudge so the orchestrator delegates to
       // @observer instead.
-      // auto routing keys on the turn's model: vision-capable models keep
-      // image parts inline (native read); only non-vision chains fall back
-      // to the observer relay. chat.message records the turn's model just
-      // before this handler runs; the fallback chain covers mid-session
-      // model switches.
-      // `input` is an empty shell in this handler; use the sessionID
-      // extracted from the messages above.
-      const turnModelRef = sessionID
-        ? parseModelRef(
-            foregroundFallback?.getActiveFallback(sessionID)?.model ??
-              sessionMetadata.getModel(sessionID),
-          )
+      // auto routing keys on the model that will actually serve this
+      // request: vision-capable models keep image parts inline (native
+      // read); only non-vision chains fall back to the observer relay.
+      // On v2 the context bridge passes the request model as `hints.model`
+      // (the host resolves it before the context hook, and a per-request
+      // router may swap it) — that beats the session's last-recorded model.
+      // v1 hosts have no such seam, so the fallback chain and session
+      // metadata remain the source there.
+      const hintModel = hints?.model
+        ? { providerID: hints.model.providerID, id: hints.model.id }
         : undefined;
+      const turnModelRef =
+        hintModel ??
+        (sessionID
+          ? parseModelRef(
+              foregroundFallback?.getActiveFallback(sessionID)?.model ??
+                sessionMetadata.getModel(sessionID),
+            )
+          : undefined);
       const hasImageParts =
         runtime.imageRouting !== 'direct' &&
         !!turnModelRef &&
@@ -4391,14 +4402,17 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
     },
 
-    'tool.execute.after': async (input, output) => {
-      await jsonErrorRecoveryAfter(input, output);
-      await toolLoopGuard?.['tool.execute.after'](
-        input as never,
-        output as never,
-      );
-      if (taskSessionManagerHook) await taskSessionManagerAfter(input, output);
-    },
+    'tool.execute.after':
+      jsonErrorRecoveryAfter || toolLoopGuard || taskSessionManagerAfter
+        ? async (input, output) => {
+            await jsonErrorRecoveryAfter?.(input, output);
+            await toolLoopGuard?.['tool.execute.after'](
+              input as never,
+              output as never,
+            );
+            await taskSessionManagerAfter?.(input, output);
+          }
+        : undefined,
   } as Hooks & {
     'v2.pendingRefusalOutcome':
       | ForegroundFallbackManager['pendingRefusalOutcome']

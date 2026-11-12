@@ -735,6 +735,46 @@ describe('createSessionContextHandler (merged context hook seam)', () => {
     ]);
   });
 
+  test('context bridge forwards the request model to the messages transform', async () => {
+    let observed: unknown;
+    const handler = createSessionContextHandler({
+      interviewHandleContext: async () => {},
+      messagesTransform: async (_input, _output, hints) => {
+        observed = hints;
+      },
+    });
+    const event = makeEvent(
+      [{ id: 'u', role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      { model: { id: 'glm-5.3', providerID: 'pipi', variant: 'max' } },
+    );
+
+    await handler(event);
+
+    // Image routing must key on the model serving THIS request, not on a
+    // session model recorded earlier (a per-request router can swap it).
+    expect(observed).toEqual({ model: { providerID: 'pipi', id: 'glm-5.3' } });
+  });
+
+  test('context bridge omits the model hint when the event carries no usable model', async () => {
+    let calls = 0;
+    let observed: unknown = 'unset';
+    const handler = createSessionContextHandler({
+      interviewHandleContext: async () => {},
+      messagesTransform: async (_input, _output, hints) => {
+        calls += 1;
+        observed = hints;
+      },
+    });
+    const event = makeEvent([
+      { id: 'u', role: 'user', content: [{ type: 'text', text: 'hi' }] },
+    ]);
+
+    await handler(event);
+
+    expect(calls).toBe(1);
+    expect(observed).toBeUndefined();
+  });
+
   test('context bridge exposes the stored synthetic delivery time to the observer', async () => {
     const text =
       '<subagent sessionID="ses_child" state="completed" description="work">\ndone\n</subagent>';

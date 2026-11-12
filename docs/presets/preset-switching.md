@@ -74,6 +74,13 @@ The `/preset` list marks the current session's bound preset separately from
 the global default. A preset can carry both markers. The bound name remains
 visible even if its preset definition has since been removed.
 
+When `disabled_commands` includes `preset`, the sidebar row stays visible as
+information only: it cannot open the picker and does not poll the session
+binding, so it shows the configured default rather than a session binding.
+Existing sessions keep the team they were already bound to. The gate follows
+the project the TUI is showing, so switching to a project that enables the
+command restores the picker and the binding read.
+
 ## Scope and when changes take effect
 
 On v2, a root work session captures its subagent inference configuration before

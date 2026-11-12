@@ -4,16 +4,15 @@
 
 Implements the plugin's OpenCode lifecycle hooks: message/prompt transforms,
 tool-execute interception, event handling, cache-safe prompt injection, and
-runtime command interception. Each hook is a factory function (barrel-exported
-from `index.ts`) that returns the hook points OpenCode invokes.
+runtime command interception. Each hook is a factory function, imported directly
+from its owning module, that returns the hook points OpenCode invokes.
 
 ## Design
 
 ### Core Architecture
 
 - **Factory leaves**: Optional implementations load inside the feature gate that
-  uses them. `src/index.ts` imports shared leaves directly; the historical
-  `index.ts` barrel remains for tests and local consumers, not the server entry.
+  uses them. `src/index.ts` imports leaves directly; there is no hooks barrel.
 - **SessionLifecycle** (`session-lifecycle.ts`): Coordinator that owns
   `session.deleted` cleanup-callback registration. Stateful hooks register
   cleanup callbacks instead of implementing their own `session.deleted`
@@ -115,7 +114,7 @@ with one equivalent pass; the cache-safety harness mirrors this wiring.
 
 ### Consumers
 
-- **Main Plugin** (`src/index.ts`): imports every factory from `index.ts` and
+- **Main Plugin** (`src/index.ts`): imports every factory from its owning module and
   wires the returned handlers into the plugin's hook object.
 - **Council seats** (`council-seats/`): owns `Seats:`-line seat-result
   assembly. The managed resolver (V1 managed) reads the parent-side job board

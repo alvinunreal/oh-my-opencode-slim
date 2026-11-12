@@ -913,6 +913,48 @@ describe('plugin feature gates through exported hooks', () => {
     }
   });
 
+  for (const flavor of ['v1', 'v2'] as const) {
+    test(`${flavor}: no post-tool consumers means no v1 after hook`, async () => {
+      await configure({
+        backgroundJobs: { mode: 'off' },
+        disabled_hooks: [
+          'auto-update-checker',
+          'json-error-recovery',
+          'tool-loop-guard',
+        ],
+      });
+      const hooks = await createHooks(flavor);
+      try {
+        expect(hooks['tool.execute.after']).toBeUndefined();
+      } finally {
+        await hooks.dispose?.();
+      }
+    });
+  }
+
+  // v2 rejects `backgroundJobs.mode: "managed"` at config load, so the
+  // updater matrix only covers the two supported v2 modes.
+  for (const mode of ['native', 'off'] as const) {
+    test(`v2 ${mode}: native updates replace the unused server checker`, async () => {
+      await configure({ backgroundJobs: { mode }, disabled_hooks: [] });
+      const factory = spyOn(autoUpdateFactories, 'createAutoUpdateCheckerHook');
+      let hooks: PluginHooks | undefined;
+      try {
+        hooks = await createHooks('v2');
+        await hooks.event?.({
+          event: {
+            type: 'session.created',
+            properties: { info: { id: 'ses_native_update' } },
+          },
+        } as never);
+        expect(factory).not.toHaveBeenCalled();
+      } finally {
+        await hooks?.dispose?.();
+        factory.mockRestore();
+      }
+    });
+  }
+
   async function exerciseSidebar(hooks: PluginHooks, externalDir: string) {
     const call = { tool: 'task', sessionID: 'ses_p', callID: 'call_1' };
     await hooks['tool.execute.before']?.(

@@ -54,7 +54,12 @@ hook, tool or utility barrels:
   resolved, independent of configuration. The v1 wake scheduler is separate from
   the pure message helpers used on both hosts.
 - `autoUpdate: false` or the disabled `auto-update-checker` hook skips loading
-  the update implementation. Tool guards follow their existing hook switches.
+  the v1 update implementation. On v2 the v1 server updater is never loaded
+  (it cannot install there and its toast is a shim no-op); the host owns
+  package management and the TUI notice. Tool guards follow their existing
+  hook switches. When every post-tool consumer is off, the shared v1
+  `tool.execute.after` hook is absent; on v2 the bridge keeps that hook only
+  while it actually owns admission captures (routing enabled).
 - Disabling both AST tools skips their shared implementation. ACP loads only
   when at least one enabled wrapper can use `acp_run`; disabling that tool also
   removes its unusable wrapper agents.

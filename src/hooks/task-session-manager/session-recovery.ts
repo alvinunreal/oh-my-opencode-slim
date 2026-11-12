@@ -4,7 +4,7 @@
  * Reads the host session, verifies parent and agent, classifies only the
  * latest delivered round, then imports a terminal cache row. On v2 the host
  * outcome/idle owns terminality and transcript text is bound to that idle;
- * the startup recovery path below keeps its transcript-idle classifier.
+ * startup recovery also accepts timestamp-attributed host terminal evidence.
  * It does not scan at startup, send a prompt, or keep a recovery claim.
  */
 import type { PluginInput } from '@opencode-ai/plugin';
@@ -580,6 +580,7 @@ interface StartupSessionRow {
   parentID?: string;
   agent?: string;
   outcome?: string;
+  hostInfo?: Record<string, unknown>;
 }
 
 interface StartupCandidate {
@@ -587,6 +588,7 @@ interface StartupCandidate {
   parentID?: string;
   agent?: string;
   outcome?: string;
+  hostInfo?: Record<string, unknown>;
   persisted?: PersistedBackgroundChild;
 }
 
@@ -691,6 +693,7 @@ export async function recoverSubagentSessionsAtStartup(
       parentID: row.parentID,
       ...(row.agent ? { agent: row.agent } : {}),
       ...(row.outcome ? { outcome: row.outcome } : {}),
+      ...(row.hostInfo ? { hostInfo: row.hostInfo } : {}),
     });
   }
   for (const [taskID, child] of persisted) {
@@ -701,6 +704,7 @@ export async function recoverSubagentSessionsAtStartup(
       parentID: current?.parentID ?? child.parentSessionID,
       ...(current?.agent ? { agent: current.agent } : {}),
       ...(current?.outcome ? { outcome: current.outcome } : {}),
+      ...(current?.hostInfo ? { hostInfo: current.hostInfo } : {}),
       persisted: child,
     });
   }
@@ -723,11 +727,11 @@ export async function recoverSubagentSessionsAtStartup(
   };
   const recovered: string[] = [];
 
-  for (const candidate of candidates.values()) {
-    if (options.isDisposed?.()) return recovered;
+  const prepare = async (candidate: StartupCandidate) => {
+    if (options.isDisposed?.()) return;
     const taskID = candidate.id;
-    if (!SESSION_ID_PATTERN.test(taskID)) continue;
-    if (ledger.tombstones.has(taskID)) continue;
+    if (!SESSION_ID_PATTERN.test(taskID)) return;
+    if (ledger.tombstones.has(taskID)) return;
     // Capture the run identity before any asynchronous read below. A relaunch
     // or same-generation reopen registered while this scan is reading is a
     // newer run; stale history must not correct or re-own it.
@@ -740,10 +744,24 @@ export async function recoverSubagentSessionsAtStartup(
         }
       : undefined;
     const epoch = ledger.deletionEpochs.get(taskID);
+    const invalid = () =>
+      options.isDisposed?.() ||
+      ledger.tombstones.has(taskID) ||
+      ledger.deletionEpochs.get(taskID) !== epoch;
     let parentSessionID = candidate.parentID;
     let hostOutcome = candidate.outcome;
-    let hasV2Lifecycle = hostOutcome !== undefined;
-    if (!parentSessionID || hostOutcome === undefined) {
+    let hostInfo = candidate.hostInfo;
+    const listedTime = isRecord(hostInfo?.time) ? hostInfo.time : undefined;
+    let hasV2Lifecycle =
+      hostOutcome !== undefined ||
+      listedTime?.busy !== undefined ||
+      listedTime?.idle !== undefined;
+    if (
+      !parentSessionID ||
+      hostOutcome === undefined ||
+      (options.hostFlavor === 'v2' &&
+        hostRoundStateOf(hostInfo).kind === 'unknown')
+    ) {
       const response = await raceEvidenceDeadline(
         readHostSessionInfo(options.input, {
           taskID,
@@ -759,11 +777,13 @@ export async function recoverSubagentSessionsAtStartup(
         readTimeoutMs,
         options.timers,
       );
+      if (invalid()) return;
       const hosted = hostSessionFromResponse(response, taskID);
       if (hosted.kind === 'ok') {
-        if (parentSessionID && hosted.parentID !== parentSessionID) continue;
+        if (parentSessionID && hosted.parentID !== parentSessionID) return;
         parentSessionID ??= hosted.parentID;
         hostOutcome ??= hosted.outcome;
+        hostInfo = hosted.hostInfo;
         const hostTime = isRecord(hosted.hostInfo.time)
           ? hosted.hostInfo.time
           : undefined;
@@ -775,232 +795,327 @@ export async function recoverSubagentSessionsAtStartup(
         !parentSessionID ||
         (hosted.kind === 'refused' && hosted.reasonCode === 'host-missing')
       ) {
-        continue;
+        return;
       }
     }
-    if (!parentSessionID) continue;
+    if (!parentSessionID) return;
     if (
       candidate.persisted &&
       candidate.persisted.parentSessionID !== parentSessionID
     ) {
-      continue;
+      return;
     }
 
     // Parent history is read for ALL candidates, including persisted ones:
     // a trusted current-run delivery already in that history is the only
     // restart-safe proof that this child's outcome reached the parent.
     const transcript = await parentTranscript(parentSessionID);
+    if (invalid()) return;
     const delegation = parentDelegation(
       parentTaskParts(transcript),
       parentSessionID,
       taskID,
     );
-    if (!candidate.persisted) {
-      const parentAgent =
-        rowsByID.get(parentSessionID)?.agent ??
-        latestTranscriptAgent(transcript);
-      const isPrimaryAgentName =
-        options.isPrimaryAgentName ?? isBuiltInPrimaryAgent;
-      if (
-        !options.shouldManageSession(parentSessionID) &&
-        (typeof parentAgent !== 'string' || !isPrimaryAgentName(parentAgent))
-      ) {
-        continue;
-      }
-      if (delegation?.background !== true) continue;
-    }
-    options.registerParentSession?.(parentSessionID);
-
-    const state = await classifyStartupChild(
-      options,
-      taskID,
+    const state = candidate.persisted
+      ? await classifyStartupChild(
+          options,
+          taskID,
+          hostOutcome,
+          hasV2Lifecycle,
+          hostInfo,
+        )
+      : undefined;
+    if (invalid()) return;
+    return {
+      scanStartRun,
+      epoch,
+      parentSessionID,
       hostOutcome,
       hasV2Lifecycle,
-    );
-    if (state.kind === 'unknown') continue;
-    // A run can already have relaunched before this scan starts, while the
-    // host transcript still exposes the previous terminal round. Matching
-    // the board generation across the read is necessary but not sufficient:
-    // the terminal evidence must also reach the persisted/current run fence.
-    // V2's session-level outcome alone has no such boundary and cannot prove
-    // which run ended when the transcript is unavailable.
-    const expectedRunStartedAt = latestFence(
-      candidate.persisted?.launchedAt,
-      scanStartRun?.runStartedAt,
-    );
-    if (
-      state.kind === 'terminal' &&
-      expectedRunStartedAt !== undefined &&
-      ((state.completedAt === undefined && options.hostFlavor === 'v2') ||
-        (state.completedAt !== undefined &&
-          state.completedAt < expectedRunStartedAt))
+      hostInfo,
+      transcript,
+      delegation,
+      state,
+    };
+  };
+
+  const queue = [...candidates.values()];
+  type Preparation = Awaited<ReturnType<typeof prepare>>;
+  const pending = new Map<
+    number,
+    Promise<{ value: Preparation } | { error: unknown }>
+  >();
+  const fill = (start: number) => {
+    for (
+      let index = start;
+      index < Math.min(start + 4, queue.length);
+      index++
     ) {
+      const candidate = queue[index];
+      if (!candidate.persisted || pending.has(index) || options.isDisposed?.())
+        continue;
+      // Deadlines release waiters, not host reads; cancellation requires host support.
+      pending.set(
+        index,
+        prepare(candidate).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        ),
+      );
+    }
+  };
+  fill(0);
+  for (let index = 0; index < queue.length; index++) {
+    if (options.isDisposed?.()) return recovered;
+    const candidate = queue[index];
+    const taskID = candidate.id;
+    const result = await (pending.get(index) ??
+      prepare(candidate).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      ));
+    pending.delete(index);
+    if ('error' in result) throw result.error;
+    const prepared = result.value;
+    if (!prepared) {
+      fill(index + 1);
       continue;
     }
+    const {
+      scanStartRun,
+      epoch,
+      parentSessionID,
+      hostOutcome,
+      hasV2Lifecycle,
+      hostInfo,
+      transcript,
+      delegation,
+    } = prepared;
     if (options.isDisposed?.()) return recovered;
     if (
       ledger.tombstones.has(taskID) ||
       ledger.deletionEpochs.get(taskID) !== epoch
     ) {
+      fill(index + 1);
       continue;
     }
-    // Re-read after the async classify: a parent transform may have
-    // registered the same running child while this scan was in flight.
-    const boardRow = board.get(taskID);
-    const runStartedAt = latestFence(
-      candidate.persisted?.launchedAt,
-      delegation?.at,
-      state.startedAt,
-    );
-    const rowKeepsObservedRun = startupRowKeepsObservedRun({
-      scanStartRun,
-      row: boardRow,
-      observedRunStartedAt: runStartedAt,
-    });
-
-    // Delivery timestamps never override explicit unfinished child evidence.
-    // Even a stored marker must cover this round's own terminal boundary.
-    const persistedDeliveredAt = candidate.persisted?.deliveredAt;
-    const persistedDeliveryCoversRun =
-      state.kind === 'terminal' &&
-      persistedDeliveredAt !== undefined &&
-      (runStartedAt === undefined || persistedDeliveredAt >= runStartedAt) &&
-      (state.completedAt === undefined ||
-        persistedDeliveredAt >= state.completedAt);
-    if (persistedDeliveryCoversRun) {
-      if (
-        rowKeepsObservedRun &&
-        boardRow?.state === 'running' &&
-        state.kind === 'terminal'
-      ) {
-        correctStartupTerminal(options, board, boardRow, state);
+    let failed = false;
+    try {
+      if (!candidate.persisted) {
+        const parentAgent =
+          rowsByID.get(parentSessionID)?.agent ??
+          latestTranscriptAgent(transcript);
+        const isPrimaryAgentName =
+          options.isPrimaryAgentName ?? isBuiltInPrimaryAgent;
+        if (
+          !options.shouldManageSession(parentSessionID) &&
+          (typeof parentAgent !== 'string' || !isPrimaryAgentName(parentAgent))
+        ) {
+          continue;
+        }
+        if (delegation?.background !== true) continue;
       }
-      continue;
-    }
+      options.registerParentSession?.(parentSessionID);
 
-    // A trusted current-run delivery already in the parent's history means
-    // the outcome reached the parent before this process existed. Never
-    // adopt, re-probe, or replay it; just fence the persisted identity.
-    const delivered =
-      state.kind === 'terminal'
-        ? nativeDeliveryForRun(
-            transcript,
-            parentSessionID,
-            taskID,
-            latestFence(runStartedAt, state.completedAt),
-          )
-        : undefined;
-    if (state.kind === 'terminal' && delivered?.state === state.state) {
-      if (
-        rowKeepsObservedRun &&
-        boardRow?.state === 'running' &&
-        state.kind === 'terminal'
-      ) {
-        correctStartupTerminal(options, board, boardRow, state);
-      }
-      if (candidate.persisted && delivered) {
-        markPersistedBackgroundChildDelivered(
+      const state =
+        prepared.state ??
+        (await classifyStartupChild(
+          options,
           taskID,
-          delivered.at,
-          candidate.persisted.launchedAt,
-        );
+          hostOutcome,
+          hasV2Lifecycle,
+          hostInfo,
+        ));
+      if (state.kind === 'unknown') continue;
+      // A run can already have relaunched before this scan starts, while the
+      // host transcript still exposes the previous terminal round. Matching
+      // the board generation across the read is necessary but not sufficient:
+      // the terminal evidence must also reach the persisted/current run fence.
+      // V2's session-level outcome alone has no such boundary and cannot prove
+      // which run ended when the transcript is unavailable.
+      const expectedRunStartedAt = latestFence(
+        candidate.persisted?.launchedAt,
+        scanStartRun?.runStartedAt,
+      );
+      if (
+        state.kind === 'terminal' &&
+        expectedRunStartedAt !== undefined &&
+        ((state.completedAt === undefined && options.hostFlavor === 'v2') ||
+          (state.completedAt !== undefined &&
+            state.completedAt < expectedRunStartedAt))
+      ) {
+        continue;
       }
-      continue;
-    }
+      if (options.isDisposed?.()) return recovered;
+      if (
+        ledger.tombstones.has(taskID) ||
+        ledger.deletionEpochs.get(taskID) !== epoch
+      ) {
+        continue;
+      }
+      // Re-read after the async classify: a parent transform may have
+      // registered the same running child while this scan was in flight.
+      const boardRow = board.get(taskID);
+      const runStartedAt = latestFence(
+        candidate.persisted?.launchedAt,
+        delegation?.at,
+        state.startedAt,
+      );
+      const rowKeepsObservedRun = startupRowKeepsObservedRun({
+        scanStartRun,
+        row: boardRow,
+        observedRunStartedAt: runStartedAt,
+      });
 
-    if (state.kind === 'running') {
-      if (boardRow) {
-        // A parent transform may have adopted this running row while the
-        // startup scan was in flight. Mark it startup-owned so its eventual
-        // revision-1 terminal outcome publishes a wake — but only while the
-        // row still belongs to the run observed at scan start.
-        if (rowKeepsObservedRun && boardRow.state === 'running') {
-          boardRow.recoveredAtStartup = true;
+      // Delivery timestamps never override explicit unfinished child evidence.
+      // Even a stored marker must cover this round's own terminal boundary.
+      const persistedDeliveredAt = candidate.persisted?.deliveredAt;
+      const persistedDeliveryCoversRun =
+        state.kind === 'terminal' &&
+        persistedDeliveredAt !== undefined &&
+        (runStartedAt === undefined || persistedDeliveredAt >= runStartedAt) &&
+        (state.completedAt === undefined ||
+          persistedDeliveredAt >= state.completedAt);
+      if (persistedDeliveryCoversRun) {
+        if (
+          rowKeepsObservedRun &&
+          boardRow?.state === 'running' &&
+          state.kind === 'terminal'
+        ) {
+          correctStartupTerminal(options, board, boardRow, state);
         }
         continue;
       }
-      // No run fence means no way to keep a stale delivery from stranding
-      // a newer run: leave the identity as-is rather than guessing "now".
-      if (runStartedAt === undefined) continue;
-      const agent =
-        candidate.persisted?.agent ??
-        delegation?.agent ??
-        candidate.agent ??
-        RECOVERED_STARTUP_AGENT_FALLBACK;
-      const description =
-        candidate.persisted?.description ?? delegation?.description;
-      const prompt = delegation?.prompt;
-      const label = deriveTaskSessionLabel({
-        description,
-        prompt,
-        agentType: agent,
-      });
-      const objective =
-        candidate.persisted?.objective ??
-        deriveFullObjective({ description, prompt }) ??
-        label;
-      const adopted = board.registerLaunch({
-        taskID,
-        parentSessionID,
-        agent,
-        description: label,
-        objective,
-        background: true,
-        preserveRun: true,
-        adopted: true,
-        now: runStartedAt,
-      });
-      adopted.recoveredAtStartup = true;
-      options.backgroundTaskConcurrency?.restoreTask(
-        taskID,
-        options.getModelForAgent?.(agent, parentSessionID),
-      );
-      recovered.push(taskID);
-      continue;
-    }
 
-    if (boardRow) {
-      if (boardRow.state !== 'running') continue;
-      if (!rowKeepsObservedRun) continue;
-      if (correctStartupTerminal(options, board, boardRow, state)) {
-        await deliverStartupTerminal(
-          options,
-          parentSessionID,
+      // A trusted current-run delivery already in the parent's history means
+      // the outcome reached the parent before this process existed. Never
+      // adopt, re-probe, or replay it; just fence the persisted identity.
+      const delivered =
+        state.kind === 'terminal'
+          ? nativeDeliveryForRun(
+              transcript,
+              parentSessionID,
+              taskID,
+              latestFence(runStartedAt, state.completedAt),
+            )
+          : undefined;
+      if (state.kind === 'terminal' && delivered?.state === state.state) {
+        if (
+          rowKeepsObservedRun &&
+          boardRow?.state === 'running' &&
+          state.kind === 'terminal'
+        ) {
+          correctStartupTerminal(options, board, boardRow, state);
+        }
+        if (candidate.persisted && delivered) {
+          markPersistedBackgroundChildDelivered(
+            taskID,
+            delivered.at,
+            candidate.persisted.launchedAt,
+          );
+        }
+        continue;
+      }
+
+      if (state.kind === 'running') {
+        if (boardRow) {
+          // A parent transform may have adopted this running row while the
+          // startup scan was in flight. Mark it startup-owned so its eventual
+          // revision-1 terminal outcome publishes a wake — but only while the
+          // row still belongs to the run observed at scan start.
+          if (rowKeepsObservedRun && boardRow.state === 'running') {
+            boardRow.recoveredAtStartup = true;
+          }
+          continue;
+        }
+        // No run fence means no way to keep a stale delivery from stranding
+        // a newer run: leave the identity as-is rather than guessing "now".
+        if (runStartedAt === undefined) continue;
+        const agent =
+          candidate.persisted?.agent ??
+          delegation?.agent ??
+          candidate.agent ??
+          RECOVERED_STARTUP_AGENT_FALLBACK;
+        const description =
+          candidate.persisted?.description ?? delegation?.description;
+        const prompt = delegation?.prompt;
+        const label = deriveTaskSessionLabel({
+          description,
+          prompt,
+          agentType: agent,
+        });
+        const objective =
+          candidate.persisted?.objective ??
+          deriveFullObjective({ description, prompt }) ??
+          label;
+        const adopted = board.registerLaunch({
           taskID,
-          candidate.persisted?.launchedAt,
+          parentSessionID,
+          agent,
+          description: label,
+          objective,
+          background: true,
+          preserveRun: true,
+          adopted: true,
+          now: runStartedAt,
+        });
+        adopted.recoveredAtStartup = true;
+        options.backgroundTaskConcurrency?.restoreTask(
+          taskID,
+          options.getModelForAgent?.(agent, parentSessionID),
         );
         recovered.push(taskID);
+        continue;
       }
-      continue;
+
+      if (boardRow) {
+        if (boardRow.state !== 'running') continue;
+        if (!rowKeepsObservedRun) continue;
+        if (correctStartupTerminal(options, board, boardRow, state)) {
+          await deliverStartupTerminal(
+            options,
+            parentSessionID,
+            taskID,
+            candidate.persisted?.launchedAt,
+          );
+          recovered.push(taskID);
+        }
+        continue;
+      }
+      if (!candidate.persisted) {
+        // No plugin-owned identity: this is history, not a restart wake.
+        continue;
+      }
+      const restored = board.restoreRetainedSession({
+        taskID,
+        parentSessionID,
+        agent: candidate.persisted.agent,
+        description: candidate.persisted.description,
+        ...(candidate.persisted.objective !== undefined
+          ? { objective: candidate.persisted.objective }
+          : {}),
+        state: state.state,
+        resultSummary: state.resultSummary,
+        background: true,
+        launchedAt: candidate.persisted.launchedAt,
+        ...(state.completedAt !== undefined
+          ? { completedAt: state.completedAt }
+          : {}),
+      });
+      if (!restored) continue;
+      await deliverStartupTerminal(
+        options,
+        parentSessionID,
+        taskID,
+        candidate.persisted.launchedAt,
+      );
+      recovered.push(taskID);
+    } catch (error) {
+      failed = true;
+      throw error;
+    } finally {
+      if (!failed) fill(index + 1);
     }
-    if (!candidate.persisted) {
-      // No plugin-owned identity: this is history, not a restart wake.
-      continue;
-    }
-    const restored = board.restoreRetainedSession({
-      taskID,
-      parentSessionID,
-      agent: candidate.persisted.agent,
-      description: candidate.persisted.description,
-      ...(candidate.persisted.objective !== undefined
-        ? { objective: candidate.persisted.objective }
-        : {}),
-      state: state.state,
-      resultSummary: state.resultSummary,
-      background: true,
-      launchedAt: candidate.persisted.launchedAt,
-      ...(state.completedAt !== undefined
-        ? { completedAt: state.completedAt }
-        : {}),
-    });
-    if (!restored) continue;
-    await deliverStartupTerminal(
-      options,
-      parentSessionID,
-      taskID,
-      candidate.persisted.launchedAt,
-    );
-    recovered.push(taskID);
   }
   return recovered;
 }
@@ -1107,6 +1222,7 @@ async function classifyStartupChild(
   taskID: string,
   outcome: string | undefined,
   hasV2Lifecycle: boolean,
+  hostInfo: Record<string, unknown> | undefined,
 ): Promise<StartupChildState> {
   const terminalFromOutcome = startupTerminalState(outcome);
   let round: ReturnType<typeof classifyCurrentDeliveredRound> | undefined;
@@ -1125,6 +1241,21 @@ async function classifyStartupChild(
       options.hostFlavor === 'v2'
         ? classifyV2HistoricalRound(transcript, hasV2Lifecycle)
         : classifyCurrentDeliveredRound(transcript);
+    if (options.hostFlavor === 'v2' && round.verdict === 'incomplete') {
+      const hostState = attributeHostRoundToTranscript(
+        hostRoundStateOf(hostInfo),
+        transcript,
+      );
+      const latestInputAt = latestInputAtOf(transcript);
+      if (hostRoundVerdict(hostState, latestInputAt) === 'terminal') {
+        const hostRound = composeHostRound(hostState, latestInputAt);
+        const text = terminalTextOf(transcript);
+        if (hostRound.verdict !== 'completed' || text) {
+          if (text) hostRound.text = text;
+          round = hostRound;
+        }
+      }
+    }
   } catch {
     return { kind: 'unknown' };
   }
@@ -1158,9 +1289,8 @@ async function classifyStartupChild(
       };
     }
     if (round.verdict === 'incomplete') {
-      // Session-level outcomes can outlive the round they describe. They
-      // cannot override positive evidence of an unfinished latest input (or
-      // a succeeded round whose answer is not readable yet).
+      // An outcome without an attributable boundary cannot settle this input,
+      // nor can a succeeded round whose answer is not readable yet.
       return {
         kind: 'running',
         ...(round.startedAt !== undefined
@@ -1239,6 +1369,7 @@ async function listStartupSessions(
           ...(stringField(row.outcome)
             ? { outcome: stringField(row.outcome) }
             : {}),
+          hostInfo: row,
         },
       ];
     });

@@ -1894,6 +1894,7 @@ async function main() {
       'Omitted/false foreground semantics are exercised in off mode; true-background and same-ID steering are exercised in every requested mode. Native/default same-provider foreground conversion requires source/unit validation.',
       'Progress report real-host coverage currently proves idle-parent queue/resume:false; running, interrupted, and form-waiting parents are not separately exercised.',
       'Refusal fallback coverage uses native mode with a three-model chain: two consecutive content-filter refusals exercise foreground re-attach and background result delivery; off mode intentionally leaves the native executor untouched.',
+      'The harness asserts OpenCode 2.2.6 exactly; when the installed host is newer, point V2_LIFECYCLE_HOST at a 2.2.6 binary.',
       'Terminal-but-not-yet-admitted crash and admitted-but-unconsumed restart windows need a deterministic host-side fault seam. No host DB mutations or plugin recovery are used to fabricate those states.',
       ...(options.restart === 'none' || !options.modes.includes('native')
         ? [
