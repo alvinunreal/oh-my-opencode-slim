@@ -74,6 +74,10 @@ Maintain repository-level build, packaging, and release validation automation. G
   - Runs extended cache smoke runs across varied payloads, models, and tools to detect cache degradation
     or anomalies in the caching layer across different provider sessions.
   - Performs continuous monitoring to ensure cache hit rates and plateau detection remain within expected bounds.
+- `verify-optional-loading.ts` / `optional-loading-probe.mjs`
+  - Runs the built server entry in fresh Node processes across isolated feature matrices.
+  - Separates Node coverage runs (evaluated module/byte totals) from timing samples; timing reports CPU/heap/code stats.
+  - Fails verify mode when the fully disabled baseline no longer loads strictly fewer package bytes than the cold-gated controls.
 - All scripts are executable boundary files (#!/usr/bin/env bun / Node), with explicit temp-dir lifecycle management
   and defensive cleanup via rmSync(..., { force: true, recursive: true }).
 

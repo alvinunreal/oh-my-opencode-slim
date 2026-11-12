@@ -39,19 +39,19 @@ export const LATEST_VERSION_URL = `https://registry.npmjs.org/${PACKAGE_NAME}/la
 export const UPDATE_BADGE_SLOT = 'sidebar.footer';
 
 /** Wait before checking: the host is still mounting slots at setup time. */
-export const UPDATE_NOTICE_DELAY_MS = 1_500;
+const UPDATE_NOTICE_DELAY_MS = 1_500;
 
 /** A slow registry must never outlive the check, so the fetch is bounded. */
-export const UPDATE_FETCH_TIMEOUT_MS = 4_000;
+const UPDATE_FETCH_TIMEOUT_MS = 4_000;
 
 /** How long the transient toast stays up (the badge is the real trace). */
-export const UPDATE_TOAST_DURATION_MS = 10_000;
+const UPDATE_TOAST_DURATION_MS = 10_000;
 
 /** Parsed `major.minor.patch`; the tuple keeps comparison allocation-free. */
 export type VersionTriple = NumericVersion;
 
 /** A `ui.toast.show` input (v2 `ToastOptions` subset this module sends). */
-export interface UpdateNoticeToast {
+interface UpdateNoticeToast {
   title?: string;
   message: string;
   variant?: 'info' | 'success' | 'warning' | 'error';
@@ -59,7 +59,7 @@ export interface UpdateNoticeToast {
 }
 
 /** Theme tokens read for the badge colour, tolerated in either shape. */
-export interface UpdateNoticeTheme {
+interface UpdateNoticeTheme {
   text?: { muted?: unknown; subdued?: unknown; default?: unknown };
 }
 
@@ -68,7 +68,7 @@ export interface UpdateNoticeTheme {
  * because hosts differ (and because a boxed/older host may expose none of
  * them); each call site capability-checks instead of assuming.
  */
-export interface UpdateNoticeContext {
+interface UpdateNoticeContext {
   location?: { directory?: string };
   client?: unknown;
   ui?: {
@@ -83,7 +83,7 @@ export interface UpdateNoticeContext {
 }
 
 /** Minimal `fetch` shape; the global one is assignable to it. */
-export type FetchLike = (
+type FetchLike = (
   url: string,
   init?: { signal?: AbortSignal },
 ) => Promise<{ ok: boolean; json: () => Promise<unknown> }>;
@@ -207,7 +207,7 @@ function versionFromPluginList(result: unknown): string | undefined {
  * unrelated leftover — trusting it hides exactly the update this module exists
  * to announce (a running 3.0.4 next to a leftover 3.0.5 reads as "up to date").
  */
-export function resolveRunningVersion(
+function resolveRunningVersion(
   moduleUrl: string | URL = import.meta.url,
 ): string | undefined {
   let modulePath: string;
@@ -331,7 +331,7 @@ export async function checkForUpdate(
 }
 
 /** Muted text colour for the badge; `undefined` falls back to the host default. */
-export function resolveMutedColor(theme?: UpdateNoticeTheme): unknown {
+function resolveMutedColor(theme?: UpdateNoticeTheme): unknown {
   const text = theme?.text;
   return text?.muted ?? text?.subdued ?? text?.default;
 }

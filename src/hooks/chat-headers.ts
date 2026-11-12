@@ -1,6 +1,6 @@
 import type { PluginInput, ProviderContext } from '@opencode-ai/plugin';
 import type { Model, UserMessage } from '@opencode-ai/sdk';
-import { isInternalInitiatorPart } from '../utils';
+import { isInternalInitiatorPart } from '../utils/internal-initiator';
 import { getClient } from '../utils/opencode-client';
 
 interface ChatHeadersInput {

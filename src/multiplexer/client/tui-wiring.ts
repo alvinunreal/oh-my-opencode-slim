@@ -74,17 +74,17 @@ export const EMBEDDED_HOST_BASE_URL = 'http://opencode.internal';
  * Stable-idle debounce window (FR-10). OQ-1 fixes the final value after the
  * scenario 6 measurement; 5s keeps the 1-2s "brief idle" case alive.
  */
-export const DEFAULT_STABLE_IDLE_MS = 5_000;
+const DEFAULT_STABLE_IDLE_MS = 5_000;
 
 /** Bounded readiness probe: ~2s total, inside the NFR-1 latency budget. */
-export const DEFAULT_READINESS: ReadinessPolicy = {
+const DEFAULT_READINESS: ReadinessPolicy = {
   maxAttempts: 10,
   retryDelayMs: 200,
 };
 
-export const DEFAULT_PROBE_TIMEOUT_MS = 1_500;
-export const DEFAULT_STATUS_TIMEOUT_MS = 1_500;
-export const DEFAULT_LIST_TIMEOUT_MS = 5_000;
+const DEFAULT_PROBE_TIMEOUT_MS = 1_500;
+const DEFAULT_STATUS_TIMEOUT_MS = 1_500;
+const DEFAULT_LIST_TIMEOUT_MS = 5_000;
 
 /** Minimum gap between recovery probes once the host looked unreachable. */
 export const HOST_REPROBE_INTERVAL_MS = 5_000;
@@ -96,11 +96,11 @@ export const HOST_REPROBE_INTERVAL_MS = 5_000;
  * after `unreachable → reachable` drains on this tick, never inline with an
  * event; completed sweeps do not repeat every 30s.
  */
-export const RECONCILE_INTERVAL_MS = 30_000;
+const RECONCILE_INTERVAL_MS = 30_000;
 const ROUTE_POLL_INTERVAL_MS = 250;
 
 /** Raw session events the client consumes (FR-3). */
-export const SESSION_EVENT_TYPES = [
+const SESSION_EVENT_TYPES = [
   'session.created',
   'session.status',
   'session.idle',
@@ -236,7 +236,7 @@ export function detectClientAdapter(
   if (env.CMUX_TUI_SOCKET || env.CMUX_MUX_SOCKET) return 'cmux-tui';
   if (env.TMUX_PANE) return 'tmux';
   if (env.ZELLIJ_PANE_ID) return 'zellij';
-  if (env.HERDR_PANE_ID) return 'herdr';
+  if (env.HC_TERMINAL_ID || env.HERDR_PANE_ID) return 'herdr';
   if (env.KITTY_WINDOW_ID) return 'kitty';
   // WezTerm hosts tmux/zellij sessions, which must win when nested inside it;
   // Orca sits after it for the same reason (a nested session inside either
@@ -309,7 +309,7 @@ export function resolveAnchoredTarget(
     case 'zellij':
       return env.ZELLIJ_PANE_ID ?? null;
     case 'herdr':
-      return env.HERDR_PANE_ID ?? null;
+      return env.HC_TERMINAL_ID ?? env.HERDR_PANE_ID ?? null;
     case 'kitty':
       return env.KITTY_WINDOW_ID ?? null;
     case 'wezterm':
@@ -1020,8 +1020,7 @@ function createTrackedClock(base?: Clock): {
   const source: Clock = base ?? {
     now: () => Date.now(),
     setTimeout: (handler, delayMs) => setTimeout(handler, delayMs),
-    clearTimeout: (handle) =>
-      clearTimeout(handle as ReturnType<typeof setTimeout>),
+    clearTimeout: (handle) => clearTimeout(handle),
   };
   const handles = new Set<ClockTimerHandle>();
   return {

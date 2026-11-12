@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { type CrossSpawnResult, crossSpawn } from '../../utils/compat';
+import type { TimerHandle, TimerSeamOptions } from '../../utils/timer-seam';
 import { applyRewrites } from './apply-rewrites';
 import {
   DEFAULT_MAX_MATCHES,
@@ -27,14 +28,10 @@ type SearchProcess = Pick<
   CrossSpawnResult,
   'stdout' | 'stderr' | 'exited' | 'kill'
 >;
-type TimerHandle = ReturnType<typeof setTimeout> | number;
-
-interface RunDependencies {
+interface RunDependencies extends TimerSeamOptions {
   spawn?: (...args: Parameters<typeof crossSpawn>) => SearchProcess;
   ensureBinary?: typeof ensureAstGrepBinary;
   findBinary?: typeof findSgCliPathSync;
-  setTimeout?: (callback: () => void, delay: number) => TimerHandle;
-  clearTimeout?: (timer: TimerHandle) => void;
 }
 
 async function executeSg(

@@ -10,14 +10,25 @@
 ## Design
 
 - `HerdrMultiplexer` in `index.ts` implements `Multiplexer`.
+- In Herdr Desktop, `HC_TERMINAL_ID` selects the herdr-core route: it verifies
+  the exact parent terminal's `herdr.space` and `herdr.tab` labels, starts a
+  child with `hc run --parent --no-notify`, and copies those Herdr labels so
+  the app adopts it in the parent's tab. A unique `omosc.spawn` label lets
+  cleanup find malformed `hc run` results and close a terminal only after
+  parent and ownership checks. The adapter polls for the pane at the
+  500 ms core-event cadence, up to three times. Both `hc kill` and `hc rm`
+  require a tracked `omosc.owner`/`omosc` marker plus a fresh parent check;
+  sweep queries the
+  owner label and verifies the exact parent. The old `HERDR_PANE_ID` route
+  remains unchanged.
 - `layout-equalize.ts` speaks Herdr's socket API one request per connection: `layout.export` returns the tab's binary split tree, then `layout.set_split_ratio` rewrites every agent-only node to `span(first)/(span(first)+span(second))`. `paneSpan` counts panes along the split axis (perpendicular splits take the larger side), and the walker recurses through — but never rewrites — any split whose subtree contains the main pane. Zoomed tabs are skipped; the whole step is best-effort (logged, never thrown). On Windows the socket is a named pipe, so `herdrSocketEndpoint` maps `HERDR_SOCKET_PATH` onto `\\.\pipe\<path>` before connecting.
 - `findBinary` is a `which/where herdr` probe with a cached path; `HERDR_BIN_PATH` overrides the probe when set.
-- `isInsideSession` checks `process.env.HERDR_PANE_ID`; `isAvailable` uses the cached `binaryPath`.
-- `spawnPane` requires the parent pane from `HERDR_PANE_ID` (no `--current` fallback; missing → fail closed), splits it in the configured direction, renames the new pane to the agent description, and runs `opencode attach` via `herdr pane run`. Pane IDs are parsed from the newline-delimited JSON of `herdr pane split` (`result.pane.pane_id`). `pane run` types the command into the pane's own shell, so on Windows the command position is quoted for PowerShell (`& '<path>'`), and every quoted value uses PowerShell escaping (an embedded apostrophe is doubled) because the POSIX `'\''` form is unreadable to PowerShell.
+- `isInsideSession` checks `HC_TERMINAL_ID` or `HERDR_PANE_ID`. Desktop availability probes `hc` and `herdr-app`; the legacy route probes `herdr` and honors `HERDR_BIN_PATH`.
+- `spawnPane` requires the parent pane from `HERDR_PANE_ID` (no `--current` fallback; missing → fail closed), splits it in the configured direction, renames the new pane to the agent description, and runs `opencode attach` via `herdr pane run`. Pane IDs are parsed from the newline-delimited JSON of `herdr pane split` (`result.pane.pane_id`). `pane run` types the command into the pane's own shell, so on Windows the command position is quoted for PowerShell (`& '<path>'`), and every quoted value uses PowerShell escaping (an embedded apostrophe, ASCII or typographic U+2018–U+201B, is doubled) because the POSIX `'\''` form is unreadable to PowerShell.
 - `spawnPane` is serialized through an internal mutex so concurrent spawns cannot race the `main-*` agent-area tracking; the first parent split becomes the agent area and later children stack inside it — below for `main-vertical`, to the right for `main-horizontal`. A successful parent split also records `mainPaneId` (from `HERDR_PANE_ID`).
-- After a successful attach, and after closing a pane this client spawned, `equalizeAgentArea` calls `layout-equalize.ts` with `HERDR_TAB_ID` / `HERDR_SOCKET_PATH`; missing context is skipped silently and failures only log. `multiplexer.equalize_panes` (constructor 4th parameter, default `true`) gates the step before any environment or socket access.
-- `listPanesWithTitles` reads `herdr pane list` and maps each pane's `label` for the FR-8 sweep.
-- `closePane` sends `ctrl+c` via `herdr pane send_keys`, waits 250ms, then runs `herdr pane close`; exit codes `0` and `1` count as closed.
+- After a successful attach, and after closing a pane this client spawned, `equalizeAgentArea` calls `layout-equalize.ts` with `HERDR_TAB_ID` / `HERDR_SOCKET_PATH`; missing context is skipped silently and failures only log. `multiplexer.equalize_panes` (constructor 3rd parameter, default `true`) gates the step before any environment or socket access.
+- `listPanesWithTitles` reads `herdr pane list` and maps each pane's `label` for the FR-8 sweep; scan failures are propagated for retry.
+- `closePane` sends `ctrl+c` and waits 250ms outside the topology mutex, then closes the pane; only success or a `pane_not_found` error counts as closed.
 - Split directions are mapped per layout:
   - `getPaneDirection` (parent → agent area): `main-vertical`, `even-horizontal`, `tiled` → `right`; `main-horizontal`, `even-vertical` → `down`
   - `getStackDirection` (agent area → later children): `main-vertical` → `down`; `main-horizontal` → `right`
@@ -39,9 +50,9 @@
 - `closePane(paneId)`:
   - `herdr pane send_keys <pane> ctrl+c`
   - wait 250ms
-  - `herdr pane close <pane>`; treats exit codes `0` and `1` as successful closure
-  - clears the tracked agent-area pane when that pane was the one closed
-  - re-equalizes the agent area when the closed pane was spawned by this client
+  - `herdr pane close <pane>`; accepts exit 0 or a `pane_not_found` error
+  - promotes a surviving agent pane when the closed pane was the agent-area anchor
+  - re-equalizes only when agent panes spawned by this client remain
 
 ## Integration
 

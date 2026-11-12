@@ -3,20 +3,12 @@ import type { CurrentRoundClassification } from './child-transcript';
 import { isRecord } from './guards';
 import { getClient } from './opencode-client';
 import { raceEvidenceDeadline, readHostSessionInfo } from './session-info-read';
+import type { TimerHandle, TimerSeam } from './timer-seam';
 
 export type RuntimeSessionStatus = 'busy' | 'retry' | 'idle';
 export const DEFAULT_RUNTIME_SESSION_STATUS_TIMEOUT_MS = 5_000;
 /** Default bound for the one host-info classification read (v2 hosts). */
 const DEFAULT_LIVE_SESSION_CLASSIFY_TIMEOUT_MS = 1_500;
-
-/**
- * Injectable timer seam for the bounded reads in this module. Tests wire
- * `src/utils/test-timers.ts` here instead of binding to real time.
- */
-interface RuntimeStatusTimers {
-  setTimeout: (callback: () => void, delay: number) => unknown;
-  clearTimeout: (timer: unknown) => void;
-}
 
 const openStatusReads = new WeakMap<object, Promise<void>>();
 
@@ -232,7 +224,7 @@ export async function classifyLiveSession(
   sessionID: string,
   options: {
     timeoutMs?: number;
-    timers?: RuntimeStatusTimers;
+    timers?: TimerSeam;
     /** Reuse a status-map read already performed for this query. */
     snapshot?: RuntimeSessionStatusSnapshot;
     /** Reuse a session-info read already performed for this query. */
@@ -405,7 +397,7 @@ export function composeHostRound(
 async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
-  timers?: RuntimeStatusTimers,
+  timers?: TimerSeam,
 ): Promise<T> {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw new Error('Session status lookup timed out');
@@ -414,17 +406,17 @@ async function withTimeout<T>(
     timers?.setTimeout ??
     ((callback: () => void, delay: number) => setTimeout(callback, delay));
   const clearTimer =
-    timers?.clearTimeout ??
-    ((timer: unknown) => clearTimeout(timer as ReturnType<typeof setTimeout>));
-  let timer: unknown;
+    timers?.clearTimeout ?? ((timer: TimerHandle) => clearTimeout(timer));
+  let timer: TimerHandle | undefined;
   try {
     return await Promise.race([
       promise,
       new Promise<T>((_, reject) => {
-        timer = setTimer(() => {
+        const scheduled = setTimer(() => {
           reject(new Error('Session status lookup timed out'));
         }, timeoutMs);
-        (timer as { unref?: () => void }).unref?.();
+        timer = scheduled;
+        if (typeof scheduled !== 'number') scheduled.unref();
       }),
     ]);
   } finally {

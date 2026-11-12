@@ -130,8 +130,9 @@ the first 2,048 bytes. Later declarations do not override the decoder fallback.
 
 ### Disabling
 
-Set `webfetch.enabled` to `false` to skip registering the enhanced version and
-use OpenCode's built-in `webfetch` instead:
+Set `webfetch.enabled` to `false` to skip loading the enhanced version and its
+JSDOM startup probe, and use OpenCode's built-in `webfetch` instead. Listing
+`webfetch` in `disabled_tools` has the same cold behavior:
 
 ```jsonc
 {

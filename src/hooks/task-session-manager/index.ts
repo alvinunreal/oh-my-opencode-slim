@@ -40,7 +40,7 @@ import {
   type MessageTransformView,
   resolveView,
 } from '../message-transform-view';
-import { isGenuineOperatorMessage } from '../orchestrator-wake/index';
+import { isGenuineOperatorMessage } from '../orchestrator-wake/operator-text';
 import type { SessionLifecycle } from '../session-lifecycle';
 import { isMessageWithParts } from '../types';
 import {
@@ -392,6 +392,7 @@ export function createTaskSessionManagerHook(
     }) => Promise<
       import('./session-recovery').UndeliveredBackgroundChild | undefined
     >;
+    isKillAllStopActive?: (sessionID: string) => boolean;
     /** Register a session as orchestrator when the transform hook detects
      *  an orchestrator message but the session isn't in the agent map yet. */
     registerSessionAsOrchestrator?: (sessionID: string) => void;
@@ -780,6 +781,7 @@ export function createTaskSessionManagerHook(
     hasUndeliveredTerminalPush: options.hasUndeliveredTerminalPush,
     metadataKey: BACKGROUND_JOB_BOARD_METADATA_KEY,
     shouldManageSession: options.shouldManageSession,
+    isKillAllStopActive: options.isKillAllStopActive,
     taskContextTracker,
   };
 

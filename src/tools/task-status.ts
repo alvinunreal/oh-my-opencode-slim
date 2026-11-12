@@ -38,6 +38,7 @@ import {
   type RuntimeSessionStatusSnapshot,
   runtimeSessionStatus,
 } from '../utils/session-runtime-status';
+import type { TimerHandle, TimerSeam } from '../utils/timer-seam';
 import type { TaskActivityTracker } from './task-activity';
 import {
   observationFromSnapshot,
@@ -130,10 +131,8 @@ interface TerminalProbeResult {
   };
 }
 
-export interface StatusTimers {
-  setTimeout: (callback: () => void, delay: number) => unknown;
-  clearTimeout: (timer: unknown) => void;
-}
+/** Timer seam for the bounded host reads. */
+export type StatusTimers = TimerSeam;
 
 /**
  * One host-side terminal-outcome probe for a tracked run.

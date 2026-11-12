@@ -2,20 +2,20 @@
  * Injected IO surface of the client-side pane lifecycle core (NFR-3).
  *
  * Nothing in this module touches the environment, the network, or real
- * timers: the wiring layer supplies every port.
+ * timers at runtime: the wiring layer supplies every port. The clock's handle
+ * type is shared from `utils/timer-seam`; that is a type-only edge.
  */
 
+import type { TimerHandle, TimerSeam } from '../../utils/timer-seam';
 import type { Multiplexer } from '../types';
 import type { AdapterType, SessionRuntimeStatus } from './types';
 
-/** Opaque handle returned by `Clock.setTimeout` and passed back to clear. */
-export type ClockTimerHandle = unknown;
+/** Handle returned by `Clock.setTimeout` and passed back to clear. */
+export type ClockTimerHandle = TimerHandle;
 
 /** Injected time source; the core never creates real timers directly. */
-export interface Clock {
+export interface Clock extends TimerSeam {
   now(): number;
-  setTimeout(handler: () => void, delayMs: number): ClockTimerHandle;
-  clearTimeout(handle: ClockTimerHandle): void;
 }
 
 /** Result of one `/session/status` read. */
@@ -64,7 +64,7 @@ export interface AdapterFactory {
 }
 
 /** Reflected server URL; a guessed default is never substituted (D3). */
-export interface ServerUrlResolution {
+interface ServerUrlResolution {
   /** Usable base URL for `opencode attach`; absent when unreachable. */
   url?: string;
   /** True for the embedded-mode sentinel: no listener to attach to. */
@@ -72,7 +72,7 @@ export interface ServerUrlResolution {
 }
 
 /** Reflects the host's server URL and its reachability. */
-export type ServerUrlResolver = () => ServerUrlResolution;
+type ServerUrlResolver = () => ServerUrlResolution;
 
 /** The complete injected surface of the pane lifecycle core. */
 export interface ClientPorts {

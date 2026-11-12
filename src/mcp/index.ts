@@ -3,7 +3,7 @@ import { context7 } from './context7';
 import { gh_grep } from './grep-app';
 import type { McpConfig } from './types';
 
-export type { LocalMcpConfig, McpConfig, RemoteMcpConfig } from './types';
+export type { McpConfig, RemoteMcpConfig } from './types';
 
 const allBuiltinMcps: Record<McpName, McpConfig> = {
   context7,

@@ -68,8 +68,8 @@ Local lane registry (git-ignored), e.g.:
   (`reset --hard`, `clean`, force-push, branch deletion) are never automatic.
 - Cleanup refuses dirty worktrees and unmerged branches without explicit
   approval.
-- `.slim/worktrees/` and `.slim/worktrees.json` are git-ignored; managed
-  `.ignore` entries keep them readable by OpenCode, and the skill only edits its
+- `.slim/worktrees/` and `.slim/worktrees.json` are git-ignored via a managed
+  `.gitignore` block; the skill writes no `.ignore` allowlist and only edits its
   own marker blocks.
 
 ## When To Use It

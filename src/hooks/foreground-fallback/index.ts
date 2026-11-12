@@ -55,10 +55,9 @@ import {
   abortSessionWithTimeout,
   OperationTimeoutError,
   parseModelReference,
-  type TimerHandle,
-  type TimerSeam,
   withTimeout,
 } from '../../utils/session';
+import type { TimerHandle, TimerSeam } from '../../utils/timer-seam';
 import type { ExperimentalV2, V2GenerateModelRef } from '../../v2/client-shim';
 import { isInternalAdmission } from '../../v2/internal-admissions';
 import {
@@ -69,6 +68,7 @@ import {
 import type { SessionLifecycle } from '../session-lifecycle';
 import type { createBackgroundFallbackHandoff } from '../task-session-manager/fallback-observation-transfer';
 import { isUserMessageWithParts } from '../types';
+import { asHttpStatus, DEDUP_WINDOW_MS } from './dedup';
 
 /** Timer port for deterministic test control (see `src/utils/test-timers.ts`):
  *  `now` is observation time (dedup windows, incident clocks); scheduling
@@ -210,6 +210,10 @@ const TRANSPORT_MESSAGE_PATTERNS = [
   // transport code. Match the narrow phrase only.
   /cannot connect to api/i,
   /did not begin a response within the pre-response time limit/i,
+  // Provider auth plugins throw this once their lifecycle ends (e.g.
+  // "Antigravity plugin has been disposed" after a host reload). The
+  // provider is gone for this request, so the next model should be tried.
+  /\bplugin has been disposed\b/i,
 ];
 const PROVIDER_OUTAGE_PATTERNS = [
   /\binternal server error\b/i,
@@ -241,6 +245,8 @@ const REQUEST_ERROR_PATTERNS = [
   /\bmodel is not available\b/i,
   /\bunsupported model\b/i,
   /\bunknown model\b/i,
+  /\bmodel unavailable\b/i,
+  /\bvariant unavailable\b/i,
   // OpenCode's ProviderModelNotFoundError uses "Model not found" wording; the
   // model may exist on a later entry in the configured chain.
   /\bmodel not found\b/i,
@@ -322,17 +328,6 @@ const UNKNOWN_FINISH_LOOP_ERROR = {
   name: 'UnknownFinishLoopError',
   message: 'Consecutive unknown assistant finishes without tool calls',
 };
-
-function asHttpStatus(value: unknown): number | undefined {
-  if (typeof value === 'number' && Number.isInteger(value)) {
-    return value >= 100 && value <= 599 ? value : undefined;
-  }
-  if (typeof value === 'string' && /^\d{3}$/.test(value)) {
-    const parsed = Number(value);
-    return parsed >= 100 && parsed <= 599 ? parsed : undefined;
-  }
-  return undefined;
-}
 
 function nestedField(source: unknown, key: string): unknown {
   return isRecord(source) ? source[key] : undefined;
@@ -651,7 +646,6 @@ export function isInlineFailoverError(error: unknown): boolean {
 // ---------------------------------------------------------------------------
 
 /** Bounds stale-retry rejection, incident correlation, and incident dedup. */
-const DEDUP_WINDOW_MS = 5_000;
 /** Longer host backoffs should use the configured model chain instead. */
 const MAX_HOST_RETRY_DELAY_MS = 30 * 60_000;
 const PROVIDER_MARK_TTL_MS = 30 * 60_000;
@@ -720,6 +714,65 @@ function getProcessFallbacksInProgress(): Set<string> {
 
 export type ForegroundFallbackModel = string | { id: string; variant?: string };
 
+export type ForegroundFallbackOptions = {
+  /**
+   * Ordered fallback chains per agent.
+   * e.g. { orchestrator: ['anthropic/claude-opus-4-5', 'openai/gpt-4o'] }
+   * Scan from the head, skipping tried models and providers abandoned by
+   * this session or its parent.
+   */
+  chains: Record<string, ReadonlyArray<ForegroundFallbackModel>>;
+  enabled: boolean;
+  input: PluginInput;
+  /** Host retry events tolerated before the first model switch. No-chain
+   *  sessions reuse the same budget for same-model retries (the shared
+   *  sessionRetries counter bounds host absorbs and replay charges
+   *  together).
+   *  @default 3 */
+  maxRetries?: number;
+  coordinator?: SessionLifecycle;
+  onSessionModelChanged?: (
+    sessionID: string,
+    model: string,
+    detail?: V2SwitchDetail,
+  ) => void;
+  /**
+   * Delay before first fallback; gives intercepting plugins time to recover.
+   * @default 0
+   */
+  initialRetryDelayMs?: number;
+  /**
+   * Delay between consecutive fallback attempts.
+   * @default 500
+   */
+  retryDelayMs?: number;
+  /** Terminal-observation handoff for background children: prepare()
+   *  arms the stop-gate deferral BEFORE the admission await (with the
+   *  baseline from the same transcript read that produced the replay);
+   *  admit() converts it into a tracked run once the host accepts the
+   *  re-prompt; reject() withdraws it on any non-admitted outcome. */
+  backgroundFallbackHandoff?: BackgroundFallbackHandoff;
+  /** Synchronous board read returning the tracked generation for a
+   *  confirmed BACKGROUND child only (undefined = foreground or
+   *  unmanaged — the handoff is not applicable, never a wildcard).
+   *  Captured before ANY await in the fallback preparation. */
+  readBackgroundGeneration?: (
+    sessionID: string,
+    includeForeground?: boolean,
+  ) => number | undefined;
+  /** Synchronous check for running background children OF this session. */
+  hasRunningChildren?: (sessionID: string) => boolean;
+  /** v2 retry-hook steering enablement. Independent of `enabled` (the
+   *  replay path) because the two paths carry different race profiles:
+   *  the replay path aborts and re-prompts — impossible to keep
+   *  consistent without a host per-turn/atomic conditional switch —
+   *  while the steering path only mutates the host's in-flight retry
+   *  decision and calls session.switchModel, so it can run on v2 hosts.
+   *  Defaults to `enabled` for hosts where both paths apply. */
+  v2RetryEnabled?: boolean;
+  timers?: ForegroundFallbackTimers;
+};
+
 /**
  * Manages runtime model fallback for foreground agent sessions.
  *
@@ -727,6 +780,13 @@ export type ForegroundFallbackModel = string | { id: string; variant?: string };
  * (built from _modelArray entries in agents.<name>.model).
  */
 export class ForegroundFallbackManager {
+  private readonly enabled: boolean;
+  private readonly input: PluginInput;
+  private readonly maxRetries: number;
+  private readonly initialRetryDelayMs: number;
+  private readonly retryDelayMs: number;
+  private readonly hasRunningChildren?: (sessionID: string) => boolean;
+  private readonly v2RetryEnabled: boolean;
   private readonly chainSource: Record<
     string,
     ReadonlyArray<ForegroundFallbackModel>
@@ -1550,57 +1610,29 @@ export class ForegroundFallbackManager {
     return true;
   }
 
-  constructor(
-    /**
-     * Ordered fallback chains per agent.
-     * e.g. { orchestrator: ['anthropic/claude-opus-4-5', 'openai/gpt-4o'] }
-     * Scan from the head, skipping tried models and providers abandoned by
-     * this session or its parent.
-     */
-    chains: Record<string, ReadonlyArray<ForegroundFallbackModel>>,
-    private readonly enabled: boolean,
-    private readonly input: PluginInput,
-    /** Host retry events tolerated before the first model switch. No-chain
-     *  sessions reuse the same budget for same-model retries (the shared
-     *  sessionRetries counter bounds host absorbs and replay charges
-     *  together). */
-    private readonly maxRetries: number = 3,
-    coordinator?: SessionLifecycle,
-    onSessionModelChanged?: (
-      sessionID: string,
-      model: string,
-      detail?: V2SwitchDetail,
-    ) => void,
-    /** Delay before first fallback; gives intercepting plugins time to recover. */
-    private readonly initialRetryDelayMs: number = 0,
-    /** Delay between consecutive fallback attempts. */
-    private readonly retryDelayMs: number = 500,
-    /** Terminal-observation handoff for background children: prepare()
-     *  arms the stop-gate deferral BEFORE the admission await (with the
-     *  baseline from the same transcript read that produced the replay);
-     *  admit() converts it into a tracked run once the host accepts the
-     *  re-prompt; reject() withdraws it on any non-admitted outcome. */
-    backgroundFallbackHandoff?: BackgroundFallbackHandoff,
-    /** Synchronous board read returning the tracked generation for a
-     *  confirmed BACKGROUND child only (undefined = foreground or
-     *  unmanaged — the handoff is not applicable, never a wildcard).
-     *  Captured before ANY await in the fallback preparation. */
-    readBackgroundGeneration?: (
-      sessionID: string,
-      includeForeground?: boolean,
-    ) => number | undefined,
-    /** Synchronous check for running background children OF this session. */
-    private readonly hasRunningChildren?: (sessionID: string) => boolean,
-    /** v2 retry-hook steering enablement. Independent of `enabled` (the
-     *  replay path) because the two paths carry different race profiles:
-     *  the replay path aborts and re-prompts — impossible to keep
-     *  consistent without a host per-turn/atomic conditional switch —
-     *  while the steering path only mutates the host's in-flight retry
-     *  decision and calls session.switchModel, so it can run on v2 hosts.
-     *  Defaults to `enabled` for hosts where both paths apply. */
-    private readonly v2RetryEnabled: boolean = enabled,
-    timers?: ForegroundFallbackTimers,
-  ) {
+  constructor(options: ForegroundFallbackOptions) {
+    const {
+      chains,
+      enabled,
+      input,
+      maxRetries = 3,
+      coordinator,
+      onSessionModelChanged,
+      initialRetryDelayMs = 0,
+      retryDelayMs = 500,
+      backgroundFallbackHandoff,
+      readBackgroundGeneration,
+      hasRunningChildren,
+      v2RetryEnabled = enabled,
+      timers,
+    } = options;
+    this.enabled = enabled;
+    this.input = input;
+    this.maxRetries = maxRetries;
+    this.initialRetryDelayMs = initialRetryDelayMs;
+    this.retryDelayMs = retryDelayMs;
+    this.hasRunningChildren = hasRunningChildren;
+    this.v2RetryEnabled = v2RetryEnabled;
     this.chainSource = chains;
     this.onSessionModelChanged = onSessionModelChanged;
     this.backgroundFallbackHandoff = backgroundFallbackHandoff;
@@ -1631,6 +1663,7 @@ export class ForegroundFallbackManager {
   /** Drop all per-session state once the session is deleted. */
   private forgetSession(id: string): void {
     this.sessionModel.delete(id);
+    this.sessionParent.delete(id);
     this.activeFallback.delete(id);
     this.downProviders.delete(id);
     this.sessionAgent.delete(id);

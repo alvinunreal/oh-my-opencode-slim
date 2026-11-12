@@ -373,7 +373,10 @@ injection). Without council config at all, the chain is never built.
 
 Each councillor is dispatched in parallel as its own TUI pane while it
 runs; when idle, councillors are hidden from the @-mention menu (they are
-still dispatchable by name). As they complete, their responses stream into
+still dispatchable by name). The OMO-Slim sidebar also hides `council`,
+`councillor`, and every `councillor-<seat>` row by default; set
+`sidebarShowHiddenAgents: true` to render those rows. As they complete,
+their responses stream into
 the panes. Once all councillors have responded (or failed), the
 orchestrator calls the council agent with a `Seats: <id, id>` line of the
 dispatch-returned session IDs, and

@@ -21,7 +21,7 @@
 export const CHILD_TOKEN_LENGTH = 5;
 
 /** Child-name agent-type fallback when the session has none. */
-export const FALLBACK_SUBAGENT_TYPE = 'subagent';
+const FALLBACK_SUBAGENT_TYPE = 'subagent';
 
 /**
  * Strips C0/C1 control characters so a display name can never smuggle

@@ -31,6 +31,14 @@ function runtimeFor(config: PluginConfig | undefined = {}) {
   return RuntimeConfig.get(TEST_DIRECTORY);
 }
 
+function permissionsOf(
+  agents: ReturnType<typeof createAgents>,
+  name: string,
+): Record<string, unknown> {
+  return (agents.find((agent) => agent.name === name)?.config.permission ??
+    {}) as Record<string, unknown>;
+}
+
 function councilConfig() {
   const parsed = CouncilConfigSchema.parse({
     presets: { default: { alpha: { model: 'test/councillor' } } },
@@ -843,6 +851,31 @@ describe('orchestrator agent', () => {
     expect(permission('bridge')).toBe('deny');
   });
 
+  test('task_report is available to subagents and denied to primaries', () => {
+    const agents = createAgents(runtimeFor({ council: councilConfig() }), {
+      hostFlavor: 'v2',
+    });
+    expect(permissionsOf(agents, 'orchestrator').task_report).toBe('deny');
+    expect(permissionsOf(agents, 'explorer').task_report).toBe('allow');
+    // Preserve explicit deny-all agents such as council synthesis.
+    expect(permissionsOf(agents, 'council').task_report).toBe('deny');
+    expect(permissionsOf(agents, 'councillor').task_report).toBe('deny');
+  });
+
+  test('task_report honors explicit agent permissions', () => {
+    const agents = createAgents(
+      runtimeFor({
+        agents: {
+          explorer: { permission: { task_report: 'deny' } },
+          orchestrator: { permission: { task_report: 'allow' } },
+        },
+      }),
+      { hostFlavor: 'v2' },
+    );
+    expect(permissionsOf(agents, 'explorer').task_report).toBe('deny');
+    expect(permissionsOf(agents, 'orchestrator').task_report).toBe('allow');
+  });
+
   test('interview_submit_state honors an explicit agent permission', () => {
     const agents = createAgents(
       runtimeFor({
@@ -1317,6 +1350,186 @@ describe('tool permissions', () => {
   });
 });
 
+describe('generated default permission availability', () => {
+  test('lifecycle off omits primary task-control grants but keeps subagent denies', () => {
+    const agents = createAgents(
+      runtimeFor({ backgroundJobs: { mode: 'off' } }),
+    );
+    const orchestrator = permissionsOf(agents, 'orchestrator');
+    for (const tool of [
+      'task_cancel',
+      'task_reply',
+      'task_status',
+      'task_revive',
+      'task_message',
+      'wait_for_user',
+    ]) {
+      expect(Object.hasOwn(orchestrator, tool)).toBe(false);
+    }
+    expect(orchestrator.question).toBe('allow');
+    // Generated denials stay: the v2 permission base starts at `*: allow`.
+    const fixer = permissionsOf(agents, 'fixer');
+    for (const tool of ['task_cancel', 'task_reply', 'task_status']) {
+      expect(fixer[tool]).toBe('deny');
+    }
+  });
+
+  test('disabled task controls omit primary allows but keep every deny', () => {
+    const agents = createAgents(
+      runtimeFor({ disabled_tools: ['task_cancel', 'task_reply'] }),
+    );
+    const orchestrator = permissionsOf(agents, 'orchestrator');
+    expect(Object.hasOwn(orchestrator, 'task_cancel')).toBe(false);
+    expect(Object.hasOwn(orchestrator, 'task_reply')).toBe(false);
+    expect(orchestrator.task_status).toBe('allow');
+    const oracle = permissionsOf(agents, 'oracle');
+    expect(oracle.task_cancel).toBe('deny');
+    expect(oracle.task_reply).toBe('deny');
+  });
+
+  test('native lifecycle registers only task_cancel and task_status defaults', () => {
+    const agents = createAgents(
+      runtimeFor({ backgroundJobs: { mode: 'native' } }),
+    );
+    const orchestrator = permissionsOf(agents, 'orchestrator');
+    expect(orchestrator.task_cancel).toBe('allow');
+    expect(orchestrator.task_status).toBe('allow');
+    expect(Object.hasOwn(orchestrator, 'task_reply')).toBe(false);
+    expect(Object.hasOwn(orchestrator, 'task_revive')).toBe(false);
+    expect(Object.hasOwn(orchestrator, 'wait_for_user')).toBe(false);
+  });
+
+  test('v2 omits v1-only controls and wait_for_user defaults', () => {
+    const agents = createAgents(runtimeFor(), { hostFlavor: 'v2' });
+    const orchestrator = permissionsOf(agents, 'orchestrator');
+    expect(orchestrator.task_cancel).toBe('allow');
+    expect(orchestrator.task_status).toBe('allow');
+    expect(Object.hasOwn(orchestrator, 'task_revive')).toBe(false);
+    expect(Object.hasOwn(orchestrator, 'task_message')).toBe(false);
+    expect(Object.hasOwn(orchestrator, 'wait_for_user')).toBe(false);
+    const oracle = permissionsOf(agents, 'oracle');
+    // v1-only controls stay absent on v2 specialists (base policy); existing
+    // denies on cross-host controls are retained.
+    expect(Object.hasOwn(oracle, 'task_revive')).toBe(false);
+    expect(Object.hasOwn(oracle, 'task_message')).toBe(false);
+    expect(oracle.wait_for_user).toBe('deny');
+  });
+
+  test('interview defaults follow the feature gate and disabled command', () => {
+    const interviewOff = createAgents(
+      runtimeFor({ interview: { enabled: false } }),
+    );
+    expect(
+      Object.hasOwn(
+        permissionsOf(interviewOff, 'orchestrator'),
+        'interview_submit_state',
+      ),
+    ).toBe(false);
+    expect(permissionsOf(interviewOff, 'oracle').interview_submit_state).toBe(
+      'deny',
+    );
+
+    const commandOff = createAgents(
+      runtimeFor({ disabled_commands: ['interview'] }),
+    );
+    expect(
+      Object.hasOwn(
+        permissionsOf(commandOff, 'orchestrator'),
+        'interview_submit_state',
+      ),
+    ).toBe(false);
+  });
+
+  test('marketplace kill switch omits primary grants but keeps denies', () => {
+    const agents = createAgents(
+      runtimeFor({ marketplace: { enabled: false } }),
+    );
+    const orchestrator = permissionsOf(agents, 'orchestrator');
+    expect(Object.hasOwn(orchestrator, 'marketplace_inspect')).toBe(false);
+    expect(Object.hasOwn(orchestrator, 'marketplace_manage')).toBe(false);
+    const fixer = permissionsOf(agents, 'fixer');
+    expect(fixer.marketplace_inspect).toBe('deny');
+    expect(fixer.marketplace_manage).toBe('deny');
+  });
+
+  test('explicit user entries survive unavailable defaults untouched', () => {
+    const agents = createAgents(
+      runtimeFor({
+        backgroundJobs: { mode: 'off' },
+        agents: {
+          orchestrator: { permission: { task_status: 'ask' } },
+          reviewer: {
+            model: 'test/reviewer',
+            permission: { task_cancel: 'ask', wait_for_user: 'ask' },
+          },
+        },
+      }),
+    );
+    const orchestrator = permissionsOf(agents, 'orchestrator');
+    expect(orchestrator.task_status).toBe('ask');
+    const reviewer = permissionsOf(agents, 'reviewer');
+    // A subagent's explicit non-primary stance keeps its forced deny: the
+    // runtime fences classify these controls by primary-ness.
+    expect(reviewer.task_cancel).toBe('ask');
+    expect(reviewer.wait_for_user).toBe('deny');
+  });
+
+  test('disabled Slim AST tools drop factory allow grants but keep read-only denies', () => {
+    const agents = createAgents(
+      runtimeFor({
+        disabled_tools: ['ast_grep_search', 'ast_grep_replace'],
+        council: councilConfig(),
+        agents: {
+          reviewer: { model: 'test/reviewer' },
+        },
+      }),
+    );
+    const councillor = permissionsOf(agents, 'councillor-alpha');
+    expect(councillor['*']).toBe('deny');
+    expect(councillor.read).toBe('allow');
+    // The default allow grant is dead config; the factory deny stays.
+    expect(Object.hasOwn(councillor, 'ast_grep_search')).toBe(false);
+    expect(councillor.ast_grep_replace).toBe('deny');
+    // The synthesis agent's deny stance is not an allow and survives.
+    const council = permissionsOf(agents, 'council');
+    expect(council.ast_grep_search).toBe('deny');
+    expect(council.ast_grep_replace).toBe('deny');
+    // No non-primary gains a dead allow either.
+    for (const name of ['fixer', 'reviewer']) {
+      expect(
+        Object.hasOwn(permissionsOf(agents, name), 'ast_grep_search'),
+      ).toBe(false);
+    }
+  });
+
+  test('explicit Slim AST permissions survive disabled tools', () => {
+    const agents = createAgents(
+      runtimeFor({
+        disabled_tools: ['ast_grep_search'],
+        council: councilConfig(),
+        agents: {
+          councillor: { permission: { ast_grep_search: 'allow' } },
+        },
+      }),
+    );
+    expect(permissionsOf(agents, 'councillor').ast_grep_search).toBe('allow');
+  });
+
+  test('enabled generations keep the role permission stance', () => {
+    const agents = createAgents(runtimeFor({ disabled_agents: [] }));
+    const orchestrator = permissionsOf(agents, 'orchestrator');
+    expect(orchestrator.task_cancel).toBe('allow');
+    expect(orchestrator.task_reply).toBe('allow');
+    expect(orchestrator.task_status).toBe('allow');
+    expect(orchestrator.task_revive).toBe('allow');
+    expect(orchestrator.task_message).toBe('allow');
+    expect(orchestrator.wait_for_user).toBe('allow');
+    expect(orchestrator.interview_submit_state).toBe('allow');
+    expect(orchestrator.marketplace_inspect).toBe('allow');
+    expect(permissionsOf(agents, 'explorer').question).toBe('deny');
+  });
+});
+
 test('orchestrator prompt carries the council seat pointer when councillors exist', () => {
   const agents = createAgents(runtimeFor({ council: councilConfig() }));
   const orchestrator = agents.find((a) => a.name === 'orchestrator');
@@ -1353,8 +1566,9 @@ test('council pointer wording tracks the council-inject hook state', () => {
   // block will ever appear, so the seats would otherwise be undispatchable.
   expect(disabledPrompt).toContain('Seats: councillor-alpha');
   expect(disabledPrompt).toContain(
-    'Seats: councillor-alpha — dispatch via task() when the user asks for consensus.',
+    'Seats: councillor-alpha — dispatch when the user asks for consensus.',
   );
+  expect(disabledPrompt).not.toContain('dispatch via task()');
   expect(disabledPrompt).not.toContain('council-inject hook');
 });
 
@@ -1568,7 +1782,9 @@ describe('createAgents', () => {
     // (issue #1591 guard widening): the runtime fences classify by
     // primary-ness, not by name.
     expect(coworkerPermission.task_cancel).toBe('allow');
-    expect(coworkerPermission.wait_for_user).toBe('allow');
+    // v2 hosts never register wait_for_user (the native question tool covers
+    // the blocking boundary), so the primary allow default is omitted.
+    expect(coworkerPermission.wait_for_user).toBeUndefined();
     expect(coworkerPermission.marketplace_manage).toBe('allow');
 
     const reviewerPermission = (
@@ -1959,6 +2175,130 @@ describe('createAgents', () => {
       '*': 'deny',
       bridge: 'allow',
       'councillor-alpha': 'allow',
+    });
+  });
+
+  describe('ACP wrapper availability projection', () => {
+    const promptOf = (agents: ReturnType<typeof createAgents>, name: string) =>
+      (agents.find((agent) => agent.name === name)?.config.prompt ??
+        '') as string;
+
+    test('disabled acp_run tool omits wrapper, catalog, scope and profile entries', () => {
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const runtime = runtimeFor({
+          disabled_tools: ['acp_run'],
+          acpAgents: { bridge: { command: 'bridge-acp' } },
+          agents: {
+            orchestrator: { subagents: ['bridge'] },
+          },
+        });
+        const agents = createAgents(runtime);
+        expect(agents.some((agent) => agent.name === 'bridge')).toBe(false);
+        expect(promptOf(agents, 'orchestrator')).not.toContain('@bridge');
+        // The primary allow default is dropped for a tool that is not
+        // registered; the generic deny for non-primaries stays.
+        expect(
+          Object.hasOwn(permissionsOf(agents, 'orchestrator'), 'acp_run'),
+        ).toBe(false);
+
+        // Scope validation drops the wrapper: it is not a known specialist,
+        // so the compiled stance keeps only the wildcard deny.
+        expect(permissionsOf(agents, 'orchestrator').task).toEqual({
+          '*': 'deny',
+        });
+        const drops = warnSpy.mock.calls.filter((call) =>
+          String(call[0]).includes(
+            "entry 'bridge' does not match a known agent",
+          ),
+        );
+        expect(drops).toHaveLength(1);
+        expect(getAgentConfigs(runtime).bridge).toBeUndefined();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    test('disabled ACP wrapper agent omits wrapper, catalog, scope and profile entries', () => {
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const runtime = runtimeFor({
+          disabled_agents: ['bridge'],
+          acpAgents: { bridge: { command: 'bridge-acp' } },
+          agents: {
+            orchestrator: { subagents: ['bridge'] },
+          },
+        });
+        const agents = createAgents(runtime);
+        expect(agents.some((agent) => agent.name === 'bridge')).toBe(false);
+        expect(promptOf(agents, 'orchestrator')).not.toContain('@bridge');
+        expect(permissionsOf(agents, 'orchestrator').task).toEqual({
+          '*': 'deny',
+        });
+        const drops = warnSpy.mock.calls.filter((call) =>
+          String(call[0]).includes(
+            "entry 'bridge' does not match a known agent",
+          ),
+        );
+        expect(drops).toHaveLength(1);
+        expect(getAgentConfigs(runtime).bridge).toBeUndefined();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    test('active wrappers keep the catalog, scope allow, profile and role prompt', () => {
+      const runtime = runtimeFor({
+        acpAgents: { bridge: { command: 'bridge-acp' } },
+        agents: { orchestrator: { subagents: ['bridge'] } },
+      });
+      const agents = createAgents(runtime);
+      expect(agents.some((agent) => agent.name === 'bridge')).toBe(true);
+      const wrapperPrompt = promptOf(agents, 'bridge');
+      expect(wrapperPrompt).toContain(
+        'You proxy tasks to the configured external ACP agent "bridge"',
+      );
+      // The default wrapper prompt stays role-sized: the tool-usage
+      // paragraphs now live in the acp_run parameter descriptions.
+      expect(wrapperPrompt).not.toContain('acp_run');
+      expect(wrapperPrompt).not.toContain('Inner ACP selector: <value>');
+      expect(wrapperPrompt).not.toContain('report the ambiguity');
+      expect(wrapperPrompt).not.toContain('actual task, constraints');
+      const orchestratorPrompt = promptOf(agents, 'orchestrator');
+      expect(orchestratorPrompt).toContain('@bridge');
+      expect(orchestratorPrompt).toContain(
+        'Include an explicitly requested inner ACP selector in the delegation brief',
+      );
+      expect(permissionsOf(agents, 'orchestrator').task).toEqual({
+        '*': 'deny',
+        bridge: 'allow',
+      });
+      expect(permissionsOf(agents, 'orchestrator').acp_run).toBe('allow');
+      expect(getAgentConfigs(runtime).bridge).toBeDefined();
+    });
+
+    test('custom ACP prompts replace generated guidance byte-for-byte', () => {
+      const agents = createAgents(
+        runtimeFor({
+          acpAgents: {
+            bridge: {
+              command: 'fixture-acp',
+              args: [],
+              env: {},
+              timeoutMs: 0,
+              permissionMode: 'ask',
+              prompt: 'Custom wrapper contract.',
+              orchestratorPrompt: 'Custom ACP routing contract.',
+            },
+          },
+        }),
+      );
+      expect(promptOf(agents, 'bridge')).toBe(
+        'Custom wrapper contract.\n\nIf a task is outside your role, do not attempt partial work. Return a brief reason to the orchestrator.',
+      );
+      const orchestratorPrompt = promptOf(agents, 'orchestrator');
+      expect(orchestratorPrompt).toContain('Custom ACP routing contract.');
+      expect(orchestratorPrompt).not.toContain('Inner ACP selector:');
     });
   });
 
@@ -3013,19 +3353,19 @@ describe('createAgents with malformed disabled_tools', () => {
     expect(() => createAgents(runtimeFor(config))).not.toThrow();
   });
 
-  test('orchestrator is created with wait_for_user enabled when disabled_tools is malformed', () => {
+  test('orchestrator keeps wait_for_user available when disabled_tools is malformed', () => {
     const config: PluginConfig = {
       disabled_tools: 'not-an-array' as any,
     };
     const agents = createAgents(runtimeFor(config));
     const orchestrator = agents.find((a) => a.name === 'orchestrator');
     expect(orchestrator).toBeDefined();
-    // When disabled_tools is malformed (treated as empty array), wait_for_user
-    // should be enabled, which is reflected in the prompt text
-    expect(orchestrator?.config.prompt).toContain('then call `wait_for_user`');
-    expect(orchestrator?.config.prompt).not.toContain(
-      '`wait_for_user` is disabled',
-    );
+    // A malformed list is treated as empty: the managed v1 lifecycle
+    // registers wait_for_user, so the primary default stays available.
+    expect(
+      (orchestrator as { config: { permission: Record<string, unknown> } })
+        .config.permission.wait_for_user,
+    ).toBe('allow');
   });
 });
 

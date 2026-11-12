@@ -422,6 +422,18 @@ describe('applyAgentToDraft', () => {
     });
   });
 
+  test('theme tokens do not replace the native host color', () => {
+    const agent: Record<string, unknown> = { color: '#654321' };
+    const { draft } = recorder();
+    draft.update = (_id, update) => update(agent);
+    applyAgentToDraft(draft, 'oracle', { color: 'info' });
+    expect(agent.color).toBe('#654321');
+
+    delete agent.color;
+    applyAgentToDraft(draft, 'oracle', { color: 'primary' });
+    expect(agent).not.toHaveProperty('color');
+  });
+
   test('defaults orchestrator to primary mode', () => {
     const { draft, calls } = recorder();
     applyAgentToDraft(draft, 'orchestrator', {});

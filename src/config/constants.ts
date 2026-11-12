@@ -69,21 +69,13 @@ export function formatSystemReminder(text: string): string {
 export const PHASE_REMINDER = formatSystemReminder(PHASE_REMINDER_TEXT);
 
 export const WRITABLE_FILE_OPERATIONS_RULES = `**File Operations Rules**:
-- Prefer dedicated file tools for normal code work: glob/grep/ast_grep_search for discovery, read for file contents, and edit/write/apply_patch for targeted source changes.
-- Use bash for execution and automation: git, package managers, tests, builds, scripts, diagnostics, and shell-native filesystem operations.
-- Shell is acceptable for bulk or mechanical filesystem changes when it is clearer or safer than many individual edits (for example: truncate generated logs, remove build artifacts, batch rename/move files), especially when the user explicitly asks for that shell operation.
-- Before destructive or broad shell operations, verify the target set and quote paths. Prefer a dry-run/listing first when practical.
-- Do not use cat/head/tail/sed/awk only to read code into context; use read/grep unless a shell pipeline is genuinely the better diagnostic.`;
+- Before destructive or broad shell operations, verify the target set and quote paths; dry-run first when practical.`;
 
 export const READONLY_FILE_OPERATIONS_RULES = `**File Operations Rules**:
-- READ-ONLY: inspect and report; do not modify files.
-- Prefer dedicated file tools for codebase inspection: glob/grep/ast_grep_search for discovery and read for file contents.
-- Bash is allowed for non-mutating diagnostics and shell-native inspection when it is the clearest tool, but not for modifying files.
-- Do not use cat/head/tail/sed/awk only to read code into context; use read/grep unless a shell pipeline is genuinely the better diagnostic.`;
+- READ-ONLY: inspect and report; do not modify files.`;
 
 export const NO_SHELL_READONLY_FILE_OPERATIONS_RULES = `**File Operations Rules**:
 - READ-ONLY: inspect and report; do not modify files.
-- Use glob/grep/ast_grep_search for discovery and read for file contents.
 - Do not use bash or shell commands.`;
 
 // Toast duration (ms) used by all OMOS toasts

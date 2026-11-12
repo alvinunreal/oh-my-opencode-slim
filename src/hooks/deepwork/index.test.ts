@@ -116,7 +116,8 @@ describe('deepwork command hook', () => {
       'utf-8',
     );
     expect(skill).toContain('.slim/deepwork/<session-id>.md');
-    expect(skill).toContain('!.slim/deepwork/**');
+    expect(skill).toContain('ensure `.gitignore` contains');
+    expect(skill).not.toContain('!.slim/deepwork/**');
     expect(skill).toContain('status: active');
   });
 });

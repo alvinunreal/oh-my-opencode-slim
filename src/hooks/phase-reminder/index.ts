@@ -26,7 +26,7 @@
  * enough to be cache-read.
  */
 import { PHASE_REMINDER } from '../../config/constants';
-import { isInternalInitiatorPart } from '../../utils';
+import { isInternalInitiatorPart } from '../../utils/internal-initiator';
 import {
   appendTaggedSyntheticPart,
   isTaggedPart,

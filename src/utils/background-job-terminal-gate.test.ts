@@ -2509,6 +2509,33 @@ describe('evidence re-arm behavior (#1561)', () => {
     expect(h.reads()).toBeGreaterThan(readsAfterBusy);
   });
 
+  test('a generation change clears an armed timer whose handle is 0', async () => {
+    // 0 is a legal TimerHandle (a harness id), so the generation replacement
+    // must clear on `!== undefined`, not truthiness — otherwise the old timer
+    // stays scheduled and dispose() can never reach it.
+    const cleared: number[] = [];
+    let armed = 0;
+    const h = harness({
+      readTerminalEvidence: async () => undefined,
+      setTimeout: () => {
+        armed += 1;
+        return 0;
+      },
+      clearTimeout: (id: number) => cleared.push(id),
+    });
+    await h.gate.reconcile(h.run);
+    expect(armed).toBe(1);
+    const next = h.board.registerLaunch({
+      taskID: h.run.taskID,
+      parentSessionID: 'parent',
+      agent: 'fixer',
+      now: 2,
+    });
+    expect(next.generation).toBe(h.run.generation + 1);
+    h.gate.capture(next);
+    expect(cleared).toEqual([0]);
+  });
+
   test('T1: a late-attributable outcome terminalizes the stranded board', async () => {
     const capture = captureLogs();
     try {

@@ -25,19 +25,25 @@ export interface FeatureGateConfig {
   readonly marketplace?: {
     readonly enabled?: boolean;
   };
+  readonly webfetch?: {
+    readonly enabled?: boolean;
+  };
   readonly liveConfigRefresh?: boolean;
   readonly autoUpdate?: boolean;
   readonly disabled_hooks?: readonly string[];
+  readonly disabled_tools?: readonly string[];
 }
 
 /** Resolved enable/disable decisions for the optional subsystems. */
 export interface FeatureGates {
   readonly backgroundJobsMode: BackgroundJobsMode;
   readonly managedJobs: boolean;
+  readonly presetRouting: boolean;
   readonly tui: boolean;
   readonly sidebar: boolean;
   readonly interview: boolean;
   readonly marketplace: boolean;
+  readonly webfetch: boolean;
   readonly liveConfigRefresh: boolean;
   readonly updateChecker: boolean;
 }
@@ -52,16 +58,27 @@ export function resolveFeatureGates(
 ): Readonly<FeatureGates> {
   const backgroundJobsMode = config.backgroundJobs?.mode ?? 'managed';
   const tui = config.tui !== false;
+  // User-edited config can be malformed despite the declared type; treat a
+  // non-array disabled list as empty instead of failing plugin init.
+  const disabledTools = Array.isArray(config.disabled_tools)
+    ? config.disabled_tools
+    : [];
+  const disabledHooks = Array.isArray(config.disabled_hooks)
+    ? config.disabled_hooks
+    : [];
   return Object.freeze({
     backgroundJobsMode,
     managedJobs: backgroundJobsMode === 'managed',
+    presetRouting: backgroundJobsMode !== 'off',
     tui,
     sidebar: tui && config.sidebar !== false,
     interview: config.interview?.enabled !== false,
     marketplace: config.marketplace?.enabled !== false,
+    webfetch:
+      config.webfetch?.enabled !== false && !disabledTools.includes('webfetch'),
     liveConfigRefresh: config.liveConfigRefresh !== false,
     updateChecker:
       config.autoUpdate !== false &&
-      !(config.disabled_hooks ?? []).includes('auto-update-checker'),
+      !disabledHooks.includes('auto-update-checker'),
   });
 }

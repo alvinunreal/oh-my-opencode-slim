@@ -18,6 +18,7 @@ const PANE_ENV_KEYS = [
   'ZELLIJ_PANE_ID',
   'HERDR_ENV',
   'HERDR_PANE_ID',
+  'HC_TERMINAL_ID',
   'KITTY_PID',
   'KITTY_WINDOW_ID',
   'WEZTERM_PANE',
@@ -106,6 +107,17 @@ describe('multiplexer factory', () => {
     process.env.HERDR_PANE_ID = 'w1:p1';
 
     const { getMultiplexer } = await importFreshFactory('auto-herdr-pane');
+
+    const multiplexer = getMultiplexer({ ...BASE_CONFIG, type: 'auto' });
+
+    expect(multiplexer).not.toBeNull();
+    expect(multiplexer?.type).toBe('herdr');
+  });
+
+  test('auto-detects Herdr Desktop from HC_TERMINAL_ID', async () => {
+    process.env.HC_TERMINAL_ID = 't-parent';
+
+    const { getMultiplexer } = await importFreshFactory('auto-herdr-desktop');
 
     const multiplexer = getMultiplexer({ ...BASE_CONFIG, type: 'auto' });
 

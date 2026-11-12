@@ -41,6 +41,7 @@ export interface PipelineOptions {
    */
   goalPointer?: boolean;
   refusalCorrection?: boolean;
+  killAllStop?: () => boolean;
 }
 
 export interface Pipeline {
@@ -89,6 +90,7 @@ export function createPipeline(options: PipelineOptions = {}): Pipeline {
     {
       maxSessionsPerAgent: 2,
       backgroundJobBoard: board,
+      isKillAllStopActive: options.killAllStop,
       shouldManageSession: (sessionID) =>
         sessionAgentMap.get(sessionID) === 'orchestrator',
       registerSessionAsOrchestrator: (sessionID) => {

@@ -20,7 +20,7 @@
   </p>
 
   <p>
-    <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a> | <a href="README.ja-JP.md">日本語</a> | <b>한국어</b> | <a href="README.fa-IR.md">فارسی</a>
+    <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a> | <a href="README.zh-TW.md">繁體中文</a> | <a href="README.ja-JP.md">日本語</a> | <b>한국어</b> | <a href="README.fa-IR.md">فارسی</a>
   </p>
 
   <p><sub>✦ ✦ ✦</sub></p>
@@ -522,8 +522,8 @@ ping all agents
 **읽기 전용 시각 분석** - 이미지, 스크린샷, PDF, 다이어그램을 해석합니다. 원본 파일의 바이트를 주 컨텍스트에 직접 넣지 않고, 구조화된 관찰 결과를 Orchestrator에게 전달합니다.
 
 - 이미지, 스크린샷, 다이어그램 → `read` 도구(네이티브 이미지 지원)
-- PDF 및 바이너리 문서 → `read` 도구(텍스트 + 구조 추출)
-- **기본적으로 비활성화** - `"disabled_agents": []`와 비전 지원 모델을 설정해 활성화하세요. `--preset=opencode-go`로 설치하면 `opencode-go/mimo-v2.5` 모델로 활성화됩니다. `"auto"`에서는 첨부 파일을 작업 공간에 저장한 뒤 경로로 Observer에게 전달합니다. 이미지 자체를 Orchestrator의 메시지에 유지하려면 `"image_routing": "direct"`로 설정하세요.
+- PDF → `read` 도구(PDF 미디어로 모델에 전달되며 텍스트 추출은 하지 않음)
+- **기본적으로 비활성화** - `"disabled_agents": []`와 비전 지원 모델을 설정해 활성화하세요. `--preset=opencode-go`로 설치하면 `opencode-go/mimo-v2.5` 모델로 활성화됩니다. `"auto"`는 모델 능력에 따라 분기합니다. 비전 지원 모델은 첨부를 인라인으로 읽고, 비전이 아닌 체인만 저장 후 경로로 Observer에게 전달합니다. 이미지 자체를 Orchestrator의 메시지에 유지하려면 `"image_routing": "direct"`로 설정하세요. 자동 저장은 붙여넣은 PNG/JPEG/GIF/WebP만 대상으로 하며, PDF와 도구가 생성한 이미지는 자동 전달되지 않으므로 경로로 직접 위임하세요.
 
     </td>
   </tr>

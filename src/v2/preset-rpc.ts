@@ -16,7 +16,7 @@ const state = z.object({
 });
 
 /** Shared server/TUI contract. Call context.client.rpc(sessionPresetRpc).
- * Neither method writes config or changes the session's native model. */
+ * No method writes config or changes the session's native model. */
 export const sessionPresetRpc = Rpc.define({
   id: 'oh-my-opencode-slim.session-preset.v1',
   methods: {
@@ -29,6 +29,11 @@ export const sessionPresetRpc = Rpc.define({
         .object({ sessionID: z.string().min(1), presetName: z.string().min(1) })
         .strict(),
       output: state,
+    },
+    createBound: {
+      input: z.object({ presetName: z.string().min(1) }).strict(),
+      output: state,
+      errors: { create_failed: z.null() },
     },
   },
   events: {},
