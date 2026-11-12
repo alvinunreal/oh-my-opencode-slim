@@ -16,6 +16,7 @@ import {
   removeTopLevelJsonProperty,
 } from '../config/json-file';
 import { parseJsonConfigText } from '../config/jsonc';
+import { repairLegacyExplorerMcps } from '../config/legacy-preset-defaults';
 import {
   findPluginConfigPaths,
   isProjectConfigDisabled,
@@ -657,6 +658,9 @@ export function getAllConfiguredPresets(
   hostFlavor?: string,
 ): Record<string, PresetInput> {
   const userPresets = readUserPresets(directory);
+  // User presets bypass the loader, so normalize this one raw layer here;
+  // editable reads and the file on disk stay untouched.
+  repairLegacyExplorerMcps({ presets: userPresets }, () => {});
   const projectConfig = readProjectConfig(directory, hostFlavor);
   const projectPresets =
     projectConfig &&

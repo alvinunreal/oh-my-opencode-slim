@@ -954,22 +954,45 @@ Notes:
   Display names are frozen until a full reload, so renaming or removing one
   changes the sidebar label only after the plugin reloads
 
-> **Rename continuity:** `librarian` was merged into `explorer`. Existing
-> `agents.librarian` config (model, variant, mcps, skills, prompt,
-> `inheritModelFrom`) keeps working: it is applied to `explorer`, the merged
-> research agent. An explicit `agents.explorer` field wins over the legacy
-> `librarian` field. `disabled_agents: ['librarian']` now disables `explorer`.
-> A `librarian.md` / `librarian_append.md` prompt override still applies —
-> rename it to `explorer.md` when convenient (a one-time notice reminds you).
-> Marketplace packages extending `builtin: 'librarian'` now extend
-> `builtin: 'explorer'` (same one-time notice). `librarian` remains a reserved
-> legacy name: it cannot be reused as a custom, ACP, or display name. New
-> configs should use `explorer` directly.
->
-> Still true: an explicit `explorer.mcps` list (including `[]`) overrides the
-> runtime defaults — old generated presets pinned `mcps: []`; remove that
-> override or set it to `["context7", "gh_grep"]`. Newly generated configs
-> omit `mcps` so defaults always apply.
+### Updating configurations after the librarian merge
+
+`explorer` now handles codebase and external research. `librarian` remains a
+reserved alias; its settings fill fields that Explorer does not explicitly set.
+
+Old generated presets contained both `librarian.mcps: ["context7", "gh_grep"]`
+and `explorer.mcps: []`. The empty Explorer list accidentally hid the research
+MCPs. On load, Slim now removes that empty field **in memory** when this exact
+pair occurs in one source preset (either MCP order is accepted). Existing alias
+resolution then carries Librarian's list to Explorer. Loader and doctor report
+which preset was repaired; neither rewrites your JSON/JSONC file.
+
+This rule also matches a hand-written preset with the identical pair: there is
+no generation marker that distinguishes them. To deliberately deny all MCPs
+while retaining that legacy pair, use `explorer.mcps: ["!*"]`. Root `agents`,
+non-empty Explorer lists, custom Librarian MCP lists, and entries split across
+layers or inherited presets are not repaired. Higher-layer overrides still win.
+
+| Setting | What to check when upgrading |
+|---------|-----------------------------|
+| MCPs | New configs omit `mcps` and use runtime defaults. Outside the exact pair above, remove a stale Explorer override to inherit defaults, or set `["context7", "gh_grep"]` explicitly. `disabled_mcps` and host permission restrictions remain authoritative. |
+| Model, variant, skills, inline prompt | Explicit Explorer fields win over Librarian fields, including `skills: []`. Move custom Librarian values you want to keep into Explorer, or remove the conflicting Explorer fields. Slim does not guess which values you intended. |
+| Prompt files | `librarian.md` and `librarian_append.md` remain supported with a rename notice. Within a location, Explorer files win; project files retain precedence over global files. |
+| Disabled agent | `disabled_agents: ["librarian"]` disables Explorer. Remove it if you want the merged research role enabled. |
+| Host and marketplace config | Host `agent.librarian` settings and marketplace `builtin: "librarian"` remain supported. Use `explorer` in new settings; the legacy name cannot be reused as a custom, ACP, or display name. |
+
+For an explicit MCP correction that overrides presets:
+
+```jsonc
+{
+  "agents": {
+    "explorer": { "mcps": ["context7", "gh_grep"] }
+  }
+}
+```
+
+Reload OpenCode after upgrading or changing MCP/skill permissions; these are
+frozen for existing sessions. Avoid installer `--reset`: it replaces customized
+configuration rather than repairing the one stale field.
 
 ### Independent agent model inheritance
 

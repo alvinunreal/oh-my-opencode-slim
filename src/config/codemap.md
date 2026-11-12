@@ -221,6 +221,7 @@ This allows consumers to import directly from `src/config` rather than individua
 ## Backward Compatibility
 
 - Removed keys (`REMOVED_CONFIG_KEYS` in `removed-keys.ts`: top-level `tmux`, `council.master*`, council preset `master` / `councillors`, `backgroundJobs.continueOnIdle`, `fallback.timeoutMs|retry_on_empty|runtimeOverride`, `multiplexer.zellij_pane_mode`, `webfetch.model`): stripped from each raw layer before validation with a `removed-key` warning; the schema itself still rejects them
+- `legacy-preset-defaults.ts` removes only the empty Explorer MCP override matching the historical Librarian/Explorer preset pair before alias merging. Loader, doctor, and the effective preset catalog share the rule; files, root overrides, and other fields remain unchanged.
 - Invalid `multiplexer` values disable pane management (`type: "none"`) with one diagnostic
 
 ## Error Handling
