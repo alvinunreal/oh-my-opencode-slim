@@ -31,10 +31,11 @@ import {
   getCompanionTarget,
 } from './companion/updater';
 import { RuntimeConfig } from './config/runtime';
-import * as wakeHooks from './hooks';
 import { isTaggedPart, stripTaggedContent } from './hooks/cache-safe-injection';
 import { COUNCIL_INJECT_METADATA_KEY } from './hooks/council-inject';
+import { ForegroundFallbackManager } from './hooks/foreground-fallback';
 import { JSON_ERROR_REMINDER } from './hooks/json-error-recovery/hook';
+import * as orchestratorWake from './hooks/orchestrator-wake';
 import {
   getWakeProgress,
   resetOrchestratorWakeGateForTests,
@@ -1287,7 +1288,10 @@ describe('plugin tool registration', () => {
       const originalNow = Date.now;
       const clock = createHostTimerHarness();
       const abortCalls: string[] = [];
-      const scheduler = spyOn(wakeHooks, 'createOrchestratorWakeScheduler');
+      const scheduler = spyOn(
+        orchestratorWake,
+        'createOrchestratorWakeScheduler',
+      );
       const noop = async () => ({});
       const client = createPluginClient(noop, async ({ path }) => {
         abortCalls.push(path.id);
@@ -2197,9 +2201,9 @@ describe('plugin reload generation cleanup', () => {
   ] as const)(
     '$hostFlavor wake scheduler creation is structural (created=$schedulerCreated)',
     async ({ hostFlavor, schedulerCreated, periodicWakeEnabled }) => {
-      const createScheduler = wakeHooks.createOrchestratorWakeScheduler;
+      const createScheduler = orchestratorWake.createOrchestratorWakeScheduler;
       const scheduler = spyOn(
-        wakeHooks,
+        orchestratorWake,
         'createOrchestratorWakeScheduler',
       ).mockImplementation((...args: Parameters<typeof createScheduler>) =>
         createScheduler(...args),
@@ -2226,9 +2230,9 @@ describe('plugin reload generation cleanup', () => {
     'stopped recovery listener respects explicit provenance: %s',
     async (kind) => {
       const wake = mock(() => {});
-      const createScheduler = wakeHooks.createOrchestratorWakeScheduler;
+      const createScheduler = orchestratorWake.createOrchestratorWakeScheduler;
       const scheduler = spyOn(
-        wakeHooks,
+        orchestratorWake,
         'createOrchestratorWakeScheduler',
       ).mockImplementation((...args) => ({
         ...createScheduler(...args),
@@ -2343,9 +2347,9 @@ describe('plugin reload generation cleanup', () => {
   }) {
     const completedPush = mock(() => {});
     const publicationWake = mock(() => {});
-    const createScheduler = wakeHooks.createOrchestratorWakeScheduler;
+    const createScheduler = orchestratorWake.createOrchestratorWakeScheduler;
     const scheduler = spyOn(
-      wakeHooks,
+      orchestratorWake,
       'createOrchestratorWakeScheduler',
     ).mockImplementation((...args: Parameters<typeof createScheduler>) => ({
       ...createScheduler(...args),
@@ -2478,9 +2482,9 @@ describe('plugin reload generation cleanup', () => {
     republishAfterDirectPrompt?: boolean;
   }) {
     const wake = mock(() => {});
-    const createScheduler = wakeHooks.createOrchestratorWakeScheduler;
+    const createScheduler = orchestratorWake.createOrchestratorWakeScheduler;
     const scheduler = spyOn(
-      wakeHooks,
+      orchestratorWake,
       'createOrchestratorWakeScheduler',
     ).mockImplementation((...args: Parameters<typeof createScheduler>) => ({
       ...createScheduler(...args),
@@ -4116,6 +4120,9 @@ describe('plugin config model inheritance', () => {
   test('v1 exposes enabled bundled skills without overriding user skills', async () => {
     const hooks = await loadConfiguredPlugin({ disabled_skills: ['reflect'] });
     const configDir = lastConfigDir as string;
+    process.env.HOME = configDir;
+    process.env.XDG_CONFIG_HOME = path.join(configDir, 'config');
+    delete process.env.OPENCODE_DISABLE_EXTERNAL_SKILLS;
     const userSkill = path.join(configDir, 'skills', 'codemap');
     await mkdir(userSkill, { recursive: true });
     await Bun.write(
@@ -4134,9 +4141,20 @@ describe('plugin config model inheritance', () => {
       '---\nname: deepwork\ndescription: disabled external skill\n---\n',
     );
     process.env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS = '1';
-    const hostConfig = { skills: { paths: [] as string[] } };
+    const hostConfig = {
+      skills: {
+        paths: [userSkill],
+        urls: ['https://example.com/skills'],
+      },
+    };
+    const home = spyOn(os, 'homedir').mockReturnValue(configDir);
     try {
       await hooks.config?.(hostConfig as never);
+      const paths = [...hostConfig.skills.paths];
+      await hooks.config?.(hostConfig as never);
+      expect(hostConfig.skills.paths).toEqual(paths);
+      expect(hostConfig.skills.paths[0]).toBe(userSkill);
+      expect(hostConfig.skills.urls).toEqual(['https://example.com/skills']);
       expect(
         hostConfig.skills.paths.some((item) =>
           item.endsWith('/src/skills/deepwork'),
@@ -4153,6 +4171,7 @@ describe('plugin config model inheritance', () => {
         ),
       ).toBe(false);
     } finally {
+      home.mockRestore();
       await hooks.dispose?.();
     }
   });
@@ -5200,7 +5219,7 @@ describe('plugin config model inheritance', () => {
       agents: { explorer: { model: ['provider/first', 'provider/next'] } },
     };
     const disableChain = spyOn(
-      wakeHooks.ForegroundFallbackManager.prototype,
+      ForegroundFallbackManager.prototype,
       'disableChain',
     );
     let hooks = await loadConfiguredPlugin(config);
@@ -5280,7 +5299,7 @@ describe('plugin config model inheritance', () => {
       },
     });
     const disableChain = spyOn(
-      wakeHooks.ForegroundFallbackManager.prototype,
+      ForegroundFallbackManager.prototype,
       'disableChain',
     );
     try {

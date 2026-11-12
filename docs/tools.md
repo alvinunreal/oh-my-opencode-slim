@@ -79,6 +79,7 @@ conservatively passes the path through. Disable with
 | Tool | Description |
 |------|-------------|
 | `task_status` | Check task status; `result: true` retrieves a completed result; `diagnostic: true` reads an unsuccessful child's partial excerpt |
+| `task_report` | In managed v2 mode, send a bounded progress update or blocker from a running subagent to its owning parent |
 | `task_message` | Queue a bounded instruction into a running child's context without starting a new run (v1 only; on v2 steer with `subagent(sessionID, prompt)`) |
 | `task_reply` | Answer a child's pending question or permission request by task ID/alias and request ID. On v2, question replies require `session.form.reply`; otherwise answer questions in the host UI |
 | `task_cancel` | Stop a generation while retaining its session |
@@ -98,6 +99,15 @@ own atomic interrupt without a status pre-check: it is a no-op for an idle
 session, returns whether it actually interrupted anything, and leaves cleanup
 plus the terminal notification to the host. The session is never deleted and
 stays continuable.
+
+On v2, a child can use `task_report` for a material milestone, consequential
+finding, blocker, or decision request. The recipient is always read from the
+child session's host-owned `parentID`; callers cannot choose another session.
+Reports enter the host's serialized inbox and are attributed to the child. The
+tool confirms that the host accepted a report, not that the parent has read or
+acted on it. If the parent is waiting for input or its last run was interrupted,
+the report remains queued without waking it. The parent can reply by continuing
+the same child session with the native v2 `subagent(sessionID, prompt)` tool.
 
 The task controls use the task ID or its parent-scoped alias for the task being
 managed. `task_status` with an unknown or placeholder ID enumerates the

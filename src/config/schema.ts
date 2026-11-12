@@ -48,7 +48,7 @@ export const PermissionConfigSchema = z.union([
   PermissionObjectSchema,
 ]);
 
-export const AgentColorSchema = z.union([
+const AgentColorSchema = z.union([
   z
     .string()
     .regex(/^#[0-9a-fA-F]{6}$/, 'Expected a six-digit hex color (#RRGGBB)'),
@@ -56,7 +56,7 @@ export const AgentColorSchema = z.union([
 ]);
 
 // Agent override configuration (distinct from SDK's AgentConfig)
-export const ModelInheritanceSourceSchema = z.enum(['session', 'orchestrator']);
+const ModelInheritanceSourceSchema = z.enum(['session', 'orchestrator']);
 
 export const AgentOverrideConfigSchema = z
   .object({
@@ -148,7 +148,7 @@ export const MultiplexerTypeSchema = z.enum([
 export type MultiplexerType = z.infer<typeof MultiplexerTypeSchema>;
 
 // Layout options (shared across multiplexers)
-export const MultiplexerLayoutSchema = z.enum([
+const MultiplexerLayoutSchema = z.enum([
   'main-horizontal', // Main pane on top, agents stacked below
   'main-vertical', // Main pane on left, agents stacked on right
   'tiled', // All panes equal size grid
@@ -158,9 +158,9 @@ export const MultiplexerLayoutSchema = z.enum([
 
 export type MultiplexerLayout = z.infer<typeof MultiplexerLayoutSchema>;
 
-export const MULTIPLEXER_MAIN_PANE_SIZE_MIN = 20;
-export const MULTIPLEXER_MAIN_PANE_SIZE_MAX = 80;
-export const MULTIPLEXER_MAIN_PANE_SIZE_DEFAULT = 60;
+const MULTIPLEXER_MAIN_PANE_SIZE_MIN = 20;
+const MULTIPLEXER_MAIN_PANE_SIZE_MAX = 80;
+const MULTIPLEXER_MAIN_PANE_SIZE_DEFAULT = 60;
 
 const MultiplexerMainPaneSizeSchema = z
   .number()
@@ -182,7 +182,7 @@ const MultiplexerEqualizePanesSchema = z.boolean();
  * Subagent pane surface: the full `tui` (v1 default) or the lightweight
  * `mini` interface (v2 default). The host wiring resolves an omitted value.
  */
-export const MultiplexerViewerSchema = z.enum(['tui', 'mini']);
+const MultiplexerViewerSchema = z.enum(['tui', 'mini']);
 
 export type MultiplexerViewer = z.infer<typeof MultiplexerViewerSchema>;
 
@@ -201,7 +201,7 @@ export const MULTIPLEXER_RENAMED_TYPE_MESSAGE =
   'multiplexer.type "cmux" was renamed to "cmux-tui"; update your config.';
 
 /** Multiplexer diagnostics are emitted at most once per process. */
-export type MultiplexerDiagnosticKind = 'invalid-value' | 'renamed-type';
+type MultiplexerDiagnosticKind = 'invalid-value' | 'renamed-type';
 
 const emittedMultiplexerDiagnostics = new Set<MultiplexerDiagnosticKind>();
 
@@ -417,8 +417,6 @@ export const MarketplaceConfigSchema = z
   })
   .passthrough();
 
-export type MarketplaceConfig = z.infer<typeof MarketplaceConfigSchema>;
-
 const MARKETPLACE_ACTIVATION_KEYS = [
   'agents',
   'agents_add',
@@ -451,7 +449,7 @@ const FlatMarketplaceValueSchema = z.union([
  * new presets; the loader also accepts the inline form below so adding an
  * `extends` key does not require moving existing agent entries.
  */
-export const PresetDefinitionSchema = z
+const PresetDefinitionSchema = z
   .object({
     extends: z.string().min(1).optional(),
     agents: PresetAgentsSchema,
@@ -485,8 +483,7 @@ export type PresetDefinition = z.infer<typeof PresetDefinitionSchema>;
 export type PresetInput = z.infer<typeof PresetSchema>;
 
 // MCP names
-export const McpNameSchema = z.enum(['context7', 'gh_grep']);
-export type McpName = z.infer<typeof McpNameSchema>;
+export type McpName = 'context7' | 'gh_grep';
 
 export const InterviewOutputFolderSchema = z
   .string()
@@ -526,7 +523,7 @@ export type InterviewConfig = z.infer<typeof InterviewConfigSchema>;
 
 const ConcurrencyLimitSchema = z.number().int().min(0).max(1000);
 
-export const BackgroundTaskConcurrencyConfigSchema = z
+const BackgroundTaskConcurrencyConfigSchema = z
   .object({
     defaultConcurrency: z
       .number()
@@ -557,11 +554,7 @@ export const BackgroundTaskConcurrencyConfigSchema = z
     modelConcurrency: {},
   });
 
-export type BackgroundTaskConcurrencyConfig = z.infer<
-  typeof BackgroundTaskConcurrencyConfigSchema
->;
-
-export const BackgroundJobsConfigStrictSchema = z.object({
+const BackgroundJobsConfigStrictSchema = z.object({
   strategy: z
     .never({
       error:
@@ -572,7 +565,7 @@ export const BackgroundJobsConfigStrictSchema = z.object({
     .enum(['managed', 'native', 'off'])
     .optional()
     .describe(
-      'Background-task lifecycle mode. "managed" (default) runs the OMOS managed lifecycle and its task_cancel/task_status/task_reply tools. "native" skips every board-shaped component and registers only two thin host-read tools — task_status (parent-checked host read plus trailing result) and task_cancel (the host atomic interruption) — for agents driving native subagent/task delegation. "off" registers no OMOS task tool at all and leaves native OpenCode delegation completely untouched.',
+      'Background-task lifecycle mode. "managed" (default) runs the OMOS managed lifecycle and its task_cancel/task_status/task_reply tools. "native" skips every board-shaped component and registers only two thin host-read tools — task_status (parent-checked host read plus trailing result) and task_cancel (the host atomic interruption) — for agents driving native subagent/task delegation. "off" registers no OMOS task tool. On v2 it also disables session-preset routing and leaves the native subagent executor untouched; agent inference settings still register normally.',
     ),
   enabled: z
     .never({
@@ -729,7 +722,7 @@ export const BackgroundJobsConfigStrictSchema = z.object({
     .optional(),
 });
 
-export const BACKGROUND_JOBS_INVALID_VALUE_MESSAGE =
+const BACKGROUND_JOBS_INVALID_VALUE_MESSAGE =
   'Invalid backgroundJobs config value; offending keys are dropped and defaults apply.';
 
 /** BackgroundJobs diagnostics are emitted at most once per process. */
@@ -905,7 +898,7 @@ export const FailoverConfigSchema = z
 
 export type FailoverConfig = z.infer<typeof FailoverConfigSchema>;
 
-export const CompanionConfigSchema = z.object({
+const CompanionConfigSchema = z.object({
   enabled: z.boolean().optional(),
   binaryPath: z
     .string()
@@ -946,14 +939,12 @@ export const WebfetchConfigSchema = z
       .boolean()
       .default(true)
       .describe(
-        'When false, skip registering this enhanced webfetch so OpenCode uses its built-in version.',
+        'When false, skip loading this enhanced webfetch and its JSDOM probe so OpenCode uses its built-in version. disabled_tools: ["webfetch"] has the same cold behavior.',
       ),
   })
   .strict();
 
-export type WebfetchConfig = z.infer<typeof WebfetchConfigSchema>;
-
-export const AcpAgentPermissionModeSchema = z.enum(['ask', 'allow', 'reject']);
+const AcpAgentPermissionModeSchema = z.enum(['ask', 'allow', 'reject']);
 
 export const MAX_ACP_TIMEOUT_MS = 2_147_483_647;
 
@@ -1029,7 +1020,7 @@ export const DISABLED_COMMANDS_VALUES = [
   'subagent',
 ] as const;
 
-export const RawPluginConfigSchema = z
+const RawPluginConfigSchema = z
   .object({
     preset: z.string().optional(),
     setDefaultAgent: z.boolean().optional(),
@@ -1044,6 +1035,12 @@ export const RawPluginConfigSchema = z
       .optional()
       .describe(
         'Use the compact TUI sidebar layout. Defaults to true; set false to use the expanded layout.',
+      ),
+    sidebarShowHiddenAgents: z
+      .boolean()
+      .optional()
+      .describe(
+        'Render internal Council agents (council, councillor, and the dynamic councillor-<seat> agents) as rows in the OMOS TUI sidebar. Defaults to false: those agents stay hidden from the sidebar because their seats are internal orchestration surfaces. When true, each row shows its model and status dot like any other agent; agent registration, availability, and the host agent picker are unchanged.',
       ),
     sidebar: z
       .boolean()

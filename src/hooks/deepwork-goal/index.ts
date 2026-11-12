@@ -55,18 +55,18 @@ import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import { formatSystemReminder } from '../../config/constants';
-import { isInternalInitiatorPart } from '../../utils';
+import { isInternalInitiatorPart } from '../../utils/internal-initiator';
 import {
   appendTrailingVolatileMessage,
   omittedOrFull,
   stripTaggedContent,
 } from '../cache-safe-injection';
-import { routerHeadAnnouncement } from '../deepwork';
+import { routerHeadAnnouncement } from '../deepwork/announcement';
 import {
   type MessageTransformView,
   resolveView,
 } from '../message-transform-view';
-import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../task-session-manager/board-injection';
+import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../task-session-manager/refusal-corrections';
 import type { MessagePart, MessageWithParts } from '../types';
 
 export const GOAL_POINTER_METADATA_KEY = 'oh-my-opencode-slim.deepworkGoal';

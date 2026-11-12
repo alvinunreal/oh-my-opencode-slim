@@ -17,17 +17,6 @@ export function saveResults(
   return filepath;
 }
 
-export function loadLatestResult(suiteName: string): EvalSuiteResult | null {
-  const path = loadLatestResultPath(suiteName);
-  if (!path) return null;
-  try {
-    const raw = readFileSync(path, 'utf-8');
-    return JSON.parse(raw) as EvalSuiteResult;
-  } catch {
-    return null;
-  }
-}
-
 export function loadAllResults(suiteName: string): EvalSuiteResult[] {
   try {
     const entries = readdirSync(RESULTS_DIR)
@@ -45,8 +34,6 @@ export function loadAllResults(suiteName: string): EvalSuiteResult[] {
 
 /**
  * Returns the path to the latest result file for a suite, or null.
- * Shared by results.ts and eval-all.ts — single implementation,
- * not duplicated.
  */
 export function loadLatestResultPath(
   suiteName: string,

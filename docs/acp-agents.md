@@ -8,8 +8,10 @@ such as Claude Code ACP, Gemini ACP, or another ACP-compatible coding agent.
 
 ## How it works
 
-Each `acpAgents` entry creates a lightweight wrapper subagent. The wrapper can
-only call `acp_run`, which:
+Each enabled `acpAgents` entry creates a lightweight wrapper subagent. Disabling
+`acp_run` in `disabled_tools` removes the tool and its wrapper agents; disabling
+an individual wrapper through `disabled_agents` leaves other ACP agents intact.
+The wrapper can only call `acp_run`, which:
 
 1. Checks the calling agent and requests launch permission.
 2. Starts the configured ACP subprocess over stdio and sends `initialize`.
@@ -107,24 +109,24 @@ Task: Investigate this bug and summarize the likely cause.
 Constraints: Read-only; do not change files.
 ```
 
-The generated wrapper prompt instructs the wrapper to extract the selector into
-`acp_run.model` and forward the actual task, constraints, and relevant context as
-`acp_run.prompt`, not the wrapper-routing instructions. This extraction is
-**LLM-mediated**: there is no new native `subagent` argument or deterministic
-parser for delegation text. Native `subagent.model` still selects only the
-outer wrapper and must not be used to choose the inner ACP model.
+The generated wrapper prompt carries only the wrapper's role and the
+outer/inner distinction; the `acp_run` tool description owns call syntax and
+parameter semantics. This extraction is **LLM-mediated**: there is no new native
+`subagent` argument or deterministic parser for delegation text. Native
+`subagent.model` still selects only the outer wrapper and must not be used to
+choose the inner ACP model.
 
 The wrapper must not infer a selector from its own model, a previous call, or
-incidental model names in task content. If an explicit inner model request
-cannot be resolved to an exact selector, it should report the ambiguity to the
-caller rather than omit `model` or guess a default. Only when there is no inner
-model request should it omit the argument.
+incidental model names in task content. It passes an explicitly requested inner
+selector through; only a request with no inner selector omits the argument.
+Exact-selector validation and omission semantics live in the `acp_run` tool
+schema.
 
 Custom `acpAgents.<name>.prompt` and `orchestratorPrompt` overrides replace the
 respective generated instructions. They bypass this default extraction/routing
-guidance, so authors must include the same outer/inner distinction, explicit
-selector forwarding, and ambiguity handling themselves. The tool cannot infer
-that an override omitted a requested selection.
+guidance, so authors must include the same outer/inner distinction and explicit
+selector forwarding themselves. The tool cannot infer that an override omitted
+a requested selection.
 
 ### Protocol and failure behavior
 

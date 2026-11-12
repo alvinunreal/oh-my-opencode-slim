@@ -71,8 +71,8 @@ const CONFIG_WARNING_COLOR = 'orange';
 /**
  * Council agents are internal orchestration surfaces: `council`,
  * `councillor`, and the dynamic `councillor-<name>` agents (v3 registry
- * writes them into `snapshot.agentModels`). They must never appear as
- * sidebar rows (#1672).
+ * writes them into `snapshot.agentModels`). They stay out of the sidebar
+ * by default (#1672); `sidebarShowHiddenAgents: true` opts them back in.
  */
 function isCouncilSidebarAgent(agent: string): boolean {
   return (
@@ -85,6 +85,10 @@ function isCouncilSidebarAgent(agent: string): boolean {
 const FALLBACK_SIDEBAR_AGENTS = SUBAGENT_NAMES.filter(
   (agent) =>
     !isCouncilSidebarAgent(agent) && !DEFAULT_DISABLED_AGENTS.includes(agent),
+);
+/** Fallback for `sidebarShowHiddenAgents: true`; internal Council included. */
+const FALLBACK_SIDEBAR_AGENTS_WITH_HIDDEN = SUBAGENT_NAMES.filter(
+  (agent) => !DEFAULT_DISABLED_AGENTS.includes(agent),
 );
 const BORDER = { type: 'single' };
 const ACTIVITY_FRAME_MS = 100;
@@ -263,13 +267,18 @@ export function splitSidebarModelId(model: string): {
   };
 }
 
-export function getSidebarAgentNames(snapshot: TuiSnapshot): string[] {
+export function getSidebarAgentNames(
+  snapshot: TuiSnapshot,
+  showHiddenAgents = false,
+): string[] {
   const configuredAgents = Object.keys(snapshot.agentModels).filter(
-    (agent) => !isCouncilSidebarAgent(agent),
+    (agent) => showHiddenAgents || !isCouncilSidebarAgent(agent),
   );
   return configuredAgents.length > 0
     ? configuredAgents
-    : FALLBACK_SIDEBAR_AGENTS;
+    : showHiddenAgents
+      ? FALLBACK_SIDEBAR_AGENTS_WITH_HIDDEN
+      : FALLBACK_SIDEBAR_AGENTS;
 }
 
 type AgentListFn = (
@@ -318,6 +327,18 @@ function remoteModelId(model: unknown): string | undefined {
   return id ? `${rec.providerID}/${id}` : undefined;
 }
 
+/**
+ * Names the remote host list may contribute. Mirrors the local snapshot,
+ * which also carries dynamic `councillor-<seat>` agents: they stay hidden
+ * by default and only render under `sidebarShowHiddenAgents`.
+ */
+function isRemoteSidebarAgent(name: string): boolean {
+  return (
+    (ALL_AGENT_NAMES as readonly string[]).includes(name) ||
+    isCouncilSidebarAgent(name)
+  );
+}
+
 function modelsFromAgentList(response: unknown): Record<string, string> {
   const models: Record<string, string> = {};
   for (const entry of unwrapAgentList(response)) {
@@ -326,7 +347,7 @@ function modelsFromAgentList(response: unknown): Record<string, string> {
       (entry as { model?: unknown } | undefined)?.model,
     );
     if (!name || !model) continue;
-    if ((ALL_AGENT_NAMES as readonly string[]).includes(name)) {
+    if (isRemoteSidebarAgent(name)) {
       models[name] = model;
     }
   }
@@ -1518,6 +1539,7 @@ function projectSidebarSessionModels(
 export function projectSidebarTeam(
   snapshot: TuiSnapshot,
   state?: SessionPresetState,
+  showHiddenAgents = false,
 ): TuiSnapshot {
   // Older backends omit team; retain their existing sidebar behavior.
   const team = state?.team;
@@ -1535,10 +1557,12 @@ export function projectSidebarTeam(
   else variants.orchestrator = rootVariant;
   const names = new Set(
     [
-      ...getSidebarAgentNames(snapshot),
+      ...getSidebarAgentNames(snapshot, showHiddenAgents),
       ...Object.keys(team.agentModels),
       ...Object.keys(team.inheritance),
-    ].map(canonicalName),
+    ]
+      .filter((name) => showHiddenAgents || !isCouncilSidebarAgent(name))
+      .map(canonicalName),
   );
   if (rootModel === undefined) names.delete('orchestrator');
   return {
@@ -1610,6 +1634,8 @@ export function renderSidebar(
   presetRow?: SidebarPresetRow,
   modelNames?: ReadonlyMap<string, string>,
   resolveSessionTitle?: (sessionID: string) => string | undefined,
+  /** `sidebarShowHiddenAgents`: include internal Council agents as rows. */
+  showHiddenAgents = false,
 ): JSX.Element {
   const configStatusRow = buildConfigStatusRow(configInvalid, theme);
   const hoverBackground = resolveHoverBackground({
@@ -1626,6 +1652,7 @@ export function renderSidebar(
       )
     : null;
   const activeAgents = getActiveSidebarAgentNames(snapshot, visibleRootID);
+  const sidebarAgentNames = getSidebarAgentNames(snapshot, showHiddenAgents);
   const targetsByAgent = new Map(
     getSidebarAgentTargets(snapshot, visibleRootID).map((group) => [
       group.agentName,
@@ -1687,7 +1714,7 @@ export function renderSidebar(
       header,
       ...(sidebarOpen ? [configStatusRow, presetRowEl] : []),
       ...(sidebarOpen
-        ? getSidebarAgentNames(snapshot).flatMap((agentName) => {
+        ? sidebarAgentNames.flatMap((agentName) => {
             const model = snapshot.agentModels[agentName] ?? 'pending';
             const variant = snapshot.agentVariants[agentName];
             const active = activeAgents.has(agentName);
@@ -1984,9 +2011,15 @@ interface V2TuiThemeTokens {
     muted?: unknown;
     default?: unknown;
     subdued?: unknown;
+    action?: {
+      primary?: { base: unknown };
+      secondary?: { base: unknown };
+    };
     feedback?: {
       success?: { base: unknown };
       warning?: { base: unknown };
+      error?: { base: unknown };
+      info?: { base: unknown };
     };
   };
   background: {
@@ -2047,15 +2080,26 @@ function v2ThemeView(theme: V2TuiThemeTokens): {
   textMuted: unknown;
   success?: unknown;
   warning?: unknown;
+  primary?: unknown;
+  secondary?: unknown;
+  error?: unknown;
+  info?: unknown;
 } {
+  const feedback = theme.text.feedback;
   return {
     accent: theme.hue?.interactive[200],
     background: theme.background.base ?? theme.background.default,
     borderActive: theme.border.base ?? theme.border.default,
     text: theme.text.base ?? theme.text.default,
     textMuted: theme.text.muted ?? theme.text.subdued,
-    success: theme.text.feedback?.success?.base ?? theme.success,
-    warning: theme.text.feedback?.warning?.base ?? theme.warning,
+    success: feedback?.success?.base ?? theme.success,
+    warning: feedback?.warning?.base ?? theme.warning,
+    // Documented agent colors (`agents.<name>.color`) resolve against these
+    // flat tokens; v2 splits them across text.action and text.feedback.
+    primary: theme.text.action?.primary?.base,
+    secondary: theme.text.action?.secondary?.base,
+    error: feedback?.error?.base,
+    info: feedback?.info?.base,
   };
 }
 
@@ -2215,9 +2259,21 @@ function createSidebarRuntime(
   let configDirectory = adapter.getDirectory();
   let gatesRead = initial ?? readTuiGates(configDirectory, adapter.hostFlavor);
   const sidebarEnabled = gatesRead.gates.sidebarEnabled;
-  let { configInvalid, compactSidebar, multiplexerType, presetName } =
-    configStateOfGates(gatesRead.gates);
+  let {
+    configInvalid,
+    compactSidebar,
+    showHiddenAgents,
+    multiplexerType,
+    presetName,
+  } = configStateOfGates(gatesRead.gates);
   adapter.onMultiplexerConfig?.(multiplexerType, gatesRead.paneConfig);
+  // The `/preset` command gate is config state like the rows above: the
+  // sidebar re-reads project config while idle, so a change to
+  // `disabled_commands` must repaint the row instead of leaving the old
+  // clickable control in place.
+  let presetEnabled = isCommandEnabled('preset', {
+    disabledCommands: gatesRead.gates.disabledCommands,
+  });
   let configRenderPending = false;
   const applyConfigState = (fresh = false): boolean => {
     const read = readTuiGates(configDirectory, adapter.hostFlavor, fresh);
@@ -2231,19 +2287,34 @@ function createSidebarRuntime(
     }
     gatesRead = read;
     const next = retainLastGoodConfigState(
-      { configInvalid, compactSidebar, multiplexerType, presetName },
+      {
+        configInvalid,
+        compactSidebar,
+        showHiddenAgents,
+        multiplexerType,
+        presetName,
+      },
       configStateOfGates(read.gates),
     );
+    const nextPresetEnabled = next.configInvalid
+      ? presetEnabled
+      : isCommandEnabled('preset', {
+          disabledCommands: read.gates.disabledCommands,
+        });
     const changed =
       next.configInvalid !== configInvalid ||
       next.compactSidebar !== compactSidebar ||
+      next.showHiddenAgents !== showHiddenAgents ||
       next.multiplexerType !== multiplexerType ||
-      next.presetName !== presetName;
+      next.presetName !== presetName ||
+      nextPresetEnabled !== presetEnabled;
     if (changed) {
       configInvalid = next.configInvalid;
       compactSidebar = next.compactSidebar;
+      showHiddenAgents = next.showHiddenAgents;
       multiplexerType = next.multiplexerType;
       presetName = next.presetName;
+      presetEnabled = nextPresetEnabled;
       configRenderPending = true;
       adapter.onMultiplexerConfig?.(multiplexerType, gatesRead.paneConfig);
     }
@@ -2269,14 +2340,31 @@ function createSidebarRuntime(
     if (currentDirectory === configDirectory) return false;
     configDirectory = currentDirectory;
     gatesRead = readTuiGates(configDirectory, adapter.hostFlavor);
-    ({ configInvalid, compactSidebar, multiplexerType, presetName } =
-      configStateOfGates(gatesRead.gates));
+    ({
+      configInvalid,
+      compactSidebar,
+      showHiddenAgents,
+      multiplexerType,
+      presetName,
+    } = configStateOfGates(gatesRead.gates));
+    presetEnabled = isCommandEnabled('preset', {
+      disabledCommands: gatesRead.gates.disabledCommands,
+    });
     configRenderPending = true;
     adapter.onMultiplexerConfig?.(multiplexerType, gatesRead.paneConfig);
     // Never carry one project's last-good config state into another.
     bindConfigListener();
     return true;
   };
+  // A disabled `preset` command keeps the row as information only: the
+  // runtime owns this gate because it re-reads project config (both on a
+  // directory switch and while idle), unlike a value captured during setup.
+  // The session binding is dropped with the action so a gate change cannot
+  // leave a stale team name on an informational row.
+  const gatedPresetRow = (
+    row: SidebarPresetRow | undefined,
+  ): SidebarPresetRow | undefined =>
+    row && !presetEnabled ? { name: row.name } : row;
   const refreshSidebar = async () => {
     if (disposed) return;
     if (!sidebarEnabled) return;
@@ -2322,7 +2410,7 @@ function createSidebarRuntime(
     if (modelNamesCache.names !== namesBefore) {
       setModelNames(modelNamesCache.names);
     }
-    if (adapter.readSessionPreset && currentSession) {
+    if (adapter.readSessionPreset && currentSession && presetEnabled) {
       let state: SessionPresetState | undefined;
       try {
         state = await adapter.readSessionPreset(
@@ -2456,6 +2544,7 @@ function createSidebarRuntime(
               projectSidebarTeam(
                 projectSidebarSessionModels(currentSnapshot, visible),
                 isCurrentProjection ? projection.state : undefined,
+                showHiddenAgents,
               ),
               adapter.getSelectedRootModel?.(currentSnapshot),
             ),
@@ -2466,13 +2555,16 @@ function createSidebarRuntime(
             animationNow,
             visible,
             interaction,
-            adapter.getPresetRow?.(
-              configDirectory,
-              presetName,
-              sessionOverride,
+            gatedPresetRow(
+              adapter.getPresetRow?.(
+                configDirectory,
+                presetName,
+                sessionOverride,
+              ),
             ),
             modelNames(),
             adapter.resolveSessionTitle,
+            showHiddenAgents,
           );
         }),
       )
@@ -2512,6 +2604,10 @@ async function setup(
     log('[tui] tui disabled by config (tui: false); registering nothing');
     return;
   }
+  // The sidebar preset entry follows `disabled_commands` exactly like the
+  // `/preset` keymap command and the session-preset RPC: a disabled command
+  // opens no picker and reads no binding. The row itself stays visible as an
+  // informational line, matching a host without the dialog capability.
   const presetManagerCtx = (directory: string): V2TuiContext => {
     const augmented = Object.create(ctx as object) as V2TuiContext;
     augmented.onConfigChanged = () =>
@@ -2688,6 +2784,8 @@ async function setup(
         readSessionPreset(ctx, sessionID, directory),
       getPresetRow: (directory, presetName, sessionPreset) => {
         const name = presetName ?? '(none)';
+        // `disabled_commands` is applied by the sidebar runtime, which
+        // re-reads it per project; only the host capability is static here.
         if (!canOpenPresetManagerV2(ctx)) return { name, sessionPreset };
         return {
           name,

@@ -13,6 +13,13 @@ Issues and PRs for this repo live as GitHub issues. Use the `gh` CLI for all ope
 
 Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone. **Write operations (create / label / comment / close) must target the upstream tracker:** pass `--repo alvinunreal/oh-my-opencode-slim` (or set `GH_REPO=alvinunreal/oh-my-opencode-slim`). In a fork clone, a bare `gh` command would mutate your fork instead of the project tracker.
 
+## Maintainer PR handling
+
+Review cleanup, bug-fix, and optimization PRs; fix worthwhile changes directly
+and merge after checks. Thank the author when merged. PRs that add features,
+including mixed feature/fix PRs, receive the `feature` label and remain open
+for Alvin's review. Classify by behavior and diff, not the title alone.
+
 ## Pull requests as a triage surface
 
 **PRs as a request surface: yes.** This is an open-source repo; external PRs are feature requests with attached code. They enter the triage queue for **category labeling only**, not the full state machine. Collaborators' in-flight PRs are excluded by the `authorAssociation` filter below.
@@ -20,7 +27,7 @@ Infer the repo from `git remote -v` — `gh` does this automatically when run in
 **Scope: category labels only.** External PRs get a `bug` or `enhancement` category label based on the PR description or linked issue. They do **not** enter the triage state transitions and are **never** auto-closed during triage.
 
 Guardrails (per council review):
-- Apply only `bug` or `enhancement` to PRs. Do not apply state labels (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`).
+- Apply `bug` or `enhancement` during category triage; feature additions also receive `feature` for owner review. Do not apply state labels (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`).
 - Never apply `good-to-code` to PRs — they are already code; the label is noise.
 - Never auto-close external PRs during triage. Closure stays in the review flow / maintainer decision.
 - Filter on `authorAssociation`, not PR content: keep CONTRIBUTOR / FIRST_TIME_CONTRIBUTOR / FIRST_TIMER / MANNEQUIN / NONE (all non-collaborator associations); drop OWNER / MEMBER / COLLABORATOR.

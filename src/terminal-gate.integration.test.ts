@@ -3,9 +3,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import * as hookFactories from './hooks';
 import { isVolatileTaggedMessage } from './hooks/cache-safe-injection';
 import { resetOrchestratorWakeGateForTests } from './hooks/orchestrator-wake/wake-gate';
+import * as taskSessionManager from './hooks/task-session-manager';
 import { BACKGROUND_JOB_BOARD_METADATA_KEY } from './hooks/task-session-manager/board-injection';
 import type { RevivedRunTracker } from './hooks/task-session-manager/revived-run-tracker';
 import * as runtimeFactories from './hooks/task-session-manager/runtime-status-reconciliation';
@@ -28,6 +28,10 @@ import {
   isInternalInitiatorPart,
   isNativeBackgroundTaskNotification,
 } from './utils/internal-initiator';
+import {
+  createKillAllStopReader,
+  writeKillAllStop,
+} from './utils/kill-all-stop';
 import * as loggerModule from './utils/logger';
 import { createTimerHarness } from './utils/test-timers';
 import { buildPluginInput } from './v2/client-shim';
@@ -117,7 +121,9 @@ async function assembly(
   );
   let board!: ProductionBoard;
   let gate!: gateFactories.BackgroundJobTerminalGate;
-  let taskHook!: ReturnType<typeof hookFactories.createTaskSessionManagerHook>;
+  let taskHook!: ReturnType<
+    typeof taskSessionManager.createTaskSessionManagerHook
+  >;
   // The production tracker instance, captured from the hook factory's
   // options (index.ts threads `revivedRunTracker` into
   // createTaskSessionManagerHook) so tests can register revived runs —
@@ -151,10 +157,10 @@ async function assembly(
     });
     return gate;
   });
-  const originalHook = hookFactories.createTaskSessionManagerHook;
+  const originalHook = taskSessionManager.createTaskSessionManagerHook;
   let prune!: ReturnType<typeof spyOn>;
   const hookSpy = spyOn(
-    hookFactories,
+    taskSessionManager,
     'createTaskSessionManagerHook',
   ).mockImplementation((...args) => {
     taskHook = originalHook(...args);
@@ -318,6 +324,96 @@ async function pullTaskStatus(
   } as never);
   return String(status);
 }
+
+test('v2 interrupted continuation publishes stopped and notifies its parent once', async () => {
+  const promptAsync = mock(async (_args: unknown) => ({}));
+  let currentTranscript = transcript();
+  const probe = v2ShimClient({
+    outcome: 'interrupted',
+    transcript: () => currentTranscript,
+    wakeSurface: { promptAsync },
+  });
+  let hostOutcome = 'succeeded';
+  let hostIdleAt = 0;
+  probe.get.mockImplementation(async () => ({
+    data: {
+      parentID: 'parent',
+      outcome: hostOutcome,
+      time: { idle: hostIdleAt },
+    },
+  }));
+  const h = await assembly(undefined, {
+    client: probe.client,
+    hostFlavor: 'v2',
+  });
+  await h.hooks['chat.message']?.(
+    { sessionID: 'parent', agent: 'orchestrator' } as never,
+    { parts: [] } as never,
+  );
+  currentTranscript = transcript();
+  const now = Date.now();
+  const run = h.board.registerLaunch({
+    taskID: 'child',
+    parentSessionID: 'parent',
+    agent: 'explorer',
+    description: 'continued work',
+    background: true,
+    now: now - 300,
+  });
+  hostIdleAt = now - 200;
+  await h.gate.reconcile(run);
+  expect(h.board.get('child')?.state).toBe('completed');
+  h.board.markRunningFromLiveSession('child', now - 100, run.generation, 1);
+  currentTranscript = {
+    data: [
+      {
+        info: {
+          id: 'aborted',
+          role: 'assistant',
+          time: { completed: now - 20 },
+          finish: 'error',
+          error: { type: 'aborted', message: 'Step interrupted' },
+        },
+        parts: [],
+      },
+    ],
+  } as typeof currentTranscript;
+  hostOutcome = 'interrupted';
+  hostIdleAt = now - 10;
+  await h.gate.reconcile(run);
+  await flush();
+  expect(h.board.get('child')).toMatchObject({
+    state: 'stopped',
+    resultSummary: 'Host reported outcome: interrupted.',
+  });
+  expect(h.board.get('child')?.terminalRevision).toBeGreaterThan(1);
+  expect(promptAsync).toHaveBeenCalledTimes(1);
+  expect(JSON.stringify(promptAsync.mock.calls[0])).toContain(
+    'state=\\"stopped\\"',
+  );
+  expect(JSON.stringify(promptAsync.mock.calls[0])).toContain(
+    'Background task stopped: continued work',
+  );
+  // The v2 host keeps only the text of the queued part; the bridge restores
+  // its internal marker (src/v2/setup.ts), so the notice text is the delivery.
+  const [[sent]] = promptAsync.mock.calls as unknown as Array<
+    [{ body: { parts: Array<{ text: string }> } }]
+  >;
+  const notice = sent.body.parts[0];
+  await h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    parentMessage({
+      type: 'text',
+      text: notice.text,
+      synthetic: true,
+      metadata: { 'oh-my-opencode-slim.internalInitiator': true },
+    }) as never,
+  );
+  expect(h.board.get('child')).toMatchObject({
+    state: 'stopped',
+    terminalUnreconciled: false,
+  });
+});
 
 for (const state of ['completed', 'error'] as const) {
   for (const provisional of [true, false]) {
@@ -677,6 +773,113 @@ function setChildError(
   });
 }
 
+test('v1 background abort wakes the idle parent only for kill-all', async () => {
+  const h = await fallbackAssembly();
+  const error = {
+    name: 'MessageAbortedError',
+    data: { message: 'The user aborted a request.' },
+  };
+  await h.advance(1);
+  writeKillAllStop(h.directory, ['parent']);
+  setChildError(h, error);
+  await h.event('session.error', { sessionID: 'child', error });
+  await h.idle();
+  await h.runtime.reconcile();
+  await h.advance(0);
+  expect(h.board.get('child')).toMatchObject({
+    state: 'stopped',
+    terminalRevision: 1,
+    resultSummary: 'Host reported outcome: interrupted.',
+  });
+  expect(h.promptAsync).toHaveBeenCalledTimes(1);
+  const wake = (
+    h.promptAsync.mock.calls as unknown as Array<
+      [{ body: { parts: Array<{ text: string }> } }]
+    >
+  )[0][0].body.parts[0].text;
+  expect(wake).toContain('state: stopped');
+
+  await h.hooks['chat.message']?.(
+    { sessionID: 'parent', agent: 'orchestrator' } as never,
+    { parts: [{ type: 'text', text: 'continue' }] } as never,
+  );
+  await h.advance(1);
+  h.promptAsync.mockClear();
+  await h.requestTask('another', 'another task');
+  await h.event('session.created', {
+    info: { id: 'child2', parentID: 'parent', agent: 'explorer' },
+  });
+  await h.hooks['tool.execute.after']?.(
+    { tool: 'task', sessionID: 'parent', callID: 'another' },
+    { output: 'task_id: child2\nstate: running' },
+  );
+  setChildError(h, error);
+  await h.event('session.error', { sessionID: 'child2', error });
+  await h.event('session.idle', { sessionID: 'child2' });
+  await h.runtime.reconcile();
+  await h.advance(0);
+  expect(h.board.get('child2')).toMatchObject({
+    state: 'stopped',
+    terminalRevision: 1,
+    resultSummary: 'Host reported outcome: interrupted.',
+  });
+  expect(h.promptAsync).not.toHaveBeenCalled();
+
+  // Once the parent has replied, the stop retires like the error it
+  // replaces and the user can have the same objective relaunched.
+  await h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    parentMessage(
+      { type: 'text', text: 'Both stopped. How should I proceed?' },
+      'assistant',
+      Date.now() + 1,
+    ) as never,
+  );
+  expect(h.board.get('child')?.terminalUnreconciled).toBe(false);
+  await h.requestTask('relaunch', 'ordinary task');
+});
+
+test('v1 kill-all stop already reported to a busy parent does not wake it again', async () => {
+  const h = await fallbackAssembly();
+  const error = {
+    name: 'MessageAbortedError',
+    data: { message: 'The user aborted a request.' },
+  };
+  const working = Date.now();
+  await h.advance(1);
+  // alt+w while the parent is still working.
+  h.status.mockImplementation(async () => ({
+    data: { parent: { type: 'busy' } },
+  }));
+  writeKillAllStop(h.directory, ['parent']);
+  setChildError(h, error);
+  await h.event('session.error', { sessionID: 'child', error });
+  await h.idle();
+  await h.runtime.reconcile();
+  await h.advance(0);
+  expect(h.board.get('child')?.state).toBe('stopped');
+  expect(h.promptAsync).not.toHaveBeenCalled();
+
+  // Its next request carries the notice, then it ends its turn.
+  const request = {
+    messages: [
+      ['ask', 'user', 'Delegate the task and keep working.'],
+      ['working', 'assistant', 'Checking files.'],
+    ].map(([id, role, text]) => ({
+      info: { id, sessionID: 'parent', role, time: { created: working } },
+      parts: [{ type: 'text', text }],
+    })),
+  };
+  await h.hooks['experimental.chat.messages.transform']?.({}, request as never);
+  expect(JSON.stringify(request)).toContain(
+    'User stopped all running subagents',
+  );
+  h.status.mockImplementation(async () => ({ data: {} }));
+  await h.event('session.idle', { sessionID: 'parent' });
+  await h.advance(0);
+  expect(h.promptAsync).not.toHaveBeenCalled();
+});
+
 function parentMessage(
   part: Record<string, unknown>,
   role = 'user',
@@ -691,6 +894,57 @@ function parentMessage(
     ],
   };
 }
+
+test('kill-all notice follows internal turns and expires on the next external prompt', async () => {
+  let now = Date.now();
+  const clock = spyOn(Date, 'now').mockImplementation(() => now);
+  cleanups.push(async () => clock.mockRestore());
+  const h = await assembly();
+  now += 1;
+  writeKillAllStop(h.directory, ['parent']);
+  const notice =
+    "User stopped all running subagents (emergency stop). Don't relaunch or retry them; ask how to proceed.";
+  const request = parentMessage({ type: 'text', text: 'work' });
+  const transform = async () => {
+    await h.hooks['experimental.chat.messages.transform']?.(
+      {},
+      request as never,
+    );
+  };
+  await transform();
+  expect(request.messages.at(-1)?.parts[0]).toMatchObject({
+    synthetic: true,
+    text: expect.stringContaining(notice),
+    metadata: {
+      [BACKGROUND_JOB_BOARD_METADATA_KEY]: true,
+      'oh-my-opencode-slim.killAllStop': true,
+    },
+  });
+  await h.hooks['chat.message']?.(
+    { sessionID: 'parent', agent: 'orchestrator' } as never,
+    { parts: [createInternalAgentTextPart('internal wake')] } as never,
+  );
+  await transform();
+  expect(JSON.stringify(request).split(notice)).toHaveLength(2);
+
+  const other = parentMessage({ type: 'text', text: 'other' });
+  other.messages[0].info.sessionID = 'other';
+  await h.hooks['experimental.chat.messages.transform']?.({}, other as never);
+  expect(JSON.stringify(other)).not.toContain(notice);
+
+  now += 1;
+  await h.hooks['chat.message']?.(
+    { sessionID: 'parent', agent: 'orchestrator' } as never,
+    { parts: [{ type: 'text', text: 'sigue' }] } as never,
+  );
+  await transform();
+  expect(JSON.stringify(request)).not.toContain(notice);
+  now += 1;
+  writeKillAllStop(h.directory, ['parent']);
+  await transform();
+  expect(JSON.stringify(request).split(notice)).toHaveLength(2);
+  expect(createKillAllStopReader(h.directory).isActive('parent')).toBe(false);
+});
 
 function foregroundFailure(error = contentFilterError.data.message) {
   return {
@@ -764,6 +1018,64 @@ test('v1 foreground replay keeps the error part and appends a correction', async
   ).toContain('confirmed result');
 });
 
+test('v1 foreground continuation stop reaches the parent once', async () => {
+  const h = await fallbackAssembly(undefined, 2000, true);
+  setChildError(h);
+  const request = parentMessage(foregroundFailure(), 'assistant');
+  request.messages.unshift(
+    parentMessage({ type: 'text', text: 'work' }).messages[0],
+  );
+  const transform = h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    request as never,
+  );
+  await h.event('session.error', {
+    sessionID: 'child',
+    error: contentFilterError,
+  });
+  await h.idle();
+  await h.advance(2000);
+  await transform;
+  const prompts = () =>
+    h.promptAsync.mock.calls.map(
+      ([call]) =>
+        call as {
+          path: { id: string };
+          body: { messageID: string; parts: { text: string }[] };
+        },
+    );
+  h.setBusy(true);
+  await h.busySignal();
+  const replay = prompts().find(({ path }) => path.id === 'child')?.body;
+  const error = {
+    name: 'MessageAbortedError',
+    data: { message: 'The user aborted a request.' },
+  };
+  h.history.push(
+    { info: { id: replay?.messageID, role: 'user' }, parts: replay?.parts },
+    {
+      info: {
+        id: 'aborted',
+        role: 'assistant',
+        error,
+        time: { completed: Date.now() },
+      },
+      parts: [],
+    },
+  );
+  await h.event('session.error', { sessionID: 'child', error });
+  h.setBusy(false);
+  await h.idle();
+  await h.runtime.reconcile();
+  await h.advance(10_000);
+  // The continuation tracker owns the stop; no recovery wake beside it.
+  const parent = prompts()
+    .filter(({ path }) => path.id === 'parent')
+    .map(({ body }) => body.parts[0].text);
+  expect(parent).toHaveLength(2);
+  expect(parent[1]).toContain('<task id="child" state="stopped">');
+});
+
 test('v1 foreground leaves the native failure when its chain is exhausted', async () => {
   const h = await fallbackAssembly(undefined, 2000, true, ['test/primary']);
   setChildError(h);
@@ -781,6 +1093,40 @@ test('v1 foreground leaves the native failure when its chain is exhausted', asyn
   await transform;
   expect(request.messages[0].parts[0]).toEqual(part);
   expect(h.promptAsync).not.toHaveBeenCalled();
+});
+
+test('a foreground host stop is acknowledged by the next parent request', async () => {
+  const h = await fallbackAssembly(undefined, 2000, true, ['test/primary']);
+  const error = {
+    name: 'MessageAbortedError',
+    data: { message: 'The user aborted a request.' },
+  };
+  setChildError(h, error);
+  await h.event('session.error', { sessionID: 'child', error });
+  await h.idle();
+  await h.runtime.reconcile();
+  await h.advance(0);
+  const stopped = h.board.get('child');
+  expect(stopped).toMatchObject({
+    state: 'stopped',
+    background: false,
+    terminalUnreconciled: true,
+  });
+  // The parent turn that answers the stop can be created before the stop
+  // is published; its request still carries the tool result.
+  await h.hooks['experimental.chat.messages.transform']?.(
+    {},
+    parentMessage(
+      { type: 'text', text: 'Stopped. How should I proceed?' },
+      'assistant',
+      (stopped?.completedAt ?? 0) - 15,
+    ) as never,
+  );
+  expect(h.board.get('child')?.terminalUnreconciled).toBe(false);
+  await h.requestTask(
+    'relaunch',
+    'Investigate   the complete foreground fallback path with a long task description',
+  );
 });
 
 test('v1 background keeps a prefixed refusal and sends one terminal result', async () => {
@@ -3494,15 +3840,13 @@ test('first publication of an unowned second generation remains native-owned', a
   }
 });
 
-// ── M4+M1 pin: honest stop reason + pull-only stops ─────────────────────
+// ── M4+M1 pin: honest stop reason + tracker delivery ────────────────────
 //
 // A revived run that STOPS no longer triggers a recovery wake on v2
-// (council 2026-10-23): the plugin has no wake machinery, so neither the
-// tracker-owned nor the tracker-less stop is pushed. The board record
-// still carries the truthful host-attributed reason for a task_status
-// pull.
+// (council 2026-10-23). The tracker delivers stopped continuations, and the
+// board record retains the host-attributed reason for a task_status pull.
 
-test('revived stop with no prior tracker delivery injects nothing; the attributed reason stays on the record', async () => {
+test('revived stop notifies the parent and retains its attributed reason', async () => {
   resetOrchestratorWakeGateForTests();
   const capture = captureGateLogs();
   try {
@@ -3627,20 +3971,19 @@ test('revived stop with no prior tracker delivery injects nothing; the attribute
     if (!stopped) throw new Error('revived stop never published');
     expect(stopped.resultSummary).toBe('Host reported outcome: interrupted.');
 
-    // v2 has no recovery wake for a revived stop (council 2026-10-23):
-    // nothing is queued, and the parent reads the stop (state + the
-    // truthful reason kept on the board record above) through
-    // task_status pull. Status mode reports state/activity, not the
-    // result summary, so only the state is asserted here.
+    // The tracker owns this continuation; no recovery scheduler is needed.
     await flush();
-    expect(promptAsync).not.toHaveBeenCalled();
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(promptAsync.mock.calls[0])).toContain(
+      'state=\\"stopped\\"',
+    );
     expect(await pullTaskStatus(h, 'child')).toContain('state: stopped');
   } finally {
     capture.restore();
   }
 });
 
-test('revived generation stays silent after a tracker-delivered terminal and a later stop', async () => {
+test('revived generation delivers a later stop after a tracker-delivered terminal', async () => {
   resetOrchestratorWakeGateForTests();
   const capture = captureGateLogs();
   try {
@@ -3767,9 +4110,7 @@ test('revived generation stays silent after a tracker-delivered terminal and a l
 
     // The delivered generation resumes and is then interrupted: the
     // stop is a LATER revision of a lineage the parent already heard
-    // from. v2 injects nothing for the stop (council 2026-10-23) — the
-    // tracker's one <task> delivery stays the generation's only prompt,
-    // and there is no recovery-wake skip log either.
+    // from. The tracker delivers this new revision without a recovery wake.
     hostOutcome = 'interrupted';
     hostIdleAt = undefined;
     hostChildren = [
@@ -3804,7 +4145,10 @@ test('revived generation stays silent after a tracker-delivered terminal and a l
     if (!stopped) throw new Error('post-completion stop never published');
 
     await flush();
-    expect(promptAsync).toHaveBeenCalledTimes(1);
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(promptAsync.mock.calls[1])).toContain(
+      'state=\\"stopped\\"',
+    );
     expect(
       capture.of(
         '[orchestrator-wake] stopped-job recovery wake skipped',

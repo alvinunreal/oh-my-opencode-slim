@@ -1,10 +1,7 @@
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Hooks, Plugin, ToolDefinition } from '@opencode-ai/plugin';
-import {
-  type AdmissionRuntimeLease,
-  acquireAdmissionRuntime,
-} from './admission-runtime';
+import type { AdmissionRuntimeLease } from './admission-runtime';
 import {
   type AgentModelProjection,
   type AgentRuntimeProfiles,
@@ -39,7 +36,7 @@ import {
   DEFAULT_MAX_SESSION_METADATA_ENTRIES,
   TOAST_DURATION_MS,
 } from './config/constants';
-import type { ConfigLoadWarning, ConfigLoadWarningKind } from './config/loader';
+import type { ConfigLoadWarningKind } from './config/loader';
 import { RuntimeConfig } from './config/runtime';
 import {
   cloneConfigValue,
@@ -52,42 +49,44 @@ import {
   minimumExpectedAgentCount,
   minimumExpectedToolCount,
 } from './health-check';
+import type { createAbsolutePathRescueHook } from './hooks/absolute-path-rescue';
+import type { createApplyPatchHook } from './hooks/apply-patch';
+import type { createAutoUpdateCheckerHook } from './hooks/auto-update-checker';
+import type { createCacheMonitorHook } from './hooks/cache-monitor';
+import { stripTaggedContents } from './hooks/cache-safe-injection';
+import type { createChatHeadersHook } from './hooks/chat-headers';
+import { isCommandEnabled } from './hooks/command-hook-utils';
 import {
   COUNCIL_INJECT_METADATA_KEY,
-  createAbsolutePathRescueHook,
-  createApplyPatchHook,
-  createAutoUpdateCheckerHook,
-  createCacheMonitorHook,
-  createChatHeadersHook,
   createCouncilInjectHook,
-  createDeepworkCommandHook,
+} from './hooks/council-inject';
+import type { createCouncilSeatHook } from './hooks/council-seats';
+import type { createDeepworkCommandHook } from './hooks/deepwork';
+import {
   createDeepworkGoalHook,
   createDeepworkHeadGate,
-  createJsonErrorRecoveryHook,
-  createOrchestratorWakeScheduler,
-  createPhaseReminderHook,
-  createReflectCommandHook,
-  createSearchPathGuardHook,
-  createTaskSessionManagerHook,
-  createToolLoopGuardHook,
-  ForegroundFallbackManager,
+  GOAL_POINTER_METADATA_KEY,
+} from './hooks/deepwork-goal';
+import type { ForegroundFallbackManager } from './hooks/foreground-fallback';
+import { isImagePart, processImageAttachments } from './hooks/image-hook';
+import { createMessageTransformView } from './hooks/message-transform-view';
+import type { createOrchestratorWakeScheduler } from './hooks/orchestrator-wake';
+import {
   formatChildInputWaitDelta,
   formatCompletedJobDelta,
   formatStoppedJobDelta,
-  GOAL_POINTER_METADATA_KEY,
   HOST_ATTRIBUTED_STOP_OUTCOME,
-  SessionLifecycle,
   stoppedJobRecoveryReason,
-} from './hooks';
-import { stripTaggedContents } from './hooks/cache-safe-injection';
-import { isCommandEnabled } from './hooks/command-hook-utils';
-import { createCouncilSeatHook } from './hooks/council-seats';
-import { createManagedSeatResolver } from './hooks/council-seats/managed';
-import { createNativeSeatResolver } from './hooks/council-seats/native';
-import { isImagePart, processImageAttachments } from './hooks/image-hook';
-import { createMessageTransformView } from './hooks/message-transform-view';
+} from './hooks/orchestrator-wake/operator-text';
 import { clearAllWakeSessions } from './hooks/orchestrator-wake/wake-gate';
-import { PHASE_REMINDER_METADATA_KEY } from './hooks/phase-reminder';
+import {
+  createPhaseReminderHook,
+  PHASE_REMINDER_METADATA_KEY,
+} from './hooks/phase-reminder';
+import type { createReflectCommandHook } from './hooks/reflect';
+import type { createSearchPathGuardHook } from './hooks/search-path-guard';
+import { SessionLifecycle } from './hooks/session-lifecycle';
+import type { createTaskSessionManagerHook } from './hooks/task-session-manager';
 import type { ChildInputWaitRecord } from './hooks/task-session-manager/child-input-wait';
 import {
   clearChildInputWaitsForSession,
@@ -95,12 +94,10 @@ import {
   getChildInputWait,
   listChildInputWaits,
 } from './hooks/task-session-manager/child-input-wait';
-import { createBackgroundFallbackHandoff } from './hooks/task-session-manager/fallback-observation-transfer';
-import { createRevivedRunTracker } from './hooks/task-session-manager/revived-run-tracker';
-import {
+import type { createRevivedRunTracker } from './hooks/task-session-manager/revived-run-tracker';
+import type {
   createAliasAuthority,
   createSessionRecovery,
-  recoverSubagentSessionsAtStartup,
 } from './hooks/task-session-manager/session-recovery';
 import type { ToolLoopGuardHook } from './hooks/tool-loop-guard/hook';
 import type { MessageWithParts } from './hooks/types';
@@ -115,20 +112,8 @@ import {
 } from './marketplace/skills';
 import { resolveDesiredMarketplacePackageIds } from './marketplace/status';
 import { createBuiltinMcps, getOverriddenBuiltinMcpKeys } from './mcp';
-import {
-  ast_grep_replace,
-  ast_grep_search,
-  createAcpRunTool,
-  createCancelTaskTool,
-  createInterviewSubmitStateTool,
-  createNativeTaskControlTools,
-  createTaskMessageTool,
-  createTaskReplyTool,
-  createTaskReviveTool,
-  createTaskStatusTool,
-  createWaitForUserTool,
-  createWebfetchTool,
-} from './tools';
+import type { createAcpRunTool } from './tools/acp-run';
+import type { createWebfetchTool } from './tools/smartfetch';
 import {
   applyActivityEvent,
   resolveEventSessionID,
@@ -150,36 +135,31 @@ import {
   withTuiSnapshotBatch,
 } from './tui-state';
 import {
-  BackgroundJobBoard,
-  BackgroundJobSupervisor,
-  type BackgroundTaskConcurrency,
   createDisplayNameMentionRewriter,
-  markPersistedBackgroundChildDelivered,
   normalizeAgentName,
   resolveRuntimeAgentName,
-} from './utils';
+} from './utils/agent-variant';
 import type {
+  BackgroundJobBoard,
   BackgroundJobEvictedSession,
   BackgroundJobRecord,
   ContextFile,
 } from './utils/background-job-board';
-import { isPrunableEvictedSession } from './utils/background-job-board';
-import {
-  type BackgroundJobTerminalGate,
-  createBackgroundJobTerminalGate,
-} from './utils/background-job-terminal-gate';
+import type { BackgroundJobSupervisor } from './utils/background-job-supervisor';
+import type { BackgroundJobTerminalGate } from './utils/background-job-terminal-gate';
+import type { BackgroundTaskConcurrency } from './utils/background-task-concurrency';
 import { isPluginDisabledByEnv } from './utils/env';
 import {
   createEventDirectoryScope,
   type EventDirectoryScope,
   hasLiveInstances,
 } from './utils/event-directory-scope';
-import { pruneEvictedHostSession } from './utils/evicted-session-prune';
 import {
   isInternalInitiatorPart,
   isNativeBackgroundTaskNotification,
 } from './utils/internal-initiator';
 import { probeJSDOM } from './utils/jsdom';
+import { createKillAllStopReader } from './utils/kill-all-stop';
 import { initLogger, log } from './utils/logger';
 import {
   type ModelImageCapabilityCache,
@@ -187,7 +167,6 @@ import {
   modelAcceptsImageInput,
 } from './utils/model-image-capability';
 import { findOwnedPackageJson } from './utils/package-root';
-import { registerPendingSessionPrune } from './utils/pending-session-prunes';
 import { parseModelReference, withTimeout } from './utils/session';
 import { SessionMetadataStore } from './utils/session-metadata';
 import { DEFAULT_RUNTIME_SESSION_STATUS_TIMEOUT_MS } from './utils/session-runtime-status';
@@ -200,7 +179,7 @@ import {
   collapseSystemInPlace,
   looksLikeMainChatRequest,
 } from './utils/system-collapse';
-import { createTuiReusableProjection } from './utils/tui-reusable-projection';
+import type { createTuiReusableProjection } from './utils/tui-reusable-projection';
 import { createV2Setup } from './v2';
 import { parseModelRef } from './v2/adapters';
 import {
@@ -370,6 +349,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     log('[plugin] disabled by OH_MY_OPENCODE_SLIM_DISABLE');
     return {};
   }
+  const killAllStop = createKillAllStopReader(ctx.directory);
 
   // Directory scope (multi-instance): created inside the init try so every
   // exit path releases its live-directory claim (see the catch below).
@@ -417,6 +397,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   // Host flavor ('v2' on OpenCode v2 hosts via the client shim, undefined on
   // v1). Survives the try block so prompt-assembly hooks can use it.
   let hostFlavor: string | undefined;
+  /** Managed lifecycle gate; survives init for the v2 extension hooks below. */
+  let lifecycleEnabled = false;
   let instanceDisposed = false;
   let companionStartupAbort: AbortController | undefined;
   const marketplaceLeaseAbort = new AbortController();
@@ -675,10 +657,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     | ReturnType<typeof createAbsolutePathRescueHook>
     | undefined;
   let toolLoopGuard: ToolLoopGuardHook | undefined;
-  let jsonErrorRecoveryAfter: (i: unknown, o: unknown) => Promise<void> =
-    async () => {};
-  let taskSessionManagerAfter: (i: unknown, o: unknown) => Promise<void> =
-    async () => {};
+  let jsonErrorRecoveryAfter:
+    | ((i: unknown, o: unknown) => Promise<void>)
+    | undefined;
+  let taskSessionManagerAfter:
+    | ((i: unknown, o: unknown) => Promise<void>)
+    | undefined;
   let backgroundJobBoard: BackgroundJobBoard | undefined;
   // Shared by task management and control tools; initialized only with
   // managed lifecycle.
@@ -968,8 +952,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     // Observation-only prompt-cache watchdog: created once the runtime
     // config is known so `disabled_hooks: ["cache-monitor"]` skips
-    // construction entirely (fail-open by design: no creation, no call).
+    // construction (and the implementation load) entirely (fail-open by
+    // design: no creation, no call).
     if (!runtime.disabledHooks.has('cache-monitor')) {
+      const { createCacheMonitorHook } = await import('./hooks/cache-monitor');
       cacheMonitor = createCacheMonitorHook();
     }
 
@@ -988,7 +974,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // or task_* / wait_for_user tool factories. Native OpenCode task/subagent
     // delegation stays completely untouched; `native` mode separately
     // registers the two thin host-read controls below.
-    const lifecycleEnabled = runtime.backgroundJobsEnabled;
+    lifecycleEnabled = runtime.backgroundJobsEnabled;
+    // One predicate set for every per-tool gate in this init (managed
+    // lifecycle, native controls, AST-grep, final registration filter).
+    const disabledToolNames = new Set(runtime.disabledTools);
     if (lifecycleEnabled) {
       taskActivityTracker = new TaskActivityTracker();
     }
@@ -1009,9 +998,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       disabledSkills: runtime.disabledSkills,
     };
     if (isCommandEnabled('deepwork', commandOptions)) {
+      // Dynamically loaded: the command bundles the deepwork SKILL.md text,
+      // so a disabled command must not pay for it.
+      const { createDeepworkCommandHook } = await import('./hooks/deepwork');
       deepworkCommandHook = createDeepworkCommandHook();
     }
     if (isCommandEnabled('reflect', commandOptions)) {
+      const { createReflectCommandHook } = await import('./hooks/reflect');
       reflectCommandHook = createReflectCommandHook();
     }
     agentDefs = createAgents(runtime, {
@@ -1022,20 +1015,67 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     agents = getAgentConfigsFromDefinitions(runtime, agentDefs);
 
     mcps = createBuiltinMcps(runtime.disabledMcps);
+    const acpAgentEntries = Object.keys(runtime.acpAgents ?? {});
     acpRunTools =
-      Object.keys(runtime.acpAgents ?? {}).length > 0
-        ? { acp_run: createAcpRunTool(runtime.acpAgents) }
+      acpAgentEntries.length > 0
+        ? {
+            acp_run: (await import('./tools/acp-run')).createAcpRunTool(
+              runtime.acpAgents,
+            ),
+          }
         : {};
-    webfetch =
-      runtime.webfetch.enabled !== false
-        ? createWebfetchTool(ctx, { binaryDir: undefined })
-        : undefined;
+    if (runtime.featureGates.webfetch) {
+      const { createWebfetchTool } = await import('./tools/smartfetch');
+      webfetch = createWebfetchTool(ctx);
+    }
     sessionLifecycle = new SessionLifecycle(log);
     sessionLifecycle.onSessionDeleted((sessionID) => {
       compactingSessionIds.delete(sessionID);
     });
 
     if (runtime.backgroundJobsEnabled) {
+      // Managed-lifecycle implementations load here — concurrently and
+      // BEFORE any board resource, timer, or admission lease exists — so
+      // `off`/`native` never evaluate the board, supervisor,
+      // task-session-manager, terminal gate, or persistence modules. A load
+      // rejection therefore unwinds before this block owns anything.
+      const [
+        { BackgroundJobBoard, isPrunableEvictedSession },
+        { BackgroundJobSupervisor },
+        { createBackgroundJobTerminalGate },
+        { pruneEvictedHostSession },
+        { registerPendingSessionPrune },
+        {
+          createAliasAuthority,
+          createSessionRecovery,
+          recoverSubagentSessionsAtStartup,
+        },
+        { createRevivedRunTracker },
+        { createTaskSessionManagerHook },
+        { acquireAdmissionRuntime },
+        { markPersistedBackgroundChildDelivered },
+        orchestratorWakeModule,
+        sidebarProjectionModule,
+      ] = await Promise.all([
+        import('./utils/background-job-board'),
+        import('./utils/background-job-supervisor'),
+        import('./utils/background-job-terminal-gate'),
+        import('./utils/evicted-session-prune'),
+        import('./utils/pending-session-prunes'),
+        import('./hooks/task-session-manager/session-recovery'),
+        import('./hooks/task-session-manager/revived-run-tracker'),
+        import('./hooks/task-session-manager'),
+        import('./admission-runtime'),
+        import('./utils/background-job-persistence'),
+        // The v1 wake scheduler is managed-only and never exists on v2
+        // hosts; do not even resolve its module there.
+        hostFlavor === 'v2'
+          ? Promise.resolve(undefined)
+          : import('./hooks/orchestrator-wake'),
+        runtime.sidebarEnabled
+          ? import('./utils/tui-reusable-projection')
+          : Promise.resolve(undefined),
+      ]);
       backgroundJobBoard = new BackgroundJobBoard({
         maxReusablePerAgent: runtime.backgroundJobs.maxSessionsPerAgent,
         deferNumberedAliases: true,
@@ -1105,10 +1145,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // the sidebar surface; disabled means no state file, no locks, no
       // parent/alias hydration from this process.
       if (runtime.sidebarEnabled) {
-        tuiReusableProjection = createTuiReusableProjection({
-          board: backgroundJobBoard,
-          projectDir: ctx.directory,
-        });
+        // Sidebar-only projection, loaded with the managed block above so a
+        // load failure unwinds before any resource is owned.
+        if (!sidebarProjectionModule) {
+          throw new Error('sidebar projection module missing');
+        }
+        tuiReusableProjection =
+          sidebarProjectionModule.createTuiReusableProjection({
+            board: backgroundJobBoard,
+            projectDir: ctx.directory,
+          });
         backgroundJobBoard.addLaunchIdentityListener((event) => {
           const directory = tuiActivityDirectory(event.taskID);
           if (event.kind === 'registered') {
@@ -1263,6 +1309,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       });
 
       taskSessionManagerHook = createTaskSessionManagerHook(ctx, {
+        isKillAllStopActive: killAllStop.isActive,
         v1ReplayOutcome: (...args) =>
           foregroundFallback?.v1ReplayOutcome(...args) ??
           Promise.resolve(undefined),
@@ -1327,78 +1374,78 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
       // v2 has no wake scheduler; later child executions without a host job
       // are delivered by the tracker. Child asks remain available via task_status.
-      orchestratorWakeScheduler =
-        hostFlavor === 'v2'
-          ? undefined
-          : createOrchestratorWakeScheduler(ctx, {
-              // v1 honors the configured key.
-              config: {
-                ...runtime.backgroundJobs.orchestratorWake,
-                periodicWakeEnabled:
-                  runtime.backgroundJobs.orchestratorWake.periodicWakeEnabled ??
-                  true,
-              },
-              // The machine board is never rendered, so wake annotations always point
-              // at the pull channel (`task_status`).
-              childInputWakeKinds: runtime.backgroundJobs.childInputWakeKinds,
-              shouldManageSession: (sessionID) =>
-                isPrimaryAgentName(sessionMetadata.getAgent(sessionID)),
-              isPrimaryAgentName,
-              hasInputWait: (sessionID) =>
-                taskSessionManagerHook!.hasInputWait(sessionID),
-              isFallbackInProgress: (sessionID) =>
-                foregroundFallback?.isFallbackInProgress(sessionID) ?? false,
-              resolveSelection: lifecycleSelectionResolver,
-              isStoppedJobRecoveryCurrent: (taskID, generation) => {
-                const record = backgroundJobBoard!.get(taskID);
-                return (
-                  record?.generation === generation &&
-                  record.state === 'stopped' &&
-                  record.terminalUnreconciled
-                );
-              },
-              // A queued completed-job result stays actionable only while the record
-              // is still the SAME run's terminal publication: a reopened record (or
-              // one that published again) must not be reported from a stale delta.
-              isCompletedJobCurrent: (taskID, generation) => {
-                const record = backgroundJobBoard!.get(taskID);
-                return (
-                  record?.generation === generation &&
-                  record.terminalUnreconciled === true &&
-                  (record.state === 'completed' || record.state === 'error')
-                );
-              },
-              isChildInputWaitCurrent: (taskID, requestID) => {
-                const record = backgroundJobBoard!.get(taskID);
-                return (
-                  record?.state === 'running' &&
-                  getChildInputWait(taskID, requestID) !== undefined
-                );
-              },
-              hasPendingDelegatedWork: (sessionID) =>
-                backgroundJobBoard!.hasRunning(sessionID) ||
-                backgroundJobBoard!.hasTerminalUnreconciled(sessionID),
-              isPublicationCurrent: (publication) => {
-                const record = backgroundJobBoard!.get(publication.taskID);
-                return (
-                  record !== undefined &&
-                  record.state !== 'running' &&
-                  record.terminalUnreconciled === true &&
-                  record.generation === publication.generation &&
-                  (publication.terminalRevision === undefined ||
-                    record.terminalRevision === publication.terminalRevision)
-                );
-              },
-              onPublicationAccepted: (publication) => {
-                const record = backgroundJobBoard!.get(publication.taskID);
-                markPersistedBackgroundChildDelivered(
-                  publication.taskID,
-                  Date.now(),
-                  record?.runStartedAt,
-                );
-              },
-              coordinator: sessionLifecycle,
-            });
+      if (hostFlavor !== 'v2' && orchestratorWakeModule) {
+        orchestratorWakeScheduler =
+          orchestratorWakeModule.createOrchestratorWakeScheduler(ctx, {
+            // v1 honors the configured key.
+            config: {
+              ...runtime.backgroundJobs.orchestratorWake,
+              periodicWakeEnabled:
+                runtime.backgroundJobs.orchestratorWake.periodicWakeEnabled ??
+                true,
+            },
+            // The machine board is never rendered, so wake annotations always point
+            // at the pull channel (`task_status`).
+            childInputWakeKinds: runtime.backgroundJobs.childInputWakeKinds,
+            shouldManageSession: (sessionID) =>
+              isPrimaryAgentName(sessionMetadata.getAgent(sessionID)),
+            isPrimaryAgentName,
+            hasInputWait: (sessionID) =>
+              taskSessionManagerHook!.hasInputWait(sessionID),
+            isFallbackInProgress: (sessionID) =>
+              foregroundFallback?.isFallbackInProgress(sessionID) ?? false,
+            resolveSelection: lifecycleSelectionResolver,
+            isStoppedJobRecoveryCurrent: (taskID, generation) => {
+              const record = backgroundJobBoard!.get(taskID);
+              return (
+                record?.generation === generation &&
+                record.state === 'stopped' &&
+                record.terminalUnreconciled
+              );
+            },
+            // A queued completed-job result stays actionable only while the record
+            // is still the SAME run's terminal publication: a reopened record (or
+            // one that published again) must not be reported from a stale delta.
+            isCompletedJobCurrent: (taskID, generation) => {
+              const record = backgroundJobBoard!.get(taskID);
+              return (
+                record?.generation === generation &&
+                record.terminalUnreconciled === true &&
+                (record.state === 'completed' || record.state === 'error')
+              );
+            },
+            isChildInputWaitCurrent: (taskID, requestID) => {
+              const record = backgroundJobBoard!.get(taskID);
+              return (
+                record?.state === 'running' &&
+                getChildInputWait(taskID, requestID) !== undefined
+              );
+            },
+            hasPendingDelegatedWork: (sessionID) =>
+              backgroundJobBoard!.hasRunning(sessionID) ||
+              backgroundJobBoard!.hasTerminalUnreconciled(sessionID),
+            isPublicationCurrent: (publication) => {
+              const record = backgroundJobBoard!.get(publication.taskID);
+              return (
+                record !== undefined &&
+                record.state !== 'running' &&
+                record.terminalUnreconciled === true &&
+                record.generation === publication.generation &&
+                (publication.terminalRevision === undefined ||
+                  record.terminalRevision === publication.terminalRevision)
+              );
+            },
+            onPublicationAccepted: (publication) => {
+              const record = backgroundJobBoard!.get(publication.taskID);
+              markPersistedBackgroundChildDelivered(
+                publication.taskID,
+                Date.now(),
+                record?.runStartedAt,
+              );
+            },
+            coordinator: sessionLifecycle,
+          });
+      }
       // A restarted plugin starts with an empty board. If the parent stays idle
       // it never transforms history, so restore owned children here from host
       // state instead of waiting for the next parent request. Verification is
@@ -1453,15 +1500,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         if (hostFlavor === 'v2') return;
         if (record.state !== 'stopped' || !record.terminalUnreconciled) return;
         // Symmetric tracker suppression (M4): when the revived-run tracker
-        // owns this generation's delivery — it already delivered the run's
-        // terminal <task> notification — a recovery wake beside it would
-        // queue a second admission for a lineage the parent already heard
-        // from. Scoped like the publication listener's check: a stop that
-        // is the generation's FIRST publication has no tracker delivery
-        // beside it (the tracker only delivers completed/error), so the
-        // recovery wake stays that stop's one and only notification.
+        // owns this generation's delivery it sends the stop as its own
+        // <task state="stopped"> notification; a recovery wake beside it
+        // would queue a second admission for the same stop.
         if (
-          record.terminalRevision > 1 &&
           revivedRunTracker!.willNotifyParent(record.taskID, record.generation)
         ) {
           log('[orchestrator-wake] stopped-job recovery wake skipped', {
@@ -1474,33 +1516,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           });
           return;
         }
-        // Host-attributed double-delivery gate: a stop the host itself
-        // reported (interrupted/cancelled — the terminal gate's own result
-        // summary, same anchor as stoppedJobRecoveryReason) is already
-        // delivered to the parent by the host's native notifier for a
-        // tool-launched generation, so a recovery wake beside it would
-        // queue a second admission for one stop. The revived-run tracker is
-        // the complementary view: when it owns this generation's delivery
-        // (task_revive lineage), omos stays the wake's author and the skip
-        // does not apply. Tracker without a record for this (taskID,
-        // generation) reads as false → only host-attributed stops fall to
-        // the native side (error-safe: at worst a redundant wake is
-        // dropped); every other stop keeps its recovery wake.
-        // First-publication only (terminalRevision === 1): the native
-        // observer is armed per tool-launched run, and every
-        // tool-launched relaunch resets the revision (board recordLaunch
-        // bumps the generation and zeroes terminalRevision), so a
-        // revision-1 host-attributed stop is always a fresh tool-launched
-        // run the native notifier covers. A later publication (rev > 1)
-        // means the child ran again WITHOUT a tool launch — e.g. a direct
-        // prompt after completion — where no native observer exists for
-        // the new run and this recovery wake is the only notification the
-        // parent gets. Skipping there would lose the stop entirely.
+        // For ordinary first v1 aborts, only kill-all needs a recovery wake.
         if (
           record.terminalRevision === 1 &&
+          !(
+            record.background && killAllStop.isActive(record.parentSessionID)
+          ) &&
           record.recoveredAtStartup !== true &&
-          HOST_ATTRIBUTED_STOP_OUTCOME.test(record.resultSummary ?? '') &&
-          !revivedRunTracker!.willNotifyParent(record.taskID, record.generation)
+          HOST_ATTRIBUTED_STOP_OUTCOME.test(record.resultSummary ?? '')
         ) {
           log('[orchestrator-wake] stopped-job recovery wake skipped', {
             sessionID: record.parentSessionID,
@@ -1508,7 +1531,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             generation: record.generation,
             trigger: 'stopped-job-recovery',
             verdict: 'skipped',
-            reason: 'native-delivers-host-attributed-stop',
+            reason: 'host-attributed-stop-no-recovery',
           });
           return;
         }
@@ -1710,8 +1733,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
     }
 
-    if (runtime.updateCheckerEnabled) {
-      // Initialize auto-update checker hook
+    if (hostFlavor !== 'v2' && runtime.updateCheckerEnabled) {
+      // v2 owns package checks/installation; its TUI adds the Slim notice.
+      // The v1 updater cannot install or display feedback through the shim.
+      const { createAutoUpdateCheckerHook } = await import(
+        './hooks/auto-update-checker'
+      );
       autoUpdateChecker = createAutoUpdateCheckerHook(ctx, {
         companion: runtime.companion,
       });
@@ -1721,6 +1748,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // hosts — the v2 bridge reads v1Hooks['chat.headers'] and skips the
     // model.request registration when the key is absent.
     if (!runtime.disabledHooks.has('chat-headers')) {
+      const { createChatHeadersHook } = await import('./hooks/chat-headers');
       chatHeadersHook = createChatHeadersHook(ctx);
     }
 
@@ -1736,13 +1764,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // depends on it) but the board-derived deps pass undefined instead of
     // false-returning stubs — no board, no supervisor, no handoff exists
     // to observe, so the manager stays honest about the absent surface.
-    const backgroundFallbackHandoff = lifecycleEnabled
-      ? createBackgroundFallbackHandoff({
-          backgroundJobBoard: backgroundJobBoard!,
-          revivedRunTracker: revivedRunTracker!,
-          allowForeground: hostFlavor !== 'v2',
-        })
-      : undefined;
     // The current v2 host interface has no per-turn/atomic conditional
     // switch, so an in-flight REPLAY (abort + re-prompt) can commit on the
     // host after a newer user turn has taken over — the replay path stays
@@ -1777,74 +1798,104 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // registry finalize and every successful profile refresh. The manager
     // aliases this record; see publishChainGeneration.
     foregroundFallbackChains = runtime.modelArrays;
-    foregroundFallback = fallbackManagerNeeded
-      ? new ForegroundFallbackManager(
-          foregroundFallbackChains,
-          fallbackEnabled,
-          ctx,
-          runtime.fallback.maxRetries,
-          sessionLifecycle,
-          // A managed background-task session switching models mid-flight must
-          // move its admission accounting (provider/model caps) to the new
-          // model. No-op for unknown/non-task sessions; idempotent per model.
-          (sessionID, model, detail) => {
-            if (lifecycleEnabled)
-              backgroundTaskConcurrency?.migrateTask(sessionID, model);
-            if (hostFlavor === 'v2' && detail?.agentName) {
-              projectLiveAgentModel(
-                sessionID,
-                resolveRuntimeAgentName(runtime, detail.agentName),
-                model,
-                detail.variant,
-              );
+    if (fallbackManagerNeeded) {
+      // The handoff module is consumed only by this manager; load it in the
+      // same breath (parallel, never when the manager is skipped) and only
+      // when a managed board exists to observe.
+      const [fallbackModule, handoffModule] = await Promise.all([
+        import('./hooks/foreground-fallback'),
+        lifecycleEnabled
+          ? import('./hooks/task-session-manager/fallback-observation-transfer')
+          : undefined,
+      ]);
+      const backgroundFallbackHandoff =
+        handoffModule && lifecycleEnabled
+          ? handoffModule.createBackgroundFallbackHandoff({
+              backgroundJobBoard: backgroundJobBoard!,
+              revivedRunTracker: revivedRunTracker!,
+              allowForeground: hostFlavor !== 'v2',
+            })
+          : undefined;
+      foregroundFallback = new fallbackModule.ForegroundFallbackManager({
+        chains: foregroundFallbackChains,
+        enabled: fallbackEnabled,
+        input: ctx,
+        maxRetries: runtime.fallback.maxRetries,
+        coordinator: sessionLifecycle,
+        // A managed background-task session switching models mid-flight must
+        // move its admission accounting (provider/model caps) to the new
+        // model. No-op for unknown/non-task sessions; idempotent per model.
+        onSessionModelChanged: (sessionID, model, detail) => {
+          if (lifecycleEnabled)
+            backgroundTaskConcurrency?.migrateTask(sessionID, model);
+          if (hostFlavor === 'v2' && detail?.agentName) {
+            projectLiveAgentModel(
+              sessionID,
+              resolveRuntimeAgentName(runtime, detail.agentName),
+              model,
+              detail.variant,
+            );
+          }
+        },
+        initialRetryDelayMs: runtime.fallback.initialRetryDelayMs,
+        retryDelayMs: runtime.fallback.retryDelayMs,
+        backgroundFallbackHandoff: backgroundFallbackHandoff,
+        // Identify confirmed background children even after cancellation or
+        // termination, so handoff preparation rejects a delayed stale replay.
+        // Undefined remains exclusive to foreground/unmanaged sessions, and
+        // is the honest value when no board exists.
+        readBackgroundGeneration: lifecycleEnabled
+          ? (sessionID, includeForeground) => {
+              const record = backgroundJobBoard?.get(sessionID);
+              return record &&
+                (record.background === true ||
+                  (includeForeground && record.provisional !== true))
+                ? record.generation
+                : undefined;
             }
-          },
-          runtime.fallback.initialRetryDelayMs,
-          runtime.fallback.retryDelayMs,
-          backgroundFallbackHandoff,
-          // Identify confirmed background children even after cancellation or
-          // termination, so handoff preparation rejects a delayed stale replay.
-          // Undefined remains exclusive to foreground/unmanaged sessions, and
-          // is the honest value when no board exists.
-          lifecycleEnabled
-            ? (sessionID, includeForeground) => {
-                const record = backgroundJobBoard?.get(sessionID);
-                return record &&
-                  (record.background === true ||
-                    (includeForeground && record.provisional !== true))
-                  ? record.generation
-                  : undefined;
-              }
-            : undefined,
-          lifecycleEnabled
-            ? (sessionID) => backgroundJobBoard?.hasRunning(sessionID) ?? false
-            : undefined,
-          v2RetryEnabled,
-        )
-      : undefined;
+          : undefined,
+        hasRunningChildren: lifecycleEnabled
+          ? (sessionID) => backgroundJobBoard?.hasRunning(sessionID) ?? false
+          : undefined,
+        v2RetryEnabled: v2RetryEnabled,
+      });
+    }
 
     // P0 cold gating: each on-demand tool guard is only constructed when
     // its disabled_hooks entry is absent, so a disabled guard performs no
     // construction work or per-tool-call work.
     if (!runtime.disabledHooks.has('apply-patch')) {
+      const { createApplyPatchHook } = await import('./hooks/apply-patch');
       applyPatch = createApplyPatchHook(ctx);
     }
 
     if (!runtime.disabledHooks.has('search-path-guard')) {
+      const { createSearchPathGuardHook } = await import(
+        './hooks/search-path-guard'
+      );
       searchPathGuard = createSearchPathGuardHook(ctx);
     }
 
     if (!runtime.disabledHooks.has('absolute-path-rescue')) {
+      const { createAbsolutePathRescueHook } = await import(
+        './hooks/absolute-path-rescue'
+      );
       absolutePathRescue = createAbsolutePathRescueHook(ctx);
     }
 
     if (!runtime.disabledHooks.has('json-error-recovery')) {
+      const { createJsonErrorRecoveryHook } = await import(
+        './hooks/json-error-recovery/hook'
+      );
       const jsonErrorRecoveryHook = createJsonErrorRecoveryHook(ctx);
       jsonErrorRecoveryAfter = wrapPostToolHook('json-error-recovery', (i, o) =>
         jsonErrorRecoveryHook['tool.execute.after'](i as never, o as never),
       );
     }
     if (!runtime.disabledHooks.has('tool-loop-guard')) {
+      const { createToolLoopGuardHook } = await import(
+        './hooks/tool-loop-guard/hook'
+      );
       toolLoopGuard = createToolLoopGuardHook({ directory: ctx.directory });
     }
 
@@ -1860,12 +1911,22 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // while the lifecycle owns it; without the lifecycle the native resolver
     // resolves seat refs through the host client and no board is involved.
     // The hook only acts on council delegations carrying a final `Seats:`
-    // line and never throws.
-    councilSeatHook = createCouncilSeatHook({
-      resolveSeats: lifecycleEnabled
-        ? createManagedSeatResolver(backgroundJobBoard!)
-        : createNativeSeatResolver(ctx),
-    });
+    // line and never throws. Constructed (and its modules loaded) only when
+    // a real council agent exists — no council, no seat machinery.
+    // Council-inject stays independently switchable by disabled_hooks above.
+    if (agentDefs.some((a) => a.name === 'council')) {
+      const [seatHookModule, resolveSeats] = await Promise.all([
+        import('./hooks/council-seats'),
+        lifecycleEnabled
+          ? import('./hooks/council-seats/managed').then((managed) =>
+              managed.createManagedSeatResolver(backgroundJobBoard!),
+            )
+          : import('./hooks/council-seats/native').then((native) =>
+              native.createNativeSeatResolver(ctx),
+            ),
+      ]);
+      councilSeatHook = seatHookModule.createCouncilSeatHook({ resolveSeats });
+    }
     if (runtime.interviewEnabled) {
       const { collapseInterviewHistory } = await import('./interview/history');
       collapseActiveInterviewHistory = collapseInterviewHistory;
@@ -1898,71 +1959,122 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           'managed lifecycle enabled without recovery/alias state',
         );
       }
-      const taskCancelTools = createCancelTaskTool({
-        input: ctx,
-        backgroundJobBoard: backgroundJobBoard!,
-        terminalGate,
-        shouldManageSession: (sessionID) => isManagedSession(sessionID),
-        recoverRetainedSession,
-        resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
-        isDisposed: () => instanceDisposed,
-      });
-      const taskReplyTools = createTaskReplyTool({
-        input: ctx,
-        backgroundJobBoard: backgroundJobBoard!,
-        resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
-        isDisposed: () => instanceDisposed,
-      });
-      const taskStatusTools = createTaskStatusTool({
-        input: ctx,
-        backgroundJobBoard: backgroundJobBoard!,
-        activityTracker: taskActivityTracker,
-        terminalGate,
-        resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
-        isDisposed: () => instanceDisposed,
-      });
-      const taskReviveTools = createTaskReviveTool({
-        isFallbackPending,
-        ...(hostFlavor !== 'v2' && {
-          registerIntent: registerV1DelegatedIntent,
-        }),
-        terminalGate,
-        input: ctx,
-        backgroundJobBoard: backgroundJobBoard!,
-        shouldManageSession: (sessionID) => isManagedSession(sessionID),
-        backgroundJobSupervisor: backgroundJobSupervisor!,
-        revivedRunTracker: revivedRunTracker!,
-        recoverRetainedSession,
-        isDisposed: () => instanceDisposed,
-        resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
-      });
-      const waitForUserTools = createWaitForUserTool({
-        shouldManageSession: (sessionID) => isManagedSession(sessionID),
-        resolveAgentName: (agent) => resolveRuntimeAgentName(runtime, agent),
-        isPrimaryAgentName,
-        registerSessionAsOrchestrator: (sessionID) => {
-          sessionMetadata.markTaskManaged(sessionID);
-        },
-        beginUserWait: (sessionID) => {
-          taskSessionManagerHook?.beginUserWait(sessionID);
-          orchestratorWakeScheduler?.suppress(sessionID);
-        },
-        waitForUserGuardEnabled: runtime.backgroundJobs.waitForUserGuard,
-        hasOutstandingBackgroundTasks: (sessionID) =>
-          runtime.backgroundJobs.orchestratorWake.enabled &&
-          (backgroundJobBoard?.hasRunning(sessionID) ?? false),
-      });
-      const taskMessageTools =
-        hostFlavor !== 'v2' && !runtime.disabledTools.includes('task_message')
-          ? createTaskMessageTool({
-              input: ctx,
-              backgroundJobBoard: backgroundJobBoard!,
-              resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
-              isDisposed: () => instanceDisposed,
-            })
-          : {};
+      // Managed control tools load here — each implementation only when it
+      // is actually registrable. v2 registers neither task_revive,
+      // wait_for_user, nor task_message, so those modules never load there;
+      // task_report is the inverse (v2 only); a disabled_tools entry skips
+      // its own implementation as well.
+      const v1Flavor = hostFlavor !== 'v2';
+      const wants = (name: string) => !disabledToolNames.has(name);
+      const [
+        cancelToolModule,
+        replyToolModule,
+        taskReportToolModule,
+        statusToolModule,
+        reviveToolModule,
+        waitForUserToolModule,
+        taskMessageToolModule,
+      ] = await Promise.all([
+        wants('task_cancel') ? import('./tools/cancel-task') : undefined,
+        wants('task_reply') ? import('./tools/task-reply') : undefined,
+        hostFlavor === 'v2' && wants('task_report')
+          ? import('./tools/task-report')
+          : undefined,
+        wants('task_status') ? import('./tools/task-status') : undefined,
+        v1Flavor && wants('task_revive')
+          ? import('./tools/task-revive')
+          : undefined,
+        v1Flavor && wants('wait_for_user')
+          ? import('./tools/wait-for-user')
+          : undefined,
+        v1Flavor && wants('task_message')
+          ? import('./tools/task-message')
+          : undefined,
+      ]);
+      const taskCancelTools = cancelToolModule
+        ? cancelToolModule.createCancelTaskTool({
+            input: ctx,
+            backgroundJobBoard: backgroundJobBoard!,
+            terminalGate,
+            shouldManageSession: (sessionID) => isManagedSession(sessionID),
+            recoverRetainedSession,
+            resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
+            isDisposed: () => instanceDisposed,
+          })
+        : {};
+      const taskReplyTools = replyToolModule
+        ? replyToolModule.createTaskReplyTool({
+            input: ctx,
+            backgroundJobBoard: backgroundJobBoard!,
+            resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
+            isDisposed: () => instanceDisposed,
+          })
+        : {};
+      const taskReportTools = taskReportToolModule
+        ? taskReportToolModule.createTaskReportTool({
+            input: ctx,
+            hasInputWait: (sessionID) =>
+              taskSessionManagerHook?.hasInputWait(sessionID) ?? false,
+            isDisposed: () => instanceDisposed,
+          })
+        : {};
+      const taskStatusTools = statusToolModule
+        ? statusToolModule.createTaskStatusTool({
+            input: ctx,
+            backgroundJobBoard: backgroundJobBoard!,
+            activityTracker: taskActivityTracker,
+            terminalGate,
+            resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
+            isDisposed: () => instanceDisposed,
+          })
+        : {};
+      const taskReviveTools = reviveToolModule
+        ? reviveToolModule.createTaskReviveTool({
+            isFallbackPending,
+            ...(hostFlavor !== 'v2' && {
+              registerIntent: registerV1DelegatedIntent,
+            }),
+            terminalGate,
+            input: ctx,
+            backgroundJobBoard: backgroundJobBoard!,
+            shouldManageSession: (sessionID) => isManagedSession(sessionID),
+            backgroundJobSupervisor: backgroundJobSupervisor!,
+            revivedRunTracker: revivedRunTracker!,
+            recoverRetainedSession,
+            isDisposed: () => instanceDisposed,
+            resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
+          })
+        : {};
+      const waitForUserTools = waitForUserToolModule
+        ? waitForUserToolModule.createWaitForUserTool({
+            shouldManageSession: (sessionID) => isManagedSession(sessionID),
+            resolveAgentName: (agent) =>
+              resolveRuntimeAgentName(runtime, agent),
+            isPrimaryAgentName,
+            registerSessionAsOrchestrator: (sessionID) => {
+              sessionMetadata.markTaskManaged(sessionID);
+            },
+            beginUserWait: (sessionID) => {
+              taskSessionManagerHook?.beginUserWait(sessionID);
+              orchestratorWakeScheduler?.suppress(sessionID);
+            },
+            waitForUserGuardEnabled: runtime.backgroundJobs.waitForUserGuard,
+            hasOutstandingBackgroundTasks: (sessionID) =>
+              runtime.backgroundJobs.orchestratorWake.enabled &&
+              (backgroundJobBoard?.hasRunning(sessionID) ?? false),
+          })
+        : {};
+      const taskMessageTools = taskMessageToolModule
+        ? taskMessageToolModule.createTaskMessageTool({
+            input: ctx,
+            backgroundJobBoard: backgroundJobBoard!,
+            resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
+            isDisposed: () => instanceDisposed,
+          })
+        : {};
       lifecycleTaskTools = {
         ...taskCancelTools,
+        ...taskReportTools,
         ...taskMessageTools,
         ...taskReplyTools,
         // Keep master's v1 registration order (cache-stable tool list).
@@ -1975,13 +2087,25 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // native delegation surface has no model-facing status/cancel, so a lost
     // completion notice and a stuck child have no agent-side channel. Two
     // thin host-read controls cover exactly that; `off` registers none, and
-    // managed mode keeps its own board-backed tools.
+    // managed mode keeps its own board-backed tools. If disabled_tools removes
+    // both controls, skip the implementation import entirely; a single
+    // remaining control still loads the shared module and filters the other.
     const nativeTaskTools =
-      runtime.backgroundJobsMode === 'native'
-        ? createNativeTaskControlTools({
-            input: ctx,
-            isDisposed: () => instanceDisposed,
-          })
+      runtime.backgroundJobsMode === 'native' &&
+      !(
+        disabledToolNames.has('task_cancel') &&
+        disabledToolNames.has('task_status')
+      )
+        ? Object.fromEntries(
+            Object.entries(
+              (
+                await import('./tools/native-task-control')
+              ).createNativeTaskControlTools({
+                input: ctx,
+                isDisposed: () => instanceDisposed,
+              }),
+            ).filter(([name]) => !disabledToolNames.has(name)),
+          )
         : {};
 
     // v2 hosts skip wait_for_user: the native `question` tool covers the
@@ -1989,12 +2113,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // v2 resumes retained sessions through native subagent(sessionID, prompt).
     // v1 registration is unchanged; the generic disabled_tools filter below
     // still removes either tool when listed. The interview tool follows the
-    // interviewEnabled master switch in addition to disabled_commands.
-    const shouldRegisterWebfetch = runtime.webfetch.enabled !== false;
+    // interviewEnabled master switch, disabled_commands and disabled_tools; a
+    // tool-level off skips the implementation import below.
     const shouldRegisterInterview =
-      runtime.interviewEnabled && !runtime.disabledCommands.has('interview');
+      runtime.interviewEnabled &&
+      !runtime.disabledCommands.has('interview') &&
+      !disabledToolNames.has('interview_submit_state');
     const interviewTools = shouldRegisterInterview
-      ? createInterviewSubmitStateTool({
+      ? (
+          await import('./tools/interview-submit-state')
+        ).createInterviewSubmitStateTool({
           service: () => {
             if (!interviewSubmitService) {
               throw new Error('interview service unavailable');
@@ -2004,23 +2132,40 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           maxQuestions: config.interview?.maxQuestions,
         })
       : {};
+    // The AST-grep implementation loads only when at least one of its two
+    // tools is enabled; both listed in disabled_tools keeps it out entirely.
+    // Enabled entries keep their original registration positions/order.
+    let astGrepTools: Record<string, ToolDefinition> = {};
+    if (
+      !disabledToolNames.has('ast_grep_search') ||
+      !disabledToolNames.has('ast_grep_replace')
+    ) {
+      const astGrep = await import('./tools/ast-grep');
+      astGrepTools = {
+        ...(disabledToolNames.has('ast_grep_search')
+          ? {}
+          : { ast_grep_search: astGrep.ast_grep_search }),
+        ...(disabledToolNames.has('ast_grep_replace')
+          ? {}
+          : { ast_grep_replace: astGrep.ast_grep_replace }),
+      };
+    }
     tools = {
       ...lifecycleTaskTools,
       ...nativeTaskTools,
       ...interviewTools,
       ...acpRunTools,
-      ...(shouldRegisterWebfetch && webfetch ? { webfetch } : {}),
-      ast_grep_search,
-      ast_grep_replace,
+      ...(webfetch ? { webfetch } : {}),
+      ...astGrepTools,
     };
-    if (runtime.disabledTools.length > 0) {
-      const disabledTools = new Set(runtime.disabledTools);
+    if (disabledToolNames.size > 0) {
       tools = Object.fromEntries(
-        Object.entries(tools).filter(([name]) => !disabledTools.has(name)),
+        Object.entries(tools).filter(([name]) => !disabledToolNames.has(name)),
       );
     }
   } catch (err) {
     terminalGate?.dispose();
+    backgroundJobSupervisor?.dispose();
     admissionRuntimeLease?.release();
     releaseRuntimeConfig?.();
     // The scope claim must not outlive a failed init: a leaked live-directory
@@ -2041,9 +2186,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   // ── Probe jsdom (async, non-blocking) ───────────────────────────────
   // Don't await this; we don't want to block init. The warning will
   // appear shortly after startup if jsdom is broken. Skipped entirely when
-  // the enhanced webfetch is disabled: a disabled feature must not pay for
-  // the JSDOM load (the probe is the only startup importer of jsdom).
-  if (runtime.webfetch.enabled !== false) {
+  // the enhanced webfetch is unavailable (config switch or disabled_tools):
+  // a disabled feature must not pay for the JSDOM load (the probe is the only
+  // startup importer of jsdom).
+  if (webfetch) {
     probeJSDOM().then((err) => {
       if (err) {
         const msg = `jsdom probe failed; webfetch tool will not work: ${err}`;
@@ -2083,10 +2229,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     }
   } else {
     // Disabled: no manager, but still prune this session's stale entry
-    // (and any manager a previous enabled load left running).
-    const { companionSessionIdForDirectory, pruneDisabledCompanionSession } =
-      await import('./companion/manager');
-    pruneDisabledCompanionSession(
+    // (and any manager a previous enabled load left running). The light
+    // runtime seam keeps a state-less disabled startup out of the manager
+    // module entirely; only a persisted state file justifies loading it.
+    const { companionSessionIdForDirectory, pruneDisabledCompanionRuntime } =
+      await import('./companion/runtime');
+    await pruneDisabledCompanionRuntime(
       companionSessionIdForDirectory(ctx.directory),
     );
   }
@@ -2398,7 +2546,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       registryRetired = true;
     },
   };
-  if (marketplaceEnabled && marketplaceService) {
+  // Tool-level off for both controls skips the tool module; the marketplace
+  // service and registry remain loaded because the feature itself is on.
+  const marketplaceToolNamesEnabled =
+    !runtime.disabledTools.includes('marketplace_inspect') ||
+    !runtime.disabledTools.includes('marketplace_manage');
+  if (marketplaceEnabled && marketplaceService && marketplaceToolNamesEnabled) {
     const { createMarketplaceTools, resolveFinalizedOrchestratorIdentities } =
       await import('./tools/marketplace');
     const marketplaceTools = createMarketplaceTools({
@@ -2429,7 +2582,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   );
   const toolThreshold = minimumExpectedToolCount(
     runtime.disabledTools,
-    runtime.webfetch.enabled !== false,
+    Boolean(webfetch),
     hostFlavor,
     runtime.backgroundJobsMode,
   );
@@ -2860,20 +3013,22 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       foregroundFallback?.refusedChildOutcome.bind(foregroundFallback),
     'v2.pendingRefusalOutcome':
       foregroundFallback?.pendingRefusalOutcome.bind(foregroundFallback),
-    'v2.backgroundGeneration': (
-      parentID: string,
-      childID: string,
-      runningOnly = false,
-      refusalTime?: number,
-    ) => {
-      const record = backgroundJobBoard?.get(childID);
-      return record?.background &&
-        record.parentSessionID === parentID &&
-        (!runningOnly || record.state === 'running') &&
-        (refusalTime === undefined || refusalTime >= record.runStartedAt)
-        ? record.generation
-        : undefined;
-    },
+    'v2.backgroundGeneration': lifecycleEnabled
+      ? (
+          parentID: string,
+          childID: string,
+          runningOnly = false,
+          refusalTime?: number,
+        ) => {
+          const record = backgroundJobBoard?.get(childID);
+          return record?.background &&
+            record.parentSessionID === parentID &&
+            (!runningOnly || record.state === 'running') &&
+            (refusalTime === undefined || refusalTime >= record.runStartedAt)
+            ? record.generation
+            : undefined;
+        }
+      : undefined,
     'v2.session.retry': fallbackRetryHookEnabled
       ? (input: never, switchModel: never) =>
           foregroundFallback?.handleV2Retry(input, switchModel)
@@ -2976,12 +3131,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
                 : {};
             removeLegacySkillSyncState(undefined, runtime.disabledSkills);
             skills.paths = [
-              ...(Array.isArray(skills.paths) ? skills.paths : []),
-              ...getV1BundledSkillPaths(
-                dirname(packageJson),
-                ctx.directory,
-                runtime.disabledSkills,
-              ),
+              ...new Set([
+                ...(Array.isArray(skills.paths) ? skills.paths : []),
+                ...getV1BundledSkillPaths(
+                  dirname(packageJson),
+                  ctx.directory,
+                  runtime.disabledSkills,
+                ),
+              ]),
             ];
             opencodeConfig.skills = skills;
           }
@@ -3791,6 +3948,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         (typeof messageID === 'string' &&
           isInternalAdmission(input.sessionID, messageID));
       if (!internalAdmission) {
+        killAllStop.noteExternalPrompt(input.sessionID);
         if (hostFlavor === 'v2' && (inputParts.length || outputParts.length)) {
           foregroundFallback?.noteV2Prompt(input.sessionID);
         }
@@ -4115,9 +4273,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
               : targetAgent === 'orchestrator'
                 ? buildOrchestratorPrompt({
                     disabledAgents: runtime.disabledAgents,
-                    waitForUser:
-                      runtime.backgroundJobsEnabled &&
-                      !runtime.disabledTools.includes('wait_for_user'),
                     wakeScheduler:
                       runtime.backgroundJobsEnabled &&
                       runtime.backgroundJobs.orchestratorWake.enabled,
@@ -4157,6 +4312,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'experimental.chat.messages.transform': async (
       input: Record<string, never>,
       output: { messages: unknown[] },
+      hints?: { model?: { providerID: string; id: string } },
     ): Promise<void> => {
       const typedOutput = output as { messages: MessageWithParts[] };
       let view = createMessageTransformView(typedOutput.messages);
@@ -4190,19 +4346,25 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // input, the API call fails before the LLM can respond. We replace
       // image bytes with a text nudge so the orchestrator delegates to
       // @observer instead.
-      // auto routing keys on the turn's model: vision-capable models keep
-      // image parts inline (native read); only non-vision chains fall back
-      // to the observer relay. chat.message records the turn's model just
-      // before this handler runs; the fallback chain covers mid-session
-      // model switches.
-      // `input` is an empty shell in this handler; use the sessionID
-      // extracted from the messages above.
-      const turnModelRef = sessionID
-        ? parseModelRef(
-            foregroundFallback?.getActiveFallback(sessionID)?.model ??
-              sessionMetadata.getModel(sessionID),
-          )
+      // auto routing keys on the model that will actually serve this
+      // request: vision-capable models keep image parts inline (native
+      // read); only non-vision chains fall back to the observer relay.
+      // On v2 the context bridge passes the request model as `hints.model`
+      // (the host resolves it before the context hook, and a per-request
+      // router may swap it) — that beats the session's last-recorded model.
+      // v1 hosts have no such seam, so the fallback chain and session
+      // metadata remain the source there.
+      const hintModel = hints?.model
+        ? { providerID: hints.model.providerID, id: hints.model.id }
         : undefined;
+      const turnModelRef =
+        hintModel ??
+        (sessionID
+          ? parseModelRef(
+              foregroundFallback?.getActiveFallback(sessionID)?.model ??
+                sessionMetadata.getModel(sessionID),
+            )
+          : undefined);
       const hasImageParts =
         runtime.imageRouting !== 'direct' &&
         !!turnModelRef &&
@@ -4299,14 +4461,17 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
     },
 
-    'tool.execute.after': async (input, output) => {
-      await jsonErrorRecoveryAfter(input, output);
-      await toolLoopGuard?.['tool.execute.after'](
-        input as never,
-        output as never,
-      );
-      if (taskSessionManagerHook) await taskSessionManagerAfter(input, output);
-    },
+    'tool.execute.after':
+      jsonErrorRecoveryAfter || toolLoopGuard || taskSessionManagerAfter
+        ? async (input, output) => {
+            await jsonErrorRecoveryAfter?.(input, output);
+            await toolLoopGuard?.['tool.execute.after'](
+              input as never,
+              output as never,
+            );
+            await taskSessionManagerAfter?.(input, output);
+          }
+        : undefined,
   } as Hooks & {
     'v2.pendingRefusalOutcome':
       | ForegroundFallbackManager['pendingRefusalOutcome']
@@ -4314,12 +4479,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'v2.refusalOutcome':
       | ForegroundFallbackManager['refusedChildOutcome']
       | undefined;
-    'v2.backgroundGeneration': (
-      parentID: string,
-      childID: string,
-      runningOnly?: boolean,
-      refusalTime?: number,
-    ) => number | undefined;
+    'v2.backgroundGeneration':
+      | ((
+          parentID: string,
+          childID: string,
+          runningOnly?: boolean,
+          refusalTime?: number,
+        ) => number | undefined)
+      | undefined;
     'v2.foreignTaskEvent': typeof observeForeignTaskEvent;
     'v2.refreshProfiles': typeof refreshProfilesFromDisk;
     'v2.resolveDelegatedModel': typeof resolveV2DelegatedModel;

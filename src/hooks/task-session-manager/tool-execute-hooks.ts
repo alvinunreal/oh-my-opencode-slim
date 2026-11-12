@@ -37,6 +37,7 @@ import { convertSameProviderBackgroundTask } from './same-provider-policy';
 import {
   appendChildRefSuffix,
   type CanonicalTaskReference,
+  looksLikeBrokenSessionId,
   noteExactSessionAlias,
   pluginDisposedMessage,
   type RetainedRecoveryResult,
@@ -354,8 +355,22 @@ export async function handleToolExecuteBefore(
         requested,
         agentType,
       );
-
-    if (!remembered) {
+    const nativeOwnedSessionId =
+      deps.hostFlavor === 'v2' && looksLikeBrokenSessionId(requested);
+    if (!remembered && nativeOwnedSessionId) {
+      // Native v2 `subagent` owns session-id validity. Its schema accepts any
+      // `ses`-prefixed value and reports the missing session itself; routing
+      // it through alias resolution would invent an alias refusal for a
+      // truncated id (#1823). No board row can exist for it.
+      pendingCall.resumedTaskId = requested;
+      log(
+        '[task-session-manager] delegated malformed session id to native subagent',
+        {
+          requested,
+          sessionID: input.sessionID,
+        },
+      );
+    } else if (!remembered) {
       const knownManagedTask = deps.backgroundJobBoard.resolve(
         input.sessionID,
         requested,
@@ -484,6 +499,18 @@ export async function handleToolExecuteBefore(
             remembered = restored;
           } else if (restored) {
             refuseKnownTaskResume(requested, restored, agentType, delegation);
+          } else if (
+            recovery.kind === 'refused' &&
+            recovery.reasonCode === 'foreign-parent'
+          ) {
+            // Native v2 `subagent` applies the same `parentID` check. Let its
+            // refusal stand instead of restating it with a plugin guess about
+            // forks or host restarts (#1823).
+            pendingCall.resumedTaskId = requested;
+            log(
+              '[task-session-manager] delegated foreign-parent resume to native subagent',
+              { requested, sessionID: input.sessionID },
+            );
           } else {
             const reason =
               recovery.kind === 'refused'
@@ -496,7 +523,7 @@ export async function handleToolExecuteBefore(
             );
           }
         }
-        if (!remembered) {
+        if (!remembered && pendingCall.resumedTaskId === undefined) {
           refuseExplicitTaskId(
             requested,
             adoption === 'rejected' ||
@@ -1159,6 +1186,9 @@ function registerTaskOutputLaunch(
     /** Session's first host-confirmed input admission for the child, when
      *  surfaced. Anchors fresh runs only; resumed runs bind their pending. */
     firstAdmission?: FirstAdmissionLookup;
+    /** Observation clock for the launch stamp. Tests inject it to pin the
+     *  run boundary; production omits it and the board uses real time. */
+    now?: () => number;
   },
 ): ReturnType<BackgroundJobBoard['get']> {
   if (deps.isStaleDeletedTaskOutput?.(taskID, pending.lifecycleEpoch)) {
@@ -1230,6 +1260,16 @@ function registerTaskOutputLaunch(
   try {
     return deps.backgroundJobBoard.registerLaunch({
       taskID,
+      // Reaching here with a resumed pending means the host returned the
+      // child's own native output, so the new round was accepted and this
+      // registration is itself activity proof. The relaunch lease is NOT
+      // proof: `task-revive` registers before its host write is accepted
+      // and that path supplies no flag, so it keeps the live fence.
+      ...(resumed ? { resumedRunProven: true as const } : {}),
+      // Observable-clock seam only: production passes nothing, so the board
+      // stamps real time. Tests need the run boundary under their control to
+      // place a busy event before it.
+      ...(deps.now ? { now: deps.now() } : {}),
       parentSessionID: pending.parentSessionId,
       agent: pending.agentType,
       // Identity was unresolved (no-ID drain or window-shifted take):
@@ -1320,6 +1360,9 @@ export interface RegisterDelegatedLaunchDeps {
   /** Session's first host-confirmed input admission for the child, when
    *  surfaced. Anchors fresh runs only; resumed runs bind their pending. */
   firstAdmission?: FirstAdmissionLookup;
+  /** Observation clock for launch stamps. Tests inject it to pin the run
+   *  boundary; production omits it and the board uses real time. */
+  now?: () => number;
 }
 
 export interface DelegatedLaunchFromStructuredInput {

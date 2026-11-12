@@ -31,12 +31,12 @@ import { log } from '../../utils/logger';
 
 export type HerdrSplitDirection = 'down' | 'right';
 
-export interface HerdrLayoutPane {
+interface HerdrLayoutPane {
   type: 'pane';
   pane_id: string;
 }
 
-export interface HerdrLayoutSplit {
+interface HerdrLayoutSplit {
   type: 'split';
   direction: HerdrSplitDirection;
   ratio: number;
@@ -46,7 +46,7 @@ export interface HerdrLayoutSplit {
 
 export type HerdrLayoutNode = HerdrLayoutPane | HerdrLayoutSplit;
 
-export interface SplitRatioUpdate {
+interface SplitRatioUpdate {
   /** Child choices from the root: false = first, true = second. */
   path: boolean[];
   ratio: number;
@@ -339,6 +339,7 @@ export async function equalizeAgentPanes(
     }
 
     opts.onPanesSeen?.(collectPaneIds(root));
+    if (opts.agentPaneIds?.size === 0) return true;
 
     const boundary =
       opts.mainPaneShare === undefined

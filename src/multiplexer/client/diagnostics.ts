@@ -23,7 +23,7 @@ export const PLUGIN_LOG_SINK: DiagnosticLogger = {
 
 export const DIAGNOSTIC_EVENT_NO_PANE = 'multiplexer.no-pane';
 export const DIAGNOSTIC_EVENT_PANE_CREATED = 'multiplexer.pane-created';
-export const DIAGNOSTIC_EVENT_PANE_CLOSED = 'multiplexer.pane-closed';
+const DIAGNOSTIC_EVENT_PANE_CLOSED = 'multiplexer.pane-closed';
 export const DIAGNOSTIC_EVENT_HOST_UNSUPPORTED = 'multiplexer.host-unsupported';
 
 /** Optional context attached to a diagnostic record. */

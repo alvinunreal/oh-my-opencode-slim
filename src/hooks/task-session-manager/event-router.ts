@@ -115,7 +115,12 @@ function rememberSessionGeneration(
   if (!previous || previous.generation !== job.generation) {
     fences.set(sessionID, {
       generation: job.generation,
-      awaitingActivity: previous !== undefined,
+      // A generation transition normally arms the fence, so a late
+      // generationless event for the *previous* generation cannot terminalize
+      // this one. A launch that is itself activity proof skips that wait —
+      // the same rule `observeSessionEvent` applies — otherwise a delayed
+      // `session.created` re-arms what registration just proved.
+      awaitingActivity: previous !== undefined && job.resumedRunProven !== true,
     });
   }
 }
@@ -145,7 +150,7 @@ function observeSessionEvent(
   const fence = generationChanged
     ? {
         generation: job.generation,
-        awaitingActivity: true,
+        awaitingActivity: job.resumedRunProven !== true,
       }
     : (previous ?? {
         generation: job.generation,
@@ -549,6 +554,17 @@ export async function handleEvent(
   if (input.event.type === 'session.error') {
     const sessionId =
       input.event.properties?.info?.id || input.event.properties?.sessionID;
+    // Native launch acceptance proves the new run exists, but cannot
+    // attribute a delayed, generationless error from the previous run.
+    // Leave ambiguous failures to idle reconciliation's host evidence.
+    if (
+      sessionId &&
+      deps.backgroundJobBoard.get(sessionId)?.resumedRunProven === true &&
+      eventGeneration(input) === undefined &&
+      !finiteNumber(eventActivityAt(input, Number.NaN))
+    ) {
+      return;
+    }
     const observedAt = eventActivityAt(
       input,
       deps.options.now?.() ?? Date.now(),
@@ -612,6 +628,7 @@ export async function handleEvent(
             structuredErrorMessage(props?.error) ?? 'Session error';
           await deps.terminalGate.reconcile(job, {
             kind: 'session-error',
+            error: props?.error,
             message:
               job.background && isFailoverError(props?.error)
                 ? deps.withFallbackReason(sessionId, message)
@@ -677,6 +694,7 @@ export async function handleEvent(
         const message = structuredErrorMessage(props?.error) ?? 'Session error';
         await deps.terminalGate.reconcile(job, {
           kind: 'session-error',
+          error: props?.error,
           message: isFailoverError(props?.error)
             ? deps.withFallbackReason(sessionId, message)
             : message,

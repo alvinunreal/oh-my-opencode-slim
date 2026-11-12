@@ -70,7 +70,7 @@ function stateInstruction(
       ];
 }
 
-export const SPECIFICATION_TEMPLATE_GUIDELINE = `
+const SPECIFICATION_TEMPLATE_GUIDELINE = `
 Your target document MUST be structured strictly using the following 11-section template (exclude the frontmatter itself from the summary JSON field, as the tool handles frontmatter automatically):
 
 # Introduction

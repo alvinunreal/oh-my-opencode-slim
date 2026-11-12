@@ -24,7 +24,7 @@ export interface V2AgentDraft {
  * tool's confined JS runtime, so session tool catalogs yield
  * `Unknown tool: <name>` even though registration succeeded. The field
  * is additive: hosts that don't recognize the field ignore it. */
-export interface V2ToolOptions {
+interface V2ToolOptions {
   codemode?: boolean;
   namespace?: string;
   permission?: string;
@@ -38,7 +38,7 @@ export interface V2ToolDefinition {
   options?: V2ToolOptions;
   execute: (input: unknown, context: unknown) => Promise<unknown>;
 }
-export interface V2ToolDraft {
+interface V2ToolDraft {
   add(tool: V2ToolDefinition): void;
   /** Update a registered tool by id; missing ids are ignored (host
    * `tool.transform` editor semantics). The callback receives the fields it
@@ -182,7 +182,7 @@ export interface V2ToolAfterEvent {
   result?: unknown;
   error?: unknown;
 }
-export interface V2Registration {
+interface V2Registration {
   dispose(): Promise<void> | void;
 }
 /** v2 permission Rule (OpenCode core's `Permission.Rule`). The host
@@ -198,20 +198,28 @@ export interface V2PermissionRule {
 /** v2 mcp transform draft (used after capability probing; RemoteConfig
  * shape see packages/schema/src/mcp.ts — no `enabled`, it uses
  * `disabled?: boolean`; the name is the map key, not in the config). */
-export interface V2McpDraft {
+interface V2McpDraft {
   list(): Array<[string, Record<string, unknown>]>;
   get(name: string): Record<string, unknown> | undefined;
   set(name: string, config: Record<string, unknown>): void;
   update(name: string, update: (c: Record<string, unknown>) => void): void;
   remove(name: string): void;
 }
-/** Only this plugin's error-free, event-free Zod contract is registered.
- * Infer handler inputs from its schemas without exposing dev-only host types.
- * The host also supplies an error factory; these handlers only use signal. */
+/** Mirror only the consumed error-factory arguments. Its opaque result is
+ * thrown, never returned as success or exposed as a dev-only branded type. */
 export type V2SessionPresetRpcHandlers = {
   readonly [Name in keyof typeof sessionPresetRpc.methods]: (
     input: z.output<(typeof sessionPresetRpc.methods)[Name]['input']>,
-    context: { readonly signal: AbortSignal },
+    context: Name extends 'createBound'
+      ? {
+          readonly signal: AbortSignal;
+          readonly error: (
+            type: 'create_failed',
+            message: string,
+            data: null,
+          ) => unknown;
+        }
+      : { readonly signal: AbortSignal },
   ) => Promise<z.input<(typeof sessionPresetRpc.methods)[Name]['output']>>;
 };
 
@@ -219,7 +227,7 @@ export type V2SessionPresetRpcHandlers = {
  * subset): filter by event type names; `server.connected` always passes and
  * must not be listed. The mirror uses `string` element types — the pinned
  * name union is enforced against the host surface in `mirror-conformance.ts`. */
-export interface V2EventSubscribeOptions {
+interface V2EventSubscribeOptions {
   readonly types?: ReadonlyArray<string>;
 }
 
@@ -301,6 +309,10 @@ export interface V2Context {
     ): Promise<V2Registration>;
     /** v2 session.get — SessionInfo by id (runtime-probed). */
     get?(input: { sessionID: string }): Promise<unknown>;
+    /** Native empty root creation; only the consumed location/id subset. */
+    create?(input: {
+      location: { directory: string; workspaceID?: string };
+    }): Promise<{ readonly id: string }>;
     /** Wait for the session agent loop to become idle (runtime-probed). */
     wait?(input: { sessionID: string }): Promise<void>;
     /** v2 session.remove — DELETE /api/session/:id (runtime-probed). */

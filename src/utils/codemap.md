@@ -17,7 +17,7 @@ Centralized utilities and shared abstractions used across the oh-my-opencode-sli
 
 ### Core Abstractions
 
-- **BackgroundJobBoard** (`background-job-board.ts`): Singleton registry and lifecycle manager for background tasks with reusable session pool patterns, automatic cleanup, and reconciliation hooks. Also owns the terminal-outcome subscription fan-out, launch-identity projection, and the process-local lifecycle ledger (tombstones, deletion epochs, suppression write-through). The board is never rendered: records retain run/activity/publication fences and observed status, not render-age or generic update timestamps.
+- **BackgroundJobBoard** (`background-job-board.ts`): Singleton registry and lifecycle manager for background tasks with reusable session pool patterns, automatic cleanup, and reconciliation hooks. Also owns the terminal-outcome subscription fan-out, launch-identity projection, and the process-local lifecycle ledger (tombstones, deletion epochs, suppression write-through). The board is never rendered: records retain run/activity/publication fences and observed status, not render-age or generic update timestamps. It stores the caller-supplied `resumedRunProven` for a resumed launch whose native output the host already returned, so the event fence never waits for activity evidence that a proven launch already supplies. A relaunch lease is not proof and the board does not derive the flag.
 - **BackgroundJobSupervisor** (`background-job-supervisor.ts`): One-shot wall-clock watchdog with timer/generation/abort mechanics; on expiry it aborts the child through the same lease-guarded host primitive `task_cancel` uses and never publishes a terminal itself
 - **BackgroundTaskConcurrency** (`background-task-concurrency.ts`): Process-local admission scheduler for native background task launches with model/provider capacity tracking
 - **Runtime Session Status** (`session-runtime-status.ts`): Reads and validates the in-process OpenCode session-status map with absent/unknown distinction; reduces the `session.get` outcome/idleAt projection to terminal/pending/unknown verdicts for v2 recovery triage (`hostRoundStateOf`), and classifies one live session for a probe (`classifyLiveSession`: `running`/`idle`/an attributable host terminal outcome read through a bounded, timer-injectable shared host read on hosts without the map).
@@ -144,7 +144,7 @@ export * from './background-job-persistence';
 export * from './background-job-supervisor';
 export * from './background-task-concurrency';
 export * from './internal-initiator';
-export { initLogger, log } from './logger';
+export { log } from './logger';
 export * from './polling';
 export * from './redact';
 export * from './session';
@@ -169,6 +169,7 @@ Session metadata, the opencode client accessor, and the type-only call-shape con
 | `background-job-terminal-gate.ts` | Terminal evidence verification and attribution; bounded two-tier evidence re-arm for late-attributable host outcomes (shim hosts only — `runtime-status-reconciliation.ts` owns recovery where `session.status` exists) |
 | `background-job-fixture.ts` | Test-only board fixtures for adapter/state-machine tests |
 | `test-timers.ts` | Test-only deterministic timer harness for seam-wired timer code |
+| `timer-seam.ts` | Single timer-seam contract (`TimerHandle`, `TimerSeam`, `TimerSeamOptions`) shared by every scheduling seam |
 | `tui-reusable-projection.ts` | Board → tui-state projection for sidebar reusable dots |
 | `session.ts` | Session timeout, abort, and model-reference utilities |
 | `session-metadata.ts` | Bounded session → agent/directory store |

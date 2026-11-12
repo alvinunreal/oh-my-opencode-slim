@@ -80,10 +80,10 @@ export interface CmuxTarget {
   sessionName?: string;
 }
 
-export type CmuxError = 'not_found' | 'unavailable' | 'hard';
+type CmuxError = 'not_found' | 'unavailable' | 'hard';
 
 /** Distinguishable failure causes for logs (FR-13 diagnostics). */
-export type CmuxFailureReason =
+type CmuxFailureReason =
   | 'binary-not-found'
   | 'no-control-plane'
   | 'no-anchor'
@@ -93,7 +93,7 @@ export type CmuxFailureReason =
   | 'invalid-response'
   | 'command-failed';
 
-export type CmuxResult<T> =
+type CmuxResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: CmuxError; reason: CmuxFailureReason };
 
@@ -108,19 +108,19 @@ export interface CmuxAnchor {
 }
 
 /** One `tab list` entry (only the fields this adapter reads). */
-export interface CmuxTab {
+interface CmuxTab {
   tabId: string;
   paneId: string;
   focused: boolean;
 }
 
 /** One `terminal list` entry (sweep candidate discovery). */
-export interface CmuxTerminal {
+interface CmuxTerminal {
   terminalId: string;
 }
 
 /** The handle of a created child view: terminal id plus its tab. */
-export interface CmuxRunResult {
+interface CmuxRunResult {
   tabId: string;
   terminalId: string;
 }

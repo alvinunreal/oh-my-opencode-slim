@@ -1,13 +1,10 @@
 import { type CrossSpawnResult, crossSpawn } from '../../utils/compat';
+import type { TimerHandle, TimerSeamOptions } from '../../utils/timer-seam';
 
 type RewriteProcess = Pick<CrossSpawnResult, 'exited' | 'stderr' | 'kill'>;
-// Host overloads can return object handles or numeric IDs; the harness uses IDs.
-type TimerHandle = ReturnType<typeof setTimeout> | number;
 
-interface RewriteDependencies {
+interface RewriteDependencies extends TimerSeamOptions {
   spawn?: (...args: Parameters<typeof crossSpawn>) => RewriteProcess;
-  setTimeout?: (callback: () => void, delay: number) => TimerHandle;
-  clearTimeout?: (timer: TimerHandle) => void;
 }
 
 export async function applyRewrites(

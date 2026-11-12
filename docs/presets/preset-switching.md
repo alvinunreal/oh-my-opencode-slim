@@ -10,7 +10,7 @@ the built-in `/models`, so it triggers no LLM turn.
 
 | Level | What you do |
 |-------|-------------|
-| 1. Preset list | Apply / Edit / Delete an existing preset, or create a new one |
+| 1. Preset list | Apply / Edit / Delete a preset, start a bound session (v2), or create a preset |
 | 2. Agent arrangement | Choose a Base preset, add / remove / edit local agents, then Save (or Save & Apply) |
 | 3. Edit agent | Pick model → variant (thinking strength) → temperature → options (JSON) |
 
@@ -35,6 +35,26 @@ the built-in `/models`, so it triggers no LLM turn.
 > delegation. Listing `preset` in `disabled_commands` removes both the TUI
 > entry and the server command.
 
+## Start a session from a preset
+
+On v2, open `/preset`, select a preset, and choose **New session**. It opens
+an empty session in the current directory and workspace, with the selected
+team already bound. Creation sends no message and leaves the global default
+unchanged.
+
+The binding covers subagent inference settings: models, variants, temperature,
+provider options and fallback chains. The main-agent model uses OpenCode's
+native selection; prompts, tools, skills and MCPs follow normal host configuration.
+
+> **`backgroundJobs.mode: "off"` disables session bindings.** That mode leaves
+> native delegation untouched: no session `/preset` command, RPC, or child
+> snapshot. Children use the registered agent configuration, and the `preset`
+> global default still selects those settings at startup.
+
+If creation succeeds but binding fails, the error includes the new session ID.
+Open that session and use **Apply preset → Current session**. A host shutdown
+between creation and binding can also leave an unbound empty session.
+
 ## Reading the current team
 
 On v2, the sidebar's team models and variants come from the displayed
@@ -53,6 +73,13 @@ The `/preset` list marks the current session's bound preset separately from
 the global default. A preset can carry both markers. The bound name remains
 visible even if its preset definition has since been removed.
 
+When `disabled_commands` includes `preset`, the sidebar row stays visible as
+information only: it cannot open the picker and does not poll the session
+binding, so it shows the configured default rather than a session binding.
+Existing sessions keep the team they were already bound to. The gate follows
+the project the TUI is showing, so switching to a project that enables the
+command restores the picker and the binding read.
+
 ## Scope and when changes take effect
 
 On v2, a root work session captures its subagent inference configuration before
@@ -63,8 +90,9 @@ the existing session creates later.
 
 | Action | What is saved | Who uses the change |
 |--------|---------------|---------------------|
-| Manager → Current session | The session's inference snapshot in OpenCode's plugin storage | New delegations from that session after the switch |
-| `/preset <name>` (TUI fast path or server-side) | The same session snapshot, for the session the command runs in | New delegations from that session after the switch |
+| Manager → Current session | The session's inference snapshot in OpenCode's plugin storage | New children and explicit same-agent continuations of bound children |
+| `/preset <name>` (TUI fast path or server-side) | The same session snapshot, for the session the command runs in | New children and explicit same-agent continuations of bound children |
+| Manager → New session | The selected inference snapshot on a new empty session | Subagents delegated from the new session |
 | Manager → Global default | The selected preset in the user configuration | Sessions that first bind after the configuration refresh, subject to project and environment overrides |
 | Edit the user configuration's `preset` | The global default | Future bindings that inherit the global default |
 | Edit a project configuration's `preset` | That project's default | Future bindings in that project |
@@ -89,13 +117,36 @@ pretending a global selection changed that project's effective default.
 3. A's new subagents still use its `cheap` snapshot; B's use `powerful`.
 4. Changing the global default back to `cheap` does not change B.
 5. Applying `powerful` to A's **Current session** changes A's future
-   delegations. Its already-created children keep their own snapshots.
+   delegations. An existing child keeps its current settings until A explicitly
+   continues that bound child with the same agent.
 
-A bound child also retains its snapshot when resumed. If it creates a
-grandchild after its parent switches presets, the grandchild inherits that
-child's older snapshot, not the root's latest selection. An explicit model
-or variant supplied to a delegation takes precedence over the preset default;
-an explicit model selection does not opt into that child's preset fallback chain.
+### Continuing an existing child
+
+The next same-agent continuation adopts the direct parent's changed team:
+model, variant, temperature, provider options and fallback chains. The child
+keeps its session ID and history. Apply alone sends no prompt and does not
+broadcast changes to children. Prompts, tools, permissions, skills and MCPs
+keep their existing configuration.
+
+An explicit model or variant supplied to the continuation takes precedence
+over the preset default; an explicit model selection disables that child's
+preset fallback chain. After a team is successfully adopted, further
+continuations of that team keep the child's current manual or fallback model
+selection.
+
+New subagents launched by the child during that continuation also use the
+adopted team. A preset separately applied inside that child takes precedence
+for its future delegations; the parent's continuation changes only the child's
+execution settings.
+
+Continuation is **best-effort**. OpenCode authorizes and selects the model,
+then Slim installs options and fallback at the awaited native progress step,
+before the prompt. The team snapshot is saved after native execute succeeds;
+a background `running` return counts as successful submission, not completed
+work. A failure reports an error without rolling back native model or history
+changes. After interruption or restart, repeat the operation if needed; the
+plugin does not retain a pending target, and repeating a failed call may send
+the prompt again.
 
 ### Persistence and failures
 

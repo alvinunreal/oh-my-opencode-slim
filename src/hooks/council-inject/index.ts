@@ -62,7 +62,7 @@ const SLASH_COMMAND_LEAD_PATTERN = /^\s*\/[a-zA-Z][\w-]*(?:\s|$)/;
 
 /** Strip fenced code blocks and inline code so pasted configs/logs that
  * merely mention "council" do not trigger the injection. */
-export function stripCodeForTriggerMatch(text: string): string {
+function stripCodeForTriggerMatch(text: string): string {
   return text
     .replace(CODE_FENCE_PATTERN, ' ')
     .replace(INLINE_CODE_PATTERN, ' ');

@@ -23,6 +23,12 @@ The companion system consists of two main components following a **Producer-Cons
   - For remembered/offline targets, routes writes only through a live TypeScript manager, checks registered absolute paths, directory accessibility, and invalid JSONC before any preset mutation; returns explicit rejection feedback without changing the relay's config
   - Implements a locking mechanism for concurrent state writes
 
+- **Cold cleanup (`runtime.ts`)**: dependency-free state path, manager identity,
+  and disabled-startup pruning. Missing state synchronously calls the manager's
+  registered disposal seam (covers enable→disable after a failed first
+  publication); existing state loads the manager and uses its original
+  dispose-before-prune path. Fresh disabled startups never evaluate the manager.
+
 - **Consumer (updater.ts)**: Binary installation and update logic
   - Downloads platform-specific companion binary from GitHub releases
   - Validates checksums for security

@@ -386,6 +386,40 @@ describe('canonical alias reference', () => {
     expect(messages).not.toHaveBeenCalled();
   });
 
+  test('v2 sends ses-prefixed broken ids to native, not alias history', async () => {
+    const { input, messages } = clientFor([
+      taskPart({ output: withRef(HOST, 'fix-1') }),
+    ]);
+    (input as { hostFlavor?: string }).hostFlavor = 'v2';
+    const authority = createAliasAuthority({
+      input: input as never,
+      board: deferredBoard(),
+    });
+    for (const requested of ['ses', 'ses_', 'sesabc']) {
+      expect(await authority.resolveCanonical(PARENT, requested)).toEqual({
+        kind: 'exact',
+        taskID: requested,
+      });
+    }
+    // A custom agent whose prefix is `ses` still owns its numbered alias.
+    const numbered = new BackgroundJobBoard();
+    numbered.registerLaunch({
+      taskID: HOST,
+      parentSessionID: PARENT,
+      agent: 'ses-agent',
+    });
+    expect(
+      await createAliasAuthority({
+        input: input as never,
+        board: numbered,
+      }).resolveCanonical(PARENT, 'ses-1'),
+    ).toEqual({
+      kind: 'exact',
+      taskID: HOST,
+    });
+    expect(messages).not.toHaveBeenCalled();
+  });
+
   test('two saved targets refuse without writing', async () => {
     const other = 'ses_secondhost';
     const { input } = clientFor([

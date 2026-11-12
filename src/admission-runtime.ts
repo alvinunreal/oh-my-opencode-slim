@@ -7,7 +7,7 @@ import {
   type BackgroundTaskConcurrencyConfig,
 } from './utils/background-task-concurrency';
 
-export interface AdmissionRuntime {
+interface AdmissionRuntime {
   readonly backgroundTaskConcurrency: BackgroundTaskConcurrency;
   readonly pendingCallTracker: PendingCallTracker;
 }

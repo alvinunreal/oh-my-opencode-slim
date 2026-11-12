@@ -211,6 +211,27 @@ describe('master adoption and retained-round integration', () => {
     expect(errors[0]).toContain('Tracking does not survive a host restart');
   });
 
+  test('v2 foreign-parent recovery exposes the reason code that defers to native', async () => {
+    const fixture = reviveHost({
+      hostFlavor: 'v2',
+      get: () => ({
+        data: { id: CHILD, parentID: 'ses_otherparent', agent: 'fixer' },
+      }),
+    });
+    const result = await fixture.recover({
+      parentSessionID: PARENT,
+      requested: CHILD,
+      purpose: 'revive',
+    });
+    expect(result).toMatchObject({
+      kind: 'refused',
+      reasonCode: 'foreign-parent',
+    });
+    expect(result.kind === 'refused' && result.reason).toBeTruthy();
+    expect(fixture.promptAsync).not.toHaveBeenCalled();
+    expect(fixture.abort).not.toHaveBeenCalled();
+  });
+
   test('a persisted terminal result wins before transcript import and retains its epoch', async () => {
     const fixture = reviveHost();
     recordBackgroundJobSuppression(fixture.board, CHILD, {
