@@ -122,6 +122,8 @@ permission/question asks stay discoverable via `task_status`. Every
     repeat. `getStore()` backfills the two maps so a store object left by a
     pre-#1411 in-process reload cannot crash the delta-less path.
   - Bounded at `MAX_TRACKED_SESSIONS` (256) with insertion-ordered eviction.
+    Rows a live evaluation owns are never evicted, so the cap is exceeded
+    until those owners release.
 
 ## Flow
 
@@ -184,7 +186,8 @@ busy (external) / errors / user activity → rearm cap
 
 - One unref'd timer per continuously-idle managed session; timers are cleared
   on any busy/error/wait/deletion.
-- All process-global state is bounded and evicted LRU-style; event-tracking
-  maps are bounded at 512 entries FIFO.
+- All process-global state is bounded and evicted LRU-style, except rows a
+  live evaluation owns (see Design); event-tracking maps are bounded at 512
+  entries FIFO.
 - Host snapshot reads are `Promise.all`-parallel and only happen inside the
   one-flight evaluation.
