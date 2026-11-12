@@ -11927,6 +11927,56 @@ describe('ForegroundFallbackManager dispose', () => {
     expect(drained).toBe(true);
   });
 
+  test('dispose gives up at the teardown budget and a late settlement is harmless', async () => {
+    const { manager } = v2Manager();
+    const sessionID = 'sess-dispose-budget';
+    const entered = Promise.withResolvers<void>();
+    const native = Promise.withResolvers<void>();
+    const work = manager.handleV2Retry(nativeEvent(sessionID), () => {
+      entered.resolve();
+      return native.promise;
+    });
+    await entered.promise;
+
+    let drained = false;
+    const drain = manager.dispose().then(() => {
+      drained = true;
+    });
+    await clock.advance(2_000); // TEARDOWN_DRAIN_MS
+    await drain;
+    expect(drained).toBe(true);
+
+    native.resolve();
+    await work;
+  });
+
+  test('a rejected native switch does not end the drain while another is pending', async () => {
+    const { manager } = v2Manager();
+    const failed = Promise.withResolvers<void>();
+    const pending = Promise.withResolvers<void>();
+    const works = [
+      manager.handleV2Retry(nativeEvent('sess-drain-reject'), () => {
+        return failed.promise;
+      }),
+      manager.handleV2Retry(nativeEvent('sess-drain-pending'), () => {
+        return pending.promise;
+      }),
+    ].map((work) => work.catch(() => {}));
+
+    let drained = false;
+    const drain = manager.dispose().then(() => {
+      drained = true;
+    });
+    failed.reject(new Error('native switch failed'));
+    await tick();
+    expect(drained).toBe(false);
+
+    pending.resolve();
+    await drain; // settlement, not success: disposal must not reject
+    await Promise.all(works);
+    expect(drained).toBe(true);
+  });
+
   test('handleV2Retry does not switch after dispose', async () => {
     const { manager } = v2Manager();
     await manager.dispose();

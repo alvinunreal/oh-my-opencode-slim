@@ -686,9 +686,13 @@ currently break this plugin:
   explicitly: the v1 `dispose` hook cancels pending foreground-fallback
   initial-delay timers and fences off in-flight fallback chains at
   their suspension points (`foregroundFallback.dispose()` — no replay,
-  abort, or transcript read continues through the destroyed client),
-  clears the process-global wake-gate
-  progress so the next generation does not inherit the previous
+  abort, or transcript read continues through the destroyed client)
+  and waits up to 2 s for native model switches it already issued to
+  settle (rejections count as settled). A switch still pending after
+  that budget is not cancelled and can land after the new generation
+  starts, because the host publishes model selection without a
+  generation fence; ownership is released either way. It also clears
+  the process-global wake-gate progress so the next generation does not inherit the previous
   generation's two-wake no-progress caps (`clearAllWakeSessions()`),
   and explicitly releases companion ownership
   (`companionManager.onExit()` — idempotent). The v2 `setup` entry

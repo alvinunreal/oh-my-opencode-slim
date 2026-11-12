@@ -6419,7 +6419,7 @@ describe('plugin foreground fallback host gating', () => {
         (() => native) as never,
       );
 
-    test('runtime ownership is released only after the switch settles', async () => {
+    test('runtime ownership is held while the switch is pending', async () => {
       const hooks = await createHooks('v2');
       const runtime = RuntimeConfig.get(projectDir);
       const native = Promise.withResolvers<void>();
