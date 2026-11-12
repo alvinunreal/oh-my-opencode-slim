@@ -3095,6 +3095,91 @@ describe('child permission payload stance tail', () => {
     { action: 'edit', resource: 'src/*', effect: 'allow' },
   ];
 
+  function duplicateTailFixture() {
+    const registry = build(
+      runtimeFor({
+        disabled_agents: [],
+        agents: {
+          explorer: {
+            permission: {
+              edit: {
+                '*': 'deny',
+                'src/a/*': 'allow',
+                'src/b/*': 'allow',
+                'src/c/*': 'allow',
+              },
+            },
+          },
+        },
+      }),
+      {},
+      { hostFlavor: 'v2' },
+    );
+    const payload: V2PermissionRule[] = [
+      { action: 'edit', resource: '*', effect: 'allow' },
+      { action: 'edit', resource: 'private/a/*', effect: 'deny' },
+      { action: 'edit', resource: 'private/b/*', effect: 'deny' },
+    ];
+    return { registry, payload };
+  }
+
+  test('child tail dedupe bounds two host denies replayed by three grants', () => {
+    const { registry, payload } = duplicateTailFixture();
+    const compiled = registry.compileChildPermissions('explorer', payload);
+    const tail = compiled.slice(payload.length);
+    const edit = tail.filter((rule) => rule.action === 'edit');
+    expect(edit).toHaveLength(6);
+    expect(new Set(edit.map((rule) => JSON.stringify(rule))).size).toBe(6);
+    expect(new Set(tail.map((rule) => JSON.stringify(rule))).size).toBe(
+      tail.length,
+    );
+    expect(decideOf(compiled)('edit', 'src/a/index.ts')).toBe('allow');
+    expect(decideOf(compiled)('edit', 'private/a/key.ts')).toBe('deny');
+  });
+
+  test('child tail dedupe keeps the last deny after an intervening allow', () => {
+    const registry = build(
+      runtimeFor({
+        disabled_agents: [],
+        agents: {
+          explorer: {
+            permission: {
+              edit: { '*': 'deny', 'src/*': 'allow', 'src/public/*': 'allow' },
+            },
+          },
+        },
+      }),
+      {},
+      { hostFlavor: 'v2' },
+    );
+    const payload: V2PermissionRule[] = [
+      { action: 'edit', resource: '*', effect: 'allow' },
+      { action: 'edit', resource: 'src/private/*', effect: 'deny' },
+    ];
+    const compiled = registry.compileChildPermissions('explorer', payload);
+    const tail = compiled
+      .slice(payload.length)
+      .filter((rule) => rule.action === 'edit');
+    expect(tail).toEqual([
+      { action: 'edit', resource: '*', effect: 'deny' },
+      { action: 'edit', resource: 'src/*', effect: 'allow' },
+      { action: 'edit', resource: 'src/public/*', effect: 'allow' },
+      { action: 'edit', resource: 'src/private/*', effect: 'deny' },
+    ]);
+    expect(decideOf(compiled)('edit', 'src/public/index.ts')).toBe('allow');
+    expect(decideOf(compiled)('edit', 'src/private/key.ts')).toBe('deny');
+  });
+
+  test('child tail dedupe reapplication preserves the deduped array', () => {
+    const { registry, payload } = duplicateTailFixture();
+    const once = registry.compileChildPermissions('explorer', payload);
+    expect(once.filter((rule) => rule.action === 'edit')).toHaveLength(9);
+    const twice = registry.compileChildPermissions('explorer', once);
+    expect(twice).toEqual(once);
+    expect(twice.filter((rule) => rule.action === 'edit')).toHaveLength(9);
+    expect(once.slice(0, payload.length)).toEqual(payload);
+  });
+
   const EDIT_GRID = [
     'src/index.ts',
     'src/private/approved.ts',

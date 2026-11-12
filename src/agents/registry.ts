@@ -793,6 +793,20 @@ function rulesEndWithTail(
   });
 }
 
+function keepLastRules(rules: readonly V2PermissionRule[]): V2PermissionRule[] {
+  const seen = new Set<string>();
+  // Last-match-wins: removing an earlier copy cannot change any decision.
+  return rules
+    .toReversed()
+    .filter((rule) => {
+      const key = JSON.stringify([rule.action, rule.resource, rule.effect]);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .reverse();
+}
+
 /**
  * Shared permission-finalization tail for one agent: adapts the finalized
  * permission map into the v2 baseline, adds the marketplace read safeguards
@@ -1879,9 +1893,8 @@ export function buildResolvedAgentRegistry(
           rule.effect !== first.effect
         )
           continue;
-        const prefixTail = buildChildTail(
-          compiled.slice(0, start),
-          denyCeiling,
+        const prefixTail = keepLastRules(
+          buildChildTail(compiled.slice(0, start), denyCeiling),
         );
         if (
           prefixTail.length === compiled.length - start &&
@@ -1889,7 +1902,10 @@ export function buildResolvedAgentRegistry(
         )
           return compiled;
       }
-      return [...compiled, ...buildChildTail(compiled, denyCeiling)];
+      return [
+        ...compiled,
+        ...keepLastRules(buildChildTail(compiled, denyCeiling)),
+      ];
     },
     mcpConfig: frozenMcps,
     managedMcpConfig: frozenPluginMcps,
