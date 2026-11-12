@@ -55,7 +55,11 @@ bun run mutation:foreground-fallback
 It uses `stryker.foreground-fallback.conf.mjs` to mutate
 `src/hooks/foreground-fallback/dedup.ts`, which owns `asHttpStatus` and
 `DEDUP_WINDOW_MS`. Thresholds are `high: 90`, `low: 85`, and `break: 80`;
-the job fails when the score drops below `break`.
+the job fails when the score drops below `break`. It also mutates each
+`DEDUP_WINDOW_MS` guard in `foreground-fallback/index.ts`, found by the
+`// mutation-guard: dedup-window` comment on the line above it (not by line
+number). `scripts/check-mutation-targets.mjs` fails if a guard is unmarked
+or produced no mutants.
 
 The first run installs the tool tree (`bun install --cwd tools/mutation`,
 frozen lockfile). Nothing in the repo root is modified to run a sweep, but

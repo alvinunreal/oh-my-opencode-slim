@@ -1,10 +1,9 @@
 // Fails when the scoped mutation run silently lost a target.
 // Stryker only warns on unmatched globs and reports NaN for zero mutants,
-// which passes the threshold check. Targets come from the Stryker config,
-// so each configured guard line must still hold DEDUP_WINDOW_MS and produce
-// at least one mutant.
+// which passes the threshold check. Each marked guard line must still hold
+// DEDUP_WINDOW_MS, be a configured target, and produce at least one mutant.
 import { readFileSync } from 'node:fs';
-import config from '../stryker.foreground-fallback.conf.mjs';
+import config, { guardLines } from '../stryker.foreground-fallback.conf.mjs';
 
 const REPORT = 'reports/mutation/mutation.json';
 const INDEX = 'src/hooks/foreground-fallback/index.ts';
@@ -23,24 +22,25 @@ if (!report.files[DEDUP]?.mutants?.length) {
   problems.push('dedup.ts has no mutants');
 }
 const lines = mutantLines(INDEX);
-const guardTargets = config.mutate.filter((t) => t.startsWith(`${INDEX}:`));
-if (guardTargets.length !== EXPECTED_GUARDS) {
-  problems.push(
-    `expected ${EXPECTED_GUARDS} guard targets, config has ${guardTargets.length}`,
-  );
+// Pins come from `mutation-guard` markers; every DEDUP_WINDOW_MS use outside
+// the import must carry one, and each marked line must be a mutated target.
+const marked = guardLines();
+const used = indexLines.flatMap((text, i) =>
+  text.includes('DEDUP_WINDOW_MS') && !text.startsWith('import ')
+    ? [i + 1]
+    : [],
+);
+if (marked.length !== EXPECTED_GUARDS) {
+  problems.push(`expected ${EXPECTED_GUARDS} guards, found ${marked.length}`);
 }
-for (const target of config.mutate) {
-  if (target === DEDUP) continue;
-  const match = target.match(
-    /^src\/hooks\/foreground-fallback\/index\.ts:(\d+)-(\d+)$/,
-  );
-  if (!match) {
-    problems.push(`unrecognized target: ${target}`);
-    continue;
-  }
-  const line = Number(match[1]);
-  if (!indexLines[line - 1]?.includes('DEDUP_WINDOW_MS')) {
+for (const line of used) {
+  if (!marked.includes(line)) problems.push(`line ${line} is unmarked`);
+}
+for (const line of marked) {
+  if (!indexLines[line - 1].includes('DEDUP_WINDOW_MS')) {
     problems.push(`line ${line} no longer holds DEDUP_WINDOW_MS`);
+  } else if (!config.mutate.includes(`${INDEX}:${line}-${line}`)) {
+    problems.push(`line ${line} is not a configured target`);
   } else if (!lines.has(line)) {
     problems.push(`line ${line} produced no mutants`);
   }

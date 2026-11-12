@@ -69,6 +69,7 @@ import type { SessionLifecycle } from '../session-lifecycle';
 import type { createBackgroundFallbackHandoff } from '../task-session-manager/fallback-observation-transfer';
 import { isUserMessageWithParts } from '../types';
 import { asHttpStatus, DEDUP_WINDOW_MS } from './dedup';
+import { SwitchTracker } from './switch-tracker';
 
 /** Timer port for deterministic test control (see `src/utils/test-timers.ts`):
  *  `now` is observation time (dedup windows, incident clocks); scheduling
@@ -651,6 +652,8 @@ const MAX_HOST_RETRY_DELAY_MS = 30 * 60_000;
 const PROVIDER_MARK_TTL_MS = 30 * 60_000;
 /** Ceiling on host calls: a hung transport must not stall fallback. */
 const HOST_CALL_TIMEOUT_MS = 2_000;
+/** Teardown's own wait for native switches that cannot be cancelled. */
+const TEARDOWN_DRAIN_MS = 2_000;
 const V1_OUTCOME_TIMEOUT_MS = 5_000;
 export const REFUSAL_CONTINUATION =
   "The previous response was stopped by the provider's content filter. Continue from where it stopped without repeating completed content.";
@@ -859,7 +862,7 @@ export class ForegroundFallbackManager {
   private readonly authGrace = new Map<string, number>();
   /** This instance's real v2 native calls, including calls whose admission
    * timed out. Other locations retain their own independent drain. */
-  private readonly switchRequests = new Set<Promise<unknown>>();
+  private readonly switches: SwitchTracker;
   /** sessionID → timestamp of last trigger (stale retry guard only) */
   private readonly lastTrigger = new Map<string, number>();
   /** sessionID → model in use when lastTrigger was set; a model change starts
@@ -1196,19 +1199,13 @@ export class ForegroundFallbackManager {
     this.separateCompaction.clear();
     this.downProviders.clear();
     this.authGrace.clear();
-    return withTimeout(
-      Promise.allSettled([...this.switchRequests]),
-      HOST_CALL_TIMEOUT_MS,
-      'foreground fallback native switch drain timed out',
-      this.timerSeam,
-    ).then(
-      () => {},
-      (error) => {
+    return this.switches.drain(TEARDOWN_DRAIN_MS).then((settled) => {
+      if (!settled) {
         log('[foreground-fallback] native switch drain timed out; proceeding', {
-          error: stringifyError(error),
+          pending: this.switches.size,
         });
-      },
-    );
+      }
+    });
   }
 
   private rememberOutcome(key: string, outcome: ChildOutcome) {
@@ -1487,6 +1484,7 @@ export class ForegroundFallbackManager {
       pending.turn === (this.turnEpoch.get(sessionID) ?? 0) &&
       pending.model === this.sessionModel.get(sessionID) &&
       pending.fingerprint === stringifyError(error) &&
+      // mutation-guard: dedup-window
       this.now() - pending.time < DEDUP_WINDOW_MS
     ) {
       return pending.incidentID;
@@ -1519,6 +1517,7 @@ export class ForegroundFallbackManager {
       pending.turn === (this.turnEpoch.get(sessionID) ?? 0) &&
       pending.model === this.sessionModel.get(sessionID) &&
       pending.fingerprint === stringifyError(error) &&
+      // mutation-guard: dedup-window
       this.now() - pending.time < DEDUP_WINDOW_MS
     ) {
       return pending.incidentID;
@@ -1574,6 +1573,7 @@ export class ForegroundFallbackManager {
     const now = this.now();
     let matched = false;
     for (const [id, previous] of incidents) {
+      // mutation-guard: dedup-window
       if (previous.turn !== turn || now - previous.time >= DEDUP_WINDOW_MS) {
         incidents.delete(id);
         continue;
@@ -1671,6 +1671,7 @@ export class ForegroundFallbackManager {
       setTimeout: this.setTimer,
       clearTimeout: this.clearTimer,
     };
+    this.switches = new SwitchTracker(this.timerSeam);
   }
 
   /** Sleep for ms using the injected timer seam. */
@@ -1978,6 +1979,7 @@ export class ForegroundFallbackManager {
           : undefined;
         const recentlyHandledMessage =
           priorMessageIncident?.turn === (this.turnEpoch.get(sessionID) ?? 0) &&
+          // mutation-guard: dedup-window
           this.now() - priorMessageIncident.time < DEDUP_WINDOW_MS;
         if (
           info.role !== 'user' &&
@@ -2223,6 +2225,7 @@ export class ForegroundFallbackManager {
             curModel !== undefined &&
             prevModel !== curModel;
           const withinDedupWindow =
+            // mutation-guard: dedup-window
             this.now() - lastTriggerTime < DEDUP_WINDOW_MS;
           if (modelChanged && withinDedupWindow && attempt > 1) {
             // Model changed since last trigger, within dedup window, and
@@ -2481,13 +2484,6 @@ export class ForegroundFallbackManager {
     }
   }
 
-  private trackSwitch<T>(p: Promise<T>): Promise<T> {
-    this.switchRequests.add(p);
-    const release = () => this.switchRequests.delete(p);
-    void p.then(release, release);
-    return p;
-  }
-
   private async switchV2InPlace(
     sessionID: string,
     from: string | undefined,
@@ -2512,7 +2508,7 @@ export class ForegroundFallbackManager {
       const { agentName, nextModel, ref, variant } = selected;
       picked = nextModel;
       detail = { agentName, variant };
-      switchRequest = this.trackSwitch(
+      switchRequest = this.switches.track(
         switchModel(sessionID, {
           providerID: ref.providerID,
           id: ref.modelID,
@@ -3051,6 +3047,7 @@ export class ForegroundFallbackManager {
         ?.has(parseModelReference(trigger.model)?.providerID ?? '') &&
       trigger.signature === spentQuotaSignature(error) &&
       trigger.turn === (this.turnEpoch.get(sessionID) ?? 0) &&
+      // mutation-guard: dedup-window
       this.now() - trigger.time < DEDUP_WINDOW_MS
     )
       return trigger.model;
@@ -3731,6 +3728,7 @@ export class ForegroundFallbackManager {
         this.triggerIncidents.set(sessionID, incidents);
       }
       for (const [id, previous] of incidents) {
+        // mutation-guard: dedup-window
         if (previous.turn !== turn || now - previous.time >= DEDUP_WINDOW_MS) {
           incidents.delete(id);
         }
