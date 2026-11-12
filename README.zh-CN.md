@@ -20,7 +20,7 @@
   </p>
 
   <p>
-    <a href="README.md">English</a> | <b>简体中文</b> | <a href="README.ja-JP.md">日本語</a> | <a href="README.ko-KR.md">한국어</a> | <a href="README.fa-IR.md">فارسی</a>
+    <a href="README.md">English</a> | <b>简体中文</b> | <a href="README.zh-TW.md">繁體中文</a> | <a href="README.ja-JP.md">日本語</a> | <a href="README.ko-KR.md">한국어</a> | <a href="README.fa-IR.md">فارسی</a>
   </p>
 
   <p><sub>✦ ✦ ✦</sub></p>
