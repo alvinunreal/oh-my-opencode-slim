@@ -4137,9 +4137,19 @@ describe('plugin config model inheritance', () => {
       '---\nname: deepwork\ndescription: disabled external skill\n---\n',
     );
     process.env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS = '1';
-    const hostConfig = { skills: { paths: [] as string[] } };
+    const hostConfig = {
+      skills: {
+        paths: [userSkill],
+        urls: ['https://example.com/skills'],
+      },
+    };
     try {
       await hooks.config?.(hostConfig as never);
+      const paths = [...hostConfig.skills.paths];
+      await hooks.config?.(hostConfig as never);
+      expect(hostConfig.skills.paths).toEqual(paths);
+      expect(hostConfig.skills.paths[0]).toBe(userSkill);
+      expect(hostConfig.skills.urls).toEqual(['https://example.com/skills']);
       expect(
         hostConfig.skills.paths.some((item) =>
           item.endsWith('/src/skills/deepwork'),

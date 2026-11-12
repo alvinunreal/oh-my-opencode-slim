@@ -657,10 +657,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     | ReturnType<typeof createAbsolutePathRescueHook>
     | undefined;
   let toolLoopGuard: ToolLoopGuardHook | undefined;
-  let jsonErrorRecoveryAfter: (i: unknown, o: unknown) => Promise<void> =
-    async () => {};
-  let taskSessionManagerAfter: (i: unknown, o: unknown) => Promise<void> =
-    async () => {};
+  let jsonErrorRecoveryAfter:
+    | ((i: unknown, o: unknown) => Promise<void>)
+    | undefined;
+  let taskSessionManagerAfter:
+    | ((i: unknown, o: unknown) => Promise<void>)
+    | undefined;
   let backgroundJobBoard: BackgroundJobBoard | undefined;
   // Shared by task management and control tools; initialized only with
   // managed lifecycle.
@@ -1731,9 +1733,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
     }
 
-    if (runtime.updateCheckerEnabled) {
-      // Initialize auto-update checker hook; the implementation (updater
-      // graph) loads only through this gate.
+    if (hostFlavor !== 'v2' && runtime.updateCheckerEnabled) {
+      // v2 owns package checks/installation; its TUI adds the Slim notice.
+      // The v1 updater cannot install or display feedback through the shim.
       const { createAutoUpdateCheckerHook } = await import(
         './hooks/auto-update-checker'
       );
@@ -3129,12 +3131,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
                 : {};
             removeLegacySkillSyncState(undefined, runtime.disabledSkills);
             skills.paths = [
-              ...(Array.isArray(skills.paths) ? skills.paths : []),
-              ...getV1BundledSkillPaths(
-                dirname(packageJson),
-                ctx.directory,
-                runtime.disabledSkills,
-              ),
+              ...new Set([
+                ...(Array.isArray(skills.paths) ? skills.paths : []),
+                ...getV1BundledSkillPaths(
+                  dirname(packageJson),
+                  ctx.directory,
+                  runtime.disabledSkills,
+                ),
+              ]),
             ];
             opencodeConfig.skills = skills;
           }
@@ -4453,14 +4457,17 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
     },
 
-    'tool.execute.after': async (input, output) => {
-      await jsonErrorRecoveryAfter(input, output);
-      await toolLoopGuard?.['tool.execute.after'](
-        input as never,
-        output as never,
-      );
-      if (taskSessionManagerHook) await taskSessionManagerAfter(input, output);
-    },
+    'tool.execute.after':
+      jsonErrorRecoveryAfter || toolLoopGuard || taskSessionManagerAfter
+        ? async (input, output) => {
+            await jsonErrorRecoveryAfter?.(input, output);
+            await toolLoopGuard?.['tool.execute.after'](
+              input as never,
+              output as never,
+            );
+            await taskSessionManagerAfter?.(input, output);
+          }
+        : undefined,
   } as Hooks & {
     'v2.pendingRefusalOutcome':
       | ForegroundFallbackManager['pendingRefusalOutcome']

@@ -2946,7 +2946,11 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         setSessionTeamResolver?.(
           (sessionID) => presets.peek(sessionID)?.bundle,
         );
-        if (presets.available && ctx.rpc?.register) {
+        if (
+          presets.available &&
+          ctx.rpc?.register &&
+          isCommandEnabled('preset', { disabledCommands })
+        ) {
           const registration = await ctx.rpc.register(sessionPresetRpc, {
             read: ({ sessionID }) => presets.readState(sessionID),
             apply: ({ sessionID, presetName }, { signal }) =>
@@ -3837,7 +3841,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             });
             disposers.push(() => reg.dispose());
           }
-          if (after) {
+          // Before owns the admission captures; after must still run its
+          // cleanup when the v1 factory has no post-tool consumers. Without
+          // captures (`off`) an empty after hook would be pure overhead.
+          if (after || (before && captures)) {
             const reg = await ctx.tool.hook('execute.after', async (event) => {
               try {
                 await bridges.afterBridge(event as never);

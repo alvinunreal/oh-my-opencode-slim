@@ -2,12 +2,14 @@
 
 ## Responsibility
 
-Implements a background auto-update system for oh-my-opencode-slim that:
+Implements the v1 background update checker for oh-my-opencode-slim:
 - Checks for plugin updates when new OpenCode sessions are created
 - Validates version compatibility and channel membership (latest, alpha, beta, etc.)
 - Prevents major version upgrades automatically (surfaces as manual migration notice)
-- Synchronizes bundled skills from updated packages to OpenCode's skills directory
 - Provides user notifications via OpenCode TUI toasts
+
+V2 uses host package management and the Slim TUI notice instead. Bundled skills
+load from the installed package through the host, not a copy/sync module.
 
 ## Design
 
@@ -27,7 +29,6 @@ The folder implements an **OpenCode plugin hook** that observes the `session.cre
 | `cache.ts` | Install-dir resolution, staging/publish, cross-process install lock | `resolveInstallContext()`, `preparePackageUpdate()`, `publishPackageUpdate()`, `acquirePackageUpdateLock()` |
 | `constants.ts` | Configuration constants and paths | `PACKAGE_NAME`, `NPM_REGISTRY_URL`, `CACHE_DIR` |
 | `types.ts` | TypeScript interfaces and types | `AutoUpdateCheckerOptions`, `CompatibleVersionResult`, `PluginEntryInfo` |
-| `skill-sync.ts` | Skill synchronization from package updates | `syncBundledSkillsFromPackage()`, atomic staging with rename |
 
 ### Version Safety Strategy
 
@@ -38,7 +39,6 @@ The system implements multiple safety checks:
 3. **Major Version Blocking**: Prevents auto-updates that cross major versions; surfaces as manual migration notice
 4. **Pinned Version Detection**: Respects pinned versions in user configuration
 5. **Timeout Protection**: Uses a 300-second timeout for the package-manager install (OpenCode's embedded bun, bun, or npm) to prevent stalling OpenCode
-6. **Atomic Skill Sync**: Uses staging directories with rename for atomic skill synchronization
 
 ### Data Flow
 
@@ -66,8 +66,6 @@ Decision: Auto-update enabled? → No: Notify user
 Action: Prepare package update (download + extract)
     ↓
 Action: Run package-manager install (OpenCode's embedded bun, bun, or npm) in isolated directory
-    ↓
-Sync: Bundled skills to OpenCode config/skills/
     ↓
 Sync: Companion update (if enabled)
     ↓
@@ -107,26 +105,10 @@ Notify: Success/failure via OpenCode TUI toast
 14. Run package-manager install (OpenCode's embedded bun, bun, or npm) with 300s timeout
 15. Release the install lock (finally)
 16. If install succeeds:
-    - Sync bundled skills from package
     - Update companion if enabled
     - Show success toast with version diff and changes
 17. If install fails: Show error toast
 ```
-
-### Skill Synchronization Flow (skill-sync.ts)
-
-1. **Source Validation**: Check if source skills directory exists and is valid
-2. **Destination Setup**: Create destination skills directory if needed
-3. **Entry Processing**: For each skill directory in source:
-   - Skip hidden files (starting with `.`)
-   - Validate SKILL.md exists
-   - Check if destination already exists
-   - If exists: Skip and log
-   - If not exists: Create staging directory
-   - Copy skill files to staging
-   - Atomic rename from staging to destination
-   - Clean up staging on success or failure
-4. **Result Tracking**: Collect installed, skipped, and failed skills
 
 ## Integration
 
@@ -180,7 +162,7 @@ Uses OpenCode's plugin cache directory:
 ### Recovery Strategies
 
 - **Retry on Restart**: Companion updates that fail will retry on next OpenCode restart
-- **Atomic Operations**: Skill sync uses staging + rename for atomic updates
+- **Atomic Operations**: Package installs publish through a staging directory and rename
 - **Graceful Degradation**: If auto-update fails, shows error toast but doesn't crash OpenCode
 - **Local Dev Fallback**: Local development mode skips all update checks
 
@@ -202,6 +184,5 @@ Key test scenarios:
 - Pinned version handling
 - Outer feature-gate cold disable (no construction when updates are off)
 - Network timeout and failure handling
-- Skill synchronization (install, skip, failure cases)
 - Companion update scenarios
 - Toast notification display
