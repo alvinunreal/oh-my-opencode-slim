@@ -155,3 +155,7 @@ The original monolithic module was split to improve:
 - **Scalability**: Capped data structures prevent unbounded memory growth.
 
 Each submodule adheres to the **Single Responsibility Principle** while collaborating through the facade to provide a cohesive user experience.
+
+Proven resumed launches still reject generationless `session.error` events
+without host timestamps: launch acceptance does not attribute an old error.
+Idle reconciliation reads current host evidence instead.

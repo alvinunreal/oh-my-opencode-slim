@@ -554,6 +554,17 @@ export async function handleEvent(
   if (input.event.type === 'session.error') {
     const sessionId =
       input.event.properties?.info?.id || input.event.properties?.sessionID;
+    // Native launch acceptance proves the new run exists, but cannot
+    // attribute a delayed, generationless error from the previous run.
+    // Leave ambiguous failures to idle reconciliation's host evidence.
+    if (
+      sessionId &&
+      deps.backgroundJobBoard.get(sessionId)?.resumedRunProven === true &&
+      eventGeneration(input) === undefined &&
+      !finiteNumber(eventActivityAt(input, Number.NaN))
+    ) {
+      return;
+    }
     const observedAt = eventActivityAt(
       input,
       deps.options.now?.() ?? Date.now(),
