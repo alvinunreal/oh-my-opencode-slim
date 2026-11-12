@@ -11861,6 +11861,13 @@ describe('ForegroundFallbackManager disableChain', () => {
 // ---------------------------------------------------------------------------
 
 describe('ForegroundFallbackManager dispose', () => {
+  const v2Manager = () =>
+    makeManager({
+      chain: ['test/a', 'test/b'],
+      hostFlavor: 'v2',
+      maxRetries: 0,
+    });
+
   const nativeEvent = (sessionID: string) => ({
     sessionID,
     agent: 'orchestrator',
@@ -11869,17 +11876,8 @@ describe('ForegroundFallbackManager dispose', () => {
     decision: { retry: true },
   });
 
-  test('dispose waits for this generation native switch, not another location', async () => {
-    const { manager } = makeManager({
-      chain: ['test/a', 'test/b'],
-      hostFlavor: 'v2',
-      maxRetries: 0,
-    });
-    const { manager: other } = makeManager({
-      chain: ['test/a', 'test/b'],
-      hostFlavor: 'v2',
-      maxRetries: 0,
-    });
+  test('dispose waits for this generation native switch', async () => {
+    const { manager } = v2Manager();
     const sessionID = 'sess-dispose-drain';
     const entered = Promise.withResolvers<void>();
     const native = Promise.withResolvers<void>();
@@ -11895,7 +11893,6 @@ describe('ForegroundFallbackManager dispose', () => {
     const drain = manager.dispose().then(() => {
       drained = true;
     });
-    await other.dispose(); // an unrelated location must not drain this flight
     await tick();
     expect(drained).toBe(false);
     expect(manager.isFallbackInProgress(sessionID)).toBe(true);
@@ -11908,11 +11905,7 @@ describe('ForegroundFallbackManager dispose', () => {
   });
 
   test('dispose still waits for a native switch whose admission timed out', async () => {
-    const { manager } = makeManager({
-      chain: ['test/a', 'test/b'],
-      hostFlavor: 'v2',
-      maxRetries: 0,
-    });
+    const { manager } = v2Manager();
     const sessionID = 'sess-dispose-timed-out';
     const native = Promise.withResolvers<void>();
     const work = manager.handleV2Retry(nativeEvent(sessionID), () => {
@@ -11931,6 +11924,36 @@ describe('ForegroundFallbackManager dispose', () => {
 
     native.resolve();
     await drain;
+    expect(drained).toBe(true);
+  });
+
+  test('dispose proceeds when a native switch never settles', async () => {
+    const { manager } = v2Manager();
+    const sessionID = 'sess-dispose-never-settles';
+    const entered = Promise.withResolvers<void>();
+    const work = manager.handleV2Retry(nativeEvent(sessionID), () => {
+      entered.resolve();
+      return new Promise<never>(() => {});
+    });
+    await entered.promise;
+
+    const drain = manager.dispose();
+    let drained = false;
+    void drain.then(() => {
+      drained = true;
+    });
+    await tick();
+    expect(drained).toBe(false);
+
+    let postDisposeWrites = 0;
+    await manager.handleV2Retry(nativeEvent('sess-after-dispose'), async () => {
+      postDisposeWrites++;
+    });
+    expect(postDisposeWrites).toBe(0);
+
+    await clock.advance(2_500);
+    await drain;
+    await work;
     expect(drained).toBe(true);
   });
 

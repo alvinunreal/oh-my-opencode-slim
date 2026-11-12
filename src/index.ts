@@ -3725,12 +3725,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // defers final scheduler/tracker teardown by one macrotask so an
         // immediate config-update re-init can retain active and queued calls.
       } finally {
-        try {
-          await fallbackDrain;
-        } finally {
-          admissionRuntimeLease?.release();
-          releaseRuntimeConfig?.();
-        }
+        await fallbackDrain;
+        admissionRuntimeLease?.release();
+        releaseRuntimeConfig?.();
       }
     },
 

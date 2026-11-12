@@ -1180,7 +1180,8 @@ export class ForegroundFallbackManager {
    *  points inside tryFallback/tryFallbackWithAbort/execFallback abandon
    *  their continuation (see abandonedByDispose) so no replay, abort, or
    *  transcript read runs through the destroyed generation's client. Real
-   *  native switches cannot be cancelled: return their settlement barrier. */
+   *  native switches cannot be cancelled: return a bounded settlement
+   *  barrier. This method never rejects. */
   dispose(): Promise<void> {
     this.disposed = true;
     for (const finish of this.v1Waiters.values()) finish();
@@ -1195,7 +1196,19 @@ export class ForegroundFallbackManager {
     this.separateCompaction.clear();
     this.downProviders.clear();
     this.authGrace.clear();
-    return Promise.allSettled([...this.switchRequests]).then(() => {});
+    return withTimeout(
+      Promise.allSettled([...this.switchRequests]),
+      HOST_CALL_TIMEOUT_MS,
+      'foreground fallback native switch drain timed out',
+      this.timerSeam,
+    ).then(
+      () => {},
+      (error) => {
+        log('[foreground-fallback] native switch drain timed out; proceeding', {
+          error: stringifyError(error),
+        });
+      },
+    );
   }
 
   private rememberOutcome(key: string, outcome: ChildOutcome) {
@@ -2468,6 +2481,13 @@ export class ForegroundFallbackManager {
     }
   }
 
+  private trackSwitch<T>(p: Promise<T>): Promise<T> {
+    this.switchRequests.add(p);
+    const release = () => this.switchRequests.delete(p);
+    void p.then(release, release);
+    return p;
+  }
+
   private async switchV2InPlace(
     sessionID: string,
     from: string | undefined,
@@ -2492,17 +2512,13 @@ export class ForegroundFallbackManager {
       const { agentName, nextModel, ref, variant } = selected;
       picked = nextModel;
       detail = { agentName, variant };
-      switchRequest = switchModel(sessionID, {
-        providerID: ref.providerID,
-        id: ref.modelID,
-        ...(variant ? { variant } : {}),
-      });
-      const request = switchRequest;
-      this.switchRequests.add(request);
-      const release = () => {
-        this.switchRequests.delete(request);
-      };
-      void request.then(release, release);
+      switchRequest = this.trackSwitch(
+        switchModel(sessionID, {
+          providerID: ref.providerID,
+          id: ref.modelID,
+          ...(variant ? { variant } : {}),
+        }),
+      );
       await withTimeout(
         switchRequest,
         HOST_CALL_TIMEOUT_MS,

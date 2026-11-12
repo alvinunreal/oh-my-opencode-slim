@@ -41,6 +41,7 @@ import {
   resetOrchestratorWakeGateForTests,
 } from './hooks/orchestrator-wake/wake-gate';
 import { PHASE_REMINDER_METADATA_KEY } from './hooks/phase-reminder';
+import * as taskSessionManagerModule from './hooks/task-session-manager';
 import { BACKGROUND_JOB_BOARD_METADATA_KEY } from './hooks/task-session-manager';
 import {
   clearChildInputWaitsForSession,
@@ -6443,9 +6444,9 @@ describe('plugin foreground fallback host gating', () => {
     });
 
     test('a rejecting unrelated cleanup still waits for the switch', async () => {
-      const original = wakeHooks.createTaskSessionManagerHook;
+      const original = taskSessionManagerModule.createTaskSessionManagerHook;
       const create = spyOn(
-        wakeHooks,
+        taskSessionManagerModule,
         'createTaskSessionManagerHook',
       ).mockImplementation((...args) => {
         const hook = original(...args);
