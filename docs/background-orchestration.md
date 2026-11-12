@@ -509,7 +509,11 @@ Behavior:
   activity. v2 hosts without `session.get()` use observed session updates.
 - One in-flight evaluation/wake per session. Status/waits/generation are
   rechecked immediately before `promptAsync`. Cooldown/reservation is recorded
-  before the call so a failed `promptAsync` cannot storm retries.
+  before the call so a failed `promptAsync` cannot storm retries. Each host
+  read inside an evaluation is bounded at 10s, so a stalled host read fails
+  like any other read error and releases the slot instead of pinning it; the
+  send itself is unbounded, since releasing the slot mid-send would duplicate
+  the wake.
 - Default-on safety: the scheduler evaluates a bounded host-progress fingerprint
   (TODO statuses plus child status/update evidence) to decide whether to keep
   waking. After **two** successful wakes with an unchanged fingerprint, further
