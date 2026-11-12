@@ -214,7 +214,6 @@ describe('optional implementation loading', () => {
       'companion/updater.ts',
       'tools/smartfetch/index.ts',
       'tools/smartfetch/tool.ts',
-      'tools/index.ts',
       'utils/index.ts',
       'admission-runtime.ts',
       'hooks/auto-update-checker/index.ts',

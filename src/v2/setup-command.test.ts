@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'bun:test';
 import * as fs from 'node:fs/promises';
-import { Error as NativeToolError } from '@opencode/schema/tool';
+import { Error as NativeToolError } from '@opencode/plugin/promise/tool';
 import {
   appendTaggedSyntheticPart,
   appendTrailingVolatileMessage,

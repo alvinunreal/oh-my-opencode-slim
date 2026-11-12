@@ -23,10 +23,10 @@ import { isMessageWithParts, isUserMessageWithParts } from '../types';
 export const BACKGROUND_JOB_BOARD_METADATA_KEY =
   'oh-my-opencode-slim.backgroundJobBoard';
 
-export const REFUSAL_CORRECTION_METADATA_KEY =
+const REFUSAL_CORRECTION_METADATA_KEY =
   'oh-my-opencode-slim.refusalContinuation';
 
-export function formatRefusalCorrectionText(
+function formatRefusalCorrectionText(
   corrections: Array<{ taskID: string; model: string }>,
 ): string {
   return formatSystemReminder(

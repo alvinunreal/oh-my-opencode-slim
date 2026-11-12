@@ -62,7 +62,7 @@ export interface TuiGatesRead {
   readFailed: boolean;
 }
 
-export function resolveMultiplexerType(value: unknown): MultiplexerType {
+function resolveMultiplexerType(value: unknown): MultiplexerType {
   const parsed = MultiplexerConfigSchema.safeParse(value ?? {});
   return parsed.success ? parsed.data.type : 'none';
 }
