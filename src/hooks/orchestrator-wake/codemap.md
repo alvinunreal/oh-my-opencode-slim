@@ -68,16 +68,13 @@ permission/question asks stay discoverable via `task_status`. Every
     restore the publication reason after parent busy transitions, even when
     periodic wakes are disabled; deletion still discards them.
     #1862: the three host reads inside `evaluate` (both snapshot reads and
-    `resolveSelection`) ride `boundHostRead` under
+    `resolveSelection`) ride `readWithWatchdog` under
     `WAKE_HOST_READ_TIMEOUT_MS` (10 s). A read that never settles would pin
     the in-flight slot, which eviction must not take; the timeout makes it an
     ordinary failed read that releases the slot in `finally`. `promptAsync`
     is deliberately unbounded: the host acknowledges it without waiting for
     the turn, and holding the slot while a send is in flight is what prevents
-    a duplicate wake. Over-cap sessions observe nothing different: rows past
-    `MAX_TRACKED_SESSIONS` keep their state, and the next touch after an
-    owner releases trims back to the cap.
-    Only a send the host never acknowledges can keep a row pinned.
+    a duplicate wake.
   - A delivered publication consumes the per-parent throttle inside
     `evaluate`, whether delivered directly, by timer or by one-flight
     waiter. Failed/vetoed attempts and periodic deliveries do not consume

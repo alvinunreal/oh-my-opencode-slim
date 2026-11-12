@@ -4,6 +4,7 @@ import {
   commitWakeReservation,
   getSuppressedDuplicateWakes,
   getWakeProgress,
+  MAX_TRACKED_SESSIONS,
   releaseWakeEvaluation,
   reserveWakeBodyOccurrence,
   resetOrchestratorWakeGateForTests,
@@ -14,8 +15,6 @@ import {
 const LIVE = 'ses_live';
 const EVICTABLE = 'ses_evictable';
 const QUIET = 'ses_quiet';
-/** Mirrors MAX_TRACKED_SESSIONS: the LRU cap in wake-gate.ts. */
-const TRACKED_CAP = 256;
 
 /** Touch `count` distinct sessions the way normal session traffic does. */
 function touchSessions(count: number, prefix = 'ses_fill'): void {
@@ -55,7 +54,7 @@ describe('in-flight evaluation slot', () => {
 
   test('LRU eviction does not release a live slot (#1861)', () => {
     claimInFlight(LIVE);
-    touchSessions(TRACKED_CAP);
+    touchSessions(MAX_TRACKED_SESSIONS);
     expect(tryBeginWakeEvaluation(LIVE)).toBeNull();
   });
 
@@ -64,7 +63,7 @@ describe('in-flight evaluation slot', () => {
     commitWakeReservation(LIVE, owner, 'fingerprint');
     commitWakeReservation(LIVE, owner, 'fingerprint');
 
-    touchSessions(TRACKED_CAP);
+    touchSessions(MAX_TRACKED_SESSIONS);
 
     const progress = getWakeProgress(LIVE);
     expect(progress.unchangedWakeCount).toBe(2);
@@ -79,7 +78,7 @@ describe('in-flight evaluation slot', () => {
       retried = true;
     });
 
-    touchSessions(TRACKED_CAP);
+    touchSessions(MAX_TRACKED_SESSIONS);
     releaseWakeEvaluation(LIVE, owner);
 
     expect(retried).toBe(true);
@@ -89,7 +88,7 @@ describe('in-flight evaluation slot', () => {
     claimInFlight(LIVE);
     reserveWakeBodyOccurrence(LIVE, 'wake body');
 
-    touchSessions(TRACKED_CAP);
+    touchSessions(MAX_TRACKED_SESSIONS);
 
     expect(reserveWakeBodyOccurrence(LIVE, 'wake body').repeat).toBe(true);
     expect(getSuppressedDuplicateWakes(LIVE)).toBe(1);
@@ -101,13 +100,13 @@ describe('in-flight evaluation slot', () => {
     releaseWakeEvaluation(EVICTABLE, owner);
     expect(getWakeProgress(EVICTABLE).lastFingerprint).toBe('fingerprint');
 
-    touchSessions(TRACKED_CAP);
+    touchSessions(MAX_TRACKED_SESSIONS);
 
     expect(getWakeProgress(EVICTABLE).lastFingerprint).toBeUndefined();
   });
 
   test('LRU eviction never evicts the session being touched (#1861)', () => {
-    for (let index = 0; index < TRACKED_CAP; index += 1) {
+    for (let index = 0; index < MAX_TRACKED_SESSIONS; index += 1) {
       claimInFlight(`ses_live${index}`);
     }
 
@@ -123,7 +122,7 @@ describe('in-flight evaluation slot', () => {
   });
 
   test('eviction resumes after a live owner releases (#1861)', () => {
-    const owners = Array.from({ length: TRACKED_CAP }, (_, index) =>
+    const owners = Array.from({ length: MAX_TRACKED_SESSIONS }, (_, index) =>
       claimInFlight(`ses_live${index}`),
     );
     commitWakeReservation('ses_live0', owners[0], 'fingerprint-0');
@@ -143,7 +142,7 @@ describe('in-flight evaluation slot', () => {
     claimInFlight('ses_pinned');
     const oldest = getWakeProgress('ses_oldest');
     const newer = getWakeProgress('ses_newer');
-    for (let index = 0; index < TRACKED_CAP - 3; index += 1) {
+    for (let index = 0; index < MAX_TRACKED_SESSIONS - 3; index += 1) {
       claimInFlight(`ses_fill${index}`);
     }
     // At the cap: pinned (live), then oldest and newer (both evictable).

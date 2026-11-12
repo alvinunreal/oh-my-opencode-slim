@@ -33,7 +33,7 @@ type WakeGateStore = {
 
 const STORE_KEY = 'oh-my-opencode-slim.orchestrator-wake-gate';
 const HOLDERS_KEY = 'oh-my-opencode-slim.orchestrator-wake-gate-holders';
-const MAX_TRACKED_SESSIONS = 256;
+export const MAX_TRACKED_SESSIONS = 256;
 const MAX_HOLDER_SESSIONS = 512;
 
 /** Hook instances (by token) that serve each tracked session. Separate key so

@@ -141,10 +141,10 @@ export const ORCHESTRATOR_WAKE_UNCHANGED_CAP = 2;
  * its session's in-flight slot until it returns and eviction never takes a
  * live row, so a read that never settles would pin both forever. Reads have
  * no side effects, so a timeout is just a failed read: ordinary error path,
- * slot released in `finally`. Three reads stay well under the 60s wake
- * interval floor. `shortcut: a send the host never acknowledges pins the
- * slot until the process restarts; bound it if a hung prompt_async is ever
- * observed. */
+ * slot released in `finally`. Three reads fit within the 60s wake interval
+ * floor. `shortcut: a send the host never acknowledges pins the slot until
+ * the process restarts; bound it if a hung prompt_async is ever observed.`
+ * Exported for unit tests (watchdog advance). */
 export const WAKE_HOST_READ_TIMEOUT_MS = 10_000;
 
 /**
@@ -848,8 +848,7 @@ export function createOrchestratorWakeScheduler(
   const cancelTimeout: TimerSeam['clearTimeout'] =
     options.clearTimeout ?? ((timer) => clearTimeout(timer));
 
-  /** Every host read inside an evaluation rides the watchdog (#1862). */
-  const boundHostRead = <T>(operation: Promise<T>, message: string) =>
+  const readWithWatchdog = <T>(operation: Promise<T>, message: string) =>
     withTimeout(operation, WAKE_HOST_READ_TIMEOUT_MS, message, {
       setTimeout: scheduleTimeout,
       clearTimeout: cancelTimeout,
@@ -1786,11 +1785,11 @@ export function createOrchestratorWakeScheduler(
     let accepted = false;
 
     try {
-      const snapshot = await boundHostRead<WakeSnapshot | undefined>(
+      const snapshot = await readWithWatchdog<WakeSnapshot | undefined>(
         wakeMode === 'children'
           ? readChildrenSnapshot(sessionID)
           : readHostSnapshot(sessionID),
-        'orchestrator-wake: host snapshot read timed out',
+        'host snapshot read timed out',
       );
       if (!snapshot || state.generation !== generation) return false;
       if (!state.continuousIdle) return false;
@@ -1846,11 +1845,11 @@ export function createOrchestratorWakeScheduler(
       }
 
       // Recheck host status/waits immediately before promptAsync.
-      const latest = await boundHostRead<WakeSnapshot | undefined>(
+      const latest = await readWithWatchdog<WakeSnapshot | undefined>(
         wakeMode === 'children'
           ? readChildrenSnapshot(sessionID)
           : readHostSnapshot(sessionID),
-        'orchestrator-wake: host recheck read timed out',
+        'host recheck read timed out',
       );
       if (!latest || state.generation !== generation) return false;
       if (!state.continuousIdle) return false;
@@ -1952,9 +1951,9 @@ export function createOrchestratorWakeScheduler(
       // observable (matching the historical behavior for sessions that
       // always ran orchestrator).
       const selection = options.resolveSelection
-        ? await boundHostRead(
+        ? await readWithWatchdog(
             options.resolveSelection(sessionID),
-            'orchestrator-wake: selection read timed out',
+            'selection read timed out',
           ).catch(() => undefined)
         : undefined;
       // The await above is a new race window: an external message can
