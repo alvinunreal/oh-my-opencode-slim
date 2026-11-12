@@ -772,27 +772,6 @@ function buildChildTail(
   );
 }
 
-/**
- * Whether `rules` already end with exactly `tail` (the deny-ceiling tail is
- * the literal suffix, so nothing follows it that a host could evaluate after
- * the ceiling). Used to keep the child-payload tail idempotent.
- */
-function rulesEndWithTail(
-  rules: readonly V2PermissionRule[],
-  tail: readonly V2PermissionRule[],
-): boolean {
-  if (rules.length < tail.length) return false;
-  const offset = rules.length - tail.length;
-  return tail.every((rule, index) => {
-    const existing = rules[offset + index];
-    return (
-      existing.action === rule.action &&
-      existing.resource === rule.resource &&
-      existing.effect === rule.effect
-    );
-  });
-}
-
 function keepLastRules(rules: readonly V2PermissionRule[]): V2PermissionRule[] {
   const seen = new Set<string>();
   // Last-match-wins: removing an earlier copy cannot change any decision.
@@ -1832,9 +1811,9 @@ export function buildResolvedAgentRegistry(
         // external_directory guard floor as the registered policy, so the
         // ceiling's default-effect allow can never synthesize a grant for a
         // child payload that never declared the guard. Non-marketplace agents
-        // have no ceilings and keep the untouched host-rule pass-through.
+        // have no ceilings and use the compacted host rules.
         baselineRules: constraints ? EXTERNAL_DIRECTORY_GUARD_FLOOR : [],
-        hostRules: rules,
+        hostRules: keepLastRules(rules),
         ...(constraints ? { ceilings: constraints } : {}),
       });
       const compiled = policy.rules;
@@ -1851,9 +1830,9 @@ export function buildResolvedAgentRegistry(
       // compiled plugin child payload so findLast always terminates on it.
       // Derived from the same registered permission map the static policy was
       // compiled from — never hardcoded per agent; empty for agents without
-      // declarations (the orchestrator), whose payloads pass through
-      // untouched. Idempotent: a payload that already ends with the tail is
-      // not duplicated.
+      // declarations (the orchestrator), whose compacted payloads pass through.
+      // Input is finalized agent rules (setup.ts), not stored session rules.
+      // Recompiling stored output is not a supported contract.
       //
       // A deny tail is a monotone ceiling — appending it can only narrow what
       // the host granted, so it is always safe; wildcard-action denies stay
@@ -1881,63 +1860,10 @@ export function buildResolvedAgentRegistry(
           )
         : frozenDenyCeilings[agent];
       if (!denyCeiling || denyCeiling.length === 0) return compiled;
-      // Recognize legacy raw tails before expanding their repeated host rules.
-      const first = denyCeiling[0];
-      const seen = new Map<
-        string,
-        Map<string, Set<V2PermissionRule['effect']>>
-      >();
-      const suffix: V2PermissionRule[] = [];
-      for (let start = compiled.length - 1; start >= 0; start -= 1) {
-        const rule = compiled[start];
-        let resources = seen.get(rule.action);
-        if (!resources) {
-          resources = new Map();
-          seen.set(rule.action, resources);
-        }
-        let effects = resources.get(rule.resource);
-        if (!effects) {
-          effects = new Set();
-          resources.set(rule.resource, effects);
-        }
-        if (effects.has(rule.effect)) continue;
-        effects.add(rule.effect);
-        suffix.push(rule);
-        if (
-          rule.action !== first.action ||
-          rule.resource !== first.resource ||
-          rule.effect !== first.effect
-        )
-          continue;
-        const rawTail = buildChildTail(compiled.slice(0, start), denyCeiling);
-        if (rulesEndWithTail(compiled, rawTail)) {
-          return [
-            ...compiled.slice(0, compiled.length - rawTail.length),
-            ...keepLastRules(rawTail),
-          ];
-        }
-        const target = keepLastRules(rawTail);
-        if (
-          target.length === suffix.length &&
-          rulesEndWithTail(suffix.toReversed(), target)
-        )
-          return compiled;
-        if (suffix.length > target.length) break;
-      }
-      const rawTail = buildChildTail(compiled, denyCeiling);
-      const tail = keepLastRules(rawTail);
-      // A duplicate opening deny can hide the raw boundary from the scan.
-      if (rulesEndWithTail(compiled, rawTail)) {
-        const prefix = compiled.slice(0, compiled.length - rawTail.length);
-        const prefixTail = buildChildTail(prefix, denyCeiling);
-        if (
-          prefixTail.length === rawTail.length &&
-          rulesEndWithTail(rawTail, prefixTail)
-        )
-          return [...prefix, ...tail];
-      }
-      if (rulesEndWithTail(compiled, tail)) return compiled;
-      return [...compiled, ...tail];
+      return keepLastRules([
+        ...compiled,
+        ...buildChildTail(compiled, denyCeiling),
+      ]);
     },
     mcpConfig: frozenMcps,
     managedMcpConfig: frozenPluginMcps,
