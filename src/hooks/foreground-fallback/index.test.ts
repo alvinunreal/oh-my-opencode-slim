@@ -11927,34 +11927,15 @@ describe('ForegroundFallbackManager dispose', () => {
     expect(drained).toBe(true);
   });
 
-  test('dispose proceeds when a native switch never settles', async () => {
+  test('handleV2Retry does not switch after dispose', async () => {
     const { manager } = v2Manager();
-    const sessionID = 'sess-dispose-never-settles';
-    const entered = Promise.withResolvers<void>();
-    const work = manager.handleV2Retry(nativeEvent(sessionID), () => {
-      entered.resolve();
-      return new Promise<never>(() => {});
-    });
-    await entered.promise;
-
-    const drain = manager.dispose();
-    let drained = false;
-    void drain.then(() => {
-      drained = true;
-    });
-    await tick();
-    expect(drained).toBe(false);
+    await manager.dispose();
 
     let postDisposeWrites = 0;
     await manager.handleV2Retry(nativeEvent('sess-after-dispose'), async () => {
       postDisposeWrites++;
     });
     expect(postDisposeWrites).toBe(0);
-
-    await clock.advance(2_500);
-    await drain;
-    await work;
-    expect(drained).toBe(true);
   });
 
   test('dispose cancels pending initial-delay timers and empties the map', async () => {

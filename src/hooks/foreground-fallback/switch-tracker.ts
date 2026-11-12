@@ -7,7 +7,7 @@ import type { TimerSeam } from '../../utils/timer-seam';
 export class SwitchTracker {
   private readonly pending = new Set<Promise<unknown>>();
 
-  constructor(private readonly timers?: TimerSeam) {}
+  constructor(private readonly timers: TimerSeam) {}
 
   get size(): number {
     return this.pending.size;

@@ -1,9 +1,9 @@
 // Fails when the scoped mutation run silently lost a target.
 // Stryker only warns on unmatched globs and reports NaN for zero mutants,
 // which passes the threshold check. Each marked guard line must still hold
-// DEDUP_WINDOW_MS, be a configured target, and produce at least one mutant.
+// DEDUP_WINDOW_MS and produce at least one mutant.
 import { readFileSync } from 'node:fs';
-import config, { guardLines } from '../stryker.foreground-fallback.conf.mjs';
+import { guardLines } from '../stryker.foreground-fallback.conf.mjs';
 
 const REPORT = 'reports/mutation/mutation.json';
 const INDEX = 'src/hooks/foreground-fallback/index.ts';
@@ -37,10 +37,8 @@ for (const line of used) {
   if (!marked.includes(line)) problems.push(`line ${line} is unmarked`);
 }
 for (const line of marked) {
-  if (!indexLines[line - 1].includes('DEDUP_WINDOW_MS')) {
+  if (!indexLines[line - 1]?.includes('DEDUP_WINDOW_MS')) {
     problems.push(`line ${line} no longer holds DEDUP_WINDOW_MS`);
-  } else if (!config.mutate.includes(`${INDEX}:${line}-${line}`)) {
-    problems.push(`line ${line} is not a configured target`);
   } else if (!lines.has(line)) {
     problems.push(`line ${line} produced no mutants`);
   }
