@@ -4119,6 +4119,9 @@ describe('plugin config model inheritance', () => {
   test('v1 exposes enabled bundled skills without overriding user skills', async () => {
     const hooks = await loadConfiguredPlugin({ disabled_skills: ['reflect'] });
     const configDir = lastConfigDir as string;
+    process.env.HOME = configDir;
+    process.env.XDG_CONFIG_HOME = path.join(configDir, 'config');
+    delete process.env.OPENCODE_DISABLE_EXTERNAL_SKILLS;
     const userSkill = path.join(configDir, 'skills', 'codemap');
     await mkdir(userSkill, { recursive: true });
     await Bun.write(
@@ -4143,6 +4146,7 @@ describe('plugin config model inheritance', () => {
         urls: ['https://example.com/skills'],
       },
     };
+    const home = spyOn(os, 'homedir').mockReturnValue(configDir);
     try {
       await hooks.config?.(hostConfig as never);
       const paths = [...hostConfig.skills.paths];
@@ -4166,6 +4170,7 @@ describe('plugin config model inheritance', () => {
         ),
       ).toBe(false);
     } finally {
+      home.mockRestore();
       await hooks.dispose?.();
     }
   });

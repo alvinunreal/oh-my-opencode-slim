@@ -26,7 +26,8 @@ async function runRecovery(mode: string) {
           evicted = !existsSync(cachedPath);
           if (mode === 'recover' || mode === 'missing') {
             const pkg = createRequire(import.meta.url).resolve('@ast-grep/cli/package.json');
-            copyFileSync(join(dirname(pkg), process.platform === 'win32' ? 'ast-grep.exe' : 'ast-grep'), cachedPath);
+            const { resolveBinaryPath } = createRequire(import.meta.url)(join(dirname(pkg), 'postinstall.js'));
+            copyFileSync(resolveBinaryPath(), cachedPath);
           } else {
             writeFileSync(cachedPath, badBinary, { mode: 0o755 });
           }
