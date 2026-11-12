@@ -3180,6 +3180,33 @@ describe('child permission payload stance tail', () => {
     expect(once.slice(0, payload.length)).toEqual(payload);
   });
 
+  test('child tail dedupe compacts one legacy raw tail without changing its host', () => {
+    const { registry, payload } = duplicateTailFixture();
+    const other = registry
+      .compileChildPermissions('explorer', payload)
+      .slice(payload.length)
+      .filter((rule) => rule.action !== 'edit');
+    const rawTail: V2PermissionRule[] = [
+      { action: 'edit', resource: '*', effect: 'deny' },
+      ...['src/a/*', 'src/b/*', 'src/c/*'].flatMap((resource) => [
+        { action: 'edit', resource, effect: 'allow' as const },
+        ...payload.slice(1),
+      ]),
+      ...other,
+    ];
+    const legacy = [...payload, ...rawTail];
+    expect(legacy).toHaveLength(25);
+    const compact = registry.compileChildPermissions('explorer', legacy);
+    expect(compact).toHaveLength(21);
+    expect(compact.slice(0, payload.length)).toEqual(payload);
+    expect(compact).toEqual(
+      registry.compileChildPermissions('explorer', payload),
+    );
+    expect(registry.compileChildPermissions('explorer', compact)).toEqual(
+      compact,
+    );
+  });
+
   const EDIT_GRID = [
     'src/index.ts',
     'src/private/approved.ts',
@@ -3191,6 +3218,40 @@ describe('child permission payload stance tail', () => {
     'lib/a.ts',
     'README.md',
   ];
+
+  test('child tail dedupe is idempotent when the opening deny moves last', () => {
+    const registry = build(
+      runtimeFor({
+        disabled_agents: [],
+        agents: {
+          explorer: {
+            permission: {
+              edit: { 'src/private/*': 'deny', 'src/*': 'allow' },
+            },
+          },
+        },
+      }),
+      {},
+      { hostFlavor: 'v2' },
+    );
+    const payload: V2PermissionRule[] = [
+      { action: 'edit', resource: '*', effect: 'allow' },
+      { action: 'edit', resource: 'src/private/*', effect: 'deny' },
+    ];
+    const once = registry.compileChildPermissions('explorer', payload);
+    const twice = registry.compileChildPermissions('explorer', once);
+    const expected: V2PermissionRule[] = [
+      { action: 'edit', resource: '*', effect: 'allow' },
+      { action: 'edit', resource: 'src/private/*', effect: 'deny' },
+      { action: 'edit', resource: 'src/*', effect: 'allow' },
+      { action: 'edit', resource: 'src/private/*', effect: 'deny' },
+    ];
+    expect(once.filter((rule) => rule.action === 'edit')).toEqual(expected);
+    expect(twice.filter((rule) => rule.action === 'edit')).toHaveLength(4);
+    expect(twice.filter((rule) => rule.action === 'edit')).toEqual(expected);
+    expect(twice).toEqual(once);
+    expect(once.slice(0, payload.length)).toEqual(payload);
+  });
 
   test('replayed allow never reopens a narrower host deny inside its pattern', () => {
     const runtime = runtimeFor({

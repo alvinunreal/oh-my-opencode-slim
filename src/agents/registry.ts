@@ -1881,31 +1881,52 @@ export function buildResolvedAgentRegistry(
           )
         : frozenDenyCeilings[agent];
       if (!denyCeiling || denyCeiling.length === 0) return compiled;
-      // Idempotent: a payload that already ends with the tail built from its
-      // own prefix is returned unchanged. Every tail opens with the
-      // ceiling's first deny verbatim, so only those positions can start it.
+      // Recognize legacy raw tails before expanding their repeated host rules.
       const first = denyCeiling[0];
+      const seen = new Map<
+        string,
+        Map<string, Set<V2PermissionRule['effect']>>
+      >();
+      const suffix: V2PermissionRule[] = [];
       for (let start = compiled.length - 1; start >= 0; start -= 1) {
         const rule = compiled[start];
+        let resources = seen.get(rule.action);
+        if (!resources) {
+          resources = new Map();
+          seen.set(rule.action, resources);
+        }
+        let effects = resources.get(rule.resource);
+        if (!effects) {
+          effects = new Set();
+          resources.set(rule.resource, effects);
+        }
+        if (effects.has(rule.effect)) continue;
+        effects.add(rule.effect);
+        suffix.push(rule);
         if (
           rule.action !== first.action ||
           rule.resource !== first.resource ||
           rule.effect !== first.effect
         )
           continue;
-        const prefixTail = keepLastRules(
-          buildChildTail(compiled.slice(0, start), denyCeiling),
-        );
+        const rawTail = buildChildTail(compiled.slice(0, start), denyCeiling);
+        if (rulesEndWithTail(compiled, rawTail)) {
+          return [
+            ...compiled.slice(0, compiled.length - rawTail.length),
+            ...keepLastRules(rawTail),
+          ];
+        }
+        const target = keepLastRules(rawTail);
         if (
-          prefixTail.length === compiled.length - start &&
-          rulesEndWithTail(compiled, prefixTail)
+          target.length === suffix.length &&
+          rulesEndWithTail(suffix.toReversed(), target)
         )
           return compiled;
+        if (suffix.length > target.length) break;
       }
-      return [
-        ...compiled,
-        ...keepLastRules(buildChildTail(compiled, denyCeiling)),
-      ];
+      const tail = keepLastRules(buildChildTail(compiled, denyCeiling));
+      if (rulesEndWithTail(compiled, tail)) return compiled;
+      return [...compiled, ...tail];
     },
     mcpConfig: frozenMcps,
     managedMcpConfig: frozenPluginMcps,
