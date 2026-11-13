@@ -38,6 +38,7 @@ import {
   type V2PresetManagerContext,
   type V2PresetUiSurface,
 } from './preset-manager';
+import { registerQuestionTimeout } from './question-timeout-tui';
 import { bindSessionPreset } from './session-preset-apply';
 import { registerUpdateNotice } from './update-notice';
 
@@ -340,6 +341,11 @@ export async function runSetup(
   const disposers: Array<() => void | Promise<void>> = [];
   const baseCleanup = await omoTui.setup(ctx, gatesRead);
   if (typeof baseCleanup === 'function') disposers.push(baseCleanup);
+  const timeoutCleanup = registerQuestionTimeout(
+    ctx as unknown as Parameters<typeof registerQuestionTimeout>[0],
+    { timeoutMs: gatesRead.gates.questionTimeoutMs },
+  );
+  if (timeoutCleanup) disposers.push(timeoutCleanup);
 
   // `disabled_commands` gates the TUI entry exactly like it gates the
   // server command: a disabled command's palette/slash/keybind does not

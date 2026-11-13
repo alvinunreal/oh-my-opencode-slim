@@ -115,6 +115,14 @@ plugin rejected with "invalid tui export".
   the entry through the package's `exports["./tui"]` map — the server-side
   export plays no role in that discovery.
 
+The opt-in `questionTimeoutMs` setting runs in the OMOS TUI on v2 because the
+server plugin session API has no form-reply domain. It requires `tui` to be
+enabled and an attached OMOS TUI. A headless server or pane viewer does not own
+the timer. Restarting the TUI does not re-arm questions that were already open.
+V1 runs the same feature in its server plugin. See
+[Configuration Reference](configuration.md) for the accepted range and safety
+limits.
+
 The host entry builds retain their public paths and include ESM chunks for
 optional implementations. Install or copy the complete package: an entry file
 alone is no longer self-contained. Packed-artifact verification checks every

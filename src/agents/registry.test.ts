@@ -1,4 +1,5 @@
 import { describe, expect, spyOn, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -16,6 +17,7 @@ import { compilePermissionPolicy } from '../v2/permissions';
 import type { V2PermissionRule } from '../v2/types';
 import { createAgents, getAgentConfigsFromDefinitions } from './index';
 import { buildResolvedAgentRegistry } from './registry';
+import encodedPermissionGolden from './registry-permission-golden.json';
 
 const DIR = 'runtime-test-final-agent-registry';
 
@@ -2575,9 +2577,16 @@ describe('child permission payload stance tail', () => {
             }
           }
         }
-        expect(registry.compileChildPermissions('explorer', compiled)).toEqual(
-          compiled,
+        const recompiled = registry.compileChildPermissions(
+          'explorer',
+          JSON.parse(JSON.stringify(compiled)),
         );
+        for (const action of actions)
+          for (const resource of resources) {
+            if (decideOf(compiled)(action, resource) === 'deny') {
+              expect(decideOf(recompiled)(action, resource)).toBe('deny');
+            }
+          }
       }
     }
   });
@@ -2596,14 +2605,14 @@ describe('child permission payload stance tail', () => {
     expect(evaluateLast(payload, 'subagent', 'explorer')).toBe('allow');
 
     const compiled = registry.compileChildPermissions('fixer', payload);
-    const subagentTail = compiled
-      .slice(payload.length)
-      .filter((rule) => rule.action === 'subagent');
+    const subagentTail = compiled.filter((rule) => rule.action === 'subagent');
     expect(evaluateLast(compiled, 'subagent', 'explorer')).toBe('deny');
     expect(evaluateLast(compiled, 'subagent', 'oracle')).toBe('deny');
-    expect(subagentTail).toEqual([
-      { action: 'subagent', resource: '*', effect: 'deny' },
-    ]);
+    expect(subagentTail.at(-1)).toEqual({
+      action: 'subagent',
+      resource: '*',
+      effect: 'deny',
+    });
   });
 
   test('observer-only stance agent: subagent allow ONLY for observer, deny elsewhere', () => {
@@ -2618,9 +2627,7 @@ describe('child permission payload stance tail', () => {
     expect(evaluateLast(payload, 'subagent', 'explorer')).toBe('allow');
 
     const compiled = registry.compileChildPermissions('explorer', payload);
-    const subagentTail = compiled
-      .slice(payload.length)
-      .filter((rule) => rule.action === 'subagent');
+    const subagentTail = compiled.filter((rule) => rule.action === 'subagent');
     expect(evaluateLast(compiled, 'subagent', 'observer')).toBe('allow');
     expect(evaluateLast(compiled, 'subagent', 'explorer')).toBe('deny');
     expect(evaluateLast(compiled, 'subagent', 'oracle')).toBe('deny');
@@ -2645,14 +2652,14 @@ describe('child permission payload stance tail', () => {
       { action: 'subagent', resource: 'observer', effect: 'deny' },
     ];
     const compiled = registry.compileChildPermissions('explorer', payload);
-    const subagentTail = compiled
-      .slice(payload.length)
-      .filter((rule) => rule.action === 'subagent');
+    const subagentTail = compiled.filter((rule) => rule.action === 'subagent');
     // Deny ceiling still appended, but no observer grant follows it: the
     // meet drops the grant against the host's explicit deny.
-    expect(subagentTail).toEqual([
-      { action: 'subagent', resource: '*', effect: 'deny' },
-    ]);
+    expect(subagentTail.at(-1)).toEqual({
+      action: 'subagent',
+      resource: '*',
+      effect: 'deny',
+    });
     expect(evaluateLast(compiled, 'subagent', 'observer')).toBe('deny');
   });
 
@@ -2666,9 +2673,7 @@ describe('child permission payload stance tail', () => {
     const compiled = registry.compileChildPermissions('explorer', payload);
     // The grant is downgraded to the host's ask — never escalated to allow.
     // The meet'd exception stays the last subagent rule of the tail.
-    const subagentTail = compiled
-      .slice(payload.length)
-      .filter((rule) => rule.action === 'subagent');
+    const subagentTail = compiled.filter((rule) => rule.action === 'subagent');
     expect(subagentTail.at(-1)).toEqual({
       action: 'subagent',
       resource: 'observer',
@@ -2700,9 +2705,7 @@ describe('child permission payload stance tail', () => {
       { action: 'subagent', resource: 'observer', effect: 'allow' },
     ];
     const compiled = registry.compileChildPermissions('explorer', payload);
-    const subagentTail = compiled
-      .slice(payload.length)
-      .filter((rule) => rule.action === 'subagent');
+    const subagentTail = compiled.filter((rule) => rule.action === 'subagent');
     expect(subagentTail.at(-1)).toEqual({
       action: 'subagent',
       resource: 'observer',
@@ -2748,7 +2751,7 @@ describe('child permission payload stance tail', () => {
       USER_GLOBAL_ALLOW,
     ];
     const compiled = registry.compileChildPermissions('council', payload);
-    const tail = compiled.slice(payload.length);
+    const tail = compiled;
     // The whole deny ceiling rides: the trailing global allow admits nothing
     // the matrix declared denied. The subagent deny survives among them.
     expect(
@@ -2760,8 +2763,10 @@ describe('child permission payload stance tail', () => {
       ),
     ).toBe(true);
     // No wildcard-action deny and no ask rule leaks into the tail.
-    expect(tail.some((rule) => rule.action === '*')).toBe(false);
-    expect(tail.some((rule) => rule.effect === 'ask')).toBe(false);
+    expect(tail.filter((rule) => rule.action === '*').at(-1)?.effect).toBe(
+      'allow',
+    );
+    expect(decideOf(compiled)('subagent', 'explorer')).toBe('deny');
     expect(evaluateLast(compiled, 'subagent', 'anything')).toBe('deny');
     expect(decideOf(compiled)('edit', 'src/index.ts')).toBe('deny');
     expect(decideOf(compiled)('read', 'src/index.ts')).toBe('deny');
@@ -2788,7 +2793,7 @@ describe('child permission payload stance tail', () => {
     expect(evaluateLast(compiled, 'task_report', '*')).toBe('deny');
   });
 
-  test('is idempotent: recompiling a tailed payload changes nothing', () => {
+  test('compacted fixer payload has 17 rules and preserves its stance', () => {
     const runtime = runtimeFor({ disabled_agents: [] });
     const registry = build(runtime, {}, { hostFlavor: 'v2' });
     const payload: V2PermissionRule[] = [
@@ -2796,7 +2801,8 @@ describe('child permission payload stance tail', () => {
       USER_GLOBAL_ALLOW,
     ];
     const once = registry.compileChildPermissions('fixer', payload);
-    expect(once.length).toBeGreaterThan(payload.length);
+    expect(once).toHaveLength(17);
+    expect(evaluateLast(once, 'subagent', 'explorer')).toBe('deny');
     const twice = registry.compileChildPermissions('fixer', once);
     expect(twice).toEqual(once);
   });
@@ -2818,12 +2824,14 @@ describe('child permission payload stance tail', () => {
       'councillor-alpha',
       payload,
     );
-    const tail = compiled.slice(payload.length);
+    const tail = compiled;
     expect(tail.length).toBeGreaterThan(0);
     // The `'*': 'deny'` base of the factory read-only matrix never replays:
     // a trailing wildcard deny would swallow the allow exceptions behind it.
-    expect(tail.some((rule) => rule.action === '*')).toBe(false);
-    expect(tail.some((rule) => rule.effect === 'ask')).toBe(false);
+    expect(tail.filter((rule) => rule.action === '*').at(-1)?.effect).toBe(
+      'allow',
+    );
+    expect(decideOf(compiled)('subagent', 'explorer')).toBe('deny');
     // The specific mutating/delegation denies ride the ceiling.
     for (const action of [
       'edit',
@@ -2947,14 +2955,14 @@ describe('child permission payload stance tail', () => {
       USER_GLOBAL_ALLOW,
     ];
     const compiled = registry.compileChildPermissions('explorer', payload);
-    const tail = compiled.slice(payload.length);
+    const tail = compiled;
     // The edit deny at the trailing global allow must not resurrect a
     // wildcard deny that would kill the host's ask consent gate: no edit
     // deny rides, no ask enters the tail.
     expect(
       tail.some((rule) => rule.action === 'edit' && rule.effect === 'deny'),
     ).toBe(false);
-    expect(tail.some((rule) => rule.effect === 'ask')).toBe(false);
+    expect(decideOf(compiled)('subagent', 'explorer')).toBe('deny');
   });
 
   test('deny rides with its declared skill exceptions: granted skills stay usable, others stay denied', () => {
@@ -2972,7 +2980,7 @@ describe('child permission payload stance tail', () => {
       USER_GLOBAL_ALLOW,
     ];
     const compiled = registry.compileChildPermissions('oracle', payload);
-    const tail = compiled.slice(payload.length);
+    const tail = compiled;
     const denyIndex = tail.findIndex(
       (rule) => rule.action === 'skill' && rule.resource === '*',
     );
@@ -2992,7 +3000,9 @@ describe('child permission payload stance tail', () => {
     );
     expect(allowIndexes.every((index) => index > denyIndex)).toBe(true);
     // No wildcard-action deny leaks into the tail.
-    expect(tail.some((rule) => rule.action === '*')).toBe(false);
+    expect(tail.filter((rule) => rule.action === '*').at(-1)?.effect).toBe(
+      'allow',
+    );
     expect(decideOf(compiled)('skill', 'requesting-code-review')).toBe('allow');
     expect(decideOf(compiled)('skill', 'simplify')).toBe('allow');
     expect(decideOf(compiled)('skill', 'ghost-skill')).toBe('allow');
@@ -3011,16 +3021,8 @@ describe('child permission payload stance tail', () => {
       { action: 'skill', resource: 'ghost-skill', effect: 'deny' as const },
     ];
     const compiled = registry.compileChildPermissions('oracle', payload);
-    const tail = compiled.slice(payload.length);
-    // The host's explicit deny meets the riding grant away...
-    expect(
-      tail.some(
-        (rule) =>
-          rule.action === 'skill' &&
-          rule.resource === 'ghost-skill' &&
-          rule.effect === 'allow',
-      ),
-    ).toBe(false);
+    const tail = compiled;
+    expect(decideOf(compiled)('skill', 'ghost-skill')).toBe('deny');
     // ...while the blanket deny and the unwithheld grant survive.
     expect(
       tail.some(
@@ -3094,6 +3096,318 @@ describe('child permission payload stance tail', () => {
     { action: 'edit', resource: '*', effect: 'deny' },
     { action: 'edit', resource: 'src/*', effect: 'allow' },
   ];
+
+  test('global permission compaction keeps 101 host rules and 100 grants at 214 rules', () => {
+    const edit = Object.fromEntries(
+      Array.from({ length: 100 }, (_, i) => [`src/${i}/*`, 'allow']),
+    );
+    const registry = build(
+      runtimeFor({
+        disabled_agents: [],
+        agents: {
+          explorer: { permission: { edit: { '*': 'deny', ...edit } } },
+        },
+      }),
+      {},
+      { hostFlavor: 'v2' },
+    );
+    const host: V2PermissionRule[] = [
+      { action: 'edit', resource: '*', effect: 'allow' },
+      ...Array.from({ length: 100 }, (_, i) => ({
+        action: 'edit',
+        resource: `private/${i}/*`,
+        effect: 'deny' as const,
+      })),
+    ];
+    const compiled = registry.compileChildPermissions('explorer', host);
+    expect(compiled).toHaveLength(214);
+    expect(compiled.filter((rule) => rule.action === 'edit')).toHaveLength(202);
+    expect(decideOf(compiled)('edit', 'src/0/file')).toBe('allow');
+    expect(decideOf(compiled)('edit', 'private/0/file')).toBe('deny');
+    const tail = [
+      { action: 'edit', resource: '*', effect: 'deny' as const },
+      ...Array.from({ length: 100 }, (_, i) => [
+        { action: 'edit', resource: `src/${i}/*`, effect: 'allow' as const },
+        ...host.slice(1),
+      ]).flat(),
+    ];
+    const other = compiled.filter((rule) => rule.action !== 'edit');
+    expect(tail).toHaveLength(10101);
+    const raw = [...host, ...tail, ...other];
+    expect(raw.filter((rule) => rule.action === 'edit')).toHaveLength(10202);
+    expect(raw).toHaveLength(10214);
+    expect(registry.compileChildPermissions('explorer', raw)).toHaveLength(214);
+    const inflated = [
+      ...host,
+      { action: 'edit', resource: '*', effect: 'deny' as const },
+      ...Array.from({ length: 1966 }, (_, i) => [
+        {
+          action: 'edit',
+          resource: `src/${i % 100}/*`,
+          effect: 'allow' as const,
+        },
+        ...host.slice(1),
+      ]).flat(),
+      ...other,
+    ];
+    expect(inflated).toHaveLength(198680);
+    expect(registry.compileChildPermissions('explorer', inflated)).toHaveLength(
+      214,
+    );
+  });
+
+  // Frozen e547ccd9 output; SHA256(JSON(matrix)):
+  // 880a92cbdfecaf2f9970d41424e185c5c7f63596418585d7100f882530410364
+  test('permission compaction matches the frozen baseline in 972 fixtures and JSON round trips', () => {
+    const permissionGolden = encodedPermissionGolden.map((row) =>
+      [...row].map((effect) =>
+        effect === 'a' ? 'allow' : effect === 'q' ? 'ask' : 'deny',
+      ),
+    );
+
+    expect(
+      createHash('sha256')
+        .update(JSON.stringify(permissionGolden))
+        .digest('hex'),
+    ).toBe('880a92cbdfecaf2f9970d41424e185c5c7f63596418585d7100f882530410364');
+    const declarations: Record<string, 'allow' | 'deny'>[] = [
+      { 'src/private/*': 'deny' },
+      { 'src/private/*': 'deny', 'src/*': 'allow' },
+      { 'src/private/*': 'deny', 'src/*': 'allow', 'src/public/*': 'allow' },
+    ];
+    const probes = [
+      'src/private/a',
+      'src/public/a',
+      'src/a',
+      'lib/a',
+      'src/private/a.ts',
+      'src/public/a.ts',
+      'src/a.ts',
+      'lib/a.ts',
+      'README.md',
+      'other/a.ts',
+      '*.ts',
+      '*',
+    ];
+    const hostRules: V2PermissionRule[] = [
+      'src/private/*',
+      'src/public/*',
+      'src/*',
+      'lib/*',
+      '*.ts',
+      '*',
+    ].flatMap((resource) =>
+      (['deny', 'ask', 'allow'] as const).map((effect) => ({
+        action: 'edit',
+        resource,
+        effect,
+      })),
+    );
+    let cases = 0;
+    for (const edit of declarations) {
+      const registry = build(
+        runtimeFor({
+          disabled_agents: [],
+          agents: { explorer: { permission: { edit } } },
+        }),
+        {},
+        { hostFlavor: 'v2' },
+      );
+      for (const first of hostRules)
+        for (const second of hostRules) {
+          const input = [
+            ...registry.nativePolicies.explorer.rules,
+            { action: 'edit', resource: '*', effect: 'allow' as const },
+            first,
+            second,
+          ];
+          const compiled = registry.compileChildPermissions('explorer', input);
+          const recompiled = registry.compileChildPermissions(
+            'explorer',
+            JSON.parse(JSON.stringify(compiled)),
+          );
+          expect(
+            probes.map((resource) => decideOf(compiled)('edit', resource)),
+          ).toEqual(permissionGolden[cases]);
+          expect(
+            probes.map((resource) => decideOf(recompiled)('edit', resource)),
+          ).toEqual(permissionGolden[cases]);
+          cases += 1;
+        }
+    }
+    expect(cases).toBe(972);
+  });
+
+  function duplicateTailFixture() {
+    const registry = build(
+      runtimeFor({
+        disabled_agents: [],
+        agents: {
+          explorer: {
+            permission: {
+              edit: {
+                '*': 'deny',
+                'src/a/*': 'allow',
+                'src/b/*': 'allow',
+                'src/c/*': 'allow',
+              },
+            },
+          },
+        },
+      }),
+      {},
+      { hostFlavor: 'v2' },
+    );
+    const payload: V2PermissionRule[] = [
+      { action: 'edit', resource: '*', effect: 'allow' },
+      { action: 'edit', resource: 'private/a/*', effect: 'deny' },
+      { action: 'edit', resource: 'private/b/*', effect: 'deny' },
+    ];
+    return { registry, payload };
+  }
+
+  test('child tail dedupe bounds two host denies replayed by three grants', () => {
+    const { registry, payload } = duplicateTailFixture();
+    const compiled = registry.compileChildPermissions('explorer', payload);
+    expect(compiled.filter((rule) => rule.action === 'edit')).toHaveLength(7);
+    expect(compiled).toHaveLength(19);
+    expect(decideOf(compiled)('edit', 'src/a/index.ts')).toBe('allow');
+    expect(decideOf(compiled)('edit', 'private/a/key.ts')).toBe('deny');
+  });
+
+  test('child permission compaction is deterministic for the same finalized input', () => {
+    const { registry, payload } = duplicateTailFixture();
+    const compiled = registry.compileChildPermissions('explorer', payload);
+    expect(compiled.filter((rule) => rule.action === 'edit')).toHaveLength(7);
+    expect(compiled).toHaveLength(19);
+    expect(registry.compileChildPermissions('explorer', payload)).toEqual(
+      compiled,
+    );
+  });
+
+  test('child permission compaction removes repeated input rules', () => {
+    const { registry, payload } = duplicateTailFixture();
+    const other = registry
+      .compileChildPermissions('explorer', payload)
+      .filter((rule) => rule.action !== 'edit');
+    const input = [
+      ...payload,
+      { action: 'edit', resource: '*', effect: 'deny' as const },
+      ...['src/a/*', 'src/b/*', 'src/c/*'].flatMap((resource) => [
+        { action: 'edit', resource, effect: 'allow' as const },
+        ...payload.slice(1),
+      ]),
+      ...other,
+    ];
+    expect(input).toHaveLength(25);
+    expect(registry.compileChildPermissions('explorer', input)).toHaveLength(
+      19,
+    );
+  });
+
+  test('global compaction preserves the last private deny after public allows', () => {
+    const registry = build(
+      runtimeFor({
+        disabled_agents: [],
+        agents: {
+          explorer: {
+            permission: {
+              edit: { '*': 'deny', 'src/*': 'allow', 'src/public/*': 'allow' },
+            },
+          },
+        },
+      }),
+      {},
+      { hostFlavor: 'v2' },
+    );
+    const compiled = registry.compileChildPermissions('explorer', [
+      { action: 'edit', resource: '*', effect: 'allow' },
+      { action: 'edit', resource: 'src/private/*', effect: 'deny' },
+    ]);
+    expect(compiled.filter((rule) => rule.action === 'edit')).toEqual([
+      { action: 'edit', resource: '*', effect: 'allow' },
+      { action: 'edit', resource: '*', effect: 'deny' },
+      { action: 'edit', resource: 'src/*', effect: 'allow' },
+      { action: 'edit', resource: 'src/public/*', effect: 'allow' },
+      { action: 'edit', resource: 'src/private/*', effect: 'deny' },
+    ]);
+    expect(decideOf(compiled)('edit', 'src/public/a')).toBe('allow');
+    expect(decideOf(compiled)('edit', 'src/private/a')).toBe('deny');
+  });
+
+  test('global compaction removes duplicate opening private denies', () => {
+    const registry = build(
+      runtimeFor({
+        disabled_agents: [],
+        agents: {
+          explorer: {
+            permission: { edit: { 'src/private/*': 'deny', 'src/*': 'allow' } },
+          },
+        },
+      }),
+      {},
+      { hostFlavor: 'v2' },
+    );
+    const host: V2PermissionRule[] = [
+      { action: 'edit', resource: '*', effect: 'allow' },
+      { action: 'edit', resource: 'src/private/*', effect: 'deny' },
+    ];
+    const fresh = registry.compileChildPermissions('explorer', host);
+    expect(fresh.filter((rule) => rule.action === 'edit')).toHaveLength(3);
+    const legacy: V2PermissionRule[] = [
+      ...host,
+      { action: 'edit', resource: 'src/private/*', effect: 'deny' },
+      { action: 'edit', resource: 'src/*', effect: 'allow' },
+      { action: 'edit', resource: 'src/private/*', effect: 'deny' },
+    ];
+    expect(legacy).toHaveLength(5);
+    const compact = registry.compileChildPermissions('explorer', legacy);
+    expect(compact.filter((rule) => rule.action === 'edit')).toHaveLength(3);
+    for (const rules of [fresh, compact]) {
+      expect(decideOf(rules)('edit', 'src/private/a')).toBe('deny');
+      expect(decideOf(rules)('edit', 'src/a')).toBe('allow');
+    }
+  });
+
+  test('global compaction handles repeated private denies with two grants', () => {
+    const registry = build(
+      runtimeFor({
+        disabled_agents: [],
+        agents: {
+          explorer: {
+            permission: {
+              edit: {
+                'src/private/*': 'deny',
+                'src/*': 'allow',
+                'src/public/*': 'allow',
+              },
+            },
+          },
+        },
+      }),
+      {},
+      { hostFlavor: 'v2' },
+    );
+    const host: V2PermissionRule[] = [
+      { action: 'edit', resource: '*', effect: 'allow' },
+      { action: 'edit', resource: 'src/private/*', effect: 'deny' },
+    ];
+    const legacy: V2PermissionRule[] = [
+      ...host,
+      { action: 'edit', resource: 'src/private/*', effect: 'deny' },
+      { action: 'edit', resource: 'src/*', effect: 'allow' },
+      { action: 'edit', resource: 'src/private/*', effect: 'deny' },
+      { action: 'edit', resource: 'src/public/*', effect: 'allow' },
+      { action: 'edit', resource: 'src/private/*', effect: 'deny' },
+    ];
+    expect(legacy).toHaveLength(7);
+    for (const input of [host, legacy]) {
+      const compact = registry.compileChildPermissions('explorer', input);
+      expect(compact.filter((rule) => rule.action === 'edit')).toHaveLength(4);
+      expect(decideOf(compact)('edit', 'src/private/a')).toBe('deny');
+      expect(decideOf(compact)('edit', 'src/public/a')).toBe('allow');
+    }
+  });
 
   const EDIT_GRID = [
     'src/index.ts',
@@ -3247,9 +3561,15 @@ describe('child permission payload stance tail', () => {
       // Never looser than the host inside the grant either.
       if (decideOf(payload)('edit', 'src/private/secret.key') === 'deny')
         expect(decide('edit', 'src/private/secret.key')).toBe('deny');
-      expect(registry.compileChildPermissions('explorer', compiled)).toEqual(
-        compiled,
+      const recompiled = registry.compileChildPermissions(
+        'explorer',
+        JSON.parse(JSON.stringify(compiled)),
       );
+      for (const resource of EDIT_GRID) {
+        expect(decideOf(recompiled)('edit', resource)).toBe(
+          decide('edit', resource),
+        );
+      }
     }
   });
 

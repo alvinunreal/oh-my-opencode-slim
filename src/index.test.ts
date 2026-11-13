@@ -5693,6 +5693,85 @@ describe('plugin foreground fallback host gating', () => {
     await rm(projectDir, { recursive: true, force: true });
   });
 
+  test('T12: lifecycle wake selects the restored origin over the host fallback', async () => {
+    const createScheduler = orchestratorWake.createOrchestratorWakeScheduler;
+    const scheduler = spyOn(
+      orchestratorWake,
+      'createOrchestratorWakeScheduler',
+    ).mockImplementation((...args) => createScheduler(...args));
+    const { client, messages } = createFallbackClient();
+    client.session.get = mock(async () => ({
+      data: {
+        agent: 'orchestrator',
+        model: { providerID: 'openai', id: 'gpt-c' },
+      },
+    }));
+    messages.mockResolvedValue({
+      data: [
+        {
+          info: {
+            id: 'user',
+            role: 'user',
+            model: { providerID: 'openai', modelID: 'gpt-b', variant: 'high' },
+          },
+          parts: [{ type: 'text', text: 'work' }],
+        },
+      ],
+    });
+    const hooks = await plugin({
+      client,
+      directory: projectDir,
+      worktree: projectDir,
+      serverUrl: new URL('http://127.0.0.1:4096'),
+    } as never);
+    try {
+      await hooks['chat.message']?.(
+        {
+          sessionID: 'root',
+          agent: 'orchestrator',
+          model: { providerID: 'openai', modelID: 'gpt-b' },
+        } as never,
+        {} as never,
+      );
+      await hooks.event?.({
+        event: {
+          type: 'message.updated',
+          properties: {
+            info: {
+              id: 'assistant',
+              sessionID: 'root',
+              role: 'assistant',
+              agent: 'orchestrator',
+              providerID: 'openai',
+              modelID: 'gpt-b',
+            },
+          },
+        },
+      } as never);
+      await hooks.event?.({
+        event: {
+          type: 'session.error',
+          properties: {
+            sessionID: 'root',
+            error: { type: 'provider.content-filter', message: 'blocked' },
+          },
+        },
+      } as never);
+      await hooks.event?.({
+        event: { type: 'session.idle', properties: { sessionID: 'root' } },
+      } as never);
+      const resolve = scheduler.mock.calls[0]?.[1].resolveSelection;
+      expect(resolve).toBeDefined();
+      expect(await resolve?.('root')).toMatchObject({
+        model: { providerID: 'openai', modelID: 'gpt-b' },
+        variant: 'high',
+      });
+    } finally {
+      await hooks.dispose?.();
+      scheduler.mockRestore();
+    }
+  });
+
   test('companion preserves replay busy when an older error starts fallback', async () => {
     await Bun.write(
       `${projectDir}/oh-my-opencode-slim.json`,

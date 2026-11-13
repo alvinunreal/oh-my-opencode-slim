@@ -83,6 +83,35 @@ function send(board: BackgroundJobBoard, message: string, timeoutMs?: number) {
 }
 
 describe('task_message', () => {
+  test('T13: pins the restore target, or the current child model when unavailable', async () => {
+    const board = new BackgroundJobBoard();
+    registerRunningChild(board);
+    const prompt = makePrompt();
+    const session = makeSession(prompt);
+    client = { session };
+    let restore = true;
+    const task = createTaskMessageTool({
+      input: { directory: '/test', client } as any,
+      backgroundJobBoard: board,
+      restoreTarget: () =>
+        restore ? { model: 'primary/a', variant: 'high' } : undefined,
+    }).task_message;
+    await task.execute({ task_id: 'ses_child1', message: 'first' }, {
+      sessionID: 'parent-1',
+    } as any);
+    expect(prompt.mock.calls[0]?.[0].body).toMatchObject({
+      model: { providerID: 'primary', modelID: 'a' },
+      variant: 'high',
+    });
+    restore = false;
+    await task.execute({ task_id: 'ses_child1', message: 'second' }, {
+      sessionID: 'parent-1',
+    } as any);
+    expect(prompt.mock.calls[1]?.[0].body).toMatchObject({
+      model: { providerID: 'openai', modelID: 'gpt-6' },
+      variant: 'default',
+    });
+  });
   test('the schema-level message cap admits 2000 chars and rejects 2001', async () => {
     // The cap lives in the host-enforced zod schema; retuning it touches this.
     const tool = createTool(new BackgroundJobBoard());

@@ -41,6 +41,7 @@ export interface TuiGatesSnapshot extends SidebarConfigState {
   tuiEnabled: boolean;
   sidebarEnabled: boolean;
   updateCheckerEnabled: boolean;
+  questionTimeoutMs: number;
   disabledCommands: ReadonlySet<string>;
 }
 
@@ -83,6 +84,7 @@ function failOpenTuiGates(): TuiGatesSnapshot {
     multiplexerType: 'none',
     presetName: undefined,
     updateCheckerEnabled: true,
+    questionTimeoutMs: 0,
     disabledCommands: new Set(),
   };
 }
@@ -111,6 +113,7 @@ function deriveTuiGates(snapshot: PluginConfigSnapshot): TuiGatesSnapshot {
     tuiEnabled: featureGates.tui,
     sidebarEnabled: featureGates.sidebar,
     updateCheckerEnabled: featureGates.updateChecker,
+    questionTimeoutMs: config.questionTimeoutMs ?? 0,
     configInvalid: warningsMakeConfigInvalid(snapshot.warnings),
     compactSidebar: config.compactSidebar ?? true,
     showHiddenAgents: config.sidebarShowHiddenAgents ?? false,

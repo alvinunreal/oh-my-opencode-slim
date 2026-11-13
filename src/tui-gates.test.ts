@@ -11,6 +11,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import tuiPlugin, { readConfigState, readTuiGates } from './tui';
+import { readTuiGatesOnly } from './tui-gates';
 
 interface TestEnvironment {
   root: string;
@@ -169,6 +170,21 @@ describe('TUI feature gates', () => {
   afterEach(() => {
     env.restore();
     fs.rmSync(env.root, { recursive: true, force: true });
+  });
+
+  test('question timeout defaults off and follows the configured value', () => {
+    // Mutation: omit timeout from the TUI gate projection.
+    writeUserConfig({});
+    expect(readTuiGates(env.projectDir).gates.questionTimeoutMs).toBe(0);
+    writeUserConfig({ questionTimeoutMs: 60_000 });
+    expect(readTuiGates(env.projectDir).gates.questionTimeoutMs).toBe(60_000);
+  });
+
+  test('a thrown config read leaves question timeout off', () => {
+    // Mutation: enable question timeout in fail-open defaults.
+    const read = readTuiGatesOnly(null as never);
+    expect(read.readFailed).toBe(true);
+    expect(read.gates.questionTimeoutMs).toBe(0);
   });
 
   test('entry and unchanged polling share one parsed config snapshot', async () => {

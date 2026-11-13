@@ -11,7 +11,11 @@ import { pluginDisposedMessage } from '../hooks/task-session-manager/session-rec
 import type { BackgroundJobBoard } from '../utils/background-job-board';
 import { isRecord } from '../utils/guards';
 import { getClient } from '../utils/opencode-client';
-import { OperationTimeoutError, withTimeout } from '../utils/session';
+import {
+  OperationTimeoutError,
+  parseModelReference,
+  withTimeout,
+} from '../utils/session';
 import {
   type CanonicalTaskResolver,
   readTaskRef,
@@ -43,6 +47,9 @@ export function createTaskMessageTool(options: {
   messageTimeoutMs?: number;
   resolveCanonicalTaskRef?: CanonicalTaskResolver;
   isDisposed?: () => boolean;
+  restoreTarget?: (
+    sessionID: string,
+  ) => { model: string; variant?: string } | undefined;
 }): Record<'task_message', ToolDefinition> {
   const task_message = tool({
     description:
@@ -134,16 +141,22 @@ export function createTaskMessageTool(options: {
         const lookupController = new AbortController();
         let modelSelection: ContinuationModelSelection | undefined;
         try {
-          modelSelection = await withTimeout(
-            readCurrentChildModel(
-              session,
-              lease.taskID,
-              options.input.directory,
-              lookupController.signal,
-            ),
-            messageTimeoutMs,
-            `Task message model lookup timed out after ${messageTimeoutMs}ms`,
-          );
+          const restore = options.restoreTarget?.(lease.taskID);
+          modelSelection = restore
+            ? parseContinuationModelSelection(
+                parseModelReference(restore.model),
+                restore.variant,
+              )
+            : await withTimeout(
+                readCurrentChildModel(
+                  session,
+                  lease.taskID,
+                  options.input.directory,
+                  lookupController.signal,
+                ),
+                messageTimeoutMs,
+                `Task message model lookup timed out after ${messageTimeoutMs}ms`,
+              );
         } finally {
           lookupController.abort();
         }

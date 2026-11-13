@@ -771,6 +771,7 @@ Use this section as a map: start with installation, then jump to features, confi
 | **[Clonedeps](docs/clonedeps.md)** | Clone selected dependency source into an ignored local workspace for inspection |
 | **[Worktrees](docs/worktrees.md)** | Use `.slim/worktrees/` lanes for isolated parallel or risky coding work |
 | **[Preset Switching](docs/presets/preset-switching.md)** | Switch agent model presets at runtime with `/preset` |
+| **[Desktop GUI](docs/gui.md)** | Manage presets and agent settings from the Desktop sidebar (experimental) |
 | **[Interview](docs/interview.md)** | Turn rough ideas into a structured markdown spec through a browser-based Q&A flow, then implement it with `/implement` |
 | **[Companion](docs/companion.md)** | Floating window companion for parsing, help, and types |
 
@@ -800,7 +801,7 @@ Use this section as a map: start with installation, then jump to features, confi
   <p><sub>Every merged contribution leaves a mark on the realm.</sub></p>
 
   <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
-[![All Contributors](https://img.shields.io/badge/all_contributors-149-orange.svg?style=flat-square)](#contributors-)
+[![All Contributors](https://img.shields.io/badge/all_contributors-150-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 </div>
 
@@ -1009,6 +1010,7 @@ Use this section as a map: start with installation, then jump to features, confi
       <td align="center" valign="top" width="16.66%"><a href="https://github.com/NowOne"><img src="https://avatars.githubusercontent.com/u/843357?v=4?s=100" width="100px;" alt="NowOne"/><br /><sub><b>NowOne</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=NowOne" title="Code">💻</a></td>
       <td align="center" valign="top" width="16.66%"><a href="https://github.com/wsmajt"><img src="https://avatars.githubusercontent.com/u/70204246?v=4?s=100" width="100px;" alt="Kacper Muszyński"/><br /><sub><b>Kacper Muszyński</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=wsmajt" title="Code">💻</a></td>
       <td align="center" valign="top" width="16.66%"><a href="http://www.berthojoris.com/"><img src="https://avatars.githubusercontent.com/u/1352912?v=4?s=100" width="100px;" alt="Bertho Joris"/><br /><sub><b>Bertho Joris</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=berthojoris" title="Code">💻</a></td>
+      <td align="center" valign="top" width="16.66%"><a href="https://github.com/tanishqbaweja"><img src="https://avatars.githubusercontent.com/u/74068132?v=4?s=100" width="100px;" alt="Tanishq"/><br /><sub><b>Tanishq</b></sub></a><br /><a href="https://github.com/alvinunreal/oh-my-opencode-slim/commits?author=tanishqbaweja" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
