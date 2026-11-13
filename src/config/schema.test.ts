@@ -301,6 +301,19 @@ describe('PluginConfigSchema image_routing', () => {
 });
 
 describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
+  it('accepts the observer guard opt-out independently of image routing', () => {
+    const result = PluginConfigSchema.safeParse({
+      disabled_hooks: ['observer-dispatch-guard'],
+      image_routing: 'auto',
+      disabled_agents: [],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.disabled_hooks).toEqual(['observer-dispatch-guard']);
+      expect(result.data.image_routing).toBe('auto');
+    }
+  });
+
   it('accepts the whitelisted hook and command names', () => {
     const result = PluginConfigSchema.safeParse({
       disabled_hooks: ['phase-reminder', 'foreground-fallback'],
@@ -352,6 +365,7 @@ describe('PluginConfigSchema disabled_hooks and disabled_commands', () => {
       'absolute-path-rescue',
       'apply-patch',
       'council-inject',
+      'observer-dispatch-guard',
       'auto-update-checker',
     ]);
     expect(DISABLED_COMMANDS_VALUES).toEqual([

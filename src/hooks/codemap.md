@@ -150,6 +150,12 @@ with one equivalent pass; the cache-safety harness mirrors this wiring.
 | `task-session-manager/` | Resumable task session tracking, terminal-delivery observation, reconciliation |
 | `tool-loop-guard/` | Detects byte-identical repeated tool calls: warns at 3, blocks at 5, with task-lifecycle exemptions and per-turn wait-tool counting |
 
+`observer-dispatch-guard` lives in `src/v2/observer-dispatch-guard.ts`, not a
+parallel hook registry: the existing native tool-before registration invokes
+it before delegation admission. Its disabled-hooks switch removes the policy
+check and its host reads; model capabilities, permissions and execution remain
+host-owned.
+
 ### Dependencies
 
 - **OpenCode SDK**: `MessageWithParts`, `MessageInfo`, and hook signature types

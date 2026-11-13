@@ -43,6 +43,95 @@ describe('modelAcceptsImageInput', () => {
     ).resolves.toBeUndefined();
   });
 
+  test('keys v2 catalog entries by selection id, falling back to modelID', async () => {
+    // Host Model.Info carries `id` (catalog selection alias) separately from
+    // `modelID` (provider API id); Model.Ref.id selects by `id`.
+    const deps: ModelImageCapabilityDeps = {
+      cache: {},
+      modelDomain: {
+        list: async () => ({
+          data: [
+            {
+              providerID: 'p',
+              id: 'vision-tiered',
+              modelID: 'vision-backend',
+              capabilities: { input: ['text', 'image'] },
+            },
+            {
+              providerID: 'p',
+              id: 'text-tiered',
+              modelID: 'vision-backend',
+              capabilities: { input: ['text'] },
+            },
+          ],
+        }),
+      },
+    };
+    // The alias is accepted via its selection id.
+    await expect(
+      modelAcceptsImageInput({ providerID: 'p', id: 'vision-tiered' }, deps),
+    ).resolves.toBe(true);
+    // Distinct catalog records sharing one backend id stay separately keyed:
+    // the alias's image capability must not leak into the text record.
+    await expect(
+      modelAcceptsImageInput({ providerID: 'p', id: 'text-tiered' }, deps),
+    ).resolves.toBe(false);
+    // The shared backend id is not itself a catalog key.
+    await expect(
+      modelAcceptsImageInput({ providerID: 'p', id: 'vision-backend' }, deps),
+    ).resolves.toBeUndefined();
+    await expect(
+      modelExistsInCatalog({ providerID: 'p', id: 'vision-tiered' }, deps),
+    ).resolves.toBe(true);
+    await expect(
+      modelExistsInCatalog({ providerID: 'p', id: 'vision-backend' }, deps),
+    ).resolves.toBe(false);
+  });
+
+  test('still keys v2 catalog entries by modelID when no selection id is present', async () => {
+    // Older returned shapes carry only `modelID`.
+    const deps: ModelImageCapabilityDeps = {
+      cache: {},
+      modelDomain: {
+        list: async () => ({
+          data: [
+            {
+              providerID: 'p',
+              modelID: 'vision',
+              capabilities: { input: ['text', 'image'] },
+            },
+          ],
+        }),
+      },
+    };
+    await expect(
+      modelAcceptsImageInput({ providerID: 'p', id: 'vision' }, deps),
+    ).resolves.toBe(true);
+  });
+
+  test('uses the host image-modality prefix rule for configured capabilities', async () => {
+    const deps: ModelImageCapabilityDeps = {
+      cache: {},
+      modelDomain: {
+        list: async () => ({
+          data: [
+            {
+              providerID: 'p',
+              id: 'configured-vision',
+              capabilities: { input: ['text', 'image/png'] },
+            },
+          ],
+        }),
+      },
+    };
+    await expect(
+      modelAcceptsImageInput(
+        { providerID: 'p', id: 'configured-vision' },
+        deps,
+      ),
+    ).resolves.toBe(true);
+  });
+
   test('reads the v1 providers catalog (boolean record shape) and caches it', async () => {
     let calls = 0;
     const deps: ModelImageCapabilityDeps = {

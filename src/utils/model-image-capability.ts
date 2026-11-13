@@ -59,7 +59,11 @@ type ImageCatalog = ReadonlyMap<
 function imageInputOf(capabilities: unknown): boolean | undefined {
   if (!capabilities || typeof capabilities !== 'object') return undefined;
   const input = (capabilities as { input?: unknown }).input;
-  if (Array.isArray(input)) return input.includes('image');
+  if (Array.isArray(input))
+    return input.some(
+      (modality) =>
+        typeof modality === 'string' && modality.startsWith('image'),
+    );
   if (input && typeof input === 'object')
     return (input as { image?: unknown }).image === true;
   return undefined;
@@ -72,7 +76,10 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
 }
 
 /** v2 `model.list()` payload: `{ data: ModelInfo[] }`, each entry carrying
- * `providerID`, `modelID` and the merged `capabilities`. */
+ * `providerID`, `modelID` and the merged `capabilities`. Host `Model.Info`
+ * has both `id` (catalog selection key) and `modelID` (provider API id);
+ * the catalog is keyed by `id`. Prefer `rec.id` when string and nonempty,
+ * retain `rec.modelID` only for older returned shapes lacking selection id. */
 function catalogFromModelList(payload: unknown): ImageCatalog {
   const catalog = new Map<string, Map<string, boolean | undefined>>();
   const data = recordOf(payload)?.data;
@@ -80,14 +87,14 @@ function catalogFromModelList(payload: unknown): ImageCatalog {
   for (const entry of data) {
     const rec = recordOf(entry);
     const providerID = rec?.providerID;
-    const modelID = rec?.modelID;
-    if (typeof providerID !== 'string' || typeof modelID !== 'string') continue;
+    const id = typeof rec?.id === 'string' && rec.id ? rec.id : rec?.modelID;
+    if (typeof providerID !== 'string' || typeof id !== 'string') continue;
     let models = catalog.get(providerID);
     if (!models) {
       models = new Map<string, boolean | undefined>();
       catalog.set(providerID, models);
     }
-    models.set(modelID, imageInputOf(rec?.capabilities));
+    models.set(id, imageInputOf(rec?.capabilities));
   }
   return catalog;
 }

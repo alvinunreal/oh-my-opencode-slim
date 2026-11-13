@@ -5,9 +5,9 @@ export function appendTaskRejectionInstruction(prompt: string): string {
   return `${prompt}\n\n${TASK_REJECTION_INSTRUCTION}`;
 }
 
-/** Advisory-role line enabling the observer dispatch route. Injected only
- * when the observer agent is enabled; capability-neutral so it stays true
- * for both vision and non-vision models. */
+/** Legacy advisory routing, used only when the v2 execution guard is off.
+ * With the guard on, native tools own usage guidance instead of a standing
+ * instruction that primes even vision-capable agents to delegate. */
 const OBSERVER_DISPATCH_INSTRUCTION =
   'When you cannot view an image or visual file directly, dispatch @observer with the file path and a precise goal, then work from its reported observations.';
 

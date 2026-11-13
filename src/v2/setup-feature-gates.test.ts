@@ -42,6 +42,7 @@ import type {
   V2Context,
   V2SessionContextEvent,
   V2SessionPresetRpcHandlers,
+  V2ToolBeforeEvent,
 } from './types';
 
 /** Manually-resolved promise for holding a backend write in flight. */
@@ -882,6 +883,235 @@ describe('v2 setup feature gates', () => {
       watcherFactory.mockRestore();
     }
   }, 20_000);
+
+  // ── Observer dispatch guard (bounded integration) ────────────────────────
+  /** All unrelated admission paths off; observer enabled by default. */
+  const guardConfig = () => ({
+    companion: { enabled: false },
+    backgroundJobs: { mode: 'off' },
+    interview: { enabled: false },
+    sidebar: false,
+    liveConfigRefresh: false,
+    webfetch: { enabled: false },
+    disabled_agents: [] as string[],
+    disabled_hooks: [] as string[],
+  });
+
+  /** Alias `id` vs provider API `modelID`: the host catalog keys by `id`. */
+  const gateCatalog = () => ({
+    data: [
+      {
+        providerID: 'pipi',
+        id: 'gemini-tiered',
+        modelID: 'gemini-api',
+        capabilities: { input: ['text', 'image'] },
+      },
+      {
+        providerID: 'pipi',
+        id: 'text',
+        modelID: 'text-api',
+        capabilities: { input: ['text'] },
+      },
+    ],
+  });
+
+  /** Native subagent event from caller `designer` to a target agent. */
+  const designerEvent = (id: string, agent: string): V2ToolBeforeEvent => ({
+    tool: 'subagent',
+    sessionID: 'ses_gate_parent',
+    agent: 'designer',
+    messageID: 'msg_gate',
+    id,
+    input: { agent, description: 'analyze', prompt: 'Image?' },
+  });
+
+  const readEvent = (): V2ToolBeforeEvent => ({
+    tool: 'read',
+    sessionID: 'ses_gate_parent',
+    agent: 'designer',
+    messageID: 'msg_gate',
+    id: 'call_gate_read',
+    input: { filePath: '/tmp/screenshot.png' },
+  });
+
+  /** Local cold setup: real config loader + captured `execute.before` hooks,
+   *  per-call host-read counters, a mutable caller model, and a native-child
+   *  creation spy. Nothing is exported; no production code is touched. */
+  const setupGuard = async (
+    options: {
+      config?: Record<string, unknown>;
+      /** Remove `ctx.model.list` to prove the cold capability gate. */
+      catalog?: boolean;
+      /** Remove `ctx.session.context` to prove the cold context gate. */
+      context?: boolean;
+    } = {},
+  ) => {
+    await writeProjectConfig({ ...guardConfig(), ...options.config });
+    const { ctx, beforeHooks } = makeCtx(projectDir);
+    const reads = { modelList: 0, context: 0 };
+    const createCalls: unknown[] = [];
+    const currentModel = { id: 'gemini-tiered' };
+    if (options.catalog !== false)
+      ctx.model = {
+        list: async () => {
+          reads.modelList += 1;
+          return gateCatalog();
+        },
+      } as unknown as V2Context['model'];
+    if (options.context !== false)
+      ctx.session.context = async ({ sessionID }) => {
+        reads.context += 1;
+        return (
+          sessionID === 'ses_gate_parent'
+            ? [
+                {
+                  id: 'msg_gate',
+                  type: 'assistant',
+                  model: { providerID: 'pipi', id: currentModel.id },
+                },
+              ]
+            : []
+        ) as Array<Record<string, unknown>>;
+      };
+    ctx.session.create = async (input: unknown) => {
+      createCalls.push(input);
+      throw new Error('guard must not create a native child session');
+    };
+    const cleanup = await createV2Setup()(ctx);
+    const dispatch = async (event: unknown) => {
+      for (const hook of beforeHooks) await hook(event as never);
+    };
+    return {
+      ctx,
+      beforeHooks,
+      reads,
+      createCalls,
+      currentModel,
+      dispatch,
+      cleanup,
+    };
+  };
+
+  test('observer dispatch guard: rejects a known image caller via its selection alias', async () => {
+    // The exact assistant row (`msg_gate`) names the catalog alias
+    // `gemini-tiered`, not the backend `gemini-api`. Resolution must go
+    // through the host catalog keyed by `id`, and reject synchronously in
+    // `execute.before` without creating a native child.
+    const g = await setupGuard();
+    try {
+      const event = designerEvent('call_gate_observer', 'observer');
+      const input = structuredClone(event.input);
+      await expect(g.dispatch(event)).rejects.toThrow(
+        'current model accepts images',
+      );
+      // Input/messages survive the rejection untouched.
+      expect(event.input).toEqual(input);
+      expect(g.createCalls).toEqual([]);
+      // One catalog fetch per generation; one context read for the row.
+      expect(g.reads).toEqual({ modelList: 1, context: 1 });
+    } finally {
+      await g.cleanup();
+    }
+  }, 20_000);
+
+  test('observer dispatch guard: finalized Observer display name uses the same policy', async () => {
+    const g = await setupGuard({
+      config: { agents: { observer: { displayName: 'visual-reader' } } },
+    });
+    try {
+      await expect(
+        g.dispatch(designerEvent('call_display', 'visual-reader')),
+      ).rejects.toThrow('current model accepts images');
+      expect(g.reads).toEqual({ modelList: 1, context: 1 });
+    } finally {
+      await g.cleanup();
+    }
+  }, 20_000);
+
+  test('observer dispatch guard: text→image→text resolves per call, not a static chain head', async () => {
+    const g = await setupGuard();
+    try {
+      g.currentModel.id = 'text';
+      await expect(
+        g.dispatch(designerEvent('call_1', 'observer')),
+      ).resolves.toBeUndefined();
+      g.currentModel.id = 'gemini-tiered';
+      await expect(
+        g.dispatch(designerEvent('call_2', 'observer')),
+      ).rejects.toThrow('current model accepts images');
+      g.currentModel.id = 'text';
+      await expect(
+        g.dispatch(designerEvent('call_3', 'observer')),
+      ).resolves.toBeUndefined();
+      // The flat session.context getter is read per call; the catalog is
+      // cached once across the same setup/session.
+      expect(g.reads).toEqual({ modelList: 1, context: 3 });
+      expect(g.createCalls).toEqual([]);
+    } finally {
+      await g.cleanup();
+    }
+  }, 20_000);
+
+  test('observer dispatch guard: read tool and nonobserver subagent cause zero guard reads', async () => {
+    const g = await setupGuard();
+    try {
+      // Neither a non-subagent tool nor a nonobserver target reaches the
+      // capability/context reads — the native path stays untouched.
+      await expect(g.dispatch(readEvent())).resolves.toBeUndefined();
+      await expect(
+        g.dispatch(designerEvent('call_gate_explorer', 'explorer')),
+      ).resolves.toBeUndefined();
+      expect(g.reads).toEqual({ modelList: 0, context: 0 });
+      expect(g.createCalls).toEqual([]);
+    } finally {
+      await g.cleanup();
+    }
+  }, 20_000);
+
+  // Both master switches must leave the identical image event native with
+  // zero extra host reads. (Advisory dispatch instruction restoration with
+  // the hook off is covered in agents/index.test.ts.)
+  for (const [label, config] of [
+    [
+      'disabled_hooks',
+      { disabled_hooks: ['observer-dispatch-guard', 'auto-update-checker'] },
+    ],
+    ['observer disabled', { disabled_agents: ['observer'] }],
+  ] as const) {
+    test(`observer dispatch guard: ${label} admits the image event with zero reads`, async () => {
+      const g = await setupGuard({ config });
+      try {
+        await expect(
+          g.dispatch(designerEvent(`call_gate_${label}`, 'observer')),
+        ).resolves.toBeUndefined();
+        expect(g.reads).toEqual({ modelList: 0, context: 0 });
+        expect(g.createCalls).toEqual([]);
+      } finally {
+        await g.cleanup();
+      }
+    }, 20_000);
+  }
+
+  // Cold gate: setup arms the guard only when the host exposes BOTH the
+  // merged model catalog and the flat session-context getter. Missing either
+  // leaves Observer delegation native and performs no reads.
+  for (const [label, options] of [
+    ['no ctx.model.list', { catalog: false }],
+    ['no ctx.session.context', { context: false }],
+  ] as const) {
+    test(`observer dispatch guard: ${label} is not armed and reads nothing`, async () => {
+      const g = await setupGuard(options);
+      try {
+        await expect(
+          g.dispatch(designerEvent(`call_gate_${label}`, 'observer')),
+        ).resolves.toBeUndefined();
+        expect(g.reads).toEqual({ modelList: 0, context: 0 });
+        expect(g.createCalls).toEqual([]);
+      } finally {
+        await g.cleanup();
+      }
+    }, 20_000);
+  }
 
   test('sidebar disabled: finalization writes no display names', async () => {
     await writeProjectConfig({
