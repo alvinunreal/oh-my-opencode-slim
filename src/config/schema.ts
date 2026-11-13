@@ -1034,6 +1034,12 @@ const RawPluginConfigSchema = z
   .object({
     preset: z.string().optional(),
     setDefaultAgent: z.boolean().optional(),
+    questionTimeoutMs: z
+      .union([z.literal(0), z.number().int().min(60_000).max(2_147_483_647)])
+      .optional()
+      .describe(
+        'Opt-in question auto-answer timeout in milliseconds. Unset or 0 disables it; otherwise 60,000–2,147,483,647. Permission and closed-choice requests are never answered. On v2, requires an attached OMOS TUI with tui enabled.',
+      ),
     tui: z
       .boolean()
       .optional()

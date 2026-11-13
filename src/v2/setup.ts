@@ -29,6 +29,7 @@ import { InterviewConfigSchema } from '../config/schema';
 import type { PluginConfigSnapshot } from '../config/snapshot';
 import { readPluginConfigSnapshot } from '../config/snapshot';
 import { getBuildInfo } from '../generated/build-info';
+import { registerGuiConfigRpc } from '../gui-plugin/register';
 import { getCurrentRuntimePackageJsonPath } from '../hooks/auto-update-checker/runtime-package';
 import {
   isTaggedPart,
@@ -2812,6 +2813,8 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             read: ({ sessionID }) => presets.readState(sessionID),
             apply: ({ sessionID, presetName }, { signal }) =>
               presets.apply(sessionID, presetName, signal),
+            unbind: ({ sessionID }, { signal }) =>
+              presets.reset(sessionID, signal),
             createBound: async ({ presetName }, { signal, error }) => {
               try {
                 return await presets.createBound(presetName, signal);
@@ -2825,6 +2828,23 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             },
           });
           disposers.push(() => registration.dispose());
+        }
+      }
+      if (ctx.rpc?.register) {
+        try {
+          const guiRegistration = await registerGuiConfigRpc(
+            ctx,
+            directory,
+            getBuildInfo().version,
+          );
+          if (guiRegistration) {
+            disposers.push(() => guiRegistration.dispose());
+          }
+        } catch (cause) {
+          log(
+            '[v2] GUI preset RPC unavailable; Desktop editor disabled',
+            cause,
+          );
         }
       }
       try {
@@ -3642,6 +3662,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                     bundle,
                     explicitModel,
                     ...(model ? { model } : {}),
+                    ...(binding?.selection
+                      ? { selection: binding.selection }
+                      : {}),
                     ...(parentModel
                       ? { inheritedProviderID: parentModel.providerID }
                       : {}),

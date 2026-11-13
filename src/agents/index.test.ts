@@ -1211,13 +1211,13 @@ describe('skill permissions', () => {
     expect(skillPerm?.clonedeps).not.toBe('allow');
   });
 
-  test('oracle gets requesting-code-review skill allowed by default', () => {
+  test('oracle does not get the external requesting-code-review skill by default', () => {
     const agents = createAgents(runtimeFor());
     const oracle = agents.find((a) => a.name === 'oracle');
     expect(oracle).toBeDefined();
     const skillPerm = (oracle?.config.permission as Record<string, unknown>)
       ?.skill as Record<string, string>;
-    expect(skillPerm?.['requesting-code-review']).toBe('allow');
+    expect(skillPerm?.['requesting-code-review']).toBeUndefined();
   });
 
   test('oracle gets simplify skill allowed by default', () => {

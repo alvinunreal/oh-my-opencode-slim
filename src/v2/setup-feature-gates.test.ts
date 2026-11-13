@@ -534,7 +534,23 @@ describe('v2 setup feature gates', () => {
     const { ctx, rpcHandlers, commandAdds, storageCalls } = makeCtx(projectDir);
     const cleanup = await createV2Setup()(ctx);
     try {
-      expect(rpcHandlers).toEqual([]);
+      // Only the Desktop config editor RPC remains: it edits config files
+      // and never routes sessions, so it stays available with routing off.
+      expect(
+        rpcHandlers.map((handlers) => Object.keys(handlers).sort()),
+      ).toEqual([
+        [
+          'clearPresetDefault',
+          'createPreset',
+          'deletePreset',
+          'getGoMonthlyLimits',
+          'getSnapshot',
+          'removeAgent',
+          'setAgentDisabled',
+          'setAgentOverride',
+          'switchPreset',
+        ],
+      ]);
       expect(commandAdds.map((entry) => entry.name)).not.toContain('preset');
       expect(storageCalls).toEqual({ get: 0, set: 0, remove: 0, scan: 0 });
     } finally {

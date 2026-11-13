@@ -31,6 +31,45 @@ import type { RevivedRunTracker } from './revived-run-tracker';
 
 type BackgroundJobRecord = NonNullable<ReturnType<BackgroundJobBoard['get']>>;
 
+type ChildAsk = {
+  event: {
+    type: string;
+    properties?: {
+      id?: string;
+      requestID?: string;
+      sessionID?: string;
+      questions?: unknown;
+      permission?: unknown;
+      patterns?: unknown;
+    };
+  };
+};
+export type PendingChildAsks = Map<
+  string,
+  Map<string, { generation: number; input: ChildAsk }>
+>;
+
+export function observePendingChildAsks(
+  board: BackgroundJobBoard,
+  pending: PendingChildAsks,
+): () => void {
+  const listener = () => {
+    for (const [taskID, asks] of pending) {
+      const job = board.get(taskID);
+      if (job?.state !== 'running') {
+        pending.delete(taskID);
+        continue;
+      }
+      for (const [requestID, ask] of asks) {
+        if (ask.generation !== job.generation) asks.delete(requestID);
+      }
+      if (asks.size === 0) pending.delete(taskID);
+    }
+  };
+  board.addMutationListener(listener);
+  return () => board.removeMutationListener(listener);
+}
+
 interface SessionEventGenerationFence {
   generation: number;
   /** A new generation must see a live activity fence before lifecycle events. */
@@ -307,12 +346,21 @@ export async function handleEvent(
     revivedRunTracker?: RevivedRunTracker;
     /** Surface a background child's newly opened input wait to the parent. */
     onChildInputWait?: (notification: ChildInputWaitNotification) => void;
+    pendingChildAsks?: PendingChildAsks;
     /** Test seam; production uses event-arrival wall-clock time. */
     now?: () => number;
   },
 ): Promise<void> {
   deps.inputWaits.trackInputWait(input.event);
   routeChildInputWait(input, deps);
+
+  if (input.event.type === 'server.instance.disposed')
+    deps.pendingChildAsks?.clear();
+  if (input.event.type === 'session.deleted') {
+    const sessionID =
+      input.event.properties?.info?.id ?? input.event.properties?.sessionID;
+    if (sessionID) deps.pendingChildAsks?.delete(sessionID);
+  }
 
   if (input.event.type === 'message.part.updated') {
     deps.observeSyntheticTerminalPart?.(input.event.properties?.part);
@@ -900,26 +948,14 @@ export async function handleEvent(
  * already ended. When the asking session is a RUNNING board-tracked
  * BACKGROUND child, record the ask in the child-input-wait sidecar
  * (idempotent per request id) and notify so the parent can be woken with
- * the ask content. Replies/rejections clear the entry. Foreground children
- * (background !== true), unknown sessions, and id-less asks are ignored.
+ * the ask content. Replies/rejections clear the entry.
  */
-function routeChildInputWait(
-  input: {
-    event: {
-      type: string;
-      properties?: {
-        id?: string;
-        requestID?: string;
-        sessionID?: string;
-        questions?: unknown;
-        permission?: unknown;
-        patterns?: unknown;
-      };
-    };
-  },
+export function routeChildInputWait(
+  input: ChildAsk,
   deps: {
     backgroundJobBoard: BackgroundJobBoard;
     onChildInputWait?: (notification: ChildInputWaitNotification) => void;
+    pendingChildAsks?: PendingChildAsks;
     now?: () => number;
   },
 ): void {
@@ -939,6 +975,15 @@ function routeChildInputWait(
       typeof properties?.id === 'string' ? properties.id : undefined;
     if (!requestID || requestID.trim() === '') return;
     const job = deps.backgroundJobBoard.get(sessionID);
+    if (
+      job?.state === 'running' &&
+      (job.background !== true || job.provisional === true)
+    ) {
+      const pending = deps.pendingChildAsks?.get(sessionID) ?? new Map();
+      pending.set(requestID, { generation: job.generation, input });
+      deps.pendingChildAsks?.set(sessionID, pending);
+      return;
+    }
     if (
       job?.state !== 'running' ||
       job.background !== true ||
@@ -1006,6 +1051,9 @@ function routeChildInputWait(
         ? properties.requestID
         : undefined;
     if (!requestID || requestID.trim() === '') return;
+    const pending = deps.pendingChildAsks?.get(sessionID);
+    pending?.delete(requestID);
+    if (pending?.size === 0) deps.pendingChildAsks?.delete(sessionID);
     if (
       clearChildInputWait(sessionID, requestID) &&
       deps.backgroundJobBoard.get(sessionID)
@@ -1015,5 +1063,22 @@ function routeChildInputWait(
         requestID,
       });
     }
+  }
+}
+
+export function promoteChildInputWaits(
+  taskID: string,
+  deps: {
+    backgroundJobBoard: BackgroundJobBoard;
+    onChildInputWait?: (notification: ChildInputWaitNotification) => void;
+    pendingChildAsks: PendingChildAsks;
+  },
+): void {
+  const job = deps.backgroundJobBoard.get(taskID);
+  if (job?.state !== 'running' || !job.background || job.provisional) return;
+  const pending = deps.pendingChildAsks.get(taskID);
+  deps.pendingChildAsks.delete(taskID);
+  for (const ask of pending?.values() ?? []) {
+    if (ask.generation === job.generation) routeChildInputWait(ask.input, deps);
   }
 }

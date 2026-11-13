@@ -25,6 +25,34 @@ import {
   resetMultiplexerDiagnostics,
 } from './schema';
 
+it('validates the opt-in question timeout boundaries', () => {
+  // Mutation: remove the zero exception, integer constraint, or bounds.
+  expect(PluginConfigSchema.safeParse({ questionTimeoutMs: 0 }).success).toBe(
+    true,
+  );
+  expect(
+    PluginConfigSchema.safeParse({ questionTimeoutMs: 60_000 }).success,
+  ).toBe(true);
+  expect(
+    PluginConfigSchema.safeParse({ questionTimeoutMs: 1_200_000 }).success,
+  ).toBe(true);
+  expect(
+    PluginConfigSchema.safeParse({ questionTimeoutMs: 2_147_483_647 }).success,
+  ).toBe(true);
+  expect(
+    PluginConfigSchema.safeParse({ questionTimeoutMs: 59_999 }).success,
+  ).toBe(false);
+  expect(PluginConfigSchema.safeParse({ questionTimeoutMs: 1.5 }).success).toBe(
+    false,
+  );
+  expect(PluginConfigSchema.safeParse({ questionTimeoutMs: -1 }).success).toBe(
+    false,
+  );
+  expect(
+    PluginConfigSchema.safeParse({ questionTimeoutMs: 2_147_483_648 }).success,
+  ).toBe(false);
+});
+
 describe('ProviderModelIdSchema', () => {
   it('accepts and preserves model remainders with spaces and nested segments', () => {
     const ids = [

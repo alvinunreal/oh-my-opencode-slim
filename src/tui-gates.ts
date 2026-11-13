@@ -41,6 +41,7 @@ export interface TuiGatesSnapshot extends SidebarConfigState {
   tuiEnabled: boolean;
   sidebarEnabled: boolean;
   updateCheckerEnabled: boolean;
+  questionTimeoutMs: number;
   disabledCommands: ReadonlySet<string>;
   /**
    * Whether session-scoped preset routing (session binding, new-session
@@ -89,6 +90,7 @@ function failOpenTuiGates(): TuiGatesSnapshot {
     multiplexerType: 'none',
     presetName: undefined,
     updateCheckerEnabled: true,
+    questionTimeoutMs: 0,
     disabledCommands: new Set(),
     presetRouting: true,
   };
@@ -121,6 +123,7 @@ function deriveTuiGates(
     tuiEnabled: featureGates.tui,
     sidebarEnabled: featureGates.sidebar,
     updateCheckerEnabled: featureGates.updateChecker,
+    questionTimeoutMs: config.questionTimeoutMs ?? 0,
     configInvalid: warningsMakeConfigInvalid(snapshot.warnings),
     compactSidebar: config.compactSidebar ?? true,
     showHiddenAgents: config.sidebarShowHiddenAgents ?? false,

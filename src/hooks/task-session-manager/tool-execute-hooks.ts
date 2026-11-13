@@ -743,6 +743,7 @@ export async function handleToolExecuteAfter(
   deps: {
     directory: string;
     backgroundJobBoard: BackgroundJobBoard;
+    onLaunchConfirmed?: (taskID: string) => void;
     terminalGate: BackgroundJobTerminalGate;
     pendingCallTracker: {
       take(
@@ -980,6 +981,7 @@ export async function handleToolExecuteAfter(
         deps,
       );
       if (!record) return;
+      deps.onLaunchConfirmed?.(record.taskID);
       deps.bindConcurrencyTicket?.(record.taskID, pending);
       deps.clearRehydrateTombstone?.(status.taskID);
       normalizeLateCancelledTaskOutput(
@@ -1088,6 +1090,7 @@ export async function handleToolExecuteAfter(
           },
     );
     if (promoted && !promoted.provisional) {
+      deps.onLaunchConfirmed?.(promoted.taskID);
       deps.bindConcurrencyTicket?.(promoted.taskID, pending);
       if (exactCallConfirmed) {
         deps.backgroundJobSupervisor?.onLaunch(promoted);
@@ -1339,6 +1342,7 @@ function registerTaskOutputLaunch(
 export interface RegisterDelegatedLaunchDeps {
   directory: string;
   backgroundJobBoard: BackgroundJobBoard;
+  onLaunchConfirmed?: (taskID: string) => void;
   terminalGate: BackgroundJobTerminalGate;
   backgroundJobSupervisor?: BackgroundJobSupervisor;
   backgroundTaskConcurrency?: BackgroundTaskConcurrency;
@@ -1436,6 +1440,7 @@ export async function registerDelegatedLaunchFromStructured(
       deps,
     );
     if (!record) return undefined;
+    deps.onLaunchConfirmed?.(record.taskID);
     if (input.handledByWrapper === true) {
       input.pending.registeredByWrapper = true;
     }

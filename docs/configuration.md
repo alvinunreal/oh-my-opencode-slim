@@ -93,6 +93,23 @@ disk state only; they do not mutate the current session's agent registry. See
 the [Marketplace guide](marketplace.md) for activation, status, and reload
 commands.
 
+Set `questionTimeoutMs` to opt in to an automatic response when an eligible
+question is unanswered. The value is in milliseconds: `0` or an omitted value
+disables it; enabled values range from `60000` to `2147483647`.
+
+```jsonc
+{
+  "questionTimeoutMs": 1200000
+}
+```
+
+The reply tells the model how long it waited and asks it to decide and continue.
+Permission requests and questions that disallow custom answers remain pending. On v1 the
+server owns the timer. On v2 an OMOS TUI must be attached and `tui` must be
+enabled; a server without that TUI does not auto-answer. Restart the TUI after
+changing the setting. A TUI restarted while a question is already open does not
+re-arm that question.
+
 The TUI sidebar uses the compact layout by default. Set `compactSidebar` to
 `false` in `oh-my-opencode-slim.jsonc` to use the expanded layout:
 

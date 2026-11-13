@@ -140,6 +140,7 @@ function createMockClient(overrides?: {
       session,
       _client: { post },
     } as never,
+    session,
     mocks: { promptAsync, abort, messages, message, post },
   };
 }
@@ -2980,6 +2981,7 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
       await manager.handleEvent(event);
     await settle();
     expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(manager.getActiveFallback('root-no-route')?.model).toBe('test/b');
     expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
     expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
       body: {
@@ -12401,5 +12403,479 @@ describe('ForegroundFallbackManager v1 replay outcome', () => {
     await clock.advance(5_000);
     expect(await outcome).toBeUndefined();
     expect(clock.pending()).toBe(0);
+  });
+});
+
+describe('fallback restoration', () => {
+  const sid = 'restore-session';
+  const ttl = 30 * 60 * 1000;
+  const origin = { providerID: 'primary', id: 'a', variant: 'high' };
+  const rejection = { type: 'provider.content-filter', message: 'blocked' };
+  const idle = (activityAt = clock.now()) => ({
+    type: 'session.idle',
+    properties: { sessionID: sid, activityAt },
+  });
+  const busy = () => ({
+    type: 'session.status',
+    properties: { sessionID: sid, status: { type: 'busy' } },
+  });
+
+  function fixture(options?: {
+    parentID?: string;
+    promptAsyncImpl?: (args: unknown) => Promise<unknown>;
+    chain?: string[];
+    unarmedHandoff?: boolean;
+  }) {
+    const info: {
+      model:
+        | typeof origin
+        | { providerID: string; id: string; variant?: string };
+      agent: string;
+      parentID?: string;
+    } = {
+      model: { ...origin },
+      agent: 'orchestrator',
+      parentID: options?.parentID,
+    };
+    const { client, session } = createMockClient({
+      getData: info,
+      promptAsyncImpl: options?.promptAsyncImpl,
+    });
+    const switchModel = mock(
+      async (_sessionID: string, model: typeof info.model) => {
+        info.model = model;
+      },
+    );
+    const changed = mock();
+    const manager = timedManager({
+      chains: {
+        orchestrator: options?.chain ?? ['primary/a', 'backup/b', 'third/c'],
+      },
+      enabled: false,
+      v2RetryEnabled: true,
+      maxRetries: 0,
+      retryDelayMs: 0,
+      input: {
+        directory: '/test',
+        hostFlavor: 'v2',
+        client,
+        experimental_v2: { switchModel },
+      } as never,
+      onSessionModelChanged: changed,
+      ...(options?.unarmedHandoff
+        ? {
+            readBackgroundGeneration: () => 1,
+            backgroundFallbackHandoff: {
+              prepare: () => false,
+              admit: () => false,
+              reject: () => {},
+              settleUnresolved: () => {},
+            },
+          }
+        : {}),
+    });
+    const retry = (model = origin, error: unknown = rejection) =>
+      manager.handleV2Retry(
+        { sessionID: sid, agent: 'orchestrator', model, error },
+        switchModel,
+      );
+    const refuse = async (
+      id = 'refused',
+      model: typeof info.model = origin,
+    ) => {
+      await manager.handleEvent({
+        type: 'session.step.started',
+        data: {
+          sessionID: sid,
+          assistantMessageID: id,
+          agent: 'orchestrator',
+          model,
+        },
+      });
+      await manager.handleEvent({
+        type: 'session.step.failed',
+        data: {
+          sessionID: sid,
+          assistantMessageID: id,
+          finish: 'content-filter',
+          error: rejection,
+        },
+      });
+      for (let i = 0; i < 40; i++) await Promise.resolve();
+    };
+    return {
+      manager,
+      info,
+      switchModel,
+      changed,
+      retry,
+      refuse,
+      session,
+    };
+  }
+
+  async function replay(error: unknown = rejection) {
+    createMockClient({
+      messagesData: [
+        {
+          info: {
+            id: 'user',
+            role: 'user',
+            model: { providerID: 'primary', modelID: 'a', variant: 'high' },
+          },
+          parts: [{ type: 'text', text: 'work' }],
+        },
+      ],
+    });
+    const changed = mock();
+    const manager = timedManager({
+      chains: { orchestrator: ['primary/a', 'backup/b'] },
+      enabled: true,
+      input: { directory: '/test' } as never,
+      maxRetries: 0,
+      retryDelayMs: 0,
+      onSessionModelChanged: changed,
+    });
+    manager.registerSessionAgent(sid, 'orchestrator');
+    await manager.handleEvent({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'assistant',
+          sessionID: sid,
+          role: 'assistant',
+          agent: 'orchestrator',
+          providerID: 'primary',
+          modelID: 'a',
+        },
+      },
+    });
+    await manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID: sid, error },
+    });
+    return { manager, changed };
+  }
+
+  test('T1: v2 restores the first origin and variant after multiple switches', async () => {
+    const f = fixture();
+    await f.retry();
+    await f.retry({ providerID: 'backup', id: 'b', variant: 'default' });
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+    expect(f.manager.getActiveFallback(sid)).toBeUndefined();
+    expect(f.changed).toHaveBeenLastCalledWith(sid, 'primary/a', {
+      agentName: 'orchestrator',
+      variant: 'high',
+    });
+  });
+
+  test('T2: v2 ignores the failed run idle after continuation admission', async () => {
+    const f = fixture();
+    await f.refuse();
+    clock.set(clock.now() + 10);
+    await f.manager.handleEvent({
+      type: 'session.execution.failed',
+      created: clock.now(),
+      data: { sessionID: sid, error: rejection },
+    });
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    await f.manager.handleEvent({
+      type: 'session.status',
+      properties: { sessionID: sid, status: { type: 'busy' } },
+    });
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('T3: v2 does not restore during an in-flight refusal', async () => {
+    const pending = deferred<unknown>();
+    const f = fixture({ promptAsyncImpl: () => pending.promise });
+    await f.refuse();
+    expect(f.manager.isFallbackInProgress(sid)).toBe(true);
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    pending.resolve({});
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+    await f.manager.handleEvent({
+      type: 'session.status',
+      properties: { sessionID: sid, status: { type: 'busy' } },
+    });
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('v2 retry status releases the continuation fence', async () => {
+    const f = fixture();
+    await f.refuse();
+    await f.manager.handleEvent({
+      type: 'session.status',
+      properties: { sessionID: sid, status: { type: 'retry' } },
+    });
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('T4: a foreground child restores only after reattachment', async () => {
+    const f = fixture({ parentID: 'parent' });
+    await f.refuse();
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    f.manager.noteV2Prompt(sid);
+    await f.manager.handleEvent(busy());
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('S5: foreground child waits for continuation busy after reattachment', async () => {
+    const f = fixture({ parentID: 'parent' });
+    await f.manager.handleEvent(busy());
+    await f.refuse();
+    f.manager.noteV2Prompt(sid);
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    await f.manager.handleEvent(busy());
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('S6: exhausted chain restores after an idle during refusal handling', async () => {
+    const f = fixture({ chain: ['primary/a', 'backup/b'] });
+    const fallback = { providerID: 'backup', id: 'b' };
+    await f.manager.handleEvent(busy());
+    await f.refuse('first', origin);
+    await f.manager.handleEvent(busy());
+    await f.refuse('second', fallback);
+    await f.manager.handleEvent(idle());
+    await f.manager.handleEvent(busy());
+    const pending = deferred<unknown>();
+    f.session.get = mock(() => pending.promise);
+    await f.refuse('exhausted', fallback);
+    await f.manager.handleEvent(idle());
+    pending.resolve({ data: f.info });
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('S7: a rejected continuation releases the fence', async () => {
+    const f = fixture({
+      promptAsyncImpl: async () => ({ error: { name: 'BadRequest' } }),
+    });
+    await f.manager.handleEvent(busy());
+    await f.refuse();
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('an unarmed background handoff releases the fence', async () => {
+    const f = fixture({ parentID: 'parent', unarmedHandoff: true });
+    await f.manager.handleEvent(busy());
+    await f.refuse();
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('S9: continuation busy before prompt acknowledgement releases the fence', async () => {
+    let manager!: ForegroundFallbackManager;
+    const f = fixture({
+      promptAsyncImpl: async () => {
+        await manager.handleEvent(idle());
+        await manager.handleEvent(busy());
+        return {};
+      },
+    });
+    manager = f.manager;
+    await manager.handleEvent(busy());
+    await f.refuse();
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    await manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('an uncertain continuation keeps the fence until busy', async () => {
+    const f = fixture({
+      promptAsyncImpl: async () => {
+        throw new Error('connection lost');
+      },
+    });
+    await f.manager.handleEvent(busy());
+    await f.refuse();
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    await f.manager.handleEvent(busy());
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('T5: v2 waits for the provider mark timer to expire', async () => {
+    const f = fixture();
+    await f.retry(origin, { message: '429 rate limit' });
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    await clock.advance(ttl - 1);
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    await clock.advance(1);
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('T6: v2 preserves a manually changed fallback variant', async () => {
+    const f = fixture();
+    await f.retry();
+    f.info.model = { providerID: 'backup', id: 'b', variant: 'manual' };
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    expect(f.manager.getActiveFallback(sid)).toBeUndefined();
+    expect(f.manager.restoreTarget(sid)).toBeUndefined();
+  });
+
+  test('T6b: v2 preserves a manual model with the fallback variant', async () => {
+    const f = fixture();
+    await f.retry();
+    f.info.model = { providerID: 'third', id: 'c', variant: 'default' };
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    expect(f.manager.getActiveFallback(sid)).toBeUndefined();
+    expect(f.manager.restoreTarget(sid)).toBeUndefined();
+  });
+
+  test('v2 restores a manual model after that model fails over', async () => {
+    const f = fixture({
+      chain: ['primary/a', 'backup/b', 'third/c', 'fourth/d'],
+    });
+    await f.retry();
+    const manual = { providerID: 'third', id: 'c', variant: 'high' };
+    f.info.model = manual;
+    await f.retry(manual);
+    expect(f.info.model).toEqual({ providerID: 'fourth', id: 'd' });
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, manual);
+  });
+
+  test('v2 ignores a stale origin observed on a new prompt', async () => {
+    const f = fixture();
+    await f.retry();
+    f.manager.noteExternalTurn(sid, undefined, 'primary/a');
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+  });
+
+  test('a different continuation discards its old descent', async () => {
+    const f = fixture();
+    await f.retry();
+    f.manager.observeContinuationModel(sid, 'third/c');
+    expect(f.manager.restoreTarget(sid)).toBeUndefined();
+  });
+
+  test('v2 foreground child restores after its no-route waiter cannot recover', async () => {
+    const f = fixture({ parentID: 'parent' });
+    await f.manager.handleEvent({
+      type: 'session.created',
+      properties: { info: { id: sid, parentID: 'parent' } },
+    });
+    await f.retry();
+    await f.manager.handleEvent({
+      type: 'session.status',
+      properties: { sessionID: sid, status: { type: 'busy' } },
+    });
+    clock.set(clock.now() + 10);
+    const error = {
+      type: 'provider.no-route',
+      message: 'no route for backup/b',
+    };
+    await f.manager.handleEvent({
+      type: 'session.execution.failed',
+      created: clock.now(),
+      data: { sessionID: sid, error },
+    });
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    await f.manager.refusedChildOutcome(sid, {
+      type: 'no-route',
+      id: 'unrecoverable',
+      error,
+      time: { completed: clock.now() },
+    });
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('T7: v1 replay retains the failed model and variant', async () => {
+    const { manager } = await replay();
+    await manager.handleEvent(idle());
+    expect(manager.restoreTarget(sid)).toEqual({
+      model: 'primary/a',
+      variant: 'high',
+    });
+  });
+
+  test('T8: v1 cannot restore during a busy turn', async () => {
+    const { manager } = await replay();
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: { sessionID: sid, status: { type: 'busy' } },
+    });
+    expect(manager.restoreTarget(sid)).toBeUndefined();
+    await manager.handleEvent(idle());
+    expect(manager.restoreTarget(sid)?.model).toBe('primary/a');
+  });
+
+  test('v1 status idle clears busy before session.idle', async () => {
+    const { manager } = await replay();
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: { sessionID: sid, status: { type: 'busy' } },
+    });
+    expect(manager.restoreTarget(sid)).toBeUndefined();
+    await manager.handleEvent({
+      type: 'session.status',
+      properties: { sessionID: sid, status: { type: 'idle' } },
+    });
+    expect(manager.restoreTarget(sid)).toEqual({
+      model: 'primary/a',
+      variant: 'high',
+    });
+  });
+
+  test('T9: v1 cannot restore before the provider mark expires', async () => {
+    const { manager } = await replay({ message: '429 rate limit' });
+    await manager.handleEvent(idle());
+    expect(manager.restoreTarget(sid)).toBeUndefined();
+    await clock.advance(ttl);
+    expect(manager.restoreTarget(sid)).toEqual({
+      model: 'primary/a',
+      variant: 'high',
+    });
+  });
+
+  test('T10: v1 explicit choices drop or commit the descent', async () => {
+    const first = await replay();
+    first.manager.noteExternalTurn(sid, 'manual', 'third/c');
+    expect(first.manager.restoreTarget(sid)).toBeUndefined();
+    expect(first.manager.getActiveFallback(sid)).toBeUndefined();
+    await first.manager.handleEvent({
+      type: 'session.error',
+      properties: { sessionID: sid, error: rejection },
+    });
+    await first.manager.handleEvent(idle());
+    expect(first.manager.restoreTarget(sid)).toEqual({ model: 'third/c' });
+    const second = await replay();
+    second.manager.noteExternalTurn(sid, 'origin', 'primary/a');
+    expect(second.manager.getActiveFallback(sid)).toBeUndefined();
+    expect(second.changed).toHaveBeenLastCalledWith(sid, 'primary/a', {
+      agentName: 'orchestrator',
+      variant: 'high',
+    });
+  });
+
+  test('T11: v1 origin continuation commits the restore', async () => {
+    const { manager, changed } = await replay();
+    manager.observeContinuationModel(sid, 'primary/a');
+    expect(manager.getActiveFallback(sid)).toBeUndefined();
+    expect(changed).toHaveBeenLastCalledWith(sid, 'primary/a', {
+      agentName: 'orchestrator',
+      variant: 'high',
+    });
   });
 });

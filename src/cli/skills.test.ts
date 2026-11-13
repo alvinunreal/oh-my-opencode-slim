@@ -97,7 +97,7 @@ describe('summarizeSkillGrants', () => {
     summarizeSkillGrants(getSkillPermissionsForAgent(agent, skills, disabled));
 
   it('lists default grants and reports none as empty', () => {
-    expect(summarize('oracle')).toBe('simplify, requesting-code-review');
+    expect(summarize('oracle')).toBe('simplify');
     expect(summarize('fixer')).toBe('');
   });
 
