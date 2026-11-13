@@ -20,7 +20,7 @@
   </p>
 
   <p>
-    <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a> | <b>日本語</b> | <a href="README.ko-KR.md">한국어</a> | <a href="README.fa-IR.md">فارسی</a>
+    <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a> | <a href="README.zh-TW.md">繁體中文</a> | <b>日本語</b> | <a href="README.ko-KR.md">한국어</a> | <a href="README.fa-IR.md">فارسی</a>
   </p>
 
   <p><sub>✦ ✦ ✦</sub></p>
@@ -487,8 +487,8 @@ ping all agents
 **読み取り専用のビジュアル解析** - 画像、スクリーンショット、PDF、図解を解釈します。ファイルの生バイトをメインのコンテキストウィンドウに読み込ませることなく、構造化された観察結果をオーケストレーターに返します。
 
 - 画像、スクリーンショット、図解 → `read` ツール（ネイティブな画像サポート）
-- PDF やバイナリドキュメント → `read` ツール（テキスト＋構造抽出）
-- **デフォルトでは無効** - `"disabled_agents": []` を設定し、ビジョン対応モデルを構成することで有効化できます。`--preset=opencode-go` でインストールすると `opencode-go/mimo-v2.5` で有効になります。有効時、画像添付はデフォルトで Observer にルーティングされます。`"image_routing": "direct"` を設定すると Orchestrator に渡し続けます。
+- PDF → `read` ツール（PDF メディアとしてモデルに渡され、テキスト抽出はしません）
+- **デフォルトでは無効** - `"disabled_agents": []` を設定し、ビジョン対応モデルを構成することで有効化できます。`--preset=opencode-go` でインストールすると `opencode-go/mimo-v2.5` で有効になります。`"auto"` はモデル能力で分岐します。ビジョン対応モデルは添付をそのまま読み、非ビジョン系列のみ保存してパスで Observer に委譲します。`"image_routing": "direct"` を設定すると常に Orchestrator に渡します。自動保存の対象は貼り付けた PNG/JPEG/GIF/WebP のみで、PDF やツールが生成した画像は自動転送されないため、パス指定で委譲してください。
 
     </td>
   </tr>

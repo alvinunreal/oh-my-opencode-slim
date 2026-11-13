@@ -64,9 +64,17 @@ function touchOrder(sessionID: string): void {
   if (idx >= 0) store.order.splice(idx, 1);
   store.order.push(sessionID);
   while (store.order.length > MAX_TRACKED_SESSIONS) {
-    const oldest = store.order.shift();
-    if (!oldest) break;
-    clearWakeSession(oldest);
+    // Never evict a live evaluation's row, and never evict the row being
+    // touched: the caller holds that object and mutates it next. Evict the
+    // oldest evictable row instead. When no row is evictable the cap is
+    // exceeded until an owner releases; #1862 tracks bounding that.
+    const victimIndex = store.order.findIndex(
+      (id) => id !== sessionID && !store.inFlight.has(id),
+    );
+    if (victimIndex < 0) break;
+    const [evicted] = store.order.splice(victimIndex, 1);
+    if (evicted === undefined) break;
+    clearWakeSession(evicted);
   }
 }
 

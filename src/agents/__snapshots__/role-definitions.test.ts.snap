@@ -25,7 +25,7 @@ exports[`specialist role definitions matches golden factory prompts and descript
   {
     "description": "Visual analysis specialist; requires a vision-capable model.",
     "name": "observer",
-    "promptSha256": "0fc70a1687fddc19e839287e8a3a5587e0d2a0ff377de1fa418dfbad82a847d4",
+    "promptSha256": "8fe81691f94fad14d647c354da88161efe51ca0866439b605daa7539a6f2d722",
   },
 ]
 `;

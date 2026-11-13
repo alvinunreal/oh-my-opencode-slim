@@ -3,9 +3,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import * as hookFactories from './hooks';
 import { isVolatileTaggedMessage } from './hooks/cache-safe-injection';
 import { resetOrchestratorWakeGateForTests } from './hooks/orchestrator-wake/wake-gate';
+import * as taskSessionManager from './hooks/task-session-manager';
 import { BACKGROUND_JOB_BOARD_METADATA_KEY } from './hooks/task-session-manager/board-injection';
 import type { RevivedRunTracker } from './hooks/task-session-manager/revived-run-tracker';
 import * as runtimeFactories from './hooks/task-session-manager/runtime-status-reconciliation';
@@ -121,7 +121,9 @@ async function assembly(
   );
   let board!: ProductionBoard;
   let gate!: gateFactories.BackgroundJobTerminalGate;
-  let taskHook!: ReturnType<typeof hookFactories.createTaskSessionManagerHook>;
+  let taskHook!: ReturnType<
+    typeof taskSessionManager.createTaskSessionManagerHook
+  >;
   // The production tracker instance, captured from the hook factory's
   // options (index.ts threads `revivedRunTracker` into
   // createTaskSessionManagerHook) so tests can register revived runs —
@@ -155,10 +157,10 @@ async function assembly(
     });
     return gate;
   });
-  const originalHook = hookFactories.createTaskSessionManagerHook;
+  const originalHook = taskSessionManager.createTaskSessionManagerHook;
   let prune!: ReturnType<typeof spyOn>;
   const hookSpy = spyOn(
-    hookFactories,
+    taskSessionManager,
     'createTaskSessionManagerHook',
   ).mockImplementation((...args) => {
     taskHook = originalHook(...args);

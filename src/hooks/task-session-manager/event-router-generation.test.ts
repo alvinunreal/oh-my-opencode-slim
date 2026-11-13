@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { describe, expect, mock, spyOn, test } from 'bun:test';
 import { BackgroundJobBoard } from '../../utils/background-job-board';
 import { createBackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
 import { mapV2EventToV1 } from '../../v2/event-adapter';
@@ -68,6 +68,53 @@ async function route(
 }
 
 describe('task session event generation fences', () => {
+  test('proven resumes reject unattributed old errors but reconcile idle', async () => {
+    const board = new BackgroundJobBoard();
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      now: 100,
+    });
+    const deps = createDeps(board, () => 300);
+    await route(deps, 'session.status', {
+      sessionID: 'child-1',
+      status: { type: 'busy' },
+      activityAt: 100,
+    });
+    board.registerLaunch({
+      taskID: 'child-1',
+      parentSessionID: 'parent-1',
+      agent: 'fixer',
+      now: 200,
+      resumedRunProven: true,
+    });
+    const reconcile = spyOn(deps.terminalGate, 'reconcile').mockResolvedValue({
+      kind: 'stale',
+    });
+    try {
+      await route(deps, 'session.error', {
+        sessionID: 'child-1',
+        error: { message: 'late old error' },
+      });
+      expect(reconcile).not.toHaveBeenCalled();
+      expect(board.get('child-1')?.state).toBe('running');
+      await route(deps, 'session.idle', { sessionID: 'child-1' });
+      expect(
+        deps.idleReconciler.scheduleChildIdleReconciliation,
+      ).toHaveBeenCalledTimes(1);
+      await route(deps, 'session.error', {
+        sessionID: 'child-1',
+        activityAt: 300,
+        error: { message: 'current failure' },
+      });
+      expect(reconcile).toHaveBeenCalledTimes(1);
+    } finally {
+      reconcile.mockRestore();
+      deps.terminalGate.dispose();
+    }
+  });
+
   test('quarantines an interleaved old idle/error/busy sequence after same-ID relaunch', async () => {
     let clock = 100;
     const board = new BackgroundJobBoard();

@@ -20,7 +20,7 @@
   </p>
 
   <p>
-    <b>English</b> | <a href="README.zh-CN.md">简体中文</a> | <a href="README.ja-JP.md">日本語</a> | <a href="README.ko-KR.md">한국어</a> | <a href="README.fa-IR.md">فارسی</a>
+    <b>English</b> | <a href="README.zh-CN.md">简体中文</a> | <a href="README.zh-TW.md">繁體中文</a> | <a href="README.ja-JP.md">日本語</a> | <a href="README.ko-KR.md">한국어</a> | <a href="README.fa-IR.md">فارسی</a>
   </p>
 
   <p><sub>✦ ✦ ✦</sub></p>
@@ -655,8 +655,8 @@ activation, and update flow.
 **Read-only visual analysis** - interprets images, screenshots, PDFs, and diagrams. Returns structured observations to the orchestrator without loading raw file bytes into the main context window.
 
 - Images, screenshots, diagrams → `read` tool (native image support)
-- PDFs and binary documents → `read` tool (text + structure extraction)
-- **Disabled by default** - enable with `"disabled_agents": []` and configure a vision-capable model; installing with `--preset=opencode-go` enables it with `opencode-go/mimo-v2.5`. In `"auto"`, attachments ride the turn model's capabilities: vision-capable models read them inline, non-vision chains get them saved as workspace assets and routed to Observer by path; set `"image_routing": "direct"` to always keep them inline.
+- PDFs → `read` tool (passed to the model as PDF media, not text-extracted)
+- **Disabled by default** - enable with `"disabled_agents": []` and configure a vision-capable model; installing with `--preset=opencode-go` enables it with `opencode-go/mimo-v2.5`. In `"auto"`, attachments ride the turn model's capabilities: vision-capable models read them inline, non-vision chains get attachments saved as workspace assets and routed to Observer by path; set `"image_routing": "direct"` to always keep them inline. The automatic save-and-route covers pasted images only (PNG/JPEG/GIF/WebP); PDFs and images produced by tools stay inline, so delegate those by path yourself.
 
     </td>
   </tr>

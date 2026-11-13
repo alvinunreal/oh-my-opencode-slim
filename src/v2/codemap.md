@@ -37,10 +37,15 @@ immediately before native admission; it is never forwarded to the host.
 | `question-timeout-tui.ts` | Opt-in v2 question timer registered by `tui-impl.ts`. Only the primary TUI answers session question forms with custom string or multiselect fields; replies, cancellations, session deletion and TUI disposal clear timers. |
 | `update-notice.ts` | v2 "a newer release is available" notice (issue #1655): the server-side checker detects updates but its `client.tui.showToast` is a logging no-op in `client-shim.ts`, so delivery moved to the TUI. `registerUpdateNotice` schedules a check 1.5 s after setup (never the startup path), resolves the installed version from the running copy's own `package.json` (module-relative, name-checked) with `client.plugin.list` as the fallback - never a cache scan, which can read a higher leftover copy and hide the update - fetches `registry.npmjs.org/<pkg>/latest` under a 4 s bound that covers the body read, and — only for a strictly newer **same-major** version — toasts `v<installed> → v<latest> · run opencode plugin update` and registers a muted `sidebar.footer` badge (the durable trace for a missed toast). Silent and throw-free on offline/timeout/unparseable versions/new major/missing `client`/`toast`/`slot`; the disposer clears the timer and the badge claim. |
 | `adapters.ts` | Shape adapters: `parseModelRef`, `adaptPermissions` (v1 map → v2 Rule[] + v2 permissive base + `task`→`subagent`/`bash`→`shell` mapping), `rewritePromptForV2` (`task(`→`subagent(`), `adaptTool`, `applyAgentToDraft`. |
+| `update-notice.ts` | v2 "a newer release is available" notice (issue #1655): the v2 adapter does not load the v1 server updater at all (`src/index.ts` gates it to v1), and `client.tui.showToast` is a logging no-op in `client-shim.ts`, so the TUI owns the message. `registerUpdateNotice` schedules a check 1.5 s after setup (never the startup path), resolves the installed version from the running copy's own `package.json` (module-relative, name-checked) with `client.plugin.list` as the fallback - never a cache scan, which can read a higher leftover copy and hide the update - fetches `registry.npmjs.org/<pkg>/latest` under a 4 s bound that covers the body read, and — only for a strictly newer **same-major** version — toasts `v<installed> → v<latest> · run opencode plugin update` and registers a muted `sidebar.footer` badge (the durable trace for a missed toast). Silent and throw-free on offline/timeout/unparseable versions/new major/missing `client`/`toast`/`slot`; the disposer clears the timer and the badge claim. |
+| `adapters.ts` | Shape adapters: `parseModelRef`, `adaptPermissions` (v1 map → v2 Rule[] + v2 permissive base + `task`→`subagent`/`bash`→`shell` mapping), `rewritePromptForV2` (`task(`→`subagent(`), `adaptTool`, `applyAgentToDraft` (six-digit hex colors pass to the host; v1 theme tokens stay sidebar-local). |
 | `interview-bridge.ts` | v2-only `/interview` marker command, trailing-message context bridge, v2 interview runtime, and per-session transcript projections. |
 | `mirror-conformance.ts` | Compile-time conformance guard binding the hand-mirrored v2 context types in `types.ts` to the pinned `@opencode/plugin` surface; enforced by `bun run typecheck` — deliberately no `.test.ts` suffix (tsc excludes test files) and never imported at runtime. |
 
 ## Preset Session Creation
+
+`disabled_commands: ["preset"]` gates the command, client RPC and sidebar editor
+entry. Internal inference binding/admission remains active for delegation.
 
 `preset-manager.ts` adds **New session** through `preset-rpc.ts`'s `createBound`.
 `session-presets.ts` captures the selected inference team, creates an empty root
@@ -114,7 +119,7 @@ The v2 runtime surface and plugin contracts are adapted through the following da
    - **Session hooks**: Single `ctx.session.hook("context")` handles system/messages transforms, chat.message agent tracking, and marker dispatch with interview bridge integration. Stored synthetic delivery timestamps are projected into the observer by message ID and omitted again from the outgoing context.
    - **Runtime bridges**: Separate session hooks for `prompt`, `model.request`, and `compaction` bridges that adapt v1 chat.headers, chat.message, and session.compaction to v2
    - **Permission rules**: Uses `createPermissionRulesBridge` to apply child-session permission rules via `ctx.session.update({sessionID, permissions})`
-   - **Tool execute bridges**: Uses `createToolExecuteBridges` to normalize `subagent`→`task` semantics for tool.execute.before/after hooks
+   - **Tool execute bridges**: Uses `createToolExecuteBridges` to normalize `subagent`→`task` semantics. With no shared post-tool consumers, v2 still registers the after hook while it owns admission captures (`backgroundJobs.mode` managed or native), and never in `off`
    - **Event pump**: Uses `mapV2EventToV1` for additive-only v2→v1 event synthesis, preserving raw events for the interview bridge
 
 5. **Initialization and Cleanup**: The setup returns a cleanup function that disposes every v2 registration and the v1 `dispose`.
@@ -133,6 +138,11 @@ The v2 runtime surface and plugin contracts are adapted through the following da
 - **Interview cache boundary.** The interview context hook only rewrites the current trailing command message; prior messages remain unchanged for provider prompt-cache prefix reuse.
 - **Commands via marker round-trip.** v2 command drafts are add-only, so `execute` submits a whole-text-anchored `<omos-cmd-command>` marker as a user prompt. The context hook replays its expansion for every projection so prior request bytes remain stable.
 - **Capability guard.** Hosts invoking `setup()` with a reduced/TUI-side ctx (no `agent.transform`) are skipped gracefully instead of crashing.
+- **Core versus optional hooks.** Prompt/context and permission bridges own
+  inference options, attribution and admission safety; disabling the preset UI
+  does not disable those bridges. Extension methods on the returned hooks object
+  are internal calls, not event subscriptions or timers. Optional consumers keep
+  their existing command/tool/feature gates.
 - **Session-frozen runtime profiles.** Config-file refreshes update the profiles
   available to new children, without rebuilding agent definitions or the host
   registry. A bound session keeps its saved team until Apply. New-child capture

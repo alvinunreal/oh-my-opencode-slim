@@ -249,6 +249,488 @@ afterEach(() => {
 });
 
 describe('startup subagent recovery', () => {
+  test('four timed-out child reads allow a fifth persisted child to recover', async () => {
+    const ids = Array.from({ length: 5 }, (_, index) => `ses_hang_${index}`);
+    await seedPersistence(
+      memoryStorage(),
+      ids.map((id) => persistedChild(id)),
+    );
+    const held = ids.slice(0, 4).map(() => Promise.withResolvers<unknown>());
+    const clock = createTimerHarness();
+    const scanInput = input({
+      sessions: ids.map((id) => ({
+        id,
+        parentID: PARENT,
+        outcome: 'succeeded',
+      })),
+      parent: parentTranscript([]),
+    });
+    const session = (scanInput.client as ReturnType<typeof client>).session;
+    session.messages = mock(async ({ path }: { path: { id: string } }) => {
+      if (path.id === PARENT) return parentTranscript([]);
+      const index = ids.indexOf(path.id);
+      return index < 4
+        ? held[index].promise
+        : completedChildTranscript('healthy');
+    });
+    const board = new BackgroundJobBoard();
+    const scan = recoverSubagentSessionsAtStartup({
+      input: scanInput,
+      backgroundJobBoard: board,
+      hostFlavor: 'v2',
+      shouldManageSession: () => true,
+      readTimeoutMs: 20,
+      timers: {
+        setTimeout: clock.setTimeout,
+        clearTimeout: (timer: unknown) => clock.clearTimeout(timer as number),
+      },
+    });
+    await clock.tick();
+    expect(session.messages.mock.calls.map(([arg]) => arg.path.id)).toEqual([
+      PARENT,
+      ...ids.slice(0, 4),
+    ]);
+    await clock.advance(20);
+    expect(await scan).toEqual([ids[4]]);
+    expect(session.messages.mock.calls.map(([arg]) => arg.path.id)).toContain(
+      ids[4],
+    );
+    expect(board.get(ids[4])).toMatchObject({
+      state: 'completed',
+      resultSummary: 'healthy',
+    });
+    held[0].reject(new Error('late child read failure'));
+    for (const child of held.slice(1)) {
+      child.resolve(completedChildTranscript('late'));
+    }
+    await clock.tick();
+    expect(ids.slice(0, 4).map((id) => board.get(id))).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(clock.pending()).toBe(0);
+  });
+
+  test('prepares four persisted children ahead but commits and refills in order', async () => {
+    const ids = Array.from({ length: 5 }, (_, index) => `ses_ahead_${index}`);
+    await seedPersistence(
+      memoryStorage(),
+      ids.map((id) => persistedChild(id)),
+    );
+    const children = ids.map(() => Promise.withResolvers<unknown>());
+    const wakeHeld = Promise.withResolvers<boolean>();
+    const clock = createTimerHarness();
+    const scanInput = input({
+      sessions: ids.map((id) => ({
+        id,
+        parentID: PARENT,
+        outcome: 'succeeded',
+      })),
+      parent: parentTranscript([]),
+    });
+    const session = (scanInput.client as ReturnType<typeof client>).session;
+    session.messages = mock(async ({ path }: { path: { id: string } }) => {
+      if (path.id === PARENT) return parentTranscript([]);
+      return children[ids.indexOf(path.id)].promise;
+    });
+    const board = new BackgroundJobBoard();
+    const wakes: string[] = [];
+    const scan = recoverSubagentSessionsAtStartup({
+      input: scanInput,
+      backgroundJobBoard: board,
+      hostFlavor: 'v2',
+      shouldManageSession: () => true,
+      timers: {
+        setTimeout: clock.setTimeout,
+        clearTimeout: (timer: unknown) => clock.clearTimeout(timer as number),
+      },
+      onRecoveredTerminal: async (_parent, id) => {
+        wakes.push(id);
+        return id === ids[0] ? wakeHeld.promise : true;
+      },
+    });
+    await clock.tick();
+    expect(session.messages.mock.calls.map(([arg]) => arg.path.id)).toEqual([
+      PARENT,
+      ...ids.slice(0, 4),
+    ]);
+    for (let index = 3; index >= 0; index--) {
+      children[index].resolve(completedChildTranscript(ids[index]));
+    }
+    await clock.tick();
+    expect(wakes).toEqual([ids[0]]);
+    expect(board.get(ids[1])).toBeUndefined();
+    expect(
+      session.messages.mock.calls.some(([arg]) => arg.path.id === ids[4]),
+    ).toBe(false);
+    wakeHeld.resolve(true);
+    await clock.tick();
+    expect(wakes).toEqual(ids.slice(0, 4));
+    expect(
+      session.messages.mock.calls.filter(([arg]) => arg.path.id === PARENT),
+    ).toHaveLength(1);
+    expect(
+      session.messages.mock.calls.some(([arg]) => arg.path.id === ids[4]),
+    ).toBe(true);
+    children[4].resolve(completedChildTranscript(ids[4]));
+    expect(await scan).toEqual(ids);
+    expect(wakes).toEqual(ids);
+    expect(ids.map((id) => board.get(id)?.resultSummary)).toEqual(ids);
+    expect(clock.pending()).toBe(0);
+  });
+
+  test('disposal prevents prefetched results from mutating the board', async () => {
+    const ids = ['ses_dispose_a', 'ses_dispose_b'];
+    await seedPersistence(
+      memoryStorage(),
+      ids.map((id) => persistedChild(id)),
+    );
+    const held = ids.map(() => Promise.withResolvers<unknown>());
+    const clock = createTimerHarness();
+    const scanInput = input({
+      sessions: ids.map((id) => ({
+        id,
+        parentID: PARENT,
+        outcome: 'succeeded',
+      })),
+      parent: parentTranscript([]),
+    });
+    const session = (scanInput.client as ReturnType<typeof client>).session;
+    session.messages = mock(async ({ path }: { path: { id: string } }) =>
+      path.id === PARENT
+        ? parentTranscript([])
+        : held[ids.indexOf(path.id)].promise,
+    );
+    let disposed = false;
+    const board = new BackgroundJobBoard();
+    const scan = recoverSubagentSessionsAtStartup({
+      input: scanInput,
+      backgroundJobBoard: board,
+      hostFlavor: 'v2',
+      shouldManageSession: () => true,
+      isDisposed: () => disposed,
+      timers: {
+        setTimeout: clock.setTimeout,
+        clearTimeout: (timer: unknown) => clock.clearTimeout(timer as number),
+      },
+    });
+    await clock.tick();
+    disposed = true;
+    held[0].resolve(completedChildTranscript('first'));
+    expect(await scan).toEqual([]);
+    held[1].reject(new Error('late failure'));
+    await clock.tick();
+    expect(board.get(ids[0])).toBeUndefined();
+    expect(board.get(ids[1])).toBeUndefined();
+    expect(clock.pending()).toBe(0);
+  });
+
+  test('prefetched deletion fences evidence before ordered consumption', async () => {
+    const ids = ['ses_fence_first', 'ses_fence_deleted'];
+    await seedPersistence(
+      memoryStorage(),
+      ids.map((id) => persistedChild(id)),
+    );
+    const held = Promise.withResolvers<unknown>();
+    const clock = createTimerHarness();
+    const scanInput = input({
+      sessions: ids.map((id) => ({
+        id,
+        parentID: PARENT,
+        outcome: 'succeeded',
+      })),
+      parent: parentTranscript([]),
+    });
+    const session = (scanInput.client as ReturnType<typeof client>).session;
+    session.messages = mock(async ({ path }: { path: { id: string } }) => {
+      if (path.id === PARENT) return parentTranscript([]);
+      if (path.id === ids[0]) return held.promise;
+      return completedChildTranscript('deleted');
+    });
+    const board = new BackgroundJobBoard();
+    const scan = recoverSubagentSessionsAtStartup({
+      input: scanInput,
+      backgroundJobBoard: board,
+      hostFlavor: 'v2',
+      shouldManageSession: () => true,
+      timers: {
+        setTimeout: clock.setTimeout,
+        clearTimeout: (timer: unknown) => clock.clearTimeout(timer as number),
+      },
+    });
+    await clock.tick();
+    board.drop(ids[1]);
+    held.resolve(completedChildTranscript('first'));
+    expect(await scan).toEqual([ids[0]]);
+    expect(board.get(ids[1])).toBeUndefined();
+    expect(clock.pending()).toBe(0);
+  });
+
+  test('ordered persisted parent registration authorizes a later listed-only child', async () => {
+    await seedPersistence(memoryStorage(), [persistedChild(DONE)]);
+    const parent = parentTranscript([
+      {
+        callID: 'listed',
+        sessionID: RUNNING,
+        value: launchText(RUNNING),
+        background: true,
+      },
+    ]);
+    const board = new BackgroundJobBoard();
+    let managed = false;
+    const recovered = await recoverSubagentSessionsAtStartup({
+      input: input({
+        sessions: [
+          { id: DONE, parentID: PARENT, outcome: 'succeeded' },
+          { id: RUNNING, parentID: PARENT },
+        ],
+        parent,
+        children: {
+          [DONE]: completedChildTranscript('done'),
+          [RUNNING]: runningChildTranscript(),
+        },
+      }),
+      backgroundJobBoard: board,
+      hostFlavor: 'v2',
+      shouldManageSession: () => managed,
+      registerParentSession: () => {
+        managed = true;
+      },
+    });
+    expect(recovered).toEqual([DONE, RUNNING]);
+    expect(board.get(RUNNING)?.state).toBe('running');
+  });
+
+  test.each(['relaunch', 'reopen'] as const)(
+    'prefetched terminal evidence cannot correct a later %s',
+    async (change) => {
+      const ids = ['ses_race_first', 'ses_race_second'];
+      await seedPersistence(
+        memoryStorage(),
+        ids.map((id) => persistedChild(id)),
+      );
+      const held = Promise.withResolvers<unknown>();
+      const clock = createTimerHarness();
+      const scanInput = input({
+        sessions: ids.map((id) => ({
+          id,
+          parentID: PARENT,
+          outcome: 'succeeded',
+        })),
+        parent: parentTranscript([]),
+      });
+      const session = (scanInput.client as ReturnType<typeof client>).session;
+      session.messages = mock(async ({ path }: { path: { id: string } }) => {
+        if (path.id === PARENT) return parentTranscript([]);
+        return path.id === ids[0]
+          ? held.promise
+          : completedChildTranscript('old');
+      });
+      const board = new BackgroundJobBoard();
+      if (change === 'reopen') {
+        board.restoreRetainedSession({
+          taskID: ids[1],
+          parentSessionID: PARENT,
+          agent: 'explorer',
+          description: 'old',
+          state: 'completed',
+          background: true,
+          launchedAt: 6,
+        });
+      } else {
+        board.registerLaunch({
+          taskID: ids[1],
+          parentSessionID: PARENT,
+          agent: 'explorer',
+          background: true,
+          adopted: true,
+          now: 6,
+        });
+      }
+      const scan = recoverSubagentSessionsAtStartup({
+        input: scanInput,
+        backgroundJobBoard: board,
+        hostFlavor: 'v2',
+        shouldManageSession: () => true,
+        timers: {
+          setTimeout: clock.setTimeout,
+          clearTimeout: (timer: unknown) => clock.clearTimeout(timer as number),
+        },
+      });
+      await clock.tick();
+      if (change === 'reopen') board.markRunningFromLiveSession(ids[1], 30);
+      else
+        board.registerLaunch({
+          taskID: ids[1],
+          parentSessionID: PARENT,
+          agent: 'explorer',
+          background: true,
+          adopted: true,
+          now: 30,
+        });
+      held.resolve(completedChildTranscript('first'));
+      expect(await scan).toEqual([ids[0]]);
+      expect(board.get(ids[1])).toMatchObject({
+        state: 'running',
+        runStartedAt: 30,
+      });
+      expect(clock.pending()).toBe(0);
+    },
+  );
+  test.each([
+    ['failed', 'error'],
+    ['interrupted', 'cancelled'],
+    ['succeeded', 'completed'],
+  ] as const)(
+    'timestamp-attributed %s host outcome does not occupy startup capacity',
+    async (outcome, expected) => {
+      await seedPersistence(memoryStorage(), [persistedChild(RUNNING)]);
+      const board = new BackgroundJobBoard();
+      const concurrency = new BackgroundTaskConcurrency({
+        defaultConcurrency: 1,
+        providerConcurrency: {},
+        modelConcurrency: {},
+      });
+      const transcript = runningChildTranscript(12);
+      if (outcome === 'succeeded') {
+        transcript.data.push({
+          info: { id: 'a', role: 'assistant', time: { created: 13 } },
+          parts: [{ type: 'text', text: 'answer' }],
+        });
+      }
+      await recoverSubagentSessionsAtStartup({
+        input: input({
+          sessions: [
+            { id: RUNNING, parentID: PARENT, outcome, time: { idle: 14 } },
+          ],
+          parent: parentTranscript([]),
+          children: { [RUNNING]: transcript },
+        }),
+        backgroundJobBoard: board,
+        backgroundTaskConcurrency: concurrency,
+        hostFlavor: 'v2',
+        shouldManageSession: () => true,
+      });
+
+      expect(board.get(RUNNING)?.state).toBe(expected);
+      expect(concurrency.snapshot()).toEqual({ active: 0, queued: 0 });
+      const ticket = concurrency.acquire({});
+      await ticket.ready;
+      ticket.release();
+      concurrency.dispose();
+    },
+  );
+
+  test.each([
+    ['stale', { outcome: 'failed', time: { idle: 11 } }],
+    ['partial', { outcome: 'failed' }],
+    ['running', {}],
+  ])('startup %s evidence keeps running capacity', async (_name, evidence) => {
+    await seedPersistence(memoryStorage(), [persistedChild(RUNNING)]);
+    const board = new BackgroundJobBoard();
+    const concurrency = new BackgroundTaskConcurrency({
+      defaultConcurrency: 1,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    await recoverSubagentSessionsAtStartup({
+      input: input({
+        sessions: [{ id: RUNNING, parentID: PARENT, ...evidence }],
+        parent: parentTranscript([]),
+        children: { [RUNNING]: runningChildTranscript(12) },
+      }),
+      backgroundJobBoard: board,
+      backgroundTaskConcurrency: concurrency,
+      hostFlavor: 'v2',
+      shouldManageSession: () => true,
+    });
+    expect(board.get(RUNNING)?.state).toBe('running');
+    const ticket = concurrency.acquire({});
+    expect(concurrency.snapshot()).toEqual({ active: 1, queued: 1 });
+    concurrency.releaseTask(RUNNING);
+    await ticket.ready;
+    ticket.release();
+    concurrency.dispose();
+  });
+
+  test('reads timestamped host outcome when listing omits idle time', async () => {
+    await seedPersistence(memoryStorage(), [persistedChild(RUNNING)]);
+    const board = new BackgroundJobBoard();
+    const scanInput = input({
+      sessions: [{ id: RUNNING, parentID: PARENT, outcome: 'failed' }],
+      parent: parentTranscript([]),
+      children: { [RUNNING]: runningChildTranscript(12) },
+    });
+    (scanInput.client as ReturnType<typeof client>).session.get = mock(
+      async ({ path }: { path: { id: string } }) => ({
+        data: {
+          id: path.id,
+          parentID: PARENT,
+          outcome: 'failed',
+          time: { idle: 14 },
+        },
+      }),
+    );
+    const concurrency = new BackgroundTaskConcurrency({
+      defaultConcurrency: 1,
+      providerConcurrency: {},
+      modelConcurrency: {},
+    });
+    await recoverSubagentSessionsAtStartup({
+      input: scanInput,
+      backgroundJobBoard: board,
+      backgroundTaskConcurrency: concurrency,
+      hostFlavor: 'v2',
+      shouldManageSession: () => true,
+    });
+    expect(board.get(RUNNING)?.state).toBe('error');
+    expect(concurrency.snapshot()).toEqual({ active: 0, queued: 0 });
+    concurrency.dispose();
+  });
+
+  test.each(['newer assistant', 'textless success'] as const)(
+    'startup %s does not settle from host idle',
+    async (scenario) => {
+      await seedPersistence(memoryStorage(), [persistedChild(RUNNING)]);
+      const board = new BackgroundJobBoard();
+      const transcript = runningChildTranscript(12);
+      if (scenario === 'newer assistant') {
+        transcript.data.push({
+          info: { id: 'a', role: 'assistant', time: { created: 15 } },
+          parts: [{ type: 'text', text: 'new activity' }],
+        });
+      }
+      const concurrency = new BackgroundTaskConcurrency({
+        defaultConcurrency: 1,
+        providerConcurrency: {},
+        modelConcurrency: {},
+      });
+      await recoverSubagentSessionsAtStartup({
+        input: input({
+          sessions: [
+            {
+              id: RUNNING,
+              parentID: PARENT,
+              outcome: scenario === 'newer assistant' ? 'failed' : 'succeeded',
+              time: { idle: 14 },
+            },
+          ],
+          parent: parentTranscript([]),
+          children: { [RUNNING]: transcript },
+        }),
+        backgroundJobBoard: board,
+        backgroundTaskConcurrency: concurrency,
+        hostFlavor: 'v2',
+        shouldManageSession: () => true,
+      });
+      expect(board.get(RUNNING)?.state).toBe('running');
+      expect(concurrency.snapshot()).toEqual({ active: 1, queued: 0 });
+      concurrency.dispose();
+    },
+  );
+
   test.each([
     ['empty', false],
     ['running', true],
@@ -482,7 +964,9 @@ describe('startup subagent recovery', () => {
         void recoverSubagentSessionsAtStartup(options);
         await clock.tick();
         await clock.advance(20);
-        expect(get).toHaveBeenCalledTimes(1);
+        expect(
+          get.mock.calls.filter(([args]) => args.path.id === RUNNING),
+        ).toHaveLength(1);
         expect(wake).toHaveBeenCalledTimes(1);
       }
     },

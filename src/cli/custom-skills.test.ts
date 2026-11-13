@@ -40,6 +40,8 @@ describe('getV1BundledSkillPaths', () => {
     delete process.env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS;
     delete process.env.OPENCODE_DISABLE_EXTERNAL_SKILLS;
     spyOn(os, 'homedir').mockReturnValue(home);
+    process.env.XDG_CONFIG_HOME = path.join(home, 'config');
+    process.env.OPENCODE_CONFIG_DIR = path.join(home, 'opencode');
     fs.mkdirSync(path.join(project, '.git'));
     for (const name of ['codemap', 'deepwork', 'reflect']) {
       writeSkill(root, name, `---\nname: ${name}\ndescription: d\n---\n`);

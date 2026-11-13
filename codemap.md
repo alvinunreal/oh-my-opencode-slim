@@ -91,7 +91,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 
 4. **Install/release path**
    - `src/cli/` configures host OpenCode instances.
-   - `src/skills/` is copied into the user skill directory.
+   - `src/skills/` ships inside the package; v2 registers it in-process, and v1 points the host's skill scanner at the installed package path.
    - `scripts/` validates generated schema, package completeness, and host-load behavior.
 
 ## Key Cross-Module Integration Points
@@ -132,7 +132,9 @@ This codemap covers the plugin repository itself and excludes the nested `openco
   asynchronous scope and commits synchronously under the existing file lock.
 - v2 admission shares its validated record/identity with profile capture. Native
   event filters freeze the required type union once; Interview has one owner.
-- Update facts use the existing native RPC seam. Optional implementations are
+- Native v2 owns package checks and installation; Slim's server-side v1
+  updater loads only on v1, and the TUI keeps its own notice on both hosts.
+  Optional implementations are
   emitted as packaged ESM chunks; entry paths remain unchanged. See
   [Runtime Efficiency](docs/runtime-efficiency.md) and release import checks.
 
