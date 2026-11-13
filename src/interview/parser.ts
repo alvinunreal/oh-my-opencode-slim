@@ -211,6 +211,11 @@ export function normalizeAssistantState(
         .slice(0, maxQuestions)
     : [];
 
+  if (
+    new Set(questions.map((question) => question.id)).size !== questions.length
+  ) {
+    throw new Error('Duplicate interview question IDs');
+  }
   return { summary, patch, title, questions };
 }
 

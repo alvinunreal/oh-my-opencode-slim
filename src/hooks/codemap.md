@@ -4,17 +4,15 @@
 
 Implements the plugin's OpenCode lifecycle hooks: message/prompt transforms,
 tool-execute interception, event handling, cache-safe prompt injection, and
-runtime command interception. Each hook is a factory function (barrel-exported
-from `index.ts`) that returns the hook points OpenCode invokes.
+runtime command interception. Each hook is a factory function, imported directly
+from its owning module, that returns the hook points OpenCode invokes.
 
 ## Design
 
 ### Core Architecture
 
-- **Factory barrel** (`index.ts`): Exports every hook factory plus the shared
-  helpers (`cache-safe-injection`, `chat-headers`, `command-hook-utils`,
-  `image-hook`, `session-lifecycle`, `types`). `src/index.ts` imports from here
-  rather than individual files.
+- **Factory leaves**: Optional implementations load inside the feature gate that
+  uses them. `src/index.ts` imports leaves directly; there is no hooks barrel.
 - **SessionLifecycle** (`session-lifecycle.ts`): Coordinator that owns
   `session.deleted` cleanup-callback registration. Stateful hooks register
   cleanup callbacks instead of implementing their own `session.deleted`
@@ -33,6 +31,13 @@ from `index.ts`) that returns the hook points OpenCode invokes.
   shared by command-style hooks (deepwork, reflect).
 - **Message types** (`types.ts`): `MessageInfo`, `MessagePart`,
   `MessageWithParts`, plus replay helpers used by foreground-fallback.
+- **Cold-load leaves**: `orchestrator-wake/operator-text.ts` owns the pure
+  operator/delta helpers without the v1 scheduler;
+  `task-session-manager/refusal-corrections.ts` owns the board metadata key and
+  refusal correction injection without the board graph; `deepwork/announcement.ts`
+  owns the router-head sentence without bundling the deepwork skill text;
+  `auto-update-checker/runtime-package.ts` owns package resolution without the
+  updater graph.
 
 ### Hook Categories
 
@@ -41,7 +46,7 @@ from `index.ts`) that returns the hook points OpenCode invokes.
 | Prompt transforms | `createPhaseReminderHook`, `createCouncilInjectHook`, `createChatHeadersHook`, task-session-manager delivery observation, `processImageAttachments` | `experimental.chat.messages.transform`, `chat.headers` |
 | Tool interception | `createApplyPatchHook` (tool), `createSearchPathGuardHook`, `createCouncilSeatHook`, task-session-manager | `tool.execute.before` / `tool.execute.after` |
 | Error recovery | `createJsonErrorRecoveryHook`, `createAutoUpdateCheckerHook` | message transform, tool-execute after |
-| Lifecycle/event | task-session-manager, `createCacheMonitorHook`, `createOrchestratorWakeScheduler` | `event` |
+| Lifecycle/event | task-session-manager, `createCacheMonitorHook`, `createOrchestratorWakeScheduler`, `createQuestionTimeoutHook` (v1) | `event` |
 | Runtime commands | `createDeepworkCommandHook`, `createReflectCommandHook` | `command.execute.before` |
 | Model fallback | `ForegroundFallbackManager` | event-driven (message.updated/session.error/session.status) |
 
@@ -87,7 +92,8 @@ with one equivalent pass; the cache-safety harness mirrors this wiring.
 
 ```
 1. Plugin initializes (src/index.ts)
-2. Hook factories are called, returning handler objects
+2. Hook factories load inside their feature/disabled_hooks gates and return
+   handler objects
 3. src/index.ts wires them directly into the plugin's hook object
    (no central registry; factories are composed at the call site)
 4. Stateful hooks register session.deleted cleanup with SessionLifecycle
@@ -103,12 +109,15 @@ with one equivalent pass; the cache-safety harness mirrors this wiring.
   (observation only, fails open).
 - `createOrchestratorWakeScheduler` tracks continuous parent idle and triggers
   periodic wake prompts (see its sub-map).
+- `question-timeout/` owns the shared request timer and the opt-in v1 hook.
+  It skips questions that disallow custom answers; replies, rejections, session
+  deletion and plugin disposal clear timers. A turn abort alone does not.
 
 ## Integration
 
 ### Consumers
 
-- **Main Plugin** (`src/index.ts`): imports every factory from `index.ts` and
+- **Main Plugin** (`src/index.ts`): imports every factory from its owning module and
   wires the returned handlers into the plugin's hook object.
 - **Council seats** (`council-seats/`): owns `Seats:`-line seat-result
   assembly. The managed resolver reads the parent-side job board only;

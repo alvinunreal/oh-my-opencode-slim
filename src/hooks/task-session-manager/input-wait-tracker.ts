@@ -60,7 +60,11 @@ export function createInputWaitTracker(options: {
 
   function trackInputWait(event: {
     type: string;
-    properties?: { id?: string; requestID?: string; sessionID?: string };
+    properties?: {
+      id?: string;
+      requestID?: string;
+      sessionID?: string;
+    };
   }): void {
     const sessionID = event.properties?.sessionID;
     if (!sessionID || !options.shouldManageSession(sessionID)) {

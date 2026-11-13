@@ -129,7 +129,6 @@ export * from './constants';
 export * from './council-schema';
 export { deepMerge, loadAgentPrompt, loadPluginConfig } from './loader';
 export * from './schema';
-export { getAcpAgentNames, getAgentOverride, getCustomAgentNames } from './utils';
 ```
 
 This allows consumers to import directly from `src/config` rather than individual files.
@@ -148,7 +147,6 @@ This allows consumers to import directly from `src/config` rather than individua
 
 - `getAgentOverride(config, name)`: Get agent-specific override with alias support
 - `getCustomAgentNames(config)`: List custom agents declared in config.agents
-- `getAcpAgentNames(config)`: List ACP agent names from config.acpAgents
 - `loadAgentPrompt(agentName, preset?)`: Load custom prompt files for agents, searching current and ancestor locations before global directories
 - `stripOrchestratorModel` / `applyOrchestratorModelConfig` (strip-orchestrator-model.ts): Strip the orchestrator's single model/variant when a fallback chain is configured
 
@@ -159,7 +157,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `RuntimeConfig.reset(directory)`: Clear the singleton for a directory
 - `RuntimeConfig.captureHostConfig(opencodeConfig)`: Capture host-side config before the config hook mutates it
 - `setRuntimePreset(name)` / `getRuntimePreset()`: Runtime preset override (stale names clear it)
-- Derived getters: `plugin`, `preset`, `featureGates`, `agents()`, `agent(name)`, `disabledAgents`, `disabledTools`, `disabledSkills`, `disabledHooks`, `disabledCommands`, `customAgentNames`, `disabledMcps`, `imageRouting`, `multiplexer`, `backgroundJobs` (incl. `orchestratorWake`), `fallback`, `webfetch`, `acpAgents`, `companion`, `council`, `updateCheckerEnabled`, `stripOrchestratorModel`, `setDefaultAgent`, `compactSidebar`, `modelArrays` (incl. councillor chains), `runtimeChains`, `primaryModel`, `smallModel()`, `hostAgent(name)`
+- Derived getters: `plugin`, `preset`, `featureGates`, `agents()`, `agent(name)`, `disabledAgents`, `disabledTools`, `disabledSkills`, `disabledHooks`, `disabledCommands`, `customAgentNames`, `disabledMcps`, `imageRouting`, `multiplexer`, `backgroundJobs` (incl. `orchestratorWake`), `fallback`, `acpAgents`, `companion`, `council`, `updateCheckerEnabled`, `stripOrchestratorModel`, `setDefaultAgent`, `compactSidebar`, `modelArrays` (incl. councillor chains), `runtimeChains`, `primaryModel`, `smallModel()`, `hostAgent(name)`
 
 ### MCP Management
 
@@ -188,7 +186,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `fallback`: Failover/retry configuration
 - `council`: Council configuration with councillor presets and a default preset
 - `companion`: Companion animation configuration
-- `acpAgents`: ACP agent configurations
+- `acpAgents`: active ACP wrapper projection (empty when `acp_run` or every wrapper is disabled; raw config remains `plugin.acpAgents`)
 
 ### AgentOverrideConfig
 - `model`: Model ID or array of model IDs

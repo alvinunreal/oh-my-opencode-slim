@@ -150,8 +150,8 @@ Start it directly with:
 - Deepwork-owned process files stop at head and progress. Durable verdicts,
   research, and decisions go to the project's existing tracked documentation;
   generated assets stay where their producing script or path contract requires.
-- Before creating state, `.gitignore` gets `.slim/deepwork/` and `.ignore` gets
-  `!.slim/deepwork/` plus `!.slim/deepwork/**` (only missing entries).
+- Before creating state, `.gitignore` gets `.slim/deepwork/` (only if missing).
+  No `.ignore` allowlist is written.
 
 **Migrating existing `.slim/deepwork/` trees** (one-time, per project; no tooling):
 - Keep generated or pinned assets where code, tests, or frozen pins require them.
@@ -360,6 +360,9 @@ Control which skills each agent can use in `~/.config/opencode/oh-my-opencode-sl
   native permissions
 - `!item` excludes a specific skill
 - Conflicts (e.g. `["a", "!a"]`) → deny wins (principle of least privilege)
+- Without a `skills` list, built-in specialists get only the bundled skills
+  assigned to them above; grant a skill you installed yourself with `skills`
+  or `skills_add`
 
 The orchestrator's `<Agents>` routing block shows each specialist's effective
 grants (from `skills`, `disabled_skills` and `permission.skill`) on that

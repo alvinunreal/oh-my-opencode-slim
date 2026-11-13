@@ -1,15 +1,15 @@
 /**
  * Emergency kill-all for the running subagents of the visible conversation.
  *
- * Pure helper shared by the v1 (`api.command`, src/tui.ts) and v2
- * (keymap layer, src/v2/tui.ts) TUI surfaces: it only resolves targets and
- * issues aborts. Post-kill reconciliation is entirely the existing event
+ * Helper shared by the v1 (`api.command`, src/tui.ts) and v2
+ * (keymap layer, src/v2/tui.ts) TUI surfaces. Post-kill reconciliation is the existing event
  * pipeline's job (event-router → idle-reconciler → board → tui-state.json);
- * this file never writes state, polls, or invents a 'cancelled' status.
+ * the stop notice is written before aborts, without inventing a status.
  */
 import type { OpencodeClient } from '@opencode-ai/sdk';
 import { getSidebarAgentTargets } from './tui';
 import type { TuiSnapshot } from './tui-state';
+import { writeKillAllStop } from './utils/kill-all-stop';
 import { log } from './utils/logger';
 import {
   abortSessionWithTimeout,
@@ -71,6 +71,22 @@ export async function killAllRunningSubagents(
 ): Promise<KillAllResult> {
   const targets = getKillAllTargets(snapshot, visibleRootID);
   if (targets.length === 0) return { killed: 0, failed: 0, total: 0 };
+  if (directory) {
+    const parents = [
+      ...new Set(
+        targets
+          .map((id) => snapshot.sessionParents[id])
+          .filter((id): id is string => !!id),
+      ),
+    ];
+    try {
+      // A timed-out interrupt may still stop the child; writing afterward could
+      // leave its parent without the emergency-stop notice.
+      writeKillAllStop(directory, parents);
+    } catch (error) {
+      log('[tui-kill] stop notice write failed', { error: String(error) });
+    }
+  }
   const rec = client as
     | {
         app?: { agents?: unknown };

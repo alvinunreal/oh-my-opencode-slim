@@ -84,7 +84,7 @@ Returns record of McpConfig objects to main plugin
 
 ### API Surface
 
-- **Exported types**: `RemoteMcpConfig`, `LocalMcpConfig`, `McpConfig` from `types.ts`
+- **Exported types**: `RemoteMcpConfig`, `McpConfig` from `types.ts`
 - **Exported functions**: `createBuiltinMcps()` from `index.ts`, plus
   `getOverriddenBuiltinMcpKeys(builtin, user)` which returns the built-in
   names the user already defines so callers can suppress injection for those

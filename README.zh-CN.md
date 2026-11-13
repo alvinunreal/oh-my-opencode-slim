@@ -20,7 +20,7 @@
   </p>
 
   <p>
-    <a href="README.md">English</a> | <b>简体中文</b> | <a href="README.ja-JP.md">日本語</a> | <a href="README.ko-KR.md">한국어</a> | <a href="README.fa-IR.md">فارسی</a>
+    <a href="README.md">English</a> | <b>简体中文</b> | <a href="README.zh-TW.md">繁體中文</a> | <a href="README.ja-JP.md">日本語</a> | <a href="README.ko-KR.md">한국어</a> | <a href="README.fa-IR.md">فارسی</a>
   </p>
 
   <p><sub>✦ ✦ ✦</sub></p>
@@ -483,8 +483,8 @@ ping all agents
 **只读视觉分析** -- 解读图像、屏幕截图、PDF 和图表。将结构化的观察结果返回给 Orchestrator，而无需将原始文件字节加载到主上下文窗口中。
 
 - 图像、屏幕截图、图表 → `read` 工具（原生图像支持）
-- PDF 和二进制文档 → `read` 工具（文本 + 结构提取）
-- **默认禁用** -- 通过设置 `"disabled_agents": []` 和配置具有视觉能力的模型来启用；若使用 `--preset=opencode-go` 预设安装，将自动使用 `opencode-go/mimo-v2.5` 启用它。启用时，`"auto"` 按模型能力分流：视觉模型内联直读，非视觉链路存盘并路由至 Observer；设置 `"image_routing": "direct"` 可始终保留给 Orchestrator。
+- PDF → `read` 工具（以 PDF 媒体形式交给模型，不做文本提取）
+- **默认禁用** -- 通过设置 `"disabled_agents": []` 和配置具有视觉能力的模型来启用；若使用 `--preset=opencode-go` 预设安装，将自动使用 `opencode-go/mimo-v2.5` 启用它。启用时，`"auto"` 按模型能力分流：视觉模型内联直读，非视觉链路存盘并路由至 Observer；设置 `"image_routing": "direct"` 可始终保留给 Orchestrator。自动存盘仅覆盖粘贴的 PNG/JPEG/GIF/WebP；PDF 与工具产出的图像不会被自动转交，需自行按路径委派。
 
     </td>
   </tr>

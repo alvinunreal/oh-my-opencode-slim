@@ -25,7 +25,7 @@ export type ConfigChangeListener = () =>
 /** Default bound for one live-refresh notification round. A listener that
  * hangs must not hang the caller's flow: the timeout reports failure so the
  * caller shows the actionable reload fallback. */
-export const CONFIG_CHANGE_NOTIFY_TIMEOUT_MS = 2_000;
+const CONFIG_CHANGE_NOTIFY_TIMEOUT_MS = 2_000;
 
 export interface NotifyConfigChangedOptions {
   /** Test seam: override the per-listener wait bound. */

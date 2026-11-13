@@ -19,7 +19,9 @@
  * Apply explicitly chooses a scope. Global defaults and definition edits
  * persist to user config and request a refresh for future unbound roots.
  * Current-session inference bindings are owned by the server RPC, never local
- * config. Neither operation changes the root model or existing children.
+ * config. Neither operation changes the root model or immediately updates
+ * existing children. Children can adopt their parent's bound team on
+ * continuation.
  * A requested config refresh is not a confirmed watcher outcome; session
  * apply succeeds only when the RPC confirms its binding.
  *
@@ -73,7 +75,7 @@ import { type SessionPresetState, sessionPresetRpc } from './preset-rpc';
 // --- v2 host mirror types (subset consumed here, capability-guarded) ---
 
 /** One `ui.dialog.select` option as consumed from the v2 host. */
-export interface V2PresetDialogOption<Value> {
+interface V2PresetDialogOption<Value> {
   title: string;
   value: Value;
   description?: string;
@@ -88,13 +90,13 @@ export interface V2PresetSelectInput<Value> {
 }
 
 /** `ui.dialog.prompt` + `ui.dialog.confirm` inputs (v2 option subsets). */
-export interface V2PresetPromptInput {
+interface V2PresetPromptInput {
   title: string;
   description?: string;
   placeholder?: string;
   value?: string;
 }
-export interface V2PresetConfirmInput {
+interface V2PresetConfirmInput {
   title: string;
   message: string;
   label?: { confirm?: string; cancel?: string };
@@ -103,7 +105,7 @@ export interface V2PresetConfirmInput {
 /** v2 `ui.dialog` subset. Every method is optional: hosts that only expose
  * some of them still render the sidebar, and the manager degrades with a
  * toast instead of throwing. */
-export interface V2PresetDialogApi {
+interface V2PresetDialogApi {
   select?: <Value>(
     options: V2PresetSelectInput<Value>,
   ) => Promise<Value | undefined>;
@@ -113,18 +115,18 @@ export interface V2PresetDialogApi {
 }
 
 /** A `ui.toast.show` input (v2 `ToastOptions` subset). */
-export interface V2PresetToastInput {
+interface V2PresetToastInput {
   title?: string;
   message: string;
   variant?: string;
 }
-export interface V2PresetToastApi {
+interface V2PresetToastApi {
   show?: (toast: V2PresetToastInput) => void;
 }
 
 /** One model entry as returned by the host model collection (v2 `ModelInfo`
  * subset). Entries are normalized defensively at read time. */
-export interface V2PresetModelInfo {
+interface V2PresetModelInfo {
   providerID: string;
   modelID: string;
   name?: string;
@@ -132,7 +134,7 @@ export interface V2PresetModelInfo {
 }
 
 /** v2 `LocationCollection<ModelInfo>` subset (`invalidate` is not needed). */
-export interface V2PresetModelCollection {
+interface V2PresetModelCollection {
   list: (location?: unknown) => V2PresetModelInfo[] | undefined;
   sync?: (location?: unknown) => Promise<void>;
 }
@@ -141,6 +143,9 @@ export interface V2PresetModelCollection {
 export interface V2PresetUiSurface {
   dialog?: V2PresetDialogApi;
   toast?: V2PresetToastApi;
+  router?: {
+    navigate?: (destination: { type: 'session'; sessionID: string }) => void;
+  };
 }
 
 /** Minimal v2 TUI manager context. `client` carries the v2 client for the
@@ -229,12 +234,16 @@ export function sessionPresetClient(ctx: V2PresetManagerContext) {
             input: { sessionID: string; presetName: string },
             options: V2PresetRpcCallOptions,
           ) => Promise<SessionPresetState>;
+          createBound: (
+            input: { presetName: string },
+            options: V2PresetRpcCallOptions,
+          ) => Promise<SessionPresetState>;
         };
       }
     | undefined;
   if (typeof client?.rpc !== 'function') {
     throw new Error(
-      'Session presets are unavailable on this server. Update the server and reconnect.',
+      'Session presets are unavailable on this server. Set "preset" in config to change the global default.',
     );
   }
   return client.rpc(sessionPresetRpc);
@@ -260,7 +269,7 @@ export async function readSessionPreset(
   return state;
 }
 
-export function sessionPresetLabel(state: SessionPresetState): string {
+function sessionPresetLabel(state: SessionPresetState): string {
   return state.status === 'bound'
     ? (state.presetName ?? '(no named preset)')
     : 'Not bound';
@@ -435,7 +444,7 @@ function toast(
 
 /** Success text for a completed config write: says the refresh was REQUESTED
  * (the TUI cannot observe the server watcher), never applied. */
-export function liveRefreshSuccessMessage(
+function liveRefreshSuccessMessage(
   presetName: string,
   summary: string[] = [],
 ): string {
@@ -443,10 +452,7 @@ export function liveRefreshSuccessMessage(
   return `Saved preset "${presetName}". Live refresh requested.${suffix}`;
 }
 
-export function liveRefreshFailureMessage(
-  presetName: string,
-  reason: string,
-): string {
+function liveRefreshFailureMessage(presetName: string, reason: string): string {
   return `Saved preset "${presetName}" to user config, but the live refresh request failed: ${reason}. Reload OpenCode to refresh the default for new, unbound sessions.`;
 }
 
@@ -604,6 +610,11 @@ async function showPresetActions(
       getPresetSource(run.directory, presetName, 'v2') === 'project';
     const options: V2PresetDialogOption<string>[] = [
       { title: 'Apply preset', value: 'apply' },
+      {
+        title: 'New session',
+        value: 'new-session',
+        description: 'Start an empty session with this preset',
+      },
       ...(isProject
         ? []
         : [
@@ -621,6 +632,37 @@ async function showPresetActions(
     if (choice === ACTION_BACK) return 'list';
 
     switch (choice) {
+      case 'new-session':
+        try {
+          const router = run.ctx.ui?.router;
+          if (typeof router?.navigate !== 'function') {
+            throw new Error('Session navigation is unavailable.');
+          }
+          const state = await sessionPresetClient(run.ctx).createBound(
+            { presetName },
+            { location: { ...run.ctx.location, directory: run.directory } },
+          );
+          if (state.status !== 'bound' || state.presetName !== presetName) {
+            throw new Error(
+              `Server did not confirm the requested binding for session ${state.sessionID}.`,
+            );
+          }
+          router.navigate({ type: 'session', sessionID: state.sessionID });
+          toast(run.ctx, 'success', 'New session', `"${presetName}" applied.`);
+        } catch (err) {
+          toast(
+            run.ctx,
+            'warning',
+            'New session failed',
+            err &&
+              typeof err === 'object' &&
+              'message' in err &&
+              typeof err.message === 'string'
+              ? err.message
+              : String(err),
+          );
+        }
+        return 'exit';
       case 'apply':
         {
           const target = await chooseApplyTarget(run, presetName, false);

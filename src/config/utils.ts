@@ -89,10 +89,6 @@ export function getCustomAgentNames(
   });
 }
 
-export function getAcpAgentNames(config: PluginConfig | undefined): string[] {
-  return Object.keys(config?.acpAgents ?? {});
-}
-
 const SKILL_DIRECTIVE_KEYS = [
   'skills',
   'skills_add',

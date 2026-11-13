@@ -52,6 +52,45 @@ function registerBackgroundChild(board: BackgroundJobBoard) {
   });
 }
 
+test('preserves multiple selections for one question', async () => {
+  // Mutation: flatten each answer into a separate question.
+  const board = new BackgroundJobBoard();
+  registerBackgroundChild(board);
+  noteChildInputWait({
+    taskID: 'ses_child1',
+    parentSessionID: 'parent-1',
+    kind: 'question',
+    requestID: 'que_multi',
+    questions: [
+      {
+        question: 'Features?',
+        header: 'Features',
+        multiple: true,
+        options: [],
+      },
+    ],
+  });
+  const reply = mock(async (_args: unknown) => ({ data: true }));
+  const { task_reply } = createTaskReplyTool({
+    input: { directory: '/test', client: { question: { reply } } } as never,
+    backgroundJobBoard: board,
+  });
+  expect(task_reply.args.answers.safeParse([['A', 'B']]).success).toBe(true);
+  await task_reply.execute(
+    {
+      task_id: 'ses_child1',
+      request_id: 'que_multi',
+      answers: [['A', 'B']],
+    } as never,
+    { sessionID: 'parent-1' } as never,
+  );
+  expect(reply).toHaveBeenCalledWith({
+    requestID: 'que_multi',
+    directory: '/test',
+    answers: [['A', 'B']],
+  });
+});
+
 const statusClient = () =>
   ({
     session: { status: mock(async () => ({ data: {} })) },

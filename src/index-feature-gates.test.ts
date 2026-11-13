@@ -16,14 +16,18 @@ import {
   companionSessionIdForDirectory,
   stateFilePath,
 } from './companion/manager';
-import * as hookFactories from './hooks';
+import * as autoUpdateFactories from './hooks/auto-update-checker';
+import * as foregroundFallbackFactories from './hooks/foreground-fallback';
 import * as handoffFactories from './hooks/task-session-manager/fallback-observation-transfer';
 import { OhMyOpenCodeLite as plugin } from './index';
 import * as interviewFactories from './interview';
+import * as interviewSubmitStateFactories from './tools/interview-submit-state';
+import * as nativeTaskControlFactories from './tools/native-task-control';
 import { getTuiStatePath, readTuiSnapshot } from './tui-state';
 import type { BackgroundJobRecord } from './utils/background-job-board';
 import * as gateFactories from './utils/background-job-terminal-gate';
 import { BackgroundTaskConcurrency } from './utils/background-task-concurrency';
+import * as jsdom from './utils/jsdom';
 
 type PluginHooks = Awaited<ReturnType<typeof plugin>>;
 
@@ -80,6 +84,7 @@ describe('plugin feature gates through exported hooks', () => {
       path.join(projectDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
         companion: { enabled: false },
+        webfetch: { enabled: false },
         disabled_hooks: ['auto-update-checker'],
         ...overrides,
       }),
@@ -95,6 +100,35 @@ describe('plugin feature gates through exported hooks', () => {
       ...(hostFlavor ? { hostFlavor } : {}),
     } as never);
 
+  for (const [label, options, enabled] of [
+    ['enabled', { webfetch: { enabled: true } }, true],
+    ['feature disabled', { webfetch: { enabled: false } }, false],
+    [
+      'tool disabled',
+      { webfetch: { enabled: true }, disabled_tools: ['webfetch'] },
+      false,
+    ],
+    [
+      'both disabled',
+      { webfetch: { enabled: false }, disabled_tools: ['webfetch'] },
+      false,
+    ],
+  ] as const) {
+    test(`webfetch ${label}: registration and JSDOM probe agree`, async () => {
+      await configure({ backgroundJobs: { mode: 'off' }, ...options });
+      const probe = spyOn(jsdom, 'probeJSDOM').mockResolvedValue(null);
+      let hooks: PluginHooks | undefined;
+      try {
+        hooks = await createHooks();
+        expect(Boolean(hooks.tool?.webfetch)).toBe(enabled);
+        expect(probe).toHaveBeenCalledTimes(enabled ? 1 : 0);
+      } finally {
+        await hooks?.dispose?.();
+        probe.mockRestore();
+      }
+    });
+  }
+
   for (const flavor of ['v1', 'v2'] as const) {
     test(`${flavor}: disabling managed jobs preserves headers and real retry steering`, async () => {
       await configure({
@@ -105,7 +139,7 @@ describe('plugin feature gates through exported hooks', () => {
         },
       });
       const retrySpy = spyOn(
-        hookFactories.ForegroundFallbackManager.prototype,
+        foregroundFallbackFactories.ForegroundFallbackManager.prototype,
         'handleV2Retry',
       );
       const handoffSpy = spyOn(
@@ -124,6 +158,7 @@ describe('plugin feature gates through exported hooks', () => {
         ]) {
           expect(hooks.tool?.[name]).toBeUndefined();
         }
+        expect(hooks['v2.backgroundGeneration']).toBeUndefined();
         expect(hooks['chat.headers']).toBeFunction();
         expect(handoffSpy).not.toHaveBeenCalled();
 
@@ -167,8 +202,36 @@ describe('plugin feature gates through exported hooks', () => {
         ]) {
           expect(hooks.tool?.[name]).toBeUndefined();
         }
+        expect(hooks['v2.backgroundGeneration']).toBeUndefined();
       } finally {
         await hooks?.dispose?.();
+      }
+    });
+
+    test(`${flavor}: native mode returns nothing when both host-read controls are disabled`, async () => {
+      // Startup-only case: keep unrelated optional subsystems cold so the
+      // assertion is about the native-control gate, not init cost.
+      await configure({
+        backgroundJobs: { mode: 'native' },
+        disabled_tools: ['task_cancel', 'task_status'],
+        webfetch: { enabled: false },
+        marketplace: { enabled: false },
+        disabled_hooks: ['auto-update-checker', 'foreground-fallback'],
+        disabled_commands: ['deepwork', 'reflect'],
+      });
+      const nativeControlSpy = spyOn(
+        nativeTaskControlFactories,
+        'createNativeTaskControlTools',
+      );
+      let hooks: PluginHooks | undefined;
+      try {
+        hooks = await createHooks(flavor);
+        expect(nativeControlSpy).not.toHaveBeenCalled();
+        expect(hooks.tool?.task_cancel).toBeUndefined();
+        expect(hooks.tool?.task_status).toBeUndefined();
+      } finally {
+        await hooks?.dispose?.();
+        nativeControlSpy.mockRestore();
       }
     });
 
@@ -187,6 +250,7 @@ describe('plugin feature gates through exported hooks', () => {
         ]) {
           expect(hooks.tool?.[name]).toBeUndefined();
         }
+        expect(hooks['v2.backgroundGeneration']).toBeUndefined();
       } finally {
         await hooks?.dispose?.();
       }
@@ -203,7 +267,7 @@ describe('plugin feature gates through exported hooks', () => {
       },
     });
     const retrySpy = spyOn(
-      hookFactories.ForegroundFallbackManager.prototype,
+      foregroundFallbackFactories.ForegroundFallbackManager.prototype,
       'handleV2Retry',
     );
     let hooks: PluginHooks | undefined;
@@ -266,6 +330,43 @@ describe('plugin feature gates through exported hooks', () => {
     }
   });
 
+  test('v2 fallback remains retry-capable with watcher off for explicit preset bindings', async () => {
+    await configure({
+      backgroundJobs: { mode: 'off' },
+      fallback: { enabled: false, maxRetries: 0 },
+      liveConfigRefresh: false,
+      agents: {
+        orchestrator: { model: ['openai/gpt-b', 'openai/gpt-c'] },
+      },
+    });
+    let hooks: PluginHooks | undefined;
+    try {
+      hooks = await createHooks('v2');
+      // An explicit /preset (or a persisted child binding) can turn fallback on
+      // without the file watcher; the retry hook must stay registered.
+      hooks['v2.pinSessionChains']?.(
+        'ses_explicit_fallback',
+        { orchestrator: ['openai/gpt-b', 'openai/gpt-c'] },
+        true,
+      );
+      const switchModel = mock(async () => ({}));
+      const retry = {
+        sessionID: 'ses_explicit_fallback',
+        agent: 'orchestrator',
+        model: { providerID: 'openai', id: 'gpt-b' },
+        error: { message: 'Rate limit exceeded' },
+        decision: { retry: true, delay: 2_000 },
+      };
+      await hooks['v2.session.retry']?.(retry as never, switchModel as never);
+      expect(switchModel).toHaveBeenCalledWith('ses_explicit_fallback', {
+        providerID: 'openai',
+        id: 'gpt-c',
+      });
+    } finally {
+      await hooks?.dispose?.();
+    }
+  });
+
   test('v1 interview disabled keeps request transforms inert', async () => {
     await configure({
       backgroundJobs: { mode: 'off' },
@@ -301,6 +402,35 @@ describe('plugin feature gates through exported hooks', () => {
       expect(completed.text).toBe('hello');
     } finally {
       await hooks?.dispose?.();
+    }
+  });
+
+  test('disabled interview_submit_state skips its tool registration', async () => {
+    // Feature stays enabled (interview on, command available); only the tool
+    // is switched off, so this exercises the tool-level guard. Unrelated
+    // subsystems stay cold for a startup-only assertion. The factory spy
+    // pins the outcome to construction, not just registration.
+    const submitStateSpy = spyOn(
+      interviewSubmitStateFactories,
+      'createInterviewSubmitStateTool',
+    );
+    await configure({
+      backgroundJobs: { mode: 'off' },
+      interview: { enabled: true },
+      disabled_tools: ['interview_submit_state'],
+      webfetch: { enabled: false },
+      marketplace: { enabled: false },
+      disabled_hooks: ['auto-update-checker', 'foreground-fallback'],
+      disabled_commands: ['deepwork', 'reflect'],
+    });
+    let hooks: PluginHooks | undefined;
+    try {
+      hooks = await createHooks('v2');
+      expect(submitStateSpy).not.toHaveBeenCalled();
+      expect(hooks.tool?.interview_submit_state).toBeUndefined();
+    } finally {
+      await hooks?.dispose?.();
+      submitStateSpy.mockRestore();
     }
   });
 
@@ -412,7 +542,7 @@ describe('plugin feature gates through exported hooks', () => {
   test('auto-update checker is cold-gated by the disabled hook in every lifecycle mode', async () => {
     const checkerEvent = mock(() => undefined);
     const factorySpy = spyOn(
-      hookFactories,
+      autoUpdateFactories,
       'createAutoUpdateCheckerHook',
     ).mockImplementation(() => ({ event: checkerEvent }));
     try {
@@ -461,7 +591,7 @@ describe('plugin feature gates through exported hooks', () => {
   test('autoUpdate false alone keeps the server hook unconstructed', async () => {
     const checkerEvent = mock(() => undefined);
     const factorySpy = spyOn(
-      hookFactories,
+      autoUpdateFactories,
       'createAutoUpdateCheckerHook',
     ).mockImplementation(() => ({ event: checkerEvent }));
     let hooks: PluginHooks | undefined;
@@ -511,6 +641,46 @@ describe('plugin feature gates through exported hooks', () => {
       factorySpy.mockRestore();
     }
   });
+
+  for (const flavor of ['v1', 'v2'] as const) {
+    test(`${flavor}: no post-tool consumers means no v1 after hook`, async () => {
+      await configure({
+        backgroundJobs: { mode: 'off' },
+        disabled_hooks: [
+          'auto-update-checker',
+          'json-error-recovery',
+          'tool-loop-guard',
+        ],
+      });
+      const hooks = await createHooks(flavor);
+      try {
+        expect(hooks['tool.execute.after']).toBeUndefined();
+      } finally {
+        await hooks.dispose?.();
+      }
+    });
+  }
+
+  for (const mode of ['managed', 'native', 'off'] as const) {
+    test(`v2 ${mode}: native updates replace the unused server checker`, async () => {
+      await configure({ backgroundJobs: { mode }, disabled_hooks: [] });
+      const factory = spyOn(autoUpdateFactories, 'createAutoUpdateCheckerHook');
+      let hooks: PluginHooks | undefined;
+      try {
+        hooks = await createHooks('v2');
+        await hooks.event?.({
+          event: {
+            type: 'session.created',
+            properties: { info: { id: 'ses_native_update' } },
+          },
+        } as never);
+        expect(factory).not.toHaveBeenCalled();
+      } finally {
+        await hooks?.dispose?.();
+        factory.mockRestore();
+      }
+    });
+  }
 
   async function exerciseSidebar(hooks: PluginHooks, externalDir: string) {
     const call = { tool: 'task', sessionID: 'ses_p', callID: 'call_1' };

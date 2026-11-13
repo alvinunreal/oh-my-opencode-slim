@@ -1,4 +1,4 @@
-export class MarketplaceError extends Error {
+class MarketplaceError extends Error {
   constructor(
     message: string,
     readonly code: string,

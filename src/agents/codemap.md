@@ -12,18 +12,18 @@ Each agent is a **prompt-driven specialist** with a factory function that create
 
 | Agent | Factory | Role | Permissions | Model Default |
 |-------|---------|------|-------------|---------------|
-| **orchestrator** | `createOrchestratorAgent()` | Workflow manager that delegates tasks to specialists | Primary agent with full tool access | Resolved from config or runtime preset |
-| **explorer** | `createExplorerAgent()` | Fast codebase search, pattern matching, and external docs/library/web research | Read-only by prompt (glob, grep, ast_grep_search, context7, gh_grep) | DEFAULT_MODELS.explorer |
-| **oracle** | `createOracleAgent()` | Strategic technical advisor and code reviewer | Read-only by prompt (read, glob, grep, ast_grep_search) | DEFAULT_MODELS.oracle |
-| **designer** | `createDesignerAgent()` | UI/UX design, review, and implementation | Read/write (read, glob, grep, write, edit) | DEFAULT_MODELS.designer |
-| **fixer** | `createFixerAgent()` | Fast implementation specialist for bounded tasks | Read/write (read, glob, grep, write, edit) | DEFAULT_MODELS.fixer |
-| **observer** | `createObserverAgent()` | Visual analysis specialist (images, PDFs, diagrams) | Read-only by prompt (read, glob, grep, ast_grep_search) | DEFAULT_MODELS.observer |
+| **orchestrator** | `createOrchestratorAgent()` | Workflow manager that delegates tasks to specialists | Primary agent with available guarded controls | Resolved from config or runtime preset |
+| **explorer** | `createExplorerAgent()` | Fast codebase search, pattern matching, and external docs/library/web research | Read-only defaults; tool descriptions own mechanics | DEFAULT_MODELS.explorer |
+| **oracle** | `createOracleAgent()` | Strategic technical advisor and code reviewer | Read-only defaults | DEFAULT_MODELS.oracle |
+| **designer** | `createDesignerAgent()` | UI/UX design, review, and implementation | Read/write defaults | DEFAULT_MODELS.designer |
+| **fixer** | `createFixerAgent()` | Fast implementation specialist for bounded tasks | Read/write defaults | DEFAULT_MODELS.fixer |
+| **observer** | `createObserverAgent()` | Visual analysis specialist (images, PDFs, diagrams) | Read-only defaults; requires a vision-capable model | DEFAULT_MODELS.observer |
 | **council** | `createCouncilAgent()` | Multi-model consensus synthesis (read-only, no tools) | Read-only (council permission) | DEFAULT_MODELS.council |
-| **councillor** | Created dynamically by `buildCouncillorAgents()` | Read-only council advisor; registered per preset seat as `councillor-<name>` | Read-only (read, glob, grep, ast_grep_search) | Inherited from council preset |
+| **councillor** | Created dynamically by `buildCouncillorAgents()` | Read-only council advisor; registered per preset seat as `councillor-<name>` | Read-only defaults | Inherited from council preset |
 
 ### Configuration System
 
-- **Default prompts**: Each agent factory has a base prompt defined in its file (e.g., `explorer.ts`, `oracle.ts`)
+- **Default prompts**: Role/workflow guidance without duplicating tool catalogs or call syntax; tool descriptions own usage
 - **User overrides**: From `~/.config/opencode/oh-my-opencode-slim.json` via `loadAgentPrompt()`
 - **Agent colors**: Optional per-agent hex or theme-color overrides; no defaults (colorless agents get the host TUI's distinct palette colors)
 - **Permission wildcards**: Applied via `applyDefaultPermissions()` in `index.ts`
@@ -44,7 +44,7 @@ change. Shared capabilities/ID schemas do not load the full manifest graph.
 
 1. **Agent creation**: `createAgents(config)` instantiates all agents with merged configuration
 2. **Dynamic councillors**: `buildCouncillorAgents()` (`council-agents.ts`) creates one `councillor-<name>` subagent per council preset seat, attaching `_modelArray` fallback chains for multi-model councillors
-3. **Permission application**: `applyDefaultPermissions()` gives `question`, task tools, and interview submission to the orchestrator and declared primary agents (custom agents with `agents.<name>.primary: true`) and denies them for everyone else — a parked child question has no headless answerer, so only primaries ask by default (explicit per-agent config wins). `task_cancel`, `task_revive`, `wait_for_user` and the marketplace tools are granted to every primary (issue #1591): the runtime fences classify by primary-ness, not by name. It also adds skill grants on top of each agent's map, preserving key order
+3. **Permission application**: `applyDefaultPermissions()` emits generated `allow` grants only for tools this generation registers, while preserving generated denies (the v2 base allows unmatched names). `question`, task tools, and interview submission stay primary-scoped by default — a parked child question has no headless answerer (explicit per-agent config wins). `task_report` is available to subagents by default and denied to primaries; its runtime still requires a host-confirmed parent session. Marketplace/ACP/AST grants follow their registration gates, and `disabled_tools: ["acp_run"]` also removes the wrappers that could call it. It then adds skill grants on top of each agent's map, preserving key order
 4. **Task-rejection instruction**: `appendTaskRejectionInstruction()` appends the "outside your role" instruction to specialist prompts (`task-rejection.ts`)
 5. **Display name injection**: Orchestrator prompt rewrites `@agent` mentions to user-configured display names
 6. **Configuration export**: `getAgentConfigs()` converts `AgentDefinition` to OpenCode SDK format with classification metadata
@@ -64,9 +64,9 @@ const protoSubAgents = Object.entries(SUBAGENT_FACTORIES)
 
 // 2. Apply overrides and default permissions
 const builtInSubAgents = protoSubAgents.map((agent) => {
-  const override = getAgentOverride(config, agent.name);
+  const override = getOverrideFromAgents(config, agent.name);
   if (override) applyOverrides(agent, override);
-  applyDefaultPermissions(agent, override?.skills, config?.disabled_skills);
+  applyDefaultPermissions(agent, registeredTools, override?.skills, runtime, hostFlavor);
   return agent;
 });
 
@@ -75,7 +75,7 @@ const orchestrator = createOrchestratorAgent(
   orchestratorModel,
   orchestratorPrompts.prompt,
   orchestratorPrompts.appendPrompt,
-  { disabledAgents: disabled, hostFlavor /* , waitForUser, wakeScheduler, routingBlock */ },
+  { disabledAgents: disabled, hostFlavor /* , wakeScheduler, routingBlock */ },
 );
 applyDefaultPermissions(orchestrator, orchestratorOverride?.skills, config?.disabled_skills);
 

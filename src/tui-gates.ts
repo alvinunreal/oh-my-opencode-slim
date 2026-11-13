@@ -20,6 +20,11 @@ import { log } from './utils/logger';
 export interface SidebarConfigState {
   configInvalid: boolean;
   compactSidebar: boolean;
+  /**
+   * Render internal Council agents (`council`, `councillor`, and dynamic
+   * `councillor-<seat>` agents) as sidebar rows (#1672). Off by default.
+   */
+  showHiddenAgents: boolean;
   multiplexerType: MultiplexerType;
   /** Active preset name (`config.preset`), undefined when unset. */
   presetName?: string;
@@ -36,6 +41,7 @@ export interface TuiGatesSnapshot extends SidebarConfigState {
   tuiEnabled: boolean;
   sidebarEnabled: boolean;
   updateCheckerEnabled: boolean;
+  questionTimeoutMs: number;
   disabledCommands: ReadonlySet<string>;
 }
 
@@ -74,9 +80,11 @@ function failOpenTuiGates(): TuiGatesSnapshot {
     sidebarEnabled: true,
     configInvalid: false,
     compactSidebar: true,
+    showHiddenAgents: false,
     multiplexerType: 'none',
     presetName: undefined,
     updateCheckerEnabled: true,
+    questionTimeoutMs: 0,
     disabledCommands: new Set(),
   };
 }
@@ -105,8 +113,10 @@ function deriveTuiGates(snapshot: PluginConfigSnapshot): TuiGatesSnapshot {
     tuiEnabled: featureGates.tui,
     sidebarEnabled: featureGates.sidebar,
     updateCheckerEnabled: featureGates.updateChecker,
+    questionTimeoutMs: config.questionTimeoutMs ?? 0,
     configInvalid: warningsMakeConfigInvalid(snapshot.warnings),
     compactSidebar: config.compactSidebar ?? true,
+    showHiddenAgents: config.sidebarShowHiddenAgents ?? false,
     multiplexerType: resolveMultiplexerType(config.multiplexer),
     ...(typeof config.preset === 'string' && config.preset.length > 0
       ? { presetName: config.preset }
@@ -193,6 +203,7 @@ export function configStateOfGates(
   return {
     configInvalid: gates.configInvalid,
     compactSidebar: gates.compactSidebar,
+    showHiddenAgents: gates.showHiddenAgents,
     multiplexerType: gates.multiplexerType,
     presetName: gates.presetName,
   };

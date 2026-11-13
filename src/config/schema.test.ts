@@ -25,6 +25,34 @@ import {
   resetMultiplexerDiagnostics,
 } from './schema';
 
+it('validates the opt-in question timeout boundaries', () => {
+  // Mutation: remove the zero exception, integer constraint, or bounds.
+  expect(PluginConfigSchema.safeParse({ questionTimeoutMs: 0 }).success).toBe(
+    true,
+  );
+  expect(
+    PluginConfigSchema.safeParse({ questionTimeoutMs: 60_000 }).success,
+  ).toBe(true);
+  expect(
+    PluginConfigSchema.safeParse({ questionTimeoutMs: 1_200_000 }).success,
+  ).toBe(true);
+  expect(
+    PluginConfigSchema.safeParse({ questionTimeoutMs: 2_147_483_647 }).success,
+  ).toBe(true);
+  expect(
+    PluginConfigSchema.safeParse({ questionTimeoutMs: 59_999 }).success,
+  ).toBe(false);
+  expect(PluginConfigSchema.safeParse({ questionTimeoutMs: 1.5 }).success).toBe(
+    false,
+  );
+  expect(PluginConfigSchema.safeParse({ questionTimeoutMs: -1 }).success).toBe(
+    false,
+  );
+  expect(
+    PluginConfigSchema.safeParse({ questionTimeoutMs: 2_147_483_648 }).success,
+  ).toBe(false);
+});
+
 describe('ProviderModelIdSchema', () => {
   it('accepts and preserves model remainders with spaces and nested segments', () => {
     const ids = [
@@ -741,6 +769,29 @@ describe('PluginConfigSchema sidebar', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.sidebar).toBe(false);
+    }
+  });
+
+  it('keeps sidebarShowHiddenAgents optional and accepts both values', () => {
+    const omitted = PluginConfigSchema.safeParse({});
+    const shown = PluginConfigSchema.safeParse({
+      sidebarShowHiddenAgents: true,
+    });
+    const hidden = PluginConfigSchema.safeParse({
+      sidebarShowHiddenAgents: false,
+    });
+
+    expect(omitted.success).toBe(true);
+    expect(shown.success).toBe(true);
+    expect(hidden.success).toBe(true);
+    if (omitted.success) {
+      expect(omitted.data.sidebarShowHiddenAgents).toBeUndefined();
+    }
+    if (shown.success) {
+      expect(shown.data.sidebarShowHiddenAgents).toBe(true);
+    }
+    if (hidden.success) {
+      expect(hidden.data.sidebarShowHiddenAgents).toBe(false);
     }
   });
 

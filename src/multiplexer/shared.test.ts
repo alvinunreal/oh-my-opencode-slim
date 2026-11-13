@@ -333,6 +333,35 @@ describe('findBinaryLogPrefix', () => {
   });
 });
 
+describe('findBinary', () => {
+  afterEach(() => {
+    crossSpawnMock.mockReset();
+  });
+
+  test('returns the first Windows where match without CRLF', async () => {
+    const original = process.platform;
+    Object.defineProperty(process, 'platform', {
+      value: 'win32',
+      configurable: true,
+    });
+    crossSpawnMock.mockImplementation(() => ({
+      exited: Promise.resolve(0),
+      stdout: () =>
+        Promise.resolve('C:\\first\\tmux.exe\r\nC:\\second\\tmux.exe\r\n'),
+      stderr: () => Promise.resolve(''),
+    }));
+    try {
+      const { findBinary } = await importShared();
+      expect(await findBinary('tmux')).toBe('C:\\first\\tmux.exe');
+    } finally {
+      Object.defineProperty(process, 'platform', {
+        value: original,
+        configurable: true,
+      });
+    }
+  });
+});
+
 describe('buildViewCommand', () => {
   test('a PowerShell pane invokes the quoted executable behind the call operator', async () => {
     const { buildViewCommand } = await importShared();
@@ -356,6 +385,24 @@ describe('buildViewCommand', () => {
     });
     expect(cmd).toBe(
       "& 'C:/Users/O''Brien/opencode.exe' --session 'ses''x' 'C:/Users/O''Brien/repo'",
+    );
+  });
+
+  test('a PowerShell pane doubles typographic single quotes too', async () => {
+    const { buildViewCommand } = await importShared();
+    // PowerShell also ends a single-quoted string at U+2018-U+201B.
+    const cmd = buildViewCommand(
+      'ses_x',
+      'http://x',
+      'C:/repo/\u2018a\u2019 \u201Ab\u201B',
+      {
+        executable: 'C:/Users/John\u2019s/opencode.exe',
+        viewerFlavor: 'v2-shared',
+        shell: 'powershell',
+      },
+    );
+    expect(cmd).toBe(
+      "& 'C:/Users/John\u2019\u2019s/opencode.exe' --session 'ses_x' 'C:/repo/\u2018\u2018a\u2019\u2019 \u201A\u201Ab\u201B\u201B'",
     );
   });
 

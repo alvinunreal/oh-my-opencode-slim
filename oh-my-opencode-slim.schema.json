@@ -8,12 +8,30 @@
     "setDefaultAgent": {
       "type": "boolean"
     },
+    "questionTimeoutMs": {
+      "description": "Opt-in question auto-answer timeout in milliseconds. Unset or 0 disables it; otherwise 60,000–2,147,483,647. Permission and closed-choice requests are never answered. On v2, requires an attached OMOS TUI with tui enabled.",
+      "anyOf": [
+        {
+          "type": "number",
+          "const": 0
+        },
+        {
+          "type": "integer",
+          "minimum": 60000,
+          "maximum": 2147483647
+        }
+      ]
+    },
     "tui": {
       "description": "Master switch for all OMOS TUI surfaces (sidebar, /preset, /killall, /subagent, update notice). When false, the TUI entry registers nothing and the server records no sidebar state; other server-side features are untouched. Defaults to true.",
       "type": "boolean"
     },
     "compactSidebar": {
       "description": "Use the compact TUI sidebar layout. Defaults to true; set false to use the expanded layout.",
+      "type": "boolean"
+    },
+    "sidebarShowHiddenAgents": {
+      "description": "Render internal Council agents (council, councillor, and the dynamic councillor-<seat> agents) as rows in the OMOS TUI sidebar. Defaults to false: those agents stay hidden from the sidebar because their seats are internal orchestration surfaces. When true, each row shows its model and status dot like any other agent; agent registration, availability, and the host agent picker are unchanged.",
       "type": "boolean"
     },
     "sidebar": {
@@ -1461,7 +1479,7 @@
           "not": {}
         },
         "mode": {
-          "description": "Background-task lifecycle mode. \"managed\" (default) runs the OMOS managed lifecycle and its task_cancel/task_status/task_reply tools. \"native\" skips every board-shaped component and registers only two thin host-read tools — task_status (parent-checked host read plus trailing result) and task_cancel (the host atomic interruption) — for agents driving native subagent/task delegation. \"off\" registers no OMOS task tool at all and leaves native OpenCode delegation completely untouched.",
+          "description": "Background-task lifecycle mode. \"managed\" (default) runs the OMOS managed lifecycle and its task_cancel/task_status/task_reply tools. \"native\" skips every board-shaped component and registers only two thin host-read tools — task_status (parent-checked host read plus trailing result) and task_cancel (the host atomic interruption) — for agents driving native subagent/task delegation. \"off\" registers no OMOS task tool. On v2 it also disables session-preset routing and leaves the native subagent executor untouched; agent inference settings still register normally.",
           "type": "string",
           "enum": [
             "managed",
@@ -1820,7 +1838,7 @@
       "properties": {
         "enabled": {
           "default": true,
-          "description": "When false, skip registering this enhanced webfetch so OpenCode uses its built-in version.",
+          "description": "When false, skip loading this enhanced webfetch and its JSDOM probe so OpenCode uses its built-in version. disabled_tools: [\"webfetch\"] has the same cold behavior.",
           "type": "boolean"
         }
       },

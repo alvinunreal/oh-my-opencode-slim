@@ -109,7 +109,7 @@
   - TTL cleanup removes terminal states after 24h.
 
 - Supporting modules:
-  - `document.ts`: markdown/file helpers (`slugify`, path resolution, frontmatter,
+  - `document.ts`: markdown/file helpers (path resolution, frontmatter,
     title/summary extraction).
   - `parser.ts`: assistant state parse pipeline (`parseAssistantState`,
     `findLatestAssistantState`, `buildFallbackState`).

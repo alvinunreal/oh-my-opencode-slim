@@ -91,7 +91,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 
 4. **Install/release path**
    - `src/cli/` configures host OpenCode instances.
-   - `src/skills/` is copied into the user skill directory.
+   - `src/skills/` ships inside the package; v2 registers it in-process, and v1 points the host's skill scanner at the installed package path.
    - `scripts/` validates generated schema, package completeness, and host-load behavior.
 
 ## Key Cross-Module Integration Points
@@ -102,9 +102,10 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 - `src/multiplexer/` is client-only: `src/tui.ts` wires the per-client pane lifecycle, while the server entry must not reach `src/multiplexer/client/*` or the adapters (enforced by `src/dependency-contract.test.ts`, invariant I1).
 - `src/multiplexer/cmux/` is a plain adapter: readiness polling, retry/mutation queues, orphan cooldowns, close budgets, and global pane registries no longer exist in the module.
 - Council mode is implemented in `src/agents/`; `council-agents.ts` builds dynamic `councillor-<name>` subagents from council presets, the orchestrator dispatches them, and the council agent synthesizes responses. Seat-result assembly lives in `src/hooks/council-seats/` behind one resolver seam: the managed resolver reads the parent-side job board, and the native resolver reads host sessions directly whenever the managed lifecycle is off (`backgroundJobs.mode` is `native` or `off`) — so council keeps working with no OMOS lifecycle. `native` mode additionally registers the two thin host-read controls (`src/tools/native-task-control.ts`: `task_status` over `session.get`, `task_cancel` over `session.abort`).
-- Optional subsystems are cold-gated by one pure `resolveFeatureGates` projection: `backgroundJobs.mode`, `interview.enabled`, `marketplace.enabled`, `autoUpdate` / `disabled_hooks: ["auto-update-checker"]`, `tui` (which also stops server sidebar state; `sidebar` narrows TUI only), and `liveConfigRefresh`. A disabled subsystem is not constructed (no tools, listeners, timers, state files, or server), and the enhanced `webfetch` — including its JSDOM probe — is skipped entirely when disabled.
+- Optional subsystems are cold-gated by one pure `resolveFeatureGates` projection: `backgroundJobs.mode`, `interview.enabled`, `marketplace.enabled`, `autoUpdate` / `disabled_hooks: ["auto-update-checker"]`, `tui` (which also stops server sidebar state; `sidebar` narrows TUI only), and `liveConfigRefresh`. A disabled subsystem is not constructed (no tools, listeners, timers, state files, or server), and its implementation modules load only inside the branch that owns the enabled feature. The enhanced `webfetch` — including its JSDOM probe — is skipped entirely when disabled.
 - `src/tools/preset-switch.ts` + `src/tui-preset.ts` + `src/preset-editor-domain.ts` implement `/preset` switching: the preset name (or preset edits) is persisted to the user config file. Agent definitions are never hot-swapped mid-session; on v2 hosts the write requests the live refresh and only the inference fields (`model`, `variant`, `temperature`, `options`) apply to NEW child sessions (frozen for each child before its first request via the awaited `session.prompt` hook) plus the sidebar, while prompts/tools/permissions/skills/MCPs stay frozen for existing sessions; a malformed config is rejected before any swap (last-known-good state kept). v1 hosts apply on the next reload. The `preset-editor-domain` module holds the pure domain helpers (name validation, sentinel-safe choices, descriptions, inheritance, immutable edits, parsing) shared by the v1 JSX editor and the v2 promise-dialog editor.
 - `src/hooks/task-session-manager/` depends on `src/utils/background-job-board.ts`, `background-job-supervisor.ts`, `session-runtime-status.ts`, and `task.ts`, and injects prompt content only through `src/hooks/cache-safe-injection.ts`.
+- `src/tui-kill.ts` writes the per-project kill-all notice before interrupts; `src/utils/kill-all-stop.ts` reads it for volatile parent reminders.
 - `src/hooks/cache-monitor/` watches `message.updated` cache telemetry across all sessions and logs prompt-cache-bust/plateau warnings; it is observation-only and never mutates messages.
 - `src/hooks/orchestrator-wake/` reads v1 host todo/children/status APIs, gates on
   the task-session-manager's `hasInputWait` and continuation-model seams, and
@@ -131,7 +132,9 @@ This codemap covers the plugin repository itself and excludes the nested `openco
   asynchronous scope and commits synchronously under the existing file lock.
 - v2 admission shares its validated record/identity with profile capture. Native
   event filters freeze the required type union once; Interview has one owner.
-- Update facts use the existing native RPC seam. Optional implementations are
+- Native v2 owns package checks and installation; Slim's server-side v1
+  updater loads only on v1, and the TUI keeps its own notice on both hosts.
+  Optional implementations are
   emitted as packaged ESM chunks; entry paths remain unchanged. See
   [Runtime Efficiency](docs/runtime-efficiency.md) and release import checks.
 
