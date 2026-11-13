@@ -2451,54 +2451,69 @@ export class ForegroundFallbackManager {
         break;
       }
 
-      case 'session.idle': {
-        const props = event.properties as { sessionID?: string } | undefined;
-        const sessionID = props?.sessionID;
-        if (!sessionID) break;
-        this.busy.delete(sessionID);
-        if (isV2Host) await this.restoreV2(sessionID);
+      case 'session.idle':
+        await this.handleSessionIdle(event, isV2Host);
         break;
-      }
 
-      case 'session.created': {
-        const info = (
-          event.properties as
-            | { info?: { id?: string; parentID?: string } }
-            | undefined
-        )?.info;
-        if (info?.id && info.parentID) {
-          this.sessionParent.set(info.id, info.parentID);
-        }
+      case 'session.created':
+        this.handleSessionCreated(event);
         break;
-      }
 
-      case 'subagent.session.created': {
-        // Some builds of OpenCode include the agent name here.
-        const props = event.properties as
-          | { sessionID?: string; agentName?: unknown }
-          | undefined;
-        if (props?.sessionID && typeof props.agentName === 'string') {
-          this.registerSessionAgent(props.sessionID, props.agentName);
-        }
+      case 'subagent.session.created':
+        this.handleSubagentSessionCreated(event);
         break;
-      }
 
-      case 'session.deleted': {
-        const props = event.properties as
-          | { sessionID?: string; info?: { id?: string } }
-          | undefined;
-        const id = props?.info?.id || props?.sessionID;
-        if (id) {
-          log('[foreground-fallback] session.deleted observed', {
-            sessionID: id,
-          });
-          this.sessionParent.delete(id);
-          // Without a lifecycle coordinator this event is the only deletion
-          // signal, so it must clear the retry/terminal state too.
-          if (!this.hasCoordinator) this.forgetSession(id);
-        }
+      case 'session.deleted':
+        this.handleSessionDeleted(event);
         break;
-      }
+    }
+  }
+
+  private async handleSessionIdle(
+    event: { properties?: unknown },
+    isV2Host: boolean,
+  ): Promise<void> {
+    const props = event.properties as { sessionID?: string } | undefined;
+    const sessionID = props?.sessionID;
+    if (!sessionID) return;
+    this.busy.delete(sessionID);
+    if (isV2Host) await this.restoreV2(sessionID);
+  }
+
+  private handleSessionCreated(event: { properties?: unknown }): void {
+    const info = (
+      event.properties as
+        | { info?: { id?: string; parentID?: string } }
+        | undefined
+    )?.info;
+    if (info?.id && info.parentID) {
+      this.sessionParent.set(info.id, info.parentID);
+    }
+  }
+
+  private handleSubagentSessionCreated(event: { properties?: unknown }): void {
+    // Some builds of OpenCode include the agent name here.
+    const props = event.properties as
+      | { sessionID?: string; agentName?: unknown }
+      | undefined;
+    if (props?.sessionID && typeof props.agentName === 'string') {
+      this.registerSessionAgent(props.sessionID, props.agentName);
+    }
+  }
+
+  private handleSessionDeleted(event: { properties?: unknown }): void {
+    const props = event.properties as
+      | { sessionID?: string; info?: { id?: string } }
+      | undefined;
+    const id = props?.info?.id || props?.sessionID;
+    if (id) {
+      log('[foreground-fallback] session.deleted observed', {
+        sessionID: id,
+      });
+      this.sessionParent.delete(id);
+      // Without a lifecycle coordinator this event is the only deletion
+      // signal, so it must clear the retry/terminal state too.
+      if (!this.hasCoordinator) this.forgetSession(id);
     }
   }
 
