@@ -164,7 +164,7 @@ export function switchPresetOnDisk(
   }
   const configuredPresets =
     scope === 'global'
-      ? readUserPresets(directory)
+      ? readEffectiveUserPresets(directory)
       : getAllConfiguredPresets(directory, options.hostFlavor);
   const presets: PresetMap =
     scope === 'global'
@@ -630,6 +630,15 @@ function readUserPresets(directory: string): Record<string, PresetInput> {
   return config.presets as Record<string, PresetInput>;
 }
 
+/** User presets as runtime reads them; editable reads stay raw. */
+function readEffectiveUserPresets(
+  directory: string,
+): Record<string, PresetInput> {
+  const presets = readUserPresets(directory);
+  repairLegacyExplorerMcps({ presets }, () => {});
+  return presets;
+}
+
 /**
  * Read and merge ancestor project config files. Returns null if absent.
  */
@@ -657,10 +666,7 @@ export function getAllConfiguredPresets(
   directory: string,
   hostFlavor?: string,
 ): Record<string, PresetInput> {
-  const userPresets = readUserPresets(directory);
-  // User presets bypass the loader, so normalize this one raw layer here;
-  // editable reads and the file on disk stay untouched.
-  repairLegacyExplorerMcps({ presets: userPresets }, () => {});
+  const userPresets = readEffectiveUserPresets(directory);
   const projectConfig = readProjectConfig(directory, hostFlavor);
   const projectPresets =
     projectConfig &&

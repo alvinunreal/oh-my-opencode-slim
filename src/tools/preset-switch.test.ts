@@ -319,6 +319,37 @@ test('repairs user preset MCPs in the catalog without rewriting the file', () =>
 });
 
 describe('switchPresetOnDisk', () => {
+  test('global-scope summary inherits repaired legacy MCPs', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const userPath = path.join(
+      tempDir,
+      'xdg-config',
+      'opencode',
+      'oh-my-opencode-slim.json',
+    );
+    fs.writeFileSync(
+      userPath,
+      JSON.stringify({
+        presets: {
+          legacy: {
+            librarian: { mcps: ['context7', 'gh_grep'] },
+            explorer: { mcps: [] },
+          },
+        },
+      }),
+    );
+
+    const result = switchPresetOnDisk(
+      projectDir,
+      'legacy',
+      {},
+      { scope: 'global' },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.summary).toContain('explorer → mcps: context7,gh_grep');
+  });
+
   test('returns a not-found result for an unknown preset', () => {
     const config: PluginConfig = {
       presets: {
