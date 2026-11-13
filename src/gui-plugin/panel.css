@@ -1,0 +1,2391 @@
+.omos-panel {
+  --omos-muted: color-mix(in srgb, currentColor 76%, transparent);
+  --omos-faint: color-mix(in srgb, currentColor 64%, transparent);
+  --omos-line: color-mix(in srgb, currentColor 14%, transparent);
+  --omos-line-strong: color-mix(in srgb, currentColor 25%, transparent);
+  --omos-surface: color-mix(in srgb, currentColor 4.5%, transparent);
+  --omos-surface-2: color-mix(in srgb, currentColor 7.5%, transparent);
+  --omos-surface-3: color-mix(in srgb, currentColor 11%, transparent);
+  --omos-success: color-mix(in srgb, #2fbf71 72%, currentColor);
+  --omos-warning: color-mix(in srgb, #f0a43c 78%, currentColor);
+  --omos-danger: color-mix(in srgb, #ef5f5f 78%, currentColor);
+  --omos-mono: var(
+    --font-mono,
+    ui-monospace,
+    "SFMono-Regular",
+    "Cascadia Code",
+    "Roboto Mono",
+    monospace
+  );
+  --omos-ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+.omos-panel *,
+.omos-panel *::before,
+.omos-panel *::after {
+  box-sizing: border-box;
+}
+
+.omos-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  container-type: inline-size;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────── */
+
+.omos-head {
+  position: relative;
+  z-index: 30;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px 8px;
+  border-bottom: 1px solid var(--omos-line);
+}
+
+.omos-brand {
+  display: grid;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 1px solid var(--omos-line);
+  border-radius: 7px;
+  color: var(--omos-muted);
+  background: linear-gradient(
+    145deg,
+    var(--omos-surface-3),
+    var(--omos-surface)
+  );
+  box-shadow: inset 0 1px 0 color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.omos-title-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.omos-title-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.omos-title {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: currentColor;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.omos-version {
+  flex: none;
+  color: var(--omos-faint);
+  font-family: var(--omos-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.omos-subtitle {
+  margin-top: 1px;
+  overflow: hidden;
+  color: var(--omos-faint);
+  font-family: var(--omos-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.omos-head-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  margin-right: -4px;
+}
+
+.omos-progress {
+  position: absolute;
+  z-index: 5;
+  inset: 0 0 auto;
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+}
+
+.omos-progress span {
+  display: block;
+  width: 42%;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, currentColor 55%, transparent),
+    transparent
+  );
+  animation: omos-progress 1.05s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* ── Scroll area ────────────────────────────────────────────────────── */
+
+.omos-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 10px 12px 14px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--omos-line-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.omos-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.omos-body::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--omos-line-strong);
+  background-clip: padding-box;
+}
+
+.omos-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ── Notices ────────────────────────────────────────────────────────── */
+
+.omos-notices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 9px;
+}
+
+.omos-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 7px 8px;
+  border: 1px solid var(--omos-line);
+  border-radius: 7px;
+  color: var(--omos-muted);
+  background: var(--omos-surface);
+  font-size: 9.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.omos-notice.is-warn {
+  border-color: color-mix(in srgb, var(--omos-warning) 30%, var(--omos-line));
+  background: color-mix(in srgb, var(--omos-warning) 6%, transparent);
+}
+
+.omos-notice.is-danger {
+  border-color: color-mix(in srgb, var(--omos-danger) 30%, var(--omos-line));
+  background: color-mix(in srgb, var(--omos-danger) 6%, transparent);
+}
+
+.omos-notice-icon {
+  flex: none;
+  margin-top: 1px;
+}
+
+.omos-notice.is-warn .omos-notice-icon {
+  color: var(--omos-warning);
+}
+
+.omos-notice.is-danger .omos-notice-icon {
+  color: var(--omos-danger);
+}
+
+.omos-notice.is-info .omos-notice-icon {
+  color: var(--omos-muted);
+}
+
+.omos-path {
+  display: block;
+  margin-top: 2px;
+  color: var(--omos-faint);
+  font-family: var(--omos-mono);
+  font-size: 8.5px;
+  overflow-wrap: anywhere;
+}
+
+/* ── Segmented tabs ────────────────────────────────────────────────── */
+
+.omos-tabs {
+  position: sticky;
+  z-index: 4;
+  top: -1px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  margin: 0 -2px 10px;
+  padding: 3px;
+  border: 1px solid var(--omos-line);
+  border-radius: 8px;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+}
+
+.omos-tab {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  height: 26px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--omos-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.13s ease,
+    color 0.13s ease,
+    box-shadow 0.13s ease;
+}
+
+.omos-tab span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.omos-tab:hover {
+  color: currentColor;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+}
+
+.omos-tab.is-active {
+  color: currentColor;
+  background: color-mix(in srgb, currentColor 11%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, currentColor 7%, transparent),
+    0 1px 2px rgb(0 0 0 / 5%);
+}
+
+.omos-tab-icon {
+  flex: none;
+  opacity: 0.6;
+}
+
+.omos-tab.is-active .omos-tab-icon {
+  opacity: 0.9;
+}
+
+@container (max-width: 272px) {
+  .omos-tab {
+    gap: 3px;
+    padding-inline: 4px;
+  }
+
+  .omos-tab-icon {
+    display: none;
+  }
+}
+
+/* ── Workbench and roster shells ───────────────────────────────────── */
+
+.omos-workbench,
+.omos-roster {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: omos-fade 0.16s ease both;
+}
+
+.omos-workbench {
+  gap: 10px;
+}
+
+.omos-agents {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ── New preset form ───────────────────────────────────────────────── */
+
+.omos-new-preset {
+  padding: 8px 9px 9px;
+  border: 1px solid var(--omos-line);
+  border-radius: 9px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, currentColor 4%, transparent),
+    transparent 80%
+  );
+  animation: omos-rise 0.18s var(--omos-ease) both;
+}
+
+.omos-new-preset-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 16px;
+}
+
+.omos-new-preset-hint {
+  margin: 3px 0 7px;
+  color: var(--omos-muted);
+  font-size: 9px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.omos-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.omos-field-error {
+  margin-top: 4px;
+  color: var(--omos-danger);
+  font-size: 9px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* ── Preset card ───────────────────────────────────────────────────── */
+
+.omos-presets {
+  position: relative;
+  padding: 0 0 10px;
+  border-bottom: 1px solid var(--omos-line);
+  animation: omos-rise 0.2s var(--omos-ease) both;
+}
+
+.omos-presets-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 20px;
+}
+
+.omos-label {
+  flex: none;
+  color: var(--omos-faint);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.omos-panel .omos-delete-btn {
+  flex: none;
+  margin-right: -5px;
+  font-size: 9.5px;
+}
+
+.omos-panel .omos-delete-btn:hover {
+  color: var(--omos-danger);
+}
+
+.omos-preset-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.omos-preset-chip {
+  appearance: none;
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid var(--omos-line);
+  border-radius: 5px;
+  color: color-mix(in srgb, currentColor 78%, transparent);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 550;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.omos-preset-chip:hover {
+  border-color: var(--omos-line-strong);
+  color: currentColor;
+  background: var(--omos-surface);
+}
+
+.omos-preset-chip.is-selected {
+  border-color: color-mix(in srgb, currentColor 48%, transparent);
+  color: currentColor;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 5%, transparent);
+}
+
+.omos-preset-chip.is-active {
+  font-weight: 600;
+}
+
+.omos-preset-check {
+  flex: none;
+}
+
+.omos-preset-name {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.omos-chip-dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--omos-success);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--omos-success) 15%, transparent);
+}
+
+.omos-chip-dot.is-muted {
+  border: 1px solid var(--omos-line-strong);
+  background: transparent;
+  box-shadow: none;
+}
+
+.omos-chip-active {
+  flex: none;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: var(--omos-success);
+  background: color-mix(in srgb, var(--omos-success) 8%, transparent);
+  font-family: var(--omos-mono);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+
+.omos-preset-lock {
+  display: grid;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  place-items: center;
+  margin-left: -1px;
+  color: var(--omos-faint);
+}
+
+.omos-preset-lock svg {
+  width: 12px;
+  height: 12px;
+}
+
+.omos-presets-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid var(--omos-line);
+  animation: omos-fade 0.15s ease both;
+}
+
+.omos-presets-hint {
+  flex: 1;
+  min-width: 90px;
+  color: var(--omos-muted);
+  font-size: 9.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.omos-presets-foot.is-warn .omos-presets-hint {
+  color: var(--omos-warning);
+}
+
+.omos-foot-icon {
+  flex: none;
+  color: var(--omos-warning);
+  opacity: 0.85;
+}
+
+.omos-panel .omos-apply-btn {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 600;
+  animation: omos-rise 0.18s ease both;
+}
+
+/* ── Extends metadata ──────────────────────────────────────────────── */
+
+.omos-preset-extends {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 5px;
+  margin-top: 5px;
+  color: var(--omos-muted);
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.omos-preset-extends-key {
+  flex: none;
+  color: var(--omos-faint);
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.omos-preset-extends-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ── Default vs session team ───────────────────────────────────────── */
+
+.omos-scope {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--omos-line);
+}
+
+.omos-scope-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  min-width: 0;
+}
+
+.omos-scope-row + .omos-scope-row {
+  margin-top: 3px;
+}
+
+.omos-scope-label {
+  flex: none;
+  color: var(--omos-faint);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+
+.omos-scope-value {
+  flex: 1 1 120px;
+  min-width: 0;
+  color: var(--omos-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.omos-scope-value.is-warn {
+  color: var(--omos-warning);
+}
+
+.omos-scope-sources {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.omos-scope-note {
+  margin-top: 3px;
+  color: var(--omos-faint);
+  font-size: 10px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.omos-scope-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.omos-panel .omos-scope-btn {
+  flex: 1 1 100px;
+  min-width: 0;
+  min-height: 28px;
+  height: auto;
+  padding-block: 3px;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  white-space: normal;
+}
+
+.omos-scope-error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 3px 6px;
+  margin-top: 3px;
+}
+
+.omos-scope-error .omos-field-hint {
+  flex: 1 1 150px;
+  margin-top: 0;
+}
+
+.omos-scope-hint {
+  margin-top: 5px;
+  color: var(--omos-muted);
+  font-size: 10px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* ── Inline confirmations ──────────────────────────────────────────── */
+
+.omos-confirm-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+  padding: 7px 8px;
+  border: 1px solid var(--omos-line);
+  border-radius: 6px;
+  font-size: 9.5px;
+  line-height: 1.4;
+}
+
+.omos-confirm-row.is-danger {
+  border-color: color-mix(in srgb, var(--omos-danger) 28%, var(--omos-line));
+  background: color-mix(in srgb, var(--omos-danger) 5%, transparent);
+}
+
+.omos-confirm-text {
+  flex: 1;
+  min-width: 110px;
+  color: var(--omos-muted);
+  overflow-wrap: anywhere;
+}
+
+.omos-confirm-row.is-danger .omos-confirm-text {
+  color: var(--omos-danger);
+}
+
+/* ── Section heads ─────────────────────────────────────────────────── */
+
+.omos-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 22px;
+}
+
+.omos-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.omos-section-count {
+  color: var(--omos-faint);
+  font-family: var(--omos-mono);
+  font-size: 8.5px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.omos-panel .omos-add-btn {
+  flex: none;
+  margin-right: -4px;
+  font-size: 10.5px;
+}
+
+/* ── Add-agent picker ──────────────────────────────────────────────── */
+
+.omos-add-picker {
+  overflow: hidden;
+  border: 1px solid var(--omos-line);
+  border-radius: 8px;
+  background: var(--omos-surface);
+  animation: omos-rise 0.16s var(--omos-ease) both;
+}
+
+.omos-add-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--omos-line);
+}
+
+.omos-add-picker-list {
+  max-height: 196px;
+  overflow-y: auto;
+  scrollbar-color: var(--omos-line-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.omos-add-option {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-top: 1px solid var(--omos-line);
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.omos-add-option:first-child {
+  border-top: 0;
+}
+
+.omos-add-option:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 4.5%, transparent);
+}
+
+.omos-add-option:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.omos-add-option-name {
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.omos-add-option-role {
+  overflow: hidden;
+  color: var(--omos-faint);
+  font-size: 8.5px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Agent list ────────────────────────────────────────────────────── */
+
+.omos-agent-list {
+  overflow: hidden;
+  border: 1px solid var(--omos-line);
+  border-radius: 9px;
+  background: color-mix(in srgb, currentColor 1.5%, transparent);
+}
+
+.omos-agent-block {
+  border-top: 1px solid var(--omos-line);
+  transition: background 0.13s ease;
+}
+
+.omos-agent-block:first-child {
+  border-top: 0;
+}
+
+.omos-agent-block.is-open {
+  background: color-mix(in srgb, currentColor 3.5%, transparent);
+}
+
+.omos-agent-row {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  width: 100%;
+  min-height: 36px;
+  margin: 0;
+  padding: 5px 9px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.13s ease;
+}
+
+.omos-agent-row:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 3.5%, transparent);
+}
+
+.omos-agent-row:disabled {
+  cursor: default;
+}
+
+.omos-agent-name {
+  flex: 1;
+  min-width: 0;
+  color: currentColor;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: -0.006em;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.omos-mini-tag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: 14px;
+  padding: 0 4px;
+  border: 1px solid var(--omos-line);
+  border-radius: 4px;
+  color: var(--omos-muted);
+  background: color-mix(in srgb, currentColor 3%, transparent);
+  font-family: var(--omos-mono);
+  font-size: 8px;
+  font-weight: 550;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.omos-agent-inherited {
+  display: inline-grid;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  place-items: center;
+  color: var(--omos-faint);
+}
+
+.omos-mini-tag.is-warn {
+  border-color: color-mix(in srgb, var(--omos-warning) 28%, transparent);
+  color: var(--omos-warning);
+  background: color-mix(in srgb, var(--omos-warning) 7%, transparent);
+}
+
+.omos-agent-model {
+  display: flex;
+  flex: 1 1 100%;
+  order: 2;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+  margin-left: auto;
+  color: var(--omos-muted);
+  font-family: var(--omos-mono);
+  font-size: 9px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.omos-agent-model.is-empty {
+  gap: 3px;
+  color: var(--omos-muted);
+  font-family: inherit;
+  font-size: 10px;
+}
+
+.omos-agent-model-icon {
+  flex: none;
+  color: var(--omos-faint);
+}
+
+.omos-agent-provider {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 42%;
+  overflow: hidden;
+  color: var(--omos-faint);
+  font-size: 8.5px;
+  text-overflow: ellipsis;
+}
+
+.omos-agent-sep {
+  flex: none;
+  color: var(--omos-faint);
+  font-size: 9px;
+}
+
+.omos-agent-model-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: color-mix(in srgb, currentColor 76%, transparent);
+  font-size: 10px;
+  font-weight: 550;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+  transition: color 0.13s ease;
+}
+
+.omos-agent-row:hover .omos-agent-model-name {
+  color: currentColor;
+}
+
+.omos-agent-variant {
+  flex: none;
+  height: 15px;
+  padding: 0 4px;
+  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+  border-radius: 4px;
+  color: var(--omos-muted);
+  background: color-mix(in srgb, currentColor 5%, transparent);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 13px;
+}
+
+.omos-agent-chain {
+  flex: none;
+  color: var(--omos-faint);
+}
+
+.omos-agent-caret {
+  display: grid;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  place-items: center;
+  color: var(--omos-faint);
+  transition:
+    transform 0.15s ease,
+    color 0.13s ease;
+}
+
+.omos-agent-caret.is-open {
+  transform: rotate(180deg);
+  color: var(--omos-muted);
+}
+
+/* ── Inline agent editor ───────────────────────────────────────────── */
+
+.omos-agent-editor {
+  padding: 8px 9px 10px;
+  border-top: 1px solid var(--omos-line);
+  background: color-mix(in srgb, currentColor 2.5%, transparent);
+  animation: omos-fade 0.14s ease both;
+}
+
+.omos-agent-editor.is-new {
+  border: 1px solid var(--omos-line);
+  border-radius: 9px;
+  background: color-mix(in srgb, currentColor 2.5%, transparent);
+  animation: omos-rise 0.16s var(--omos-ease) both;
+}
+
+.omos-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 26px;
+  margin-bottom: 7px;
+}
+
+.omos-editor-title {
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  overflow-wrap: anywhere;
+}
+
+.omos-editor-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  margin-right: -4px;
+}
+
+.omos-field {
+  min-width: 0;
+}
+
+.omos-field + .omos-field,
+.omos-field-row + .omos-field,
+.omos-field + .omos-field-row,
+.omos-field-row + .omos-field-row {
+  margin-top: 8px;
+}
+
+.omos-field-label {
+  margin-bottom: 4px;
+  color: var(--omos-faint);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.3;
+}
+
+.omos-field-hint {
+  margin-top: 4px;
+  color: var(--omos-muted);
+  font-size: 10px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.omos-field-hint.is-warn {
+  color: var(--omos-warning);
+}
+
+.omos-field-hint.is-error {
+  color: var(--omos-danger);
+}
+
+.omos-field-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.omos-field-grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.omos-temp-input {
+  width: 100%;
+  font-family: var(--omos-mono);
+}
+
+/* Model list */
+
+.omos-model-picker {
+  min-width: 0;
+  margin-bottom: 10px;
+}
+
+.omos-model-summary {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: 1px solid var(--omos-line-strong);
+  border-radius: 5px;
+  color: inherit;
+  background: var(--omos-surface);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.omos-model-summary:hover:not(:disabled) {
+  background: var(--omos-surface-2);
+}
+
+.omos-model-summary-text {
+  display: grid;
+  flex: 1;
+  gap: 1px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.omos-model-summary-name {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.omos-model-summary-provider,
+.omos-model-results {
+  color: var(--omos-muted);
+  font-size: 10px;
+}
+
+.omos-model-search {
+  margin-top: 0;
+  padding: 2px 2px 0;
+}
+
+.omos-model-field {
+  position: relative;
+}
+
+.omos-model-anchor {
+  position: relative;
+}
+
+.omos-model-menu {
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  width: auto;
+  display: flex;
+  flex-direction: column;
+  max-height: min(56vh, 380px);
+  padding: 6px;
+}
+
+.omos-model-menu .omos-model-list {
+  max-height: none;
+  min-height: 0;
+  margin-top: 5px;
+  border-color: var(--omos-line);
+  background: color-mix(in srgb, currentColor 2.5%, transparent);
+}
+
+.omos-model-menu .omos-model-close {
+  margin-top: 4px;
+  padding: 4px 2px;
+}
+
+.omos-model-results {
+  margin-top: 3px;
+  text-align: right;
+}
+
+.omos-go-caps {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--omos-line);
+}
+
+.omos-go-heading {
+  margin-bottom: 4px;
+  color: var(--omos-muted);
+  font-size: 10px;
+}
+
+.omos-go-plans {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.omos-go-plans .omos-segment {
+  padding-inline: 3px;
+  font-family: inherit;
+}
+
+.omos-go-note {
+  margin-top: 4px;
+  color: var(--omos-muted);
+  font-size: 9.5px;
+  overflow-wrap: anywhere;
+}
+
+.omos-go-source,
+.omos-model-close {
+  appearance: none;
+  min-height: 26px;
+  padding: 3px 0;
+  border: 0;
+  border-radius: 3px;
+  color: var(--omos-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.omos-go-source:hover,
+.omos-model-close:hover {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.omos-model-close {
+  display: block;
+  margin-left: auto;
+}
+
+.omos-go-selected-cap {
+  margin-top: 2px;
+  font-size: 10.5px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.omos-model-cap {
+  flex: 0 0 78px;
+  color: var(--omos-muted);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.omos-editor-dirty,
+.omos-save-scope {
+  color: var(--omos-muted);
+  font-size: 10px;
+}
+
+.omos-editor-dirty {
+  flex: none;
+}
+
+.omos-editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--omos-line);
+}
+
+.omos-editor-footer .omos-editor-actions {
+  margin-left: auto;
+  margin-right: 0;
+}
+
+.omos-model-list {
+  max-height: min(184px, 30vh);
+  margin-top: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: 4px;
+  border: 1px solid var(--omos-line);
+  border-radius: 6px;
+  background: color-mix(in srgb, currentColor 1.5%, transparent);
+  scrollbar-color: var(--omos-line-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.omos-model-group + .omos-model-group {
+  border-top: 1px solid var(--omos-line);
+}
+
+.omos-model-provider {
+  padding: 4px 7px 3px;
+  color: var(--omos-faint);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+
+.omos-model-option {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 7px;
+  border: 0;
+  color: color-mix(in srgb, currentColor 84%, transparent);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.omos-model-option:hover:not(:disabled) {
+  color: currentColor;
+  background: color-mix(in srgb, currentColor 4.5%, transparent);
+}
+
+.omos-model-option.is-current {
+  color: currentColor;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+}
+
+.omos-model-option:disabled {
+  cursor: default;
+}
+
+.omos-model-option-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.omos-model-option.is-current .omos-model-option-name {
+  font-weight: 600;
+}
+
+.omos-model-check {
+  flex: none;
+  color: var(--omos-success);
+}
+
+.omos-editor-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 12px 8px;
+  color: var(--omos-muted);
+  font-size: 9px;
+  line-height: 1.45;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.omos-editor-state.is-error {
+  color: var(--omos-danger);
+}
+
+/* Variant segmented control */
+
+.omos-segmented {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.omos-segment {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 2px 7px;
+  border: 1px solid var(--omos-line);
+  border-radius: 4px;
+  color: color-mix(in srgb, currentColor 80%, transparent);
+  background: transparent;
+  font: inherit;
+  font-family: var(--omos-mono);
+  font-size: 10px;
+  line-height: 1.2;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.omos-segment:hover:not(:disabled) {
+  border-color: var(--omos-line-strong);
+  color: currentColor;
+  background: var(--omos-surface);
+}
+
+.omos-segment.is-selected {
+  border-color: color-mix(in srgb, currentColor 24%, transparent);
+  color: currentColor;
+  background: color-mix(in srgb, currentColor 7%, transparent);
+}
+
+.omos-segment:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Options JSON */
+
+.omos-editor-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 20px;
+  margin-bottom: 3px;
+}
+
+.omos-panel .omos-editor-section-head .omos-field-label {
+  margin-bottom: 0;
+}
+
+.omos-json-editor {
+  display: block;
+  width: 100%;
+  min-height: 64px;
+  padding: 6px 7px;
+  border: 1px solid var(--omos-line);
+  border-radius: 5px;
+  color: inherit;
+  background: var(
+    --background-stronger,
+    var(
+      --background-strong,
+      var(--omos-pop-bg, color-mix(in srgb, currentColor 3%, transparent))
+    )
+  );
+  font-family: var(--omos-mono);
+  font-size: 9px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.omos-json-editor::placeholder {
+  color: var(--omos-faint);
+}
+
+.omos-json-editor:focus-visible {
+  outline: 2px solid color-mix(in srgb, currentColor 40%, transparent);
+  outline-offset: 1px;
+}
+
+.omos-json-editor.is-invalid {
+  border-color: color-mix(in srgb, var(--omos-danger) 46%, var(--omos-line));
+}
+
+.omos-json-editor:disabled {
+  opacity: 0.65;
+}
+
+.omos-editor-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.omos-panel .omos-remove-btn {
+  width: 100%;
+  justify-content: flex-start;
+  margin-top: 8px;
+  padding-left: 0;
+  color: var(--omos-danger);
+  font-size: 9.5px;
+}
+
+.omos-panel .omos-model-reset {
+  width: 100%;
+  justify-content: flex-start;
+  margin-top: 4px;
+  padding-left: 0;
+  color: var(--omos-muted);
+  font-size: 9.5px;
+}
+
+.omos-panel .omos-model-reset:hover:not(:disabled) {
+  color: currentColor;
+  background: var(--omos-surface);
+}
+
+.omos-panel .omos-remove-btn:hover:not(:disabled) {
+  color: var(--omos-danger);
+  background: color-mix(in srgb, var(--omos-danger) 6%, transparent);
+}
+
+/* Read-only metadata chips (skills / mcps) */
+
+.omos-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 17px;
+  padding: 0 5px;
+  border: 1px solid var(--omos-line);
+  border-radius: 4px;
+  color: var(--omos-muted);
+  background: transparent;
+  font-family: var(--omos-mono);
+  font-size: 8.5px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.omos-tag.is-static {
+  color: var(--omos-faint);
+}
+
+.omos-tag .k {
+  color: var(--omos-faint);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.omos-tag .v {
+  max-width: 110px;
+  overflow: hidden;
+  color: var(--omos-muted);
+  font-size: 8.5px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Empty agent state ─────────────────────────────────────────────── */
+
+.omos-empty-agents {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 16px 10px;
+  border: 1px dashed var(--omos-line);
+  border-radius: 9px;
+  color: var(--omos-faint);
+  text-align: center;
+}
+
+.omos-empty-agents-title {
+  margin-top: 2px;
+  color: var(--omos-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.omos-empty-agents-hint {
+  max-width: 200px;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+/* ── Empty and loading states ──────────────────────────────────────── */
+
+.omos-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 24px 16px;
+  border: 1px dashed var(--omos-line);
+  border-radius: 10px;
+  background: var(--omos-surface);
+  text-align: center;
+}
+
+.omos-empty-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px dashed var(--omos-line-strong);
+  border-radius: 9px;
+  color: var(--omos-muted);
+  background: color-mix(in srgb, currentColor 4%, transparent);
+}
+
+.omos-empty-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.omos-empty p {
+  max-width: 210px;
+  margin: 0;
+  color: var(--omos-muted);
+  font-size: 9.5px;
+  line-height: 1.5;
+}
+
+.omos-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 240px;
+  padding: 28px 16px;
+  text-align: center;
+}
+
+.omos-state-title {
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.omos-state p {
+  max-width: 220px;
+  margin: 0;
+  color: var(--omos-muted);
+  font-size: 10px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.omos-state-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--omos-danger) 30%, var(--omos-line));
+  border-radius: 9px;
+  color: var(--omos-danger);
+  background: color-mix(in srgb, var(--omos-danger) 7%, transparent);
+}
+
+/* ── Global roster ─────────────────────────────────────────────────── */
+
+.omos-roster-intro {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 9px;
+  border: 1px solid var(--omos-line);
+  border-radius: 9px;
+  background: var(--omos-surface);
+}
+
+.omos-intro-icon {
+  display: grid;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid var(--omos-line);
+  border-radius: 6px;
+  color: var(--omos-muted);
+  background: var(--omos-surface-2);
+}
+
+.omos-intro-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.omos-roster-intro p {
+  margin: 2px 0 0;
+  color: var(--omos-muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.omos-roster-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 1px;
+  color: var(--omos-muted);
+  font-size: 9px;
+}
+
+.omos-roster-summary strong {
+  color: currentColor;
+  font-weight: 600;
+}
+
+.omos-roster-list {
+  overflow: hidden;
+  border: 1px solid var(--omos-line);
+  border-radius: 9px;
+  background: color-mix(in srgb, currentColor 1.5%, transparent);
+}
+
+.omos-roster-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-top: 1px solid var(--omos-line);
+  transition: background 0.12s ease;
+}
+
+.omos-roster-row:first-child {
+  border-top: 0;
+}
+
+.omos-roster-row:hover {
+  background: var(--omos-surface);
+}
+
+.omos-roster-row.is-off {
+  background: color-mix(in srgb, var(--omos-warning) 4%, transparent);
+}
+
+.omos-roster-row.is-off:hover {
+  background: color-mix(in srgb, var(--omos-warning) 7%, transparent);
+}
+
+.omos-roster-row.is-off .omos-roster-name {
+  color: var(--omos-muted);
+}
+
+.omos-roster-row.is-protected {
+  background: color-mix(in srgb, currentColor 1.5%, transparent);
+}
+
+.omos-roster-row.is-protected:hover {
+  background: var(--omos-surface);
+}
+
+.omos-roster-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.omos-roster-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.omos-roster-role {
+  margin-top: 1px;
+  overflow: hidden;
+  color: var(--omos-faint);
+  font-size: 8.5px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.omos-roster-toggle {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.omos-lock-chip {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid var(--omos-line);
+  border-radius: 6px;
+  color: var(--omos-faint);
+  background: var(--omos-surface);
+}
+
+/* ── Utilities, focus, motion ──────────────────────────────────────── */
+
+.omos-muted {
+  color: var(--omos-muted);
+}
+
+.omos-preset-chip:focus-visible,
+.omos-tab:focus-visible,
+.omos-agent-row:focus-visible,
+.omos-segment:focus-visible,
+.omos-model-option:focus-visible,
+.omos-add-option:focus-visible {
+  outline: 2px solid color-mix(in srgb, currentColor 42%, transparent);
+  outline-offset: 1px;
+}
+
+.omos-model-summary:focus-visible,
+.omos-model-close:focus-visible,
+.omos-go-source:focus-visible {
+  outline: 2px solid color-mix(in srgb, currentColor 42%, transparent);
+  outline-offset: 1px;
+}
+
+.omos-agent-row:focus-visible {
+  outline-offset: -2px;
+}
+
+.omos-model-option:focus-visible,
+.omos-add-option:focus-visible {
+  outline-offset: -2px;
+}
+
+@keyframes omos-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes omos-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes omos-progress {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(340%);
+  }
+}
+
+@container (max-width: 336px) {
+  .omos-agent-provider,
+  .omos-agent-sep {
+    display: none;
+  }
+}
+
+@container (max-width: 292px) {
+  .omos-brand {
+    display: none;
+  }
+}
+
+@container (max-width: 282px) {
+  .omos-body {
+    padding-inline: 10px;
+  }
+
+  .omos-agent-row {
+    padding-inline: 8px;
+  }
+
+  .omos-agent-editor {
+    padding-inline: 8px;
+  }
+
+  .omos-preset-chip {
+    padding-inline: 7px;
+  }
+}
+
+@container (max-width: 246px) {
+  .omos-tab-icon {
+    display: none;
+  }
+
+  .omos-agent-name {
+    font-size: 11px;
+  }
+
+  .omos-editor-head {
+    flex-wrap: wrap;
+  }
+
+  .omos-editor-actions {
+    margin-left: auto;
+  }
+
+  .omos-presets-foot .omos-apply-btn {
+    margin-left: auto;
+  }
+
+  .omos-preset-chip {
+    font-size: 9.5px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .omos-panel *,
+  .omos-panel *::before,
+  .omos-panel *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* -- Header popovers (opaque by design) ------------------------------- */
+
+.omos-menu-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.omos-popover {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  right: 0;
+  width: min(280px, calc(100vw - 32px));
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid var(--omos-line-strong);
+  border-radius: 8px;
+  color: inherit;
+  background: var(
+    --background-stronger,
+    var(--background-strong, var(--omos-pop-bg, #24262b))
+  );
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.28);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.omos-popover[data-mode="dark"] {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.omos-new-menu {
+  width: max-content;
+  min-width: 190px;
+}
+
+.omos-settings-menu {
+  width: min(260px, calc(100vw - 32px));
+  padding: 8px;
+}
+
+.omos-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 2px 4px 6px;
+  color: var(--omos-faint);
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.omos-menu-group {
+  padding: 6px 6px 3px;
+  color: var(--omos-faint);
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.omos-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 7px;
+  border: 0;
+  border-radius: 5px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.omos-menu-item:hover,
+.omos-menu-item:focus-visible {
+  background: color-mix(in srgb, currentColor 9%, transparent);
+}
+
+.omos-menu-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.omos-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 5px;
+  min-width: 0;
+}
+
+.omos-menu-row:hover {
+  background: color-mix(in srgb, currentColor 6%, transparent);
+}
+
+.omos-menu-row.is-selected {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.omos-menu-row.is-deleted {
+  background: color-mix(in srgb, var(--omos-danger) 9%, transparent);
+}
+
+.omos-menu-select {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 4px 6px 5px;
+  border: 0;
+  border-radius: 5px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.omos-menu-check {
+  display: grid;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  place-items: center;
+}
+
+.omos-menu-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.omos-menu-trash {
+  flex: none;
+  margin-right: 2px;
+  opacity: 0.55;
+}
+
+.omos-menu-row:hover .omos-menu-trash,
+.omos-menu-trash:focus-visible {
+  opacity: 1;
+}
+
+.omos-menu-trash:hover {
+  color: var(--omos-danger);
+}
+
+.omos-menu-confirm {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  padding-right: 2px;
+}
+
+.omos-menu-undo {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 3px 3px 3px 6px;
+  font-size: 10.5px;
+}
+
+.omos-menu-undo-text {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--omos-muted);
+  overflow-wrap: anywhere;
+}
+
+.omos-menu-undo-text svg {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+
+.omos-preset-select {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.omos-preset-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 5px 8px;
+  border: 1px solid var(--omos-line);
+  border-radius: 6px;
+  color: currentColor;
+  background: var(--omos-surface);
+  font: inherit;
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.omos-preset-trigger:hover:not(:disabled),
+.omos-preset-trigger[aria-expanded="true"] {
+  border-color: var(--omos-line-strong);
+  background: var(--omos-surface-2);
+}
+
+.omos-preset-trigger-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.omos-preset-lock-icon {
+  flex: none;
+  opacity: 0.6;
+}
+
+.omos-preset-menu {
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  width: auto;
+  max-height: min(52vh, 360px);
+}
+
+/* -- Variant slider --------------------------------------------------- */
+
+.omos-field-label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.omos-variant-value {
+  color: var(--omos-muted);
+  font-family: var(--omos-mono);
+  font-size: 10.5px;
+}
+
+.omos-range {
+  position: relative;
+  padding: 3px 0 0;
+  --omos-range-accent: #4d8dff;
+  --omos-range-track: color-mix(in srgb, currentColor 22%, transparent);
+}
+
+.omos-range-dots {
+  position: absolute;
+  top: 3px;
+  right: 0;
+  left: 0;
+  height: 20px;
+  pointer-events: none;
+}
+
+.omos-range-dots span {
+  position: absolute;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: color-mix(in srgb, currentColor 38%, transparent);
+  transform: translate(-50%, -50%);
+}
+
+.omos-range-dots span.is-filled {
+  background: var(--omos-range-accent);
+}
+
+.omos-variant-slider {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  height: 20px;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.omos-variant-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--omos-range-accent) 0 var(--omos-range-fill, 0%),
+    var(--omos-range-track) var(--omos-range-fill, 0%) 100%
+  );
+}
+
+.omos-variant-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border: 1px solid color-mix(in srgb, #000 45%, transparent);
+  border-radius: 50%;
+  background: #d6d6d6;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+
+.omos-variant-slider:focus-visible {
+  outline: none;
+}
+
+.omos-variant-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 2px var(--omos-range-accent);
+}
+
+.omos-variant-slider:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.omos-variant-ticks {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  color: var(--omos-faint);
+  font-size: 9px;
+}
+
+/* -- Collapsed agent cap badge ---------------------------------------- */
+
+.omos-agent-cap {
+  flex: none;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: var(--omos-faint);
+  background: var(--omos-surface-2);
+  font-family: var(--omos-mono);
+  font-size: 8.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+/* -- Compact session scope -------------------------------------------- */
+
+.omos-scope-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.omos-scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: var(--omos-faint);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.omos-scope-chip strong {
+  overflow: hidden;
+  max-width: 130px;
+  color: var(--omos-muted);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.omos-scope-chip.is-warn strong {
+  color: var(--omos-warning);
+}
+
+.omos-scope-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.omos-scope-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 22px;
+  color: var(--omos-muted);
+  font-size: 10px;
+  cursor: default;
+}
+
+.omos-scope-toggle input {
+  cursor: pointer;
+}
+
+/* -- Menu stacking and editor refinement ------------------------------ */
+
+.omos-presets.is-menu-open {
+  z-index: 25;
+}
+
+.omos-popover.omos-model-menu {
+  left: 0;
+  right: 0;
+  width: auto;
+  max-width: none;
+  box-sizing: border-box;
+}
+
+.omos-model-menu .omos-model-search {
+  min-width: 0;
+}
+
+.omos-model-menu .omos-model-search-input,
+.omos-model-menu input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.omos-model-inherit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  color: var(--omos-muted);
+  font-size: 10px;
+  cursor: default;
+}
+
+.omos-panel .omos-more-toggle {
+  align-self: flex-start;
+  margin-top: 8px;
+  padding-left: 0;
+}
+
+.omos-go-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.omos-go-source-icon {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
