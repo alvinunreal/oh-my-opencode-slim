@@ -11,9 +11,10 @@ plugin requires OpenCode **2.3.0+** on v2 hosts; parseable versions below stable
 2.3.0 (including `2.3.0-dev`) fail setup with an upgrade message. Unversioned
 embeddings cannot be checked and must provide the same host behavior.
 This next major plugin release is the floor change: 2.3
-always runs subagents in the background and reports every child idle
-period, which replaces Slim's argument/description rewrites and its own
-duplicate completion notices.
+always runs subagents in the background and reports every child idle period
+([OpenCode 2.3.0 release](https://github.com/anomalyco/opencode/releases/tag/v2.3.0),
+[canonical changelog](https://opencode.ai/changelog/v2.3.0)), which replaces
+Slim's argument/description rewrites and its own duplicate completion notices.
 Bundled skills use the host's in-process registration channel (`ctx.skill` with
 `add`) on v2. On v1 the config hook adds package skill paths to the host's disk
 scanner, excluding disabled skills and names supplied by the user. MCPs also

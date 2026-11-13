@@ -1618,8 +1618,8 @@ async function refusalFallback(
 ) {
   const host = new Host(root, model);
   await host.configure(installed, 'native', refusalConfig());
-  await host.start();
   try {
+    await host.start();
     const parent = await host.create('refusal chain');
     await checkCase(
       results,
