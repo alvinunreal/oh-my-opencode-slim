@@ -5702,9 +5702,9 @@ describe('plugin foreground fallback host gating', () => {
   });
 
   test('T12: lifecycle wake selects the restored origin over the host fallback', async () => {
-    const createScheduler = wakeHooks.createOrchestratorWakeScheduler;
+    const createScheduler = orchestratorWake.createOrchestratorWakeScheduler;
     const scheduler = spyOn(
-      wakeHooks,
+      orchestratorWake,
       'createOrchestratorWakeScheduler',
     ).mockImplementation((...args) => createScheduler(...args));
     const { client, messages } = createFallbackClient();

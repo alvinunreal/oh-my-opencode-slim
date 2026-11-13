@@ -21,13 +21,12 @@ use the host transform, with existing configured namespaces taking priority.
 Slim does not start a second MCP client or skill loader.
 The adapter targets the v2 plugin API surface (see
 [The v2 plugin API surface](#the-v2-plugin-api-surface-this-adapter-uses)),
-and the compile-time mirror guard below remains pinned to `@opencode/plugin`
-2.2.0. The 2.3.0 plugin package is not yet published to npm; the runtime host
-floor above is 2.3.0. Typecheck covers the consumed listing filters, nullable
-continuation cursors, native execution event envelope, compaction result names
-and the
-existing hook/permission contracts. This is source-contract coverage against
-v2.2.0; the latest live-host smoke baseline remains the version stated below.
+and the compile-time mirror guard below is pinned to `@opencode/plugin`
+2.3.0. Typecheck covers the consumed listing filters, nullable continuation
+cursors, native execution event envelope, compaction result names and
+hook/permission contracts. The official hook set also includes `fork`,
+`experimental.model.resolve`, and `experimental.idle`; Slim does not register
+these host-owned hooks.
 
 The 2.2.0 release adds the Desktop GUI plugin SDK, per-session
 `session.instructions.entry.*`, type-filtered event subscriptions,
@@ -145,7 +144,7 @@ Three host entry builds are produced:
 | `./tui` | `dist/tui2.js` | `build:tui` | same external set as `build:plugin` (thin gate entry + deferred `dist/tui-impl` chunk composing the v1 TUI entry; inlines zod) |
 
 The optional `@opentui/*` dependencies provide the v2 TUI entry's rendering
-stack. The development-only `@opencode/plugin` 2.2.0 contract declares an
+stack. The development-only `@opencode/plugin` 2.3.0 contract declares an
 optional OpenTUI peer floor of `0.7.0`; the runtime pins track that family
 (`@opentui/core`/`@opentui/solid` 0.7.0) so the dependency-contract test and
 the host agree. `@opentui/solid` pins `solid-js` exactly (0.7.0 requires
@@ -182,7 +181,7 @@ Verified live on OpenCode v2 (all bridges green — health check
 name for the chat.headers bridge; the event stream and bridges are exercised end-to-end on the stable host;
 the plugin creates no wake scheduler or child-job tracker on v2; the host owns
 terminal delivery and recovery). v2 conformance is compile-time-pinned by the
-mirror-conformance guard against the `@opencode/plugin` 2.2.0
+mirror-conformance guard against the `@opencode/plugin` 2.3.0
 devDependency and exercised by the mock-driven bridge tests. Every v2
 API the adapter touches is
 capability-probed at runtime (`s.switchModel`, `ctx.generate`, …), so a host

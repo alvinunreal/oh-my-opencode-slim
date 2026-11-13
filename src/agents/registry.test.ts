@@ -21,9 +21,12 @@ import encodedPermissionGolden from './registry-permission-golden.json';
 
 const DIR = 'runtime-test-final-agent-registry';
 
-function runtimeFor(config: Parameters<typeof RuntimeConfig.init>[1]) {
+function runtimeFor(
+  config: Parameters<typeof RuntimeConfig.init>[1],
+  hostFlavor?: string,
+) {
   RuntimeConfig.reset(DIR);
-  return RuntimeConfig.init(DIR, config);
+  return RuntimeConfig.init(DIR, config, hostFlavor);
 }
 
 function build(
@@ -3102,12 +3105,15 @@ describe('child permission payload stance tail', () => {
       Array.from({ length: 100 }, (_, i) => [`src/${i}/*`, 'allow']),
     );
     const registry = build(
-      runtimeFor({
-        disabled_agents: [],
-        agents: {
-          explorer: { permission: { edit: { '*': 'deny', ...edit } } },
+      runtimeFor(
+        {
+          disabled_agents: [],
+          agents: {
+            explorer: { permission: { edit: { '*': 'deny', ...edit } } },
+          },
         },
-      }),
+        'v2',
+      ),
       {},
       { hostFlavor: 'v2' },
     );
@@ -3240,21 +3246,24 @@ describe('child permission payload stance tail', () => {
 
   function duplicateTailFixture() {
     const registry = build(
-      runtimeFor({
-        disabled_agents: [],
-        agents: {
-          explorer: {
-            permission: {
-              edit: {
-                '*': 'deny',
-                'src/a/*': 'allow',
-                'src/b/*': 'allow',
-                'src/c/*': 'allow',
+      runtimeFor(
+        {
+          disabled_agents: [],
+          agents: {
+            explorer: {
+              permission: {
+                edit: {
+                  '*': 'deny',
+                  'src/a/*': 'allow',
+                  'src/b/*': 'allow',
+                  'src/c/*': 'allow',
+                },
               },
             },
           },
         },
-      }),
+        'v2',
+      ),
       {},
       { hostFlavor: 'v2' },
     );

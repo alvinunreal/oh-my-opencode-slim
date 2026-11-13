@@ -3,7 +3,7 @@
  *
  * Compile-time assertions binding the hand-mirrored v2 plugin context in
  * `./types.ts` to the official `@opencode/plugin` types (pinned to the
- * audited version in devDependencies; baseline `2.2.0`). Enforcement
+ * audited version in devDependencies; baseline `2.3.0`). Enforcement
  * point is `bun run typecheck`: this file must NOT carry a test suffix,
  * because tsconfig excludes test-suffixed files (`*.test.ts`) from tsc —
  * a test-suffixed guard silently checks nothing.
@@ -57,7 +57,7 @@ type Equal<A, B> =
 
 /** The deliberately narrow RPC mirror supports only our portable Zod
  * contract. Keep handler inference, cancellation and client location options
- * pinned to the official 2.2.0 API without exporting its dev-only types. */
+ * pinned to the official 2.3.0 API without exporting its dev-only types. */
 type PresetRpc = typeof sessionPresetRpc;
 type _presetRpcPortable = Expect<
   PresetRpc extends Rpc.PortableDefinition ? true : false
@@ -128,23 +128,23 @@ type _rpcCallOptions = Expect<
   Equal<V2PresetRpcCallOptions, Pick<RpcCallOptions, 'location' | 'signal'>>
 >;
 
-/** Official session hook surface as of the pinned @opencode/plugin.
- * `experimental.ws.send`/`receive` were added upstream in 2.0.6 (#49136);
- * the plugin does not register them (experimental, no current consumer),
- * so they appear in the official set only. */
+/** Official 2.3 hook surface, including host-owned hooks Slim does not use. */
 type OfficialSessionHookNames =
+  | 'fork'
   | 'prompt'
   | 'context'
   | 'compaction'
   | 'generate'
   | 'title'
+  | 'experimental.model.resolve'
   | 'model.request'
   | 'http.request'
   | 'http.response'
   | 'experimental.ws.handshake'
   | 'experimental.ws.send'
   | 'experimental.ws.receive'
-  | 'retry';
+  | 'retry'
+  | 'experimental.idle';
 
 /** Layer 1: the official surface is exactly this set — nothing added,
  * removed, or renamed in OpenCode core without this guard failing. */
