@@ -23,7 +23,6 @@ const checkerMocks = {
     latestMajorVersion: null,
     blockedByMajor: false,
   })),
-  getLatestVersion: mock(async () => null),
   getLocalDevVersion: mock(() => null),
   getCurrentRuntimePackageJsonPath: mock(() => null),
   updateInstallerManagedVersions: mock(() => ({ status: 'changed' })),
@@ -161,8 +160,6 @@ describe('auto-update-checker/index', () => {
       latestMajorVersion: null,
       blockedByMajor: false,
     }));
-    checkerMocks.getLatestVersion.mockReset();
-    checkerMocks.getLatestVersion.mockImplementation(async () => null);
     checkerMocks.getLocalDevVersion.mockReset();
     checkerMocks.getLocalDevVersion.mockImplementation(() => null);
     checkerMocks.updateInstallerManagedVersions.mockReset();
@@ -255,7 +252,7 @@ describe('auto-update-checker/index', () => {
 
     expect(showToast).not.toHaveBeenCalled();
     expect(checkerMocks.findPluginEntry).not.toHaveBeenCalled();
-    expect(checkerMocks.getLatestVersion).not.toHaveBeenCalled();
+    expect(checkerMocks.getLatestCompatibleVersion).not.toHaveBeenCalled();
   });
 
   test('shows success toast after updating the active install root', async () => {

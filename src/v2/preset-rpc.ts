@@ -5,6 +5,7 @@ const state = z.object({
   sessionID: z.string(),
   status: z.enum(['bound', 'unbound']),
   presetName: z.string().nullable(),
+  selection: z.enum(['explicit', 'default']).optional(),
   affects: z.literal('future-children-only'),
   team: z
     .object({
@@ -28,6 +29,10 @@ export const sessionPresetRpc = Rpc.define({
       input: z
         .object({ sessionID: z.string().min(1), presetName: z.string().min(1) })
         .strict(),
+      output: state,
+    },
+    unbind: {
+      input: z.object({ sessionID: z.string().min(1) }).strict(),
       output: state,
     },
     createBound: {

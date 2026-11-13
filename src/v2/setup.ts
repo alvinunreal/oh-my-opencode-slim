@@ -29,6 +29,7 @@ import { InterviewConfigSchema } from '../config/schema';
 import type { PluginConfigSnapshot } from '../config/snapshot';
 import { readPluginConfigSnapshot } from '../config/snapshot';
 import { getBuildInfo } from '../generated/build-info';
+import { registerGuiConfigRpc } from '../gui-plugin/register';
 import { getCurrentRuntimePackageJsonPath } from '../hooks/auto-update-checker/runtime-package';
 import {
   isTaggedPart,
@@ -283,12 +284,16 @@ export interface V2SessionContextHandlerDeps {
     input: unknown,
     output: { system: string[] },
   ) => Promise<void>;
-  /** v1 `experimental.chat.messages.transform` hook. */
+  /** v1 `experimental.chat.messages.transform` hook. The second `hints`
+   * argument carries request-scoped facts the v1 signature has no slot for
+   * (currently the model this exact request will run on, so image routing
+   * never keys on a stale session model). */
   messagesTransform?: (
     input: unknown,
     output: {
       messages: Array<{ info: { role: string }; parts: unknown[] }>;
     },
+    hints?: { model?: { providerID: string; id: string } },
   ) => Promise<void>;
   /** Session-frozen runtime profile application: mutates ONLY the request
    * `options` record (temperature/provider options) for a captured child
@@ -648,7 +653,19 @@ export function createSessionContextHandler(
               ) !== undefined,
           ),
         );
-        await deps.messagesTransform({}, { messages: v1messages });
+        const requestModel = v1ModelFromContext(event.model);
+        await deps.messagesTransform(
+          {},
+          { messages: v1messages },
+          requestModel
+            ? {
+                model: {
+                  providerID: requestModel.providerID,
+                  id: requestModel.modelID,
+                },
+              }
+            : undefined,
+        );
         event.messages = v1messages.map((m) => {
           const info = m.info as { content?: unknown; time?: unknown };
           if (projectedTimes.has(info)) delete info.time;
@@ -2930,11 +2947,17 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         setSessionTeamResolver?.(
           (sessionID) => presets.peek(sessionID)?.bundle,
         );
-        if (presets.available && ctx.rpc?.register) {
+        if (
+          presets.available &&
+          ctx.rpc?.register &&
+          isCommandEnabled('preset', { disabledCommands })
+        ) {
           const registration = await ctx.rpc.register(sessionPresetRpc, {
             read: ({ sessionID }) => presets.readState(sessionID),
             apply: ({ sessionID, presetName }, { signal }) =>
               presets.apply(sessionID, presetName, signal),
+            unbind: ({ sessionID }, { signal }) =>
+              presets.reset(sessionID, signal),
             createBound: async ({ presetName }, { signal, error }) => {
               try {
                 return await presets.createBound(presetName, signal);
@@ -2948,6 +2971,23 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             },
           });
           disposers.push(() => registration.dispose());
+        }
+      }
+      if (ctx.rpc?.register) {
+        try {
+          const guiRegistration = await registerGuiConfigRpc(
+            ctx,
+            directory,
+            getBuildInfo().version,
+          );
+          if (guiRegistration) {
+            disposers.push(() => guiRegistration.dispose());
+          }
+        } catch (cause) {
+          log(
+            '[v2] GUI preset RPC unavailable; Desktop editor disabled',
+            cause,
+          );
         }
       }
       try {
@@ -3246,6 +3286,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             o: {
               messages: Array<{ info: { role: string }; parts: unknown[] }>;
             },
+            hints?: { model?: { providerID: string; id: string } },
           ) => Promise<void>)
         | undefined;
       const chatMessage = v1Hooks['chat.message'] as
@@ -3784,6 +3825,9 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                     bundle,
                     explicitModel,
                     ...(model ? { model } : {}),
+                    ...(binding?.selection
+                      ? { selection: binding.selection }
+                      : {}),
                     ...(parentModel
                       ? { inheritedProviderID: parentModel.providerID }
                       : {}),
@@ -3820,7 +3864,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             });
             disposers.push(() => reg.dispose());
           }
-          if (after) {
+          // Before owns the admission captures; after must still run its
+          // cleanup when the v1 factory has no post-tool consumers. Without
+          // captures (`off`) an empty after hook would be pure overhead.
+          if (after || (before && captures)) {
             const reg = await ctx.tool.hook('execute.after', async (event) => {
               try {
                 await bridges.afterBridge(event as never);

@@ -743,6 +743,7 @@ export async function handleToolExecuteAfter(
   deps: {
     directory: string;
     backgroundJobBoard: BackgroundJobBoard;
+    onLaunchConfirmed?: (taskID: string) => void;
     terminalGate: BackgroundJobTerminalGate;
     pendingCallTracker: {
       take(
@@ -980,6 +981,7 @@ export async function handleToolExecuteAfter(
         deps,
       );
       if (!record) return;
+      deps.onLaunchConfirmed?.(record.taskID);
       deps.bindConcurrencyTicket?.(record.taskID, pending);
       deps.clearRehydrateTombstone?.(status.taskID);
       normalizeLateCancelledTaskOutput(
@@ -1088,6 +1090,7 @@ export async function handleToolExecuteAfter(
           },
     );
     if (promoted && !promoted.provisional) {
+      deps.onLaunchConfirmed?.(promoted.taskID);
       deps.bindConcurrencyTicket?.(promoted.taskID, pending);
       if (exactCallConfirmed) {
         deps.backgroundJobSupervisor?.onLaunch(promoted);
@@ -1186,6 +1189,9 @@ function registerTaskOutputLaunch(
     /** Session's first host-confirmed input admission for the child, when
      *  surfaced. Anchors fresh runs only; resumed runs bind their pending. */
     firstAdmission?: FirstAdmissionLookup;
+    /** Observation clock for the launch stamp. Tests inject it to pin the
+     *  run boundary; production omits it and the board uses real time. */
+    now?: () => number;
   },
 ): ReturnType<BackgroundJobBoard['get']> {
   if (deps.isStaleDeletedTaskOutput?.(taskID, pending.lifecycleEpoch)) {
@@ -1257,6 +1263,16 @@ function registerTaskOutputLaunch(
   try {
     return deps.backgroundJobBoard.registerLaunch({
       taskID,
+      // Reaching here with a resumed pending means the host returned the
+      // child's own native output, so the new round was accepted and this
+      // registration is itself activity proof. The relaunch lease is NOT
+      // proof: `task-revive` registers before its host write is accepted
+      // and that path supplies no flag, so it keeps the live fence.
+      ...(resumed ? { resumedRunProven: true as const } : {}),
+      // Observable-clock seam only: production passes nothing, so the board
+      // stamps real time. Tests need the run boundary under their control to
+      // place a busy event before it.
+      ...(deps.now ? { now: deps.now() } : {}),
       parentSessionID: pending.parentSessionId,
       agent: pending.agentType,
       // Identity was unresolved (no-ID drain or window-shifted take):
@@ -1326,6 +1342,7 @@ function registerTaskOutputLaunch(
 export interface RegisterDelegatedLaunchDeps {
   directory: string;
   backgroundJobBoard: BackgroundJobBoard;
+  onLaunchConfirmed?: (taskID: string) => void;
   terminalGate: BackgroundJobTerminalGate;
   backgroundJobSupervisor?: BackgroundJobSupervisor;
   backgroundTaskConcurrency?: BackgroundTaskConcurrency;
@@ -1347,6 +1364,9 @@ export interface RegisterDelegatedLaunchDeps {
   /** Session's first host-confirmed input admission for the child, when
    *  surfaced. Anchors fresh runs only; resumed runs bind their pending. */
   firstAdmission?: FirstAdmissionLookup;
+  /** Observation clock for launch stamps. Tests inject it to pin the run
+   *  boundary; production omits it and the board uses real time. */
+  now?: () => number;
 }
 
 export interface DelegatedLaunchFromStructuredInput {
@@ -1420,6 +1440,7 @@ export async function registerDelegatedLaunchFromStructured(
       deps,
     );
     if (!record) return undefined;
+    deps.onLaunchConfirmed?.(record.taskID);
     if (input.handledByWrapper === true) {
       input.pending.registeredByWrapper = true;
     }

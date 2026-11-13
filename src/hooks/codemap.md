@@ -4,16 +4,15 @@
 
 Implements the plugin's OpenCode lifecycle hooks: message/prompt transforms,
 tool-execute interception, event handling, cache-safe prompt injection, and
-runtime command interception. Each hook is a factory function (barrel-exported
-from `index.ts`) that returns the hook points OpenCode invokes.
+runtime command interception. Each hook is a factory function, imported directly
+from its owning module, that returns the hook points OpenCode invokes.
 
 ## Design
 
 ### Core Architecture
 
 - **Factory leaves**: Optional implementations load inside the feature gate that
-  uses them. `src/index.ts` imports shared leaves directly; the historical
-  `index.ts` barrel remains for tests and local consumers, not the server entry.
+  uses them. `src/index.ts` imports leaves directly; there is no hooks barrel.
 - **SessionLifecycle** (`session-lifecycle.ts`): Coordinator that owns
   `session.deleted` cleanup-callback registration. Stateful hooks register
   cleanup callbacks instead of implementing their own `session.deleted`
@@ -47,7 +46,7 @@ from `index.ts`) that returns the hook points OpenCode invokes.
 | Prompt transforms | `createPhaseReminderHook`, `createCouncilInjectHook`, `createChatHeadersHook`, task-session-manager delivery observation, `processImageAttachments` | `experimental.chat.messages.transform`, `chat.headers` |
 | Tool interception | `createApplyPatchHook` (tool), `createSearchPathGuardHook`, `createCouncilSeatHook`, task-session-manager | `tool.execute.before` / `tool.execute.after` |
 | Error recovery | `createJsonErrorRecoveryHook`, `createAutoUpdateCheckerHook` | message transform, tool-execute after |
-| Lifecycle/event | task-session-manager, `createCacheMonitorHook`, `createOrchestratorWakeScheduler` | `event` |
+| Lifecycle/event | task-session-manager, `createCacheMonitorHook`, `createOrchestratorWakeScheduler`, `createQuestionTimeoutHook` (v1) | `event` |
 | Runtime commands | `createDeepworkCommandHook`, `createReflectCommandHook` | `command.execute.before` |
 | Model fallback | `ForegroundFallbackManager` | event-driven (message.updated/session.error/session.status) |
 
@@ -110,12 +109,15 @@ with one equivalent pass; the cache-safety harness mirrors this wiring.
   (observation only, fails open).
 - `createOrchestratorWakeScheduler` tracks continuous parent idle and triggers
   periodic wake prompts (see its sub-map).
+- `question-timeout/` owns the shared request timer and the opt-in v1 hook.
+  It skips questions that disallow custom answers; replies, rejections, session
+  deletion and plugin disposal clear timers. A turn abort alone does not.
 
 ## Integration
 
 ### Consumers
 
-- **Main Plugin** (`src/index.ts`): imports every factory from `index.ts` and
+- **Main Plugin** (`src/index.ts`): imports every factory from its owning module and
   wires the returned handlers into the plugin's hook object.
 - **Council seats** (`council-seats/`): owns `Seats:`-line seat-result
   assembly. The managed resolver reads the parent-side job board only;

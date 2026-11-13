@@ -152,6 +152,7 @@ function makeCtx(
   const contextHooks: Array<(event: never) => Promise<void>> = [];
   const storageCalls = { get: 0, set: 0, remove: 0, scan: 0 };
   const rpcHandlers: Array<Record<string, unknown>> = [];
+  const rpcDefinitions: unknown[] = [];
   const countedStorage = storage
     ? {
         get: async (key: string) => {
@@ -309,9 +310,10 @@ function makeCtx(
     },
     rpc: {
       register: async (
-        _definition: unknown,
+        definition: unknown,
         handlers: Record<string, unknown>,
       ) => {
+        rpcDefinitions.push(definition);
         rpcHandlers.push(handlers);
         return reg('rpc.register');
       },
@@ -328,6 +330,7 @@ function makeCtx(
     contextHooks,
     storageCalls,
     rpcHandlers,
+    rpcDefinitions,
   };
 }
 
@@ -422,6 +425,74 @@ describe('v2 setup feature gates', () => {
       expect(trailing.content).toEqual([
         { type: 'text', text: INTERVIEW_MARKER },
       ]);
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('disabled preset removes the command and RPC without breaking delegation', async () => {
+    await writeProjectConfig({
+      companion: { enabled: false },
+      backgroundJobs: { mode: 'managed' },
+      disabled_commands: ['preset'],
+    });
+    const { ctx, commandAdds, rpcDefinitions, beforeHooks } =
+      makeCtx(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(commandAdds.map((command) => command.name)).not.toContain(
+        'preset',
+      );
+      expect(rpcDefinitions).not.toContain(sessionPresetRpc);
+      const before = beforeHooks[0];
+      if (!before) throw new Error('tool:execute.before not captured');
+      await expect(before(delegationEvent() as never)).resolves.toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('enabled preset keeps the command and RPC registration', async () => {
+    await writeProjectConfig({
+      companion: { enabled: false },
+      backgroundJobs: { mode: 'managed' },
+    });
+    const { ctx, commandAdds, rpcDefinitions } = makeCtx(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(commandAdds.map((command) => command.name)).toContain('preset');
+      expect(rpcDefinitions).toContain(sessionPresetRpc);
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('no v1 post-tool consumers keeps the native admission cleanup hook', async () => {
+    await writeProjectConfig({
+      companion: { enabled: false },
+      backgroundJobs: { mode: 'managed' },
+      disabled_hooks: ['json-error-recovery', 'tool-loop-guard'],
+    });
+    const { ctx, hooks } = makeCtx(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(hooks).toContain('tool:execute.before');
+      expect(hooks).toContain('tool:execute.after');
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('off mode keeps delegation fully native: no admission capture hook', async () => {
+    await writeProjectConfig({
+      companion: { enabled: false },
+      backgroundJobs: { mode: 'off' },
+      disabled_hooks: ['json-error-recovery', 'tool-loop-guard'],
+    });
+    const { ctx, hooks } = makeCtx(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+    try {
+      expect(hooks).not.toContain('tool:execute.after');
     } finally {
       await cleanup();
     }
@@ -555,7 +626,23 @@ describe('v2 setup feature gates', () => {
     const { ctx, rpcHandlers, commandAdds, storageCalls } = makeCtx(projectDir);
     const cleanup = await createV2Setup()(ctx);
     try {
-      expect(rpcHandlers).toEqual([]);
+      // Only the Desktop config editor RPC remains: it edits config files
+      // and never routes sessions, so it stays available with routing off.
+      expect(
+        rpcHandlers.map((handlers) => Object.keys(handlers).sort()),
+      ).toEqual([
+        [
+          'clearPresetDefault',
+          'createPreset',
+          'deletePreset',
+          'getGoMonthlyLimits',
+          'getSnapshot',
+          'removeAgent',
+          'setAgentDisabled',
+          'setAgentOverride',
+          'switchPreset',
+        ],
+      ]);
       expect(commandAdds.map((entry) => entry.name)).not.toContain('preset');
       expect(storageCalls).toEqual({ get: 0, set: 0, remove: 0, scan: 0 });
     } finally {

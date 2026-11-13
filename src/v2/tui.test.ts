@@ -1351,6 +1351,351 @@ describe('v2 tui preset plugin', () => {
       cleanup?.();
     });
 
+    test('disabled_commands preset keeps the sidebar row informational without activation or RPC reads', async () => {
+      writeUserConfig({
+        ...makeConfig(),
+        disabled_commands: ['preset'],
+        disabled_hooks: ['auto-update-checker'],
+        multiplexer: { type: 'none' },
+      });
+      process.env.XDG_DATA_HOME = path.join(configHome, 'disabled-preset-data');
+      process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '10';
+      const stub = makeSetupCtx();
+      const ui = stub.ctx.ui as {
+        router: { current: () => unknown };
+        dialog?: unknown;
+      };
+      ui.router.current = () => ({ type: 'session', sessionID: 'root-a' });
+      const selectCalls: unknown[] = [];
+      ui.dialog = {
+        select: async (args: unknown) => {
+          selectCalls.push(args);
+          return undefined;
+        },
+        prompt: async () => undefined,
+        confirm: async () => undefined,
+      };
+      const reads: unknown[] = [];
+      stub.ctx.client = {
+        model: { list: async () => [] },
+        rpc: () => ({
+          read: async (input: unknown) => {
+            reads.push(input);
+            return {
+              sessionID: 'root-a',
+              status: 'bound',
+              presetName: 'server-team',
+              affects: 'future-children-only',
+            };
+          },
+        }),
+      };
+      let cleanup: (() => void) | undefined;
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        const sidebar = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        if (!sidebar?.render) throw new Error('Sidebar slot missing');
+        screen = await testRender(() => sidebar.render?.() as never, {
+          width: 80,
+          height: 24,
+        });
+        await screen.renderOnce();
+        const lines = () => screen?.captureCharFrame().split('\n') ?? [];
+        const presetLine = () =>
+          lines().findIndex((line) => line.includes('Preset'));
+        // The informational row survives with the configured default: it never
+        // shows the session's server binding, and it renders in the same
+        // muted, non-interactive style a host without dialogs produces.
+        expect(lines()[presetLine()]).toContain('Preset balanced');
+        expect(lines()[presetLine()]).not.toContain('▸');
+        expect(screen.captureCharFrame()).not.toContain('server-team');
+        const presetValue = screen
+          .captureSpans()
+          .lines.flatMap((line) => line.spans)
+          .find((span) => span.text.includes('balanced'));
+        expect(presetValue?.fg.r).toBeCloseTo(138 / 255);
+        expect(presetValue?.fg.g).toBeCloseTo(138 / 255);
+        expect(reads).toHaveLength(0);
+
+        // Clicking the row opens nothing.
+        const column = (lines()[presetLine()]?.indexOf('balanced') ?? 0) + 1;
+        await screen.mockMouse.click(column, presetLine());
+        await screen.flush();
+        expect(selectCalls).toHaveLength(0);
+
+        // A completed refresh cycle (proven by the new snapshot reaching the
+        // frame) still issues no session-preset read for the disabled command.
+        recordTuiAgentModels(
+          { agentModels: { oracle: 'openai/gpt-5-mini' } },
+          projectDir,
+        );
+        await waitFor(async () => {
+          await screen?.renderOnce();
+          return lines().some((line) => line.includes('oracle'));
+        }, 10_000);
+        expect(reads).toHaveLength(0);
+        expect(selectCalls).toHaveLength(0);
+      } finally {
+        cleanup?.();
+        screen?.renderer.destroy();
+      }
+    }, 20_000);
+
+    test('enabled preset keeps the sidebar row activation and session-preset reads', async () => {
+      writeUserConfig({
+        ...makeConfig(),
+        disabled_hooks: ['auto-update-checker'],
+        multiplexer: { type: 'none' },
+      });
+      process.env.XDG_DATA_HOME = path.join(configHome, 'enabled-preset-data');
+      process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '60000';
+      const stub = makeSetupCtx();
+      const ui = stub.ctx.ui as {
+        router: { current: () => unknown };
+        dialog?: unknown;
+      };
+      ui.router.current = () => ({ type: 'session', sessionID: 'root-a' });
+      const selectCalls: Array<{ title?: string }> = [];
+      ui.dialog = {
+        select: async (args: { title?: string }) => {
+          selectCalls.push(args);
+          return undefined;
+        },
+        prompt: async () => undefined,
+        confirm: async () => undefined,
+      };
+      const reads: unknown[] = [];
+      stub.ctx.client = {
+        model: { list: async () => [] },
+        rpc: () => ({
+          read: async (input: unknown) => {
+            reads.push(input);
+            return {
+              sessionID: 'root-a',
+              status: 'bound',
+              presetName: 'server-team',
+              affects: 'future-children-only',
+            };
+          },
+        }),
+      };
+      let cleanup: (() => void) | undefined;
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        await waitFor(() => reads.length > 0);
+        const sidebar = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        if (!sidebar?.render) throw new Error('Sidebar slot missing');
+        screen = await testRender(() => sidebar.render?.() as never, {
+          width: 80,
+          height: 24,
+        });
+        await screen.renderOnce();
+        const lines = () => screen?.captureCharFrame().split('\n') ?? [];
+        const presetLine = () =>
+          lines().findIndex((line) => line.includes('Preset'));
+        expect(lines()[presetLine()]).toContain(
+          'Preset server-team · default balanced',
+        );
+        expect(lines()[presetLine()]).toContain('▸');
+        const presetValue = screen
+          .captureSpans()
+          .lines.flatMap((line) => line.spans)
+          .find((span) => span.text.includes('server-team'));
+        expect(presetValue?.fg.r).toBeCloseTo(240 / 255);
+
+        // The row still opens the manager.
+        const column = (lines()[presetLine()]?.indexOf('server-team') ?? 0) + 1;
+        await screen.mockMouse.click(column, presetLine());
+        await waitFor(() => selectCalls.length > 0);
+        expect(selectCalls[0]?.title).toContain('Presets');
+      } finally {
+        cleanup?.();
+        screen?.renderer.destroy();
+      }
+    }, 20_000);
+
+    test('preset gate follows the project switch instead of the setup directory', async () => {
+      writeUserConfig({
+        ...makeConfig(),
+        disabled_hooks: ['auto-update-checker'],
+        multiplexer: { type: 'none' },
+      });
+      // The first project disables the command; the second does not.
+      fs.mkdirSync(path.join(projectDir, '.opencode'), { recursive: true });
+      fs.writeFileSync(
+        path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+        JSON.stringify({ disabled_commands: ['preset'] }),
+      );
+      const otherProject = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'omos-tui2-proj2-'),
+      );
+      fs.mkdirSync(path.join(otherProject, '.opencode'), { recursive: true });
+      fs.writeFileSync(
+        path.join(otherProject, '.opencode', 'oh-my-opencode-slim.json'),
+        JSON.stringify({}),
+      );
+      process.env.XDG_DATA_HOME = path.join(configHome, 'switch-preset-data');
+      process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '10';
+      const [directory, setDirectory] = createSignal(projectDir);
+      const stub = makeSetupCtx();
+      const ui = stub.ctx.ui as {
+        router: { current: () => unknown };
+        dialog?: unknown;
+      };
+      ui.router.current = () => ({ type: 'session', sessionID: 'root-a' });
+      const selectCalls: unknown[] = [];
+      ui.dialog = {
+        select: async (args: unknown) => {
+          selectCalls.push(args);
+          return undefined;
+        },
+        prompt: async () => undefined,
+        confirm: async () => undefined,
+      };
+      Object.defineProperty(stub.ctx, 'location', {
+        get: () => ({ directory: directory() }),
+      });
+      const reads: unknown[] = [];
+      stub.ctx.client = {
+        rpc: () => ({
+          read: async (input: unknown) => {
+            reads.push(input);
+            return {
+              sessionID: 'root-a',
+              status: 'bound',
+              presetName: 'server-team',
+              affects: 'future-children-only',
+            };
+          },
+        }),
+      };
+      let cleanup: (() => void) | undefined;
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        const sidebar = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        if (!sidebar?.render) throw new Error('Sidebar slot missing');
+        screen = await testRender(() => sidebar.render?.() as never, {
+          width: 80,
+          height: 24,
+        });
+        await screen.renderOnce();
+        const frame = () => screen?.captureCharFrame() ?? '';
+        // Disabled in the first project: information only, no binding read.
+        expect(frame()).toContain('Preset balanced');
+        expect(frame()).not.toContain('▸');
+        expect(reads).toHaveLength(0);
+
+        setDirectory(otherProject);
+        await waitFor(() => reads.length > 0);
+        await waitFor(() => frame().includes('server-team'));
+        expect(reads.length).toBeGreaterThan(0);
+        expect(frame()).toContain('Preset server-team · default balanced');
+        expect(frame()).toContain('▸');
+      } finally {
+        cleanup?.();
+        screen?.renderer.destroy();
+        fs.rmSync(otherProject, { recursive: true, force: true });
+      }
+    }, 20_000);
+
+    test('disabling preset while idle repaints the row and stops binding reads', async () => {
+      writeUserConfig({
+        ...makeConfig(),
+        disabled_hooks: ['auto-update-checker'],
+        multiplexer: { type: 'none' },
+      });
+      process.env.XDG_DATA_HOME = path.join(configHome, 'idle-preset-data');
+      process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '10';
+      const stub = makeSetupCtx();
+      const ui = stub.ctx.ui as {
+        router: { current: () => unknown };
+        dialog?: unknown;
+      };
+      ui.router.current = () => ({ type: 'session', sessionID: 'root-a' });
+      const selectCalls: unknown[] = [];
+      ui.dialog = {
+        select: async (args: unknown) => {
+          selectCalls.push(args);
+          return undefined;
+        },
+        prompt: async () => undefined,
+        confirm: async () => undefined,
+      };
+      const reads: unknown[] = [];
+      stub.ctx.client = {
+        rpc: () => ({
+          read: async (input: unknown) => {
+            reads.push(input);
+            return {
+              sessionID: 'root-a',
+              status: 'bound',
+              presetName: 'server-team',
+              affects: 'future-children-only',
+            };
+          },
+        }),
+      };
+      let cleanup: (() => void) | undefined;
+      let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          stub.ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        const sidebar = stub.slotClaims.find(
+          (slot) => slot.append === 'sidebar.content',
+        );
+        if (!sidebar?.render) throw new Error('Sidebar slot missing');
+        screen = await testRender(() => sidebar.render?.() as never, {
+          width: 80,
+          height: 24,
+        });
+        await screen.renderOnce();
+        const frame = () => screen?.captureCharFrame() ?? '';
+        await waitFor(() => frame().includes('server-team'));
+        expect(frame()).toContain('▸');
+
+        // Only `disabled_commands` changes; the gate must reach the rendered
+        // row, not just the binding reads.
+        writeUserConfig({
+          ...makeConfig(),
+          disabled_commands: ['preset'],
+          disabled_hooks: ['auto-update-checker'],
+          multiplexer: { type: 'none' },
+        });
+        await waitFor(() => !frame().includes('▸'));
+        expect(frame()).toContain('Preset balanced');
+        expect(frame()).not.toContain('server-team');
+        const readsAfterDisable = reads.length;
+        // Clicking the now-informational row must not open the manager.
+        const lines = frame().split('\n');
+        const row = lines.findIndex((line) => line.includes('Preset'));
+        const column = (lines[row]?.indexOf('balanced') ?? 0) + 1;
+        await screen.mockMouse.click(column, row);
+        await screen.flush();
+        expect(selectCalls).toHaveLength(0);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(reads.length).toBe(readsAfterDisable);
+      } finally {
+        cleanup?.();
+        screen?.renderer.destroy();
+      }
+    }, 20_000);
+
     test('disabled_commands killall/subagent remove their keymap commands', async () => {
       writeUserConfig({ disabled_commands: ['killall', 'subagent'] });
       const stub = makeSetupCtx();

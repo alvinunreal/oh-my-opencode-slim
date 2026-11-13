@@ -18,30 +18,10 @@ import { log } from '../../utils/logger';
 import { assembleCouncilPrompt, parseSeatRefs } from './assemble';
 import type { SeatResultResolver } from './types';
 
-export {
-  assembleCouncilPrompt,
-  buildSeatPrompt,
-  parseSeatRefs,
-  SEAT_REASONS,
-  SEATS_LINE_PATTERN,
-  seatBodyOf,
-} from './assemble';
-export { createManagedSeatResolver } from './managed';
-export type {
-  NativeSeatResolverOptions,
-  NativeSeatTimers,
-} from './native';
-export {
-  createNativeSeatResolver,
-  DEFAULT_NATIVE_SEAT_TIMEOUT_MS,
-} from './native';
-export type { SeatRequest, SeatResult, SeatResultResolver } from './types';
-
 const COUNCIL_AGENT = 'council';
 const DELEGATION_TOOLS = new Set(['task', 'subagent']);
 
-/** v1/v2 tool.execute.before input shapes (see src/hooks/index.ts wiring
- * and the v2→v1 bridge in src/v2/setup.ts). */
+/** v1/v2 tool.execute.before input shapes (see the v2→v1 bridge in src/v2/setup.ts). */
 interface ToolExecuteBeforeInput {
   tool: string;
   sessionID?: string;

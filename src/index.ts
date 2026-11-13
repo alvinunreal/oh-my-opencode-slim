@@ -400,6 +400,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   /** Managed lifecycle gate; survives init for the v2 extension hooks below. */
   let lifecycleEnabled = false;
   let instanceDisposed = false;
+  let questionTimeoutHook:
+    | ReturnType<
+        typeof import('./hooks/question-timeout')['createQuestionTimeoutHook']
+      >
+    | undefined;
   let companionStartupAbort: AbortController | undefined;
   const marketplaceLeaseAbort = new AbortController();
   // v1 task() has no model override. Prompts claim these bounded intentions
@@ -456,6 +461,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       lifecycleSelectionReader,
       sessionMetadata,
     );
+    const restore =
+      hostFlavor !== 'v2'
+        ? foregroundFallback?.restoreTarget(sessionID)
+        : undefined;
+    const restoreModel = modelFromMetadataString(restore?.model);
+    if (restore && restoreModel) {
+      return { ...resolved, model: restoreModel, variant: restore.variant };
+    }
     const internalOverride = v1InternalSelectionOverrides.get(sessionID);
     if (!internalOverride) return resolved;
 
@@ -657,10 +670,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     | ReturnType<typeof createAbsolutePathRescueHook>
     | undefined;
   let toolLoopGuard: ToolLoopGuardHook | undefined;
-  let jsonErrorRecoveryAfter: (i: unknown, o: unknown) => Promise<void> =
-    async () => {};
-  let taskSessionManagerAfter: (i: unknown, o: unknown) => Promise<void> =
-    async () => {};
+  let jsonErrorRecoveryAfter:
+    | ((i: unknown, o: unknown) => Promise<void>)
+    | undefined;
+  let taskSessionManagerAfter:
+    | ((i: unknown, o: unknown) => Promise<void>)
+    | undefined;
   let backgroundJobBoard: BackgroundJobBoard | undefined;
   // Shared by task management and control tools; initialized only with
   // managed lifecycle.
@@ -916,6 +931,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       );
     }
     config = cloneConfigValue(startupConfigSnapshot.config);
+    if (hostFlavor !== 'v2' && (config.questionTimeoutMs ?? 0) > 0) {
+      const { createQuestionTimeoutHook } = await import(
+        './hooks/question-timeout'
+      );
+      questionTimeoutHook = createQuestionTimeoutHook({
+        ctx,
+        timeoutMs: config.questionTimeoutMs,
+        hostFlavor,
+      });
+    }
     // Seed the per-directory runtime registry with the raw plugin file
     // config. The runtime preset reapplication below mutates `config` for
     // legacy consumers; RuntimeConfig keeps the pre-mutation snapshot and
@@ -1731,9 +1756,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
     }
 
-    if (runtime.updateCheckerEnabled) {
-      // Initialize auto-update checker hook; the implementation (updater
-      // graph) loads only through this gate.
+    if (hostFlavor !== 'v2' && runtime.updateCheckerEnabled) {
+      // v2 owns package checks/installation; its TUI adds the Slim notice.
+      // The v1 updater cannot install or display feedback through the shim.
       const { createAutoUpdateCheckerHook } = await import(
         './hooks/auto-update-checker'
       );
@@ -2066,6 +2091,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         ? taskMessageToolModule.createTaskMessageTool({
             input: ctx,
             backgroundJobBoard: backgroundJobBoard!,
+            restoreTarget: (sessionID) =>
+              foregroundFallback?.restoreTarget(sessionID),
             resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
             isDisposed: () => instanceDisposed,
           })
@@ -2162,6 +2189,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       );
     }
   } catch (err) {
+    questionTimeoutHook?.dispose();
     terminalGate?.dispose();
     backgroundJobSupervisor?.dispose();
     admissionRuntimeLease?.release();
@@ -3129,12 +3157,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
                 : {};
             removeLegacySkillSyncState(undefined, runtime.disabledSkills);
             skills.paths = [
-              ...(Array.isArray(skills.paths) ? skills.paths : []),
-              ...getV1BundledSkillPaths(
-                dirname(packageJson),
-                ctx.directory,
-                runtime.disabledSkills,
-              ),
+              ...new Set([
+                ...(Array.isArray(skills.paths) ? skills.paths : []),
+                ...getV1BundledSkillPaths(
+                  dirname(packageJson),
+                  ctx.directory,
+                  runtime.disabledSkills,
+                ),
+              ]),
             ];
             opencodeConfig.skills = skills;
           }
@@ -3277,6 +3307,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       withTuiSnapshotBatch(async () => {
         if (input.event.type === 'server.instance.disposed') {
           instanceDisposed = true;
+          questionTimeoutHook?.dispose();
           companionStartupAbort?.abort();
           marketplaceLeaseAbort.abort();
           terminalGate?.dispose();
@@ -3295,6 +3326,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           await observeForeignTaskEvent(input);
           return;
         }
+        questionTimeoutHook?.event(
+          input.event as Parameters<
+            NonNullable<typeof questionTimeoutHook>['event']
+          >[0],
+        );
 
         const event = input.event as {
           type: string;
@@ -3682,6 +3718,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     dispose: async () => {
       eventDirectoryScope?.release();
+      questionTimeoutHook?.dispose();
       // Synchronous: v2 setup calls this directly and does not emit the
       // public server.instance.disposed event first.
       instanceDisposed = true;
@@ -4096,6 +4133,19 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           trackedModelText,
         );
       }
+      if (hostFlavor !== 'v2' && internalAdmission && output?.message?.model) {
+        const restore = foregroundFallback?.restoreTarget(input.sessionID);
+        if (
+          restore &&
+          `${output.message.model.providerID}/${output.message.model.modelID}` ===
+            restore.model
+        ) {
+          foregroundFallback?.observeContinuationModel(
+            input.sessionID,
+            restore.model,
+          );
+        }
+      }
       if (rewroteInternalSelection) {
         v1InternalSelectionOverrides.set(input.sessionID, {
           ...(trackedAgent ? { agent: trackedAgent } : {}),
@@ -4304,6 +4354,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'experimental.chat.messages.transform': async (
       input: Record<string, never>,
       output: { messages: unknown[] },
+      hints?: { model?: { providerID: string; id: string } },
     ): Promise<void> => {
       const typedOutput = output as { messages: MessageWithParts[] };
       let view = createMessageTransformView(typedOutput.messages);
@@ -4337,19 +4388,25 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // input, the API call fails before the LLM can respond. We replace
       // image bytes with a text nudge so the orchestrator delegates to
       // @observer instead.
-      // auto routing keys on the turn's model: vision-capable models keep
-      // image parts inline (native read); only non-vision chains fall back
-      // to the observer relay. chat.message records the turn's model just
-      // before this handler runs; the fallback chain covers mid-session
-      // model switches.
-      // `input` is an empty shell in this handler; use the sessionID
-      // extracted from the messages above.
-      const turnModelRef = sessionID
-        ? parseModelRef(
-            foregroundFallback?.getActiveFallback(sessionID)?.model ??
-              sessionMetadata.getModel(sessionID),
-          )
+      // auto routing keys on the model that will actually serve this
+      // request: vision-capable models keep image parts inline (native
+      // read); only non-vision chains fall back to the observer relay.
+      // On v2 the context bridge passes the request model as `hints.model`
+      // (the host resolves it before the context hook, and a per-request
+      // router may swap it) — that beats the session's last-recorded model.
+      // v1 hosts have no such seam, so the fallback chain and session
+      // metadata remain the source there.
+      const hintModel = hints?.model
+        ? { providerID: hints.model.providerID, id: hints.model.id }
         : undefined;
+      const turnModelRef =
+        hintModel ??
+        (sessionID
+          ? parseModelRef(
+              foregroundFallback?.getActiveFallback(sessionID)?.model ??
+                sessionMetadata.getModel(sessionID),
+            )
+          : undefined);
       const hasImageParts =
         runtime.imageRouting !== 'direct' &&
         !!turnModelRef &&
@@ -4446,14 +4503,17 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
     },
 
-    'tool.execute.after': async (input, output) => {
-      await jsonErrorRecoveryAfter(input, output);
-      await toolLoopGuard?.['tool.execute.after'](
-        input as never,
-        output as never,
-      );
-      if (taskSessionManagerHook) await taskSessionManagerAfter(input, output);
-    },
+    'tool.execute.after':
+      jsonErrorRecoveryAfter || toolLoopGuard || taskSessionManagerAfter
+        ? async (input, output) => {
+            await jsonErrorRecoveryAfter?.(input, output);
+            await toolLoopGuard?.['tool.execute.after'](
+              input as never,
+              output as never,
+            );
+            await taskSessionManagerAfter?.(input, output);
+          }
+        : undefined,
   } as Hooks & {
     'v2.pendingRefusalOutcome':
       | ForegroundFallbackManager['pendingRefusalOutcome']

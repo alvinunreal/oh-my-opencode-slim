@@ -103,6 +103,18 @@ export interface BackgroundJobRecord {
   /** Host-admitted steers whose jobs deliver this terminal revision. */
   hostSteerCover?: { revision: number; calls: number };
   lastLiveBusyAt?: number;
+  /**
+   * This generation was registered from a resume whose native executor the
+   * caller already observed running, so registration itself is activity
+   * proof and the event fence need not wait for a busy event.
+   *
+   * A relaunch lease is deliberately NOT proof: it is this plugin's
+   * ownership token, acquired before the host write, so it exists during the
+   * window when a late generationless event from the previous run could be
+   * misattributed to this one. Absent on provisional, adopted, and
+   * lease-only relaunch observations.
+   */
+  resumedRunProven?: true;
   completedAt?: number;
   resultSummary?: string;
   lastStatusError?: string;
@@ -220,6 +232,15 @@ export interface BackgroundJobLaunchInput {
   preserveRun?: boolean;
   /** Host admission id of this run's opening input, when known. */
   runInputMessageID?: string;
+  /**
+   * The caller observed the host already running this resumed child. The
+   * registration is itself activity proof, so the event fence need not wait
+   * for a busy event that may be stamped before this registration.
+   *
+   * A relaunch lease is NOT an acceptable substitute: it is acquired before
+   * the host write, so it proves ownership, not that a new run began.
+   */
+  resumedRunProven?: true;
   /**
    * This plugin's own tracked native task call launched a fresh background
    * child (not a resume). Ignored for adopted/provisional input and for
@@ -717,6 +738,7 @@ export class BackgroundJobBoard {
         hostSteerCover: undefined,
         lastLiveBusyAt: now,
         lastUsedAt: now,
+        resumedRunProven: input.resumedRunProven === true ? true : undefined,
       } satisfies BackgroundJobRecord;
       this.setJob(updated);
       this.persistBackgroundChild(updated, {});
@@ -844,6 +866,9 @@ export class BackgroundJobBoard {
       runStartedAt: now,
       lastLiveBusyAt: now,
       lastUsedAt: now,
+      ...(input.resumedRunProven === true
+        ? { resumedRunProven: true as const }
+        : {}),
       alias:
         input.adopted || !this.isNumberedAliasReady(input.parentSessionID)
           ? input.taskID

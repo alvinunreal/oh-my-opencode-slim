@@ -90,6 +90,23 @@ disk state only; they do not mutate the current session's agent registry. See
 the [Marketplace guide](marketplace.md) for activation, status, and reload
 commands.
 
+Set `questionTimeoutMs` to opt in to an automatic response when an eligible
+question is unanswered. The value is in milliseconds: `0` or an omitted value
+disables it; enabled values range from `60000` to `2147483647`.
+
+```jsonc
+{
+  "questionTimeoutMs": 1200000
+}
+```
+
+The reply tells the model how long it waited and asks it to decide and continue.
+Permission requests and questions that disallow custom answers remain pending. On v1 the
+server owns the timer. On v2 an OMOS TUI must be attached and `tui` must be
+enabled; a server without that TUI does not auto-answer. Restart the TUI after
+changing the setting. A TUI restarted while a question is already open does not
+re-arm that question.
+
 The TUI sidebar uses the compact layout by default. Set `compactSidebar` to
 `false` in `oh-my-opencode-slim.jsonc` to use the expanded layout:
 
@@ -328,7 +345,7 @@ and [Council](council.md) for what remains.
 | `acpAgents.<name>.permissionMode` | string | `ask` | How ACP permission requests are handled: `ask`, `allow`, or `reject` See [ACP-connected agents](#acp-connected-agents). |
 | `acpAgents.<name>.timeoutMs` | integer | `0` | Timeout for a single ACP run in milliseconds. `0` disables the timeout so external agents can run indefinitely. Finite values can be up to `2147483647`ms (~24.8 days) See [ACP-connected agents](#acp-connected-agents). |
 | `disabled_agents` | string[] | `["observer"]` | Agent names to disable globally. Set to `[]` to enable Observer; this is global, not per-preset See [Custom Agents](#custom-agents). |
-| `image_routing` | `"auto"` \| `"direct"` | omitted (legacy conditional) | Optional. When omitted, resolves to `"auto"` if Observer is enabled, otherwise `"direct"`. Explicit `"auto"` saves image attachments under `.opencode/images/<session>/` and nudges delegation to @observer; saved images remain until you remove them. `"direct"` always passes image parts to the orchestrator. Remove saved images with `rm -rf .opencode/images/` (or a single session subdirectory) when they are no longer needed; session-less messages save images at the top level. |
+| `image_routing` | `"auto"` \| `"direct"` | omitted (legacy conditional) | Optional. When omitted, resolves to `"auto"` if Observer is enabled, otherwise `"direct"`. Explicit `"auto"` saves image attachments under `.opencode/images/<session>/` and nudges delegation to @observer; saved images remain until you remove them. `"direct"` always passes image parts to the orchestrator. Remove saved images with `rm -rf .opencode/images/` (or a single session subdirectory) when they are no longer needed; session-less messages save images at the top level. The automatic save covers pasted PNG/JPEG/GIF/WebP attachments only: PDFs, images produced by tools, and any image the turn model visibly accepts stay inline. |
 | `autoUpdate` | boolean | `true` | Master switch for OMOS plugin updates. When `false`, no update check, notification, or automatic installation runs. Either this or `disabled_hooks: ["auto-update-checker"]` disables the same update path. |
 | `multiplexer.type` | string | `"none"` | Multiplexer mode: `auto`, `tmux`, `zellij`, `herdr`, `cmux-tui`, `kitty`, `wezterm`, `orca`, or `none` See [Multiplexer Integration](multiplexer-integration.md). On OpenCode v2 hosts, panes work with the shared background service or an explicit `--server`; `--standalone` hosts ignore the setting (one diagnostic per process). |
 | `multiplexer.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Each adapter maps it to its nearest native expression (tmux full layouts; split directions for Zellij/Herdr; built-in layouts for kitty; split order for WezTerm); cmux-tui has no layout expression and ignores it. Herdr builds an agent area for both `main-*` layouts (`main-vertical` agent column, `main-horizontal` agent row) and re-equalizes only its agent panes after each spawn/close. See [Multiplexer Integration](multiplexer-integration.md#layouts). |

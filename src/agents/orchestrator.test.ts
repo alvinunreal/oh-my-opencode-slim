@@ -307,7 +307,7 @@ describe('createAgents orchestrator prompt gates', () => {
       expect(prompt).toBe(
         buildOrchestratorPrompt({
           disabledAgents: new Set(['observer', 'council', 'councillor']),
-          agentSkills: { oracle: 'simplify, requesting-code-review' },
+          agentSkills: { oracle: 'simplify' },
           hostFlavor,
         }),
       );

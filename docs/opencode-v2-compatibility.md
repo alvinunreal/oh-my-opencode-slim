@@ -10,7 +10,9 @@ v3.0.5**, with historical live host verification on **OpenCode v2.0.7**. The
 plugin requires OpenCode v2.0.7+ on v2 hosts; older v2 hosts are unsupported.
 Bundled skills use the host's in-process registration channel (`ctx.skill` with
 `add`) on v2. On v1 the config hook adds package skill paths to the host's disk
-scanner, excluding disabled skills and names supplied by the user.
+scanner, excluding disabled skills and names supplied by the user. MCPs also
+use the host transform, with existing configured namespaces taking priority.
+Slim does not start a second MCP client or skill loader.
 The adapter targets the v2 plugin API surface (see
 [The v2 plugin API surface](#the-v2-plugin-api-surface-this-adapter-uses)),
 and the compile-time mirror guard below is pinned to `@opencode/plugin`
@@ -26,7 +28,16 @@ event-type union at setup and subscribes to Interview text streams only when
 Interview is enabled. It consumes none of the GUI surface and retains the
 existing promise-adapter bridges. The native patch tool is
 still named `patch` with a `{ patchText }` input, and the apply-patch preflight
-now serves both that name and v1's `apply_patch`.
+now serves both that name and v1's `apply_patch`. Native schema input repair
+and Slim's invalid-JSON failure reminder have different triggers: one repairs
+arguments before execution, the other only reminds after a malformed call.
+Likewise, `/goal` owns its idle judge loop while `deepwork-goal` only restores
+a disk progress pointer lost to compaction. Their existing switches and
+defaults are retained.
+
+On v2, package checks and installation remain host-owned. Slim does not load
+its v1 server updater through the v2 shim; the TUI keeps its update toast/badge
+because the host does not publish the latest version string.
 
 The 2.1 replay renames do not require rewriting host-owned data here: the
 compaction bridge leaves `result.native` and `metadata.keepID` untouched.
@@ -103,6 +114,14 @@ plugin rejected with "invalid tui export".
   its own `kind: "tui"` loader pass over the same plugin list and resolves
   the entry through the package's `exports["./tui"]` map — the server-side
   export plays no role in that discovery.
+
+The opt-in `questionTimeoutMs` setting runs in the OMOS TUI on v2 because the
+server plugin session API has no form-reply domain. It requires `tui` to be
+enabled and an attached OMOS TUI. A headless server or pane viewer does not own
+the timer. Restarting the TUI does not re-arm questions that were already open.
+V1 runs the same feature in its server plugin. See
+[Configuration Reference](configuration.md) for the accepted range and safety
+limits.
 
 The host entry builds retain their public paths and include ESM chunks for
 optional implementations. Install or copy the complete package: an entry file

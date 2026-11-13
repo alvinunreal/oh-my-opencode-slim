@@ -1,6 +1,7 @@
 /// <reference types="bun-types" />
 
 import { describe, expect, test } from 'bun:test';
+import { CUSTOM_SKILLS } from './custom-skills';
 import { generateLiteConfig, MODEL_MAPPINGS } from './providers';
 
 describe('providers', () => {
@@ -127,9 +128,8 @@ describe('providers', () => {
     // Orchestrator should always have '*'
     expect(agents.orchestrator.skills).toEqual(['*']);
 
-    // Oracle should have bundled simplify
-    expect(agents.oracle.skills).toContain('simplify');
-    expect(agents.oracle.skills).toContain('requesting-code-review');
+    // Oracle should only have bundled simplify
+    expect(agents.oracle.skills).toEqual(['simplify']);
 
     // Orchestrator should implicitly cover bundled codemap via '*'
     expect(agents.orchestrator.skills).toContain('*');
@@ -142,6 +142,24 @@ describe('providers', () => {
 
     // Fixer should have no bundled skills by default
     expect(agents.fixer.skills).toEqual([]);
+  });
+
+  test('generateLiteConfig only grants skills the plugin bundles', () => {
+    const config = generateLiteConfig({
+      backgroundSubagents: 'no',
+      reset: false,
+    });
+
+    // The install provides only bundled skills, so any other name in a
+    // generated preset can point at a skill that does not exist (#1867).
+    const bundled = new Set(CUSTOM_SKILLS.map((skill) => skill.name));
+    const granted = Object.values(config.presets as any).flatMap(
+      (preset: any) =>
+        Object.values(preset).flatMap((agent: any) => agent.skills),
+    );
+    expect(
+      granted.filter((name) => name !== '*' && !bundled.has(name)),
+    ).toEqual([]);
   });
 
   test('generateLiteConfig omits mcps (runtime defaults apply)', () => {

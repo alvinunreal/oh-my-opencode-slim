@@ -1020,11 +1020,11 @@ export function createInterviewService(
       };
     }
 
-    const normalized = normalizeAssistantState(
-      state as unknown as Record<string, unknown>,
-      maxQuestions,
-    );
     try {
+      const normalized = normalizeAssistantState(
+        state as unknown as Record<string, unknown>,
+        maxQuestions,
+      );
       const outcome = await applyStateToDocument(interview, normalized);
       if (outcome.patchError) {
         const memory = memoryFor(interview.id);
@@ -1512,7 +1512,11 @@ export function createInterviewService(
         if (activeQuestionIds.size === 0) {
           throw new Error('There are no active interview questions to answer.');
         }
-        if (answers.length !== activeQuestionIds.size) {
+        if (
+          answers.length !== activeQuestionIds.size ||
+          new Set(answers.map((answer) => answer.questionId)).size !==
+            activeQuestionIds.size
+        ) {
           throw new Error(
             'Answer every active interview question before submitting.',
           );
