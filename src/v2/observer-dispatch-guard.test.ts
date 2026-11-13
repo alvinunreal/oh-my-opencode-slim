@@ -37,18 +37,15 @@ interface GuardHarnessOptions {
   }) => Promise<Array<Record<string, unknown>>>;
   /** Omit the host context read entirely. */
   withoutContext?: boolean;
-  getSession?: (input: { sessionID: string }) => Promise<unknown>;
   accepts?: (ref: ModelImageCapabilityRef) => Promise<boolean | undefined>;
 }
 
 function observe(options: GuardHarnessOptions = {}) {
   const contextReads: Array<{ sessionID: string }> = [];
   const capabilityReads: ModelImageCapabilityRef[] = [];
-  const getSessionReads: Array<{ sessionID: string }> = [];
   const contextImpl =
     options.context ??
     (async () => (options.rows ?? []) as Array<Record<string, unknown>>);
-  const getSessionImpl = options.getSession;
   const guard = createObserverDispatchGuard({
     observerNames:
       options.observerNames ?? (() => options.names ?? ['observer']),
@@ -60,20 +57,12 @@ function observe(options: GuardHarnessOptions = {}) {
             return contextImpl(input);
           },
         }),
-    ...(getSessionImpl
-      ? {
-          getSession: async (input: { sessionID: string }) => {
-            getSessionReads.push(input);
-            return getSessionImpl(input);
-          },
-        }
-      : {}),
     acceptsImages: async (ref) => {
       capabilityReads.push(ref);
       return options.accepts ? options.accepts(ref) : true;
     },
   });
-  return { guard, contextReads, capabilityReads, getSessionReads };
+  return { guard, contextReads, capabilityReads };
 }
 
 async function rejection(promise: Promise<unknown>): Promise<unknown> {
@@ -420,228 +409,6 @@ describe('createObserverDispatchGuard', () => {
     expect(rows[0]).toEqual(assistantRow('msg_call', VISION));
   });
 
-  test('refuses an omitted-agent observer resume on a known vision caller', async () => {
-    const { guard, getSessionReads, contextReads, capabilityReads } = observe({
-      rows: [assistantRow('msg_call', VISION)],
-      getSession: async () => ({
-        id: 'ses_observer_child',
-        parentID: 'ses_parent',
-        agent: 'observer',
-      }),
-    });
-
-    expectRefusal(
-      await rejection(
-        guard(
-          makeEvent({
-            input: {
-              sessionID: 'ses_observer_child',
-              prompt: 'continue the analysis',
-            },
-          }),
-        ),
-      ),
-    );
-    expect(getSessionReads).toEqual([{ sessionID: 'ses_observer_child' }]);
-    expect(contextReads).toEqual([{ sessionID: 'ses_parent' }]);
-    expect(capabilityReads).toEqual([VISION]);
-  });
-
-  test('allows an omitted-agent observer resume on a text-only caller', async () => {
-    const { guard, getSessionReads, capabilityReads } = observe({
-      rows: [assistantRow('msg_call', TEXT_ONLY)],
-      accepts: async () => false,
-      getSession: async () => ({
-        id: 'ses_observer_child',
-        parentID: 'ses_parent',
-        agent: 'observer',
-      }),
-    });
-
-    await expect(
-      guard(
-        makeEvent({
-          input: { sessionID: 'ses_observer_child', prompt: 'continue' },
-        }),
-      ),
-    ).resolves.toBeUndefined();
-    expect(getSessionReads).toEqual([{ sessionID: 'ses_observer_child' }]);
-    expect(capabilityReads).toEqual([TEXT_ONLY]);
-  });
-
-  test('allows an omitted-agent nonobserver resume with no context or capability reads', async () => {
-    const { guard, getSessionReads, contextReads, capabilityReads } = observe({
-      rows: [assistantRow('msg_call', VISION)],
-      getSession: async () => ({
-        id: 'ses_child',
-        parentID: 'ses_parent',
-        agent: 'fixer',
-      }),
-    });
-
-    await expect(
-      guard(
-        makeEvent({
-          input: { sessionID: 'ses_child', prompt: 'continue' },
-        }),
-      ),
-    ).resolves.toBeUndefined();
-    expect(getSessionReads).toEqual([{ sessionID: 'ses_child' }]);
-    expect(contextReads).toHaveLength(0);
-    expect(capabilityReads).toHaveLength(0);
-  });
-
-  test('leaves a foreign-parent or malformed child resume to native validation', async () => {
-    const childPayloads: unknown[] = [
-      { id: 'ses_child', parentID: 'ses_other', agent: 'observer' },
-      { id: 'ses_child', agent: 'observer' },
-      { id: 'ses_child', parentID: 'ses_parent' },
-      { id: 'ses_child', parentID: 'ses_parent', agent: '' },
-      { id: 'ses_child', parentID: 'ses_parent', agent: 42 },
-      { id: 'ses_child', parentID: 'ses_parent', agent: null },
-      null,
-      'not-an-object',
-      { data: { parentID: 'ses_other', agent: 'observer' } },
-    ];
-
-    for (const payload of childPayloads) {
-      const { guard, getSessionReads, contextReads, capabilityReads } = observe(
-        {
-          rows: [assistantRow('msg_call', VISION)],
-          getSession: async () => payload,
-        },
-      );
-      await expect(
-        guard(
-          makeEvent({
-            input: { sessionID: 'ses_child', prompt: 'continue' },
-          }),
-        ),
-      ).resolves.toBeUndefined();
-      expect(getSessionReads).toEqual([{ sessionID: 'ses_child' }]);
-      expect(contextReads).toHaveLength(0);
-      expect(capabilityReads).toHaveLength(0);
-    }
-  });
-
-  test('unwraps a data-wrapped session.get payload for an omitted-agent resume', async () => {
-    const { guard, capabilityReads } = observe({
-      rows: [assistantRow('msg_call', VISION)],
-      names: ['observer', 'visual-analyst'],
-      getSession: async () => ({
-        data: {
-          id: 'ses_child',
-          parentID: 'ses_parent',
-          agent: 'visual-analyst',
-        },
-      }),
-    });
-
-    expectRefusal(
-      await rejection(
-        guard(
-          makeEvent({ input: { sessionID: 'ses_child', prompt: 'continue' } }),
-        ),
-      ),
-    );
-    expect(capabilityReads).toEqual([VISION]);
-  });
-
-  test('fails open when session.get throws for an omitted-agent resume', async () => {
-    const { guard, getSessionReads, contextReads, capabilityReads } = observe({
-      rows: [assistantRow('msg_call', VISION)],
-      getSession: async () => {
-        throw new Error('session.get failed');
-      },
-    });
-
-    await expect(
-      guard(
-        makeEvent({ input: { sessionID: 'ses_child', prompt: 'continue' } }),
-      ),
-    ).resolves.toBeUndefined();
-    expect(getSessionReads).toEqual([{ sessionID: 'ses_child' }]);
-    expect(contextReads).toHaveLength(0);
-    expect(capabilityReads).toHaveLength(0);
-  });
-
-  test('allows an omitted-agent resume untouched when session.get is absent', async () => {
-    const { guard, getSessionReads, contextReads, capabilityReads } = observe({
-      rows: [assistantRow('msg_call', VISION)],
-    });
-
-    await expect(
-      guard(
-        makeEvent({ input: { sessionID: 'ses_child', prompt: 'continue' } }),
-      ),
-    ).resolves.toBeUndefined();
-    expect(getSessionReads).toHaveLength(0);
-    expect(contextReads).toHaveLength(0);
-    expect(capabilityReads).toHaveLength(0);
-  });
-
-  test('normalizes a legacy task_id resume and prefers a canonical sessionID', async () => {
-    const { guard, getSessionReads } = observe({
-      rows: [assistantRow('msg_call', VISION)],
-      getSession: async () => ({
-        id: 'ses_child',
-        parentID: 'ses_parent',
-        agent: 'observer',
-      }),
-    });
-
-    expectRefusal(
-      await rejection(
-        guard(
-          makeEvent({ input: { task_id: 'ses_legacy', prompt: 'continue' } }),
-        ),
-      ),
-    );
-    expectRefusal(
-      await rejection(
-        guard(
-          makeEvent({
-            input: {
-              sessionID: 'ses_canonical',
-              task_id: 'ses_legacy',
-              prompt: 'continue',
-            },
-          }),
-        ),
-      ),
-    );
-    expect(getSessionReads).toEqual([
-      { sessionID: 'ses_legacy' },
-      { sessionID: 'ses_canonical' },
-    ]);
-  });
-
-  test('explicit nonobserver target with a resume id performs zero host reads', async () => {
-    const { guard, getSessionReads, contextReads, capabilityReads } = observe({
-      rows: [assistantRow('msg_call', VISION)],
-      getSession: async () => ({
-        id: 'ses_child',
-        parentID: 'ses_parent',
-        agent: 'observer',
-      }),
-    });
-
-    await expect(
-      guard(
-        makeEvent({
-          input: {
-            agent: 'fixer',
-            sessionID: 'ses_child',
-            prompt: 'continue',
-          },
-        }),
-      ),
-    ).resolves.toBeUndefined();
-    expect(getSessionReads).toHaveLength(0);
-    expect(contextReads).toHaveLength(0);
-    expect(capabilityReads).toHaveLength(0);
-  });
-
   test('a throwing name resolver degrades to canonical observer only', async () => {
     const { guard, contextReads, capabilityReads } = observe({
       rows: [assistantRow('msg_call', VISION)],
@@ -665,16 +432,11 @@ describe('createObserverDispatchGuard', () => {
   });
 
   test('a throwing name resolver never rejects unrelated calls', async () => {
-    const { guard, getSessionReads, contextReads, capabilityReads } = observe({
+    const { guard, contextReads, capabilityReads } = observe({
       rows: [assistantRow('msg_call', VISION)],
       observerNames: () => {
         throw new Error('registry not finalized');
       },
-      getSession: async () => ({
-        id: 'ses_child',
-        parentID: 'ses_parent',
-        agent: 'observer',
-      }),
     });
 
     await expect(
@@ -688,15 +450,8 @@ describe('createObserverDispatchGuard', () => {
         }),
       ),
     ).resolves.toBeUndefined();
-    // Canonical still classifies an omitted-agent observer resume.
-    expectRefusal(
-      await rejection(
-        guard(
-          makeEvent({ input: { sessionID: 'ses_child', prompt: 'continue' } }),
-        ),
-      ),
-    );
-    expect(getSessionReads).toEqual([{ sessionID: 'ses_child' }]);
+    // Canonical still classifies an alias-named observer call.
+    expectRefusal(await rejection(guard(makeEvent())));
     expect(contextReads).toEqual([{ sessionID: 'ses_parent' }]);
     expect(capabilityReads).toEqual([VISION]);
   });

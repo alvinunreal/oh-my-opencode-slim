@@ -3872,9 +3872,6 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                   context: sessionContextRead
                     ? ({ sessionID }) => sessionContextRead(sessionID)
                     : undefined,
-                  getSession: ctx.session.get
-                    ? async (input) => ctx.session.get?.(input)
-                    : undefined,
                   acceptsImages: (ref) =>
                     modelAcceptsImageInput(ref, {
                       ...(ctx.model?.list ? { modelDomain: ctx.model } : {}),

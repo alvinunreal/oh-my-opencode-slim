@@ -2,8 +2,11 @@
  * Native v2 `subagent` policy: delegating to Observer is unnecessary when the
  * calling model accepts images. Reads only the exact tool-call assistant row
  * plus the injected host registry; any failure or unknown result proceeds
- * natively. Missing-agent continuations are classified once from the native
- * child session (parentID ownership first). No executor, ledger, or state.
+ * natively. No executor, ledger, or state.
+ *
+ * Resume calls must name the agent: the host schema requires it, so an
+ * omitted-agent input is a dead call the host validator rejects — no
+ * classification needed here.
  */
 
 import { isRecord } from '../utils/guards';
@@ -23,8 +26,6 @@ export interface ObserverDispatchGuardOptions {
   context?: (input: {
     sessionID: string;
   }) => Promise<Array<Record<string, unknown>>>;
-  /** Native session.get, used only to classify a continuation without agent. */
-  getSession?: (input: { sessionID: string }) => Promise<unknown>;
   acceptsImages: (ref: ModelImageCapabilityRef) => Promise<boolean | undefined>;
   /** Deterministic scheduling seam (tests); production uses real timers. */
   timers?: TimerSeam;
@@ -33,7 +34,6 @@ export interface ObserverDispatchGuardOptions {
 export function createObserverDispatchGuard({
   observerNames,
   context,
-  getSession,
   acceptsImages,
   timers,
 }: ObserverDispatchGuardOptions): (event: V2ToolBeforeEvent) => Promise<void> {
@@ -53,21 +53,10 @@ export function createObserverDispatchGuard({
     const matchesObserver = (name: string) =>
       name === OBSERVER || names.includes(name);
 
+    // The host schema requires `agent`; anything but an observer-targeting
+    // string is left to the host validator without a single read.
     const agent = input.agent;
-    let resumeID: string | undefined;
-    if (typeof agent === 'string') {
-      if (!matchesObserver(agent)) return; // explicit nonobserver: zero reads
-    } else if (agent === undefined) {
-      // OMOS normalizes a legacy task_id into the native sessionID; canonical
-      // sessionID wins when present.
-      const resume =
-        input.sessionID !== undefined ? input.sessionID : input.task_id;
-      resumeID =
-        typeof resume === 'string' && resume.length > 0 ? resume : undefined;
-      if (!resumeID || !getSession) return;
-    } else {
-      return; // malformed explicit agent -> host validator owns the reject
-    }
+    if (typeof agent !== 'string' || !matchesObserver(agent)) return;
 
     const { messageID, sessionID } = event;
     if (
@@ -83,23 +72,6 @@ export function createObserverDispatchGuard({
     try {
       accepts = await withTimeout(
         (async () => {
-          if (resumeID) {
-            const child = await getSession?.({ sessionID: resumeID });
-            const data = isRecord(child) ? child.data : undefined;
-            const info =
-              isRecord(data) && ('parentID' in data || 'agent' in data)
-                ? data
-                : child;
-            if (!isRecord(info) || info.parentID !== sessionID) return;
-            const childAgent = info.agent;
-            if (
-              typeof childAgent !== 'string' ||
-              childAgent.length === 0 ||
-              !matchesObserver(childAgent)
-            )
-              return;
-          }
-
           const rows = await context?.({ sessionID });
           const row = Array.isArray(rows)
             ? rows.find(
