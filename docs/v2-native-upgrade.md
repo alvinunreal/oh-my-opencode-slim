@@ -6,7 +6,9 @@ chooses the release version and publishes the upgrade notice before release;
 this change does not bump or publish the package.
 
 OpenCode **2.3.0+** is required on V2: native subagents always run in the
-background and the host reports every settled child period. Parseable versions
+background and the host reports every settled child period
+([release](https://github.com/anomalyco/opencode/releases/tag/v2.3.0),
+[changelog](https://opencode.ai/changelog/v2.3.0)). Parseable versions
 below stable 2.3.0 (including `2.3.0-dev`) fail setup with upgrade guidance.
 Unversioned embeddings cannot be checked and must provide the same host
 behavior. V1 is unchanged.
