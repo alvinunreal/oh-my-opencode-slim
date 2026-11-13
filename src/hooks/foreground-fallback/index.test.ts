@@ -10528,6 +10528,7 @@ describe('ForegroundFallbackManager forgetSession cleanup', () => {
     'sessionModel',
     'sessionParent',
     'activeFallback',
+    'restoredFrom',
     'downProviders',
     'sessionAgent',
     'separateCompaction',
@@ -10657,6 +10658,7 @@ describe('ForegroundFallbackManager dispose cleanup', () => {
     'observedUserMessageIds',
     'separateCompaction',
     'downProviders',
+    'restoredFrom',
     'authGrace',
   ])('%s is cleared on dispose', (mapName) => {
     const mgr = new ForegroundFallbackManager(
@@ -12668,6 +12670,8 @@ describe('fallback restoration', () => {
   const sid = 'restore-session';
   const ttl = 30 * 60 * 1000;
   const origin = { providerID: 'primary', id: 'a', variant: 'high' };
+  const backup = { providerID: 'backup', id: 'b' };
+  const outage = { status: 503, message: 'provider unavailable' };
   const rejection = { type: 'provider.content-filter', message: 'blocked' };
   const idle = (activityAt = clock.now()) => ({
     type: 'session.idle',
@@ -12683,6 +12687,7 @@ describe('fallback restoration', () => {
     promptAsyncImpl?: (args: unknown) => Promise<unknown>;
     chain?: string[];
     unarmedHandoff?: boolean;
+    retryDelayMs?: number;
   }) {
     const info: {
       model:
@@ -12695,7 +12700,7 @@ describe('fallback restoration', () => {
       agent: 'orchestrator',
       parentID: options?.parentID,
     };
-    const { client, session } = createMockClient({
+    const { client, session, mocks } = createMockClient({
       getData: info,
       promptAsyncImpl: options?.promptAsyncImpl,
     });
@@ -12712,7 +12717,7 @@ describe('fallback restoration', () => {
       enabled: false,
       v2RetryEnabled: true,
       maxRetries: 0,
-      retryDelayMs: 0,
+      retryDelayMs: options?.retryDelayMs ?? 0,
       input: {
         directory: '/test',
         hostFlavor: 'v2',
@@ -12769,7 +12774,68 @@ describe('fallback restoration', () => {
       retry,
       refuse,
       session,
+      mocks,
     };
+  }
+
+  async function startStep(
+    manager: ForegroundFallbackManager,
+    assistantMessageID: string,
+    model: { providerID: string; id: string; variant?: string },
+  ) {
+    await manager.handleEvent({
+      type: 'session.step.started',
+      data: {
+        sessionID: sid,
+        assistantMessageID,
+        agent: 'orchestrator',
+        model,
+      },
+    });
+  }
+
+  async function toolStep(
+    manager: ForegroundFallbackManager,
+    assistantMessageID?: string,
+  ) {
+    await manager.handleEvent({
+      type: 'session.step.ended',
+      data: { sessionID: sid, assistantMessageID, finish: 'tool-calls' },
+    });
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+  }
+
+  async function restoreWithInFlightStep(f: ReturnType<typeof fixture>) {
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    await clock.advance(ttl);
+    await toolStep(f.manager);
+    // The host can start this step before the event subscriber restores.
+    await startStep(f.manager, 'in-flight', backup);
+  }
+
+  async function restoreWithPendingAck(f: ReturnType<typeof fixture>) {
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    await startStep(f.manager, 'before-restore', backup);
+    await clock.advance(ttl);
+    const applied = deferred<void>();
+    const ack = Promise.withResolvers<void>();
+    const lookup = deferred<{ data: typeof f.info }>();
+    const get = f.session.get;
+    f.session.get = mock(() => lookup.promise);
+    f.switchModel.mockImplementationOnce(async (_sessionID, model) => {
+      f.info.model = model;
+      applied.resolve();
+      await ack.promise;
+    });
+    const pending = toolStep(f.manager, 'before-restore');
+    expect((f.manager as any).restoredFrom.has(sid)).toBe(false);
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    f.session.get = get;
+    lookup.resolve({ data: f.info });
+    await applied.promise;
+    return { ack, pending };
   }
 
   async function replay(error: unknown = rejection) {
@@ -12814,6 +12880,414 @@ describe('fallback restoration', () => {
     });
     return { manager, changed };
   }
+
+  test('mid-turn restores after the original outage deadline even after another switch', async () => {
+    const f = fixture({
+      chain: ['primary/a', 'primary/y', 'backup/b', 'third/c'],
+    });
+    const sibling = { providerID: 'primary', id: 'y' };
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    expect(f.info.model).toEqual(sibling);
+    await clock.advance(ttl / 2);
+    await f.retry(sibling, rejection);
+    await f.retry(backup, { message: 'usage limit reached' });
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(3);
+    expect(clock.pending()).toBe(0);
+    await clock.advance(ttl / 2 - 1);
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(3);
+    await clock.advance(1);
+    await f.manager.handleEvent({
+      type: 'session.step.ended',
+      data: { sessionID: sid, finish: 'length' },
+    });
+    expect(f.switchModel).toHaveBeenCalledTimes(3);
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+    expect(f.manager.getActiveFallback(sid)).toBeUndefined();
+  });
+
+  test('mid-turn does not probe a spent quota even after a later outage', async () => {
+    const f = fixture();
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, { message: 'usage limit reached' });
+    await f.retry(backup, outage);
+    await clock.advance(ttl);
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+    expect(f.info.model).toEqual({ providerID: 'third', id: 'c' });
+  });
+
+  test('mid-turn does not probe permanent billing failures', async () => {
+    const initial = fixture();
+    await initial.manager.handleEvent(busy());
+    await initial.retry(origin, { status: 402, message: 'payment required' });
+    await clock.advance(ttl);
+    await toolStep(initial.manager);
+    expect(initial.switchModel).toHaveBeenCalledTimes(1);
+    expect(initial.info.model).toEqual(backup);
+    initial.manager.dispose();
+
+    const f = fixture({ chain: ['primary/a', 'primary/y', 'backup/b'] });
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    await f.retry(
+      { providerID: 'primary', id: 'y' },
+      { status: 402, message: 'payment required' },
+    );
+    await clock.advance(ttl);
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+  });
+
+  test('mid-turn does not probe a request rejection even after a later outage', async () => {
+    const f = fixture();
+    await f.manager.handleEvent(busy());
+    await f.retry();
+    await f.retry(backup, outage);
+    await clock.advance(ttl);
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+    await f.manager.handleEvent(idle());
+    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('mid-turn repeated outages start a fresh deadline without timers', async () => {
+    const f = fixture();
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    await clock.advance(ttl);
+    await toolStep(f.manager);
+    expect(f.info.model).toEqual(origin);
+    await f.retry(origin, outage);
+    expect(f.info.model).toEqual(backup);
+    await toolStep(f.manager);
+    await clock.advance(ttl - 1);
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(3);
+    expect(clock.pending()).toBe(0);
+    await clock.advance(1);
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(4);
+    expect(f.info.model).toEqual(origin);
+  });
+
+  test('mid-turn preserves a manually selected fallback variant', async () => {
+    const f = fixture();
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    f.info.model = { ...backup, variant: 'manual' };
+    await clock.advance(ttl);
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(1);
+    expect(f.info.model).toEqual({ ...backup, variant: 'manual' });
+    expect(f.manager.getActiveFallback(sid)).toBeUndefined();
+  });
+
+  test('F1 queued fallback success retains attribution for the next fallback refusal', async () => {
+    const f = fixture();
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    await startStep(f.manager, 'fallback-n', backup);
+    await clock.advance(ttl);
+    await toolStep(f.manager, 'fallback-n');
+    expect(f.info.model).toEqual(origin);
+    await startStep(f.manager, 'fallback-n1', backup);
+    await toolStep(f.manager, 'fallback-n1');
+    await f.refuse('fallback-n2', backup);
+    expect(await f.manager.pendingRefusalOutcome(sid, 'fallback-n2')).toBe(
+      'primary/a',
+    );
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+    expect(f.mocks.promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('F2 spent quota on the origin provider disables a later mid-turn probe', async () => {
+    const f = fixture({ chain: ['primary/a', 'primary/y', 'backup/b'] });
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    await f.retry(
+      { providerID: 'primary', id: 'y' },
+      { message: 'usage limit reached' },
+    );
+    expect(f.info.model).toEqual(backup);
+    await toolStep(f.manager);
+    await clock.advance(ttl);
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+    expect(f.info.model).toEqual(backup);
+  });
+
+  test('mid-turn keeps the child reattachment fence after a later refusal', async () => {
+    const f = fixture({ parentID: 'parent' });
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    await f.refuse('child-refusal', backup);
+    await clock.advance(ttl);
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+    await f.manager.handleEvent(busy());
+    await toolStep(f.manager);
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+    f.manager.noteV2Prompt(sid);
+    await toolStep(f.manager);
+    expect(f.info.model).toEqual(origin);
+  });
+
+  test('N1 retry hook during restore ACK keeps the original and spent-quota evidence', async () => {
+    const f = fixture();
+    const { ack, pending } = await restoreWithPendingAck(f);
+    const event = {
+      sessionID: sid,
+      agent: 'orchestrator',
+      model: backup,
+      error: { message: 'usage limit reached' },
+      decision: { retry: false },
+    };
+    await f.manager.handleV2Retry(event, f.switchModel);
+    const callsBeforeAck = f.switchModel.mock.calls.length;
+    ack.resolve();
+    await pending;
+    expect(event.decision).toEqual({ retry: true, delay: 0 });
+    expect(callsBeforeAck).toBe(2);
+    expect(f.info.model).toEqual(origin);
+    expect(f.manager.getActiveFallback(sid)).toBeUndefined();
+    expect((f.manager as any).restoredFrom.has(sid)).toBe(false);
+    await f.retry(origin, outage);
+    expect(f.info.model).toEqual({ providerID: 'third', id: 'c' });
+    f.manager.dispose();
+
+    const failed = fixture();
+    const waiting = await restoreWithPendingAck(failed);
+    waiting.ack.reject(new Error('restore rejected'));
+    await waiting.pending;
+    expect((failed.manager as any).restoredFrom.has(sid)).toBe(false);
+    expect(failed.manager.getActiveFallback(sid)?.model).toBe('backup/b');
+  });
+
+  test('N1 child waiter during restore ACK reattaches on the original', async () => {
+    const f = fixture({ parentID: 'parent' });
+    const { ack, pending } = await restoreWithPendingAck(f);
+    const outcome = await f.manager.refusedChildOutcome(sid, {
+      id: 'in-flight-child',
+      type: 'assistant',
+      agent: 'orchestrator',
+      model: backup,
+      finish: 'content-filter',
+      error: rejection,
+      time: { created: clock.now() - 1, completed: clock.now() },
+    });
+    ack.resolve();
+    await pending;
+    expect(outcome).toBe('primary/a');
+    expect((f.manager as any).reattachPending.has(sid)).toBe(true);
+    expect((f.manager as any).restoredFrom.has(sid)).toBe(false);
+    expect(f.info.model).toEqual(origin);
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+    expect(f.mocks.promptAsync).not.toHaveBeenCalled();
+    f.manager.noteV2Prompt(sid);
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    expect(f.info.model).toEqual({ providerID: 'third', id: 'c' });
+  });
+
+  test('F3 late request rejection excludes the failed fallback on the next outage', async () => {
+    const provider = fixture({ retryDelayMs: 250 });
+    await restoreWithInFlightStep(provider);
+    expect(provider.info.model).toEqual(origin);
+    const providerEvent = {
+      sessionID: sid,
+      agent: 'orchestrator',
+      model: backup,
+      error: outage,
+      decision: { retry: false, delay: 900 },
+    };
+    await provider.manager.handleV2Retry(providerEvent, provider.switchModel);
+    expect(providerEvent.decision).toEqual({ retry: true, delay: 250 });
+    expect(provider.info.model).toEqual(origin);
+    expect(provider.switchModel).toHaveBeenCalledTimes(2);
+    expect(provider.manager.getActiveFallback(sid)).toBeUndefined();
+    provider.manager.dispose();
+
+    const f = fixture();
+    await restoreWithInFlightStep(f);
+    const event = {
+      sessionID: sid,
+      agent: 'orchestrator',
+      model: backup,
+      error: rejection,
+      decision: { retry: false },
+    };
+    await f.manager.handleV2Retry(event, f.switchModel);
+    expect(event.decision).toEqual({ retry: true, delay: 0 });
+    expect(f.info.model).toEqual(origin);
+    await f.retry(origin, outage);
+    expect(f.info.model).toEqual({ providerID: 'third', id: 'c' });
+  });
+
+  test('F3 late spent quota excludes the failed provider on the next outage', async () => {
+    const f = fixture();
+    await restoreWithInFlightStep(f);
+    const event = {
+      sessionID: sid,
+      agent: 'orchestrator',
+      model: backup,
+      error: { message: 'usage limit reached' },
+      decision: { retry: false },
+    };
+    await f.manager.handleV2Retry(event, f.switchModel);
+    expect(event.decision).toEqual({ retry: true, delay: 0 });
+    expect(f.info.model).toEqual(origin);
+    await f.retry(origin, outage);
+    expect(f.info.model).toEqual({ providerID: 'third', id: 'c' });
+  });
+
+  test('F4 interrupted run drops attribution on a new external prompt', async () => {
+    const f = fixture();
+    await restoreWithInFlightStep(f);
+    for (const event of mapV2EventToV1({
+      type: 'session.execution.interrupted',
+      data: { sessionID: sid, reason: 'abort' },
+    }))
+      await f.manager.handleEvent(event);
+    const bridge = createSessionPromptBridge(
+      async () => {},
+      undefined,
+      (sessionID, messageID) =>
+        f.manager.observeExternalPromptIntent(sessionID, messageID),
+    );
+    bridge.observePromptIntent({
+      sessionID: sid,
+      messageID: 'new-external',
+      prompt: { text: 'continue on the selected model' },
+    } as never);
+    f.info.model = backup;
+    await f.retry(backup, outage);
+    expect(f.switchModel).toHaveBeenCalledTimes(3);
+    expect(f.info.model).toEqual({ providerID: 'primary', id: 'a' });
+    expect(f.manager.getActiveFallback(sid)?.model).toBe('primary/a');
+  });
+
+  test('mid-turn success clears attribution of the previous fallback', async () => {
+    const f = fixture();
+    await restoreWithInFlightStep(f);
+    expect(f.info.model).toEqual(origin);
+    await startStep(f.manager, 'original-success', origin);
+    await f.manager.handleEvent({
+      type: 'session.step.ended',
+      data: {
+        sessionID: sid,
+        assistantMessageID: 'original-success',
+        finish: 'stop',
+      },
+    });
+    expect((f.manager as any).restoredFrom.has(sid)).toBe(false);
+    await f.retry(origin, outage);
+    expect(f.info.model).toEqual(backup);
+    await f.retry(backup, outage);
+    expect(f.info.model).toEqual({ providerID: 'third', id: 'c' });
+  });
+
+  test('mid-turn consumes attribution on a nonmatching retry', async () => {
+    const f = fixture();
+    await restoreWithInFlightStep(f);
+    expect(f.info.model).toEqual(origin);
+    await f.retry(origin, outage);
+    await f.retry(backup, outage);
+    expect(f.info.model).toEqual({ providerID: 'third', id: 'c' });
+    expect(f.switchModel).toHaveBeenCalledTimes(4);
+  });
+
+  test('mid-turn late refusal respects a manual variant selected after restoration', async () => {
+    const f = fixture();
+    await restoreWithInFlightStep(f);
+    f.info.model = { ...origin, variant: 'manual' };
+    await f.manager.handleEvent({
+      type: 'session.step.failed',
+      data: {
+        sessionID: sid,
+        assistantMessageID: 'in-flight',
+        finish: 'content-filter',
+        error: rejection,
+      },
+    });
+    expect(
+      await f.manager.pendingRefusalOutcome(sid, 'in-flight'),
+    ).toBeUndefined();
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+    expect(f.mocks.promptAsync).not.toHaveBeenCalled();
+    expect(f.info.model).toEqual({ ...origin, variant: 'manual' });
+  });
+
+  test('mid-turn late root refusal continues on the origin and excludes the rejected fallback', async () => {
+    const f = fixture();
+    await restoreWithInFlightStep(f);
+    expect(f.info.model).toEqual(origin);
+    await f.manager.handleEvent({
+      type: 'session.step.failed',
+      data: {
+        sessionID: sid,
+        assistantMessageID: 'in-flight',
+        finish: 'content-filter',
+        error: rejection,
+      },
+    });
+    expect(await f.manager.pendingRefusalOutcome(sid, 'in-flight')).toBe(
+      'primary/a',
+    );
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+    expect(f.mocks.promptAsync).toHaveBeenCalledTimes(1);
+    const request = f.mocks.promptAsync.mock.calls[0]?.[0] as {
+      body: { agent: string; model?: unknown; parts: unknown[] };
+    };
+    expect(request.body.agent).toBe('orchestrator');
+    expect(request.body.model).toBeUndefined();
+    expect(isInternalInitiatorPart(request.body.parts[0])).toBe(true);
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    expect(f.info.model).toEqual({ providerID: 'third', id: 'c' });
+  });
+
+  test('mid-turn late child refusal reattaches without a model and excludes the rejected fallback', async () => {
+    const f = fixture({ parentID: 'parent' });
+    await restoreWithInFlightStep(f);
+    expect(f.info.model).toEqual(origin);
+    const wrapper = createSubagentExecutorWrapper({
+      register: () => {},
+      context: async () => [
+        {
+          id: 'in-flight',
+          type: 'assistant',
+          agent: 'orchestrator',
+          model: backup,
+          finish: 'content-filter',
+          error: rejection,
+          time: { created: clock.now() - 1, completed: clock.now() },
+        },
+      ],
+      refusalOutcome: (...args) => f.manager.refusedChildOutcome(...args),
+    });
+    const execute = mock(async () => {
+      if (execute.mock.calls.length === 1)
+        throw new Error(`Subagent failed (sessionID: ${sid}): blocked`);
+      return { output: { sessionID: sid, status: 'completed' } };
+    });
+    await wrapper.wrap(execute)(
+      { agent: 'orchestrator', model: 'backup/b' },
+      { id: 'call', sessionID: 'parent' },
+    );
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute.mock.calls[1]?.[0]).not.toHaveProperty('model');
+    expect(f.mocks.promptAsync).not.toHaveBeenCalled();
+    expect(f.info.model).toEqual(origin);
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+    f.manager.noteV2Prompt(sid);
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    expect(f.info.model).toEqual({ providerID: 'third', id: 'c' });
+  });
 
   test('T1: v2 restores the first origin and variant after multiple switches', async () => {
     const f = fixture();
