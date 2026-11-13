@@ -15,6 +15,7 @@
  */
 
 import path from 'node:path';
+import { lt, valid } from 'semver';
 import type { RegistryFactoryBridge } from '../agents/registry-bridge';
 import {
   buildBundledSkillInfos,
@@ -2183,19 +2184,15 @@ const MINIMUM_V2_HOST_VERSION = '2.3.0';
  * child idle period. Older v2 hosts would silently lose refusal recovery,
  * so fail before registering anything when the version is parseable. */
 function assertSupportedV2Host(ctx: V2Context): void {
-  const version = ctx.app?.version;
-  const match =
-    typeof version === 'string'
-      ? /^v?(\d+)\.(\d+)\.(\d+)(?:[-+][\w.-]+)?$/.exec(version)
-      : null;
-  if (!match) {
+  const rawVersion = ctx.app?.version;
+  const version = typeof rawVersion === 'string' ? valid(rawVersion) : null;
+  if (!version) {
     log('[v2] host version is not semver; skipping minimum check', {
-      version,
+      version: rawVersion,
     });
     return;
   }
-  const [major, minor] = [Number(match[1]), Number(match[2])];
-  if (major < 2 || (major === 2 && minor < 3)) {
+  if (lt(version, MINIMUM_V2_HOST_VERSION)) {
     throw new Error(
       `OpenCode ${version} is unsupported: oh-my-opencode-slim requires OpenCode ${MINIMUM_V2_HOST_VERSION} or newer on v2 hosts.`,
     );

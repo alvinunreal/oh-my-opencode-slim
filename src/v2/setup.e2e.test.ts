@@ -2014,7 +2014,13 @@ describe('createV2Setup e2e', () => {
       (ctx.app as { version: string }).version = version;
     };
 
-    for (const version of ['1.0.0', 'v2.2.7', '2.2.9']) {
+    for (const version of [
+      '1.0.0',
+      'v2.2.7',
+      '2.2.9',
+      '2.3.0-dev',
+      '2.3.0-rc.1+build',
+    ]) {
       test(`rejects ${version} before any registration`, async () => {
         const { ctx, calls } = makeMockV2Context(projectDir);
         setVersion(ctx, version);
@@ -2026,7 +2032,7 @@ describe('createV2Setup e2e', () => {
       }, 20_000);
     }
 
-    for (const version of ['2.3.0', '2.3.0-dev', 'v2.3.0', '3.0.0']) {
+    for (const version of ['2.3.0', '2.3.0+build', 'v2.3.0', '3.0.0']) {
       test(`accepts ${version} and completes registration`, async () => {
         const { ctx, calls } = makeMockV2Context(projectDir);
         setVersion(ctx, version);

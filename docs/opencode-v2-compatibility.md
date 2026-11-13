@@ -7,8 +7,10 @@ register it.
 
 The source baseline for this compatibility work is **oh-my-opencode-slim
 v3.0.5**, with historical live host verification on **OpenCode v2.0.7**. The
-plugin requires OpenCode **2.3.0+** on v2 hosts; older v2 hosts fail setup with
-an upgrade message. This next major plugin release is the floor change: 2.3
+plugin requires OpenCode **2.3.0+** on v2 hosts; parseable versions below stable
+2.3.0 (including `2.3.0-dev`) fail setup with an upgrade message. Unversioned
+embeddings cannot be checked and must provide the same host behavior.
+This next major plugin release is the floor change: 2.3
 always runs subagents in the background and reports every child idle
 period, which replaces Slim's argument/description rewrites and its own
 duplicate completion notices.
