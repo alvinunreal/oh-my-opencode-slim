@@ -461,6 +461,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       lifecycleSelectionReader,
       sessionMetadata,
     );
+    const restore =
+      hostFlavor !== 'v2'
+        ? foregroundFallback?.restoreTarget(sessionID)
+        : undefined;
+    const restoreModel = modelFromMetadataString(restore?.model);
+    if (restore && restoreModel) {
+      return { ...resolved, model: restoreModel, variant: restore.variant };
+    }
     const internalOverride = v1InternalSelectionOverrides.get(sessionID);
     if (!internalOverride) return resolved;
 
@@ -2083,6 +2091,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         ? taskMessageToolModule.createTaskMessageTool({
             input: ctx,
             backgroundJobBoard: backgroundJobBoard!,
+            restoreTarget: (sessionID) =>
+              foregroundFallback?.restoreTarget(sessionID),
             resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
             isDisposed: () => instanceDisposed,
           })
@@ -4122,6 +4132,19 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           input.sessionID,
           trackedModelText,
         );
+      }
+      if (hostFlavor !== 'v2' && internalAdmission && output?.message?.model) {
+        const restore = foregroundFallback?.restoreTarget(input.sessionID);
+        if (
+          restore &&
+          `${output.message.model.providerID}/${output.message.model.modelID}` ===
+            restore.model
+        ) {
+          foregroundFallback?.observeContinuationModel(
+            input.sessionID,
+            restore.model,
+          );
+        }
       }
       if (rewroteInternalSelection) {
         v1InternalSelectionOverrides.set(input.sessionID, {
