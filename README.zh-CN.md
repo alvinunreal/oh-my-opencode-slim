@@ -470,7 +470,7 @@ ping all agents
 > **为什么要独立出一个智能体？** 如果您的 Orchestrator 模型不是多模态模型，可以启用 Observer 来处理图像、屏幕截图和其他视觉文件。Observer 默认是禁用的，它在无需您更改核心推理模型的情况下，为 Orchestrator 赋予了专用的多模态读取能力。只需在您的配置中设置 `disabled_agents: []` 并指定一个 `observer` 模型即可。自带的 `opencode-go` 安装预设会自动执行此操作，因为其 GLM Orchestrator 不是多模态模型。省略 `image_routing` 会保留现有的条件式 Observer 行为。`image_routing: "auto"` 具备能力感知：接受图片输入的模型将附件内联保留（原生视觉直读）；非视觉链路则将附件存入 `.opencode/images/<session>/` 并按路径委派 Observer。`"direct"` 则始终将图片附件内联直达。
 
 > [!TIP]
-> **子代理读取图片。** 有视觉能力的代理应直接读取视觉文件。OpenCode v2 上默认启用的 `observer-dispatch-guard` 会按发出工具调用的助手消息所用模型判断：支持图片输入时拒绝委派 Observer；纯文本模型仍可委派，能力未知或宿主读取失败则保持原生行为。此守卫与附件分流 `image_routing` 是两件事。若确实需要 Observer 隔离分析，设置 `"disabled_hooks": ["observer-dispatch-guard"]` 并重启 OpenCode；这也恢复原来的顾问委派指令。顾问子代理要继续委派 Observer，仍需在 OpenCode 配置里设置 `"experimental": { "subagent_depth": 2 }`。fixer、Observer 自身与 council 合成代理默认不可派生。
+> **子代理读取图片。** 有视觉能力的代理应直接读取视觉文件。OpenCode v2 上默认启用的 `observer-dispatch-guard` 会按发出工具调用的助手消息所用模型判断：支持图片输入时拒绝委派 Observer；纯文本模型仍可委派，能力未知或宿主读取失败则保持原生行为。此守卫管出向委派，与 `image_routing`（只管入向粘贴附件）独立——设成 `"direct"` 依然会拒绝视觉模型的冗余 Observer 委派。若确实需要 Observer 隔离分析，设置 `"disabled_hooks": ["observer-dispatch-guard"]` 并重启 OpenCode；这也恢复原来的顾问委派指令。顾问子代理要继续委派 Observer，仍需在 OpenCode 配置里设置 `"experimental": { "subagent_depth": 2 }`。fixer、Observer 自身与 council 合成代理默认不可派生。
 
 <table>
   <tr>

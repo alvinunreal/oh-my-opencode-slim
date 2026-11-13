@@ -1113,6 +1113,26 @@ describe('v2 setup feature gates', () => {
     }, 20_000);
   }
 
+  // The guard is independent of attachment routing: `image_routing: "direct"`
+  // stops the inbound interceptor, not the outbound delegation policy. A
+  // vision-capable caller must still be refused under direct routing.
+  test('observer dispatch guard: image_routing "direct" still refuses the image caller', async () => {
+    const g = await setupGuard({
+      config: { image_routing: 'direct' },
+    });
+    try {
+      await expect(
+        g.dispatch(designerEvent('call_gate_direct', 'observer')),
+      ).rejects.toThrow('current model accepts images');
+      // Direct routing skipped the inbound interceptor's catalog read; the
+      // guard performs its own on the delegation call.
+      expect(g.reads).toEqual({ modelList: 1, context: 1 });
+      expect(g.createCalls).toEqual([]);
+    } finally {
+      await g.cleanup();
+    }
+  }, 20_000);
+
   test('sidebar disabled: finalization writes no display names', async () => {
     await writeProjectConfig({
       companion: { enabled: false },
