@@ -222,6 +222,7 @@ describe('loadPluginConfig', () => {
           childInputWakeKinds: { question: false },
           waitForUserGuard: false,
           pruneEvictedSessions: true,
+          sameProviderPolicy: { openai: 'foreground' },
         },
       });
 
@@ -234,7 +235,7 @@ describe('loadPluginConfig', () => {
 
       expect(config).toBeDefined();
       const unsupported = warnings.filter((w) => w.kind === 'unsupported-host');
-      expect(unsupported).toHaveLength(4);
+      expect(unsupported).toHaveLength(5);
       expect(
         unsupported.some((w) => w.message.includes('childInputWake is')),
       ).toBe(true);
@@ -247,6 +248,30 @@ describe('loadPluginConfig', () => {
       expect(
         unsupported.some((w) => w.message.includes('pruneEvictedSessions')),
       ).toBe(true);
+      expect(
+        unsupported.some((w) => w.message.includes('sameProviderPolicy')),
+      ).toBe(true);
+    });
+
+    test('v1 emits no unsupported-host warnings for sameProviderPolicy', () => {
+      const projectDir = path.join(tempDir, 'project');
+      writeProjectConfig(projectDir, {
+        backgroundJobs: {
+          sameProviderPolicy: { openai: 'foreground' },
+          childInputWake: false,
+        },
+      });
+
+      const warnings: ConfigLoadWarning[] = [];
+      const config = loadPluginConfig(projectDir, {
+        hostFlavor: 'v1',
+        silent: true,
+        onWarning: (w) => warnings.push(w),
+      });
+
+      expect(config).toBeDefined();
+      const unsupported = warnings.filter((w) => w.kind === 'unsupported-host');
+      expect(unsupported).toHaveLength(0);
     });
   });
 

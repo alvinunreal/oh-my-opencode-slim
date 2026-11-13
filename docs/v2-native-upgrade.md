@@ -5,6 +5,11 @@ plugin release. It must not ship in a 3.x patch or minor release. The maintainer
 chooses the release version and publishes the upgrade notice before release;
 this change does not bump or publish the package.
 
+OpenCode **2.3.0+** is required on V2: native subagents always run in the
+background and the host reports every settled child period. Parseable older
+versions fail setup with upgrade guidance. Unversioned embeddings cannot be
+checked and must provide the same host behavior. V1 is unchanged.
+
 On V2, the default changes from `managed` to `native`, even when no
 `backgroundJobs` configuration is present. Slim's job board, short aliases,
 reusable-session pool and managed limits stop applying; OpenCode owns child
@@ -52,11 +57,11 @@ for concurrency, deadlines or session retention against your OpenCode host
 before upgrading. If the same user configuration serves V1 and V2, keep
 V1-only lifecycle settings out of every configuration layer V2 discovers.
 
-`orchestratorWake`, `childInputWake`, `childInputWakeKinds`, `waitForUserGuard`
-and `pruneEvictedSessions` remain supported for V1 managed mode. Explicit V2
-values warn and have no effect; remove them from V2 configuration after review.
-Warnings include each source layer, so an inherited key can appear more than
-once. `sameProviderPolicy` remains supported on V2 native mode.
+`orchestratorWake`, `childInputWake`, `childInputWakeKinds`, `waitForUserGuard`,
+`pruneEvictedSessions`, and `sameProviderPolicy` remain supported for V1
+managed mode only. Explicit V2 values warn and have no effect; remove them
+from V2 configuration after review. Warnings include each source layer, so an
+inherited key can appear more than once.
 
 The unrelated disable switches `autoUpdate: false`,
 `webfetch.enabled: false`, and `backgroundJobs.childInputWake: false` remain in

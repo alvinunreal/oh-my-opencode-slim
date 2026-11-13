@@ -353,7 +353,7 @@ describe('plugin feature gates through exported hooks', () => {
     }
   });
 
-  test('v2 native applies the armed background default and same-provider policy', async () => {
+  test('v2 native injects no background default and ignores sameProviderPolicy', async () => {
     await configure({
       backgroundJobs: {
         mode: 'native',
@@ -371,21 +371,35 @@ describe('plugin feature gates through exported hooks', () => {
         } as never,
         {} as never,
       );
-      const flip = hooks['v2.backgroundDefaultFlip'];
       const call = {
         tool: 'task',
         sessionID: 'ses_policy',
         callID: 'call_policy',
       };
-      const args: Record<string, unknown> = {
+      // Omitted background stays omitted: the host owns the default.
+      const omitted: Record<string, unknown> = {
         subagent_type: 'oracle',
         description: 'policy',
         prompt: 'work',
       };
-      flip.arm();
-      await hooks['tool.execute.before']?.(call as never, { args } as never);
-      // Omitted -> armed default true -> same-provider foreground conversion.
-      expect(args.background).toBe(false);
+      await hooks['tool.execute.before']?.(
+        call as never,
+        { args: omitted } as never,
+      );
+      expect('background' in omitted).toBe(false);
+
+      // Explicit values pass through untouched in both lanes.
+      const explicitTrue: Record<string, unknown> = {
+        subagent_type: 'oracle',
+        description: 'policy',
+        prompt: 'work',
+        background: true,
+      };
+      await hooks['tool.execute.before']?.(
+        { ...call, callID: 'call_true' } as never,
+        { args: explicitTrue } as never,
+      );
+      expect(explicitTrue.background).toBe(true);
 
       const explicitFalse: Record<string, unknown> = {
         subagent_type: 'oracle',
@@ -394,22 +408,10 @@ describe('plugin feature gates through exported hooks', () => {
         background: false,
       };
       await hooks['tool.execute.before']?.(
-        { ...call, callID: 'call_explicit' } as never,
+        { ...call, callID: 'call_false' } as never,
         { args: explicitFalse } as never,
       );
       expect(explicitFalse.background).toBe(false);
-
-      flip.disarm();
-      const omitted: Record<string, unknown> = {
-        subagent_type: 'oracle',
-        description: 'policy',
-        prompt: 'work',
-      };
-      await hooks['tool.execute.before']?.(
-        { ...call, callID: 'call_unarmed' } as never,
-        { args: omitted } as never,
-      );
-      expect('background' in omitted).toBe(false);
     } finally {
       await hooks?.dispose?.();
     }

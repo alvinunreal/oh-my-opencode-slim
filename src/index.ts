@@ -89,7 +89,6 @@ import { SessionLifecycle } from './hooks/session-lifecycle';
 import type { createTaskSessionManagerHook } from './hooks/task-session-manager';
 import type { ChildInputWaitRecord } from './hooks/task-session-manager/child-input-wait';
 import type { createRevivedRunTracker } from './hooks/task-session-manager/revived-run-tracker';
-import { convertSameProviderBackgroundTask } from './hooks/task-session-manager/same-provider-policy';
 import type {
   createAliasAuthority,
   createSessionRecovery,
@@ -177,11 +176,7 @@ import {
 import type { createTuiReusableProjection } from './utils/tui-reusable-projection';
 import { createV2Setup } from './v2';
 import { parseModelRef } from './v2/adapters';
-import {
-  type BackgroundDefaultFlipState,
-  createBackgroundDefaultFlipState,
-  delegationWording,
-} from './v2/delegation';
+import { delegationWording } from './v2/delegation';
 import {
   isInternalAdmission,
   recordInternalAdmission,
@@ -899,11 +894,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     }
   };
 
-  // Per-instance pairing state for the background-default flip (v2): the
-  // setup arms it only after its description rewrite verifiably landed,
-  // so prose and mechanism state one contract per location. Inert on v1
-  // (hostFlavor gate) and until armed.
-  const backgroundDefaultFlip = createBackgroundDefaultFlipState();
   try {
     // Directory scope (multi-instance): the host loads this plugin once per
     // location and broadcasts every event to every instance in the process.
@@ -1342,8 +1332,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           foregroundFallback?.v1ReplayOutcome(...args) ??
           Promise.resolve(undefined),
         terminalGate,
-        // Flip mechanism half reads the per-instance box declared above.
-        isBackgroundDefaultFlipArmed: backgroundDefaultFlip.isArmed,
         // Host flavor marker; v1 hosts are structurally boardless (issue
         // #1647): the machine board is never rendered.
         hostFlavor,
@@ -3008,15 +2996,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'v2.setSessionTeamResolver': (resolver: typeof sessionTeamFor) => {
       sessionTeamFor = resolver;
     },
-    // Per-instance background-default flip handle: v2 setup arms it after
-    // its description rewrite verifies and disarms it with its teardown.
-    'v2.backgroundDefaultFlip': backgroundDefaultFlip,
     'v2.pendingRefusalOutcome':
       foregroundFallback?.pendingRefusalOutcome.bind(foregroundFallback),
-    'v2.refusedChildOutcome':
-      foregroundFallback?.refusedChildOutcome.bind(foregroundFallback),
-    'v2.setForegroundChildProbe':
-      foregroundFallback?.setForegroundChildProbe.bind(foregroundFallback),
     'v2.session.retry': fallbackRetryHookEnabled
       ? (input: never, switchModel: never) =>
           foregroundFallback?.handleV2Retry(input, switchModel)
@@ -3704,29 +3685,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         input as never,
         output as never,
       );
-      if (
-        hostFlavor === 'v2' &&
-        runtime.backgroundJobsMode === 'native' &&
-        input.tool.toLowerCase() === 'task' &&
-        output.args !== null &&
-        typeof output.args === 'object' &&
-        !Array.isArray(output.args)
-      ) {
-        const args = output.args as Record<string, unknown>;
-        if (backgroundDefaultFlip.isArmed() && args.background === undefined) {
-          args.background = true;
-        }
-        if (typeof args.subagent_type === 'string') {
-          convertSameProviderBackgroundTask({
-            agentType: args.subagent_type,
-            parentSessionID: input.sessionID,
-            args,
-            policy: runtime.backgroundJobs.sameProviderPolicy,
-            getParentModel: liveSessionModel,
-            getChildModel: getModelForAgent,
-          });
-        }
-      }
       await taskSessionManagerHook?.['tool.execute.before'](
         input as never,
         output as never,
@@ -4463,16 +4421,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'v2.pendingRefusalOutcome':
       | ForegroundFallbackManager['pendingRefusalOutcome']
       | undefined;
-    'v2.refusedChildOutcome':
-      | ForegroundFallbackManager['refusedChildOutcome']
-      | undefined;
-    'v2.setForegroundChildProbe':
-      | ForegroundFallbackManager['setForegroundChildProbe']
-      | undefined;
     'v2.refreshProfiles': typeof refreshProfilesFromDisk;
     'v2.resolveDelegatedModel': typeof resolveV2DelegatedModel;
     'v2.setSessionTeamResolver': (resolver: typeof sessionTeamFor) => void;
-    'v2.backgroundDefaultFlip': BackgroundDefaultFlipState;
     'v2.pinSessionChains': (
       sessionID: string,
       chains?: SessionTeamBundle['chains'],

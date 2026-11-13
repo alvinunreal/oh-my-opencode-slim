@@ -30,11 +30,10 @@ The directory follows a **Facade + Strategy** pattern where `index.ts` acts as t
   publication until a delivery owner exists; unresolved outcomes convert the
   preparation into the owning run. V1 foreground children also use this handoff
   after a terminal failover error that is replayed.
-- **same-provider-policy.ts**: Opt-in per-provider rewrite
+- **same-provider-policy.ts**: V1 managed opt-in per-provider rewrite
   (`backgroundJobs.sameProviderPolicy: { <provider>: "foreground" }`)
-  converting same-provider `background: true` task requests (including v2
-  omitted-`background` calls, defaulted to true before this check) to the foreground
-  path for shared single-runtime backends; fail-open on unknown model/provider.
+  converting same-provider `background: true` task requests to foreground for
+  shared single-runtime backends; fail-open on unknown model/provider.
 - **task-context-tracker.ts**: Manages read context from child sessions with line-count and file caps. Stores context per task ID, provides pruning to prevent unbounded growth, and exposes `filterStaleContextFiles(directory, files)` for a bounded sync disk re-check (drops missing/unreadable/oversized/truncated, logs; per-file size cap + per-commit byte budget so validation cannot stall the session).
 
 All modules depend on `BackgroundJobBoard` from `src/utils/background-job-board.ts` as the single source of truth for active jobs, terminal unreconciled jobs, reusable completed sessions, aliases, read context, and LRU caps. None of that state is rendered into a prompt.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Database } from 'bun:sqlite';
 /**
- * Packed-artifact, headless OpenCode 2.2.6 lifecycle verification.
+ * Packed-artifact, headless OpenCode 2.3.0 lifecycle verification.
  *
  * Build first, then run:
  *   bun scripts/verify-v2-native-lifecycle.ts
@@ -32,7 +32,13 @@ type Message = {
     type: string;
     name?: string;
     text?: string;
-    state?: { status: string; content?: unknown; error?: unknown };
+    state?: {
+      status: string;
+      content?: unknown;
+      error?: unknown;
+      input?: RecordValue;
+      metadata?: RecordValue;
+    };
   }>;
 };
 type ModelRequest = {
@@ -57,6 +63,7 @@ type Mode = 'default' | 'native' | 'off';
 type PackEntry = { filename?: string };
 
 const ROOT = '/tmp/opencode/v2-native-lifecycle';
+const HOST_VERSION = '2.3.0';
 const HOST = process.env.V2_LIFECYCLE_HOST ?? 'opencode2';
 const REPO = path.resolve(import.meta.dir, '..');
 const args = process.argv.slice(2);
@@ -656,8 +663,8 @@ class Host {
       60_000,
     );
     assert(
-      JSON.stringify(info).includes('2.2.6'),
-      'The registered host is not OpenCode 2.2.6',
+      JSON.stringify(info).includes(HOST_VERSION),
+      `The registered host is not OpenCode ${HOST_VERSION}`,
     );
     await writeFile(
       path.join(this.root, `host-${generation}.identity.json`),
@@ -811,6 +818,25 @@ class Host {
       return metadata?.source === 'subagent' && metadata.childID === childID;
     });
   }
+  inboxAdmissions(parentID: string, text: string) {
+    return this.events.filter((event) => {
+      if (event.type !== 'session.inbox.enqueued') return false;
+      const payload = object(event.data);
+      if (payload.sessionID !== parentID) return false;
+      const item = object(payload.item);
+      return String(object(item.payload).text ?? '').includes(text);
+    });
+  }
+  async inbox(parentID: string) {
+    return this.request<
+      Array<{
+        id: string;
+        type: string;
+        delivery: string;
+        payload: RecordValue;
+      }>
+    >(`/api/session/${parentID}/inbox`);
+  }
   async runTools(sessionID: string, actions: Action[], final: string) {
     const marker = this.model.plan('parent', [...actions, { text: final }]);
     await this.prompt(sessionID, marker);
@@ -926,14 +952,32 @@ async function lifecycle(host: Host, mode: Mode, results: Evidence[]) {
       ]);
       await host.runTools(
         main.id,
-        [subagent(marker, { background: true })],
+        [subagent(marker)],
         'PARENT_IDLE_AFTER_LAUNCH',
       );
       childID = await host.child(main.id);
       await model.wait(`${mode}:first`);
+      const activeWhileHeld = await host.request<RecordValue>(
+        '/api/session/active',
+      );
       assert.equal(
-        (await host.request<RecordValue>('/api/session/active'))[main.id],
+        activeWhileHeld[main.id],
         undefined,
+        'Subagent call blocked the parent while child was held',
+      );
+      assert(activeWhileHeld[childID], 'Held child was not active');
+      // Always-background contract: the call returned while the child was
+      // held mid-stream; the returned tool state must describe it as running.
+      const launch = toolParts(await host.messages(main.id), 'subagent').at(-1);
+      assert.equal(launch?.state?.status, 'completed');
+      assert.equal(
+        object(launch?.state?.metadata).status,
+        'running',
+        'subagent call did not report a running background child',
+      );
+      assert(
+        !('background' in object(launch?.state?.input)),
+        'Native subagent input still uses the retired background flag',
       );
       model.release(`${mode}:first`);
       await host.contains(main.id, 'ROUND_ONE_NATIVE_TEXT');
@@ -947,7 +991,7 @@ async function lifecycle(host: Host, mode: Mode, results: Evidence[]) {
       ]);
       const messages = await host.runTools(
         main.id,
-        [subagent(second, { sessionID: childID, background: true })],
+        [subagent(second, { sessionID: childID })],
         'CONTINUATION_ADMITTED',
       );
       await model.wait(`${mode}:second`);
@@ -1021,43 +1065,73 @@ async function lifecycle(host: Host, mode: Mode, results: Evidence[]) {
       };
     },
   );
-  if (native) {
-    await checkCase(
-      results,
-      `${mode}: omitted background uses the activated default`,
-      async () => {
-        const parent = await host.create('Omitted background default');
-        const child = model.plan('child', [
-          { text: 'OMITTED_BACKGROUND_CHILD_TEXT', hold: `${mode}:omitted` },
-        ]);
-        await host.runTools(
-          parent.id,
-          [subagent(child)],
-          'OMITTED_BACKGROUND_PARENT_CONTINUED',
-        );
-        const target = await host.child(parent.id);
-        await model.wait(`${mode}:omitted`);
-        assert(
-          renderedText(await host.messages(parent.id)).includes(
-            'OMITTED_BACKGROUND_PARENT_CONTINUED',
-          ),
-          'Omitted background blocked the parent',
-        );
-        model.release(`${mode}:omitted`);
-        await host.contains(parent.id, 'OMITTED_BACKGROUND_CHILD_TEXT');
-        await host.idle(parent.id);
-        await poll('omitted background completion admission', async () =>
-          host.notices(parent.id, target).length === 1 ? true : undefined,
-        );
-        return {
-          parentID: parent.id,
-          childID: target,
-          notices: 1,
-          defaultedTo: 'background',
-        };
-      },
-    );
-  }
+  await checkCase(
+    results,
+    `${mode}: direct child prompt is reported as a later host period`,
+    async () => {
+      const previousNotices = host.notices(main.id, childID).length;
+      const text = 'DIRECT_PROMPT_LATER_NATIVE_TEXT';
+      const marker = model.plan('child', [
+        { text, hold: `${mode}:direct-prompt` },
+      ]);
+      await poll('prior subagent job rows cleared', async () =>
+        host.rows(
+          'select notification_id from job where child_session_id = ?',
+          childID,
+        ).length === 0
+          ? true
+          : undefined,
+      );
+      await host.prompt(childID, marker);
+      await model.wait(`${mode}:direct-prompt`);
+      assert.equal(
+        host.rows(
+          'select notification_id from job where child_session_id = ?',
+          childID,
+        ).length,
+        0,
+        'Direct prompt unexpectedly started a host Job',
+      );
+      assert.equal(
+        host.notices(main.id, childID).length,
+        previousNotices,
+        'Direct prompt reported before its held child period settled',
+      );
+      model.release(`${mode}:direct-prompt`);
+      await host.contains(childID, text);
+      await poll('direct-prompt host completion admission', async () =>
+        host.notices(main.id, childID).length === previousNotices + 1
+          ? true
+          : undefined,
+      );
+      await host.contains(main.id, text);
+      await host.idle(main.id);
+      const notices = host.notices(main.id, childID);
+      assert.equal(notices.length, previousNotices + 1);
+      const item = object(object(notices.at(-1)?.data).item);
+      const payload = object(item.payload);
+      const metadata = object(payload.metadata);
+      assert.equal(item.type, 'synthetic');
+      assert.equal(item.delivery, 'steer');
+      assert.equal(metadata.source, 'subagent');
+      assert.equal(metadata.childID, childID);
+      assert.equal(metadata.state, 'completed');
+      const visible = (await host.messages(main.id)).filter((message) =>
+        message.text?.includes(text),
+      );
+      assert.equal(visible.length, 1);
+      assert.equal(visible[0].metadata?.source, 'subagent');
+      assert.equal(visible[0].metadata?.childID, childID);
+      assert.equal(host.children(main.id).length, 1);
+      return {
+        parentID: main.id,
+        childID,
+        directPrompt: true,
+        hostAdmissions: 1,
+        activeJobDuringPrompt: false,
+      };
+    },
+  );
   await checkCase(
     results,
     `${mode}: running-child steer and busy-parent completion`,
@@ -1066,16 +1140,12 @@ async function lifecycle(host: Host, mode: Mode, results: Evidence[]) {
       const first = model.plan('child', [
         { text: 'PRE_STEER_TEXT', hold: `${mode}:steer-child` },
       ]);
-      await host.runTools(
-        parent.id,
-        [subagent(first, { background: true })],
-        'STEER_CHILD_LAUNCHED',
-      );
+      await host.runTools(parent.id, [subagent(first)], 'STEER_CHILD_LAUNCHED');
       const runningID = await host.child(parent.id);
       await model.wait(`${mode}:steer-child`);
       const next = model.plan('child', [{ text: 'LATEST_STEERED_TEXT' }]);
       const parentMarker = model.plan('parent', [
-        subagent(next, { sessionID: runningID, background: true }),
+        subagent(next, { sessionID: runningID }),
         { text: 'BUSY_PARENT_RELEASED', hold: `${mode}:busy-parent` },
         { text: 'BUSY_NOTICE_CONSUMED' },
       ]);
@@ -1113,12 +1183,7 @@ async function lifecycle(host: Host, mode: Mode, results: Evidence[]) {
       const parent = await host.create('Invalid child ID');
       const messages = await host.runTools(
         parent.id,
-        [
-          subagent('Must not execute', {
-            sessionID: 'ses_lifecycle_missing',
-            background: true,
-          }),
-        ],
+        [subagent('Must not execute', { sessionID: 'ses_lifecycle_missing' })],
         'INVALID_ID_FINISHED',
       );
       assert.match(
@@ -1195,59 +1260,6 @@ async function lifecycle(host: Host, mode: Mode, results: Evidence[]) {
       };
     },
   );
-  if (!native) {
-    await checkCase(
-      results,
-      `${mode}: omitted/false background arguments retain native foreground behavior`,
-      async () => {
-        const parent = await host.create('Off native argument semantics');
-        const first = model.plan('child', [
-          { text: 'OFF_OMITTED_FOREGROUND', hold: 'off:omitted' },
-        ]);
-        const script = model.plan('parent', [
-          subagent(first),
-          { text: 'OMITTED_PARENT_FINISHED' },
-        ]);
-        await host.prompt(parent.id, script);
-        await model.wait('off:omitted');
-        const firstID = await host.child(parent.id);
-        assert(
-          !renderedText(await host.messages(parent.id)).includes(
-            'OMITTED_PARENT_FINISHED',
-          ),
-        );
-        model.release('off:omitted');
-        await host.contains(parent.id, 'OMITTED_PARENT_FINISHED');
-        await host.idle(parent.id);
-        const second = model.plan('child', [
-          { text: 'OFF_FALSE_FOREGROUND', hold: 'off:false' },
-        ]);
-        const followup = model.plan('parent', [
-          subagent(second, { background: false }),
-          { text: 'FALSE_PARENT_FINISHED' },
-        ]);
-        await host.prompt(parent.id, followup);
-        await model.wait('off:false');
-        const secondID = await host.child(parent.id, 2);
-        assert(
-          !renderedText(await host.messages(parent.id)).includes(
-            'FALSE_PARENT_FINISHED',
-          ),
-        );
-        model.release('off:false');
-        await host.contains(parent.id, 'FALSE_PARENT_FINISHED');
-        await host.idle(parent.id);
-        assert.equal(host.children(parent.id).length, 2);
-        assert.equal(host.notices(parent.id, firstID).length, 0);
-        assert.equal(host.notices(parent.id, secondID).length, 0);
-        return {
-          omitted: 'foreground',
-          false: 'foreground',
-          true: 'background (previous cases)',
-        };
-      },
-    );
-  }
   await checkCase(
     results,
     `${mode}: lifecycle storage absence and preset ownership`,
@@ -1320,10 +1332,7 @@ async function nativeControls(
         const messages = await host.runTools(
           parent.id,
           [
-            subagent('FOREIGN_MUST_NOT_EXECUTE', {
-              sessionID: childID,
-              background: true,
-            }),
+            subagent('FOREIGN_MUST_NOT_EXECUTE', { sessionID: childID }),
             control('task_status', childID),
             control('task_cancel', childID),
           ],
@@ -1359,7 +1368,7 @@ async function nativeControls(
       ]);
       await host.runTools(
         parent.id,
-        [subagent(marker, { background: true })],
+        [subagent(marker)],
         'CANCEL_CHILD_LAUNCHED',
       );
       const target = await host.child(parent.id);
@@ -1404,7 +1413,7 @@ async function nativeControls(
       ]);
       await host.runTools(
         parent.id,
-        [subagent(childMarker, { background: true })],
+        [subagent(childMarker)],
         'PERMISSION_CHILD_LAUNCHED',
       );
       const target = await host.child(parent.id);
@@ -1479,7 +1488,7 @@ async function nativeControls(
       ]);
       await host.runTools(
         parent.id,
-        [subagent(childMarker, { background: true })],
+        [subagent(childMarker)],
         'REPORT_PARENT_IDLE',
       );
       const target = await host.child(parent.id);
@@ -1549,11 +1558,7 @@ async function restartRunning(host: Host, results: Evidence[]) {
         { text: 'KILLED_STREAM_MUST_NOT_FINISH', hold: 'restart:running' },
         { text: 'NATIVE_CHILD_RECOVERED_AFTER_RESTART' },
       ]);
-      await host.runTools(
-        parent.id,
-        [subagent(child, { background: true })],
-        'RESTART_PARENT_IDLE',
-      );
+      await host.runTools(parent.id, [subagent(child)], 'RESTART_PARENT_IDLE');
       const target = await host.child(parent.id);
       await model.wait('restart:running');
       const persisted = host.rows(
@@ -1615,48 +1620,123 @@ async function refusalFallback(
   await host.configure(installed, 'native', refusalConfig());
   await host.start();
   try {
-    const parent = await host.create('refusal fallback');
+    const parent = await host.create('refusal chain');
     await checkCase(
       results,
-      'native: content-filter refusal continues foreground child',
+      'native 2.3: two consecutive refusals continue once and the host delivers the result once',
       async () => {
+        const requestOffset = model.requests.length;
+        // Hold the parent inside its second model call so every child period
+        // and every parent admission stays observable without a step boundary.
         const marker = model.plan('parent', [
-          subagent('REFUSAL_CHILD_PROMPT', { background: false }),
-          { text: 'PARENT_DONE' },
+          subagent('REFUSAL_CHILD_PROMPT'),
+          { text: 'REFUSAL_PARENT_HELD', hold: 'refusal:parent' },
         ]);
         await host.prompt(parent.id, marker);
-        await poll('foreground refusal result', async () => {
-          const messages = await host.messages(parent.id);
-          return toolText(messages, 'subagent').includes('CHILD_FALLBACK_DONE')
-            ? true
-            : undefined;
+        await model.wait('refusal:parent');
+        const childID = await host.child(parent.id);
+        await host.contains(childID, 'CHILD_FALLBACK_DONE');
+        await host.idle(childID);
+        // Each refusal continued exactly once: one request per chain model,
+        // each continuation carrying the refusal reminder.
+        const chain = model.requests
+          .slice(requestOffset)
+          .filter(
+            (request) =>
+              ['child', 'backup', 'backup2'].includes(request.body.model) &&
+              JSON.stringify(request.body.messages).includes(
+                'REFUSAL_CHILD_PROMPT',
+              ),
+          );
+        for (const id of ['child', 'backup', 'backup2'])
+          assert.equal(
+            chain.filter((request) => request.body.model === id).length,
+            1,
+            `${id} was not continued exactly once`,
+          );
+        for (const id of ['backup', 'backup2']) {
+          const request = chain.find((entry) => entry.body.model === id);
+          assert.match(
+            request?.body.messages
+              .filter((message) => message.role === 'user')
+              .map((message) => JSON.stringify(message.content))
+              .join('\n') ?? '',
+            /previous response was stopped/,
+          );
+        }
+        const refusals = host.events.filter((event) => {
+          if (event.type !== 'session.step.failed') return false;
+          const props = object(event.data);
+          return (
+            props.sessionID === childID && props.finish === 'content-filter'
+          );
         });
+        assert.equal(
+          refusals.length,
+          2,
+          'Expected exactly two consecutive content-filter refusals',
+        );
+        // The host owns the completion notice: exactly one parent admission
+        // carries the finished text and it carries host subagent metadata.
+        await poll('host refusal completion admission', async () =>
+          host.inboxAdmissions(parent.id, 'CHILD_FALLBACK_DONE').length >= 1
+            ? true
+            : undefined,
+        );
+        const admissions = host.inboxAdmissions(
+          parent.id,
+          'CHILD_FALLBACK_DONE',
+        );
+        assert.equal(
+          admissions.length,
+          1,
+          'Slim duplicated the host completion notice',
+        );
+        const admission = object(object(admissions[0].data).item);
+        assert.equal(admission.type, 'synthetic');
+        assert.equal(admission.delivery, 'steer');
+        const admissionMetadata = object(object(admission.payload).metadata);
+        assert.equal(admissionMetadata.source, 'subagent');
+        assert.equal(admissionMetadata.childID, childID);
+        assert.equal(admissionMetadata.state, 'completed');
+        const queued = (await host.inbox(parent.id)).filter((item) =>
+          String(item.payload.text ?? '').includes('CHILD_FALLBACK_DONE'),
+        );
+        assert.equal(
+          queued.length,
+          1,
+          'Unexpected second pending completion item',
+        );
+        assert.equal(queued[0].type, 'synthetic');
+        assert.equal(object(queued[0].payload.metadata).source, 'subagent');
+        assert.equal(object(queued[0].payload.metadata).childID, childID);
+        const launch = toolParts(await host.messages(parent.id), 'subagent')[0];
+        assert(
+          !('background' in object(launch?.state?.input)),
+          'Refusal launch still used the retired background flag',
+        );
+        model.release('refusal:parent');
+        await host.contains(parent.id, 'CHILD_FALLBACK_DONE');
         await host.idle(parent.id);
-        const children = host.children(parent.id);
-        assert.equal(children.length, 1);
-        return { child: children[0]?.id };
-      },
-    );
-    const bgParent = await host.create('background refusal fallback');
-    await checkCase(
-      results,
-      'native: content-filter refusal continues background child',
-      async () => {
-        const marker = model.plan('parent', [
-          subagent('REFUSAL_CHILD_PROMPT_BG', { background: true }),
-          { text: 'BG_PARENT_DONE' },
-        ]);
-        await host.prompt(bgParent.id, marker);
-        await host.idle(bgParent.id);
-        await poll('background refusal result', async () => {
-          const messages = await host.messages(bgParent.id);
-          return renderedText(messages).includes('CHILD_FALLBACK_DONE')
-            ? true
-            : undefined;
-        });
-        const children = host.children(bgParent.id);
-        assert.equal(children.length, 1);
-        return { child: children[0]?.id };
+        const visible = (await host.messages(parent.id)).filter((message) =>
+          message.text?.includes('CHILD_FALLBACK_DONE'),
+        );
+        assert.equal(
+          visible.length,
+          1,
+          'Slim duplicated the delivery in the parent transcript',
+        );
+        assert.equal(visible[0].type, 'synthetic');
+        assert.equal(visible[0].metadata?.source, 'subagent');
+        assert.equal(visible[0].metadata?.childID, childID);
+        assert.equal(host.children(parent.id).length, 1);
+        return {
+          parentID: parent.id,
+          childID,
+          refusals: 2,
+          continuations: ['backup', 'backup2'],
+          hostAdmissions: 1,
+        };
       },
     );
   } finally {
@@ -1749,6 +1829,51 @@ async function selfCheck() {
       { method: 'POST', body: JSON.stringify(input) },
     );
     assert.match(await second.text(), /SELF_CHECK_OK/);
+    const refusal = await fetch(
+      `http://127.0.0.1:${model.server.port}/v1/chat/completions`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          model: 'child',
+          messages: [
+            { role: 'user', content: 'REFUSAL_CHILD_PROMPT' },
+            { role: 'user', content: 'previous response was stopped' },
+          ],
+        }),
+      },
+    );
+    assert.equal(refusal.status, 200);
+    assert.match(await refusal.text(), /content_filter/);
+    const backup = await fetch(
+      `http://127.0.0.1:${model.server.port}/v1/chat/completions`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          model: 'backup',
+          messages: [
+            { role: 'user', content: 'REFUSAL_CHILD_PROMPT' },
+            { role: 'user', content: 'previous response was stopped' },
+          ],
+        }),
+      },
+    );
+    assert.equal(backup.status, 200);
+    assert.match(await backup.text(), /content_filter/);
+    const backup2 = await fetch(
+      `http://127.0.0.1:${model.server.port}/v1/chat/completions`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          model: 'backup2',
+          messages: [
+            { role: 'user', content: 'REFUSAL_CHILD_PROMPT' },
+            { role: 'user', content: 'previous response was stopped' },
+          ],
+        }),
+      },
+    );
+    assert.equal(backup2.status, 200);
+    assert.match(await backup2.text(), /CHILD_FALLBACK_DONE/);
     const packEntry = { filename: 'local-candidate.tgz' };
     assert.deepEqual(
       parsePackJson(`npm notice\n${JSON.stringify([packEntry])}\n`),
@@ -1766,6 +1891,23 @@ async function selfCheck() {
     assert.equal(pluginConfig('off').backgroundJobs?.mode, 'off');
     assert('plugins' in hostConfig('/tmp/opencode/local-only', model));
     assert(!('plugin' in hostConfig('/tmp/opencode/local-only', model)));
+    assert.equal(HOST_VERSION, '2.3.0');
+    assert.deepEqual(subagent('Local', { sessionID: 'ses_local' }).input, {
+      agent: 'explorer',
+      description: 'Local lifecycle verification',
+      prompt: 'Local',
+      sessionID: 'ses_local',
+    });
+    assert(
+      !('background' in subagent('Local').input),
+      'Harness native calls still pass the retired background flag',
+    );
+    assert.deepEqual(refusalConfig().fallback, { enabled: true });
+    assert(
+      !(refusalConfig().disabled_hooks as string[]).includes(
+        'foreground-fallback',
+      ),
+    );
     assert.equal(model.failures.length, 0);
     console.log(
       'Harness self-check passed; no candidate packed or host launched.',
@@ -1797,7 +1939,7 @@ async function main() {
       path.join(root, 'version.log'),
       { PATH: process.env.PATH, HOME: root },
     );
-    assert.match(version, /2\.2\.6/);
+    assert.match(version, new RegExp(HOST_VERSION.replaceAll('.', '\\.')));
     for (const directory of ['pkg', 'app'])
       await mkdir(path.join(root, directory));
     const packed = await command(
@@ -1891,10 +2033,11 @@ async function main() {
       'The harness assumes dist is already built; it packs with npm --ignore-scripts and installs the tarball into a throwaway Bun app.',
       'Module cold-loading, cancel transport timeout, stop-versus-prompt races, council resolution, native continuation while permission/form-waiting, and preset/cache projections require parent focused source/unit validation; this HTTP harness does not claim them.',
       'Rendered catalogs cover orchestrator/explorer with this local test preset, across requested default/native/off modes. Other caller roles/presets, disabled-tool matrices, and before/after prompt byte comparisons require parent focused validation.',
-      'Omitted/false foreground semantics are exercised in off mode; true-background and same-ID steering are exercised in every requested mode. Native/default same-provider foreground conversion requires source/unit validation.',
+      'Omitted background, explicit same-ID follow-ups, and direct child prompts are exercised in every requested mode; the host always returns a running background child.',
+      'Direct-prompt later-period coverage holds the parent model call and asserts no host Job outbox row exists while the direct prompt runs, then checks the host subagent metadata on the single completion admission.',
       'Progress report real-host coverage currently proves idle-parent queue/resume:false; running, interrupted, and form-waiting parents are not separately exercised.',
-      'Refusal fallback coverage uses native mode with a three-model chain: two consecutive content-filter refusals exercise foreground re-attach and background result delivery; off mode intentionally leaves the native executor untouched.',
-      'The harness asserts OpenCode 2.2.6 exactly; when the installed host is newer, point V2_LIFECYCLE_HOST at a 2.2.6 binary.',
+      'Refusal fallback coverage uses native mode with a three-model chain: exactly two consecutive content-filter refusals are asserted from host step events, each chain model is called once, and the single completion admission must carry host subagent metadata rather than a Slim duplicate.',
+      `The harness asserts OpenCode ${HOST_VERSION} exactly; point V2_LIFECYCLE_HOST at a ${HOST_VERSION} binary.`,
       'Terminal-but-not-yet-admitted crash and admitted-but-unconsumed restart windows need a deterministic host-side fault seam. No host DB mutations or plugin recovery are used to fabricate those states.',
       ...(options.restart === 'none' || !options.modes.includes('native')
         ? [
@@ -1908,7 +2051,7 @@ async function main() {
         `bun scripts/verify-v2-native-lifecycle.ts ${args.join(' ')}`.trim(),
       exitCode: failure ? 1 : 0,
       host: HOST,
-      expectedHostVersion: '2.2.6',
+      expectedHostVersion: HOST_VERSION,
       tarball,
       installed,
       isolation:

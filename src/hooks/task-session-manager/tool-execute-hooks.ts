@@ -190,9 +190,6 @@ export async function handleToolExecuteBefore(
      * delegation vocabulary for model-visible refusal guidance. Defaults to
      * v1 wording. */
     hostFlavor?: string;
-    /** Per-instance pairing flag for the background-default flip: true only
-     * after this setup's v2 description rewrite verifiably landed. */
-    isBackgroundDefaultFlipArmed?: () => boolean;
     recoverRetainedSession?: (request: {
       parentSessionID: string;
       requested: string;
@@ -231,32 +228,6 @@ export async function handleToolExecuteBefore(
   if (!isObjectRecord(output.args)) return;
 
   const args = output.args as TaskArgs;
-  // Background-default flip (v2 only): the native `subagent` schema has no
-  // default, so an omitted `background` silently blocks the parent turn —
-  // measured 2:1 foreground habit even in orchestration sessions. Flip the
-  // omitted-parameter default to background for managed sessions; explicit
-  // `false` (dependent work) and explicit `true` pass through untouched.
-  // Gated on the per-instance pairing flag: the flip only runs once this
-  // setup's v2 description rewrite verifiably landed (arm via
-  // 'v2.backgroundDefaultFlip') — otherwise the native foreground default
-  // keeps operating end-to-end with its native wording intact. v1 hosts
-  // keep the full native behavior (no flavor gate entry).
-  if (deps.hostFlavor === 'v2' && deps.isBackgroundDefaultFlipArmed?.()) {
-    if (args.background === undefined) {
-      args.background = true;
-      log('[task-session-manager] v2 background default applied', {
-        sessionID: input.sessionID,
-      });
-    } else {
-      // Observation lamp for the explicit lane: `false` usage is the
-      // dependent-work health metric; `true` distinguishes model-chosen
-      // background from the rewritten default.
-      log('[task-session-manager] v2 background explicit', {
-        sessionID: input.sessionID,
-        background: args.background,
-      });
-    }
-  }
   if (typeof args.task_id === 'string' && args.task_id.trim() === '') {
     refuseExplicitTaskId(
       args.task_id,

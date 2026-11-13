@@ -91,9 +91,7 @@ import {
   watchPluginConfigFiles,
 } from './config-watch';
 import {
-  type BackgroundDefaultFlipState,
   DELEGATION_TOOL_V2,
-  SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION,
   subagentArgsToV1,
   toolNameToV1,
   v1ArgsToSubagent,
@@ -2179,10 +2177,34 @@ export function adaptMcpServer(v1: McpConfig): Record<string, unknown> {
   return out;
 }
 
+const MINIMUM_V2_HOST_VERSION = '2.3.0';
+
+/** OpenCode 2.3 always runs subagents in the background and reports every
+ * child idle period. Older v2 hosts would silently lose refusal recovery,
+ * so fail before registering anything when the version is parseable. */
+function assertSupportedV2Host(ctx: V2Context): void {
+  const version = ctx.app?.version;
+  const match =
+    typeof version === 'string'
+      ? /^v?(\d+)\.(\d+)\.(\d+)(?:[-+][\w.-]+)?$/.exec(version)
+      : null;
+  if (!match) {
+    log('[v2] host version is not semver; skipping minimum check', {
+      version,
+    });
+    return;
+  }
+  const [major, minor] = [Number(match[1]), Number(match[2])];
+  if (major < 2 || (major === 2 && minor < 3)) {
+    throw new Error(
+      `OpenCode ${version} is unsupported: oh-my-opencode-slim requires OpenCode ${MINIMUM_V2_HOST_VERSION} or newer on v2 hosts.`,
+    );
+  }
+}
+
 export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
   return async (ctx: V2Context): Promise<V2Cleanup> => {
     let retireSessionPresets: (() => Promise<void>) | undefined;
-    const foregroundChildren = new Set<string>();
     initLogger();
     // First logged line: identify the build that produced every following
     // log entry (logging-only — build info never enters prompt payloads).
@@ -2210,6 +2232,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       log('[v2] setup skipped: registration-only embedded context');
       return async () => {};
     }
+    assertSupportedV2Host(ctx);
     // Directory/location resolution lives in the shim now (single source);
     // setup still needs the directory for config loading and tool adapters.
     const directory = resolveV2Directory(ctx);
@@ -2243,7 +2266,6 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
     let stopPermissionEventIntake: (() => Promise<void>) | undefined;
     let v1Hooks: Record<string, unknown> | undefined;
     let registryBridge: RegistryFactoryBridge | undefined;
-    let backgroundFlip: BackgroundDefaultFlipState | undefined;
 
     const boundedPermissionStop = (
       stop: () => Promise<void> | void,
@@ -2282,18 +2304,6 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         pluginInput as never,
       )) as unknown as Record<string, unknown>;
       registryBridge = v1Hooks.registryBridge as RegistryFactoryBridge;
-      // Foreground `subagent` calls are re-attached by the refusal
-      // continuation wrapper below; background children continue directly.
-      (
-        v1Hooks['v2.setForegroundChildProbe'] as
-          | ((probe: (sessionID: string) => boolean) => void)
-          | undefined
-      )?.((sessionID) => foregroundChildren.has(sessionID));
-      // Per-instance flip handle (the native tool-before policy reads its
-      // isArmed getter; this side owns arm/disarm).
-      backgroundFlip = v1Hooks['v2.backgroundDefaultFlip'] as
-        | BackgroundDefaultFlipState
-        | undefined;
       log('[v2] v1 factory initialized', {
         agents: Object.keys((v1Hooks as { agent?: object }).agent ?? {}).length,
         tools: Object.keys((v1Hooks as { tool?: object }).tool ?? {}).length,
@@ -3716,56 +3726,28 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             });
             disposers.push(() => reg.dispose());
           }
-          // Native delegation keeps the paired description/default rewrite and
-          // session-frozen preset routing. Off leaves the host executor untouched.
-          // The flip is armed only after a replay verifies the description swap;
-          // teardown or a failed replay disarms this location's handle.
+          // Native delegation keeps session-frozen preset routing. Off leaves
+          // the host executor untouched.
           if (before && presetRoutingEnabled) {
             try {
               const { wrapSessionPresetSubagent } = await import(
                 './session-presets'
               );
-              const { createSubagentRefusalContinuation } = await import(
-                './refusal-continuation'
-              );
               const presets = sessionPresets;
               const profiles = sessionProfileBridge;
               if (!presets || !profiles)
                 throw new Error('Session preset routing unavailable');
-              const refusalOutcome = v1Hooks['v2.refusedChildOutcome'] as
-                | ((
-                    sessionID: string,
-                    entry: Record<string, unknown>,
-                  ) => Promise<string | undefined>)
-                | undefined;
-              const refusalContinuation =
-                sessionContextRead && refusalOutcome
-                  ? createSubagentRefusalContinuation({
-                      context: sessionContextRead,
-                      refusalOutcome,
-                      onForegroundChild: (sessionID, active) => {
-                        if (active) foregroundChildren.add(sessionID);
-                        else foregroundChildren.delete(sessionID);
-                      },
-                    })
-                  : undefined;
               const wrapped = new WeakSet<object>();
               const reg = await ctx.tool.transform((draft) => {
                 nativePresetWrapperReady = false;
                 try {
                   draft.update(DELEGATION_TOOL_V2, (tool) => {
-                    if (backgroundFlip)
-                      tool.description =
-                        SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION;
                     if (tool.execute && wrapped.has(tool.execute)) {
                       nativePresetWrapperReady = true;
                     }
                     if (tool.execute && !wrapped.has(tool.execute)) {
-                      let execute = tool.execute;
-                      if (refusalContinuation)
-                        execute = refusalContinuation.wrap(execute);
-                      execute = wrapSessionPresetSubagent({
-                        execute,
+                      const execute = wrapSessionPresetSubagent({
+                        execute: tool.execute,
                         presets,
                         capture: captureTeam,
                         effectiveBinding: profiles.effectiveBinding,
@@ -3788,38 +3770,12 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                       nativePresetWrapperReady = true;
                     }
                   });
-                  if (backgroundFlip) {
-                    const flipped = draft.get(DELEGATION_TOOL_V2);
-                    if (
-                      flipped?.description ===
-                      SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION
-                    ) {
-                      backgroundFlip.arm();
-                    } else {
-                      // A replay that cannot find the native tool must undo
-                      // a previous arm so the two halves never disagree.
-                      backgroundFlip.disarm();
-                      log(
-                        '[v2] subagent description flip missed (tool absent)',
-                      );
-                    }
-                  }
                 } catch (err) {
-                  // A throwing replay must not leave a stale arm behind
-                  // either; disarm is the fail-safe direction on every
-                  // error path, not just registration-time throws.
-                  backgroundFlip?.disarm();
-                  log('[v2] subagent description flip failed', String(err));
+                  log('[v2] preset wrapper failed', String(err));
                 }
               });
-              disposers.push(() => {
-                // Disarm first: a throwing reg.dispose() must never leave a
-                // stale armed mechanism behind (fail-safe direction).
-                backgroundFlip?.disarm();
-                return reg.dispose();
-              });
+              disposers.push(() => reg.dispose());
             } catch (err) {
-              backgroundFlip?.disarm();
               nativePresetWrapperReady = false;
               log('[v2] tool transform registration failed', String(err));
             }

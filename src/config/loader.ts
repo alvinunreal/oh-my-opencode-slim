@@ -483,6 +483,7 @@ export function loadRawPluginConfigFromPath(
         'childInputWakeKinds',
         'waitForUserGuard',
         'pruneEvictedSessions',
+        'sameProviderPolicy',
       ]) {
         if (!Object.hasOwn(rawConfig.backgroundJobs, key)) continue;
         emitWarning(

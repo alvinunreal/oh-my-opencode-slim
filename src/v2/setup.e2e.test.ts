@@ -1849,11 +1849,12 @@ describe('createV2Setup e2e', () => {
     }
   }, 20_000);
 
-  test('background-default flip arms on registry replay, not registration', async () => {
+  test('preset wrapper readiness arms on registry replay, not registration', async () => {
     // The v2 registry replays transforms on the next read after a change,
     // never at registration (the skills test below relies on the same
-    // contract). The flip must therefore arm inside the replayed callback;
-    // a registration-time probe would always read false and never arm.
+    // contract). The wrapper must therefore land inside the replayed
+    // callback; a registration-time probe would always read not-ready and
+    // never admit a launch.
     const { ctx, calls } = makeMockV2Context(projectDir);
     const setupCtx = ctx as unknown as {
       tool: {
@@ -1880,18 +1881,17 @@ describe('createV2Setup e2e', () => {
         id === 'subagent' && toolPresent ? nativeTool : undefined,
     });
     let callSeq = 0;
-    const sendLaunch = async (background?: boolean) => {
+    const sendLaunch = async () => {
       const event = {
         tool: 'subagent',
-        sessionID: 'ses_flip_parent',
+        sessionID: 'ses_wrapper_parent',
         agent: 'orchestrator',
-        messageID: 'msg_flip',
-        id: `call_flip_${++callSeq}`,
+        messageID: 'msg_wrapper',
+        id: `call_wrapper_${++callSeq}`,
         input: {
           agent: 'fixer',
-          description: 'flip probe',
+          description: 'wrapper probe',
           prompt: 'Work',
-          ...(background === undefined ? {} : { background }),
         },
       };
       const hook = calls.toolBeforeCb;
@@ -1906,35 +1906,34 @@ describe('createV2Setup e2e', () => {
       // than launching an unwrapped child without its durable snapshot.
       expect(replay).toBeDefined();
       await expect(sendLaunch()).rejects.toThrow('wrapper unavailable');
-      await flushLoggerForTesting();
-      expect(readPluginLog()).not.toContain('v2 background default applied');
 
-      // (2) First replay lands the rewrite: the mechanism half arms and
-      // the same omitted call flips to background.
+      // (2) First replay lands the wrap: the same omitted-background call
+      // is admitted and stays free of any plugin-owned background field.
       replay?.(draft());
-      expect((await sendLaunch()).background).toBe(true);
-      await flushLoggerForTesting();
-      expect(nativeTool.description).toContain('Background (default)');
+      const admitted = (await sendLaunch()) as Record<string, unknown>;
+      expect('background' in admitted).toBe(false);
+      // The wrap covers the executor only: the native description stays
+      // byte-unchanged.
+      expect(nativeTool.description).toBe(
+        'Foreground (default) native wording',
+      );
 
-      // (3) Explicit values pass through untouched in both lanes.
-      expect((await sendLaunch(true)).background).toBe(true);
-      expect((await sendLaunch(false)).background).toBe(false);
-      await flushLoggerForTesting();
-
-      // (4) A later replay without the native tool disarms again, and a
+      // (3) A later replay without the native tool resets readiness, and a
       // subsequent replay with it re-arms (replays are idempotent).
       toolPresent = false;
       replay?.(draft());
       await expect(sendLaunch()).rejects.toThrow('wrapper unavailable');
+      // No tool draft was available, so readiness stays closed without a
+      // misleading error log; a later replay with the tool re-arms it.
       await flushLoggerForTesting();
-      expect(readPluginLog()).toContain(
-        '[v2] subagent description flip missed (tool absent)',
-      );
+      expect(readPluginLog()).not.toContain('[v2] preset wrapper failed');
       toolPresent = true;
       replay?.(draft());
-      expect((await sendLaunch()).background).toBe(true);
+      expect(
+        'background' in ((await sendLaunch()) as Record<string, unknown>),
+      ).toBe(false);
 
-      // (5) A throwing replay must not leave a stale arm behind.
+      // (4) A throwing replay must not leave a stale readiness behind.
       replay?.({
         update: () => {
           throw new Error('boom');
@@ -1943,15 +1942,13 @@ describe('createV2Setup e2e', () => {
       });
       await expect(sendLaunch()).rejects.toThrow('wrapper unavailable');
       await flushLoggerForTesting();
-      expect(readPluginLog()).toContain(
-        '[v2] subagent description flip failed',
-      );
+      expect(readPluginLog()).toContain('[v2] preset wrapper failed');
     } finally {
       await cleanup();
     }
   }, 20_000);
 
-  test('background-default flip disarms on setup disposal', async () => {
+  test('preset wrapper registration disposes without leaving a stale admission path', async () => {
     const { ctx, calls } = makeMockV2Context(projectDir);
     const setupCtx = ctx as unknown as {
       tool: {
@@ -1971,10 +1968,10 @@ describe('createV2Setup e2e', () => {
     };
     const launch = () => ({
       tool: 'subagent',
-      sessionID: 'ses_flip_dispose',
+      sessionID: 'ses_wrapper_dispose',
       agent: 'orchestrator',
-      messageID: 'msg_flip_dispose',
-      id: 'call_flip_dispose',
+      messageID: 'msg_wrapper_dispose',
+      id: 'call_wrapper_dispose',
       input: {
         agent: 'fixer',
         description: 'dispose probe',
@@ -1983,38 +1980,94 @@ describe('createV2Setup e2e', () => {
     });
 
     const cleanup = await createV2Setup()(ctx);
-    // Land the rewrite and prove the flip is armed before disposal: the
-    // omitted background flips and the armed log is on record. Without
-    // this precondition the disarm assertions below would prove nothing.
+    // Land the wrap before disposal: the omitted-background launch is
+    // admitted with no plugin-owned background field (proves the admission
+    // path was live before the disposal assertions below).
     replay?.({
       update: (_id: string, fn: (tool: typeof nativeTool) => void) => {
         fn(nativeTool);
       },
       get: (id: string) => (id === 'subagent' ? nativeTool : undefined),
     });
-    const armedLaunch = launch();
+    const admitted = launch();
     const hook = calls.toolBeforeCb;
     if (!hook) throw new Error('tool:execute.before not captured');
-    await hook(armedLaunch);
-    expect(armedLaunch.input.background).toBe(true);
-    await flushLoggerForTesting();
-    expect(readPluginLog()).toContain('[v2] background-default flip armed');
-    expect(readPluginLog()).not.toContain(
-      '[v2] background-default flip disarmed',
-    );
+    await hook(admitted);
+    expect(
+      (admitted.input as Record<string, unknown>).background,
+    ).toBeUndefined();
+    expect(nativeTool.description).toBe('Foreground (default) native wording');
 
     await cleanup();
-    await flushLoggerForTesting();
-    // Disposal must disarm the flip itself. A disposed instance also
-    // rejects further execute.before calls, but that rejection happens
-    // before any flip consultation, so only the disarmed log proves the
-    // state transition (removing disarm() from the disposer fails here).
-    expect(readPluginLog()).toContain('[v2] background-default flip disarmed');
 
+    // Disposal must retire the admission path: further execute.before
+    // calls are rejected outright and no background field is injected.
     const rejected = launch();
     await expect(hook(rejected)).rejects.toThrow(/disposed|retired/);
-    expect(rejected.input).not.toHaveProperty('background');
+    expect(
+      (rejected.input as Record<string, unknown>).background,
+    ).toBeUndefined();
   }, 20_000);
+
+  describe('v2 host version floor', () => {
+    const setVersion = (ctx: V2Context, version: string) => {
+      (ctx.app as { version: string }).version = version;
+    };
+
+    for (const version of ['1.0.0', 'v2.2.7', '2.2.9']) {
+      test(`rejects ${version} before any registration`, async () => {
+        const { ctx, calls } = makeMockV2Context(projectDir);
+        setVersion(ctx, version);
+        await expect(createV2Setup()(ctx)).rejects.toThrow(/unsupported/);
+        expect(calls.commandAdds).toEqual([]);
+        expect(calls.toolAdds).toEqual([]);
+        expect(calls.hooks).toEqual([]);
+        expect(calls.agentTransformCount).toBe(0);
+      }, 20_000);
+    }
+
+    for (const version of ['2.3.0', '2.3.0-dev', 'v2.3.0', '3.0.0']) {
+      test(`accepts ${version} and completes registration`, async () => {
+        const { ctx, calls } = makeMockV2Context(projectDir);
+        setVersion(ctx, version);
+        const cleanup = await createV2Setup()(ctx);
+        try {
+          expect(calls.commandAdds.map((c) => c.name)).toContain('deepwork');
+        } finally {
+          await cleanup();
+        }
+      }, 20_000);
+    }
+
+    test('unparseable version passes and completes registration', async () => {
+      const { ctx, calls } = makeMockV2Context(projectDir);
+      setVersion(ctx, 'not-a-semver');
+      const cleanup = await createV2Setup()(ctx);
+      try {
+        expect(calls.commandAdds.map((c) => c.name)).toContain('deepwork');
+      } finally {
+        await cleanup();
+      }
+    }, 20_000);
+
+    test('reduced context without agent.transform skips the version check', async () => {
+      const { ctx } = makeMockV2Context(projectDir);
+      setVersion(ctx, '1.0.0');
+      const reduced = { app: ctx.app } as unknown as V2Context;
+      await expect(createV2Setup()(reduced)).resolves.toBeFunction();
+    }, 20_000);
+
+    test('registration-only embedded context skips the version check', async () => {
+      const { ctx } = makeMockV2Context(projectDir);
+      setVersion(ctx, '1.0.0');
+      const embedded = {
+        app: ctx.app,
+        agent: ctx.agent,
+        location: ctx.location,
+      } as unknown as V2Context;
+      await expect(createV2Setup()(embedded)).resolves.toBeFunction();
+    }, 20_000);
+  });
 
   test('bundled skills register through a lazily replayed draft', async () => {
     // Deferred execution previously prevented setup from retaining the
@@ -4808,7 +4861,7 @@ describe('createV2Setup e2e', () => {
     20_000,
   );
 
-  test('admission uses the finalized v2 child model instead of its parent', async () => {
+  test('v2 ignores sameProviderPolicy and injects no background field', async () => {
     await Bun.write(
       path.join(configDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
@@ -4816,7 +4869,7 @@ describe('createV2Setup e2e', () => {
         backgroundJobs: { sameProviderPolicy: { openai: 'foreground' } },
       }),
     );
-    const { ctx, calls, events } = makeMockV2Context(projectDir);
+    const { ctx, calls } = makeMockV2Context(projectDir);
     const agent = ctx.agent as unknown as {
       transform: (callback: (draft: unknown) => void) => Promise<{
         dispose: () => void;
@@ -4854,39 +4907,60 @@ describe('createV2Setup e2e', () => {
 
     const cleanup = await createV2Setup()(ctx);
     try {
-      events.push({
-        type: 'message.updated',
-        properties: {
-          info: {
-            id: 'msg_parent_model',
-            sessionID: 'ses_admission_parent',
-            providerID: 'openai',
-            modelID: 'parent-model',
-          },
-        },
-      });
-      await Bun.sleep(20);
-
       const beforeHook = calls.toolBeforeCb;
       if (!beforeHook) throw new Error('tool:execute.before not captured');
-      const childLaunch = {
+      // The parent's provider (openai) is listed as 'foreground'; a v1
+      // conversion would flip an omitted background to foreground here.
+      // v2 owns the field: it must stay omitted and every explicit lane
+      // must pass through untouched.
+      const omitted = {
         tool: 'subagent',
-        sessionID: 'ses_admission_parent',
+        sessionID: 'ses_policy_omitted',
         agent: 'orchestrator',
-        messageID: 'msg_admission',
-        id: 'call_admission',
+        messageID: 'msg_policy',
+        id: 'call_policy_omitted',
         input: {
           agent: 'fixer',
-          description: 'verify finalized child model',
+          description: 'policy probe',
+          prompt: 'Do the work',
+        },
+      };
+      await beforeHook(omitted);
+      expect(
+        (omitted.input as Record<string, unknown>).background,
+      ).toBeUndefined();
+
+      const explicitBackground = {
+        ...omitted,
+        sessionID: 'ses_policy_background',
+        id: 'call_policy_background',
+        input: {
+          agent: 'fixer',
+          description: 'policy probe',
           prompt: 'Do the work',
           background: true,
         },
       };
-      await beforeHook(childLaunch);
+      await beforeHook(explicitBackground);
+      expect(
+        (explicitBackground.input as Record<string, unknown>).background,
+      ).toBe(true);
 
-      // The policy applies to the parent's provider. If admission incorrectly
-      // falls back to the parent model, this is converted to foreground.
-      expect(childLaunch.input.background).toBe(true);
+      const explicitForeground = {
+        ...omitted,
+        sessionID: 'ses_policy_foreground',
+        id: 'call_policy_foreground',
+        input: {
+          agent: 'fixer',
+          description: 'policy probe',
+          prompt: 'Do the work',
+          background: false,
+        },
+      };
+      await beforeHook(explicitForeground);
+      expect(
+        (explicitForeground.input as Record<string, unknown>).background,
+      ).toBe(false);
     } finally {
       await cleanup();
     }

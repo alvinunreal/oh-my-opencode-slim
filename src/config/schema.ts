@@ -695,7 +695,7 @@ const BackgroundJobsConfigStrictSchema = z.object({
     .record(z.string().min(1), z.literal('foreground'))
     .default({})
     .describe(
-      'Opt-in per-provider policy for native background tasks on V1 managed and V2 native lifecycles (inert when backgroundJobs.mode is "off"): when the parent session and child agent resolve to a provider listed here as "foreground", the background task request is converted to foreground execution. Unlisted providers keep background behavior. Default {} (no conversion).',
+      'Opt-in per-provider policy for native background tasks on the V1 managed lifecycle (inert when backgroundJobs.mode is "off"): when the parent session and child agent resolve to a provider listed here as "foreground", the background task request is converted to foreground execution. Unlisted providers keep background behavior. OpenCode v2 subagents always run in the background, so this key is v1-only; an explicit value on v2 emits an unsupported-host warning and is ignored. Default {} (no conversion).',
     ),
   waitForUserGuard: z
     .boolean()

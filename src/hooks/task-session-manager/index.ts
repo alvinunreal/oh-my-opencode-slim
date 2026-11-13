@@ -362,19 +362,16 @@ export function createTaskSessionManagerHook(
       agentType: string,
       parentSessionID?: string,
     ) => string | undefined;
-    /** Current "provider/model" for a session. Feeds same-provider
-     *  background conversion. */
+    /** Current "provider/model" for a session. Feeds V1 same-provider
+     *  background→foreground conversion. */
     getSessionModel?: (sessionID: string) => string | undefined;
-    /** Opt-in provider → "foreground" map for same-provider background
+    /** Opt-in provider → "foreground" map for V1 same-provider background
      *  conversion. */
     sameProviderPolicy?: Record<string, 'foreground'>;
     /** Host flavor marker ('v2' on OpenCode v2 hosts); selects the native
      *  delegation vocabulary in model-visible tool guidance. Defaults v1. */
     hostFlavor?: string;
     v1ReplayOutcome?: ForegroundFallbackManager['v1ReplayOutcome'];
-    /** Per-instance pairing flag for the background-default flip (v2 only);
-     *  see BackgroundDefaultFlipState in v2/delegation. */
-    isBackgroundDefaultFlipArmed?: () => boolean;
     recoverRetainedSession?: (request: {
       parentSessionID: string;
       requested: string;
@@ -965,7 +962,6 @@ export function createTaskSessionManagerHook(
         taskContextTracker,
         getLifecycleEpoch: () => rehydrateState.nextEpoch,
         hostFlavor: options.hostFlavor,
-        isBackgroundDefaultFlipArmed: options.isBackgroundDefaultFlipArmed,
         recoverRetainedSession: options.recoverRetainedSession,
         resolveCanonicalTaskRef: options.resolveCanonicalTaskRef,
         isDisposed: options.isDisposed,

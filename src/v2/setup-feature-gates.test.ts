@@ -4,7 +4,7 @@
  * - `interview.enabled: false` → no bridge instance (no `/interview` command
  *   marker registered, no per-event bridge work, no context-hook dispatch).
  * - V2 native defaults → no job ledger/KV; native keeps preset routing and
- *   the paired background-first rewrite, while off leaves delegation untouched.
+ *   the preset-wrapper executor wrap, while off leaves delegation untouched.
  * - `liveConfigRefresh: false` → no config-file watcher, while the one-shot
  *   startup profile seed and explicit `refreshProfiles` still function.
  * - `sidebar: false` → no server-side sidebar state write on finalization.
@@ -28,7 +28,6 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import * as configWatch from './config-watch';
-import { SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION } from './delegation';
 import { sessionPresetRpc } from './preset-rpc';
 import { createV2Setup } from './setup';
 import type {
@@ -116,8 +115,8 @@ function makeCtx(
     tool: {
       transform: async (cb: (draft: unknown) => void) => {
         // One live `subagent` tool per replay so `update` and `get` observe
-        // the same object: the setup reads the description back after the
-        // rewrite to arm its background-default flip.
+        // the same object: the setup wraps this executor when preset
+        // routing needs the wrapper.
         const subagentTool: Record<string, unknown> = {
           description: 'native',
           execute: async () => ({}),
@@ -125,8 +124,8 @@ function makeCtx(
         subagentTools.push(subagentTool);
         cb({
           // The native subagent executor is what the wrapper(s) wrap; record
-          // each update plus the description the rewrite left behind, so the
-          // native description/default pair stays observable.
+          // each update plus the description the wrap left behind, so the
+          // native description staying byte-unchanged stays observable.
           update: (id: string, update: (tool: unknown) => void) => {
             const tool = id === 'subagent' ? subagentTool : {};
             update(tool);
@@ -241,17 +240,16 @@ function makeCtx(
 const INTERVIEW_MARKER =
   '<omos-interview-command>do it</omos-interview-command>';
 
-/** Native preset routing keeps the paired background-first description. */
+/**
+ * Preset-wrapper readiness keeps the native subagent description untouched:
+ * the wrapper wraps the executor, never rewrites the description text.
+ */
 function expectNativeWrap(
   updates: Array<{ id: string; description?: unknown }>,
 ) {
   const subagent = updates.filter((u) => u.id === 'subagent');
   expect(subagent.length).toBeGreaterThan(0);
-  expect(
-    subagent.every(
-      (u) => u.description === SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION,
-    ),
-  ).toBe(true);
+  expect(subagent.every((u) => u.description === 'native')).toBe(true);
 }
 
 /** A v2 delegation the `execute.before` bridge must admit (or reject). */
@@ -597,16 +595,11 @@ describe('v2 setup feature gates', () => {
     },
   );
 
-  test('native default keeps the paired background-first description', async () => {
+  test('native default leaves the native subagent description untouched', async () => {
     const { ctx, toolUpdates } = makeCtx(projectDir);
     const cleanup = await createV2Setup()(ctx);
     try {
-      const flipped = toolUpdates.filter(
-        (u) =>
-          u.id === 'subagent' &&
-          u.description === SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION,
-      );
-      expect(flipped.length).toBeGreaterThan(0);
+      expectNativeWrap(toolUpdates);
     } finally {
       await cleanup();
     }

@@ -380,7 +380,7 @@ and [Council](council.md) for what remains.
 | `backgroundJobs.concurrency.defaultConcurrency` | integer | `0` | Maximum concurrently running native background tasks. `0` means unlimited; accepted values are `0`–`1000`. V1 managed only; an explicit `concurrency` object on V2 is rejected even when every limit is zero. See [Background Job Management](#background-job-management). |
 | `backgroundJobs.concurrency.providerConcurrency` | object | `{}` | Per-provider caps keyed by provider ID. Each value must be `0`–`1000`, where `0` means unlimited for that provider. The most specific configured cap wins: model > provider > default. V1 managed only. See [Background Job Management](#background-job-management). |
 | `backgroundJobs.concurrency.modelConcurrency` | object | `{}` | Per-model caps keyed by `provider/model` ID. Each value must be `0`–`1000`, where `0` means unlimited for that model. The most specific configured cap wins: model > provider > default. V1 managed only. See [Background Job Management](#background-job-management). |
-| `backgroundJobs.sameProviderPolicy` | object | `{}` | Opt-in per-provider policy keyed by provider ID; the only value is `"foreground"`. When the parent session's current model and the child agent's resolved model both resolve to a configured provider, an explicit background call (`task(..., background: true)` on v1, `subagent(..., background: true)` on v2) is converted to the existing foreground execution path. On v2 hosts, when the background-default flip is active, calls that omit `background` are first defaulted to background, so they are converted too. Unconfigured, different, or undeterminable providers keep background behavior. See [Background Job Management](#background-job-management). |
+| `backgroundJobs.sameProviderPolicy` | object | `{}` | Opt-in per-provider policy keyed by provider ID; the only value is `"foreground"`. When the parent session's current model and the child agent's resolved model both resolve to a configured provider, an explicit background call (`task(..., background: true)` on v1) is converted to the existing foreground execution path. V1 managed only; an explicit value on V2 emits an `unsupported-host` warning and is ignored. Unconfigured, different, or undeterminable providers keep background behavior. See [Background Job Management](#background-job-management). |
 | `backgroundJobs.childInputWake` | boolean | `true` | Master switch for child-input wakes: when true, each ask kind wakes its parent only if enabled in `backgroundJobs.childInputWakeKinds` (default: questions wake, permissions do not). When false, no child ask wakes the parent. V1 managed only; an explicit value on V2 emits an `unsupported-host` warning and is ignored. |
 | `backgroundJobs.childInputWakeKinds` | object | `{ permission: false, question: true }` | Which child ask kinds may wake the parent. Permission asks default off (#1504) because their replies carry no host wake and are resolved by the UI or an external responder. Invalid or partial values fall back to per-field defaults silently. V1 managed only; an explicit value on V2 emits an `unsupported-host` warning and is ignored. See [Background Job Management](#background-job-management). |
 | `backgroundJobs.waitForUserGuard` | boolean | `true` | V1 only (`wait_for_user` is not registered on V2); an explicit value on V2 emits an `unsupported-host` warning and is ignored. When true, intercepts `wait_for_user` calls while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. See [Background Job Management](#background-job-management). |
@@ -771,7 +771,7 @@ disabled unless `wallClockTimeoutMs` is set:
 The settings in the example are V1 managed only. On V2, explicit
 `concurrency`, `wallClockTimeoutMs`, `maxSessionsPerAgent`, and
 `stopConfirmationMs` are rejected during configuration; `sameProviderPolicy`
-remains supported.
+warns as v1-only and is ignored.
 
 On V1, `orchestratorWake` defaults to enabled with a 5-minute continuous-idle
 interval and `"auto"` mode (todo-gated). Set `enabled: false` to keep idle
@@ -799,15 +799,14 @@ the new model. The scheduler is process-scoped: when the plugin re-inits on a
 config update, running slots and queued tickets survive, so admission state
 is not reset mid-run.
 
-`sameProviderPolicy` is an opt-in per-provider policy for local inference
-backends that execute multiple logical agent sessions on one shared
-accelerator/model runtime. When a foreground parent and a same-provider
+`sameProviderPolicy` is an opt-in per-provider policy (V1 managed only) for
+local inference backends that execute multiple logical agent sessions on one
+shared accelerator/model runtime. When a foreground parent and a same-provider
 background child run concurrently on such a backend, throughput can degrade
 from repeated model/KV context switching between the two large sessions.
 When the parent session's current model and the child agent's resolved model
 both resolve to a provider configured with `"foreground"`, an explicit
-`task(..., background: true)` request or an omitted `background` on v2 (when
-the background-default flip is active) is
+`task(..., background: true)` request is
 converted to the existing foreground execution path:
 
 ```jsonc
@@ -928,18 +927,13 @@ model is still the failed source or already the switch target; a different
 observed selection is left untouched.
 
 Hosts up to v2.2.x end a step that finishes with `content-filter` without
-calling the `retry` hook. Slim observes `session.step.failed` instead,
-switches the model in place, and continues the run with one internal prompt:
-root sessions and background children continue in place, while a foreground
-child is re-attached inside the same native `subagent` call by the v2
-continuation wrapper. `backgroundJobs.mode: "off"` leaves the native executor
-untouched: a refused child is continued in place and its result is delivered
-as the synthetic notice below, but an already-failed foreground parent call
-is not re-attached. A continued background child delivers its final text as
-one internal synthetic subagent notice to the parent, because the host's
-original subagent job already published the refusal error. The host's own
-`state="error"` notice stays in the parent's history; v2 does not append the
-v1 managed trailing correction.
+calling the `retry` hook, and 2.3 still does. Slim observes `session.step.failed`
+instead, switches the model in place, and continues the run with one internal
+prompt; root sessions and children continue in place. OpenCode reports each
+continued child period to its parent when it settles, including the
+`state="error"` notice for the refused period, so Slim adds no second result
+notice. `backgroundJobs.mode: "off"` leaves the native executor untouched:
+a refused child is continued in place and reported by the host.
 
 On v2, the host's `provider.transport` errors (response-header timeouts,
 dropped connections) walk the chain like other provider failures. A

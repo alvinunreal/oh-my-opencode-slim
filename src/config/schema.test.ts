@@ -952,6 +952,12 @@ describe('PluginConfigSchema backgroundJobs', () => {
     expect(properties.sameProviderPolicy?.description).toContain(
       'inert when backgroundJobs.mode is "off"',
     );
+    expect(properties.sameProviderPolicy?.description).toContain(
+      'this key is v1-only',
+    );
+    expect(properties.sameProviderPolicy?.description).toContain(
+      'an explicit value on v2 emits an unsupported-host warning and is ignored',
+    );
     expect(properties.waitForUserGuard?.description).toContain(
       'v1 hosts only; ignored with a warning on OpenCode v2 hosts',
     );

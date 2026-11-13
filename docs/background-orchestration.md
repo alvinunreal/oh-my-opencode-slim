@@ -16,9 +16,8 @@ surface; it does not maintain a second child-job lifecycle on OpenCode v2.
 
 ## Runtime Requirement
 
-Background orchestration needs an OpenCode release with native background
-subagents and hook-driven completion. On v1, start it with background subagents
-enabled:
+On V2, OpenCode **2.3.0+** owns background subagents and completion for each
+child idle period. On V1, start it with background subagents enabled:
 
 ```bash
 OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
@@ -47,10 +46,8 @@ subagent(agent, description, prompt)                    → new child
 subagent(agent, description, prompt, sessionID)         → same child
 ```
 
-An omitted `background` argument is rewritten to `true` on V2, while explicit
-`true` and `false` pass through unchanged. The paired rewrite of the native
-tool description keeps the mechanism and wording consistent; teardown disarms
-both. This is a delegation-argument policy, not child-job state.
+V2 subagents always run in the background. Slim leaves the native tool
+description and arguments unchanged; there is no foreground override.
 
 Slim registers only the gaps the native model surface leaves open:
 
@@ -64,8 +61,8 @@ Slim registers only the gaps the native model surface leaves open:
   by ID.
 - `task_reply` answers a pending **permission** request. It verifies the child
   belongs to the caller, reads the pending request from the host, then replies.
-  OpenCode 2.2.6 does not expose a supported Form reply method to plugin code,
-  so questions are answered in the host UI.
+  The V2 plugin session domain does not expose Form replies, so questions are
+  answered in the host UI.
 - `task_report` lets a child add a bounded progress or escalation update to the
   parent's host inbox. It is queue-only (`resume: false`): acceptance means the
   host queued the update, not that the parent read it or started a turn.
@@ -81,11 +78,8 @@ embedding that does not run the host recovery sweep does not gain one from
 Slim. Completion notices can still be lost or scrolled out of context, which is
 why `task_status` is a pull channel.
 
-Native continuation through `subagent(sessionID, prompt)` participates in the
-host Job lifecycle, including a later terminal notification. A direct
-`session.prompt` issued outside the native subagent tool does not: that path is
-not a delegated Job, so Slim does not promise a plugin-generated parent notice
-for it.
+OpenCode reports later child work too, including direct `session.prompt`
+continuations outside the subagent tool. Slim adds no completion watcher.
 
 ### off
 
@@ -192,7 +186,6 @@ On V2 the same call is made with the native vocabulary:
 subagent(
   agent="explorer",
   description="Search auth flow",
-  background=true,
   prompt="Find the auth entry points, session storage, and login callback paths. Return file paths and a concise map. Do not edit files."
 )
 ```
@@ -371,14 +364,10 @@ the parent orchestrator continues scheduling.
 
 ### Completion delivery
 
-On V2, the host's Job completion synthetic reaches the parent inbox. An idle
-parent can be woken; a busy parent follows the host's steer/queue ordering. The
-plugin does not add a second completion message for the same native Job.
-
-`subagent(sessionID, prompt)` continuations run through the host's Job path and
-receive the corresponding notification. A direct `session.prompt` outside that
-path is not represented as a Job, so no plugin watcher synthesizes a completion
-notice for it.
+On V2, OpenCode reports each child busy period when it settles. The report
+reaches the parent inbox and wakes or steers the parent; this includes native
+`subagent(sessionID, prompt)` follow-ups and direct `session.prompt`
+continuations. Slim adds no second completion message or delivery ledger.
 
 ### Cancellation
 
@@ -433,10 +422,9 @@ managed-only policies. V2 relies on native execution and exposes no equivalent
 OMOS queue or wall-clock supervisor; do not expect those settings to impose a
 cap or deadline on V2 children.
 
-`sameProviderPolicy` remains available on V2 as a stateless argument rewrite:
-when parent and child resolve to the same opted-in provider, a background
-request is changed to foreground to avoid local KV/accelerator thrash. Unknown
-model/provider evidence leaves the call unchanged.
+`sameProviderPolicy` applies only to V1 managed tasks: a same-provider
+background request can be converted to foreground. V2 has no foreground lane;
+an explicit setting warns and is ignored.
 
 ## Example Flow
 

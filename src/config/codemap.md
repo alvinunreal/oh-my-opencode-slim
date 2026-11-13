@@ -182,7 +182,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `multiplexer`: Unified pane management config (type, layout, sizes, viewer surface)
 - `interview`: Interview feature configuration
 - `backgroundJobs`: Background job configuration
-- `backgroundJobs.concurrency`: Optional default, provider, and model caps for V1 managed background task admission. V2 rejects explicit concurrency, wall-clock, retention, and stop-confirmation settings before schema defaults; `sameProviderPolicy` remains a stateless argument policy.
+- `backgroundJobs.concurrency`: Optional default, provider, and model caps for V1 managed background task admission. V2 rejects explicit concurrency, wall-clock, retention, and stop-confirmation settings before schema defaults; `sameProviderPolicy` applies only to V1 managed and warns as ignored on V2.
 - `fallback`: Failover/retry configuration
 - `council`: Council configuration with councillor presets and a default preset
 - `companion`: Companion animation configuration

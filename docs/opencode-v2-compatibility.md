@@ -7,7 +7,11 @@ register it.
 
 The source baseline for this compatibility work is **oh-my-opencode-slim
 v3.0.5**, with historical live host verification on **OpenCode v2.0.7**. The
-plugin requires OpenCode v2.0.7+ on v2 hosts; older v2 hosts are unsupported.
+plugin requires OpenCode **2.3.0+** on v2 hosts; older v2 hosts fail setup with
+an upgrade message. This next major plugin release is the floor change: 2.3
+always runs subagents in the background and reports every child idle
+period, which replaces Slim's argument/description rewrites and its own
+duplicate completion notices.
 Bundled skills use the host's in-process registration channel (`ctx.skill` with
 `add`) on v2. On v1 the config hook adds package skill paths to the host's disk
 scanner, excluding disabled skills and names supplied by the user. MCPs also
@@ -15,9 +19,11 @@ use the host transform, with existing configured namespaces taking priority.
 Slim does not start a second MCP client or skill loader.
 The adapter targets the v2 plugin API surface (see
 [The v2 plugin API surface](#the-v2-plugin-api-surface-this-adapter-uses)),
-and the compile-time mirror guard below is pinned to `@opencode/plugin`
-2.2.0. Typecheck covers the consumed listing filters, nullable continuation
-cursors, native execution event envelope, compaction result names and the
+and the compile-time mirror guard below remains pinned to `@opencode/plugin`
+2.2.0. The 2.3.0 plugin package is not yet published to npm; the runtime host
+floor above is 2.3.0. Typecheck covers the consumed listing filters, nullable
+continuation cursors, native execution event envelope, compaction result names
+and the
 existing hook/permission contracts. This is source-contract coverage against
 v2.2.0; the latest live-host smoke baseline remains the version stated below.
 
@@ -456,7 +462,7 @@ side cannot be observed.
 | Tool execute hooks (apply-patch recovery, task-session, json-recovery) | ✅ | ✅ `createToolExecuteBridges` with subagent→task normalization | — |
 | Built-in MCPs (context7, gh_grep) auto-registered | ✅ | ✅ `ctx.mcp.transform` | `ctx.mcp.transform` is present in all v2.0.x stable hosts; the runtime capability probe is belt-and-suspenders |
 | Background-job state persistence (tombstones, deletion epochs) | ➖ process-local | ❌ not used | The V2 managed persistence was retired with the board. OpenCode owns Job durability and restart recovery; its recovery is at-least-once and can repeat external side effects, not an exactly-once guarantee (see [Background Orchestration](background-orchestration.md)) |
-| Foreground model fallback (rate-limit failover) | ✅ | ⚠️ replay disabled; retry-hook steering active | v2's non-atomic `session.switchModel` + steer replay could alter/replay a newer turn, so only the in-place switch runs. A content-filter/no-route child refusal continues on the next model: the native wrapper re-attaches foreground children inside the parent `subagent` call, while background children receive one internal result notice. `off` continues the child in place but does not re-attach the parent call |
+| Foreground model fallback (rate-limit failover) | ✅ | ⚠️ replay disabled; retry-hook steering active | v2's non-atomic `session.switchModel` + steer replay could alter/replay a newer turn, so only the in-place switch runs. A content-filter/no-route failure switches to the next model and continues in place; OpenCode reports each settled child period. There is no foreground subagent lane to reattach. |
 | `/preset` (preset manager) | ✅ configuration writes; reload to apply | ✅ TUI entry (`./tui` → `dist/tui2.js`), with **Current session** / **Global default** selection; `/preset <name>` binds the current session | The command layer registers from an `append: "app"` slot render because `keymap.layer` is provider-scoped; commands carry an `id` and `slash.arguments`. The manager needs `ui.dialog.select` + `prompt` + `confirm`; feedback uses `ui.toast.show`. Session scope is a server-registered RPC domain — `ctx.rpc.register` on the plugin side, `client.rpc` on the TUI side — whose snapshots live in `ctx.storage`; all three are required members of the v2 plugin contract, so no host-version gate is involved. It changes future subagent inference for the selected session, including best-effort adoption on explicit same-agent continuation of bound children; its main model is unchanged. User/project `.json` and `.jsonc` edits are watched (~300 ms debounce), including newly created candidates; they refresh defaults for future bindings, not saved snapshots. Global-write feedback acknowledges the refresh request, while session-apply feedback requires RPC confirmation. With persistence available, native subagent `progress` saves a new child's binding before its first prompt; same-ID continuation installs runtime inference there and saves the adopted snapshot after native execute succeeds. `session.created` is not used to capture its profile. Non-TUI clients also get a server-side `/preset <name>` command (apply-only): a name binds the invoking session, and the result is reported through the command error channel so the switch costs no model turn and adds no context. See [Preset switching](presets/preset-switching.md) for inheritance, reapplication and compatibility limits |
 | Default primary agent | ✅ finalized visible orchestrator identity | ✅ `draft.default(<visible orchestrator identity>)`; the canonical `orchestrator` entry remains a hidden alias when `displayName` is configured | v1 `default_agent` and v2 draft default target the same visible entry |
 | TUI default agent | ✅ orchestrator | ✅ host follows the default primary agent and hoists it to the head of the agent list | — |
@@ -806,7 +812,7 @@ directly when the parent calls `task_status`, `task_cancel`, or `task_reply`.
 
 ### Recovery is host-owned and at-least-once
 
-OpenCode 2.2.6 owns automatic restart continuation through its registered
+OpenCode 2.3.0 owns automatic restart continuation through its registered
 recovery sweep. A standalone embedding without that sweep does not gain one
 from Slim. Pending Job recovery is at-least-once and can repeat external side
 effects after a crash; it is not an exactly-once execution or universal delivery
@@ -955,30 +961,31 @@ admission, terminal gate, wall-clock watchdog, concurrency queue,
 orchestrator-wake scheduler, child-input wake, persistence/tombstone/delivery
 ledger, or structured-launch executor wrapper. `backgroundJobs.mode: "managed"`
 is rejected during V2 configuration; an unset mode resolves to `native`. The
-V2-only `concurrency`, `wallClockTimeoutMs`, `maxSessionsPerAgent`, and
-`stopConfirmationMs` settings are rejected when explicitly set. The remaining
-native controls are exact-ID host reads: `task_status`, `task_cancel`,
-permission-only `task_reply`, and queue-only `task_report`. Native continuation
-through `subagent(sessionID, prompt)` keeps host Job delivery; a direct
-`session.prompt` outside that path has no plugin completion watcher.
-`sameProviderPolicy` remains a stateless foreground argument rewrite.
+V1-only `concurrency`, `wallClockTimeoutMs`, `maxSessionsPerAgent`, and
+`stopConfirmationMs` settings are rejected when explicitly set on V2;
+`sameProviderPolicy` warns and is ignored because V2 subagents always run in
+background. The remaining native controls are exact-ID host reads:
+`task_status`, `task_cancel`,
+permission-only `task_reply`, and queue-only `task_report`. OpenCode reports
+every settled child busy period — native `subagent(sessionID, prompt)` and
+direct `session.prompt` continuations included — so Slim keeps no completion
+watcher.
 
 ### No orchestrator-wake on v2
 
 The wake scheduler is **not created on v2**. The host's native background
-notifier delivers the first terminal result of each Job: a busy parent is
+notifier delivers each child report: a busy parent is
 reached by steer at its next step boundary, an idle parent gets a successor
-turn, and restart recovery uses the durable Job marker. A relaunch through the
-`subagent` tool starts a new Job generation and re-arms the notifier. There is
-no plugin tracker for direct child prompts outside native Jobs. Every native
-`subagent(sessionID, prompt)` continuation participates in host Job delivery;
-a missing notice is recovered with `task_status`. After TUI kill-all, a volatile
-reminder tells each affected parent not to relaunch the stopped work; it
-expires at that parent's next external prompt. Child permission/question asks
-are a host-UI boundary the host does not route to the parent agent; the parent
-discovers open permission requests via `task_status` and answers them with
-`task_reply`. The whole `backgroundJobs.orchestratorWake` config section is
-v1-only and warns as ignored on v2.
+turn, and restart recovery uses the durable outbox rows. There
+is no plugin completion tracker; OpenCode reports every settled child period,
+including continuations started by Slim's refusal recovery or any direct
+`session.prompt`. A missing notice is recovered with `task_status`. After TUI
+kill-all, a volatile reminder tells each affected parent not to relaunch the
+stopped work; it expires at that parent's next external prompt. Child
+permission/question asks are a host-UI boundary the host does not route to the
+parent agent; the parent discovers open permission requests via `task_status`
+and answers them with `task_reply`. The whole `backgroundJobs.orchestratorWake`
+config section is v1-only and warns as ignored on v2.
 
 ### Terminal-publication wake
 

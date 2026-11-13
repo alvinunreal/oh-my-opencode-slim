@@ -83,7 +83,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
    - Prompt content is injected only through the cache-safe helpers in `src/hooks/cache-safe-injection.ts` so provider prompt-cache prefixes stay byte-stable.
 
 3. **Delegated execution**
-   - On V2, OpenCode owns native background child execution, same-session continuation, steering, Job persistence, completion delivery, and restart recovery. The plugin registers exact-ID `task_status`/`task_cancel`/`task_reply` and child `task_report`; it reads host sessions on demand and keeps no child-job ledger.
+   - On V2, OpenCode 2.3+ owns native background child execution, same-session continuation, steering, Job persistence, completion delivery, and restart recovery. The plugin registers exact-ID `task_status`/`task_cancel`/`task_reply` and child `task_report`; it reads host sessions on demand, keeps no child-job ledger, and adds no second completion message.
    - On V1 managed, native OpenCode background tasks are parsed from `task` output and tracked in the shared background job board (board + store + coordinator + supervisor in `src/utils/`).
    - On V1 managed, `src/hooks/task-session-manager/` updates job-board state, resolves short aliases, and observes terminal deliveries in the parent's history (the board itself is never rendered); runtime-status reconciliation and the shared terminal-publication gate (`background-job-terminal-gate.ts`) keep board state honest against live session status.
    - On V1 managed, `src/hooks/orchestrator-wake/` periodically nudges an idle parent orchestrator when incomplete TODOs remain, pushes later terminal results as one-shot deltas, and reacts to jobs that stop without a terminal result.
