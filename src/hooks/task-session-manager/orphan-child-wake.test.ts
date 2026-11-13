@@ -46,11 +46,25 @@ function createDeps(
     resolve?: typeof resolveUndeliveredBackgroundChild;
     willAttemptFallback?: (sessionID: string) => boolean;
     registerSessionAsOrchestrator?: (sessionID: string) => void;
+    isPrimaryAgentName?: (agent: string) => boolean;
     isDisposed?: () => boolean;
+    reconcileIdle?: boolean;
   },
 ) {
-  const scheduleChildIdleReconciliation = mock(() => {});
-  const reconcile = mock(async () => ({ kind: 'committed' as const }));
+  const reconcile = mock(
+    async (record: { taskID: string }, outcome?: { kind: string }) => {
+      const row = board.get(record.taskID);
+      if (row) {
+        row.state = outcome?.kind === 'session-error' ? 'error' : 'completed';
+      }
+      return { kind: 'committed' as const };
+    },
+  );
+  const scheduleChildIdleReconciliation = mock((sessionID: string) => {
+    if (!options?.reconcileIdle) return;
+    const row = board.get(sessionID);
+    if (row) void reconcile(row, { kind: 'inspect' });
+  });
   const deps = {
     inputWaits: {
       trackInputWait() {},
@@ -68,6 +82,7 @@ function createDeps(
       now: () => 1000,
       willAttemptFallback: options?.willAttemptFallback,
       registerSessionAsOrchestrator: options?.registerSessionAsOrchestrator,
+      isPrimaryAgentName: options?.isPrimaryAgentName,
       isDisposed: options?.isDisposed,
       ...(options?.resolve
         ? { resolveUndeliveredBackgroundChild: options.resolve }
@@ -444,6 +459,7 @@ describe('resolveUndeliveredBackgroundChild (#1560)', () => {
       background?: boolean;
       withTime?: boolean;
       output?: string;
+      parentAgent?: string;
     } = {},
   ) {
     const input = {
@@ -457,32 +473,20 @@ describe('resolveUndeliveredBackgroundChild (#1560)', () => {
         info: {
           id: `call-${taskID}`,
           role: 'assistant',
-          agent: 'orchestrator',
+          agent: extra.parentAgent ?? 'orchestrator',
           ...(extra.withTime === false ? {} : { time: { created: at } }),
         },
         parts: [
           {
-            type: 'tool-call',
-            toolCallId: `call-${taskID}`,
-            toolName: 'subagent',
-            input,
-          },
-        ],
-      },
-      {
-        info: {
-          id: `result-${taskID}`,
-          role: 'tool',
-          ...(extra.withTime === false ? {} : { time: { created: at + 1 } }),
-        },
-        parts: [
-          {
-            type: 'tool-result',
-            toolCallId: `call-${taskID}`,
-            toolName: 'subagent',
-            output: {
-              type: 'text',
-              value: extra.output ?? launchText(taskID),
+            type: 'tool',
+            tool: 'task',
+            ...(extra.withTime === false
+              ? {}
+              : { time: { start: at, end: at + 1 } }),
+            state: {
+              input,
+              output: extra.output ?? launchText(taskID),
+              status: 'completed',
             },
           },
         ],
@@ -495,27 +499,74 @@ describe('resolveUndeliveredBackgroundChild (#1560)', () => {
       info: {
         id: `delivery-${taskID}`,
         role: 'assistant',
+        sessionID: PARENT,
         time: { created: at },
       },
       parts: [
         {
           type: 'text',
-          text: `<subagent sessionID="${taskID}" state="completed">\nDone\n</subagent>`,
-          metadata: { source: 'subagent', childID: taskID, state: 'completed' },
+          text: `<task id="${taskID}" state="completed">\nDone\n</task>`,
+          synthetic: true,
         },
       ],
     };
+  }
+
+  function childTranscript(
+    prompt = 'find it',
+    options: { laterPrompt?: string; error?: boolean } = {},
+  ) {
+    const data = [
+      {
+        info: { id: 'child-input-1', role: 'user', time: { created: 20 } },
+        parts: [{ type: 'text', text: prompt }],
+      },
+      {
+        info: {
+          id: 'child-answer-1',
+          role: 'assistant',
+          time: { completed: 30 },
+          ...(options.error ? { error: { message: 'child failed' } } : {}),
+        },
+        parts: [{ type: 'text', text: 'Done' }],
+      },
+    ];
+    if (options.laterPrompt !== undefined) {
+      data.push(
+        {
+          info: {
+            id: 'child-input-2',
+            role: 'user',
+            time: { created: 40 },
+          },
+          parts: [{ type: 'text', text: options.laterPrompt }],
+        },
+        {
+          info: {
+            id: 'child-answer-2',
+            role: 'assistant',
+            time: { completed: 50 },
+          },
+          parts: [{ type: 'text', text: 'Later answer' }],
+        },
+      );
+    }
+    return { data };
   }
 
   function proverInput(
     transcript: unknown,
     options: {
       fail?: boolean;
+      failChild?: boolean;
+      childTranscript?: unknown;
       hostParentID?: string | null;
       hostAgent?: string | null;
     } = {},
   ) {
+    const reads = { child: 0, parent: 0 };
     return {
+      reads,
       input: {
         directory: '/tmp',
         worktree: '/tmp',
@@ -536,9 +587,18 @@ describe('resolveUndeliveredBackgroundChild (#1560)', () => {
                     }
                   : { id: path.id },
             })),
-            messages: mock(async () => {
-              if (options.fail) throw new Error('host unavailable');
-              return transcript;
+            messages: mock(async ({ path }: { path: { id: string } }) => {
+              if (path.id === CHILD) {
+                reads.child += 1;
+                if (options.failChild) throw new Error('child unavailable');
+                return options.childTranscript ?? childTranscript();
+              }
+              if (path.id === PARENT) {
+                reads.parent += 1;
+                if (options.fail) throw new Error('host unavailable');
+                return transcript;
+              }
+              return { data: [] };
             }),
           },
         },
@@ -559,17 +619,55 @@ describe('resolveUndeliveredBackgroundChild (#1560)', () => {
     ).toMatchObject({ parentSessionID: PARENT });
   });
 
+  test('requires the terminal child prompt to match the delegation', async () => {
+    const proof = proverInput(
+      { data: delegationMessage(CHILD, 10, { background: true }) },
+      { childTranscript: childTranscript('a different prompt') },
+    );
+
+    expect(await resolveUndeliveredBackgroundChild(proof)).toBeUndefined();
+    expect(proof.reads).toEqual({ child: 1, parent: 1 });
+  });
+
+  test('single-flights concurrent proofs for the same child', async () => {
+    const proof = proverInput({
+      data: delegationMessage(CHILD, 10, { background: true }),
+    });
+
+    const results = await Promise.all([
+      resolveUndeliveredBackgroundChild(proof),
+      resolveUndeliveredBackgroundChild(proof),
+    ]);
+
+    expect(results[0]).toMatchObject({ parentSessionID: PARENT });
+    expect(results[1]).toMatchObject({ parentSessionID: PARENT });
+    expect(proof.reads).toEqual({ child: 1, parent: 1 });
+  });
+
   test('refuses a launch the parent already saw delivered', async () => {
     const transcript = {
       data: [
         ...delegationMessage(CHILD, 10, { background: true }),
-        deliveryMessage(CHILD, 20),
+        deliveryMessage(CHILD, 40),
       ],
     };
 
     expect(
       await resolveUndeliveredBackgroundChild(proverInput(transcript)),
     ).toBeUndefined();
+  });
+
+  test('fences native delivery against the classified round completion time', async () => {
+    const proof = proverInput({
+      data: [
+        ...delegationMessage(CHILD, 10, { background: true }),
+        deliveryMessage(CHILD, 20),
+      ],
+    });
+
+    expect(await resolveUndeliveredBackgroundChild(proof)).toMatchObject({
+      parentSessionID: PARENT,
+    });
   });
 
   test('refuses a foreground delegation — the parent awaits the tool result', async () => {
@@ -656,5 +754,167 @@ describe('resolveUndeliveredBackgroundChild (#1560)', () => {
         taskID: 'not a session id',
       }),
     ).toBeUndefined();
+  });
+
+  function resolveForV1Event(
+    proof: ReturnType<typeof proverInput>,
+  ): typeof resolveUndeliveredBackgroundChild {
+    const { parentSessionID: _parentSessionID, ...options } = proof;
+    return (observation) =>
+      resolveUndeliveredBackgroundChild({ ...options, ...observation });
+  }
+
+  function v1ErrorEvent() {
+    return {
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: CHILD,
+          error: { name: 'Error', data: { message: 'child failed' } },
+        },
+      },
+    };
+  }
+
+  function v1IdleEvent() {
+    return {
+      event: { type: 'session.idle', properties: { sessionID: CHILD } },
+    };
+  }
+
+  test('adopts a v1 terminal orphan and publishes its failure once', async () => {
+    const board = new BackgroundJobBoard();
+    const proof = proverInput(
+      { data: delegationMessage(CHILD, 10, { background: true }) },
+      { childTranscript: childTranscript('find it', { error: true }) },
+    );
+    const { deps, reconcile } = createDeps(board, managed, {
+      resolve: resolveForV1Event(proof),
+    });
+
+    await handleEvent(v1ErrorEvent(), deps);
+
+    expect(board.get(CHILD)).toMatchObject({
+      parentSessionID: PARENT,
+      state: 'error',
+      recoveredAtStartup: true,
+    });
+    expect(proof.reads).toEqual({ child: 1, parent: 1 });
+    expect(reconcile).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not adopt after a later foreground child continuation', async () => {
+    const board = new BackgroundJobBoard();
+    const proof = proverInput(
+      { data: delegationMessage(CHILD, 10, { background: true }) },
+      {
+        childTranscript: childTranscript('find it', {
+          laterPrompt: 'continue',
+        }),
+      },
+    );
+    const { deps, scheduleChildIdleReconciliation, reconcile } = createDeps(
+      board,
+      managed,
+      { resolve: resolveForV1Event(proof) },
+    );
+
+    await handleEvent(v1IdleEvent(), deps);
+
+    expect(board.get(CHILD)).toBeUndefined();
+    expect(scheduleChildIdleReconciliation).not.toHaveBeenCalled();
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  test('duplicate v1 idle observations adopt and publish only once', async () => {
+    const board = new BackgroundJobBoard();
+    const proof = proverInput({
+      data: delegationMessage(CHILD, 10, { background: true }),
+    });
+    const resolve = mock(resolveForV1Event(proof));
+    const { deps, reconcile, scheduleChildIdleReconciliation } = createDeps(
+      board,
+      managed,
+      { resolve, reconcileIdle: true },
+    );
+
+    await handleEvent(v1IdleEvent(), deps);
+    await handleEvent(v1IdleEvent(), deps);
+
+    expect(board.get(CHILD)).toMatchObject({ state: 'completed' });
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(scheduleChildIdleReconciliation).toHaveBeenCalledTimes(1);
+    expect(reconcile).toHaveBeenCalledTimes(1);
+  });
+
+  test('admits a configured non-orchestrator primary and rejects other parents', async () => {
+    const primaryBoard = new BackgroundJobBoard();
+    const primaryProof = proverInput({
+      data: delegationMessage(CHILD, 10, {
+        background: true,
+        parentAgent: 'planner',
+      }),
+    });
+    const { deps: primaryDeps } = createDeps(primaryBoard, () => false, {
+      resolve: resolveForV1Event(primaryProof),
+      isPrimaryAgentName: (agent) => agent === 'planner',
+    });
+
+    await handleEvent(v1ErrorEvent(), primaryDeps);
+
+    expect(primaryBoard.get(CHILD)).toMatchObject({
+      parentSessionID: PARENT,
+      recoveredAtStartup: true,
+    });
+
+    const otherBoard = new BackgroundJobBoard();
+    const otherProof = proverInput({
+      data: delegationMessage(CHILD, 10, {
+        background: true,
+        parentAgent: 'fixer',
+      }),
+    });
+    const { deps: otherDeps, reconcile } = createDeps(otherBoard, () => false, {
+      resolve: resolveForV1Event(otherProof),
+      isPrimaryAgentName: (agent) => agent === 'planner',
+    });
+
+    await handleEvent(v1ErrorEvent(), otherDeps);
+
+    expect(otherBoard.get(CHILD)).toBeUndefined();
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  test('negative-caches an unchanged terminal proof before rereading parent', async () => {
+    const board = new BackgroundJobBoard();
+    const proof = proverInput({ data: [] });
+    const { deps } = createDeps(board, managed, {
+      resolve: resolveForV1Event(proof),
+    });
+
+    await handleEvent(v1IdleEvent(), deps);
+    await handleEvent(v1IdleEvent(), deps);
+
+    expect(board.get(CHILD)).toBeUndefined();
+    expect(proof.reads).toEqual({ child: 2, parent: 1 });
+  });
+
+  test('refuses a native v1 delivery at or after the round fence', async () => {
+    const board = new BackgroundJobBoard();
+    const proof = proverInput({
+      data: [
+        ...delegationMessage(CHILD, 10, { background: true }),
+        deliveryMessage(CHILD, 30),
+      ],
+    });
+    const { deps, reconcile } = createDeps(board, managed, {
+      resolve: resolveForV1Event(proof),
+    });
+
+    await handleEvent(v1ErrorEvent(), deps);
+
+    expect(board.get(CHILD)).toBeUndefined();
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(proof.reads).toEqual({ child: 1, parent: 1 });
   });
 });

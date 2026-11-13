@@ -659,7 +659,7 @@ function latestFence(...values: Array<number | undefined>): number | undefined {
 /** A proven orphan: its parent, its launch fence, and the observation identity. */
 export interface UndeliveredBackgroundChild {
   parentSessionID: string;
-  /** Time of the parent's own delegation evidence; fences the adoption. */
+  /** Time of the parent's own delegation evidence; fences the adopted row. */
   launchedAt: number;
   /** The parent's own agent, read from its history. Startup recovery uses the
    *  same fallback to recognize an orchestrator parent whose in-memory
@@ -674,19 +674,33 @@ export interface UndeliveredBackgroundChild {
  *
  * A child the board lost mid-run (host restart, or a launch that predates
  * persistence) only goes idle/terminal with no row to claim the completion.
- * Re-adopting it is safe only under the same proofs startup recovery demands
- * of a non-persisted candidate: the parent's own history must show a
- * background delegation for this task, and that run must have no trusted
- * native delivery yet. Without a launch time the delivery fence has no
- * boundary, so the absence of delivery cannot be proven and this returns
- * undefined. A failed read is no evidence either.
+ * Re-adopting it is safe only when the child's current terminal round is the
+ * first and only prompt after the parent's background delegation, and that
+ * round's native delivery is absent from the parent history using startup's
+ * run-plus-terminal fence. A failed read is no evidence either.
  *
  * v1 terminal events carry only the child session id, so the parent comes from
- * a bounded `session.get` when the event names none; the shared single-flight
- * reader collapses repeated observations of the same child into one host read.
- * The parent's agent rides along because a restart drops its in-memory
- * membership while its history still names it as an orchestrator.
+ * a bounded `session.get` when the event names none. Repeated observations read
+ * the child first and negative-cache the parent proof by terminal timestamp.
  */
+interface OrphanProofState {
+  failedProofs: Map<string, number | undefined>;
+  inFlight: Map<string, Promise<UndeliveredBackgroundChild | undefined>>;
+}
+
+const orphanProofStates = new WeakMap<object, OrphanProofState>();
+
+function orphanProofState(client: object): OrphanProofState {
+  const existing = orphanProofStates.get(client);
+  if (existing) return existing;
+  const created: OrphanProofState = {
+    failedProofs: new Map(),
+    inFlight: new Map(),
+  };
+  orphanProofStates.set(client, created);
+  return created;
+}
+
 export async function resolveUndeliveredBackgroundChild(options: {
   input: PluginInput;
   hostFlavor?: string;
@@ -699,8 +713,70 @@ export async function resolveUndeliveredBackgroundChild(options: {
   timers?: Parameters<typeof raceEvidenceDeadline>[2];
 }): Promise<UndeliveredBackgroundChild | undefined> {
   if (!SESSION_ID_PATTERN.test(options.taskID)) return undefined;
+  const state = orphanProofState(getClient(options.input));
+  const inFlight = state.inFlight.get(options.taskID);
+  if (inFlight) return inFlight;
+  const proof = resolveUndeliveredBackgroundChildProof(options, state);
+  state.inFlight.set(options.taskID, proof);
+  try {
+    return await proof;
+  } finally {
+    if (state.inFlight.get(options.taskID) === proof) {
+      state.inFlight.delete(options.taskID);
+    }
+  }
+}
+
+async function resolveUndeliveredBackgroundChildProof(
+  options: {
+    input: PluginInput;
+    hostFlavor?: string;
+    taskID: string;
+    parentSessionID?: string;
+    agent?: string;
+    title?: string;
+    readTimeoutMs?: number;
+    timers?: Parameters<typeof raceEvidenceDeadline>[2];
+  },
+  state: OrphanProofState,
+): Promise<UndeliveredBackgroundChild | undefined> {
   const readTimeoutMs = options.readTimeoutMs ?? TRANSCRIPT_READ_TIMEOUT_MS;
   if (!Number.isFinite(readTimeoutMs) || readTimeoutMs <= 0) return undefined;
+  let proofKey: number | undefined;
+  const failed = (): undefined => {
+    state.failedProofs.set(options.taskID, proofKey);
+    return undefined;
+  };
+  let round: ReturnType<typeof classifyCurrentDeliveredRound>;
+  let childTranscript: unknown;
+  try {
+    childTranscript = await raceEvidenceDeadline(
+      fetchChildTranscript(
+        getClient(options.input),
+        options.taskID,
+        options.input.directory,
+      ),
+      readTimeoutMs,
+      options.timers,
+    );
+    if (childTranscript === undefined) return failed();
+    round = classifyCurrentDeliveredRound(childTranscript);
+  } catch {
+    return failed();
+  }
+  const terminal =
+    round.verdict === 'completed' ||
+    round.verdict === 'error' ||
+    round.verdict === 'interrupted';
+  proofKey = terminal ? round.completedAt : undefined;
+  if (
+    state.failedProofs.has(options.taskID) &&
+    state.failedProofs.get(options.taskID) === proofKey
+  ) {
+    return undefined;
+  }
+  if (!terminal || round.startedAt === undefined) return failed();
+
   let parentSessionID = options.parentSessionID;
   let agent = options.agent;
   let title = options.title;
@@ -716,16 +792,16 @@ export async function resolveUndeliveredBackgroundChild(options: {
         options.timers,
       );
     } catch {
-      return undefined;
+      return failed();
     }
     const data =
       isRecord(response) && isRecord(response.data) ? response.data : undefined;
-    if (typeof data?.parentID !== 'string') return undefined;
+    if (typeof data?.parentID !== 'string') return failed();
     parentSessionID = data.parentID;
     agent ??= typeof data.agent === 'string' ? data.agent.trim() : undefined;
     title ??= typeof data.title === 'string' ? data.title : undefined;
   }
-  if (!SESSION_ID_PATTERN.test(parentSessionID)) return undefined;
+  if (!SESSION_ID_PATTERN.test(parentSessionID)) return failed();
   let transcript: unknown;
   try {
     transcript = await readParentTranscript(
@@ -737,31 +813,36 @@ export async function resolveUndeliveredBackgroundChild(options: {
       options.timers,
     );
   } catch {
-    return undefined;
+    return failed();
   }
   const delegation = parentDelegation(
     parentTaskParts(transcript),
     parentSessionID,
     options.taskID,
   );
-  if (delegation?.background !== true || delegation.at === undefined) {
-    return undefined;
+  if (
+    delegation?.background !== true ||
+    delegation.at === undefined ||
+    !childRoundMatchesDelegation(childTranscript, round, delegation)
+  ) {
+    return failed();
   }
   if (
     nativeDeliveryForRun(
       transcript,
       parentSessionID,
       options.taskID,
-      delegation.at,
+      latestFence(delegation.at, round.completedAt),
     ) !== undefined
   ) {
-    return undefined;
+    return failed();
   }
   const parentAgent = latestTranscriptAgent(transcript);
   // Neither the event nor the host names the child's agent on v1 terminal
   // events; the delegation is the only remaining source, and a later
   // continuation's agent-equality check depends on it.
   agent ??= delegation.agent;
+  state.failedProofs.delete(options.taskID);
   return {
     parentSessionID,
     launchedAt: delegation.at,
@@ -769,6 +850,65 @@ export async function resolveUndeliveredBackgroundChild(options: {
     ...(agent ? { agent } : {}),
     ...(title ? { title } : {}),
   };
+}
+
+function childRoundMatchesDelegation(
+  transcript: unknown,
+  round: ReturnType<typeof classifyCurrentDeliveredRound>,
+  delegation: ParentTaskPart,
+): boolean {
+  const delegationAt = delegation.at;
+  if (
+    !isRecord(transcript) ||
+    !Array.isArray(transcript.data) ||
+    delegationAt === undefined ||
+    round.startedAt === undefined
+  ) {
+    return false;
+  }
+  const users = transcript.data.filter(
+    (message): message is Record<string, unknown> =>
+      isRecord(message) &&
+      isRecord(message.info) &&
+      message.info.role === 'user',
+  );
+  const firstInRun = users.find((message) => {
+    const at = transcriptOrderKey(message as TranscriptMessage);
+    return at !== undefined && at >= delegationAt;
+  });
+  const latestUser = users.at(-1);
+  if (!firstInRun) return false;
+  const firstInRunIndex = users.indexOf(firstInRun);
+  if (
+    firstInRunIndex < 0 ||
+    firstInRun !== latestUser ||
+    transcriptOrderKey(firstInRun as TranscriptMessage) !== round.startedAt
+  ) {
+    return false;
+  }
+  if (
+    users.slice(0, firstInRunIndex).some((message) => {
+      const at = transcriptOrderKey(message as TranscriptMessage);
+      return at === undefined || at >= delegationAt;
+    })
+  ) {
+    return false;
+  }
+  if (delegation.prompt === undefined) return true;
+  const prompt = Array.isArray(firstInRun.parts)
+    ? firstInRun.parts
+        .filter(
+          (part) =>
+            isRecord(part) &&
+            part.type === 'text' &&
+            typeof part.text === 'string',
+        )
+        .map((part) => (part as { text: string }).text.trim())
+        .filter((text) => text.length > 0)
+        .join('\n')
+        .trim()
+    : '';
+  return prompt === delegation.prompt.trim();
 }
 
 /**

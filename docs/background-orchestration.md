@@ -133,16 +133,17 @@ continues it with the new prompt.
 Recovery verifies the original agent and latest delivered round before importing
 a retained terminal row. This cache-only import does not launch or notify.
 A second recovery channel needs no caller: when a child the board does not track
-reports `session.idle` or `session.error` after the restart, the plugin re-adopts
-it under the parent named by the event and lets the normal reconciliation publish
-the terminal outcome, which carries the parent wake. This runs on v1 only and
-under startup recovery's own proofs: the parent's history must show a background
-delegation for that child, that run must have no trusted native delivery yet, and
-the child must have no persisted identity (those belong to startup recovery). The
-parent must be a managed session, or an orchestrator session recognized from its
-own history, which the plugin then registers as managed. On v2 the host owns
-completion delivery through its native subagent push, and the plugin forgoes
-observation-time adoption there rather than race that wake.
+reports `session.idle` or `session.error` after the restart, the plugin can
+re-adopt it on v1 only. Its latest child round must be terminal and match the
+first and only child prompt after a background delegation; any later child
+continuation refuses adoption. The parent must have no native delivery at or
+after the later of the delegation launch and the round's completion (startup
+also fences on the round start, which the observation path does not),
+and must be managed or recognized as a configured primary agent from its history.
+Children with persisted identities remain startup recovery's responsibility.
+Repeated failed proofs are gated by the child's terminal timestamp. On v2 the
+host owns completion delivery through its native subagent push, and the plugin
+forgoes observation-time adoption there rather than race that wake.
 On V2, `session.execution.interrupted` with reason `shutdown` is suspension,
 not a terminal idle transition. OMO preserves the raw event without synthesizing
 idle/status events; the host retains execution and first-notification ownership.

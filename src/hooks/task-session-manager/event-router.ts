@@ -5,6 +5,7 @@
  * session.idle, session.error, session.status, session.deleted) to
  * the appropriate subsystems.
  */
+import { isBuiltInPrimaryAgent } from '../../utils/agent-variant';
 import type { BackgroundJobBoard } from '../../utils/background-job-board';
 import {
   deriveTaskSessionLabel,
@@ -212,16 +213,17 @@ function isCurrentSessionObservation(
  * #1560 observation fallback: a child the board lost mid-run (host restart,
  * or a launch that predates persistence) goes idle/error with no row to claim
  * the completion, so nothing would ever wake its parent. Adopt it only when
- * startup recovery's own single-child proof holds — the parent owns the child
- * and its history shows an undelivered background delegation — then let the
- * normal reconciliation publish the terminal outcome; that publication is the
- * one-shot wake. Children with a persisted identity are startup recovery's
- * business. On v2 the host owns delivery, so no resolver is wired and adoption
- * never races the host's own wake.
+ * startup recovery's own single-child proof holds — the child transcript
+ * attributes its terminal round to the parent's background delegation, and
+ * the parent has not received native delivery — then let normal reconciliation
+ * publish the outcome and wake. Children with a persisted identity are startup
+ * recovery's business. On v2 the host owns delivery, so adoption never races
+ * the host's own wake.
  */
 async function adoptUndeliveredBackgroundChild(args: {
   board: BackgroundJobBoard;
   shouldManageSession: (sessionID: string) => boolean;
+  isPrimaryAgentName?: (agent: string) => boolean;
   registerParentSession?: (sessionID: string) => void;
   isDisposed?: () => boolean;
   resolve?: (observation: {
@@ -264,9 +266,13 @@ async function adoptUndeliveredBackgroundChild(args: {
   const parentManaged = args.shouldManageSession(proven.parentSessionID);
   // Order of permission checks does not survive a restart: a session that was
   // managed keeps its history but loses the in-memory membership. Startup
-  // recovery admits an orchestrator parent on transcript evidence and
-  // registers it; do the same here, and never adopt for anyone else.
-  if (!parentManaged && proven.parentAgent !== 'orchestrator') {
+  // recovery admits primary agents on transcript evidence and registers them.
+  const isPrimaryAgentName = args.isPrimaryAgentName ?? isBuiltInPrimaryAgent;
+  if (
+    !parentManaged &&
+    (typeof proven.parentAgent !== 'string' ||
+      !isPrimaryAgentName(proven.parentAgent))
+  ) {
     return undefined;
   }
   // The proof read is asynchronous: a row may have appeared or been deleted
@@ -364,6 +370,8 @@ export async function handleEvent(
     };
     options: {
       shouldManageSession: (sessionID: string) => boolean;
+      /** Same primary-agent admission predicate used by startup recovery. */
+      isPrimaryAgentName?: (agent: string) => boolean;
       registerSessionAsOrchestrator?: (sessionID: string) => void;
       isFallbackInProgress?: (sessionID: string) => boolean;
       /** True when foreground fallback could still recover the session. */
@@ -677,6 +685,7 @@ export async function handleEvent(
       const adopted = await adoptUndeliveredBackgroundChild({
         board: deps.backgroundJobBoard,
         shouldManageSession: deps.options.shouldManageSession,
+        isPrimaryAgentName: deps.options.isPrimaryAgentName,
         registerParentSession: deps.options.registerSessionAsOrchestrator,
         isDisposed: deps.options.isDisposed,
         resolve: deps.options.resolveUndeliveredBackgroundChild,
@@ -853,6 +862,7 @@ export async function handleEvent(
         const adopted = await adoptUndeliveredBackgroundChild({
           board: deps.backgroundJobBoard,
           shouldManageSession: deps.options.shouldManageSession,
+          isPrimaryAgentName: deps.options.isPrimaryAgentName,
           registerParentSession: deps.options.registerSessionAsOrchestrator,
           isDisposed: deps.options.isDisposed,
           resolve: deps.options.resolveUndeliveredBackgroundChild,
