@@ -143,12 +143,12 @@ Three host entry builds are produced:
 | `./server` | `dist/server/index.js` + chunks | `build:v2` | jsdom, jsonc-parser (other runtime dependencies bundled) |
 | `./tui` | `dist/tui2.js` | `build:tui` | same external set as `build:plugin` (thin gate entry + deferred `dist/tui-impl` chunk composing the v1 TUI entry; inlines zod) |
 
-The optional `@opentui/*` dependencies provide the v2 TUI entry's rendering
-stack. The development-only `@opencode/plugin` 2.3.0 contract declares an
-optional OpenTUI peer floor of `0.7.0`; the runtime pins track that family
-(`@opentui/core`/`@opentui/solid` 0.7.0) so the dependency-contract test and
-the host agree. `@opentui/solid` pins `solid-js` exactly (0.7.0 requires
-1.9.12), so any future OpenTUI bump must re-check that pin.
+The optional `@opentui/*` runtime pins remain at 0.7.0 for V1;
+`@opentui/solid` 0.7.0 requires `solid-js` 1.9.12. The development-only
+`@opencode/plugin` 2.3.0 declares optional OpenTUI peers `>=0.8.4`.
+The TUI builds externalize these imports; the mirror pin does not upgrade
+Slim's rendering dependencies. Any OpenTUI runtime bump must re-check the
+V1 contract and the exact Solid pin.
 
 v2's plugin resolver tries the `server` subpath first
 (`subpaths: ["server", ""]`), which the exports map resolves directly to
