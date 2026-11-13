@@ -12,9 +12,9 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, relative } from 'node:path';
 import { getProjectConfigDirectories } from '../config/loader';
 import { getConfigDir, getConfigSearchDirs } from '../config/paths';
-import { CUSTOM_SKILLS, type CustomSkill } from './custom-skills-registry';
+import { CUSTOM_SKILLS } from './custom-skills-registry';
 
-export { CUSTOM_SKILLS, type CustomSkill };
+export { CUSTOM_SKILLS };
 
 export interface BundledSkillInfo {
   id: string;

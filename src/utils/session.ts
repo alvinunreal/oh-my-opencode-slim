@@ -3,6 +3,7 @@
  */
 
 import type { OpencodeClient } from '@opencode-ai/sdk';
+import type { TimerHandle, TimerSeam } from './timer-seam';
 
 export const SESSION_ABORT_TIMEOUT_MS = 1_000;
 
@@ -15,16 +16,6 @@ export class OperationTimeoutError extends Error {
   }
 }
 
-/** Timer handle: platform timers or a harness's numeric ids. */
-export type TimerHandle = ReturnType<typeof setTimeout> | number;
-
-/** Scheduling seam (see src/utils/test-timers.ts); defaults to platform
- *  timers. */
-export type TimerSeam = {
-  setTimeout: (callback: () => void, delay: number) => TimerHandle;
-  clearTimeout: (timer: TimerHandle) => void;
-};
-
 export async function withTimeout<T>(
   operation: Promise<T>,
   timeoutMs: number,
@@ -36,8 +27,7 @@ export async function withTimeout<T>(
   const setTimer =
     timers?.setTimeout ?? ((callback, delay) => setTimeout(callback, delay));
   const clearTimer =
-    timers?.clearTimeout ??
-    ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>));
+    timers?.clearTimeout ?? ((timer: TimerHandle) => clearTimeout(timer));
 
   let timer: TimerHandle | undefined;
   try {

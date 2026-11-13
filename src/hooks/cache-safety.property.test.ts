@@ -62,6 +62,19 @@ function goalMessages(messages: unknown[]): MessageWithParts[] {
 }
 
 describe('cache-safety: turn-over-turn prefix stability', () => {
+  test('a kill-all notice can disappear without changing earlier payload bytes', async () => {
+    let active = true;
+    const pipeline = createPipeline({ killAllStop: () => active });
+    const history = buildHistory();
+    const stopped = await renderTurn(pipeline, history, history.length - 1);
+    active = false;
+    const continued = await renderTurn(pipeline, history, history.length - 1);
+    expect(stableFingerprints(stopped.messages)).toEqual(
+      stableFingerprints(continued.messages),
+    );
+    expect(stopped.messages).toHaveLength(continued.messages.length + 1);
+  });
+
   test('a fallback notice can disappear without changing earlier payload bytes', async () => {
     const pipeline = createPipeline({ refusalCorrection: true });
     const history = [...buildHistory(), refusedChildTurn()];

@@ -92,7 +92,7 @@ export function getMultiplexer(config: MultiplexerConfig): Multiplexer | null {
           config.main_pane_size,
         );
         actualType = 'zellij';
-      } else if (process.env.HERDR_PANE_ID) {
+      } else if (process.env.HC_TERMINAL_ID || process.env.HERDR_PANE_ID) {
         multiplexer = new HerdrMultiplexer(
           config.layout,
           config.main_pane_size,

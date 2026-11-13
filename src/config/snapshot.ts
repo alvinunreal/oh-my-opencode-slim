@@ -17,7 +17,7 @@ import type { ResolvedPluginConfig } from './schema';
 const MAX_ENTRIES = 16;
 const ENV_REFERENCE_PATTERN = /\{env:([^}]+)\}/g;
 
-export interface PluginConfigSnapshotPaths {
+interface PluginConfigSnapshotPaths {
   userConfigPath: string | null;
   projectConfigPath: string | null;
   projectConfigPaths: string[];

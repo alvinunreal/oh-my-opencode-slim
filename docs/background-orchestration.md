@@ -58,10 +58,11 @@ the `task_*` control tools and `wait_for_user` are not registered, and no job
 board, retention, terminal gate, watchdog, wake scheduler, or startup recovery
 runs. Native `task`/`subagent` delegation and host completion delivery keep
 working exactly as OpenCode provides them, so council seat assembly and
-ordinary background delegation still function — only the OMOS bookkeeping and
-control surface disappear. Session presets are a separate subsystem (they bind
-delegated children to the frozen inference snapshot and back `/preset`), so
-they keep applying in every mode; they are not board state. See
+ordinary background delegation still function. On V2, off also skips the
+session-preset store, child profile bridge and executor wrapper: no OMOS read
+or model injection precedes native dispatch or continuation. Agent inference
+settings from the configured global preset still register at startup; per-session
+preset binding requires `native` or `managed`. See
 [Configuration](configuration.md).
 
 `backgroundJobs.mode: "native"` keeps the managed layer off but registers the
@@ -573,10 +574,21 @@ exact run (generation- and revision-fenced) when it observes the delivery that
 reported it — the native `<subagent>` delivery on v2, its own tagged
 `<completed-job>` push on v1, or the revived-run notification. A completed,
 error, or cancelled record also retires once the parent demonstrably moves past
-the terminal report. Stopped jobs are not retired that way (a stop has no native
-notification): they stay stopped and unreconciled, the stopped-job recovery wake
-reports them, and `task_revive` acknowledges them. Reopen corrections tell the
-parent once not to rely on the earlier result.
+the terminal report. So does a stop the host attributed to an interruption
+(`Host reported outcome: interrupted.` or `cancelled.`), like the error it
+replaces; a foreground one retires at the parent's next request, because the
+tool result already reported it, and so does a background one while the
+parent's kill-all notice is active, because that request carries the notice.
+Other stopped jobs are not retired that way. On v1 an abort cancels the native
+background job without a notification; Slim wakes the parent for a background
+kill-all stop unless the tracker delivers it or the parent has already made a
+request carrying the notice.
+`task_revive` acknowledges stopped jobs. Reopen corrections tell the parent once
+not to rely on the earlier result.
+
+TUI kill-all (`alt+w` or `/killall`) writes a temporary notice for each affected
+parent before interrupting its children. The notice asks the parent not to
+relaunch them and expires on its next external prompt or server restart.
 
 For external manual work, the orchestrator gives concrete steps and then calls
 `wait_for_user` as its final tool action; the wait is cleared only by a distinct
@@ -607,7 +619,8 @@ Terminal facts travel as one-shot pushes instead:
   dropping: results inside the window stay queued and one wake delivers them
   together when it elapses.
   The wake that carries it is a bare resume pointer: the delta holds the
-  facts. On v2 the revived-run tracker queues a `<task>` result to the parent.
+  facts. On v2 the revived-run tracker queues a `<task>` result, including
+  `stopped`, to the parent. Tracked continuations also deliver `stopped` on v1.
   A run relaunched through `subagent` starts a new generation and its first
   result is delivered natively.
 - Overflowed pushes keep a durable pointer to `task_status` instead of

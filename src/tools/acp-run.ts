@@ -7,6 +7,7 @@ import {
   type AcpAgentsConfig,
   MAX_ACP_TIMEOUT_MS,
 } from '../config';
+import type { TimerHandle, TimerSeam } from '../utils/timer-seam';
 
 const z = tool.schema;
 
@@ -414,21 +415,15 @@ class AcpClient {
   }
 }
 
-/** Timer seam so tests can drive the invocation timeout deterministically. */
-export interface AcpRunTimers {
-  setTimeout: (callback: () => void, ms: number) => unknown;
-  clearTimeout: (handle: unknown) => void;
-}
-
-const DEFAULT_TIMERS: AcpRunTimers = {
+const DEFAULT_TIMERS: TimerSeam = {
   setTimeout: (callback, ms) => setTimeout(callback, ms),
-  clearTimeout: (handle) =>
-    clearTimeout(handle as ReturnType<typeof setTimeout>),
+  clearTimeout: (handle) => clearTimeout(handle),
 };
 
+/** Timer seam so tests can drive the invocation timeout deterministically. */
 export function createAcpRunTool(
   agents: AcpAgentsConfig = {},
-  timers: AcpRunTimers = DEFAULT_TIMERS,
+  timers: TimerSeam = DEFAULT_TIMERS,
 ): ToolDefinition {
   return tool({
     description:
@@ -493,7 +488,7 @@ export function createAcpRunTool(
       let client: AcpClient | undefined;
       const requestedModel = args.model;
       const timeoutMs = args.timeout_ms ?? config.timeoutMs;
-      let timer: unknown;
+      let timer: TimerHandle | undefined;
       let stop!: (error: Error) => void;
       const interruption = new Promise<never>((_, reject) => {
         stop = reject;

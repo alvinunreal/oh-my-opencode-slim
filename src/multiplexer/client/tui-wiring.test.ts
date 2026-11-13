@@ -688,6 +688,7 @@ describe('client adapter detection (FR-9)', () => {
     expect(detectClientAdapter({ TMUX_PANE: '%1' })).toBe('tmux');
     expect(detectClientAdapter({ ZELLIJ_PANE_ID: '3' })).toBe('zellij');
     expect(detectClientAdapter({ HERDR_PANE_ID: 'wP:p4' })).toBe('herdr');
+    expect(detectClientAdapter({ HC_TERMINAL_ID: 't7' })).toBe('herdr');
     expect(detectClientAdapter({ KITTY_WINDOW_ID: '4' })).toBe('kitty');
     expect(detectClientAdapter({ WEZTERM_PANE: '7' })).toBe('wezterm');
     expect(detectClientAdapter({ ORCA_TERMINAL_HANDLE: 'pane-1' })).toBe(
@@ -1514,6 +1515,7 @@ describe('serverUrl reflection and probe (D3)', () => {
     expect(resolveAnchoredTarget('herdr', { HERDR_PANE_ID: 'wP:p4' })).toBe(
       'wP:p4',
     );
+    expect(resolveAnchoredTarget('herdr', { HC_TERMINAL_ID: 't7' })).toBe('t7');
     expect(resolveAnchoredTarget('kitty', { KITTY_WINDOW_ID: '4' })).toBe('4');
     expect(resolveAnchoredTarget('wezterm', { WEZTERM_PANE: '7' })).toBe('7');
     expect(

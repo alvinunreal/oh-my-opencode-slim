@@ -26,6 +26,20 @@ const DEFAULT_RETRY_DELAY_MS = 1_000;
 const TERMINAL_NOTIFICATION_TIMEOUT_MS = 10_000;
 const DEFAULT_HANDOFF_EXPIRY_MS = 30_000;
 
+const TERMINAL_NOTIFICATIONS = {
+  completed: { label: 'completed', text: 'Completed.', tag: 'task_result' },
+  error: { label: 'failed', text: 'Failed.', tag: 'task_error' },
+  stopped: { label: 'stopped', text: 'Stopped.', tag: 'task_error' },
+} as const;
+type TerminalState = keyof typeof TERMINAL_NOTIFICATIONS;
+type DeliverableRecord = BackgroundJobRecord & { state: TerminalState };
+
+function isDeliverable(
+  record: BackgroundJobRecord,
+): record is DeliverableRecord {
+  return Object.hasOwn(TERMINAL_NOTIFICATIONS, record.state);
+}
+
 type SessionMessage = {
   info?: {
     id?: string;
@@ -67,7 +81,7 @@ type RevivedRun = {
      * replaces the whole object and starts a fresh lifecycle). */
     ownershipReleased?: boolean;
   };
-  terminalState?: 'completed' | 'error';
+  terminalState?: TerminalState;
   terminalRevision?: number;
 };
 
@@ -255,9 +269,7 @@ export function createRevivedRunTracker(options: {
       options.backgroundJobSupervisor?.onTerminal(record);
       return;
     }
-    if (record.state !== 'completed' && record.state !== 'error') {
-      return;
-    }
+    if (!isDeliverable(record)) return;
     // An answer attributed to our exact queued input proves admission even
     // if its transport acknowledgement was lost. Retire only our own lease.
     if (run.promptMessageID && run.admissionLease) {
@@ -279,7 +291,7 @@ export function createRevivedRunTracker(options: {
       record.provisional === true ||
       record.terminalRevision <= 1 ||
       record.hostSteerCover?.revision === record.terminalRevision ||
-      (record.state !== 'completed' && record.state !== 'error') ||
+      !isDeliverable(record) ||
       isTracked(record.taskID, record.generation)
     )
       return;
@@ -312,7 +324,7 @@ export function createRevivedRunTracker(options: {
 
   function finish(run: RevivedRun, record: BackgroundJobRecord): boolean {
     if (disposed || runs.get(run.taskID) !== run) return false;
-    if (record.state !== 'completed' && record.state !== 'error') return false;
+    if (!isDeliverable(record)) return false;
     if (run.terminalRevision !== record.terminalRevision) {
       if (run.notification.retryTimer)
         clearTimeout(run.notification.retryTimer);
@@ -457,7 +469,7 @@ export function createRevivedRunTracker(options: {
 
   async function notifyParent(
     run: RevivedRun,
-    record: BackgroundJobRecord,
+    record: DeliverableRecord,
   ): Promise<void> {
     const notification = run.notification;
     if (
@@ -477,12 +489,9 @@ export function createRevivedRunTracker(options: {
     let lease: BackgroundJobLease | undefined;
     try {
       if (run.fallbackNotice) await run.fallbackNotice;
-      const state = record.state === 'completed' ? 'completed' : 'error';
-      const tag = state === 'completed' ? 'task_result' : 'task_error';
-      const summary =
-        state === 'completed'
-          ? `Background task completed: ${run.description}`
-          : `Background task failed: ${run.description}`;
+      const state = record.state;
+      const { label, tag, text: fallbackText } = TERMINAL_NOTIFICATIONS[state];
+      const summary = `Background task ${label}: ${run.description}`;
       // Resolve BEFORE acquiring the lease: a hung host read must not
       // pin the notification lease. Host `session.get` is bounded inside
       // resolveCurrentSelection; metadata still completes the hierarchy
@@ -520,8 +529,7 @@ export function createRevivedRunTracker(options: {
         `<task id="${run.taskID}" state="${state}">`,
         `<summary>${summary}</summary>`,
         `<${tag}>`,
-        record.resultSummary ??
-          (state === 'completed' ? 'Completed.' : 'Failed.'),
+        record.resultSummary ?? fallbackText,
         `</${tag}>`,
         '</task>',
       ].join('\n');
@@ -585,7 +593,7 @@ export function createRevivedRunTracker(options: {
 
   function scheduleNotificationRetry(
     run: RevivedRun,
-    record: BackgroundJobRecord,
+    record: DeliverableRecord,
     notification: RevivedRun['notification'],
   ): void {
     if (
@@ -1018,14 +1026,16 @@ class NotificationTransportTimeoutError extends Error {
 
 function terminalOutcome(
   record: BackgroundJobRecord,
-): 'completed' | 'error' | undefined {
+): 'completed' | 'error' | 'stopped' | undefined {
   if (record.state === 'reconciled') {
     return record.terminalState === 'completed' ||
       record.terminalState === 'error'
       ? record.terminalState
       : undefined;
   }
-  return record.state === 'completed' || record.state === 'error'
+  return record.state === 'completed' ||
+    record.state === 'error' ||
+    record.state === 'stopped'
     ? record.state
     : undefined;
 }

@@ -1,7 +1,10 @@
-import type { BackgroundJobBoard, BackgroundJobRecord } from '../../utils';
-import { parseTaskStatusOutput } from '../../utils';
+import type {
+  BackgroundJobBoard,
+  BackgroundJobRecord,
+} from '../../utils/background-job-board';
 import { isRecord as isObjectRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
+import { parseTaskStatusOutput } from '../../utils/task';
 
 export function extractTaskSummary(output: string): string | undefined {
   const summary = /<summary>\s*([\s\S]*?)\s*<\/summary>/i.exec(output)?.[1];

@@ -40,6 +40,7 @@ import {
   composeHostRound,
   hostRoundStateOf,
 } from '../../utils/session-runtime-status';
+import type { TimerSeam } from '../../utils/timer-seam';
 import { SEAT_REASONS } from './assemble';
 import type { SeatResult, SeatResultResolver } from './types';
 
@@ -47,10 +48,7 @@ import type { SeatResult, SeatResultResolver } from './types';
 export const DEFAULT_NATIVE_SEAT_TIMEOUT_MS = 5_000;
 
 /** Scheduler seam, matching `raceEvidenceDeadline`'s timer contract. */
-export interface NativeSeatTimers {
-  setTimeout(callback: () => void, delay: number): unknown;
-  clearTimeout(timer: unknown): void;
-}
+export type NativeSeatTimers = TimerSeam;
 
 export interface NativeSeatResolverOptions {
   /** Total budget for one resolver call. Default 5 s. */

@@ -20,6 +20,7 @@ import {
   resolveKnownCompanionProject,
   stateFilePath,
 } from './manager';
+import { pruneDisabledCompanionRuntime } from './runtime';
 import { normalizeCompanionSessionStatus } from './status';
 
 // Point writes at a temp dir so tests don't touch the real state file.
@@ -1565,6 +1566,99 @@ describe('CompanionManager', () => {
 
     expect(child.killed()).toBe(true);
     expect(readState().sessions).toEqual([]);
+  });
+
+  it('cold prune disposes a live manager synchronously when its state file is gone', async () => {
+    const baseline = process.listenerCount('exit');
+    const manager = make('cold-prune-session', '/cold/project');
+    manager.onLoad();
+    const child = attachFakeChild(manager);
+    writeFileSync(companionPidFile(), String(process.pid));
+    (manager as unknown as { wasSpawner: boolean }).wasSpawner = true;
+    (
+      manager as unknown as { spawnedCompanionPid: number }
+    ).spawnedCompanionPid = process.pid;
+    expect(process.listenerCount('exit')).toBe(baseline + 1);
+
+    rmSync(stateFilePath(), { force: true });
+
+    const pending = pruneDisabledCompanionRuntime('cold-prune-session');
+    // The missing-state branch invokes the registered manager seam before any
+    // await, so timers, child, and exit listener are gone immediately.
+    const internal = manager as unknown as {
+      presetPoller: unknown;
+      publishRetryTimer: unknown;
+    };
+    expect(internal.presetPoller).toBeNull();
+    expect(internal.publishRetryTimer).toBeNull();
+    expect(child.killed()).toBe(true);
+    expect(process.listenerCount('exit')).toBe(baseline);
+    await pending;
+
+    // Existing no-file exit behavior is preserved: removing the session
+    // recreates an empty state file.
+    expect(readState().sessions).toEqual([]);
+
+    // The seam survives disposal: a later generation in this process remains
+    // reachable without re-registering it.
+    const next = make('cold-prune-next', '/cold/next');
+    next.onLoad();
+    rmSync(stateFilePath(), { force: true });
+    await pruneDisabledCompanionRuntime('cold-prune-next');
+    expect(
+      (next as unknown as { presetPoller: unknown }).presetPoller,
+    ).toBeNull();
+    expect(process.listenerCount('exit')).toBe(baseline);
+  });
+
+  it('cold prune disposes an unpublished manager and keeps other projects', async () => {
+    const live = make('cold-live-session', '/cold/live');
+    live.onLoad();
+
+    // Hold the state lock so the next manager registers itself and starts its
+    // timers, but cannot publish its owner row.
+    const release = acquirePidFileLock(stateFilePath());
+    expect(release).not.toBeNull();
+    const blocked = make('cold-blocked-session', '/cold/blocked');
+    try {
+      blocked.onLoad();
+      const internal = blocked as unknown as {
+        presetPoller: unknown;
+        publishRetryTimer: unknown;
+      };
+      expect(internal.presetPoller).not.toBeNull();
+      expect(internal.publishRetryTimer).not.toBeNull();
+    } finally {
+      release?.();
+    }
+
+    // A stale row from an earlier process, plus the unrelated project's row.
+    const state = readState();
+    state.sessions.push({
+      session_id: 'cold-blocked-session',
+      cwd: '/cold/blocked',
+      active_agents: ['intro'],
+      status: 'idle',
+      pid: process.pid,
+    });
+    writeFileSync(stateFilePath(), JSON.stringify(state));
+
+    await pruneDisabledCompanionRuntime('cold-blocked-session');
+
+    const internal = blocked as unknown as {
+      presetPoller: unknown;
+      publishRetryTimer: unknown;
+    };
+    expect(internal.presetPoller).toBeNull();
+    expect(internal.publishRetryTimer).toBeNull();
+    expect(
+      (live as unknown as { presetPoller: unknown }).presetPoller,
+    ).not.toBeNull();
+    expect(
+      readState().sessions.map(
+        (session: { session_id: string }) => session.session_id,
+      ),
+    ).toEqual(['cold-live-session']);
   });
 
   it('removes its entry on exit', () => {

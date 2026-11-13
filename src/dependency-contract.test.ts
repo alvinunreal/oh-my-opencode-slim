@@ -212,6 +212,37 @@ describe('optional implementation loading', () => {
       'marketplace/service.ts',
       'companion/manager.ts',
       'companion/updater.ts',
+      'tools/smartfetch/index.ts',
+      'tools/smartfetch/tool.ts',
+      'tools/index.ts',
+      'utils/index.ts',
+      'admission-runtime.ts',
+      'hooks/auto-update-checker/index.ts',
+      'hooks/auto-update-checker/checker.ts',
+      'hooks/foreground-fallback/index.ts',
+      'hooks/apply-patch/index.ts',
+      'hooks/task-session-manager/index.ts',
+      'hooks/task-session-manager/board-injection.ts',
+      'hooks/orchestrator-wake/index.ts',
+      'hooks/council-seats/index.ts',
+      'hooks/council-seats/managed.ts',
+      'hooks/council-seats/native.ts',
+      'utils/background-job-board.ts',
+      'utils/background-job-supervisor.ts',
+      'utils/background-job-persistence.ts',
+      'utils/background-job-terminal-gate.ts',
+      'tools/acp-run.ts',
+      'tools/ast-grep/tools.ts',
+      'tools/marketplace.ts',
+      'tools/cancel-task.ts',
+      'tools/task-status.ts',
+      'tools/task-reply.ts',
+      'tools/task-report.ts',
+      'tools/task-revive.ts',
+      'tools/task-message.ts',
+      'tools/wait-for-user.ts',
+      'tools/native-task-control.ts',
+      'tools/interview-submit-state.ts',
       'cli/config-io.ts',
       'cli/paths.ts',
     ]) {
@@ -228,15 +259,13 @@ describe('server entry dependency graph (pane process boundary)', () => {
     const reachableSet = new Set(reachable);
     // Guards against a vacuous pass: if import resolution breaks, the graph
     // would be tiny and the boundary assertions below would prove nothing.
-    expect(reachableSet.has(path.join(SRC_DIR, 'hooks', 'index.ts'))).toBe(
-      true,
-    );
+    expect(reachableSet.has(path.join(SRC_DIR, 'index.ts'))).toBe(true);
     expect(reachableSet.has(path.join(SRC_DIR, 'config', 'index.ts'))).toBe(
       true,
     );
-    expect(reachableSet.has(path.join(SRC_DIR, 'utils', 'index.ts'))).toBe(
-      true,
-    );
+    expect(
+      reachableSet.has(path.join(SRC_DIR, 'hooks', 'session-lifecycle.ts')),
+    ).toBe(true);
     expect(reachable.length).toBeGreaterThan(50);
   });
 

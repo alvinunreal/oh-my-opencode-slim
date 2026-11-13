@@ -44,6 +44,7 @@ import type { MultiplexerLayout } from '../../config/schema';
 import { crossSpawn } from '../../utils/compat';
 import { isRecord } from '../../utils/guards';
 import { log } from '../../utils/logger';
+import type { TimerHandle, TimerSeamOptions } from '../../utils/timer-seam';
 import {
   buildViewCommand,
   findBinary,
@@ -57,9 +58,6 @@ import {
 } from '../shared';
 import type { Multiplexer, PaneResult, PaneSpawnOptions } from '../types';
 
-/** Platform timer handle; fake harnesses may return bare numeric ids. */
-type TimerHandle = Timer;
-
 type SplitDirection = 'horizontal' | 'vertical';
 
 /** Bound for `orca terminal split`; a hung CLI must not stall the spawn. */
@@ -68,12 +66,6 @@ const SPLIT_TIMEOUT_MS = 5_000;
 const STATUS_TIMEOUT_MS = 2_000;
 /** Bound for `orca terminal close`. */
 const CLOSE_TIMEOUT_MS = 5_000;
-
-export interface OrcaMultiplexerOptions {
-  /** Timeout seam; tests inject `src/utils/test-timers.ts` harness timers. */
-  setTimeout?: (callback: () => void, delay: number) => TimerHandle;
-  clearTimeout?: (timer: TimerHandle) => void;
-}
 
 /** Outcome of one bounded CLI call. */
 interface CliRun {
@@ -100,7 +92,7 @@ export class OrcaMultiplexer implements Multiplexer {
 
   constructor(
     layout: MultiplexerLayout = 'main-vertical',
-    options: OrcaMultiplexerOptions = {},
+    options: TimerSeamOptions = {},
   ) {
     this.layout = layout;
     this.setTimer =

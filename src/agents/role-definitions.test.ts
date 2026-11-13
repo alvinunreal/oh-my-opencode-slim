@@ -81,6 +81,31 @@ describe('specialist role definitions', () => {
     expect(ROLE_ROUTING_SLIM_LINES.council).toContain('multi-model consensus');
     expect(ROLE_ROUTING_SLIM_LINES.oracle).toContain('escalation');
   });
+
+  test('default prompts keep role and guardrails, not tool catalogs', () => {
+    const explorerPrompt = ROLE_DEFINITIONS.explorer.prompt;
+    expect(explorerPrompt).toContain(
+      'a fast research specialist for codebases and external knowledge',
+    );
+    expect(explorerPrompt).toContain('**Role**: Codebase navigation');
+    expect(explorerPrompt).toContain('READ-ONLY: inspect and report');
+    expect(explorerPrompt).not.toContain('**Tool selection**');
+    for (const catalog of [
+      'ast_grep_search',
+      'context7',
+      'gh_grep',
+      'glob/grep/ast_grep_search',
+      'cat/head/tail/sed/awk',
+    ]) {
+      expect(explorerPrompt).not.toContain(catalog);
+    }
+
+    for (const role of SUPPORTED_SPECIALIST_ROLES) {
+      const prompt = ROLE_DEFINITIONS[role].prompt;
+      expect(prompt).not.toContain('glob/grep/ast_grep_search');
+      expect(prompt).not.toContain('cat/head/tail/sed/awk');
+    }
+  });
 });
 
 describe('nested-dispatch stance', () => {

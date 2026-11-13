@@ -81,29 +81,15 @@ operation.
 
 ### 3. Ignore File Setup
 
-Before creating or cleaning lanes, inspect existing `.gitignore` and `.ignore`.
-Update the managed block in place when present; otherwise append it. Add only
-the missing exact lines below, never duplicate entries or modify unrelated
-rules. These blocks keep lane artifacts git-local while the `.ignore` allowlist
-keeps them readable to OpenCode.
-
-`.gitignore`:
+Before creating or cleaning lanes, inspect `.gitignore`. Update the managed
+block in place when present; otherwise append it. Add only the missing exact
+lines below, never duplicate entries or modify unrelated rules. This keeps lane
+artifacts out of git.
 
 ```gitignore
 # BEGIN oh-my-opencode-slim worktrees
 .slim/worktrees/
 .slim/worktrees.json
-# END oh-my-opencode-slim worktrees
-```
-
-`.ignore`:
-
-```ignore
-# BEGIN oh-my-opencode-slim worktrees
-!.slim/
-!.slim/worktrees.json
-!.slim/worktrees/
-!.slim/worktrees/**
 # END oh-my-opencode-slim worktrees
 ```
 

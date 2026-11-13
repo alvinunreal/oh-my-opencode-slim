@@ -121,6 +121,7 @@ describe('v2 sidebar config-state invalidation', () => {
     ).toEqual({
       configInvalid: true,
       compactSidebar: lastGood.compactSidebar,
+      showHiddenAgents: lastGood.showHiddenAgents,
       multiplexerType: lastGood.multiplexerType,
       presetName: 'beta',
     });
@@ -131,6 +132,7 @@ describe('v2 sidebar config-state invalidation', () => {
     ).toEqual({
       configInvalid: false,
       compactSidebar: lastGood.compactSidebar,
+      showHiddenAgents: lastGood.showHiddenAgents,
       multiplexerType: lastGood.multiplexerType,
       presetName: 'alpha',
     });

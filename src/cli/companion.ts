@@ -9,9 +9,7 @@ import { mutateJsonFile } from '../config/json-file';
 import { getExistingLiteConfigPath } from '../config/paths';
 import type { ConfigMergeResult } from './types';
 
-export { getCompanionBinaryPath, getCompanionTarget };
-
-export async function installCompanion(config: {
+async function installCompanion(config: {
   dryRun?: boolean;
 }): Promise<ConfigMergeResult> {
   const target = getCompanionTarget();

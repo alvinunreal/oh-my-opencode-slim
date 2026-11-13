@@ -3,9 +3,9 @@
  * path and the server-side `/preset <name>` command (issue #1700).
  *
  * A preset switch is not a configuration write: it binds the target session's
- * inference snapshot (see `./session-presets`), so future subagents of that
- * session use the preset. The root model, prompts, skills/MCPs, already-created
- * children and the global default are untouched. The transport differs (TUI:
+ * inference snapshot (see `./session-presets`) for new delegations and explicit
+ * same-agent continuations. The root model, prompts, skills/MCPs and global
+ * default are untouched. The transport differs (TUI:
  * session-preset RPC; server: the in-process store), so callers pass a `bind`
  * callback; name validation and the user-facing wording live here so both
  * surfaces report the same thing.
@@ -40,8 +40,8 @@ export function readAvailablePresets(
   return { names, active: config.preset };
 }
 
-export function sessionPresetAppliedMessage(presetName: string): string {
-  return `Applied preset "${presetName}" to this session's team. Future subagents use it on their next dispatch; the root model, already-created children and the global default stay unchanged.`;
+function sessionPresetAppliedMessage(presetName: string): string {
+  return `Applied preset "${presetName}" to this session's team.`;
 }
 
 /**

@@ -118,8 +118,7 @@ resume after compaction, not to log activity.
   lane.
 
 Setup: before creating any deepwork file, ensure `.gitignore` contains
-`.slim/deepwork/` and `.ignore` contains `!.slim/deepwork/` plus
-`!.slim/deepwork/**`, adding only missing entries. Claim a new task with
+`.slim/deepwork/`, adding it only if missing. Claim a new task with
 `mkdir -p .slim/deepwork` then a plain `mkdir .slim/deepwork/<task-slug>`;
 if it already exists and another session's `status: active` head names that
 slug, pick another slug, otherwise adopt it. Write the `slug:` into your head

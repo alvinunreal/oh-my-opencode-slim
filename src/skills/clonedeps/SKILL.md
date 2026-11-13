@@ -100,15 +100,12 @@ The orchestrator owns final approval. Before cloning:
 5. Ask for confirmation before network cloning unless the user explicitly asked
    to clone immediately.
 
-### Step 4: Update Ignore Files
+### Step 4: Update `.gitignore`
 
-Before cloning artifacts or cleaning cloned dependencies, inspect existing
-`.gitignore` and `.ignore`. Update the managed block in place when present;
-otherwise append it. Add only the missing exact lines below, never duplicate
-entries or modify unrelated rules. These blocks keep cloned artifacts git-local
-while the `.ignore` allowlist keeps them readable to OpenCode.
-
-`.gitignore`:
+Before cloning artifacts, inspect `.gitignore`. Update the managed block in
+place when present; otherwise append it. Add only the missing exact lines below,
+never duplicate entries or modify unrelated rules. This keeps cloned artifacts
+out of git.
 
 ```gitignore
 # BEGIN oh-my-opencode-slim clonedeps
@@ -116,19 +113,7 @@ while the `.ignore` allowlist keeps them readable to OpenCode.
 # END oh-my-opencode-slim clonedeps
 ```
 
-`.ignore`:
-
-```ignore
-# BEGIN oh-my-opencode-slim clonedeps
-!.slim/
-!.slim/clonedeps.json
-!.slim/clonedeps/
-!.slim/clonedeps/repos/
-!.slim/clonedeps/repos/**
-.slim/clonedeps/repos/**/.git/
-.slim/clonedeps/repos/**/.git/**
-# END oh-my-opencode-slim clonedeps
-```
+Read cloned sources by their absolute path.
 
 ### Step 5: Clone Sources Manually
 
@@ -234,7 +219,8 @@ make agents read it for the basic repo list.
 When the user asks to clean cloned dependencies, remove:
 
 - `.slim/clonedeps/repos/`
-- the managed clonedeps marker blocks from `.gitignore` and `.ignore`
+- the managed clonedeps marker block from `.gitignore`, plus any from `.ignore`
+  written by earlier versions
 
 Ask before removing `.slim/clonedeps.json` or the `AGENTS.md` section because
 they may be intentional project metadata.

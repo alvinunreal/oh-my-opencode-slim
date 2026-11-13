@@ -1,17 +1,7 @@
 /**
- * C2 layer 1: native delegation vocabulary in generated prompts.
- *
- * On v2 hosts (hostFlavor 'v2', stamped by the v2 client shim) the
- * generated orchestrator/council prompt text must use the v2-native
- * delegation vocabulary directly (`subagent(...)` tool with the `agent`
- * parameter) instead of emitting v1 wording (`task(...)`,
- * `subagent_type`).
- *
- * v1 hosts (no hostFlavor) must keep byte-identical v1 wording. That is
- * locked here by literal delegation-sentence assertions (matching the
- * pre-change master strings) plus the repo-wide golden snapshot in
- * src/hooks/cache-payload.snapshot.test.ts, which snapshots
- * buildOrchestratorPrompt with no hostFlavor and must not drift.
+ * Native delegation vocabulary belongs to host tool descriptions. Generated
+ * role prompts keep the workflow and council roster without repeating tool
+ * names, argument syntax, or model-selection mechanics.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -82,24 +72,23 @@ describe('delegationVocabulary', () => {
 });
 
 describe('buildOrchestratorPrompt delegation vocabulary', () => {
-  test('v2 hostFlavor emits subagent( wording with agent param', () => {
+  test('v2 hostFlavor preserves the resume-only channel without v1 wake copy', () => {
     const prompt = buildOrchestratorPrompt({ hostFlavor: 'v2' });
 
-    expect(prompt).not.toContain('Prefer `subagent(..., background: true)`');
-    expect(prompt).toContain('After dispatching, do non-overlapping work');
-    expect(prompt).toContain('`subagent` calls in one message');
+    expect(prompt).toContain('completion notifications resume you');
+    expect(prompt).not.toContain('wake scheduler resume you');
+    expect(prompt).not.toContain('`subagent` calls in one message');
     expect(prompt).not.toContain('subagent_type');
     expect(prompt).not.toContain('task(');
     expect(prompt).not.toContain('task_id');
   });
 
-  test('v1 (no hostFlavor) emits task wording', () => {
+  test('v1 (no hostFlavor) keeps the wake-scheduler resume channel', () => {
     const prompt = buildOrchestratorPrompt();
 
-    expect(prompt).toContain('`task` calls in one message');
+    expect(prompt).toContain('completion notifications and the wake scheduler');
+    expect(prompt).not.toContain('`task` calls in one message');
     expect(prompt).not.toContain('subagent(');
-    expect(prompt).not.toContain('Prefer `task(..., background: true)`');
-    expect(prompt).not.toContain('optional `model` argument');
   });
 });
 
@@ -107,11 +96,6 @@ describe('buildOrchestratorPrompt delegation vocabulary', () => {
  * sites (orchestrator base prompt + council block) when the host's
  * subagent tool supports the optional `model` parameter. */
 const MODEL_PARAM_SENTENCE = ` The subagent tool also accepts an optional \`model\` argument ("providerID/modelID"). Only set it when the user explicitly asks for a specific model or variant; never guess the ID — look it up with the models tool first, filtering to your own provider.`;
-
-/** Slim v2 model-param guidance (buildOrchestratorPrompt on v2): the optional
- * `model` parameter note compressed to one routing line. */
-const SLIM_MODEL_PARAM_SENTENCE =
-  'Set `model` only when the user asks; look up IDs with the models tool';
 
 describe('createAgents council seat pointer vocabulary', () => {
   test('v2 hostFlavor emits a roster-only seat pointer, not the full procedure', () => {
@@ -126,8 +110,7 @@ describe('createAgents council seat pointer vocabulary', () => {
     expect(prompt).not.toContain('dispatch via subagent()');
     expect(prompt).not.toContain('## Council Mode');
     expect(prompt).not.toContain('in PARALLEL');
-    // The slim base prompt carries the compressed model-param guidance.
-    expect(prompt).toContain(SLIM_MODEL_PARAM_SENTENCE);
+    expect(prompt).not.toContain('models tool');
     expect(prompt).not.toContain('subagent_type');
     expect(prompt).not.toContain('task(');
   });
@@ -141,7 +124,7 @@ describe('createAgents council seat pointer vocabulary', () => {
     expect(prompt).not.toContain('## Council Mode');
     expect(prompt).not.toContain('subagent(');
     expect(prompt).not.toContain(MODEL_PARAM_SENTENCE);
-    expect(prompt).not.toContain(SLIM_MODEL_PARAM_SENTENCE);
+    expect(prompt).not.toContain('models tool');
   });
 
   test("the disabled-hook manual hint carries the flavor's native tool", () => {
@@ -159,17 +142,13 @@ describe('createAgents council seat pointer vocabulary', () => {
         .prompt as string;
     };
 
+    const expected =
+      'Seats: councillor-alpha — dispatch when the user asks for consensus.';
     const v2 = disabledPromptFor('v2');
-    expect(v2).toContain(
-      'Seats: councillor-alpha — dispatch via subagent() when the user asks for consensus.',
-    );
-    expect(v2).not.toContain('dispatch via task()');
+    expect(v2).toContain(expected);
 
     const v1 = disabledPromptFor();
-    expect(v1).toContain(
-      'Seats: councillor-alpha — dispatch via task() when the user asks for consensus.',
-    );
-    expect(v1).not.toContain('dispatch via subagent()');
+    expect(v1).toContain(expected);
   });
 
   test('v2 does not adopt the v1 task_revive-first rule', () => {

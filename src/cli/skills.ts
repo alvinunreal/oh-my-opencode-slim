@@ -2,42 +2,16 @@ import { AGENT_ALIASES } from '../config/constants';
 import { CUSTOM_SKILLS } from './custom-skills';
 
 /**
- * A skill that is managed externally (e.g. user-installed) and needs
- * permission grants but is NOT installed by this plugin's CLI.
- */
-export interface PermissionOnlySkill {
-  /** Skill name - must match the name OpenCode uses for permission checks */
-  name: string;
-  /** List of agents that should auto-allow this skill */
-  allowedAgents: string[];
-  /** Human-readable description (for documentation only) */
-  description: string;
-}
-
-/**
- * Skills managed externally (not installed by this plugin's CLI).
- * Entries here only affect agent permission grants - nothing is installed.
- */
-export const PERMISSION_ONLY_SKILLS: PermissionOnlySkill[] = [
-  {
-    name: 'requesting-code-review',
-    allowedAgents: ['oracle'],
-    description:
-      'Code review template for reviewer subagents in multi-step workflows',
-  },
-];
-
-/**
  * Names of the skills an agent is granted by default when no explicit
- * `skills` list is configured: bundled custom skills plus
- * externally-managed skills whose `allowedAgents` includes `'*'` or the
- * canonical agent name. Order follows the registries: CUSTOM_SKILLS first,
- * then PERMISSION_ONLY_SKILLS.
+ * `skills` list is configured: bundled skills whose `allowedAgents`
+ * includes `'*'` or the canonical agent name, in CUSTOM_SKILLS order.
+ * Skills the plugin does not bundle get no named default grant, since
+ * nothing guarantees they are installed.
  */
 export function getDefaultGrantedSkillNames(agentName: string): string[] {
   const canonicalAgentName = AGENT_ALIASES[agentName] ?? agentName;
   const names: string[] = [];
-  for (const skill of [...CUSTOM_SKILLS, ...PERMISSION_ONLY_SKILLS]) {
+  for (const skill of CUSTOM_SKILLS) {
     if (
       skill.allowedAgents.includes('*') ||
       skill.allowedAgents.includes(canonicalAgentName)
@@ -86,8 +60,7 @@ export function getSkillPermissionsForAgent(
     return permissions;
   }
 
-  // Apply permissions for the skills the agent is granted by default
-  // (bundled custom skills + externally-managed skills)
+  // Apply permissions for the bundled skills the agent is granted by default
   for (const name of getDefaultGrantedSkillNames(agentName)) {
     if (!disabledSkills.has(name)) {
       permissions[name] = 'allow';

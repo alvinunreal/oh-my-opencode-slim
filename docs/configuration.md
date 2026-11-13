@@ -90,12 +90,43 @@ disk state only; they do not mutate the current session's agent registry. See
 the [Marketplace guide](marketplace.md) for activation, status, and reload
 commands.
 
+Set `questionTimeoutMs` to opt in to an automatic response when an eligible
+question is unanswered. The value is in milliseconds: `0` or an omitted value
+disables it; enabled values range from `60000` to `2147483647`.
+
+```jsonc
+{
+  "questionTimeoutMs": 1200000
+}
+```
+
+The reply tells the model how long it waited and asks it to decide and continue.
+Permission requests and questions that disallow custom answers remain pending. On v1 the
+server owns the timer. On v2 an OMOS TUI must be attached and `tui` must be
+enabled; a server without that TUI does not auto-answer. Restart the TUI after
+changing the setting. A TUI restarted while a question is already open does not
+re-arm that question.
+
 The TUI sidebar uses the compact layout by default. Set `compactSidebar` to
 `false` in `oh-my-opencode-slim.jsonc` to use the expanded layout:
 
 ```jsonc
 {
   "compactSidebar": false
+}
+```
+
+Internal Council agents (`council`, `councillor`, and the dynamic
+`councillor-<seat>` agents) stay out of the sidebar because their seats are
+internal orchestration surfaces. Set `sidebarShowHiddenAgents` to `true` to
+render them as ordinary rows — model, variant, status dot, and session
+expansion behave exactly as they do for any other agent. The default is
+`false`; the switch affects the sidebar only, not agent registration or the
+host agent picker:
+
+```jsonc
+{
+  "sidebarShowHiddenAgents": true
 }
 ```
 
@@ -252,7 +283,15 @@ delegation, completion delivery, session continuation, and council seat
 assembly keep working. `backgroundJobs.mode: "native"` is the middle ground:
 it skips every board-shaped component but keeps two thin host-read controls
 (`task_status` reads a child's state and trailing result; `task_cancel` aborts
-a stuck child), which is what a native-delegation setup otherwise loses. See
+a stuck child), which is what a native-delegation setup otherwise loses.
+
+`backgroundJobs.mode: "off"` is stricter: the plugin does not wrap the host's
+`subagent` executor, does not read child sessions before the host validates a
+call, and does not bind session-level presets. Delegated children use the
+models, variants, temperature and provider options from the registered agent
+configuration (the `preset` default still selects those at startup). Session
+`/preset` bindings and the related RPC are unavailable in this mode; the
+global default remains configurable. See
 [Background Orchestration](background-orchestration.md)
 and [Council](council.md) for what remains.
 
@@ -265,6 +304,7 @@ and [Council](council.md) for what remains.
 | `preset` | string | - | Active preset name (e.g. `"openai"`, `"best"`) |
 | `setDefaultAgent` | boolean | `true` | When `true`, sets OpenCode's `default_agent` to the orchestrator if unset or pointing at a subagent; `false` leaves it untouched |
 | `sidebar` | boolean | `true` | Master switch for the OMOS TUI sidebar surface (the agent list it renders and its state file). When `false`, the plugin never registers or renders the sidebar and writes no sidebar state; the native host sidebar is untouched, and pane management keeps following `multiplexer` config changes. `tui: false` implies this off. |
+| `sidebarShowHiddenAgents` | boolean | `false` | Render internal Council agents (`council`, `councillor`, and the dynamic `councillor-<seat>` agents) as OMOS TUI sidebar rows. When `true`, each row carries the same model, variant, status dot, and session expansion as any other agent. Affects the sidebar only: agent registration, availability, and the host agent picker are unchanged. |
 | `tui` | boolean | `true` | Master switch for all OMOS TUI surfaces: the sidebar and its server-side state, `/preset`, `/killall`, `/subagent`, and the update notice. When `false`, the TUI entry registers nothing and never loads the TUI render stack, and the server writes no sidebar state; server-side agents, council, observer, hooks, and tools remain active. |
 | `liveConfigRefresh` | boolean | `true` | v2 only: master switch for the live config-file watcher that reloads runtime model/preset profiles when `oh-my-opencode-slim.json(c)` changes on disk. When `false`, v2 does not watch config files and file edits apply only after a restart; explicit `/preset` writes still refresh the current generation where applicable |
 | `stripOrchestratorModel` | boolean | `false` | Preserve a runtime `/model` selection for the orchestrator after subagent dispatch by omitting its configured model from the SDK config. A selected preset's explicit `orchestrator.model` is retained. Without a runtime selection, this opt-in delegates the initial orchestrator choice to OpenCode's session default. |
@@ -305,7 +345,7 @@ and [Council](council.md) for what remains.
 | `acpAgents.<name>.permissionMode` | string | `ask` | How ACP permission requests are handled: `ask`, `allow`, or `reject` See [ACP-connected agents](#acp-connected-agents). |
 | `acpAgents.<name>.timeoutMs` | integer | `0` | Timeout for a single ACP run in milliseconds. `0` disables the timeout so external agents can run indefinitely. Finite values can be up to `2147483647`ms (~24.8 days) See [ACP-connected agents](#acp-connected-agents). |
 | `disabled_agents` | string[] | `["observer"]` | Agent names to disable globally. Set to `[]` to enable Observer; this is global, not per-preset See [Custom Agents](#custom-agents). |
-| `image_routing` | `"auto"` \| `"direct"` | omitted (legacy conditional) | Optional. When omitted, resolves to `"auto"` if Observer is enabled, otherwise `"direct"`. Explicit `"auto"` saves image attachments under `.opencode/images/<session>/` and nudges delegation to @observer; saved images remain until you remove them. `"direct"` always passes image parts to the orchestrator. Remove saved images with `rm -rf .opencode/images/` (or a single session subdirectory) when they are no longer needed; session-less messages save images at the top level. |
+| `image_routing` | `"auto"` \| `"direct"` | omitted (legacy conditional) | Optional. When omitted, resolves to `"auto"` if Observer is enabled, otherwise `"direct"`. Explicit `"auto"` saves image attachments under `.opencode/images/<session>/` and nudges delegation to @observer; saved images remain until you remove them. `"direct"` always passes image parts to the orchestrator. Remove saved images with `rm -rf .opencode/images/` (or a single session subdirectory) when they are no longer needed; session-less messages save images at the top level. The automatic save covers pasted PNG/JPEG/GIF/WebP attachments only: PDFs, images produced by tools, and any image the turn model visibly accepts stay inline. |
 | `autoUpdate` | boolean | `true` | Master switch for OMOS plugin updates. When `false`, no update check, notification, or automatic installation runs. Either this or `disabled_hooks: ["auto-update-checker"]` disables the same update path. |
 | `multiplexer.type` | string | `"none"` | Multiplexer mode: `auto`, `tmux`, `zellij`, `herdr`, `cmux-tui`, `kitty`, `wezterm`, `orca`, or `none` See [Multiplexer Integration](multiplexer-integration.md). On OpenCode v2 hosts, panes work with the shared background service or an explicit `--server`; `--standalone` hosts ignore the setting (one diagnostic per process). |
 | `multiplexer.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Each adapter maps it to its nearest native expression (tmux full layouts; split directions for Zellij/Herdr; built-in layouts for kitty; split order for WezTerm); cmux-tui has no layout expression and ignores it. Herdr builds an agent area for both `main-*` layouts (`main-vertical` agent column, `main-horizontal` agent row) and re-equalizes only its agent panes after each spawn/close. See [Multiplexer Integration](multiplexer-integration.md#layouts). |
@@ -315,7 +355,7 @@ and [Council](council.md) for what remains.
 | `multiplexer.viewer` | string | `"tui"` on v1, `"mini"` on v2 | Subagent pane surface: `"tui"` (full interface) or `"mini"` (lightweight interface). Explicit values override the host default. On v1, `"mini"` requires OpenCode >= 1.17.10 and runs `attach ... --dir <dir> --mini`; on v2 it runs `opencode mini` without a positional directory. Changes take effect on the next opencode start. See [Multiplexer Integration](multiplexer-integration.md). |
 | `multiplexer.zellij_pane_mode` | — | — | Removed: ignored with a warning. See [Removed config keys](#removed-config-keys). |
 | `tmux` (top-level) | — | — | Removed: ignored with a warning. Use `multiplexer.*`. See [Removed config keys](#removed-config-keys). |
-| `backgroundJobs.mode` | string | `"managed"` | Background-task lifecycle mode. `"managed"` runs the OMOS job board, retention, wake scheduler, wall-clock watchdog, terminal gate, and the `task_cancel`/`task_status`/`task_reply` tools. `"native"` skips every board-shaped component and registers only two thin host-read controls: `task_status` (parent-scoped `session.get` plus the trailing result) and `task_cancel` (`session.abort`, session retained). `"off"` registers no OMOS task tool and leaves native OpenCode delegation completely untouched (session presets still bind delegated children; they are not board state). See [Background Job Management](#background-job-management). |
+| `backgroundJobs.mode` | string | `"managed"` | Background-task lifecycle mode. `"managed"` runs the OMOS job board, retention, wake scheduler, wall-clock watchdog, terminal gate, and the `task_cancel`/`task_status`/`task_reply` tools. `"native"` skips every board-shaped component and registers only two thin host-read controls: `task_status` (parent-scoped `session.get` plus the trailing result) and `task_cancel` (`session.abort`, session retained). `"off"` registers no OMOS task tool and leaves native OpenCode delegation completely untouched: the native `subagent` executor is not wrapped, no child session is read before native validation, and session-level preset bindings do not apply (agent models, variants, temperature and provider options still come from the registered agent configuration, and the `preset` default still selects them at startup). See [Background Job Management](#background-job-management). |
 | `backgroundJobs.maxSessionsPerAgent` | integer | `2` | Maximum completed/reconciled reusable child sessions per specialist type in the current orchestrator session (1–10) See [Background Job Management](#background-job-management). |
 | `backgroundJobs.maxRetainedSnapshots` | — | — | Removed: ignored with a warning. See [Removed config keys](#removed-config-keys). |
 | `backgroundJobs.strategy` | — | — | Removed: board placement is change-only. See [Removed config keys](#removed-config-keys). |
@@ -336,11 +376,11 @@ and [Council](council.md) for what remains.
 | `backgroundJobs.waitForUserGuard` | boolean | `true` | v1 only (`wait_for_user` is not registered on v2). When true, intercepts `wait_for_user` calls while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. See [Background Job Management](#background-job-management). |
 | `backgroundJobs.pruneEvictedSessions` | boolean | `false` | When true, removes the host child session when a retention trim (per-agent count cap or context budget, reusable or retained-stopped) evicts its terminal or retained-stopped background job record. Only background children this plugin launched itself through a tracked `task(..., background: true)` call are eligible: foreground task children, unattributed placeholder sessions, and adopted, restored, or rehydrated sessions are never deleted. Bounded host reads must also confirm the session's `parentID` still matches the record's parent and that the session is idle; a session the board tracks again (revived, re-registered, or leased) or with a parked child-input wait is never removed, and the delete itself has a deadline; parent deletion (`session.deleted`) and explicit drops never remove host sessions. v1 hosts only for now: v2 has no live session-status map, so every prune is skipped there (logged, no warning). See [Background Job Management](#background-job-management). |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
-| `disabled_tools` | string[] | `[]` | Slim tool names to disable globally. Disabled Slim tools are not registered with OpenCode and cannot be used by agents; OpenCode built-in tools are not affected |
+| `disabled_tools` | string[] | `[]` | Slim tool names to disable globally. Disabled Slim tools are not registered and their implementations are not loaded; OpenCode built-in tools are not affected. Disabling `acp_run` also omits ACP wrapper agents that would be unusable. |
 | `disabled_skills` | string[] | `[]` | Skill names to disable globally. Disabled skills are not granted to agents, and disabled bundled skills are not registered; listing `reflect` here also disables the `/reflect` command |
 | `disabled_hooks` | string[] | `[]` | Hook names to disable globally: `phase-reminder`, `foreground-fallback`, `deepwork-goal`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`, `auto-update-checker`. Either `auto-update-checker` here or `autoUpdate: false` turns the whole update feature off (check, notice, install); the hook entry also keeps the hook off if the feature switch is later re-enabled. Unknown values are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies. See [Hooks](#hooks) |
 | `disabled_commands` | string[] | `[]` | Slash commands to disable globally: `interview`, `implement`, `deepwork`, `reflect`, `preset`, `killall`, `subagent`. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. Listing `reflect` in `disabled_skills` also disables the `/reflect` command. See [Slash Commands](#slash-commands) |
-| `webfetch.enabled` | boolean | `true` | When `false`, the enhanced `webfetch` is not registered and OpenCode's built-in is used. See [Webfetch](webfetch.md) |
+| `webfetch.enabled` | boolean | `true` | When `false`, the enhanced `webfetch` is not loaded or registered and OpenCode's built-in is used. Listing `webfetch` in `disabled_tools` has the same cold behavior without changing the feature config. See [Webfetch](webfetch.md) |
 | `fallback.enabled` | boolean | `true` | Enable Slim's foreground model-chain failover. It does not configure OpenCode provider/AI-SDK retries. On **v2 hosts** the replay path (abort + re-prompt) stays disabled — the v2 `switchModel` has no per-turn/atomic conditional form, so an in-flight replay could commit after a newer user turn has taken over — while the retry-hook steering path runs: host retry events are absorbed up to `fallback.maxRetries`, then the model is switched in place via the host `session.switchModel` and the host retries the current turn on the new model. The same switch disables both paths. |
 | `fallback.maxRetries` | integer | `3` | Number of host retry events Slim absorbs before advancing the foreground model chain. The budget stays spent across model switches. Recovery re-arms it: a completed successful assistant response on v1, or a raw `session.step.ended` with `finish` `stop`, `tool-calls` or `length`, or `session.execution.succeeded` on v2. A confirmed new v1 user turn, an observed return to the configured primary outside our committed fallback for a fresh descent, or session deletion also re-arms it. A new v2 user turn alone does not reset the budget; an explicit model change is recorded so returning to the configured primary can re-arm the descent. Landing on the configured head through a committed fallback does not re-arm this budget, including for inherit+chain agents. Terminal `session.error` and `message.updated` failures advance immediately without charging it. On v1, three distinct consecutive completed, error-free `finish: 'unknown'` messages with verified tool-free parts also trigger request-scoped abort and replay without charging retries. `0` advances on the first retry event. This does not configure OpenCode provider or background subagent retries. |
 | `fallback.initialRetryDelayMs` | number | `0` | Delay in milliseconds before triggering the first fallback on a failover-worthy error. Gives intercepting plugins time to recover the current model before the fallback chain advances. 0 disables. v1 replay only: the v2 steering path performs no replay, so it ignores this delay. When the delay is nonzero, v2 logs that it is ignored; the notice can repeat after recovery. |
@@ -408,7 +448,8 @@ On v2, `/preset` opens a manager with two application scopes:
 
 - **Current session** saves that session's subagent inference configuration
   without changing the configuration file's selected preset. It affects
-  future delegations, not already-created children or the main session's
+  future delegations, including explicit same-agent continuations of bound
+  children. Applying alone does not update a child or the main session's
   native model selection.
 - **Global default** writes the user configuration. It affects sessions that
   first bind after the refresh, subject to project and environment overrides.
@@ -422,6 +463,11 @@ or project configuration, and edits to the same preset definition, do not
 change existing bindings or their future children.** Explicitly reapply the
 preset to Current session to use an updated definition. Bindings persist in
 OpenCode's plugin storage across restarts.
+
+Same-ID continuation is best-effort. The host selects the model, the plugin
+installs inference options before the prompt, and a successful native return
+saves the adopted snapshot. Failures are reported without rolling back native
+model or history changes; repeating a failed call can submit the prompt again.
 
 Only subagent inference settings (`model`, `variant`, `temperature`,
 `options`, and fallback chains) are isolated. Prompts, tools, permissions,
@@ -489,9 +535,10 @@ Current session application. On v1, reload after changing the active preset.
 
 Use `acpAgents` to expose external Agent Client Protocol servers as optional
 OpenCode subagents. The plugin creates a lightweight wrapper agent for each
-entry. The wrapper calls the built-in `acp_run` tool, which starts the ACP
+entry. The wrapper calls the `acp_run` tool, which starts the ACP
 process, creates a session, sends the task, streams tool and plan progress to
-the TUI while the agent works, and returns the final result.
+the TUI while the agent works, and returns the final result. Listing `acp_run`
+in `disabled_tools` removes the tool and every wrapper that could call it.
 `command` is only the executable; put flags and subcommands in `args`.
 
 See **[ACP Agents](acp-agents.md)** for the dedicated setup guide, auth notes,

@@ -33,7 +33,7 @@ export type ChildTerminalEvidence =
   | { kind: 'ready'; text: string }
   | { kind: 'textless' }
   | { kind: 'pending' }
-  | { kind: 'error'; errorText: string }
+  | { kind: 'error'; errorText: string; aborted?: true }
   | { kind: 'no-assistant' };
 
 /**
@@ -515,7 +515,7 @@ function isCompactionRound(message: TranscriptMessage): boolean {
 
 export type TerminalEvidenceVerdict =
   | { verdict: 'completed'; text: string }
-  | { verdict: 'error'; text: string }
+  | { verdict: 'error'; text: string; aborted?: true }
   | { verdict: 'absent' }
   | { verdict: 'retry'; reason: string };
 
@@ -526,7 +526,11 @@ function verdictFromEvidence(
     case 'ready':
       return { verdict: 'completed', text: evidence.text };
     case 'error':
-      return { verdict: 'error', text: evidence.errorText };
+      return {
+        verdict: 'error',
+        text: evidence.errorText,
+        ...(evidence.aborted ? { aborted: true } : {}),
+      };
     case 'pending':
       return { verdict: 'retry', reason: 'pending' };
     case 'textless':
@@ -665,6 +669,13 @@ export function classifyTerminalEvidence(
   );
 }
 
+export function isHostAbortError(error: unknown): boolean {
+  return (
+    isRecord(error) &&
+    (error.type === 'aborted' || error.name === 'MessageAbortedError')
+  );
+}
+
 /**
  * Single source of truth for classifying ONE assistant turn as the
  * terminal evidence of a run: pending finish states, completion time,
@@ -688,7 +699,12 @@ export function classifyAssistantTurnEvidence(
   // (e.g. 'tool-calls'/'unknown') survived the failure — the error is
   // the outcome, the finish flag is leftover state.
   if (last.info?.error !== undefined && last.info?.error !== null) {
-    return { kind: 'error', errorText: stringifyError(last.info.error) };
+    const error = last.info.error;
+    return {
+      kind: 'error',
+      errorText: stringifyError(error),
+      ...(isHostAbortError(error) ? { aborted: true } : {}),
+    };
   }
 
   const finish = last.info?.finish;

@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { BackgroundJobBoard } from '../../utils/background-job-board';
 import {
   formatChildInputWaitDetail,
@@ -14,9 +14,16 @@ mock.module('../../utils/opencode-client', () => ({
   getClient: (input: { client: unknown }) => input.client as never,
 }));
 
+const hooks: ReturnType<typeof createTaskSessionManagerHook>[] = [];
+afterEach(async () => {
+  for (const hook of hooks.splice(0))
+    await hook.event({ event: { type: 'server.instance.disposed' } });
+});
+
 function createHook(options?: {
   backgroundJobBoard?: BackgroundJobBoard;
   shouldManageSession?: (sessionID: string) => boolean;
+  isFallbackInProgress?: (sessionID: string) => boolean;
   onChildInputWait?: (notification: {
     parentSessionID: string;
     taskID: string;
@@ -43,8 +50,10 @@ function createHook(options?: {
       idleReconcileDelayMs: 0,
       runtimeStatusReconcileDelayMs: 0,
       onChildInputWait: options?.onChildInputWait,
+      isFallbackInProgress: options?.isFallbackInProgress,
     },
   );
+  hooks.push(hook);
   return { hook };
 }
 
@@ -71,6 +80,206 @@ function questionAskedEvent(childID: string, requestID: string) {
 }
 
 describe('background child input wait surfacing (RED)', () => {
+  test('manager disposal detaches its pending-ask board observer', async () => {
+    // Mutation: fail to detach the pending-ask observer at instance disposal.
+    const board = new BackgroundJobBoard();
+    const add = spyOn(board, 'addMutationListener');
+    const remove = spyOn(board, 'removeMutationListener');
+    const { hook } = createHook({ backgroundJobBoard: board });
+    expect(add).toHaveBeenCalledTimes(1);
+    const listener = add.mock.calls[0]?.[0];
+    await hook.event({ event: { type: 'server.instance.disposed' } });
+    expect(remove).toHaveBeenCalledWith(listener);
+  });
+
+  test('a still-open foreground question is surfaced when promoted', async () => {
+    // Mutation: discard asks before the child is confirmed background.
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    const notified: unknown[] = [];
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      onChildInputWait: (n) => notified.push(n),
+    });
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-promote' },
+      {
+        args: {
+          subagent_type: 'fixer',
+          description: 'work',
+          background: false,
+        },
+      },
+    );
+    await hook.event({
+      event: {
+        type: 'session.created',
+        properties: {
+          info: {
+            id: 'ses_child',
+            parentID: 'parent-1',
+            agent: 'fixer',
+            title: 'work (@fixer subagent)',
+          },
+        },
+      },
+    });
+    await hook.event(questionAskedEvent('ses_child', 'que_promote'));
+    expect(getChildInputWait('ses_child', 'que_promote')).toBeUndefined();
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-promote' },
+      {
+        output:
+          'task_id: ses_child\nstate: running\n\n<task_result>\nBackground task started.\n</task_result>',
+        metadata: { background: true },
+      },
+    );
+    expect(getChildInputWait('ses_child', 'que_promote')?.requestID).toBe(
+      'que_promote',
+    );
+    expect(notified).toHaveLength(1);
+  });
+
+  test('a foreground question resolved before promotion stays resolved', async () => {
+    // Mutation: replay settled provisional asks on promotion.
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    const notified: unknown[] = [];
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      onChildInputWait: (n) => notified.push(n),
+    });
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-promote' },
+      {
+        args: {
+          subagent_type: 'fixer',
+          description: 'work',
+          background: false,
+        },
+      },
+    );
+    await hook.event({
+      event: {
+        type: 'session.created',
+        properties: {
+          info: {
+            id: 'ses_child',
+            parentID: 'parent-1',
+            agent: 'fixer',
+            title: 'work (@fixer subagent)',
+          },
+        },
+      },
+    });
+    await hook.event(questionAskedEvent('ses_child', 'que_settled'));
+    await hook.event({
+      event: {
+        type: 'question.replied',
+        properties: { sessionID: 'ses_child', requestID: 'que_settled' },
+      },
+    });
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-promote' },
+      {
+        output:
+          'task_id: ses_child\nstate: running\n\n<task_result>\nBackground task started.\n</task_result>',
+        metadata: { background: true },
+      },
+    );
+    expect(getChildInputWait('ses_child', 'que_settled')).toBeUndefined();
+    expect(notified).toHaveLength(0);
+  });
+
+  test('a foreground question survives an aborted turn until promotion', async () => {
+    // Mutation: delete pending foreground asks on MessageAbortedError.
+    resetChildInputWaitForTests();
+    const board = new BackgroundJobBoard();
+    const { hook } = createHook({
+      backgroundJobBoard: board,
+      isFallbackInProgress: () => true,
+    });
+    await hook['tool.execute.before'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-abort' },
+      {
+        args: {
+          subagent_type: 'fixer',
+          description: 'work',
+          background: false,
+        },
+      },
+    );
+    await hook.event({
+      event: {
+        type: 'session.created',
+        properties: {
+          info: { id: 'ses_abort', parentID: 'parent-1', agent: 'fixer' },
+        },
+      },
+    });
+    await hook.event(questionAskedEvent('ses_abort', 'que_abort'));
+    expect(board.get('ses_abort')?.state).toBe('running');
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'ses_abort',
+          error: { name: 'MessageAbortedError' },
+        },
+      },
+    });
+    expect(board.get('ses_abort')?.state).toBe('running');
+    await hook['tool.execute.after'](
+      { tool: 'task', sessionID: 'parent-1', callID: 'call-abort' },
+      {
+        output:
+          'task_id: ses_abort\nstate: running\n\n<task_result>\nBackground task started.\n</task_result>',
+        metadata: { background: true },
+      },
+    );
+    expect(board.get('ses_abort')?.background).toBe(true);
+    expect(getChildInputWait('ses_abort', 'que_abort')?.requestID).toBe(
+      'que_abort',
+    );
+  });
+
+  test('an aborted v1 turn preserves its question until the host answers it', async () => {
+    // Mutation: clear question waits on MessageAbortedError.
+    resetUserWaitGateForTests();
+    const { hook } = createHook();
+    await hook.event(questionAskedEvent('parent-1', 'que_abort'));
+    await hook.event({
+      event: {
+        type: 'permission.asked',
+        properties: { sessionID: 'parent-1', id: 'per_other' },
+      },
+    });
+    await hook.event({
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'parent-1',
+          error: { name: 'MessageAbortedError' },
+        },
+      },
+    });
+    expect(hook.hasInputWait('parent-1')).toBe(true);
+    await hook.event({
+      event: {
+        type: 'permission.replied',
+        properties: { sessionID: 'parent-1', requestID: 'per_other' },
+      },
+    });
+    expect(hook.hasInputWait('parent-1')).toBe(true);
+    await hook.event({
+      event: {
+        type: 'question.replied',
+        properties: { sessionID: 'parent-1', requestID: 'que_abort' },
+      },
+    });
+    expect(hook.hasInputWait('parent-1')).toBe(false);
+  });
+
   test('a background child question notifies the parent with the question content', async () => {
     resetUserWaitGateForTests();
     resetChildInputWaitForTests();

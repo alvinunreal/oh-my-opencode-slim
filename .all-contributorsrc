@@ -1334,6 +1334,33 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "wsmajt",
+      "name": "Kacper Muszyński",
+      "avatar_url": "https://avatars.githubusercontent.com/u/70204246?v=4",
+      "profile": "https://github.com/wsmajt",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "berthojoris",
+      "name": "Bertho Joris",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1352912?v=4",
+      "profile": "http://www.berthojoris.com/",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "tanishqbaweja",
+      "name": "Tanishq",
+      "avatar_url": "https://avatars.githubusercontent.com/u/74068132?v=4",
+      "profile": "https://github.com/tanishqbaweja",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitConvention": "angular"

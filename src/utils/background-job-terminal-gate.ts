@@ -8,7 +8,9 @@ import type {
 import {
   classifyTerminalEvidence,
   fetchChildTranscript,
+  isHostAbortError,
   responseError,
+  type TerminalEvidenceVerdict,
 } from './child-transcript';
 import { isRecord } from './guards';
 import { log } from './logger';
@@ -28,22 +30,34 @@ import {
   guardCompletedStatusText,
   type TaskStatusOutput,
 } from './task';
+import type { TimerHandle, TimerSeamOptions } from './timer-seam';
 
 export const STOP_CONFIRMATION_GRACE_MS = 5_000;
-export const DEFAULT_EVIDENCE_READ_TIMEOUT_MS = 5_000;
+const DEFAULT_EVIDENCE_READ_TIMEOUT_MS = 5_000;
 /** Slow-tier base delay for the bounded evidence re-arm (see
  * `scheduleEvidenceRearm`). Internal seam: no user-facing config. */
-export const DEFAULT_EVIDENCE_REARM_MS = 30_000;
+const DEFAULT_EVIDENCE_REARM_MS = 30_000;
 /** Cap on the slow tier's exponential backoff. */
-export const REARM_CAP_MS = 300_000;
+const REARM_CAP_MS = 300_000;
 /** How many slow re-arms one observation episode may arm. */
-export const DEFAULT_MAX_EVIDENCE_REARMS = 12;
-export const STOPPED_WITHOUT_TERMINAL_RESULT =
+const DEFAULT_MAX_EVIDENCE_REARMS = 12;
+const STOPPED_WITHOUT_TERMINAL_RESULT =
   'Background session stopped before a terminal task result was received.';
 export const EVIDENCE_UNAVAILABLE_DIAGNOSTIC =
   'Terminal evidence could not be read after repeated attempts; task termination is unconfirmed (observation unavailable).';
 const UNATTRIBUTABLE_HOST_OUTCOME =
   'Host outcome is not attributable to this run/attempt; task termination is unconfirmed.';
+
+function transcriptOutcome(
+  evidence: Extract<
+    TerminalEvidenceVerdict,
+    { verdict: 'completed' | 'error' }
+  >,
+): ['completed' | 'error' | 'stopped', string] {
+  return evidence.verdict === 'error' && evidence.aborted
+    ? ['stopped', 'Host reported outcome: interrupted.']
+    : [evidence.verdict, evidence.text];
+}
 
 /** Origin of the terminal evidence behind a publication. Log field only. */
 type TerminalAttribution = 'host-outcome' | 'transcript' | 'event';
@@ -74,7 +88,7 @@ export type RuntimeObservation = {
   stable?: boolean;
   terminalOutcome?: string;
 };
-export type TaskOutputOrigin =
+type TaskOutputOrigin =
   | {
       kind: 'native';
       run: RunRef;
@@ -91,7 +105,7 @@ export type TaskOutputOrigin =
 export type TerminalSignal =
   | { kind: 'inspect' }
   | { kind: 'output'; status: TaskStatusOutput; origin: TaskOutputOrigin }
-  | { kind: 'session-error'; message: string }
+  | { kind: 'session-error'; message: string; error?: unknown }
   | { kind: 'cancel'; lease: BackgroundJobLease; reason?: string };
 export type GateResult =
   | { kind: 'deferred'; record: BackgroundJobRecord }
@@ -136,9 +150,6 @@ export function consumeTerminalCommitToken(
     authorization.validate()
   );
 }
-
-/** Platform timer handle; fake harnesses may return bare numeric ids. */
-type TimerHandle = Timer;
 
 export function runtimeObservationFromSnapshot(
   snapshot: RuntimeSessionStatusSnapshot,
@@ -413,8 +424,8 @@ export function createBackgroundJobTerminalGate(options: {
   maxEvidenceRearms?: number;
   now?: () => number;
   /** Test seam: defaults to the platform timers. */
-  setTimeout?: (callback: () => void, delay: number) => TimerHandle;
-  clearTimeout?: (timer: TimerHandle) => void;
+  setTimeout?: TimerSeamOptions['setTimeout'];
+  clearTimeout?: TimerSeamOptions['clearTimeout'];
 }): BackgroundJobTerminalGate {
   const board = options.backgroundJobBoard;
   const now = options.now ?? Date.now;
@@ -441,7 +452,8 @@ export function createBackgroundJobTerminalGate(options: {
     if (disposed || record?.generation !== run.generation) return;
     let value = observations.get(run.taskID);
     if (!value || value.generation !== run.generation) {
-      if (value?.timer) clearTimer(value.timer);
+      if (value !== undefined && value.timer !== undefined)
+        clearTimer(value.timer);
       value = {
         generation: run.generation,
         activityRevision: record.activityRevision,
@@ -452,7 +464,7 @@ export function createBackgroundJobTerminalGate(options: {
       observations.set(run.taskID, value);
     }
     if (value.activityRevision !== record.activityRevision) {
-      if (value.timer) clearTimer(value.timer);
+      if (value.timer !== undefined) clearTimer(value.timer);
       value = {
         generation: run.generation,
         activityRevision: record.activityRevision,
@@ -574,7 +586,7 @@ export function createBackgroundJobTerminalGate(options: {
     if (board.get(run.taskID)?.state !== 'running') return 'not-running';
     // Guard 4: one timer slot per observation. A pending timer means recovery
     // is ALREADY scheduled — not that the budget is spent.
-    if (value.timer) return 'timer-pending';
+    if (value.timer !== undefined) return 'timer-pending';
     // Guard 5: bounded.
     const max = options.maxEvidenceRearms ?? DEFAULT_MAX_EVIDENCE_REARMS;
     if (value.rearms >= max) return 'budget-exhausted';
@@ -593,7 +605,7 @@ export function createBackgroundJobTerminalGate(options: {
       },
       Math.max(1, delay),
     );
-    value.timer.unref?.();
+    if (typeof value.timer !== 'number') value.timer.unref();
     return 'armed';
   }
 
@@ -607,7 +619,7 @@ export function createBackgroundJobTerminalGate(options: {
     const value = observation(run);
     if (!value) return { kind: 'stale' };
     if (
-      !value.timer &&
+      value.timer === undefined &&
       value.retries <= (options.maxEvidenceRetries ?? 3) &&
       board.get(run.taskID)?.state === 'running'
     ) {
@@ -623,7 +635,7 @@ export function createBackgroundJobTerminalGate(options: {
         },
         Math.max(1, graceMs),
       );
-      value.timer.unref?.();
+      if (typeof value.timer !== 'number') value.timer.unref();
     }
     if (diagnostic === EVIDENCE_UNAVAILABLE_DIAGNOSTIC) {
       // Give-up branch: the fast evidence budget is exhausted. Hand the
@@ -742,7 +754,7 @@ export function createBackgroundJobTerminalGate(options: {
       latest.state === 'running'
     )
       return { kind: 'stale' };
-    if (value.timer) clearTimer(value.timer);
+    if (value.timer !== undefined) clearTimer(value.timer);
     value.timer = undefined;
     value.candidate = undefined;
     // Log-only corroboration: when a window-attributed host outcome is in
@@ -824,7 +836,7 @@ export function createBackgroundJobTerminalGate(options: {
       // Ambiguous busy/retry is live activity: drop held candidates.
       value.candidate = undefined;
       value.idleCandidate = undefined;
-      if (value.timer) clearTimer(value.timer);
+      if (value.timer !== undefined) clearTimer(value.timer);
       value.timer = undefined;
       return deferred(token);
     }
@@ -859,7 +871,7 @@ export function createBackgroundJobTerminalGate(options: {
       value.rearmExhaustedLogged = false;
       value.candidate = undefined;
       value.idleCandidate = undefined;
-      if (value.timer) clearTimer(value.timer);
+      if (value.timer !== undefined) clearTimer(value.timer);
       value.timer = undefined;
       value.runtime = runtime;
       const record = board.markRunningFromLiveSession(
@@ -893,7 +905,7 @@ export function createBackgroundJobTerminalGate(options: {
       // Unknown invalidates open evidence, but never replenishes retries.
       // inspect accounts for the failed attempt, including missing APIs.
       value.quiescentSince = undefined;
-      if (value.timer) clearTimer(value.timer);
+      if (value.timer !== undefined) clearTimer(value.timer);
       value.timer = undefined;
       return deferred(
         token,
@@ -1075,13 +1087,8 @@ export function createBackgroundJobTerminalGate(options: {
         token,
         'Queued continuation has no attributable terminal answer yet.',
       );
-    return commit(
-      token,
-      evidence.verdict,
-      evidence.text,
-      undefined,
-      'transcript',
-    );
+    const [state, text] = transcriptOutcome(evidence);
+    return commit(token, state, text, undefined, 'transcript');
   }
 
   async function inspect(run: RunRef): Promise<GateResult> {
@@ -1272,7 +1279,9 @@ export function createBackgroundJobTerminalGate(options: {
       );
     }
     if (signal?.kind === 'session-error')
-      return commit(token, 'error', signal.message);
+      return isHostAbortError(signal.error)
+        ? commit(token, 'stopped', 'Host reported outcome: interrupted.')
+        : commit(token, 'error', signal.message);
     // Capability absence, not a pending read: fetchChildTranscript
     // resolves undefined ONLY when the host exposes no session.messages
     // endpoint. A host that HAS the source keeps its pending/textless
@@ -1353,15 +1362,17 @@ export function createBackgroundJobTerminalGate(options: {
           });
       }
     }
-    if (evidence.verdict === 'completed' || evidence.verdict === 'error')
+    if (evidence.verdict === 'completed' || evidence.verdict === 'error') {
+      const [state, text] = transcriptOutcome(evidence);
       return commit(
         token,
-        evidence.verdict,
-        evidence.text,
+        state,
+        text,
         undefined,
         'transcript',
         terminalOutcome,
       );
+    }
     // Native return is attributable only when no transcript exists. Foreground
     // still publishes when the transcript is pending; empty result uses a
     // placeholder instead of the original whitespace.
@@ -1584,7 +1595,7 @@ export function createBackgroundJobTerminalGate(options: {
       disposed = true;
       authorizedByGate.delete(gate);
       for (const value of observations.values())
-        if (value.timer) clearTimer(value.timer);
+        if (value.timer !== undefined) clearTimer(value.timer);
       observations.clear();
       inFlight.clear();
     },

@@ -40,7 +40,7 @@ import {
   type MessageTransformView,
   resolveView,
 } from '../message-transform-view';
-import { isGenuineOperatorMessage } from '../orchestrator-wake/index';
+import { isGenuineOperatorMessage } from '../orchestrator-wake/operator-text';
 import type { SessionLifecycle } from '../session-lifecycle';
 import { isMessageWithParts } from '../types';
 import {
@@ -55,7 +55,12 @@ import {
 } from './board-injection';
 import type { ChildInputWaitNotification } from './child-input-wait';
 import { clearChildInputWaitsForSession } from './child-input-wait';
-import { handleEvent } from './event-router';
+import {
+  handleEvent,
+  observePendingChildAsks,
+  type PendingChildAsks,
+  promoteChildInputWaits,
+} from './event-router';
 import { createIdleReconciler } from './idle-reconciliation';
 import { createIdleSessionTokens } from './idle-session-tokens';
 import { createInputWaitTracker } from './input-wait-tracker';
@@ -381,6 +386,7 @@ export function createTaskSessionManagerHook(
     ) => Promise<import('./session-recovery').CanonicalTaskReference>;
     isDisposed?: () => boolean;
     shouldManageSession: (sessionID: string) => boolean;
+    isKillAllStopActive?: (sessionID: string) => boolean;
     /** Register a session as orchestrator when the transform hook detects
      *  an orchestrator message but the session isn't in the agent map yet. */
     registerSessionAsOrchestrator?: (sessionID: string) => void;
@@ -701,6 +707,17 @@ export function createTaskSessionManagerHook(
     invalidateIdle: (sessionID) => idleSessionTokens.invalidate(sessionID),
   });
   hasInputWait = (s) => inputWaits.hasInputWait(s);
+  const pendingChildAsks: PendingChildAsks = new Map();
+  const stopObservingPendingChildAsks = observePendingChildAsks(
+    backgroundJobBoard,
+    pendingChildAsks,
+  );
+  const onLaunchConfirmed = (taskID: string) =>
+    promoteChildInputWaits(taskID, {
+      backgroundJobBoard,
+      pendingChildAsks,
+      onChildInputWait: options.onChildInputWait,
+    });
 
   // A background child's open question/permission must wake the parent even
   // though the parent session itself has no input wait. The event router
@@ -769,6 +786,7 @@ export function createTaskSessionManagerHook(
     hasUndeliveredTerminalPush: options.hasUndeliveredTerminalPush,
     metadataKey: BACKGROUND_JOB_BOARD_METADATA_KEY,
     shouldManageSession: options.shouldManageSession,
+    isKillAllStopActive: options.isKillAllStopActive,
     taskContextTracker,
   };
 
@@ -828,6 +846,7 @@ export function createTaskSessionManagerHook(
         {
           directory: _ctx.directory,
           backgroundJobBoard,
+          onLaunchConfirmed,
           terminalGate,
           backgroundJobSupervisor: options.backgroundJobSupervisor,
           backgroundTaskConcurrency: options.backgroundTaskConcurrency,
@@ -960,6 +979,7 @@ export function createTaskSessionManagerHook(
       await handleToolExecuteAfter(input, output, {
         directory: _ctx.directory,
         backgroundJobBoard,
+        onLaunchConfirmed,
         terminalGate,
         backgroundJobSupervisor: options.backgroundJobSupervisor,
         backgroundTaskConcurrency: options.backgroundTaskConcurrency,
@@ -1185,6 +1205,7 @@ export function createTaskSessionManagerHook(
       }
 
       if (input.event.type === 'server.instance.disposed') {
+        stopObservingPendingChildAsks();
         runtimeStatusReconciler.dispose();
         if (!options.terminalGate) terminalGate.dispose();
       }
@@ -1206,6 +1227,7 @@ export function createTaskSessionManagerHook(
           observeSyntheticTerminalPart(injectionState, part),
         revivedRunTracker: options.revivedRunTracker,
         onChildInputWait: options.onChildInputWait,
+        pendingChildAsks,
       }).then(() => runtimeStatusReconciler.schedule());
     },
   };

@@ -32,13 +32,6 @@ export type EvalSessionResult = {
   durationSecs: number;
 };
 
-export type RunViaServer = (
-  agent: string,
-  prompt: string,
-  label: string,
-  attempt: number,
-) => Promise<EvalSessionResult>;
-
 const sessionDependencies = { withTimeout, pollSession, stopEvalSessionTree };
 
 /**

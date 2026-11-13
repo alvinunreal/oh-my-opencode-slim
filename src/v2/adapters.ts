@@ -66,10 +66,6 @@ export function v1PermKeyToV2(
   return [{ action: key, resource: '*' }];
 }
 
-export const TASK_V2_ACTIONS: ReadonlySet<string> = Object.freeze(
-  new Set(v1PermKeyToV2('task').map((t) => t.action)),
-);
-
 /** Convert a v1 permission map (or shorthand string) into v2 permission rules. */
 export function adaptPermissions(
   perm: unknown,
@@ -286,7 +282,17 @@ export function applyAgentToDraft(
       (v1.mode as string) ?? (name === 'orchestrator' ? 'primary' : 'subagent');
     agent.hidden = v1.hidden === true;
     if (typeof v1.description === 'string') agent.description = v1.description;
-    if (typeof v1.color === 'string') agent.color = v1.color;
+    // Native v2 colors are hex-only; a theme token is left untouched on the
+    // host entry (so an existing host color survives and the palette applies
+    // when none exists) while the OMOS sidebar still renders the token.
+    if (typeof v1.color === 'string') {
+      if (/^#[0-9a-fA-F]{6}$/.test(v1.color)) agent.color = v1.color;
+      else {
+        log('[v2] theme color kept sidebar-local; host color unchanged', {
+          color: v1.color,
+        });
+      }
+    }
     if (typeof v1.prompt === 'string') agent.system = v1.prompt;
     if (model) {
       agent.model = {
