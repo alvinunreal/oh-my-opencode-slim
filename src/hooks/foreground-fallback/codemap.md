@@ -7,6 +7,7 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 - Retrieves the last user message from the bounded transcript tail or its latest parent; an empty or failed tail never triggers a full-history read
 - Re-prompts with the first eligible entry from the chain head, skipping tried models and providers abandoned by this session or its parent
 - Operates reactively through the event system (cannot wrap `prompt()` directly for interactive sessions)
+- On v2, records confirmed quota exhaustion with explicit reset metadata in a small configuration-domain store (`quota-cooldown.ts`); reads/restarts preserve the absolute deadline, while ordinary rate limits/auth/request errors do not create records.
 - Defers terminal job-board bookkeeping for recoverable child failover errors (cooperates with task-session-manager's `willAttemptFallback`). The deferral fences every terminal gate path before replay preparation starts; idle always uses the bounded backstop.
 
 ## Design
@@ -55,6 +56,7 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 
 ### Fallback Chain Resolution
 - **Agent-specific chains**: Each agent defines an ordered list of fallback models via `modelArrays`, preserving per-entry variants
+- **Durable quota eligibility**: Existing selection skips cooling provider/model entries without reordering variants. Native retry observations record before quota early returns; the v2 request bridge checks eligibility before dispatch. The existing foreground-fallback disable controls apply to both paths; no account/provider-wide quarantine or separate retry controller is introduced.
 - **Chain generations**: The published table (`foregroundFallbackChains`) is swapped atomically by registry finalize and every successful v2 profile refresh (`buildChainGeneration`/`publishChainGeneration` in `src/index.ts`); each session pins the generation in effect at registration (`pinSessionChains`, fired by the v2 profile bridge at profile freeze) and finishes its descent against it — a swap mid-descent never changes what counts as untried
 - Selection scans from index 0, skipping tried entries and the union of this
   session's and its parent's live `downProviders` marks. Other models on

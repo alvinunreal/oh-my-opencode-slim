@@ -52,6 +52,10 @@ const ALLOWLIST = new Map<string, string>([
     'Date.now() gates retry/dedup windows for model failover; no prompt content is derived from it.',
   ],
   [
+    'hooks/foreground-fallback/quota-cooldown.ts',
+    'Date.now() calculates and checks on-disk quota eligibility deadlines only; timestamps never enter prompt content, agent definitions or tool descriptions.',
+  ],
+  [
     'hooks/task-session-manager/task-context-tracker.ts',
     'Date.now() records lastReadAt for internal recency ordering; formatted prompt output (background job board) is confined to the volatile trailing message.',
   ],

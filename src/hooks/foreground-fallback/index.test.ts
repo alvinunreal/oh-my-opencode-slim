@@ -42,7 +42,9 @@ import {
   isInlineFailoverError,
   isPermanentQuotaBillingError,
   isSpentQuotaError,
+  quotaCooldownResetDuration,
 } from './index';
+import { isQuotaModelCooling } from './quota-cooldown';
 
 // ACCEPTANCE GAP: config() hook behaviour is not covered by CI — verify live.
 
@@ -13135,5 +13137,498 @@ describe('fallback restoration', () => {
       agentName: 'orchestrator',
       variant: 'high',
     });
+  });
+});
+
+describe('v2 durable quota cooldown', () => {
+  function holdQuotaWrite(manager: ForegroundFallbackManager) {
+    const entered = deferred<void>();
+    const hold = deferred<void>();
+    const seam = manager as unknown as {
+      recordV2QuotaCooldown: (...args: unknown[]) => Promise<void>;
+    };
+    seam.recordV2QuotaCooldown = async () => {
+      entered.resolve(undefined);
+      await hold.promise;
+    };
+    return { entered: entered.promise, release: () => hold.resolve(undefined) };
+  }
+
+  const quotaFailure = {
+    type: 'provider.rate-limit',
+    status: 429,
+    retryAfterMs: 374_901_749,
+    message:
+      'Individual quota reached. Please upgrade your subscription to increase your limits. quota resets in 104h 8m 15s.',
+  };
+
+  test('classifies only confirmed quota exhaustion with an explicit reset', () => {
+    const resetAfterMs = 374_901_749;
+    expect(quotaCooldownResetDuration(quotaFailure)).toBe(resetAfterMs);
+    expect(
+      quotaCooldownResetDuration({
+        type: 'provider.quota',
+        retryAfterMs: resetAfterMs,
+      }),
+    ).toBe(resetAfterMs);
+
+    for (const error of [
+      {
+        type: 'provider.rate-limit',
+        status: 429,
+        retryAfterMs: 30_000,
+        message: 'rate limit',
+      },
+      {
+        type: 'provider.rate-limit',
+        status: 429,
+        message: 'Individual quota reached',
+      },
+      {
+        type: 'provider.auth',
+        status: 403,
+        retryAfterMs: 30_000,
+        message: 'quota exceeded',
+      },
+      {
+        type: 'provider.auth',
+        status: 401,
+        retryAfterMs: 30_000,
+        message: 'quota exceeded',
+      },
+      {
+        type: 'provider.content-filter',
+        status: 429,
+        retryAfterMs: 30_000,
+        message: 'quota exceeded',
+      },
+      {
+        type: 'provider.invalid-request',
+        status: 429,
+        retryAfterMs: 30_000,
+        message: 'quota exceeded',
+      },
+      {
+        type: 'provider.rate-limit',
+        status: 429,
+        retryAfterMs: 30_000,
+        message: 'Invalid JSON schema: quota exceeded',
+      },
+      {
+        type: 'provider.transport',
+        status: 412,
+        retryAfterMs: 30_000,
+        message:
+          'Antigravity did not begin a response within the pre-response time limit',
+      },
+      {
+        type: 'provider.rate-limit',
+        status: 429,
+        retryAfterMs: 120_000,
+        message: 'Rate limited. quota resets in 2m',
+      },
+      {
+        type: 'provider.rate-limit',
+        status: 412,
+        retryAfterMs: 30_000,
+        message: 'Antigravity account pool is unavailable',
+      },
+      {
+        type: 'provider.rate-limit',
+        status: 412,
+        retryAfterMs: 30_000,
+        message:
+          'Requested Antigravity model is not available to the configured accounts',
+      },
+      {
+        type: 'provider.rate-limit',
+        status: 429,
+        retryAfterMs: 0,
+        message: 'quota exceeded',
+      },
+    ]) {
+      expect(quotaCooldownResetDuration(error)).toBeUndefined();
+    }
+  });
+
+  test('a superseding prompt during persistence cannot switch or mutate the decision', async () => {
+    const { manager } = makeManager({ hostFlavor: 'v2' });
+    const held = holdQuotaWrite(manager);
+    const decision = { retry: false };
+    const switchModel = mock(async () => {});
+    const pending = manager.handleV2Retry(
+      {
+        sessionID: 'quota-superseded',
+        agent: 'orchestrator',
+        model: { providerID: 'test', id: 'a' },
+        error: quotaFailure,
+        decision,
+      },
+      switchModel,
+    );
+
+    await held.entered;
+    manager.observeExternalPromptIntent('quota-superseded', 'new-user-turn');
+    held.release();
+    await pending;
+
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(decision).toEqual({ retry: false });
+    expect(manager.isFallbackInProgress('quota-superseded')).toBe(false);
+    manager.dispose();
+  });
+
+  test('disposing during persistence cannot steer the disposed session', async () => {
+    const { manager } = makeManager({ hostFlavor: 'v2' });
+    const held = holdQuotaWrite(manager);
+    const decision = { retry: false };
+    const switchModel = mock(async () => {});
+    const pending = manager.handleV2Retry(
+      {
+        sessionID: 'quota-disposed',
+        agent: 'orchestrator',
+        model: { providerID: 'test', id: 'a' },
+        error: quotaFailure,
+        decision,
+      },
+      switchModel,
+    );
+
+    await held.entered;
+    manager.dispose();
+    held.release();
+    await pending;
+
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(decision).toEqual({ retry: false });
+    expect(manager.isFallbackInProgress('quota-disposed')).toBe(false);
+  });
+
+  test('single-flight ownership covers persistence and releases for the next retry', async () => {
+    const { manager } = makeManager({
+      hostFlavor: 'v2',
+      chain: ['test/a', 'backup/b', 'third/c'],
+    });
+    const held = holdQuotaWrite(manager);
+    const switchModel = mock(async () => {});
+    const firstDecision = { retry: false };
+    const first = manager.handleV2Retry(
+      {
+        sessionID: 'quota-overlap',
+        agent: 'orchestrator',
+        model: { providerID: 'test', id: 'a' },
+        error: quotaFailure,
+        decision: firstDecision,
+      },
+      switchModel,
+    );
+
+    await held.entered;
+    const overlappingDecision = { retry: false };
+    await manager.handleV2Retry(
+      {
+        sessionID: 'quota-overlap',
+        agent: 'orchestrator',
+        model: { providerID: 'test', id: 'a' },
+        error: {
+          type: 'provider.rate-limit',
+          status: 429,
+          message: 'rate limit',
+        },
+        decision: overlappingDecision,
+      },
+      switchModel,
+    );
+    expect(manager.isFallbackInProgress('quota-overlap')).toBe(true);
+    expect(switchModel).not.toHaveBeenCalled();
+    expect(overlappingDecision).toEqual({ retry: false });
+
+    held.release();
+    await first;
+    expect(switchModel).toHaveBeenCalledTimes(1);
+    expect(switchModel).toHaveBeenLastCalledWith('quota-overlap', {
+      providerID: 'backup',
+      id: 'b',
+    });
+    expect(manager.isFallbackInProgress('quota-overlap')).toBe(false);
+
+    await manager.handleV2Retry(
+      {
+        sessionID: 'quota-overlap',
+        agent: 'orchestrator',
+        model: { providerID: 'backup', id: 'b' },
+        error: {
+          type: 'provider.rate-limit',
+          status: 429,
+          message: 'rate limit',
+        },
+        decision: { retry: false },
+      },
+      switchModel,
+    );
+    expect(switchModel).toHaveBeenCalledTimes(2);
+    expect(switchModel).toHaveBeenLastCalledWith('quota-overlap', {
+      providerID: 'third',
+      id: 'c',
+    });
+    manager.dispose();
+  });
+
+  test('records quota cooldown before spent-quota early return and leaves other errors ephemeral', async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'omos-quota-manager-'),
+    );
+    const filePath = path.join(root, 'omos-quota-cooldowns.json');
+    const now = clock.now();
+
+    try {
+      const manager = timedManager(
+        makeOptions({
+          chains: { orchestrator: ['test/early-quota'] },
+          enabled: true,
+          input: { directory: '/test', hostFlavor: 'v2' } as never,
+          quotaCooldownFilePath: filePath,
+        }),
+      );
+      const switchModel = mock(async () => {});
+      const earlyQuotaEvent = {
+        sessionID: 'quota-early-surface',
+        agent: 'orchestrator',
+        model: { providerID: 'test', id: 'early-quota' },
+        error: {
+          type: 'provider.rate-limit',
+          status: 429,
+          retryAfterMs: 90_000,
+          message: 'quota exceeded',
+        },
+        decision: { retry: true, delay: 500 },
+      };
+      await manager.handleV2Retry(earlyQuotaEvent, switchModel);
+      expect(switchModel).not.toHaveBeenCalled();
+      expect(isQuotaModelCooling('test', 'early-quota', now, filePath)).toBe(
+        true,
+      );
+
+      await fs.rm(filePath, { force: true });
+      const ephemeralManager = timedManager(
+        makeOptions({
+          chains: { orchestrator: ['test/a', 'backup/b'] },
+          enabled: true,
+          input: { directory: '/test', hostFlavor: 'v2' } as never,
+          quotaCooldownFilePath: filePath,
+        }),
+      );
+      const ephemeralErrors = [
+        {
+          type: 'provider.rate-limit',
+          status: 429,
+          retryAfterMs: 30_000,
+          message: 'ordinary rate limit',
+        },
+        {
+          type: 'provider.rate-limit',
+          status: 429,
+          message: 'Individual quota reached. quota resets in 104h',
+        },
+        {
+          type: 'provider.auth',
+          status: 403,
+          retryAfterMs: 30_000,
+          message: 'quota exceeded; invalid credentials',
+        },
+        {
+          type: 'provider.content-filter',
+          status: 429,
+          retryAfterMs: 30_000,
+          message: 'quota exceeded; content blocked',
+        },
+        {
+          type: 'provider.invalid-request',
+          status: 429,
+          retryAfterMs: 30_000,
+          message: 'quota exceeded; malformed request',
+        },
+        {
+          type: 'provider.transport',
+          status: 412,
+          retryAfterMs: 30_000,
+          message:
+            'Antigravity did not begin a response within the pre-response time limit',
+        },
+        {
+          type: 'provider.rate-limit',
+          status: 429,
+          retryAfterMs: 120_000,
+          message: 'Rate limited. quota resets in 2m',
+        },
+        {
+          type: 'provider.rate-limit',
+          status: 412,
+          retryAfterMs: 30_000,
+          message: 'Antigravity account pool is unavailable',
+        },
+        {
+          type: 'provider.rate-limit',
+          status: 412,
+          retryAfterMs: 30_000,
+          message:
+            'Requested Antigravity model is not available to the configured accounts',
+        },
+      ];
+      for (let index = 0; index < ephemeralErrors.length; index++) {
+        await ephemeralManager.handleV2Retry(
+          {
+            sessionID: `ephemeral-${index}`,
+            agent: 'orchestrator',
+            model: { providerID: 'test', id: 'a' },
+            error: ephemeralErrors[index],
+            decision: { retry: false },
+          },
+          async () => {},
+        );
+      }
+      await expect(fs.readFile(filePath, 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      manager.dispose();
+      ephemeralManager.dispose();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test('v2 selection skips a cooled model without changing configured order or variants', async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'omos-quota-selection-'),
+    );
+    const filePath = path.join(root, 'omos-quota-cooldowns.json');
+    const now = clock.now();
+    try {
+      const chain = [
+        { id: 'test/a', variant: 'low' },
+        { id: 'backup/b', variant: 'high' },
+        { id: 'third/c', variant: 'balanced' },
+      ];
+      const { recordQuotaCooldown } = await import('./quota-cooldown');
+      expect(
+        await recordQuotaCooldown('backup', 'b', 60_000, now, { filePath }),
+      ).toBe(true);
+      const manager = timedManager(
+        makeOptions({
+          chains: { orchestrator: chain },
+          enabled: true,
+          input: { directory: '/test', hostFlavor: 'v2' } as never,
+          quotaCooldownFilePath: filePath,
+        }),
+      );
+      const switchModel = mock(async () => {});
+      const decision = { retry: false };
+      await manager.handleV2Retry(
+        {
+          sessionID: 'quota-selection',
+          agent: 'orchestrator',
+          model: { providerID: 'test', id: 'a' },
+          error: {
+            type: 'provider.rate-limit',
+            status: 429,
+            message: 'rate limit',
+          },
+          decision,
+        },
+        switchModel,
+      );
+      expect(chain).toEqual([
+        { id: 'test/a', variant: 'low' },
+        { id: 'backup/b', variant: 'high' },
+        { id: 'third/c', variant: 'balanced' },
+      ]);
+      expect(switchModel).toHaveBeenCalledWith('quota-selection', {
+        providerID: 'third',
+        id: 'c',
+        variant: 'balanced',
+      });
+      manager.dispose();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test('an all-cooled v2 chain stops without switching to a cold provider', async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'omos-quota-all-cooled-'),
+    );
+    const filePath = path.join(root, 'omos-quota-cooldowns.json');
+    try {
+      const { recordQuotaCooldown } = await import('./quota-cooldown');
+      expect(
+        await recordQuotaCooldown('test', 'a', 60_000, clock.now(), {
+          filePath,
+        }),
+      ).toBe(true);
+      expect(
+        await recordQuotaCooldown('backup', 'b', 60_000, clock.now(), {
+          filePath,
+        }),
+      ).toBe(true);
+      const manager = timedManager(
+        makeOptions({
+          chains: { orchestrator: ['test/a', 'backup/b'] },
+          enabled: true,
+          input: { directory: '/test', hostFlavor: 'v2' } as never,
+          quotaCooldownFilePath: filePath,
+        }),
+      );
+      const switchModel = mock(async () => {});
+      const decision = { retry: false };
+      await manager.handleV2Retry(
+        {
+          sessionID: 'quota-all-cooled',
+          agent: 'orchestrator',
+          model: { providerID: 'test', id: 'a' },
+          error: {
+            type: 'provider.rate-limit',
+            status: 429,
+            message: 'ordinary rate limit',
+          },
+          decision,
+        },
+        switchModel,
+      );
+      expect(switchModel).not.toHaveBeenCalled();
+      expect(decision).toEqual({ retry: false });
+      manager.dispose();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test('fallback-disabled v2 sessions do not use quota cooldown eligibility', async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'omos-quota-disabled-'),
+    );
+    const filePath = path.join(root, 'omos-quota-cooldowns.json');
+    try {
+      const { recordQuotaCooldown } = await import('./quota-cooldown');
+      expect(
+        await recordQuotaCooldown('test', 'a', 60_000, clock.now(), {
+          filePath,
+        }),
+      ).toBe(true);
+      const manager = timedManager(
+        makeOptions({
+          chains: { orchestrator: ['test/a'] },
+          enabled: false,
+          v2RetryEnabled: false,
+          input: { directory: '/test', hostFlavor: 'v2' } as never,
+          quotaCooldownFilePath: filePath,
+        }),
+      );
+      expect(manager.isQuotaModelCooling('disabled-session', 'test', 'a')).toBe(
+        false,
+      );
+      manager.dispose();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });

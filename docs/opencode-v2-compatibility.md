@@ -863,6 +863,17 @@ is ignored there. Other prompt callers, like the orchestration scheduler (v1
 only), merely pin the current model and keep steering; this is not foreground
 fallback.
 
+Confirmed quota exhaustion with a positive native `retryAfterMs` additionally
+records a model-scoped absolute deadline shared by sessions using the same
+OpenCode configuration directory. The existing retry hook observes the failure;
+existing fallback selection skips cooling entries, and the final `model.request`
+hook refuses an explicitly cooling selection before transport. This does not
+replace native retry/backoff, infer account identity or invent a TTL for errors
+without reset information. Both recording and refusal respect the existing
+foreground-fallback disable controls. See
+[Quota reset cooldowns](configuration.md#quota-reset-cooldowns-on-v2) for storage,
+expiry and operator-clear limitations.
+
 ## Background job state: rehydrate probe and persistence
 
 Several mechanisms keep the in-memory background job board honest against the

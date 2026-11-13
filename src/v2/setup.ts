@@ -3622,17 +3622,41 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
         disposers.push(() => reg.dispose());
         log('[v2] session context hook registered');
 
-        // v1 chat.headers → v2 session.model.request (per-provider-request
-        // HTTP headers; registered unconditionally when the v1
-        // hook exists — a failure fails setup rather than silently skipping
-        // the Copilot initiator header).
-        if (chatHeadersHook || registryBridge.hasSelectedMarketplaceAgents) {
+        // v1 chat.headers and the configured quota cooldown final check share
+        // the native pre-dispatch model.request hook.
+        const quotaCoolingCheck = (
+          v1Hooks as {
+            'v2.isQuotaModelCooling'?: (
+              sessionID: string,
+              providerID: string,
+              modelID: string,
+            ) => boolean;
+          }
+        )?.['v2.isQuotaModelCooling'];
+        if (
+          chatHeadersHook ||
+          registryBridge.hasSelectedMarketplaceAgents ||
+          quotaCoolingCheck
+        ) {
           const headers = chatHeadersHook
             ? createChatHeadersBridge(chatHeaderStates)
             : undefined;
           const headerReg = await ctx.session.hook(
             'model.request',
             async (event) => {
+              if (
+                event.model?.providerID &&
+                event.model.id &&
+                quotaCoolingCheck?.(
+                  event.sessionID,
+                  event.model.providerID,
+                  event.model.id,
+                )
+              ) {
+                throw new Error(
+                  `[QUOTA COOLDOWN REFUSAL] Refusing model.request for "${event.model.providerID}/${event.model.id}": its confirmed quota reset has not elapsed.`,
+                );
+              }
               if (registryBridge.hasSelectedMarketplaceAgents) {
                 if (!permissionSnapshotReady) {
                   await withTimeout(

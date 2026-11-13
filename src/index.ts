@@ -3059,6 +3059,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       ? (input: never, switchModel: never) =>
           foregroundFallback?.handleV2Retry(input, switchModel)
       : undefined,
+    'v2.isQuotaModelCooling': foregroundFallback
+      ? (sessionID: string, providerID: string, modelID: string) =>
+          foregroundFallback?.isQuotaModelCooling(
+            sessionID,
+            providerID,
+            modelID,
+          ) ?? false
+      : undefined,
     // v2-only extension hook: pin the chain generation in effect when a
     // child session registers — the same generation as its frozen profile.
     'v2.pinSessionChains': (
@@ -4534,6 +4542,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     'v2.resolveDelegatedModel': typeof resolveV2DelegatedModel;
     'v2.setSessionTeamResolver': (resolver: typeof sessionTeamFor) => void;
     'v2.backgroundDefaultFlip': BackgroundDefaultFlipState;
+    'v2.isQuotaModelCooling':
+      | ((sessionID: string, providerID: string, modelID: string) => boolean)
+      | undefined;
     'v2.pinSessionChains': (
       sessionID: string,
       chains?: SessionTeamBundle['chains'],
