@@ -8,8 +8,8 @@ this change does not bump or publish the package.
 OpenCode **2.3.0+** is required on V2: native subagents always run in the
 background and the host reports every settled child period. Parseable versions
 below stable 2.3.0 (including `2.3.0-dev`) fail setup with upgrade guidance.
-Unversioned embeddings cannot be
-checked and must provide the same host behavior. V1 is unchanged.
+Unversioned embeddings cannot be checked and must provide the same host
+behavior. V1 is unchanged.
 
 On V2, the default changes from `managed` to `native`, even when no
 `backgroundJobs` configuration is present. Slim's job board, short aliases,
