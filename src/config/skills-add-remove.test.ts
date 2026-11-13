@@ -218,11 +218,8 @@ describe('skills_add / skills_remove directives', () => {
     ).toEqual(['a', '!b', 'c']);
   });
 
-  test('getDefaultGrantedSkillNames: oracle grants in registry order', () => {
-    const grants = getDefaultGrantedSkillNames('oracle');
-    expect(grants[0]).toBe('simplify');
-    expect(grants).toContain('requesting-code-review');
-    expect(grants).not.toContain('codemap');
+  test('getDefaultGrantedSkillNames: oracle gets only its bundled grants', () => {
+    expect(getDefaultGrantedSkillNames('oracle')).toEqual(['simplify']);
   });
 
   // Loader E2E ---------------------------------------------------------------
@@ -309,7 +306,7 @@ describe('skills_add / skills_remove directives', () => {
     expect(orchestrator.skills).toEqual(['*', '!foo']);
     expectNoDirectiveKeys(orchestrator);
     const oracle = effectiveAgent(loaded);
-    expect(oracle.skills).toEqual(['simplify', 'requesting-code-review']);
+    expect(oracle.skills).toEqual(['simplify']);
     expectNoDirectiveKeys(oracle);
   });
 
