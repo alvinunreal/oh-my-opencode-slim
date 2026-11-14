@@ -179,6 +179,18 @@ function companionPidFile(): string {
   return path.join(path.dirname(stateFilePath()), 'companion.pid');
 }
 
+function companionSpawnFile(): string {
+  return path.join(path.dirname(stateFilePath()), 'companion-spawn.json');
+}
+
+function readSpawnAttachments(): Array<{ pid: number; startTime?: string }> {
+  return (
+    JSON.parse(readFileSync(companionSpawnFile(), 'utf8')) as {
+      attachments: Array<{ pid: number; startTime?: string }>;
+    }
+  ).attachments;
+}
+
 function companionStateLock(): string {
   return `${stateFilePath()}.lock`;
 }
@@ -460,64 +472,22 @@ describe('CompanionManager', () => {
     expect(readState().sessions).toEqual([]);
   });
 
-  it('does not respawn after Quit until a new TUI PID attaches', () => {
-    const m = make('quit-epoch', '/quit-epoch');
-    m.onLoad();
-    const internal = m as unknown as {
-      spawnIfAvailable: (...args: unknown[]) => boolean;
-    };
-    let attempts = 0;
-    internal.spawnIfAvailable = () => {
-      attempts += 1;
-      return true;
-    };
-    reconcile(m);
-    expect(attempts).toBe(1);
-
-    writeFileSync(companionPidFile(), '999999999');
-    reconcile(m);
-    expect(attempts).toBe(1);
-
-    attachAnotherTui('/quit-epoch');
-    reconcile(m);
-    expect(attempts).toBe(2);
-  });
-
-  it('retries after an empty attachment epoch even if the old window exits later', () => {
-    const m = make('quit-after-reload-gap', '/quit-after-reload-gap');
-    m.onLoad();
-    const internal = m as unknown as {
-      spawnIfAvailable: (...args: unknown[]) => boolean;
-    };
-    let attempts = 0;
-    internal.spawnIfAvailable = () => {
-      attempts += 1;
-      return true;
-    };
-    reconcile(m);
-    expect(attempts).toBe(1);
-
-    writeFileSync(companionPidFile(), String(process.pid));
-    detachDirectory('/quit-after-reload-gap');
-    reconcile(m);
-    writeAttachment(process.pid, '/quit-after-reload-gap');
-    reconcile(m);
-    writeFileSync(companionPidFile(), '999999999');
-    reconcile(m);
-
-    expect(attempts).toBe(2);
-  });
-
-  it('logs a missing binary once per unchanged attachment set', () => {
-    const m = make('missing-bin', '/missing-bin', {
+  it('does not respawn after Quit through a second project manager', () => {
+    const config = {
       enabled: true,
-      binaryPath: path.join(TEST_DIR, 'absent-companion'),
-    });
-    m.onLoad();
+      binaryPath: path.join(TEST_DIR, 'missing-companion'),
+    };
+    const first = make('spawn-first', '/spawn-first', config);
+    const second = make('spawn-second', '/spawn-second', config);
+    first.onLoad();
+    second.onLoad();
     const logSpy = spyOn(loggerModule, 'log');
     try {
-      reconcile(m);
-      reconcile(m);
+      reconcile(first);
+      const history = readSpawnAttachments();
+      writeFileSync(companionPidFile(), '999999999');
+      reconcile(second);
+      expect(readSpawnAttachments()).toEqual(history);
       expect(
         logSpy.mock.calls.filter(([message]) =>
           String(message).includes('companion binary not found'),
@@ -526,6 +496,98 @@ describe('CompanionManager', () => {
     } finally {
       logSpy.mockRestore();
     }
+  });
+
+  it('does not respawn after plugin reload with unchanged attachments', () => {
+    const config = {
+      enabled: true,
+      binaryPath: path.join(TEST_DIR, 'missing-companion'),
+    };
+    const original = make('spawn-reload', '/spawn-reload', config);
+    original.onLoad();
+    const logSpy = spyOn(loggerModule, 'log');
+    try {
+      reconcile(original);
+      const history = readSpawnAttachments();
+      writeFileSync(companionPidFile(), '999999999');
+      original.onExit();
+
+      const replacement = make('spawn-reload', '/spawn-reload', config);
+      replacement.onLoad();
+      reconcile(replacement);
+      expect(readSpawnAttachments()).toEqual(history);
+      expect(
+        logSpy.mock.calls.filter(([message]) =>
+          String(message).includes('companion binary not found'),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('allows one new spawn attempt when a new TUI PID attaches', () => {
+    const m = make('new-tui-spawn', '/new-tui-spawn', {
+      enabled: true,
+      binaryPath: path.join(TEST_DIR, 'missing-companion'),
+    });
+    m.onLoad();
+    const logSpy = spyOn(loggerModule, 'log');
+    try {
+      reconcile(m);
+      const previous = readSpawnAttachments();
+      const newPid = attachAnotherTui('/new-tui-spawn');
+      reconcile(m);
+      const updated = readSpawnAttachments();
+      expect(updated.map((attachment) => attachment.pid)).toContain(newPid);
+      expect(updated).not.toEqual(previous);
+      reconcile(m);
+      expect(
+        logSpy.mock.calls.filter(([message]) =>
+          String(message).includes('companion binary not found'),
+        ),
+      ).toHaveLength(2);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('clears spawn history when the attachment set becomes empty', () => {
+    const m = make('clear-spawn-history', '/clear-spawn-history', {
+      enabled: true,
+      binaryPath: path.join(TEST_DIR, 'missing-companion'),
+    });
+    m.onLoad();
+    reconcile(m);
+    expect(existsSync(companionSpawnFile())).toBe(true);
+
+    detachDirectory('/clear-spawn-history');
+    reconcile(m);
+    expect(existsSync(companionSpawnFile())).toBe(false);
+  });
+
+  it('retries spawning after a busy PID lock clears without saving spawn history', () => {
+    const binary = path.join(TEST_DIR, 'fake-companion');
+    writeFileSync(binary, '#!/bin/sh\nexit 0\n');
+    chmodSync(binary, 0o755);
+    const m = make('lock-retry', '/lock-retry', {
+      enabled: true,
+      binaryPath: binary,
+    });
+    m.onLoad();
+    const pidFile = companionPidFile();
+    const lock = `${pidFile}.lock`;
+    mkdirSync(lock);
+    writeFileSync(path.join(lock, 'owner'), String(process.pid));
+
+    reconcile(m);
+    expect(existsSync(companionSpawnFile())).toBe(false);
+    expect(existsSync(pidFile)).toBe(false);
+
+    rmSync(lock, { recursive: true, force: true });
+    reconcile(m);
+    expect(existsSync(companionSpawnFile())).toBe(true);
+    expect(Number(readFileSync(pidFile, 'utf8'))).toBeGreaterThan(0);
   });
 
   it('keeps an unreadable live attachment and skips reconciliation', () => {

@@ -805,6 +805,43 @@ describe('v2 tui preset plugin', () => {
       expect(fs.existsSync(attachment)).toBe(false);
     });
 
+    test('a throwing slot disposer still removes the Companion attachment', async () => {
+      writeUserConfig({
+        sidebar: false,
+        companion: { enabled: true },
+        autoUpdate: false,
+      });
+      const dataHome = path.join(configHome, 'throwing-disposer-data');
+      process.env.XDG_DATA_HOME = dataHome;
+      const attachment = path.join(
+        dataHome,
+        'opencode',
+        'storage',
+        'oh-my-opencode-slim',
+        'tui-attach',
+        `${process.pid}.json`,
+      );
+      const setup = makeSetupCtx();
+      (
+        setup.ctx.ui as {
+          slot: (...args: unknown[]) => () => void;
+        }
+      ).slot = () => () => {
+        throw new Error('test slot cleanup failure');
+      };
+      const cleanup = await tui2Plugin.setup(
+        setup.ctx as unknown as V2TuiPluginContext,
+      );
+      if (!cleanup) throw new Error('expected TUI cleanup');
+      try {
+        expect(fs.existsSync(attachment)).toBe(true);
+        await expect(cleanup()).rejects.toThrow('test slot cleanup failure');
+        expect(fs.existsSync(attachment)).toBe(false);
+      } finally {
+        await cleanup().catch(() => {});
+      }
+    });
+
     test('viewer TUI does not check for updates', async () => {
       writeUserConfig({
         sidebar: false,

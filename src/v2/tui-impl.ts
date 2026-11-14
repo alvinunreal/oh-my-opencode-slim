@@ -366,8 +366,30 @@ export async function runSetup(
   if (gatesRead.gates.companionEnabled) {
     disposers.push(attachTuiProcess(directory));
   }
-  const disposeAll = () =>
-    Promise.all(disposers.reverse().map((dispose) => dispose())).then(() => {});
+  let disposed = false;
+  const disposeAll = async (): Promise<void> => {
+    if (disposed) return;
+    disposed = true;
+    const results = await Promise.allSettled(
+      disposers
+        .splice(0)
+        .reverse()
+        .map((dispose) => {
+          try {
+            return Promise.resolve(dispose());
+          } catch (error) {
+            return Promise.reject(error);
+          }
+        }),
+    );
+    const failure = results.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    if (failure) {
+      log('[v2][tui] cleanup failed', String(failure.reason));
+      throw failure.reason;
+    }
+  };
   try {
     const baseCleanup = await omoTui.setup(ctx, gatesRead);
     if (typeof baseCleanup === 'function') disposers.push(baseCleanup);
@@ -434,9 +456,11 @@ export async function runSetup(
 
     return disposeAll;
   } catch (error) {
-    await Promise.allSettled(
-      disposers.reverse().map((dispose) => Promise.resolve().then(dispose)),
-    );
+    try {
+      await disposeAll();
+    } catch {
+      // disposeAll logs cleanup failures; preserve the setup error.
+    }
     throw error;
   }
 }

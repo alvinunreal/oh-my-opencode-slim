@@ -26,7 +26,6 @@ import {
 import { log } from '../utils/logger';
 import {
   acquirePidFileLock,
-  acquirePidFileLockWithRetry,
   isProcessAlive,
   parsePidFile,
 } from '../utils/pid-file-lock';
@@ -141,6 +140,100 @@ function pidFilePath(): string {
     'oh-my-opencode-slim',
     'companion.pid',
   );
+}
+
+interface SpawnAttemptAttachment {
+  pid: number;
+  startTime?: string;
+}
+
+interface SpawnAttemptRecord {
+  attachments: SpawnAttemptAttachment[];
+}
+
+function spawnAttemptFilePath(): string {
+  return path.join(path.dirname(pidFilePath()), 'companion-spawn.json');
+}
+
+function readSpawnAttemptRecord(): SpawnAttemptRecord | null {
+  try {
+    const record = JSON.parse(
+      readFileSync(spawnAttemptFilePath(), 'utf8'),
+    ) as Partial<SpawnAttemptRecord>;
+    if (!Array.isArray(record.attachments)) return null;
+    if (
+      !record.attachments.every(
+        (attachment) =>
+          Number.isSafeInteger(attachment?.pid) &&
+          attachment.pid > 0 &&
+          (attachment.startTime === undefined ||
+            typeof attachment.startTime === 'string'),
+      )
+    ) {
+      return null;
+    }
+    return record as SpawnAttemptRecord;
+  } catch {
+    return null;
+  }
+}
+
+function isSpawnRecorded(
+  attachment: TuiAttachment,
+  record: SpawnAttemptRecord,
+) {
+  return record.attachments.some(
+    (previous) =>
+      previous.pid === attachment.pid &&
+      (attachment.startTime === null ||
+        previous.startTime === undefined ||
+        previous.startTime === attachment.startTime),
+  );
+}
+
+function writeSpawnAttemptRecord(
+  attachments: readonly TuiAttachment[],
+  isLockOwned: () => boolean,
+): boolean {
+  const file = spawnAttemptFilePath();
+  try {
+    if (!isLockOwned()) return false;
+    writeFileSync(
+      file,
+      JSON.stringify({
+        attachments: attachments.map(({ pid, startTime }) => ({
+          pid,
+          ...(startTime === null ? {} : { startTime }),
+        })),
+      } satisfies SpawnAttemptRecord),
+    );
+    return true;
+  } catch (error) {
+    log('[companion] spawn history write failed', String(error));
+    return false;
+  }
+}
+
+function clearSpawnAttemptRecordIfDetached(
+  attachments: readonly TuiAttachment[] | null,
+): void {
+  const file = spawnAttemptFilePath();
+  if (!attachments || attachments.length > 0 || !existsSync(file)) return;
+  let release: ReturnType<typeof acquirePidFileLock>;
+  try {
+    release = acquirePidFileLock(pidFilePath());
+  } catch {
+    return;
+  }
+  if (!release) return;
+  try {
+    const current = liveTuiAttachments();
+    if (release.isOwned() && current?.length === 0) {
+      rmSync(file, { force: true });
+    }
+  } finally {
+    release();
+  }
 }
 
 function defaultBinaryPath(): string {
@@ -431,8 +524,6 @@ export class CompanionManager {
   private presetPoller: NodeJS.Timeout | null = null;
   private publishRetryTimer: NodeJS.Timeout | null = null;
   private unattachedTicks = 0;
-  private readonly lastSpawnAttemptPids = new Set<number>();
-  private attachmentSetWentEmpty = false;
   private lastReconcileState?: {
     desired: boolean;
     actual: boolean;
@@ -569,6 +660,7 @@ export class CompanionManager {
     if (attachments === null) return;
     const count = attachments.length;
     const desired = count > 0;
+    clearSpawnAttemptRecordIfDetached(attachments);
     const directoryAttached = isDirectoryAttached(attachments, this.cwd);
     this.unattachedTicks = directoryAttached ? 0 : this.unattachedTicks + 1;
 
@@ -609,30 +701,8 @@ export class CompanionManager {
     const hasAttachedSession = state.sessions.some((session) =>
       isDirectoryAttached(attachments, session.cwd),
     );
-    if (!desired) {
-      this.lastSpawnAttemptPids.clear();
-      this.attachmentSetWentEmpty = true;
-    } else if (actual) {
-      if (!this.attachmentSetWentEmpty) {
-        this.lastSpawnAttemptPids.clear();
-        for (const attachment of attachments) {
-          this.lastSpawnAttemptPids.add(attachment.pid);
-        }
-      }
-    } else if (
-      hasAttachedSession &&
-      (this.attachmentSetWentEmpty ||
-        attachments.some(
-          (attachment) => !this.lastSpawnAttemptPids.has(attachment.pid),
-        ))
-    ) {
-      if (this.spawnIfAvailable(attachments)) {
-        this.lastSpawnAttemptPids.clear();
-        for (const attachment of attachments) {
-          this.lastSpawnAttemptPids.add(attachment.pid);
-        }
-        this.attachmentSetWentEmpty = false;
-      }
+    if (desired && !actual && hasAttachedSession) {
+      this.spawnIfAvailable(attachments);
     }
   }
 
@@ -1237,23 +1307,27 @@ export class CompanionManager {
   ): boolean {
     if (this.config?.enabled !== true || !attachments?.length) return false;
     const pidFile = pidFilePath();
-    let releasePidFileLock: (() => void) | null = null;
+    let releasePidFileLock: ReturnType<typeof acquirePidFileLock>;
     try {
-      releasePidFileLock = acquirePidFileLockWithRetry(pidFile, 80);
+      releasePidFileLock = acquirePidFileLock(pidFile);
       if (releasePidFileLock === null) {
         log('[companion] another instance already running, skipping spawn');
-        return true;
+        return false;
       }
     } catch (err) {
       log('[companion] PID file lock failed', String(err));
-      return true;
+      return false;
     }
     let spawnedChild: ReturnType<typeof spawn> | null = null;
+    let attemptRecorded = false;
     try {
       const currentAttachments = liveTuiAttachments();
       if (currentAttachments === null) return false;
       const count = currentAttachments.length;
-      if (count === 0) return false;
+      if (count === 0) {
+        rmSync(spawnAttemptFilePath(), { force: true });
+        return false;
+      }
       if (existsSync(pidFile)) {
         const existingPid = parsePidFile(readFileSync(pidFile, 'utf8'));
         if (existingPid !== null && isProcessAlive(existingPid)) {
@@ -1262,7 +1336,7 @@ export class CompanionManager {
             dir: this.cwd,
             count,
           });
-          return true;
+          return false;
         }
         log('[companion] removing stale PID file', {
           pid: existingPid,
@@ -1271,6 +1345,22 @@ export class CompanionManager {
         });
         rmSync(pidFile, { force: true });
       }
+      const previousAttempt = readSpawnAttemptRecord();
+      if (
+        previousAttempt &&
+        !currentAttachments.some(
+          (attachment) => !isSpawnRecorded(attachment, previousAttempt),
+        )
+      ) {
+        return false;
+      }
+      if (
+        !writeSpawnAttemptRecord(currentAttachments, releasePidFileLock.isOwned)
+      ) {
+        return false;
+      }
+      attemptRecorded = true;
+
       const bin = resolveCompanionBinaryPath(this.config);
       if (!bin) {
         const expected = this.config.binaryPath?.trim() || defaultBinaryPath();
@@ -1318,7 +1408,7 @@ export class CompanionManager {
         }
       }
       log('[companion] spawn guard failed', String(err));
-      return true;
+      return attemptRecorded;
     } finally {
       releasePidFileLock?.();
     }
