@@ -98,6 +98,17 @@ type V2SwitchDetail = {
 };
 type V2SwitchModel = NonNullable<ExperimentalV2['switchModel']>;
 type ChildOutcome = Promise<string | undefined>;
+type SessionStatusProps = {
+  sessionID?: string;
+  info?: { id?: string };
+  status?: {
+    type?: string;
+    message?: string;
+    attempt?: number;
+    next?: number;
+  };
+  error?: unknown;
+};
 type V2RefusalStep = {
   assistantMessageID: string;
   agent: string;
@@ -2198,142 +2209,9 @@ export class ForegroundFallbackManager {
         await this.handleSessionError(event);
         break;
 
-      case 'session.status': {
-        const props = event.properties as
-          | {
-              sessionID?: string;
-              info?: { id?: string };
-              status?: {
-                type?: string;
-                message?: string;
-                attempt?: number;
-                next?: number;
-              };
-              error?: unknown;
-            }
-          | undefined;
-        if (!props) break;
-        const sessionID = eventSessionID(props);
-        if (!sessionID) break;
-        if (props.status?.type === 'busy' || props.status?.type === 'retry') {
-          this.busy.add(sessionID);
-          this.awaitingRun.delete(sessionID);
-        } else if (props.status?.type === 'idle') this.busy.delete(sessionID);
-        if (this.separateCompaction.get(sessionID)?.active) break;
-        const isFailoverRetry =
-          props.status?.type === 'retry' &&
-          (isFailoverError(props.error) ||
-            (props.status.message !== undefined &&
-              isFailoverError({ message: props.status.message })));
-        if (isFailoverRetry && this.enabled) {
-          log('[foreground-fallback] v1 retry observed', {
-            sessionID,
-            message: props.status?.message
-              ? redactSecretsForLog(props.status.message).slice(0, 300)
-              : undefined,
-            attempt: props.status?.attempt,
-          });
-          // Guard: stale retry event from a previous model's retry loop.
-          // After a fallback, lastTriggerModel holds the OLD model (set by
-          // isDeduped before the fallback), while sessionModel holds the NEW
-          // model. A stale retry from the old model arrives with attempt > 1
-          // (continuation of old retry loop). A genuine retry from the new
-          // model arrives with attempt === 1 (first retry for new model).
-          const prevModel = this.lastTriggerModel.get(sessionID);
-          const curModel = this.sessionModel.get(sessionID);
-          const lastTriggerTime = this.lastTrigger.get(sessionID) ?? 0;
-          const attempt = props.status?.attempt ?? 1;
-          const modelChanged =
-            prevModel !== undefined &&
-            curModel !== undefined &&
-            prevModel !== curModel;
-          const withinDedupWindow =
-            this.now() - lastTriggerTime < DEDUP_WINDOW_MS;
-          if (modelChanged && withinDedupWindow && attempt > 1) {
-            // Model changed since last trigger, within dedup window, and
-            // attempt > 1: this is a stale retry from the old model's
-            // retry loop (continuation of previous attempts). Skip it.
-            break;
-          }
-          // An overlapping retry cannot be admitted by the active fallback;
-          // leave both the retry identity and host budget untouched.
-          if (this.inProgress.has(sessionID)) break;
-          this.rearmIfFreshDescent(sessionID);
-          if (this.retryAlreadyObserved(sessionID, attempt)) break;
-          // A no-chain status paired with a same-turn error incident is the
-          // host retrying that already-handled failure (or its replay):
-          // consume it without charging or sending another prompt.
-          if (
-            !this.hasFallbackChain(sessionID) &&
-            this.hasSameTurnErrorIncident(sessionID)
-          ) {
-            this.recordRetryAttempt(sessionID, attempt);
-            this.cancelInitialDelay(sessionID);
-            break;
-          }
-          const incidentID = `retry:${curModel ?? 'unknown'}:${attempt}`;
-          const retryError = props.error ?? {
-            message: props.status?.message ?? '',
-          };
-          if (this.surfacesSpentQuota(sessionID, retryError)) break;
-          // Permanent quota/billing exhaustion and spent allowance never
-          // recover by host retries on this provider — skip the host-retry
-          // budget and fall back at once. Otherwise (attempt === 1, or model
-          // didn't change, or outside dedup window): process as genuine
-          // retry for current model.
-          if (
-            !isPermanentQuotaBillingError(retryError) &&
-            !isSpentQuotaError(retryError) &&
-            this.absorbHostRetry(
-              sessionID,
-              props.status?.next === undefined
-                ? undefined
-                : props.status.next - this.now(),
-            )
-          ) {
-            this.recordRetryAttempt(sessionID, attempt);
-            this.cancelInitialDelay(sessionID);
-            break;
-          }
-          if (this.bypassInitialFallbackDelay(sessionID, retryError)) {
-            await this.tryFallbackWithAbort(
-              sessionID,
-              retryError,
-              attempt,
-              incidentID,
-            );
-          } else if (
-            !this.delayInitialFallback(
-              sessionID,
-              true,
-              attempt,
-              retryError,
-              incidentID,
-            )
-          ) {
-            // Failover may have been detected from status.message (e.g.
-            // 'AI_APICallError: Gone') with no separate error property;
-            // forward that message so 401/410 inline errors suppress the
-            // toast on this path too, matching session.error behavior.
-            await this.tryFallbackWithAbort(
-              sessionID,
-              retryError,
-              attempt,
-              incidentID,
-            );
-          }
-          break;
-        }
-
-        // Note: do NOT clear sessionRetries here on non-rate-limit statuses.
-        // Abort events triggered by our own fallback carry non-rate-limit
-        // messages and would reset the counter, creating an infinite loop:
-        // abort → fallback → set retries to 1 → abort event clears retries
-        // → next retry sees tried=0 → abort+fallback again → repeat.
-        // Retries are only cleared on a completed successful assistant
-        // response or session deletion.
+      case 'session.status':
+        await this.handleSessionStatus(event);
         break;
-      }
 
       case 'session.idle':
         await this.handleSessionIdle(event, isV2Host);
@@ -2506,6 +2384,138 @@ export class ForegroundFallbackManager {
       )
     ) {
       await this.tryFallback(sessionID, props.error, incidentID);
+    }
+  }
+
+  private async handleSessionStatus(event: {
+    properties?: unknown;
+  }): Promise<void> {
+    const props = event.properties as SessionStatusProps | undefined;
+    if (!props) return;
+    const sessionID = eventSessionID(props);
+    if (!sessionID) return;
+    if (props.status?.type === 'busy' || props.status?.type === 'retry') {
+      this.busy.add(sessionID);
+      this.awaitingRun.delete(sessionID);
+    } else if (props.status?.type === 'idle') this.busy.delete(sessionID);
+    if (this.separateCompaction.get(sessionID)?.active) return;
+    const isFailoverRetry =
+      props.status?.type === 'retry' &&
+      (isFailoverError(props.error) ||
+        (props.status.message !== undefined &&
+          isFailoverError({ message: props.status.message })));
+    if (isFailoverRetry && this.enabled) {
+      await this.handleV1RetryStatus(sessionID, props);
+      return;
+    }
+
+    // Note: do NOT clear sessionRetries here on non-rate-limit statuses.
+    // Abort events triggered by our own fallback carry non-rate-limit
+    // messages and would reset the counter, creating an infinite loop:
+    // abort → fallback → set retries to 1 → abort event clears retries
+    // → next retry sees tried=0 → abort+fallback again → repeat.
+    // Retries are only cleared on a completed successful assistant
+    // response or session deletion.
+  }
+
+  private async handleV1RetryStatus(
+    sessionID: string,
+    props: SessionStatusProps,
+  ): Promise<void> {
+    log('[foreground-fallback] v1 retry observed', {
+      sessionID,
+      message: props.status?.message
+        ? redactSecretsForLog(props.status.message).slice(0, 300)
+        : undefined,
+      attempt: props.status?.attempt,
+    });
+    // Guard: stale retry event from a previous model's retry loop.
+    // After a fallback, lastTriggerModel holds the OLD model (set by
+    // isDeduped before the fallback), while sessionModel holds the NEW
+    // model. A stale retry from the old model arrives with attempt > 1
+    // (continuation of old retry loop). A genuine retry from the new
+    // model arrives with attempt === 1 (first retry for new model).
+    const prevModel = this.lastTriggerModel.get(sessionID);
+    const curModel = this.sessionModel.get(sessionID);
+    const lastTriggerTime = this.lastTrigger.get(sessionID) ?? 0;
+    const attempt = props.status?.attempt ?? 1;
+    const modelChanged =
+      prevModel !== undefined &&
+      curModel !== undefined &&
+      prevModel !== curModel;
+    const withinDedupWindow = this.now() - lastTriggerTime < DEDUP_WINDOW_MS;
+    if (modelChanged && withinDedupWindow && attempt > 1) {
+      // Model changed since last trigger, within dedup window, and
+      // attempt > 1: this is a stale retry from the old model's
+      // retry loop (continuation of previous attempts). Skip it.
+      return;
+    }
+    // An overlapping retry cannot be admitted by the active fallback;
+    // leave both the retry identity and host budget untouched.
+    if (this.inProgress.has(sessionID)) return;
+    this.rearmIfFreshDescent(sessionID);
+    if (this.retryAlreadyObserved(sessionID, attempt)) return;
+    // A no-chain status paired with a same-turn error incident is the
+    // host retrying that already-handled failure (or its replay):
+    // consume it without charging or sending another prompt.
+    if (
+      !this.hasFallbackChain(sessionID) &&
+      this.hasSameTurnErrorIncident(sessionID)
+    ) {
+      this.recordRetryAttempt(sessionID, attempt);
+      this.cancelInitialDelay(sessionID);
+      return;
+    }
+    const incidentID = `retry:${curModel ?? 'unknown'}:${attempt}`;
+    const retryError = props.error ?? {
+      message: props.status?.message ?? '',
+    };
+    if (this.surfacesSpentQuota(sessionID, retryError)) return;
+    // Permanent quota/billing exhaustion and spent allowance never
+    // recover by host retries on this provider — skip the host-retry
+    // budget and fall back at once. Otherwise (attempt === 1, or model
+    // didn't change, or outside dedup window): process as genuine
+    // retry for current model.
+    if (
+      !isPermanentQuotaBillingError(retryError) &&
+      !isSpentQuotaError(retryError) &&
+      this.absorbHostRetry(
+        sessionID,
+        props.status?.next === undefined
+          ? undefined
+          : props.status.next - this.now(),
+      )
+    ) {
+      this.recordRetryAttempt(sessionID, attempt);
+      this.cancelInitialDelay(sessionID);
+      return;
+    }
+    if (this.bypassInitialFallbackDelay(sessionID, retryError)) {
+      await this.tryFallbackWithAbort(
+        sessionID,
+        retryError,
+        attempt,
+        incidentID,
+      );
+    } else if (
+      !this.delayInitialFallback(
+        sessionID,
+        true,
+        attempt,
+        retryError,
+        incidentID,
+      )
+    ) {
+      // Failover may have been detected from status.message (e.g.
+      // 'AI_APICallError: Gone') with no separate error property;
+      // forward that message so 401/410 inline errors suppress the
+      // toast on this path too, matching session.error behavior.
+      await this.tryFallbackWithAbort(
+        sessionID,
+        retryError,
+        attempt,
+        incidentID,
+      );
     }
   }
 
