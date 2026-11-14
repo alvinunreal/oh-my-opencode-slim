@@ -18,6 +18,9 @@
       "preset": "recommended",
       "suspicious": {
         "noExplicitAny": "warn"
+      },
+      "correctness": {
+        "noUndeclaredVariables": "error"
       }
     }
   },
@@ -43,6 +46,7 @@
     "attributePosition": "auto"
   },
   "javascript": {
+    "globals": ["Bun"],
     "formatter": {
       "quoteStyle": "single",
       "trailingCommas": "all"
