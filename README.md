@@ -218,8 +218,9 @@ apply subagent inference settings to **Current session**, start an empty
 **New session** bound to a preset, or change the **Global default**.
 `/preset <name>` applies the preset to the session you are
 in — no restart — while manual configuration edits change the default for
-future sessions; existing work and its future subagents retain their saved
-configuration until you explicitly reapply a preset to that session.
+future sessions and refresh default-bound roots on their next admission.
+Explicitly applied sessions keep their saved configuration until you reapply
+the preset to that session.
 After reapplying, explicitly continuing a bound child with the same agent
 adopts the parent's updated inference settings while retaining its ID and
 history. This is best-effort: a failed continuation can leave the native

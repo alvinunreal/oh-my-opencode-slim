@@ -85,24 +85,26 @@ command restores the picker and the binding read.
 On v2, a root work session captures its subagent inference configuration before
 its first managed prompt is admitted. Its new native subagents inherit their
 direct parent's snapshot, including model variants, inference options and fallback
-chains. Changing the default does not change that snapshot, even for children
-the existing session creates later.
+chains. Default-bound roots refresh their snapshot on their next admission;
+named-preset bindings stay pinned until explicitly reapplied.
 
 | Action | What is saved | Who uses the change |
 |--------|---------------|---------------------|
 | Manager → Current session | The session's inference snapshot in OpenCode's plugin storage | New children and explicit same-agent continuations of bound children |
 | `/preset <name>` (TUI fast path or server-side) | The same session snapshot, for the session the command runs in | New children and explicit same-agent continuations of bound children |
 | Manager → New session | The selected inference snapshot on a new empty session | Subagents delegated from the new session |
-| Manager → Global default | The selected preset in the user configuration | Sessions that first bind after the configuration refresh, subject to project and environment overrides |
-| Edit the user configuration's `preset` | The global default | Future bindings that inherit the global default |
-| Edit a project configuration's `preset` | That project's default | Future bindings in that project |
-| Edit a preset definition or its `extends` base; manager → Save | The shared preset definition | Future bindings, or a session that explicitly reapplies the preset |
+| Manager → Global default | The selected preset in the user configuration | Unbound sessions and default-bound roots on their next admission, subject to project and environment overrides |
+| Edit the user configuration's `preset` | The global default | Future bindings and default-bound roots on their next admission |
+| Edit a project configuration's `preset` | That project's default | Future bindings in that project and default-bound roots on their next admission |
+| Edit a preset definition or its `extends` base; manager → Save | The shared preset definition | Future bindings and default-bound roots on their next admission, or a named-preset session that explicitly reapplies it |
 
-**Manual configuration edits do not update existing session snapshots.**
-This includes edits to the same preset name. To use its updated definition in
-an existing work session, open `/preset`, select that preset, and apply it to
-**Current session** — or run `/preset <name>` in that session. Reloading
-OpenCode does not reset a saved binding.
+**Manual configuration edits refresh default-bound roots on their next
+admission; invalid configuration preserves their previous snapshots.**
+Named-preset bindings do not change, including edits to the same preset name.
+To use its updated definition in an existing work session, open `/preset`,
+select that preset, and apply it to **Current session** — or run
+`/preset <name>` in that session. Reloading OpenCode does not reset a saved
+binding.
 
 **Save & Apply** asks for the application scope before saving the definition
 and applying it. A session-only application does not change the selected
@@ -112,10 +114,13 @@ pretending a global selection changed that project's effective default.
 
 ### Two concurrent work sessions
 
-1. Session A starts with `cheap` and captures its team configuration.
-2. You change the global default to `powerful`, then start session B.
-3. A's new subagents still use its `cheap` snapshot; B's use `powerful`.
-4. Changing the global default back to `cheap` does not change B.
+1. Session A starts with `cheap` and explicitly applies it to **Current
+   session**.
+2. You change the global default to `powerful`, then start default-bound
+   session B.
+3. A and its new subagents still use `cheap`; B uses `powerful`.
+4. Changing the global default back to `cheap` refreshes B on its next
+   admission; A stays bound to `cheap`.
 5. Applying `powerful` to A's **Current session** changes A's future
    delegations. An existing child keeps its current settings until A explicitly
    continues that bound child with the same agent.
@@ -195,8 +200,9 @@ create a local override, then edit it at Level 3.
 Saving an inherited preset preserves its `extends` value and writes only its
 local agent overrides; it does not flatten or copy inherited agents into the
 child. Editing the base preset updates derived definitions for future v2
-session bindings or an explicit session reapplication; it does not rewrite
-saved inference snapshots. On v1, reload to apply the edited definition.
+session bindings and refreshes default-bound roots on their next admission;
+named-preset bindings retain their saved snapshots until explicitly reapplied.
+On v1, reload to apply the edited definition.
 A base preset with dependents cannot be deleted until those presets choose
 another base or clear inheritance.
 
