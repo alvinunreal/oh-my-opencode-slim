@@ -2892,6 +2892,10 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
           currentBundle = { ...result.bundle, profiles };
           currentBundleFallback = result.fallback;
           profilesRegistry = registryAtResolution;
+        } else {
+          // A rejected refresh keeps the last-good bundle; default roots must
+          // not adopt it while the live config is invalid.
+          currentBundleFallback = true;
         }
         return result;
       };

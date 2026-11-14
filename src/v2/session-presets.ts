@@ -164,7 +164,7 @@ export function createSessionPresets(options: {
     'directory' | 'workspaceID'
   >;
   current: () => SessionTeamBundle;
-  /** True while `current` came from a fallback config; roots keep their snapshot. */
+  /** True while `current` is not a valid live config (fallback or failed refresh); roots keep their snapshot. */
   currentIsFallback?: () => boolean;
   named: (name: string) => Promise<SessionTeamBundle>;
 }) {
