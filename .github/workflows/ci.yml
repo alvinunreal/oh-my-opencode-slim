@@ -75,6 +75,9 @@ jobs:
             --reporter=junit \
             --reporter-outfile=reports/junit.xml
 
+      - name: Convert coverage for fallow CRAP scoring
+        run: bun run coverage:istanbul
+
       - name: Upload test and coverage reports
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -83,6 +86,7 @@ jobs:
           path: |
             reports/junit.xml
             coverage/lcov.info
+            coverage/coverage-final.json
           if-no-files-found: ignore
           retention-days: 14
 
