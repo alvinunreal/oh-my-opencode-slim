@@ -175,7 +175,9 @@ Finalized-registry setup captures configured MCP namespace inventory through
 `ctx.mcp.transform` before the deferred agent transform callback runs. Setup
 does not force host materialization with `ctx.agent.list()`. Until agent
 finalization, prompt admission fails closed; a premature agent callback cannot
-freeze policies without the host MCP inventory.
+freeze policies without the host MCP inventory. Prompt-time admission of a
+foreign-plugin child reads the live host list (`listHostAgentIds`, under a
+timeout) because agents registered by later plugins miss the snapshot (#1874).
 Namespaces already present in the host snapshot own their key: a built-in MCP
 is never injected over an existing host/user entry (issue #1290).
 Hosts without the MCP transform itself are unsupported and setup fails with an
