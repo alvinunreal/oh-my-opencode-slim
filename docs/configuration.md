@@ -928,6 +928,11 @@ preserving chain order and variants. A request that explicitly selects a cooling
 model is refused before transport rather than silently rewritten. Eligibility
 returns at the deadline; reading or restarting does not extend it.
 
+Automatic restoration to the original model also respects its quota deadline,
+even after a temporary provider-failure mark expires. The session keeps its
+confirmed fallback while the origin is cooling, retaining the original model
+and variant for a later eligible restoration.
+
 The configuration directory is the sharing domain, not an account identity.
 Variants of one provider/model share its deadline; other models and providers
 are not excluded by that record. Credentials and endpoints are not inspected or

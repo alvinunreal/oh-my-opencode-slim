@@ -44,7 +44,7 @@ import {
   isSpentQuotaError,
   quotaCooldownResetDuration,
 } from './index';
-import { isQuotaModelCooling } from './quota-cooldown';
+import { isQuotaModelCooling, recordQuotaCooldown } from './quota-cooldown';
 
 // ACCEPTANCE GAP: config() hook behaviour is not covered by CI — verify live.
 
@@ -12685,6 +12685,7 @@ describe('fallback restoration', () => {
     promptAsyncImpl?: (args: unknown) => Promise<unknown>;
     chain?: string[];
     unarmedHandoff?: boolean;
+    quotaCooldownFilePath?: string;
   }) {
     const info: {
       model:
@@ -12721,6 +12722,7 @@ describe('fallback restoration', () => {
         client,
         experimental_v2: { switchModel },
       } as never,
+      quotaCooldownFilePath: options?.quotaCooldownFilePath,
       onSessionModelChanged: changed,
       ...(options?.unarmedHandoff
         ? {
@@ -12977,6 +12979,100 @@ describe('fallback restoration', () => {
     expect(f.switchModel).toHaveBeenCalledTimes(1);
     await clock.advance(1);
     expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+  });
+
+  test('v2 keeps a quota-cooled origin unrestored after the provider mark expires', async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'omos-quota-restore-'),
+    );
+    const quotaCooldownFilePath = path.join(root, 'omos-quota-cooldowns.json');
+    const resetAfterMs = 5 * 60 * 60 * 1000;
+    const startedAt = clock.now();
+    const f = fixture({
+      chain: ['primary/a', 'backup/b'],
+      quotaCooldownFilePath,
+    });
+
+    try {
+      await f.retry(origin, {
+        type: 'provider.quota',
+        status: 429,
+        message: 'Quota exhausted',
+        retryAfterMs: resetAfterMs,
+      });
+      expect(f.switchModel).toHaveBeenCalledTimes(1);
+      expect(f.switchModel).toHaveBeenLastCalledWith(sid, {
+        providerID: 'backup',
+        id: 'b',
+      });
+      expect(
+        f.manager.isQuotaModelCooling(sid, 'primary', 'a', startedAt),
+      ).toBe(true);
+
+      await f.manager.handleEvent(idle(startedAt));
+      await clock.advance(ttl + 1);
+      await f.manager.handleEvent(idle(clock.now()));
+      expect(f.switchModel).toHaveBeenCalledTimes(1);
+      expect(f.manager.isQuotaModelCooling(sid, 'primary', 'a')).toBe(true);
+      expect(f.manager.getActiveFallback(sid)?.model).toBe('backup/b');
+
+      await clock.advance(resetAfterMs - ttl - 1);
+      expect(f.manager.isQuotaModelCooling(sid, 'primary', 'a')).toBe(false);
+      await f.manager.handleEvent(idle(clock.now()));
+      expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+      expect(f.manager.getActiveFallback(sid)).toBeUndefined();
+    } finally {
+      f.manager.dispose();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test('v2 rechecks quota cooldown after the asynchronous restore identity read', async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'omos-quota-restore-race-'),
+    );
+    const quotaCooldownFilePath = path.join(root, 'omos-quota-cooldowns.json');
+    const f = fixture({
+      chain: ['primary/a', 'backup/b'],
+      quotaCooldownFilePath,
+    });
+
+    try {
+      await f.retry(origin, { message: '429 rate limit' });
+      await clock.advance(ttl + 1);
+      const lookup = deferred<{ data: unknown }>();
+      const lookupStarted = deferred<void>();
+      f.session.get = mock(() => {
+        lookupStarted.resolve(undefined);
+        return lookup.promise;
+      });
+      const restoring = f.manager.handleEvent(idle(clock.now()));
+      await lookupStarted.promise;
+
+      expect(
+        await recordQuotaCooldown(
+          'primary',
+          'a',
+          5 * 60 * 60 * 1000,
+          clock.now(),
+          { filePath: quotaCooldownFilePath },
+        ),
+      ).toBe(true);
+      lookup.resolve({ data: f.info });
+      await restoring;
+
+      expect(f.switchModel).toHaveBeenCalledTimes(1);
+      expect(f.switchModel).toHaveBeenLastCalledWith(sid, {
+        providerID: 'backup',
+        id: 'b',
+      });
+      expect(f.manager.isQuotaModelCooling(sid, 'primary', 'a')).toBe(true);
+      expect(f.manager.restoreTarget(sid)).toBeUndefined();
+      expect(f.manager.getActiveFallback(sid)?.model).toBe('backup/b');
+    } finally {
+      f.manager.dispose();
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   test('T6: v2 preserves a manually changed fallback variant', async () => {

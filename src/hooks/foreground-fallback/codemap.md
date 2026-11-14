@@ -56,7 +56,7 @@ Runtime model fallback system for foreground (interactive) agent sessions. When 
 
 ### Fallback Chain Resolution
 - **Agent-specific chains**: Each agent defines an ordered list of fallback models via `modelArrays`, preserving per-entry variants
-- **Durable quota eligibility**: Existing selection skips cooling provider/model entries without reordering variants. Native retry observations record before quota early returns; the v2 request bridge checks eligibility before dispatch. The existing foreground-fallback disable controls apply to both paths; no account/provider-wide quarantine or separate retry controller is introduced.
+- **Durable quota eligibility**: Existing selection skips cooling provider/model entries without reordering variants. Origin restoration checks the same eligibility and retains the descent while cooling, even after temporary provider marks expire. Native retry observations record before quota early returns; the v2 request bridge checks eligibility before dispatch. The existing foreground-fallback disable controls apply to these paths; no account/provider-wide quarantine or separate retry controller is introduced.
 - **Chain generations**: The published table (`foregroundFallbackChains`) is swapped atomically by registry finalize and every successful v2 profile refresh (`buildChainGeneration`/`publishChainGeneration` in `src/index.ts`); each session pins the generation in effect at registration (`pinSessionChains`, fired by the v2 profile bridge at profile freeze) and finishes its descent against it — a swap mid-descent never changes what counts as untried
 - Selection scans from index 0, skipping tried entries and the union of this
   session's and its parent's live `downProviders` marks. Other models on

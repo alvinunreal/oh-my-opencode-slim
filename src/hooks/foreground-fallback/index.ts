@@ -1895,6 +1895,12 @@ export class ForegroundFallbackManager {
       )
     )
       return;
+    const origin = parseModelReference(descent.model);
+    if (
+      origin &&
+      this.isQuotaModelCooling(sessionID, origin.providerID, origin.modelID)
+    )
+      return;
     return {
       model: descent.model,
       ...(descent.variant ? { variant: descent.variant } : {}),
