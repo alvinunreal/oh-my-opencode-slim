@@ -164,6 +164,8 @@ export function createSessionPresets(options: {
     'directory' | 'workspaceID'
   >;
   current: () => SessionTeamBundle;
+  /** True while `current` came from a fallback config; roots keep their snapshot. */
+  currentIsFallback?: () => boolean;
   named: (name: string) => Promise<SessionTeamBundle>;
 }) {
   const location = options.location ? { ...options.location } : undefined;
@@ -287,24 +289,39 @@ export function createSessionPresets(options: {
     if (existing) {
       if (existing.parentID !== parentID)
         throw new Error('Session preset parent identity mismatch');
+      // A root on the live default follows strict config refreshes; a team
+      // applied by name, or a root during a fallback config, keeps its snapshot.
+      let bundle = existing.bundle;
+      if (
+        !parentID &&
+        existing.selection === 'default' &&
+        !options.currentIsFallback?.()
+      ) {
+        const live = options.current();
+        assertJSON(live);
+        bundle = JSON.parse(JSON.stringify(live));
+      }
+      const current = isDeepStrictEqual(existing.bundle, bundle)
+        ? existing
+        : { ...existing, bundle };
       if (
         explicitModel === true &&
-        (!existing.explicitModel || !existing.preserveModel)
+        (!current.explicitModel || !current.preserveModel)
       ) {
         return write(
           id,
-          { ...existing, explicitModel: true, preserveModel: true },
+          { ...current, explicitModel: true, preserveModel: true },
           signal,
         );
       }
       if (
         explicitModel === false &&
-        (existing.explicitModel || existing.preserveModel)
+        (current.explicitModel || current.preserveModel)
       ) {
-        const { preserveModel: _preserve, ...rest } = existing;
+        const { preserveModel: _preserve, ...rest } = current;
         return write(id, { ...rest, explicitModel: false }, signal);
       }
-      return existing;
+      return current === existing ? existing : write(id, current, signal);
     }
     if (parentID) {
       // Historical/host-created children have no proven launch snapshot.

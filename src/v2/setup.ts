@@ -2857,6 +2857,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       // Dropped on every profile refresh so a retired/added model is re-read.
       const modelCatalogCache: ModelImageCapabilityCache = {};
       let currentBundle: SessionTeamBundle | undefined;
+      let currentBundleFallback = false;
       let profilesRegistry: typeof finalizedRegistry;
       const factoryRefreshProfiles = v1Hooks['v2.refreshProfiles'] as
         | ((options?: {
@@ -2869,6 +2870,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                 ok: true;
                 profiles: V2AgentRuntimeProfiles;
                 bundle: SessionTeamBundle;
+                fallback: boolean;
               }
             | { ok: false; reason: string }
           >)
@@ -2888,6 +2890,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
             result.profiles,
           );
           currentBundle = { ...result.bundle, profiles };
+          currentBundleFallback = result.fallback;
           profilesRegistry = registryAtResolution;
         }
         return result;
@@ -2912,6 +2915,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
               throw new Error('Session team snapshot unavailable');
             return currentBundle;
           },
+          currentIsFallback: () => currentBundleFallback,
           named: async (presetName) => {
             await withTimeout(
               permissionSnapshotReadiness,

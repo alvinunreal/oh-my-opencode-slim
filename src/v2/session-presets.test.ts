@@ -27,6 +27,7 @@ function makeHarness(options?: {
   directory?: string;
   named?: (name: string) => Promise<SessionTeamBundle>;
   current?: () => SessionTeamBundle;
+  currentIsFallback?: () => boolean;
 }) {
   const storage = new Map<string, unknown>();
   const getCalls: Array<unknown> = [];
@@ -66,6 +67,7 @@ function makeHarness(options?: {
     directory: options?.directory ?? DIRECTORY,
     location,
     current: options?.current ?? (() => BUNDLE),
+    currentIsFallback: options?.currentIsFallback,
     named: options?.named ?? (async () => BUNDLE),
   });
   return {
@@ -433,11 +435,108 @@ describe('reset', () => {
       bundle: unnamed,
       selection: 'default',
     });
-    // The next admission must not rewrite the default provenance or the
-    // captured bundle that was present when the user turned the team off.
+    // The next admission keeps the default provenance; the captured bundle
+    // follows the live default, so it only changes on a config refresh.
     const record = await h.presets.ensure('root-default');
     expect(record?.selection).toBe('default');
     expect(record?.bundle).toEqual(unnamed);
+  });
+
+  test('a root on the live default follows config refreshes; a named team keeps its snapshot', async () => {
+    let live: SessionTeamBundle = BUNDLE;
+    const h = makeHarness({ current: () => live });
+    h.setGetResponse({
+      data: { id: 'root', location: { directory: DIRECTORY } },
+    });
+    await h.presets.ensure('root');
+    const refreshed = {
+      ...BUNDLE,
+      profiles: { explorer: { sidebarModel: 'openai/gpt-5-nano' } },
+    };
+    live = refreshed;
+    expect((await h.presets.ensure('root'))?.bundle).toEqual(refreshed);
+    expect(h.storage.get(storageKey('root'))).toEqual({
+      schemaVersion: 1,
+      bundle: refreshed,
+      selection: 'default',
+    });
+
+    h.storage.set(storageKey('named'), {
+      schemaVersion: 1,
+      bundle: BUNDLE,
+      selection: 'explicit',
+    });
+    h.setGetResponse({
+      data: { id: 'named', location: { directory: DIRECTORY } },
+    });
+    expect((await h.presets.ensure('named'))?.bundle).toEqual(BUNDLE);
+  });
+
+  test('refresh applies to roots only, and composes with an explicit model flag', async () => {
+    let live: SessionTeamBundle = BUNDLE;
+    const h = makeHarness({ current: () => live });
+    h.setGetResponse({
+      data: {
+        id: 'child',
+        parentID: 'root',
+        location: { directory: DIRECTORY },
+      },
+    });
+    h.storage.set(storageKey('child'), {
+      schemaVersion: 1,
+      parentID: 'root',
+      bundle: BUNDLE,
+      selection: 'default',
+    });
+    live = { ...BUNDLE, presetName: 'next' };
+    expect((await h.presets.ensure('child'))?.bundle).toEqual(BUNDLE);
+
+    h.setGetResponse({
+      data: { id: 'root', location: { directory: DIRECTORY } },
+    });
+    h.storage.set(storageKey('root'), {
+      schemaVersion: 1,
+      bundle: BUNDLE,
+      selection: 'default',
+    });
+    const record = await h.presets.ensure('root', undefined, true);
+    expect(record?.bundle).toEqual(live);
+    expect(record?.explicitModel).toBe(true);
+    expect(record?.preserveModel).toBe(true);
+  });
+
+  test('a root keeps its snapshot while the live config is a fallback', async () => {
+    let live: SessionTeamBundle = BUNDLE;
+    let fallback = false;
+    const h = makeHarness({
+      current: () => live,
+      currentIsFallback: () => fallback,
+    });
+    h.setGetResponse({
+      data: { id: 'root', location: { directory: DIRECTORY } },
+    });
+    await h.presets.ensure('root');
+    live = { ...BUNDLE, presetName: 'broken-fallback' };
+    fallback = true;
+    expect((await h.presets.ensure('root'))?.bundle).toEqual(BUNDLE);
+    fallback = false;
+    expect((await h.presets.ensure('root'))?.bundle).toEqual(live);
+  });
+
+  test('a default root refresh rejects non-JSON live config instead of sanitizing it', async () => {
+    let live: SessionTeamBundle = BUNDLE;
+    const h = makeHarness({ current: () => live });
+    h.setGetResponse({
+      data: { id: 'root', location: { directory: DIRECTORY } },
+    });
+    await h.presets.ensure('root');
+    live = {
+      ...BUNDLE,
+      profiles: {
+        explorer: { sidebarModel: 'openai/gpt-5-nano', limit: Infinity },
+      },
+    } as unknown as SessionTeamBundle;
+    await expect(h.presets.ensure('root')).rejects.toThrow('not JSON');
   });
 
   test('serializes reset and apply so the last operation wins', async () => {
