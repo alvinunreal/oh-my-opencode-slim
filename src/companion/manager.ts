@@ -191,6 +191,17 @@ function isSpawnRecorded(
   );
 }
 
+function attachmentsWithPublishedRows(
+  attachments: readonly TuiAttachment[],
+  state: CompanionState,
+): TuiAttachment[] {
+  return attachments.filter((attachment) =>
+    state.sessions.some((session) =>
+      isDirectoryAttached([attachment], session.cwd),
+    ),
+  );
+}
+
 function writeSpawnAttemptRecord(
   attachments: readonly TuiAttachment[],
   isLockOwned: () => boolean,
@@ -240,9 +251,10 @@ function updateSpawnAttemptRecordIfAttached(
   attachments: readonly TuiAttachment[],
   record: SpawnAttemptRecord | null,
 ): void {
+  const published = attachmentsWithPublishedRows(attachments, readState());
   if (
     record &&
-    !attachments.some((attachment) => !isSpawnRecorded(attachment, record))
+    !published.some((attachment) => !isSpawnRecorded(attachment, record))
   ) {
     return;
   }
@@ -255,16 +267,19 @@ function updateSpawnAttemptRecordIfAttached(
   if (!release) return;
   try {
     const current = liveTuiAttachments();
+    const published = current
+      ? attachmentsWithPublishedRows(current, readState())
+      : [];
     const currentRecord = readSpawnAttemptRecord();
     if (
       release.isOwned() &&
-      current?.length &&
+      published.length > 0 &&
       (!currentRecord ||
-        current.some(
+        published.some(
           (attachment) => !isSpawnRecorded(attachment, currentRecord),
         ))
     ) {
-      writeSpawnAttemptRecord(current, release.isOwned);
+      writeSpawnAttemptRecord(published, release.isOwned);
     }
   } finally {
     release();
@@ -1399,16 +1414,24 @@ export class CompanionManager {
         rmSync(pidFile, { force: true });
       }
       const previousAttempt = readSpawnAttemptRecord();
+      const publishedAttachments = attachmentsWithPublishedRows(
+        currentAttachments,
+        readState(),
+      );
       if (
-        previousAttempt &&
-        !currentAttachments.some(
-          (attachment) => !isSpawnRecorded(attachment, previousAttempt),
-        )
+        publishedAttachments.length === 0 ||
+        (previousAttempt &&
+          !publishedAttachments.some(
+            (attachment) => !isSpawnRecorded(attachment, previousAttempt),
+          ))
       ) {
         return false;
       }
       if (
-        !writeSpawnAttemptRecord(currentAttachments, releasePidFileLock.isOwned)
+        !writeSpawnAttemptRecord(
+          publishedAttachments,
+          releasePidFileLock.isOwned,
+        )
       ) {
         return false;
       }

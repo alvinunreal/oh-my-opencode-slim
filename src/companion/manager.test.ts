@@ -389,6 +389,43 @@ describe('CompanionManager', () => {
     expect(spawnAttempts).toBe(1);
   });
 
+  it('does not record an unpublished attachment, so its later row can spawn', () => {
+    const logSpy = spyOn(loggerModule, 'log');
+    try {
+      const a = make('session-a', '/project-a', {
+        enabled: true,
+        binaryPath: path.join(TEST_DIR, 'missing-companion'),
+      });
+      a.onLoad();
+      writeFileSync(companionPidFile(), String(process.pid));
+      reconcile(a);
+      expect(readSpawnAttachments()).toHaveLength(1);
+
+      // TUI C attaches to another project; its state row is not published yet.
+      const c = make('session-c', '/project-c', {
+        enabled: true,
+        binaryPath: path.join(TEST_DIR, 'missing-companion'),
+      });
+      reconcile(a);
+      expect(readSpawnAttachments().map((entry) => entry.pid)).not.toContain(
+        attachmentPidsByDirectory.get(path.resolve('/project-c')),
+      );
+
+      // A's TUI quits and the companion exits; C publishes its row and ticks.
+      detachDirectory('/project-a');
+      rmSync(companionPidFile(), { force: true });
+      c.onLoad();
+      reconcile(c);
+      expect(
+        logSpy.mock.calls.filter(([message]) =>
+          String(message).includes('companion binary not found'),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   it('removes dead and mismatched attachment records', () => {
     const m = new CompanionManager('crash-leftover', '/crashed', {
       enabled: true,
