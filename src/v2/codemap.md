@@ -152,8 +152,8 @@ The v2 runtime surface and plugin contracts are adapted through the following da
 
 ## Integration Points
 
-- `src/index.ts`: imports `createV2Setup` for the dual `default` export (`{ id, server, setup }` — no `tui` key; hosts validate that a server module's `tui` field is a function and never coexists with `server`) and exports `OhMyOpenCodeLite` (named) for the adapter to wrap.
-- Build: `build:v2` bundles `src/index.ts` (which pulls in `src/v2/`) into `dist/server/index.js` (self-contained except `jsdom`) — the directory entrypoint 2.x hosts require, also served via the
+- `src/plugin.ts`: imports `createV2Setup` for the v2 plugin's default `{ id, setup }`; `src/v2/setup.ts` wraps the `OhMyOpenCodeLite` factory from `src/index.ts`.
+- Build: `build:v2` bundles `src/plugin.ts` (which pulls in `src/v2/`) into `dist/server/index.js` (self-contained except `jsdom` and `jsonc-parser`) — the directory entrypoint 2.x hosts require, also served via the
   `./server` package subpath (the exports map resolves it directly);
   `build:tui` bundles `src/v2/tui.ts` into `dist/tui2.js`.
 
