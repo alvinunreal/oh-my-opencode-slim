@@ -271,6 +271,21 @@ function updateSpawnAttemptRecordIfAttached(
   }
 }
 
+function clearSpawnAttemptRecordOnDispose(): void {
+  let release: ReturnType<typeof acquirePidFileLock>;
+  try {
+    release = acquirePidFileLock(pidFilePath());
+  } catch {
+    return;
+  }
+  if (!release) return;
+  try {
+    if (release.isOwned()) rmSync(spawnAttemptFilePath(), { force: true });
+  } finally {
+    release();
+  }
+}
+
 function defaultBinaryPath(): string {
   const xdg = process.env.XDG_DATA_HOME?.trim();
   const base =
@@ -736,10 +751,7 @@ export class CompanionManager {
     } else if (this.unattachedTicks >= 8 && hasSession) {
       this.releaseCompanion();
     }
-    const hasAttachedSession = state.sessions.some((session) =>
-      isDirectoryAttached(attachments, session.cwd),
-    );
-    if (desired && !actual && hasAttachedSession) {
+    if (desired && !actual && directoryAttached && hasSession) {
       this.spawnIfAvailable(attachments);
     }
   }
@@ -1208,10 +1220,13 @@ export class CompanionManager {
   }
 
   private removeSessionState(): boolean {
-    if (!existsSync(stateFilePath())) return true;
-    return writeState((state) => {
-      dropRow(state, this.id);
-    });
+    const removed = !existsSync(stateFilePath())
+      ? true
+      : writeState((state) => {
+          dropRow(state, this.id);
+        });
+    if (removed) clearSpawnAttemptRecordOnDispose();
+    return removed;
   }
 
   private releaseCompanion(): boolean {

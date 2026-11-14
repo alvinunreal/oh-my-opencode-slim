@@ -357,6 +357,38 @@ describe('CompanionManager', () => {
     );
   });
 
+  it('only spawns from the attached project manager', () => {
+    const headless = new CompanionManager(
+      'headless-project',
+      '/headless-project',
+      {
+        enabled: true,
+        binaryPath: path.join(TEST_DIR, 'missing-companion'),
+      },
+    );
+    managers.push(headless);
+    headless.onLoad();
+
+    const attached = make('attached-project', '/attached-project', {
+      enabled: true,
+      binaryPath: path.join(TEST_DIR, 'working-companion-stub'),
+    });
+    attached.onLoad();
+    const internal = attached as unknown as {
+      spawnIfAvailable: () => boolean;
+    };
+    let spawnAttempts = 0;
+    internal.spawnIfAvailable = () => {
+      spawnAttempts += 1;
+      return true;
+    };
+
+    reconcile(headless);
+    expect(existsSync(companionSpawnFile())).toBe(false);
+    reconcile(attached);
+    expect(spawnAttempts).toBe(1);
+  });
+
   it('removes dead and mismatched attachment records', () => {
     const m = new CompanionManager('crash-leftover', '/crashed', {
       enabled: true,
@@ -498,7 +530,7 @@ describe('CompanionManager', () => {
     }
   });
 
-  it('does not respawn after plugin reload with unchanged attachments', () => {
+  it('retries spawning after plugin reload with unchanged attachments', () => {
     const config = {
       enabled: true,
       binaryPath: path.join(TEST_DIR, 'missing-companion'),
@@ -508,19 +540,22 @@ describe('CompanionManager', () => {
     const logSpy = spyOn(loggerModule, 'log');
     try {
       reconcile(original);
-      const history = readSpawnAttachments();
-      writeFileSync(companionPidFile(), '999999999');
+      expect(existsSync(companionSpawnFile())).toBe(true);
+      writeFileSync(companionPidFile(), String(process.pid));
       original.onExit();
+      expect(existsSync(companionSpawnFile())).toBe(false);
+      expect(readState().sessions).toEqual([]);
+      writeFileSync(companionPidFile(), '999999999');
 
       const replacement = make('spawn-reload', '/spawn-reload', config);
       replacement.onLoad();
       reconcile(replacement);
-      expect(readSpawnAttachments()).toEqual(history);
       expect(
         logSpy.mock.calls.filter(([message]) =>
           String(message).includes('companion binary not found'),
         ),
-      ).toHaveLength(1);
+      ).toHaveLength(2);
+      expect(existsSync(companionSpawnFile())).toBe(true);
     } finally {
       logSpy.mockRestore();
     }
