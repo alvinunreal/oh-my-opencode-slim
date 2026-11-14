@@ -19,11 +19,11 @@ import {
   createPhaseReminderHook,
   PHASE_REMINDER_METADATA_KEY,
 } from '../hooks/phase-reminder';
-import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/task-session-manager/board-injection';
 import {
   createToolLoopGuardHook,
   LOOP_GUARD_WARNING,
 } from '../hooks/tool-loop-guard/hook';
+import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/volatile-message';
 import {
   collapseInterviewHistory,
   INTERVIEW_SUMMARY_STUB,
@@ -920,17 +920,8 @@ describe('createSessionContextHandler (merged context hook seam)', () => {
 });
 
 describe('context bridge: transcript identity enrichment', () => {
-  test('job launches never touch the payload and never split tool pairs', async () => {
+  test('context enrichment keeps tool calls and results adjacent', async () => {
     const pipeline = createPipeline();
-    const launch = (taskID: string) =>
-      pipeline.board.registerLaunch({
-        taskID,
-        parentSessionID: SESSION_ID,
-        agent: 'fixer',
-        description: taskID,
-        background: true,
-      });
-    launch('ses_first_child');
     const handler = createSessionContextHandler({
       interviewHandleContext: async () => {},
       messagesTransform: async (_input, output) => pipeline.run(output),
@@ -967,7 +958,6 @@ describe('context bridge: transcript identity enrichment', () => {
     // The job board is never rendered (issue #1647): no launch ever adds a
     // byte to the payload.
     expect(boards(initial)).toHaveLength(0);
-    launch('ses_second_child');
     history.push({
       id: 'assistant-call',
       role: 'assistant',
@@ -1023,13 +1013,6 @@ describe('context bridge: transcript identity enrichment', () => {
 
   test('a completion changes nothing in the payload across tool continuations', async () => {
     const pipeline = createPipeline();
-    pipeline.board.registerLaunch({
-      taskID: 'ses_remaining_child',
-      parentSessionID: SESSION_ID,
-      agent: 'fixer',
-      description: 'remaining job',
-      background: true,
-    });
     const handler = createSessionContextHandler({
       interviewHandleContext: async () => {},
       messagesTransform: async (_input, output) => pipeline.run(output),
@@ -1364,15 +1347,8 @@ describe('context bridge: transcript identity enrichment', () => {
     expect(user.agent).toBeUndefined();
   });
 
-  test('v2 synthetic wake is internal: no new phase reminder or job board (T4)', async () => {
+  test('synthetic continuation gets no new phase reminder', async () => {
     const pipeline = createPipeline();
-    pipeline.board.registerLaunch({
-      taskID: 'ses_child',
-      parentSessionID: SESSION_ID,
-      agent: 'explorer',
-      description: 'running job',
-      background: true,
-    });
     const wake = {
       id: 'msg_omos_wake',
       role: 'user',
@@ -1417,15 +1393,8 @@ describe('context bridge: transcript identity enrichment', () => {
     ).toBe(false);
   });
 
-  test('v1 flagged wake likewise gets no fresh phase reminder or job board (T5)', async () => {
+  test('a continuation tagged by Slim gets no new phase reminder', async () => {
     const pipeline = createPipeline();
-    pipeline.board.registerLaunch({
-      taskID: 'ses_child',
-      parentSessionID: SESSION_ID,
-      agent: 'explorer',
-      description: 'running job',
-      background: true,
-    });
     const wake = internalInitiatorTurn('wake', 'continue');
     const output: { messages: unknown[] } = {
       messages: [userTurn('u1', 'start'), assistantTurn('a1', 'working'), wake],

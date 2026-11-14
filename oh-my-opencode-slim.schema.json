@@ -1491,59 +1491,6 @@
         "abortGraceMs": {
           "not": {}
         },
-        "orchestratorWake": {
-          "default": {
-            "enabled": true,
-            "intervalMs": 300000,
-            "mode": "auto",
-            "periodicWakeEnabled": true,
-            "wakeOnTerminalPublication": true,
-            "publicationWakeMinIntervalMs": 30000
-          },
-          "description": "Periodic orchestrator wake scheduler for idle sessions (v1 hosts only; ignored on OpenCode v2 hosts). Requires host session APIs (session.get, todo, children, status, promptAsync) and wakes while incomplete todos remain. Default enabled at a 5-minute interval.",
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "default": true,
-              "description": "When true, idle orchestrator sessions with incomplete todos may receive periodic internal wake prompts. Default enabled.",
-              "type": "boolean"
-            },
-            "intervalMs": {
-              "default": 300000,
-              "description": "Continuous parent-idle interval between orchestrator wake evaluations (60,000–2,147,483,647ms). Default 300,000 (5 minutes). 0 is invalid.",
-              "type": "integer",
-              "minimum": 60000,
-              "maximum": 2147483647
-            },
-            "mode": {
-              "default": "auto",
-              "description": "Wake-condition source (v1 hosts only). \"auto\" uses todo-gating; \"todo\" or \"children\" pin one mode, degrading to children when the host lacks the todo API. On OpenCode v2 hosts the whole section is ignored. Default \"auto\".",
-              "type": "string",
-              "enum": [
-                "auto",
-                "todo",
-                "children"
-              ]
-            },
-            "periodicWakeEnabled": {
-              "default": true,
-              "description": "When false, the periodic idle evaluation never runs; only event-driven wakes (stopped-job recovery, terminal-publication rev>1, child-input) still deliver. Failed event wakes keep their timer-based retry path. v1 hosts only; v2 hosts create no wake scheduler. Default enabled.",
-              "type": "boolean"
-            },
-            "wakeOnTerminalPublication": {
-              "default": true,
-              "description": "When true, a terminal completed/error publication wakes an idle parent orchestrator immediately (bounded by publicationWakeMinIntervalMs) instead of waiting for the next periodic evaluation. v1 hosts only. Default enabled.",
-              "type": "boolean"
-            },
-            "publicationWakeMinIntervalMs": {
-              "default": 30000,
-              "description": "Per-parent minimum spacing between terminal-publication wakes (1,000–2,147,483,647ms; 0 is invalid at the config layer). Default 30,000 (30 seconds). A burst of publications collapses into one wake. Later-result (<completed-job>) pushes honor the same spacing: inside the window they stay queued and are delivered together when it elapses.",
-              "type": "integer",
-              "minimum": 1000,
-              "maximum": 2147483647
-            }
-          }
-        },
         "wallClockTimeoutMs": {
           "default": 0,
           "description": "Explicit opt-in wall-clock deadline for native task(..., background: true) child sessions. V1 managed lifecycle only; unsupported and rejected on OpenCode v2. On expiry the plugin asks the host to stop the child and lets the host report the real terminal. 0 disables supervision; finite values are 60,000–2,147,483,647ms.",

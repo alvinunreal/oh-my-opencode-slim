@@ -50,7 +50,7 @@ import { COUNCIL_INJECT_METADATA_KEY } from '../hooks/council-inject';
 import { GOAL_POINTER_METADATA_KEY } from '../hooks/deepwork-goal';
 import type { ForegroundFallbackManager } from '../hooks/foreground-fallback';
 import { PHASE_REMINDER_METADATA_KEY } from '../hooks/phase-reminder';
-import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/task-session-manager/refusal-corrections';
+import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/volatile-message';
 import { OhMyOpenCodeLite } from '../index';
 import { MarketplaceBusyError } from '../marketplace/errors';
 import {

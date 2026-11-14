@@ -1425,9 +1425,6 @@ function createAgentViews(
         agentSkills: skillGrants(
           orchestratorScope ?? allSubAgents.map((agent) => agent.name),
         ),
-        wakeScheduler:
-          runtime.backgroundJobsEnabled &&
-          runtime.backgroundJobs.orchestratorWake.enabled,
         hostFlavor: options?.hostFlavor,
         routingBlock:
           runtime.routingBlock &&

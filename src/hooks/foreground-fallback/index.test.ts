@@ -12,8 +12,6 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { isInternalInitiatorPart } from '../../utils';
-import { BackgroundJobBoard } from '../../utils/background-job-board';
-import { createBackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
 import {
   INTERNAL_INITIATOR_METADATA_KEY,
   SLIM_INTERNAL_INITIATOR_MARKER,
@@ -26,9 +24,6 @@ import { recordInternalAdmission } from '../../v2/internal-admissions';
 import { createV2InterviewBridge, markerText } from '../../v2/interview-bridge';
 import { createSessionPromptBridge } from '../../v2/setup';
 import { SessionLifecycle } from '../session-lifecycle';
-import { createBackgroundFallbackHandoff } from '../task-session-manager/fallback-observation-transfer';
-import type { FallbackNotice } from '../task-session-manager/revived-run-tracker';
-import { createRevivedRunTracker } from '../task-session-manager/revived-run-tracker';
 import {
   ForegroundFallbackManager,
   type ForegroundFallbackOptions,
@@ -6150,7 +6145,7 @@ describe('ForegroundFallbackManager session.error', () => {
         admit: (
           sessionID: string,
           generation: number | undefined,
-          _notice?: FallbackNotice,
+          _notice?: unknown,
         ) => {
           calls.admit.push([sessionID, generation]);
         },

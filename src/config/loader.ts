@@ -479,7 +479,6 @@ export function loadRawPluginConfigFromPath(
       isPlainRecord(rawConfig.backgroundJobs)
     ) {
       for (const key of [
-        'orchestratorWake',
         'childInputWake',
         'childInputWakeKinds',
         'waitForUserGuard',

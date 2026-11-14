@@ -622,9 +622,6 @@ describe('RuntimeConfig', () => {
       'boardInjection' in (runtime.backgroundJobs as Record<string, unknown>),
     ).toBe(false);
     expect(runtime.backgroundJobs.pruneEvictedSessions).toBe(false);
-    expect(runtime.backgroundJobs.orchestratorWake.periodicWakeEnabled).toBe(
-      true,
-    );
     expect(runtime.backgroundJobs.concurrency).toEqual({
       defaultConcurrency: 0,
       providerConcurrency: {},

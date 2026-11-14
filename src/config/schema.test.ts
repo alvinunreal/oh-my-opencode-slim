@@ -1062,10 +1062,6 @@ describe('PluginConfigSchema backgroundJobs', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.backgroundJobs?.orchestratorWake?.enabled).toBe(false);
-      expect(result.data.backgroundJobs?.orchestratorWake?.intervalMs).toBe(
-        300_000,
-      );
       expect(result.data.backgroundJobs?.concurrency?.defaultConcurrency).toBe(
         4,
       );
@@ -1075,7 +1071,6 @@ describe('PluginConfigSchema backgroundJobs', () => {
     }
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const message = warnSpy.mock.calls[0]?.[0] as string;
-    expect(message).toContain('orchestratorWake.intervalMs');
     expect(message).toContain('concurrency.providerConcurrency');
   });
 
@@ -1189,70 +1184,6 @@ describe('PluginConfigSchema backgroundJobs', () => {
     },
   );
 
-  it('defaults orchestratorWake to enabled with a 5-minute interval and auto mode', () => {
-    const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.orchestratorWake).toEqual({
-        enabled: true,
-        intervalMs: 300_000,
-        mode: 'auto',
-        periodicWakeEnabled: true,
-        wakeOnTerminalPublication: true,
-        publicationWakeMinIntervalMs: 30_000,
-      });
-    }
-  });
-
-  it('accepts explicit orchestratorWake overrides', () => {
-    const result = PluginConfigSchema.safeParse({
-      backgroundJobs: {
-        orchestratorWake: {
-          enabled: false,
-          intervalMs: 120_000,
-          wakeOnTerminalPublication: false,
-          publicationWakeMinIntervalMs: 120_000,
-        },
-      },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.orchestratorWake).toEqual({
-        enabled: false,
-        intervalMs: 120_000,
-        mode: 'auto',
-        periodicWakeEnabled: true,
-        wakeOnTerminalPublication: false,
-        publicationWakeMinIntervalMs: 120_000,
-      });
-    }
-  });
-
-  it('drops out-of-bounds publicationWakeMinIntervalMs back to the wake defaults', () => {
-    for (const publicationWakeMinIntervalMs of [0, 999, -1, 2_147_483_648]) {
-      const result = PluginConfigSchema.safeParse({
-        backgroundJobs: {
-          maxSessionsPerAgent: 4,
-          orchestratorWake: { publicationWakeMinIntervalMs },
-        },
-      });
-
-      expect(result.success).toBe(true);
-      if (result.success) {
-        // Sibling key must survive — direct evidence that only the bad key
-        // is dropped.
-        expect(result.data.backgroundJobs?.maxSessionsPerAgent).toBe(4);
-        expect(
-          result.data.backgroundJobs?.orchestratorWake
-            ?.publicationWakeMinIntervalMs,
-        ).toBe(30_000);
-      }
-    }
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-  });
-
   it('defaults backgroundJobs.stopConfirmationMs to 5 seconds', () => {
     const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
 
@@ -1277,60 +1208,6 @@ describe('PluginConfigSchema backgroundJobs', () => {
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data.backgroundJobs?.stopConfirmationMs).toBe(5_000);
-      }
-    }
-  });
-
-  it('accepts explicit orchestratorWake.mode values', () => {
-    for (const mode of ['auto', 'todo', 'children'] as const) {
-      const result = PluginConfigSchema.safeParse({
-        backgroundJobs: { orchestratorWake: { mode } },
-      });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.backgroundJobs?.orchestratorWake?.mode).toBe(mode);
-      }
-    }
-  });
-
-  it('drops invalid nested orchestratorWake values back to the wake defaults', () => {
-    for (const orchestratorWake of [
-      { intervalMs: 0 },
-      { intervalMs: 1 },
-      { intervalMs: 59_999 },
-      { intervalMs: 60_000.5 },
-      { intervalMs: -1 },
-      { mode: 'child' },
-      { mode: '' },
-      { mode: null },
-    ]) {
-      const result = PluginConfigSchema.safeParse({
-        backgroundJobs: { orchestratorWake },
-      });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.backgroundJobs?.orchestratorWake).toEqual({
-          enabled: true,
-          intervalMs: 300_000,
-          mode: 'auto',
-          periodicWakeEnabled: true,
-          wakeOnTerminalPublication: true,
-          publicationWakeMinIntervalMs: 30_000,
-        });
-      }
-    }
-  });
-
-  it('accepts orchestratorWake.intervalMs bounds', () => {
-    for (const intervalMs of [60_000, 300_000, 2_147_483_647]) {
-      const result = PluginConfigSchema.safeParse({
-        backgroundJobs: { orchestratorWake: { intervalMs } },
-      });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.backgroundJobs?.orchestratorWake?.intervalMs).toBe(
-          intervalMs,
-        );
       }
     }
   });

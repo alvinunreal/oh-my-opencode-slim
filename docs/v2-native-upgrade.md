@@ -12,7 +12,8 @@ On V2, the default changes from `managed` to `native`, even when no
 `backgroundJobs` configuration is present. Slim's job board, short aliases,
 reusable-session pool and managed limits stop applying; OpenCode owns child
 execution, continuation, persistence, restart recovery and completion
-notifications.
+notifications. The five-minute idle TODO reminder and the scheduler that sent
+it were removed.
 
 ## Check configuration before upgrading
 
@@ -57,8 +58,7 @@ before upgrading.
 
 Remove `orchestratorWake`, `childInputWake`, `childInputWakeKinds`,
 `waitForUserGuard`, `pruneEvictedSessions`, and `sameProviderPolicy` from
-`backgroundJobs` after review. Slim ignores these former managed lifecycle
-settings and warns for each configuration file that declares them.
+`backgroundJobs` after review. Slim warns for each configuration file that declares these retired settings.
 
 ## Existing sessions and automation
 

@@ -66,7 +66,6 @@ import {
   noRouteOutcomeID,
 } from '../../v2/terminal-fallback';
 import type { SessionLifecycle } from '../session-lifecycle';
-import type { createBackgroundFallbackHandoff } from '../task-session-manager/fallback-observation-transfer';
 import { isUserMessageWithParts } from '../types';
 import { asHttpStatus, DEDUP_WINDOW_MS } from './dedup';
 
@@ -78,9 +77,20 @@ export interface ForegroundFallbackTimers extends TimerSeam {
   now?: () => number;
 }
 
-type BackgroundFallbackHandoff = ReturnType<
-  typeof createBackgroundFallbackHandoff
->;
+interface BackgroundFallbackHandoff {
+  prepare(
+    sessionID: string,
+    generation: number | undefined,
+    baselineMessageID: string | undefined,
+  ): boolean;
+  admit(
+    sessionID: string,
+    generation: number | undefined,
+    notice?: { from?: string; to?: string; error: string },
+  ): boolean;
+  reject(sessionID: string, generation: number | undefined): void;
+  settleUnresolved(sessionID: string, generation: number | undefined): void;
+}
 
 type V2SwitchDetail = {
   agentName: string | undefined;

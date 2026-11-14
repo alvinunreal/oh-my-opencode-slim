@@ -82,51 +82,29 @@ function writeProjectConfig(
 
 type Dispose = () => void | Promise<void>;
 
-interface V1Capture {
-  slotRegistrations: number;
-  commands: Array<Record<string, unknown>>;
-}
-
-function makeV1Api(projectDir: string): {
+function makeSidebarApi(projectDir: string): {
   api: Record<string, unknown>;
-  capture: V1Capture;
   disposers: Dispose[];
 } {
-  const capture: V1Capture = { slotRegistrations: 0, commands: [] };
   const disposers: Dispose[] = [];
   const api = {
-    state: { path: { directory: projectDir } },
-    route: { current: { name: 'home' } },
-    lifecycle: {
-      onDispose: (callback: Dispose) => {
-        disposers.push(callback);
-        return () => {};
-      },
-    },
+    location: { directory: projectDir },
     renderer: { requestRender: () => {} },
-    slots: {
-      register: () => {
-        capture.slotRegistrations += 1;
-        return 'test-slot';
-      },
-    },
-    theme: { current: {} },
-    command: {
-      register: (callback: () => Array<Record<string, unknown>>) => {
-        capture.commands.push(...callback());
-        return () => {};
-      },
+    theme: { text: {}, background: {}, border: {} },
+    ui: {
+      router: { current: () => ({ type: 'home' }) },
+      slot: () => () => {},
     },
   };
-  return { api, capture, disposers };
+  apiDisposers.set(api, disposers);
+  return { api, disposers };
 }
 
-async function runV1Entry(api: Record<string, unknown>): Promise<void> {
-  await tuiPlugin.tui(
-    api as unknown as Parameters<typeof tuiPlugin.tui>[0],
-    {},
-    { version: 'test' } as Parameters<typeof tuiPlugin.tui>[2],
-  );
+const apiDisposers = new WeakMap<Record<string, unknown>, Dispose[]>();
+
+async function runSidebar(api: Record<string, unknown>): Promise<void> {
+  const dispose = await tuiPlugin.setup(api as never);
+  if (dispose) apiDisposers.get(api)?.push(dispose);
 }
 
 function spyOnIntervals(): {
@@ -200,9 +178,9 @@ describe('TUI feature gates', () => {
       return realRead(...(args as Parameters<typeof fs.readFileSync>));
     });
     const intervals = spyOnIntervals();
-    const { api, disposers } = makeV1Api(env.projectDir);
+    const { api, disposers } = makeSidebarApi(env.projectDir);
     try {
-      await runV1Entry(api);
+      await runSidebar(api);
       const startupReads = reads;
       expect(startupReads).toBeGreaterThan(0);
       intervals.callbacks.get(5000)?.();
@@ -212,7 +190,7 @@ describe('TUI feature gates', () => {
       intervals.callbacks.get(5000)?.();
       expect(reads).toBeGreaterThan(startupReads);
       const afterEdit = reads;
-      expect(readConfigState(env.projectDir).presetName).toBe('edited');
+      expect(readConfigState(env.projectDir, 'v2').presetName).toBe('edited');
       expect(reads).toBe(afterEdit);
     } finally {
       for (const dispose of disposers) await dispose();
@@ -287,18 +265,6 @@ describe('TUI feature gates', () => {
     expect(broken.paneConfig?.invalid).toBe(true);
   });
 
-  test('v1 entry registers nothing when tui is false', async () => {
-    writeUserConfig({});
-    writeProjectConfig(env.projectDir, { tui: false });
-    const { api, capture, disposers } = makeV1Api(env.projectDir);
-
-    await runV1Entry(api);
-
-    expect(capture.slotRegistrations).toBe(0);
-    expect(capture.commands).toEqual([]);
-    expect(disposers).toEqual([]);
-  });
-
   test('independently reachable internal setup honors tui false', async () => {
     writeUserConfig({ tui: false });
 
@@ -307,51 +273,6 @@ describe('TUI feature gates', () => {
     } as unknown as Parameters<typeof tuiPlugin.setup>[0]);
 
     expect(cleanup).toBeUndefined();
-  });
-
-  test('v1 disabled_commands removes killall and keeps preset', async () => {
-    writeUserConfig({});
-    writeProjectConfig(env.projectDir, { disabled_commands: ['killall'] });
-    const { api, capture, disposers } = makeV1Api(env.projectDir);
-
-    try {
-      await runV1Entry(api);
-      const names = capture.commands.map((command) => command.value);
-      expect(names).toContain('preset');
-      expect(names).not.toContain('omo.kill_all');
-    } finally {
-      for (const dispose of disposers) await dispose();
-    }
-  });
-
-  test('v1 disabled_commands removes preset and keeps killall', async () => {
-    writeUserConfig({});
-    writeProjectConfig(env.projectDir, { disabled_commands: ['preset'] });
-    const { api, capture, disposers } = makeV1Api(env.projectDir);
-
-    try {
-      await runV1Entry(api);
-      const names = capture.commands.map((command) => command.value);
-      expect(names).not.toContain('preset');
-      expect(names).toContain('omo.kill_all');
-    } finally {
-      for (const dispose of disposers) await dispose();
-    }
-  });
-
-  test('v1 commands are enabled by default', async () => {
-    writeUserConfig({});
-    const { api, capture, disposers } = makeV1Api(env.projectDir);
-
-    try {
-      await runV1Entry(api);
-      expect(capture.commands.map((command) => command.value)).toEqual([
-        'preset',
-        'omo.kill_all',
-      ]);
-    } finally {
-      for (const dispose of disposers) await dispose();
-    }
   });
 
   test('threads hostFlavor to feature gates during TUI gate probe', () => {
@@ -389,9 +310,9 @@ describe('TUI feature gates', () => {
     test('sidebar-on rendering keeps the fast 1s poll', async () => {
       writeUserConfig({});
       const intervals = spyOnIntervals();
-      const { api, disposers } = makeV1Api(env.projectDir);
+      const { api, disposers } = makeSidebarApi(env.projectDir);
       try {
-        await runV1Entry(api);
+        await runSidebar(api);
         expect(intervals.delays).toContain(1000);
         expect(intervals.delays).toContain(100);
         expect(intervals.delays).not.toContain(5000);
@@ -405,9 +326,9 @@ describe('TUI feature gates', () => {
       writeUserConfig({});
       writeProjectConfig(env.projectDir, { sidebar: false });
       const intervals = spyOnIntervals();
-      const { api, disposers } = makeV1Api(env.projectDir);
+      const { api, disposers } = makeSidebarApi(env.projectDir);
       try {
-        await runV1Entry(api);
+        await runSidebar(api);
         expect(intervals.delays).toContain(5000);
         expect(intervals.delays).not.toContain(1000);
         expect(intervals.delays).not.toContain(100);
@@ -421,9 +342,9 @@ describe('TUI feature gates', () => {
       process.env.OH_MY_OPENCODE_SLIM_TUI_REFRESH_MS = '42';
       writeUserConfig({});
       const fastIntervals = spyOnIntervals();
-      const fast = makeV1Api(env.projectDir);
+      const fast = makeSidebarApi(env.projectDir);
       try {
-        await runV1Entry(fast.api);
+        await runSidebar(fast.api);
         expect(fastIntervals.delays).toContain(42);
         expect(fastIntervals.delays).not.toContain(1000);
       } finally {
@@ -433,9 +354,9 @@ describe('TUI feature gates', () => {
 
       writeProjectConfig(env.projectDir, { sidebar: false });
       const slowIntervals = spyOnIntervals();
-      const slow = makeV1Api(env.projectDir);
+      const slow = makeSidebarApi(env.projectDir);
       try {
-        await runV1Entry(slow.api);
+        await runSidebar(slow.api);
         expect(slowIntervals.delays).toContain(42);
         expect(slowIntervals.delays).not.toContain(5000);
       } finally {

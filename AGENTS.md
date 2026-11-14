@@ -71,9 +71,8 @@ bun test -t "test-name-pattern"
   guessed `setTimeout` waits, or duration-based settling.
 - Drive timer code deterministically with `src/utils/test-timers.ts`
   (`createTimerHarness`, `tick`). Scheduling components accept injected
-  `setTimeout`/`clearTimeout` seams (see `BackgroundJobSupervisor`,
-  `createBackgroundJobTerminalGate`); wire the harness there, not via
-  global spies.
+  `setTimeout`/`clearTimeout` seams (see `src/hooks/question-timeout/core.ts`).
+  Wire the harness to those seams.
 - Keep observation-time (`now`) seams separate from scheduling when event
   timestamps are the subject of the test.
 - Integration tests that exercise real platform timing may keep a real
@@ -221,7 +220,6 @@ same second); TUI client processes use the `tui-` prefix.
 Read-only dependency source repositories are available under
 `.slim/clonedeps/repos/` for inspection. Do not edit these clones.
 
-- `.slim/clonedeps/repos/anomalyco__opencode-v1.18.13/` - `https://github.com/anomalyco/opencode.git` at `v1.18.13@a105350812f05f914c768e468559dbd6bd508d8e`; inspect `packages/plugin` and `packages/sdk/js` for OpenCode plugin and SDK internals.
 - `.slim/clonedeps/repos/opencode/` - `https://github.com/anomalyco/opencode.git` at `v2.3.0@a6b15d33daf6ab7d35569f6d711fdb630b9f04e7` (release tag; active development branch is `dev`); inspect `packages/core` and `packages/server` for the v2 TypeScript runtime (split from the former `packages/opencode`), `packages/plugin` for the v2 plugin/hook API, `packages/sdk` (embedded host) and `packages/client` (HTTP client) for v2 SDK internals, and `packages/core/src/tool/plugin/subagent.ts` for background subagent support.
 - `.slim/clonedeps/repos/modelcontextprotocol__typescript-sdk/` - `https://github.com/modelcontextprotocol/typescript-sdk.git` at `1.30.0@2d889f2b329e46680ec9bdd565de4616c497825a`; inspect it for MCP protocol and server integration internals.
 - `.slim/clonedeps/repos/agentclientprotocol__agent-client-protocol/` - `https://github.com/agentclientprotocol/agent-client-protocol.git` at `main@541daf8fa488c6b93aad4a874ac050b3daf9b282`; inspect it for ACP protocol specification and schema details.

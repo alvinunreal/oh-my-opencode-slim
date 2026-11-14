@@ -167,7 +167,7 @@ for restored MCP defaults and custom model/skill precedence.
 
 ### Getting Started
 
-Slim requires OpenCode **2.3.0 or newer**. See the [upgrade guide](docs/v2-native-upgrade.md) for the host update and configuration changes.
+Slim requires OpenCode **2.3.0 or newer**. OpenCode delivers subagent completions to the parent. Slim removed its five-minute idle TODO reminder. See the [upgrade guide](docs/v2-native-upgrade.md) for the host update and configuration changes.
 
 The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default.
 

@@ -84,14 +84,6 @@ const DEFAULT_MULTIPLEXER: MultiplexerConfig =
 const DEFAULT_BACKGROUND_JOBS: BackgroundJobsConfig = {
   mode: 'managed',
   maxSessionsPerAgent: DEFAULT_MAX_SESSIONS_PER_AGENT,
-  orchestratorWake: {
-    enabled: true,
-    intervalMs: 300_000,
-    mode: 'auto',
-    periodicWakeEnabled: true,
-    wakeOnTerminalPublication: true,
-    publicationWakeMinIntervalMs: 30_000,
-  },
   wallClockTimeoutMs: 0,
   stopConfirmationMs: 5_000,
   concurrency: {

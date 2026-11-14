@@ -12,7 +12,7 @@ orchestrator plans → dispatches background specialists → monitors → reconc
 
 The host owns delegated execution, continuation, completion delivery and
 restart recovery. Slim adds scheduling guidance and a small on-demand control
-surface; it does not maintain a second child-job lifecycle on OpenCode v2.
+surface. Slim removed its managed job board and periodic idle TODO reminder.
 
 ## Runtime Requirement
 

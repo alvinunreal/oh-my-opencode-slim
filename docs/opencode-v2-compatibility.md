@@ -826,21 +826,14 @@ every settled child busy period — native `subagent(sessionID, prompt)` and
 direct `session.prompt` continuations included — so Slim keeps no completion
 watcher.
 
-### No orchestrator-wake on v2
+### Native parent notifications
 
-The wake scheduler is **not created on v2**. The host's native background
-notifier delivers each child report: a busy parent is
-reached by steer at its next step boundary, an idle parent gets a successor
-turn, and restart recovery uses the durable outbox rows. There
-is no plugin completion tracker; OpenCode reports every settled child period,
-including continuations started by Slim's refusal recovery or any direct
-`session.prompt`. A missing notice is recovered with `task_status`. After TUI
-kill-all, a volatile reminder tells each affected parent not to relaunch the
-stopped work; it expires at that parent's next external prompt. Child
-permission/question asks are a host-UI boundary the host does not route to the
-parent agent; the parent discovers open permission requests via `task_status`
-and answers them with `task_reply`. The whole `backgroundJobs.orchestratorWake`
-config section is v1-only and warns as ignored on v2.
+The periodic orchestrator scheduler was removed. OpenCode delivers settled
+child reports through its native notifier. A busy parent receives a steer at
+its next step boundary, an idle parent gets a successor turn, and restart
+recovery uses the durable host outbox. This also covers direct child prompts.
+Use `task_status` to pull a missing result or discover pending permissions.
+Answer permissions with `task_reply` and questions in the host UI.
 
 ### Environment caveats
 

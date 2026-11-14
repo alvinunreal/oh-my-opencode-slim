@@ -611,62 +611,6 @@ const BackgroundJobsConfigStrictSchema = z.object({
         'backgroundJobs.abortGraceMs was removed; the wall-clock watchdog no longer fabricates a terminal: it aborts the child and the host reports the real outcome',
     })
     .optional(),
-  orchestratorWake: z
-    .object({
-      enabled: z
-        .boolean()
-        .default(true)
-        .describe(
-          'When true, idle orchestrator sessions with incomplete todos may receive periodic internal wake prompts. Default enabled.',
-        ),
-      intervalMs: z
-        .number()
-        .int()
-        .min(60_000)
-        .max(2_147_483_647)
-        .default(300_000)
-        .describe(
-          'Continuous parent-idle interval between orchestrator wake evaluations (60,000–2,147,483,647ms). Default 300,000 (5 minutes). 0 is invalid.',
-        ),
-      mode: z
-        .enum(['auto', 'todo', 'children'])
-        .default('auto')
-        .describe(
-          'Wake-condition source (v1 hosts only). "auto" uses todo-gating; "todo" or "children" pin one mode, degrading to children when the host lacks the todo API. On OpenCode v2 hosts the whole section is ignored. Default "auto".',
-        ),
-      periodicWakeEnabled: z
-        .boolean()
-        .default(true)
-        .describe(
-          'When false, the periodic idle evaluation never runs; only event-driven wakes (stopped-job recovery, terminal-publication rev>1, child-input) still deliver. Failed event wakes keep their timer-based retry path. v1 hosts only; v2 hosts create no wake scheduler. Default enabled.',
-        ),
-      wakeOnTerminalPublication: z
-        .boolean()
-        .default(true)
-        .describe(
-          'When true, a terminal completed/error publication wakes an idle parent orchestrator immediately (bounded by publicationWakeMinIntervalMs) instead of waiting for the next periodic evaluation. v1 hosts only. Default enabled.',
-        ),
-      publicationWakeMinIntervalMs: z
-        .number()
-        .int()
-        .min(1_000)
-        .max(2_147_483_647)
-        .default(30_000)
-        .describe(
-          'Per-parent minimum spacing between terminal-publication wakes (1,000–2,147,483,647ms; 0 is invalid at the config layer). Default 30,000 (30 seconds). A burst of publications collapses into one wake. Later-result (<completed-job>) pushes honor the same spacing: inside the window they stay queued and are delivered together when it elapses.',
-        ),
-    })
-    .default({
-      enabled: true,
-      intervalMs: 300_000,
-      mode: 'auto',
-      periodicWakeEnabled: true,
-      wakeOnTerminalPublication: true,
-      publicationWakeMinIntervalMs: 30_000,
-    })
-    .describe(
-      'Periodic orchestrator wake scheduler for idle sessions (v1 hosts only; ignored on OpenCode v2 hosts). Requires host session APIs (session.get, todo, children, status, promptAsync) and wakes while incomplete todos remain. Default enabled at a 5-minute interval.',
-    ),
   wallClockTimeoutMs: z
     .union([z.literal(0), z.number().int().min(60_000).max(2_147_483_647)])
     .default(0)
@@ -720,8 +664,7 @@ const BackgroundJobsConfigStrictSchema = z.object({
     ),
   continueOnIdle: z
     .never({
-      error:
-        'backgroundJobs.continueOnIdle was removed; use backgroundJobs.orchestratorWake.enabled',
+      error: 'backgroundJobs.continueOnIdle was removed',
     })
     .optional(),
 });

@@ -22,6 +22,7 @@ const REMOVED_CONFIG_KEYS = [
   'council.presets.*.master',
   'council.presets.*.councillors',
   'backgroundJobs.continueOnIdle',
+  'backgroundJobs.orchestratorWake',
   'backgroundJobs.enabled',
   'backgroundJobs.maxContextLines',
   'backgroundJobs.readContextMinLines',

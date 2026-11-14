@@ -813,8 +813,6 @@ describe('loadPluginConfig', () => {
 
     expect(config.backgroundJobs?.maxSessionsPerAgent).toBe(8);
     expect('strategy' in (config.backgroundJobs ?? {})).toBe(false);
-    expect(config.backgroundJobs?.orchestratorWake?.intervalMs).toBe(120_000);
-    expect(config.backgroundJobs?.orchestratorWake?.enabled).toBe(false);
   });
 
   test('a project backgroundJobs layer without mode keeps the user mode off', () => {
@@ -1347,53 +1345,6 @@ describe('onWarning callback', () => {
     ]);
   });
 
-  test('passes explicit terminal-publication wake and stop-confirmation knobs through', () => {
-    const projectDir = path.join(tempDir, 'project');
-    const projectConfigDir = path.join(projectDir, '.opencode');
-    fs.mkdirSync(projectConfigDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        backgroundJobs: {
-          orchestratorWake: {
-            wakeOnTerminalPublication: false,
-            publicationWakeMinIntervalMs: 120_000,
-          },
-          stopConfirmationMs: 15_000,
-        },
-      }),
-    );
-
-    const config = loadPluginConfig(projectDir, { silent: true });
-
-    expect(config.backgroundJobs?.orchestratorWake).toEqual({
-      enabled: true,
-      intervalMs: 300_000,
-      mode: 'auto',
-      periodicWakeEnabled: true,
-      wakeOnTerminalPublication: false,
-      publicationWakeMinIntervalMs: 120_000,
-    });
-    expect(config.backgroundJobs?.stopConfirmationMs).toBe(15_000);
-  });
-
-  test('v2 host flavor leaves wake keys at schema defaults; gating is structural', () => {
-    const projectDir = path.join(tempDir, 'project');
-    const config = loadPluginConfig(projectDir, {
-      silent: true,
-      hostFlavor: 'v2',
-    });
-
-    // The loader derives nothing per host flavor. v2 periodic-off is applied
-    // structurally at the wake-scheduler wiring (src/index.ts).
-    // No layer configures backgroundJobs, so nothing is parsed and no key
-    // is derived: the periodic key stays absent (runtime applies the true
-    // default on v1 and the index.ts mapping forces it off on v2).
-    expect(
-      config.backgroundJobs?.orchestratorWake?.periodicWakeEnabled,
-    ).toBeUndefined();
-  });
-
   test('routingBlock never derives a v2 default (no boardInjection-style flip)', () => {
     const projectDir = path.join(tempDir, 'project');
     // Unset on v2 stays unset: the native subagent roster carries agent
@@ -1451,6 +1402,7 @@ describe('onWarning callback', () => {
         'backgroundJobs.strategy',
         'backgroundJobs.maxRetainedSnapshots',
         'backgroundJobs.boardInjection',
+        'backgroundJobs.orchestratorWake',
       ]) {
         const matching = warnings.filter((message) =>
           message.includes(`"${key}"`),
@@ -1466,6 +1418,7 @@ describe('onWarning callback', () => {
         'strategy',
         'maxRetainedSnapshots',
         'boardInjection',
+        'orchestratorWake',
       ]) {
         expect(key in bj).toBe(false);
       }
@@ -1477,85 +1430,11 @@ describe('onWarning callback', () => {
         ),
       ).toHaveLength(1);
       expect('boardInjection' in bj).toBe(false);
-      // Valid siblings and explicit wake keys still load.
+      // Valid siblings still load.
       expect(config.backgroundJobs?.maxSessionsPerAgent).toBe(4);
-      expect(config.backgroundJobs?.orchestratorWake.periodicWakeEnabled).toBe(
-        true,
-      );
     } finally {
       console.warn = originalWarn;
     }
-  });
-
-  test('explicit v2 opt-out still holds and v1 hosts keep wake defaults', () => {
-    const projectDir = path.join(tempDir, 'project');
-    const projectConfigDir = path.join(projectDir, '.opencode');
-    fs.mkdirSync(projectConfigDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        backgroundJobs: {
-          orchestratorWake: { periodicWakeEnabled: false },
-        },
-      }),
-    );
-
-    const v2Config = loadPluginConfig(projectDir, {
-      silent: true,
-      hostFlavor: 'v2',
-    });
-    expect(v2Config.backgroundJobs?.orchestratorWake.periodicWakeEnabled).toBe(
-      false,
-    );
-
-    const v1Config = loadPluginConfig(projectDir, { silent: true });
-    expect(v1Config.backgroundJobs?.orchestratorWake.periodicWakeEnabled).toBe(
-      false,
-    );
-  });
-
-  test('v2 warns only on an explicit periodicWakeEnabled true; unset and v1 stay silent', () => {
-    // Mirrors the boardInjection warning: v2 forces the periodic wake off
-    // where the scheduler is wired, so an explicit true must not be lost
-    // silently. Pre-parse, so the schema default never warns.
-    const mkProject = (name: string, backgroundJobs: unknown) => {
-      const dir = path.join(tempDir, name);
-      const configDir = path.join(dir, '.opencode');
-      fs.mkdirSync(configDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(configDir, 'oh-my-opencode-slim.json'),
-        JSON.stringify({ backgroundJobs }),
-      );
-      return dir;
-    };
-    const capture = (dir: string, options?: { hostFlavor?: string }) => {
-      const warnings: string[] = [];
-      const originalWarn = console.warn;
-      console.warn = (message: string) => warnings.push(message);
-      try {
-        loadPluginConfig(dir, options);
-      } finally {
-        console.warn = originalWarn;
-      }
-      return warnings.filter((message) => message.includes('orchestratorWake'));
-    };
-
-    const explicitTrue = mkProject('wake-explicit', {
-      orchestratorWake: { periodicWakeEnabled: true },
-    });
-    const warnings = capture(explicitTrue, { hostFlavor: 'v2' });
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain(
-      'backgroundJobs.orchestratorWake is v1-only and ignored on OpenCode v2',
-    );
-
-    // Any orchestratorWake key is inert on v2, not just periodicWakeEnabled.
-    const unset = mkProject('wake-unset', {
-      orchestratorWake: { intervalMs: 60_000 },
-    });
-    expect(capture(unset, { hostFlavor: 'v2' })).toHaveLength(1);
-
-    expect(capture(explicitTrue)).toHaveLength(0);
   });
 
   test('no options object does not break loadPluginConfig', () => {
@@ -3602,7 +3481,6 @@ describe('removed config keys', () => {
         enabled: false,
         maxSessionsPerAgent: 4,
         concurrency: { defaultConcurrency: 2 },
-        orchestratorWake: { enabled: false },
       },
     });
 
@@ -3612,7 +3490,6 @@ describe('removed config keys', () => {
     // Only the alias is dropped; every sibling keeps its configured value.
     expect(config.backgroundJobs?.maxSessionsPerAgent).toBe(4);
     expect(config.backgroundJobs?.concurrency?.defaultConcurrency).toBe(2);
-    expect(config.backgroundJobs?.orchestratorWake?.enabled).toBe(false);
     expect(Object.hasOwn(config.backgroundJobs ?? {}, 'enabled')).toBe(false);
     expect(warnings.map((w) => w.kind)).toEqual(['removed-key']);
     expect(warnings[0]?.message).toContain('"backgroundJobs.enabled"');

@@ -163,8 +163,7 @@ The v2 runtime surface and plugin contracts are adapted through the following da
 
 Multiplexer panes work on shared and `--server` v2 hosts; standalone and
 invalid hosts ignore a configured `multiplexer.type` with one diagnostic per
-process (NFR-6). The orchestrator-wake scheduler is v1-only; v2 uses the
-host's native background notifier.
+process (NFR-6). OpenCode delivers native child notifications.
 Finalized-registry setup captures configured MCP namespace inventory through
 `ctx.mcp.transform` before the deferred agent transform callback runs. Setup
 does not force host materialization with `ctx.agent.list()`. Until agent

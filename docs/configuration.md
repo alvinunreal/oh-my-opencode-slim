@@ -421,7 +421,7 @@ replacement yourself where one exists.
 | `council.presets.<name>.master` (councillor named `master`) | None; rename the councillor if you still want it |
 | `council.presets.<name>.councillors` (nested wrapper) | Put councillors directly under `council.presets.<name>` (the wrapped entries are dropped) |
 | `backgroundJobs.enabled` | `backgroundJobs.mode`: `true` → host default (`"managed"` on V1, `"native"` on V2), `false` → `"off"` (a stale `enabled: false` without `mode` is still applied as `"off"`, with a warning) |
-| `backgroundJobs.continueOnIdle` | `backgroundJobs.orchestratorWake.enabled` |
+| `backgroundJobs.continueOnIdle`, `backgroundJobs.orchestratorWake` | OpenCode delivers native subagent completions. The periodic idle reminder was removed. |
 | `backgroundJobs.maxContextLines` | None; reusability is state-based (terminal, reconciled, status-certain). See [Background Job Management](#background-job-management) |
 | `backgroundJobs.readContextMinLines` | None; the per-session read-context list is path-only with an internal display cap |
 | `backgroundJobs.readContextMaxFiles` | None; the display cap is internal |
@@ -1221,7 +1221,7 @@ Guards such as `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, a
 
 Notes:
 
-- Injection surfaces that have dedicated switches are not listed here: wake prompts (`backgroundJobs.orchestratorWake.enabled`, `backgroundJobs.childInputWake`), the whole managed background-task lifecycle (`backgroundJobs.mode`), the interview subsystem (`interview.enabled`), the TUI surface (`tui`, `sidebar`), and image routing (`image_routing`). `autoUpdate: false` and `disabled_hooks: ["auto-update-checker"]` both stop the update feature; use whichever granularity you need.
+- Injection surfaces that have dedicated switches are not listed here: the interview subsystem (`interview.enabled`), the TUI surface (`tui`, `sidebar`), and image routing (`image_routing`). `autoUpdate: false` and `disabled_hooks: ["auto-update-checker"]` both stop the update feature; use whichever granularity you need.
 - Invalid entries are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies.
 
 ### Slash Commands
