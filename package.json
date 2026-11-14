@@ -82,6 +82,7 @@
     "cache:smoke": "bun run scripts/cache-smoke.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "coverage:istanbul": "bun tools/coverage/lcov-to-istanbul.ts",
     "lint": "biome lint .",
     "format": "biome format . --write",
     "check": "biome check --write .",
