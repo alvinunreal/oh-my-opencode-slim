@@ -24,7 +24,6 @@ import {
   type PluginConfig,
   PluginConfigSchema,
 } from '../config/schema';
-import { findOpenCode } from './system';
 
 export type DoctorArgs = {
   json?: boolean;
@@ -274,10 +273,7 @@ function checkPreset(
   return { preset: presetName, ok: true };
 }
 
-export function runDoctorCheck(
-  cwd: string,
-  hostFlavor = findOpenCode()?.hostFlavor,
-): DoctorResult {
+export function runDoctorCheck(cwd: string, hostFlavor = 'v2'): DoctorResult {
   const { userConfigPath, projectConfigPaths } = findPluginConfigPaths(
     cwd,
     hostFlavor,

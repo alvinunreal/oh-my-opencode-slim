@@ -741,7 +741,7 @@ describe('v2 tui preset plugin', () => {
       expect(tui2Plugin.id).toBe(baseTui.id);
       // The v1 factory is a thin delegate (the composition loads only when a
       // v1 host calls it), so identity is asserted on the contract shape.
-      expect(typeof tui2Plugin.tui).toBe('function');
+      expect(tui2Plugin).not.toHaveProperty('tui');
       expect(typeof tui2Plugin.setup).toBe('function');
     });
 

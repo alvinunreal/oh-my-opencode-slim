@@ -18,7 +18,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 | Path | Role |
 |---|---|
 | `package.json` | Package manifest, dependency graph, release scripts, published file list. |
-| `src/index.ts` | Main plugin bootstrap: wires agents (incl. dynamic councillors), tools, MCPs, hooks, shared background job board + supervisor, interview support, cache monitor, orchestrator-wake scheduler, TUI preset switching, and health checks. Does not touch multiplexer pane lifecycle (client-only). Exports the dual `default.server`/`default.setup` so v1 and v2 hosts share one build. |
+| `src/index.ts` | Main plugin bootstrap: wires agents (incl. dynamic councillors), tools, MCPs, hooks, shared background job board + supervisor, interview support, cache monitor, orchestrator-wake scheduler, TUI preset switching, and health checks. Does not touch multiplexer pane lifecycle (client-only). Published entry points use `src/plugin.ts` and expose only OpenCode 2 setup. |
 | `src/cli/index.ts` | CLI entrypoint for installation/bootstrap workflows. |
 | `src/config/schema.ts` | Source-of-truth runtime config schema used by validation and schema generation. |
 | `src/config/runtime.ts` | Per-directory `RuntimeConfig` singleton: derived getters over the frozen plugin config, pre-mutation host-config snapshot, and preset/model overrides. |
@@ -69,7 +69,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 ## Runtime Control Flow
 
 1. **Plugin startup**
-   - OpenCode loads `src/index.ts` (v1 via `default.server`; v2 via `default.setup` through `src/v2/`).
+   - OpenCode loads `src/plugin.ts` through `default.setup`.
    - Config is loaded and normalized through `src/config/`; the `RuntimeConfig` singleton captures the pre-mutation host config.
    - Agent definitions (incl. dynamic councillors) are produced by `src/agents/`.
    - Tool factories from `src/tools/` and MCP definitions from `src/mcp/` are registered.

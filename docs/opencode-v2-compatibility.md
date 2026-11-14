@@ -1,25 +1,9 @@
 # OpenCode v2 (`opencode2`) Compatibility
 
-oh-my-opencode-slim installs and runs on **both** OpenCode v1 (`opencode`)
-and OpenCode v2 (`opencode2`) from a single published package. This document
-describes how each host loads the plugin, what is supported where, and how to
-register it.
+Slim requires **OpenCode 2.3.0 or newer**. OpenCode runs subagents in the
+background and reports each child idle period. [OpenCode 2.3 changelog](https://opencode.ai/changelog/v2.3.0)
 
-The source baseline for this compatibility work is **oh-my-opencode-slim
-v3.0.5**, with historical live host verification on **OpenCode v2.0.7**. The
-plugin requires OpenCode **2.3.0+** on v2 hosts; parseable versions below stable
-2.3.0 (including `2.3.0-dev`) fail setup with an upgrade message. Unversioned
-embeddings cannot be checked and must provide the same host behavior.
-This next major plugin release is the floor change: 2.3
-always runs subagents in the background and reports every child idle period
-([OpenCode 2.3.0 release](https://github.com/anomalyco/opencode/releases/tag/v2.3.0),
-[canonical changelog](https://opencode.ai/changelog/v2.3.0)), which replaces
-Slim's argument/description rewrites and its own duplicate completion notices.
-Bundled skills use the host's in-process registration channel (`ctx.skill` with
-`add`) on v2. On v1 the config hook adds package skill paths to the host's disk
-scanner, excluding disabled skills and names supplied by the user. MCPs also
-use the host transform, with existing configured namespaces taking priority.
-Slim does not start a second MCP client or skill loader.
+Bundled skills and MCPs register through OpenCode’s plugin APIs.
 The adapter targets the v2 plugin API surface (see
 [The v2 plugin API surface](#the-v2-plugin-api-surface-this-adapter-uses)),
 and the compile-time mirror guard below is pinned to `@opencode/plugin`
@@ -84,119 +68,13 @@ tool).
 
 ## How it works
 
-The package's default export is an object:
+OpenCode loads the server and TUI through their package exports. Both
+entry points expose `{ id, setup }`. The package includes split ESM
+chunks, so local installs point at the complete package directory.
 
-```ts
-export default {
-  id: 'oh-my-opencode-slim',
-  server: OhMyOpenCodeLite, // v1 plugin function (PluginInput) => Promise<Hooks>
-  setup: createV2Setup(),   // v2 promise-plugin setup (ctx) => Promise<cleanup>
-};
-```
-
-There is deliberately **no `tui` key** on this export: hosts validate a
-server plugin module's `tui` field (it must be a function and must not
-coexist with `server`), so a boolean `tui: true` marker gets the whole
-plugin rejected with "invalid tui export".
-
-- **v1 loader** (`readV1Plugin` in `packages/opencode/src/plugin/shared.ts`)
-  detects an object with a `server` field and calls `plugin.server(input)`
-  with the full v1 `PluginInput`. Extra keys (such as `setup`) are ignored on
-  this path.
-- **Embedded v2 pass on v1 hosts.** Every v1 host (≥ v1.17.10) also boots
-  the v2 core, which reads the same config (migrating `plugin:` entries to
-  `plugins:`) and calls `setup(ctx)` with a registration-only context
-  (agent/aisdk/catalog/command/integration/plugin/reference/skill — no
-  tool/session/event/mcp/generate). A dual-export plugin registered via the
-  v1 `plugin:` key therefore gets **both** invocations: full V1 functionality
-  flows through `server()`, while `setup()` skips the registration-only pass
-  before validating configuration. Legitimate V1 managed settings never pass
-  through V2 retirement checks. A v2 `plugins:` entry yields
-  the setup pass alone — v1 does not convert v2 plugin declarations into v1
-  hooks.
-- **v2 loader** (`PluginModule` schema in
-  `packages/core/src/plugin/supervisor.ts`) decodes `default` as
-  `{ id, setup }` (Effect Schema 4 rejects function defaults) and calls
-  `setup(ctx)` via the promise-plugin bridge.
-- **v2 TUI** loads the `./tui` entry unconditionally: the TUI runtime runs
-  its own `kind: "tui"` loader pass over the same plugin list and resolves
-  the entry through the package's `exports["./tui"]` map — the server-side
-  export plays no role in that discovery.
-
-The opt-in `questionTimeoutMs` setting runs in the OMOS TUI on v2 because the
-server plugin session API has no form-reply domain. It requires `tui` to be
-enabled and an attached OMOS TUI. A headless server or pane viewer does not own
-the timer. Restarting the TUI does not re-arm questions that were already open.
-V1 runs the same feature in its server plugin. See
-[Configuration Reference](configuration.md) for the accepted range and safety
-limits.
-
-The host entry builds retain their public paths and include ESM chunks for
-optional implementations. Install or copy the complete package: an entry file
-alone is no longer self-contained. Packed-artifact verification checks every
-relative static and dynamic import target.
-
-Three host entry builds are produced:
-
-| Export | File | Build | Externals |
-|---|---|---|---|
-| `.` (main) | `dist/index.js` | `build:plugin` | zod, jsdom, @opencode-ai/*, @opentui/* (shared with v1 host) |
-| `./server` | `dist/server/index.js` + chunks | `build:v2` | jsdom, jsonc-parser (other runtime dependencies bundled) |
-| `./tui` | `dist/tui2.js` | `build:tui` | same external set as `build:plugin` (thin gate entry + deferred `dist/tui-impl` chunk composing the v1 TUI entry; inlines zod) |
-
-The optional `@opentui/*` runtime pins remain at 0.7.0 for V1;
-`@opentui/solid` 0.7.0 requires `solid-js` 1.9.12. The development-only
-`@opencode/plugin` 2.3.0 declares optional OpenTUI peers `>=0.8.4`.
-The TUI builds externalize these imports; the mirror pin does not upgrade
-Slim's rendering dependencies. Any OpenTUI runtime bump must re-check the
-V1 contract and the exact Solid pin.
-
-v2's plugin resolver tries the `server` subpath first
-(`subpaths: ["server", ""]`), which the exports map resolves directly to
-`dist/server/index.js` — the v2 server entry with its packaged chunks, and the
-artifact the release check requires. Local source development registers an
-external shim directory instead of pointing at `dist/` (see
-[Local source development](#local-source-development-no-publishing)); v1
-uses the main entry.
-
-Upstream npm naming split with the stable line: v2 ships as
-`@opencode/plugin` / `@opencode/client` / `@opencode/sdk` / `@opencode/cli`
-(at `2.0.x`), while `@opencode-ai/plugin` and `@opencode-ai/sdk` are V1-only
-packages that will never carry the v2 surface. The plugin
-intentionally keeps its v1 runtime pins and hand-mirrors the subset of the v2
-plugin context it consumes in `src/v2/types.ts` — the v1 host must be able to
-load the main build with no v2 package installed. This is a known tradeoff,
-not an oversight: the mirror is refreshed by hand and can drift from
-upstream, so every v2 release bump needs a deliberate diff of
-`src/v2/types.ts` against the new `@opencode/plugin`. That diff is
-backed by a compile-time tripwire: `src/v2/mirror-conformance.ts` — typechecked
-against the `@opencode/plugin` devDependency, pinned to the audited
-version — fails `bun run typecheck` when either the mirror or the
-pinned official surface drifts (hook-name sets, key payload fields).
-The guard file must stay non-test-suffixed: tsconfig excludes
-test-suffixed files from tsc, so a `.test.ts` guard silently checks
-nothing.
-
-Verified live on OpenCode v2 (all bridges green — health check
-`bridges:11`, +1 on hosts that accept the `session.model.request` hook
-name for the chat.headers bridge; the event stream and bridges are exercised end-to-end on the stable host;
-the plugin creates no wake scheduler or child-job tracker on v2; the host owns
-terminal delivery and recovery). v2 conformance is compile-time-pinned by the
-mirror-conformance guard against the `@opencode/plugin` 2.3.0
-devDependency and exercised by the mock-driven bridge tests. Every v2
-API the adapter touches is
-capability-probed at runtime (`s.switchModel`, `ctx.generate`, …), so a host
-lacking an optional capability degrades that single feature with a log line
-instead of breaking the load. The configured MCP namespace inventory is a
-required input to finalized-registry permission policy: a host without
-`ctx.mcp.transform` is unsupported and setup fails with an actionable error.
-The session hooks are the deliberate exception: on full contexts they
-register unconditionally and a
-registration failure fails setup (see
-[The v2 adapter](#the-v2-adapter-srcv2setupts)).
-`ctx.mcp.transform` is present in **all** v2.0.x stable hosts. Its inventory
-snapshot is required to preserve host-only MCP namespace policy; missing it is
-not an optional-degradation path.
+`questionTimeoutMs` requires an attached Slim TUI because the server
+plugin API does not expose question replies. See the
+[configuration reference](configuration.md).
 
 ## The v2 adapter (`src/v2/setup.ts`)
 
@@ -449,30 +327,6 @@ mutate an active registry. When no finalized registry is available (for example,
 in standalone CLI use), status reports `reloadRequired: null` because the live
 side cannot be observed.
 
-## Feature matrix
-
-| Capability | v1 (`opencode`) | v2 (`opencode2`) | Notes |
-|---|---|---|---|
-| `routingBlock` (drop `<Agents>` from the built orchestrator prompt) | ✅ removes the block | ✅ removes the block | The host's native delegation-tool roster keeps agent identity; the block's Delegate/Don't routing criteria have no roster equivalent — see [Upstream behaviors to know](#upstream-behaviors-to-know) |
-| Orchestrator + specialist agents, prompts & permission mapping | ✅ | ✅ `ctx.agent.transform` | — |
-| Delegation + native child lifecycle | ✅ `task` tool + managed board | ✅ host `subagent` (name/args normalization in `src/v2/delegation.ts`, output bridging in the execute bridges) | On V2 the managed board is retired: the host owns child execution, same-session continuation, Job persistence, completion delivery, and restart recovery. The plugin's controls take an exact `sessionID` (no `task_id` alias, no aliases, adoption, or board state). `backgroundJobs.mode: "off"` registers no `task_*` tool on either host; on V2 it also skips the preset executor wrapper and session bindings, while native `subagent` delegation, completion delivery and `sessionID` continuation remain untouched, static agent inference settings still register, and council seat assembly uses the native resolver |
-| Tools (ast-grep, webfetch, task_status/task_cancel/task_reply, queue-only `task_report`, acp_run; `task_revive`, `task_message` and `wait_for_user` are v1-only — v2 continues retained sessions through native `subagent(sessionID, prompt)` and uses the native `question` tool as the blocking boundary) | ✅ | ✅ `ctx.tool.transform` | On V2, `task_reply` answers a pending permission only; questions stay in the host UI. v2 requires `options: {codemode: false}` on each registration (CodeMode split): without it a tool registers cleanly but is confined to the `execute` tool's JS runtime and session catalogs yield `Unknown tool: <name>`. The plugin stamps it on every adapted tool (`adaptTool` in `src/v2/adapters.ts`; additive field, older hosts ignore it). ast-grep needs its CLI binary (package, system, or lazy download); webfetch needs `jsdom` resolvable |
-| Slash commands `/deepwork` `/reflect` | ✅ | ✅ marker round-trip | — |
-| `/interview` | ✅ | ✅ marker command + trailing-message context bridge | `interview.enabled: false` removes the command, the v1 manager, and the v2 bridge entirely |
-| Message transforms (phase reminder, skills filter, image routing, display-name rewrite) | ✅ | ✅ via the single context hook | — |
-| Event handling (session tracking, lifecycle, cache telemetry) | ✅ | ✅ event pump + additive v2→v1 synthesis | The synthesized usage `message.updated` carries no agent/model fields, so live session-model observation (sidebar model projection + `sessionMetadata` tracking) rides the prompt-bridge `chat.message` deliveries (agent + model + variant together; unchanged writes are short-circuited by the tui-state memo); the v2 TUI additionally overlays the picker's live selection on root orchestrator rows (including a root session running the orchestrator's displayName identity) until the next prompt commits it. The static projection is republished on `config()` re-invocations |
-| Tool execute hooks (apply-patch recovery, task-session, json-recovery) | ✅ | ✅ `createToolExecuteBridges` with subagent→task normalization | — |
-| Built-in MCPs (context7, gh_grep) auto-registered | ✅ | ✅ `ctx.mcp.transform` | `ctx.mcp.transform` is present in all v2.0.x stable hosts; the runtime capability probe is belt-and-suspenders |
-| Background-job state persistence (tombstones, deletion epochs) | ➖ process-local | ❌ not used | The V2 managed persistence was retired with the board. OpenCode owns Job durability and restart recovery; its recovery is at-least-once and can repeat external side effects, not an exactly-once guarantee (see [Background Orchestration](background-orchestration.md)) |
-| Foreground model fallback (rate-limit failover) | ✅ | ⚠️ replay disabled; retry-hook steering active | v2's non-atomic `session.switchModel` + steer replay could alter/replay a newer turn, so only the in-place switch runs. A content-filter/no-route failure switches to the next model and continues in place; OpenCode reports each settled child period. There is no foreground subagent lane to reattach. |
-| `/preset` (preset manager) | ✅ configuration writes; reload to apply | ✅ TUI entry (`./tui` → `dist/tui2.js`), with **Current session** / **Global default** selection; `/preset <name>` binds the current session | The command layer registers from an `append: "app"` slot render because `keymap.layer` is provider-scoped; commands carry an `id` and `slash.arguments`. The manager needs `ui.dialog.select` + `prompt` + `confirm`; feedback uses `ui.toast.show`. Session scope is a server-registered RPC domain — `ctx.rpc.register` on the plugin side, `client.rpc` on the TUI side — whose snapshots live in `ctx.storage`; all three are required members of the v2 plugin contract, so no host-version gate is involved. It changes future subagent inference for the selected session, including best-effort adoption on explicit same-agent continuation of bound children; its main model is unchanged. User/project `.json` and `.jsonc` edits are watched (~300 ms debounce), including newly created candidates; they refresh defaults for future bindings and default-bound roots on their next admission, while named-preset bindings remain pinned until explicitly reapplied. Global-write feedback acknowledges the refresh request, while session-apply feedback requires RPC confirmation. With persistence available, native subagent `progress` saves a new child's binding before its first prompt; same-ID continuation installs runtime inference there and saves the adopted snapshot after native execute succeeds. `session.created` is not used to capture its profile. Non-TUI clients also get a server-side `/preset <name>` command (apply-only): a name binds the invoking session, and the result is reported through the command error channel so the switch costs no model turn and adds no context. See [Preset switching](presets/preset-switching.md) for inheritance, reapplication and compatibility limits |
-| Default primary agent | ✅ finalized visible orchestrator identity | ✅ `draft.default(<visible orchestrator identity>)`; the canonical `orchestrator` entry remains a hidden alias when `displayName` is configured | v1 `default_agent` and v2 draft default target the same visible entry |
-| TUI default agent | ✅ orchestrator | ✅ host follows the default primary agent and hoists it to the head of the agent list | — |
-| Multiplexer (tmux/zellij/herdr/cmux-tui/kitty/wezterm panes) | ✅ | ✅ TUI plugin entry wires the client-owned pane lifecycle through a v2 host adapter: shared background service and `--server` hosts are supported, `--standalone` is fail-closed (one diagnostic per process, `/subagent` navigates to the latest child) | Defaults are host-specific: `"tui"` on v1 (`opencode attach <url> --session <id> --dir <dir>`); `"mini"` on v2 shared (`opencode mini --session <id>`) and remote (`opencode mini --server <url> --session <id>`), with the pane cwd pinned by the adapter. Explicit `viewer: "tui"` retains the v2 full-TUI commands with a positional directory; v1 `viewer: "mini"` appends `--mini` to attach (OpenCode >= 1.17.10), without extra cwd pinning. The `OPENCODE_PASSWORD` secret is injected through the multiplexer's spawn-time environment (or a Linux + POSIX-shell `/proc` bridge on zellij/cmux-tui), never through the viewer's command line — see [Secret handling](multiplexer-integration.md#known-limitations). Events are projected from `session.created` / `session.execution.*` / `session.idle` / `session.deleted`; directory attribution is recorded at `session.created` because execution events carry none |
-| Orchestrator-wake scheduler | ✅ todo-gated (host `todo`/`children`/`status` APIs) | ❌ not created | V2 relies solely on the host's native completion notification and inbox delivery; `backgroundJobs.orchestratorWake` and `childInputWakeKinds` are v1-only and an explicit value on V2 warns and is ignored. Use `task_status` for a missing notice |
-| `chat.headers` (Copilot `x-initiator` routing) | ✅ | ✅ via `session.hook("model.request")` | transport-level only; auxiliary kinds are covered by v2's built-in Copilot provider hook |
-| Companion app | ✅ | ⚠️ unverified | independent desktop app; test separately against v2 |
-
 ## Upstream behaviors to know
 
 Behaviors of v2 itself that plugin authors should know about — none
@@ -704,7 +558,7 @@ is not read for plugin config):
 
 ```json
 {
-  "plugin": ["oh-my-opencode-slim@<exact-version>"]
+  "plugins": ["oh-my-opencode-slim@<exact-version>"]
 }
 ```
 
@@ -718,7 +572,7 @@ directory entries by file convention (`<dir>/server.*` for the server role,
 
 ```json
 {
-  "plugin": ["file:///path/to/oh-my-opencode-slim"]
+  "plugins": ["file:///path/to/oh-my-opencode-slim"]
 }
 ```
 
@@ -760,7 +614,7 @@ Register the shim directory in the OpenCode v2 config:
 
 ```json
 {
-  "plugin": ["file:///absolute/path/to/opencode-plugins-dev/oh-my-opencode-slim"]
+  "plugins": ["file:///absolute/path/to/opencode-plugins-dev/oh-my-opencode-slim"]
 }
 ```
 
@@ -954,8 +808,7 @@ calls do not flood the log.
 
 ### Retired V2 managed lifecycle
 
-This is a next-major plugin change. Before upgrading, review every inherited
-configuration layer using the [V2 native lifecycle upgrade](v2-native-upgrade.md).
+Review every inherited config using the [upgrade guide](v2-native-upgrade.md).
 
 The V2 managed lifecycle is retired as a structural deletion, not renamed or
 emulated. Slim constructs no V2 job board, alias authority, reusable-session
@@ -988,25 +841,6 @@ permission/question asks are a host-UI boundary the host does not route to the
 parent agent; the parent discovers open permission requests via `task_status`
 and answers them with `task_reply`. The whole `backgroundJobs.orchestratorWake`
 config section is v1-only and warns as ignored on v2.
-
-### Terminal-publication wake
-
-On v1, the **terminal-publication wake** handles later publications of the
-same generation: the terminal gate publishes a `completed` or `error` host
-outcome while the parent is idle, no input wait is open, and the per-parent
-`publicationWakeMinIntervalMs` throttle has elapsed. The first terminal
-publication of any generation is suppressed because the native notifier armed
-by that generation's `task` call already delivers it; a busy parent is skipped
-for the same reason. Delivery reuses the periodic wake's bounded queue and
-text (no new prompt surface). Config knobs are `wakeOnTerminalPublication` and
-`publicationWakeMinIntervalMs` (v1 only). The v2 host has no plugin wake
-scheduler; native continuations keep host Job notifications, and missing
-results are pulled with `task_status`.
-
-When a v1 job whose terminal report the parent already consumed (reconciled)
-reopens to running, the plugin appends exactly one corrective trailing notice
-("previously reported terminal, now running again; the earlier report is
-superseded") in the cache-safe tail zone, pointing at `task_status`.
 
 ### Environment caveats
 

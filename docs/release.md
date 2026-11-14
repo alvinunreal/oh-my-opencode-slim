@@ -121,12 +121,9 @@ Compatibility/migration notes, Publish notes). Choose the plugin version
 independently of Companion; bump native only when its code or the required
 state protocol/asset set changes.
 
-The OpenCode V2 managed-lifecycle retirement requires a major plugin release.
-Do not include it in a 3.x patch or minor release: existing explicit managed
-modes and V1-only limits refuse V2 initialization. Publish the
-[V2 pre-upgrade checklist](v2-native-upgrade.md) in that release's notes before
-publishing the package. The maintainer selects the major release version
-before merging the retirement into a release branch.
+For this compatibility break, include the [OpenCode upgrade checklist](v2-native-upgrade.md)
+in the release notes. Call out OpenCode 2.3.0 as the minimum and the config
+keys users must remove.
 
 ### 2. Verify before tagging or publishing
 
@@ -140,12 +137,12 @@ bun run verify:companion-manifest
 bun run verify:companion-release
 bun run verify:release
 bun run verify:optional-loading
-bun run verify:host-smoke
+V2_LIFECYCLE_HOST="$(command -v opencode)" bun run verify:host-smoke
 ```
 
 CI uses the Bun version pinned in `packageManager`, `bun ci`, JUnit/LCOV reports,
 a non-blocking latest-Bun canary, package smoke for package-affecting PRs, and
-scheduled pinned/latest OpenCode compatibility checks.
+scheduled compatibility checks against OpenCode 2.3.0.
 
 Inspect `git status --short`, `git diff`, and `git log --oneline -10`. Stage only
 intended files. Commit/push release preparation before versioning.

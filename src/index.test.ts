@@ -51,9 +51,10 @@ import {
 import * as trackerModule from './hooks/task-session-manager/revived-run-tracker';
 import { LOOP_GUARD_WARNING } from './hooks/tool-loop-guard/hook';
 import type { MessageWithParts } from './hooks/types';
-import pluginModuleDefault, { OhMyOpenCodeLite as plugin } from './index';
+import { OhMyOpenCodeLite as plugin } from './index';
 import { MarketplaceStore } from './marketplace/store';
 import { createBuiltinMcps } from './mcp';
+import pluginModuleDefault from './plugin';
 import tuiPlugin from './tui';
 import {
   getTuiStatePath,
@@ -5632,17 +5633,9 @@ describe('v1 host plugin module contract', () => {
   // and third rules, so the whole plugin fails to load with
   // "Plugin ... has invalid tui export" (observed on v1.18.25). The TUI
   // entry ships separately via the `./tui` package export.
-  test('server entry keeps a callable server export and no tui key', () => {
-    expect(typeof pluginModuleDefault).toBe('object');
-    expect(pluginModuleDefault).not.toBeNull();
-
-    const module = pluginModuleDefault as Record<string, unknown>;
-
-    // v1 loader: `server` present must be a function.
-    expect(typeof module.server).toBe('function');
-    // v1 loader: `tui` must be absent (or a function in a tui-only module);
-    // a server module declaring `tui` is rejected outright.
-    expect('tui' in module).toBe(false);
+  test('published entry exposes the OpenCode 2 setup contract', () => {
+    expect(Object.keys(pluginModuleDefault)).toEqual(['id', 'setup']);
+    expect(typeof pluginModuleDefault.setup).toBe('function');
   });
 });
 

@@ -4,7 +4,7 @@ import { doctor, parseDoctorArgs } from './doctor';
 import { install } from './install';
 import { runMarketplaceCommand } from './marketplace';
 import { getGeneratedPresetNames, isGeneratedPresetName } from './providers';
-import type { BackgroundSubagentsArg, InstallArgs } from './types';
+import type { InstallArgs } from './types';
 
 export function parseArgs(args: string[]): InstallArgs {
   const result: InstallArgs = {
@@ -28,21 +28,6 @@ export function parseArgs(args: string[]): InstallArgs {
         process.exit(1);
       }
       result.preset = preset;
-    } else if (arg.startsWith('--background-subagents=')) {
-      const mode = arg.slice(
-        '--background-subagents='.length,
-      ) as BackgroundSubagentsArg;
-      if (!['ask', 'yes', 'no'].includes(mode)) {
-        console.error(
-          'Unsupported --background-subagents value: use ask, yes, or no',
-        );
-        process.exit(1);
-      }
-      result.backgroundSubagents = mode;
-    } else if (arg.startsWith('--background-subagents-target=')) {
-      result.backgroundSubagentsTarget = arg.slice(
-        '--background-subagents-target='.length,
-      );
     } else if (arg === '--dry-run') {
       result.dryRun = true;
     } else if (arg === '--reset') {
@@ -55,8 +40,6 @@ export function parseArgs(args: string[]): InstallArgs {
       process.exit(1);
     }
   }
-
-  result.backgroundSubagents ??= result.tui ? 'ask' : 'no';
 
   return result;
 }
@@ -73,11 +56,6 @@ Usage:
 
 Options:
   --preset=<name>        Active generated config preset (default: openai)
-  --background-subagents=ask|yes|no
-                          Persist required OpenCode background subagent env
-                          (default: ask; prompt defaults to yes)
-  --background-subagents-target=<path>
-                          Shell startup file to update
   --no-tui               Non-interactive mode
   --dry-run              Simulate install without writing files
   --reset                Force overwrite of existing configuration
@@ -95,7 +73,6 @@ For the full config reference, see docs/configuration.md.
 Examples:
   bunx oh-my-opencode-slim install
   bunx oh-my-opencode-slim install --no-tui
-  bunx oh-my-opencode-slim install --background-subagents=yes
   bunx oh-my-opencode-slim install --preset=opencode-go
   bunx oh-my-opencode-slim install --reset
   bunx oh-my-opencode-slim doctor

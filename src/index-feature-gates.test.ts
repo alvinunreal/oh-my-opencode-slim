@@ -22,7 +22,7 @@ import * as foregroundFallbackFactories from './hooks/foreground-fallback';
 import * as taskSessionFactories from './hooks/task-session-manager';
 import * as handoffFactories from './hooks/task-session-manager/fallback-observation-transfer';
 import * as revivedRunTrackerFactories from './hooks/task-session-manager/revived-run-tracker';
-import pluginModuleDefault, { OhMyOpenCodeLite as plugin } from './index';
+import { OhMyOpenCodeLite as plugin } from './index';
 import * as interviewFactories from './interview';
 import * as interviewSubmitStateFactories from './tools/interview-submit-state';
 import * as nativeTaskControlFactories from './tools/native-task-control';
@@ -224,37 +224,6 @@ describe('plugin feature gates through exported hooks', () => {
       tracker.mockRestore();
     }
   });
-
-  test.each([{ mode: 'managed' }, { concurrency: { defaultConcurrency: 2 } }])(
-    'V1 dual entry keeps managed config %j out of the embedded V2 pass',
-    async (backgroundJobs) => {
-      await configure({ backgroundJobs });
-      const transform = mock(async () => ({ dispose() {} }));
-      const cleanup = await pluginModuleDefault.setup({
-        location: { directory: projectDir },
-        agent: { transform },
-      } as never);
-      try {
-        expect(transform).not.toHaveBeenCalled();
-        const hooks = await pluginModuleDefault.server({
-          client: createClient(),
-          directory: projectDir,
-          worktree: projectDir,
-          serverUrl: new URL('http://127.0.0.1:4096'),
-        } as never);
-        try {
-          expect(hooks.tool?.task_status).toBeDefined();
-          expect(hooks.tool?.task_reply).toBeDefined();
-          expect(hooks.tool?.task_revive).toBeDefined();
-          expect(hooks.tool?.wait_for_user).toBeDefined();
-        } finally {
-          await hooks.dispose?.();
-        }
-      } finally {
-        await cleanup();
-      }
-    },
-  );
 
   test('v2 default mode is native, registers four tools, and constructs no managed owner', async () => {
     await configure({});

@@ -1,23 +1,18 @@
 # OpenCode V2 native lifecycle upgrade
 
-The V2 managed-lifecycle retirement is a breaking change for the next major
-plugin release. It must not ship in a 3.x patch or minor release. The maintainer
-chooses the release version and publishes the upgrade notice before release;
-this change does not bump or publish the package.
+Slim requires **OpenCode 2.3.0 or newer**. Upgrade OpenCode before switching
+to this Slim release. For npm installations, use
+`npm install -g @opencode/cli@latest`. Then rerun the Slim installer to
+register it under OpenCode's `plugins` configuration.
 
-OpenCode **2.3.0+** is required on V2: native subagents always run in the
-background and the host reports every settled child period
-([release](https://github.com/anomalyco/opencode/releases/tag/v2.3.0),
-[changelog](https://opencode.ai/changelog/v2.3.0)). Parseable versions
-below stable 2.3.0 (including `2.3.0-dev`) fail setup with upgrade guidance.
-Unversioned embeddings cannot be checked and must provide the same host
-behavior. V1 is unchanged.
+OpenCode runs subagents in the background and reports each settled child
+period to its parent. [OpenCode 2.3 release notes](https://opencode.ai/changelog/v2.3.0)
 
 On V2, the default changes from `managed` to `native`, even when no
 `backgroundJobs` configuration is present. Slim's job board, short aliases,
 reusable-session pool and managed limits stop applying; OpenCode owns child
 execution, continuation, persistence, restart recovery and completion
-notifications. V1 keeps its managed lifecycle and existing configuration.
+notifications.
 
 ## Check configuration before upgrading
 
@@ -37,7 +32,7 @@ plugin refuses initialization rather than silently dropping the setting:
 ```
 
 From each project, run `oh-my-opencode-slim doctor` using the new plugin
-version. When it detects OpenCode v2, it reports incompatible settings in
+version. It reports incompatible settings in
 each configuration file before you start OpenCode.
 
 | Existing V2 setting | Required edit |
@@ -58,20 +53,12 @@ An example V2 configuration after review is:
 
 These removals do not provide equivalent host limits. Review any requirement
 for concurrency, deadlines or session retention against your OpenCode host
-before upgrading. If the same user configuration serves V1 and V2, keep
-V1-only lifecycle settings out of every configuration layer V2 discovers.
+before upgrading.
 
-`orchestratorWake`, `childInputWake`, `childInputWakeKinds`, `waitForUserGuard`,
-`pruneEvictedSessions`, and `sameProviderPolicy` remain supported for V1
-managed mode only. Explicit V2 values warn and have no effect; remove them
-from V2 configuration after review. Warnings include each source layer, so an
-inherited key can appear more than once.
-
-The unrelated disable switches `autoUpdate: false`,
-`webfetch.enabled: false`, and `backgroundJobs.childInputWake: false` remain in
-the schema with their existing layered precedence. This retirement does not
-remove or rename those controls. V2 has no Slim child-input wake scheduler;
-V1 still honors the configured switch.
+Remove `orchestratorWake`, `childInputWake`, `childInputWakeKinds`,
+`waitForUserGuard`, `pruneEvictedSessions`, and `sameProviderPolicy` from
+`backgroundJobs` after review. Slim ignores these former managed lifecycle
+settings and warns for each configuration file that declares them.
 
 ## Existing sessions and automation
 

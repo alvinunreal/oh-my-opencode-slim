@@ -173,7 +173,6 @@ import {
   looksLikeMainChatRequest,
 } from './utils/system-collapse';
 import type { createTuiReusableProjection } from './utils/tui-reusable-projection';
-import { createV2Setup } from './v2';
 import { parseModelRef } from './v2/adapters';
 import { delegationWording } from './v2/delegation';
 import {
@@ -331,6 +330,9 @@ export type V2ProfileRefreshResult =
  */
 export const HARD_PROFILE_REFRESH_WARNING_KINDS: ReadonlySet<ConfigLoadWarningKind> =
   new Set(['invalid-json', 'invalid-schema', 'read-error']);
+
+// Build-time flag used by the published OpenCode 2 entry points.
+declare const SLIM_OPENCODE2_ONLY: boolean;
 
 export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   initLogger();
@@ -915,7 +917,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       );
     }
     config = cloneConfigValue(startupConfigSnapshot.config);
-    if (hostFlavor !== 'v2' && (config.questionTimeoutMs ?? 0) > 0) {
+    if (
+      typeof SLIM_OPENCODE2_ONLY === 'undefined' &&
+      hostFlavor !== 'v2' &&
+      (config.questionTimeoutMs ?? 0) > 0
+    ) {
       const { createQuestionTimeoutHook } = await import(
         './hooks/question-timeout'
       );
@@ -981,11 +987,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // or task_* / wait_for_user tool factories. Native OpenCode task/subagent
     // delegation stays completely untouched; `native` mode separately
     // registers the thin host-read controls below.
-    lifecycleEnabled = hostFlavor !== 'v2' && runtime.backgroundJobsEnabled;
+    lifecycleEnabled =
+      typeof SLIM_OPENCODE2_ONLY === 'undefined' &&
+      hostFlavor !== 'v2' &&
+      runtime.backgroundJobsEnabled;
     // One predicate set for every per-tool gate in this init (managed
     // lifecycle, native controls, AST-grep, final registration filter).
     const disabledToolNames = new Set(runtime.disabledTools);
-    if (lifecycleEnabled) {
+    if (typeof SLIM_OPENCODE2_ONLY === 'undefined' && lifecycleEnabled) {
       taskActivityTracker = new TaskActivityTracker();
     }
     const activePresetName = runtime.getRuntimePreset() ?? config.preset;
@@ -1039,7 +1048,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       compactingSessionIds.delete(sessionID);
     });
 
-    if (lifecycleEnabled) {
+    if (typeof SLIM_OPENCODE2_ONLY === 'undefined' && lifecycleEnabled) {
       // V1 managed-lifecycle implementations load here — concurrently and
       // BEFORE any board resource, timer, or admission lease exists — so
       // `off`/`native` never evaluate the board, supervisor,
@@ -1731,7 +1740,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
     }
 
-    if (hostFlavor !== 'v2' && runtime.updateCheckerEnabled) {
+    if (
+      typeof SLIM_OPENCODE2_ONLY === 'undefined' &&
+      hostFlavor !== 'v2' &&
+      runtime.updateCheckerEnabled
+    ) {
       // v2 owns package checks/installation; its TUI adds the Slim notice.
       // The v1 updater cannot install or display feedback through the shim.
       const { createAutoUpdateCheckerHook } = await import(
@@ -1802,7 +1815,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // when a managed board exists to observe.
       const [fallbackModule, handoffModule] = await Promise.all([
         import('./hooks/foreground-fallback'),
-        lifecycleEnabled
+        typeof SLIM_OPENCODE2_ONLY === 'undefined' && lifecycleEnabled
           ? import('./hooks/task-session-manager/fallback-observation-transfer')
           : undefined,
       ]);
@@ -1915,7 +1928,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     if (agentDefs.some((a) => a.name === 'council')) {
       const [seatHookModule, resolveSeats] = await Promise.all([
         import('./hooks/council-seats'),
-        lifecycleEnabled
+        typeof SLIM_OPENCODE2_ONLY === 'undefined' && lifecycleEnabled
           ? import('./hooks/council-seats/managed').then((managed) =>
               managed.createManagedSeatResolver(backgroundJobBoard!),
             )
@@ -1930,7 +1943,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       collapseActiveInterviewHistory = collapseInterviewHistory;
       // v2 owns its bridge; the submit tool resolves its service after the
       // setup handoff. v1 alone loads the legacy command/event owner.
-      if (hostFlavor !== 'v2') {
+      if (typeof SLIM_OPENCODE2_ONLY === 'undefined' && hostFlavor !== 'v2') {
         const { createInterviewManager } = await import('./interview');
         interviewManager = createInterviewManager(ctx, config);
         interviewSubmitService = interviewManager.service;
@@ -1948,7 +1961,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         startupConfigSnapshot,
       );
     }
-    if (lifecycleEnabled) {
+    if (typeof SLIM_OPENCODE2_ONLY === 'undefined' && lifecycleEnabled) {
       // Invariant: the lifecycle block above initialized the shared recovery
       // and alias state. Checked once here so TypeScript narrows it for the
       // control-tool registrations below, instead of `!` at every option.
@@ -3040,7 +3053,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           preMutationHostSnapshot,
         );
       }
-      if (hostFlavor !== 'v2') {
+      if (typeof SLIM_OPENCODE2_ONLY === 'undefined' && hostFlavor !== 'v2') {
         try {
           const packageJson = findOwnedPackageJson(
             fileURLToPath(import.meta.url),
@@ -3847,7 +3860,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // V1-only: v1 has no prompt hook, so chat.message is the admission
       // gate; on v2 the awaited `session.prompt` hook feeds the tracker
       // earlier, and this delayed forward would only re-bind a live pending.
-      if (hostFlavor !== 'v2' && typeof messageID === 'string') {
+      if (
+        typeof SLIM_OPENCODE2_ONLY === 'undefined' &&
+        hostFlavor !== 'v2' &&
+        typeof messageID === 'string'
+      ) {
         admissionRuntimeLease?.pendingCallTracker.noteAdmission(
           input.sessionID,
           messageID,
@@ -3891,7 +3908,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // a creation intention; task_id resumes claim their explicit child ID.
       const childAgentRaw = input.agent ?? output?.message?.agent;
       let childRoute: (typeof v1DelegatedIntents)[number] | undefined;
-      if (hostFlavor !== 'v2' && !internalAdmission && childAgentRaw) {
+      if (
+        typeof SLIM_OPENCODE2_ONLY === 'undefined' &&
+        hostFlavor !== 'v2' &&
+        !internalAdmission &&
+        childAgentRaw
+      ) {
         const agentName = resolveRuntimeAgentName(runtime, childAgentRaw);
         childRoute = v1DelegatedIntents.find(
           (route) =>
@@ -4029,7 +4051,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           trackedModelText,
         );
       }
-      if (hostFlavor !== 'v2' && internalAdmission && output?.message?.model) {
+      if (
+        typeof SLIM_OPENCODE2_ONLY === 'undefined' &&
+        hostFlavor !== 'v2' &&
+        internalAdmission &&
+        output?.message?.model
+      ) {
         const restore = foregroundFallback?.restoreTarget(input.sessionID);
         if (
           restore &&
@@ -4078,7 +4105,11 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
 
       if (agent) {
-        if (hostFlavor !== 'v2' && !internalAdmission) {
+        if (
+          typeof SLIM_OPENCODE2_ONLY === 'undefined' &&
+          hostFlavor !== 'v2' &&
+          !internalAdmission
+        ) {
           await foregroundFallback?.registerExternalSessionAgent(
             input.sessionID,
             agent,
@@ -4428,27 +4459,3 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
   return hooks;
 };
-
-export default {
-  id: 'oh-my-opencode-slim',
-  // NOTE: do not add a `tui` key here. OpenCode v1.18.23+ (and v2's
-  // byte-identical readV1Plugin) validate the default export of a server
-  // plugin module: `tui`, when present, must be a function and must not
-  // coexist with `server` — a boolean marker makes the whole plugin fail
-  // to load with "invalid tui export". The TUI entry is discovered
-  // separately by hosts through the package.json `./tui` export
-  // (dist/tui2.js), never through this module.
-  server: OhMyOpenCodeLite,
-  setup: createV2Setup(),
-};
-
-export type {
-  AgentName,
-  AgentOverrideConfig,
-  McpName,
-  MultiplexerConfig,
-  MultiplexerLayout,
-  MultiplexerType,
-  PluginConfig,
-} from './config';
-export type { RemoteMcpConfig } from './mcp';

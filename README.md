@@ -167,6 +167,8 @@ for restored MCP defaults and custom model/skill precedence.
 
 ### Getting Started
 
+Slim requires OpenCode **2.3.0 or newer**. See the [upgrade guide](docs/v2-native-upgrade.md) for the host update and configuration changes.
+
 The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default.
 
 > [!TIP]
@@ -232,17 +234,13 @@ model changed without saving the new team snapshot. Main-session models,
 prompts, tools, skills and MCPs are not switched by the session action.
 The sidebar shows the current session's saved team models and variants;
 `/preset` marks its bound preset separately from the global default.
-The V2 lifecycle retirement is reserved for the next major plugin release;
-review the [pre-upgrade checklist](docs/v2-native-upgrade.md) for existing
-managed configurations. V1 keeps its managed lifecycle.
-
 V2 defaults to `backgroundJobs.mode: "native"`: OpenCode owns the child Job
 lifecycle, and Slim keeps exact-ID status, cancellation, permission reply, and
 queue-only progress reporting. V2 rejects the V1-only `"managed"` mode.
 With `backgroundJobs.mode: "off"`, V2 delegation stays fully native: session
 bindings and all OMOS task tools are disabled, while the configured global
 preset still selects the agent settings registered at startup.
-On v1, reload OpenCode after applying a preset. See
+See
 [Preset Switching](docs/presets/preset-switching.md) for scope and timing, and
 [Configuration](docs/configuration.md#preset-inheritance) for the inheritance
 example and precedence rules.
@@ -250,8 +248,7 @@ example and precedence rules.
 ### Preset Docs
 
 Project settings in `.opencode/oh-my-opencode-slim.json[c]` are inherited from
-ancestor directories, matching the host's discovery: v2 walks to the filesystem
-root; v1 stops at the Git worktree boundary. `OPENCODE_DISABLE_PROJECT_CONFIG`
+ancestor directories up to the filesystem root. `OPENCODE_DISABLE_PROJECT_CONFIG`
 disables the project walk.
 Closer settings override matching fields. Prompt files and the optional
 `skills_include_local` grants also search ancestor `.opencode` directories,

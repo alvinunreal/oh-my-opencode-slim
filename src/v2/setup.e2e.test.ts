@@ -2056,14 +2056,16 @@ describe('createV2Setup e2e', () => {
       }
     }, 20_000);
 
-    test('reduced context without agent.transform skips the version check', async () => {
+    test('rejects an old host before probing a reduced context', async () => {
       const { ctx } = makeMockV2Context(projectDir);
       setVersion(ctx, '1.0.0');
       const reduced = { app: ctx.app } as unknown as V2Context;
-      await expect(createV2Setup()(reduced)).resolves.toBeFunction();
+      await expect(createV2Setup()(reduced)).rejects.toThrow(
+        /requires OpenCode 2.3.0/,
+      );
     }, 20_000);
 
-    test('registration-only embedded context skips the version check', async () => {
+    test('rejects an old host in a registration-only context', async () => {
       const { ctx } = makeMockV2Context(projectDir);
       setVersion(ctx, '1.0.0');
       const embedded = {
@@ -2071,7 +2073,9 @@ describe('createV2Setup e2e', () => {
         agent: ctx.agent,
         location: ctx.location,
       } as unknown as V2Context;
-      await expect(createV2Setup()(embedded)).resolves.toBeFunction();
+      await expect(createV2Setup()(embedded)).rejects.toThrow(
+        /requires OpenCode 2.3.0/,
+      );
     }, 20_000);
   });
 

@@ -15,7 +15,6 @@
  */
 
 import path from 'node:path';
-import { lt, valid } from 'semver';
 import type { RegistryFactoryBridge } from '../agents/registry-bridge';
 import {
   buildBundledSkillInfos,
@@ -26,6 +25,11 @@ import {
   BUILTIN_OPENCODE_SUBAGENTS_TO_DISABLE,
 } from '../config/constants';
 import { resolveFeatureGates } from '../config/feature-gates';
+import {
+  isSupportedOpenCodeVersion,
+  MINIMUM_OPENCODE_VERSION,
+  parseOpenCodeVersion,
+} from '../config/opencode-version';
 import { InterviewConfigSchema } from '../config/schema';
 import type { PluginConfigSnapshot } from '../config/snapshot';
 import { readPluginConfigSnapshot } from '../config/snapshot';
@@ -2228,23 +2232,22 @@ export function adaptMcpServer(v1: McpConfig): Record<string, unknown> {
   return out;
 }
 
-const MINIMUM_V2_HOST_VERSION = '2.3.0';
-
 /** OpenCode 2.3 always runs subagents in the background and reports every
  * child idle period. Older v2 hosts would silently lose refusal recovery,
  * so fail before registering anything when the version is parseable. */
 function assertSupportedV2Host(ctx: V2Context): void {
-  const rawVersion = ctx.app?.version;
-  const version = typeof rawVersion === 'string' ? valid(rawVersion) : null;
+  const rawVersion = ctx?.app?.version;
+  const version =
+    typeof rawVersion === 'string' ? parseOpenCodeVersion(rawVersion) : null;
   if (!version) {
     log('[v2] host version is not semver; skipping minimum check', {
       version: rawVersion,
     });
     return;
   }
-  if (lt(version, MINIMUM_V2_HOST_VERSION)) {
+  if (!isSupportedOpenCodeVersion(version)) {
     throw new Error(
-      `OpenCode ${version} is unsupported: oh-my-opencode-slim requires OpenCode ${MINIMUM_V2_HOST_VERSION} or newer on v2 hosts.`,
+      `OpenCode ${version} is unsupported: oh-my-opencode-slim requires OpenCode ${MINIMUM_OPENCODE_VERSION} or newer. Update with npm install -g @opencode/cli@latest.`,
     );
   }
 }
@@ -2263,6 +2266,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       log('[v2] setup skipped: disabled by OH_MY_OPENCODE_SLIM_DISABLE');
       return async () => {};
     }
+    assertSupportedV2Host(ctx);
     // Capability guard: some hosts load this same `setup` with a reduced or
     // TUI-side context where agent/tool/session/event domains are missing.
     // Skip registration instead of crashing the host (and retry-storming).
@@ -2272,14 +2276,11 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
       );
       return async () => {};
     }
-    // V1 also invokes setup with registration-only V2 domains. Its server()
-    // owns the configuration and managed lifecycle; do not validate that V1
-    // configuration as a full V2 server or create a second plugin instance.
+    // A registration-only context cannot run the server plugin.
     if (!ctx.tool && !ctx.session && !ctx.event) {
       log('[v2] setup skipped: registration-only embedded context');
       return async () => {};
     }
-    assertSupportedV2Host(ctx);
     // Directory/location resolution lives in the shim now (single source);
     // setup still needs the directory for config loading and tool adapters.
     const directory = resolveV2Directory(ctx);

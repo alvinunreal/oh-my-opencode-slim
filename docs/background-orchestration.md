@@ -16,26 +16,15 @@ surface; it does not maintain a second child-job lifecycle on OpenCode v2.
 
 ## Runtime Requirement
 
-On V2, OpenCode **2.3.0+** owns background subagents and completion for each
-child idle period. On V1, start it with background subagents enabled:
-
-```bash
-OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
-```
-
-The tools, their v1/v2 differences, and the `task()`/`subagent()` vocabulary are
-listed in [Tools](tools.md#background-task-control). V2 does not use this
-variable. Confirm the release with `opencode --version`.
+OpenCode **2.3.0 or newer** owns background subagents and completion delivery.
+Check your version with `opencode --version`.
 
 ## Lifecycle modes
 
-`backgroundJobs.mode` selects the lifecycle. On OpenCode v2 the default is
-`native`; `managed` is V1-only and an explicit V2 `managed` is rejected during
-configuration. V1 keeps its historical `managed` default. This retirement is
-reserved for the next major plugin release; existing V2 configurations require
-the [pre-upgrade checks](v2-native-upgrade.md).
+`backgroundJobs.mode` selects Slim’s task controls and preset binding.
+See the [upgrade guide](v2-native-upgrade.md) for retired settings.
 
-### native (default on V2)
+### native (default)
 
 Native leaves delegation, same-session continuation, steering, execution
 recovery and completion notification to OpenCode. The native `subagent` tool
@@ -67,10 +56,7 @@ Slim registers only the gaps the native model surface leaves open:
   parent's host inbox. It is queue-only (`resume: false`): acceptance means the
   host queued the update, not that the parent read it or started a turn.
 
-V1 `native` registers only `task_status` and `task_cancel`; `task_reply` and
-`task_report` are V2-only. All identifiers are exact session IDs. V2 native has no aliases, historical
-alias reconstruction, reusable-session pool, objective deduplication, delivery
-leases, or plugin-side completion retries.
+Use exact session IDs for every task control.
 
 OpenCode owns background Job persistence and recovery. Its recovery is
 at-least-once and can repeat external side effects after a crash; a standalone
@@ -88,23 +74,6 @@ OMOS task tool. It also skips session-preset routing and its executor wrapper,
 so no OMOS child read or model injection precedes native dispatch or
 continuation. Agent inference settings selected by the configured global preset
 still register at startup. See [Configuration](configuration.md).
-
-### managed (V1 only)
-
-V1 has no durable native background-Job lifecycle. Its managed mode keeps the
-job board, short aliases, reusable-session admission, terminal observation,
-retained-session recovery, optional orchestrator wake scheduler, and the
-`task_cancel` / `task_status` / `task_reply` / `task_revive` / `task_message` /
-`wait_for_user` controls. The board remains machine-side and is never rendered
-into a prompt. This mode is not available on V2.
-
-On V1 managed, moving a child to another live worktree does not move its task
-ownership: the delegating parent's instance still observes the tracked child's
-lifecycle. The destination owns its permissions and runtime profiles; unrelated
-foreign sessions remain excluded. V2 leaves cross-location Jobs to the host.
-
-There is no automatic V2 fallback to V1 managed behavior: missing background
-support is an environment or version problem.
 
 ## Core Principle
 
@@ -169,18 +138,7 @@ avoid wasted work and conflicting edits.
 
 ### 2. Dispatch background specialists
 
-Independent work should be launched with background tasks:
-
-```text
-task(
-  description="Search auth flow",
-  subagent_type="explorer",
-  background=true,
-  prompt="Find the auth entry points, session storage, and login callback paths. Return file paths and a concise map. Do not edit files."
-)
-```
-
-On V2 the same call is made with the native vocabulary:
+Launch independent work through OpenCode’s native tool:
 
 ```text
 subagent(
@@ -215,8 +173,6 @@ poll it.
 
 - On V2, continue the same child with `subagent(sessionID, prompt)`. Both a
   settled child and a running child use the host's Job/steering path.
-- On V1, use `task_revive` for a retained session and `task_message` for a
-  queue-only amendment. `wait_for_user` handles external manual work.
 - `task_cancel` asks the host to interrupt the exact child. It does not delete
   the session and does not roll back partial edits.
 - `task_reply` answers a pending permission request. Answer questions in the
@@ -344,21 +300,16 @@ facts it needs:
 
 | Field | Meaning |
 |-------|---------|
-| session ID | Native child session returned by `subagent` or `task` |
+| session ID | Native child session returned by `subagent` |
 | specialist | Agent type assigned |
 | objective | What the child is responsible for |
 | ownership | Files/folders/subsystems the child may edit |
 | dependencies | Children that must complete first |
 | result | Final output reported by the host or read through `task_status` |
 
-On V1 managed, the machine-side board additionally tracks aliases, reusable
-completion, stall state, and recovery generations. It is never rendered into a
-prompt. On V2, exact session IDs replace aliases and host Job state replaces the
-board.
-
 ## Runtime Integration
 
-The plugin understands that a `task`/`subagent` return can mean "background job
+The plugin understands that a `subagent` return can mean "background job
 launched" rather than "work complete." It keeps multiplexer panes attached while
 the parent orchestrator continues scheduling.
 
@@ -387,20 +338,6 @@ permission request is visible through `task_status` and can be answered by the
 parent model with `task_reply` when the request is still pending. If another
 actor answers first, the reply reports that it is no longer pending.
 
-`wait_for_user` remains a V1 tool. Its wait latch suppresses the V1 orchestrator
-wake scheduler until a distinct external user message arrives.
-
-### Orchestrator Wake Scheduler
-
-On V1 managed, the scheduler defaults to enabled with a five-minute continuous
-idle interval and todo gating. It observes parent activity, suppresses wakes
-while input is pending, and stops repeated wakes when no progress is visible.
-`backgroundJobs.orchestratorWake.enabled: false` disables the scheduler;
-`periodicWakeEnabled: false` leaves event-driven stopped-job, terminal-publication,
-and child-input wakes available. See the
-[configuration reference](configuration.md#background-job-management) for the
-interval, mode, and publication throttle. V2 constructs no wake scheduler.
-
 ### Restart
 
 OpenCode owns background Job durability and recovery. On a host with the
@@ -414,17 +351,6 @@ Slim writes no V2 child/tombstone/delivery ledger. Pending permissions are
 cancelled by a host reload; ask again after the child continues if necessary.
 If recovery state is unavailable, `task_status` reports `unknown` rather than
 inventing completion.
-
-### Admission and delegate policy
-
-`backgroundJobs.concurrency` and `backgroundJobs.wallClockTimeoutMs` are V1
-managed-only policies. V2 relies on native execution and exposes no equivalent
-OMOS queue or wall-clock supervisor; do not expect those settings to impose a
-cap or deadline on V2 children.
-
-`sameProviderPolicy` applies only to V1 managed tasks: a same-provider
-background request can be converted to foreground. V2 has no foreground lane;
-an explicit setting warns and is ignored.
 
 ## Example Flow
 

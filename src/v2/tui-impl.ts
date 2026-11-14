@@ -427,5 +427,3 @@ export async function runSetup(
   return () =>
     Promise.all(disposers.reverse().map((dispose) => dispose())).then(() => {});
 }
-
-export const tui = omoTui.tui;

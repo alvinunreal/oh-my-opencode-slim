@@ -2904,88 +2904,95 @@ interface TuiDualContractModule {
   ) => Promise<undefined | (() => Promise<void>)>;
 }
 
-const plugin: TuiDualContractModule = {
-  id: `${PLUGIN_NAME}:tui`,
-  tui: async (api, _options, meta) => {
-    if (isPluginDisabledByEnv()) return;
-    const gatesRead = readTuiGates(getTuiDirectory(api));
-    if (!gatesRead.gates.tuiEnabled) {
-      // `tui: false` master switch: the TUI entry registers nothing — no
-      // sidebar runtime, no commands, no pane wiring. Server-side features
-      // are untouched.
-      log('[tui] tui disabled by config (tui: false); registering nothing');
-      return;
-    }
+// The published TUI build only exposes the OpenCode 2 contract.
+declare const SLIM_OPENCODE2_ONLY: boolean;
+const plugin = {
+  ...(typeof SLIM_OPENCODE2_ONLY === 'undefined' && {
+    tui: (async (api, _options, meta) => {
+      if (isPluginDisabledByEnv()) return;
+      const gatesRead = readTuiGates(getTuiDirectory(api));
+      if (!gatesRead.gates.tuiEnabled) {
+        // `tui: false` master switch: the TUI entry registers nothing — no
+        // sidebar runtime, no commands, no pane wiring. Server-side features
+        // are untouched.
+        log('[tui] tui disabled by config (tui: false); registering nothing');
+        return;
+      }
 
-    const runtime = createSidebarRuntime(
-      {
-        version: meta.version ?? (await readPackageVersion()) ?? 'dev',
-        getDirectory: () => getTuiDirectory(api),
-        getVisibleSession: () => resolveRouteSessionId(api.route.current),
+      const runtime = createSidebarRuntime(
+        {
+          version: meta.version ?? (await readPackageVersion()) ?? 'dev',
+          getDirectory: () => getTuiDirectory(api),
+          getVisibleSession: () => resolveRouteSessionId(api.route.current),
+          client: (api as { client?: unknown }).client,
+          renderer: api.renderer,
+          theme: () => api.theme.current,
+          navigate: makeRouteNavigator(api.route, 'navigate', false),
+          registerSlot: (render) => {
+            api.slots.register({
+              order: resolveSidebarSlotOrder(
+                api.tuiConfig?.plugin,
+                PLUGIN_NAME,
+              ),
+              slots: { sidebar_content: render },
+            });
+            return undefined;
+          },
+        },
+        gatesRead,
+      );
+      api.lifecycle.onDispose(runtime.dispose);
+
+      // `/preset` is a pure TUI slash command (like the built-in `/models`):
+      // it opens a picker, switches the preset via on-disk state, and never
+      // sends a message to the server or triggers an LLM turn. The legacy
+      // `api.command` API is still populated in OpenCode 1.18; if it is absent
+      // (e.g. a future v2-only build), registration is skipped gracefully.
+      // `/killall` (+ alt+w) rides the same registration: it only
+      // resolves visible-conversation targets from the snapshot and aborts
+      // them via the shared helper.
+      if (api.command) {
+        const snapshotRef: { snapshot: TuiSnapshot } = {
+          get snapshot() {
+            return runtime.getSnapshot();
+          },
+          set snapshot(value: TuiSnapshot) {
+            runtime.setSnapshot(value);
+          },
+        };
+        // Both commands follow `disabled_commands` exactly like every other
+        // plugin command: a disabled command is not registered anywhere.
+        const disabledCommands = gatesRead.gates.disabledCommands;
+        const commands: TuiCommand[] = [];
+        if (isCommandEnabled('preset', { disabledCommands })) {
+          commands.push(
+            buildPresetCommand(api, runtime.getDirectory, snapshotRef),
+          );
+        }
+        if (isCommandEnabled('killall', { disabledCommands })) {
+          commands.push(
+            buildKillAllCommand(api, runtime.getDirectory, runtime.getSnapshot),
+          );
+        }
+        const disposeCommands = api.command.register(() => commands);
+        api.lifecycle.onDispose(disposeCommands);
+      }
+
+      // Client-side pane lifecycle (v1; the v2 `setup()` wires its own). The
+      // wiring owns admission, config, log init, serverUrl reflection and the
+      // event projection; disposal closes this client's panes best-effort.
+      const paneWiring = await createTuiPaneWiring({
+        ...paneWiringOptions(api),
+        eventBus: api.event,
         client: (api as { client?: unknown }).client,
-        renderer: api.renderer,
-        theme: () => api.theme.current,
-        navigate: makeRouteNavigator(api.route, 'navigate', false),
-        registerSlot: (render) => {
-          api.slots.register({
-            order: resolveSidebarSlotOrder(api.tuiConfig?.plugin, PLUGIN_NAME),
-            slots: { sidebar_content: render },
-          });
-          return undefined;
-        },
-      },
-      gatesRead,
-    );
-    api.lifecycle.onDispose(runtime.dispose);
-
-    // `/preset` is a pure TUI slash command (like the built-in `/models`):
-    // it opens a picker, switches the preset via on-disk state, and never
-    // sends a message to the server or triggers an LLM turn. The legacy
-    // `api.command` API is still populated in OpenCode 1.18; if it is absent
-    // (e.g. a future v2-only build), registration is skipped gracefully.
-    // `/killall` (+ alt+w) rides the same registration: it only
-    // resolves visible-conversation targets from the snapshot and aborts
-    // them via the shared helper.
-    if (api.command) {
-      const snapshotRef: { snapshot: TuiSnapshot } = {
-        get snapshot() {
-          return runtime.getSnapshot();
-        },
-        set snapshot(value: TuiSnapshot) {
-          runtime.setSnapshot(value);
-        },
-      };
-      // Both commands follow `disabled_commands` exactly like every other
-      // plugin command: a disabled command is not registered anywhere.
-      const disabledCommands = gatesRead.gates.disabledCommands;
-      const commands: TuiCommand[] = [];
-      if (isCommandEnabled('preset', { disabledCommands })) {
-        commands.push(
-          buildPresetCommand(api, runtime.getDirectory, snapshotRef),
-        );
-      }
-      if (isCommandEnabled('killall', { disabledCommands })) {
-        commands.push(
-          buildKillAllCommand(api, runtime.getDirectory, runtime.getSnapshot),
-        );
-      }
-      const disposeCommands = api.command.register(() => commands);
-      api.lifecycle.onDispose(disposeCommands);
-    }
-
-    // Client-side pane lifecycle (v1; the v2 `setup()` wires its own). The
-    // wiring owns admission, config, log init, serverUrl reflection and the
-    // event projection; disposal closes this client's panes best-effort.
-    const paneWiring = await createTuiPaneWiring({
-      ...paneWiringOptions(api),
-      eventBus: api.event,
-      client: (api as { client?: unknown }).client,
-      env: process.env,
-      paneConfig: gatesRead.paneConfig,
-    });
-    api.lifecycle.onDispose(() => paneWiring.dispose());
-  },
+        env: process.env,
+        paneConfig: gatesRead.paneConfig,
+      });
+      api.lifecycle.onDispose(() => paneWiring.dispose());
+    }) satisfies TuiPlugin,
+  }),
+  id: `${PLUGIN_NAME}:tui`,
   setup,
-};
+} as TuiDualContractModule;
 
 export default plugin;

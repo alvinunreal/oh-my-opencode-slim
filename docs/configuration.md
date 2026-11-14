@@ -234,9 +234,8 @@ All config files support **JSONC** (JSON with Comments):
 
 ## Minimal Setup
 
-The V2 native-lifecycle default is a next-major breaking change. Review
-[V2 native lifecycle upgrade](v2-native-upgrade.md) before upgrading an existing
-managed V2 configuration. V1 keeps its managed default.
+Slim requires OpenCode 2.3.0 or newer. See the [upgrade guide](v2-native-upgrade.md)
+for configuration changes.
 
 Every optional subsystem has one switch, all defaulting to on. A
 council-and-observer-only setup turns off the rest:
@@ -364,26 +363,9 @@ and [Council](council.md) for what remains.
 | `multiplexer.viewer` | string | `"tui"` on v1, `"mini"` on v2 | Subagent pane surface: `"tui"` (full interface) or `"mini"` (lightweight interface). Explicit values override the host default. On v1, `"mini"` requires OpenCode >= 1.17.10 and runs `attach ... --dir <dir> --mini`; on v2 it runs `opencode mini` without a positional directory. Changes take effect on the next opencode start. See [Multiplexer Integration](multiplexer-integration.md). |
 | `multiplexer.zellij_pane_mode` | — | — | Removed: ignored with a warning. See [Removed config keys](#removed-config-keys). |
 | `tmux` (top-level) | — | — | Removed: ignored with a warning. Use `multiplexer.*`. See [Removed config keys](#removed-config-keys). |
-| `backgroundJobs.mode` | string | `"managed"` on V1, `"native"` on V2 | Background-task lifecycle mode. `"managed"` (V1 only; rejected on V2) runs the OMOS job board, retention, wake scheduler, wall-clock watchdog, terminal gate, and the `task_cancel`/`task_status`/`task_reply` tools. `"native"` skips every board-shaped component and registers thin host-read controls: on V2, `task_status` (parent-scoped child read plus trailing result and pending permissions), `task_cancel` (`session.abort`, session retained), permission-only `task_reply`, and child `task_report`; V1 native registers only `task_status` and `task_cancel`. `"off"` registers no OMOS task tool and leaves native OpenCode delegation completely untouched: the native `subagent` executor is not wrapped, no child session is read before native validation, and session-level preset bindings do not apply (agent models, variants, temperature and provider options still come from the registered agent configuration, and the `preset` default still selects them at startup). See [Background Job Management](#background-job-management). |
-| `backgroundJobs.maxSessionsPerAgent` | integer | `2` | Maximum completed/reconciled reusable child sessions per specialist type in the current orchestrator session (1–10). V1 managed only; an explicit value on V2 is rejected. See [Background Job Management](#background-job-management). |
+| `backgroundJobs.mode` | string | `"native"` | `"native"` enables Slim task controls and session preset binding. `"off"` disables both. OpenCode runs and reports subagents in either mode. |
 | `backgroundJobs.maxRetainedSnapshots` | — | — | Removed: ignored with a warning. See [Removed config keys](#removed-config-keys). |
 | `backgroundJobs.strategy` | — | — | Removed: board placement is change-only. See [Removed config keys](#removed-config-keys). |
-| `backgroundJobs.orchestratorWake.enabled` | boolean | `true` | When true, idle orchestrator sessions with incomplete todos may receive periodic internal wake prompts (default every 5 minutes of continuous parent idle). Requires host session APIs. v1 hosts only. See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler) See [Background Job Management](#background-job-management). |
-| `backgroundJobs.orchestratorWake.intervalMs` | integer | `300000` | Continuous parent-idle interval between wake evaluations (`60000`–`2147483647` ms). `0` is invalid. v1 hosts only. See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler) See [Background Job Management](#background-job-management). |
-| `backgroundJobs.orchestratorWake.mode` | string | `"auto"` | Wake-condition source (v1 hosts only): `"auto"` uses todo-gating; `"todo"`/`"children"` pin one mode (explicit `"todo"` degrades to children where no todo API exists). | See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler). |
-| `backgroundJobs.orchestratorWake.periodicWakeEnabled` | boolean | `true` | When false, the periodic idle evaluation never runs; only event-driven wakes (stopped-job recovery, later terminal publications, child-input asks) still deliver, and failed event wakes keep their timer-based retry. v1 hosts only: on v2 no scheduler is created, so the whole `orchestratorWake` section is ignored with a warning. | See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler). |
-| `backgroundJobs.orchestratorWake.wakeOnTerminalPublication` | boolean | `true` | When true, a terminal completed/error publication that reaches an idle parent wakes it immediately instead of waiting for the next periodic evaluation. The first terminal publication of any generation (terminalRevision 1) is skipped (the native notifier armed by that generation's `subagent` tool call already delivers it); busy parents are skipped the same way. v1 hosts only. See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler) See [Background Job Management](#background-job-management). |
-| `backgroundJobs.orchestratorWake.publicationWakeMinIntervalMs` | integer | `30000` | Per-parent minimum spacing between terminal-publication wakes (`1000`–`2147483647` ms; `0` is invalid — the schema floor is 1,000ms). A burst of publications collapses into one wake; later-result `<completed-job>` pushes honor the same spacing (queued, then delivered together when the window elapses); the window is consumed only when a wake is actually delivered. v1 hosts only. See [Background Orchestration](background-orchestration.md#orchestrator-wake-scheduler) See [Background Job Management](#background-job-management). |
-| `backgroundJobs.wallClockTimeoutMs` | integer | `0` | **Opt-in wall-clock watchdog (V1 managed only; an explicit value on V2 is rejected).** `0` disables it. Otherwise, only native background child sessions (`task(..., background: true)`) are supervised; accepted values are `60000`–`2147483647` milliseconds. On expiry the plugin asks the host to stop the child (a session abort, the same primitive `task_cancel` uses) and the host's own terminal report publishes the row — the plugin never fabricates a terminal for the deadline See [Background Job Management](#background-job-management). |
-| `backgroundJobs.stopConfirmationMs` | integer | `5000` | Terminal-gate grace period the background-job terminal gate waits for stop confirmation evidence before publishing a stopped job. Accepted values are `1000`–`60000` milliseconds. V1 managed only; an explicit value on V2 is rejected. See [Background Job Management](#background-job-management). |
-| `backgroundJobs.concurrency.defaultConcurrency` | integer | `0` | Maximum concurrently running native background tasks. `0` means unlimited; accepted values are `0`–`1000`. V1 managed only; an explicit `concurrency` object on V2 is rejected even when every limit is zero. See [Background Job Management](#background-job-management). |
-| `backgroundJobs.concurrency.providerConcurrency` | object | `{}` | Per-provider caps keyed by provider ID. Each value must be `0`–`1000`, where `0` means unlimited for that provider. The most specific configured cap wins: model > provider > default. V1 managed only. See [Background Job Management](#background-job-management). |
-| `backgroundJobs.concurrency.modelConcurrency` | object | `{}` | Per-model caps keyed by `provider/model` ID. Each value must be `0`–`1000`, where `0` means unlimited for that model. The most specific configured cap wins: model > provider > default. V1 managed only. See [Background Job Management](#background-job-management). |
-| `backgroundJobs.sameProviderPolicy` | object | `{}` | Opt-in per-provider policy keyed by provider ID; the only value is `"foreground"`. When the parent session's current model and the child agent's resolved model both resolve to a configured provider, an explicit background call (`task(..., background: true)` on v1) is converted to the existing foreground execution path. V1 managed only; an explicit value on V2 emits an `unsupported-host` warning and is ignored. Unconfigured, different, or undeterminable providers keep background behavior. See [Background Job Management](#background-job-management). |
-| `backgroundJobs.childInputWake` | boolean | `true` | Master switch for child-input wakes: when true, each ask kind wakes its parent only if enabled in `backgroundJobs.childInputWakeKinds` (default: questions wake, permissions do not). When false, no child ask wakes the parent. V1 managed only; an explicit value on V2 emits an `unsupported-host` warning and is ignored. |
-| `backgroundJobs.childInputWakeKinds` | object | `{ permission: false, question: true }` | Which child ask kinds may wake the parent. Permission asks default off (#1504) because their replies carry no host wake and are resolved by the UI or an external responder. Invalid or partial values fall back to per-field defaults silently. V1 managed only; an explicit value on V2 emits an `unsupported-host` warning and is ignored. See [Background Job Management](#background-job-management). |
-| `backgroundJobs.waitForUserGuard` | boolean | `true` | V1 only (`wait_for_user` is not registered on V2); an explicit value on V2 emits an `unsupported-host` warning and is ignored. When true, intercepts `wait_for_user` calls while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. See [Background Job Management](#background-job-management). |
-| `backgroundJobs.pruneEvictedSessions` | boolean | `false` | When true, removes the host child session when a retention trim (per-agent count cap or context budget, reusable or retained-stopped) evicts its terminal or retained-stopped background job record. Only background children this plugin launched itself through a tracked `task(..., background: true)` call are eligible: foreground task children, unattributed placeholder sessions, and adopted, restored, or rehydrated sessions are never deleted. Bounded host reads must also confirm the session's `parentID` still matches the record's parent and that the session is idle; a session the board tracks again (revived, re-registered, or leased) or with a parked child-input wait is never removed, and the delete itself has a deadline; parent deletion (`session.deleted`) and explicit drops never remove host sessions. V1 managed only; an explicit value on V2 emits an `unsupported-host` warning and is ignored. See [Background Job Management](#background-job-management). |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
 | `disabled_tools` | string[] | `[]` | Slim tool names to disable globally. Disabled Slim tools are not registered and their implementations are not loaded; OpenCode built-in tools are not affected. Disabling `acp_run` also omits ACP wrapper agents that would be unusable. |
 | `disabled_skills` | string[] | `[]` | Skill names to disable globally. Disabled skills are not granted to agents, and disabled bundled skills are not registered; listing `reflect` here also disables the `/reflect` command |
@@ -684,180 +666,16 @@ process, not once per session).
 
 ### Background Job Management
 
-> The delegation tool named `task()` in the background-job material here is
-> `subagent()` on V2, with `task_id`/`sessionID` as the matching resume id; bare
-> `task()` mentions in this section refer to that host-specific delegation tool.
+OpenCode owns child execution, continuation, delivery, and restart recovery.
+Slim defaults to `backgroundJobs.mode: "native"`, which enables exact-ID
+`task_status`, `task_cancel`, permission-only `task_reply`, queue-only
+`task_report`, and session preset binding. Use `"off"` to disable Slim's
+task controls and session bindings.
 
-Lifecycle configuration lives under `backgroundJobs`, and every key is
-optional. The board-shaped settings below describe the V1 managed lifecycle,
-which is the default on V1. On V2 the default is `native`: OpenCode owns child
-execution, continuation, completion delivery and recovery, and Slim constructs
-no board, lease, retention, watchdog, wake scheduler, persistence, or
-structured-launch wrapper. For glossary definitions of background-job terms,
-see [GLOSSARY.md — Background Jobs](../GLOSSARY.md#background-jobs).
+Remove retired managed lifecycle settings listed in the
+[upgrade guide](v2-native-upgrade.md).
 
-**Choosing a lifecycle mode.** `backgroundJobs.mode: "managed"` is the full V1
-layer described here. `"native"` is the V2 default and keeps native OpenCode
-delegation: it registers `task_status` (host read of a child's state, trailing
-result, and pending permissions), `task_cancel` (host interruption, session
-retained), and permission-only `task_reply` for the orchestrator, plus
-queue-only `task_report` for child subagents. `"off"` registers no OMOS task
-tool at all and skips session-preset routing. An explicit `"managed"` on V2
-fails configuration with a clear error instead of falling back to native.
-
-**What gates reusability (V1 managed).** A completed child session enters the reusable pool
-when it reached a canonical terminal state, has been reconciled, and its status
-is certain — nothing else. There is no size-based eviction: reading many or
-large files never disqualifies a session, and an explicit resume by session id
-is never refused for budget reasons. The only retention bound is the
-`maxSessionsPerAgent` count cap (LRU eviction).
-
-**What the read-context list shows (V1 managed).** Each tracked job record keeps the paths
-that child read via the `read` tool (deduped per path, most recently read
-first, internal cap with a `(+N more)` tail). It is informational only — the
-list never feeds reusability, eviction, or any policy decision.
-
-**No board in the prompt.** On V1 the job board is a machine-side projection:
-the native background notifier and inbox delivery surface each run's first
-terminal publication, later publications are pushed as one-shot deltas, and
-`task_status` covers on-demand discovery. On V2 there is no board at all; the
-host owns completion delivery and `task_status` is the pull channel.
-
-**No wake scheduler on V2.** The host's native background notifier delivers each
-Job's completion to the parent — idle parents get a new turn, busy parents get a
-steer. `orchestratorWake`, `waitForUserGuard`, and `childInputWakeKinds` are
-V1-only; an explicit value on V2 emits an `unsupported-host` warning and is
-ignored. `pruneEvictedSessions` is likewise V1-only. Event-driven wakes
-(stopped-job recovery, later terminal publications, child-input asks) do not
-exist on V2. `task_status` remains the pull channel for a missing notice.
-
-`routingBlock` deliberately gets **no** v2-derived default. Unlike the board
-injection, the `<Agents>` block is not duplicated by a native channel: the
-roster carries agent identity only (~20 tokens of the block overlap with it),
-while the block's Delegate/Don't routing criteria have no native equivalent.
-A derived `false` would be a silent routing downgrade dressed up as
-deduplication, so the trade-off stays behind an explicit opt-in. v1 and v2
-share one orchestrator prompt template, so the switch applies on both.
-
-On V2 there is no plugin-side consumption bookkeeping or terminal retirement,
-and a natively delivered result lost host-side has no passive display
-fallback — check `task_status` if a completion looks missing.
-
-On V1 managed, the wall-clock supervisor is separately opt-in and remains
-disabled unless `wallClockTimeoutMs` is set:
-
-```jsonc
-{
-  "backgroundJobs": {
-    "maxSessionsPerAgent": 3,
-    "orchestratorWake": {
-      "enabled": true,
-      "intervalMs": 300000,
-      "mode": "auto"
-    },
-    "wallClockTimeoutMs": 900000,
-    "concurrency": {
-      "defaultConcurrency": 2,
-      "providerConcurrency": {
-        "openai": 2
-      },
-      "modelConcurrency": {
-        "openai/gpt-6-luna": 1
-      }
-    }
-  }
-}
-```
-
-The settings in the example are V1 managed only. On V2, explicit
-`concurrency`, `wallClockTimeoutMs`, `maxSessionsPerAgent`, and
-`stopConfirmationMs` are rejected during configuration; `sameProviderPolicy`
-warns as v1-only and is ignored.
-
-On V1, `orchestratorWake` defaults to enabled with a 5-minute continuous-idle
-interval and `"auto"` mode (todo-gated). Set `enabled: false` to keep idle
-reconciliation and background-job orchestration without periodic wake prompts.
-The V2 native lifecycle creates no scheduler. See the
-[Background Orchestration](background-orchestration.md) guide for the concept,
-defaults, and examples.
-
-On V1 managed, `concurrency` limits only native background tasks with
-`task(..., background: true)`. Foreground tasks are unchanged. A task waits
-for admission before OpenCode creates its child session, so queued work does
-not consume a provider request. `0` means unlimited; V2 rejects an explicit
-`concurrency` object even when every limit is zero.
-
-Only the most specific configured cap applies to a task, matching the
-reference implementation's priority: a model cap for the task's model wins
-over a provider cap for its provider, which wins over the default cap. For
-example, with `defaultConcurrency: 2`, `providerConcurrency: {"openai": 5}`
-and `modelConcurrency: {"openai/gpt-4o": 10}`, up to 10 `openai/gpt-4o`
-tasks run concurrently. Queued tasks are admitted in order among tasks whose
-resolved cap has capacity. Terminal completion, cancellation, failure,
-session deletion, and plugin disposal release the slot. A task that switches
-models mid-flight (e.g. foreground model fallback) moves its accounting to
-the new model. The scheduler is process-scoped: when the plugin re-inits on a
-config update, running slots and queued tickets survive, so admission state
-is not reset mid-run.
-
-`sameProviderPolicy` is an opt-in per-provider policy (V1 managed only) for
-local inference backends that execute multiple logical agent sessions on one
-shared accelerator/model runtime. When a foreground parent and a same-provider
-background child run concurrently on such a backend, throughput can degrade
-from repeated model/KV context switching between the two large sessions.
-When the parent session's current model and the child agent's resolved model
-both resolve to a provider configured with `"foreground"`, an explicit
-`task(..., background: true)` request is
-converted to the existing foreground execution path:
-
-```jsonc
-{
-  "backgroundJobs": {
-    "sameProviderPolicy": {
-      "lm-nexus": "foreground"
-    }
-  }
-}
-```
-
-- Same provider with `"foreground"` configured → the background request is
-  converted to foreground (no concurrency admission, no wall-clock
-  supervision, synchronous host execution).
-- Different providers → unchanged.
-- Provider not configured → unchanged.
-- Either provider undeterminable → unchanged (fail-open).
-
-Default (omitted) behavior is unchanged. This does not change
-`orchestratorWake` or the V1 `defaultConcurrency`/`providerConcurrency`/
-`modelConcurrency` semantics: a converted task simply bypasses background
-admission like any foreground task.
-
-On V1 managed, two behaviors to know about when concurrency is enabled:
-
-- Sessions that are themselves managed tasks (a background subagent
-  orchestrating its own nested `task(..., background: true)` calls) are
-  exempt from admission. They already hold a slot while running, so waiting
-  for a second one would self-deadlock once the queue saturates.
-- Admission has no timeout of its own. A running task that never reaches a
-  terminal state keeps its slot forever, and queued tasks as well as the
-  orchestrator's `task` calls block behind it. When you enable
-  `concurrency`, pair it with an opt-in `wallClockTimeoutMs` so stalled tasks
-  eventually prompt the host to stop; their slots are released only when a
-  real terminal report confirms that they have ended.
-
-`backgroundJobs.continueOnIdle` was removed: it is ignored with a warning and
-its value is not migrated. Use `orchestratorWake.enabled`.
-
-On V1 managed, `wallClockTimeoutMs` is a hard deadline that only supervises
-explicitly background native task calls; foreground calls or calls with
-`background` omitted are not supervised. It is independent from OpenCode's external
-task-wait timeout. When it expires, the plugin sends one host session abort —
-the same primitive `task_cancel` uses — and the host's own terminal report
-publishes the result; no local terminal is fabricated for the deadline.
-If another control operation holds the child's lease, the watchdog retries
-acquisition every second while the same run remains active. No abort is sent
-until the lease is available; a never-settling control operation can therefore
-delay cancellation. `abortGraceMs` was removed and is ignored with a warning.
+### Model fallback
 
 `fallback.maxRetries` is unrelated to the wall-clock supervisor and to
 OpenCode's provider retry policy. A value of `0` allows no host retry events

@@ -82,9 +82,7 @@ const BASE_DISABLED_COMMANDS = [
  * thin host-read controls (native) and in-file guards (hooks, council seats)
  * may legitimately share minimal's chunks. */
 const STRICT_CONTROLS: readonly string[] = [
-  'managed',
   'ast',
-  'update',
   'fallback',
   'acp',
   'companion',
@@ -130,18 +128,6 @@ const CASES: readonly Case[] = [
     note: 'host task delegation only',
   },
   {
-    name: 'managed',
-    config: {
-      ...baseConfig,
-      backgroundJobs: {
-        mode: 'managed',
-        wallClockTimeoutMs: 0,
-        orchestratorWake: { enabled: false },
-      },
-    },
-    note: 'managed lifecycle, wake disabled, watchdog off',
-  },
-  {
     name: 'ast',
     config: {
       ...baseConfig,
@@ -151,15 +137,6 @@ const CASES: readonly Case[] = [
       ]),
     },
     note: 'ast-grep tools enabled',
-  },
-  {
-    name: 'update',
-    config: {
-      ...baseConfig,
-      autoUpdate: true,
-      disabled_hooks: without(ALL_HOOKS, ['auto-update-checker']),
-    },
-    note: 'updater armed, session.created never delivered',
   },
   {
     name: 'fallback',
@@ -568,24 +545,8 @@ function caseChecks(
       expectTools(
         checks,
         'native',
-        ['task_status', 'task_cancel'],
-        ['task_reply', 'task_revive', 'task_message', 'wait_for_user'],
-        registration,
-      );
-      break;
-    case 'managed':
-      expectTools(
-        checks,
-        'managed',
-        [
-          'task_status',
-          'task_cancel',
-          'task_reply',
-          'task_revive',
-          'task_message',
-          'wait_for_user',
-        ],
-        [],
+        ['task_status', 'task_cancel', 'task_reply', 'task_report'],
+        ['task_revive', 'task_message', 'wait_for_user'],
         registration,
       );
       break;
