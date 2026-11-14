@@ -1241,12 +1241,18 @@ export class CompanionManager {
   }
 
   private removeSessionState(): boolean {
+    // Only a manager that actually owned a row may clear the shared spawn
+    // history: a headless manager's dispose must not erase the record that
+    // keeps an attached project from respawning after a user Quit.
+    const hadRow = readState().sessions.some(
+      (session) => session.session_id === this.id,
+    );
     const removed = !existsSync(stateFilePath())
       ? true
       : writeState((state) => {
           dropRow(state, this.id);
         });
-    if (removed) clearSpawnAttemptRecordOnDispose();
+    if (removed && hadRow) clearSpawnAttemptRecordOnDispose();
     return removed;
   }
 

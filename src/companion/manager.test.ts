@@ -482,6 +482,42 @@ describe('CompanionManager', () => {
     }
   });
 
+  it('does not let a headless manager dispose erase the user-quit guard', () => {
+    const logSpy = spyOn(loggerModule, 'log');
+    try {
+      const a = make('session-a', '/project-a', {
+        enabled: true,
+        binaryPath: path.join(TEST_DIR, 'missing-companion'),
+      });
+      a.onLoad();
+      writeFileSync(companionPidFile(), String(process.pid));
+      reconcile(a);
+      expect(readSpawnAttachments()).toHaveLength(1);
+
+      // User quits the Companion: A stays attached, pid file goes stale.
+      writeFileSync(companionPidFile(), '999999999');
+
+      // A headless project (no row) disposes; it must not erase the record.
+      const headless = new CompanionManager('headless-b', '/project-b', {
+        enabled: true,
+        binaryPath: path.join(TEST_DIR, 'missing-companion'),
+      });
+      managers.push(headless);
+      headless.onExit();
+      expect(readSpawnAttachments()).toHaveLength(1);
+
+      // A's next poll: recorded → no respawn of the window the user closed.
+      reconcile(a);
+      expect(
+        logSpy.mock.calls.filter(([message]) =>
+          String(message).includes('companion binary not found'),
+        ),
+      ).toHaveLength(0);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   it('removes dead and mismatched attachment records', () => {
     const m = new CompanionManager('crash-leftover', '/crashed', {
       enabled: true,
