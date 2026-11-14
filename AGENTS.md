@@ -177,7 +177,7 @@ Before pushing changes to the repository, when makes sense run a code review to 
 
 ### Maintainer merge bar
 
-A change that a review blocked merges only when all five criteria hold:
+When a review blocks a change, all five criteria must hold before merge:
 
 - **Proof**: the diff reproduces the real failure end to end; a test of the
   new mechanism alone does not count, and docs claim only what the
