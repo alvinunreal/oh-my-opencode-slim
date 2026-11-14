@@ -98,6 +98,17 @@ type V2SwitchDetail = {
 };
 type V2SwitchModel = NonNullable<ExperimentalV2['switchModel']>;
 type ChildOutcome = Promise<string | undefined>;
+type SessionStatusProps = {
+  sessionID?: string;
+  info?: { id?: string };
+  status?: {
+    type?: string;
+    message?: string;
+    attempt?: number;
+    next?: number;
+  };
+  error?: unknown;
+};
 type V2RefusalStep = {
   assistantMessageID: string;
   agent: string;
@@ -1989,516 +2000,605 @@ export class ForegroundFallbackManager {
       (this.input as PluginInput & { hostFlavor?: string }).hostFlavor === 'v2';
 
     switch (event.type) {
-      case 'session.execution.failed': {
-        if (!isV2Host) break;
-        const props = isRecord(event.data) ? event.data : event.properties;
-        if (
-          isRecord(props) &&
-          typeof props.sessionID === 'string' &&
-          isRecord(props.error) &&
-          props.error.type === 'provider.no-route' &&
-          typeof (rawEvent as { created?: unknown }).created === 'number'
-        ) {
-          await this.handleV2NoRoute(props.sessionID, props.error, {
-            time: { completed: (rawEvent as { created: number }).created },
-          });
-        }
-        break;
-      }
-      case 'session.step.started': {
-        if (!isV2Host) break;
-        const props = isRecord(event.data) ? event.data : event.properties;
-        if (
-          isRecord(props) &&
-          typeof props.sessionID === 'string' &&
-          typeof props.assistantMessageID === 'string' &&
-          typeof props.agent === 'string' &&
-          isRecord(props.model) &&
-          typeof props.model.providerID === 'string' &&
-          typeof props.model.id === 'string' &&
-          (props.model.variant === undefined ||
-            typeof props.model.variant === 'string')
-        ) {
-          this.v2Steps.set(props.sessionID, {
-            assistantMessageID: props.assistantMessageID,
-            agent: props.agent,
-            epoch: this.turnEpoch.get(props.sessionID) ?? 0,
-            model: {
-              providerID: props.model.providerID,
-              id: props.model.id,
-              ...(typeof props.model.variant === 'string'
-                ? { variant: props.model.variant }
-                : {}),
-            },
-          });
-        }
-        break;
-      }
-      case 'session.step.failed': {
-        if (!isV2Host) break;
-        const props = isRecord(event.data) ? event.data : event.properties;
-        if (
-          isRecord(props) &&
-          typeof props.sessionID === 'string' &&
-          typeof props.assistantMessageID === 'string' &&
-          props.finish === 'content-filter'
-        ) {
-          const step = this.v2Steps.get(props.sessionID);
-          if (step?.assistantMessageID === props.assistantMessageID)
-            void this.refusalOutcome(
-              props.sessionID,
-              step,
-              props.error,
-              props.rawFinish,
-            );
-        }
-        break;
-      }
-      case 'session.step.ended':
-      case 'session.execution.succeeded': {
-        if (!isV2Host) break;
-        const props = isRecord(event.data) ? event.data : event.properties;
-        if (
-          isRecord(props) &&
-          typeof props.sessionID === 'string' &&
-          (event.type === 'session.execution.succeeded' ||
-            props.finish === 'stop' ||
-            props.finish === 'tool-calls' ||
-            props.finish === 'length')
-        ) {
-          this.resetRecoveryState(props.sessionID);
-        }
-        break;
-      }
-
-      case 'message.updated': {
-        const info = (
-          event.properties as { info?: Record<string, unknown> } | undefined
-        )?.info;
-        if (!info) break;
-        const sessionID = info.sessionID as string | undefined;
-        if (!sessionID) break;
-        if (this.observeCompactionMessage(info)) break;
-        if (info.role === 'user') {
-          const props = event.properties as { parts?: unknown[] } | undefined;
-          const parts = Array.isArray(props?.parts)
-            ? props.parts
-            : Array.isArray(info.parts)
-              ? info.parts
-              : [];
-          if (
-            typeof info.id === 'string' &&
-            !this.isKnownUserMessage(sessionID, info.id, parts)
-          ) {
-            let model: string | undefined;
-            if (isRecord(info.model)) {
-              const providerID = info.model.providerID;
-              const modelID = info.model.modelID ?? info.model.id;
-              if (
-                typeof providerID === 'string' &&
-                typeof modelID === 'string'
-              ) {
-                model = `${providerID}/${modelID}`;
-              }
-            }
-            this.noteExternalTurn(sessionID, info.id, model);
-          }
-          if (typeof info.agent === 'string') {
-            this.registerSessionAgent(sessionID, info.agent);
-          }
-          break;
-        }
-        // Track the model currently serving this session
-        const messageID = typeof info.id === 'string' ? info.id : undefined;
-        const priorMessageIncident = messageID
-          ? this.triggerIncidents.get(sessionID)?.get(`message:${messageID}`)
-          : undefined;
-        const recentlyHandledMessage =
-          priorMessageIncident?.turn === (this.turnEpoch.get(sessionID) ?? 0) &&
-          this.now() - priorMessageIncident.time < DEDUP_WINDOW_MS;
-        if (
-          info.role !== 'user' &&
-          !recentlyHandledMessage &&
-          typeof info.providerID === 'string' &&
-          typeof info.modelID === 'string'
-        ) {
-          const model = `${info.providerID}/${info.modelID}`;
-          this.sessionModel.set(sessionID, model);
-          // The replacement spoke: later errors are its own.
-          if (model !== this.lastSwitchTrigger.get(sessionID)?.model)
-            this.lastSwitchTrigger.delete(sessionID);
-        }
-        const messageTime = info.time;
-        const isCompletedAssistant =
-          info.role === 'assistant' &&
-          isRecord(messageTime) &&
-          typeof messageTime.completed === 'number';
-        const isCompletedSuccessfulAssistant =
-          isCompletedAssistant &&
-          !info.error &&
-          // OpenCode v1 publishes a content-filter turn as completed before it
-          // attaches the ContentFilterError: a failure, not a recovery.
-          info.finish !== 'content-filter';
-        const epoch = this.turnEpoch.get(sessionID) ?? 0;
-        const readsParts =
-          this.enabled &&
-          isCompletedSuccessfulAssistant &&
-          info.finish === 'unknown';
-        // Every reset swaps this record, so a reply whose parts were still
-        // being read when the count was reset is not counted afterwards.
-        let streak = this.unknownFinishStreak.get(sessionID);
-        if (readsParts && !streak) {
-          streak = { count: 0, seen: new Set<string>() };
-          this.unknownFinishStreak.set(sessionID, streak);
-        }
-        const noTools = readsParts
-          ? await this.messageHasNoTools(sessionID, messageID)
-          : false;
-        if (!this.isCurrentTurn(sessionID, epoch)) break;
-        let isUnknownLoop = false;
-        if (
-          noTools &&
-          messageID !== undefined &&
-          streak &&
-          this.unknownFinishStreak.get(sessionID) === streak
-        ) {
-          if (!streak.seen.has(messageID)) {
-            streak.seen.add(messageID);
-            isUnknownLoop = ++streak.count >= 3;
-            if (isUnknownLoop) streak.count = 0;
-          }
-        } else if (isCompletedAssistant && noTools === false) {
-          this.resetUnknownFinishStreak(sessionID);
-        }
-        // OpenCode v1 can publish `finish: 'content-filter'` before attaching
-        // its ContentFilterError. Treat that terminal finish as the error
-        // event itself; the later message/session error is deduped by ID.
-        const messageError = isUnknownLoop
-          ? UNKNOWN_FINISH_LOOP_ERROR
-          : info.finish === 'content-filter' && !isFailoverError(info.error)
-            ? CONTENT_FILTER_ERROR
-            : info.error;
-        const incidentID =
-          this.enabled && messageError && isFailoverError(messageError)
-            ? this.incidentForMessageError(sessionID, messageID, messageError)
-            : undefined;
-        if (
-          incidentID !== undefined &&
-          messageError &&
-          // The error belongs to this message's own model, which may differ
-          // from sessionModel once a re-emitted update follows a switch.
-          !this.surfacesSpentQuota(
-            sessionID,
-            messageError,
-            typeof info.providerID === 'string' &&
-              typeof info.modelID === 'string'
-              ? `${info.providerID}/${info.modelID}`
-              : undefined,
-            incidentID,
-          )
-        ) {
-          if (
-            this.bypassInitialFallbackDelay(sessionID, messageError) ||
-            !this.delayInitialFallback(
-              sessionID,
-              isUnknownLoop,
-              undefined,
-              messageError,
-              incidentID,
-            )
-          ) {
-            if (isUnknownLoop) {
-              await this.tryFallbackWithAbort(
-                sessionID,
-                messageError,
-                undefined,
-                incidentID,
-              );
-            } else {
-              await this.tryFallback(sessionID, messageError, incidentID);
-            }
-          }
-        } else if (
-          !isV2Host &&
-          isCompletedSuccessfulAssistant &&
-          noTools === false
-        ) {
-          // v2 completed-message synthesis is telemetry, not recovery evidence.
-          const created = isRecord(messageTime)
-            ? messageTime.created
-            : undefined;
-          if (
-            typeof info.providerID === 'string' &&
-            typeof created === 'number'
-          ) {
-            for (const id of [sessionID, this.sessionParent.get(sessionID)]) {
-              const marks = id ? this.downProviders.get(id) : undefined;
-              const markedAt = marks?.get(info.providerID);
-              if (markedAt !== undefined && created >= markedAt) {
-                marks?.delete(info.providerID);
-              }
-            }
-          }
-          this.resetRecoveryState(sessionID);
-        }
-        if (
-          !isV2Host &&
-          info.finish === 'content-filter' &&
-          !this.isFallbackInProgress(sessionID)
-        ) {
-          this.finishV1InterviewRefusal(sessionID);
-        }
-        break;
-      }
-
-      case 'message.part.updated': {
-        const part = (
-          event.properties as { part?: Record<string, unknown> } | undefined
-        )?.part;
-        if (!part) break;
-        const isInternalPart =
-          isInternalInitiatorPart(part) ||
-          (typeof part.text === 'string' &&
-            part.text.includes(SLIM_INTERNAL_INITIATOR_MARKER));
-        if (
-          isInternalPart &&
-          typeof part.sessionID === 'string' &&
-          typeof part.messageID === 'string'
-        ) {
-          this.rememberUserMessage(part.sessionID, part.messageID);
-        }
-        break;
-      }
-
-      case 'session.error': {
-        const props = event.properties as
-          | { sessionID?: string; info?: { id?: string }; error?: unknown }
-          | undefined;
-        if (!props) break;
-        const sessionID = eventSessionID(props);
-        if (
-          !this.enabled ||
-          !sessionID ||
-          !props.error ||
-          (this.separateCompaction.get(sessionID)?.active &&
-            (!props.info?.id ||
-              props.info.id ===
-                this.separateCompaction.get(sessionID)?.messageID)) ||
-          !isFailoverError(props.error)
-        ) {
-          break;
-        }
-        const incidentID = this.incidentForSessionError(
-          sessionID,
-          typeof props.info?.id === 'string' ? props.info.id : undefined,
-          props.error,
+      case 'session.execution.failed':
+        await this.handleV2ExecutionFailed(
+          event,
+          rawEvent as { created?: unknown },
+          isV2Host,
         );
-        if (
-          this.surfacesSpentQuota(sessionID, props.error, undefined, incidentID)
-        ) {
-          break;
-        }
-        if (this.bypassInitialFallbackDelay(sessionID, props.error)) {
-          await this.tryFallback(sessionID, props.error, incidentID);
-        } else if (
-          !this.delayInitialFallback(
-            sessionID,
-            false,
-            undefined,
-            props.error,
-            incidentID,
-          )
-        ) {
-          await this.tryFallback(sessionID, props.error, incidentID);
-        }
         break;
-      }
 
-      case 'session.status': {
-        const props = event.properties as
-          | {
-              sessionID?: string;
-              info?: { id?: string };
-              status?: {
-                type?: string;
-                message?: string;
-                attempt?: number;
-                next?: number;
-              };
-              error?: unknown;
-            }
-          | undefined;
-        if (!props) break;
-        const sessionID = eventSessionID(props);
-        if (!sessionID) break;
-        if (props.status?.type === 'busy' || props.status?.type === 'retry') {
-          this.busy.add(sessionID);
-          this.awaitingRun.delete(sessionID);
-        } else if (props.status?.type === 'idle') this.busy.delete(sessionID);
-        if (this.separateCompaction.get(sessionID)?.active) break;
-        const isFailoverRetry =
-          props.status?.type === 'retry' &&
-          (isFailoverError(props.error) ||
-            (props.status.message !== undefined &&
-              isFailoverError({ message: props.status.message })));
-        if (isFailoverRetry && this.enabled) {
-          log('[foreground-fallback] v1 retry observed', {
-            sessionID,
-            message: props.status?.message
-              ? redactSecretsForLog(props.status.message).slice(0, 300)
-              : undefined,
-            attempt: props.status?.attempt,
-          });
-          // Guard: stale retry event from a previous model's retry loop.
-          // After a fallback, lastTriggerModel holds the OLD model (set by
-          // isDeduped before the fallback), while sessionModel holds the NEW
-          // model. A stale retry from the old model arrives with attempt > 1
-          // (continuation of old retry loop). A genuine retry from the new
-          // model arrives with attempt === 1 (first retry for new model).
-          const prevModel = this.lastTriggerModel.get(sessionID);
-          const curModel = this.sessionModel.get(sessionID);
-          const lastTriggerTime = this.lastTrigger.get(sessionID) ?? 0;
-          const attempt = props.status?.attempt ?? 1;
-          const modelChanged =
-            prevModel !== undefined &&
-            curModel !== undefined &&
-            prevModel !== curModel;
-          const withinDedupWindow =
-            this.now() - lastTriggerTime < DEDUP_WINDOW_MS;
-          if (modelChanged && withinDedupWindow && attempt > 1) {
-            // Model changed since last trigger, within dedup window, and
-            // attempt > 1: this is a stale retry from the old model's
-            // retry loop (continuation of previous attempts). Skip it.
-            break;
-          }
-          // An overlapping retry cannot be admitted by the active fallback;
-          // leave both the retry identity and host budget untouched.
-          if (this.inProgress.has(sessionID)) break;
-          this.rearmIfFreshDescent(sessionID);
-          if (this.retryAlreadyObserved(sessionID, attempt)) break;
-          // A no-chain status paired with a same-turn error incident is the
-          // host retrying that already-handled failure (or its replay):
-          // consume it without charging or sending another prompt.
-          if (
-            !this.hasFallbackChain(sessionID) &&
-            this.hasSameTurnErrorIncident(sessionID)
-          ) {
-            this.recordRetryAttempt(sessionID, attempt);
-            this.cancelInitialDelay(sessionID);
-            break;
-          }
-          const incidentID = `retry:${curModel ?? 'unknown'}:${attempt}`;
-          const retryError = props.error ?? {
-            message: props.status?.message ?? '',
-          };
-          if (this.surfacesSpentQuota(sessionID, retryError)) break;
-          // Permanent quota/billing exhaustion and spent allowance never
-          // recover by host retries on this provider — skip the host-retry
-          // budget and fall back at once. Otherwise (attempt === 1, or model
-          // didn't change, or outside dedup window): process as genuine
-          // retry for current model.
-          if (
-            !isPermanentQuotaBillingError(retryError) &&
-            !isSpentQuotaError(retryError) &&
-            this.absorbHostRetry(
-              sessionID,
-              props.status?.next === undefined
-                ? undefined
-                : props.status.next - this.now(),
-            )
-          ) {
-            this.recordRetryAttempt(sessionID, attempt);
-            this.cancelInitialDelay(sessionID);
-            break;
-          }
-          if (this.bypassInitialFallbackDelay(sessionID, retryError)) {
-            await this.tryFallbackWithAbort(
-              sessionID,
-              retryError,
-              attempt,
-              incidentID,
-            );
-          } else if (
-            !this.delayInitialFallback(
-              sessionID,
-              true,
-              attempt,
-              retryError,
-              incidentID,
-            )
-          ) {
-            // Failover may have been detected from status.message (e.g.
-            // 'AI_APICallError: Gone') with no separate error property;
-            // forward that message so 401/410 inline errors suppress the
-            // toast on this path too, matching session.error behavior.
-            await this.tryFallbackWithAbort(
-              sessionID,
-              retryError,
-              attempt,
-              incidentID,
-            );
-          }
-          break;
+      case 'session.step.started':
+        this.handleV2StepStarted(event, isV2Host);
+        break;
+
+      case 'session.step.failed':
+        this.handleV2StepFailed(event, isV2Host);
+        break;
+
+      case 'session.step.ended':
+      case 'session.execution.succeeded':
+        this.handleV2StepEnded(event, isV2Host);
+        break;
+
+      case 'message.updated':
+        await this.handleMessageUpdated(event, isV2Host);
+        break;
+
+      case 'message.part.updated':
+        this.handleMessagePartUpdated(event);
+        break;
+
+      case 'session.error':
+        await this.handleSessionError(event);
+        break;
+
+      case 'session.status':
+        await this.handleSessionStatus(event);
+        break;
+
+      case 'session.idle':
+        await this.handleSessionIdle(event, isV2Host);
+        break;
+
+      case 'session.created':
+        this.handleSessionCreated(event);
+        break;
+
+      case 'subagent.session.created':
+        this.handleSubagentSessionCreated(event);
+        break;
+
+      case 'session.deleted':
+        this.handleSessionDeleted(event);
+        break;
+    }
+  }
+
+  private async handleV2ExecutionFailed(
+    event: { properties?: unknown; data?: unknown },
+    rawEvent: { created?: unknown },
+    isV2Host: boolean,
+  ): Promise<void> {
+    if (!isV2Host) return;
+    const props = isRecord(event.data) ? event.data : event.properties;
+    if (
+      isRecord(props) &&
+      typeof props.sessionID === 'string' &&
+      isRecord(props.error) &&
+      props.error.type === 'provider.no-route' &&
+      typeof rawEvent.created === 'number'
+    ) {
+      await this.handleV2NoRoute(props.sessionID, props.error, {
+        time: { completed: rawEvent.created },
+      });
+    }
+  }
+
+  private handleV2StepStarted(
+    event: { properties?: unknown; data?: unknown },
+    isV2Host: boolean,
+  ): void {
+    if (!isV2Host) return;
+    const props = isRecord(event.data) ? event.data : event.properties;
+    if (
+      isRecord(props) &&
+      typeof props.sessionID === 'string' &&
+      typeof props.assistantMessageID === 'string' &&
+      typeof props.agent === 'string' &&
+      isRecord(props.model) &&
+      typeof props.model.providerID === 'string' &&
+      typeof props.model.id === 'string' &&
+      (props.model.variant === undefined ||
+        typeof props.model.variant === 'string')
+    ) {
+      this.v2Steps.set(props.sessionID, {
+        assistantMessageID: props.assistantMessageID,
+        agent: props.agent,
+        epoch: this.turnEpoch.get(props.sessionID) ?? 0,
+        model: {
+          providerID: props.model.providerID,
+          id: props.model.id,
+          ...(typeof props.model.variant === 'string'
+            ? { variant: props.model.variant }
+            : {}),
+        },
+      });
+    }
+  }
+
+  private handleV2StepFailed(
+    event: { properties?: unknown; data?: unknown },
+    isV2Host: boolean,
+  ): void {
+    if (!isV2Host) return;
+    const props = isRecord(event.data) ? event.data : event.properties;
+    if (
+      isRecord(props) &&
+      typeof props.sessionID === 'string' &&
+      typeof props.assistantMessageID === 'string' &&
+      props.finish === 'content-filter'
+    ) {
+      const step = this.v2Steps.get(props.sessionID);
+      if (step?.assistantMessageID === props.assistantMessageID)
+        void this.refusalOutcome(
+          props.sessionID,
+          step,
+          props.error,
+          props.rawFinish,
+        );
+    }
+  }
+
+  private handleV2StepEnded(
+    event: { type: string; properties?: unknown; data?: unknown },
+    isV2Host: boolean,
+  ): void {
+    if (!isV2Host) return;
+    const props = isRecord(event.data) ? event.data : event.properties;
+    if (
+      isRecord(props) &&
+      typeof props.sessionID === 'string' &&
+      (event.type === 'session.execution.succeeded' ||
+        props.finish === 'stop' ||
+        props.finish === 'tool-calls' ||
+        props.finish === 'length')
+    ) {
+      this.resetRecoveryState(props.sessionID);
+    }
+  }
+
+  private handleMessagePartUpdated(event: { properties?: unknown }): void {
+    const part = (
+      event.properties as { part?: Record<string, unknown> } | undefined
+    )?.part;
+    if (!part) return;
+    const isInternalPart =
+      isInternalInitiatorPart(part) ||
+      (typeof part.text === 'string' &&
+        part.text.includes(SLIM_INTERNAL_INITIATOR_MARKER));
+    if (
+      isInternalPart &&
+      typeof part.sessionID === 'string' &&
+      typeof part.messageID === 'string'
+    ) {
+      this.rememberUserMessage(part.sessionID, part.messageID);
+    }
+  }
+
+  private async handleSessionError(event: {
+    properties?: unknown;
+  }): Promise<void> {
+    const props = event.properties as
+      | { sessionID?: string; info?: { id?: string }; error?: unknown }
+      | undefined;
+    if (!props) return;
+    const sessionID = eventSessionID(props);
+    if (
+      !this.enabled ||
+      !sessionID ||
+      !props.error ||
+      (this.separateCompaction.get(sessionID)?.active &&
+        (!props.info?.id ||
+          props.info.id ===
+            this.separateCompaction.get(sessionID)?.messageID)) ||
+      !isFailoverError(props.error)
+    ) {
+      return;
+    }
+    const incidentID = this.incidentForSessionError(
+      sessionID,
+      typeof props.info?.id === 'string' ? props.info.id : undefined,
+      props.error,
+    );
+    if (
+      this.surfacesSpentQuota(sessionID, props.error, undefined, incidentID)
+    ) {
+      return;
+    }
+    if (this.bypassInitialFallbackDelay(sessionID, props.error)) {
+      await this.tryFallback(sessionID, props.error, incidentID);
+    } else if (
+      !this.delayInitialFallback(
+        sessionID,
+        false,
+        undefined,
+        props.error,
+        incidentID,
+      )
+    ) {
+      await this.tryFallback(sessionID, props.error, incidentID);
+    }
+  }
+
+  private async handleMessageUpdated(
+    event: { properties?: unknown },
+    isV2Host: boolean,
+  ): Promise<void> {
+    const info = (
+      event.properties as { info?: Record<string, unknown> } | undefined
+    )?.info;
+    if (!info) return;
+    const sessionID = info.sessionID as string | undefined;
+    if (!sessionID) return;
+    if (this.observeCompactionMessage(info)) return;
+    if (info.role === 'user') {
+      this.handleUserMessageTurn(event, sessionID, info);
+      return;
+    }
+    await this.handleAssistantMessageUpdate(sessionID, info, isV2Host);
+  }
+
+  private handleUserMessageTurn(
+    event: { properties?: unknown },
+    sessionID: string,
+    info: Record<string, unknown>,
+  ): void {
+    const props = event.properties as { parts?: unknown[] } | undefined;
+    const parts = Array.isArray(props?.parts)
+      ? props.parts
+      : Array.isArray(info.parts)
+        ? info.parts
+        : [];
+    if (
+      typeof info.id === 'string' &&
+      !this.isKnownUserMessage(sessionID, info.id, parts)
+    ) {
+      let model: string | undefined;
+      if (isRecord(info.model)) {
+        const providerID = info.model.providerID;
+        const modelID = info.model.modelID ?? info.model.id;
+        if (typeof providerID === 'string' && typeof modelID === 'string') {
+          model = `${providerID}/${modelID}`;
         }
-
-        // Note: do NOT clear sessionRetries here on non-rate-limit statuses.
-        // Abort events triggered by our own fallback carry non-rate-limit
-        // messages and would reset the counter, creating an infinite loop:
-        // abort → fallback → set retries to 1 → abort event clears retries
-        // → next retry sees tried=0 → abort+fallback again → repeat.
-        // Retries are only cleared on a completed successful assistant
-        // response or session deletion.
-        break;
       }
+      this.noteExternalTurn(sessionID, info.id, model);
+    }
+    if (typeof info.agent === 'string') {
+      this.registerSessionAgent(sessionID, info.agent);
+    }
+  }
 
-      case 'session.idle': {
-        const props = event.properties as { sessionID?: string } | undefined;
-        const sessionID = props?.sessionID;
-        if (!sessionID) break;
-        this.busy.delete(sessionID);
-        if (isV2Host) await this.restoreV2(sessionID);
-        break;
+  private async handleAssistantMessageUpdate(
+    sessionID: string,
+    info: Record<string, unknown>,
+    isV2Host: boolean,
+  ): Promise<void> {
+    // Track the model currently serving this session
+    const messageID = typeof info.id === 'string' ? info.id : undefined;
+    const priorMessageIncident = messageID
+      ? this.triggerIncidents.get(sessionID)?.get(`message:${messageID}`)
+      : undefined;
+    const recentlyHandledMessage =
+      priorMessageIncident?.turn === (this.turnEpoch.get(sessionID) ?? 0) &&
+      this.now() - priorMessageIncident.time < DEDUP_WINDOW_MS;
+    if (
+      info.role !== 'user' &&
+      !recentlyHandledMessage &&
+      typeof info.providerID === 'string' &&
+      typeof info.modelID === 'string'
+    ) {
+      const model = `${info.providerID}/${info.modelID}`;
+      this.sessionModel.set(sessionID, model);
+      // The replacement spoke: later errors are its own.
+      if (model !== this.lastSwitchTrigger.get(sessionID)?.model)
+        this.lastSwitchTrigger.delete(sessionID);
+    }
+    const messageTime = info.time;
+    const isCompletedAssistant =
+      info.role === 'assistant' &&
+      isRecord(messageTime) &&
+      typeof messageTime.completed === 'number';
+    const isCompletedSuccessfulAssistant =
+      isCompletedAssistant &&
+      !info.error &&
+      // OpenCode v1 publishes a content-filter turn as completed before it
+      // attaches the ContentFilterError: a failure, not a recovery.
+      info.finish !== 'content-filter';
+    const epoch = this.turnEpoch.get(sessionID) ?? 0;
+    const readsParts =
+      this.enabled &&
+      isCompletedSuccessfulAssistant &&
+      info.finish === 'unknown';
+    // Every reset swaps this record, so a reply whose parts were still
+    // being read when the count was reset is not counted afterwards.
+    let streak = this.unknownFinishStreak.get(sessionID);
+    if (readsParts && !streak) {
+      streak = { count: 0, seen: new Set<string>() };
+      this.unknownFinishStreak.set(sessionID, streak);
+    }
+    const noTools = readsParts
+      ? await this.messageHasNoTools(sessionID, messageID)
+      : false;
+    if (!this.isCurrentTurn(sessionID, epoch)) return;
+    let isUnknownLoop = false;
+    if (
+      noTools &&
+      messageID !== undefined &&
+      streak &&
+      this.unknownFinishStreak.get(sessionID) === streak
+    ) {
+      if (!streak.seen.has(messageID)) {
+        streak.seen.add(messageID);
+        isUnknownLoop = ++streak.count >= 3;
+        if (isUnknownLoop) streak.count = 0;
       }
+    } else if (isCompletedAssistant && noTools === false) {
+      this.resetUnknownFinishStreak(sessionID);
+    }
+    // OpenCode v1 can publish `finish: 'content-filter'` before attaching
+    // its ContentFilterError. Treat that terminal finish as the error
+    // event itself; the later message/session error is deduped by ID.
+    const messageError = isUnknownLoop
+      ? UNKNOWN_FINISH_LOOP_ERROR
+      : info.finish === 'content-filter' && !isFailoverError(info.error)
+        ? CONTENT_FILTER_ERROR
+        : info.error;
+    const incidentID =
+      this.enabled && messageError && isFailoverError(messageError)
+        ? this.incidentForMessageError(sessionID, messageID, messageError)
+        : undefined;
+    if (
+      incidentID !== undefined &&
+      messageError &&
+      // The error belongs to this message's own model, which may differ
+      // from sessionModel once a re-emitted update follows a switch.
+      !this.surfacesSpentQuota(
+        sessionID,
+        messageError,
+        typeof info.providerID === 'string' && typeof info.modelID === 'string'
+          ? `${info.providerID}/${info.modelID}`
+          : undefined,
+        incidentID,
+      )
+    ) {
+      await this.fallbackOnMessageError(
+        sessionID,
+        messageError,
+        isUnknownLoop,
+        incidentID,
+      );
+    } else if (
+      !isV2Host &&
+      isCompletedSuccessfulAssistant &&
+      noTools === false
+    ) {
+      await this.clearProviderDownMarks(sessionID, info, messageTime);
+      // v2 completed-message synthesis is telemetry, not recovery evidence.
+      this.resetRecoveryState(sessionID);
+    }
+    if (
+      !isV2Host &&
+      info.finish === 'content-filter' &&
+      !this.isFallbackInProgress(sessionID)
+    ) {
+      this.finishV1InterviewRefusal(sessionID);
+    }
+  }
 
-      case 'session.created': {
-        const info = (
-          event.properties as
-            | { info?: { id?: string; parentID?: string } }
-            | undefined
-        )?.info;
-        if (info?.id && info.parentID) {
-          this.sessionParent.set(info.id, info.parentID);
+  private async fallbackOnMessageError(
+    sessionID: string,
+    messageError: unknown,
+    isUnknownLoop: boolean,
+    incidentID: string | undefined,
+  ): Promise<void> {
+    if (
+      this.bypassInitialFallbackDelay(sessionID, messageError) ||
+      !this.delayInitialFallback(
+        sessionID,
+        isUnknownLoop,
+        undefined,
+        messageError,
+        incidentID,
+      )
+    ) {
+      if (isUnknownLoop) {
+        await this.tryFallbackWithAbort(
+          sessionID,
+          messageError,
+          undefined,
+          incidentID,
+        );
+      } else {
+        await this.tryFallback(sessionID, messageError, incidentID);
+      }
+    }
+  }
+
+  private async clearProviderDownMarks(
+    sessionID: string,
+    info: Record<string, unknown>,
+    messageTime: unknown,
+  ): Promise<void> {
+    const created = isRecord(messageTime) ? messageTime.created : undefined;
+    if (typeof info.providerID === 'string' && typeof created === 'number') {
+      for (const id of [sessionID, this.sessionParent.get(sessionID)]) {
+        const marks = id ? this.downProviders.get(id) : undefined;
+        const markedAt = marks?.get(info.providerID);
+        if (markedAt !== undefined && created >= markedAt) {
+          marks?.delete(info.providerID);
         }
-        break;
       }
+    }
+  }
 
-      case 'subagent.session.created': {
-        // Some builds of OpenCode include the agent name here.
-        const props = event.properties as
-          | { sessionID?: string; agentName?: unknown }
-          | undefined;
-        if (props?.sessionID && typeof props.agentName === 'string') {
-          this.registerSessionAgent(props.sessionID, props.agentName);
-        }
-        break;
-      }
+  private async handleSessionStatus(event: {
+    properties?: unknown;
+  }): Promise<void> {
+    const props = event.properties as SessionStatusProps | undefined;
+    if (!props) return;
+    const sessionID = eventSessionID(props);
+    if (!sessionID) return;
+    if (props.status?.type === 'busy' || props.status?.type === 'retry') {
+      this.busy.add(sessionID);
+      this.awaitingRun.delete(sessionID);
+    } else if (props.status?.type === 'idle') this.busy.delete(sessionID);
+    if (this.separateCompaction.get(sessionID)?.active) return;
+    const isFailoverRetry =
+      props.status?.type === 'retry' &&
+      (isFailoverError(props.error) ||
+        (props.status.message !== undefined &&
+          isFailoverError({ message: props.status.message })));
+    if (isFailoverRetry && this.enabled) {
+      await this.handleV1RetryStatus(sessionID, props);
+      return;
+    }
 
-      case 'session.deleted': {
-        const props = event.properties as
-          | { sessionID?: string; info?: { id?: string } }
-          | undefined;
-        const id = props?.info?.id || props?.sessionID;
-        if (id) {
-          log('[foreground-fallback] session.deleted observed', {
-            sessionID: id,
-          });
-          this.sessionParent.delete(id);
-          // Without a lifecycle coordinator this event is the only deletion
-          // signal, so it must clear the retry/terminal state too.
-          if (!this.hasCoordinator) this.forgetSession(id);
-        }
-        break;
-      }
+    // Note: do NOT clear sessionRetries here on non-rate-limit statuses.
+    // Abort events triggered by our own fallback carry non-rate-limit
+    // messages and would reset the counter, creating an infinite loop:
+    // abort → fallback → set retries to 1 → abort event clears retries
+    // → next retry sees tried=0 → abort+fallback again → repeat.
+    // Retries are only cleared on a completed successful assistant
+    // response or session deletion.
+  }
+
+  private async handleV1RetryStatus(
+    sessionID: string,
+    props: SessionStatusProps,
+  ): Promise<void> {
+    log('[foreground-fallback] v1 retry observed', {
+      sessionID,
+      message: props.status?.message
+        ? redactSecretsForLog(props.status.message).slice(0, 300)
+        : undefined,
+      attempt: props.status?.attempt,
+    });
+    // Guard: stale retry event from a previous model's retry loop.
+    // After a fallback, lastTriggerModel holds the OLD model (set by
+    // isDeduped before the fallback), while sessionModel holds the NEW
+    // model. A stale retry from the old model arrives with attempt > 1
+    // (continuation of old retry loop). A genuine retry from the new
+    // model arrives with attempt === 1 (first retry for new model).
+    const prevModel = this.lastTriggerModel.get(sessionID);
+    const curModel = this.sessionModel.get(sessionID);
+    const lastTriggerTime = this.lastTrigger.get(sessionID) ?? 0;
+    const attempt = props.status?.attempt ?? 1;
+    const modelChanged =
+      prevModel !== undefined &&
+      curModel !== undefined &&
+      prevModel !== curModel;
+    const withinDedupWindow = this.now() - lastTriggerTime < DEDUP_WINDOW_MS;
+    if (modelChanged && withinDedupWindow && attempt > 1) {
+      // Model changed since last trigger, within dedup window, and
+      // attempt > 1: this is a stale retry from the old model's
+      // retry loop (continuation of previous attempts). Skip it.
+      return;
+    }
+    // An overlapping retry cannot be admitted by the active fallback;
+    // leave both the retry identity and host budget untouched.
+    if (this.inProgress.has(sessionID)) return;
+    this.rearmIfFreshDescent(sessionID);
+    if (this.retryAlreadyObserved(sessionID, attempt)) return;
+    // A no-chain status paired with a same-turn error incident is the
+    // host retrying that already-handled failure (or its replay):
+    // consume it without charging or sending another prompt.
+    if (
+      !this.hasFallbackChain(sessionID) &&
+      this.hasSameTurnErrorIncident(sessionID)
+    ) {
+      this.recordRetryAttempt(sessionID, attempt);
+      this.cancelInitialDelay(sessionID);
+      return;
+    }
+    const incidentID = `retry:${curModel ?? 'unknown'}:${attempt}`;
+    const retryError = props.error ?? {
+      message: props.status?.message ?? '',
+    };
+    if (this.surfacesSpentQuota(sessionID, retryError)) return;
+    // Permanent quota/billing exhaustion and spent allowance never
+    // recover by host retries on this provider — skip the host-retry
+    // budget and fall back at once. Otherwise (attempt === 1, or model
+    // didn't change, or outside dedup window): process as genuine
+    // retry for current model.
+    if (
+      !isPermanentQuotaBillingError(retryError) &&
+      !isSpentQuotaError(retryError) &&
+      this.absorbHostRetry(
+        sessionID,
+        props.status?.next === undefined
+          ? undefined
+          : props.status.next - this.now(),
+      )
+    ) {
+      this.recordRetryAttempt(sessionID, attempt);
+      this.cancelInitialDelay(sessionID);
+      return;
+    }
+    if (this.bypassInitialFallbackDelay(sessionID, retryError)) {
+      await this.tryFallbackWithAbort(
+        sessionID,
+        retryError,
+        attempt,
+        incidentID,
+      );
+    } else if (
+      !this.delayInitialFallback(
+        sessionID,
+        true,
+        attempt,
+        retryError,
+        incidentID,
+      )
+    ) {
+      // Failover may have been detected from status.message (e.g.
+      // 'AI_APICallError: Gone') with no separate error property;
+      // forward that message so 401/410 inline errors suppress the
+      // toast on this path too, matching session.error behavior.
+      await this.tryFallbackWithAbort(
+        sessionID,
+        retryError,
+        attempt,
+        incidentID,
+      );
+    }
+  }
+
+  private async handleSessionIdle(
+    event: { properties?: unknown },
+    isV2Host: boolean,
+  ): Promise<void> {
+    const props = event.properties as { sessionID?: string } | undefined;
+    const sessionID = props?.sessionID;
+    if (!sessionID) return;
+    this.busy.delete(sessionID);
+    if (isV2Host) await this.restoreV2(sessionID);
+  }
+
+  private handleSessionCreated(event: { properties?: unknown }): void {
+    const info = (
+      event.properties as
+        | { info?: { id?: string; parentID?: string } }
+        | undefined
+    )?.info;
+    if (info?.id && info.parentID) {
+      this.sessionParent.set(info.id, info.parentID);
+    }
+  }
+
+  private handleSubagentSessionCreated(event: { properties?: unknown }): void {
+    // Some builds of OpenCode include the agent name here.
+    const props = event.properties as
+      | { sessionID?: string; agentName?: unknown }
+      | undefined;
+    if (props?.sessionID && typeof props.agentName === 'string') {
+      this.registerSessionAgent(props.sessionID, props.agentName);
+    }
+  }
+
+  private handleSessionDeleted(event: { properties?: unknown }): void {
+    const props = event.properties as
+      | { sessionID?: string; info?: { id?: string } }
+      | undefined;
+    const id = props?.info?.id || props?.sessionID;
+    if (id) {
+      log('[foreground-fallback] session.deleted observed', {
+        sessionID: id,
+      });
+      this.sessionParent.delete(id);
+      // Without a lifecycle coordinator this event is the only deletion
+      // signal, so it must clear the retry/terminal state too.
+      if (!this.hasCoordinator) this.forgetSession(id);
     }
   }
 
