@@ -661,9 +661,9 @@ const PROVIDER_MARK_TTL_MS = 30 * 60_000;
 /** Ceiling on host calls: a hung transport must not stall fallback. */
 const HOST_CALL_TIMEOUT_MS = 2_000;
 const V1_OUTCOME_TIMEOUT_MS = 5_000;
-export const REFUSAL_CONTINUATION =
+const REFUSAL_CONTINUATION =
   "The previous response was stopped by the provider's content filter. Continue from where it stopped without repeating completed content.";
-export const NO_ROUTE_CONTINUATION =
+const NO_ROUTE_CONTINUATION =
   'The selected model was unavailable. Continue the previous request using the fallback model.';
 /** The replay send's ack can lag after the host admitted it: wait as long as
  *  the tracker's own `promptAsync`, so a slow ack is not read as a refusal. */

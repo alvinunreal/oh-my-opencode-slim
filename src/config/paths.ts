@@ -76,13 +76,7 @@ function getLiteConfigJsonc(): string {
   return join(getConfigDir(), 'oh-my-opencode-slim.jsonc');
 }
 
-export function getTuiConfig(): string {
-  const customConfigPath = getCustomTuiConfigPath();
-  if (customConfigPath) return customConfigPath;
-  return join(getConfigDir(), 'tui.json');
-}
-
-export function getTuiConfigJsonc(): string {
+function getTuiConfigJsonc(): string {
   return join(getConfigDir(), 'tui.jsonc');
 }
 
@@ -132,11 +126,6 @@ export function getExistingConfigPath(): string {
 
 export function ensureConfigDir(): void {
   const configDir = getConfigDir();
-  if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
-}
-
-export function ensureTuiConfigDir(): void {
-  const configDir = dirname(getTuiConfig());
   if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
 }
 

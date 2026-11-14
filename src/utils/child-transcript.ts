@@ -146,7 +146,7 @@ interface LooseMessage {
 
 export type TranscriptMessage = LooseMessage;
 
-export const DIAGNOSTIC_MAX_BYTES = 6_144;
+const DIAGNOSTIC_MAX_BYTES = 6_144;
 const DIAGNOSTIC_MESSAGE_CHARS = 2_000;
 const DIAGNOSTIC_ITEM_CHARS = 500;
 const DIAGNOSTIC_MESSAGE_PARTS = 100;
@@ -669,7 +669,7 @@ export function classifyTerminalEvidence(
   );
 }
 
-export function isHostAbortError(error: unknown): boolean {
+function isHostAbortError(error: unknown): boolean {
   return (
     isRecord(error) &&
     (error.type === 'aborted' || error.name === 'MessageAbortedError')
@@ -756,9 +756,7 @@ export interface CurrentRoundClassification {
   completedAt?: number;
 }
 
-export function transcriptOrderKey(
-  message: TranscriptMessage,
-): number | undefined {
+function transcriptOrderKey(message: TranscriptMessage): number | undefined {
   const time = message.info?.time;
   if (!isRecord(time)) return undefined;
   if (typeof time.created === 'number' && Number.isFinite(time.created)) {

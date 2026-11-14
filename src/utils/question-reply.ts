@@ -1,4 +1,4 @@
-export function errorText(error: unknown): string {
+function errorText(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === 'string') return error;
   try {
@@ -57,29 +57,4 @@ export function toFormAnswer(
         : selections[0];
   });
   return answer;
-}
-
-export async function replyV1Question(
-  client: {
-    question?: { reply: (args: Record<string, unknown>) => Promise<unknown> };
-    _client?: { post?: (args: Record<string, unknown>) => Promise<unknown> };
-  },
-  input: { requestID: string; directory: string; answers: string[][] },
-): Promise<unknown> {
-  if (typeof client.question?.reply === 'function') {
-    return await client.question.reply(input);
-  }
-  const post = client._client?.post;
-  if (typeof post !== 'function') {
-    throw new Error(
-      'Host client has no question.reply API; cannot answer the pending question',
-    );
-  }
-  return await post({
-    url: '/question/{requestID}/reply',
-    path: { requestID: input.requestID },
-    query: { directory: input.directory },
-    body: { answers: input.answers },
-    headers: { 'Content-Type': 'application/json' },
-  });
 }
