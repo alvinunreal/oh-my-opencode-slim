@@ -236,6 +236,41 @@ function clearSpawnAttemptRecordIfDetached(
   }
 }
 
+function updateSpawnAttemptRecordIfAttached(
+  attachments: readonly TuiAttachment[],
+  record: SpawnAttemptRecord | null,
+): void {
+  if (
+    record &&
+    !attachments.some((attachment) => !isSpawnRecorded(attachment, record))
+  ) {
+    return;
+  }
+  let release: ReturnType<typeof acquirePidFileLock>;
+  try {
+    release = acquirePidFileLock(pidFilePath());
+  } catch {
+    return;
+  }
+  if (!release) return;
+  try {
+    const current = liveTuiAttachments();
+    const currentRecord = readSpawnAttemptRecord();
+    if (
+      release.isOwned() &&
+      current?.length &&
+      (!currentRecord ||
+        current.some(
+          (attachment) => !isSpawnRecorded(attachment, currentRecord),
+        ))
+    ) {
+      writeSpawnAttemptRecord(current, release.isOwned);
+    }
+  } finally {
+    release();
+  }
+}
+
 function defaultBinaryPath(): string {
   const xdg = process.env.XDG_DATA_HOME?.trim();
   const base =
@@ -674,6 +709,9 @@ export class CompanionManager {
       // The locked spawn path handles unreadable or stale pid files.
     }
     const actual = pid !== null && isProcessAlive(pid);
+    if (desired && actual) {
+      updateSpawnAttemptRecordIfAttached(attachments, readSpawnAttemptRecord());
+    }
     const previousReconcileState = this.lastReconcileState;
     if (
       !previousReconcileState ||

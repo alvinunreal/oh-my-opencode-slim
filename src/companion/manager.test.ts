@@ -526,6 +526,52 @@ describe('CompanionManager', () => {
     }
   });
 
+  it('remembers TUIs that attach while the Companion is running', () => {
+    const m = make('remember-live-tuis', '/remember-live-tuis', {
+      enabled: true,
+      binaryPath: path.join(TEST_DIR, 'missing-companion'),
+    });
+    m.onLoad();
+    const attachmentA = attachmentPidsByDirectory.get(
+      path.resolve('/remember-live-tuis'),
+    );
+    if (attachmentA === undefined) {
+      throw new Error('test attachment PID is missing');
+    }
+    const logSpy = spyOn(loggerModule, 'log');
+    try {
+      reconcile(m);
+      expect(readSpawnAttachments().map(({ pid }) => pid)).toEqual([
+        attachmentA,
+      ]);
+
+      writeFileSync(companionPidFile(), String(process.pid));
+      const attachmentB = attachAnotherTui('/remember-live-tuis');
+      reconcile(m);
+      const remembered = readSpawnAttachments().map(({ pid }) => pid);
+      expect(remembered).toContain(attachmentA);
+      expect(remembered).toContain(attachmentB);
+
+      writeFileSync(companionPidFile(), '999999999');
+      reconcile(m);
+      expect(
+        logSpy.mock.calls.filter(([message]) =>
+          String(message).includes('companion binary not found'),
+        ),
+      ).toHaveLength(1);
+
+      attachAnotherTui('/remember-live-tuis');
+      reconcile(m);
+      expect(
+        logSpy.mock.calls.filter(([message]) =>
+          String(message).includes('companion binary not found'),
+        ),
+      ).toHaveLength(2);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   it('allows one new spawn attempt when a new TUI PID attaches', () => {
     const m = make('new-tui-spawn', '/new-tui-spawn', {
       enabled: true,
