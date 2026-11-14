@@ -3265,7 +3265,7 @@ describe('createV2Setup e2e', () => {
     }
   });
 
-  test('v2 primary requests receive startup inference settings', async () => {
+  test('v2 Orchestrator requests receive startup inference settings', async () => {
     await mkdir(path.join(projectDir, '.opencode'), { recursive: true });
     await Bun.write(
       path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
@@ -3283,14 +3283,6 @@ describe('createV2Setup e2e', () => {
                 thinking: { type: 'enabled', budgetTokens: 4096 },
               },
             },
-          },
-        },
-        agents: {
-          planner: {
-            primary: true,
-            model: 'openai/gpt-6',
-            temperature: 0.7,
-            options: { reasoningEffort: 'low' },
           },
         },
       }),
@@ -3351,33 +3343,24 @@ describe('createV2Setup e2e', () => {
     });
     const cleanup = await createV2Setup()(ctx);
     try {
-      for (const [agent, temperature, reasoningEffort] of [
-        ['orchestrator', 0.25, 'high'],
-        ['planner', 0.7, 'low'],
-      ] as const) {
-        const event = {
-          sessionID: `root-${agent}`,
-          agent,
-          model: { providerID: 'openai', id: 'gpt-6' },
-          options: { maxTokens: 2048 },
-          system: [],
-          messages: [],
-          tools: {},
-        };
-        await calls.contextHookCb?.(event);
-        expect(event.options).toEqual({
-          maxTokens: 2048,
-          temperature,
-          reasoningEffort,
-          ...(agent === 'orchestrator'
-            ? {
-                serviceTier: 'priority',
-                include: ['agent-setting'],
-                thinking: { type: 'enabled', budgetTokens: 4096 },
-              }
-            : {}),
-        });
-      }
+      const event = {
+        sessionID: 'root-orchestrator',
+        agent: 'orchestrator',
+        model: { providerID: 'openai', id: 'gpt-6' },
+        options: { maxTokens: 2048 },
+        system: [],
+        messages: [],
+        tools: {},
+      };
+      await calls.contextHookCb?.(event);
+      expect(event.options).toEqual({
+        maxTokens: 2048,
+        temperature: 0.25,
+        reasoningEffort: 'high',
+        serviceTier: 'priority',
+        include: ['agent-setting'],
+        thinking: { type: 'enabled', budgetTokens: 4096 },
+      });
       const variantEvent = {
         sessionID: 'root-orchestrator-low',
         agent: 'orchestrator',

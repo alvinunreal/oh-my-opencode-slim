@@ -74,7 +74,7 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 ### Task Control Flows
 
 ```
-1. Managed parent invokes task_cancel (including Build/custom primary agents)
+1. Managed parent invokes task_cancel (including Build sessions that have delegated work)
    ├─> Validates managed-session admission; host tool permissions still apply
    ├─> Resolves task_id to BackgroundJobBoard entry
    ├─> Calls abortSessionWithTimeout() to signal cancellation
@@ -82,7 +82,7 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
    ├─> Marks job as cancelled in BackgroundJobBoard
    └─> Returns cancellation confirmation while retaining the child session
 
-2. Managed parent invokes task_revive (including Build/custom primary agents)
+2. Managed parent invokes task_revive (including Build sessions that have delegated work)
    ├─> Resolves the retained BackgroundJobBoard entry
    ├─> Cancels a running generation when necessary
    ├─> Launches a new prompt in the existing child session

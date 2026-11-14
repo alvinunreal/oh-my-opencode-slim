@@ -1,13 +1,10 @@
 import { type ToolDefinition, tool } from '@opencode-ai/plugin';
-import { isBuiltInPrimaryAgent } from '../utils/agent-variant';
 
 const z = tool.schema;
 
 interface WaitForUserToolOptions {
   shouldManageSession: (sessionID: string) => boolean;
   resolveAgentName?: (agent: string) => string;
-  /** Primary classification (issue #1591); defaults to built-in only. */
-  isPrimaryAgentName?: (agent: string) => boolean;
   registerSessionAsOrchestrator?: (sessionID: string) => void;
   beginUserWait: (sessionID: string) => void;
   hasOutstandingBackgroundTasks?: (sessionID: string) => boolean;
@@ -38,14 +35,11 @@ Final tool action only, after giving the user concrete manual steps; the next di
         typeof rawAgent === 'string'
           ? (options.resolveAgentName?.(rawAgent) ?? rawAgent)
           : undefined;
-      const isPrimary = options.isPrimaryAgentName ?? isBuiltInPrimaryAgent;
-      if (agent && !isPrimary(agent)) {
-        throw new Error(
-          'wait_for_user can only be used by primary orchestrators',
-        );
+      if (agent && agent !== 'orchestrator') {
+        throw new Error('wait_for_user can only be used by the orchestrator');
       }
       if (!options.shouldManageSession(sessionID)) {
-        if (agent && isPrimary(agent)) {
+        if (agent === 'orchestrator') {
           options.registerSessionAsOrchestrator?.(sessionID);
         }
       }

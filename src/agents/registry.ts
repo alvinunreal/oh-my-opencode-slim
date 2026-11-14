@@ -170,8 +170,6 @@ function applyMarketplaceOwnerOverride(
       typeof model === 'string' ? { id: model } : { ...model },
     );
     definition._modelArray = models;
-    // Declared primaries (agents.<name>.primary) are not projected yet
-    // (issue #1591).
     if (definition.name !== 'orchestrator') {
       definition.config.model = models[0]?.id;
       if (models[0]?.variant) definition.config.variant = models[0].variant;
@@ -1160,20 +1158,6 @@ export function buildResolvedAgentRegistry(
     const admittedNames = new Set(
       constructed.agents.map((agent) => agent.name),
     );
-    // A config key matching an admitted marketplace agent is an owner
-    // override; the package definition replaces the custom one, so
-    // `primary` cannot apply (marketplace agents are never primary, #1591).
-    const ownerAgents = runtime.agents();
-    for (const name of admittedNames) {
-      if (
-        customOwnerNames.has(name) &&
-        ownerAgents[name]?.primary !== undefined
-      ) {
-        console.warn(
-          `[oh-my-opencode-slim] agents.${name}.primary is ignored: '${name}' is a marketplace agent and marketplace agents cannot be primary.`,
-        );
-      }
-    }
     // Snapshot the manifest chains BEFORE owner overrides rewrite
     // `_modelArray` on the admitted definitions (see
     // applyMarketplaceOwnerOverride) — the merged modelCandidates cannot

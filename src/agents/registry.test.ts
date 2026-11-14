@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -2084,44 +2084,6 @@ describe('finalized existing-agent registry', () => {
       model: 'host/selected',
       variant: 'host-variant',
     });
-  });
-
-  test('an owner override never makes a marketplace agent primary (#1591)', () => {
-    const warn = spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const runtime = runtimeFor({
-        agents: {
-          'market-agent': { model: 'owner/selected', primary: true },
-          coworker: { model: 'custom/model', primary: true },
-        },
-      });
-      for (const hostFlavor of [undefined, 'v2']) {
-        const registry = build(
-          runtime,
-          { mcp: { 'host-mcp': { type: 'local' } } },
-          {
-            hostFlavor,
-            ...marketplaceOptions(
-              ['team/model-owner'],
-              marketplaceStore({
-                'team/model-owner': marketplacePackage('team/model-owner'),
-              }),
-            ),
-          },
-        );
-        const projection = registry.getSdkAgentProjection();
-        expect(projection['market-agent']?.mode).toBe('subagent');
-        expect(projection.coworker?.mode).toBe('primary');
-        expect(projection.orchestrator?.mode).toBe('primary');
-      }
-      expect(
-        warn.mock.calls.some((call) =>
-          String(call[0]).includes('agents.market-agent.primary is ignored'),
-        ),
-      ).toBe(true);
-    } finally {
-      warn.mockRestore();
-    }
   });
 
   test('leaves builtin and orchestrator model policies unset when no role model resolves', () => {

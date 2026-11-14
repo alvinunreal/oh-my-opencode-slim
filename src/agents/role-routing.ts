@@ -85,7 +85,7 @@ function scopedRoutingLine(
 }
 
 /**
- * `<Agents>` catalog for a declared primary (issue #1591): exactly its
+ * `<Agents>` catalog for the orchestrator (issue #1591): exactly its
  * scoped specialists, one routing line each. Built-in roles reuse the slim
  * lines; custom specialists fall back to their configured description.
  * shortcut: no display-name rewriting here — the caller runs

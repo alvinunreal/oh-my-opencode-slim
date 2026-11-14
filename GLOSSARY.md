@@ -6,9 +6,9 @@ A glossary of the terms used in this project's domain. Definitions describe what
 
 - **Agent** — A named LLM role with a defined lane (permissions, tools, prompt); the unit of work delegation in the system.
 - **Orchestrator** — The canonical primary agent. Plans work, delegates to subagents, monitors them, and reconciles their results. One per session; cannot be disabled.
-- **Primary agent** — An agent projected with SDK mode `primary`: a long-lived foreground session that orchestrates rather than doing bounded work. The orchestrator is the canonical one; a custom agent joins via `agents.<name>.primary: true` and delegates within its `agents.<name>.subagents` scope when set.
+- **Primary agent** — An agent with SDK mode `primary` that can run a foreground session. Slim registers the built-in orchestrator in this mode.
 - **Subagent** — A specialist agent a primary agent delegates bounded work to.
-- **Delegation scope** — A primary agent's `agents.<name>.subagents` allowlist: the specialists it may delegate to, compiled into the `task` permission stance and rendered as its scoped `<Agents>` catalog.
+- **Delegation scope** — The orchestrator's `agents.orchestrator.subagents` allowlist: the specialists it may delegate to, compiled into the `task` permission stance and rendered as its scoped `<Agents>` catalog.
 - **Explorer** — Subagent for fast codebase search, pattern matching, and external documentation/library research.
 - **Oracle** — Subagent for architecture, debugging strategy, and code review.
 - **Designer** — Subagent for UI/UX design and visual polish.
@@ -16,7 +16,7 @@ A glossary of the terms used in this project's domain. Definitions describe what
 - **Observer** — Subagent for visual/media analysis (images, PDFs, diagrams). Disabled by default.
 - **Council** — A multi-LLM agent that runs several councillors and synthesizes their views.
 - **Councillor** — A read-only LLM advisor dispatched as a subagent by the orchestrator. Each councillor is registered as `councillor-<name>` from the council preset. Hidden from the @-mention menu; visible as panes when dispatched.
-- **Agent mode** — SDK classification of an agent: `primary` (an orchestrator — the built-in one or a declared primary) or `subagent` (specialist, including council — the synthesizer is dispatched by the orchestrator, never switched to as a primary).
+- **Agent mode** — SDK classification of an agent: `primary` (the built-in orchestrator in Slim) or `subagent` (specialist, including council — the synthesizer is dispatched by the orchestrator, never switched to as a primary).
 - **Protected agent** — An agent that cannot be disabled (orchestrator).
 - **Custom agent** — A user-defined agent supplied via config, distinct from the built-ins.
 - **ACP agent** — An external agent defined via the Agent Communication Protocol, run through `acp_run`.

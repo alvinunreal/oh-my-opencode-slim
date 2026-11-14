@@ -126,9 +126,9 @@ If the plugin is disposed during a result read, the read is refused without
 acknowledging the result; a fresh plugin instance can retrieve it later.
 
 `task_cancel` and `task_revive` admit managed parent sessions, including Build
-and custom primary agents that have delegated work. Host tool permissions still
-apply, and a parent can only control its own children. Switching primary agents
-does not transfer child ownership. Completed results are surfaced and
+sessions that have delegated work. Host tool permissions still apply, and a
+parent can only control its own children. Child ownership follows the parent
+session across agent switches. Completed results are surfaced and
 acknowledged for reuse regardless of the parent's agent name.
 History recovery and injected completion handling use the same managed-session
 admission; an unmanaged Build turn is not promoted to Orchestrator.

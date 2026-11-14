@@ -11,12 +11,6 @@ export interface AgentDefinition {
   displayName?: string;
   description?: string;
   config: AgentConfig;
-  /**
-   * Declared primary orchestrator (`agents.<name>.primary`). Set only by
-   * custom-agent construction, so marketplace definitions that replace a
-   * same-named owner override can never inherit primary mode (#1591).
-   */
-  primary?: boolean;
   /** Priority-ordered model entries for runtime fallback resolution. */
   _modelArray?: Array<{ id: string; variant?: string }>;
 }

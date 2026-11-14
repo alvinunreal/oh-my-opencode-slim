@@ -4113,6 +4113,57 @@ describe('plugin config model inheritance', () => {
     } as never);
   }
 
+  test('loads legacy custom primaries as specialists across agent and preset configs', async () => {
+    const hooks = await loadConfiguredPlugin({
+      preset: 'team',
+      agents: {
+        coworker: {
+          primary: true,
+          model: 'test/coworker',
+          subagents: ['fixer'],
+        },
+        orchestrator: { subagents: ['coworker', 'reviewer', 'writer'] },
+      },
+      presets: {
+        base: { reviewer: { primary: true, model: 'test/reviewer' } },
+        team: {
+          extends: 'base',
+          agents: {
+            writer: { primary: true, model: 'test/writer' },
+            primary: { primary: true, model: 'test/specialist' },
+          },
+        },
+      },
+    });
+    try {
+      const hostConfig: { agent?: Record<string, unknown> } = {};
+      await hooks.config?.(hostConfig);
+      expect(hostConfig.agent).toMatchObject({
+        orchestrator: {
+          mode: 'primary',
+          permission: {
+            task: {
+              '*': 'deny',
+              coworker: 'allow',
+              reviewer: 'allow',
+              writer: 'allow',
+            },
+          },
+        },
+        coworker: {
+          mode: 'subagent',
+          model: 'test/coworker',
+          permission: { task_cancel: 'deny' },
+        },
+        reviewer: { mode: 'subagent', model: 'test/reviewer' },
+        writer: { mode: 'subagent', model: 'test/writer' },
+        primary: { mode: 'subagent', model: 'test/specialist' },
+      });
+    } finally {
+      await hooks.dispose?.();
+    }
+  });
+
   test('v1 exposes enabled bundled skills without overriding user skills', async () => {
     const hooks = await loadConfiguredPlugin({ disabled_skills: ['reflect'] });
     const configDir = lastConfigDir as string;
