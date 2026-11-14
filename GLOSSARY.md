@@ -6,9 +6,9 @@ A glossary of the terms used in this project's domain. Definitions describe what
 
 - **Agent** — A named LLM role with a defined lane (permissions, tools, prompt); the unit of work delegation in the system.
 - **Orchestrator** — The canonical primary agent. Plans work, delegates to subagents, monitors them, and reconciles their results. One per session; cannot be disabled.
-- **Primary agent** — An agent projected with SDK mode `primary`: a long-lived foreground session that orchestrates rather than doing bounded work. The orchestrator is the canonical one; a custom agent joins via `agents.<name>.primary: true` and delegates within its `agents.<name>.subagents` scope when set.
+- **Primary agent** — An agent with SDK mode `primary` that can run a foreground session. Slim registers the built-in orchestrator in this mode.
 - **Subagent** — A specialist agent a primary agent delegates bounded work to.
-- **Delegation scope** — A primary agent's `agents.<name>.subagents` allowlist: the specialists it may delegate to, compiled into the `task` permission stance and rendered as its scoped `<Agents>` catalog.
+- **Delegation scope** — The orchestrator's `agents.orchestrator.subagents` allowlist: the specialists it may delegate to, compiled into the `task` permission stance and rendered as its scoped `<Agents>` catalog.
 - **Explorer** — Subagent for fast codebase search, pattern matching, and external documentation/library research.
 - **Oracle** — Subagent for architecture, debugging strategy, and code review.
 - **Designer** — Subagent for UI/UX design and visual polish.
@@ -16,7 +16,7 @@ A glossary of the terms used in this project's domain. Definitions describe what
 - **Observer** — Subagent for visual/media analysis (images, PDFs, diagrams). Disabled by default.
 - **Council** — A multi-LLM agent that runs several councillors and synthesizes their views.
 - **Councillor** — A read-only LLM advisor dispatched as a subagent by the orchestrator. Each councillor is registered as `councillor-<name>` from the council preset. Hidden from the @-mention menu; visible as panes when dispatched.
-- **Agent mode** — SDK classification of an agent: `primary` (an orchestrator — the built-in one or a declared primary) or `subagent` (specialist, including council — the synthesizer is dispatched by the orchestrator, never switched to as a primary).
+- **Agent mode** — SDK classification of an agent: `primary` (the built-in orchestrator in Slim) or `subagent` (specialist, including council — the synthesizer is dispatched by the orchestrator, never switched to as a primary).
 - **Protected agent** — An agent that cannot be disabled (orchestrator).
 - **Custom agent** — A user-defined agent supplied via config, distinct from the built-ins.
 - **ACP agent** — An external agent defined via the Agent Communication Protocol, run through `acp_run`.
@@ -33,17 +33,18 @@ A glossary of the terms used in this project's domain. Definitions describe what
 - **Multiplexer** — A terminal backend (tmux, zellij, herdr, kitty, wezterm, orca, or cmux) that hosts child agent panes. Set via \`multiplexer.type\`, which also accepts \`auto\` (auto-detect) and \`none\` (disabled).
 - **Multiplexer type** — The selected backend: `auto`, `tmux`, `zellij`, `herdr`, `kitty`, `wezterm`, `orca`, `cmux`, or `none`.
 - **Pane** — A terminal region spawned by the multiplexer to run a child agent session.
-- **Child session** — A background agent session hosted in a multiplexer pane and tracked by the background job board.
+- **Child session** — A delegated agent session that may be displayed in a multiplexer pane. V1 managed tracks it on the background job board; V2 leaves its execution and recovery to the host Job lifecycle.
 - **Client pane lifecycle** — The TUI client's in-process pane tracking: admits child sessions of the displayed parent, spawns and closes multiplexer panes anchored to the client's own pane, and reacts to session lifecycle events. There is no server-side or cross-process pane state.
 - **Close reason** — Why a pane is closed: `idle`, `deleted`, or `backfill-gone`.
 
 ## Background Jobs
 
-- **Background job** — A delegated specialist task that runs asynchronously; tracked until its result is reconciled into the delegating primary's response.
-- **Background Job Board** — The store of background job state and metadata. It is machine-side only: it is never rendered into a prompt.
-- **Background Job Coordinator** — The layer that owns background-job lifecycle policy and deferred-close state, writing through the board.
-- **Job state** — A background job's status: `running`, `completed`, `error`, `cancelled`, or `reconciled`. `reconciled` is a distinct post-consumption phase marking that a terminal job's result has been folded into the delegating primary's response; it is not a terminal outcome itself.
-- **Job alias** — A short human-readable identifier for a background job (e.g., `fix-1`, `exp-2`).
+- **Background job** — A delegated specialist task that runs asynchronously. V1 managed tracks it on the plugin board until its result is reconciled; on V2 the host Job owns execution, notification, and recovery.
+- **Native lifecycle (V2)** — OpenCode owns the child Job, same-session continuation, completion delivery, and restart recovery. The plugin keeps only exact-ID controls (`task_status`, `task_cancel`, permission-only `task_reply`, queue-only `task_report`) and reads host sessions on demand.
+- **Background Job Board (V1 managed)** — The store of background job state and metadata. It is machine-side only: it is never rendered into a prompt.
+- **Background Job Coordinator (V1 managed)** — The layer that owns background-job lifecycle policy and deferred-close state, writing through the board.
+- **Job state (V1 managed)** — A background job's status: `running`, `completed`, `error`, `cancelled`, or `reconciled`. `reconciled` is a distinct post-consumption phase marking that a terminal job's result has been folded into the delegating primary's response; it is not a terminal outcome itself.
+- **Job alias (V1 managed)** — A short human-readable identifier for a background job (e.g., `fix-1`, `exp-2`). V2 uses exact session IDs only.
 - **Terminal state** — A job state from which no further transition occurs (`completed`, `error`, `cancelled`).
 
 ## Skills

@@ -53,47 +53,7 @@ const ALLOWLIST = new Map<string, string>([
   ],
   [
     'hooks/foreground-fallback/quota-cooldown.ts',
-    'Date.now() calculates and checks on-disk quota eligibility deadlines only; timestamps never enter prompt content, agent definitions or tool descriptions.',
-  ],
-  [
-    'hooks/task-session-manager/task-context-tracker.ts',
-    'Date.now() records lastReadAt for internal recency ordering; formatted prompt output (background job board) is confined to the volatile trailing message.',
-  ],
-  [
-    'hooks/task-session-manager/event-router.ts',
-    'Date.now() captures idleObservedAt to detect post-idle busy recovery from foreground-fallback re-prompts; never serialized into prompt content.',
-  ],
-  [
-    'hooks/task-session-manager/revived-run-tracker.ts',
-    'Date.now() captures immutable observation-attempt boundaries for terminal attribution; these timestamps are never serialized into notification prompts.',
-  ],
-  [
-    'hooks/task-session-manager/runtime-status-reconciliation.ts',
-    'Date.now() establishes in-memory request/observation ordering for generation-safe status reconciliation; board timestamps are never formatted into prompt content.',
-  ],
-  [
-    'hooks/orchestrator-wake/index.ts',
-    'Date.now() timestamps event-tracked child/status bookkeeping for wake decisions (staleness bound, busy-set); the wake prompt text is static and never derives from them.',
-  ],
-  [
-    'hooks/task-session-manager/child-input-wait.ts',
-    'Date.now() defaults the askedAt ordering key for pending child asks; timestamps are internal bookkeeping — the wake delta carries the ask content, never the timestamp.',
-  ],
-  [
-    'hooks/task-session-manager/session-recovery.ts',
-    'Date.now() stamps the persisted delivery marker and bounds v1 stop-confirmation polling; neither value is rendered into prompt content. Restored board timestamps come from host/transcript evidence, not this clock.',
-  ],
-  [
-    'hooks/auto-update-checker/cache.ts',
-    'Date.now() and process.pid name an on-disk quarantine directory during the atomic publish transaction; the path is filesystem bookkeeping, never serialized into prompt content.',
-  ],
-  [
-    'hooks/auto-update-checker/checker.ts',
-    'Date.now()/Math.random() compose a per-run temp token for install bookkeeping; it names local directories and never reaches the prompt prefix.',
-  ],
-  [
-    'hooks/task-session-manager/tool-execute-hooks.ts',
-    'Date.now() stamps the internal markReconciled acknowledgement before a native continuation; the value is board bookkeeping and is never formatted into prompt content (the hook writes tool args and board state only).',
+    'Date.now() calculates and checks persisted quota reset deadlines only; timestamp values never enter prompt content.',
   ],
 ]);
 

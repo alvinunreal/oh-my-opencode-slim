@@ -43,6 +43,12 @@ export interface TuiGatesSnapshot extends SidebarConfigState {
   updateCheckerEnabled: boolean;
   questionTimeoutMs: number;
   disabledCommands: ReadonlySet<string>;
+  /**
+   * Whether session-scoped preset routing (session binding, new-session
+   * creation) is active. False when `backgroundJobs.mode` is `off`; global
+   * preset editing remains available regardless.
+   */
+  presetRouting: boolean;
 }
 
 /**
@@ -86,6 +92,7 @@ function failOpenTuiGates(): TuiGatesSnapshot {
     updateCheckerEnabled: true,
     questionTimeoutMs: 0,
     disabledCommands: new Set(),
+    presetRouting: true,
   };
 }
 
@@ -106,9 +113,12 @@ export function warningsMakeConfigInvalid(
 }
 
 /** Derive every gate from one snapshot. Pure; no file access. */
-function deriveTuiGates(snapshot: PluginConfigSnapshot): TuiGatesSnapshot {
+function deriveTuiGates(
+  snapshot: PluginConfigSnapshot,
+  hostFlavor?: string,
+): TuiGatesSnapshot {
   const config = snapshot.config;
-  const featureGates = resolveFeatureGates(config);
+  const featureGates = resolveFeatureGates(config, hostFlavor);
   return {
     tuiEnabled: featureGates.tui,
     sidebarEnabled: featureGates.sidebar,
@@ -122,6 +132,7 @@ function deriveTuiGates(snapshot: PluginConfigSnapshot): TuiGatesSnapshot {
       ? { presetName: config.preset }
       : {}),
     disabledCommands: new Set(config.disabled_commands ?? []),
+    presetRouting: featureGates.presetRouting,
   };
 }
 
@@ -154,7 +165,7 @@ export function probeTuiGates(
     const snapshot = readPluginConfigSnapshot(directory, { hostFlavor, fresh });
     return {
       read: {
-        gates: deriveTuiGates(snapshot),
+        gates: deriveTuiGates(snapshot, hostFlavor),
         fingerprint: snapshot.fingerprint,
         paneConfig: undefined,
         readFailed: false,

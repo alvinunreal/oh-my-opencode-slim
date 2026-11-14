@@ -10,7 +10,7 @@ the built-in `/models`, so it triggers no LLM turn.
 
 | Level | What you do |
 |-------|-------------|
-| 1. Preset list | Apply / Edit / Delete a preset, start a bound session (v2), or create a preset |
+| 1. Preset list | Apply / Edit / Delete an existing preset, or create a preset |
 | 2. Agent arrangement | Choose a Base preset, add / remove / edit local agents, then Save (or Save & Apply) |
 | 3. Edit agent | Pick model → variant (thinking strength) → temperature → options (JSON) |
 
@@ -35,25 +35,14 @@ the built-in `/models`, so it triggers no LLM turn.
 > delegation. Listing `preset` in `disabled_commands` removes both the TUI
 > entry and the server command.
 
-## Start a session from a preset
+To choose a preset for new work, open a new session and run
+`/preset <name>` in it.
 
-On v2, open `/preset`, select a preset, and choose **New session**. It opens
-an empty session in the current directory and workspace, with the selected
-team already bound. Creation sends no message and leaves the global default
-unchanged.
-
-The binding covers subagent inference settings: models, variants, temperature,
-provider options and fallback chains. The main-agent model uses OpenCode's
-native selection; prompts, tools, skills and MCPs follow normal host configuration.
-
-> **`backgroundJobs.mode: "off"` disables session bindings.** That mode leaves
+> **`backgroundJobs.mode: "off"` disables session bindings.** Session bindings
+> remain available in the V2 `native` default; `off` leaves
 > native delegation untouched: no session `/preset` command, RPC, or child
 > snapshot. Children use the registered agent configuration, and the `preset`
 > global default still selects those settings at startup.
-
-If creation succeeds but binding fails, the error includes the new session ID.
-Open that session and use **Apply preset → Current session**. A host shutdown
-between creation and binding can also leave an unbound empty session.
 
 ## Reading the current team
 
@@ -83,7 +72,7 @@ command restores the picker and the binding read.
 ## Scope and when changes take effect
 
 On v2, a root work session captures its subagent inference configuration before
-its first managed prompt is admitted. Its new native subagents inherit their
+its first prompt is admitted. Its new native subagents inherit their
 direct parent's snapshot, including model variants, inference options and fallback
 chains. Default-bound roots refresh their snapshot on their next admission;
 named-preset bindings stay pinned until explicitly reapplied.
@@ -92,7 +81,6 @@ named-preset bindings stay pinned until explicitly reapplied.
 |--------|---------------|---------------------|
 | Manager → Current session | The session's inference snapshot in OpenCode's plugin storage | New children and explicit same-agent continuations of bound children |
 | `/preset <name>` (TUI fast path or server-side) | The same session snapshot, for the session the command runs in | New children and explicit same-agent continuations of bound children |
-| Manager → New session | The selected inference snapshot on a new empty session | Subagents delegated from the new session |
 | Manager → Global default | The selected preset in the user configuration | Unbound sessions and default-bound roots on their next admission, subject to project and environment overrides |
 | Edit the user configuration's `preset` | The global default | Future bindings and default-bound roots on their next admission |
 | Edit a project configuration's `preset` | That project's default | Future bindings in that project and default-bound roots on their next admission |

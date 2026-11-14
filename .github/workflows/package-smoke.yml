@@ -14,7 +14,7 @@ on:
       - 'LICENSE'
       - 'README*.md'
       - 'scripts/generate-schema.ts'
-      - 'scripts/verify-opencode-host-smoke.ts'
+      - 'scripts/verify-v2-native-lifecycle.ts'
       - 'scripts/verify-release-artifact.ts'
       - 'src/**'
   push:
@@ -50,4 +50,6 @@ jobs:
         run: bun run verify:release
 
       - name: Verify OpenCode host smoke test
-        run: bun run verify:host-smoke
+        run: |
+          npm install --prefix "$RUNNER_TEMP/opencode" @opencode/cli@2.3.0
+          V2_LIFECYCLE_HOST="$RUNNER_TEMP/opencode/node_modules/.bin/opencode" bun run verify:host-smoke

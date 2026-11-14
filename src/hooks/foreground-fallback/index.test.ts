@@ -12,8 +12,6 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { isInternalInitiatorPart } from '../../utils';
-import { BackgroundJobBoard } from '../../utils/background-job-board';
-import { createBackgroundJobTerminalGate } from '../../utils/background-job-terminal-gate';
 import {
   INTERNAL_INITIATOR_METADATA_KEY,
   SLIM_INTERNAL_INITIATOR_MARKER,
@@ -24,16 +22,8 @@ import { buildPluginInput } from '../../v2/client-shim';
 import { mapV2EventToV1 } from '../../v2/event-adapter';
 import { recordInternalAdmission } from '../../v2/internal-admissions';
 import { createV2InterviewBridge, markerText } from '../../v2/interview-bridge';
-import {
-  createSessionContextHandler,
-  createSessionPromptBridge,
-} from '../../v2/setup';
-import { createSubagentExecutorWrapper } from '../../v2/subagent-executor-wrapper';
+import { createSessionPromptBridge } from '../../v2/setup';
 import { SessionLifecycle } from '../session-lifecycle';
-import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../task-session-manager/board-injection';
-import { createBackgroundFallbackHandoff } from '../task-session-manager/fallback-observation-transfer';
-import type { FallbackNotice } from '../task-session-manager/revived-run-tracker';
-import { createRevivedRunTracker } from '../task-session-manager/revived-run-tracker';
 import {
   ForegroundFallbackManager,
   type ForegroundFallbackOptions,
@@ -2857,8 +2847,8 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     chains?: Record<string, Array<string | { id: string; variant: string }>>;
     switchModel?: (sessionID: string, model: unknown) => Promise<unknown>;
     promptAsyncImpl?: (args: unknown) => Promise<unknown>;
-    handoff?: ReturnType<typeof createBackgroundFallbackHandoff>;
-    readBackgroundGeneration?: (sessionID: string) => number | undefined;
+    messagesData?: unknown[];
+    messagesImpl?: (args: unknown) => Promise<unknown>;
     retryEnabled?: boolean;
     maxRetries?: number;
   }) {
@@ -2872,6 +2862,8 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     const { client, mocks } = createMockClient({
       getData: info,
       promptAsyncImpl: options?.promptAsyncImpl,
+      messagesData: options?.messagesData,
+      messagesImpl: options?.messagesImpl,
     });
     const switchModel = mock(
       options?.switchModel ??
@@ -2894,8 +2886,6 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
         onSessionModelChanged: onChanged,
         initialRetryDelayMs: 0,
         retryDelayMs: 0,
-        backgroundFallbackHandoff: options?.handoff,
-        readBackgroundGeneration: options?.readBackgroundGeneration,
         v2RetryEnabled: options?.retryEnabled ?? true,
       }),
     );
@@ -2931,16 +2921,6 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
         message: 'Provider blocked the response',
       },
     },
-  });
-  const refused = (completedAt = Date.now()) => ({
-    id: 'assistant-1',
-    type: 'assistant',
-    agent: 'orchestrator',
-    model: started('child').data.model,
-    finish: 'content-filter',
-    error: failed('child').data.error,
-    rawFinish: 'refusal',
-    time: { created: completedAt - 100, completed: completedAt },
   });
   const settle = async () => {
     for (let i = 0; i < 30; i++) await Promise.resolve();
@@ -3027,75 +3007,6 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     manager.dispose();
   });
 
-  test('v2 foreground reattaches after a retry selects an unavailable route', async () => {
-    const childID = 'child-no-route';
-    const created = Date.now() - 60_000;
-    const history = [
-      {
-        id: 'compact-child',
-        type: 'compaction',
-        status: 'completed',
-        time: { created },
-      },
-      ...Array.from({ length: 50 }, (_, i) => ({
-        id: `step-${i}`,
-        type: 'assistant',
-        time: { created: created + i + 1 },
-      })),
-    ];
-    const { manager, mocks, switchModel, durable } = fixture({
-      parentID: 'parent',
-      chains: { orchestrator: ['test/a', 'test/b', 'test/c'] },
-    });
-    const host = installV2History(history);
-    switchModel.mockImplementation(async (_id, model) => {
-      durable.id = (model as { id: string }).id;
-      durable.variant = 'default';
-    });
-    await manager.handleEvent({
-      type: 'session.created',
-      properties: { info: { id: childID, parentID: 'parent' } },
-    });
-    await manager.handleV2Retry(
-      retryEvent(childID, 'a', { retry: true, delay: 2_000 }),
-      switchModel,
-    );
-    const result = {
-      output: { sessionID: childID, status: 'completed' },
-      content: 'CHILD_OK',
-    };
-    const execute = mock(async () => {
-      if (execute.mock.calls.length === 1) {
-        for (const event of mapV2EventToV1(noRoute(childID, 'test/b')))
-          await manager.handleEvent(event);
-        throw new Error(
-          `Subagent failed (sessionID: ${childID}): Model unavailable: test/b`,
-        );
-      }
-      return result;
-    });
-    const wrapper = createSubagentExecutorWrapper({
-      register: () => {},
-      context: host.context,
-      refusalOutcome: (...args) => manager.refusedChildOutcome(...args),
-    });
-    expect(
-      await wrapper.wrap(execute)(
-        { agent: 'orchestrator', model: 'test/a' },
-        { id: 'call', sessionID: 'parent' },
-      ),
-    ).toBe(result);
-    expect(switchModel).toHaveBeenCalledTimes(2);
-    expect(execute).toHaveBeenCalledTimes(2);
-    expect(execute.mock.calls[1]?.[0]).toMatchObject({
-      sessionID: childID,
-      prompt: expect.stringContaining('model was unavailable'),
-    });
-    expect(execute.mock.calls[1]?.[0]).not.toHaveProperty('model');
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-    manager.dispose();
-  });
-
   test('v2 no-route falls back when the session has no selected model', async () => {
     const { manager, mocks, switchModel, info } = fixture();
     info.model = undefined;
@@ -3121,149 +3032,52 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     manager.dispose();
   });
 
-  test('v2 unmanaged child no-route does not switch or continue', async () => {
+  test('v2 native child no-route continues in place without a parent completion write', async () => {
     const { manager, mocks, switchModel } = fixture({ parentID: 'parent' });
-    installV2History([
-      { id: 'user', type: 'user', time: { created: Date.now() } },
-    ]);
-    await manager.handleEvent({
-      type: 'session.created',
-      properties: { info: { id: 'unmanaged', parentID: 'parent' } },
-    });
-    for (const event of mapV2EventToV1(noRoute('unmanaged')))
-      await manager.handleEvent(event);
-    await settle();
-    expect(switchModel).not.toHaveBeenCalled();
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
-    manager.dispose();
-  });
-
-  test('v2 foreground leaves no-route untouched when the wrapper cannot read context', async () => {
-    const childID = 'child-context-failed';
-    const { manager, switchModel } = fixture({ parentID: 'parent' });
-    await manager.handleEvent({
-      type: 'session.created',
-      properties: { info: { id: childID, parentID: 'parent' } },
-    });
-    const failure = new Error(
-      `Subagent failed (sessionID: ${childID}): Model unavailable: test/a`,
-    );
-    const wrapper = createSubagentExecutorWrapper({
-      register: () => {},
-      context: async () => {
-        throw new Error('context unavailable');
-      },
-      refusalOutcome: (...args) => manager.refusedChildOutcome(...args),
-    });
-    const execute = wrapper.wrap(async () => {
-      for (const event of mapV2EventToV1(noRoute(childID)))
-        await manager.handleEvent(event);
-      throw failure;
-    });
-    await expect(execute({}, { id: 'call', sessionID: 'parent' })).rejects.toBe(
-      failure,
-    );
-    expect(switchModel).not.toHaveBeenCalled();
-    manager.dispose();
-  });
-
-  test('v2 background no-route keeps the handoff and corrects its notice', async () => {
-    const childID = 'background-no-route';
-    const created = Date.now() - 1_000;
-    const board = new BackgroundJobBoard();
-    const run = board.registerLaunch({
-      taskID: childID,
-      parentSessionID: 'parent',
-      agent: 'orchestrator',
-      background: true,
-    });
-    const tracker = createRevivedRunTracker({
-      input: { directory: '/test', client: {} } as never,
-      backgroundJobBoard: board,
-      terminalGate: {
-        reconcile: async () => ({ kind: 'deferred', record: run }),
-      } as never,
-    });
-    const prepare = spyOn(tracker, 'prepareObservation');
-    const { manager, mocks, switchModel } = fixture({
-      parentID: 'parent',
-      handoff: createBackgroundFallbackHandoff({
-        backgroundJobBoard: board,
-        revivedRunTracker: tracker,
-      }),
-      readBackgroundGeneration: () => run.generation,
-    });
-    const host = installV2History([
-      {
-        id: 'compact-background',
-        type: 'compaction',
-        status: 'completed',
-        time: { created },
-      },
-    ]);
-    const text = `<subagent sessionID="${childID}" state="error">\nModel unavailable: test/a\n</subagent>`;
-    const notice = {
-      id: 'notice',
-      type: 'synthetic',
-      text,
-      time: { created: Date.now() },
-    };
-    const handler = createSessionContextHandler({
-      interviewHandleContext: async () => {},
-      messagesTransform: async () => {},
-      sessionContext: async (id) =>
-        id === 'parent' ? [notice] : host.context(),
-      backgroundGeneration: () => run.generation,
-      refusalOutcome: (...args) => manager.refusedChildOutcome(...args),
-    });
-    const event = {
-      sessionID: 'parent',
-      agent: 'orchestrator',
-      model: {},
-      system: [],
-      tools: {},
-      messages: [
-        { id: notice.id, role: 'user', content: [{ type: 'text', text }] },
-      ],
-    };
-    for (const mapped of mapV2EventToV1(noRoute(childID)))
-      await manager.handleEvent(mapped);
-    await handler(event as never);
-    expect(switchModel).toHaveBeenCalledTimes(1);
-    expect(
-      mocks.promptAsync.mock.calls.filter(
-        ([args]) => (args as { path: { id: string } }).path.id === childID,
-      ),
-    ).toHaveLength(1);
-    expect(tracker.isTracked(childID, run.generation)).toBe(true);
-    expect(prepare).toHaveBeenCalledWith(
-      expect.objectContaining({ baselineMessageID: 'compact-background' }),
-    );
-    expect(event.messages[0].content[0].text).toBe(text);
-    expect(event.messages.at(-1)?.content[0].text).toContain('test/b');
-    manager.dispose();
-  });
-
-  test('v2 background no-route does not switch without an armed handoff', async () => {
-    const handoff = {
-      prepare: mock(() => false),
-      admit: mock(() => false),
-      reject: mock(() => {}),
-      settleUnresolved: mock(() => {}),
-    };
-    const { manager, mocks, switchModel } = fixture({
-      parentID: 'parent',
-      handoff,
-      readBackgroundGeneration: () => 1,
-    });
     installV2History([
       { id: 'user', type: 'user', time: { created: Date.now() - 1 } },
     ]);
-    for (const mapped of mapV2EventToV1(noRoute('background-unarmed')))
-      await manager.handleEvent(mapped);
-    expect(handoff.prepare).toHaveBeenCalledTimes(1);
-    expect(switchModel).not.toHaveBeenCalled();
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    await manager.handleEvent({
+      type: 'session.created',
+      properties: { info: { id: 'native-child', parentID: 'parent' } },
+    });
+    for (const event of mapV2EventToV1(noRoute('native-child')))
+      await manager.handleEvent(event);
+    await settle();
+    expect(switchModel).toHaveBeenCalledWith('native-child', {
+      providerID: 'test',
+      id: 'b',
+      variant: 'high',
+    });
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
+      path: { id: 'native-child' },
+      body: {
+        agent: 'orchestrator',
+        parts: [
+          expect.objectContaining({
+            text: expect.stringContaining('selected model was unavailable'),
+          }),
+        ],
+      },
+    });
+
+    // A stale previous-period terminal and its synthesized idle must not
+    // produce a synthetic parent completion write: the continuation run
+    // only ever prompts the child itself.
+    for (const event of mapV2EventToV1({
+      type: 'session.execution.succeeded',
+      created: Date.now() + 1,
+      data: { sessionID: 'native-child' },
+    }))
+      await manager.handleEvent(event);
+    await settle();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.promptAsync.mock.calls.map(
+        ([input]) => (input as { path?: { id?: string } }).path?.id,
+      ),
+    ).toEqual(['native-child']);
     manager.dispose();
   });
 
@@ -3343,36 +3157,6 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
       manager.dispose();
       await fs.rm(directory, { recursive: true, force: true });
     }
-  });
-
-  test('v2 foreground re-attach keeps request rejections', async () => {
-    const { manager, switchModel } = fixture({
-      parentID: 'parent',
-      chains: { orchestrator: ['test/a', 'test/b', 'test/c'] },
-    });
-    const sessionID = 'foreground-reattach-policy';
-    await manager.handleEvent(started(sessionID));
-    await manager.handleEvent(failed(sessionID));
-    await settle();
-    manager.noteV2Prompt(sessionID);
-    await manager.handleEvent({
-      type: 'session.step.ended',
-      data: { sessionID, finish: 'tool-calls' },
-    });
-    await manager.handleV2Retry(
-      {
-        sessionID,
-        agent: 'orchestrator',
-        model: { providerID: 'test', id: 'b' },
-        error: { type: 'provider.invalid-request', message: 'cyber_policy' },
-        decision: { retry: false },
-      },
-      switchModel,
-    );
-    expect(switchModel.mock.calls.map(([, model]) => model)).toEqual([
-      { providerID: 'test', id: 'b' },
-      { providerID: 'test', id: 'c' },
-    ]);
   });
 
   test('v2 request rejections survive a successful tool step on the fallback', async () => {
@@ -3469,318 +3253,6 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
       { providerID: 'test', id: 'c' },
       { providerID: 'test', id: 'a' },
     ]);
-  });
-
-  test('v2 background refusal hands off its continued run and defers an empty successor', async () => {
-    const board = new BackgroundJobBoard();
-    const run = board.registerLaunch({
-      taskID: 'child-bg',
-      parentSessionID: 'parent',
-      agent: 'orchestrator',
-      background: true,
-    });
-    const admission = deferred<void>();
-    let manager: ForegroundFallbackManager;
-    const input = { directory: '/test', client: {} } as never;
-    const gate = createBackgroundJobTerminalGate({
-      backgroundJobBoard: board,
-      input,
-      readRuntime: async (_run, readStartedAt) => ({
-        kind: 'quiescent',
-        origin: 'v2-successor',
-        readStartedAt,
-        terminalOutcome: 'succeeded',
-      }),
-      baselineFor: (id, generation) => tracker.baselineFor(id, generation),
-      observationRevisionFor: (id, generation) =>
-        tracker.revisionFor(id, generation),
-      isObservationPending: (id, generation) =>
-        manager.isFallbackInProgress(id) ||
-        tracker.isObservationPending(id, generation),
-    });
-    const tracker = createRevivedRunTracker({
-      input,
-      backgroundJobBoard: board,
-      terminalGate: gate,
-    });
-    const child = fixture({
-      parentID: 'parent',
-      handoff: createBackgroundFallbackHandoff({
-        backgroundJobBoard: board,
-        revivedRunTracker: tracker,
-      }),
-      readBackgroundGeneration: () => run.generation,
-      promptAsyncImpl: () => admission.promise,
-    });
-    manager = child.manager;
-    try {
-      await manager.handleEvent(started('child-bg'));
-      await manager.handleEvent(failed('child-bg'));
-      await settle();
-      expect(child.switchModel).toHaveBeenCalledTimes(1);
-      expect(child.mocks.promptAsync).toHaveBeenCalledTimes(1);
-      expect(tracker.isObservationPending('child-bg', run.generation)).toBe(
-        true,
-      );
-      expect((await gate.reconcile(run)).kind).toBe('deferred');
-      admission.resolve();
-      await settle();
-      expect(tracker.isTracked('child-bg', run.generation)).toBe(true);
-    } finally {
-      admission.resolve();
-      manager.dispose();
-      tracker.dispose();
-      gate.dispose();
-    }
-  });
-
-  test('v2 waiter claims the refused assistant before the pump and both join once', async () => {
-    const { manager, switchModel } = fixture({ parentID: 'parent' });
-    const outcome = manager.refusedChildOutcome('child', refused());
-    await manager.handleEvent(started('child'));
-    await manager.handleEvent(failed('child'));
-    expect(await outcome).toBe('test/b');
-    expect(switchModel).toHaveBeenCalledTimes(1);
-  });
-
-  test('v2 waiter leaves a refusal from before manager startup unchanged', async () => {
-    const { manager, switchModel } = fixture({ parentID: 'parent' });
-    expect(
-      await manager.refusedChildOutcome('child', refused(Date.now() - 1)),
-    ).toBeUndefined();
-    expect(switchModel).not.toHaveBeenCalled();
-  });
-
-  test('v2 waiter returns immediately when fallback is disabled', async () => {
-    const { manager, switchModel } = fixture({
-      parentID: 'parent',
-      retryEnabled: false,
-    });
-    expect(
-      await manager.refusedChildOutcome('child', refused()),
-    ).toBeUndefined();
-    expect(switchModel).not.toHaveBeenCalled();
-  });
-
-  test('v2 foreground refusal reattaches the same child and returns its result', async () => {
-    const child = fixture({ parentID: 'parent' });
-    const wrapper = createSubagentExecutorWrapper({
-      register: () => {},
-      context: async () => [refused()],
-      refusalOutcome: (...args) => child.manager.refusedChildOutcome(...args),
-    });
-    const result = {
-      output: { sessionID: 'child', status: 'completed' },
-      content: 'CHILD_OK',
-    };
-    const execute = mock(async () => {
-      if (execute.mock.calls.length === 1) {
-        await child.manager.handleEvent(started('child'));
-        throw new Error(
-          'Subagent failed (sessionID: child): Provider blocked the response',
-        );
-      }
-      return result;
-    });
-    expect(
-      await wrapper.wrap(execute)(
-        { agent: 'orchestrator', model: 'test/a' },
-        { id: 'call', sessionID: 'parent' },
-      ),
-    ).toBe(result);
-    expect(execute).toHaveBeenCalledTimes(2);
-    expect(execute.mock.calls[1]?.[0]).toMatchObject({ sessionID: 'child' });
-    expect(execute.mock.calls[1]?.[0]).not.toHaveProperty('model');
-  });
-
-  test('v2 foreground keeps the native error when no model or no refusal is available', async () => {
-    const failure = new Error(
-      'Subagent failed (sessionID: child): invalid request',
-    );
-    const outcome = mock(async () => undefined);
-    const history: Array<Record<string, unknown>> = [
-      { id: 'message', type: 'assistant', finish: 'stop' },
-    ];
-    const wrapper = createSubagentExecutorWrapper({
-      register: () => {},
-      context: async () => history,
-      refusalOutcome: outcome,
-    });
-    const execute = wrapper.wrap(async () => {
-      throw failure;
-    });
-    await expect(execute({}, { id: 'call', sessionID: 'parent' })).rejects.toBe(
-      failure,
-    );
-    expect(outcome).not.toHaveBeenCalled();
-    history[0].finish = 'content-filter';
-    await expect(execute({}, { id: 'call', sessionID: 'parent' })).rejects.toBe(
-      failure,
-    );
-    expect(outcome).toHaveBeenCalledTimes(1);
-  });
-
-  function notice(
-    result: string | undefined,
-    options: { running?: boolean } = {},
-  ) {
-    const text =
-      '<subagent sessionID="child" state="error" description="inspect">\nProvider blocked the response\n</subagent>';
-    const prefix = '\u00a742\u00a7 ';
-    const sessionContext = mock(async (_sessionID: string) => [
-      {
-        id: 'assistant-1',
-        type: 'assistant',
-        finish: 'content-filter',
-        error: {
-          type: 'provider.content-filter',
-          message: 'Provider blocked the response',
-        },
-        time: { completed: Date.now() },
-      },
-    ]);
-    const handler = createSessionContextHandler({
-      interviewHandleContext: async () => {},
-      messagesTransform: async () => {},
-      sessionContext,
-      backgroundGeneration: (parent, child, runningOnly) =>
-        parent === 'parent' &&
-        child === 'child' &&
-        (!runningOnly || options.running !== false)
-          ? 1
-          : undefined,
-      refusalOutcome: async () => result,
-    });
-    const event = {
-      sessionID: 'parent',
-      agent: 'orchestrator',
-      model: {},
-      system: [],
-      tools: {},
-      messages: [
-        {
-          id: 'notice',
-          role: 'user',
-          agent: 'orchestrator',
-          content: [{ type: 'text', text: prefix + text }],
-        },
-      ],
-    };
-    return { handler, event, text, prefix, sessionContext };
-  }
-
-  test('v2 parent keeps a prefixed refusal and receives a trailing correction', async () => {
-    const { handler, event, prefix, text } = notice('test/b');
-    await handler(event as never);
-    expect(event.messages[0].content[0].text).toBe(prefix + text);
-    expect(event.messages.at(-1)?.content[0]).toMatchObject({
-      synthetic: true,
-      text: expect.stringContaining('test/b'),
-      metadata: { [BACKGROUND_JOB_BOARD_METADATA_KEY]: true },
-    });
-    expect(event.messages.at(-1)?.content[0]).not.toHaveProperty('cache');
-    expect(event.messages[0].content[0]).toHaveProperty('cache');
-  });
-
-  test('v2 reuses the refused child context across parent requests', async () => {
-    const { handler, event, sessionContext } = notice('test/b');
-    const next = structuredClone(event);
-    await handler(event as never);
-    await handler(next as never);
-    expect(event.messages.at(-1)?.content[0].text).toContain('test/b');
-    expect(next.messages.at(-1)?.content[0].text).toContain('test/b');
-    expect(
-      sessionContext.mock.calls.filter(([id]) => id === 'child'),
-    ).toHaveLength(1);
-  });
-
-  test('v2 skips refused child context reads for terminal jobs', async () => {
-    const { handler, event, sessionContext } = notice('test/b', {
-      running: false,
-    });
-    await handler(event as never);
-    expect(event.messages).toHaveLength(1);
-    expect(
-      sessionContext.mock.calls.filter(([id]) => id === 'child'),
-    ).toHaveLength(0);
-  });
-
-  test('v2 parent retains the native error when no continuation is admitted', async () => {
-    const { handler, event, prefix, text } = notice(undefined);
-    await handler(event as never);
-    expect(event.messages[0].content[0].text).toBe(prefix + text);
-  });
-
-  test('v2 correction disappears after the child leaves the board', async () => {
-    const board = new BackgroundJobBoard();
-    const completedAt = Date.now();
-    board.registerLaunch({
-      taskID: 'child',
-      parentSessionID: 'parent',
-      agent: 'explorer',
-      description: 'inspect',
-      background: true,
-      now: completedAt - 1,
-    });
-    const text =
-      '<subagent sessionID="child" state="error" description="inspect">\ncontent filter\n</subagent>';
-    const refusalOutcome = mock(async () => 'test/b');
-    const handler = createSessionContextHandler({
-      interviewHandleContext: async () => {},
-      messagesTransform: async () => {},
-      sessionContext: async () => [
-        {
-          id: 'assistant-1',
-          type: 'assistant',
-          finish: 'content-filter',
-          error: { message: 'content filter' },
-          time: { completed: completedAt },
-        },
-      ],
-      backgroundGeneration: (_parent, _child, runningOnly, refusalTime) => {
-        const record = board.get('child');
-        return record &&
-          (!runningOnly || record.state === 'running') &&
-          (refusalTime === undefined || refusalTime >= record.runStartedAt)
-          ? record.generation
-          : undefined;
-      },
-      refusalOutcome,
-    });
-    const event = () => ({
-      sessionID: 'parent',
-      agent: 'orchestrator',
-      model: {},
-      system: [],
-      tools: {},
-      messages: [
-        { id: 'notice', role: 'user', content: [{ type: 'text', text }] },
-      ],
-    });
-    const running = event();
-    await handler(running as never);
-    expect(running.messages[0].content[0].text).toBe(text);
-    expect(running.messages.at(-1)?.content[0].text).toContain('test/b');
-    expect(refusalOutcome).toHaveBeenCalledTimes(1);
-    board.registerLaunch({
-      taskID: 'child',
-      parentSessionID: 'parent',
-      agent: 'explorer',
-      description: 'inspect again',
-      background: true,
-      now: completedAt + 1,
-    });
-    const relaunched = event();
-    await handler(relaunched as never);
-    expect(relaunched.messages[0].content[0].text).toBe(text);
-    expect(relaunched.messages).toHaveLength(1);
-    expect(refusalOutcome).toHaveBeenCalledTimes(1);
-    board.drop('child');
-    expect(board.get('child')).toBeUndefined();
-    const completed = event();
-    await handler(completed as never);
-    expect(completed.messages[0].content[0].text).toBe(text);
-    expect(completed.messages).toHaveLength(1);
   });
 
   test('v2 refusal continuation names the refused step agent', async () => {
@@ -4004,13 +3476,16 @@ describe('ForegroundFallbackManager v2 content-filter refusal', () => {
     expect(manager.isFallbackInProgress('root')).toBe(false);
   });
 
-  test('v2 content-filter child switches without an orphan continuation', async () => {
+  test('v2 content-filter child continues in place', async () => {
     const { manager, mocks, switchModel } = fixture({ parentID: 'parent' });
     await manager.handleEvent(started('child'));
     await manager.handleEvent(failed('child'));
     await settle();
     expect(switchModel).toHaveBeenCalledTimes(1);
-    expect(mocks.promptAsync).not.toHaveBeenCalled();
+    expect(mocks.promptAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.promptAsync.mock.calls[0]?.[0]).toMatchObject({
+      path: { id: 'child' },
+    });
   });
 
   test('v2 content-filter uses the step model when the session has no explicit model', async () => {
@@ -4326,7 +3801,6 @@ describe('ForegroundFallbackManager v2 retry hook', () => {
     function promptBridgeFor(mgr: ForegroundFallbackManager) {
       return createSessionPromptBridge(
         async () => {},
-        undefined,
         (sid, msgId) => mgr.observeExternalPromptIntent(sid, msgId),
       );
     }
@@ -6673,7 +6147,7 @@ describe('ForegroundFallbackManager session.error', () => {
         admit: (
           sessionID: string,
           generation: number | undefined,
-          _notice?: FallbackNotice,
+          _notice?: unknown,
         ) => {
           calls.admit.push([sessionID, generation]);
         },
@@ -12879,28 +12353,39 @@ describe('fallback restoration', () => {
     expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
   });
 
-  test('T4: a foreground child restores only after reattachment', async () => {
-    const f = fixture({ parentID: 'parent' });
-    await f.refuse();
-    await f.manager.handleEvent(idle());
-    expect(f.switchModel).toHaveBeenCalledTimes(1);
-    f.manager.noteV2Prompt(sid);
-    await f.manager.handleEvent(busy());
-    await f.manager.handleEvent(idle());
-    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
-  });
+  test.each(['succeeded', 'interrupted'] as const)(
+    'stale execution.%s and mapped idle keep the child continuation fence',
+    async (ending) => {
+      const f = fixture({ parentID: 'parent' });
+      await f.refuse();
+      expect(f.manager.restoreTarget(sid)).toBeUndefined();
+      expect(f.switchModel).toHaveBeenCalledTimes(1);
 
-  test('S5: foreground child waits for continuation busy after reattachment', async () => {
-    const f = fixture({ parentID: 'parent' });
-    await f.manager.handleEvent(busy());
-    await f.refuse();
-    f.manager.noteV2Prompt(sid);
-    await f.manager.handleEvent(idle());
-    expect(f.switchModel).toHaveBeenCalledTimes(1);
-    await f.manager.handleEvent(busy());
-    await f.manager.handleEvent(idle());
-    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
-  });
+      for (const event of mapV2EventToV1({
+        type: `session.execution.${ending}`,
+        created: clock.now() + 1,
+        data: {
+          sessionID: sid,
+          ...(ending === 'interrupted' ? { reason: 'user' } : {}),
+        },
+      }))
+        await f.manager.handleEvent(event);
+      expect(f.manager.restoreTarget(sid)).toBeUndefined();
+      expect(f.switchModel).toHaveBeenCalledTimes(1);
+
+      // Only the continuation's actual started event admits the restore after
+      // its subsequent idle, not the stale period's synthesized idle above.
+      for (const event of mapV2EventToV1({
+        type: 'session.execution.started',
+        created: clock.now() + 2,
+        data: { sessionID: sid },
+      }))
+        await f.manager.handleEvent(event);
+      expect(f.manager.restoreTarget(sid)).toBeUndefined();
+      await f.manager.handleEvent(idle());
+      expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+    },
+  );
 
   test('S6: exhausted chain restores after an idle during refusal handling', async () => {
     const f = fixture({ chain: ['primary/a', 'backup/b'] });
@@ -12924,14 +12409,6 @@ describe('fallback restoration', () => {
     const f = fixture({
       promptAsyncImpl: async () => ({ error: { name: 'BadRequest' } }),
     });
-    await f.manager.handleEvent(busy());
-    await f.refuse();
-    await f.manager.handleEvent(idle());
-    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
-  });
-
-  test('an unarmed background handoff releases the fence', async () => {
-    const f = fixture({ parentID: 'parent', unarmedHandoff: true });
     await f.manager.handleEvent(busy());
     await f.refuse();
     await f.manager.handleEvent(idle());
@@ -13124,7 +12601,7 @@ describe('fallback restoration', () => {
     expect(f.manager.restoreTarget(sid)).toBeUndefined();
   });
 
-  test('v2 foreground child restores after its no-route waiter cannot recover', async () => {
+  test('v2 native child no-route continues in place and never writes a parent completion', async () => {
     const f = fixture({ parentID: 'parent' });
     await f.manager.handleEvent({
       type: 'session.created',
@@ -13140,21 +12617,28 @@ describe('fallback restoration', () => {
       type: 'provider.no-route',
       message: 'no route for backup/b',
     };
-    await f.manager.handleEvent({
+    for (const event of mapV2EventToV1({
       type: 'session.execution.failed',
       created: clock.now(),
       data: { sessionID: sid, error },
-    });
-    await f.manager.handleEvent(idle());
-    expect(f.switchModel).toHaveBeenCalledTimes(1);
-    await f.manager.refusedChildOutcome(sid, {
-      type: 'no-route',
-      id: 'unrecoverable',
-      error,
-      time: { completed: clock.now() },
-    });
+    }))
+      await f.manager.handleEvent(event);
     for (let i = 0; i < 40; i++) await Promise.resolve();
-    expect(f.switchModel).toHaveBeenLastCalledWith(sid, origin);
+    expect(f.switchModel).toHaveBeenCalledTimes(2);
+
+    for (const event of mapV2EventToV1({
+      type: 'session.execution.succeeded',
+      created: clock.now() + 1,
+      data: { sessionID: sid },
+    }))
+      await f.manager.handleEvent(event);
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+    expect(f.manager.restoreTarget(sid)).toBeUndefined();
+    expect(
+      f.session.promptAsync.mock.calls.every(
+        (call) => (call[0] as { path: { id: string } }).path.id === sid,
+      ),
+    ).toBe(true);
   });
 
   test('T7: v1 replay retains the failed model and variant', async () => {

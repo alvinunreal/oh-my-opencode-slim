@@ -2,13 +2,15 @@
 
 ## Responsibility
 
-OpenCode v2 (`opencode2`) host adapter. Bridges the existing v1 plugin factory
+OpenCode 2 host adapter. Bridges the existing v1 plugin factory
 into v2's promise-plugin transform/runtime-hook API so a single published
 package runs on both hosts.
 
 v2 loads `default.setup(ctx)` (v1 loads `default.server`). `setup` wraps the v1
 factory to reuse all build logic, then translates the returned v1 `Hooks` into
-v2 registrations. v1 behavior is unchanged.
+v2 registrations. Registration-only embedded V2 contexts on V1 skip setup
+before configuration validation; the V1 `server()` entry owns their managed
+lifecycle and configuration.
 
 The existing retry hook can record explicit quota-reset deadlines through the
 foreground fallback manager. The final `model.request` bridge checks a cooling
@@ -29,15 +31,15 @@ immediately before native admission; it is never forwarded to the host.
 | Path | Role |
 |---|---|
 | `index.ts` | Barrel: re-exports `createV2Setup` and the v2 context types. Imported by `src/index.ts` for the dual `default` export. |
-| `setup.ts` | `createV2Setup()` → the `setup(ctx)` orchestrator v2 calls. Capability-guards reduced/TUI-side hosts (no `agent.transform`). Registers agents, tools, MCPs, commands, the merged context hook, the native `session.prompt` bridge (early synchronous `observePromptIntent` on line 1 of the prompt callback before permission/profile/admission awaits feeds external prompt intent to foreground fallback, while raw admission ids feed the v1 pending tracker ahead of its first-agent deferral), the chat.headers `session.model.request` bridge, the `session.compaction` bridge, tool-execute bridges, and the event pump. Session hooks register **unconditionally** on full v2 contexts: a registration failure fails setup loudly. MCP transform is registered before agent transform; setup never materializes `ctx.agent.list()`. The MCP callback captures host namespaces, then the agent callback finalizes the registry and opens prompt readiness. Deferred callbacks do not fail setup, but an agent callback before the MCP snapshot fails rather than finalizing incomplete policy. Managed prompts fail closed until agent finalization. Missing MCP transform is unsupported and fails setup. Other domain transforms remain independently try/catch-guarded with a zero-registration health check. Child-session permission rules are applied via `ctx.session.update({sessionID, permissions})` (`createPermissionRulesBridge`); missing `session.update` remains an optional degraded child bridge. Exports the pure command-marker helpers (`wrapCommandMarker`, `parseCommandMarker`). Plugin CHILD sessions freeze the current runtime profile (`createSessionProfileBridge`: `session.switchModel` only while the child still runs the startup-registered selection, including variant with absence normalized to `default`, + per-session request options), captured on the AWAITED `session.prompt` hook path so a first child request cannot race the event pump ? the raw-event consumer is only a prewarm/cleanup path.
+| `setup.ts` | `createV2Setup()` → the `setup(ctx)` orchestrator v2 calls. Capability-guards reduced/TUI-side hosts (no `agent.transform`). Registers agents, tools, MCPs, commands, the merged context hook, the native `session.prompt` bridge (early synchronous `observePromptIntent` before permission/profile awaits feeds external prompt intent to foreground fallback; no managed admission tracker is wired), the chat.headers `session.model.request` bridge, the `session.compaction` bridge, tool-execute bridges, and the event pump. Session hooks register **unconditionally** on full v2 contexts: a registration failure fails setup loudly. MCP transform is registered before agent transform; setup never materializes `ctx.agent.list()`. The MCP callback captures host namespaces, then the agent callback finalizes the registry and opens prompt readiness. Deferred callbacks do not fail setup, but an agent callback before the MCP snapshot fails rather than finalizing incomplete policy. Managed prompts fail closed until agent finalization. Missing MCP transform is unsupported and fails setup. Other domain transforms remain independently try/catch-guarded with a zero-registration health check. Child-session permission rules are applied via `ctx.session.update({sessionID, permissions})` (`createPermissionRulesBridge`); missing `session.update` remains an optional degraded child bridge. Exports the pure command-marker helpers (`wrapCommandMarker`, `parseCommandMarker`). Plugin CHILD sessions freeze the current runtime profile (`createSessionProfileBridge`: `session.switchModel` only while the child still runs the startup-registered selection, including variant with absence normalized to `default`, + per-session request options), captured on the AWAITED `session.prompt` hook path so a first child request cannot race the event pump ? the raw-event consumer is only a prewarm/cleanup path.
 | `types.ts` | v2 plugin context surface (`V2Context` + draft/event types), mirrored locally (v2 plugin package is not a build-time dependency). Runtime-probed session methods (`get`/`interrupt`/`switchModel`/`context`/`prompt`/`synthetic`/`update`/`switchAgent`) and the optional `mcp` domain are declared optional with probe notes. |
 | `session-submit.ts` | Shared `createSessionSubmit` (prompt-only user-prompt submit via `ctx.session.prompt`) + `textFromContent`; used by both the generic command bridge and the interview bridge to avoid a setup↔bridge import cycle. |
 | `preset-command.ts` | Server-side, apply-only `/preset` for non-TUI clients (issues #1474, #1700): lists presets with no argument, otherwise binds the invoking session through `session-preset-apply` (the same result as the TUI fast path). It never writes the global default. A config switch must not run a turn, and v2 has no display-only message channel (a synthetic inbox item enters the context on the next turn), so the command definition rejects with its feedback — the one surface a non-TUI client renders without creating a message or waking a turn. |
 | `session-preset-apply.ts` | Session-scoped preset switching shared by the TUI `/preset <name>` fast path and the server command: validates the name against the visible presets, owns the applied/refused wording, and takes a `bind` transport seam (TUI: session-preset RPC; server: the in-process store). Apply updates the team for new children and the next explicit same-agent continuation; it does not immediately change existing children, the root model or the global default. |
 | `client-shim.ts` | `buildPluginInput`: constructs a v1-shaped `PluginInput` with a **real-delegation** client — v1 SDK call shapes translate to v2 flat session calls (`get`, `interrupt` — abort sends `resume: false`, `context`, `prompt` with `delivery:"steer"`, `update` for renames — `{sessionID, title}`), with honest degradation (log or omit) where the host lacks the method. A v1-shaped `noReply` prompt body maps to `delivery:"queue", resume:false` (no wake); non-noReply prompts steer. `resolveV2Directory` prefers `ctx.location.directory` (#45403+) with a `process.cwd()` fallback. `promptAsync` encapsulates v2 model switching and defaults to `"steer"`; chat-header metadata is derived internally from the body's internal-initiator parts. |
 | `internal-admissions.ts` | Bounded tracker of internal-initiator admissions (`recordInternalAdmission`/`isInternalAdmission` + `createInternalSyntheticMessageID`): the in-band marker source for the chat-headers bridge on v2 (prompt-metadata admissions recorded by the session-prompt bridge; synthetic admissions recorded by the client shim with the client-chosen id the v2 `Session.synthetic` endpoint honors and preserves on the LLM context message). |
-| `terminal-fallback.ts` | Shared no-route anchor, host-error recognition and outcome identity for the manager and child waiters. |
-| `delegation.ts` | v2↔v1 delegation tool normalization: `toolNameToV1` (`subagent`→`task`), `subagentArgsToV1` (`agent`→`subagent_type`, `sessionID`→`task_id`), `v1ArgsToSubagent` (reverse). Lets the whole v1 pipeline (task-session-manager, job board, `task_*` tools) run on v2's host `subagent` tool with zero changes. |
+| `terminal-fallback.ts` | Shared no-route anchor, host-error recognition and outcome identity for the fallback manager. |
+| `delegation.ts` | v2↔v1 delegation tool normalization: `toolNameToV1` (`subagent`→`task`), `subagentArgsToV1` (`agent`→`subagent_type`, `sessionID`→`task_id`), `v1ArgsToSubagent` (reverse). Lets shared `tool.execute.before/after` hooks see the v1 task shape on v2's host `subagent` tool. OpenCode 2.3+ owns every child idle-period report; the V2 native lifecycle keeps no board or duplicate delivery path. |
 | `event-adapter.ts` | `mapV2EventToV1`: additive-only v2→v1 event synthesis for the event pump. Raw event always first (interview bridge consumes it); payload is read from the live wire key `data` (`{id, created, type, location?, durable?, metadata?, data}` — verified live on v2 hosts) with `properties` as the legacy/test fallback, while every synthesized shape writes `properties` (what the v1 consumers read). Syntheses: `session.execution.*` → v1 busy/idle/error lifecycle shapes (every synthesized busy AND terminal idle status preserves the host envelope `created` as `activityAt` so terminal evidence keeps host-clock attribution), flat child `session.created` → v1 early-registration `{info:{id,parentID,agent?}}`, per-request `session.step.ended` telemetry → completed-assistant `message.updated` keyed by assistant message ID. Cumulative `session.usage.updated` is not subscribed. |
 | `mirror-conformance.ts` | Mirror conformance guard (P1.2): type-level verification that the hand-written v2→v1 mirror matches the @opencode/plugin upstream surface exactly. Prevents drift between the v2 contract and the v1 consumption surface. |
 | `tui.ts` | Thin v2 TUI plugin entry (`./tui` export → `dist/tui2.js`): both the legacy `tui` delegate and v2 `setup` read the environment and light `../tui-gates` module before dynamically importing `tui-impl`; `tui: false` never evaluates the render stack on either contract. `tui-impl.ts` composes the v1 dual-contract TUI (`../tui`) and extends its v2 `setup` with the `/preset` keymap flow. The layer registers from an `append: "app"` slot render because the host's `keymap.layer` is provider-scoped (calling it from `setup` throws `Keymap.Provider is missing`), using the host's thunk + full command schema (`id`, `palette`, `slash.arguments`); feedback via `ui.toast.show`; `/subagent` navigates to the latest child using `ui.router.navigate`, independently of session tabs; `/preset <name>` binds the visible session through the session-preset RPC (`session-preset-apply`), while bare `/preset` opens the manager whose Global default action writes config and requests the shared config-change coordinator. Config-write success toasts say "Live refresh requested" — never "applied" and never "Reload OpenCode" (the server watcher's outcome is unobservable from the TUI process) — and a failed request shows the reload fallback. Capability-guarded: hosts without `ui.slot`/`keymap.layer` keep the sidebar and lose the keymap commands; the interactive picker additionally needs `ui.dialog.select`. |
@@ -49,17 +51,10 @@ immediately before native admission; it is never forwarded to the host.
 | `interview-bridge.ts` | v2-only `/interview` marker command, trailing-message context bridge, v2 interview runtime, and per-session transcript projections. |
 | `mirror-conformance.ts` | Compile-time conformance guard binding the hand-mirrored v2 context types in `types.ts` to the pinned `@opencode/plugin` surface; enforced by `bun run typecheck` — deliberately no `.test.ts` suffix (tsc excludes test files) and never imported at runtime. |
 
-## Preset Session Creation
+## Session Preset Controls
 
 `disabled_commands: ["preset"]` gates the command, client RPC and sidebar editor
 entry. Internal inference binding/admission remains active for delegation.
-
-`preset-manager.ts` adds **New session** through `preset-rpc.ts`'s `createBound`.
-`session-presets.ts` captures the selected inference team, creates an empty root
-in the setup instance's directory/workspace, and writes its v1 binding before
-returning the ID for navigation. Creation sends no prompt. The declared
-`create_failed` RPC error preserves the new ID and Apply guidance if binding
-fails; the TUI reads the client's error `message`.
 
 ## Runtime Input Reuse
 
@@ -90,11 +85,10 @@ A failed commit reports an error while retaining the submitted run's profile.
 including correlated `session.step.started`/`session.step.failed` refusal
 signals for foreground fallback. The client shim exposes the real optional
 `session.switchModel` capability for that path.
-The foreground subagent wrapper rejoins a refused child after the shared fallback
-outcome; the context hook memoizes each native background refusal, checks the
-running record, and adds its volatile correction before the shared transform's
-deepwork goal pointer. Pre-step no-route failures use that same claim and
-handoff, anchored to the latest user, synthetic, or completed compaction entry.
+Native refusal and no-route events retain the foreground-fallback retry path,
+anchored to the latest user, synthetic, or completed compaction entry. A refused
+child switches and continues in place; OpenCode 2.3+ reports each settled period
+to the parent. The host remains the sole owner of child completion delivery.
 The client shim treats `idle` and
 `model-switched` markers as system entries when inspecting child results.
 Interview receives `session.text.*` with `assistantMessageID`; its v2 bridge is
@@ -126,7 +120,7 @@ The v2 runtime surface and plugin contracts are adapted through the following da
    - **Session hooks**: Single `ctx.session.hook("context")` handles system/messages transforms, chat.message agent tracking, and marker dispatch with interview bridge integration. Stored synthetic delivery timestamps are projected into the observer by message ID and omitted again from the outgoing context.
    - **Runtime bridges**: Separate session hooks for `prompt`, `model.request`, and `compaction` bridges that adapt v1 chat.headers, chat.message, and session.compaction to v2
    - **Permission rules**: Uses `createPermissionRulesBridge` to apply child-session permission rules via `ctx.session.update({sessionID, permissions})`
-   - **Tool execute bridges**: Uses `createToolExecuteBridges` to normalize `subagent`→`task` semantics. With no shared post-tool consumers, v2 still registers the after hook while it owns admission captures (`backgroundJobs.mode` managed or native), and never in `off`
+   - **Tool execute bridges**: Uses `createToolExecuteBridges` to normalize `subagent`→`task` semantics. With no shared post-tool consumers, v2 still registers the after hook while it owns admission captures (`backgroundJobs.mode` not `off`), and never in `off`
    - **Event pump**: Uses `mapV2EventToV1` for additive-only v2→v1 event synthesis, preserving raw events for the interview bridge
 
 5. **Initialization and Cleanup**: The setup returns a cleanup function that disposes every v2 registration and the v1 `dispose`.
@@ -134,7 +128,7 @@ The v2 runtime surface and plugin contracts are adapted through the following da
 ## Key Decisions
 
 - **No v2 type imports.** The v2 plugin package is not a build-time dependency (v1 host must load the main build). `types.ts` mirrors the consumed subset; optional domains are probed at runtime.
-- **Wrap, don't reimplement.** The v1 factory owns all subsystem wiring (agents, hooks, job board, multiplexer, companion); the adapter only translates at the boundary.
+- **Wrap, don't reimplement.** The v1 factory owns all subsystem wiring (agents, hooks, multiplexer, companion); the V1 managed lifecycle (job board, recovery, wake scheduler, persistence, adoption) is not constructed on V2. The adapter only translates at the boundary.
 - **Real delegation, honest degradation.** The client shim maps v1 SDK calls to the v2 session surface where it exists and explicitly fails/logs where it does not — capability probes (e.g. `session.get` presence) must see the truth, so no method is stubbed with a fake success shape.
 - **Subagent normalization at the execute bridge.** v2's host `subagent` tool is translated to v1 `task` semantics in `createToolExecuteBridges` (names + args, both directions), reusing the v1 task pipeline unchanged; before-hook failures rethrow so v2 refuses the call like v1 does.
 - **Additive event synthesis.** `mapV2EventToV1` never mutates the raw event; synthesized v1 shapes are appended for the specific fields the v1 consumers read (early registration gated on `parentID`; telemetry deduped by a deterministic fingerprint — no wall-clock or randomness).
@@ -176,8 +170,7 @@ The v2 runtime surface and plugin contracts are adapted through the following da
 
 Multiplexer panes work on shared and `--server` v2 hosts; standalone and
 invalid hosts ignore a configured `multiplexer.type` with one diagnostic per
-process (NFR-6). The orchestrator-wake scheduler is v1-only; v2 uses the
-host's native background notifier.
+process (NFR-6). OpenCode delivers native child notifications.
 Finalized-registry setup captures configured MCP namespace inventory through
 `ctx.mcp.transform` before the deferred agent transform callback runs. Setup
 does not force host materialization with `ctx.agent.list()`. Until agent

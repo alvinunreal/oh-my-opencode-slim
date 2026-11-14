@@ -122,22 +122,21 @@ async function withFactory(
 }
 
 describe('v2 profile refresh hook', () => {
-  test('exposes the raw prompt-admission feed the v2 setup wires into its bridge', async () => {
-    // Setup reads this extension from the factory's hooks and feeds the
-    // awaited `session.prompt` admission through it; a missing key would
-    // silently disable the authoritative run-identity anchor on v2.
-    const { hooks } = await bootFactory();
-    const feed = (
-      hooks as unknown as {
-        'v2.notePromptAdmission'?: (
-          sessionID: string,
-          messageID: string,
-        ) => void;
-      }
-    )['v2.notePromptAdmission'];
-    expect(typeof feed).toBe('function');
-    expect(() => feed?.('ses_missing', 'msg_missing')).not.toThrow();
-  });
+  test('does not expose retired V2 managed lifecycle extensions', async () => {
+    const { hooks } = await bootFactory(undefined, 'v2');
+    const extensions = hooks as unknown as Record<string, unknown>;
+    for (const name of [
+      'v2.notePromptAdmission',
+      'v2.backgroundGeneration',
+      'v2.refusalOutcome',
+      'v2.registerDelegatedLaunchFromStructured',
+      'v2.coverSteer',
+    ]) {
+      expect(extensions[name]).toBeUndefined();
+    }
+    // The native step/no-route observation path is retained.
+    expect(extensions['v2.pendingRefusalOutcome']).toBeFunction();
+  }, 20_000);
 
   test('re-reads the config, resolves profiles, and rewrites the sidebar model entries', async () => {
     env.writeUserConfig(withPreset('cheap'));

@@ -1,5 +1,5 @@
 /**
- * OpenCode v2 (`opencode2`) plugin adapter.
+ * OpenCode 2 plugin adapter.
  *
  * v2 loads the plugin's `default.setup(ctx)`. This package's default export is
  * `{ id, server, setup }`: v1 calls `.server` (the unchanged v1 factory); v2

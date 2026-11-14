@@ -28,11 +28,10 @@ const packagedRequiredFiles = [
   'README.md',
   'LICENSE',
   'dist/index.js',
-  'dist/index.d.ts',
+  'dist/plugin.d.ts',
   'dist/server/index.js',
-  'dist/tui.js',
   'dist/tui2.js',
-  'dist/tui.d.ts',
+  'dist/v2/tui.d.ts',
   'dist/cli/index.js',
   'dist/marketplace-contract/index.js',
   'dist/marketplace-contract/index.d.ts',
@@ -157,6 +156,16 @@ function packArtifact() {
     }
   }
 
+  for (const file of packagedFiles) {
+    if (
+      /^dist\/(?:server\/)?(?:tui\.js|chunks\/(?:orchestrator-wake|background-job-terminal-gate|task-revive|admission-runtime)-)/.test(
+        file,
+      )
+    ) {
+      fail(`npm pack artifact contains retired OpenCode 1 code: ${file}`);
+    }
+  }
+
   verifyPackagedImportClosure(repoRoot, packagedFiles);
   return path.join(repoRoot, tarball);
 }
@@ -203,44 +212,8 @@ function verifyFreshInstall(tarballPath: string) {
     const smokeScript = [
       "import pkg from 'oh-my-opencode-slim';",
       "if (pkg?.id !== 'oh-my-opencode-slim') throw new Error('default export has an unexpected plugin id');",
-      "if (typeof pkg.server !== 'function') throw new Error('default export is missing a server plugin factory');",
-      "if (typeof pkg.setup !== 'function') throw new Error('default export is missing a v2 setup factory');",
-      'const asyncNoop = async () => ({});',
-      'const client = new Proxy({}, {',
-      '  get(_target, property) {',
-      "    if (property === 'app') return { log: asyncNoop };",
-      "    if (property === 'session') return { abort: asyncNoop };",
-      '    return new Proxy({}, { get: () => asyncNoop });',
-      '  },',
-      '});',
-      'globalThis.fetch = async () => new Response(',
-      "  '<!doctype html><html><head><title>Release smoke</title></head><body><main><h1>Release smoke</h1><p>packaged jsdom extraction works</p></main></body></html>',",
-      "  { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } },",
-      ');',
-      'const plugin = await pkg.server({',
-      '  client,',
-      '  directory: process.cwd(),',
-      '  worktree: process.cwd(),',
-      "  serverUrl: new URL('http://127.0.0.1:4096'),",
-      '});',
-      'const webfetch = plugin?.tool?.webfetch;',
-      "if (typeof webfetch?.execute !== 'function') throw new Error('server plugin did not register webfetch');",
-      'const result = await webfetch.execute({',
-      "  url: 'https://example.com/release-smoke',",
-      "  format: 'markdown',",
-      '  timeout: 10,',
-      '  save_binary: false,',
-      '}, {',
-      '  ask: async () => undefined,',
-      '  metadata: () => undefined,',
-      '  abort: new AbortController().signal,',
-      '  directory: process.cwd(),',
-      "  sessionID: 'release-smoke',",
-      '});',
-      "if (!String(result).includes('packaged jsdom extraction works')) throw new Error('packaged webfetch did not extract the expected document');",
-      'await plugin.dispose?.();',
+      "if (typeof pkg.setup !== 'function' || 'server' in pkg) throw new Error('expected the OpenCode 2 setup contract');",
       "console.log('package loads');",
-      "console.log('packaged webfetch constructs and extracts a document');",
       'process.exit(0);',
     ].join('\n');
     console.log('Importing installed package entrypoint...');
@@ -251,7 +224,7 @@ function verifyFreshInstall(tarballPath: string) {
     const tuiSmokeScript = [
       "import pkg from 'oh-my-opencode-slim/tui';",
       "if (pkg?.id !== 'oh-my-opencode-slim:tui') throw new Error('TUI export has an unexpected plugin id');",
-      "if (typeof pkg.tui !== 'function') throw new Error('TUI export is missing its v1 factory');",
+      "if ('tui' in pkg) throw new Error('TUI export exposes a legacy factory');",
       "if (typeof pkg.setup !== 'function') throw new Error('TUI export is missing its v2 setup factory');",
       "console.log('TUI package loads');",
       'process.exit(0);',
@@ -264,7 +237,7 @@ function verifyFreshInstall(tarballPath: string) {
     const serverSmokeScript = [
       "import pkg from 'oh-my-opencode-slim/server';",
       "if (pkg?.id !== 'oh-my-opencode-slim') throw new Error('server export has an unexpected plugin id');",
-      "if (typeof pkg.server !== 'function') throw new Error('server export is missing a v1 plugin factory');",
+      "if ('server' in pkg) throw new Error('server export exposes a legacy factory');",
       "if (typeof pkg.setup !== 'function') throw new Error('server export is missing a v2 setup factory');",
       "console.log('server package loads');",
       'process.exit(0);',

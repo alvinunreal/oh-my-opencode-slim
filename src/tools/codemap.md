@@ -29,9 +29,7 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 
 | Tool Family | Purpose | Key Components |
 |------------|---------|----------------|
-| **Task Management** | Background task communication, cancellation, status, results, revival, and HITL continuation control | `cancel-task.ts`, `task-status.ts`, `task-revive.ts`, `wait-for-user.ts`; v2 managed-mode `task-report.ts` sends child updates to the host-owned parent through the serialized synthetic inbox; v1-only `task-message.ts` (v2 steers natively) uses the board's shared amendment fence. `native-task-control.ts` is the boardless `backgroundJobs.mode: "native"` pair (`task_status` over `session.get` + the untracked verdicts; `task_cancel` over the host interrupt, reporting only the host's own answer) built on the shared untracked-task primitives. See [diagnostic attribution](../../docs/tools.md#diagnostic-attribution). |
-| **Task Policy & Activity** | Shared live-status policy and activity tracking consumed by `task_status` and event wiring | `task-policy.ts` (`summarizeTaskStatus`), `task-activity.ts` (`TaskActivityTracker`) |
-| **Retained Adoption** | Shared resolve-or-adopt seam for untracked host sessions, consumed by `task_revive` and the v2 subagent continuation bridge | `retained-adoption.ts` (`resolveOrAdoptUntrackedTask`) |
+| **Task Management** | Exact-ID status, interrupt, permission reply, and progress reports | `native-task-control.ts`, `task-report.ts` |
 | **ACP Integration** | External agent protocol execution with live progress streaming to the parent TUI (`ctx.metadata`) | `acp-run.ts`, ACP client implementation |
 | **Code Intelligence** | AST-based code manipulation | `ast-grep/` directory, `tools.ts` |
 | **Web Fetching** | Intelligent web content retrieval | `smartfetch/` directory, `tool.ts` |
@@ -47,7 +45,6 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 ### State Management
 
 - **Runtime Presets**: Preset switching (`preset-switch.ts`) persists the preset name (or edits) to the user config file. The agent registry is never hot-swapped mid-session; on v2 hosts the shared `src/preset-editor-domain.ts` helpers back both the v1 JSX editor and the v2 promise-dialog editor, and only the inference fields (`model`, `variant`, `temperature`, `options`) hot-apply to NEW child sessions (frozen before the child's first request via the awaited `session.prompt` hook — the `session.created` event consumer is only a prewarm) plus the sidebar (via `src/v2/config-watch.ts` + `src/v2/runtime-profiles.ts`); a malformed refresh (`invalid-json`/`invalid-schema`/`read-error`) is rejected before any swap so the last-known-good profiles/sidebar stay — hot-swapping the full agent tree during an active conversation risks context truncation, drifted prior turns, and stale subagent references
-- **Background Jobs**: Task communication, cancellation, status, results, and revival use a centralized job board for tracking and lifecycle coordination; `task_status` reports live-confirmed host status with explicit uncertainty when the live read is unavailable
 
 ## Flow
 
@@ -71,48 +68,12 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
    └─> OpenCode presents result to agent
 ```
 
-### Task Control Flows
+### Task Control Flow
 
-```
-1. Managed parent invokes task_cancel (including Build/custom primary agents)
-   ├─> Validates managed-session admission; host tool permissions still apply
-   ├─> Resolves task_id to BackgroundJobBoard entry
-   ├─> Calls abortSessionWithTimeout() to signal cancellation
-   ├─> Verifies session stopped via status polling
-   ├─> Marks job as cancelled in BackgroundJobBoard
-   └─> Returns cancellation confirmation while retaining the child session
-
-2. Managed parent invokes task_revive (including Build/custom primary agents)
-   ├─> Resolves the retained BackgroundJobBoard entry
-   ├─> Cancels a running generation when necessary
-   ├─> Launches a new prompt in the existing child session
-   ├─> Registers the new generation and tracks its completion
-   └─> Returns the new running generation
-```
-
-### Explicit User-Wait Flow
-
-```
-1. Orchestrator gives the user concrete manual steps
-   └─> Invokes wait_for_user as its final tool action
-       ├─> Validates session ID, agent identity, and managed-session ownership
-       ├─> Arms task-session-manager.beginUserWait() (process-global latch)
-       ├─> Revokes pending automatic-continuation reservations
-       └─> Returns the versioned waiting_for_user protocol marker
-```
-
-### Task Status Policy Flow
-
-```
-1. Agent invokes task_status
-   ├─> Resolves task_id to a BackgroundJobBoard entry
-   ├─> Reads the bounded live session-status snapshot (session-runtime-status)
-   ├─> On the uncertain branch (plain and result:true) one classifyLiveSession probe feeds an attributable host outcome through the terminal gate's observe/reconcile (interrupted → stopped family, never completed); unknown-handle errors append the parent's last 5 `recent:` handles; unattributable evidence keeps `running (unconfirmed)` with push-not-poll guidance
-   ├─> summarizeTaskStatus() (task-policy.ts) prefers the live-confirmed host
-   │   status; board state is only reported with explicit uncertainty
-   └─> possibly_stuck requires a live-confirmed busy/retry signal beyond the
-       STUCK_IDLE_THRESHOLD_MS idle threshold
-```
+`native-task-control.ts` verifies ownership by exact session ID. Status reads
+host transcript and pending permission evidence. Cancel asks the host to
+interrupt the active child. Reply sends a verified permission response.
+`task-report.ts` queues a child's update to its parent with `resume: false`.
 
 ### ACP Agent Execution Flow
 
@@ -208,7 +169,6 @@ Tools Layer → Web Layer
 
 - **ACP Agents**: Defined in `src/config/schema.ts`, consumed by `acp_run.ts`
 - **Presets**: Defined in plugin config (`oh-my-opencode-slim.jsonc`), persisted by `preset-switch.ts` for the TUI `/preset` manager
-- **Task Status**: `task-status.ts` consumes `summarizeTaskStatus` from `task-policy.ts` and the live session-status snapshot
 
 
 ### Error Handling & Recovery

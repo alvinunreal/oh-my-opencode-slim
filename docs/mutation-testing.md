@@ -1,9 +1,7 @@
 # Mutation testing
 
-Scoped mutation testing with [Stryker](https://stryker-mutator.io/) proves that
-the background job board's state-machine guards have tests that actually
-discriminate their branches. A surviving mutant is a contract no test can see;
-the cleanup PRs that follow this workflow convert survivors into named tests.
+The foreground fallback mutation gate checks whether tests detect changes to
+retry deduplication. It uses [Stryker](https://stryker-mutator.io/).
 
 ## Toolchain
 
@@ -18,21 +16,18 @@ the cleanup PRs that follow this workflow convert survivors into named tests.
   removed in TypeScript 7 (it fails with
   `TypeError: ts.parseConfigFileTextToJson is not a function`). It exists only
   to rewrite `extends`/`references` paths that cross the sandbox boundary, and
-  this project's `tsconfig.json` has none, so `stryker.conf.mjs` points
+  this project's `tsconfig.json` has none, so `stryker.foreground-fallback.conf.mjs` points
   `tsconfigFile` at a non-file and the machinery never runs. The bun
   runner's `typescript: '<7'` peer describes its dormant
   `checkers: ['typescript']` hook (not enabled here; it degrades with a log
   line).
 - **If you add `extends` or `references` to `tsconfig.json`:** point
-  `tsconfigFile` back at it in `stryker.conf.mjs`. The TypeScript 7 skip only
+  `tsconfigFile` back at it in `stryker.foreground-fallback.conf.mjs`. The TypeScript 7 skip only
   holds while nothing needs the tsconfig rewrite, and that rewrite needs
   Stryker's upstream fix on TypeScript 7.
 - Requires Bun >= 1.4.0 (the runner refuses older) and Node >= 22
   (`@stryker-mutator/core` engines). The repo's `packageManager` pin
   (`bun@1.3.14`) is below that floor, so run sweeps with a newer Bun.
-- Config: `stryker.conf.mjs` — mutates `src/utils/background-job-board.ts` and
-  runs `src/utils/background-job-board.test.ts`. Point `mutate` and
-  `bun.testFiles` at another file pair to sweep something else.
 - `bunfig.toml` `[test].preload` lists the literal
   `./node_modules/@opentui/solid/scripts/preload.js` path because the bun
   test runner's bunfig sanitizer resolves every preload entry against the
@@ -46,22 +41,10 @@ the cleanup PRs that follow this workflow convert survivors into named tests.
 bun run mutation
 ```
 
-The CI `mutation` job runs the foreground-fallback gate instead:
-
-```sh
-bun run mutation:foreground-fallback
-```
-
-It uses `stryker.foreground-fallback.conf.mjs` to mutate
-`src/hooks/foreground-fallback/dedup.ts`, which owns `asHttpStatus` and
-`DEDUP_WINDOW_MS`. Thresholds are `high: 90`, `low: 85`, and `break: 80`;
-the job fails when the score drops below `break`.
-
-The first run installs the tool tree (`bun install --cwd tools/mutation`,
-frozen lockfile). Nothing in the repo root is modified to run a sweep, but
-the repo root's `node_modules` must already be installed: the sandboxed
-tests resolve the project's own dependencies. A full background-job-board
-sweep is 1,515 mutants and takes roughly 6-7 minutes at `concurrency: 2`.
+CI runs the same sweep via `bun run mutation:foreground-fallback`. It targets
+`dedup.ts` and locates the seven `DEDUP_WINDOW_MS` comparisons in
+`index.ts` from the source. The report check requires mutants for every
+comparison. The score must reach 80%.
 
 The JSON report lands at `reports/mutation/mutation.json` (`reports/` is
 gitignored). Keep sweep output out of commits.
@@ -104,8 +87,8 @@ Master sweep baseline: 76 mutants, 72 killed, 4 survived. Outcomes:
 | --- | --- | --- | --- |
 | `dedup.ts:4:7-4:32` | `typeof value === 'number'` → `true` | Equivalent (not killed) | Under the mutant the branch has the same result for every input: `Number.isInteger` already rejects every non-number, so the disjunct can never decide it. The guard is still not deletable — `value` is `unknown` and it narrows the type — which is why no test can observe the difference. |
 | `dedup.ts:7:7-7:32` | string-type guard → `true` | Killed | `contract: non-string values that stringify to a status are rejected` (`index.property.test.ts`). |
-| `index.ts:1559:11-1559:33` | `previous.turn !== turn` → `false` | Killed | `contract: decision trace: a no-chain retry from a new turn charges the budget` (`index.decision-trace.test.ts`). |
-| `index.ts:3707:13-3707:35` | `previous.turn !== turn` → `false` | Killed | `contract: decision trace: a same-ID error from a new turn replays` (`index.decision-trace.test.ts`). |
+| `index.ts:1637:11-1637:33` | `previous.turn !== turn` → `false` | Killed | `contract: decision trace: a no-chain retry from a new turn charges the budget` (`index.decision-trace.test.ts`). |
+| `index.ts:3836:13-3836:35` | `previous.turn !== turn` → `false` | Killed | `contract: decision trace: a same-ID error from a new turn replays` (`index.decision-trace.test.ts`). |
 
 Fresh scoped sweep (`bun run mutation:foreground-fallback`): 98.68%, 75 killed,
 1 survived (`dedup.ts:4:7`, the equivalent mutant above), 0 no-coverage.

@@ -8,10 +8,8 @@ import {
   renameSync,
   rmSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
-import { basename, dirname, join, relative } from 'node:path';
-import { getProjectConfigDirectories } from '../config/loader';
-import { getConfigDir, getConfigSearchDirs } from '../config/paths';
+import { basename, join, relative } from 'node:path';
+import { getConfigDir } from '../config/paths';
 import { CUSTOM_SKILLS } from './custom-skills-registry';
 
 export interface BundledSkillInfo {
@@ -75,42 +73,6 @@ export function buildBundledSkillInfos(
     }
   }
   return infos;
-}
-
-/** Paths for v1's disk scanner, excluding names already supplied by the user. */
-export function getV1BundledSkillPaths(
-  packageRoot: string,
-  directory: string,
-  disabled: readonly string[],
-): string[] {
-  const projectDirs = getProjectConfigDirectories(directory);
-  // v1 scans .claude/.agents skills before skills.paths, and a later
-  // duplicate name wins, so those user skills must be excluded too.
-  const flag = (name: string) =>
-    ['1', 'true', 'yes', 'on', 'y'].includes(
-      process.env[name]?.toLowerCase() ?? '',
-    );
-  const externalNames = flag('OPENCODE_DISABLE_EXTERNAL_SKILLS')
-    ? []
-    : flag('OPENCODE_DISABLE_CLAUDE_CODE') ||
-        flag('OPENCODE_DISABLE_CLAUDE_CODE_SKILLS')
-      ? ['.agents']
-      : ['.claude', '.agents'];
-  const external = [homedir(), ...projectDirs.map(dirname)].flatMap((dir) =>
-    externalNames.map((name) => join(dir, name)),
-  );
-  const roots = [
-    ...getConfigSearchDirs(),
-    join(homedir(), '.opencode'),
-    ...projectDirs,
-    ...external,
-  ].flatMap((dir) => [join(dir, 'skill'), join(dir, 'skills')]);
-  return buildBundledSkillInfos(packageRoot, disabled)
-    .filter(
-      (skill) =>
-        !roots.some((root) => existsSync(join(root, skill.name, 'SKILL.md'))),
-    )
-    .map((skill) => dirname(skill.path));
 }
 
 export interface LegacySkillCleanupResult {
