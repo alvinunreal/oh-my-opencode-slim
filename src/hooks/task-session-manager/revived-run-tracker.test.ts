@@ -253,9 +253,7 @@ describe('revived run tracker', () => {
     h.tracker.onTerminal(accepted);
     await flushNotify();
     expect(h.prompt).toHaveBeenCalledTimes(1);
-    // The accepted run stays installed as the duplicate guard for the same
-    // publication (a double-idle redelivers it after the transport ack).
-    expect(h.tracker.isTracked(h.run.taskID, h.run.generation)).toBe(true);
+    expect(h.tracker.isTracked(h.run.taskID, h.run.generation)).toBe(false);
     h.tracker.dispose();
   });
 
@@ -289,8 +287,7 @@ describe('revived run tracker', () => {
     });
     if (!newer) throw new Error('missing newer terminal record');
     expect(newer.terminalRevision).toBe(first.terminalRevision + 2);
-    // Production listener order: onTerminal retires the delivered run on the
-    // newer revision, then deliverContinuation installs its replacement.
+    // Preserve production listener order for the next publication.
     h.tracker.onTerminal(newer);
     h.tracker.deliverContinuation(newer);
     await flushNotify();

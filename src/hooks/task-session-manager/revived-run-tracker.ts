@@ -299,6 +299,7 @@ export function createRevivedRunTracker(options: {
     if (
       current?.generation !== record.generation ||
       current.terminalRevision !== record.terminalRevision ||
+      current.acceptedContinuationRevision === record.terminalRevision ||
       current.state !== record.state
     )
       return;
@@ -572,10 +573,14 @@ export function createRevivedRunTracker(options: {
             clearTimeout(notification.retryTimer);
             notification.retryTimer = undefined;
           }
-          // Keep the delivered run installed as the duplicate guard for a
-          // redelivered publication; onTerminal retires it when a newer
-          // revision arrives. Discarding it here let the same publication
-          // reinstall a fresh run and send a second notification.
+          if (run.onlyTerminalRevision !== undefined) {
+            options.backgroundJobBoard.recordAcceptedContinuation(
+              run.taskID,
+              run.generation,
+              record.terminalRevision,
+            );
+            discardRun(run);
+          }
         },
       );
     } catch (error) {
@@ -682,18 +687,9 @@ export function createRevivedRunTracker(options: {
   };
 
   const attemptStartedAtFor = (taskID: string, generation: number) => {
-    const run = runs.get(taskID);
-    if (run?.generation === generation) {
-      // A delivered continuation run is retained only as its publication's
-      // duplicate guard; its attempt start must not bound a later run's
-      // host-outcome attribution.
-      if (run.onlyTerminalRevision !== undefined && run.notification.sent)
-        return undefined;
-      return run.attemptStartedAt;
-    }
-    const pending = pendingHandoffs.get(taskID);
-    return pending?.generation === generation
-      ? pending.attemptStartedAt
+    const attempt = pendingHandoffs.get(taskID) ?? runs.get(taskID);
+    return attempt?.generation === generation
+      ? attempt.attemptStartedAt
       : undefined;
   };
 
