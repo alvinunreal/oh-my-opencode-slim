@@ -2649,7 +2649,13 @@ export class ForegroundFallbackManager {
       )
         return;
       if (!failover) return;
-      if (restored?.fallback === from) {
+      // After a timed-out switch the descent is still live, so the normal
+      // path stays safe; only a pending or confirmed restore needs this.
+      if (
+        restored?.fallback === from &&
+        (this.restoring.has(sessionID) ||
+          this.descent.get(sessionID) !== restored)
+      ) {
         if (scope === 'request') {
           const rejected = this.requestRejected.get(sessionID) ?? new Set();
           rejected.add(from);
