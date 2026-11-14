@@ -2363,7 +2363,7 @@ export class ForegroundFallbackManager {
       isCompletedSuccessfulAssistant &&
       noTools === false
     ) {
-      await this.clearProviderDownMarks(sessionID, info, messageTime);
+      this.clearProviderDownMarks(sessionID, info, messageTime);
       // v2 completed-message synthesis is telemetry, not recovery evidence.
       this.resetRecoveryState(sessionID);
     }
@@ -2405,11 +2405,11 @@ export class ForegroundFallbackManager {
     }
   }
 
-  private async clearProviderDownMarks(
+  private clearProviderDownMarks(
     sessionID: string,
     info: Record<string, unknown>,
     messageTime: unknown,
-  ): Promise<void> {
+  ): void {
     const created = isRecord(messageTime) ? messageTime.created : undefined;
     if (typeof info.providerID === 'string' && typeof created === 'number') {
       for (const id of [sessionID, this.sessionParent.get(sessionID)]) {
