@@ -218,8 +218,8 @@ The default generated configuration includes both `openai` and `opencode-go` pre
 
 Presets can inherit from one base preset with `extends`: a `design` preset can
 extend `base` and override only its designer model. On v2, `/preset` lets you
-apply subagent inference settings to **Current session**, start an empty
-**New session** bound to a preset, or change the **Global default**.
+apply subagent inference settings to **Current session** or change the
+**Global default**.
 `/preset <name>` applies the preset to the session you are
 in — no restart — while manual configuration edits change the default for
 future sessions and refresh default-bound roots on their next admission.
@@ -776,7 +776,6 @@ Use this section as a map: start with installation, then jump to features, confi
 | **[Clonedeps](docs/clonedeps.md)** | Clone selected dependency source into an ignored local workspace for inspection |
 | **[Worktrees](docs/worktrees.md)** | Use `.slim/worktrees/` lanes for isolated parallel or risky coding work |
 | **[Preset Switching](docs/presets/preset-switching.md)** | Switch agent model presets at runtime with `/preset` |
-| **[Desktop GUI](docs/gui.md)** | Manage presets and agent settings from the Desktop sidebar (experimental) |
 | **[Interview](docs/interview.md)** | Turn rough ideas into a structured markdown spec through a browser-based Q&A flow, then implement it with `/implement` |
 | **[Companion](docs/companion.md)** | Floating window companion for parsing, help, and types |
 

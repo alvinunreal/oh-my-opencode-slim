@@ -42,17 +42,10 @@ immediately before native admission; it is never forwarded to the host.
 | `interview-bridge.ts` | v2-only `/interview` marker command, trailing-message context bridge, v2 interview runtime, and per-session transcript projections. |
 | `mirror-conformance.ts` | Compile-time conformance guard binding the hand-mirrored v2 context types in `types.ts` to the pinned `@opencode/plugin` surface; enforced by `bun run typecheck` — deliberately no `.test.ts` suffix (tsc excludes test files) and never imported at runtime. |
 
-## Preset Session Creation
+## Session Preset Controls
 
 `disabled_commands: ["preset"]` gates the command, client RPC and sidebar editor
 entry. Internal inference binding/admission remains active for delegation.
-
-`preset-manager.ts` adds **New session** through `preset-rpc.ts`'s `createBound`.
-`session-presets.ts` captures the selected inference team, creates an empty root
-in the setup instance's directory/workspace, and writes its v1 binding before
-returning the ID for navigation. Creation sends no prompt. The declared
-`create_failed` RPC error preserves the new ID and Apply guidance if binding
-fails; the TUI reads the client's error `message`.
 
 ## Runtime Input Reuse
 
