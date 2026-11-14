@@ -20,6 +20,7 @@ import { isRecord } from '../utils/guards';
 import {
   INTERNAL_INITIATOR_METADATA_KEY,
   isInternalInitiatorPart,
+  TERMINAL_DELTA_METADATA_KEY,
 } from '../utils/internal-initiator';
 import { log } from '../utils/logger';
 import { withTimeout } from '../utils/session';
@@ -261,9 +262,27 @@ function internalInitiatorMetadataFromBody(
     parts?: Array<Record<string, unknown>>;
   };
   const parts = Array.isArray(body.parts) ? body.parts : [];
-  return parts.some((part) => isInternalInitiatorPart(part))
-    ? { [INTERNAL_INITIATOR_METADATA_KEY]: true }
-    : undefined;
+  const internalParts = parts.filter((part) => isInternalInitiatorPart(part));
+  if (internalParts.length === 0) return undefined;
+  // The completed-job run fence must survive the outbound metadata
+  // reduction; the existing parent-history consumer reads this exact key.
+  // Forward that key alone. Host persistence and inbound consumption are
+  // not proven by this shim.
+  const terminalDelta = internalParts
+    .map((part) =>
+      isRecord(part.metadata)
+        ? part.metadata[TERMINAL_DELTA_METADATA_KEY]
+        : undefined,
+    )
+    // First match: current producers attach one fence list to a single
+    // internal part. Merge if a producer ever splits fences across parts.
+    .find((value) => value !== undefined);
+  return {
+    [INTERNAL_INITIATOR_METADATA_KEY]: true,
+    ...(terminalDelta !== undefined
+      ? { [TERMINAL_DELTA_METADATA_KEY]: terminalDelta }
+      : {}),
+  };
 }
 
 /**
