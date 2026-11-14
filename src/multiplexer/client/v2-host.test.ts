@@ -107,7 +107,7 @@ describe('detectV2HostMode', () => {
     });
   });
 
-  test('opencode2 spike argv shapes all classify (regression pin)', () => {
+  test('OpenCode 2 packaged argv shapes classify', () => {
     // Shapes captured from live 2.0.18 processes during the v2 pane spike
     // (/tmp/opencode/v2pane-spike/runs/*.jsonl).
     expect(detectV2HostMode(['bun', '/$bunfs/root/opencode']).mode).toBe(

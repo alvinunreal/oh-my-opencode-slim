@@ -66,8 +66,8 @@ import {
   type MessageTransformView,
   resolveView,
 } from '../message-transform-view';
-import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../task-session-manager/refusal-corrections';
 import type { MessagePart, MessageWithParts } from '../types';
+import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../volatile-message';
 
 export const GOAL_POINTER_METADATA_KEY = 'oh-my-opencode-slim.deepworkGoal';
 

@@ -559,14 +559,22 @@ const BackgroundJobsConfigStrictSchema = z.object({
     .enum(['managed', 'native', 'off'])
     .optional()
     .describe(
-      'Background-task lifecycle mode. "managed" (default) runs the OMOS managed lifecycle and its task_cancel/task_status/task_reply tools. "native" skips every board-shaped component and registers only two thin host-read tools — task_status (parent-checked host read plus trailing result) and task_cancel (the host atomic interruption) — for agents driving native subagent/task delegation. "off" registers no OMOS task tool. On v2 it also disables session-preset routing and leaves the native subagent executor untouched; agent inference settings still register normally.',
+      'Background-task lifecycle mode. "managed" (default on V1 hosts) runs the OMOS managed lifecycle; it is unsupported and rejected on OpenCode v2. "native" (default on OpenCode v2 hosts) skips every board-shaped component and relies on host delegation, with four OMOS tools: task_status and task_cancel for host reads and stop requests, plus independent task_reply for the orchestrator and task_report for child subagents. Cancellation reports request acceptance, not confirmed interruption. "off" registers no OMOS task tools; on v2 it also disables session-preset routing and leaves the host delegation executor untouched. Agent inference settings still register normally.',
     ),
   enabled: z
     .never({
       error: 'backgroundJobs.enabled was removed; use backgroundJobs.mode',
     })
     .optional(),
-  maxSessionsPerAgent: z.number().int().min(1).max(10).default(2),
+  maxSessionsPerAgent: z
+    .number()
+    .int()
+    .min(1)
+    .max(10)
+    .default(2)
+    .describe(
+      'Per-parent retention cap for reusable or retained-stopped background sessions of each agent (1–10), not a running-task concurrency limit. V1 managed lifecycle only; unsupported and rejected on OpenCode v2. Default 2.',
+    ),
   maxContextLines: z
     .never({
       error:
@@ -603,67 +611,11 @@ const BackgroundJobsConfigStrictSchema = z.object({
         'backgroundJobs.abortGraceMs was removed; the wall-clock watchdog no longer fabricates a terminal: it aborts the child and the host reports the real outcome',
     })
     .optional(),
-  orchestratorWake: z
-    .object({
-      enabled: z
-        .boolean()
-        .default(true)
-        .describe(
-          'When true, idle orchestrator sessions with incomplete todos may receive periodic internal wake prompts. Default enabled.',
-        ),
-      intervalMs: z
-        .number()
-        .int()
-        .min(60_000)
-        .max(2_147_483_647)
-        .default(300_000)
-        .describe(
-          'Continuous parent-idle interval between orchestrator wake evaluations (60,000–2,147,483,647ms). Default 300,000 (5 minutes). 0 is invalid.',
-        ),
-      mode: z
-        .enum(['auto', 'todo', 'children'])
-        .default('auto')
-        .describe(
-          'Wake-condition source (v1 hosts only). "auto" uses todo-gating; "todo" or "children" pin one mode, degrading to children when the host lacks the todo API. On OpenCode v2 hosts the whole section is ignored. Default "auto".',
-        ),
-      periodicWakeEnabled: z
-        .boolean()
-        .default(true)
-        .describe(
-          'When false, the periodic idle evaluation never runs; only event-driven wakes (stopped-job recovery, terminal-publication rev>1, child-input) still deliver. Failed event wakes keep their timer-based retry path. v1 hosts only; v2 hosts create no wake scheduler. Default enabled.',
-        ),
-      wakeOnTerminalPublication: z
-        .boolean()
-        .default(true)
-        .describe(
-          'When true, a terminal completed/error publication wakes an idle parent orchestrator immediately (bounded by publicationWakeMinIntervalMs) instead of waiting for the next periodic evaluation. v1 hosts only. Default enabled.',
-        ),
-      publicationWakeMinIntervalMs: z
-        .number()
-        .int()
-        .min(1_000)
-        .max(2_147_483_647)
-        .default(30_000)
-        .describe(
-          'Per-parent minimum spacing between terminal-publication wakes (1,000–2,147,483,647ms; 0 is invalid at the config layer). Default 30,000 (30 seconds). A burst of publications collapses into one wake. Later-result (<completed-job>) pushes honor the same spacing: inside the window they stay queued and are delivered together when it elapses.',
-        ),
-    })
-    .default({
-      enabled: true,
-      intervalMs: 300_000,
-      mode: 'auto',
-      periodicWakeEnabled: true,
-      wakeOnTerminalPublication: true,
-      publicationWakeMinIntervalMs: 30_000,
-    })
-    .describe(
-      'Periodic orchestrator wake scheduler for idle sessions (v1 hosts only; ignored on OpenCode v2 hosts). Requires host session APIs (session.get, todo, children, status, promptAsync) and wakes while incomplete todos remain. Default enabled at a 5-minute interval.',
-    ),
   wallClockTimeoutMs: z
     .union([z.literal(0), z.number().int().min(60_000).max(2_147_483_647)])
     .default(0)
     .describe(
-      'Explicit opt-in wall-clock deadline for native task(..., background: true) child sessions. On expiry the plugin asks the host to stop the child (session abort) and lets the host report the real terminal. 0 disables supervision; finite values are 60,000–2,147,483,647ms.',
+      'Explicit opt-in wall-clock deadline for native task(..., background: true) child sessions. V1 managed lifecycle only; unsupported and rejected on OpenCode v2. On expiry the plugin asks the host to stop the child and lets the host report the real terminal. 0 disables supervision; finite values are 60,000–2,147,483,647ms.',
     ),
   stopConfirmationMs: z
     .number()
@@ -672,26 +624,28 @@ const BackgroundJobsConfigStrictSchema = z.object({
     .max(60_000)
     .default(5_000)
     .describe(
-      'Terminal-gate grace period the background-job terminal gate waits for stop confirmation evidence before publishing a stopped job (1,000–60,000ms). Default 5,000 (5 seconds).',
+      'Terminal-gate grace period for stop confirmation evidence before publishing a stopped job (1,000–60,000ms). V1 managed lifecycle only; unsupported and rejected on OpenCode v2. Default 5,000 (5 seconds).',
     ),
-  concurrency: BackgroundTaskConcurrencyConfigSchema,
+  concurrency: BackgroundTaskConcurrencyConfigSchema.describe(
+    'Plugin concurrency admission limits. V1 managed lifecycle only; unsupported and rejected on OpenCode v2, even when every limit is zero. Configure delegation limits through the native host instead.',
+  ),
   sameProviderPolicy: z
     .record(z.string().min(1), z.literal('foreground'))
     .default({})
     .describe(
-      'Opt-in per-provider policy for native background tasks: when the parent session and the child agent both resolve to a provider listed here with value "foreground", the background request is converted to foreground execution (existing foreground path, no concurrency admission). Unlisted or unknown providers keep background behavior. Default {} (no conversion).',
+      'Opt-in per-provider policy for native background tasks on the V1 managed lifecycle (inert when backgroundJobs.mode is "off"): when the parent session and child agent resolve to a provider listed here as "foreground", the background task request is converted to foreground execution. Unlisted providers keep background behavior. OpenCode v2 subagents always run in the background, so this key is v1-only; an explicit value on v2 emits an unsupported-host warning and is ignored. Default {} (no conversion).',
     ),
   waitForUserGuard: z
     .boolean()
     .default(true)
     .describe(
-      'When true, intercept wait_for_user calls made while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input. Default enabled.',
+      'Intercept wait_for_user calls made while background tasks are still running and the orchestrator wake scheduler is enabled, returning guidance to end the turn instead of blocking on manual input (v1 hosts only; ignored with a warning on OpenCode v2 hosts). Default enabled.',
     ),
   childInputWake: z
     .boolean()
     .default(true)
     .describe(
-      'When true, a background child ask wakes its parent with the ask content. Default enabled.',
+      'When true, a background child ask wakes its parent with the ask content. V1 managed only; ignored with a warning on OpenCode v2 hosts. Default enabled.',
     ),
   childInputWakeKinds: z
     .object({
@@ -700,7 +654,7 @@ const BackgroundJobsConfigStrictSchema = z.object({
     })
     .catch({ ...DEFAULT_CHILD_INPUT_WAKE_KINDS })
     .describe(
-      'Which background child ask kinds may wake the parent. Permission asks default off (#1504): their replies carry no host wake and are resolved by the UI or an external responder, so a parent turn is wasted. Question asks default on.',
+      'Which background child ask kinds may wake the parent (v1 hosts only; ignored with a warning on OpenCode v2 hosts). Permission asks default off (#1504): their replies carry no host wake and are resolved by the UI or an external responder, so a parent turn is wasted. Question asks default on.',
     ),
   pruneEvictedSessions: z
     .boolean()
@@ -710,8 +664,7 @@ const BackgroundJobsConfigStrictSchema = z.object({
     ),
   continueOnIdle: z
     .never({
-      error:
-        'backgroundJobs.continueOnIdle was removed; use backgroundJobs.orchestratorWake.enabled',
+      error: 'backgroundJobs.continueOnIdle was removed',
     })
     .optional(),
 });

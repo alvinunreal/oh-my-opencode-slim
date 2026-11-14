@@ -1,65 +1,11 @@
-/**
- * v2 TUI plugin entry (`./tui` subpath → `dist/tui2.js`).
- *
- * Thin contract surface, on purpose: the heavy TUI implementation —
- * `src/tui.ts`, `src/tui-kill.ts`, `src/tui-preset.ts`, `@opentui/*`,
- * `solid-js` — lives in `./tui-impl` and is imported only after the config
- * gate says the TUI is enabled. With `tui: false` (or the disable env
- * switch) the TUI host still discovers this module and reads `id` plus its
- * contract function (`setup` on v2 hosts, the legacy `tui` on v1 hosts),
- * but never evaluates the render stack.
- *
- * Hosts discover this entry through the package.json `./tui` export
- * (exports-map probe in the host's `kind: "tui"` loader pass); the
- * server-side default export (src/index.ts) plays no role in that — in
- * fact it must stay free of any `tui` key (see the note there).
- */
-import type { PluginOptions } from '@opencode-ai/plugin';
-import type { TuiPluginApi, TuiPluginMeta } from '@opencode-ai/plugin/tui';
 import { PLUGIN_ID } from '../config/constants';
 import { readTuiGatesOnly } from '../tui-gates';
 import { isPluginDisabledByEnv } from '../utils/env';
 import { log } from '../utils/logger';
 import type { V2TuiPluginContext } from './tui-impl';
 
-/**
- * Project scope for the legacy v1 TUI contract: the host's launch directory.
- * Mirrors `getTuiDirectory` in the heavy `../tui` module, which must not be
- * imported to compute it.
- */
-function legacyTuiDirectory(api: {
-  state?: { path?: { directory?: string } };
-}): string {
-  return api.state?.path?.directory ?? process.cwd();
-}
-
 const plugin = {
   id: `${PLUGIN_ID}:tui`,
-
-  /** v1 hosts validate `{ id, tui }`; the delegate keeps the identical
-   *  factory the composition exposes and defers loading it until called —
-   *  after the env switch and the light gate read, so a disabled TUI never
-   *  evaluates the render stack even on this legacy contract. */
-  async tui(
-    api: TuiPluginApi,
-    options: PluginOptions | undefined,
-    meta: TuiPluginMeta,
-  ): Promise<void> {
-    if (isPluginDisabledByEnv()) return;
-
-    // v1 config-search semantics (no host flavor), matching what the heavy
-    // `tui` factory would have read. Its own full read reuses the same
-    // cached snapshot (stats-only revalidation), so the gate costs no
-    // duplicate config parse.
-    const gates = readTuiGatesOnly(legacyTuiDirectory(api)).gates;
-    if (!gates.tuiEnabled) {
-      log('[v2][tui] tui disabled by config (tui: false); registering nothing');
-      return;
-    }
-
-    const impl = await import('./tui-impl');
-    await impl.tui(api, options, meta);
-  },
 
   /** v2 hosts validate `{ id, setup }`. Read the gates from the light module
    *  first: `tui: false` must register nothing and load nothing. */

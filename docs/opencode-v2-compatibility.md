@@ -1,25 +1,17 @@
-# OpenCode v2 (`opencode2`) Compatibility
+# OpenCode 2 Compatibility
 
-oh-my-opencode-slim installs and runs on **both** OpenCode v1 (`opencode`)
-and OpenCode v2 (`opencode2`) from a single published package. This document
-describes how each host loads the plugin, what is supported where, and how to
-register it.
+Slim requires **OpenCode 2.3.0 or newer**. OpenCode runs subagents in the
+background and reports each child idle period. [OpenCode 2.3 changelog](https://opencode.ai/changelog/v2.3.0)
 
-The source baseline for this compatibility work is **oh-my-opencode-slim
-v3.0.5**, with historical live host verification on **OpenCode v2.0.7**. The
-plugin requires OpenCode v2.0.7+ on v2 hosts; older v2 hosts are unsupported.
-Bundled skills use the host's in-process registration channel (`ctx.skill` with
-`add`) on v2. On v1 the config hook adds package skill paths to the host's disk
-scanner, excluding disabled skills and names supplied by the user. MCPs also
-use the host transform, with existing configured namespaces taking priority.
-Slim does not start a second MCP client or skill loader.
+Bundled skills and MCPs register through OpenCode’s plugin APIs.
 The adapter targets the v2 plugin API surface (see
 [The v2 plugin API surface](#the-v2-plugin-api-surface-this-adapter-uses)),
 and the compile-time mirror guard below is pinned to `@opencode/plugin`
-2.2.0. Typecheck covers the consumed listing filters, nullable continuation
-cursors, native execution event envelope, compaction result names and the
-existing hook/permission contracts. This is source-contract coverage against
-v2.2.0; the latest live-host smoke baseline remains the version stated below.
+2.3.0. Typecheck covers the consumed listing filters, nullable continuation
+cursors, native execution event envelope, compaction result names and
+hook/permission contracts. The official hook set also includes `fork`,
+`experimental.model.resolve`, and `experimental.idle`; Slim does not register
+these host-owned hooks.
 
 The 2.2.0 release adds the Desktop GUI plugin SDK, per-session
 `session.instructions.entry.*`, type-filtered event subscriptions,
@@ -76,120 +68,13 @@ tool).
 
 ## How it works
 
-The package's default export is an object:
+OpenCode loads the server and TUI through their package exports. Both
+entry points expose `{ id, setup }`. The package includes split ESM
+chunks, so local installs point at the complete package directory.
 
-```ts
-export default {
-  id: 'oh-my-opencode-slim',
-  server: OhMyOpenCodeLite, // v1 plugin function (PluginInput) => Promise<Hooks>
-  setup: createV2Setup(),   // v2 promise-plugin setup (ctx) => Promise<cleanup>
-};
-```
-
-There is deliberately **no `tui` key** on this export: hosts validate a
-server plugin module's `tui` field (it must be a function and must not
-coexist with `server`), so a boolean `tui: true` marker gets the whole
-plugin rejected with "invalid tui export".
-
-- **v1 loader** (`readV1Plugin` in `packages/opencode/src/plugin/shared.ts`)
-  detects an object with a `server` field and calls `plugin.server(input)`
-  with the full v1 `PluginInput`. Extra keys (such as `setup`) are ignored on
-  this path.
-- **Embedded v2 pass on v1 hosts.** Every v1 host (≥ v1.17.10) also boots
-  the v2 core, which reads the same config (migrating `plugin:` entries to
-  `plugins:`) and calls `setup(ctx)` with a registration-only context
-  (agent/aisdk/catalog/command/integration/plugin/reference/skill — no
-  tool/session/event/mcp/generate). A dual-export plugin registered via the
-  v1 `plugin:` key therefore gets **both** invocations: full v1
-  functionality flows through `server()`, while the parallel pass produces
-  the expected `[v2] … failed` / `bridges: 4` log noise (see
-  [Environment caveats](#environment-caveats)). A v2 `plugins:` entry yields
-  the setup pass alone — v1 does not convert v2 plugin declarations into v1
-  hooks.
-- **v2 loader** (`PluginModule` schema in
-  `packages/core/src/plugin/supervisor.ts`) decodes `default` as
-  `{ id, setup }` (Effect Schema 4 rejects function defaults) and calls
-  `setup(ctx)` via the promise-plugin bridge.
-- **v2 TUI** loads the `./tui` entry unconditionally: the TUI runtime runs
-  its own `kind: "tui"` loader pass over the same plugin list and resolves
-  the entry through the package's `exports["./tui"]` map — the server-side
-  export plays no role in that discovery.
-
-The opt-in `questionTimeoutMs` setting runs in the OMOS TUI on v2 because the
-server plugin session API has no form-reply domain. It requires `tui` to be
-enabled and an attached OMOS TUI. A headless server or pane viewer does not own
-the timer. Restarting the TUI does not re-arm questions that were already open.
-V1 runs the same feature in its server plugin. See
-[Configuration Reference](configuration.md) for the accepted range and safety
-limits.
-
-The host entry builds retain their public paths and include ESM chunks for
-optional implementations. Install or copy the complete package: an entry file
-alone is no longer self-contained. Packed-artifact verification checks every
-relative static and dynamic import target.
-
-Three host entry builds are produced:
-
-| Export | File | Build | Externals |
-|---|---|---|---|
-| `.` (main) | `dist/index.js` | `build:plugin` | zod, jsdom, @opencode-ai/*, @opentui/* (shared with v1 host) |
-| `./server` | `dist/server/index.js` + chunks | `build:v2` | jsdom, jsonc-parser (other runtime dependencies bundled) |
-| `./tui` | `dist/tui2.js` | `build:tui` | same external set as `build:plugin` (thin gate entry + deferred `dist/tui-impl` chunk composing the v1 TUI entry; inlines zod) |
-
-The optional `@opentui/*` dependencies provide the v2 TUI entry's rendering
-stack. The development-only `@opencode/plugin` 2.2.0 contract declares an
-optional OpenTUI peer floor of `0.7.0`; the runtime pins track that family
-(`@opentui/core`/`@opentui/solid` 0.7.0) so the dependency-contract test and
-the host agree. `@opentui/solid` pins `solid-js` exactly (0.7.0 requires
-1.9.12), so any future OpenTUI bump must re-check that pin.
-
-v2's plugin resolver tries the `server` subpath first
-(`subpaths: ["server", ""]`), which the exports map resolves directly to
-`dist/server/index.js` — the v2 server entry with its packaged chunks, and the
-artifact the release check requires. Local source development registers an
-external shim directory instead of pointing at `dist/` (see
-[Local source development](#local-source-development-no-publishing)); v1
-uses the main entry.
-
-Upstream npm naming split with the stable line: v2 ships as
-`@opencode/plugin` / `@opencode/client` / `@opencode/sdk` / `@opencode/cli`
-(at `2.0.x`), while `@opencode-ai/plugin` and `@opencode-ai/sdk` are V1-only
-packages that will never carry the v2 surface. The plugin
-intentionally keeps its v1 runtime pins and hand-mirrors the subset of the v2
-plugin context it consumes in `src/v2/types.ts` — the v1 host must be able to
-load the main build with no v2 package installed. This is a known tradeoff,
-not an oversight: the mirror is refreshed by hand and can drift from
-upstream, so every v2 release bump needs a deliberate diff of
-`src/v2/types.ts` against the new `@opencode/plugin`. That diff is
-backed by a compile-time tripwire: `src/v2/mirror-conformance.ts` — typechecked
-against the `@opencode/plugin` devDependency, pinned to the audited
-version — fails `bun run typecheck` when either the mirror or the
-pinned official surface drifts (hook-name sets, key payload fields).
-The guard file must stay non-test-suffixed: tsconfig excludes
-test-suffixed files from tsc, so a `.test.ts` guard silently checks
-nothing.
-
-Verified live on OpenCode v2 (all bridges green — health check
-`bridges:11`, +1 on hosts that accept the `session.model.request` hook
-name for the chat.headers bridge; the event stream and bridges are exercised end-to-end on the stable host;
-since the council 2026-10-23 removal the plugin creates no wake scheduler on
-v2; the host delivers first terminal results and the tracker delivers later
-publications). v2 conformance is compile-time-pinned by the
-mirror-conformance guard against the `@opencode/plugin` 2.2.0
-devDependency and exercised by the mock-driven bridge tests. Every v2
-API the adapter touches is
-capability-probed at runtime (`s.switchModel`, `ctx.generate`, …), so a host
-lacking an optional capability degrades that single feature with a log line
-instead of breaking the load. The configured MCP namespace inventory is a
-required input to finalized-registry permission policy: a host without
-`ctx.mcp.transform` is unsupported and setup fails with an actionable error.
-The session hooks are the deliberate exception: on full contexts they
-register unconditionally and a
-registration failure fails setup (see
-[The v2 adapter](#the-v2-adapter-srcv2setupts)).
-`ctx.mcp.transform` is present in **all** v2.0.x stable hosts. Its inventory
-snapshot is required to preserve host-only MCP namespace policy; missing it is
-not an optional-degradation path.
+`questionTimeoutMs` requires an attached Slim TUI because the server
+plugin API does not expose question replies. See the
+[configuration reference](configuration.md).
 
 ## The v2 adapter (`src/v2/setup.ts`)
 
@@ -211,7 +96,7 @@ not an optional-degradation path.
    or four seconds total; exhausting either budget leaves completion
    unconfirmed rather than trusting a partial result. Bounded tail reads
    still fetch only the requested page;
-   ordinary context reads and parent-alias recovery remain unchanged.
+   ordinary context reads remain unchanged.
    Hosts without persisted-message reads retain incomplete context and do
    not bypass missing-baseline checks. `session.prompt` (default `delivery: "steer"`;
    `noReply: true` maps to `delivery: "queue", resume: false` — queue-only, never steering),
@@ -219,8 +104,8 @@ not an optional-degradation path.
    `session.update` (`{sessionID, title}`), `session.delete`→`remove` (same
    `DELETE /api/session/:id`), and `session.list` (v2 `Session.Info` page → the v1
    `{data}` envelope with `directory` derived from `location` and `outcome`
-   mapped, used by the interview dashboard's session scan and the
-    orchestrator-wake children enumeration). OpenCode 2.1 exposes `list`:
+   mapped, used by V1-shaped consumers such as the interview dashboard and the
+   V1 orchestrator-wake children enumeration). OpenCode 2.1 exposes `list`:
     the shim drains its cursor pages, sends root-only filters as real `null`,
     and refuses incomplete enumeration after 1000 sessions or four seconds.
     The final empty page is included in the read budget. Older cursorless
@@ -232,7 +117,9 @@ not an optional-degradation path.
    omitted entirely, as with `session.get`, so capability probes see the
    truth).
 2. Invokes `OhMyOpenCodeLite(pluginInput)` to reuse **all** existing build
-   logic (config, agents, tools, hooks, job board, multiplexer, companion).
+   logic (config, agents, tools, hooks, multiplexer, companion). The V1
+   managed lifecycle (job board, recovery, wake scheduler, persistence) is not
+   constructed on V2.
 3. Runs the v1 `config()` hook against a synthesized config to resolve agent
    models and the slash commands.
 4. Bridges the returned v1 `Hooks` into v2 registrations:
@@ -342,18 +229,14 @@ not an optional-degradation path.
       as tool-loop-guard can append warnings, written back where the host
       renders the failure: its cause when it has one), and an
       errored call never presents its result content as a success.
-      The v2 executor wrapper registers child identity and state from the
-      structured result, scoped by `(parentSessionID, callID)`. For terminal
-      result text, it extracts the body of a leading `<subagent>` block with
-      the shared task-output parser; an empty block supplies no answer to the
-      terminal gate. Plain content and thrown failure details are preserved.
-      The host's returned object and rendered content remain unchanged, and
-      the after-hook skips duplicate launch registration for wrapped calls.
-      In managed/native modes, preset reads for a resumed session treat the
-      host's typed not-found as an absent snapshot, leaving the native executor
-      to report the unknown session. No replacement child is created, and
-      preset writes still require verified identity; other read failures reject.
-      Off does not construct this preset/profile layer or wrap the executor.
+      The V2 native lifecycle does not wrap the executor: there is no
+      structured-launch registration, terminal classifier, or launch dedupe.
+      In native mode, preset reads for a resumed session treat
+      the host's typed not-found as an absent snapshot, leaving the native
+      executor to report the unknown session. No replacement child is created,
+      and preset writes still require verified identity; other read failures
+      reject. Off does not construct this preset/profile layer or wrap the
+      executor.
    - `event` → `ctx.event.subscribe()` loop feeding `mapV2EventToV1`
       (`src/v2/event-adapter.ts`): additive synthesis only — the raw v2 event
       is always dispatched first (the interview bridge depends on it), then
@@ -361,9 +244,8 @@ not an optional-degradation path.
       early-registration `{info: {id, parentID, agent?}}`, flat
       `session.deleted` → the v1 deletion-cleanup shape carrying **both**
       id spellings the v1 consumers read (`properties.info.id` for the
-      cache monitor's session eviction, `properties.sessionID` for the
-      task-session-manager's tombstone/board teardown; no `generation` is
-      fabricated, so the event-router's unproven-relaunch deletion fence
+      cache monitor's session eviction, `properties.sessionID` for the v1
+      deletion handlers; no `generation` is fabricated, so any deletion fence
       keeps its strength), per-request `session.step.ended` telemetry → one
       completed-assistant `message.updated` per step, keyed by the assistant
       message ID, for the cache monitor (cumulative `session.usage.updated`
@@ -412,80 +294,24 @@ host contract violation, not a degrade path. Separately, `session.update`
 remains optional for PR7's child permission bridge: without it, only that
 child bridge degrades with a one-time warning.
 
-### Task-control prompt and idle-wait contracts
+### Task-control and prompt contracts
 
-Run-identity anchoring: the plugin records each session's FIRST
-host-confirmed input admission (`chat.message` on v1; on v2 the awaited
-`session.prompt` hook feeds the id directly, ahead of every deferred
-chat.message delivery) and stamps it on the generation's board row when that
-run opens; a resumed run binds only its own pending call's admission, never
-the session map. Amendment fencing and the diagnostic excerpt rules are
-described once in [Tools](tools.md#diagnostic-attribution).
+V2 native controls are thin host reads: exact `sessionID` only, an ownership
+check against the child's host `parentID`, and no board row, alias, adoption,
+lease, or terminal publication. `task_status` reads the child transcript and
+pending permissions on demand; `task_cancel` forwards the host interrupt and
+reports its answer; `task_reply` revalidates the pending request with the host
+before replying; `task_report` queues to the parent inbox with `resume: false`.
+See [Tools](tools.md#background-task-control) and
+[Background Orchestration](background-orchestration.md).
 
 The v1-facing `session.prompt` shim preserves text and file attachments. A
 `noReply: true` body is a real, non-synthetic prompt with `queue` +
-`resume: false`; no caller exposes a delivery/steer parameter.
-Queue alone would not preserve the no-resume intent. Unsupported per-call
-model/variant overrides and agent changes are rejected before writing, never
-silently dropped or implemented by non-atomic `switchAgent`/`switchModel` calls.
-A named owning agent is an identity assertion: the shim verifies it matches
-`session.get().agent` before admitting the prompt. Missing, mismatched, or
-unreadable identity fails closed without a write or selection switch. The
-v2 prompt path inherits the session's persisted selection; noReply callers,
-including interview notifications, retain the same no-resume semantics.
-
-`experimental_v2.waitForSessionIdle(sessionID)` exists only when the host provides
-`session.wait({sessionID})`. It delegates that method; it fabricates neither a
-status map nor board state.
-`session.status` remains absent. Historical `session.get` outcomes cannot authorize
-revive. The official 2.0.5 prompt intent fields and wait signature are pinned in
-`mirror-conformance.ts`, and tool→shim→host contracts have dedicated tests.
-The 2.0.5 promise adapter does not forward AbortSignal to these methods, so the
-bounded idle wait does not pretend to cancel the host operation: late settlement
-is observed without authorizing a prompt. It waits for idle within its budget,
-not for an atomic reservation; queued delivery can still follow an external resume.
-
-The terminal gate alone attributes `session.get` outcomes, in both v1 and v2.
-Only integrations explicitly declaring `hostOutcomeClock: 'shared-unix-ms'`
-(the local in-process wiring) may use them. Other factories default to distrust.
-Finite nonnegative timestamps must satisfy `max(generation start, attempt start,
-latest live activity) < time.idle <= read completion`; equality is ambiguous.
-Attempt boundaries survive handoff promotion and late ACKs. An unattributable
-outcome cannot establish or preserve host-outcome quiescence; it leaves the run
-uncertain, not stopped. Fresh `succeeded` still requires valid post-baseline result
-evidence — except on hosts that expose no transcript source at all (no callable
-`session.messages`), where a window-attributed `succeeded` publishes `completed`
-from the host outcome alone (attribution `host-outcome`): capability absence is a
-dead end, never a pending transcript, and a host whose transcript is present but
-unfinalized keeps waiting exactly as on v1. Independent runtime maps, native
-returns and cancellation keep their fences.
-
-A host outcome that becomes attributable only after the gate's evidence retry
-budget is exhausted is still read again. Once a defer looks suspicious (a
-stale busy runtime contradicted by a later idle, or the budget itself used
-up), the gate arms the next read instead of stopping: fast retries at
-`stopConfirmationMs` cadence (the initial read plus 3 retries), then a
-bounded second tier of slow re-arms with a 30 s base that doubles per arm
-(30 + 60 + 120 + 240, then 300 s × 8, capped at 5 minutes), 12 arms,
-≈ 47.5 minutes in total. A late outcome attributes through the normal
-host-outcome path and publishes the run's true terminal state; no event has
-to arrive in the meantime. If the outcome never becomes readable, the entry
-stays visibly indeterminate (`running` with `statusUncertain`), and the
-parent's next activity rehydrate remains the backstop. The probe in
-`src/terminal-gate.integration.test.ts` (`probe: late-attributable outcome
-after exhaustion terminalizes the stranded board`) is un-skipped and passes;
-it is this path's regression test.
-
-The slow tier arms only on hosts without `client.session.status`, and only
-where an evidence source exists. On hosts that have `session.status`,
-`createRuntimeStatusReconciler` already re-passes every 5 s while
-`board.hasRunningJobs()` and reconciles each running record — a stranded
-entry is running — so that sweeper already retries the read forever and a
-second scheduler would give one fact two owners. The re-arm parameters
-(`evidenceRearmMs` base, `maxEvidenceRearms`) are internal seams with no
-user-facing configuration. `stopConfirmationMs` remains the fast-tier
-cadence only, so raising it stretches the pre-re-arm window proportionally
-(~4× its value at the default budget) while leaving the slow tier unchanged.
+`resume: false`. Unsupported per-call model/variant overrides and agent changes
+are rejected before writing, never silently dropped or implemented by
+non-atomic `switchAgent`/`switchModel` calls. A named owning agent is an
+identity assertion: the shim verifies it matches `session.get().agent` before
+admitting the prompt.
 
 The first complete native agent snapshot finalizes the managed registry for
 the current plugin generation. Subsequent v1 `config()` calls and v2 agent
@@ -500,30 +326,6 @@ does not expose a supported full-host reload API, create a generation, or
 mutate an active registry. When no finalized registry is available (for example,
 in standalone CLI use), status reports `reloadRequired: null` because the live
 side cannot be observed.
-
-## Feature matrix
-
-| Capability | v1 (`opencode`) | v2 (`opencode2`) | Notes |
-|---|---|---|---|
-| `routingBlock` (drop `<Agents>` from the built orchestrator prompt) | ✅ removes the block | ✅ removes the block | The host's native delegation-tool roster keeps agent identity; the block's Delegate/Don't routing criteria have no roster equivalent — see [Upstream behaviors to know](#upstream-behaviors-to-know) |
-| Orchestrator + specialist agents, prompts & permission mapping | ✅ | ✅ `ctx.agent.transform` | — |
-| Delegation + background job board + `task_*` tools | ✅ `task` tool | ✅ host `subagent` (auto-bridged: name/args normalization in `src/v2/delegation.ts`, output parsing in the execute bridges) | On v2 the model-visible identifier parameter is `sessionID` for both the host `subagent` resume arg and the plugin's `task_*` tools; `task_id` is accepted only as a deprecated alias (never emitted). Prompt text must use the host's vocabulary directly — no v1→v2 delegation-vocabulary rewriting is applied (display-name substitution separately rewrites `@<internalName>` mentions to the agent's `displayName` throughout the final orchestrator prompt — inline, file, and append orchestrator prompts — and in `orchestratorPrompt`/ACP routing snippets) — so an instructed resume continues the child instead of forking a new one. `backgroundJobs.mode: "off"` removes the managed board and every `task_*` tool on both hosts. On v2 it also skips the preset executor wrapper and session bindings: native `subagent` delegation, completion delivery and `sessionID` continuation are untouched, static agent inference settings still register, and council seat assembly uses the native resolver |
-| Tools (ast-grep, webfetch, task_status/task_cancel/task_reply, managed-mode `task_report`, acp_run; `task_revive`, `task_message` and `wait_for_user` are v1-only — v2 continues retained sessions through native `subagent(sessionID, prompt)` and uses the native `question` tool as the blocking boundary) | ✅ | ✅ `ctx.tool.transform` | v2 requires `options: {codemode: false}` on each registration (CodeMode split): without it a tool registers cleanly but is confined to the `execute` tool's JS runtime and session catalogs yield `Unknown tool: <name>`. The plugin stamps it on every adapted tool (`adaptTool` in `src/v2/adapters.ts`; additive field, older hosts ignore it). ast-grep needs its CLI binary (package, system, or lazy download); webfetch needs `jsdom` resolvable |
-| Slash commands `/deepwork` `/reflect` | ✅ | ✅ marker round-trip | — |
-| `/interview` | ✅ | ✅ marker command + trailing-message context bridge | `interview.enabled: false` removes the command, the v1 manager, and the v2 bridge entirely |
-| Message transforms (phase reminder, skills filter, image routing, display-name rewrite) | ✅ | ✅ via the single context hook | — |
-| Event handling (session tracking, lifecycle, cache telemetry) | ✅ | ✅ event pump + additive v2→v1 synthesis | The synthesized usage `message.updated` carries no agent/model fields, so live session-model observation (sidebar model projection + `sessionMetadata` tracking) rides the prompt-bridge `chat.message` deliveries (agent + model + variant together; unchanged writes are short-circuited by the tui-state memo); the v2 TUI additionally overlays the picker's live selection on root orchestrator rows (including a root session running the orchestrator's displayName identity) until the next prompt commits it. The static projection is republished on `config()` re-invocations |
-| Tool execute hooks (apply-patch recovery, task-session, json-recovery) | ✅ | ✅ `createToolExecuteBridges` with subagent→task normalization | — |
-| Built-in MCPs (context7, gh_grep) auto-registered | ✅ | ✅ `ctx.mcp.transform` | `ctx.mcp.transform` is present in all v2.0.x stable hosts; the runtime capability probe is belt-and-suspenders |
-| Background-job state persistence (tombstones, deletion epochs) | ➖ process-local | ✅ via `ctx.storage` | optional domain; absent → pure in-memory fallback, zero behavior change (see [Background job state](#background-job-state-rehydrate-probe-and-persistence)) |
-| Foreground model fallback (rate-limit failover) | ✅ | ⚠️ replay disabled; retry-hook steering active | v2's non-atomic `session.switchModel` + steer replay could alter/replay a newer turn, so only the in-place switch runs |
-| `/preset` (preset manager) | ✅ configuration writes; reload to apply | ✅ TUI entry (`./tui` → `dist/tui2.js`), with **Current session** / **Global default** selection; `/preset <name>` binds the current session | The command layer registers from an `append: "app"` slot render because `keymap.layer` is provider-scoped; commands carry an `id` and `slash.arguments`. The manager needs `ui.dialog.select` + `prompt` + `confirm`; feedback uses `ui.toast.show`. Session scope is a server-registered RPC domain — `ctx.rpc.register` on the plugin side, `client.rpc` on the TUI side — whose snapshots live in `ctx.storage`; all three are required members of the v2 plugin contract, so no host-version gate is involved. It changes future subagent inference for the selected session, including best-effort adoption on explicit same-agent continuation of bound children; its main model is unchanged. User/project `.json` and `.jsonc` edits are watched (~300 ms debounce), including newly created candidates; they refresh defaults for future bindings and default-bound roots on their next admission, while named-preset bindings remain pinned until explicitly reapplied. Global-write feedback acknowledges the refresh request, while session-apply feedback requires RPC confirmation. With persistence available, native subagent `progress` saves a new child's binding before its first prompt; same-ID continuation installs runtime inference there and saves the adopted snapshot after native execute succeeds. `session.created` is not used to capture its profile. Non-TUI clients also get a server-side `/preset <name>` command (apply-only): a name binds the invoking session, and the result is reported through the command error channel so the switch costs no model turn and adds no context. See [Preset switching](presets/preset-switching.md) for inheritance, reapplication and compatibility limits |
-| Default primary agent | ✅ finalized visible orchestrator identity | ✅ `draft.default(<visible orchestrator identity>)`; the canonical `orchestrator` entry remains a hidden alias when `displayName` is configured | v1 `default_agent` and v2 draft default target the same visible entry |
-| TUI default agent | ✅ orchestrator | ✅ host follows the default primary agent and hoists it to the head of the agent list | — |
-| Multiplexer (tmux/zellij/herdr/cmux-tui/kitty/wezterm panes) | ✅ | ✅ TUI plugin entry wires the client-owned pane lifecycle through a v2 host adapter: shared background service and `--server` hosts are supported, `--standalone` is fail-closed (one diagnostic per process, `/subagent` navigates to the latest child) | Defaults are host-specific: `"tui"` on v1 (`opencode attach <url> --session <id> --dir <dir>`); `"mini"` on v2 shared (`opencode mini --session <id>`) and remote (`opencode mini --server <url> --session <id>`), with the pane cwd pinned by the adapter. Explicit `viewer: "tui"` retains the v2 full-TUI commands with a positional directory; v1 `viewer: "mini"` appends `--mini` to attach (OpenCode >= 1.17.10), without extra cwd pinning. The `OPENCODE_PASSWORD` secret is injected through the multiplexer's spawn-time environment (or a Linux + POSIX-shell `/proc` bridge on zellij/cmux-tui), never through the viewer's command line — see [Secret handling](multiplexer-integration.md#known-limitations). Events are projected from `session.created` / `session.execution.*` / `session.idle` / `session.deleted`; directory attribution is recorded at `session.created` because execution events carry none |
-| Orchestrator-wake scheduler | ✅ todo-gated (host `todo`/`children`/`status` APIs) | ❌ not created (council 2026-10-23) | On v2 the native notifier delivers each generation's first result; the tracker queues later publications to the parent. The `backgroundJobs.orchestratorWake` section is v1-only |
-| `chat.headers` (Copilot `x-initiator` routing) | ✅ | ✅ via `session.hook("model.request")` | transport-level only; auxiliary kinds are covered by v2's built-in Copilot provider hook |
-| Companion app | ✅ | ⚠️ unverified | independent desktop app; test separately against v2 |
 
 ## Upstream behaviors to know
 
@@ -571,12 +373,11 @@ currently break this plugin:
 - **`session.deleted` is synthesized with a dual id spelling.** v2
   delivers deletion flat (`{sessionID}`), and the v1 deletion consumers
   read two different spellings: the cache monitor's session eviction
-  reads `properties.info.id`, while the task-session-manager's
-  deletion handler accepts `properties.sessionID`. The synthesized v1
-  event therefore carries both. Without this synthesis the deletion
-  cleanup (rehydrate tombstone, board teardown, idle-token/input-wait
-  clears) never fired on v2, and deleted runs resurrected as
-  forever-running ghost records on the next request.
+  reads `properties.info.id`, while the v1 deletion handlers accept
+  `properties.sessionID`. The synthesized v1 event therefore carries both,
+  so deletion cleanup (idle tokens, input waits, task-context state) fires
+  on v2. The native V2 lifecycle has no board, tombstone, or delivery ledger
+  to tear down.
 - **Lifecycle keys on `session.execution.*`.** V2 hosts publish durable
   `session.execution.started/succeeded/failed/interrupted` events
   (`{sessionID}`, plus `error` on `.failed` and `reason` on
@@ -587,8 +388,9 @@ currently break this plugin:
   idle `session.status` + `session.idle`; `failed` → a v1 `session.error`
   with the host error payload passed through best-effort, emitted before
   the idle pair so the error-then-idle flow the event-router expects is
-  preserved). Without this synthesis the orchestrator-wake scheduler never
-  arms on live v2 hosts.
+  preserved). Without this synthesis the v1-shaped lifecycle consumers
+  (idle reconciliation where present, fallback retry steering) would miss
+  execution transitions on live v2 hosts.
 - **Transcript user messages carry no identity.** Context-hook
   transcript user messages on live v2 hosts carry `{id, time, text,
   type}` only — no `agent`, no `sessionID`. The v1 injection gates
@@ -602,16 +404,12 @@ currently break this plugin:
   synthetic wakes, the bridge also replaces the first text part with a
   copy restoring its internal flag and metadata. Both are idempotent;
   the provider-bound text bytes remain unchanged.
-- **Runtime status reconciliation is capability-gated.** v2 has no
+- **Runtime status reconciliation is v1-only.** v2 has no
   equivalent of the v1 live session-status map (`client.session.status`
   is not a function on v2 hosts; `session.status` is not exposed to
-  plugins), so the task-session-manager's
-  runtime-status reconciliation poll is disabled entirely on hosts
-  without the method — a single per-instance log line notes the
-  disabled reconciliation instead of logging uncertainty every ~5s poll.
-  v1 hosts expose the method and keep the exact historical polling
-  behavior. Background job stop-confirmation was never obtainable from
-  the v2 poll anyway (the lookup failed every time).
+  plugins), and the native V2 lifecycle does not construct the
+  task-session-manager poll. v1 hosts expose the method and keep the exact
+  historical polling behavior.
 - **Plugin API surface and adoption status.** The v2 plugin API exposes
   session hooks `compaction`, `generate`, and `title` (the title and
   compaction hooks may set `result` to skip the model call entirely)
@@ -621,8 +419,8 @@ currently break this plugin:
   `options` object — the plugin is unaffected: its context bridge
   mutates only system/messages; its single cache hint rides
   `ContentPart.cache`. Adoption status: the **compaction hook is
-  adopted** — the plugin strips phase reminders from the compaction input,
-  preserving job boards so the summary can report running jobs. On v1, the
+  adopted** — the plugin strips phase reminders from the compaction input;
+  the V2 native lifecycle has no job board to preserve. On v1, the
   `experimental.session.compacting` hook instead marks the next message
   transform for that session; it strips only phase reminders after the
   transform, leaving the job board untouched. The v2 adapter does not forward
@@ -664,8 +462,8 @@ currently break this plugin:
   v1-field-mapped copy after the raw v2 `permission.asked` event (raw
   first is a load-bearing invariant for v2-native handlers). Consumers
   watching both see the ask twice with the same request id — safe because
-  every ask consumer is idempotent per request id (the input-wait
-  tracker's Set, the companion's status setters, wake suppression); new
+  every ask consumer is idempotent per request id (the v1 input-wait
+  tracker's Set where present, the companion's status setters); new
   ask consumers must tolerate it, like idle.
 - **Question flow is Form-based.** v2 replaced `question.*` with the Form
   flow; the adapter synthesizes `question.asked/replied/rejected` from
@@ -703,13 +501,11 @@ currently break this plugin:
   calls `resetV2GenerationWarnings()`, rearming the one-time
   degradation latches (model.request ordering drift, permission-rules
   unavailable, session.list/remove unavailable) so every generation
-  warns once. Background-job persistence resets unconditionally on
-  every generation setup behind an epoch fence, so persisted write
-  queues cannot leak across generations. The event adapter passes
-  `location.shutdown` events through raw with no synthesis. The
+  warns once. The event adapter passes
+  `location.shutdown` events through raw with no synthesis. The v1
   user-wait-gate (`wait_for_user` HITL latch) stays armed across a
-  reload by design, and the admission runtime defers its final
-  scheduler/tracker teardown by one macrotask so an immediate re-init
+  reload by design, and the v1 admission runtime defers its final
+  scheduler teardown by one macrotask so an immediate re-init
   can retain active and queued calls.
 - **Config permission policies are kernel-enforced and deny-final.**
   `experimental.policies` supports `action: "permission"` entries
@@ -757,12 +553,11 @@ currently break this plugin:
 Add the npm package, **pinned to an exact version** — v2 auto-refreshes
 unpinned npm plugins on every startup, so `@latest` effectively means
 "silently upgrade whenever a new version ships". The global config root is
-`~/.config/opencode/opencode.json`, shared with v1 (`~/.config/opencode2/`
-is not read for plugin config):
+`~/.config/opencode/opencode.json`:
 
 ```json
 {
-  "plugin": ["oh-my-opencode-slim@<exact-version>"]
+  "plugins": ["oh-my-opencode-slim@<exact-version>"]
 }
 ```
 
@@ -776,7 +571,7 @@ directory entries by file convention (`<dir>/server.*` for the server role,
 
 ```json
 {
-  "plugin": ["file:///path/to/oh-my-opencode-slim"]
+  "plugins": ["file:///path/to/oh-my-opencode-slim"]
 }
 ```
 
@@ -818,14 +613,14 @@ Register the shim directory in the OpenCode v2 config:
 
 ```json
 {
-  "plugin": ["file:///absolute/path/to/opencode-plugins-dev/oh-my-opencode-slim"]
+  "plugins": ["file:///absolute/path/to/opencode-plugins-dev/oh-my-opencode-slim"]
 }
 ```
 
 `bun run build` after each source change; the forwarders (or the shim)
 re-export the fresh bundles and no publish step is involved.
 
-Verify with `opencode2 run "list your specialist agents" --standalone` — the
+Verify with `opencode run "list your specialist agents" --standalone` — the
 orchestrator should name explorer, oracle, designer, fixer.
 
 ### Registration rules
@@ -863,170 +658,51 @@ is ignored there. Other prompt callers, like the orchestration scheduler (v1
 only), merely pin the current model and keep steering; this is not foreground
 fallback.
 
-## Background job state: rehydrate probe and persistence
+## Native child lifecycle on v2
 
-Several mechanisms keep the in-memory background job board honest against the
-host across process and plugin restarts:
+V2 has no plugin-side child-job ledger, rehydrate probe, persistence, delivery
+marker, or terminal publication. OpenCode owns background Job durability,
+startup recovery, and completion delivery; the plugin reads host sessions
+directly when the parent calls `task_status`, `task_cancel`, or `task_reply`.
 
-### Tracking recovery is not execution recovery
+### Recovery is host-owned and at-least-once
 
-Restoring a board row does not resume interrupted execution. OpenCode owns
-automatic restart continuation. In the inspected
-[v2.0.32 host source](https://github.com/anomalyco/opencode/blob/v2.0.32/packages/core/src/session/context.ts),
-`SessionContext.select` flushes MCP tools, then selects the persisted agent
-without an explicit plugin-activation barrier in that method. The runner
-already waits for activation once when a drain begins, but does not repeat
-that wait before every later context selection. Local server logs contain
-`Session.AgentNotFoundError: Agent not found: "designer"` during restart drains;
-the same failure also affects other plugin agents.
-The related upstream [OpenCode issue #54172](https://github.com/anomalyco/opencode/issues/54172)
-also reports existing agents disappearing during plugin/config reloads.
-The proposed [host fix #51133](https://github.com/anomalyco/opencode/pull/51133)
-adds per-selection waits; it remains unmerged at the time of investigation.
-That fix does not establish whether activation readiness covers this plugin's
-deferred agent projection and asynchronous rebuild during cold startup.
-
-If native recovery reaches agent selection before registration completes,
-board adoption cannot repair that failed execution. A prompt-admission hook
-cannot protect selection that already failed. The host needs a readiness
-boundary covering plugin activation and committed agent-registry rebuilds.
-Do not interpret a restored task row as proof that execution resumed, and do
-not blindly resend continuation prompts after uncertain admission. This plugin
-does not add placeholder agents or automatically relaunch work to mask the race.
+OpenCode 2.3.0 owns automatic restart continuation through its registered
+recovery sweep. A standalone embedding without that sweep does not gain one
+from Slim. Pending Job recovery is at-least-once and can repeat external side
+effects after a crash; it is not an exactly-once execution or universal delivery
+guarantee. A saved Job row or a `task_status` read is evidence of host state,
+not proof that execution resumed. Do not blindly resend a continuation after
+uncertain admission.
 
 ### Read-only task diagnostics
 
-On v2, `task_status(diagnostic: true)` follows the same contract as on v1
-(read-only, non-final, running children refused, completed children use
-`result: true`) — see [Tools](tools.md#background-task-control). The v2-specific
-differences: the paged messages route honours the requested limit; without it
-the shim fetches full raw context, checks it for compaction, and selects only the
-newest requested entries, marking dropped entries or compaction incomplete.
-Fetching that raw context is not bounded by the shim, and there is no status map
-to fall back on — missing or ambiguous attribution is reported as uncertain,
-never guessed. Startup recovery re-adopts restarted children; v2 additionally
-re-delivers completions.
-### Rehydrate existence probe (`session.get`)
+On V2, `task_status` reads the exact child's latest round and trailing result
+from the host transcript. Missing or ambiguous evidence is reported as unknown
+or uncertain, never guessed. `diagnostic: true` is a V1 managed feature; native
+V2 status exposes the trailing result and pending permission request IDs
+instead. There is no board, no startup re-adoption, and no completion
+re-delivery by the plugin. See [Tools](tools.md#background-task-control).
 
-Rehydration re-registers persisted *running* task tool parts so a plugin
-restart does not orphan in-flight background lanes — but a session deleted
-while the plugin was down would resurrect as a forever-running ghost.
-Rehydration only re-registers what the parent's persisted tool parts still
-show; it does not by itself restore aliases or terminal results. Two
-read-only paths cover the post-restart gap: a native background plaintext
-launch result whose trailing `slim-child-ref:v1` marker is the output's
-final non-empty line still pairs its alias with that session (an anchored
-tail match only — a marker inside the body text is never trusted), and
-`task_status` falls back to host-verified ownership plus transcript
-evidence for an owned session the board no longer tracks (see
-[Background Orchestration](background-orchestration.md)).
-After rehydration registers a task, the task-session-manager transform
-fires a fire-and-forget `client.session.get` probe per newly registered
-taskID:
+### Pending permissions
 
-- **Capability-gated, not host-gated — but v2-effective.** The probe runs
-  whenever the client exposes `session.get`; hosts without it skip
-  silently. The typed NotFound classification only crosses the v2 plugin
-  boundary (the host passes the raw core effect in-process): the v1 SDK
-  wraps 4xx responses as plain `Error` with a `.cause` (or returns an
-  `{error}` tuple when `throwOnError: false`), so on v1 hosts the probe
-  runs but harmlessly never tombstones — the wrapped rejection falls into
-  the transient fail-open path. The probe lives inside the existing
-  task-session-manager transform — no new pipeline step.
-- **NotFound classification is typed, never heuristic.** A rejection
-  tombstones the task only when `err._tag === 'Session.NotFoundError'`
-  (property check; never `instanceof` or message matching — the SDK error
-  class identity is unstable across host builds). Cleanup is
-  generation-freshness-guarded: the board record's generation is captured
-  before the async `get`, and a NotFound that resolves after a legitimate
-  same-ID relaunch (new generation, tombstone cleared) skips all cleanup
-  instead of deleting the live relaunched record. On a fresh hit, the four
-  probe cleanup actions run as one synchronous block — supervisor
-  `onSessionDeleted` first (it clears the run's watchdog timer while the
-  record still identifies it; same ordering as the event-router/coordinator
-  deletion paths), then the rehydrate tombstone, board drop, and concurrency `releaseTask` (all idempotent; a
-  missing `releaseTask` would leak an admission slot forever). The
-  canonical full deletion cleanup (input waits, idle tokens, pending-call
-  tracker, `clearParent`, task-context tracker, snapshots) runs via the
-  `session.deleted` event path.
-- **Any other rejection fails open** — the job stays registered and the
-  normal reconciliation paths keep their chance. The probe never rejects
-  unhandled.
-- **A resolved terminal outcome settles the job** through the same
-  `updateStatus` semantics as the idle-reconciliation host-outcome path:
-  `succeeded` requires usable final assistant text (otherwise the
-  textless-completion diagnostics apply, per the #1115 precedent);
-  `failed` settles as error with the host outcome recorded; `interrupted`
-  is a host stop, not a failure, and settles as `stopped` (the stop
-  family — no plugin-verified cancel lease), never a false error.
-
-Related injection hardening: a remembered (possibly stale) processed
-completion skips *cleanly* — the fence check runs before the
-deletion-epoch fail-closed branch in `updateFromInjectedCompletion`, so
-replaying an old completion after a delete + same-ID relaunch can no
-longer poison the fresh generation with `markStatusUncertain`. Unobserved
-completions for a deleted task still fail closed for every provenance
-kind.
-
-### Persistence via `ctx.storage` (v2)
-
-When the v2 host exposes the optional `storage` domain, the plugin
-persists background-job lifecycle state through
-`src/utils/background-job-persistence.ts` (configured in `setup` before
-the v1 factory runs):
-
-- **Tombstones, deletion epochs, and owned child identities** are
-  write-through: every in-memory ledger mutation queues a matching
-  persisted update, so the persisted state tracks the ledger (writes are
-  fire-and-forget — a crash between the in-memory mutation and the queue
-  flush loses that persisted entry, an accepted degradation to
-  process-local behavior). A background launch persists the minimal child
-  identity (task ID, parent, original agent, description, objective,
-  launch time). A terminal outcome alone does not mark delivery: the
-  marker is persisted only after an accepted parent-visible wake, or
-  when a trusted current-run delivery is found in parent history.
-  Native notification ownership alone is not delivery evidence, and the
-  launch fence prevents an old delivery from acknowledging a newer run.
-  Busy, throttled, or failed publication retries retain the execution
-  until their accepted delivery covers it. One wake names at most 256
-  executions; the rest stay pending for a later accepted wake, and an
-  attempt whose entire batch was retired before sending is skipped and
-  releases its wake reservation.
-  Clearing a tombstone on a legitimate relaunch is persisted too —
-  a deleted-then-relaunched task is *not* ghost-skipped after a restart,
-  while its deletion epoch survives for generation fencing (restored
-  epochs keep the epoch counter monotonic).
-- **Owned child identities make startup recovery possible without
-  `session.list`.** The bounded startup scan unions those identities with
-  host child rows when list is available, reads each child's transcript,
-  verifies parent launch evidence for list-only candidates, and never
-  adopts a terminal child that has no persisted identity (historical
-  history is not replayed). The
-  delivery marker suppresses a second completion wake on a later restart.
-  Declined, skipped, throttled, or failed plugin wakes leave the identity
-  undelivered for retry. Because the marker write follows the accepted
-  wake, delivery is at-least-once across a crash, not crash-atomic.
-- **Aliases** are not persisted: only a parent created while the plugin
-  runs gets numbered aliases, and an old alias resolves only through its
-  marker in the parent's history. Once a compaction cuts that history, an
-  alias missing from the board is refused and the exact ID is needed (see
-  [Background Orchestration](background-orchestration.md)).
-- **Seeding is backend-only.** Without `ctx.storage` (v1 hosts, hosts
-  without the domain) the module is a pure in-memory no-op sink: zero
-  behavior change, fresh boards and ledgers start exactly as
-  process-local as before.
-- **Bounded and serialized.** Persisted tombstones (and their epoch
-  entries) and owned child identities each self-cap at the 500 most recent
-  by recorded/launch time; writes for one key are serialized in-process
-  (no concurrent read-modify-write); write failures log and degrade to
-  process-local behavior.
-
+`task_status` may list pending permission requests for the exact owned child
+through the host `permission.list`/`get` surface. State is reported before
+permission details. Each request keeps its exact ID; long resource paths are
+shortened within a per-request budget and end with `…`, with one trailing
+`resource details shortened` note. Whole requests are omitted only when the
+request limit is exceeded, and the list ends with `permission details
+truncated` if the total permission-details budget is exhausted. `task_reply`
+revalidates
+request ownership with the host before replying; a request answered elsewhere
+reports that it is no longer pending. The plugin keeps no request mirror, wait
+map, or lease, and OpenCode cancels pending permissions on reload.
 ### Diagnostics
 
 Two log lines aid drift diagnosis (both hosts): the task tool's terminal
 output that carries no parsable task id is logged with a ~140-char
 preview (`task output without a task id` — the host-output-drift
-detector), and an idle observation for a *tracked managed child* with no
+detector), and an idle observation for a *tracked v1 managed child* with no
 running board record logs with a `[task-session-manager] WARN:` prefix
 instead of the routine idle line.
 
@@ -1098,23 +774,18 @@ builds) exposes exactly `create`/`get`/`switchAgent`/`switchModel`/
 `wait`/`context` — **`list` and `remove` are not handed to plugins**.
 Both endpoints exist on the host's HTTP API, but the
 plugin context never receives them. `session.status`, `session.todo`, and
-`session.children` are likewise not exposed to plugins — the wake
-scheduler's fallback enumeration, the delete no-op below, and the disabled
-runtime-status reconciliation (see
-[Upstream behaviors](#upstream-behaviors-to-know)) all follow from these
+`session.children` are likewise not exposed to plugins; the delete no-op
+below and the V1-only wake and runtime-status paths follow from these
 gaps. The client shim capability-probes both at runtime
 (`typeof s.list === 'function'`, `s.remove`), so hosts exposing them use
 real delegation; on all
 v2.0.x stable hosts both probes fail and the shims degrade:
 
-- **Children enumeration (orchestrator-wake).** The shim's
+- **Children enumeration (V1 wake scheduler).** The shim's
   `client.session.list` returns the v1-parity empty page `{data: []}`,
   so `session.list({parentID})`-based enumeration never yields children
-  and the scheduler always runs its **event-tracked fallback**
-  (adapter-synthesized `session.created` parentID links plus tracked
-  busy/idle statuses — the mode the doc's wake section describes as the
-  fallback is effectively the only path on v2). The gate still passes
-  because it probes the *shim's* `list` function, which always exists.
+  and the V1 event-tracked fallback is effectively the only path. The V2
+  native lifecycle does not enumerate children at all.
   The interview dashboard's session scan likewise sees no sessions from
   `list` on v2.
 - **Session delete.** `client.session.delete` is a **no-op** on hosts without
@@ -1134,114 +805,34 @@ The guards are module-level booleans with fixed text — no timestamps,
 session ids, or per-call payloads — so repeated wake polls and cleanup
 calls do not flood the log.
 
-### No orchestrator-wake on v2
+### Retired V2 managed lifecycle
 
-The wake scheduler is **not created on v2** (council 2026-10-23). The host's
-native background notifier delivers the first terminal result of each
-generation: a busy parent is reached by steer at its next step boundary, an
-idle parent gets a successor turn, and restart recovery uses the durable job
-marker. A relaunch through the `subagent` tool starts a new generation and
-re-arms the notifier. The tracker queues later completed, error, or stopped publications
-of a managed child to the parent, including direct prompts to the child.
-After TUI kill-all, a volatile reminder tells each affected parent not to
-relaunch the stopped work. It expires at that parent's next external prompt.
-Child permission/question asks
-are a host-UI boundary the host does not route to the parent agent; the
-parent discovers open asks via `task_status` pull. The whole
-`backgroundJobs.orchestratorWake` config section is v1-only and warns as
-ignored on v2.
+Review every inherited config using the [upgrade guide](v2-native-upgrade.md).
 
-### Terminal-publication wake
+The V2 managed lifecycle is retired as a structural deletion, not renamed or
+emulated. Slim constructs no V2 job board, alias authority, reusable-session
+admission, terminal gate, wall-clock watchdog, concurrency queue,
+orchestrator-wake scheduler, child-input wake, persistence/tombstone/delivery
+ledger, or structured-launch executor wrapper. `backgroundJobs.mode: "managed"`
+is rejected during V2 configuration; an unset mode resolves to `native`. The
+V1-only `concurrency`, `wallClockTimeoutMs`, `maxSessionsPerAgent`, and
+`stopConfirmationMs` settings are rejected when explicitly set on V2;
+`sameProviderPolicy` warns and is ignored because V2 subagents always run in
+background. The remaining native controls are exact-ID host reads:
+`task_status`, `task_cancel`,
+permission-only `task_reply`, and queue-only `task_report`. OpenCode reports
+every settled child busy period — native `subagent(sessionID, prompt)` and
+direct `session.prompt` continuations included — so Slim keeps no completion
+watcher.
 
-The native notifier fires on the FIRST terminal publication of every
-generation — on v2 every plugin task launch AND relaunch is a host
-`subagent` tool call that arms the native background notifier (a relaunch
-re-arms it with a fresh `started_at`, defeating the notify dedupe). Later
-publications of the same generation have no native notifier. On v2, the
-revived-run tracker queues their results to the parent. On v1, the
-**terminal-publication wake** handles them:
+### Native parent notifications
 
-- **Trigger:** the terminal gate publishes a `completed` or `error` host
-  outcome (state-disjoint from the stopped-job recovery listener, which
-  keys on `stopped` + terminal-unreconciled) AND the parent is idle AND
-  no input wait is open AND at least `publicationWakeMinIntervalMs` has
-  passed since this parent's last *delivered* publication wake (the
-  per-parent throttle is consumed only on delivery — and only after the
-  evaluation actually queues the wake admission; a suppressed OR vetoed
-  attempt, including an in-evaluation no-delivery exit such as the
-  unchanged-fingerprint no-progress stop or an SDK error, burns
-  nothing). The FIRST terminal publication of ANY generation
-  (`terminalRevision` 1) is suppressed with `reason:
-  "first-publication-native-owned"` — the native notifier armed by that
-  generation's `subagent` tool call already delivers it to an idle
-  parent; if that native delivery is ever lost host-side, the job stays
-  pullable with `task_status` on the parent's next activity. Exception: a
-  revived run whose tracker-owned `<task>` notification exhausts its
-  whole retry budget releases ownership and re-emits the publication
-  wake directly through the scheduler (a revived lineage has no native
-  notifier, so the first-publication suppression must not apply to that
-  degraded fallback) — the idle parent always ends up with exactly one
-  delivery: the notification or the fallback wake.
-- **Busy parent → skip entirely:** the native steer already delivered the
-  first completion; a queued wake would double-notify.
-- **Delivery:** the same `promptAsync` machinery as the periodic wake —
-  `delivery: "queue"`, `modelSelection: "inherit"`, the session's current
-  model variant — reusing the existing wake text (no new prompt surface).
-- **Shared gate:** one-flight, the two-wake no-progress cap, and
-  `expectingWakeBusy` are the periodic scheduler's, not a parallel gate.
-  A publication wake enters evaluation past the cap's pre-check and lets
-  the in-evaluation fingerprint comparison decide: a publication that
-  changed the children fingerprint un-stops the session; an unchanged
-  fingerprint keeps the cap tripped.
-
-Config knobs (see the `backgroundJobs.orchestratorWake` rows in the
-[configuration reference](configuration.md#background-job-management); v1
-only): `wakeOnTerminalPublication` (boolean, default `true` — the feature
-flag) and `publicationWakeMinIntervalMs` (integer ms, default `30_000` — the
-per-parent throttle window; a burst of publications collapses into one
-wake).
-
-Related: when a job whose terminal report the parent already consumed
-(reconciled) reopens to running, the plugin appends exactly one corrective
-trailing notice ("previously reported terminal, now running again; the earlier
-report is superseded") in the cache-safe tail zone, pointing at `task_status`.
-
-On v1 the native task-tool notifier delivers the first publication. The
-plugin sends later results as self-contained `<completed-job>` deltas through
-the bounded queue, including while the parent is busy. On v2, the tracker
-queues a `<task>` result for each later publication; a relaunch through the
-`subagent` tool starts a generation whose first result is delivered natively.
-
-### Host outcome quirks the terminal gate defends against
-
-Two v2 host behaviors (verified against v2.0.26) shape how the terminal
-gate handles host outcomes:
-
-- **`idle_outcome` is never cleared.** The host writes Session.Info
-  `outcome` once, at the run's terminal transition, and nothing resets
-  it when the same session starts a new run — a later read returns the
-  PREVIOUS run's outcome until the next terminal transition overwrites
-  it. The gate therefore never trusts a session-level outcome alone:
-  `attributableHostOutcome` accepts an outcome only when its `time.idle`
-  falls inside the current run's read window (the
-  `idle-not-after-window-lower` rejection reason is this defense logging
-  itself), and the transcript classifier treats a session-level outcome
-  as corroborating evidence, never as the primary criterion.
-- **Committed-but-stale reads.** A host read can observe a state older
-  than an already-committed write (pinned by the terminal-gate test
-  suite). The gate reads evidence, never invariants such as
-  "outcome present ⇒ terminal", and simply re-reads on the next attempt
-  when a read lags a commit.
-
-The publication path additionally runs a **log-only corroboration**:
-when a window-attributed host outcome is in hand at commit time, the
-published state is compared against the state that outcome would imply
-(`succeeded` → completed, `failed` → error,
-`interrupted`/`cancelled` → stopped; verified-cancel publications are
-stop-family normalized so they never log), and disagreements land in
-`[terminal-gate] outcome corroboration` log lines. The mirror never
-gates behavior — promoting it to a decision signal requires a fresh
-review — and a host without `session.get` produces no entries.
+The periodic orchestrator scheduler was removed. OpenCode delivers settled
+child reports through its native notifier. A busy parent receives a steer at
+its next step boundary, an idle parent gets a successor turn, and restart
+recovery uses the durable host outbox. This also covers direct child prompts.
+Use `task_status` to pull a missing result or discover pending permissions.
+Answer permissions with `task_reply` and questions in the host UI.
 
 ### Environment caveats
 
@@ -1249,12 +840,10 @@ review — and a host without `session.get` produces no entries.
   with a reduced, TUI-side context that lacks `agent.transform` (and other
   domains). The adapter capability-guards `setup` and skips registration
   gracefully for those hosts instead of crashing or retry-storming. The
-  same applies to the embedded v2 pass inside every v1 host: it invokes
-  `setup` with registration-only domains, so a v1 session's plugin log
-  shows `[v2] tool.transform failed`-style lines and
-  `health check passed {"bridges":4}` — expected noise from that parallel
-  pass, not breakage. The classic `server()` path (a separate plugin-log
-  instance a few seconds apart) carries the full v1 functionality.
+  embedded V2 pass on V1 has `agent.transform` but no tool, session or event
+  domains. The adapter skips that registration-only context before reading
+  V2 configuration, so V1 managed settings remain valid. The classic
+  `server()` path carries the full V1 functionality.
 - **TUI-side plugin logs are not captured.** The plugin logger initializes
   in the server process only, so TUI-side registration failures write no
   `[v2][tui]` lines anywhere. Verify TUI behavior through the host (command

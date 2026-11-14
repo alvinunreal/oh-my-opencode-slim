@@ -87,6 +87,39 @@ describe('runDoctorCheck', () => {
     expect(result.presetCheck).toBeUndefined();
   });
 
+  test('reports a retired v2 setting in an inherited file even when a closer file selects native mode', () => {
+    const project = path.join(tempDir, 'workspace', 'repo');
+    const oldConfig = path.join(
+      tempDir,
+      'workspace',
+      '.opencode',
+      'oh-my-opencode-slim.json',
+    );
+    const newConfig = path.join(
+      project,
+      '.opencode',
+      'oh-my-opencode-slim.json',
+    );
+    for (const file of [oldConfig, newConfig])
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(oldConfig, '{"backgroundJobs":{"concurrency":{}}}');
+    fs.writeFileSync(newConfig, '{"backgroundJobs":{"mode":"native"}}');
+
+    const result = runDoctorCheck(project, 'v2');
+    expect(result.ok).toBe(false);
+    expect(result.configs).toContainEqual(
+      expect.objectContaining({
+        path: oldConfig,
+        ok: false,
+        error: {
+          kind: 'unsupported-host',
+          message: expect.stringContaining('backgroundJobs.concurrency'),
+        },
+      }),
+    );
+    expect(runDoctorCheck(project, 'v1').ok).toBe(true);
+  });
+
   test('checks all inherited layers and resolves presets across them', () => {
     const workspace = path.join(tempDir, 'workspace');
     const projectDir = path.join(workspace, 'repo');

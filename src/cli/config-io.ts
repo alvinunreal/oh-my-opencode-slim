@@ -1,24 +1,11 @@
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
-import { homedir } from 'node:os';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { mutateJsonFile, writeJsonAtomic } from '../config/json-file';
 import { parseJsonConfigText } from '../config/jsonc';
 import {
   ensureConfigDir,
   ensureOpenCodeConfigDir,
-  ensureTuiConfigDir,
   getExistingConfigPath,
-  getExistingTuiConfigPath,
   getLiteConfig,
 } from '../config/paths';
 import {
@@ -27,8 +14,6 @@ import {
   INSTALLER_MANAGED_PLUGIN_OPTION,
   type PluginEntry,
 } from '../plugin-entry';
-import { crossSpawn } from '../utils/compat';
-import { resolvePackageInstallCommand } from '../utils/package-manager';
 import { generateLiteConfig } from './providers';
 import type { ConfigMergeResult, InstallConfig, OpenCodeConfig } from './types';
 
@@ -148,41 +133,16 @@ function getPluginEntry(): PluginEntry {
       if (!version || !requestedTag || requestedTag === 'latest') {
         return PACKAGE_NAME;
       }
-      return [
-        `${PACKAGE_NAME}@${version}`,
-        { [INSTALLER_MANAGED_PLUGIN_OPTION]: true },
-      ];
+      return {
+        package: `${PACKAGE_NAME}@${version}`,
+        options: { [INSTALLER_MANAGED_PLUGIN_OPTION]: true },
+      };
     }
 
     return packageRoot;
   } catch {
     return PACKAGE_NAME;
   }
-}
-
-/**
- * Reads the OpenCode config to find the pinned version for this plugin.
- * Returns the version string (e.g. "1.2.3") if pinned, or undefined
- * if the plugin is unpinned (bare name or @latest).
- */
-function getConfiguredExactVersion(): string | undefined {
-  try {
-    const { config } = parseConfig(getExistingConfigPath());
-    if (!config) return undefined;
-    let version: string | undefined;
-    for (const entry of getPlugins(config)) {
-      const spec = getPluginSpec(entry);
-      if (!spec) continue;
-      if (spec === PACKAGE_NAME) {
-        version = undefined;
-      } else if (spec.startsWith(`${PACKAGE_NAME}@`)) {
-        const candidate = spec.slice(PACKAGE_NAME.length + 1);
-        version = candidate && candidate !== 'latest' ? candidate : undefined;
-      }
-    }
-    return version;
-  } catch {}
-  return undefined;
 }
 
 function getRequestedPackageTag(packageRoot: string): string | undefined {
@@ -216,170 +176,6 @@ function getVersionFromPackageRoot(packageRoot: string): string | undefined {
     return pkg.version;
   } catch {
     return undefined;
-  }
-}
-
-function getOpenCodePluginCacheDir(version?: string): string {
-  const cacheDir =
-    process.env.XDG_CACHE_HOME?.trim() || join(homedir(), '.cache');
-  const suffix = version
-    ? `${PACKAGE_NAME}@${version}`
-    : `${PACKAGE_NAME}@latest`;
-  return join(cacheDir, 'opencode', 'packages', suffix);
-}
-
-function writeOpenCodePluginCacheManifest(
-  cacheDir: string,
-  version: string = 'latest',
-): ConfigMergeResult | null {
-  try {
-    writeFileSync(
-      join(cacheDir, 'package.json'),
-      JSON.stringify(
-        {
-          name: `${PACKAGE_NAME}-cache`,
-          private: true,
-          dependencies: {
-            [PACKAGE_NAME]: version,
-          },
-        },
-        null,
-        2,
-      ),
-    );
-    return null;
-  } catch (err) {
-    return {
-      success: false,
-      configPath: cacheDir,
-      error: `Failed to write cache package.json: ${err}`,
-    };
-  }
-}
-
-function verifyOpenCodePluginCache(cacheDir: string): ConfigMergeResult | null {
-  const pluginPackageJsonPath = join(
-    cacheDir,
-    'node_modules',
-    PACKAGE_NAME,
-    'package.json',
-  );
-
-  if (!existsSync(pluginPackageJsonPath)) {
-    return {
-      success: false,
-      configPath: cacheDir,
-      error: `Cached plugin package not found at ${pluginPackageJsonPath}`,
-    };
-  }
-
-  try {
-    const packageJson = JSON.parse(
-      readFileSync(pluginPackageJsonPath, 'utf-8'),
-    ) as {
-      name?: string;
-    };
-
-    if (packageJson.name !== PACKAGE_NAME) {
-      return {
-        success: false,
-        configPath: cacheDir,
-        error: `Cached plugin package has unexpected name: ${packageJson.name}`,
-      };
-    }
-  } catch (err) {
-    return {
-      success: false,
-      configPath: cacheDir,
-      error: `Failed to verify cached plugin package: ${err}`,
-    };
-  }
-
-  return null;
-}
-
-export async function warmOpenCodePluginCache(): Promise<ConfigMergeResult | null> {
-  const cliEntryPath = getCliEntryPath();
-  if (!cliEntryPath) {
-    return null;
-  }
-
-  const packageRoot = findPackageRoot(cliEntryPath);
-  if (!packageRoot || !isPackageManagerInstall(packageRoot)) {
-    return null;
-  }
-
-  // Warm the directory OpenCode v1 reads for the configured entry: an exact
-  // pin maps to <name>@<version>, a bare entry to <name>@latest.
-  const cacheVersion = getConfiguredExactVersion() ?? 'latest';
-  const cacheDir = getOpenCodePluginCacheDir(cacheVersion);
-
-  // Resolve before touching the cache so a missing package manager never
-  // removes the plugin OpenCode currently loads.
-  const install = resolvePackageInstallCommand();
-  if (!install) {
-    return {
-      success: false,
-      configPath: cacheDir,
-      error:
-        'No bun or npm found on PATH; install either to warm the OpenCode plugin cache.',
-    };
-  }
-
-  let staging: string | undefined;
-  let backup: string | undefined;
-  try {
-    mkdirSync(dirname(cacheDir), { recursive: true });
-    staging = mkdtempSync(`${cacheDir}.staging-`);
-    const manifestError = writeOpenCodePluginCacheManifest(
-      staging,
-      cacheVersion,
-    );
-    if (manifestError) return { ...manifestError, configPath: cacheDir };
-    const proc = crossSpawn(install.command, {
-      cwd: staging,
-      stdout: 'pipe',
-      stderr: 'pipe',
-      env: install.env,
-    });
-    await proc.exited;
-
-    if (proc.exitCode !== 0) {
-      const stderr = (await proc.stderr()).trim();
-      return {
-        success: false,
-        configPath: cacheDir,
-        error:
-          stderr ||
-          `${install.command.join(' ')} exited with code ${proc.exitCode}`,
-      };
-    }
-
-    const verificationError = verifyOpenCodePluginCache(staging);
-    if (verificationError)
-      return { ...verificationError, configPath: cacheDir };
-
-    backup = `${staging}.previous`;
-    const hadCache = existsSync(cacheDir);
-    if (hadCache) renameSync(cacheDir, backup);
-    renameSync(staging, cacheDir);
-    if (hadCache) rmSync(backup, { recursive: true, force: true });
-
-    return { success: true, configPath: cacheDir };
-  } catch (err) {
-    if (backup && existsSync(backup) && !existsSync(cacheDir))
-      renameSync(backup, cacheDir);
-    return {
-      success: false,
-      configPath: cacheDir,
-      error: `Failed to warm OpenCode cache: ${err}`,
-    };
-  } finally {
-    if (staging) {
-      try {
-        rmSync(staging, { recursive: true, force: true });
-      } catch {}
-    }
   }
 }
 
@@ -435,7 +231,7 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
     const otherConfig = parseConfigFile(otherPath).config;
     mutateJsonFile(configPath, (current) => {
       const config = removePluginEntries(current as OpenCodeConfig);
-      config.plugin = [...(config.plugin ?? []), pluginEntry];
+      config.plugins = [...(config.plugins ?? []), pluginEntry];
       if (config.lsp === undefined && otherConfig?.lsp === undefined)
         config.lsp = true;
       return config;
@@ -458,43 +254,6 @@ export async function addPluginToOpenCodeConfig(): Promise<ConfigMergeResult> {
     };
   }
 }
-
-export async function addPluginToOpenCodeTuiConfig(): Promise<ConfigMergeResult> {
-  const configPath = getExistingTuiConfigPath();
-
-  try {
-    ensureTuiConfigDir();
-  } catch (err) {
-    return {
-      success: false,
-      configPath,
-      error: `Failed to create config directory: ${err}`,
-    };
-  }
-
-  try {
-    const pluginEntry = getPluginEntry();
-    mutateJsonFile(configPath, (current) => {
-      const config = current as OpenCodeConfig;
-      const filteredPlugins = getPlugins(config).filter(
-        (plugin) => !isMatchingPluginEntry(plugin),
-      );
-      filteredPlugins.push(pluginEntry);
-      config.plugin = filteredPlugins;
-      return config;
-    });
-    return { success: true, configPath };
-  } catch (err) {
-    return {
-      success: false,
-      configPath,
-      error: `Failed to update opencode TUI config: ${err}`,
-    };
-  }
-}
-
-// Removed: addAuthPlugins - no longer needed with cliproxy
-// Removed: addProviderConfig - default opencode now has kimi provider config
 
 export function writeLiteConfig(
   installConfig: InstallConfig,

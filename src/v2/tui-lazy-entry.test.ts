@@ -49,13 +49,13 @@ describe('v2 TUI entry graph', () => {
     expect(specifiers).toContain('../tui-gates');
     // Both contracts (v1 factory, v2 setup) load the implementation lazily.
     expect(ENTRY_SOURCE.match(/await import\('\.\/tui-impl'\)/g)).toHaveLength(
-      2,
+      1,
     );
   });
 
   test('keeps the dual contract shape', () => {
     expect(tuiPlugin.id).toBe('oh-my-opencode-slim:tui');
-    expect(typeof tuiPlugin.tui).toBe('function');
+    expect(tuiPlugin).not.toHaveProperty('tui');
     expect(typeof tuiPlugin.setup).toBe('function');
   });
 });

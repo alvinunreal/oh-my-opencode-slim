@@ -161,6 +161,8 @@ export interface V2PresetManagerContext {
   client?: unknown;
   /** Live route accessor; no session on the home screen. */
   getSessionID?: () => string | undefined;
+  /** Whether session-scoped binding are available. */
+  presetRoutingEnabled?: boolean;
   /** Runs after a successful config write (Save / Save & Apply / Apply).
    * This is a REQUEST seam: on the supported host it asks the server-side
    * watcher to refresh the runtime profiles and re-reads the TUI sidebar
@@ -284,23 +286,28 @@ async function chooseApplyTarget(
   save: boolean,
 ): Promise<ApplyTarget | undefined> {
   const sessionID = run.ctx.getSessionID?.();
+  const options: V2PresetDialogOption<'session' | 'global'>[] = [
+    ...(run.ctx.presetRoutingEnabled === false
+      ? []
+      : [
+          {
+            title: 'Current session',
+            value: 'session' as const,
+            description: sessionID
+              ? 'Model settings for future children in this session'
+              : 'Unavailable: open a session first',
+          },
+        ]),
+    {
+      title: 'Global default',
+      value: 'global',
+      description: 'Default preset for new, unbound sessions',
+    },
+  ];
   const scope = await run.dialog.select<'session' | 'global'>({
     title: `${save ? 'Save & apply' : 'Apply'}: ${presetName}`,
     placeholder: 'Choose where to apply',
-    options: [
-      {
-        title: 'Current session',
-        value: 'session',
-        description: sessionID
-          ? 'Model settings for future children in this session'
-          : 'Unavailable: open a session first',
-      },
-      {
-        title: 'Global default',
-        value: 'global',
-        description: 'Default preset for new, unbound sessions',
-      },
-    ],
+    options,
   });
   if (scope === undefined) return undefined;
   if (scope !== 'session' && scope !== 'global') return undefined;
@@ -509,7 +516,8 @@ async function runPresetList(run: ManagerRun): Promise<void> {
       ]),
     );
     const activePreset = config.preset ?? null;
-    const sessionID = run.ctx.getSessionID?.();
+    const routingEnabled = run.ctx.presetRoutingEnabled !== false;
+    const sessionID = routingEnabled ? run.ctx.getSessionID?.() : undefined;
     let sessionState: SessionPresetState | undefined;
     let sessionLabel = 'No session displayed';
     if (sessionID) {

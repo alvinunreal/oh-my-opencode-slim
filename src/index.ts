@@ -1,7 +1,4 @@
-import { dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { Hooks, Plugin, ToolDefinition } from '@opencode-ai/plugin';
-import type { AdmissionRuntimeLease } from './admission-runtime';
 import {
   type AgentModelProjection,
   type AgentRuntimeProfiles,
@@ -11,7 +8,6 @@ import {
   isSubagent,
   mergeHostAgentConfigs,
   projectAgentRuntimeState,
-  resolvePrimaryModelValue,
 } from './agents';
 import {
   type AgentDefinition,
@@ -23,10 +19,6 @@ import {
   type ResolvedAgentRegistry,
 } from './agents/registry';
 import type { RegistryFactoryBridge } from './agents/registry-bridge';
-import {
-  getV1BundledSkillPaths,
-  removeLegacySkillSyncState,
-} from './cli/custom-skills';
 import type { CompanionManager } from './companion/manager';
 import { normalizeCompanionSessionStatus } from './companion/status';
 import { deepMerge, type loadPluginConfig, type Preset } from './config';
@@ -50,7 +42,6 @@ import {
 } from './health-check';
 import type { createAbsolutePathRescueHook } from './hooks/absolute-path-rescue';
 import type { createApplyPatchHook } from './hooks/apply-patch';
-import type { createAutoUpdateCheckerHook } from './hooks/auto-update-checker';
 import type { createCacheMonitorHook } from './hooks/cache-monitor';
 import { stripTaggedContents } from './hooks/cache-safe-injection';
 import type { createChatHeadersHook } from './hooks/chat-headers';
@@ -69,15 +60,6 @@ import {
 import type { ForegroundFallbackManager } from './hooks/foreground-fallback';
 import { isImagePart, processImageAttachments } from './hooks/image-hook';
 import { createMessageTransformView } from './hooks/message-transform-view';
-import type { createOrchestratorWakeScheduler } from './hooks/orchestrator-wake';
-import {
-  formatChildInputWaitDelta,
-  formatCompletedJobDelta,
-  formatStoppedJobDelta,
-  HOST_ATTRIBUTED_STOP_OUTCOME,
-  stoppedJobRecoveryReason,
-} from './hooks/orchestrator-wake/operator-text';
-import { clearAllWakeSessions } from './hooks/orchestrator-wake/wake-gate';
 import {
   createPhaseReminderHook,
   PHASE_REMINDER_METADATA_KEY,
@@ -85,23 +67,10 @@ import {
 import type { createReflectCommandHook } from './hooks/reflect';
 import type { createSearchPathGuardHook } from './hooks/search-path-guard';
 import { SessionLifecycle } from './hooks/session-lifecycle';
-import type { createTaskSessionManagerHook } from './hooks/task-session-manager';
-import type { ChildInputWaitRecord } from './hooks/task-session-manager/child-input-wait';
-import {
-  clearChildInputWaitsForSession,
-  formatChildInputWaitDetail,
-  getChildInputWait,
-  listChildInputWaits,
-} from './hooks/task-session-manager/child-input-wait';
-import type { createRevivedRunTracker } from './hooks/task-session-manager/revived-run-tracker';
-import type {
-  createAliasAuthority,
-  createSessionRecovery,
-} from './hooks/task-session-manager/session-recovery';
 import type { ToolLoopGuardHook } from './hooks/tool-loop-guard/hook';
 import type { MessageWithParts } from './hooks/types';
-import type { createInterviewManager } from './interview';
 import type { collapseInterviewHistory } from './interview/history';
+import type { createInterviewService } from './interview/service';
 import { retryMarketplaceLeases } from './marketplace/lease';
 import type { MarketplaceRegistryImplementation } from './marketplace/registry-runtime';
 import type { MarketplaceService } from './marketplace/service';
@@ -114,13 +83,7 @@ import { createBuiltinMcps, getOverriddenBuiltinMcpKeys } from './mcp';
 import type { createAcpRunTool } from './tools/acp-run';
 import type { createWebfetchTool } from './tools/smartfetch';
 import {
-  applyActivityEvent,
-  resolveEventSessionID,
-  TaskActivityTracker,
-} from './tools/task-activity';
-import {
   clearTuiAgentActivities,
-  clearTuiSessionAlias,
   collectAgentColors,
   collectAgentDisplayNames,
   flushTuiSnapshotBatch,
@@ -129,8 +92,6 @@ import {
   recordTuiAgentModel,
   recordTuiAgentModels,
   recordTuiSessionParent,
-  type TuiSessionDetails,
-  updateTuiSessionDetails,
   withTuiSnapshotBatch,
 } from './tui-state';
 import {
@@ -138,54 +99,31 @@ import {
   normalizeAgentName,
   resolveRuntimeAgentName,
 } from './utils/agent-variant';
-import type {
-  BackgroundJobBoard,
-  BackgroundJobEvictedSession,
-  BackgroundJobRecord,
-  ContextFile,
-} from './utils/background-job-board';
-import type { BackgroundJobSupervisor } from './utils/background-job-supervisor';
-import type { BackgroundJobTerminalGate } from './utils/background-job-terminal-gate';
-import type { BackgroundTaskConcurrency } from './utils/background-task-concurrency';
 import { isPluginDisabledByEnv } from './utils/env';
 import {
   createEventDirectoryScope,
   type EventDirectoryScope,
-  hasLiveInstances,
 } from './utils/event-directory-scope';
+import { resolveEventSessionID } from './utils/event-session-id';
 import {
   isInternalInitiatorPart,
   isNativeBackgroundTaskNotification,
 } from './utils/internal-initiator';
 import { probeJSDOM } from './utils/jsdom';
-import { createKillAllStopReader } from './utils/kill-all-stop';
 import { initLogger, log } from './utils/logger';
 import {
   type ModelImageCapabilityCache,
   type ModelImageCapabilityDeps,
   modelAcceptsImageInput,
 } from './utils/model-image-capability';
-import { findOwnedPackageJson } from './utils/package-root';
 import { parseModelReference, withTimeout } from './utils/session';
 import { SessionMetadataStore } from './utils/session-metadata';
-import { DEFAULT_RUNTIME_SESSION_STATUS_TIMEOUT_MS } from './utils/session-runtime-status';
-import {
-  createSessionSelectionReader,
-  modelFromMetadataString,
-  resolveCurrentSelection,
-} from './utils/session-selection';
 import {
   collapseSystemInPlace,
   looksLikeMainChatRequest,
 } from './utils/system-collapse';
-import type { createTuiReusableProjection } from './utils/tui-reusable-projection';
-import { createV2Setup } from './v2';
 import { parseModelRef } from './v2/adapters';
-import {
-  type BackgroundDefaultFlipState,
-  createBackgroundDefaultFlipState,
-  delegationWording,
-} from './v2/delegation';
+import { delegationWording } from './v2/delegation';
 import {
   isInternalAdmission,
   recordInternalAdmission,
@@ -350,7 +288,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     log('[plugin] disabled by OH_MY_OPENCODE_SLIM_DISABLE');
     return {};
   }
-  const killAllStop = createKillAllStopReader(ctx.directory);
 
   // Directory scope (multi-instance): created inside the init try so every
   // exit path releases its live-directory claim (see the catch below).
@@ -388,104 +325,22 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   // (built-ins merged in); without this, those built-ins would be misread
   // as user-authored and pruned from the live export (issue #1290).
   let injectedMcps: Record<string, unknown> = {};
-  // Host flavor ('v2' on OpenCode v2 hosts via the client shim, undefined on
-  // v1). Survives the try block so prompt-assembly hooks can use it.
-  let hostFlavor: string | undefined;
-  /** Managed lifecycle gate; survives init for the v2 extension hooks below. */
-  let lifecycleEnabled = false;
+  const hostFlavor = 'v2';
   let instanceDisposed = false;
-  let questionTimeoutHook:
-    | ReturnType<
-        typeof import('./hooks/question-timeout')['createQuestionTimeoutHook']
-      >
-    | undefined;
   let companionStartupAbort: AbortController | undefined;
   const marketplaceLeaseAbort = new AbortController();
-  // v1 task() has no model override. Prompts claim these bounded intentions
-  // from host state, never from asynchronous session.created delivery.
-  const MAX_PENDING_V1_DELEGATED_INTENTS = 32;
-  const v1DelegatedIntents: {
-    parentID: string;
-    agentName: string;
-    childID?: string;
-  }[] = [];
-  let autoUpdateChecker:
-    | ReturnType<typeof createAutoUpdateCheckerHook>
-    | undefined;
-  const v1InternalSelectionOverrides = new Map<
-    string,
-    {
-      agent?: string;
-      model?: { providerID: string; modelID: string };
-      modelText?: string;
-      variant?: string;
-    }
-  >();
   const sessionMetadata = new SessionMetadataStore({
     maxEntries: DEFAULT_MAX_SESSION_METADATA_ENTRIES,
     isOrchestratorAgent,
     onEvict: (sessionID) => {
-      v1InternalSelectionOverrides.delete(sessionID);
       log('[session] evicted oldest session metadata', {
         threshold: DEFAULT_MAX_SESSION_METADATA_ENTRIES,
         droppedSessionId: sessionID,
       });
     },
   });
-  // Keep sessions that previously dispatched background work managed.
-  const isManagedSession = (sessionID: string) =>
-    isOrchestratorAgent(sessionMetadata.getAgent(sessionID)) ||
-    sessionMetadata.isTaskManaged(sessionID);
   const compactingSessionIds = new Set<string>();
   const ownedTuiActivitySessions = new Map<string, string>();
-  // #1079: lifecycle continuations (orchestrator wake, terminal
-  // notifications) resolve the session's CURRENT agent/model at send
-  // time instead of hardcoding `orchestrator`. Host-persisted selection
-  // normally wins; when a v1 unpinned internal continuation has temporarily
-  // overwritten it, preserve the exact policy-selected continuation until
-  // the next real operator admission.
-  const lifecycleSelectionReader = createSessionSelectionReader(
-    ctx.client,
-    ctx.directory,
-  );
-  const lifecycleSelectionResolver = async (sessionID: string) => {
-    const resolved = await resolveCurrentSelection(
-      sessionID,
-      lifecycleSelectionReader,
-      sessionMetadata,
-    );
-    const restore =
-      hostFlavor !== 'v2'
-        ? foregroundFallback?.restoreTarget(sessionID)
-        : undefined;
-    const restoreModel = modelFromMetadataString(restore?.model);
-    if (restore && restoreModel) {
-      return { ...resolved, model: restoreModel, variant: restore.variant };
-    }
-    const internalOverride = v1InternalSelectionOverrides.get(sessionID);
-    if (!internalOverride) return resolved;
-
-    // v1 computes an unpinned synthetic continuation from the static agent
-    // primary and persists that choice before chat.message runs. While that
-    // host selection is known to be internal, preserve the exact selection
-    // chosen for that continuation. A later external admission clears the
-    // override and makes the host authoritative again.
-    const agent = internalOverride.agent ?? resolved.agent;
-    const modelText = internalOverride.modelText;
-    const model = internalOverride.model ?? resolved.model;
-    return {
-      ...(agent ? { agent } : {}),
-      ...(model ? { model } : {}),
-      ...(internalOverride.variant
-        ? { variant: internalOverride.variant }
-        : modelText && agent
-          ? { variant: resolveTuiVariantForModel(agent, modelText) }
-          : resolved.variant
-            ? { variant: resolved.variant }
-            : {}),
-      provenance: 'observed-external' as const,
-    };
-  };
   // Busy/retry arrived before the session's agent was known. chat.message
   // latches the agent and flushes these so the spinner still starts. The
   // observed status is kept so the flushed activation records the right
@@ -522,20 +377,13 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   ): void => {
     if (!tuiWritesEnabled()) return;
     const directory = tuiActivityDirectory(sessionID);
-    // Alias from an already-registered board record (launch may have
-    // arrived before or after busy; both orders converge here or via the
-    // coordinator's identity listener).
-    const alias = backgroundJobBoard?.get(sessionID)?.alias;
-    const details: TuiSessionDetails = {
-      ...(alias ? { alias } : {}),
-      ...(status ? { status } : {}),
-    };
+    const details = status ? { status } : undefined;
     recordTuiAgentActivity(
       {
         sessionID,
         agentName,
         active: true,
-        ...(Object.keys(details).length > 0 ? { details } : {}),
+        ...(details ? { details } : {}),
       },
       directory,
     );
@@ -650,9 +498,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let reflectCommandHook:
     | ReturnType<typeof createReflectCommandHook>
     | undefined;
-  let taskSessionManagerHook:
-    | ReturnType<typeof createTaskSessionManagerHook>
-    | undefined;
   let phaseReminder: ReturnType<typeof createPhaseReminderHook> | undefined;
   let deepworkGoal: ReturnType<typeof createDeepworkGoalHook> | undefined;
   let councilInject: ReturnType<typeof createCouncilInjectHook> | undefined;
@@ -666,90 +511,20 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   let jsonErrorRecoveryAfter:
     | ((i: unknown, o: unknown) => Promise<void>)
     | undefined;
-  let taskSessionManagerAfter:
-    | ((i: unknown, o: unknown) => Promise<void>)
-    | undefined;
-  let backgroundJobBoard: BackgroundJobBoard | undefined;
-  // Shared by task management and control tools; initialized only with
-  // managed lifecycle.
-  let recoverRetainedSession:
-    | ReturnType<typeof createSessionRecovery>
-    | undefined;
-  let aliasAuthority: ReturnType<typeof createAliasAuthority> | undefined;
-  let tuiReusableProjection:
-    | ReturnType<typeof createTuiReusableProjection>
-    | undefined;
-  let backgroundJobSupervisor: BackgroundJobSupervisor | undefined;
-  let backgroundTaskConcurrency: BackgroundTaskConcurrency | undefined;
-  let admissionRuntimeLease: AdmissionRuntimeLease | undefined;
   let releaseRuntimeConfig: (() => void) | undefined;
-  let finalHostAgentConfig: Record<string, unknown> | undefined;
-  let interviewManager: ReturnType<typeof createInterviewManager> | undefined;
-  const v1InterviewRefusals = new Map<
-    string,
-    { messageID: string; outcome: Promise<string | undefined> }
-  >();
   let collapseActiveInterviewHistory:
     | typeof collapseInterviewHistory
     | undefined;
   let companionManager: CompanionManager | undefined;
-  let revivedRunTracker: ReturnType<typeof createRevivedRunTracker> | undefined;
-  let terminalGate: BackgroundJobTerminalGate | undefined;
-  let markRevivedRunPending: (taskID: string) => void = () => {};
-  let markRevivedRunSettled: (taskID: string) => void = () => {};
-  let getRevivedContextFiles = (_taskID: string): ContextFile[] => [];
-  let pruneRevivedContext = () => {};
-  let taskActivityTracker: TaskActivityTracker | undefined;
   let interviewSubmitService:
-    | ReturnType<typeof createInterviewManager>['service']
+    | ReturnType<typeof createInterviewService>
     | undefined;
   let acpRunTools: Record<string, ReturnType<typeof createAcpRunTool>>;
   let webfetch: ReturnType<typeof createWebfetchTool> | undefined;
-  const isFallbackPending = (taskID: string): boolean =>
-    hostFlavor !== 'v2' &&
-    !!(
-      foregroundFallback?.isFallbackInProgress(taskID) ||
-      taskSessionManagerHook?.hasDeferredError(taskID)
-    );
   let tools: Record<string, ToolDefinition>;
-  // task_* / wait_for_user registrations produced by the lifecycle block;
-  // empty when the managed background-task lifecycle is disabled.
-  let lifecycleTaskTools: Record<string, ToolDefinition> = {};
   let rewriteDisplayNameMentions: ReturnType<
     typeof createDisplayNameMentionRewriter
   >;
-
-  // Counters for post-init health check (set inside try, checked outside)
-
-  // The wake scheduler is created AFTER the task-session-manager hook (see
-  // the try block below): the hook's onChildInputWait closes over
-  // queueChildInputWaitWake, which drops notifications that arrive before
-  // the scheduler exists. The ask stays recorded in the sidecar and
-  // task_status still surfaces it, so the parent can answer via task_reply.
-  // In practice the scheduler is created synchronously in the same init,
-  // before any host event can arrive. On v2 no scheduler exists (council
-  // 2026-10-23): asks are pull-only by design — task_status surfaces them,
-  // the host UI routes the reply.
-  let orchestratorWakeScheduler:
-    | ReturnType<typeof createOrchestratorWakeScheduler>
-    | undefined;
-  function queueChildInputWaitWake(
-    record: BackgroundJobRecord,
-    wait: ChildInputWaitRecord,
-  ): void {
-    orchestratorWakeScheduler?.triggerChildInputWaitWake(
-      record.parentSessionID,
-      formatChildInputWaitDelta({
-        alias: record.alias,
-        taskID: record.taskID,
-        kind: wait.kind,
-        requestID: wait.requestID,
-        detail: formatChildInputWaitDetail(wait, hostFlavor),
-      }),
-      `${record.taskID}:${wait.requestID}`,
-      wait.kind,
-    );
-  }
 
   /** Swap the published chain table's contents in one synchronous step, then
    *  re-apply the model-switch disables through the manager's own method.
@@ -779,27 +554,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     }
   }
 
-  const resolvePrimaryModelFromFinalHostConfig = (
-    agentType: string,
-  ): string | undefined => {
-    const readModel = (entry: unknown): string | undefined => {
-      if (entry === null || typeof entry !== 'object') return undefined;
-      return resolvePrimaryModelValue((entry as Record<string, unknown>).model);
-    };
-
-    // v2 finalizes the host snapshot directly through the registry bridge, so
-    // it does not run the v1 config() projection assignment below. Prefer the
-    // generation-local finalized projection in both runtimes; the config-hook
-    // projection remains a fallback only before registry finalization.
-    const finalAgentConfig =
-      resolvedAgentRegistry?.finalAgentConfig ?? finalHostAgentConfig;
-    const directModel = readModel(finalAgentConfig?.[agentType]);
-    if (directModel) return directModel;
-
-    const resolvedName = resolveRuntimeAgentName(runtime, agentType);
-    return readModel(finalAgentConfig?.[resolvedName]);
-  };
-
   const liveSessionModel = (sessionID: string): string | undefined =>
     foregroundFallback?.getActiveFallback(sessionID)?.model ??
     sessionMetadata.getModel(sessionID);
@@ -813,9 +567,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     const agentName = resolveRuntimeAgentName(runtime, agentType);
     const bundle =
       capturedBundle === undefined
-        ? hostFlavor === 'v2'
-          ? sessionTeamFor?.(parentSessionID)
-          : undefined
+        ? sessionTeamFor?.(parentSessionID)
         : capturedBundle;
     const inheritance = bundle
       ? (bundle.inheritance[agentType] ?? bundle.inheritance[agentName])
@@ -843,59 +595,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     });
   };
 
-  const getModelForAgent = (agentType: string, parentSessionID?: string) => {
-    const bundle =
-      hostFlavor === 'v2' && parentSessionID
-        ? sessionTeamFor?.(parentSessionID)
-        : undefined;
-    const delegated = resolveDelegatedModelForParent(
-      agentType,
-      parentSessionID,
-      bundle ?? null,
-    );
-    if (delegated) return delegated.entry.id;
-    // One admission view, after the host's agent layers have been finalized.
-    if (bundle && parentSessionID) {
-      const profile =
-        bundle.profiles[agentType] ??
-        bundle.profiles[resolveRuntimeAgentName(runtime, agentType)];
-      return profile?.model
-        ? `${profile.model.providerID}/${profile.model.id}`
-        : liveSessionModel(parentSessionID);
-    }
-    return (
-      resolvePrimaryModelFromFinalHostConfig(agentType) ??
-      (parentSessionID ? sessionMetadata.getModel(parentSessionID) : undefined)
-    );
-  };
-
-  const registerV1DelegatedIntent = (
-    parentID: string,
-    childID: string | undefined,
-    agentType: string,
-  ) => {
-    const selected = resolveDelegatedModelForParent(agentType, parentID);
-    if (selected && (childID || !selected.inherited)) {
-      // A resume retry replaces its own unclaimed intention.
-      const stale = v1DelegatedIntents.findIndex(
-        (intent) => childID && intent.childID === childID,
-      );
-      if (stale >= 0) v1DelegatedIntents.splice(stale, 1);
-      v1DelegatedIntents.push({
-        parentID,
-        agentName: selected.agentName,
-        ...(childID ? { childID } : {}),
-      });
-      if (v1DelegatedIntents.length > MAX_PENDING_V1_DELEGATED_INTENTS)
-        v1DelegatedIntents.shift();
-    }
-  };
-
-  // Per-instance pairing state for the background-default flip (v2): the
-  // setup arms it only after its description rewrite verifiably landed,
-  // so prose and mechanism state one contract per location. Inert on v1
-  // (hostFlavor gate) and until armed.
-  const backgroundDefaultFlip = createBackgroundDefaultFlipState();
   try {
     // Directory scope (multi-instance): the host loads this plugin once per
     // location and broadcasts every event to every instance in the process.
@@ -903,12 +602,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     eventDirectoryScope = createEventDirectoryScope(directory);
     log('[plugin] instance scope', { directory });
 
-    // Read the host flavor marker before config load: it bounds project
-    // config discovery, and v2 hosts derive leaner background-job defaults
-    // (see loadPluginConfig), so the flavor must be known when the config
-    // is first resolved — and on every later in-session reload.
-    hostFlavor = (ctx as Parameters<Plugin>[0] & { hostFlavor?: string })
-      .hostFlavor;
     startupConfigSnapshot =
       (
         ctx as Parameters<Plugin>[0] & {
@@ -924,16 +617,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       );
     }
     config = cloneConfigValue(startupConfigSnapshot.config);
-    if (hostFlavor !== 'v2' && (config.questionTimeoutMs ?? 0) > 0) {
-      const { createQuestionTimeoutHook } = await import(
-        './hooks/question-timeout'
-      );
-      questionTimeoutHook = createQuestionTimeoutHook({
-        ctx,
-        timeoutMs: config.questionTimeoutMs,
-        hostFlavor,
-      });
-    }
     // Seed the per-directory runtime registry with the raw plugin file
     // config. The runtime preset reapplication below mutates `config` for
     // legacy consumers; RuntimeConfig keeps the pre-mutation snapshot and
@@ -982,30 +665,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       clearTuiAgentActivities(ctx.directory);
     }
 
-    // Managed lifecycle gate (`backgroundJobs.mode: "managed"`, the default).
-    // When it is not managed,
-    // nothing board-shaped is constructed: no job board, admission lease, TUI
-    // projection, terminal gate, supervisor, revived-run tracker, session
-    // recovery, alias authority, task-session-manager hook, wake scheduler,
-    // or task_* / wait_for_user tool factories. Native OpenCode task/subagent
-    // delegation stays completely untouched; `native` mode separately
-    // registers the two thin host-read controls below.
-    lifecycleEnabled = runtime.backgroundJobsEnabled;
-    // One predicate set for every per-tool gate in this init (managed
     // lifecycle, native controls, AST-grep, final registration filter).
     const disabledToolNames = new Set(runtime.disabledTools);
-    if (lifecycleEnabled) {
-      taskActivityTracker = new TaskActivityTracker();
-    }
     const activePresetName = runtime.getRuntimePreset() ?? config.preset;
     selectedMarketplacePackageIds = resolveDesiredMarketplacePackageIds(
       config,
       activePresetName,
     );
     rewriteDisplayNameMentions = createDisplayNameMentionRewriter(runtime);
-    // Host flavor marker ('v2' on OpenCode v2 hosts, set by the v2 client
-    // shim; absent on v1). Threads the native delegation vocabulary into
-    // prompt assembly so v2 prompts say subagent(...)/agent directly.
     const delegation = delegationWording(hostFlavor);
     // Slash-command hooks are lifecycle-independent, but disabled commands
     // need neither a handler nor its captured state.
@@ -1047,636 +714,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     sessionLifecycle.onSessionDeleted((sessionID) => {
       compactingSessionIds.delete(sessionID);
     });
-
-    if (runtime.backgroundJobsEnabled) {
-      // Managed-lifecycle implementations load here — concurrently and
-      // BEFORE any board resource, timer, or admission lease exists — so
-      // `off`/`native` never evaluate the board, supervisor,
-      // task-session-manager, terminal gate, or persistence modules. A load
-      // rejection therefore unwinds before this block owns anything.
-      const [
-        { BackgroundJobBoard, isPrunableEvictedSession },
-        { BackgroundJobSupervisor },
-        { createBackgroundJobTerminalGate },
-        { pruneEvictedHostSession },
-        { registerPendingSessionPrune },
-        {
-          createAliasAuthority,
-          createSessionRecovery,
-          recoverSubagentSessionsAtStartup,
-        },
-        { createRevivedRunTracker },
-        { createTaskSessionManagerHook },
-        { acquireAdmissionRuntime },
-        { markPersistedBackgroundChildDelivered },
-        orchestratorWakeModule,
-        sidebarProjectionModule,
-      ] = await Promise.all([
-        import('./utils/background-job-board'),
-        import('./utils/background-job-supervisor'),
-        import('./utils/background-job-terminal-gate'),
-        import('./utils/evicted-session-prune'),
-        import('./utils/pending-session-prunes'),
-        import('./hooks/task-session-manager/session-recovery'),
-        import('./hooks/task-session-manager/revived-run-tracker'),
-        import('./hooks/task-session-manager'),
-        import('./admission-runtime'),
-        import('./utils/background-job-persistence'),
-        // The v1 wake scheduler is managed-only and never exists on v2
-        // hosts; do not even resolve its module there.
-        hostFlavor === 'v2'
-          ? Promise.resolve(undefined)
-          : import('./hooks/orchestrator-wake'),
-        runtime.sidebarEnabled
-          ? import('./utils/tui-reusable-projection')
-          : Promise.resolve(undefined),
-      ]);
-      backgroundJobBoard = new BackgroundJobBoard({
-        maxReusablePerAgent: runtime.backgroundJobs.maxSessionsPerAgent,
-        deferNumberedAliases: true,
-        // Terminal-session GC (#1387 P2): when a retention trim evicts a
-        // terminal or retained-stopped record, remove the underlying host
-        // child session — but only a background, non-provisional child this
-        // plugin launched itself (never foreground children, unattributed
-        // placeholders, or adopted/restored/rehydrated sessions), and only
-        // after bounded host reads confirm its parentID still matches the
-        // record's parent and it is idle, and the board does not track it
-        // again. A parked child-input wait blocks removal. The prune is
-        // fire-and-forget so the synchronous board never awaits it; the
-        // delete has a deadline so the pending-prune fence always settles.
-        ...(runtime.backgroundJobs.pruneEvictedSessions
-          ? {
-              onEvictedSession: (evicted: BackgroundJobEvictedSession) => {
-                if (!isPrunableEvictedSession(evicted)) return;
-                if (listChildInputWaits(evicted.taskID).length > 0) return;
-                // Same-tick: the prune (parent read + delete) starts and is
-                // registered in one synchronous step with no await in
-                // between, so a task_revive can never observe a
-                // started-but-unregistered prune and adopt the session the
-                // delete is about to remove (#1387 race).
-                registerPendingSessionPrune(
-                  evicted.taskID,
-                  pruneEvictedHostSession({
-                    session: ctx.client.session,
-                    directory: ctx.directory,
-                    evicted,
-                    readTimeoutMs: DEFAULT_RUNTIME_SESSION_STATUS_TIMEOUT_MS,
-                    deleteTimeoutMs: DEFAULT_RUNTIME_SESSION_STATUS_TIMEOUT_MS,
-                    isTracked: (taskID) =>
-                      backgroundJobBoard?.isTracked(taskID) ?? false,
-                  }),
-                );
-              },
-            }
-          : {}),
-      });
-      recoverRetainedSession = createSessionRecovery({
-        input: ctx,
-        backgroundJobBoard: backgroundJobBoard!,
-        isDisposed: () => instanceDisposed,
-        hostFlavor,
-      });
-      aliasAuthority = createAliasAuthority({
-        input: ctx,
-        board: backgroundJobBoard!,
-        isDisposed: () => instanceDisposed,
-      });
-
-      admissionRuntimeLease = acquireAdmissionRuntime(
-        ctx.directory,
-        runtime.backgroundJobs.concurrency,
-      );
-      backgroundTaskConcurrency =
-        admissionRuntimeLease.backgroundTaskConcurrency;
-
-      // Project launch identity (alias↔session) into TUI state so the
-      // clickable sidebar can label active subagent sessions. Best-effort:
-      // a failed tui-state write must never fail a launch.
-      //
-      // Each generation must retract its own projected sections on dispose:
-      // a reload reuses this PID, so the startup dead-owner sweep retains
-      // the previous generation's entries until explicitly removed.
-      // Sidebar projection and its launch-identity writes exist only for
-      // the sidebar surface; disabled means no state file, no locks, no
-      // parent/alias hydration from this process.
-      if (runtime.sidebarEnabled) {
-        // Sidebar-only projection, loaded with the managed block above so a
-        // load failure unwinds before any resource is owned.
-        if (!sidebarProjectionModule) {
-          throw new Error('sidebar projection module missing');
-        }
-        tuiReusableProjection =
-          sidebarProjectionModule.createTuiReusableProjection({
-            board: backgroundJobBoard,
-            projectDir: ctx.directory,
-          });
-        backgroundJobBoard.addLaunchIdentityListener((event) => {
-          const directory = tuiActivityDirectory(event.taskID);
-          if (event.kind === 'registered') {
-            if (
-              event.parentSessionID &&
-              event.parentSessionID !== event.taskID
-            ) {
-              recordTuiSessionParent(
-                event.taskID,
-                event.parentSessionID,
-                directory,
-              );
-            }
-            updateTuiSessionDetails(
-              event.taskID,
-              { alias: event.alias },
-              directory,
-            );
-          } else {
-            clearTuiSessionAlias(event.taskID, directory);
-          }
-        });
-      }
-      terminalGate = createBackgroundJobTerminalGate({
-        backgroundJobBoard: backgroundJobBoard,
-        input: ctx,
-        // Configurable stop-confirmation grace (backgroundJobs.
-        // stopConfirmationMs); the default equals
-        // STOP_CONFIRMATION_GRACE_MS, so unset config keeps v1 behavior.
-        graceMs: runtime.backgroundJobs.stopConfirmationMs,
-        baselineFor: (taskID, generation) =>
-          revivedRunTracker?.baselineFor(taskID, generation),
-        promptMessageIDFor: (taskID, generation) =>
-          revivedRunTracker?.promptMessageIDFor(taskID, generation),
-        // Local in-process integration: host and plugin timestamps share Unix ms.
-        hostOutcomeClock: 'shared-unix-ms',
-        attemptStartedAtFor: (taskID, generation) =>
-          revivedRunTracker?.attemptStartedAtFor(taskID, generation),
-        observationRevisionFor: (taskID, generation) =>
-          revivedRunTracker?.revisionFor(taskID, generation),
-        isObservationPending: (taskID, generation) =>
-          (foregroundFallback?.isFallbackInProgress(taskID) ?? false) ||
-          (taskSessionManagerHook?.hasDeferredError(taskID) ?? false) ||
-          (revivedRunTracker?.isObservationPending(taskID, generation) ??
-            false),
-        onRunning: (record) => {
-          if (record.background)
-            backgroundTaskConcurrency?.restoreTask(
-              record.taskID,
-              sessionMetadata.getModel(record.taskID) ??
-                resolvePrimaryModelFromFinalHostConfig(record.agent) ??
-                sessionMetadata.getModel(record.parentSessionID),
-            );
-          if (
-            !revivedRunTracker?.promptMessageIDFor(
-              record.taskID,
-              record.generation,
-            )
-          )
-            backgroundJobSupervisor?.onLaunch(record);
-        },
-        // A task the gate gives up on stays `running` on the board forever
-        // (its termination can never be confirmed on hosts that cannot read
-        // terminal evidence). Keep its admission slot only for as long as it
-        // is genuinely in flight: without this, `defaultConcurrency` such
-        // tasks wedge every later background launch on `await ticket.ready`.
-        onGiveUp: (taskID) => backgroundTaskConcurrency?.releaseTask(taskID),
-      });
-      backgroundJobSupervisor = new BackgroundJobSupervisor({
-        backgroundJobBoard,
-        wallClockTimeoutMs: runtime.backgroundJobs.wallClockTimeoutMs,
-        abort: (taskID) =>
-          ctx.client.session.abort({
-            path: { id: taskID },
-          }),
-      });
-      backgroundJobBoard!.addTerminalOutcomeListener((record) => {
-        revivedRunTracker!.onTerminal(record);
-        const current = backgroundJobBoard!.get(record.taskID);
-        if (
-          current?.generation !== record.generation ||
-          current.terminalRevision !== record.terminalRevision ||
-          current.state === 'running'
-        )
-          return;
-        backgroundJobBoard!.addContext(
-          record.taskID,
-          getRevivedContextFiles(record.taskID),
-        );
-        markRevivedRunSettled(record.taskID);
-        pruneRevivedContext();
-        backgroundJobSupervisor!.onTerminal(record);
-        backgroundTaskConcurrency?.releaseTask(record.taskID);
-      });
-      revivedRunTracker = createRevivedRunTracker({
-        input: ctx,
-        backgroundJobBoard: backgroundJobBoard,
-        terminalGate,
-        backgroundJobSupervisor,
-        resolveSelection: lifecycleSelectionResolver,
-        onRegister: (taskID) => markRevivedRunPending(taskID),
-        onSettled: (taskID) => markRevivedRunSettled(taskID),
-        contextFilesForPrompt: (taskID) => getRevivedContextFiles(taskID),
-        pruneContext: () => pruneRevivedContext(),
-        onNotificationAccepted: (taskID, runStartedAt) => {
-          markPersistedBackgroundChildDelivered(
-            taskID,
-            Date.now(),
-            runStartedAt ?? backgroundJobBoard!.get(taskID)?.runStartedAt,
-          );
-        },
-        // Degraded-fallback wiring (revived-lineage strand): when every
-        // tracker notification attempt has failed, the publication this
-        // tracker suppressed in the terminal-outcome listener would
-        // otherwise never reach the idle parent. Re-emit it DIRECTLY
-        // through the wake scheduler — never through the listener's
-        // suppression chain: a revived lineage has no native notifier, so
-        // the first-publication-native-owned (and tracker-owned) skips
-        // must not apply to this fallback. The scheduler's own guards
-        // (canSchedule, one-flight wake gate, publication throttle) still
-        // apply, correctly.
-        onOwnershipReleased: (
-          parentSessionID,
-          taskID,
-          generation,
-          runStartedAt,
-        ) => {
-          void (async () => {
-            const record = backgroundJobBoard!.get(taskID);
-            const delivered =
-              await orchestratorWakeScheduler?.triggerTerminalPublicationWake(
-                parentSessionID,
-                taskID,
-                generation,
-                record?.terminalRevision,
-              );
-            if (delivered === true) {
-              markPersistedBackgroundChildDelivered(
-                taskID,
-                Date.now(),
-                runStartedAt ?? record?.runStartedAt,
-              );
-            }
-          })().catch(() => undefined);
-        },
-      });
-      backgroundJobBoard!.addTerminalOutcomeListener((record) => {
-        revivedRunTracker!.onTerminal(record);
-        // Sidebar activity bookkeeping only: pane lifecycle runs in the client
-        // (TUI) process, never here.
-        markTuiAgentInactive(record.taskID);
-      });
-
-      taskSessionManagerHook = createTaskSessionManagerHook(ctx, {
-        isKillAllStopActive: killAllStop.isActive,
-        v1ReplayOutcome: (...args) =>
-          foregroundFallback?.v1ReplayOutcome(...args) ??
-          Promise.resolve(undefined),
-        terminalGate,
-        // Flip mechanism half reads the per-instance box declared above.
-        isBackgroundDefaultFlipArmed: backgroundDefaultFlip.isArmed,
-        // Host flavor marker; v1 hosts are structurally boardless (issue
-        // #1647): the machine board is never rendered.
-        hostFlavor,
-        maxSessionsPerAgent: runtime.backgroundJobs.maxSessionsPerAgent,
-        backgroundJobBoard: backgroundJobBoard,
-        backgroundJobSupervisor,
-        backgroundTaskConcurrency,
-        pendingCallTracker: admissionRuntimeLease.pendingCallTracker,
-        // The stale-timestamp retirement fallback must not ack a run whose
-        // completed-job push is still queued undelivered (its own observed
-        // push retires it; acking first fences the answer out forever).
-        hasUndeliveredTerminalPush: (parentSessionID, taskID, generation) =>
-          orchestratorWakeScheduler?.hasPendingCompletedPush(
-            parentSessionID,
-            taskID,
-            generation,
-          ) === true,
-        getModelForAgent,
-        sameProviderPolicy: runtime.backgroundJobs.sameProviderPolicy,
-        getSessionModel: liveSessionModel,
-        recoverRetainedSession,
-        resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
-        isDisposed: () => instanceDisposed,
-        shouldManageSession: (sessionID) => isManagedSession(sessionID),
-        registerSessionAsOrchestrator: (sessionID) => {
-          // Membership in task management, not a selection rewrite (#1079).
-          sessionMetadata.markTaskManaged(sessionID);
-        },
-        isOrchestratorAgent,
-        isFallbackInProgress: (sessionID) =>
-          foregroundFallback?.isFallbackInProgress(sessionID) ?? false,
-        willAttemptFallback: (sessionID) =>
-          foregroundFallback?.willAttemptFallback(sessionID) ?? false,
-        fallbackFailureReason: (sessionID) =>
-          foregroundFallback?.fallbackFailureReason(sessionID) ??
-          'Model fallback is disabled.',
-        coordinator: sessionLifecycle,
-        revivedRunTracker,
-        onChildInputWait: (notification) => {
-          const record = backgroundJobBoard!.get(notification.taskID);
-          if (record?.state !== 'running') {
-            return;
-          }
-          const wait = getChildInputWait(
-            notification.taskID,
-            notification.requestID,
-          );
-          if (!wait) return;
-          queueChildInputWaitWake(record, wait);
-        },
-      });
-      markRevivedRunPending = taskSessionManagerHook!.markRevivedRunPending;
-      markRevivedRunSettled = taskSessionManagerHook!.clearRevivedRunPending;
-      getRevivedContextFiles = taskSessionManagerHook!.contextFilesForTask;
-      pruneRevivedContext = taskSessionManagerHook!.pruneTaskContext;
-
-      // v2 has no wake scheduler; later child executions without a host job
-      // are delivered by the tracker. Child asks remain available via task_status.
-      if (hostFlavor !== 'v2' && orchestratorWakeModule) {
-        orchestratorWakeScheduler =
-          orchestratorWakeModule.createOrchestratorWakeScheduler(ctx, {
-            // v1 honors the configured key.
-            config: {
-              ...runtime.backgroundJobs.orchestratorWake,
-              periodicWakeEnabled:
-                runtime.backgroundJobs.orchestratorWake.periodicWakeEnabled ??
-                true,
-            },
-            // The machine board is never rendered, so wake annotations always point
-            // at the pull channel (`task_status`).
-            childInputWakeKinds: runtime.backgroundJobs.childInputWakeKinds,
-            shouldManageSession: (sessionID) =>
-              isOrchestratorAgent(sessionMetadata.getAgent(sessionID)),
-            isOrchestratorAgent,
-            hasInputWait: (sessionID) =>
-              taskSessionManagerHook!.hasInputWait(sessionID),
-            isFallbackInProgress: (sessionID) =>
-              foregroundFallback?.isFallbackInProgress(sessionID) ?? false,
-            resolveSelection: lifecycleSelectionResolver,
-            isStoppedJobRecoveryCurrent: (taskID, generation) => {
-              const record = backgroundJobBoard!.get(taskID);
-              return (
-                record?.generation === generation &&
-                record.state === 'stopped' &&
-                record.terminalUnreconciled
-              );
-            },
-            // A queued completed-job result stays actionable only while the record
-            // is still the SAME run's terminal publication: a reopened record (or
-            // one that published again) must not be reported from a stale delta.
-            isCompletedJobCurrent: (taskID, generation) => {
-              const record = backgroundJobBoard!.get(taskID);
-              return (
-                record?.generation === generation &&
-                record.terminalUnreconciled === true &&
-                (record.state === 'completed' || record.state === 'error')
-              );
-            },
-            isChildInputWaitCurrent: (taskID, requestID) => {
-              const record = backgroundJobBoard!.get(taskID);
-              return (
-                record?.state === 'running' &&
-                getChildInputWait(taskID, requestID) !== undefined
-              );
-            },
-            hasPendingDelegatedWork: (sessionID) =>
-              backgroundJobBoard!.hasRunning(sessionID) ||
-              backgroundJobBoard!.hasTerminalUnreconciled(sessionID),
-            isPublicationCurrent: (publication) => {
-              const record = backgroundJobBoard!.get(publication.taskID);
-              return (
-                record !== undefined &&
-                record.state !== 'running' &&
-                record.terminalUnreconciled === true &&
-                record.generation === publication.generation &&
-                (publication.terminalRevision === undefined ||
-                  record.terminalRevision === publication.terminalRevision)
-              );
-            },
-            onPublicationAccepted: (publication) => {
-              const record = backgroundJobBoard!.get(publication.taskID);
-              markPersistedBackgroundChildDelivered(
-                publication.taskID,
-                Date.now(),
-                record?.runStartedAt,
-              );
-            },
-            coordinator: sessionLifecycle,
-          });
-      }
-      // A restarted plugin starts with an empty board. If the parent stays idle
-      // it never transforms history, so restore owned children here from host
-      // state instead of waiting for the next parent request. Verification is
-      // in the scanner: parent launch evidence is required before adoption.
-      void recoverSubagentSessionsAtStartup({
-        input: ctx,
-        backgroundJobBoard: backgroundJobBoard,
-        shouldManageSession: (sessionID) => isManagedSession(sessionID),
-        hostFlavor,
-        isDisposed: () => instanceDisposed,
-        registerParentSession: (sessionID) => {
-          // Membership in task management, matching the transform path.
-          sessionMetadata.markTaskManaged(sessionID);
-        },
-        isOrchestratorAgent,
-        backgroundTaskConcurrency,
-        getModelForAgent,
-        onRecoveredTerminal: async (parentSessionID, taskID) => {
-          const record = backgroundJobBoard!.get(taskID);
-          if (!record) return false;
-          return (
-            (await orchestratorWakeScheduler?.triggerTerminalPublicationWake(
-              parentSessionID,
-              taskID,
-              record.generation,
-              record.terminalRevision,
-            )) === true
-          );
-        },
-      })
-        .then((recovered) => {
-          if (hostFlavor !== 'v2' && recovered.length > 0)
-            taskSessionManagerHook?.scheduleRuntimeStatusReconciliation();
-        })
-        .catch((error: unknown) => {
-          log('[task-session-manager] startup subagent recovery failed', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-      backgroundJobBoard!.addTerminalOutcomeListener((record) => {
-        // A placeholder is not delegated work; its stop is not recoverable
-        // by the parent until a task launch has attributed the session.
-        if (record.provisional === true) return;
-        // A child's terminal state resolves any of its open input waits: the
-        // ask is gone with the run, so a queued wake must not fire for it and
-        // task_status must not show it after a restart. Runs on both hosts —
-        // the ask store has no run-generation fence of its own.
-        clearChildInputWaitsForSession(record.taskID);
-        // v2 has no wake scheduler: native delivery owns
-        // stops for job-backed runs, and the plugin does not push one for
-        // a non-job run (council 2026-10-23).
-        if (hostFlavor === 'v2') return;
-        if (record.state !== 'stopped' || !record.terminalUnreconciled) return;
-        // Symmetric tracker suppression (M4): when the revived-run tracker
-        // owns this generation's delivery it sends the stop as its own
-        // <task state="stopped"> notification; a recovery wake beside it
-        // would queue a second admission for the same stop.
-        if (
-          revivedRunTracker!.willNotifyParent(record.taskID, record.generation)
-        ) {
-          log('[orchestrator-wake] stopped-job recovery wake skipped', {
-            sessionID: record.parentSessionID,
-            taskID: record.taskID,
-            generation: record.generation,
-            trigger: 'stopped-job-recovery',
-            verdict: 'skipped',
-            reason: 'revived-tracker-owns-delivery',
-          });
-          return;
-        }
-        // For ordinary first v1 aborts, only kill-all needs a recovery wake.
-        if (
-          record.terminalRevision === 1 &&
-          !(
-            record.background && killAllStop.isActive(record.parentSessionID)
-          ) &&
-          record.recoveredAtStartup !== true &&
-          HOST_ATTRIBUTED_STOP_OUTCOME.test(record.resultSummary ?? '')
-        ) {
-          log('[orchestrator-wake] stopped-job recovery wake skipped', {
-            sessionID: record.parentSessionID,
-            taskID: record.taskID,
-            generation: record.generation,
-            trigger: 'stopped-job-recovery',
-            verdict: 'skipped',
-            reason: 'host-attributed-stop-no-recovery',
-          });
-          return;
-        }
-        orchestratorWakeScheduler?.triggerStoppedJobRecovery(
-          record.parentSessionID,
-          // Self-contained stop facts (issue #1051): the recovery wake is an
-          // internal-initiator turn, and internal-initiator turns place no
-          // board, so the wake must carry the stop facts itself.
-          formatStoppedJobDelta({
-            alias: record.alias,
-            taskID: record.taskID,
-            generation: record.generation,
-            state: record.state,
-            reason: stoppedJobRecoveryReason(record),
-          }),
-          `${record.taskID}:${record.generation}`,
-        );
-      });
-      // Terminal-publication wake: completed/error publications reaching an
-      // IDLE parent (state-disjoint from the stopped recovery listener
-      // above — stopped+terminalUnreconciled vs completed|error). A busy
-      // parent is skipped inside the trigger: the native steer already
-      // delivered the first completion, so a queued wake would
-      // double-notify.
-      backgroundJobBoard!.addTerminalOutcomeListener((record) => {
-        revivedRunTracker!.onTerminal(record);
-        if (hostFlavor === 'v2') {
-          revivedRunTracker!.deliverContinuation(record);
-          return;
-        }
-        // Unattributed child sessions are not delegated work, just as in
-        // stopped-job recovery; their owner controls parent notifications.
-        if (record.provisional === true) return;
-        if (record.state !== 'completed' && record.state !== 'error') return;
-        // Revived-run ownership: when the tracker will deliver this run's
-        // <task> result itself (notifyParent), a publication wake beside
-        // it would queue a SECOND admission to the idle parent — the
-        // double-notify the exactly-once notification contract forbids.
-        // Scoped to the exact (taskID, generation) the tracker owns;
-        // non-revived publications are unaffected.
-        if (
-          revivedRunTracker!.willNotifyParent(record.taskID, record.generation)
-        ) {
-          log('[orchestrator-wake] terminal publication wake skipped', {
-            sessionID: record.parentSessionID,
-            taskID: record.taskID,
-            generation: record.generation,
-            trigger: 'terminal-publication',
-            verdict: 'skipped',
-            reason: 'revived-tracker-owns-delivery',
-          });
-          return;
-        }
-        // First-publication ownership (live-verified on a 2.0.8 host): the
-        // native notifier delivers a run's FIRST terminal publication to
-        // the parent even while it sits idle, so a plugin push beside it
-        // would double-notify. On v2 EVERY plugin task launch AND relaunch
-        // is a host `subagent` tool call that arms the host's native
-        // background notifier — a relaunch re-arms it with a fresh
-        // `started_at`, defeating the notify dedupe — so the native
-        // contract covers the FIRST publication (terminalRevision 1) of
-        // EVERY generation, not just the original launch. Only later
-        // revisions of the same generation (rev>1: a child
-        // self-continuation, a direct prompt to the child session) have no
-        // native notifier and remain the plugin's to deliver (v1 behaves
-        // the same: the native task tool arms notifyBackgroundResult per
-        // background call). Edge: if a native delivery is ever lost
-        // host-side, the job falls back to the stale-terminal display on
-        // the parent's next activity, or stays silent until the next
-        // task_status pull.
-        // A startup-adopted row was launched before this plugin instance
-        // existed, so no native observer survives to deliver its first
-        // publication. The plugin owns that wake.
-        if (
-          record.terminalRevision === 1 &&
-          record.recoveredAtStartup !== true
-        ) {
-          // The native notifier owns this publication. Native ownership alone
-          // is not proof of delivery, so nothing is acknowledged here: the
-          // next restart's history scan either finds a trusted current-run
-          // delivery or re-owns this terminal outcome.
-
-          log('[orchestrator-wake] terminal publication wake skipped', {
-            sessionID: record.parentSessionID,
-            taskID: record.taskID,
-            generation: record.generation,
-            trigger: 'terminal-publication',
-            verdict: 'skipped',
-            reason: 'first-publication-native-owned',
-          });
-          return;
-        }
-        // v1 is structurally boardless: the board no longer carries later
-        // terminal results. Push ONE self-contained `<completed-job>` delta
-        // through the bounded delta queue (durable across a busy parent and
-        // the publication throttle) instead of the drop-prone publication
-        // wake. The fence in the part metadata retires exactly this
-        // publication when the parent observes it.
-        if (
-          runtime.backgroundJobs.orchestratorWake.wakeOnTerminalPublication ===
-          false
-        ) {
-          return;
-        }
-        const state =
-          record.terminalState === 'completed' ||
-          record.terminalState === 'error'
-            ? record.terminalState
-            : record.state === 'completed' || record.state === 'error'
-              ? record.state
-              : undefined;
-        if (!state) return;
-        orchestratorWakeScheduler?.triggerCompletedJobPublication(
-          record.parentSessionID,
-          formatCompletedJobDelta({
-            alias: record.alias,
-            taskID: record.taskID,
-            state,
-            resultSummary: record.resultSummary ?? state,
-          }),
-          `${record.taskID}:${record.generation}`,
-          {
-            taskID: record.taskID,
-            generation: record.generation,
-            terminalRevision: record.terminalRevision,
-            state,
-          },
-        );
-      });
-    }
 
     // Initialize hooks and wrapPostToolHook helper for error isolation
 
@@ -1748,17 +785,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
     }
 
-    if (hostFlavor !== 'v2' && runtime.updateCheckerEnabled) {
-      // v2 owns package checks/installation; its TUI adds the Slim notice.
-      // The v1 updater cannot install or display feedback through the shim.
-      const { createAutoUpdateCheckerHook } = await import(
-        './hooks/auto-update-checker'
-      );
-      autoUpdateChecker = createAutoUpdateCheckerHook(ctx, {
-        companion: runtime.companion,
-      });
-    }
-
     // disabled_hooks: "chat-headers" keeps the hook unregistered on both
     // hosts — the v2 bridge reads v1Hooks['chat.headers'] and skips the
     // model.request registration when the key is absent.
@@ -1767,44 +793,16 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       chatHeadersHook = createChatHeadersHook(ctx);
     }
 
-    // Initialize foreground fallback manager for runtime model switching.
-    // Agents without a chain (e.g. councillor, owned by CouncilManager) are
-    // left alone — FG only aborts/re-prompts when it has a model to switch to.
-    // The observation handoff brackets the re-prompt admission for
-    // BACKGROUND children (false-stop incident): prepare() defers the stop
-    // gate before the await, admit() enrolls the run tracker after host
-    // acceptance, reject() withdraws on failure; see
-    // fallback-observation-transfer.ts.
-    // Lifecycle off: the manager is still constructed (v2 retry steering
-    // depends on it) but the board-derived deps pass undefined instead of
-    // false-returning stubs — no board, no supervisor, no handoff exists
-    // to observe, so the manager stays honest about the absent surface.
-    // The current v2 host interface has no per-turn/atomic conditional
-    // switch, so an in-flight REPLAY (abort + re-prompt) can commit on the
-    // host after a newer user turn has taken over — the replay path stays
-    // disabled on v2 (a3ac0bee). The retry-hook steering path performs no
-    // replay: it mutates the host's in-flight retry decision and switches
-    // the model in place via session.switchModel, so the a3ac0bee race
-    // cannot occur. Steering is host-agnostic (only v2 hosts invoke the
-    // hook) and follows the same user switches as the replay path
-    // (fallback.enabled / disabled_hooks).
+    // Host retries switch models in place. Keep the retry hook registered
+    // when the feature is off at startup so a session preset can enable it.
     const fallbackUserEnabled =
       runtime.fallback.enabled !== false &&
       !runtime.disabledHooks.has('foreground-fallback');
-    // v2 can enable fallback per session through a live config refresh
-    // (pinned bundle `fallbackEnabled`), so keep the manager and its retry
-    // hook unless the hook itself is disabled; it stays cheap while every
-    // path is off (handleEvent early-returns).
-    const fallbackManagerNeeded =
-      fallbackUserEnabled ||
-      (hostFlavor === 'v2' &&
-        !runtime.disabledHooks.has('foreground-fallback'));
+    const fallbackManagerNeeded = !runtime.disabledHooks.has(
+      'foreground-fallback',
+    );
     fallbackRetryHookEnabled = fallbackManagerNeeded;
-    const fallbackEnabled = fallbackUserEnabled && hostFlavor !== 'v2';
-    const v2RetryEnabled = fallbackUserEnabled;
-    if (fallbackUserEnabled && hostFlavor === 'v2') {
-      // Deterministic notice: no timestamps or per-call ids. Do not log when
-      // the user explicitly disabled fallback, including via disabled_hooks.
+    if (fallbackUserEnabled) {
       log(
         '[foreground-fallback] v2 replay fallback disabled (no atomic per-turn model switch); retry-hook steering active',
       );
@@ -1816,24 +814,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     if (fallbackManagerNeeded) {
       // The handoff module is consumed only by this manager; load it in the
       // same breath (parallel, never when the manager is skipped) and only
-      // when a managed board exists to observe.
-      const [fallbackModule, handoffModule] = await Promise.all([
-        import('./hooks/foreground-fallback'),
-        lifecycleEnabled
-          ? import('./hooks/task-session-manager/fallback-observation-transfer')
-          : undefined,
-      ]);
-      const backgroundFallbackHandoff =
-        handoffModule && lifecycleEnabled
-          ? handoffModule.createBackgroundFallbackHandoff({
-              backgroundJobBoard: backgroundJobBoard!,
-              revivedRunTracker: revivedRunTracker!,
-              allowForeground: hostFlavor !== 'v2',
-            })
-          : undefined;
+      const fallbackModule = await import('./hooks/foreground-fallback');
       foregroundFallback = new fallbackModule.ForegroundFallbackManager({
         chains: foregroundFallbackChains,
-        enabled: fallbackEnabled,
+        enabled: false,
         input: ctx,
         maxRetries: runtime.fallback.maxRetries,
         coordinator: sessionLifecycle,
@@ -1841,9 +825,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // move its admission accounting (provider/model caps) to the new
         // model. No-op for unknown/non-task sessions; idempotent per model.
         onSessionModelChanged: (sessionID, model, detail) => {
-          if (lifecycleEnabled)
-            backgroundTaskConcurrency?.migrateTask(sessionID, model);
-          if (hostFlavor === 'v2' && detail?.agentName) {
+          if (detail?.agentName) {
             projectLiveAgentModel(
               sessionID,
               resolveRuntimeAgentName(runtime, detail.agentName),
@@ -1854,25 +836,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         },
         initialRetryDelayMs: runtime.fallback.initialRetryDelayMs,
         retryDelayMs: runtime.fallback.retryDelayMs,
-        backgroundFallbackHandoff: backgroundFallbackHandoff,
-        // Identify confirmed background children even after cancellation or
-        // termination, so handoff preparation rejects a delayed stale replay.
-        // Undefined remains exclusive to foreground/unmanaged sessions, and
-        // is the honest value when no board exists.
-        readBackgroundGeneration: lifecycleEnabled
-          ? (sessionID, includeForeground) => {
-              const record = backgroundJobBoard?.get(sessionID);
-              return record &&
-                (record.background === true ||
-                  (includeForeground && record.provisional !== true))
-                ? record.generation
-                : undefined;
-            }
-          : undefined,
-        hasRunningChildren: lifecycleEnabled
-          ? (sessionID) => backgroundJobBoard?.hasRunning(sessionID) ?? false
-          : undefined,
-        v2RetryEnabled: v2RetryEnabled,
+        v2RetryEnabled: fallbackUserEnabled,
       });
     }
 
@@ -1914,44 +878,22 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       toolLoopGuard = createToolLoopGuardHook({ directory: ctx.directory });
     }
 
-    // Pre-created wrapped handler for tool.execute.after (error-isolated).
-    if (taskSessionManagerHook) {
-      taskSessionManagerAfter = wrapPostToolHook(
-        'task-session-manager',
-        (i, o) =>
-          taskSessionManagerHook!['tool.execute.after'](i as never, o as never),
-      );
-    }
-    // Council seat assembly: the managed resolver runs against the board
-    // while the lifecycle owns it; without the lifecycle the native resolver
-    // resolves seat refs through the host client and no board is involved.
     // The hook only acts on council delegations carrying a final `Seats:`
     // line and never throws. Constructed (and its modules loaded) only when
     // a real council agent exists — no council, no seat machinery.
     // Council-inject stays independently switchable by disabled_hooks above.
     if (agentDefs.some((a) => a.name === 'council')) {
-      const [seatHookModule, resolveSeats] = await Promise.all([
+      const [seatHookModule, native] = await Promise.all([
         import('./hooks/council-seats'),
-        lifecycleEnabled
-          ? import('./hooks/council-seats/managed').then((managed) =>
-              managed.createManagedSeatResolver(backgroundJobBoard!),
-            )
-          : import('./hooks/council-seats/native').then((native) =>
-              native.createNativeSeatResolver(ctx),
-            ),
+        import('./hooks/council-seats/native'),
       ]);
-      councilSeatHook = seatHookModule.createCouncilSeatHook({ resolveSeats });
+      councilSeatHook = seatHookModule.createCouncilSeatHook({
+        resolveSeats: native.createNativeSeatResolver(ctx),
+      });
     }
     if (runtime.interviewEnabled) {
       const { collapseInterviewHistory } = await import('./interview/history');
       collapseActiveInterviewHistory = collapseInterviewHistory;
-      // v2 owns its bridge; the submit tool resolves its service after the
-      // setup handoff. v1 alone loads the legacy command/event owner.
-      if (hostFlavor !== 'v2') {
-        const { createInterviewManager } = await import('./interview');
-        interviewManager = createInterviewManager(ctx, config);
-        interviewSubmitService = interviewManager.service;
-      }
     }
     if (runtime.companion?.enabled === true) {
       const { CompanionManager, companionSessionIdForDirectory } = await import(
@@ -1965,164 +907,36 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         startupConfigSnapshot,
       );
     }
-    if (lifecycleEnabled) {
-      // Invariant: the lifecycle block above initialized the shared recovery
-      // and alias state. Checked once here so TypeScript narrows it for the
-      // control-tool registrations below, instead of `!` at every option.
-      if (!recoverRetainedSession || !aliasAuthority) {
-        throw new Error(
-          'managed lifecycle enabled without recovery/alias state',
+    const nativeControlNames = ['task_cancel', 'task_status', 'task_reply'];
+    const nativeTaskTools: Record<string, ToolDefinition> = {};
+    if (runtime.backgroundJobsMode === 'native') {
+      if (nativeControlNames.some((name) => !disabledToolNames.has(name))) {
+        const { createNativeTaskControlTools } = await import(
+          './tools/native-task-control'
         );
-      }
-      // Managed control tools load here — each implementation only when it
-      // is actually registrable. v2 registers neither task_revive,
-      // wait_for_user, nor task_message, so those modules never load there;
-      // task_report is the inverse (v2 only); a disabled_tools entry skips
-      // its own implementation as well.
-      const v1Flavor = hostFlavor !== 'v2';
-      const wants = (name: string) => !disabledToolNames.has(name);
-      const [
-        cancelToolModule,
-        replyToolModule,
-        taskReportToolModule,
-        statusToolModule,
-        reviveToolModule,
-        waitForUserToolModule,
-        taskMessageToolModule,
-      ] = await Promise.all([
-        wants('task_cancel') ? import('./tools/cancel-task') : undefined,
-        wants('task_reply') ? import('./tools/task-reply') : undefined,
-        hostFlavor === 'v2' && wants('task_report')
-          ? import('./tools/task-report')
-          : undefined,
-        wants('task_status') ? import('./tools/task-status') : undefined,
-        v1Flavor && wants('task_revive')
-          ? import('./tools/task-revive')
-          : undefined,
-        v1Flavor && wants('wait_for_user')
-          ? import('./tools/wait-for-user')
-          : undefined,
-        v1Flavor && wants('task_message')
-          ? import('./tools/task-message')
-          : undefined,
-      ]);
-      const taskCancelTools = cancelToolModule
-        ? cancelToolModule.createCancelTaskTool({
-            input: ctx,
-            backgroundJobBoard: backgroundJobBoard!,
-            terminalGate,
-            shouldManageSession: (sessionID) => isManagedSession(sessionID),
-            recoverRetainedSession,
-            resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
-            isDisposed: () => instanceDisposed,
-          })
-        : {};
-      const taskReplyTools = replyToolModule
-        ? replyToolModule.createTaskReplyTool({
-            input: ctx,
-            backgroundJobBoard: backgroundJobBoard!,
-            resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
-            isDisposed: () => instanceDisposed,
-          })
-        : {};
-      const taskReportTools = taskReportToolModule
-        ? taskReportToolModule.createTaskReportTool({
-            input: ctx,
-            hasInputWait: (sessionID) =>
-              taskSessionManagerHook?.hasInputWait(sessionID) ?? false,
-            isDisposed: () => instanceDisposed,
-          })
-        : {};
-      const taskStatusTools = statusToolModule
-        ? statusToolModule.createTaskStatusTool({
-            input: ctx,
-            backgroundJobBoard: backgroundJobBoard!,
-            activityTracker: taskActivityTracker,
-            terminalGate,
-            resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
-            isDisposed: () => instanceDisposed,
-          })
-        : {};
-      const taskReviveTools = reviveToolModule
-        ? reviveToolModule.createTaskReviveTool({
-            isFallbackPending,
-            ...(hostFlavor !== 'v2' && {
-              registerIntent: registerV1DelegatedIntent,
-            }),
-            terminalGate,
-            input: ctx,
-            backgroundJobBoard: backgroundJobBoard!,
-            shouldManageSession: (sessionID) => isManagedSession(sessionID),
-            backgroundJobSupervisor: backgroundJobSupervisor!,
-            revivedRunTracker: revivedRunTracker!,
-            recoverRetainedSession,
-            isDisposed: () => instanceDisposed,
-            resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
-          })
-        : {};
-      const waitForUserTools = waitForUserToolModule
-        ? waitForUserToolModule.createWaitForUserTool({
-            shouldManageSession: (sessionID) => isManagedSession(sessionID),
-            resolveAgentName: (agent) =>
-              resolveRuntimeAgentName(runtime, agent),
-            registerSessionAsOrchestrator: (sessionID) => {
-              sessionMetadata.markTaskManaged(sessionID);
-            },
-            beginUserWait: (sessionID) => {
-              taskSessionManagerHook?.beginUserWait(sessionID);
-              orchestratorWakeScheduler?.suppress(sessionID);
-            },
-            waitForUserGuardEnabled: runtime.backgroundJobs.waitForUserGuard,
-            hasOutstandingBackgroundTasks: (sessionID) =>
-              runtime.backgroundJobs.orchestratorWake.enabled &&
-              (backgroundJobBoard?.hasRunning(sessionID) ?? false),
-          })
-        : {};
-      const taskMessageTools = taskMessageToolModule
-        ? taskMessageToolModule.createTaskMessageTool({
-            input: ctx,
-            backgroundJobBoard: backgroundJobBoard!,
-            restoreTarget: (sessionID) =>
-              foregroundFallback?.restoreTarget(sessionID),
-            resolveCanonicalTaskRef: aliasAuthority.resolveCanonical,
-            isDisposed: () => instanceDisposed,
-          })
-        : {};
-      lifecycleTaskTools = {
-        ...taskCancelTools,
-        ...taskReportTools,
-        ...taskMessageTools,
-        ...taskReplyTools,
-        // Keep master's v1 registration order (cache-stable tool list).
-        ...(hostFlavor !== 'v2' ? taskReviveTools : {}),
-        ...taskStatusTools,
-        ...(hostFlavor !== 'v2' ? waitForUserTools : {}),
-      };
-    }
-    // `backgroundJobs.mode: "native"`: the managed lifecycle is off, but the
-    // native delegation surface has no model-facing status/cancel, so a lost
-    // completion notice and a stuck child have no agent-side channel. Two
-    // thin host-read controls cover exactly that; `off` registers none, and
-    // managed mode keeps its own board-backed tools. If disabled_tools removes
-    // both controls, skip the implementation import entirely; a single
-    // remaining control still loads the shared module and filters the other.
-    const nativeTaskTools =
-      runtime.backgroundJobsMode === 'native' &&
-      !(
-        disabledToolNames.has('task_cancel') &&
-        disabledToolNames.has('task_status')
-      )
-        ? Object.fromEntries(
+        Object.assign(
+          nativeTaskTools,
+          Object.fromEntries(
             Object.entries(
-              (
-                await import('./tools/native-task-control')
-              ).createNativeTaskControlTools({
+              createNativeTaskControlTools({
                 input: ctx,
                 isDisposed: () => instanceDisposed,
               }),
             ).filter(([name]) => !disabledToolNames.has(name)),
-          )
-        : {};
+          ),
+        );
+      }
+      if (!disabledToolNames.has('task_report')) {
+        const { createTaskReportTool } = await import('./tools/task-report');
+        Object.assign(
+          nativeTaskTools,
+          createTaskReportTool({
+            input: ctx,
+            isDisposed: () => instanceDisposed,
+          }),
+        );
+      }
+    }
 
     // v2 hosts skip wait_for_user: the native `question` tool covers the
     // blocking boundary there. task_revive remains a v1-only recovery tool;
@@ -2167,7 +981,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       };
     }
     tools = {
-      ...lifecycleTaskTools,
       ...nativeTaskTools,
       ...interviewTools,
       ...acpRunTools,
@@ -2180,10 +993,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       );
     }
   } catch (err) {
-    questionTimeoutHook?.dispose();
-    terminalGate?.dispose();
-    backgroundJobSupervisor?.dispose();
-    admissionRuntimeLease?.release();
     releaseRuntimeConfig?.();
     // The scope claim must not outlive a failed init: a leaked live-directory
     // entry would keep other instances from ever reclaiming this location and
@@ -2542,16 +1351,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         disabledCommands: runtime.disabledCommands,
         disabledSkills: runtime.disabledSkills,
       };
-      if (
-        (isCommandEnabled('interview', commandGate) ||
-          isCommandEnabled('implement', commandGate)) &&
-        interviewManager
-      ) {
-        interviewManager.registerCommand(opencodeConfig, {
-          interview: isCommandEnabled('interview', commandGate),
-          implement: isCommandEnabled('implement', commandGate),
-        });
-      }
       if (isCommandEnabled('deepwork', commandGate)) {
         deepworkCommandHook?.registerCommand(opencodeConfig);
       }
@@ -2994,25 +1793,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     return entry?.variant ? `${entry.id}#${entry.variant}` : entry?.id;
   };
 
-  // A child can move to another live location while its task board stays
-  // with the delegating parent. Only task observation crosses that boundary;
-  // the destination retains ownership of permissions, profiles and tools.
-  // Without the managed lifecycle there is no board to track, so the
-  // handler stays inert.
-  const observeForeignTaskEvent: NonNullable<Hooks['event']> = async (
-    input,
-  ) => {
-    if (instanceDisposed) return;
-    if (!taskSessionManagerHook || !backgroundJobBoard) return;
-    const taskEvent = input as Parameters<
-      (typeof taskSessionManagerHook)['event']
-    >[0];
-    const sessionID = resolveEventSessionID(taskEvent.event);
-    if (sessionID && backgroundJobBoard.isTracked(sessionID)) {
-      await taskSessionManagerHook.event(taskEvent);
-    }
-  };
-
   const hooks = {
     registryBridge,
     name: 'oh-my-opencode-slim',
@@ -3020,34 +1800,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // inference/runtime profiles for new child sessions + the sidebar.
     // Unknown to v1 hosts, consumed by src/v2/setup.ts.
     'v2.refreshProfiles': refreshProfilesFromDisk,
-    'v2.foreignTaskEvent': observeForeignTaskEvent,
     'v2.resolveDelegatedModel': resolveV2DelegatedModel,
     'v2.setSessionTeamResolver': (resolver: typeof sessionTeamFor) => {
       sessionTeamFor = resolver;
     },
-    // Per-instance background-default flip handle: v2 setup arms it after
-    // its description rewrite verifies and disarms it with its teardown.
-    'v2.backgroundDefaultFlip': backgroundDefaultFlip,
-    'v2.refusalOutcome':
-      foregroundFallback?.refusedChildOutcome.bind(foregroundFallback),
     'v2.pendingRefusalOutcome':
       foregroundFallback?.pendingRefusalOutcome.bind(foregroundFallback),
-    'v2.backgroundGeneration': lifecycleEnabled
-      ? (
-          parentID: string,
-          childID: string,
-          runningOnly = false,
-          refusalTime?: number,
-        ) => {
-          const record = backgroundJobBoard?.get(childID);
-          return record?.background &&
-            record.parentSessionID === parentID &&
-            (!runningOnly || record.state === 'running') &&
-            (refusalTime === undefined || refusalTime >= record.runStartedAt)
-            ? record.generation
-            : undefined;
-        }
-      : undefined,
     'v2.session.retry': fallbackRetryHookEnabled
       ? (input: never, switchModel: never) =>
           foregroundFallback?.handleV2Retry(input, switchModel)
@@ -3070,52 +1828,12 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // text-complete fallback at it so `/interview` state lands in the same
     // service that captured the session transcript.
     'v2.setInterviewService': (
-      service: ReturnType<typeof createInterviewManager>['service'],
+      service: ReturnType<typeof createInterviewService>,
     ) => {
       interviewSubmitService = service;
     },
-    // v2-only extension handle (consumed by src/v2/setup.ts's executor
-    // wrapper): register a delegated `subagent` launch from its STRUCTURED
-    // executor result, forwarding to the task-session-manager's shared fence
-    // pipeline (marks the pending handled-by-wrapper for the exact-once gate).
-    // No-op when the managed lifecycle is disabled (no fence pipeline).
-    'v2.registerDelegatedLaunchFromStructured': (
-      input: Parameters<
-        NonNullable<
-          NonNullable<
-            typeof taskSessionManagerHook
-          >['v2.registerDelegatedLaunchFromStructured']
-        >
-      >[0],
-    ) =>
-      taskSessionManagerHook?.['v2.registerDelegatedLaunchFromStructured'](
-        input,
-      ),
-    // v2-only extension handle (consumed by src/v2/setup.ts's prompt
-    // bridge): feed the prompt identity the host prepared for a session
-    // into the shared pending-call tracker. The awaited `session.prompt`
-    // hook carries the eventual inbox messageID and precedes every delayed
-    // chat.message / context forward, but it runs BEFORE the admission
-    // commits — so this is earliest capture, not proof of admission. Only
-    // the native outcome lane may stamp from it. No-op when the managed
-    // lifecycle is disabled (no lease).
-    'v2.notePromptAdmission': (sessionID: string, messageID: string) =>
-      admissionRuntimeLease?.pendingCallTracker.noteAdmission(
-        sessionID,
-        messageID,
-      ),
     'v2.noteExternalPromptIntent': (sessionID: string, messageID: string) =>
       foregroundFallback?.observeExternalPromptIntent(sessionID, messageID),
-    'v2.coverSteer': (
-      callID: string,
-      parentSessionID: string,
-      childSessionID: string,
-    ) =>
-      taskSessionManagerHook?.['v2.coverSteer'](
-        callID,
-        parentSessionID,
-        childSessionID,
-      ),
 
     agent: agents,
 
@@ -3136,34 +1854,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         RuntimeConfig.get(ctx.directory).captureHostConfig(
           preMutationHostSnapshot,
         );
-      }
-      if (hostFlavor !== 'v2') {
-        try {
-          const packageJson = findOwnedPackageJson(
-            fileURLToPath(import.meta.url),
-            'oh-my-opencode-slim',
-          )?.path;
-          if (packageJson) {
-            const skills =
-              opencodeConfig.skills && typeof opencodeConfig.skills === 'object'
-                ? (opencodeConfig.skills as { paths?: string[] })
-                : {};
-            removeLegacySkillSyncState(undefined, runtime.disabledSkills);
-            skills.paths = [
-              ...new Set([
-                ...(Array.isArray(skills.paths) ? skills.paths : []),
-                ...getV1BundledSkillPaths(
-                  dirname(packageJson),
-                  ctx.directory,
-                  runtime.disabledSkills,
-                ),
-              ]),
-            ];
-            opencodeConfig.skills = skills;
-          }
-        } catch (error) {
-          log('[plugin] bundled v1 skill registration failed', String(error));
-        }
       }
       // Force default_agent to the orchestrator's visible entry when unset,
       // and also when the user pointed it at an omos subagent name (opencode
@@ -3285,7 +1975,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // This is the source of truth for admission. It is intentionally
       // captured only after every host/plugin merge, model pass and
       // permission pass.
-      finalHostAgentConfig = opencodeConfig.agent as Record<string, unknown>;
+      const finalHostAgentConfig = opencodeConfig.agent as Record<
+        string,
+        unknown
+      >;
       const compaction = finalHostAgentConfig.compaction as
         | { model?: unknown }
         | undefined;
@@ -3300,10 +1993,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       withTuiSnapshotBatch(async () => {
         if (input.event.type === 'server.instance.disposed') {
           instanceDisposed = true;
-          questionTimeoutHook?.dispose();
           companionStartupAbort?.abort();
           marketplaceLeaseAbort.abort();
-          terminalGate?.dispose();
         }
         // V1 token streams have no work in this fan-out.
         const streamEventType = (input.event as { type?: string } | undefined)
@@ -3312,18 +2003,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           return;
         }
 
-        // Directory-local handling stays scoped; moved children still reach
-        // their task owner. Unresolved events fall through (fail-open).
         eventDirectoryScope?.note(input.event);
         if (eventDirectoryScope?.isForeign(input.event)) {
-          await observeForeignTaskEvent(input);
           return;
         }
-        questionTimeoutHook?.event(
-          input.event as Parameters<
-            NonNullable<typeof questionTimeoutHook>['event']
-          >[0],
-        );
 
         const event = input.event as {
           type: string;
@@ -3374,38 +2057,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
                 typeof (rawStatus as { type?: unknown }).type === 'string'
               ? (rawStatus as { type: string }).type
               : undefined;
-        if (eventSessionID && interviewManager) {
-          const info = event.properties?.info;
-          if (
-            event.type === 'message.updated' &&
-            info?.role === 'assistant' &&
-            info.finish === 'content-filter' &&
-            typeof info.id === 'string' &&
-            interviewManager.service.getActiveInterviewId(eventSessionID) &&
-            v1InterviewRefusals.get(eventSessionID)?.messageID !== info.id
-          ) {
-            const outcome = foregroundFallback?.v1InterviewRefusal(
-              eventSessionID,
-              info.id,
-            );
-            if (outcome)
-              v1InterviewRefusals.set(eventSessionID, {
-                messageID: info.id,
-                outcome,
-              });
-          } else if (
-            event.type === 'session.deleted' ||
-            (event.type === 'session.status' && statusType === 'busy')
-          ) {
-            v1InterviewRefusals.delete(eventSessionID);
-          }
-        }
-        const refusalAtIdle =
-          eventSessionID &&
-          (event.type === 'session.idle' ||
-            (event.type === 'session.status' && statusType === 'idle'))
-            ? v1InterviewRefusals.get(eventSessionID)
-            : undefined;
         // Publish before any awaited consumer can admit a newer run.
         const companionProperties = event.properties;
         const companionData = (
@@ -3451,12 +2102,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           statusType,
         );
         if (eventSessionID && companionStatus) {
-          const job = backgroundJobBoard?.get(eventSessionID);
           companionManager?.onSessionStatus({
             sessionId: eventSessionID,
             agent: sessionMetadata.getAgent(eventSessionID),
             status: companionStatus,
-            jobFinished: job !== undefined && job.state !== 'running',
           });
         }
 
@@ -3475,14 +2124,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           toolLoopGuard?.resetSession(eventSessionID);
         }
         if (eventSessionID) {
-          if (taskActivityTracker) {
-            applyActivityEvent(
-              taskActivityTracker,
-              event,
-              Date.now(),
-              eventSessionID,
-            );
-          }
           if (
             event.type === 'session.status' &&
             (statusType === 'busy' || statusType === 'retry')
@@ -3550,12 +2191,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
                 model,
               });
             }
-            // Managed background-task sessions are identified by their session
-            // ID. If the model serving one changed (fallback re-prompt, runtime
-            // switch), migrate the admission accounting so provider/model caps
-            // keep tracking the model actually in use. No-op for other
-            // sessions and idempotent when the model is unchanged.
-            backgroundTaskConcurrency?.migrateTask(info.sessionID, model);
           }
           if (
             typeof info?.agent === 'string' &&
@@ -3593,16 +2228,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           const createdSessionParent = (
             event.properties as { info?: { parentID?: unknown } } | undefined
           )?.info?.parentID;
-          // v2 hands over the raw envelope before its mapped shapes: without
-          // `info`, take the session and the host creation time from it.
-          const info = event.properties?.info;
-          const freshID = info
-            ? info.id
-            : (event.data?.sessionID ?? event.properties?.sessionID);
-          const createdAt = info ? info.time?.created : event.created;
-          if (typeof freshID === 'string' && typeof createdAt === 'number') {
-            backgroundJobBoard?.noteSessionCreated(freshID, createdAt);
-          }
           if (
             runtime.sidebarEnabled &&
             createdSessionId &&
@@ -3630,67 +2255,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         // prompt admission may synchronously emit a busy event.
         await foregroundFallback?.preflightEvent(input.event);
 
-        // Invalidate task continuations before the instance-disposed cleanup
-        // (the former multiplexer event handling moved to the client process
-        // with the pane lifecycle; the server never touches panes).
-        await taskSessionManagerHook?.event(
-          input as {
-            event: {
-              type: string;
-              properties?: { info?: { id?: string }; sessionID?: string };
-            };
-          },
-        );
         if (event.type === 'server.instance.disposed') {
           clearTuiActivities();
         }
-
-        await orchestratorWakeScheduler?.event(
-          input as {
-            event: {
-              type: string;
-              properties?: {
-                info?: { id?: string };
-                sessionID?: string;
-                status?: { type?: string };
-              };
-            };
-          },
-        );
 
         // Runtime model fallback for foreground agents (rate-limit detection).
         // Same ordering rule as above: commit staged state before re-prompt.
         flushTuiSnapshotBatch();
         await foregroundFallback?.handleEvent(input.event);
-
-        // Handle auto-update checking; the checker only exists when its
-        // disabled_hooks entry is absent.
-        await autoUpdateChecker?.event(input);
-
-        const deliverInterviewEvent = () =>
-          interviewManager?.handleEvent(
-            input as {
-              event: { type: string; properties?: Record<string, unknown> };
-            },
-          );
-        if (refusalAtIdle && eventSessionID) {
-          const settle = (model?: string) => {
-            if (
-              !instanceDisposed &&
-              v1InterviewRefusals.get(eventSessionID) === refusalAtIdle
-            ) {
-              v1InterviewRefusals.delete(eventSessionID);
-              if (!model) return deliverInterviewEvent();
-            }
-          };
-          void refusalAtIdle.outcome
-            .then(settle, () => settle())
-            .catch((error) =>
-              log('[interview] deferred idle failed', String(error)),
-            );
-        } else {
-          await deliverInterviewEvent();
-        }
 
         if (input.event.type === 'session.deleted') {
           const props = input.event.properties as
@@ -3703,7 +2275,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           }
           companionManager?.onSessionDeleted(sessionID);
           if (sessionID) {
-            v1InternalSelectionOverrides.delete(sessionID);
             sessionMetadata.delete(sessionID);
           }
         }
@@ -3711,47 +2282,24 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
     dispose: async () => {
       eventDirectoryScope?.release();
-      questionTimeoutHook?.dispose();
       // Synchronous: v2 setup calls this directly and does not emit the
       // public server.instance.disposed event first.
       instanceDisposed = true;
-      v1InterviewRefusals.clear();
       companionStartupAbort?.abort();
       marketplaceLeaseAbort.abort();
       registryBridge.retire();
-      terminalGate?.dispose();
       // Cancel pending initial-delay fallback timers so a reloaded
       // generation cannot observe one stale fallback call.
       foregroundFallback?.dispose();
       try {
-        await taskSessionManagerHook?.event({
-          event: { type: 'server.instance.disposed' },
-        });
-        await orchestratorWakeScheduler?.event({
-          event: { type: 'server.instance.disposed' },
-        });
-        // The wake gate is process-global (globalThis + Symbol.for) and survives
-        // module re-entry, so a reloaded generation would otherwise inherit the
-        // previous generation's no-progress caps. Clear it only when this was the
-        // last live instance: disposing one of several locations must not wipe
-        // the other locations' wake state.
-        if (!hasLiveInstances()) clearAllWakeSessions();
-        v1InternalSelectionOverrides.clear();
-        v1DelegatedIntents.length = 0;
-        await interviewManager?.dispose();
         clearTuiActivities();
-        tuiReusableProjection?.dispose();
         // Explicitly release this generation's companion ownership: a
         // reloaded generation only replaces the active manager at its own
         // onLoad, and if it fails before that the detached companion would
         // survive until process exit. Idempotent (registerActiveManager's
         // replacement path and the process-exit listener tolerate repeats).
         await companionManager?.dispose();
-        // Release only this generation's ownership. The admission runtime
-        // defers final scheduler/tracker teardown by one macrotask so an
-        // immediate config-update re-init can retain active and queued calls.
       } finally {
-        admissionRuntimeLease?.release();
         releaseRuntimeConfig?.();
       }
     },
@@ -3775,35 +2323,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         input as never,
         output as never,
       );
-      await taskSessionManagerHook?.['tool.execute.before'](
-        input as never,
-        output as never,
-      );
-      // Council seat assembly: acts only on a council delegation whose
-      // prompt carries a final `Seats:` line, and never throws. Runs after
-      // the task-session-manager's before-hook so lifecycle fencing (task
-      // resume validation) precede the assembly rewrite.
       await councilSeatHook?.['tool.execute.before'](
         input as never,
         output as never,
       );
-      if (
-        hostFlavor !== 'v2' &&
-        input.tool.toLowerCase() === 'task' &&
-        output.args !== null &&
-        typeof output.args === 'object' &&
-        !Array.isArray(output.args)
-      ) {
-        const args = output.args as Record<string, unknown>;
-        if (typeof args.subagent_type === 'string') {
-          // Keep the canonical specialist name for host permissions and lookup.
-          registerV1DelegatedIntent(
-            input.sessionID,
-            typeof args.task_id === 'string' ? args.task_id : undefined,
-            args.subagent_type,
-          );
-        }
-      }
       // Record a call only after all rejecting before-hooks have accepted it.
       // In particular, search-path-guard can reject grep/glob before the host
       // emits tool.execute.after; running the loop guard first would leave a
@@ -3823,22 +2346,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           disabledCommands: runtime.disabledCommands,
           disabledSkills: runtime.disabledSkills,
         });
-
-      const slashCommand = (input as { command?: string }).command;
-      if (
-        ((slashCommand === 'interview' && commandEnabled('interview')) ||
-          (slashCommand === 'implement' && commandEnabled('implement'))) &&
-        interviewManager
-      ) {
-        await interviewManager.handleCommandExecuteBefore(
-          input as {
-            command: string;
-            sessionID: string;
-            arguments: string;
-          },
-          output as { parts: Array<{ type: string; text?: string }> },
-        );
-      }
 
       if (commandEnabled('deepwork')) {
         await deepworkCommandHook?.handleCommandExecuteBefore(
@@ -3875,22 +2382,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     // v2 handles compaction in its separate session.compaction bridge.
     'experimental.session.compacting': async ({ sessionID }) => {
       compactingSessionIds.add(sessionID);
-    },
-
-    // v1-only interview fallback: capture a printed <interview_state> block
-    // through the shared apply step, then strip it from the saved/visible
-    // text. v2 has no equivalent hook.
-    'experimental.text.complete': async (input, output) => {
-      if (!interviewSubmitService) return;
-      try {
-        output.text = await interviewSubmitService.completeInterviewText(
-          input.sessionID,
-          output.text,
-          input.messageID,
-        );
-      } catch (err) {
-        log('[plugin] interview text completion failed', String(err));
-      }
     },
 
     // Track which agent each session uses (needed for serve-mode prompt
@@ -3941,15 +2432,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // v2 admission tracker — agent-discovery forwards agent/model
       // without parts.
       const messageID = input.messageID ?? output?.message?.id;
-      // V1-only: v1 has no prompt hook, so chat.message is the admission
-      // gate; on v2 the awaited `session.prompt` hook feeds the tracker
-      // earlier, and this delayed forward would only re-bind a live pending.
-      if (hostFlavor !== 'v2' && typeof messageID === 'string') {
-        admissionRuntimeLease?.pendingCallTracker.noteAdmission(
-          input.sessionID,
-          messageID,
-        );
-      }
       const inputParts = Array.isArray(input.parts) ? input.parts : [];
       const outputParts = Array.isArray(output?.parts) ? output.parts : [];
       const partsInternal = [...inputParts, ...outputParts].some(
@@ -3970,198 +2452,19 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         (typeof messageID === 'string' &&
           isInternalAdmission(input.sessionID, messageID));
       if (!internalAdmission) {
-        killAllStop.noteExternalPrompt(input.sessionID);
-        if (hostFlavor === 'v2' && (inputParts.length || outputParts.length)) {
+        if (inputParts.length || outputParts.length) {
           foregroundFallback?.noteV2Prompt(input.sessionID);
         }
         const model = input.model ?? output?.message?.model;
         foregroundFallback?.noteExternalTurn(
           input.sessionID,
           // v2 retains its retry budget across external prompts.
-          hostFlavor === 'v2' ? undefined : messageID,
+          undefined,
           model ? `${model.providerID}/${model.modelID}` : undefined,
         );
       }
 
-      // v1 confirms the session before publishing it, but saves this user
-      // message after chat.message. Only an empty host transcript can claim
-      // a creation intention; task_id resumes claim their explicit child ID.
-      const childAgentRaw = input.agent ?? output?.message?.agent;
-      let childRoute: (typeof v1DelegatedIntents)[number] | undefined;
-      if (hostFlavor !== 'v2' && !internalAdmission && childAgentRaw) {
-        const agentName = resolveRuntimeAgentName(runtime, childAgentRaw);
-        childRoute = v1DelegatedIntents.find(
-          (route) =>
-            route.childID === input.sessionID && route.agentName === agentName,
-        );
-        if (
-          !childRoute &&
-          !sessionMetadata.getAgent(input.sessionID) &&
-          v1DelegatedIntents.some(
-            (route) => !route.childID && route.agentName === agentName,
-          )
-        ) {
-          const controller = new AbortController();
-          try {
-            const request = {
-              path: { id: input.sessionID },
-              query: { directory: ctx.directory },
-              throwOnError: true as const,
-              signal: controller.signal,
-            };
-            const [{ data: session }, { data: messages }] = await withTimeout(
-              Promise.all([
-                ctx.client.session.get(request),
-                ctx.client.session.messages({
-                  ...request,
-                  query: { ...request.query, limit: 1 },
-                }),
-              ]),
-              DEFAULT_RUNTIME_SESSION_STATUS_TIMEOUT_MS,
-              'Host delegated child lookup timed out',
-            );
-            if (Array.isArray(messages) && messages.length === 0) {
-              childRoute = v1DelegatedIntents.find(
-                (route) =>
-                  !route.childID &&
-                  route.parentID === session?.parentID &&
-                  route.agentName === agentName,
-              );
-            }
-          } catch (error) {
-            controller.abort();
-            log('[delegation] child lookup failed', {
-              sessionID: input.sessionID,
-              error: String(error),
-            });
-          }
-        }
-        if (childRoute)
-          v1DelegatedIntents.splice(v1DelegatedIntents.indexOf(childRoute), 1);
-      }
-      const routedChild =
-        childRoute &&
-        resolveDelegatedModelForParent(
-          childRoute.agentName,
-          childRoute.parentID,
-        );
-      const routedChildModel = routedChild
-        ? modelFromMetadataString(routedChild.entry.id)
-        : undefined;
-      // A child already on the routed model (inherited from the parent)
-      // keeps its message untouched, including the inherited variant.
-      if (
-        routedChild &&
-        routedChildModel &&
-        output?.message &&
-        (output.message.model?.providerID !== routedChildModel.providerID ||
-          output.message.model?.modelID !== routedChildModel.modelID)
-      ) {
-        output.message.model = {
-          ...routedChildModel,
-          ...(routedChild.entry.variant
-            ? { variant: routedChild.entry.variant }
-            : {}),
-        };
-        log('[delegation] routed v1 child model', {
-          sessionID: input.sessionID,
-          parentSessionID: childRoute?.parentID,
-          agent: routedChild.agentName,
-          model: routedChild.entry.id,
-        });
-      }
-
-      // OpenCode v1's native background notifier does not pin a model. The
-      // host therefore constructs (and persists) this synthetic message on
-      // the agent's static primary before exposing chat.message, even when
-      // the parent is already running on a fallback. Rewrite the message to
-      // the policy-selected model: either retry the last external selection
-      // or retain the confirmed fallback. Remember the exact selection so
-      // later Slim lifecycle continuations use the same policy decision.
-      const unpinnedV1InternalContinuation =
-        hostFlavor !== 'v2' && internalAdmission && input.model === undefined;
-      const trackedAgent = unpinnedV1InternalContinuation
-        ? sessionMetadata.getAgent(input.sessionID)
-        : undefined;
-      const trackedModelText = unpinnedV1InternalContinuation
-        ? runtime.fallback.continuationPolicy === 'stick-to-fallback'
-          ? liveSessionModel(input.sessionID)
-          : sessionMetadata.getModel(input.sessionID)
-        : undefined;
-      const trackedModel = modelFromMetadataString(trackedModelText);
-      let rewroteInternalSelection = false;
-      if (output?.message && unpinnedV1InternalContinuation) {
-        if (trackedAgent && output.message.agent !== trackedAgent) {
-          output.message.agent = trackedAgent;
-          rewroteInternalSelection = true;
-        }
-        if (
-          trackedModel &&
-          (output.message.model?.providerID !== trackedModel.providerID ||
-            output.message.model?.modelID !== trackedModel.modelID)
-        ) {
-          const variant = trackedAgent
-            ? resolveTuiVariantForModel(trackedAgent, trackedModelText ?? '')
-            : undefined;
-          output.message.model = {
-            ...trackedModel,
-            ...(variant ? { variant } : {}),
-          };
-          rewroteInternalSelection = true;
-        }
-      }
-      if (
-        output?.message &&
-        trackedModel &&
-        trackedModelText &&
-        output.message.model?.providerID === trackedModel.providerID &&
-        output.message.model?.modelID === trackedModel.modelID
-      ) {
-        // The continuation policy changed (or confirmed) the model actually
-        // serving this turn. Keep fallback state in sync so a task delegated
-        // before the next external admission follows that model rather than
-        // a stale fallback from the preceding turn.
-        foregroundFallback?.observeContinuationModel(
-          input.sessionID,
-          trackedModelText,
-        );
-      }
-      if (hostFlavor !== 'v2' && internalAdmission && output?.message?.model) {
-        const restore = foregroundFallback?.restoreTarget(input.sessionID);
-        if (
-          restore &&
-          `${output.message.model.providerID}/${output.message.model.modelID}` ===
-            restore.model
-        ) {
-          foregroundFallback?.observeContinuationModel(
-            input.sessionID,
-            restore.model,
-          );
-        }
-      }
-      if (rewroteInternalSelection) {
-        v1InternalSelectionOverrides.set(input.sessionID, {
-          ...(trackedAgent ? { agent: trackedAgent } : {}),
-          ...(trackedModel ? { model: trackedModel } : {}),
-          ...(trackedModelText ? { modelText: trackedModelText } : {}),
-          ...(output?.message?.model?.variant
-            ? { variant: output.message.model.variant }
-            : {}),
-        });
-        log('[fallback] applied v1 internal continuation model policy', {
-          sessionID: input.sessionID,
-          agent: trackedAgent,
-          model: trackedModelText,
-          policy: runtime.fallback.continuationPolicy,
-        });
-      } else if (!internalAdmission) {
-        v1InternalSelectionOverrides.delete(input.sessionID);
-      }
-
-      const rawAgent =
-        (unpinnedV1InternalContinuation ? trackedAgent : undefined) ??
-        input.agent ??
-        output?.message?.agent;
+      const rawAgent = input.agent ?? output?.message?.agent;
       const agent = rawAgent
         ? resolveRuntimeAgentName(runtime, rawAgent)
         : undefined;
@@ -4175,14 +2478,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       }
 
       if (agent) {
-        if (hostFlavor !== 'v2' && !internalAdmission) {
-          await foregroundFallback?.registerExternalSessionAgent(
-            input.sessionID,
-            agent,
-          );
-        } else {
-          foregroundFallback?.registerSessionAgent(input.sessionID, agent);
-        }
+        foregroundFallback?.registerSessionAgent(input.sessionID, agent);
         if (!internalAdmission) {
           sessionMetadata.setAgent(input.sessionID, agent);
         }
@@ -4212,10 +2508,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       // inheriting background task could be admitted before its parent's
       // model is known — admission then resolves the correct provider/model
       // cap immediately.
-      const messageModel =
-        (routedChild ? routedChildModel : undefined) ??
-        input.model ??
-        output?.message?.model;
+      const messageModel = input.model ?? output?.message?.model;
       if (
         messageModel &&
         typeof messageModel.providerID === 'string' &&
@@ -4225,7 +2518,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         if (!internalAdmission) {
           sessionMetadata.setModel(input.sessionID, model);
           const liveVariant =
-            routedChild?.entry.variant ??
             input.variant ??
             input.model?.variant ??
             output?.message?.model?.variant;
@@ -4247,10 +2539,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           if (agent)
             projectLiveAgentModel(input.sessionID, agent, model, liveVariant);
         }
-        backgroundTaskConcurrency?.migrateTask(input.sessionID, model);
       }
-      taskSessionManagerHook?.observeChatMessage(input, output);
-      orchestratorWakeScheduler?.observeChatMessage(input, output);
       if (messageID) {
         toolLoopGuard?.observeNewUserMessage(input.sessionID, messageID, {
           internalAdmission,
@@ -4306,9 +2595,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
               ? targetDef.config.prompt
               : buildOrchestratorPrompt({
                   disabledAgents: runtime.disabledAgents,
-                  wakeScheduler:
-                    runtime.backgroundJobsEnabled &&
-                    runtime.backgroundJobs.orchestratorWake.enabled,
                   hostFlavor,
                   routingBlock: runtime.routingBlock,
                 });
@@ -4446,14 +2732,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         }
       }
 
-      // Repair session mappings before the phase-reminder gate.
-      if (taskSessionManagerHook) {
-        await taskSessionManagerHook['experimental.chat.messages.transform'](
-          input as never,
-          typedOutput as never,
-          view,
-        );
-      }
       if (phaseReminder) {
         await phaseReminder['experimental.chat.messages.transform'](
           input as never,
@@ -4468,16 +2746,10 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           view,
         );
       }
-      await taskSessionManagerHook?.injectBackgroundJobBoard(
-        input,
-        typedOutput,
-      );
       // Ordering contract: the goal pointer is the trailing-most volatile
       // message — nothing appends after it, so re-entered transforms and the
-      // board's own trailing-zone strip stay ordered.
+      // trailing-zone strip stay ordered.
       if (deepworkGoal) {
-        // Board tail stripping/appending may preserve the array length while
-        // replacing a message, so rebuild at this structural seam.
         await deepworkGoal['experimental.chat.messages.transform'](
           input as never,
           typedOutput as never,
@@ -4494,51 +2766,28 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
     },
 
     'tool.execute.after':
-      jsonErrorRecoveryAfter || toolLoopGuard || taskSessionManagerAfter
+      jsonErrorRecoveryAfter || toolLoopGuard
         ? async (input, output) => {
             await jsonErrorRecoveryAfter?.(input, output);
             await toolLoopGuard?.['tool.execute.after'](
               input as never,
               output as never,
             );
-            await taskSessionManagerAfter?.(input, output);
           }
         : undefined,
   } as Hooks & {
     'v2.pendingRefusalOutcome':
       | ForegroundFallbackManager['pendingRefusalOutcome']
       | undefined;
-    'v2.refusalOutcome':
-      | ForegroundFallbackManager['refusedChildOutcome']
-      | undefined;
-    'v2.backgroundGeneration':
-      | ((
-          parentID: string,
-          childID: string,
-          runningOnly?: boolean,
-          refusalTime?: number,
-        ) => number | undefined)
-      | undefined;
-    'v2.foreignTaskEvent': typeof observeForeignTaskEvent;
     'v2.refreshProfiles': typeof refreshProfilesFromDisk;
     'v2.resolveDelegatedModel': typeof resolveV2DelegatedModel;
     'v2.setSessionTeamResolver': (resolver: typeof sessionTeamFor) => void;
-    'v2.backgroundDefaultFlip': BackgroundDefaultFlipState;
     'v2.pinSessionChains': (
       sessionID: string,
       chains?: SessionTeamBundle['chains'],
       enabled?: boolean,
     ) => void;
     'v2.releaseSessionChains': (sessionID: string) => void;
-    'v2.registerDelegatedLaunchFromStructured': NonNullable<
-      NonNullable<
-        typeof taskSessionManagerHook
-      >['v2.registerDelegatedLaunchFromStructured']
-    >;
-    'v2.notePromptAdmission': (sessionID: string, messageID: string) => void;
-    'v2.coverSteer': NonNullable<
-      typeof taskSessionManagerHook
-    >['v2.coverSteer'];
     'v2.noteExternalPromptIntent'?: (
       sessionID: string,
       messageID: string,
@@ -4547,27 +2796,3 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
 
   return hooks;
 };
-
-export default {
-  id: 'oh-my-opencode-slim',
-  // NOTE: do not add a `tui` key here. OpenCode v1.18.23+ (and v2's
-  // byte-identical readV1Plugin) validate the default export of a server
-  // plugin module: `tui`, when present, must be a function and must not
-  // coexist with `server` — a boolean marker makes the whole plugin fail
-  // to load with "invalid tui export". The TUI entry is discovered
-  // separately by hosts through the package.json `./tui` export
-  // (dist/tui2.js), never through this module.
-  server: OhMyOpenCodeLite,
-  setup: createV2Setup(),
-};
-
-export type {
-  AgentName,
-  AgentOverrideConfig,
-  McpName,
-  MultiplexerConfig,
-  MultiplexerLayout,
-  MultiplexerType,
-  PluginConfig,
-} from './config';
-export type { RemoteMcpConfig } from './mcp';

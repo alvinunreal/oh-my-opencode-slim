@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-CLI entry point and command-line interface for the oh-my-opencode-slim plugin. Provides installation, configuration, and diagnostic commands for setting up and managing the OpenCode plugin. Manages agent skill installation, configuration generation, and shell integration for background subagents.
+CLI entry point and command-line interface for the oh-my-opencode-slim plugin. Provides installation, configuration, and diagnostic commands for setting up and managing the OpenCode plugin. Manages agent skill installation, configuration generation.
 
 ## Design
 
@@ -36,7 +36,6 @@ The CLI follows a command pattern with two primary commands:
 
 ### Integration Management
 
-- **background-subagents.ts**: Shell integration for OpenCode background subagents (persistent agent processes)
 - **companion.ts**: Desktop companion binary installation and management
 
 ## Flow
@@ -57,9 +56,6 @@ The CLI follows a command pattern with two primary commands:
 1. Parse install arguments (preset, background subagents, etc.)
 2. Check OpenCode installation
 3. Add plugin and default LSP setting to OpenCode configuration
-4. On v1, add the TUI badge (tui.json/tui.jsonc)
-5. On v1, warm the plugin cache for package manager installations
-6. On v1, configure background subagents (shell integration)
 7. Write oh-my-opencode-slim configuration
 ```
 
@@ -74,7 +70,7 @@ the plugin itself (#1582); the installer no longer writes config entries.
    - XDG_CONFIG_HOME/opencode
    - ~/.config/opencode (default)
 2. Resolve file paths:
-   - Last opencode.jsonc/opencode.json defining `plugin`; otherwise prefer .jsonc
+   - Last opencode.jsonc/opencode.json defining `plugins` or the legacy `plugin` key; otherwise prefer .jsonc
    - oh-my-opencode-slim.jsonc → oh-my-opencode-slim.json (fallback)
    - tui.jsonc → tui.json (fallback)
 ```
@@ -93,18 +89,6 @@ the plugin itself (#1582); the installer no longer writes config entries.
    - fixer → low variant
 3. Apply skill permissions based on agent role
 4. Generate final configuration with schema URL
-```
-
-### Background Subagents Integration (background-subagents.ts)
-
-```
-1. Detect shell type (bash/zsh/fish)
-2. Determine target file:
-   - bash/zsh: ~/.bashrc or ${ZDOTDIR:-$HOME}/.zshrc
-   - fish: ~/.config/fish/conf.d/opencode-background-subagents.fish
-3. Write environment variable export:
-   - export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true
-4. Persist across shell sessions
 ```
 
 ### Doctor Diagnostics Flow (doctor.ts)
@@ -178,8 +162,6 @@ bunx oh-my-opencode-slim install [OPTIONS]
 
 **Options:**
 - `--preset=<name>`: Select configuration preset (default: openai)
-- `--background-subagents=ask|yes|no`: Configure background subagents (default: ask)
-- `--background-subagents-target=<path>`: Specify shell startup file
 - `--no-tui`: Non-interactive mode
 - `--dry-run`: Simulate installation
 - `--reset`: Force overwrite existing configuration
