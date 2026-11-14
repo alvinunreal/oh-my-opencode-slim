@@ -175,6 +175,22 @@ Before pushing changes to the repository, when makes sense run a code review to 
 - Cache safety: prompt-prefix rewrites, volatile content outside the
   trailing zone, or injections bypassing `src/hooks/cache-safe-injection.ts`
 
+### Maintainer merge bar
+
+When a review blocks a change, all five criteria must hold before merge:
+
+- **Proof**: the diff reproduces the real failure end to end; a test of the
+  new mechanism alone does not count, and docs claim only what the
+  reproduction shows.
+- **Reuse**: extend the existing proof, predicate, or env source; a weaker
+  parallel fence, a literal agent-name check, or a duplicate endpoint blocks.
+- **Reversible**: validate before destructive steps (stash, worktree move),
+  restore on every path, and cover it with a regression test.
+- **Bounded**: repeated events cannot rescan unbounded history without a
+  negative-result gate.
+- **No paper-over**: a timeout or retry that restores availability without
+  the claimed guarantee still does not merge.
+
 ## Repository Map
 
 A full codemap is available at `codemap.md` in the project root.
