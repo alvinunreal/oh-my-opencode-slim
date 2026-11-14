@@ -76,6 +76,18 @@ A glossary of the terms used in this project's domain. Definitions describe what
 - **Disabled agents** — Agents turned off via config; `observer` is disabled by default.
 - **Disabled hooks / commands** — Config keys that disable hooks or slash commands entirely: `disabled_hooks` (`phase-reminder`, `foreground-fallback`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`) and `disabled_commands` (`interview`, `deepwork`, `reflect`).
 
+## Mutation testing
+
+- **Mutant** — A deliberately faulty copy of a source file (e.g., a comparison flipped), run against the tests to see whether any test fails. Never an edit to the repository itself.
+- **Mutation score** — The percentage of mutants detected by the test suite for the sweep's scope.
+- **Survivor** — A mutant no covering test fails; a behavior no test can see. Either a coverage gap or an equivalent mutant.
+- **Equivalent mutant** — A survivor that is provably identical to the original for every input; a documented proof, not a coverage gap.
+- **Killed** — A mutant at least one covering test failed, attributed to the failing test via `killedBy`.
+- **NoCoverage** — A mutant no test reached. A coverage gap, never reported as survived or killed.
+- **Mutation pin** — A test whose title carries the `contract:` prefix, written to kill a specific named mutant.
+- **Survivor ledger** — The per-mutant outcome table in `docs/mutation-testing.md` recording survivor dispositions (killed/equivalent) with their proofs; verified against each run's report by the mutation gate.
+- **Mutation gate** — The required CI check that runs the scoped Stryker sweep and fails on score drop, lost guard targets, or survivor-ledger drift.
+
 ## Flagged
 
 Terms with genuine but non-blocking collisions or historical drift. Noted for awareness; no change required:
