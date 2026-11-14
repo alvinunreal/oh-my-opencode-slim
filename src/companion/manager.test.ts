@@ -397,22 +397,78 @@ describe('CompanionManager', () => {
         binaryPath: path.join(TEST_DIR, 'missing-companion'),
       });
       a.onLoad();
+      const aPid = attachmentPidsByDirectory.get(path.resolve('/project-a'));
+      if (aPid === undefined) throw new Error('missing test attachment');
+      // Companion alive: the record update path records A while running.
       writeFileSync(companionPidFile(), String(process.pid));
       reconcile(a);
-      expect(readSpawnAttachments()).toHaveLength(1);
+      expect(readSpawnAttachments().map((entry) => entry.pid)).toEqual([aPid]);
+      // Companion exits and takes the record with it.
+      rmSync(companionPidFile(), { force: true });
+      rmSync(companionSpawnFile(), { force: true });
 
       // TUI C attaches to another project; its state row is not published yet.
       const c = make('session-c', '/project-c', {
         enabled: true,
         binaryPath: path.join(TEST_DIR, 'missing-companion'),
       });
-      reconcile(a);
-      expect(readSpawnAttachments().map((entry) => entry.pid)).not.toContain(
-        attachmentPidsByDirectory.get(path.resolve('/project-c')),
-      );
+      reconcile(a); // spawn path records A; C must stay out of the record
+      const cPid = attachmentPidsByDirectory.get(path.resolve('/project-c'));
+      if (cPid === undefined) throw new Error('missing test attachment');
+      expect(readSpawnAttachments().map((entry) => entry.pid)).toEqual([aPid]);
+      expect(
+        logSpy.mock.calls.filter(([message]) =>
+          String(message).includes('companion binary not found'),
+        ),
+      ).toHaveLength(1);
 
-      // A's TUI quits and the companion exits; C publishes its row and ticks.
-      detachDirectory('/project-a');
+      // C publishes its row and ticks: one spawn.
+      c.onLoad();
+      reconcile(c);
+      expect(
+        logSpy.mock.calls.filter(([message]) =>
+          String(message).includes('companion binary not found'),
+        ),
+      ).toHaveLength(2);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('ignores rows from dead generations when recording spawn attempts', () => {
+    const logSpy = spyOn(loggerModule, 'log');
+    try {
+      const a = make('session-a', '/project-a', {
+        enabled: true,
+        binaryPath: path.join(TEST_DIR, 'missing-companion'),
+      });
+      a.onLoad();
+      const aPid = attachmentPidsByDirectory.get(path.resolve('/project-a'));
+      if (aPid === undefined) throw new Error('missing test attachment');
+      // A row for /project-c from a killed generation; only a state write
+      // prunes it, so steady-state ticks must not treat it as published.
+      const state = readState();
+      state.sessions.push({
+        session_id: 'stale-generation',
+        cwd: path.resolve('/project-c'),
+        pid: 999999999,
+        active_agents: [],
+        active_agent_details: [],
+        status: 'idle',
+      });
+      writeFileSync(stateFilePath(), JSON.stringify(state));
+
+      const c = make('session-c', '/project-c', {
+        enabled: true,
+        binaryPath: path.join(TEST_DIR, 'missing-companion'),
+      });
+      writeFileSync(companionPidFile(), String(process.pid));
+      reconcile(a);
+      const cPid = attachmentPidsByDirectory.get(path.resolve('/project-c'));
+      if (cPid === undefined) throw new Error('missing test attachment');
+      expect(readSpawnAttachments().map((entry) => entry.pid)).toEqual([aPid]);
+
+      // C publishes its own live row and ticks: one spawn.
       rmSync(companionPidFile(), { force: true });
       c.onLoad();
       reconcile(c);

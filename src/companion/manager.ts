@@ -195,10 +195,16 @@ function attachmentsWithPublishedRows(
   attachments: readonly TuiAttachment[],
   state: CompanionState,
 ): TuiAttachment[] {
+  // Mirror pruneDeadSessions: a row from a dead generation (e.g. a killed
+  // TUI) must not count as published until a state write prunes it.
+  const liveRows = state.sessions.filter(
+    (session) =>
+      !Number.isInteger(session.pid) ||
+      session.pid === process.pid ||
+      isProcessAlive(session.pid),
+  );
   return attachments.filter((attachment) =>
-    state.sessions.some((session) =>
-      isDirectoryAttached([attachment], session.cwd),
-    ),
+    liveRows.some((session) => isDirectoryAttached([attachment], session.cwd)),
   );
 }
 
@@ -267,19 +273,19 @@ function updateSpawnAttemptRecordIfAttached(
   if (!release) return;
   try {
     const current = liveTuiAttachments();
-    const published = current
+    const currentPublished = current
       ? attachmentsWithPublishedRows(current, readState())
       : [];
     const currentRecord = readSpawnAttemptRecord();
     if (
       release.isOwned() &&
-      published.length > 0 &&
+      currentPublished.length > 0 &&
       (!currentRecord ||
-        published.some(
+        currentPublished.some(
           (attachment) => !isSpawnRecorded(attachment, currentRecord),
         ))
     ) {
-      writeSpawnAttemptRecord(published, release.isOwned);
+      writeSpawnAttemptRecord(currentPublished, release.isOwned);
     }
   } finally {
     release();
@@ -1419,11 +1425,10 @@ export class CompanionManager {
         readState(),
       );
       if (
-        publishedAttachments.length === 0 ||
-        (previousAttempt &&
-          !publishedAttachments.some(
-            (attachment) => !isSpawnRecorded(attachment, previousAttempt),
-          ))
+        previousAttempt &&
+        !publishedAttachments.some(
+          (attachment) => !isSpawnRecorded(attachment, previousAttempt),
+        )
       ) {
         return false;
       }
