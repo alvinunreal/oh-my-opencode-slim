@@ -161,6 +161,10 @@ bun install
 bun run build
 ```
 
+Upgrading from separate Librarian/Explorer agents? See the
+[configuration update guide](docs/configuration.md#updating-configurations-after-the-librarian-merge)
+for restored MCP defaults and custom model/skill precedence.
+
 ### Getting Started
 
 The installer generates both OpenAI and OpenCode Go presets, with OpenAI active by default.

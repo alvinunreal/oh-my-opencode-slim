@@ -633,6 +633,37 @@ describe('runDoctorCheck', () => {
     expect(result.ok).toBe(true);
     expect(result.configs[1].path).toContain('.jsonc');
   });
+
+  test('old generated preset pair stays ok with a repair warning', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const configDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        preset: 'team-legacy',
+        presets: {
+          'team-legacy': {
+            librarian: { mcps: ['context7', 'gh_grep'] },
+            explorer: { mcps: [] },
+          },
+        },
+      }),
+    );
+
+    const result = runDoctorCheck(projectDir);
+    const projectCheck = result.configs.find((c) => c.scope === 'project');
+    expect(result.ok).toBe(true);
+    expect(projectCheck?.ok).toBe(true);
+    const warning = projectCheck?.warnings?.join('\n');
+    expect(warning).toContain('presets.team-legacy.explorer.mcps');
+    expect(warning).toContain('matches the old generated preset shape');
+    expect(warning).toContain('Config files are not rewritten');
+    expect(projectCheck?.config?.presets?.['team-legacy']).toEqual({
+      librarian: { mcps: ['context7', 'gh_grep'] },
+      explorer: {},
+    });
+  });
 });
 
 describe('doctor CLI wrapper', () => {
