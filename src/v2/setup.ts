@@ -1169,6 +1169,10 @@ export interface V2PermissionRulesOptions {
   marketplaceAgentNames?: () => ReadonlySet<string>;
   /** All finalized host/plugin agent identities, including foreign agents. */
   knownAgentNames?: () => ReadonlySet<string>;
+  /** Live host agent ids, read at prompt time. Unlike `knownAgentNames`
+   * (a snapshot latched on the first transform pass), this sees agents that a
+   * foreign plugin registered later. */
+  hostAgentNames?: () => Promise<ReadonlySet<string>>;
   /** Effective default agent for agentless root sessions (`opencode run`
    * without `--agent`). Resolved only after a host session lookup confirms
    * the stored session record exists and has no `parentID`. */
@@ -1230,6 +1234,29 @@ async function readFinalizedAgentPermissions(
       effect: rule.effect,
     };
   });
+}
+
+/** Host-registered agent ids, unwrapping the `{ location, data }` envelope.
+ * Missing or malformed responses yield no ids; read failures propagate. */
+async function listHostAgentIds(
+  agentApi: Partial<Pick<V2Context['agent'], 'list'>> | undefined,
+): Promise<ReadonlySet<string>> {
+  if (typeof agentApi?.list !== 'function') return new Set();
+  const response = await withTimeout(
+    agentApi.list(),
+    PERMISSION_RULES_OPERATION_TIMEOUT_MS,
+    'Host agent list timed out',
+  );
+  const listed =
+    isRecord(response) && Array.isArray(response.data)
+      ? response.data
+      : response;
+  if (!Array.isArray(listed)) return new Set();
+  return new Set(
+    listed.flatMap((entry) =>
+      isRecord(entry) && typeof entry.id === 'string' ? [entry.id] : [],
+    ),
+  );
 }
 
 function classifyPermissionIdentity(
@@ -1374,6 +1401,25 @@ export function createPermissionRulesBridge(
         (options.pluginAgents.has(agent) ||
           options.knownAgentNames?.().has(agent)),
     );
+  }
+
+  /** Admits a child whose agent is plugin-classified, or a foreign-plugin
+   * agent the host lists live. Marketplace names never take the host path,
+   * so the marketplace ceiling holds; a failed host read stays unadmitted. */
+  async function isAdmittedChildAgent(
+    agent: string | undefined,
+  ): Promise<boolean> {
+    if (isClassifiedAgent(agent)) return true;
+    if (!agent || options.marketplaceAgentNames?.().has(agent)) return false;
+    try {
+      return Boolean((await options.hostAgentNames?.())?.has(agent));
+    } catch (error) {
+      log('[v2][permission-rules] host agent list failed; child not admitted', {
+        agent,
+        err: String(error),
+      });
+      return false;
+    }
   }
 
   function rejectDirectRootMarketplaceAgent(
@@ -1593,12 +1639,15 @@ export function createPermissionRulesBridge(
       return;
     }
     if (initialIdentity?.state === 'unmanaged') {
-      if (
-        marketplacePolicyRequired() &&
-        initialIdentity.parentID &&
-        !isClassifiedAgent(initialIdentity.agent)
-      ) {
-        rejectUnknownIdentity();
+      if (marketplacePolicyRequired() && initialIdentity.parentID) {
+        const admitted = await isAdmittedChildAgent(initialIdentity.agent);
+        if (disposed) throw new Error('permission rules bridge is disposed');
+        const current = identities.get(sessionID);
+        if (current !== initialIdentity) {
+          if (!current && marketplacePolicyRequired()) rejectUnknownIdentity();
+          return ensurePromptPermission(sessionID);
+        }
+        if (!admitted) rejectUnknownIdentity();
       }
       return;
     }
@@ -1698,16 +1747,18 @@ export function createPermissionRulesBridge(
     if (current) rejectDirectRootMarketplaceAgentIfNeeded(current);
     if (current?.state === 'managed') {
       await enforceKnownIdentity(sessionID, current);
-    } else if (
-      current?.state === 'unknown' ||
-      current === null ||
-      !current ||
-      (marketplacePolicyRequired() &&
-        current.parentID !== undefined &&
-        !isClassifiedAgent(current.agent))
-    ) {
+    } else if (current?.state === 'unknown' || current === null || !current) {
       if (marketplacePolicyRequired()) rejectUnknownIdentity();
       warnUnknownIdentity();
+    } else if (marketplacePolicyRequired() && current.parentID !== undefined) {
+      const admitted = await isAdmittedChildAgent(current.agent);
+      if (disposed) throw new Error('permission rules bridge is disposed');
+      const latest = identities.get(sessionID);
+      if (latest !== current) {
+        if (!latest && marketplacePolicyRequired()) rejectUnknownIdentity();
+        return ensurePromptPermission(sessionID);
+      }
+      if (!admitted) rejectUnknownIdentity();
     }
   }
 
@@ -4097,6 +4148,7 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                     ]),
                   );
                 },
+                hostAgentNames: () => listHostAgentIds(ctx.agent),
                 knownAgentNames: () => {
                   const names = new Set<string>(pluginAgents);
                   for (const [name, config] of Object.entries(
