@@ -3399,10 +3399,16 @@ describe('observer dispatch instruction injection', () => {
     expect(v1Permission).not.toHaveProperty('task');
   });
 
-  test('advisory prompts gain the dispatch line only on v2 with observer enabled', () => {
-    const enabled = createAgents(runtimeFor({ disabled_agents: [] }), {
-      hostFlavor: 'v2',
-    });
+  test('advisory prompts gain the legacy line only when the guard is disabled', () => {
+    const enabled = createAgents(
+      runtimeFor({
+        disabled_agents: [],
+        disabled_hooks: ['observer-dispatch-guard'],
+      }),
+      {
+        hostFlavor: 'v2',
+      },
+    );
     const oracleOn = enabled.find((a) => a.name === 'oracle');
     expect(oracleOn?.config.prompt).toContain(
       'dispatch @observer with the file path',
@@ -3427,6 +3433,19 @@ describe('observer dispatch instruction injection', () => {
     // Non-advisory roles never gain the line.
     const fixer = disabledSet.find((a) => a.name === 'fixer');
     expect(fixer?.config.prompt).not.toContain('dispatch @observer');
+  });
+
+  test('the runtime guard removes standing observer routing without changing permissions', () => {
+    const enabled = createAgents(runtimeFor({ disabled_agents: [] }), {
+      hostFlavor: 'v2',
+    });
+    for (const name of ['oracle', 'explorer', 'designer']) {
+      const agent = enabled.find((entry) => entry.name === name);
+      expect(agent?.config.prompt).not.toContain('dispatch @observer');
+      expect(agent?.config.permission).toMatchObject({
+        task: { '*': 'deny', observer: 'allow' },
+      });
+    }
   });
 });
 

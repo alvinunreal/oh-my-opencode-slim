@@ -23,6 +23,7 @@ import {
 import {
   AGENT_ALIASES,
   BUILTIN_OPENCODE_SUBAGENTS_TO_DISABLE,
+  DEFAULT_DISABLED_AGENTS,
 } from '../config/constants';
 import { resolveFeatureGates } from '../config/feature-gates';
 import { InterviewConfigSchema } from '../config/schema';
@@ -74,6 +75,7 @@ import {
 import { initLogger, log } from '../utils/logger';
 import {
   type ModelImageCapabilityCache,
+  modelAcceptsImageInput,
   modelExistsInCatalog,
 } from '../utils/model-image-capability';
 import { OperationTimeoutError, withTimeout } from '../utils/session';
@@ -3847,14 +3849,45 @@ export function createV2Setup(): (ctx: V2Context) => Promise<V2Cleanup> {
                 };
               })()
             : undefined;
+          // Capability policy only: the native executor still owns child
+          // validation, permissions, creation, continuation and delivery.
+          // Resolve on demand, never through a parallel step/session ledger.
+          const guardObserver =
+            sessionContextRead &&
+            ctx.model?.list &&
+            !(pluginConfig.disabled_hooks ?? []).includes(
+              'observer-dispatch-guard',
+            ) &&
+            !(pluginConfig.disabled_agents ?? DEFAULT_DISABLED_AGENTS).includes(
+              'observer',
+            )
+              ? (
+                  await import('./observer-dispatch-guard')
+                ).createObserverDispatchGuard({
+                  observerNames: () => [
+                    'observer',
+                    registryBridge?.requireRegistry().identities.observer ??
+                      'observer',
+                  ],
+                  context: sessionContextRead
+                    ? ({ sessionID }) => sessionContextRead(sessionID)
+                    : undefined,
+                  acceptsImages: (ref) =>
+                    modelAcceptsImageInput(ref, {
+                      ...(ctx.model?.list ? { modelDomain: ctx.model } : {}),
+                      cache: modelCatalogCache,
+                    }),
+                })
+              : undefined;
           const bridges = createToolExecuteBridges(
             before,
             after,
             resolvePresetRouting,
           );
-          if (before) {
+          if (before || guardObserver) {
             const reg = await ctx.tool.hook('execute.before', async (event) => {
               try {
+                await guardObserver?.(event as never);
                 await bridges.beforeBridge(event as never);
               } catch (err) {
                 captures?.delete(captureKey(event.sessionID, event.id));

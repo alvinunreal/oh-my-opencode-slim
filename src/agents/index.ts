@@ -1164,7 +1164,9 @@ function createAgentViews(
       const defaultPrompt = appendTaskRejectionInstruction(
         appendObserverDispatchInstruction(
           agent.config.prompt ?? '',
-          nestedDispatchEnabled && OBSERVER_DISPATCH_ROLES.has(name),
+          nestedDispatchEnabled &&
+            runtime.disabledHooks.has('observer-dispatch-guard') &&
+            OBSERVER_DISPATCH_ROLES.has(name),
         ),
       );
 
@@ -1468,7 +1470,9 @@ function createAgentViews(
       agent.config.prompt = appendTaskRejectionInstruction(
         appendObserverDispatchInstruction(
           agent.config.prompt ?? '',
-          nestedDispatchEnabled && agent.name.startsWith('councillor-'),
+          nestedDispatchEnabled &&
+            runtime.disabledHooks.has('observer-dispatch-guard') &&
+            agent.name.startsWith('councillor-'),
         ),
       );
     }
