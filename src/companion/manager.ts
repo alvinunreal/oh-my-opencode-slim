@@ -1115,6 +1115,7 @@ export class CompanionManager {
     if (agents.length > 0) return agents.slice(0, 9);
     if (this.status === 'waiting-input') return ['input'];
     if (this.status === 'busy') return ['orchestrator'];
+    if (this.config?.hideWhenIdle) return [];
     return ['intro'];
   }
 
