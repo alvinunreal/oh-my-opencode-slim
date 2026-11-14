@@ -46,29 +46,42 @@ const mutantsByFile = new Map(
 for (const row of ledger.matchAll(
   /^(?<line>\| `(?<range>[^`|]+):(?<sl>\d+):(?<sc>\d+)-(?<el>\d+):(?<ec>\d+)` \|.*$)/gm,
 )) {
-  const { line, range, sl, sc, el, ec } = row.groups;
-  const mutants = (mutantsByFile.get(range) ?? []).filter((mutant) => {
-    const s = mutant.location.start;
-    const e = mutant.location.end;
-    return (
-      s.line === Number(sl) &&
-      s.column === Number(sc) &&
-      e.line === Number(el) &&
-      e.column === Number(ec)
-    );
-  });
+  const { line, sl, sc, el, ec } = row.groups;
+  const rangeCell = `${row.groups.range}:${sl}:${sc}-${el}:${ec}`;
+  // Ledger rows name files bare (`dedup.ts`); report keys are repo paths.
+  const mutants = (mutantsByFile.get(row.groups.range) ?? []).filter(
+    (mutant) => {
+      const s = mutant.location.start;
+      const e = mutant.location.end;
+      return (
+        s.line === Number(sl) &&
+        s.column === Number(sc) &&
+        e.line === Number(el) &&
+        e.column === Number(ec)
+      );
+    },
+  );
   if (mutants.length === 0) {
-    problems.push(`ledger row ${range} holds no mutant`);
+    problems.push(`ledger row ${rangeCell} holds no mutant`);
     continue;
   }
   const killers = new Set(
     mutants.flatMap((mutant) => [...killerNames(mutant)]),
   );
-  if (/\| (Killed|Equivalent)/.test(line)) {
+  if (/\| Killed \|/.test(line)) {
     const named = line.match(/`contract: ([^`]+)`/);
     if (named && ![...killers].some((k) => k.includes(named[1]))) {
       problems.push(
-        `ledger row ${range} says Killed by \`${named[1]}\` but this run's killers are: ${[...killers].join(' | ') || 'none'}`,
+        `ledger row ${rangeCell} says Killed by \`${named[1]}\` but this run's killers are: ${[...killers].join(' | ') || 'none'}`,
+      );
+    }
+  } else if (/Equivalent \(not killed\)/.test(line)) {
+    // The equivalence claim survives only while the mutant itself does: a
+    // kill or a coverage change silently invalidates the documented proof.
+    if (!mutants.some((mutant) => mutant.status === 'Survived')) {
+      const statuses = mutants.map((mutant) => mutant.status).join(', ');
+      problems.push(
+        `ledger row ${rangeCell} claims Equivalent (not killed) but this run reports: ${statuses}`,
       );
     }
   }
