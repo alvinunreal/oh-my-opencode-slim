@@ -745,9 +745,118 @@ describe('v2 tui preset plugin', () => {
       expect(typeof tui2Plugin.setup).toBe('function');
     });
 
+    test('does not write an attachment when Companion is disabled', async () => {
+      writeUserConfig({
+        sidebar: false,
+        companion: { enabled: false },
+        autoUpdate: false,
+      });
+      const dataHome = path.join(configHome, 'data');
+      process.env.XDG_DATA_HOME = dataHome;
+      let cleanup: (() => void | Promise<void>) | undefined;
+      try {
+        cleanup = await tui2Plugin.setup(
+          makeSetupCtx().ctx as unknown as V2TuiPluginContext,
+        );
+        expect(
+          fs.existsSync(
+            path.join(
+              dataHome,
+              'opencode',
+              'storage',
+              'oh-my-opencode-slim',
+              'tui-attach',
+            ),
+          ),
+        ).toBe(false);
+      } finally {
+        await cleanup?.();
+      }
+    });
+
+    test('writes and removes the current TUI attachment when enabled', async () => {
+      writeUserConfig({
+        sidebar: false,
+        companion: { enabled: true },
+        autoUpdate: false,
+      });
+      const dataHome = path.join(configHome, 'enabled-data');
+      process.env.XDG_DATA_HOME = dataHome;
+      const attachment = path.join(
+        dataHome,
+        'opencode',
+        'storage',
+        'oh-my-opencode-slim',
+        'tui-attach',
+        `${process.pid}.json`,
+      );
+      let cleanup: (() => void | Promise<void>) | undefined;
+      try {
+        cleanup = await tui2Plugin.setup(
+          makeSetupCtx().ctx as unknown as V2TuiPluginContext,
+        );
+        expect(JSON.parse(fs.readFileSync(attachment, 'utf8'))).toMatchObject({
+          pid: process.pid,
+          cwd: projectDir,
+        });
+      } finally {
+        await cleanup?.();
+      }
+      expect(fs.existsSync(attachment)).toBe(false);
+    });
+
+    test('a throwing slot disposer still removes the Companion attachment', async () => {
+      writeUserConfig({
+        sidebar: false,
+        companion: { enabled: true },
+        autoUpdate: false,
+      });
+      const dataHome = path.join(configHome, 'throwing-disposer-data');
+      process.env.XDG_DATA_HOME = dataHome;
+      const attachment = path.join(
+        dataHome,
+        'opencode',
+        'storage',
+        'oh-my-opencode-slim',
+        'tui-attach',
+        `${process.pid}.json`,
+      );
+      const setup = makeSetupCtx();
+      (
+        setup.ctx.ui as {
+          slot: (...args: unknown[]) => () => void;
+        }
+      ).slot = () => () => {
+        throw new Error('test slot cleanup failure');
+      };
+      const cleanup = await tui2Plugin.setup(
+        setup.ctx as unknown as V2TuiPluginContext,
+      );
+      if (!cleanup) throw new Error('expected TUI cleanup');
+      try {
+        expect(fs.existsSync(attachment)).toBe(true);
+        await expect(cleanup()).rejects.toThrow('test slot cleanup failure');
+        expect(fs.existsSync(attachment)).toBe(false);
+      } finally {
+        await cleanup().catch(() => {});
+      }
+    });
+
     test('viewer TUI does not check for updates', async () => {
-      writeUserConfig({ sidebar: false });
+      writeUserConfig({
+        sidebar: false,
+        companion: { enabled: true },
+      });
       process.env.OH_MY_OPENCODE_SLIM_PANE_VIEWER = '1';
+      const attachmentDirectory = path.join(
+        configHome,
+        'viewer-data',
+        'opencode',
+        'storage',
+        'oh-my-opencode-slim',
+        'tui-attach',
+      );
+      process.env.XDG_DATA_HOME = path.join(configHome, 'viewer-data');
       const originalFetch = globalThis.fetch;
       let requests = 0;
       globalThis.fetch = (async () => {
@@ -763,6 +872,7 @@ describe('v2 tui preset plugin', () => {
         jest.advanceTimersByTime(1_500);
         for (let i = 0; i < 30; i += 1) await Promise.resolve();
         expect(requests).toBe(0);
+        expect(fs.existsSync(attachmentDirectory)).toBe(false);
       } finally {
         cleanup?.();
         jest.useRealTimers();

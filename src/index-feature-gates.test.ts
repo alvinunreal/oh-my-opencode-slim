@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { withTuiAttachment } from './companion/attachment-test-helper';
 import {
   CompanionManager,
   companionSessionIdForDirectory,
@@ -572,16 +573,18 @@ describe('plugin feature gates through exported hooks', () => {
         binaryPath: `${projectDir}/missing-companion-bin`,
       },
     });
-    const onLoadSpy = spyOn(CompanionManager.prototype, 'onLoad');
-    let hooks: PluginHooks | undefined;
-    try {
-      hooks = await createHooks('v2');
-      expect(onLoadSpy).toHaveBeenCalledTimes(1);
-      expect(existsSync(stateFilePath())).toBe(true);
-    } finally {
-      await hooks?.dispose?.();
-      onLoadSpy.mockRestore();
-    }
+    await withTuiAttachment(projectDir, async () => {
+      const onLoadSpy = spyOn(CompanionManager.prototype, 'onLoad');
+      let hooks: PluginHooks | undefined;
+      try {
+        hooks = await createHooks('v2');
+        expect(onLoadSpy).toHaveBeenCalledTimes(1);
+        expect(existsSync(stateFilePath())).toBe(true);
+      } finally {
+        await hooks?.dispose?.();
+        onLoadSpy.mockRestore();
+      }
+    });
   });
 
   for (const flavor of ['v2'] as const) {

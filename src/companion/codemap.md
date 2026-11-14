@@ -14,9 +14,12 @@ The companion system consists of two main components following a **Producer-Cons
   - Publishes live session model metadata for active agent tiles; variants are retained only from observed live chat selections, never inferred from static defaults
   - Maintains state in a JSON file at `~/.local/share/opencode/storage/oh-my-opencode-slim/companion-state.json`
   - Uses a stable per-project manager identity within each OpenCode process so multiple project scopes coexist instead of overwriting one `proc_<pid>` row
-  - Publishes owner state before allowing the native binary to spawn; a busy state lock is retried asynchronously
-  - Prunes state rows whose owning OpenCode process is no longer alive
-  - Spawns the companion binary process when enabled
+  - Reads one machine-wide attachment record per companion-enabled TUI process; stale records use PID plus start-time identity on Linux and PID-only liveness elsewhere
+  - Keeps each project row only while that project's TUI has a live attachment
+  - Prunes rows whose owning OpenCode process is dead on state writes
+  - Drops its project row after eight consecutive unattached poll ticks
+  - Reconciles the singleton binary on the preset poll tick; one spawn attempt is made per attachment-PID set and retried only after all attachments detach or a new TUI PID appears
+  - The native binary closes itself when its session rows become empty
   - Publishes the current/available preset catalog for the active project
   - Maintains a bounded (64) history of previously opened project directories and their last observed preset catalog; never scans disk for repositories
   - Consumes typed preset requests from the native Companion and applies them through the shared preset-switch domain
@@ -77,16 +80,25 @@ used by the root without eagerly loading Companion machinery.
 ### Session Lifecycle Integration
 
 ```
-OpenCode Session → CompanionManager.onSessionStatus() → Updates state → Spawns companion binary
+TUI plugin → per-process attachment → CompanionManager poll
+  → project session row → singleton Companion spawn/reconcile
 ```
 
-1. **Plugin loads** (`CompanionManager.onLoad()`)
+1. **Companion manager loads** (`CompanionManager.onLoad()`)
    - Reads user configuration (`enabled`, `position`, `size`, `gifPack`, `loopStyle`, `speed`, `debug`)
-   - Publishes a distinct project-scoped session row first, then spawns/joins the singleton companion only after publication succeeds
+   - Starts the poller without spawning the native binary
+   - Publishes a project-scoped session row only when that directory has a live TUI attachment
    - Retries transient state-lock contention without blocking the plugin thread
-   - Cleans up stale sessions from dead OpenCode processes on state writes
+   - Each poll reconciles machine-wide attachments, removes unattached project rows, and spawns the singleton only when needed
 
-2. **Agent activity events** (`CompanionManager.onSessionStatus()`)
+2. **TUI attachment**
+   - Only the loaded OMOS TUI plugin with its `tui` gate enabled attaches; headless serve/run and ACP/editor clients do not
+   - A companion-enabled TUI writes `<storage>/oh-my-opencode-slim/tui-attach/<pid>.json` on load
+   - V2 writes the record before awaited setup work to minimize a reload gap
+   - Dispose best-effort deletes only that TUI process's record
+   - The native window remains open while any attached TUI is live; its empty-session handling closes it after the last project row is removed
+
+3. **Agent activity events** (`CompanionManager.onSessionStatus()`)
    - Receives `session.status` events from OpenCode
    - Maps session IDs to agent names via `sessionAgentMap`
    - Updates internal state:
@@ -100,12 +112,12 @@ OpenCode Session → CompanionManager.onSessionStatus() → Updates state → Sp
    - Keep `waiting-input` until all pending requests are resolved
    - Drop a session's pending requests when that run terminates or is deleted
 
-3. **Session termination** (`CompanionManager.onSessionDeleted()`)
+4. **Session termination** (`CompanionManager.onSessionDeleted()`)
    - Removes session from active tracking
    - Updates companion display
    - Logical manager disposal retries a contended state removal before returning; process-exit cleanup remains synchronous and best effort
 
-4. **State persistence** (`CompanionManager.flush()`)
+5. **State persistence** (`CompanionManager.flush()`)
    - Writes to `companion-state.json` with atomic rename
    - Includes session configuration for display preferences
 

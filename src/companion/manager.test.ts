@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, jest } from 'bun:test';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+  spyOn,
+} from 'bun:test';
+import { type ChildProcess, spawn } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -10,6 +19,7 @@ import {
 } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as loggerModule from '../utils/logger';
 import { acquirePidFileLock } from '../utils/pid-file-lock';
 import { mapV2EventToV1 } from '../v2/event-adapter';
 import {
@@ -27,6 +37,70 @@ import { normalizeCompanionSessionStatus } from './status';
 const TEST_DIR = path.join(os.tmpdir(), `companion-test-${process.pid}`);
 const XDG_DIR = path.join(TEST_DIR, 'xdg');
 const managers: CompanionManager[] = [];
+const attachmentPidsByDirectory = new Map<string, number>();
+const attachmentChildren: ChildProcess[] = [];
+const usedAttachmentPids = new Set<number>();
+
+function nextAttachmentPid(): number {
+  if (!usedAttachmentPids.has(process.pid)) {
+    usedAttachmentPids.add(process.pid);
+    return process.pid;
+  }
+  const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], {
+    stdio: ['pipe', 'ignore', 'ignore'],
+  });
+  if (child.pid === undefined) {
+    child.kill();
+    throw new Error('test attachment process did not start');
+  }
+  attachmentChildren.push(child);
+  if (usedAttachmentPids.has(child.pid)) {
+    child.kill();
+    throw new Error('test attachment PIDs must be distinct');
+  }
+  usedAttachmentPids.add(child.pid);
+  return child.pid;
+}
+
+function testProcessStartTime(pid: number): string | null {
+  if (process.platform !== 'linux') return null;
+  const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+  const fields = stat
+    .slice(stat.lastIndexOf(')') + 2)
+    .trim()
+    .split(/\s+/);
+  if (!fields[19])
+    throw new Error(`missing start time for live test PID ${pid}`);
+  return `linux:${fields[19]}`;
+}
+
+function attachmentFile(pid: number): string {
+  return path.join(path.dirname(stateFilePath()), 'tui-attach', `${pid}.json`);
+}
+
+function writeAttachment(pid: number, cwd: string): void {
+  const file = attachmentFile(pid);
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(
+    file,
+    JSON.stringify({
+      pid,
+      startTime: testProcessStartTime(pid),
+      cwd: path.resolve(cwd),
+    }),
+  );
+}
+
+function attachAnotherTui(cwd: string): number {
+  const pid = nextAttachmentPid();
+  writeAttachment(pid, cwd);
+  return pid;
+}
+
+function detachDirectory(cwd: string): void {
+  const pid = attachmentPidsByDirectory.get(path.resolve(cwd));
+  if (pid !== undefined) rmSync(attachmentFile(pid), { force: true });
+}
 
 function readState() {
   return JSON.parse(readFileSync(stateFilePath(), 'utf8'));
@@ -40,6 +114,8 @@ const previousPresetEnv = process.env.OH_MY_OPENCODE_SLIM_PRESET;
 beforeEach(() => {
   mkdirSync(TEST_DIR, { recursive: true });
   process.env.XDG_DATA_HOME = XDG_DIR;
+  attachmentPidsByDirectory.clear();
+  usedAttachmentPids.clear();
   process.env.XDG_CONFIG_HOME = path.join(TEST_DIR, 'config');
   delete process.env.OPENCODE_CONFIG_DIR;
   delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
@@ -49,9 +125,14 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  rmSync(path.join(path.dirname(stateFilePath()), 'tui-attach'), {
+    recursive: true,
+    force: true,
+  });
   for (const manager of managers.splice(0)) {
     manager.onExit();
   }
+  for (const child of attachmentChildren.splice(0)) child.kill();
   rmSync(TEST_DIR, { recursive: true, force: true });
   if (previousXdg === undefined) delete process.env.XDG_DATA_HOME;
   else process.env.XDG_DATA_HOME = previousXdg;
@@ -76,37 +157,38 @@ function make(
 ) {
   const manager = new CompanionManager(id, cwd, config);
   managers.push(manager);
+  if (config?.enabled === true) {
+    const key = path.resolve(cwd);
+    let pid = attachmentPidsByDirectory.get(key);
+    if (pid === undefined) {
+      pid = nextAttachmentPid();
+      attachmentPidsByDirectory.set(key, pid);
+    }
+    writeAttachment(pid, cwd);
+  }
   return manager;
 }
 
-function attachFakeChild(manager: CompanionManager): { killed: () => boolean } {
-  let killed = false;
+function reconcile(manager: CompanionManager): void {
   (
-    manager as unknown as {
-      companionProcess: { kill: () => void } | null;
-    }
-  ).companionProcess = {
-    kill: () => {
-      killed = true;
-    },
-  };
-  return { killed: () => killed };
-}
-
-function attachFailingChild(manager: CompanionManager): void {
-  (
-    manager as unknown as {
-      companionProcess: { kill: () => void } | null;
-    }
-  ).companionProcess = {
-    kill: () => {
-      throw new Error('mock kill failure');
-    },
-  };
+    manager as unknown as { reconcileCompanion: () => void }
+  ).reconcileCompanion();
 }
 
 function companionPidFile(): string {
   return path.join(path.dirname(stateFilePath()), 'companion.pid');
+}
+
+function companionSpawnFile(): string {
+  return path.join(path.dirname(stateFilePath()), 'companion-spawn.json');
+}
+
+function readSpawnAttachments(): Array<{ pid: number; startTime?: string }> {
+  return (
+    JSON.parse(readFileSync(companionSpawnFile(), 'utf8')) as {
+      attachments: Array<{ pid: number; startTime?: string }>;
+    }
+  ).attachments;
 }
 
 function companionStateLock(): string {
@@ -252,31 +334,527 @@ describe('CompanionManager', () => {
     expect(existsSync(stateFilePath())).toBe(false);
   });
 
-  it('does not spawn native companion until owner state publication succeeds', () => {
-    const lock = companionStateLock();
-    mkdirSync(lock, { recursive: true });
-
-    const m = make('blocked-owner');
-    const internal = m as unknown as {
-      spawnIfAvailable: () => void;
-      publishAndSpawn: () => void;
-    };
+  it('does not spawn headlessly; an attachment is reconciled on the poll path', () => {
+    const m = new CompanionManager('headless', '/headless', { enabled: true });
+    managers.push(m);
+    const internal = m as unknown as { spawnIfAvailable: () => boolean };
     let spawnAttempts = 0;
     internal.spawnIfAvailable = () => {
       spawnAttempts += 1;
+      return true;
     };
 
     m.onLoad();
     expect(spawnAttempts).toBe(0);
-    expect(existsSync(stateFilePath())).toBe(false);
+    expect(readState().sessions).toEqual([]);
 
-    rmSync(lock, { recursive: true, force: true });
-    internal.publishAndSpawn();
-
+    writeAttachment(process.pid, '/headless');
+    reconcile(m);
+    reconcile(m);
     expect(spawnAttempts).toBe(1);
     expect(readState().sessions).toContainEqual(
-      expect.objectContaining({ session_id: 'blocked-owner' }),
+      expect.objectContaining({ session_id: 'headless' }),
     );
+  });
+
+  it('only spawns from the attached project manager', () => {
+    const headless = new CompanionManager(
+      'headless-project',
+      '/headless-project',
+      {
+        enabled: true,
+        binaryPath: path.join(TEST_DIR, 'missing-companion'),
+      },
+    );
+    managers.push(headless);
+    headless.onLoad();
+
+    const attached = make('attached-project', '/attached-project', {
+      enabled: true,
+      binaryPath: path.join(TEST_DIR, 'working-companion-stub'),
+    });
+    attached.onLoad();
+    const internal = attached as unknown as {
+      spawnIfAvailable: () => boolean;
+    };
+    let spawnAttempts = 0;
+    internal.spawnIfAvailable = () => {
+      spawnAttempts += 1;
+      return true;
+    };
+
+    reconcile(headless);
+    expect(existsSync(companionSpawnFile())).toBe(false);
+    reconcile(attached);
+    expect(spawnAttempts).toBe(1);
+  });
+
+  it('does not record an unpublished attachment, so its later row can spawn', () => {
+    const logSpy = spyOn(loggerModule, 'log');
+    try {
+      const a = make('session-a', '/project-a', {
+        enabled: true,
+        binaryPath: path.join(TEST_DIR, 'missing-companion'),
+      });
+      a.onLoad();
+      const aPid = attachmentPidsByDirectory.get(path.resolve('/project-a'));
+      if (aPid === undefined) throw new Error('missing test attachment');
+      // Companion alive: the record update path records A while running.
+      writeFileSync(companionPidFile(), String(process.pid));
+      reconcile(a);
+      expect(readSpawnAttachments().map((entry) => entry.pid)).toEqual([aPid]);
+      // Companion exits and takes the record with it.
+      rmSync(companionPidFile(), { force: true });
+      rmSync(companionSpawnFile(), { force: true });
+
+      // TUI C attaches to another project; its state row is not published yet.
+      const c = make('session-c', '/project-c', {
+        enabled: true,
+        binaryPath: path.join(TEST_DIR, 'missing-companion'),
+      });
+      reconcile(a); // spawn path records A; C must stay out of the record
+      const cPid = attachmentPidsByDirectory.get(path.resolve('/project-c'));
+      if (cPid === undefined) throw new Error('missing test attachment');
+      expect(readSpawnAttachments().map((entry) => entry.pid)).toEqual([aPid]);
+      expect(
+        logSpy.mock.calls.filter(([message]) =>
+          String(message).includes('companion binary not found'),
+        ),
+      ).toHaveLength(1);
+
+      // C publishes its row and ticks: one spawn.
+      c.onLoad();
+      reconcile(c);
+      expect(
+        logSpy.mock.calls.filter(([message]) =>
+          String(message).includes('companion binary not found'),
+        ),
+      ).toHaveLength(2);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('ignores rows from dead generations when recording spawn attempts', () => {
+    const logSpy = spyOn(loggerModule, 'log');
+    try {
+      const a = make('session-a', '/project-a', {
+        enabled: true,
+        binaryPath: path.join(TEST_DIR, 'missing-companion'),
+      });
+      a.onLoad();
+      const aPid = attachmentPidsByDirectory.get(path.resolve('/project-a'));
+      if (aPid === undefined) throw new Error('missing test attachment');
+      // A row for /project-c from a killed generation; only a state write
+      // prunes it, so steady-state ticks must not treat it as published.
+      const state = readState();
+      state.sessions.push({
+        session_id: 'stale-generation',
+        cwd: path.resolve('/project-c'),
+        pid: 999999999,
+        active_agents: [],
+        active_agent_details: [],
+        status: 'idle',
+      });
+      writeFileSync(stateFilePath(), JSON.stringify(state));
+
+      const c = make('session-c', '/project-c', {
+        enabled: true,
+        binaryPath: path.join(TEST_DIR, 'missing-companion'),
+      });
+      writeFileSync(companionPidFile(), String(process.pid));
+      reconcile(a);
+      const cPid = attachmentPidsByDirectory.get(path.resolve('/project-c'));
+      if (cPid === undefined) throw new Error('missing test attachment');
+      expect(readSpawnAttachments().map((entry) => entry.pid)).toEqual([aPid]);
+
+      // C publishes its own live row and ticks: one spawn.
+      rmSync(companionPidFile(), { force: true });
+      c.onLoad();
+      reconcile(c);
+      expect(
+        logSpy.mock.calls.filter(([message]) =>
+          String(message).includes('companion binary not found'),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('does not let a headless manager dispose erase the user-quit guard', () => {
+    const logSpy = spyOn(loggerModule, 'log');
+    try {
+      const a = make('session-a', '/project-a', {
+        enabled: true,
+        binaryPath: path.join(TEST_DIR, 'missing-companion'),
+      });
+      a.onLoad();
+      writeFileSync(companionPidFile(), String(process.pid));
+      reconcile(a);
+      expect(readSpawnAttachments()).toHaveLength(1);
+
+      // User quits the Companion: A stays attached, pid file goes stale.
+      writeFileSync(companionPidFile(), '999999999');
+
+      // A headless project (no row) disposes; it must not erase the record.
+      const headless = new CompanionManager('headless-b', '/project-b', {
+        enabled: true,
+        binaryPath: path.join(TEST_DIR, 'missing-companion'),
+      });
+      managers.push(headless);
+      headless.onExit();
+      expect(readSpawnAttachments()).toHaveLength(1);
+
+      // A's next poll: recorded → no respawn of the window the user closed.
+      reconcile(a);
+      expect(
+        logSpy.mock.calls.filter(([message]) =>
+          String(message).includes('companion binary not found'),
+        ),
+      ).toHaveLength(0);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('removes dead and mismatched attachment records', () => {
+    const m = new CompanionManager('crash-leftover', '/crashed', {
+      enabled: true,
+    });
+    managers.push(m);
+    const deadFile = attachmentFile(2_000_000_000);
+    mkdirSync(path.dirname(deadFile), { recursive: true });
+    writeFileSync(
+      deadFile,
+      JSON.stringify({
+        pid: 2_000_000_000,
+        startTime: 'dead',
+        cwd: '/crashed',
+      }),
+    );
+    if (process.platform === 'linux') {
+      writeAttachment(process.pid, '/reused');
+      writeFileSync(
+        attachmentFile(process.pid),
+        JSON.stringify({
+          pid: process.pid,
+          startTime: 'mismatched-start-time',
+          cwd: '/reused',
+        }),
+      );
+    }
+
+    m.onLoad();
+    reconcile(m);
+
+    expect(existsSync(deadFile)).toBe(false);
+    if (process.platform === 'linux') {
+      expect(existsSync(attachmentFile(process.pid))).toBe(false);
+    }
+    expect(existsSync(companionPidFile())).toBe(false);
+    expect(readState().sessions).toEqual([]);
+  });
+
+  it('drops only the detached directory row while another directory keeps the window', () => {
+    const first = make('first-directory', '/projects/first');
+    const second = make('second-directory', '/projects/second');
+    first.onLoad();
+    second.onLoad();
+    writeFileSync(companionPidFile(), String(process.pid));
+
+    detachDirectory('/projects/first');
+    for (let tick = 0; tick < 8; tick++) {
+      reconcile(first);
+      reconcile(second);
+    }
+    expect(
+      readState().sessions.map(
+        (session: { session_id: string }) => session.session_id,
+      ),
+    ).toEqual(['second-directory']);
+    expect(readFileSync(companionPidFile(), 'utf8')).toBe(String(process.pid));
+
+    detachDirectory('/projects/second');
+    for (let tick = 0; tick < 8; tick++) {
+      reconcile(first);
+      reconcile(second);
+    }
+    expect(readState().sessions).toEqual([]);
+    expect(readFileSync(companionPidFile(), 'utf8')).toBe(String(process.pid));
+  });
+
+  it('never signals a PID when the last attachment removes all rows', () => {
+    const m = make('last-tui', '/last');
+    m.onLoad();
+    writeFileSync(companionPidFile(), String(process.pid));
+    const originalKill = process.kill;
+    const signals: Array<NodeJS.Signals | number | undefined> = [];
+    process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+      signals.push(signal);
+      return originalKill(pid, signal);
+    }) as typeof process.kill;
+    try {
+      detachDirectory('/last');
+      for (let tick = 0; tick < 8; tick++) reconcile(m);
+      expect(readState().sessions).toEqual([]);
+      expect(signals.every((signal) => signal === 0)).toBe(true);
+    } finally {
+      process.kill = originalKill;
+    }
+  });
+
+  it('flush does not recreate a row after the directory detaches', () => {
+    const m = make('flush-detached', '/flush');
+    m.onLoad();
+    detachDirectory('/flush');
+    for (let tick = 0; tick < 8; tick++) reconcile(m);
+    (m as unknown as { flush: () => boolean }).flush();
+    expect(readState().sessions).toEqual([]);
+  });
+
+  it('keeps the row through a short TUI reload gap', () => {
+    const m = make('reload-gap', '/reload-gap');
+    m.onLoad();
+    detachDirectory('/reload-gap');
+    for (let tick = 0; tick < 7; tick++) reconcile(m);
+    expect(readState().sessions).toHaveLength(1);
+
+    const pid = attachmentPidsByDirectory.get(path.resolve('/reload-gap'));
+    if (pid === undefined) throw new Error('test attachment PID is missing');
+    writeAttachment(pid, '/reload-gap');
+    reconcile(m);
+    expect(readState().sessions).toHaveLength(1);
+
+    detachDirectory('/reload-gap');
+    for (let tick = 0; tick < 7; tick++) reconcile(m);
+    expect(readState().sessions).toHaveLength(1);
+    reconcile(m);
+    expect(readState().sessions).toEqual([]);
+  });
+
+  it('does not respawn after Quit through a second project manager', () => {
+    const config = {
+      enabled: true,
+      binaryPath: path.join(TEST_DIR, 'missing-companion'),
+    };
+    const first = make('spawn-first', '/spawn-first', config);
+    const second = make('spawn-second', '/spawn-second', config);
+    first.onLoad();
+    second.onLoad();
+    const logSpy = spyOn(loggerModule, 'log');
+    try {
+      reconcile(first);
+      const history = readSpawnAttachments();
+      writeFileSync(companionPidFile(), '999999999');
+      reconcile(second);
+      expect(readSpawnAttachments()).toEqual(history);
+      expect(
+        logSpy.mock.calls.filter(([message]) =>
+          String(message).includes('companion binary not found'),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('retries spawning after plugin reload with unchanged attachments', () => {
+    const config = {
+      enabled: true,
+      binaryPath: path.join(TEST_DIR, 'missing-companion'),
+    };
+    const original = make('spawn-reload', '/spawn-reload', config);
+    original.onLoad();
+    const logSpy = spyOn(loggerModule, 'log');
+    try {
+      reconcile(original);
+      expect(existsSync(companionSpawnFile())).toBe(true);
+      writeFileSync(companionPidFile(), String(process.pid));
+      original.onExit();
+      expect(existsSync(companionSpawnFile())).toBe(false);
+      expect(readState().sessions).toEqual([]);
+      writeFileSync(companionPidFile(), '999999999');
+
+      const replacement = make('spawn-reload', '/spawn-reload', config);
+      replacement.onLoad();
+      reconcile(replacement);
+      expect(
+        logSpy.mock.calls.filter(([message]) =>
+          String(message).includes('companion binary not found'),
+        ),
+      ).toHaveLength(2);
+      expect(existsSync(companionSpawnFile())).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('remembers TUIs that attach while the Companion is running', () => {
+    const m = make('remember-live-tuis', '/remember-live-tuis', {
+      enabled: true,
+      binaryPath: path.join(TEST_DIR, 'missing-companion'),
+    });
+    m.onLoad();
+    const attachmentA = attachmentPidsByDirectory.get(
+      path.resolve('/remember-live-tuis'),
+    );
+    if (attachmentA === undefined) {
+      throw new Error('test attachment PID is missing');
+    }
+    const logSpy = spyOn(loggerModule, 'log');
+    try {
+      reconcile(m);
+      expect(readSpawnAttachments().map(({ pid }) => pid)).toEqual([
+        attachmentA,
+      ]);
+
+      writeFileSync(companionPidFile(), String(process.pid));
+      const attachmentB = attachAnotherTui('/remember-live-tuis');
+      reconcile(m);
+      const remembered = readSpawnAttachments().map(({ pid }) => pid);
+      expect(remembered).toContain(attachmentA);
+      expect(remembered).toContain(attachmentB);
+
+      writeFileSync(companionPidFile(), '999999999');
+      reconcile(m);
+      expect(
+        logSpy.mock.calls.filter(([message]) =>
+          String(message).includes('companion binary not found'),
+        ),
+      ).toHaveLength(1);
+
+      attachAnotherTui('/remember-live-tuis');
+      reconcile(m);
+      expect(
+        logSpy.mock.calls.filter(([message]) =>
+          String(message).includes('companion binary not found'),
+        ),
+      ).toHaveLength(2);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('allows one new spawn attempt when a new TUI PID attaches', () => {
+    const m = make('new-tui-spawn', '/new-tui-spawn', {
+      enabled: true,
+      binaryPath: path.join(TEST_DIR, 'missing-companion'),
+    });
+    m.onLoad();
+    const logSpy = spyOn(loggerModule, 'log');
+    try {
+      reconcile(m);
+      const previous = readSpawnAttachments();
+      const newPid = attachAnotherTui('/new-tui-spawn');
+      reconcile(m);
+      const updated = readSpawnAttachments();
+      expect(updated.map((attachment) => attachment.pid)).toContain(newPid);
+      expect(updated).not.toEqual(previous);
+      reconcile(m);
+      expect(
+        logSpy.mock.calls.filter(([message]) =>
+          String(message).includes('companion binary not found'),
+        ),
+      ).toHaveLength(2);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('clears spawn history when the attachment set becomes empty', () => {
+    const m = make('clear-spawn-history', '/clear-spawn-history', {
+      enabled: true,
+      binaryPath: path.join(TEST_DIR, 'missing-companion'),
+    });
+    m.onLoad();
+    reconcile(m);
+    expect(existsSync(companionSpawnFile())).toBe(true);
+
+    detachDirectory('/clear-spawn-history');
+    reconcile(m);
+    expect(existsSync(companionSpawnFile())).toBe(false);
+  });
+
+  it('retries spawning after a busy PID lock clears without saving spawn history', () => {
+    const binary = path.join(TEST_DIR, 'fake-companion');
+    writeFileSync(binary, '#!/bin/sh\nexit 0\n');
+    chmodSync(binary, 0o755);
+    const m = make('lock-retry', '/lock-retry', {
+      enabled: true,
+      binaryPath: binary,
+    });
+    m.onLoad();
+    const pidFile = companionPidFile();
+    const lock = `${pidFile}.lock`;
+    mkdirSync(lock);
+    writeFileSync(path.join(lock, 'owner'), String(process.pid));
+
+    reconcile(m);
+    expect(existsSync(companionSpawnFile())).toBe(false);
+    expect(existsSync(pidFile)).toBe(false);
+
+    rmSync(lock, { recursive: true, force: true });
+    reconcile(m);
+    expect(existsSync(companionSpawnFile())).toBe(true);
+    expect(Number(readFileSync(pidFile, 'utf8'))).toBeGreaterThan(0);
+  });
+
+  it('keeps an unreadable live attachment and skips reconciliation', () => {
+    const m = make('unknown-attachment', '/unknown');
+    m.onLoad();
+    const file = attachmentFile(process.pid);
+    writeFileSync(file, '{not json');
+
+    reconcile(m);
+
+    expect(existsSync(file)).toBe(true);
+    expect(readState().sessions).toHaveLength(1);
+  });
+
+  it('does not consume a preset request after the eighth unattached tick drops its row', () => {
+    const projectDir = path.join(TEST_DIR, 'unattached-preset');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    mkdirSync(projectConfigDir, { recursive: true });
+    const projectConfigPath = path.join(
+      projectConfigDir,
+      'oh-my-opencode-slim.jsonc',
+    );
+    const originalConfig = JSON.stringify({ preset: 'old' });
+    writeFileSync(projectConfigPath, originalConfig);
+    writeFileSync(
+      path.join(TEST_DIR, 'config', 'opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        presets: {
+          old: { orchestrator: { model: 'old-model' } },
+          cheap: { orchestrator: { model: 'cheap-model' } },
+        },
+      }),
+    );
+
+    const m = make('unattached-preset-session', projectDir);
+    m.onLoad();
+    detachDirectory(projectDir);
+    const poll = m as unknown as { pollPresetState: () => void };
+    for (let tick = 0; tick < 7; tick++) poll.pollPresetState();
+    expect(readState().sessions).toHaveLength(1);
+
+    const state = readState();
+    state.preset_requests = [
+      {
+        request_id: 'removed-row-request',
+        session_id: 'unattached-preset-session',
+        scope: 'project',
+        preset: 'cheap',
+      },
+    ];
+    writeFileSync(stateFilePath(), JSON.stringify(state));
+
+    poll.pollPresetState();
+
+    expect(readState().sessions).toEqual([]);
+    expect(readState().preset_requests).toBeUndefined();
+    expect(readFileSync(projectConfigPath, 'utf8')).toBe(originalConfig);
   });
 
   it('publishes presets and applies a project-local preset request', () => {
@@ -546,6 +1124,7 @@ describe('CompanionManager', () => {
       'v2',
     );
     managers.push(manager);
+    writeAttachment(process.pid, worktree);
     manager.onLoad();
     const state = readState();
     state.preset_requests = [
@@ -912,6 +1491,7 @@ describe('CompanionManager', () => {
       'v2',
     );
     managers.push(manager);
+    writeAttachment(process.pid, projectDir);
     manager.onLoad();
     expect(readState().sessions[0].preset).toMatchObject({
       current: 'old',
@@ -974,6 +1554,7 @@ describe('CompanionManager', () => {
       'v2',
     );
     managers.push(manager);
+    writeAttachment(process.pid, projectDir);
     manager.onLoad();
 
     const rejected = JSON.stringify({
@@ -1594,38 +2175,23 @@ describe('CompanionManager', () => {
     expect(process.listenerCount('exit')).toBeLessThanOrEqual(baseline);
   });
 
-  it('hands native companion ownership to a superseding manager without restart', () => {
+  it('replaces a manager without a spawner-ownership lifecycle', () => {
     const first = make('reload-session');
     first.onLoad();
-    const firstChild = attachFakeChild(first);
-    writeFileSync(companionPidFile(), String(process.pid));
-    (first as unknown as { wasSpawner: boolean }).wasSpawner = true;
-    (first as unknown as { spawnedCompanionPid: number }).spawnedCompanionPid =
-      process.pid;
 
     const second = make('reload-session');
     second.onLoad();
 
-    expect(firstChild.killed()).toBe(false);
-    expect((second as unknown as { wasSpawner: boolean }).wasSpawner).toBe(
-      true,
-    );
     expect(readState().sessions).toHaveLength(1);
     expect(readState().sessions[0].session_id).toBe('reload-session');
 
     second.onExit();
-    expect(firstChild.killed()).toBe(true);
+    expect(readState().sessions).toEqual([]);
   });
 
   it('cleans up active managers when companion is disabled on reload', () => {
     const enabled = make('disable-session');
     enabled.onLoad();
-    const child = attachFakeChild(enabled);
-    writeFileSync(companionPidFile(), String(process.pid));
-    (enabled as unknown as { wasSpawner: boolean }).wasSpawner = true;
-    (
-      enabled as unknown as { spawnedCompanionPid: number }
-    ).spawnedCompanionPid = process.pid;
 
     const disabled = new CompanionManager('disable-session', '/path', {
       enabled: false,
@@ -1634,7 +2200,6 @@ describe('CompanionManager', () => {
     });
     disabled.onLoad();
 
-    expect(child.killed()).toBe(true);
     expect(readState().sessions).toEqual([]);
   });
 
@@ -1642,32 +2207,23 @@ describe('CompanionManager', () => {
     const baseline = process.listenerCount('exit');
     const manager = make('cold-prune-session', '/cold/project');
     manager.onLoad();
-    const child = attachFakeChild(manager);
-    writeFileSync(companionPidFile(), String(process.pid));
-    (manager as unknown as { wasSpawner: boolean }).wasSpawner = true;
-    (
-      manager as unknown as { spawnedCompanionPid: number }
-    ).spawnedCompanionPid = process.pid;
     expect(process.listenerCount('exit')).toBe(baseline + 1);
 
     rmSync(stateFilePath(), { force: true });
 
     const pending = pruneDisabledCompanionRuntime('cold-prune-session');
     // The missing-state branch invokes the registered manager seam before any
-    // await, so timers, child, and exit listener are gone immediately.
+    // await, so timers and the exit listener are gone immediately.
     const internal = manager as unknown as {
       presetPoller: unknown;
       publishRetryTimer: unknown;
     };
     expect(internal.presetPoller).toBeNull();
     expect(internal.publishRetryTimer).toBeNull();
-    expect(child.killed()).toBe(true);
     expect(process.listenerCount('exit')).toBe(baseline);
     await pending;
 
-    // Existing no-file exit behavior is preserved: removing the session
-    // recreates an empty state file.
-    expect(readState().sessions).toEqual([]);
+    expect(existsSync(stateFilePath())).toBe(false);
 
     // The seam survives disposal: a later generation in this process remains
     // reachable without re-registering it.
@@ -1939,6 +2495,7 @@ describe('CompanionManager', () => {
 
     const m = make('test-pid-guard');
     m.onLoad();
+    reconcile(m);
 
     // Should not have spawned — PID file guard prevented it
     // The session should still be written to state
@@ -1954,6 +2511,7 @@ describe('CompanionManager', () => {
 
     const m = make('test-stale-pid');
     m.onLoad();
+    reconcile(m);
 
     // Stale PID file should have been cleaned up
     expect(existsSync(pidFile)).toBe(false);
@@ -1961,24 +2519,9 @@ describe('CompanionManager', () => {
     expect(state.sessions[0].session_id).toBe('test-stale-pid');
   });
 
-  it('skips spawn while another process holds the PID file lock', () => {
-    mkdirSync(path.dirname(stateFilePath()), { recursive: true });
-    const pidFile = companionPidFile();
-    const lock = `${pidFile}.lock`;
-    mkdirSync(lock);
-    writeFileSync(path.join(lock, 'owner'), String(process.pid));
-
-    const m = make('test-pending-pid');
-    m.onLoad();
-    m.onExit();
-
-    expect(existsSync(lock)).toBe(true);
-    expect(existsSync(pidFile)).toBe(false);
-  });
-
   it('stores the spawned child PID in the PID file', () => {
     const bin = path.join(TEST_DIR, 'fake-companion');
-    writeFileSync(bin, '#!/bin/sh\nexec sleep 30\n');
+    writeFileSync(bin, '#!/bin/sh\nexit 0\n');
     chmodSync(bin, 0o755);
 
     const m = make('test-child-pid', '/path', {
@@ -1988,84 +2531,31 @@ describe('CompanionManager', () => {
       binaryPath: bin,
     });
     m.onLoad();
+    reconcile(m);
 
     const pid = Number(readFileSync(companionPidFile(), 'utf8'));
     expect(Number.isInteger(pid)).toBe(true);
     expect(pid).not.toBe(process.pid);
-    expect(pid).toBe(
-      (m as unknown as { spawnedCompanionPid: number }).spawnedCompanionPid,
-    );
   });
 
-  it('spawns when no PID file exists', () => {
+  it('keeps state published while the poller owns spawning', () => {
     const m = make('test-no-pid');
     m.onLoad();
     const state = readState();
     expect(state.sessions[0].session_id).toBe('test-no-pid');
   });
 
-  it('cleans up PID file on exit when this manager was the spawner', () => {
-    mkdirSync(path.dirname(stateFilePath()), { recursive: true });
-    const pidFile = companionPidFile();
-    writeFileSync(pidFile, '999999999'); // stale PID so spawn proceeds
-
-    const m = make('test-pid-cleanup');
-    // Simulate a spawner by writing a PID file as if spawn succeeded.
-    // In reality the binary doesn't exist so spawn fails before writing,
-    // but the cleanup logic only fires when wasSpawner is true.
-    writeFileSync(pidFile, String(process.pid));
-    (m as unknown as { wasSpawner: boolean }).wasSpawner = true;
-    (m as unknown as { spawnedCompanionPid: number }).spawnedCompanionPid =
-      process.pid;
-    m.onLoad();
-    m.onExit();
-
-    expect(existsSync(pidFile)).toBe(false);
-  });
-
-  it('does not delete PID file on exit when this manager was not the spawner', () => {
+  it('ordinary disposal removes its row without signaling the companion', () => {
     mkdirSync(path.dirname(stateFilePath()), { recursive: true });
     const pidFile = companionPidFile();
     writeFileSync(pidFile, String(process.pid));
 
     const m = make('test-pid-no-cleanup');
-    m.onLoad(); // skips spawn because PID is alive, wasSpawner stays false
+    m.onLoad();
     m.onExit();
 
-    // Non-spawner must not delete the guard file
     expect(existsSync(pidFile)).toBe(true);
-  });
-
-  it('does not delete a PID file owned by a different spawned child', () => {
-    mkdirSync(path.dirname(stateFilePath()), { recursive: true });
-    const pidFile = companionPidFile();
-    writeFileSync(pidFile, '222222222');
-
-    const m = make('test-pid-different-child');
-    (m as unknown as { wasSpawner: boolean }).wasSpawner = true;
-    (m as unknown as { spawnedCompanionPid: number }).spawnedCompanionPid =
-      111111111;
-    m.onExit();
-
-    expect(readFileSync(pidFile, 'utf8')).toBe('222222222');
-  });
-
-  it('does not kill the singleton when another session remains in state', () => {
-    const first = make('first-session');
-    const second = make('second-session');
-    first.onLoad();
-    second.onLoad();
-    const child = attachFakeChild(first);
-    const pidFile = companionPidFile();
-    writeFileSync(pidFile, String(process.pid));
-    (first as unknown as { wasSpawner: boolean }).wasSpawner = true;
-    (first as unknown as { spawnedCompanionPid: number }).spawnedCompanionPid =
-      process.pid;
-
-    first.onExit();
-
-    expect(child.killed()).toBe(false);
-    expect(readFileSync(pidFile, 'utf8')).toBe(String(process.pid));
+    expect(readState().sessions).toEqual([]);
   });
 
   it('removes disabled session entries on load', () => {
@@ -2149,22 +2639,6 @@ describe('CompanionManager', () => {
     const state = readState();
     expect(state.version).toBe(1);
     expect(state.sessions).toHaveLength(1);
-  });
-
-  it('logs and swallows kill() failure gracefully during exit', () => {
-    mkdirSync(path.dirname(stateFilePath()), { recursive: true });
-    const pidFile = companionPidFile();
-    writeFileSync(pidFile, String(process.pid));
-
-    const m = make('test-kill-failure');
-    attachFailingChild(m);
-    (m as unknown as { wasSpawner: boolean }).wasSpawner = true;
-    (m as unknown as { spawnedCompanionPid: number }).spawnedCompanionPid =
-      process.pid;
-
-    // Must not propagate the kill() exception
-    expect(() => m.onExit()).not.toThrow();
-    expect(existsSync(pidFile)).toBe(false);
   });
 
   it('persists only bounded known workspaces registered by plugin managers', () => {
