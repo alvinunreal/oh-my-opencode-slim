@@ -21,7 +21,7 @@ These tools enable agents to perform file operations, manage background tasks, a
 Each tool is implemented as a factory function that returns a `ToolDefinition` record compatible with the `@opencode-ai/plugin` SDK. The pattern provides:
 
 - **Encapsulation**: Tool creation logic and dependencies are isolated per tool
-- **Composition**: Tools can be selectively exported and composed in `src/tools/index.ts`
+- **Composition**: Tools are imported directly from their own modules or folders (no barrel; `src/tools/index.ts` was removed as dead code)
 - **Testability**: Factories accept dependencies as parameters, enabling mock injection
 - **Type Safety**: Zod schemas validate tool arguments at runtime
 
@@ -221,21 +221,11 @@ Tools Layer → Web Layer
 
 ## Tool Reference
 
-### Exported Tools (src/tools/index.ts)
+### Tool Imports
 
-```typescript
-// AST-grep tools
-export { createAcpRunTool } from './acp-run';
-export { ast_grep_replace, ast_grep_search } from './ast-grep';
-export { createCancelTaskTool } from './cancel-task';
-export { createNativeTaskControlTools } from './native-task-control';
-export { createTaskReviveTool } from './task-revive';
-export { createTaskStatusTool } from './task-status';
-export { createWaitForUserTool } from './wait-for-user';
-```
-
-The enhanced webfetch factory is loaded directly from `./smartfetch` after its
-feature gate; it is not re-exported by the eager tool barrel.
+Import each tool from its own module or folder; there is no tool barrel. The
+enhanced webfetch factory is loaded directly from `./smartfetch` after its
+feature gate.
 
 Preset switching is not a tool: `preset-switch.ts` exposes on-disk helpers
 (`switchPresetOnDisk`, `writePreset`, `deletePreset`, `setAgentOverride`,
