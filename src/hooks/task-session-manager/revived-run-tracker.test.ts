@@ -227,6 +227,134 @@ describe('revived run tracker', () => {
     h.tracker.dispose();
   });
 
+  test('a re-observed accepted continuation publication sends only once', async () => {
+    const h = createHarness(() => ({ data: [] }));
+    const now = Date.now();
+    h.board.updateStatus({
+      taskID: h.run.taskID,
+      state: 'completed',
+      resultSummary: 'partial',
+      now,
+    });
+    h.board.markRunningFromLiveSession(h.run.taskID, now + 1);
+    const accepted = h.board.updateStatus({
+      taskID: h.run.taskID,
+      state: 'completed',
+      resultSummary: 'final result',
+      now: now + 2,
+    });
+    if (!accepted) throw new Error('missing terminal record');
+    expect(accepted.terminalRevision).toBe(3);
+    h.tracker.deliverContinuation(accepted);
+    await flushNotify();
+    expect(h.prompt).toHaveBeenCalledTimes(1);
+
+    h.tracker.deliverContinuation(accepted);
+    h.tracker.onTerminal(accepted);
+    await flushNotify();
+    expect(h.prompt).toHaveBeenCalledTimes(1);
+    expect(h.tracker.isTracked(h.run.taskID, h.run.generation)).toBe(false);
+    h.tracker.dispose();
+  });
+
+  test('a genuinely newer revision after delivery sends exactly one more notification', async () => {
+    const h = createHarness(() => ({ data: [] }));
+    const now = Date.now();
+    h.board.updateStatus({
+      taskID: h.run.taskID,
+      state: 'completed',
+      resultSummary: 'partial',
+      now,
+    });
+    h.board.markRunningFromLiveSession(h.run.taskID, now + 1);
+    const first = h.board.updateStatus({
+      taskID: h.run.taskID,
+      state: 'completed',
+      resultSummary: 'final result',
+      now: now + 2,
+    });
+    if (!first) throw new Error('missing terminal record');
+    h.tracker.deliverContinuation(first);
+    await flushNotify();
+    expect(h.prompt).toHaveBeenCalledTimes(1);
+
+    h.board.markRunningFromLiveSession(h.run.taskID, now + 3);
+    const newer = h.board.updateStatus({
+      taskID: h.run.taskID,
+      state: 'completed',
+      resultSummary: 'direct answer',
+      now: now + 4,
+    });
+    if (!newer) throw new Error('missing newer terminal record');
+    expect(newer.terminalRevision).toBe(first.terminalRevision + 2);
+    // Preserve production listener order for the next publication.
+    h.tracker.onTerminal(newer);
+    h.tracker.deliverContinuation(newer);
+    await flushNotify();
+    expect(h.prompt).toHaveBeenCalledTimes(2);
+    expect(h.prompt.mock.calls[1]?.[0]).toMatchObject({
+      path: { id: 'parent' },
+      body: { parts: [{ text: expect.stringContaining('direct answer') }] },
+    });
+    h.tracker.dispose();
+  });
+
+  test('dispose during a pending newer-revision selection prevents the send', async () => {
+    let selections = 0;
+    let entered = false;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const h = createHarness(() => ({ data: [] }), undefined, false, {
+      resolveSelection: async () => {
+        selections += 1;
+        if (selections >= 2) {
+          entered = true;
+          await gate;
+        }
+        return { agent: 'plan', provenance: 'host-persisted' };
+      },
+    });
+    const now = Date.now();
+    h.board.updateStatus({
+      taskID: h.run.taskID,
+      state: 'completed',
+      resultSummary: 'partial',
+      now,
+    });
+    h.board.markRunningFromLiveSession(h.run.taskID, now + 1);
+    const first = h.board.updateStatus({
+      taskID: h.run.taskID,
+      state: 'completed',
+      resultSummary: 'final result',
+      now: now + 2,
+    });
+    if (!first) throw new Error('missing terminal record');
+    h.tracker.deliverContinuation(first);
+    await flushNotify();
+    expect(h.prompt).toHaveBeenCalledTimes(1);
+
+    h.board.markRunningFromLiveSession(h.run.taskID, now + 3);
+    const newer = h.board.updateStatus({
+      taskID: h.run.taskID,
+      state: 'completed',
+      resultSummary: 'direct answer',
+      now: now + 4,
+    });
+    if (!newer) throw new Error('missing newer terminal record');
+    h.tracker.onTerminal(newer);
+    h.tracker.deliverContinuation(newer);
+    await flushNotify();
+    expect(selections).toBe(2);
+    expect(entered).toBe(true);
+
+    h.tracker.dispose();
+    release();
+    await flushNotify();
+    expect(h.prompt).toHaveBeenCalledTimes(1);
+  });
+
   test('a deferred terminal probe does not settle or release its admission lease', async () => {
     const h = createHarness(() => ({ data: [] }));
     h.board.updateStatus({

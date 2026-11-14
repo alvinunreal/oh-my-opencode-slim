@@ -299,6 +299,7 @@ export function createRevivedRunTracker(options: {
     if (
       current?.generation !== record.generation ||
       current.terminalRevision !== record.terminalRevision ||
+      current.acceptedContinuationRevision === record.terminalRevision ||
       current.state !== record.state
     )
       return;
@@ -572,7 +573,14 @@ export function createRevivedRunTracker(options: {
             clearTimeout(notification.retryTimer);
             notification.retryTimer = undefined;
           }
-          if (run.onlyTerminalRevision !== undefined) discardRun(run);
+          if (run.onlyTerminalRevision !== undefined) {
+            options.backgroundJobBoard.recordAcceptedContinuation(
+              run.taskID,
+              run.generation,
+              record.terminalRevision,
+            );
+            discardRun(run);
+          }
         },
       );
     } catch (error) {

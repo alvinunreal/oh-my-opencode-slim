@@ -80,6 +80,8 @@ export interface BackgroundJobRecord {
   generation: number;
   /** Publication identity within a run, including withdrawn publications. */
   terminalRevision: number;
+  /** Continuation publication accepted by the parent notification transport. */
+  acceptedContinuationRevision?: number;
   activityRevision: number;
   /** Task-local run identity; unlike generation, unrelated tasks do not affect it. */
   taskGeneration: number;
@@ -710,6 +712,7 @@ export class BackgroundJobBoard {
         provisional: false,
         generation,
         terminalRevision: 0,
+        acceptedContinuationRevision: undefined,
         activityRevision: 0,
         taskGeneration: existing.taskGeneration + 1,
         agent: input.agent || existing.agent,
@@ -1519,6 +1522,17 @@ export class BackgroundJobBoard {
     if (job.amendmentInputMessageID === messageID) return true;
     this.setJob({ ...job, amendmentInputMessageID: messageID });
     return true;
+  }
+
+  recordAcceptedContinuation(
+    taskID: string,
+    generation: number,
+    revision: number,
+  ): void {
+    const job = this.jobs.get(taskID);
+    if (job?.generation !== generation || job.terminalRevision !== revision)
+      return;
+    this.setJob({ ...job, acceptedContinuationRevision: revision });
   }
 
   /** Cover the live run or its successor, depending on host admission time. */
