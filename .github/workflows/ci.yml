@@ -111,6 +111,28 @@ jobs:
       - name: Run knip
         run: bun run knip --no-exit-code --reporter symbols --reporter markdown --output-file markdown=$GITHUB_STEP_SUMMARY
 
+  fallow:
+    name: Report / Fallow (non-blocking)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: fallow-rs/fallow@v3
+        with:
+          command: audit
+          version: '3.43.0'
+          only: architecture,health,dupes
+          gate: new-only
+          fail-on-issues: false
+          annotations: false
+          args: '--no-css'
+
   bun-latest-canary:
     name: Canary / Bun latest
     continue-on-error: true
