@@ -1419,6 +1419,8 @@ describe('createV2Setup permission rules wiring', () => {
       const failedUpdateSessions = new Set<string>();
       const failedLookupSessions = new Set<string>();
       const getCalls: string[] = [];
+      const deletionBarrierSessionID = 'ses_probe_deletion_barrier';
+      let releaseDeletionBarrier: (() => void) | undefined;
       let pendingLookupSessionID: string | undefined;
       let rejectPendingLookup!: (error: Error) => void;
       let registrationDisposals = 0;
@@ -1528,6 +1530,9 @@ describe('createV2Setup permission rules wiring', () => {
                         error ? reject(error) : resolve();
                     });
                     heldUpdatePending = false;
+                  }
+                  if (input.sessionID === deletionBarrierSessionID) {
+                    releaseDeletionBarrier?.();
                   }
                   return {};
                 },
@@ -1840,12 +1845,26 @@ describe('createV2Setup permission rules wiring', () => {
             await Bun.sleep(10);
           }
           expect(calls).toHaveLength(updatesBeforeAgentSelection + 1);
-          const lookupsBeforeDeletedPrompt = getCalls.length;
+          let deletionBarrierReached!: () => void;
+          const deletionBarrier = new Promise<void>((resolve) => {
+            deletionBarrierReached = resolve;
+          });
+          releaseDeletionBarrier = deletionBarrierReached;
           publishEvent({
             type: 'session.deleted',
             data: { sessionID: 'ses_probe_child' },
           });
-          await Bun.sleep(10);
+          publishEvent({
+            type: 'session.created',
+            data: {
+              sessionID: deletionBarrierSessionID,
+              parentID: 'ses_parent',
+              agent: 'explorer',
+            },
+          });
+          await deletionBarrier;
+          releaseDeletionBarrier = undefined;
+          const lookupsBeforeDeletedPrompt = getCalls.length;
           await (promptHandler as NonNullable<typeof promptHandler>)({
             sessionID: 'ses_probe_child',
             messageID: 'msg_after_delete',
