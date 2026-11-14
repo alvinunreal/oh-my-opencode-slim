@@ -14,6 +14,8 @@
  * Loaded only by the thin entry (`./tui.ts`) after the config gate passes, so
  * `tui: false` never evaluates this module's render stack.
  */
+
+import { attachTuiProcess } from '../companion/attachments';
 import { isCommandEnabled } from '../hooks/command-hook-utils';
 import { PANE_VIEWER_ENV } from '../multiplexer/shared';
 import type { TuiRouteView } from '../tui';
@@ -339,68 +341,79 @@ export async function runSetup(
   }
 
   const disposers: Array<() => void | Promise<void>> = [];
-  const baseCleanup = await omoTui.setup(ctx, gatesRead);
-  if (typeof baseCleanup === 'function') disposers.push(baseCleanup);
-  const timeoutCleanup = registerQuestionTimeout(
-    ctx as unknown as Parameters<typeof registerQuestionTimeout>[0],
-    { timeoutMs: gatesRead.gates.questionTimeoutMs },
-  );
-  if (timeoutCleanup) disposers.push(timeoutCleanup);
-
-  // `disabled_commands` gates the TUI entry exactly like it gates the
-  // server command: a disabled command's palette/slash/keybind does not
-  // exist anywhere.
-  const gates = commandGates(gatesRead.gates.disabledCommands);
-
-  const slotApi = (ctx.ui as { slot?: V2SlotApi } | undefined)?.slot;
-  if (typeof slotApi !== 'function') {
-    log('[v2][tui] ui.slot unavailable; /preset disabled on this build');
-  } else {
-    try {
-      const disposeSlot = slotApi({
-        append: PRESET_APP_SLOT,
-        render: () => {
-          if (typeof ctx.keymap?.layer === 'function') {
-            try {
-              ctx.keymap.layer(buildPresetLayer(ctx, gates));
-            } catch (err) {
-              log('[v2][tui] keymap.layer failed', String(err));
-            }
-          }
-          return null;
-        },
-      });
-      if (typeof disposeSlot === 'function') disposers.push(disposeSlot);
-    } catch (err) {
-      log(
-        '[v2][tui] ui.slot registration failed; /preset disabled',
-        String(err),
-      );
-    }
+  if (gatesRead.gates.companionEnabled) {
+    disposers.push(attachTuiProcess(directory));
   }
-
-  // Update notice (issue #1655): the server-side checker detects updates
-  // but has no UI channel on V2 — `client.tui.showToast` is a no-op in the
-  // shim — so the TUI owns the message. Scheduled off the startup path and
-  // silent on every failure; see ./update-notice.
-  // The shared update-checker gate is off for `autoUpdate: false` or
-  // `disabled_hooks: ["auto-update-checker"]`: no timer, no notice, no
-  // network.
-  if (
-    process.env[PANE_VIEWER_ENV] !== '1' &&
-    gatesRead.gates.updateCheckerEnabled
-  ) {
-    disposers.push(
-      registerUpdateNotice(ctx, {
-        renderBadge: (latest, color) => renderUpdateBadge(latest, color),
-      }),
-    );
-  } else if (!gatesRead.gates.updateCheckerEnabled) {
-    log('[v2][tui] update notice skipped: update checker disabled');
-  }
-
-  return () =>
+  const disposeAll = () =>
     Promise.all(disposers.reverse().map((dispose) => dispose())).then(() => {});
+  try {
+    const baseCleanup = await omoTui.setup(ctx, gatesRead);
+    if (typeof baseCleanup === 'function') disposers.push(baseCleanup);
+    const timeoutCleanup = registerQuestionTimeout(
+      ctx as unknown as Parameters<typeof registerQuestionTimeout>[0],
+      { timeoutMs: gatesRead.gates.questionTimeoutMs },
+    );
+    if (timeoutCleanup) disposers.push(timeoutCleanup);
+
+    // `disabled_commands` gates the TUI entry exactly like it gates the
+    // server command: a disabled command's palette/slash/keybind does not
+    // exist anywhere.
+    const gates = commandGates(gatesRead.gates.disabledCommands);
+
+    const slotApi = (ctx.ui as { slot?: V2SlotApi } | undefined)?.slot;
+    if (typeof slotApi !== 'function') {
+      log('[v2][tui] ui.slot unavailable; /preset disabled on this build');
+    } else {
+      try {
+        const disposeSlot = slotApi({
+          append: PRESET_APP_SLOT,
+          render: () => {
+            if (typeof ctx.keymap?.layer === 'function') {
+              try {
+                ctx.keymap.layer(buildPresetLayer(ctx, gates));
+              } catch (err) {
+                log('[v2][tui] keymap.layer failed', String(err));
+              }
+            }
+            return null;
+          },
+        });
+        if (typeof disposeSlot === 'function') disposers.push(disposeSlot);
+      } catch (err) {
+        log(
+          '[v2][tui] ui.slot registration failed; /preset disabled',
+          String(err),
+        );
+      }
+    }
+
+    // Update notice (issue #1655): the server-side checker detects updates
+    // but has no UI channel on V2 — `client.tui.showToast` is a no-op in the
+    // shim — so the TUI owns the message. Scheduled off the startup path and
+    // silent on every failure; see ./update-notice.
+    // The shared update-checker gate is off for `autoUpdate: false` or
+    // `disabled_hooks: ["auto-update-checker"]`: no timer, no notice, no
+    // network.
+    if (
+      process.env[PANE_VIEWER_ENV] !== '1' &&
+      gatesRead.gates.updateCheckerEnabled
+    ) {
+      disposers.push(
+        registerUpdateNotice(ctx, {
+          renderBadge: (latest, color) => renderUpdateBadge(latest, color),
+        }),
+      );
+    } else if (!gatesRead.gates.updateCheckerEnabled) {
+      log('[v2][tui] update notice skipped: update checker disabled');
+    }
+
+    return disposeAll;
+  } catch (error) {
+    await Promise.allSettled(
+      disposers.reverse().map((dispose) => Promise.resolve().then(dispose)),
+    );
+    throw error;
+  }
 }
 
 export const tui = omoTui.tui;

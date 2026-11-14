@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -30,19 +30,21 @@ import {
   parsePidFile,
 } from '../utils/pid-file-lock';
 import {
+  isDirectoryAttached,
+  liveTuiAttachments,
+  type TuiAttachment,
+} from './attachments';
+import {
   companionSessionIdForDirectory,
+  normalizeCompanionDirectory,
   registerCompanionCleanup,
   stateFilePath,
 } from './runtime';
 
 export { companionSessionIdForDirectory, stateFilePath };
 
-// Only one companion `process.on('exit')` listener should be live per process.
-// The plugin function can re-run (config.update() → Instance.dispose()),
-// constructing fresh CompanionManager instances; without deduping, every
-// re-init would leak another exit listener. Track live managers separately so
-// replacing the listener never drops cleanup for detached companion children.
-// Module-level state survives re-inits because the module itself is not
+// One process exit listener cleans rows for the currently active managers.
+// Module-level state survives plugin re-inits because the module is not
 // re-evaluated.
 let activeExitListener: (() => void) | null = null;
 const activeManagers = new Set<CompanionManager>();
@@ -286,11 +288,6 @@ function readState(): CompanionState {
   return { version: 1, sessions: [] };
 }
 
-function knownProjectKey(cwd: string): string {
-  const normalized = path.resolve(cwd).replace(/[\\/]+$/, '');
-  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
-}
-
 /** Persisted local history consists only of actual OpenCode plugin workspaces. */
 export function rememberKnownCompanionProject(
   state: CompanionState,
@@ -298,9 +295,9 @@ export function rememberKnownCompanionProject(
   preset: CompanionPresetState | undefined,
   now = Date.now(),
 ): void {
-  const key = knownProjectKey(cwd);
+  const key = normalizeCompanionDirectory(cwd);
   const previous = (state.known_projects ?? []).filter(
-    (project) => knownProjectKey(project.cwd) !== key,
+    (project) => normalizeCompanionDirectory(project.cwd) !== key,
   );
   previous.push({ cwd: path.resolve(cwd), last_seen: now, preset });
   state.known_projects = previous.slice(-MAX_KNOWN_COMPANION_PROJECTS);
@@ -312,10 +309,10 @@ export function resolveKnownCompanionProject(
   candidate: string,
 ): string | null {
   if (!candidate.trim() || !path.isAbsolute(candidate)) return null;
-  const key = knownProjectKey(candidate);
+  const key = normalizeCompanionDirectory(candidate);
   return (
     state.known_projects?.find(
-      (project) => knownProjectKey(project.cwd) === key,
+      (project) => normalizeCompanionDirectory(project.cwd) === key,
     )?.cwd ?? null
   );
 }
@@ -394,6 +391,16 @@ function writeState(mutator: (state: CompanionState) => void): boolean {
   }
 }
 
+function dropRow(state: CompanionState, sessionId: string): void {
+  state.sessions = state.sessions.filter(
+    (session) => session.session_id !== sessionId,
+  );
+  state.preset_requests = (state.preset_requests ?? []).filter(
+    (request) => request.session_id !== sessionId,
+  );
+  if (state.preset_requests.length === 0) delete state.preset_requests;
+}
+
 /**
  * Tracks live agent activity per session and mirrors it to the companion
  * state file. Source of truth is OpenCode's session.status events: every
@@ -420,12 +427,16 @@ export class CompanionManager {
   private lastAttentionRequestId: string | undefined;
   private readonly config?: CompanionConfig;
   private retired = false;
-  private companionProcess: ChildProcess | null = null;
-  private spawnChecked = false;
-  private wasSpawner = false;
-  private spawnedCompanionPid: number | null = null;
   private presetPoller: NodeJS.Timeout | null = null;
   private publishRetryTimer: NodeJS.Timeout | null = null;
+  private unattachedTicks = 0;
+  private readonly lastSpawnAttemptPids = new Set<number>();
+  private attachmentSetWentEmpty = false;
+  private lastReconcileState?: {
+    desired: boolean;
+    actual: boolean;
+    count: number;
+  };
   private presetRefreshTick = 0;
   private effectivePreset: string | undefined;
   private projectPreset: string | undefined;
@@ -529,7 +540,9 @@ export class CompanionManager {
 
   private pollPresetState(): void {
     if (this.config?.enabled !== true) return;
-    if (this.consumePresetRequest()) {
+    const state = readState();
+    this.reconcileCompanion(state);
+    if (this.consumePresetRequest(state)) {
       this.presetRefreshTick = 0;
       return;
     }
@@ -538,6 +551,78 @@ export class CompanionManager {
     if (this.presetRefreshTick < PRESET_REFRESH_EVERY_TICKS) return;
     this.presetRefreshTick = 0;
     this.refreshConfigDrivenPresetState();
+  }
+
+  private reconcileCompanion(state: CompanionState = readState()): void {
+    const attachments = liveTuiAttachments();
+    if (attachments === null) return;
+    const count = attachments.length;
+    const desired = count > 0;
+    const directoryAttached = isDirectoryAttached(attachments, this.cwd);
+    this.unattachedTicks = directoryAttached ? 0 : this.unattachedTicks + 1;
+
+    const pidFile = pidFilePath();
+    let pid: number | null = null;
+    try {
+      if (existsSync(pidFile)) {
+        pid = parsePidFile(readFileSync(pidFile, 'utf8'));
+      }
+    } catch {
+      // The locked spawn path handles unreadable or stale pid files.
+    }
+    const actual = pid !== null && isProcessAlive(pid);
+    const previousReconcileState = this.lastReconcileState;
+    if (
+      !previousReconcileState ||
+      previousReconcileState.desired !== desired ||
+      previousReconcileState.actual !== actual ||
+      previousReconcileState.count !== count
+    ) {
+      this.lastReconcileState = { desired, actual, count };
+      log('[companion] attachment lifecycle transition', {
+        desired,
+        actual,
+        dir: this.cwd,
+        count,
+      });
+    }
+
+    const hasSession = state.sessions.some(
+      (session) => session.session_id === this.id,
+    );
+    if (directoryAttached) {
+      if (!hasSession) this.flush();
+    } else if (this.unattachedTicks >= 8 && hasSession) {
+      this.releaseCompanion();
+    }
+    const hasAttachedSession = state.sessions.some((session) =>
+      isDirectoryAttached(attachments, session.cwd),
+    );
+    if (!desired) {
+      this.lastSpawnAttemptPids.clear();
+      this.attachmentSetWentEmpty = true;
+    } else if (actual) {
+      if (!this.attachmentSetWentEmpty) {
+        this.lastSpawnAttemptPids.clear();
+        for (const attachment of attachments) {
+          this.lastSpawnAttemptPids.add(attachment.pid);
+        }
+      }
+    } else if (
+      hasAttachedSession &&
+      (this.attachmentSetWentEmpty ||
+        attachments.some(
+          (attachment) => !this.lastSpawnAttemptPids.has(attachment.pid),
+        ))
+    ) {
+      if (this.spawnIfAvailable(attachments)) {
+        this.lastSpawnAttemptPids.clear();
+        for (const attachment of attachments) {
+          this.lastSpawnAttemptPids.add(attachment.pid);
+        }
+        this.attachmentSetWentEmpty = false;
+      }
+    }
   }
 
   /**
@@ -574,19 +659,9 @@ export class CompanionManager {
     this.publishRetryTimer = setTimeout(() => {
       this.publishRetryTimer = null;
       if (!activeManagers.has(this)) return;
-      this.publishAndSpawn();
+      this.flush();
     }, STATE_PUBLISH_RETRY_MS);
     this.publishRetryTimer.unref();
-  }
-
-  private publishAndSpawn(): void {
-    if (!this.flush()) {
-      this.schedulePublishRetry();
-      return;
-    }
-    if (this.spawnChecked) return;
-    this.spawnChecked = true;
-    this.spawnIfAvailable();
   }
 
   private acknowledgePresetRequest(requestId: string): boolean {
@@ -621,11 +696,10 @@ export class CompanionManager {
     }
   }
 
-  private consumePresetRequest(): boolean {
+  private consumePresetRequest(state: CompanionState = readState()): boolean {
     if (this.config?.enabled !== true) return false;
     // One shared read serves both the request selection and the offline
     // known-project validation; a second identical read adds only latency.
-    const state = readState();
     const request = state.preset_requests?.find(
       (candidate) => candidate.session_id === this.id,
     );
@@ -714,7 +788,8 @@ export class CompanionManager {
       writeState((state) => {
         const known = state.known_projects?.find(
           (project) =>
-            knownProjectKey(project.cwd) === knownProjectKey(targetCwd),
+            normalizeCompanionDirectory(project.cwd) ===
+            normalizeCompanionDirectory(targetCwd),
         );
         if (!known) return;
         known.preset = {
@@ -771,27 +846,15 @@ export class CompanionManager {
     this.registerActiveManager();
     this.refreshPresetState();
     this.startPresetPoller();
-    this.publishAndSpawn();
+    this.flush();
   }
 
   /**
-   * Register this manager behind a single process `exit` listener. Re-inits for
-   * the same OpenCode session dispose the superseded manager immediately so its
-   * detached child does not survive until process exit.
+   * Register this manager behind a single process `exit` listener.
    */
   private registerActiveManager(): void {
     for (const manager of [...activeManagers]) {
       if (manager === this || manager.id !== this.id) continue;
-
-      if (manager.wasSpawner && !this.wasSpawner) {
-        this.companionProcess = manager.companionProcess;
-        this.spawnChecked = true;
-        this.wasSpawner = true;
-        this.spawnedCompanionPid = manager.spawnedCompanionPid;
-        manager.companionProcess = null;
-        manager.wasSpawner = false;
-        manager.spawnedCompanionPid = null;
-      }
       manager.disposeForReplacement();
     }
 
@@ -989,20 +1052,11 @@ export class CompanionManager {
       activeExitListener = null;
     }
     if (this.config?.enabled !== true) return true;
-    if ([...activeManagers].some((manager) => manager.id === this.id))
-      return true;
-    const removed = this.removeSessionState();
-    if (this.wasSpawner && this.removeOwnedPidFileIfNoSessionsRemain()) {
-      if (this.companionProcess) {
-        try {
-          this.companionProcess.kill();
-        } catch (err) {
-          log('[companion] kill failed', String(err));
-        }
-      }
-    }
-    this.companionProcess = null;
-    return removed;
+    const hasReplacement = [...activeManagers].some(
+      (manager) => manager.id === this.id,
+    );
+    if (hasReplacement) return true;
+    return this.removeSessionState();
   }
 
   async dispose(): Promise<void> {
@@ -1020,36 +1074,20 @@ export class CompanionManager {
   }
 
   private removeSessionState(): boolean {
+    if (!existsSync(stateFilePath())) return true;
     return writeState((state) => {
-      state.sessions = state.sessions.filter((s) => s.session_id !== this.id);
-      state.preset_requests = (state.preset_requests ?? []).filter(
-        (request) => request.session_id !== this.id,
-      );
-      if (state.preset_requests.length === 0) delete state.preset_requests;
+      dropRow(state, this.id);
     });
   }
 
-  private removeOwnedPidFileIfNoSessionsRemain(): boolean {
-    if (this.spawnedCompanionPid == null) return true;
-    const file = pidFilePath();
-    const release = acquirePidFileLockWithRetry(file, 80);
-    if (!release) {
-      log('[companion] PID file lock busy during exit; leaving guard intact');
-      return false;
-    }
-    try {
-      if (readState().sessions.length > 0) return false;
-      if (!existsSync(file)) return true;
-      const parsed = parsePidFile(readFileSync(file, 'utf8'));
-      if (parsed === this.spawnedCompanionPid) {
-        rmSync(file, { force: true });
+  private releaseCompanion(): boolean {
+    return writeState((state) => {
+      const attachments = liveTuiAttachments();
+      if (attachments === null || isDirectoryAttached(attachments, this.cwd)) {
+        return;
       }
-      return true;
-    } catch {
-      return false;
-    } finally {
-      release();
-    }
+      dropRow(state, this.id);
+    });
   }
 
   private detailFor(sessionId: string, agent: string): CompanionAgentDetail {
@@ -1096,6 +1134,7 @@ export class CompanionManager {
     if (this.config?.enabled !== true || !activeManagers.has(this))
       return false;
     try {
+      let attached = false;
       const entry: CompanionSession = {
         session_id: this.id,
         cwd: this.cwd,
@@ -1131,6 +1170,14 @@ export class CompanionManager {
         },
       };
       const written = writeState((state) => {
+        const attachments = liveTuiAttachments();
+        if (attachments === null) return;
+        if (!isDirectoryAttached(attachments, this.cwd)) {
+          if (this.unattachedTicks >= 8) dropRow(state, this.id);
+          return;
+        }
+        this.unattachedTicks = 0;
+        attached = true;
         const idx = state.sessions.findIndex((s) => s.session_id === this.id);
         if (idx >= 0) {
           state.sessions[idx] = entry;
@@ -1151,7 +1198,7 @@ export class CompanionManager {
         }
       });
       if (!written) this.schedulePublishRetry();
-      return written;
+      return written && attached;
     } catch (err) {
       log('[companion] flush failed', String(err));
       this.schedulePublishRetry();
@@ -1159,29 +1206,43 @@ export class CompanionManager {
     }
   }
 
-  private spawnIfAvailable(): void {
-    if (this.config?.enabled !== true) return;
+  private spawnIfAvailable(
+    attachments: readonly TuiAttachment[] | null = liveTuiAttachments(),
+  ): boolean {
+    if (this.config?.enabled !== true || !attachments?.length) return false;
     const pidFile = pidFilePath();
     let releasePidFileLock: (() => void) | null = null;
     try {
       releasePidFileLock = acquirePidFileLockWithRetry(pidFile, 80);
       if (releasePidFileLock === null) {
         log('[companion] another instance already running, skipping spawn');
-        return;
+        return true;
       }
     } catch (err) {
       log('[companion] PID file lock failed', String(err));
-      return;
+      return true;
     }
-    let spawnedChild: ChildProcess | null = null;
+    let spawnedChild: ReturnType<typeof spawn> | null = null;
     try {
+      const currentAttachments = liveTuiAttachments();
+      if (currentAttachments === null) return false;
+      const count = currentAttachments.length;
+      if (count === 0) return false;
       if (existsSync(pidFile)) {
         const existingPid = parsePidFile(readFileSync(pidFile, 'utf8'));
         if (existingPid !== null && isProcessAlive(existingPid)) {
-          log('[companion] another instance already running, skipping spawn');
-          return;
+          log('[companion] spawn skipped; companion PID is alive', {
+            pid: existingPid,
+            dir: this.cwd,
+            count,
+          });
+          return true;
         }
-        log('[companion] removing stale PID file for dead process');
+        log('[companion] removing stale PID file', {
+          pid: existingPid,
+          dir: this.cwd,
+          count,
+        });
         rmSync(pidFile, { force: true });
       }
       const bin = resolveCompanionBinaryPath(this.config);
@@ -1190,7 +1251,7 @@ export class CompanionManager {
         log(
           `[companion] enabled but companion binary not found at expected path: ${expected}. Please install/download the companion binary separately.`,
         );
-        return;
+        return true;
       }
       const child = spawn(bin, [], {
         detached: true,
@@ -1208,25 +1269,22 @@ export class CompanionManager {
       child.once('error', (err) => {
         log('[companion] spawn failed', String(err));
       });
-      this.companionProcess = child;
       child.unref();
       if (child.pid == null) {
         log('[companion] spawn returned without a child PID, skipping guard');
-        return;
+        return true;
       }
       writeFileSync(pidFile, String(child.pid));
-      this.wasSpawner = true;
-      this.spawnedCompanionPid = child.pid;
-      log(
-        '[companion] spawned',
-        JSON.stringify({
-          bin,
-          sessionId: this.id,
-          debug: this.config.debug === true,
-        }),
-      );
+      log('[companion] spawned', {
+        pid: child.pid,
+        dir: this.cwd,
+        count,
+        bin,
+        sessionId: this.id,
+      });
+      return true;
     } catch (err) {
-      if (spawnedChild && !this.wasSpawner) {
+      if (spawnedChild) {
         try {
           spawnedChild.kill();
         } catch (killErr) {
@@ -1234,6 +1292,7 @@ export class CompanionManager {
         }
       }
       log('[companion] spawn guard failed', String(err));
+      return true;
     } finally {
       releasePidFileLock?.();
     }
@@ -1258,7 +1317,7 @@ export function pruneDisabledCompanionSession(sessionId: string): void {
   try {
     if (!existsSync(stateFilePath())) return;
     writeState((state) => {
-      state.sessions = state.sessions.filter((s) => s.session_id !== sessionId);
+      dropRow(state, sessionId);
     });
   } catch (err) {
     log('[companion] status update failed', String(err));

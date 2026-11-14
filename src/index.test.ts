@@ -19,6 +19,7 @@ import path from 'node:path';
 import * as promiseTimers from 'node:timers/promises';
 import { testRender } from '@opentui/solid';
 import type { RegistryFactoryBridge } from './agents/registry-bridge';
+import { withTuiAttachment } from './companion/attachment-test-helper';
 import {
   CompanionManager,
   companionSessionIdForDirectory,
@@ -2648,24 +2649,30 @@ describe('plugin reload generation cleanup', () => {
         },
       }),
     );
-    const hooks = await createHooks();
-    const readSessionIds = (): string[] => {
-      const state = JSON.parse(readFileSync(stateFilePath(), 'utf8')) as {
-        sessions: Array<{ session_id: string }>;
-      };
-      return state.sessions.map((s) => s.session_id);
-    };
-
     const companionSessionId = companionSessionIdForDirectory(projectDir);
+    await withTuiAttachment(projectDir, async () => {
+      let hooks: Awaited<ReturnType<typeof plugin>> | undefined;
+      const readSessionIds = (): string[] => {
+        const state = JSON.parse(readFileSync(stateFilePath(), 'utf8')) as {
+          sessions: Array<{ session_id: string }>;
+        };
+        return state.sessions.map((s) => s.session_id);
+      };
 
-    // onLoad registered this generation's project-scoped manager in the state file.
-    expect(readSessionIds()).toContain(companionSessionId);
+      try {
+        hooks = await createHooks();
+        // onLoad registered this generation's project-scoped manager in the state file.
+        expect(readSessionIds()).toContain(companionSessionId);
 
-    await hooks.dispose?.();
+        await hooks.dispose?.();
 
-    // dispose must call companionManager.onExit(): the session entry is
-    // withdrawn even if the next generation fails before its own onLoad.
-    expect(readSessionIds()).not.toContain(companionSessionId);
+        // dispose must call companionManager.onExit(): the session entry is
+        // withdrawn even if the next generation fails before its own onLoad.
+        expect(readSessionIds()).not.toContain(companionSessionId);
+      } finally {
+        await hooks?.dispose?.();
+      }
+    });
   });
 
   test('companion startup does not gate plugin availability on a slow download', async () => {
@@ -2673,47 +2680,50 @@ describe('plugin reload generation cleanup', () => {
       `${projectDir}/oh-my-opencode-slim.json`,
       JSON.stringify({ companion: { enabled: true } }),
     );
-    const fetchOriginal = globalThis.fetch;
-    const started = Promise.withResolvers<void>();
-    const loaded = Promise.withResolvers<void>();
-    let complete!: (response: Response) => void;
-    let aborted = false;
-    globalThis.fetch = ((_url, options) =>
-      new Promise<Response>((resolve, reject) => {
-        complete = resolve;
-        options?.signal?.addEventListener('abort', () => {
-          aborted = true;
-          reject(new Error('aborted'));
-        });
-        started.resolve();
-      })) as typeof fetch;
-    const originalLoad = CompanionManager.prototype.onLoad;
-    const load = spyOn(CompanionManager.prototype, 'onLoad').mockImplementation(
-      function (this: CompanionManager) {
+    await withTuiAttachment(projectDir, async () => {
+      const fetchOriginal = globalThis.fetch;
+      const started = Promise.withResolvers<void>();
+      const loaded = Promise.withResolvers<void>();
+      let complete!: (response: Response) => void;
+      let aborted = false;
+      globalThis.fetch = ((_url, options) =>
+        new Promise<Response>((resolve, reject) => {
+          complete = resolve;
+          options?.signal?.addEventListener('abort', () => {
+            aborted = true;
+            reject(new Error('aborted'));
+          });
+          started.resolve();
+        })) as typeof fetch;
+      const originalLoad = CompanionManager.prototype.onLoad;
+      const load = spyOn(
+        CompanionManager.prototype,
+        'onLoad',
+      ).mockImplementation(function (this: CompanionManager) {
         originalLoad.call(this);
         loaded.resolve();
-      },
-    );
-    jest.useFakeTimers();
-    let hooks: Awaited<ReturnType<typeof plugin>> | undefined;
-    try {
-      const initialization = createHooks();
-      await started.promise;
-      jest.advanceTimersByTime(3_001);
-      hooks = await initialization;
-      expect(aborted).toBe(false);
-      complete(new Response('', { status: 503 }));
-      await loaded.promise;
-      expect(
-        JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions,
-      ).toHaveLength(1);
-    } finally {
-      complete?.(new Response('', { status: 503 }));
-      await hooks?.dispose?.();
-      load.mockRestore();
-      globalThis.fetch = fetchOriginal;
-      jest.useRealTimers();
-    }
+      });
+      jest.useFakeTimers();
+      let hooks: Awaited<ReturnType<typeof plugin>> | undefined;
+      try {
+        const initialization = createHooks();
+        await started.promise;
+        jest.advanceTimersByTime(3_001);
+        hooks = await initialization;
+        expect(aborted).toBe(false);
+        complete(new Response('', { status: 503 }));
+        await loaded.promise;
+        expect(
+          JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions,
+        ).toHaveLength(1);
+      } finally {
+        complete?.(new Response('', { status: 503 }));
+        await hooks?.dispose?.();
+        load.mockRestore();
+        globalThis.fetch = fetchOriginal;
+        jest.useRealTimers();
+      }
+    });
   });
 
   test('reloaded companion starts after the retired generation finishes installing', async () => {
@@ -2721,102 +2731,106 @@ describe('plugin reload generation cleanup', () => {
       `${projectDir}/oh-my-opencode-slim.json`,
       JSON.stringify({ companion: { enabled: true } }),
     );
-    const binary = getCompanionBinaryPath();
-    const target = getCompanionTarget();
-    const archive = `oh-my-opencode-slim-companion-v${COMPANION_MANIFEST.version}-${target}.${process.platform === 'win32' ? 'zip' : 'tar.gz'}`;
-    const bytes = Buffer.from('verified companion archive');
-    const checksums = COMPANION_MANIFEST.checksums;
-    COMPANION_MANIFEST.checksums = {
-      ...checksums,
-      [archive]: createHash('sha256').update(bytes).digest('hex'),
-    };
-    const download = Promise.withResolvers<Response>();
-    const started = Promise.withResolvers<void>();
-    const installed = Promise.withResolvers<void>();
-    const loaded = Promise.withResolvers<void>();
-    const joined = Promise.withResolvers<void>();
-    const attempts: Promise<unknown>[] = [];
-    const originalEnsure = companionUpdater.ensureCompanionVersionForStartup;
-    const ensure = spyOn(
-      companionUpdater,
-      'ensureCompanionVersionForStartup',
-    ).mockImplementation((...args) => {
-      const pending = originalEnsure(...args);
-      attempts.push(pending);
-      if (attempts.length === 2) joined.resolve();
-      return pending;
-    });
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = (() => {
-      started.resolve();
-      return download.promise;
-    }) as typeof fetch;
-    const extractBinary = (destination: string) => {
-      writeFileSync(path.join(destination, path.basename(binary)), 'binary');
-    };
-    const originalCrossSpawn = compat.crossSpawn;
-    const extractTar = spyOn(compat, 'crossSpawn').mockImplementation(
-      (command, options) => {
-        if (command[0] !== 'tar') return originalCrossSpawn(command, options);
-        extractBinary(command[4]);
-        return { exited: Promise.resolve(0) } as ReturnType<
-          typeof compat.crossSpawn
-        >;
-      },
-    );
-    const extractZip = spyOn(zip, 'extractZip').mockImplementation(
-      async (_archive, destination) => extractBinary(destination),
-    );
-    const originalRename = fs.renameSync;
-    const rename = spyOn(fs, 'renameSync').mockImplementation((from, to) => {
-      originalRename(from, to);
-      if (String(to) === binary) installed.resolve();
-    });
-    const child = Object.assign(new EventEmitter(), {
-      pid: undefined,
-      unref: () => {},
-      kill: () => true,
-    });
-    const spawn = spyOn(childProcess, 'spawn').mockReturnValue(
-      child as childProcess.ChildProcess,
-    );
-    const originalLoad = CompanionManager.prototype.onLoad;
-    const load = spyOn(CompanionManager.prototype, 'onLoad').mockImplementation(
-      function (this: CompanionManager) {
+    await withTuiAttachment(projectDir, async () => {
+      const binary = getCompanionBinaryPath();
+      const target = getCompanionTarget();
+      const archive = `oh-my-opencode-slim-companion-v${COMPANION_MANIFEST.version}-${target}.${process.platform === 'win32' ? 'zip' : 'tar.gz'}`;
+      const bytes = Buffer.from('verified companion archive');
+      const checksums = COMPANION_MANIFEST.checksums;
+      COMPANION_MANIFEST.checksums = {
+        ...checksums,
+        [archive]: createHash('sha256').update(bytes).digest('hex'),
+      };
+      const download = Promise.withResolvers<Response>();
+      const started = Promise.withResolvers<void>();
+      const installed = Promise.withResolvers<void>();
+      const loaded = Promise.withResolvers<void>();
+      const joined = Promise.withResolvers<void>();
+      const attempts: Promise<unknown>[] = [];
+      const originalEnsure = companionUpdater.ensureCompanionVersionForStartup;
+      const ensure = spyOn(
+        companionUpdater,
+        'ensureCompanionVersionForStartup',
+      ).mockImplementation((...args) => {
+        const pending = originalEnsure(...args);
+        attempts.push(pending);
+        if (attempts.length === 2) joined.resolve();
+        return pending;
+      });
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (() => {
+        started.resolve();
+        return download.promise;
+      }) as typeof fetch;
+      const extractBinary = (destination: string) => {
+        writeFileSync(path.join(destination, path.basename(binary)), 'binary');
+      };
+      const originalCrossSpawn = compat.crossSpawn;
+      const extractTar = spyOn(compat, 'crossSpawn').mockImplementation(
+        (command, options) => {
+          if (command[0] !== 'tar') return originalCrossSpawn(command, options);
+          extractBinary(command[4]);
+          return { exited: Promise.resolve(0) } as ReturnType<
+            typeof compat.crossSpawn
+          >;
+        },
+      );
+      const extractZip = spyOn(zip, 'extractZip').mockImplementation(
+        async (_archive, destination) => extractBinary(destination),
+      );
+      const originalRename = fs.renameSync;
+      const rename = spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+        originalRename(from, to);
+        if (String(to) === binary) installed.resolve();
+      });
+      const child = Object.assign(new EventEmitter(), {
+        pid: undefined,
+        unref: () => {},
+        kill: () => true,
+      });
+      const spawn = spyOn(childProcess, 'spawn').mockReturnValue(
+        child as childProcess.ChildProcess,
+      );
+      const originalLoad = CompanionManager.prototype.onLoad;
+      const load = spyOn(
+        CompanionManager.prototype,
+        'onLoad',
+      ).mockImplementation(function (this: CompanionManager) {
         originalLoad.call(this);
         loaded.resolve();
-      },
-    );
-    jest.useFakeTimers();
-    let first: Awaited<ReturnType<typeof plugin>> | undefined;
-    let current: Awaited<ReturnType<typeof plugin>> | undefined;
-    try {
-      first = await createHooks();
-      await started.promise;
-      await first.dispose?.();
-      current = await createHooks();
-      await joined.promise;
-      expect(attempts[1]).toBe(attempts[0]);
-      download.resolve(new Response(bytes));
-      await installed.promise;
-      await loaded.promise;
-      expect(load).toHaveBeenCalledTimes(1);
-      expect(spawn).toHaveBeenCalledWith(binary, [], expect.any(Object));
-    } finally {
-      await first?.dispose?.();
-      await current?.dispose?.();
-      download.resolve(new Response(bytes));
-      jest.useRealTimers();
-      await Promise.allSettled(attempts);
-      ensure.mockRestore();
-      load.mockRestore();
-      spawn.mockRestore();
-      rename.mockRestore();
-      extractZip.mockRestore();
-      extractTar.mockRestore();
-      globalThis.fetch = originalFetch;
-      COMPANION_MANIFEST.checksums = checksums;
-    }
+      });
+      jest.useFakeTimers();
+      let first: Awaited<ReturnType<typeof plugin>> | undefined;
+      let current: Awaited<ReturnType<typeof plugin>> | undefined;
+      try {
+        first = await createHooks();
+        await started.promise;
+        await first.dispose?.();
+        current = await createHooks();
+        await joined.promise;
+        expect(attempts[1]).toBe(attempts[0]);
+        download.resolve(new Response(bytes));
+        await installed.promise;
+        await loaded.promise;
+        jest.advanceTimersByTime(250);
+        expect(load).toHaveBeenCalledTimes(1);
+        expect(spawn).toHaveBeenCalledWith(binary, [], expect.any(Object));
+      } finally {
+        await first?.dispose?.();
+        await current?.dispose?.();
+        download.resolve(new Response(bytes));
+        jest.useRealTimers();
+        await Promise.allSettled(attempts);
+        ensure.mockRestore();
+        load.mockRestore();
+        spawn.mockRestore();
+        rename.mockRestore();
+        extractZip.mockRestore();
+        extractTar.mockRestore();
+        globalThis.fetch = originalFetch;
+        COMPANION_MANIFEST.checksums = checksums;
+      }
+    });
   });
 
   test('disposing the last companion consumer stops waiting for another process', async () => {
@@ -2896,37 +2910,39 @@ describe('plugin reload generation cleanup', () => {
         companion: { enabled: true, binaryPath: `${projectDir}/missing` },
       }),
     );
-    const hooks = await createHooks();
-    try {
-      const send = (type: string, properties: Record<string, unknown>) =>
-        hooks.event?.({ event: { type, properties } } as never);
-      await send('session.status', {
-        sessionID: 'child-a',
-        status: { type: 'busy' },
-      });
-      await send('session.status', {
-        sessionID: 'child-b',
-        status: { type: 'busy' },
-      });
-      await send('permission.asked', { sessionID: 'child-a', id: 'a' });
-      await send('permission.asked', { sessionID: 'child-b', id: 'b' });
-      await send('permission.asked', { sessionID: 'child-b', id: 'b' });
-      await send('permission.replied', {
-        sessionID: 'child-a',
-        requestID: 'a',
-      });
-      const row = () =>
-        JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions[0];
-      expect(row().status).toBe('waiting-input');
-      expect(row().attention_seq).toBe(2);
-      await send('permission.replied', {
-        sessionID: 'child-b',
-        requestID: 'b',
-      });
-      expect(row().status).toBe('busy');
-    } finally {
-      await hooks.dispose?.();
-    }
+    await withTuiAttachment(projectDir, async () => {
+      const hooks = await createHooks();
+      try {
+        const send = (type: string, properties: Record<string, unknown>) =>
+          hooks.event?.({ event: { type, properties } } as never);
+        await send('session.status', {
+          sessionID: 'child-a',
+          status: { type: 'busy' },
+        });
+        await send('session.status', {
+          sessionID: 'child-b',
+          status: { type: 'busy' },
+        });
+        await send('permission.asked', { sessionID: 'child-a', id: 'a' });
+        await send('permission.asked', { sessionID: 'child-b', id: 'b' });
+        await send('permission.asked', { sessionID: 'child-b', id: 'b' });
+        await send('permission.replied', {
+          sessionID: 'child-a',
+          requestID: 'a',
+        });
+        const row = () =>
+          JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions[0];
+        expect(row().status).toBe('waiting-input');
+        expect(row().attention_seq).toBe(2);
+        await send('permission.replied', {
+          sessionID: 'child-b',
+          requestID: 'b',
+        });
+        expect(row().status).toBe('busy');
+      } finally {
+        await hooks.dispose?.();
+      }
+    });
   });
 
   test('companion clears cancelled waits only for the terminated or deleted session', async () => {
@@ -2936,29 +2952,34 @@ describe('plugin reload generation cleanup', () => {
         companion: { enabled: true, binaryPath: `${projectDir}/missing` },
       }),
     );
-    const hooks = await createHooks();
-    try {
-      const send = (type: string, properties: Record<string, unknown>) =>
-        hooks.event?.({ event: { type, properties } } as never);
-      await send('session.status', {
-        sessionID: 'a',
-        status: { type: 'busy' },
-      });
-      await send('session.status', {
-        sessionID: 'b',
-        status: { type: 'busy' },
-      });
-      await send('permission.asked', { sessionID: 'a', id: 'permission' });
-      await send('question.asked', { sessionID: 'b', id: 'question' });
-      await send('session.idle', { sessionID: 'a' });
-      const row = () =>
-        JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions[0];
-      expect(row().status).toBe('waiting-input');
-      await send('session.deleted', { info: { id: 'b' }, sessionID: 'b' });
-      expect(row()).toMatchObject({ status: 'idle', active_agents: ['intro'] });
-    } finally {
-      await hooks.dispose?.();
-    }
+    await withTuiAttachment(projectDir, async () => {
+      const hooks = await createHooks();
+      try {
+        const send = (type: string, properties: Record<string, unknown>) =>
+          hooks.event?.({ event: { type, properties } } as never);
+        await send('session.status', {
+          sessionID: 'a',
+          status: { type: 'busy' },
+        });
+        await send('session.status', {
+          sessionID: 'b',
+          status: { type: 'busy' },
+        });
+        await send('permission.asked', { sessionID: 'a', id: 'permission' });
+        await send('question.asked', { sessionID: 'b', id: 'question' });
+        await send('session.idle', { sessionID: 'a' });
+        const row = () =>
+          JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions[0];
+        expect(row().status).toBe('waiting-input');
+        await send('session.deleted', { info: { id: 'b' }, sessionID: 'b' });
+        expect(row()).toMatchObject({
+          status: 'idle',
+          active_agents: ['intro'],
+        });
+      } finally {
+        await hooks.dispose?.();
+      }
+    });
   });
 });
 
@@ -5781,70 +5802,72 @@ describe('plugin foreground fallback host gating', () => {
         agents: { orchestrator: { model: ['openai/gpt-b', 'openai/gpt-c'] } },
       }),
     );
-    const { client, messages, promptAsync } = createFallbackClient();
-    messages.mockResolvedValue({
-      data: [
-        {
-          info: { id: 'user', role: 'user' },
-          parts: [{ type: 'text', text: 'hello' }],
-        },
-      ],
-    });
-    const hooks = await plugin({
-      client,
-      directory: projectDir,
-      worktree: projectDir,
-      serverUrl: new URL('http://127.0.0.1:4096'),
-    } as never);
-    const busy = () =>
-      hooks.event?.({
-        event: {
-          type: 'session.status',
-          properties: { sessionID: 'root', status: { type: 'busy' } },
-        },
+    await withTuiAttachment(projectDir, async () => {
+      const { client, messages, promptAsync } = createFallbackClient();
+      messages.mockResolvedValue({
+        data: [
+          {
+            info: { id: 'user', role: 'user' },
+            parts: [{ type: 'text', text: 'hello' }],
+          },
+        ],
+      });
+      const hooks = await plugin({
+        client,
+        directory: projectDir,
+        worktree: projectDir,
+        serverUrl: new URL('http://127.0.0.1:4096'),
       } as never);
-    promptAsync.mockImplementation(async () => {
-      await busy();
-      return {};
-    });
-    try {
-      await hooks['chat.message']?.(
-        {
-          sessionID: 'root',
-          agent: 'orchestrator',
-          model: { providerID: 'openai', modelID: 'gpt-b' },
-        } as never,
-        {} as never,
-      );
-      await hooks.event?.({
-        event: {
-          type: 'message.updated',
-          properties: {
-            info: {
-              id: 'assistant',
-              sessionID: 'root',
-              role: 'assistant',
-              agent: 'orchestrator',
-              providerID: 'openai',
-              modelID: 'gpt-b',
+      const busy = () =>
+        hooks.event?.({
+          event: {
+            type: 'session.status',
+            properties: { sessionID: 'root', status: { type: 'busy' } },
+          },
+        } as never);
+      promptAsync.mockImplementation(async () => {
+        await busy();
+        return {};
+      });
+      try {
+        await hooks['chat.message']?.(
+          {
+            sessionID: 'root',
+            agent: 'orchestrator',
+            model: { providerID: 'openai', modelID: 'gpt-b' },
+          } as never,
+          {} as never,
+        );
+        await hooks.event?.({
+          event: {
+            type: 'message.updated',
+            properties: {
+              info: {
+                id: 'assistant',
+                sessionID: 'root',
+                role: 'assistant',
+                agent: 'orchestrator',
+                providerID: 'openai',
+                modelID: 'gpt-b',
+              },
             },
           },
-        },
-      } as never);
-      await busy();
-      await hooks.event?.({
-        event: {
-          type: 'session.error',
-          properties: { sessionID: 'root', error: { message: 'rate limit' } },
-        },
-      } as never);
-      expect(promptAsync).toHaveBeenCalledTimes(1);
-      expect(
-        JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions[0],
-      ).toMatchObject({ status: 'busy', active_agents: ['orchestrator'] });
-    } finally {
-      await hooks.dispose?.();
-    }
+        } as never);
+        await busy();
+        await hooks.event?.({
+          event: {
+            type: 'session.error',
+            properties: { sessionID: 'root', error: { message: 'rate limit' } },
+          },
+        } as never);
+        expect(promptAsync).toHaveBeenCalledTimes(1);
+        expect(
+          JSON.parse(readFileSync(stateFilePath(), 'utf8')).sessions[0],
+        ).toMatchObject({ status: 'busy', active_agents: ['orchestrator'] });
+      } finally {
+        await hooks.dispose?.();
+      }
+    });
   });
 
   test('v1 external admission fences a pending fallback before message.updated', async () => {

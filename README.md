@@ -746,7 +746,9 @@ bunx oh-my-opencode-slim@latest companion install
 ```
 
 This downloads the native binary for your platform and sets
-`"companion": { "enabled": true }` in your config. Restart OpenCode to launch it.
+`"companion": { "enabled": true }` in your config. Restart OpenCode in an
+interactive TUI session with the OMOS TUI plugin loaded and `tui` enabled;
+headless server, `opencode run`, and ACP/editor sessions do not launch it.
 
 See **[Companion](docs/companion.md)** for configuration, positions, sizes, and
 install details.

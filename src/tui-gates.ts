@@ -40,6 +40,7 @@ export interface SidebarConfigState {
 export interface TuiGatesSnapshot extends SidebarConfigState {
   tuiEnabled: boolean;
   sidebarEnabled: boolean;
+  companionEnabled: boolean;
   updateCheckerEnabled: boolean;
   questionTimeoutMs: number;
   disabledCommands: ReadonlySet<string>;
@@ -78,6 +79,7 @@ function failOpenTuiGates(): TuiGatesSnapshot {
   return {
     tuiEnabled: true,
     sidebarEnabled: true,
+    companionEnabled: false,
     configInvalid: false,
     compactSidebar: true,
     showHiddenAgents: false,
@@ -112,6 +114,7 @@ function deriveTuiGates(snapshot: PluginConfigSnapshot): TuiGatesSnapshot {
   return {
     tuiEnabled: featureGates.tui,
     sidebarEnabled: featureGates.sidebar,
+    companionEnabled: config.companion?.enabled === true,
     updateCheckerEnabled: featureGates.updateChecker,
     questionTimeoutMs: config.questionTimeoutMs ?? 0,
     configInvalid: warningsMakeConfigInvalid(snapshot.warnings),

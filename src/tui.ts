@@ -9,6 +9,7 @@ import { type ColorInput, parseColor, RGBA } from '@opentui/core';
 import type { JSX } from '@opentui/solid';
 import { createElement, insert, setProp } from '@opentui/solid';
 import { createSignal } from 'solid-js';
+import { attachTuiProcess } from './companion/attachments';
 import {
   ALL_AGENT_NAMES,
   DEFAULT_DISABLED_AGENTS,
@@ -2982,6 +2983,9 @@ const plugin: TuiDualContractModule = {
       paneConfig: gatesRead.paneConfig,
     });
     api.lifecycle.onDispose(() => paneWiring.dispose());
+    if (gatesRead.gates.companionEnabled) {
+      api.lifecycle.onDispose(attachTuiProcess(getTuiDirectory(api)));
+    }
   },
   setup,
 };
