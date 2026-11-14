@@ -709,7 +709,7 @@ bunx oh-my-opencode-slim@latest companion install
   </tr>
   <tr>
     <td dir="rtl" align="right"><strong><a href="docs/opencode-v2-compatibility.md">سازگاری با OpenCode v2</a></strong></td>
-    <td dir="rtl" align="right">اجرای همان Plugin روی <code>opencode2</code>: ماتریس featureها، baseline سازگاری با v2.3.0+ و pin کردن version</td>
+    <td dir="rtl" align="right">اجرای همان Plugin روی <code>opencode</code>: ماتریس featureها، baseline سازگاری با v2.3.0+ و pin کردن version</td>
   </tr>
   <tr>
     <td><strong><a href="docs/configuration.md">Configuration</a></strong></td>

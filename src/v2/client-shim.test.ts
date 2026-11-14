@@ -14,7 +14,7 @@ import type { V2Context } from './types';
 
 function makeCtx(overrides?: Partial<V2Context['session']>): V2Context {
   return {
-    app: { name: 'opencode2', version: 'test' },
+    app: { name: 'opencode', version: 'test' },
     options: {},
     agent: {
       transform: async () => ({ dispose() {} }),

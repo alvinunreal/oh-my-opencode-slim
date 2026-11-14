@@ -58,7 +58,7 @@ This codemap covers the plugin repository itself and excludes the nested `openco
 | `src/tools/ast-grep/` | AST-grep binary management and AST-aware search/replace tool flow. | [View Map](src/tools/ast-grep/codemap.md) |
 | `src/tools/smartfetch/` | Fetch/extract/cache pipeline for web content and binary persistence. | [View Map](src/tools/smartfetch/codemap.md) |
 | `src/utils/` | Cross-cutting helpers: logging, session metadata, live session-status reads, in-process opencode client access, task parsing, env, compat/zip, and client call-shape contracts. | [View Map](src/utils/codemap.md) |
-| `src/v2/` | OpenCode v2 (`opencode2`) adapter: bridges the v1 plugin factory into v2's promise-plugin transform/runtime-hook API. Loaded via `default.setup`. | [View Map](src/v2/codemap.md) |
+| `src/v2/` | OpenCode 2 adapter: bridges the shared plugin factory into OpenCode’s promise-plugin transform/runtime-hook API. Loaded via `default.setup`. | [View Map](src/v2/codemap.md) |
 | `scripts/` | Build/release validation and generated-artifact maintenance scripts. | [View Map](scripts/codemap.md) |
 | `src/generated/` | Generated build metadata (`build-info.ts` via `scripts/gen-build-info.ts`); never edit by hand. | [View Map](src/generated/codemap.md) |
 | `src/companion/` | Plugin-side state manager, installer/updater, and pinned native release metadata. Rust/media/builds/releases live in the separate [oh-my-opencode-companion](https://github.com/alvinunreal/oh-my-opencode-companion) repository, with its crate at the root. | [View Map](src/companion/codemap.md) |

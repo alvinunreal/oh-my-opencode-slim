@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-OpenCode v2 (`opencode2`) host adapter. Bridges the existing v1 plugin factory
+OpenCode 2 host adapter. Bridges the existing v1 plugin factory
 into v2's promise-plugin transform/runtime-hook API so a single published
 package runs on both hosts.
 

@@ -252,7 +252,7 @@ that text:
 | Host (plugin entry) | Delegation call | Agent param | Resume param |
 |---|---|---|---|
 | v1 (`opencode`) | `task(...)` | `subagent_type` | `task_id` |
-| v2 (`opencode2`) | `subagent(...)` | `agent` | `sessionID` |
+| OpenCode 2 | `subagent(...)` | `agent` | `sessionID` |
 
 This applies to **every** prompt you supply:
 

@@ -1,4 +1,4 @@
-# OpenCode v2 (`opencode2`) Compatibility
+# OpenCode 2 Compatibility
 
 Slim requires **OpenCode 2.3.0 or newer**. OpenCode runs subagents in the
 background and reports each child idle period. [OpenCode 2.3 changelog](https://opencode.ai/changelog/v2.3.0)
@@ -553,8 +553,7 @@ currently break this plugin:
 Add the npm package, **pinned to an exact version** — v2 auto-refreshes
 unpinned npm plugins on every startup, so `@latest` effectively means
 "silently upgrade whenever a new version ships". The global config root is
-`~/.config/opencode/opencode.json`, shared with v1 (`~/.config/opencode2/`
-is not read for plugin config):
+`~/.config/opencode/opencode.json`:
 
 ```json
 {
@@ -621,7 +620,7 @@ Register the shim directory in the OpenCode v2 config:
 `bun run build` after each source change; the forwarders (or the shim)
 re-export the fresh bundles and no publish step is involved.
 
-Verify with `opencode2 run "list your specialist agents" --standalone` — the
+Verify with `opencode run "list your specialist agents" --standalone` — the
 orchestrator should name explorer, oracle, designer, fixer.
 
 ### Registration rules

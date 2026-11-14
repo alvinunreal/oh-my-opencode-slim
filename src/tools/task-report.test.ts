@@ -23,7 +23,7 @@ function createContext(options: {
     },
   };
   const ctx = {
-    app: { name: 'opencode2', version: 'test' },
+    app: { name: 'opencode', version: 'test' },
     options: {},
     agent: {
       transform: async () => ({ dispose() {} }),

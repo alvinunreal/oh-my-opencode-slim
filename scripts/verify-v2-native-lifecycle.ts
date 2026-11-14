@@ -64,7 +64,7 @@ type PackEntry = { filename?: string };
 
 const ROOT = '/tmp/opencode/v2-native-lifecycle';
 const HOST_VERSION = '2.3.0';
-const HOST = process.env.V2_LIFECYCLE_HOST ?? 'opencode2';
+const HOST = process.env.V2_LIFECYCLE_HOST ?? 'opencode';
 const REPO = path.resolve(import.meta.dir, '..');
 const args = process.argv.slice(2);
 const options = {

@@ -637,7 +637,7 @@ bunx oh-my-opencode-slim@latest companion install
 | 문서 | 내용 |
 |-----|------|
 | **[설치 가이드](docs/installation.md)** | 플러그인 설치, 명령줄 인터페이스(CLI) 옵션 사용, 설정 초기화, 설치 문제 해결 |
-| **[OpenCode v2 호환성](docs/opencode-v2-compatibility.md)** | `opencode2`에서 플러그인 실행, 기능 지원표, v2.3.0+ 호환 기준, 버전 고정 |
+| **[OpenCode v2 호환성](docs/opencode-v2-compatibility.md)** | `opencode`에서 플러그인 실행, 기능 지원표, v2.3.0+ 호환 기준, 버전 고정 |
 | **[설정](docs/configuration.md)** | 설정 파일 위치, 주석을 지원하는 JSON(JSONC), 프롬프트 재정의, 전체 옵션 설명 |
 | **[마켓플레이스](docs/marketplace.md)** | 마켓플레이스 에이전트 패키지 설치, 확인, 활성화, 업데이트 |
 | **[프로젝트별 사용자 지정](docs/project-local-customization.md)** | 저장소별 사용자 지정 에이전트, 프롬프트 재정의, 에이전트별 스킬 및 설정 우선순위 |

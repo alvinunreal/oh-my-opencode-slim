@@ -119,7 +119,6 @@ export function findOpenCode(
   environment: NodeJS.ProcessEnv = process.env,
 ): { path: string; version: string; hostFlavor: 'v1' | 'v2' } | null {
   const paths = [
-    resolvePathCommand('opencode2', environment),
     resolvePathCommand('opencode', environment) ?? 'opencode',
     ...getOpenCodePaths(environment),
   ];
