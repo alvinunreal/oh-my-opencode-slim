@@ -5,7 +5,10 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isUserMessageWithParts } from '../hooks/types';
 import { classifyTerminalEvidence } from '../utils/child-transcript';
-import { createInternalAgentTextPart } from '../utils/internal-initiator';
+import {
+  createInternalAgentTextPart,
+  TERMINAL_DELTA_METADATA_KEY,
+} from '../utils/internal-initiator';
 import { buildPluginInput } from './client-shim';
 import type { V2Context } from './types';
 
@@ -747,6 +750,9 @@ describe('v2 client shim delegation', () => {
       resume: true,
       metadata: { 'oh-my-opencode-slim.internalInitiator': true },
     });
+    expect((seq[0].i as { metadata?: unknown }).metadata).toEqual({
+      'oh-my-opencode-slim.internalInitiator': true,
+    });
     expect(typeof (seq[0].i as { description?: unknown }).description).toBe(
       'string',
     );
@@ -754,6 +760,59 @@ describe('v2 client shim delegation', () => {
       'SLIM_INTERNAL_INITIATOR',
     );
     expect(result).toMatchObject({ admitted: true });
+  });
+
+  test('promptAsync forwards the terminal-delta fence to session.synthetic without unrelated metadata', async () => {
+    // Completed-job pushes fence the exact run in part metadata. The
+    // synthetic admission must carry that fence instead of dropping it,
+    // while unrelated part metadata is not copied onto the host prompt.
+    // Host persistence and inbound consumption are outside this test.
+    const fences = [
+      {
+        taskID: 'ses_done',
+        generation: 2,
+        terminalRevision: 3,
+        state: 'completed' as const,
+      },
+    ];
+    const seq: Array<{ m: string; i: unknown }> = [];
+    const input = buildPluginInput(
+      makeCtx({
+        prompt: async (i: unknown) => {
+          seq.push({ m: 'prompt', i });
+          return {};
+        },
+        synthetic: async (i: unknown) => {
+          seq.push({ m: 'synthetic', i });
+          return {};
+        },
+      } as never),
+    );
+    await (
+      input.client as {
+        session: { promptAsync: (a: unknown) => Promise<unknown> };
+      }
+    ).session.promptAsync({
+      path: { id: 'ses_1' },
+      body: {
+        agent: 'orchestrator',
+        parts: [
+          createInternalAgentTextPart('wake reminder', {
+            [TERMINAL_DELTA_METADATA_KEY]: fences,
+            unrelated: 'drop-me',
+          }),
+        ],
+      },
+      delivery: 'queue',
+    });
+    expect(seq).toHaveLength(1);
+    expect(seq[0].m).toBe('synthetic');
+    const metadata = (seq[0].i as { metadata: Record<string, unknown> })
+      .metadata;
+    expect(metadata).toEqual({
+      'oh-my-opencode-slim.internalInitiator': true,
+      [TERMINAL_DELTA_METADATA_KEY]: fences,
+    });
   });
 
   test("lifecycle continuation with modelSelection:'inherit' inherits the persisted host selection", async () => {
@@ -1628,6 +1687,46 @@ describe('v2 client shim foreground-fallback integration', () => {
       }
     ).session.messages({ sessionID: 'ses_parent' });
     expect(result.data[0]).toMatchObject({ parts: [{ metadata }] });
+  });
+
+  test('messages retains the terminal-delta fence on synthetic history', async () => {
+    // The v2 delivery that session.synthetic admits carries its metadata
+    // on the synthetic transcript entry. The v1 mapping must keep the exact
+    // run fence (generation, terminal revision, state) instead of dropping
+    // it. Host-side persistence and retirement are not proven here.
+    const fences = [
+      {
+        taskID: 'ses_done',
+        generation: 2,
+        terminalRevision: 3,
+        state: 'completed' as const,
+      },
+    ];
+    const metadata = {
+      'oh-my-opencode-slim.internalInitiator': true,
+      [TERMINAL_DELTA_METADATA_KEY]: fences,
+    };
+    const input = buildPluginInput(
+      makeCtx({
+        context: async () => [
+          {
+            id: 'msg_omos_delivery',
+            type: 'synthetic',
+            text: '<completed-job>\ntask: ses_done\nstate: completed\n</completed-job>',
+            metadata,
+            time: { created: 2 },
+          },
+        ],
+      } as never),
+    );
+    const result = await (
+      input.client as {
+        session: { messages: (a: unknown) => Promise<{ data: unknown[] }> };
+      }
+    ).session.messages({ sessionID: 'ses_parent' });
+    expect(result.data[0]).toMatchObject({
+      parts: [{ type: 'text', metadata }],
+    });
   });
 
   test('messages preserves v2 terminal metadata through the v1 mapping', async () => {

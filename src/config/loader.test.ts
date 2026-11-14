@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { getAgentMcpList } from './agent-mcps';
 import { resolveFeatureGates } from './feature-gates';
 import type { ConfigLoadWarning } from './loader';
 import {
@@ -10,6 +11,7 @@ import {
   loadAgentPrompt,
   loadPluginConfig,
 } from './loader';
+import { RuntimeConfig } from './runtime';
 
 // Test deepMerge indirectly through loadPluginConfig behavior
 // since deepMerge is not exported
@@ -3456,4 +3458,292 @@ describe('removed config keys', () => {
     expect(config.agents?.oracle?.model).toBeUndefined();
     expect(warnings.map((w) => w.kind)).toEqual(['invalid-schema']);
   });
+});
+
+describe('legacy generated preset explorer.mcps repair', () => {
+  const G = ['context7', 'gh_grep'];
+  const RUNTIME = 'loader-legacy-preset-mcps';
+  let tempDir: string;
+  let originalEnv: typeof process.env;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loader-legacy-mcps-'));
+    originalEnv = { ...process.env };
+    delete process.env.OPENCODE_CONFIG_DIR;
+    delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
+    process.env.XDG_CONFIG_HOME = path.join(tempDir, 'user-config');
+    RuntimeConfig.reset(RUNTIME);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) delete process.env[key];
+    }
+    Object.assign(process.env, originalEnv);
+    RuntimeConfig.reset(RUNTIME);
+  });
+
+  function write(dir: string, raw: unknown): void {
+    const configDir = path.join(dir, '.opencode');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify(raw),
+    );
+  }
+
+  function load(dir: string) {
+    const warnings: ConfigLoadWarning[] = [];
+    const config = loadPluginConfig(dir, {
+      silent: true,
+      onWarning: (warning) => warnings.push(warning),
+    });
+    RuntimeConfig.reset(RUNTIME);
+    const mcps = getAgentMcpList(
+      'explorer',
+      RuntimeConfig.init(RUNTIME, config),
+    );
+    return { config, warnings, mcps };
+  }
+
+  function loadOne(raw: Record<string, unknown>, name = 'project') {
+    const dir = path.join(tempDir, name);
+    write(dir, raw);
+    return load(dir);
+  }
+
+  const project = (name: string, preset: Record<string, unknown>) => ({
+    preset: name,
+    presets: { [name]: preset },
+  });
+  const pair = (
+    librarian: string[] | undefined,
+    explorer: string[] | undefined,
+    extra: Record<string, unknown> = {},
+  ) => ({
+    ...(librarian && { librarian: { mcps: librarian } }),
+    ...(explorer && { explorer: { mcps: explorer } }),
+    ...extra,
+  });
+
+  test('repairs the generated pair under an arbitrary preset name', () => {
+    const name = 'team-legacy-2025';
+    const { config, warnings, mcps } = loadOne(project(name, pair(G, [])));
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({ kind: 'normalized' });
+    expect(warnings[0]?.message).toContain(`presets.${name}.explorer.mcps`);
+    expect(config.presets?.[name]?.explorer?.mcps).toEqual(G);
+    expect(config.agents?.explorer?.mcps).toEqual(G);
+    expect(mcps).toEqual(G);
+  });
+
+  test('repairs only mcps; other fields follow the existing alias merge', () => {
+    const canonical = {
+      mcps: [] as string[],
+      model: 'test/canonical',
+      variant: 'high',
+      skills: [] as string[],
+      prompt: 'canonical prompt',
+      options: { reasoning: { effort: 'high' } },
+      permission: { webfetch: 'deny' },
+    };
+    const { config, warnings } = loadOne(
+      project('fields', {
+        librarian: {
+          mcps: G,
+          model: 'test/legacy',
+          skills: ['research-skill'],
+          temperature: 0.4,
+          description: 'legacy description',
+        },
+        explorer: canonical,
+      }),
+    );
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.message).toContain('presets.fields.explorer.mcps');
+    expect(config.presets?.fields?.explorer?.skills).toEqual([]);
+    expect(config.presets?.fields?.explorer).toEqual({
+      ...canonical,
+      mcps: G,
+      temperature: 0.4,
+      description: 'legacy description',
+    });
+  });
+
+  // [label, preset name, raw config, expected MCPs, repair warning path,
+  //  extra assertion on the resolved preset]
+  const cases: Array<
+    [
+      string,
+      string,
+      Record<string, unknown>,
+      string[],
+      string?,
+      Record<string, unknown>?,
+    ]
+  > = [
+    [
+      'reversed librarian MCP order',
+      'order',
+      project('order', pair(['gh_grep', 'context7'], [])),
+      ['gh_grep', 'context7'],
+      'presets.order.explorer.mcps',
+    ],
+    [
+      'canonical entry written first',
+      'keys',
+      project('keys', { explorer: { mcps: [] }, librarian: { mcps: G } }),
+      G,
+      'presets.keys.explorer.mcps',
+    ],
+    [
+      'structured {agents} wrapper',
+      'struct',
+      project('struct', { agents: pair(G, []) }),
+      G,
+      'presets.struct.agents.explorer.mcps',
+    ],
+    [
+      'inline extends syntax',
+      'child',
+      {
+        preset: 'child',
+        presets: {
+          base: { oracle: { model: 'test/oracle' } },
+          child: { extends: 'base', ...pair(G, []) },
+        },
+      },
+      G,
+      'presets.child.explorer.mcps',
+    ],
+    [
+      'flat custom agent named agents',
+      'flat',
+      project('flat', pair(G, [], { agents: { model: 'test/custom' } })),
+      G,
+      'presets.flat.explorer.mcps',
+      { agents: { model: 'test/custom' } },
+    ],
+    [
+      'explorer-only empty list',
+      'mine',
+      project('mine', pair(undefined, [])),
+      [],
+    ],
+    [
+      'non-empty canonical list',
+      'mine',
+      project('mine', pair(G, ['custom-mcp'])),
+      ['custom-mcp'],
+    ],
+    [
+      'duplicate legacy name',
+      'mine',
+      project('mine', pair(['context7', 'context7'], [])),
+      [],
+    ],
+    [
+      'extra legacy MCP',
+      'mine',
+      project('mine', pair([...G, 'extra-mcp'], [])),
+      [],
+    ],
+    ['wildcard legacy list', 'mine', project('mine', pair(['*'], [])), []],
+    [
+      'exclusion in the legacy list',
+      'mine',
+      project('mine', pair(['!context7', 'gh_grep'], [])),
+      [],
+    ],
+    ['custom legacy list', 'mine', project('mine', pair(['my-mcp'], [])), []],
+    [
+      'explicit deny on the canonical entry',
+      'mine',
+      project('mine', pair(G, ['!*'])),
+      ['!*'],
+    ],
+  ];
+
+  for (const [label, name, raw, expected, warningPath, extra] of cases) {
+    test(`${warningPath ? 'repairs' : 'leaves explicit'} ${label}`, () => {
+      const { config, warnings, mcps } = loadOne(raw);
+      expect(warnings.map((warning) => warning.kind)).toEqual(
+        warningPath ? ['normalized'] : [],
+      );
+      if (warningPath) {
+        expect(warnings[0]?.message).toContain(warningPath);
+      }
+      expect(config.presets?.[name]?.explorer?.mcps).toEqual(expected);
+      expect(mcps).toEqual(expected);
+      if (extra) expect(config.presets?.[name]).toMatchObject(extra);
+    });
+  }
+
+  test('never repairs root agents or an explicit root deny', () => {
+    const rootCases: Array<[string, string[]]> = [
+      ['project-root', []],
+      ['project-deny', ['!*']],
+    ];
+    for (const [dir, expected] of rootCases) {
+      const { config, warnings, mcps } = loadOne(
+        { agents: { librarian: { mcps: G }, explorer: { mcps: expected } } },
+        dir,
+      );
+      expect(warnings).toEqual([]);
+      expect(config.agents?.explorer?.mcps).toEqual(expected);
+      expect(mcps).toEqual(expected);
+    }
+  });
+
+  test('does not assemble the fingerprint across layers', () => {
+    const base = path.join(tempDir, 'workspace-cross');
+    const child = path.join(base, 'project');
+    write(base, project('mine', { librarian: { mcps: G } }));
+    write(child, { presets: { mine: { explorer: { mcps: [] } } } });
+
+    const { config, warnings, mcps } = load(child);
+    expect(warnings).toEqual([]);
+    expect(config.presets?.mine?.explorer?.mcps).toEqual([]);
+    expect(mcps).toEqual([]);
+  });
+
+  test('does not assemble the fingerprint across an inherited preset chain', () => {
+    const { config, warnings, mcps } = loadOne({
+      preset: 'child',
+      presets: {
+        base: { librarian: { mcps: G } },
+        child: { extends: 'base', explorer: { mcps: [] } },
+      },
+    });
+
+    expect(warnings).toEqual([]);
+    expect(config.presets?.child?.explorer?.mcps).toEqual([]);
+    expect(mcps).toEqual([]);
+  });
+
+  const closerOverrides: Array<[string, Record<string, unknown>]> = [
+    ['root agents override', { agents: { explorer: { mcps: [] } } }],
+    [
+      'closer preset override',
+      { presets: { mine: { explorer: { mcps: [] } } } },
+    ],
+  ];
+
+  for (const [label, layer] of closerOverrides) {
+    test(`keeps a ${label} after repairing the lower layer`, () => {
+      const base = path.join(tempDir, 'workspace-precedence');
+      const child = path.join(base, 'project');
+      write(base, project('mine', pair(G, [])));
+      write(child, layer);
+
+      const { config, warnings, mcps } = load(child);
+      expect(warnings.map((warning) => warning.kind)).toEqual(['normalized']);
+      expect(warnings[0]?.message).toContain('presets.mine.explorer.mcps');
+      expect(config.agents?.explorer?.mcps).toEqual([]);
+      expect(mcps).toEqual([]);
+    });
+  }
 });

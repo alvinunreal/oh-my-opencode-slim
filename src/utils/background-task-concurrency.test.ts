@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  BackgroundTaskConcurrency,
-  BackgroundTaskConcurrencyQueueCancelledError,
   getBackgroundTaskConcurrency,
   resetBackgroundTaskConcurrencyForTests,
+} from '../admission-runtime';
+import {
+  BackgroundTaskConcurrency,
+  BackgroundTaskConcurrencyQueueCancelledError,
 } from './background-task-concurrency';
 
 const limited = (overrides = {}) =>

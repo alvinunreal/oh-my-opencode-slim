@@ -450,18 +450,18 @@ On v2, `/preset` opens a manager with two application scopes:
   future delegations, including explicit same-agent continuations of bound
   children. Applying alone does not update a child or the main session's
   native model selection.
-- **Global default** writes the user configuration. It affects sessions that
-  first bind after the refresh, subject to project and environment overrides.
+- **Global default** writes the user configuration. It affects unbound
+  sessions and refreshes default-bound roots on their next admission, subject
+  to project and environment overrides.
   `/preset <name>` does not touch it: the command applies the preset to the
   session it runs in, like the manager's Current session action.
 
 Each work session binds its resolved inference settings before its first
 managed prompt. New children inherit their direct parent's snapshot,
-including variants, options and fallback chains. **Manual edits to the user
-or project configuration, and edits to the same preset definition, do not
-change existing bindings or their future children.** Explicitly reapply the
-preset to Current session to use an updated definition. Bindings persist in
-OpenCode's plugin storage across restarts.
+including variants, options and fallback chains. Default-bound roots refresh
+on their next admission; invalid configuration preserves their previous
+snapshot. Named-preset bindings stay pinned until explicitly reapplied.
+Bindings persist across restarts.
 
 Same-ID continuation is best-effort. The host selects the model, the plugin
 installs inference options before the prompt, and a successful native return
@@ -512,9 +512,10 @@ entry is global: it overrides the active preset, so do not put an agent there
 if its value should vary by preset. Host config remains the final override.
 
 These precedence rules also apply when resolving a named preset for a v2
-session binding. Editing an inherited definition updates future bindings;
-existing sessions retain their resolved inference snapshots until an explicit
-Current session application. On v1, reload after changing the active preset.
+session binding. Editing an inherited definition updates future bindings and
+refreshes default-bound roots on their next admission; named-preset bindings
+retain their resolved inference snapshots until explicitly reapplied. On v1,
+reload after changing the active preset.
 
 > **niri note:** `companion-v0.1.3` includes the fixed native companion release.
 > To make it open as a bottom-right overlay, add a niri rule matching its stable
@@ -971,22 +972,45 @@ Notes:
   Display names are frozen until a full reload, so renaming or removing one
   changes the sidebar label only after the plugin reloads
 
-> **Rename continuity:** `librarian` was merged into `explorer`. Existing
-> `agents.librarian` config (model, variant, mcps, skills, prompt,
-> `inheritModelFrom`) keeps working: it is applied to `explorer`, the merged
-> research agent. An explicit `agents.explorer` field wins over the legacy
-> `librarian` field. `disabled_agents: ['librarian']` now disables `explorer`.
-> A `librarian.md` / `librarian_append.md` prompt override still applies —
-> rename it to `explorer.md` when convenient (a one-time notice reminds you).
-> Marketplace packages extending `builtin: 'librarian'` now extend
-> `builtin: 'explorer'` (same one-time notice). `librarian` remains a reserved
-> legacy name: it cannot be reused as a custom, ACP, or display name. New
-> configs should use `explorer` directly.
->
-> Still true: an explicit `explorer.mcps` list (including `[]`) overrides the
-> runtime defaults — old generated presets pinned `mcps: []`; remove that
-> override or set it to `["context7", "gh_grep"]`. Newly generated configs
-> omit `mcps` so defaults always apply.
+### Updating configurations after the librarian merge
+
+`explorer` now handles codebase and external research. `librarian` remains a
+reserved alias; its settings fill fields that Explorer does not explicitly set.
+
+Old generated presets contained both `librarian.mcps: ["context7", "gh_grep"]`
+and `explorer.mcps: []`. The empty Explorer list accidentally hid the research
+MCPs. On load, Slim now removes that empty field **in memory** when this exact
+pair occurs in one source preset (either MCP order is accepted). Existing alias
+resolution then carries Librarian's list to Explorer. Loader and doctor report
+which preset was repaired; neither rewrites your JSON/JSONC file.
+
+This rule also matches a hand-written preset with the identical pair: there is
+no generation marker that distinguishes them. To deliberately deny all MCPs
+while retaining that legacy pair, use `explorer.mcps: ["!*"]`. Root `agents`,
+non-empty Explorer lists, custom Librarian MCP lists, and entries split across
+layers or inherited presets are not repaired. Higher-layer overrides still win.
+
+| Setting | What to check when upgrading |
+|---------|-----------------------------|
+| MCPs | New configs omit `mcps` and use runtime defaults. Outside the exact pair above, remove a stale Explorer override to inherit defaults, or set `["context7", "gh_grep"]` explicitly. `disabled_mcps` and host permission restrictions remain authoritative. |
+| Model, variant, skills, inline prompt | Explicit Explorer fields win over Librarian fields, including `skills: []`. Move custom Librarian values you want to keep into Explorer, or remove the conflicting Explorer fields. Slim does not guess which values you intended. |
+| Prompt files | `librarian.md` and `librarian_append.md` remain supported with a rename notice. Within a location, Explorer files win; project files retain precedence over global files. |
+| Disabled agent | `disabled_agents: ["librarian"]` disables Explorer. Remove it if you want the merged research role enabled. |
+| Host and marketplace config | Host `agent.librarian` settings and marketplace `builtin: "librarian"` remain supported. Use `explorer` in new settings; the legacy name cannot be reused as a custom, ACP, or display name. |
+
+For an explicit MCP correction that overrides presets:
+
+```jsonc
+{
+  "agents": {
+    "explorer": { "mcps": ["context7", "gh_grep"] }
+  }
+}
+```
+
+Reload OpenCode after upgrading or changing MCP/skill permissions; these are
+frozen for existing sessions. Avoid installer `--reset`: it replaces customized
+configuration rather than repairing the one stale field.
 
 ### Independent agent model inheritance
 
@@ -1055,7 +1079,8 @@ restarts.
 If the agent started without a model, any child model is kept, including the
 parent model v2 gives new subagents; a model added later applies after reload.
 New managed children receive the inference profile bound to their parent,
-not the latest global default. Captured profiles remain frozen for later turns.
+not the latest global default. Default-bound roots refresh on their next
+admission; named-preset bindings remain pinned until explicitly reapplied.
 
 Model selection follows these rules:
 

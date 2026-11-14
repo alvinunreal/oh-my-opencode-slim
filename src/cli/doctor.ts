@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import { stripComments } from 'jsonc-parser';
 import { z } from 'zod';
 import { parseJsonConfigText } from '../config/jsonc';
+import { repairLegacyExplorerMcps } from '../config/legacy-preset-defaults';
 import {
   findPluginConfigPaths,
   interpolateEnvironmentVariables,
@@ -145,6 +146,7 @@ function checkConfigFile(
     const warn = (message: string) => warnings.push(message);
     stripRemovedConfigKeys(rawConfig, warn);
     stripRemovedDisabledValues(rawConfig, warn);
+    repairLegacyExplorerMcps(rawConfig, warn);
     normalizeDisabledArrayKeys(rawConfig, warn);
     reportUnknownCouncilKeys(rawConfig, warn);
     const parseResult = PluginConfigSchema.safeParse(rawConfig);

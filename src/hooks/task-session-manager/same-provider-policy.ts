@@ -17,7 +17,7 @@
  */
 import { providerFromModel } from '../../utils/background-task-concurrency';
 
-export type SameProviderPolicy = 'foreground';
+type SameProviderPolicy = 'foreground';
 
 export interface SameProviderConversionResult {
   converted: boolean;
