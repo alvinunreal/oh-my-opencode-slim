@@ -1989,87 +1989,26 @@ export class ForegroundFallbackManager {
       (this.input as PluginInput & { hostFlavor?: string }).hostFlavor === 'v2';
 
     switch (event.type) {
-      case 'session.execution.failed': {
-        if (!isV2Host) break;
-        const props = isRecord(event.data) ? event.data : event.properties;
-        if (
-          isRecord(props) &&
-          typeof props.sessionID === 'string' &&
-          isRecord(props.error) &&
-          props.error.type === 'provider.no-route' &&
-          typeof (rawEvent as { created?: unknown }).created === 'number'
-        ) {
-          await this.handleV2NoRoute(props.sessionID, props.error, {
-            time: { completed: (rawEvent as { created: number }).created },
-          });
-        }
+      case 'session.execution.failed':
+        await this.handleV2ExecutionFailed(
+          event,
+          rawEvent as { created?: unknown },
+          isV2Host,
+        );
         break;
-      }
-      case 'session.step.started': {
-        if (!isV2Host) break;
-        const props = isRecord(event.data) ? event.data : event.properties;
-        if (
-          isRecord(props) &&
-          typeof props.sessionID === 'string' &&
-          typeof props.assistantMessageID === 'string' &&
-          typeof props.agent === 'string' &&
-          isRecord(props.model) &&
-          typeof props.model.providerID === 'string' &&
-          typeof props.model.id === 'string' &&
-          (props.model.variant === undefined ||
-            typeof props.model.variant === 'string')
-        ) {
-          this.v2Steps.set(props.sessionID, {
-            assistantMessageID: props.assistantMessageID,
-            agent: props.agent,
-            epoch: this.turnEpoch.get(props.sessionID) ?? 0,
-            model: {
-              providerID: props.model.providerID,
-              id: props.model.id,
-              ...(typeof props.model.variant === 'string'
-                ? { variant: props.model.variant }
-                : {}),
-            },
-          });
-        }
+
+      case 'session.step.started':
+        this.handleV2StepStarted(event, isV2Host);
         break;
-      }
-      case 'session.step.failed': {
-        if (!isV2Host) break;
-        const props = isRecord(event.data) ? event.data : event.properties;
-        if (
-          isRecord(props) &&
-          typeof props.sessionID === 'string' &&
-          typeof props.assistantMessageID === 'string' &&
-          props.finish === 'content-filter'
-        ) {
-          const step = this.v2Steps.get(props.sessionID);
-          if (step?.assistantMessageID === props.assistantMessageID)
-            void this.refusalOutcome(
-              props.sessionID,
-              step,
-              props.error,
-              props.rawFinish,
-            );
-        }
+
+      case 'session.step.failed':
+        this.handleV2StepFailed(event, isV2Host);
         break;
-      }
+
       case 'session.step.ended':
-      case 'session.execution.succeeded': {
-        if (!isV2Host) break;
-        const props = isRecord(event.data) ? event.data : event.properties;
-        if (
-          isRecord(props) &&
-          typeof props.sessionID === 'string' &&
-          (event.type === 'session.execution.succeeded' ||
-            props.finish === 'stop' ||
-            props.finish === 'tool-calls' ||
-            props.finish === 'length')
-        ) {
-          this.resetRecoveryState(props.sessionID);
-        }
+      case 'session.execution.succeeded':
+        this.handleV2StepEnded(event, isV2Host);
         break;
-      }
 
       case 'message.updated': {
         const info = (
@@ -2251,24 +2190,9 @@ export class ForegroundFallbackManager {
         break;
       }
 
-      case 'message.part.updated': {
-        const part = (
-          event.properties as { part?: Record<string, unknown> } | undefined
-        )?.part;
-        if (!part) break;
-        const isInternalPart =
-          isInternalInitiatorPart(part) ||
-          (typeof part.text === 'string' &&
-            part.text.includes(SLIM_INTERNAL_INITIATOR_MARKER));
-        if (
-          isInternalPart &&
-          typeof part.sessionID === 'string' &&
-          typeof part.messageID === 'string'
-        ) {
-          this.rememberUserMessage(part.sessionID, part.messageID);
-        }
+      case 'message.part.updated':
+        this.handleMessagePartUpdated(event);
         break;
-      }
 
       case 'session.error': {
         const props = event.properties as
@@ -2466,6 +2390,117 @@ export class ForegroundFallbackManager {
       case 'session.deleted':
         this.handleSessionDeleted(event);
         break;
+    }
+  }
+
+  private async handleV2ExecutionFailed(
+    event: { properties?: unknown; data?: unknown },
+    rawEvent: { created?: unknown },
+    isV2Host: boolean,
+  ): Promise<void> {
+    if (!isV2Host) return;
+    const props = isRecord(event.data) ? event.data : event.properties;
+    if (
+      isRecord(props) &&
+      typeof props.sessionID === 'string' &&
+      isRecord(props.error) &&
+      props.error.type === 'provider.no-route' &&
+      typeof rawEvent.created === 'number'
+    ) {
+      await this.handleV2NoRoute(props.sessionID, props.error, {
+        time: { completed: rawEvent.created },
+      });
+    }
+  }
+
+  private handleV2StepStarted(
+    event: { properties?: unknown; data?: unknown },
+    isV2Host: boolean,
+  ): void {
+    if (!isV2Host) return;
+    const props = isRecord(event.data) ? event.data : event.properties;
+    if (
+      isRecord(props) &&
+      typeof props.sessionID === 'string' &&
+      typeof props.assistantMessageID === 'string' &&
+      typeof props.agent === 'string' &&
+      isRecord(props.model) &&
+      typeof props.model.providerID === 'string' &&
+      typeof props.model.id === 'string' &&
+      (props.model.variant === undefined ||
+        typeof props.model.variant === 'string')
+    ) {
+      this.v2Steps.set(props.sessionID, {
+        assistantMessageID: props.assistantMessageID,
+        agent: props.agent,
+        epoch: this.turnEpoch.get(props.sessionID) ?? 0,
+        model: {
+          providerID: props.model.providerID,
+          id: props.model.id,
+          ...(typeof props.model.variant === 'string'
+            ? { variant: props.model.variant }
+            : {}),
+        },
+      });
+    }
+  }
+
+  private handleV2StepFailed(
+    event: { properties?: unknown; data?: unknown },
+    isV2Host: boolean,
+  ): void {
+    if (!isV2Host) return;
+    const props = isRecord(event.data) ? event.data : event.properties;
+    if (
+      isRecord(props) &&
+      typeof props.sessionID === 'string' &&
+      typeof props.assistantMessageID === 'string' &&
+      props.finish === 'content-filter'
+    ) {
+      const step = this.v2Steps.get(props.sessionID);
+      if (step?.assistantMessageID === props.assistantMessageID)
+        void this.refusalOutcome(
+          props.sessionID,
+          step,
+          props.error,
+          props.rawFinish,
+        );
+    }
+  }
+
+  private handleV2StepEnded(
+    event: { type: string; properties?: unknown; data?: unknown },
+    isV2Host: boolean,
+  ): void {
+    if (!isV2Host) return;
+    const props = isRecord(event.data) ? event.data : event.properties;
+    if (
+      isRecord(props) &&
+      typeof props.sessionID === 'string' &&
+      (event.type === 'session.execution.succeeded' ||
+        props.finish === 'stop' ||
+        props.finish === 'tool-calls' ||
+        props.finish === 'length')
+    ) {
+      this.resetRecoveryState(props.sessionID);
+    }
+  }
+
+  private handleMessagePartUpdated(event: { properties?: unknown }): void {
+    const part = (
+      event.properties as { part?: Record<string, unknown> } | undefined
+    )?.part;
+    if (!part) return;
+    const isInternalPart =
+      isInternalInitiatorPart(part) ||
+      (typeof part.text === 'string' &&
+        part.text.includes(SLIM_INTERNAL_INITIATOR_MARKER));
+    if (
+      isInternalPart &&
+      typeof part.sessionID === 'string' &&
+      typeof part.messageID === 'string'
+    ) {
+      this.rememberUserMessage(part.sessionID, part.messageID);
     }
   }
 
