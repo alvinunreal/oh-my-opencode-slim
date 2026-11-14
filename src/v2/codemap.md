@@ -2,14 +2,14 @@
 
 ## Responsibility
 
-OpenCode 2 host adapter. Bridges the existing v1 plugin factory
-into v2's promise-plugin transform/runtime-hook API so a single published
-package runs on both hosts.
+OpenCode 2 host adapter. Bridges the internal v1 plugin factory (`src/index.ts`)
+into v2's promise-plugin transform/runtime-hook API. The published default
+export is `{ id, setup }` only; v1 `server` is no longer exported.
 
-v2 loads `default.setup(ctx)` (v1 loads `default.server`). `setup` wraps the v1
-factory to reuse all build logic, then translates the returned v1 `Hooks` into
-v2 registrations. Registration-only embedded V2 contexts on V1 skip setup
-before configuration validation; the V1 `server()` entry owns their managed
+v2 loads `default.setup(ctx)`. `setup` wraps the v1 factory to reuse all build
+logic, then translates the returned v1 `Hooks` into v2 registrations.
+Registration-only embedded V2 contexts on V1 skip setup before configuration
+validation; the internal v1 factory (`OhMyOpenCodeLite`) owns their managed
 lifecycle and configuration.
 
 `client-shim.ts` treats a named `session.prompt` agent as an owning-identity
