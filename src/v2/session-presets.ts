@@ -45,6 +45,9 @@ const recordSchema = z
     schemaVersion: z.literal(1),
     parentID: z.string().optional(),
     bundle: bundleSchema,
+    // Selection provenance. Absent legacy records are explicit: they were
+    // written before default bindings existed, so never rewrite them eagerly.
+    selection: z.enum(['explicit', 'default']).optional(),
     // Applying to a child changes its descendants, not its own inference.
     execution: bundleSchema.optional(),
     preserveModel: z.boolean().optional(),
@@ -70,6 +73,8 @@ export type SessionPresetState = {
   sessionID: string;
   status: 'bound' | 'unbound';
   presetName: string | null;
+  /** Present on new bindings; absent legacy records mean explicit. */
+  selection?: 'explicit' | 'default';
   affects: 'future-children-only';
   team?: {
     agentModels: Record<string, string>;
@@ -85,6 +90,8 @@ export type SessionTeamAdmission = {
   inheritedProviderID?: string;
   /** Native continuation selection, captured from the direct parent's team. */
   model?: string;
+  /** Parent binding provenance; absent legacy bindings are explicit. */
+  selection?: 'explicit' | 'default';
 };
 
 /**
@@ -307,7 +314,11 @@ export function createSessionPresets(options: {
     }
     // First admission of an old, unbound root is migration, not recovery
     // of historical settings. Capture now, not at its first delegation.
-    return write(id, { schemaVersion: 1, bundle: options.current() }, signal);
+    return write(
+      id,
+      { schemaVersion: 1, bundle: options.current(), selection: 'default' },
+      signal,
+    );
   }
 
   function admissionIdentity(
@@ -377,6 +388,8 @@ export function createSessionPresets(options: {
       preserveModel?: boolean;
       explicitModel?: boolean;
       inheritedProviderID?: string;
+      /** Parent binding provenance; absent legacy bindings are explicit. */
+      selection?: 'explicit' | 'default';
     },
   ) {
     requireAvailable();
@@ -405,6 +418,7 @@ export function createSessionPresets(options: {
           bundle,
           ...(selection?.preserveModel ? { preserveModel: true } : {}),
           explicitModel: selection?.explicitModel === true,
+          selection: selection?.selection ?? 'explicit',
           ...(selection?.inheritedProviderID
             ? { inheritedProviderID: selection.inheritedProviderID }
             : {}),
@@ -420,6 +434,7 @@ export function createSessionPresets(options: {
     sessionID: id,
     status: record ? 'bound' : 'unbound',
     presetName: record?.bundle.presetName ?? null,
+    ...(record?.selection ? { selection: record.selection } : {}),
     affects: 'future-children-only',
     ...(record
       ? {
@@ -466,7 +481,10 @@ export function createSessionPresets(options: {
           info.parentID !== adopted.parentID
         )
           throw new Error('Subagent parent identity mismatch');
-        // A child Apply owns its future-delegation bundle independently.
+        // A concurrent child Apply/reset owns the future-delegation bundle
+        // and its selection, while this execution still advances. Persist
+        // both in the execution branch below: returning early would skip the
+        // required durable commit and swallow storage failures.
         return write(
           id,
           existing.execution
@@ -474,6 +492,9 @@ export function createSessionPresets(options: {
                 ...adopted,
                 bundle: existing.bundle,
                 execution: adopted.execution ?? adopted.bundle,
+                ...(existing.selection
+                  ? { selection: existing.selection }
+                  : {}),
               }
             : adopted,
           signal,
@@ -496,7 +517,14 @@ export function createSessionPresets(options: {
       const { id } = await options.session.create({ location });
       try {
         return await serial(id, async () =>
-          state(id, await write(id, { schemaVersion: 1, bundle }, signal)),
+          state(
+            id,
+            await write(
+              id,
+              { schemaVersion: 1, bundle, selection: 'explicit' },
+              signal,
+            ),
+          ),
         );
       } catch (cause) {
         throw new Error(
@@ -546,6 +574,51 @@ export function createSessionPresets(options: {
               ? { parentID, execution: previous.execution ?? previous.bundle }
               : {}),
             bundle,
+            selection: 'explicit',
+          },
+          signal,
+        );
+        return state(id, record);
+      });
+    },
+    async reset(id: string, signal?: AbortSignal) {
+      requireAvailable();
+      return serial(id, async () => {
+        check(signal);
+        const info = await identity(id);
+        check(signal);
+        const previous = await read(id);
+        const parentID =
+          typeof info.parentID === 'string' ? info.parentID : undefined;
+        if (previous && previous.parentID !== parentID)
+          throw new Error('Session preset parent identity mismatch');
+        // A native child with no snapshot stays unbound: resetting must not
+        // invent a launch team for a session the plugin never bound.
+        if (parentID && !previous) return state(id);
+        // The running generation's effective default, captured atomically
+        // with the replacement so a concurrent ensure cannot be lost between
+        // the read and the write.
+        const bundle = options.current();
+        check(signal);
+        const record = await write(
+          id,
+          {
+            schemaVersion: 1,
+            ...(parentID ? { parentID } : {}),
+            ...(previous?.preserveModel ? { preserveModel: true } : {}),
+            ...(previous?.explicitModel !== undefined
+              ? { explicitModel: previous.explicitModel }
+              : {}),
+            ...(previous?.inheritedProviderID
+              ? { inheritedProviderID: previous.inheritedProviderID }
+              : {}),
+            // A child keeps its own frozen inference policy; only its future
+            // descendants move to the default bundle.
+            ...(parentID && previous
+              ? { execution: previous.execution ?? previous.bundle }
+              : {}),
+            bundle,
+            selection: 'default',
           },
           signal,
         );
@@ -674,6 +747,7 @@ export function wrapSessionPresetSubagent(options: {
                     ...(current.record.execution ? { execution: bundle } : {}),
                     preserveModel: true,
                     explicitModel: admission.explicitModel,
+                    selection: current.record.selection ?? 'explicit',
                     ...(admission.inheritedProviderID
                       ? { inheritedProviderID: admission.inheritedProviderID }
                       : {}),
@@ -693,6 +767,9 @@ export function wrapSessionPresetSubagent(options: {
                   {
                     preserveModel: typeof args.model === 'string',
                     explicitModel: admission.explicitModel,
+                    ...(admission.selection
+                      ? { selection: admission.selection }
+                      : {}),
                     ...(admission.inheritedProviderID
                       ? { inheritedProviderID: admission.inheritedProviderID }
                       : {}),

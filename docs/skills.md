@@ -360,6 +360,9 @@ Control which skills each agent can use in `~/.config/opencode/oh-my-opencode-sl
   native permissions
 - `!item` excludes a specific skill
 - Conflicts (e.g. `["a", "!a"]`) → deny wins (principle of least privilege)
+- Without a `skills` list, built-in specialists get only the bundled skills
+  assigned to them above; grant a skill you installed yourself with `skills`
+  or `skills_add`
 
 The orchestrator's `<Agents>` routing block shows each specialist's effective
 grants (from `skills`, `disabled_skills` and `permission.skill`) on that

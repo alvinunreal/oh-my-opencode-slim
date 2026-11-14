@@ -32,7 +32,7 @@ The CLI follows a command pattern with two primary commands:
 ### Permission and Skill Management
 
 - **custom-skills.ts**: Bundled skill discovery and safe cleanup of legacy copies
-- **skills.ts**: Agent permission management for skills (allow/ask/deny rules, includes PERMISSION_ONLY_SKILLS for externally managed skills)
+- **skills.ts**: Agent permission management for skills (allow/ask/deny rules; default grants come from the bundled skill registry only)
 
 ### Integration Management
 
@@ -155,7 +155,7 @@ the plugin itself (#1582); the installer no longer writes config entries.
 
 - **Orchestrator agent**: Granted all skills by default
 - **Other agents**: Restricted permissions, explicit allow rules from custom skills registry
-- **External skills**: Permission-only entries for skills not installed by CLI (`PERMISSION_ONLY_SKILLS` array)
+- **External skills**: Not granted to specialists by default; add them per agent with `skills` or `skills_add`
 
 ### Configuration Files
 

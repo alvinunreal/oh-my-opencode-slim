@@ -36,7 +36,7 @@ describe('cache-impact snapshots (update deliberately — see file header)', () 
     // Default skill grants: only oracle ships with skills.
     const options = {
       disabledAgents: new Set<string>(),
-      agentSkills: { oracle: 'simplify, requesting-code-review' },
+      agentSkills: { oracle: 'simplify' },
     };
     const prompt = buildOrchestratorPrompt(options);
     // Deterministic across invocations — a mismatch here means something

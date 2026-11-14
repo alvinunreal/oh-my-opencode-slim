@@ -8,6 +8,20 @@
     "setDefaultAgent": {
       "type": "boolean"
     },
+    "questionTimeoutMs": {
+      "description": "Opt-in question auto-answer timeout in milliseconds. Unset or 0 disables it; otherwise 60,000–2,147,483,647. Permission and closed-choice requests are never answered. On v2, requires an attached OMOS TUI with tui enabled.",
+      "anyOf": [
+        {
+          "type": "number",
+          "const": 0
+        },
+        {
+          "type": "integer",
+          "minimum": 60000,
+          "maximum": 2147483647
+        }
+      ]
+    },
     "tui": {
       "description": "Master switch for all OMOS TUI surfaces (sidebar, /preset, /killall, /subagent, update notice). When false, the TUI entry registers nothing and the server records no sidebar state; other server-side features are untouched. Defaults to true.",
       "type": "boolean"
