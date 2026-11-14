@@ -185,6 +185,37 @@ describe('quota cooldown persistence', () => {
     expect(fs.existsSync(filePath)).toBe(false);
   });
 
+  test('refuses oversized UTF-8 payloads without replacing existing cooldowns', async () => {
+    const filePath = path.join(tempRoot(), 'omos-quota-cooldowns.json');
+    const now = 1_000;
+    expect(
+      await recordQuotaCooldown('provider', 'existing', 60_000, now, {
+        filePath,
+      }),
+    ).toBe(true);
+    const originalBytes = fs.readFileSync(filePath, 'utf8');
+
+    for (const oversizedModelID of ['m'.repeat(65_536), 'é'.repeat(33_000)]) {
+      expect(
+        await recordQuotaCooldown('provider', oversizedModelID, 60_000, now, {
+          filePath,
+        }),
+      ).toBe(false);
+      expect(fs.readFileSync(filePath, 'utf8')).toBe(originalBytes);
+      expect(isQuotaModelCooling('provider', 'existing', now, filePath)).toBe(
+        true,
+      );
+    }
+
+    expect(
+      await recordQuotaCooldown('provider', 'next', 60_000, now, { filePath }),
+    ).toBe(true);
+    expect(isQuotaModelCooling('provider', 'existing', now, filePath)).toBe(
+      true,
+    );
+    expect(isQuotaModelCooling('provider', 'next', now, filePath)).toBe(true);
+  });
+
   test('two writer processes merge distinct models without losing either entry', async () => {
     const filePath = path.join(tempRoot(), 'omos-quota-cooldowns.json');
     const workers = [

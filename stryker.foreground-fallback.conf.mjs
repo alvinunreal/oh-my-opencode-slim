@@ -11,8 +11,8 @@ export default {
     'src/hooks/foreground-fallback/index.ts:1715-1715',
     'src/hooks/foreground-fallback/index.ts:2300-2300',
     'src/hooks/foreground-fallback/index.ts:2549-2549',
-    'src/hooks/foreground-fallback/index.ts:3431-3431',
-    'src/hooks/foreground-fallback/index.ts:4111-4111',
+    'src/hooks/foreground-fallback/index.ts:3439-3439',
+    'src/hooks/foreground-fallback/index.ts:4119-4119',
   ],
   // Non-file path skips Stryker's TS 7-incompatible tsconfig preprocessor.
   tsconfigFile: 'tsconfig.stryker-unused.json',

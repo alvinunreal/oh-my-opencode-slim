@@ -13251,6 +13251,116 @@ describe('v2 durable quota cooldown', () => {
     }
   });
 
+  test('a readable native quota cooldown switches instead of absorbing a same-model host retry', async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'omos-quota-host-retry-'),
+    );
+    const filePath = path.join(root, 'omos-quota-cooldowns.json');
+    try {
+      const { recordQuotaCooldown } = await import('./quota-cooldown');
+      expect(
+        await recordQuotaCooldown('test', 'a', 600_000, clock.now(), {
+          filePath,
+        }),
+      ).toBe(true);
+      const chain = [
+        { id: 'test/a', variant: 'primary' },
+        { id: 'backup/b', variant: 'fallback' },
+      ];
+      const manager = timedManager(
+        makeOptions({
+          chains: { orchestrator: chain },
+          enabled: true,
+          maxRetries: 3,
+          retryDelayMs: 17,
+          input: { directory: '/test', hostFlavor: 'v2' } as never,
+          quotaCooldownFilePath: filePath,
+        }),
+      );
+      const switchModel = mock(async () => {});
+      const event = {
+        sessionID: 'quota-host-retry',
+        agent: 'orchestrator',
+        model: { providerID: 'test', id: 'a', variant: 'primary' },
+        error: {
+          type: 'provider.quota',
+          status: 429,
+          message: 'Quota exhausted',
+          retryAfterMs: 600_000,
+        },
+        decision: { retry: true, delay: 0 },
+      };
+      await manager.handleV2Retry(event, switchModel);
+
+      expect(switchModel).toHaveBeenCalledTimes(1);
+      expect(switchModel).toHaveBeenCalledWith('quota-host-retry', {
+        providerID: 'backup',
+        id: 'b',
+        variant: 'fallback',
+      });
+      expect(
+        (
+          manager as unknown as { sessionRetries: Map<string, number> }
+        ).sessionRetries.get('quota-host-retry'),
+      ).toBeUndefined();
+      expect(event.decision).toEqual({ retry: true, delay: 17 });
+      manager.dispose();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test('failed quota persistence keeps ordinary host retry absorption', async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'omos-quota-write-failure-'),
+    );
+    const blocker = path.join(root, 'not-a-directory');
+    const filePath = path.join(blocker, 'omos-quota-cooldowns.json');
+    await fs.writeFile(blocker, 'blocker');
+    try {
+      const manager = timedManager(
+        makeOptions({
+          chains: { orchestrator: ['test/a', 'backup/b'] },
+          enabled: true,
+          maxRetries: 3,
+          input: { directory: '/test', hostFlavor: 'v2' } as never,
+          quotaCooldownFilePath: filePath,
+        }),
+      );
+      const switchModel = mock(async () => {});
+      const decision = { retry: true, delay: 10 };
+      await manager.handleV2Retry(
+        {
+          sessionID: 'quota-write-failed',
+          agent: 'orchestrator',
+          model: { providerID: 'test', id: 'a' },
+          error: {
+            type: 'provider.quota',
+            status: 429,
+            message: 'Quota exhausted',
+            retryAfterMs: 600_000,
+          },
+          decision,
+        },
+        switchModel,
+      );
+
+      expect(
+        manager.isQuotaModelCooling('quota-write-failed', 'test', 'a'),
+      ).toBe(false);
+      expect(switchModel).not.toHaveBeenCalled();
+      expect(
+        (
+          manager as unknown as { sessionRetries: Map<string, number> }
+        ).sessionRetries.get('quota-write-failed'),
+      ).toBe(1);
+      expect(decision).toEqual({ retry: true, delay: 10 });
+      manager.dispose();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test('a superseding prompt during persistence cannot switch or mutate the decision', async () => {
     const { manager } = makeManager({ hostFlavor: 'v2' });
     const held = holdQuotaWrite(manager);
@@ -13408,6 +13518,34 @@ describe('v2 durable quota cooldown', () => {
       expect(isQuotaModelCooling('test', 'early-quota', now, filePath)).toBe(
         true,
       );
+
+      await fs.rm(filePath, { force: true });
+      await manager.handleV2Retry(
+        {
+          sessionID: 'quota-long-reset',
+          agent: 'orchestrator',
+          model: { providerID: 'test', id: 'long-reset' },
+          error: quotaFailure,
+          decision: { retry: false },
+        },
+        switchModel,
+      );
+      expect(
+        manager.isQuotaModelCooling(
+          'quota-long-reset',
+          'test',
+          'long-reset',
+          now + 374_901_748,
+        ),
+      ).toBe(true);
+      expect(
+        manager.isQuotaModelCooling(
+          'quota-long-reset',
+          'test',
+          'long-reset',
+          now + 374_901_749,
+        ),
+      ).toBe(false);
 
       await fs.rm(filePath, { force: true });
       const ephemeralManager = timedManager(

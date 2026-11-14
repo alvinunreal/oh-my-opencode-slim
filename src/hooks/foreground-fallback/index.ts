@@ -2790,11 +2790,19 @@ export class ForegroundFallbackManager {
         event.decision = { retry: true, delay: 0 };
         return;
       }
+      const sourceQuotaCooling = this.isQuotaModelCooling(
+        sessionID,
+        event.model.providerID,
+        event.model.id,
+      );
       if (event.decision?.retry === true) {
         this.rearmIfFreshDescent(sessionID);
         // Request rejections and spent allowance cannot recover by retrying
-        // this model, so steer without charging the host-retry budget.
+        // this model, so steer without charging the host-retry budget. A
+        // persisted cooldown also makes another same-model host retry unsafe;
+        // only an actual readable cooldown skips absorption.
         if (
+          !sourceQuotaCooling &&
           !auth401 &&
           !isPermanentQuotaBillingError(event.error) &&
           !isSpentQuotaError(event.error) &&

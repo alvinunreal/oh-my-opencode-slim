@@ -199,7 +199,14 @@ export async function recordQuotaCooldown(
       version: STORE_VERSION,
       entries: Object.fromEntries(entries),
     };
-    writeAtomic(filePath, `${JSON.stringify(store, null, 2)}\n`);
+    const serialized = `${JSON.stringify(store, null, 2)}\n`;
+    if (Buffer.byteLength(serialized, 'utf8') > MAX_STORE_BYTES) {
+      log('[quota-cooldown] serialized store exceeds its size bound', {
+        filePath,
+      });
+      return false;
+    }
+    writeAtomic(filePath, serialized);
     return true;
   } catch (error) {
     logStoreFailure('write', filePath, error);
