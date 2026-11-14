@@ -305,11 +305,6 @@ export class BackgroundTaskConcurrency {
   }
 }
 
-export {
-  getBackgroundTaskConcurrency,
-  resetBackgroundTaskConcurrencyForTests,
-} from '../admission-runtime';
-
 /** Resolve the single applicable cap tier for a model (model > provider > default). */
 function resolveTier(
   config: BackgroundTaskConcurrencyConfig,
