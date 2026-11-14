@@ -837,6 +837,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         initialRetryDelayMs: runtime.fallback.initialRetryDelayMs,
         retryDelayMs: runtime.fallback.retryDelayMs,
         v2RetryEnabled: fallbackUserEnabled,
+        reprobeAfterHours: runtime.fallback.reprobe?.afterHours,
       });
     }
 
@@ -2453,16 +2454,30 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         partsInternal ||
         (typeof messageID === 'string' &&
           isInternalAdmission(input.sessionID, messageID));
+      const promptModel = input.model ?? output?.message?.model;
+      const promptModelID = promptModel
+        ? `${promptModel.providerID}/${promptModel.modelID}`
+        : undefined;
+      const promptVariant = promptModel?.variant ?? input.variant ?? undefined;
+      if (internalAdmission) {
+        await foregroundFallback?.prepareV2InternalContinuation(
+          input.sessionID,
+          input.model
+            ? `${input.model.providerID}/${input.model.modelID}`
+            : undefined,
+          input.model?.variant ?? input.variant ?? undefined,
+        );
+      }
       if (!internalAdmission) {
         if (inputParts.length || outputParts.length) {
           foregroundFallback?.noteV2Prompt(input.sessionID);
         }
-        const model = input.model ?? output?.message?.model;
         foregroundFallback?.noteExternalTurn(
           input.sessionID,
           // v2 retains its retry budget across external prompts.
           undefined,
-          model ? `${model.providerID}/${model.modelID}` : undefined,
+          promptModelID,
+          promptVariant,
         );
       }
 

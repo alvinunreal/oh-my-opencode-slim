@@ -164,6 +164,20 @@ describe('PluginConfigSchema fallback continuation policy', () => {
       }).success,
     ).toBe(false);
   });
+
+  it('accepts any positive finite v2 reprobe interval in hours', () => {
+    expect(
+      PluginConfigSchema.parse({ fallback: { reprobe: { afterHours: 5 } } })
+        .fallback?.reprobe,
+    ).toEqual({ afterHours: 5 });
+    for (const afterHours of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(
+        PluginConfigSchema.safeParse({
+          fallback: { reprobe: { afterHours } },
+        }).success,
+      ).toBe(false);
+    }
+  });
 });
 
 describe('PluginConfigSchema preset syntax', () => {

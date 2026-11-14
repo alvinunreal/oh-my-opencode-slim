@@ -383,6 +383,7 @@ and [Council](council.md) for what remains.
 | `fallback.initialRetryDelayMs` | number | `0` | Delay in milliseconds before triggering the first fallback on a failover-worthy error. Gives intercepting plugins time to recover the current model before the fallback chain advances. 0 disables. v1 replay only: the v2 steering path performs no replay, so it ignores this delay. When the delay is nonzero, v2 logs that it is ignored; the notice can repeat after recovery. |
 | `fallback.retryDelayMs` | number | `500` | Delay in milliseconds between consecutive fallback attempts after the initial trigger. 0 disables. |
 | `fallback.continuationPolicy` | `"retry-primary"` \| `"stick-to-fallback"` | `"retry-primary"` | OpenCode v1 policy for unpinned internal continuations after a confirmed fallback. `"retry-primary"` lets background-completion and lifecycle turns try the configured primary again; `"stick-to-fallback"` keeps them on the confirmed fallback until the next external user turn. |
+| `fallback.reprobe.afterHours` | positive finite number | omitted | Opt-in OpenCode v2 re-probe interval. Keep the confirmed fallback for this many hours before trying the original model on the next eligible internal continuation. For example, `5` means five hours. |
 | `council.presets` | object | - | **Required if using council.** Named councillor presets See [Council configuration note](#council-configuration-note). |
 | `council.presets.<name>.<councillor>.model` | string \| array | - | Councillor model: `provider/model` string, or a non-empty ordered fallback chain (array of IDs or `{ id, variant }`) See [Council configuration note](#council-configuration-note). |
 | `council.presets.<name>.<councillor>.variant` | string | - | Councillor variant See [Council configuration note](#council-configuration-note). |
@@ -910,6 +911,20 @@ default, `"retry-primary"`, lets the host try the configured primary again,
 which is useful after a quota or provider outage is repaired. Set it to
 `"stick-to-fallback"` to keep those internal continuations on the confirmed
 fallback until the next external user turn.
+
+On v2, `fallback.reprobe.afterHours` opts into a per-session hold. Slim starts
+the interval when it confirms a fallback switch and keeps the fallback selected
+through idle periods. After the interval, Slim tries the original model once at
+the next tool-call boundary or Slim-recognized internal admission. A successful
+primary step clears the hold; a transient provider or quota failure switches
+back to the current fallback and starts a new interval. Policy and content-filter
+rejections do not trigger another probe. A successful `switchModel` response
+only confirms the model selection, so Slim waits for a matching successful
+primary step before treating the provider as recovered. This does not poll in
+the background and does not probe on external turns. The host limitation is
+that OpenCode must expose the continuation through a tool-call boundary or an
+internal admission Slim can recognize; an unmarked host-generated wake cannot
+be distinguished safely from a user turn.
 
 V2 forwards configured variants as `provider/model#variant`. The host rejects
 a variant unavailable for that model; Slim does not silently drop it.
