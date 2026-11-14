@@ -86,7 +86,7 @@
     "format": "biome format . --write",
     "check": "biome check --write .",
     "check:ci": "biome check .",
-    "mutation": "bun install --cwd tools/mutation --frozen-lockfile && bun tools/mutation/node_modules/@stryker-mutator/core/bin/stryker.js run",
+    "mutation": "bun run mutation:foreground-fallback",
     "mutation:foreground-fallback": "bun install --cwd tools/mutation --frozen-lockfile && bun tools/mutation/node_modules/@stryker-mutator/core/bin/stryker.js run stryker.foreground-fallback.conf.mjs && node scripts/check-mutation-targets.mjs",
     "knip": "knip",
     "eval": "bun run src/cli/eval.ts",

@@ -1,19 +1,23 @@
 // @ts-check
+import { readFileSync } from 'node:fs';
+
+const fallbackPath = 'src/hooks/foreground-fallback/index.ts';
+const fallbackSource = readFileSync(
+  new URL(fallbackPath, import.meta.url),
+  'utf8',
+);
+const guardTargets = fallbackSource.split('\n').flatMap((line, index) => {
+  if (!/(?:<|>=) DEDUP_WINDOW_MS\b/.test(line)) return [];
+  const lineNumber = index + 1;
+  return [`${fallbackPath}:${lineNumber}-${lineNumber}`];
+});
+
 /** @type {import('@stryker-mutator/api/core').PartialStrykerOptions} */
 export default {
   appendPlugins: ['@hughescr/stryker-bun-runner'],
   testRunner: 'bun',
   coverageAnalysis: 'perTest',
-  mutate: [
-    'src/hooks/foreground-fallback/dedup.ts',
-    'src/hooks/foreground-fallback/index.ts:1446-1446',
-    'src/hooks/foreground-fallback/index.ts:1478-1478',
-    'src/hooks/foreground-fallback/index.ts:1533-1533',
-    'src/hooks/foreground-fallback/index.ts:2108-2108',
-    'src/hooks/foreground-fallback/index.ts:2357-2357',
-    'src/hooks/foreground-fallback/index.ts:3147-3147',
-    'src/hooks/foreground-fallback/index.ts:3827-3827',
-  ],
+  mutate: ['src/hooks/foreground-fallback/dedup.ts', ...guardTargets],
   // Non-file path skips Stryker's TS 7-incompatible tsconfig preprocessor.
   tsconfigFile: 'tsconfig.stryker-unused.json',
   ignorePatterns: ['/.slim', '/dist'],
