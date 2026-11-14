@@ -123,7 +123,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: fallow-rs/fallow@v3
+      # Pinned past the v3 tag: 65ff0b9 carries a verifier that treats glibc
+      # runners as musl and fails install (fallow-rs#4591). Return to @v3 once
+      # v3.43.1 retags it (fallow-rs#4607).
+      - uses: fallow-rs/fallow@b14326dcc7af8468e19abeeab6bb960e80094e17
         with:
           command: audit
           version: '3.43.0'
