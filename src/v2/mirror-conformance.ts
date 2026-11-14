@@ -63,11 +63,15 @@ type _presetRpcPortable = Expect<
   PresetRpc extends Rpc.PortableDefinition ? true : false
 >;
 type _presetRpcNoEvents = Expect<Equal<keyof PresetRpc['events'], never>>;
-type _presetRpcCreateError = Expect<
-  Equal<Rpc.ErrorName<PresetRpc['methods']['createBound']>, 'create_failed'>
->;
-type _presetRpcReadApplyNoErrors = Expect<
-  Equal<Rpc.ErrorName<PresetRpc['methods']['read' | 'apply']>, never>
+type _presetRpcNoErrors = Expect<
+  Equal<
+    {
+      [K in keyof PresetRpc['methods']]: 'errors' extends keyof PresetRpc['methods'][K]
+        ? true
+        : false;
+    }[keyof PresetRpc['methods']],
+    false
+  >
 >;
 type _rpcRegistrationCompatible = Expect<
   RpcDomain extends NonNullable<V2Context['rpc']> ? true : false
@@ -93,36 +97,14 @@ type _rpcHandlerOutputs = Expect<
         V2SessionPresetRpcHandlers[K]
       >;
     },
-    {
-      [K in keyof PresetRpc['methods']]: Promise<
-        Rpc.HandlerOutput<PresetRpc['methods'][K]['output']>
-      >;
-    }
+    { [K in keyof PresetRpc['methods']]: ReturnType<RpcHandlers<PresetRpc>[K]> }
   >
 >;
-type _rpcHandlerContexts = Expect<
-  {
-    [K in keyof PresetRpc['methods']]: Parameters<RpcHandlers<PresetRpc>[K]>[1];
-  } extends {
-    [K in keyof PresetRpc['methods']]: Parameters<
-      V2SessionPresetRpcHandlers[K]
-    >[1];
-  }
-    ? true
-    : false
->;
-/** Only the arguments cross our public type boundary; the host owns the
- * branded error, which its promise adapter accepts when thrown. */
-type _rpcCreateErrorArguments = Expect<
+type _rpcHandlerSignal = Expect<
   Equal<
-    Parameters<
-      Parameters<V2SessionPresetRpcHandlers['createBound']>[1]['error']
-    >,
-    Rpc.ErrorArguments<PresetRpc['methods']['createBound'], 'create_failed'>
+    Parameters<V2SessionPresetRpcHandlers['apply']>[1],
+    Pick<Parameters<RpcHandlers<PresetRpc>['apply']>[1], 'signal'>
   >
->;
-type _rpcHandlersCompatible = Expect<
-  V2SessionPresetRpcHandlers extends RpcHandlers<PresetRpc> ? true : false
 >;
 type _rpcCallOptions = Expect<
   Equal<V2PresetRpcCallOptions, Pick<RpcCallOptions, 'location' | 'signal'>>
@@ -209,12 +191,6 @@ type _permissionRulesGone = Expect<
   Equal<'rules' extends keyof PermissionDomain ? true : false, false>
 >;
 
-/** Creation consumes only native root location and the returned session ID. */
-type _sessionCreateCompatible = Expect<
-  SessionDomain['create'] extends NonNullable<V2Context['session']['create']>
-    ? true
-    : false
->;
 type SessionUpdateInput = Parameters<SessionDomain['update']>[0];
 type _sessionUpdateInput = Expect<
   SessionUpdateInput extends { sessionID: string; title?: string }

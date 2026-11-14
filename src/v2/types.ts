@@ -205,21 +205,13 @@ interface V2McpDraft {
   update(name: string, update: (c: Record<string, unknown>) => void): void;
   remove(name: string): void;
 }
-/** Mirror only the consumed error-factory arguments. Its opaque result is
- * thrown, never returned as success or exposed as a dev-only branded type. */
+/** Only this plugin's error-free, event-free Zod contract is registered.
+ * Infer handler inputs from its schemas without exposing dev-only host types.
+ * The host also supplies an error factory; these handlers only use signal. */
 export type V2SessionPresetRpcHandlers = {
   readonly [Name in keyof typeof sessionPresetRpc.methods]: (
     input: z.output<(typeof sessionPresetRpc.methods)[Name]['input']>,
-    context: Name extends 'createBound'
-      ? {
-          readonly signal: AbortSignal;
-          readonly error: (
-            type: 'create_failed',
-            message: string,
-            data: null,
-          ) => unknown;
-        }
-      : { readonly signal: AbortSignal },
+    context: { readonly signal: AbortSignal },
   ) => Promise<z.input<(typeof sessionPresetRpc.methods)[Name]['output']>>;
 };
 
@@ -309,10 +301,6 @@ export interface V2Context {
     ): Promise<V2Registration>;
     /** v2 session.get — SessionInfo by id (runtime-probed). */
     get?(input: { sessionID: string }): Promise<unknown>;
-    /** Native empty root creation; only the consumed location/id subset. */
-    create?(input: {
-      location: { directory: string; workspaceID?: string };
-    }): Promise<{ readonly id: string }>;
     /** Wait for the session agent loop to become idle (runtime-probed). */
     wait?(input: { sessionID: string }): Promise<void>;
     /** v2 session.remove — DELETE /api/session/:id (runtime-probed). */

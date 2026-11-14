@@ -14,15 +14,7 @@
  * reuses the real `loadPluginConfig` path (a written config file) so the
  * gates are proven end-to-end against the loader, not a stub.
  */
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  spyOn,
-  test,
-} from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import fs from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -38,11 +30,7 @@ import * as configWatch from './config-watch';
 import { SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION } from './delegation';
 import { sessionPresetRpc } from './preset-rpc';
 import { createV2Setup } from './setup';
-import type {
-  V2Context,
-  V2SessionContextEvent,
-  V2SessionPresetRpcHandlers,
-} from './types';
+import type { V2Context, V2SessionContextEvent } from './types';
 
 /** Manually-resolved promise for holding a backend write in flight. */
 function deferred<T>() {
@@ -626,23 +614,7 @@ describe('v2 setup feature gates', () => {
     const { ctx, rpcHandlers, commandAdds, storageCalls } = makeCtx(projectDir);
     const cleanup = await createV2Setup()(ctx);
     try {
-      // Only the Desktop config editor RPC remains: it edits config files
-      // and never routes sessions, so it stays available with routing off.
-      expect(
-        rpcHandlers.map((handlers) => Object.keys(handlers).sort()),
-      ).toEqual([
-        [
-          'clearPresetDefault',
-          'createPreset',
-          'deletePreset',
-          'getGoMonthlyLimits',
-          'getSnapshot',
-          'removeAgent',
-          'setAgentDisabled',
-          'setAgentOverride',
-          'switchPreset',
-        ],
-      ]);
+      expect(rpcHandlers).toEqual([]);
       expect(commandAdds.map((entry) => entry.name)).not.toContain('preset');
       expect(storageCalls).toEqual({ get: 0, set: 0, remove: 0, scan: 0 });
     } finally {
@@ -759,34 +731,7 @@ describe('v2 setup feature gates', () => {
     ).mockImplementation(((options: configWatch.WatchPluginConfigOptions) => {
       return factory(options);
     }) as never);
-    const values = new Map<string, unknown>();
-    let writeFailure: Error | undefined;
-    const { ctx, rpcHandlers } = makeCtx(projectDir, {
-      get: async (key) => values.get(key),
-      set: async (key, value) => {
-        if (writeFailure) throw writeFailure;
-        values.set(key, value);
-      },
-      remove: async (key) => {
-        values.delete(key);
-      },
-      scan: async () => ({ entries: [] }),
-    });
-    if (ctx.location) ctx.location.workspaceID = 'workspace-gates';
-    const createCalls: unknown[] = [];
-    ctx.session.create = async (input) => {
-      createCalls.push(input);
-      return {
-        id:
-          createCalls.length === 1 ? 'ses_created_bound' : 'ses_created_failed',
-      };
-    };
-    ctx.session.prompt = async () => {
-      throw new Error('createBound must not prompt');
-    };
-    ctx.session.switchModel = ctx.session.switchAgent = async () => {
-      throw new Error('createBound must keep the native root selection');
-    };
+    const { ctx, rpcHandlers } = makeCtx(projectDir);
     const cleanup = await createV2Setup()(ctx);
     try {
       expect(watcherFactory).not.toHaveBeenCalled();
@@ -817,65 +762,6 @@ describe('v2 setup feature gates', () => {
           { signal: new AbortController().signal },
         ),
       ).rejects.toThrow('Unknown preset: missing');
-      const createBound = (handlers as unknown as V2SessionPresetRpcHandlers)
-        .createBound;
-      const errorFactory = mock<Parameters<typeof createBound>[1]['error']>(
-        (type, message, data) => ({ type, message, data }),
-      );
-      const callContext = {
-        signal: new AbortController().signal,
-        error: errorFactory,
-      };
-      const bound = await createBound({ presetName: 'strong' }, callContext);
-      expect(bound).toMatchObject({
-        sessionID: 'ses_created_bound',
-        status: 'bound',
-        presetName: 'strong',
-        affects: 'future-children-only',
-        team: { agentModels: { explorer: 'anthropic/claude-sonnet-4-5' } },
-      });
-      expect(createCalls).toEqual([
-        { location: { directory: projectDir, workspaceID: 'workspace-gates' } },
-      ]);
-      expect(values.get('session-preset/v1/ses_created_bound')).toMatchObject({
-        schemaVersion: 1,
-        bundle: { presetName: 'strong' },
-      });
-      expect(
-        await (handlers as unknown as V2SessionPresetRpcHandlers).read(
-          { sessionID: bound.sessionID },
-          { signal: new AbortController().signal },
-        ),
-      ).toEqual(bound);
-      expect(errorFactory).not.toHaveBeenCalled();
-      const missing = createBound({ presetName: 'missing' }, callContext);
-      await expect(missing).rejects.toEqual({
-        type: 'create_failed',
-        message: 'Unknown preset: missing',
-        data: null,
-      });
-      await expect(missing).rejects.toBe(errorFactory.mock.results[0].value);
-      expect(createCalls).toHaveLength(1);
-      writeFailure = new Error('KV unavailable');
-      const failed = createBound({ presetName: 'strong' }, callContext);
-      const message =
-        'Created session ses_created_failed, but preset binding failed. Open it and use Apply to bind "strong".';
-      await expect(failed).rejects.toEqual({
-        type: 'create_failed',
-        message,
-        data: null,
-      });
-      expect(errorFactory).toHaveBeenLastCalledWith(
-        'create_failed',
-        message,
-        null,
-      );
-      await expect(failed).rejects.toBe(errorFactory.mock.results[1].value);
-      expect(
-        sessionPresetRpc.methods.createBound.errors.create_failed.parse(null),
-      ).toBeNull();
-      expect(createCalls).toHaveLength(2);
-      expect(values.has('session-preset/v1/ses_created_failed')).toBe(false);
       expect(watcherFactory).not.toHaveBeenCalled();
     } finally {
       await cleanup();
