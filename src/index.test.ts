@@ -2200,12 +2200,9 @@ describe('plugin reload generation cleanup', () => {
   ] as const)(
     '$hostFlavor wake scheduler creation is structural (created=$schedulerCreated)',
     async ({ hostFlavor, schedulerCreated, periodicWakeEnabled }) => {
-      const createScheduler = orchestratorWake.createOrchestratorWakeScheduler;
       const scheduler = spyOn(
         orchestratorWake,
         'createOrchestratorWakeScheduler',
-      ).mockImplementation((...args: Parameters<typeof createScheduler>) =>
-        createScheduler(...args),
       );
       try {
         await createHooks({ hostFlavor });
@@ -5694,11 +5691,10 @@ describe('plugin foreground fallback host gating', () => {
   });
 
   test('T12: lifecycle wake selects the restored origin over the host fallback', async () => {
-    const createScheduler = orchestratorWake.createOrchestratorWakeScheduler;
     const scheduler = spyOn(
       orchestratorWake,
       'createOrchestratorWakeScheduler',
-    ).mockImplementation((...args) => createScheduler(...args));
+    );
     const { client, messages } = createFallbackClient();
     client.session.get = mock(async () => ({
       data: {
