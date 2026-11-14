@@ -694,7 +694,7 @@ export class CompanionManager {
     if (this.config?.enabled !== true) return;
     const state = readState();
     this.reconcileCompanion(state);
-    if (this.consumePresetRequest(state)) {
+    if (this.consumePresetRequest(readState())) {
       this.presetRefreshTick = 0;
       return;
     }

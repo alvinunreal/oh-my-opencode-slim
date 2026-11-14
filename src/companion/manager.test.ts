@@ -683,6 +683,51 @@ describe('CompanionManager', () => {
     expect(readState().sessions).toHaveLength(1);
   });
 
+  it('does not consume a preset request after the eighth unattached tick drops its row', () => {
+    const projectDir = path.join(TEST_DIR, 'unattached-preset');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    mkdirSync(projectConfigDir, { recursive: true });
+    const projectConfigPath = path.join(
+      projectConfigDir,
+      'oh-my-opencode-slim.jsonc',
+    );
+    const originalConfig = JSON.stringify({ preset: 'old' });
+    writeFileSync(projectConfigPath, originalConfig);
+    writeFileSync(
+      path.join(TEST_DIR, 'config', 'opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        presets: {
+          old: { orchestrator: { model: 'old-model' } },
+          cheap: { orchestrator: { model: 'cheap-model' } },
+        },
+      }),
+    );
+
+    const m = make('unattached-preset-session', projectDir);
+    m.onLoad();
+    detachDirectory(projectDir);
+    const poll = m as unknown as { pollPresetState: () => void };
+    for (let tick = 0; tick < 7; tick++) poll.pollPresetState();
+    expect(readState().sessions).toHaveLength(1);
+
+    const state = readState();
+    state.preset_requests = [
+      {
+        request_id: 'removed-row-request',
+        session_id: 'unattached-preset-session',
+        scope: 'project',
+        preset: 'cheap',
+      },
+    ];
+    writeFileSync(stateFilePath(), JSON.stringify(state));
+
+    poll.pollPresetState();
+
+    expect(readState().sessions).toEqual([]);
+    expect(readState().preset_requests).toBeUndefined();
+    expect(readFileSync(projectConfigPath, 'utf8')).toBe(originalConfig);
+  });
+
   it('publishes presets and applies a project-local preset request', () => {
     const projectDir = path.join(TEST_DIR, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
