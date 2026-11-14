@@ -100,19 +100,6 @@ function isSteeredCall(pending: {
   );
 }
 
-function releaseSteerCoverage(
-  pending: PendingTaskCall,
-  board: BackgroundJobBoard,
-): void {
-  const fence = pending.steerAmendment;
-  if (!fence || pending.steerCoverRevision === undefined) return;
-  board.uncoverHostSteer(
-    fence.taskID,
-    fence.generation,
-    pending.steerCoverRevision,
-  );
-}
-
 function refuseKnownTaskResume(
   requested: string,
   job: ResumeRefusalJob,
@@ -190,9 +177,6 @@ export async function handleToolExecuteBefore(
      * delegation vocabulary for model-visible refusal guidance. Defaults to
      * v1 wording. */
     hostFlavor?: string;
-    /** Per-instance pairing flag for the background-default flip: true only
-     * after this setup's v2 description rewrite verifiably landed. */
-    isBackgroundDefaultFlipArmed?: () => boolean;
     recoverRetainedSession?: (request: {
       parentSessionID: string;
       requested: string;
@@ -231,32 +215,6 @@ export async function handleToolExecuteBefore(
   if (!isObjectRecord(output.args)) return;
 
   const args = output.args as TaskArgs;
-  // Background-default flip (v2 only): the native `subagent` schema has no
-  // default, so an omitted `background` silently blocks the parent turn —
-  // measured 2:1 foreground habit even in orchestration sessions. Flip the
-  // omitted-parameter default to background for managed sessions; explicit
-  // `false` (dependent work) and explicit `true` pass through untouched.
-  // Gated on the per-instance pairing flag: the flip only runs once this
-  // setup's v2 description rewrite verifiably landed (arm via
-  // 'v2.backgroundDefaultFlip') — otherwise the native foreground default
-  // keeps operating end-to-end with its native wording intact. v1 hosts
-  // keep the full native behavior (no flavor gate entry).
-  if (deps.hostFlavor === 'v2' && deps.isBackgroundDefaultFlipArmed?.()) {
-    if (args.background === undefined) {
-      args.background = true;
-      log('[task-session-manager] v2 background default applied', {
-        sessionID: input.sessionID,
-      });
-    } else {
-      // Observation lamp for the explicit lane: `false` usage is the
-      // dependent-work health metric; `true` distinguishes model-chosen
-      // background from the rewritten default.
-      log('[task-session-manager] v2 background explicit', {
-        sessionID: input.sessionID,
-        background: args.background,
-      });
-    }
-  }
   if (typeof args.task_id === 'string' && args.task_id.trim() === '') {
     refuseExplicitTaskId(
       args.task_id,
@@ -562,17 +520,6 @@ export async function handleToolExecuteBefore(
           );
         }
         deps.backgroundJobBoard.releaseLease(fence);
-        // The steer amends THIS run: fence the pending on the board's own
-        // run identity (generation + terminalRevision). The amendment is
-        // stamped only once the host proves the call actually ran (the
-        // structured launch lane) and only while that exact run still owns
-        // the record — a rejected call leaves nothing behind, and a
-        // reopened run can never inherit the boundary.
-        pendingCall.steerAmendment = {
-          taskID: remembered.taskID,
-          generation: remembered.generation,
-          terminalRevision: remembered.terminalRevision,
-        };
       }
       if (!steered) {
         const relaunchLease = deps.backgroundJobBoard.acquireLease(
@@ -897,26 +844,7 @@ export async function handleToolExecuteAfter(
 
   if (!pending) return;
 
-  if (!pending.registeredByWrapper)
-    releaseSteerCoverage(pending, deps.backgroundJobBoard);
-
   try {
-    // v2 gate: the executor wrapper registered this call's delegated
-    // (subagent) launch from the STRUCTURED executor result — launch
-    // registration, background promotion, ticket binding, tombstone clear,
-    // supervisor binding, context merge, and any terminal reconcile already
-    // happened there. Re-registering from the rendered prose would
-    // double-register. The status branch (task_status tool outputs),
-    // read-context tracking, and residual identity fallback stay live; v1
-    // never sets the flag. The finally block still releases the pending, its
-    // lease, and its ticket.
-    if (deps.hostFlavor === 'v2' && pending.registeredByWrapper === true) {
-      log(
-        '[task-session-manager] v2 subagent launch already registered by executor wrapper',
-        { callID: pending.callId },
-      );
-      return;
-    }
     if (typeof output.output !== 'string') return;
     const backgroundMeta = output.metadata as
       | { background?: unknown }
@@ -937,10 +865,6 @@ export async function handleToolExecuteAfter(
 
     const launch = parseTaskLaunchOutput(output.output);
     if (launch && !launch.result?.match(/Timed out after \d+ms/i)) {
-      // Shared launch-registration pipeline (fences + promotion + ticket/
-      // gate/supervisor/context routing). Used by both the v1 after-hook and
-      // the v2 executor wrapper so the delegated-subagent launch line has one
-      // source of truth.
       const record = await registerDelegatedLaunchFromStructured(
         {
           callID: pending.callId,
@@ -1324,21 +1248,6 @@ function registerTaskOutputLaunch(
   }
 }
 
-/**
- * Shared delegated-launch registration entry point, used by BOTH the v1
- * after-hook's launch-output branch and the v2-only executor wrapper, so the
- * delegated-`subagent` launch line has ONE source of truth. All registration
- * fences (stale lifecycle epoch, early-registration generation,
- * resumed-without-lease refusal, earlyRejected collision, authoritative-ID
- * override) live in `registerTaskOutputLaunch` unchanged.
- *
- * Routing order matches the after-hook launch branch: host-confirmed
- * background promotion, board registration, concurrency-ticket binding,
- * rehydrate-tombstone clear, supervisor launch binding, task-context mark +
- * board context merge, and — for terminal (non-running) outcomes — the
- * terminal-gate reconcile. Registration/fence errors are logged and
- * swallowed; the tool result always passes through.
- */
 export interface RegisterDelegatedLaunchDeps {
   directory: string;
   backgroundJobBoard: BackgroundJobBoard;
@@ -1378,38 +1287,10 @@ export interface DelegatedLaunchFromStructuredInput {
   state: TaskOutputState;
   /** Host-confirmed background promotion from structured metadata. */
   background: boolean;
-  /**
-   * The child's final text (v2 executor-wrapper path only): carried
-   * verbatim into the terminal gate's status so the textless-completion
-   * policy cannot turn a valid answer into an error. The v1 after-hook
-   * path never sets it (its terminal branch parses its own output).
-   */
+  /** Final text, when the caller supplies a terminal result. */
   result?: string;
   exactCallConfirmed: boolean;
   pending: PendingTaskCall;
-  /** Set only on the v2 executor-wrapper path — marks the pending so the
-   *  after-hook gates its launch-output / background-promotion branches off
-   *  (launch is registered exactly once on v2). v1 leaves this undefined. */
-  handledByWrapper?: boolean;
-}
-
-/** Stamp a native steer's amendment boundary. The admitted id is read LATE
- *  (here, not when observed), so an admission recorded during the call's
- *  extent either becomes the evidence or turns it into a refusal. */
-function noteSteerAmendment(
-  pending: PendingTaskCall,
-  deps: Pick<RegisterDelegatedLaunchDeps, 'backgroundJobBoard'>,
-): void {
-  const fence = pending.steerAmendment;
-  if (!fence) return;
-  const admitted = pending.inputMessageID;
-  if (typeof admitted !== 'string') return;
-  deps.backgroundJobBoard.noteRunAmendment(
-    fence.taskID,
-    fence.generation,
-    admitted,
-    fence.terminalRevision,
-  );
 }
 
 export async function registerDelegatedLaunchFromStructured(
@@ -1417,17 +1298,6 @@ export async function registerDelegatedLaunchFromStructured(
   deps: RegisterDelegatedLaunchDeps,
 ): Promise<BackgroundJobRecord | undefined> {
   try {
-    if (
-      input.handledByWrapper === true &&
-      input.exactCallConfirmed &&
-      input.pending.steerAmendment &&
-      input.pending.steerAmendment.taskID === input.childTaskID &&
-      input.pending.resumedTaskId === input.childTaskID
-    ) {
-      if (!input.pending.identityUnresolved)
-        noteSteerAmendment(input.pending, deps);
-      input.pending.registeredByWrapper = true;
-    }
     if (input.background && !input.pending.background) {
       adoptHostConfirmedBackground(input.pending, deps);
     }
@@ -1441,9 +1311,6 @@ export async function registerDelegatedLaunchFromStructured(
     );
     if (!record) return undefined;
     deps.onLaunchConfirmed?.(record.taskID);
-    if (input.handledByWrapper === true) {
-      input.pending.registeredByWrapper = true;
-    }
     deps.bindConcurrencyTicket?.(record.taskID, input.pending);
     deps.clearRehydrateTombstone?.(input.childTaskID);
     if (input.exactCallConfirmed) {
@@ -1483,11 +1350,7 @@ export async function registerDelegatedLaunchFromStructured(
       callID: input.callID,
       error: error instanceof Error ? error.message : String(error),
     });
-    // v1 keeps the after-hook's historic fail-loud semantics (its outer
-    // finally still releases the pending, lease, and ticket); the v2 wrapper
-    // path must never let a registration failure corrupt the tool result.
-    if (input.handledByWrapper !== true) throw error;
-    return undefined;
+    throw error;
   }
 }
 

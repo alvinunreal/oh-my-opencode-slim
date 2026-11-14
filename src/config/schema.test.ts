@@ -913,6 +913,59 @@ describe('PluginConfigSchema backgroundJobs', () => {
     }
   });
 
+  it('documents lifecycle modes, retirement, and sameProvider across V1/V2', () => {
+    const jsonSchema = z.toJSONSchema(PluginConfigSchema, {
+      io: 'input',
+    }) as {
+      properties?: {
+        backgroundJobs?: {
+          properties?: Record<string, { description?: string }>;
+        };
+      };
+    };
+
+    const properties = jsonSchema.properties?.backgroundJobs?.properties ?? {};
+
+    const modeDesc = properties.mode?.description ?? '';
+    expect(modeDesc).toContain('"managed" (default on V1 hosts)');
+    expect(modeDesc).toContain('"native" (default on OpenCode v2 hosts)');
+    expect(modeDesc).toContain(
+      'task_reply for the orchestrator and task_report for child subagents',
+    );
+    expect(modeDesc).toContain(
+      'request acceptance, not confirmed interruption',
+    );
+    expect(modeDesc).not.toContain('atomic interruption');
+
+    expect(properties.concurrency?.description).toContain(
+      'V1 managed lifecycle only',
+    );
+    expect(properties.maxSessionsPerAgent?.description).toContain(
+      'V1 managed lifecycle only',
+    );
+    expect(properties.wallClockTimeoutMs?.description).toContain(
+      'V1 managed lifecycle only',
+    );
+    expect(properties.stopConfirmationMs?.description).toContain(
+      'V1 managed lifecycle only',
+    );
+    expect(properties.sameProviderPolicy?.description).toContain(
+      'inert when backgroundJobs.mode is "off"',
+    );
+    expect(properties.sameProviderPolicy?.description).toContain(
+      'this key is v1-only',
+    );
+    expect(properties.sameProviderPolicy?.description).toContain(
+      'an explicit value on v2 emits an unsupported-host warning and is ignored',
+    );
+    expect(properties.waitForUserGuard?.description).toContain(
+      'v1 hosts only; ignored with a warning on OpenCode v2 hosts',
+    );
+    expect(properties.childInputWakeKinds?.description).toContain(
+      'v1 hosts only; ignored with a warning on OpenCode v2 hosts',
+    );
+  });
+
   it('rejects the removed enabled alias and names backgroundJobs.mode', () => {
     const result = PluginConfigSchema.safeParse({
       backgroundJobs: { enabled: false, maxSessionsPerAgent: 4 },

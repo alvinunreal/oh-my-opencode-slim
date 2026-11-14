@@ -612,26 +612,6 @@ describe('host admission anchors', () => {
     expect(tracker.take('a', 'parent-1')?.inputMessageID).toBeUndefined();
   });
 
-  test('a resumed pending carries the steer run fence it was created with', () => {
-    const tracker = createPendingCallTracker();
-    tracker.add(
-      pending({
-        callId: 'a',
-        resumedTaskId: 'ses_child',
-        steerAmendment: {
-          taskID: 'ses_child',
-          generation: 3,
-          terminalRevision: 1,
-        },
-      }),
-    );
-    expect(tracker.take('a', 'parent-1')?.steerAmendment).toEqual({
-      taskID: 'ses_child',
-      generation: 3,
-      terminalRevision: 1,
-    });
-  });
-
   test('the first-admission map clears with lifecycle state', () => {
     const tracker = createPendingCallTracker();
     tracker.noteAdmission('ses_child', 'msg_1');

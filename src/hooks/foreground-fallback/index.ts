@@ -90,7 +90,6 @@ type V2SwitchModel = NonNullable<ExperimentalV2['switchModel']>;
 type ChildOutcome = Promise<string | undefined>;
 type V2RefusalStep = {
   assistantMessageID: string;
-  baselineMessageID?: string;
   agent: string;
   model: V2GenerateModelRef | undefined;
   epoch: number;
@@ -849,17 +848,12 @@ export class ForegroundFallbackManager {
   private retryEnabledFor(sessionID: string): boolean {
     return this.sessionRetryEnabled.get(sessionID) ?? this.v2RetryEnabled;
   }
-  /** child sessionID → parent sessionID (from session.created info).
-   *  Lets the fallback abort path promote a foreground task() waiter to
-   *  background first, so the waiting tool resolves via backgroundResult
-   *  instead of "Task cancelled" while the child continues on fallback. */
+  /** child sessionID → parent sessionID (from session.created info). */
   private readonly sessionParent = new Map<string, string>();
   /** sessionID → set of models already attempted this session */
   private readonly sessionTried = new Map<string, Set<string>>();
   /** Request-scoped rejections remain ineligible until the next external turn. */
   private readonly requestRejected = new Map<string, Set<string>>();
-  /** A recovered foreground child's wrapper re-attach is our own prompt. */
-  private readonly reattachPending = new Set<string>();
   /** sessionID → providers whose allowance is spent (issue #966). The chain
    *  walk skips them; once every chain provider is listed the error
    *  surfaces. Holds at most the providers seen failing, and re-arms with
@@ -1265,61 +1259,6 @@ export class ForegroundFallbackManager {
     finish?.(model);
   }
 
-  refusedChildOutcome(
-    sessionID: string,
-    entry: Record<string, unknown>,
-  ): Promise<string | undefined> {
-    if (typeof entry.id !== 'string') return Promise.resolve(undefined);
-    const existing = this.childOutcomes.get(`${sessionID}\0${entry.id}`);
-    if (existing) return existing;
-    if (entry.type === 'no-route' && isRecord(entry.error)) {
-      return this.handleV2NoRoute(sessionID, entry.error, entry, true).then(
-        (model) => {
-          if (!model && this.awaitingRun.delete(sessionID))
-            void this.restoreV2(sessionID);
-          return model;
-        },
-      );
-    }
-    if (
-      entry.type !== 'assistant' ||
-      entry.finish !== 'content-filter' ||
-      typeof entry.agent !== 'string' ||
-      !isRecord(entry.model) ||
-      typeof entry.model.providerID !== 'string' ||
-      typeof entry.model.id !== 'string' ||
-      (entry.model.variant !== undefined &&
-        typeof entry.model.variant !== 'string') ||
-      !isRecord(entry.time) ||
-      typeof entry.time.completed !== 'number' ||
-      !Number.isFinite(entry.time.completed) ||
-      entry.time.completed < this.startedAt
-    )
-      return Promise.resolve(undefined);
-    const step = this.v2Steps.get(sessionID);
-    return this.refusalOutcome(
-      sessionID,
-      {
-        assistantMessageID: entry.id,
-        agent: entry.agent,
-        model: {
-          providerID: entry.model.providerID,
-          id: entry.model.id,
-          ...(typeof entry.model.variant === 'string'
-            ? { variant: entry.model.variant }
-            : {}),
-        },
-        // The pump's epoch is from step start; a later prompt must win.
-        epoch:
-          step?.assistantMessageID === entry.id
-            ? step.epoch
-            : (this.turnEpoch.get(sessionID) ?? 0),
-      },
-      entry.error,
-      entry.rawFinish,
-    );
-  }
-
   private createV1Outcome(key: string, timeout: number) {
     const existing = this.childOutcomes.get(key);
     if (existing) return existing;
@@ -1451,8 +1390,7 @@ export class ForegroundFallbackManager {
   }
 
   noteV2Prompt(sessionID: string): void {
-    if (!this.reattachPending.delete(sessionID))
-      this.requestRejected.delete(sessionID);
+    this.requestRejected.delete(sessionID);
     this.turnEpoch.set(sessionID, (this.turnEpoch.get(sessionID) ?? 0) + 1);
   }
 
@@ -1709,7 +1647,6 @@ export class ForegroundFallbackManager {
     this.sessionAgent.delete(id);
     this.sessionTried.delete(id);
     this.requestRejected.delete(id);
-    this.reattachPending.delete(id);
     this.sessionChains.delete(id);
     this.sessionRetryEnabled.delete(id);
     this.unknownFinishStreak.delete(id);
@@ -1768,7 +1705,6 @@ export class ForegroundFallbackManager {
       this.busy.has(sessionID) ||
       this.awaitingRun.has(sessionID) ||
       this.isFallbackInProgress(sessionID) ||
-      this.reattachPending.has(sessionID) ||
       this.getDownProviders(sessionID).has(
         parseModelReference(descent.model)?.providerID ?? '',
       )
@@ -2056,13 +1992,6 @@ export class ForegroundFallbackManager {
           await this.handleV2NoRoute(props.sessionID, props.error, {
             time: { completed: (rawEvent as { created: number }).created },
           });
-          // A foreground child's waiter owns its next recovery attempt.
-          if (
-            this.descent.has(props.sessionID) &&
-            this.sessionParent.has(props.sessionID) &&
-            this.readBackgroundGeneration?.(props.sessionID) === undefined
-          )
-            this.awaitingRun.add(props.sessionID);
         }
         break;
       }
@@ -2806,7 +2735,6 @@ export class ForegroundFallbackManager {
     sessionID: string,
     error: Record<string, unknown>,
     entry: Record<string, unknown>,
-    fromWaiter = false,
   ): Promise<string | undefined> {
     if (
       !this.retryEnabledFor(sessionID) ||
@@ -2821,13 +2749,6 @@ export class ForegroundFallbackManager {
       return;
     const failedAt = entry.time.completed;
     const epoch = this.turnEpoch.get(sessionID) ?? 0;
-    const background = this.readBackgroundGeneration?.(sessionID);
-    if (
-      !fromWaiter &&
-      this.sessionParent.has(sessionID) &&
-      background === undefined
-    )
-      return;
     try {
       const session = getClient(this.input).session;
       const result = await withTimeout(
@@ -2839,7 +2760,6 @@ export class ForegroundFallbackManager {
       if (responseError(result) !== undefined || !isRecord(data)) return;
       if (typeof data.parentID === 'string' && data.parentID) {
         this.sessionParent.set(sessionID, data.parentID);
-        if (!fromWaiter && background === undefined) return;
       }
       let anchor = entry;
       if (typeof anchor.id !== 'string') {
@@ -2880,7 +2800,6 @@ export class ForegroundFallbackManager {
         if (!isRecord(input) || !isRecord(input.info)) return;
         anchor = {
           ...input.info,
-          baselineMessageID: input.info.id,
           id:
             typeof input.info.id === 'string'
               ? noRouteOutcomeID(input.info.id, error.message)
@@ -2931,9 +2850,6 @@ export class ForegroundFallbackManager {
         sessionID,
         {
           assistantMessageID: anchor.id,
-          ...(typeof anchor.baselineMessageID === 'string'
-            ? { baselineMessageID: anchor.baselineMessageID }
-            : {}),
           agent,
           model,
           epoch,
@@ -2979,8 +2895,6 @@ export class ForegroundFallbackManager {
     const agent = this.v2AgentName(sessionID, step.agent);
     if (!this.hasFallbackChain(sessionID, agent)) return;
     const epoch = step.epoch;
-    const preparedGeneration = this.readBackgroundGeneration?.(sessionID);
-    let handoffArmed = false;
     this.inProgress.add(sessionID);
     log('[foreground-fallback] v2 refusal observed', {
       sessionID,
@@ -3016,18 +2930,6 @@ export class ForegroundFallbackManager {
       }
       if (agent) this.sessionAgent.set(sessionID, agent);
       if (from) this.sessionModel.set(sessionID, from);
-      if (
-        nestedField(error, 'type') === 'provider.no-route' &&
-        preparedGeneration !== undefined
-      ) {
-        handoffArmed =
-          this.backgroundFallbackHandoff?.prepare(
-            sessionID,
-            preparedGeneration,
-            step.baselineMessageID ?? step.assistantMessageID,
-          ) ?? false;
-        if (!handoffArmed) return;
-      }
       const nextModel = await this.switchV2InPlace(
         sessionID,
         from,
@@ -3040,28 +2942,9 @@ export class ForegroundFallbackManager {
         !nextModel ||
         this.disposed ||
         (this.turnEpoch.get(sessionID) ?? 0) !== epoch
-      ) {
-        if (handoffArmed)
-          this.backgroundFallbackHandoff?.reject(sessionID, preparedGeneration);
+      )
         return;
-      }
       this.awaitingRun.add(sessionID);
-      if (data.parentID && preparedGeneration === undefined) {
-        this.reattachPending.add(sessionID);
-        return nextModel;
-      }
-      handoffArmed ||=
-        preparedGeneration !== undefined &&
-        (this.backgroundFallbackHandoff?.prepare(
-          sessionID,
-          preparedGeneration,
-          step.baselineMessageID ?? step.assistantMessageID,
-        ) ??
-          false);
-      if (preparedGeneration !== undefined && !handoffArmed) {
-        this.awaitingRun.delete(sessionID);
-        return;
-      }
       const promptResult = await withTimeout(
         session.promptAsync({
           path: { id: sessionID },
@@ -3081,23 +2964,12 @@ export class ForegroundFallbackManager {
       );
       if (isRecord(promptResult) && responseError(promptResult) !== undefined) {
         this.awaitingRun.delete(sessionID);
-        if (handoffArmed)
-          this.backgroundFallbackHandoff?.reject(sessionID, preparedGeneration);
         return;
       }
-      if (handoffArmed)
-        this.backgroundFallbackHandoff?.admit(sessionID, preparedGeneration, {
-          from,
-          to: nextModel,
-          error: structuredErrorMessage(error) ?? 'Session error',
-        });
       return nextModel;
     } catch (err) {
-      if (handoffArmed)
-        this.backgroundFallbackHandoff?.settleUnresolved(
-          sessionID,
-          preparedGeneration,
-        );
+      // A timed-out admission may still land; only its busy event releases
+      // the continuation fence, never this uncertain failure.
       log('[foreground-fallback] v2 refusal recovery failed', {
         sessionID,
         error: stringifyError(err),

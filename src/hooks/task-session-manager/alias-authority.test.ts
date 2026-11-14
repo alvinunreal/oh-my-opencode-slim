@@ -9,7 +9,6 @@ import { createTaskReviveTool } from '../../tools/task-revive';
 import { createTaskStatusTool } from '../../tools/task-status';
 import { BackgroundJobBoard } from '../../utils/background-job-board';
 import * as opencodeClient from '../../utils/opencode-client';
-import { mapV2EventToV1 } from '../../v2/event-adapter';
 import {
   aliasUnverifiedMessage,
   appendChildRefSuffix,
@@ -331,42 +330,6 @@ describe('alias numbering', () => {
       },
     });
     expect([...aliases, restored]).toEqual(['fix-1', 'ses_restoredchild']);
-  });
-
-  // The v2 pump hands the hook every mapped event, the raw envelope first:
-  // {id, created, type, durable, data: {sessionID}}, stamped by the host.
-  test('v2 takes the creation time from the envelope; a replayed or undated parent keeps IDs', async () => {
-    const created = (sessionID: string, at?: number) =>
-      mapV2EventToV1({
-        id: `evt_${sessionID}`,
-        created: at,
-        type: 'session.created',
-        durable: true,
-        data: { sessionID },
-      });
-    const undated = 'ses_undatedparent';
-    const { aliases, outputs } = await pluginAliases(
-      [
-        [PARENT, 'ses_freshchild'],
-        [OTHER, 'ses_replayedchild'],
-        [undated, 'ses_undatedchild'],
-      ],
-      {
-        hostFlavor: 'v2',
-        events: () => [
-          ...created(PARENT, Date.now()),
-          ...created(OTHER, 0),
-          ...created(undated),
-        ],
-      },
-    );
-    expect(aliases).toEqual(['fix-1', 'ses_replayedchild', 'ses_undatedchild']);
-    // P2b: v2 renders the contract-native sessionID and never the v1-only
-    // child-ref comment, yet the alias is still allocated and resolvable
-    // (observed above through task_status, a model-visible surface).
-    for (const rendered of outputs) {
-      expect(rendered).not.toContain('slim-child-ref');
-    }
   });
 });
 

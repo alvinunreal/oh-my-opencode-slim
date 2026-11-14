@@ -75,7 +75,7 @@ export interface HostConfigSnapshot {
 const registry = new Map<string, RuntimeConfig>();
 const reloadState = new Map<
   string,
-  { preset: string | null; switchedModels: Set<string> }
+  { hostFlavor?: string; preset: string | null; switchedModels: Set<string> }
 >();
 
 const DEFAULT_MULTIPLEXER: MultiplexerConfig =
@@ -185,16 +185,17 @@ export class RuntimeConfig {
     pluginConfig: ResolvedPluginConfig,
     hostFlavor?: string,
   ): RuntimeConfig {
-    const existing = registry.get(directory);
-    if (existing) {
-      existing.hostFlavor = hostFlavor;
-      existing.seedPlugin(pluginConfig);
-      return existing;
+    const existing = RuntimeConfig.get(directory);
+    if ((existing.hostFlavor === 'v2') !== (hostFlavor === 'v2')) {
+      // A directory may be reused by the other adapter in this process; its
+      // host snapshot and saved overrides belong to the previous host.
+      const instance = new RuntimeConfig(directory, hostFlavor);
+      instance.seedPlugin(pluginConfig, hostFlavor);
+      registry.set(directory, instance);
+      return instance;
     }
-    const instance = RuntimeConfig.get(directory);
-    instance.hostFlavor = hostFlavor;
-    instance.seedPlugin(pluginConfig);
-    return instance;
+    existing.seedPlugin(pluginConfig, hostFlavor);
+    return existing;
   }
 
   /** Create an isolated runtime snapshot for read-only status projections. */
@@ -204,7 +205,7 @@ export class RuntimeConfig {
     hostFlavor?: string,
   ): RuntimeConfig {
     const instance = new RuntimeConfig(directory, hostFlavor);
-    instance.seedPlugin(pluginConfig);
+    instance.seedPlugin(pluginConfig, hostFlavor);
     return instance;
   }
 
@@ -215,6 +216,7 @@ export class RuntimeConfig {
       instance = new RuntimeConfig(directory);
       const saved = reloadState.get(directory);
       if (saved) {
+        instance.hostFlavor = saved.hostFlavor;
         instance.runtimePresetName = saved.preset;
         instance.switchedModels = saved.switchedModels;
         reloadState.delete(directory);
@@ -244,6 +246,7 @@ export class RuntimeConfig {
       if (this.owners !== 0 || registry.get(this.directory) !== this) return;
       if (this.runtimePresetName || this.switchedModels.size > 0) {
         reloadState.set(this.directory, {
+          hostFlavor: this.hostFlavor,
           preset: this.runtimePresetName,
           switchedModels: new Set(this.switchedModels),
         });
@@ -268,9 +271,14 @@ export class RuntimeConfig {
   private disabledCommandsCache: ReadonlySet<string> | undefined;
   private acpAgentsCache: AcpAgentsConfig | undefined;
 
-  private seedPlugin(pluginConfig: ResolvedPluginConfig): void {
+  private seedPlugin(
+    pluginConfig: ResolvedPluginConfig,
+    hostFlavor?: string,
+  ): void {
+    const featureGates = resolveFeatureGates(pluginConfig, hostFlavor);
     this.pluginConfig = deepFreeze(clonePlain(pluginConfig));
-    this.featureGatesCache = resolveFeatureGates(this.pluginConfig);
+    this.hostFlavor = hostFlavor;
+    this.featureGatesCache = featureGates;
     this.localSkillNamesCache = undefined;
     this.agentsCache = undefined;
     this.disabledAgentsCache = undefined;
@@ -302,7 +310,10 @@ export class RuntimeConfig {
    * current config generation; unseeded instances expose the defaults.
    */
   get featureGates(): Readonly<FeatureGates> {
-    this.featureGatesCache ??= resolveFeatureGates(this.pluginConfig);
+    this.featureGatesCache ??= resolveFeatureGates(
+      this.pluginConfig,
+      this.hostFlavor,
+    );
     return this.featureGatesCache;
   }
 
@@ -529,8 +540,9 @@ export class RuntimeConfig {
   /**
    * Resolved background-task lifecycle mode.
    *
-   * Only `managed` constructs the board-shaped lifecycle; `native` registers
-   * the two thin host-read control tools; `off` registers none.
+   * Only V1 `managed` constructs the board-shaped lifecycle. V2 defaults to
+   * `native`, with host delegation controls and independent reply/report
+   * tools; `off` registers no OMOS task tools.
    */
   get backgroundJobsMode(): FeatureGates['backgroundJobsMode'] {
     return this.featureGates.backgroundJobsMode;

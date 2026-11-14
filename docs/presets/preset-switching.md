@@ -38,7 +38,8 @@ the built-in `/models`, so it triggers no LLM turn.
 To choose a preset for new work, open a new session and run
 `/preset <name>` in it.
 
-> **`backgroundJobs.mode: "off"` disables session bindings.** That mode leaves
+> **`backgroundJobs.mode: "off"` disables session bindings.** Session bindings
+> remain available in the V2 `native` default; `off` leaves
 > native delegation untouched: no session `/preset` command, RPC, or child
 > snapshot. Children use the registered agent configuration, and the `preset`
 > global default still selects those settings at startup.
@@ -71,7 +72,7 @@ command restores the picker and the binding read.
 ## Scope and when changes take effect
 
 On v2, a root work session captures its subagent inference configuration before
-its first managed prompt is admitted. Its new native subagents inherit their
+its first prompt is admitted. Its new native subagents inherit their
 direct parent's snapshot, including model variants, inference options and fallback
 chains. Default-bound roots refresh their snapshot on their next admission;
 named-preset bindings stay pinned until explicitly reapplied.

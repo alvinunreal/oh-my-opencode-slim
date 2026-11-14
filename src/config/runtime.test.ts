@@ -344,6 +344,68 @@ describe('RuntimeConfig', () => {
     expect(managed.backgroundJobsEnabled).toBe(true);
   });
 
+  test('host flavor controls cached feature gates for reseeded and detached runtimes', () => {
+    resetRegistry();
+    const v1 = RuntimeConfig.init(DIRECTORY, {}, 'v1');
+    v1.captureHostConfig({ default_agent: 'v1-agent' });
+    v1.everModelSwitched('explorer');
+    const v1Gates = v1.featureGates;
+    expect(v1Gates.backgroundJobsMode).toBe('managed');
+    expect(v1Gates.managedJobs).toBe(true);
+
+    // Switching host flavor from v1 to v2 creates a clean instance to prevent
+    // stale v1 singleton state (switched models, host snapshot) from polluting v2.
+    const v2 = RuntimeConfig.init(DIRECTORY, {}, 'v2');
+    expect(v2).not.toBe(v1);
+    expect(v2.host()).toBeUndefined();
+    expect(v2.hasModelSwitched('explorer')).toBe(false);
+    expect(v2.featureGates).not.toBe(v1Gates);
+    expect(v2.featureGates).toMatchObject({
+      backgroundJobsMode: 'native',
+      managedJobs: false,
+      presetRouting: true,
+    });
+    expect(v2.backgroundJobs.mode).toBe('native');
+    expect(v2.backgroundJobs.maxSessionsPerAgent).toBe(2);
+    expect(v1Gates.backgroundJobsMode).toBe('managed');
+    expect(RuntimeConfig.get(DIRECTORY)).toBe(v2);
+    expect(RuntimeConfig.get(DIRECTORY).featureGates).toBe(v2.featureGates);
+
+    const detached = RuntimeConfig.createDetached(
+      DIRECTORY,
+      { backgroundJobs: { mode: 'off' } },
+      'v2',
+    );
+    expect(detached.featureGates).toMatchObject({
+      backgroundJobsMode: 'off',
+      managedJobs: false,
+      presetRouting: false,
+    });
+    expect(v2.featureGates.backgroundJobsMode).toBe('native');
+  });
+
+  test('rejects v2 managed runtime seeds before replacing the prior snapshot', () => {
+    resetRegistry();
+    const runtime = RuntimeConfig.init(DIRECTORY, { tui: false }, 'v2');
+    const gates = runtime.featureGates;
+    expect(() =>
+      RuntimeConfig.init(
+        DIRECTORY,
+        { backgroundJobs: { mode: 'managed' } },
+        'v2',
+      ),
+    ).toThrow(/Unsupported backgroundJobs\.mode "managed"/);
+    expect(runtime.featureGates).toBe(gates);
+    expect(runtime.plugin).toEqual({ tui: false });
+    expect(() =>
+      RuntimeConfig.createDetached(
+        DIRECTORY,
+        { backgroundJobs: { mode: 'managed' } },
+        'v2',
+      ),
+    ).toThrow(/Unsupported backgroundJobs\.mode "managed"/);
+  });
+
   test('updateCheckerEnabled is off for autoUpdate false or the disabled hook', () => {
     resetRegistry();
     const autoUpdateOff = RuntimeConfig.init(DIRECTORY, { autoUpdate: false });

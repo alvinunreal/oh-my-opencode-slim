@@ -3,7 +3,10 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { getAgentMcpList } from './agent-mcps';
-import { resolveFeatureGates } from './feature-gates';
+import {
+  resolveFeatureGates,
+  UnsupportedHostConfigError,
+} from './feature-gates';
 import type { ConfigLoadWarning } from './loader';
 import {
   findPluginConfigPaths,
@@ -45,6 +48,233 @@ describe('loadPluginConfig', () => {
     fs.mkdirSync(projectDir, { recursive: true });
     const config = loadPluginConfig(projectDir);
     expect(config).toEqual({});
+  });
+
+  describe('host-aware background jobs retirement matrix', () => {
+    test('v2 rejects explicit managed mode with clear error before construction', () => {
+      const projectDir = path.join(tempDir, 'project');
+      writeProjectConfig(projectDir, {
+        backgroundJobs: { mode: 'managed' },
+      });
+
+      expect(() => loadPluginConfig(projectDir, { hostFlavor: 'v2' })).toThrow(
+        UnsupportedHostConfigError,
+      );
+      expect(() => loadPluginConfig(projectDir, { hostFlavor: 'v2' })).toThrow(
+        /Unsupported backgroundJobs\.mode "managed" on OpenCode v2/,
+      );
+
+      // v1 loads managed normally
+      const v1Config = loadPluginConfig(projectDir, { hostFlavor: 'v1' });
+      expect(v1Config.backgroundJobs?.mode).toBe('managed');
+    });
+
+    test('v2 rejects explicit retired keys before defaults or sanitization', () => {
+      const projectDir = path.join(tempDir, 'project');
+      const forbiddenCases = [
+        { concurrency: { defaultConcurrency: 0 } },
+        {
+          concurrency: {
+            defaultConcurrency: 0,
+            providerConcurrency: { provider: 0 },
+            modelConcurrency: { 'provider/model': 0 },
+          },
+        },
+        { concurrency: {} },
+        { wallClockTimeoutMs: 0 },
+        { maxSessionsPerAgent: 2 },
+        { stopConfirmationMs: 5_000 },
+      ];
+
+      for (const backgroundJobs of forbiddenCases) {
+        writeProjectConfig(projectDir, { backgroundJobs });
+        expect(() =>
+          loadPluginConfig(projectDir, { hostFlavor: 'v2', silent: true }),
+        ).toThrow(UnsupportedHostConfigError);
+        for (const hostFlavor of [undefined, 'v1']) {
+          const v1 = loadPluginConfig(projectDir, { hostFlavor });
+          expect(v1.backgroundJobs).toMatchObject(backgroundJobs);
+        }
+      }
+
+      // Invalid retired values must not disappear through the sanitizer.
+      for (const backgroundJobs of [
+        { concurrency: null },
+        { wallClockTimeoutMs: -1 },
+        { maxSessionsPerAgent: 100 },
+        { stopConfirmationMs: 'invalid' },
+      ]) {
+        writeProjectConfig(projectDir, { backgroundJobs });
+        expect(() =>
+          loadPluginConfig(projectDir, { hostFlavor: 'v2', silent: true }),
+        ).toThrow(UnsupportedHostConfigError);
+      }
+    });
+
+    test('v2 allows absence of backgroundJobs and allows sameProviderPolicy', () => {
+      const projectDir = path.join(tempDir, 'project');
+      writeProjectConfig(projectDir, {
+        backgroundJobs: {
+          sameProviderPolicy: { anthropic: 'foreground' },
+        },
+      });
+
+      const v2Config = loadPluginConfig(projectDir, { hostFlavor: 'v2' });
+      expect(v2Config.backgroundJobs?.sameProviderPolicy).toEqual({
+        anthropic: 'foreground',
+      });
+      // Mode was not explicit, so it is undefined in raw loaded config and
+      // resolveFeatureGates defaults to native
+      expect(v2Config.backgroundJobs?.mode).toBeUndefined();
+      const gates = resolveFeatureGates(v2Config, 'v2');
+      expect(gates.backgroundJobsMode).toBe('native');
+      expect(gates.managedJobs).toBe(false);
+      expect(gates.presetRouting).toBe(true);
+    });
+
+    test('v2 detects explicit forbidden keys across user and project layers', () => {
+      const projectDir = path.join(tempDir, 'project');
+      const globalDir = path.join(userConfigDir, 'opencode');
+      fs.mkdirSync(globalDir, { recursive: true });
+
+      // User config sets wallClockTimeoutMs
+      fs.writeFileSync(
+        path.join(globalDir, 'oh-my-opencode-slim.json'),
+        JSON.stringify({ backgroundJobs: { wallClockTimeoutMs: 60_000 } }),
+      );
+      // Project config sets only harmless agent
+      writeProjectConfig(projectDir, { agents: { oracle: { model: 'm1' } } });
+
+      expect(() => loadPluginConfig(projectDir, { hostFlavor: 'v2' })).toThrow(
+        UnsupportedHostConfigError,
+      );
+
+      // Clean up global config
+      fs.unlinkSync(path.join(globalDir, 'oh-my-opencode-slim.json'));
+    });
+
+    test('a project native mode does not hide an unsupported user-layer managed mode', () => {
+      const projectDir = path.join(tempDir, 'project');
+      const globalDir = path.join(userConfigDir, 'opencode');
+      fs.mkdirSync(globalDir, { recursive: true });
+      const userPath = path.join(globalDir, 'oh-my-opencode-slim.json');
+      fs.writeFileSync(
+        userPath,
+        JSON.stringify({ backgroundJobs: { mode: 'managed' } }),
+      );
+      writeProjectConfig(projectDir, { backgroundJobs: { mode: 'native' } });
+
+      expect(() =>
+        loadPluginConfig(projectDir, { hostFlavor: 'v2', silent: true }),
+      ).toThrow(userPath);
+    });
+
+    test('retains existing disable switches and layered precedence on both hosts', () => {
+      const projectDir = path.join(tempDir, 'project');
+      const globalDir = path.join(userConfigDir, 'opencode');
+      fs.mkdirSync(globalDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(globalDir, 'oh-my-opencode-slim.json'),
+        JSON.stringify({
+          autoUpdate: false,
+          webfetch: { enabled: false },
+          backgroundJobs: { childInputWake: false },
+        }),
+      );
+      writeProjectConfig(projectDir, {
+        webfetch: {},
+        backgroundJobs: { childInputWakeKinds: { question: true } },
+      });
+
+      for (const hostFlavor of ['v1', 'v2']) {
+        const config = loadPluginConfig(projectDir, {
+          hostFlavor,
+          silent: true,
+        });
+        expect(resolveFeatureGates(config, hostFlavor)).toMatchObject({
+          updateChecker: false,
+          webfetch: false,
+        });
+        expect(config.backgroundJobs?.childInputWake).toBe(false);
+      }
+
+      writeProjectConfig(projectDir, {
+        autoUpdate: true,
+        webfetch: { enabled: true },
+        backgroundJobs: { childInputWake: true },
+      });
+      for (const hostFlavor of ['v1', 'v2']) {
+        const config = loadPluginConfig(projectDir, {
+          hostFlavor,
+          silent: true,
+        });
+        expect(resolveFeatureGates(config, hostFlavor)).toMatchObject({
+          updateChecker: true,
+          webfetch: true,
+        });
+        expect(config.backgroundJobs?.childInputWake).toBe(true);
+      }
+    });
+
+    test('v2 emits unsupported warnings for v1-only wake and pruning knobs without throwing', () => {
+      const projectDir = path.join(tempDir, 'project');
+      writeProjectConfig(projectDir, {
+        backgroundJobs: {
+          childInputWake: false,
+          childInputWakeKinds: { question: false },
+          waitForUserGuard: false,
+          pruneEvictedSessions: true,
+          sameProviderPolicy: { openai: 'foreground' },
+        },
+      });
+
+      const warnings: ConfigLoadWarning[] = [];
+      const config = loadPluginConfig(projectDir, {
+        hostFlavor: 'v2',
+        silent: true,
+        onWarning: (w) => warnings.push(w),
+      });
+
+      expect(config).toBeDefined();
+      const unsupported = warnings.filter((w) => w.kind === 'unsupported-host');
+      expect(unsupported).toHaveLength(5);
+      expect(
+        unsupported.some((w) => w.message.includes('childInputWake is')),
+      ).toBe(true);
+      expect(
+        unsupported.some((w) => w.message.includes('childInputWakeKinds')),
+      ).toBe(true);
+      expect(
+        unsupported.some((w) => w.message.includes('waitForUserGuard')),
+      ).toBe(true);
+      expect(
+        unsupported.some((w) => w.message.includes('pruneEvictedSessions')),
+      ).toBe(true);
+      expect(
+        unsupported.some((w) => w.message.includes('sameProviderPolicy')),
+      ).toBe(true);
+    });
+
+    test('v1 emits no unsupported-host warnings for sameProviderPolicy', () => {
+      const projectDir = path.join(tempDir, 'project');
+      writeProjectConfig(projectDir, {
+        backgroundJobs: {
+          sameProviderPolicy: { openai: 'foreground' },
+          childInputWake: false,
+        },
+      });
+
+      const warnings: ConfigLoadWarning[] = [];
+      const config = loadPluginConfig(projectDir, {
+        hostFlavor: 'v1',
+        silent: true,
+        onWarning: (w) => warnings.push(w),
+      });
+
+      expect(config).toBeDefined();
+      const unsupported = warnings.filter((w) => w.kind === 'unsupported-host');
+      expect(unsupported).toHaveLength(0);
+    });
   });
 
   test('loads project config from .opencode directory', () => {
@@ -1213,7 +1443,7 @@ describe('onWarning callback', () => {
     const originalWarn = console.warn;
     console.warn = (message: string) => warnings.push(message);
     try {
-      const config = loadPluginConfig(projectDir, { hostFlavor: 'v2' });
+      const config = loadPluginConfig(projectDir, { hostFlavor: 'v1' });
       for (const key of [
         'backgroundJobs.maxContextLines',
         'backgroundJobs.readContextMinLines',

@@ -2614,6 +2614,7 @@ async function setup(
       notifyConfigChanged(directory, 'preset-manager');
     augmented.getSessionID = () =>
       resolveRouteSessionId(ctx.ui.router.current());
+    augmented.presetRoutingEnabled = gatesRead.gates.presetRouting;
     return augmented;
   };
   // Tracks the runtime's effective `multiplexer.type` (onMultiplexerConfig).
@@ -2780,8 +2781,9 @@ async function setup(
         warnPaneUnsupported();
         void reconcilePaneWiring();
       },
-      readSessionPreset: (directory, sessionID) =>
-        readSessionPreset(ctx, sessionID, directory),
+      readSessionPreset: gatesRead.gates.presetRouting
+        ? (directory, sessionID) => readSessionPreset(ctx, sessionID, directory)
+        : undefined,
       getPresetRow: (directory, presetName, sessionPreset) => {
         const name = presetName ?? '(none)';
         // `disabled_commands` is applied by the sidebar runtime, which

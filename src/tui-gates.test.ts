@@ -354,6 +354,37 @@ describe('TUI feature gates', () => {
     }
   });
 
+  test('threads hostFlavor to feature gates during TUI gate probe', () => {
+    writeUserConfig({ backgroundJobs: { mode: 'managed' } });
+
+    // On v1 or unmarked host, probe succeeds with managed gates
+    const v1 = readTuiGates(env.projectDir, 'v1');
+    expect(v1.readFailed).toBe(false);
+    expect(v1.gates.tuiEnabled).toBe(true);
+
+    // On v2 host, explicit managed mode causes the config read to fail
+    // and probeTuiGates catches it, returning failOpen gates with readFailed: true
+    const v2 = readTuiGates(env.projectDir, 'v2');
+    expect(v2.readFailed).toBe(true);
+    expect(v2.gates.tuiEnabled).toBe(true);
+  });
+
+  test('v2 off disables session preset routing without disabling preset editing', () => {
+    writeUserConfig({
+      preset: 'kept',
+      backgroundJobs: { mode: 'off' },
+      presets: { kept: { orchestrator: { model: 'openai/gpt-5-mini' } } },
+    });
+
+    const off = readTuiGates(env.projectDir, 'v2').gates;
+    expect(off.presetRouting).toBe(false);
+    expect(off.tuiEnabled).toBe(true);
+    expect(off.presetName).toBe('kept');
+
+    writeUserConfig({ backgroundJobs: { mode: 'native' } });
+    expect(readTuiGates(env.projectDir, 'v2').gates.presetRouting).toBe(true);
+  });
+
   describe('sidebar polling intervals', () => {
     test('sidebar-on rendering keeps the fast 1s poll', async () => {
       writeUserConfig({});

@@ -31,12 +31,6 @@ export interface PendingTaskCall {
   earlyRegisteredTaskID?: string;
   earlyRegistration?: EarlyTaskRegistration;
   earlyRegistrationRejected?: boolean;
-  /** Set by the v2 executor wrapper when it handled this call's delegated
-   *  (subagent) launch registration from the STRUCTURED executor result, so
-   *  the after-hook gates its launch-output and background-promotion branches
-   *  off (launch is registered exactly once on v2: in the wrapper). v1 never
-   *  sets this. */
-  registeredByWrapper?: boolean;
   /** Consumed without verified call identity (no-ID drain fallback or a
    *  window-shifted sole take): the label/objective may belong to a
    *  sibling call and must not be painted onto the board record. */
@@ -46,18 +40,6 @@ export interface PendingTaskCall {
    *  `null` means conflicting admissions were observed (permanent
    *  ambiguity: never anchor). Absent until an admission matched. */
   inputMessageID?: string | null;
-  /** Set by the before-hook for a v2 native steer: the run this call
-   *  amends, fenced by the board's own run identity. The call stamps the
-   *  amendment only after the host proves it ran (see
-   *  `registerDelegatedLaunchFromStructured`), and only while that exact
-   *  run still owns the record. */
-  steerAmendment?: {
-    taskID: string;
-    generation: number;
-    terminalRevision: number;
-  };
-  /** Revision covered by this steer after native progress. */
-  steerCoverRevision?: number;
 }
 
 const MAX_PENDING_TASK_CALLS = 100;

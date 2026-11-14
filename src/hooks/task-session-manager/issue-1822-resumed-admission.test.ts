@@ -187,7 +187,6 @@ describe('issue-1822: resumed child admission release', () => {
             background: true,
             exactCallConfirmed: true,
             pending,
-            handledByWrapper: true,
           },
           launchDeps as never,
         );
@@ -288,7 +287,6 @@ describe('issue-1822: resumed child admission release', () => {
             background: true,
             exactCallConfirmed: true,
             pending,
-            handledByWrapper: true,
           },
           launchDeps as never,
         );
@@ -405,7 +403,6 @@ describe('issue-1822: resumed child admission release', () => {
           background: true,
           exactCallConfirmed: true,
           pending,
-          handledByWrapper: true,
         },
         launchDeps as never,
       );

@@ -3,6 +3,10 @@ import * as path from 'node:path';
 import { stripComments } from 'jsonc-parser';
 import { DEFAULT_DISABLED_AGENTS } from './constants';
 import { COUNCIL_CONFIG_KEYS } from './council-schema';
+import {
+  UnsupportedHostConfigError,
+  validateExplicitHostConfig,
+} from './feature-gates';
 import { parseJsonConfigText } from './jsonc';
 import { repairLegacyExplorerMcps } from './legacy-preset-defaults';
 import { getConfigSearchDirs } from './paths';
@@ -88,12 +92,9 @@ export interface LoadPluginConfigOptions {
   silent?: boolean;
 
   /**
-   * Host flavor marker ('v2' on OpenCode v2 hosts; absent on v1). Selects
-   * flavor-derived defaults for background-job keys that no config layer
-   * set explicitly: on v2 the native background notifier already delivers
-   * a run's first terminal publication, so board injection and periodic
-   * wake evaluation default off there. Explicit config always wins.
-   * Unmarked hosts also use v1's worktree-bounded discovery.
+   * Host flavor marker ('v2' on OpenCode v2 hosts; absent on v1). Rejects
+   * explicit V1 managed-lifecycle settings on v2 before schema defaults.
+   * Unmarked hosts use v1's worktree-bounded discovery.
    */
   hostFlavor?: string;
   /** Select a preset for this read only, without creating a runtime agent
@@ -471,6 +472,28 @@ export function loadRawPluginConfigFromPath(
       if (!options?.silent) console.warn(`[oh-my-opencode-slim] ${message}`);
     };
 
+    validateExplicitHostConfig(rawConfig, options?.hostFlavor, configPath);
+    if (
+      options?.hostFlavor === 'v2' &&
+      isPlainRecord(rawConfig) &&
+      isPlainRecord(rawConfig.backgroundJobs)
+    ) {
+      for (const key of [
+        'orchestratorWake',
+        'childInputWake',
+        'childInputWakeKinds',
+        'waitForUserGuard',
+        'pruneEvictedSessions',
+        'sameProviderPolicy',
+      ]) {
+        if (!Object.hasOwn(rawConfig.backgroundJobs, key)) continue;
+        emitWarning(
+          'unsupported-host',
+          `backgroundJobs.${key} is v1-only and ignored on OpenCode v2 hosts, which use the native lifecycle.`,
+        );
+      }
+    }
+
     // Drop keys removed in this version before schema validation: a stale
     // removed key must not invalidate the whole file (and silently discard
     // every other user setting). Reported per key, not migrated.
@@ -570,6 +593,7 @@ export function loadRawPluginConfigFromPath(
 
     return layerConfig;
   } catch (error) {
+    if (error instanceof UnsupportedHostConfigError) throw error;
     // File doesn't exist or isn't readable - this is expected and fine
     if (
       error instanceof Error &&
@@ -849,19 +873,12 @@ export function loadPluginConfig(
   const presetInheritancePaths = new Map<string, string>();
   let selectedPresetPath = '';
   let imageRoutingPath = '';
-  let wakeConfigPath = '';
   const recordConfigSources = (
     layer: RawPluginConfig,
     configPath: string,
   ): void => {
     if (layer.preset !== undefined) selectedPresetPath = configPath;
     if (layer.image_routing !== undefined) imageRoutingPath = configPath;
-    if (
-      layer.backgroundJobs?.orchestratorWake &&
-      Object.keys(layer.backgroundJobs.orchestratorWake).length > 0
-    ) {
-      wakeConfigPath = configPath;
-    }
     for (const [name, definition] of Object.entries(layer.presets ?? {})) {
       presetPaths.set(name, configPath);
       if (normalizePreset(definition).extends !== undefined) {
@@ -876,30 +893,6 @@ export function loadPluginConfig(
     if (projectConfig) {
       config = mergePluginConfigs(config, projectConfig);
       recordConfigSources(projectConfig, configPath);
-    }
-  }
-
-  // v2 hosts have no wake scheduler; the whole backgroundJobs.orchestratorWake
-  // section is v1-only. Warn so the override is never silent.
-  if (options?.hostFlavor === 'v2') {
-    const backgroundJobs = (config.backgroundJobs ?? {}) as Record<
-      string,
-      unknown
-    >;
-    const orchestratorWake = backgroundJobs.orchestratorWake;
-    if (
-      orchestratorWake !== null &&
-      typeof orchestratorWake === 'object' &&
-      Object.keys(orchestratorWake as Record<string, unknown>).length > 0
-    ) {
-      const message =
-        'backgroundJobs.orchestratorWake is v1-only and ignored on OpenCode v2 hosts, which have no wake scheduler. Run oh-my-opencode-slim doctor for details.';
-      options.onWarning?.({
-        path: wakeConfigPath || directory,
-        kind: 'unsupported-host',
-        message,
-      });
-      if (!options.silent) console.warn(`[oh-my-opencode-slim] ${message}`);
     }
   }
 

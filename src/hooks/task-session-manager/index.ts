@@ -78,10 +78,8 @@ import type { RevivedRunTracker } from './revived-run-tracker';
 import { createRuntimeStatusReconciler } from './runtime-status-reconciliation';
 import { createTaskContextTracker } from './task-context-tracker';
 import {
-  type DelegatedLaunchFromStructuredInput,
   handleToolExecuteAfter,
   handleToolExecuteBefore,
-  registerDelegatedLaunchFromStructured,
 } from './tool-execute-hooks';
 
 export { BACKGROUND_JOB_BOARD_METADATA_KEY } from './board-injection';
@@ -362,19 +360,16 @@ export function createTaskSessionManagerHook(
       agentType: string,
       parentSessionID?: string,
     ) => string | undefined;
-    /** Current "provider/model" for a session. Feeds same-provider
-     *  background conversion. */
+    /** Current "provider/model" for a session. Feeds V1 same-provider
+     *  background→foreground conversion. */
     getSessionModel?: (sessionID: string) => string | undefined;
-    /** Opt-in provider → "foreground" map for same-provider background
+    /** Opt-in provider → "foreground" map for V1 same-provider background
      *  conversion. */
     sameProviderPolicy?: Record<string, 'foreground'>;
     /** Host flavor marker ('v2' on OpenCode v2 hosts); selects the native
      *  delegation vocabulary in model-visible tool guidance. Defaults v1. */
     hostFlavor?: string;
     v1ReplayOutcome?: ForegroundFallbackManager['v1ReplayOutcome'];
-    /** Per-instance pairing flag for the background-default flip (v2 only);
-     *  see BackgroundDefaultFlipState in v2/delegation. */
-    isBackgroundDefaultFlipArmed?: () => boolean;
     recoverRetainedSession?: (request: {
       parentSessionID: string;
       requested: string;
@@ -800,74 +795,6 @@ export function createTaskSessionManagerHook(
 
   return {
     scheduleRuntimeStatusReconciliation: runtimeStatusReconciler.schedule,
-    'v2.coverSteer': (
-      callID: string,
-      parentSessionID: string,
-      childSessionID: string,
-    ) => {
-      const pending = pendingCallTracker.peekByCallId(callID, parentSessionID);
-      const steer = pending?.steerAmendment;
-      if (!pending || !steer || steer.taskID !== childSessionID) return;
-      pending.steerCoverRevision = backgroundJobBoard.coverHostSteer(
-        steer.taskID,
-        steer.generation,
-        pending.steerCoverRevision,
-      );
-    },
-    /**
-     * v2-only extension handle (consumed by src/v2/setup.ts's executor
-     * wrapper): register a delegated `subagent` launch from its STRUCTURED
-     * executor result — sessionID/status/background, no prose parsing. The
-     * pending for this callID is looked up (NOT consumed, so the after-hook
-     * still takes and releases it) and routed through the SAME shared fence
-     * pipeline the after-hook's launch branch uses; the pending is marked
-     * handled-by-wrapper so the after-hook gates its launch-output and
-     * background-promotion branches off (exactly-once registration on v2).
-     * Registration/fence errors are logged and swallowed; the tool result
-     * passes through untouched.
-     */
-    'v2.registerDelegatedLaunchFromStructured': (
-      input: Omit<DelegatedLaunchFromStructuredInput, 'pending'> & {
-        parentSessionID: string;
-      },
-    ): Promise<ReturnType<BackgroundJobBoard['get']>> => {
-      const pending = pendingCallTracker.peekByCallId(
-        input.callID,
-        input.parentSessionID,
-      );
-      if (!pending) {
-        log('[task-session-manager] v2 wrapper: pending call not found', {
-          callID: input.callID,
-        });
-        return Promise.resolve(undefined);
-      }
-      return registerDelegatedLaunchFromStructured(
-        { ...input, pending, handledByWrapper: true },
-        {
-          directory: _ctx.directory,
-          backgroundJobBoard,
-          onLaunchConfirmed,
-          terminalGate,
-          backgroundJobSupervisor: options.backgroundJobSupervisor,
-          backgroundTaskConcurrency: options.backgroundTaskConcurrency,
-          getModelForAgent: options.getModelForAgent,
-          taskContextTracker,
-          isStaleDeletedTaskOutput: (taskID, lifecycleEpoch) => {
-            const deletionEpoch = rehydrateState.deletionEpochs.get(taskID);
-            return (
-              deletionEpoch !== undefined && lifecycleEpoch < deletionEpoch
-            );
-          },
-          bindConcurrencyTicket: (taskID, tracked) =>
-            tracked.concurrencyTicket?.bind(taskID),
-          firstAdmission: (sessionID) =>
-            pendingCallTracker.firstAdmission(sessionID),
-          clearRehydrateTombstone: (taskID) =>
-            clearBackgroundJobSuppression(backgroundJobBoard, taskID),
-        },
-      );
-    },
-
     hasDeferredError: (sessionID: string): boolean =>
       deferredInlineErrors.has(sessionID),
     markRevivedRunPending: (taskID: string): void => {
@@ -965,7 +892,6 @@ export function createTaskSessionManagerHook(
         taskContextTracker,
         getLifecycleEpoch: () => rehydrateState.nextEpoch,
         hostFlavor: options.hostFlavor,
-        isBackgroundDefaultFlipArmed: options.isBackgroundDefaultFlipArmed,
         recoverRetainedSession: options.recoverRetainedSession,
         resolveCanonicalTaskRef: options.resolveCanonicalTaskRef,
         isDisposed: options.isDisposed,

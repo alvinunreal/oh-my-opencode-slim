@@ -62,7 +62,7 @@ const reportArgs = {
 };
 
 describe('task_report', () => {
-  test('sends an attributed update to only the host-owned parent', async () => {
+  test('queues an attributed update to only the host-owned parent', async () => {
     let admission: Record<string, unknown> | undefined;
     const input = createContext({
       onSynthetic: (value) => {
@@ -77,15 +77,17 @@ describe('task_report', () => {
 
     expect(admission).toMatchObject({
       sessionID: 'parent',
-      delivery: 'steer',
-      resume: true,
+      delivery: 'queue',
+      resume: false,
       description: 'oh-my-opencode-slim internal initiator',
     });
     expect(admission?.text).toContain('kind="progress"');
     expect(admission?.text).toContain('From @fixer (session child)');
     expect(admission?.text).toContain(reportArgs.message);
     expect(result).toMatch(/Update [a-f0-9-]{36} queued for the parent/);
+    expect(result).toContain('without waking it');
     expect(result).toContain('processing is not confirmed');
+    expect(result).not.toContain('processed');
   });
 
   test('does not send from a parentless session', async () => {
@@ -104,46 +106,60 @@ describe('task_report', () => {
     expect(sent).toBe(false);
   });
 
-  test('queues without waking a parent that is waiting for user input', async () => {
-    let admission: Record<string, unknown> | undefined;
+  test('always queues without resuming for busy, idle, interrupted, and form-wait parents', async () => {
+    const parentStates: Array<[string, Record<string, unknown>]> = [
+      ['busy', { outcome: 'busy', time: { busy: 2_000 } }],
+      ['idle', { outcome: 'succeeded', time: { idle: 2_000 } }],
+      ['interrupted', { outcome: 'interrupted', time: { idle: 2_000 } }],
+      [
+        'pending form',
+        {
+          outcome: 'running',
+          pendingForm: { id: 'form-1', status: 'pending' },
+        },
+      ],
+    ];
+
+    for (const [state, parent] of parentStates) {
+      let admission: Record<string, unknown> | undefined;
+      const input = createContext({
+        parent,
+        onSynthetic: (value) => {
+          admission = value;
+        },
+      });
+      const { task_report } = createTaskReportTool({ input });
+      const result = await task_report.execute(
+        { ...reportArgs, kind: 'escalation' },
+        { sessionID: 'child' } as never,
+      );
+
+      expect(admission, state).toMatchObject({
+        sessionID: 'parent',
+        delivery: 'queue',
+        resume: false,
+      });
+      expect(result, state).toContain('without waking it');
+      expect(result, state).toContain('processing is not confirmed');
+    }
+  });
+
+  test('disposal still prevents queue admission', async () => {
+    let sent = false;
     const input = createContext({
-      onSynthetic: (value) => {
-        admission = value;
+      onSynthetic: () => {
+        sent = true;
       },
     });
     const { task_report } = createTaskReportTool({
       input,
-      hasInputWait: (sessionID) => sessionID === 'parent',
+      isDisposed: () => true,
     });
 
-    const result = await task_report.execute(
-      { ...reportArgs, kind: 'escalation' },
-      { sessionID: 'child' } as never,
-    );
-
-    expect(admission).toMatchObject({
-      sessionID: 'parent',
-      delivery: 'steer',
-      resume: false,
-    });
-    expect(result).toContain('without waking it');
-  });
-
-  test('queues without waking a parent whose last run was interrupted', async () => {
-    let admission: Record<string, unknown> | undefined;
-    const input = createContext({
-      parent: { outcome: 'interrupted' },
-      onSynthetic: (value) => {
-        admission = value;
-      },
-    });
-    const { task_report } = createTaskReportTool({ input });
-
-    await task_report.execute({ ...reportArgs, kind: 'escalation' }, {
-      sessionID: 'child',
-    } as never);
-
-    expect(admission).toMatchObject({ delivery: 'steer', resume: false });
+    await expect(
+      task_report.execute(reportArgs, { sessionID: 'child' } as never),
+    ).rejects.toThrow('Plugin is disposing');
+    expect(sent).toBe(false);
   });
 
   test('does not accept a caller-selected parent ID', () => {

@@ -80,7 +80,7 @@ function makeHarness(
 }
 
 describe('registerDelegatedLaunchFromStructured', () => {
-  test('registers a running launch and marks the pending handled-by-wrapper', async () => {
+  test('registers a running launch and confirms its identity', async () => {
     const { board, deps, reconciles } = makeHarness();
     const pending = makePending();
 
@@ -92,14 +92,12 @@ describe('registerDelegatedLaunchFromStructured', () => {
         background: false,
         exactCallConfirmed: true,
         pending,
-        handledByWrapper: true,
       },
       deps,
     );
 
     expect(record?.taskID).toBe('ses_child');
     expect(board.get('ses_child')?.state).toBe('running');
-    expect(pending.registeredByWrapper).toBe(true);
     expect(deps.taskContextTracker.pendingManagedTaskIds.has('ses_child')).toBe(
       true,
     );
@@ -119,7 +117,6 @@ describe('registerDelegatedLaunchFromStructured', () => {
         background: false,
         exactCallConfirmed: true,
         pending,
-        handledByWrapper: true,
       },
       deps,
     );
@@ -130,12 +127,12 @@ describe('registerDelegatedLaunchFromStructured', () => {
     expect(reconciles[0]?.status?.state).toBe('completed');
   });
 
-  test("a completed wrapper result carries the child's final text (incident 1115 regression)", async () => {
+  test("a completed structured result carries the child's final text (incident 1115 regression)", async () => {
     // The wrapper used to register state 'completed' WITHOUT the child's
     // final text; the gate's textless-completion policy then recorded an
     // error claiming the child produced no public text even though the
     // executor returned a valid answer (the after-hook recovery lane is
-    // gated off by registeredByWrapper). The result text must reach the
+    // handled by tool execution). The result text must reach the
     // gate so the policy cannot misfire on the wrapper path.
     const { deps, reconciles } = makeHarness();
     const pending = makePending();
@@ -151,7 +148,6 @@ describe('registerDelegatedLaunchFromStructured', () => {
         result,
         exactCallConfirmed: true,
         pending,
-        handledByWrapper: true,
       },
       deps,
     );
@@ -165,7 +161,7 @@ describe('registerDelegatedLaunchFromStructured', () => {
     });
   });
 
-  test('a thrown-error wrapper result reaches the gate with the host error message', async () => {
+  test('a thrown-error structured result reaches the gate with the host error message', async () => {
     const { deps, reconciles } = makeHarness();
     const pending = makePending();
 
@@ -178,7 +174,6 @@ describe('registerDelegatedLaunchFromStructured', () => {
         result: 'Subagent failed (sessionID: ses_fail): provider timeout',
         exactCallConfirmed: true,
         pending,
-        handledByWrapper: true,
       },
       deps,
     );
@@ -192,7 +187,7 @@ describe('registerDelegatedLaunchFromStructured', () => {
     });
   });
 
-  test('the terminal status omits the result key when the wrapper carries no text', async () => {
+  test('the terminal status omits the result key when the registration carries no text', async () => {
     const { deps, reconciles } = makeHarness();
     const pending = makePending();
 
@@ -204,7 +199,6 @@ describe('registerDelegatedLaunchFromStructured', () => {
         background: false,
         exactCallConfirmed: true,
         pending,
-        handledByWrapper: true,
       },
       deps,
     );
@@ -229,7 +223,6 @@ describe('registerDelegatedLaunchFromStructured', () => {
         background: true,
         exactCallConfirmed: true,
         pending,
-        handledByWrapper: true,
       },
       deps,
     );
@@ -238,7 +231,7 @@ describe('registerDelegatedLaunchFromStructured', () => {
     expect(record?.background).toBe(true);
   });
 
-  test('a fence refusal leaves the wrapper flag unset (after-hook fallback)', async () => {
+  test('a fence refusal does not register a child', async () => {
     const { board, deps } = makeHarness();
     const pending = makePending({ resumedTaskId: 'ses_other' });
 
@@ -250,33 +243,12 @@ describe('registerDelegatedLaunchFromStructured', () => {
         background: false,
         exactCallConfirmed: true,
         pending,
-        handledByWrapper: true,
       },
       deps,
     );
 
     expect(record).toBeUndefined();
-    expect(pending.registeredByWrapper).toBeUndefined();
     expect(board.get('ses_child')).toBeUndefined();
-  });
-
-  test('the v1 path (no handledByWrapper) never sets the v2 gate flag', async () => {
-    const { deps } = makeHarness();
-    const pending = makePending();
-
-    await registerDelegatedLaunchFromStructured(
-      {
-        callID: 'call_1',
-        childTaskID: 'ses_child',
-        state: 'running',
-        background: false,
-        exactCallConfirmed: true,
-        pending,
-      },
-      deps,
-    );
-
-    expect(pending.registeredByWrapper).toBeUndefined();
   });
 });
 
@@ -287,12 +259,10 @@ describe('parent-scoped pending consumption', () => {
     const first = makePending({
       callId: 'call_shared',
       parentSessionId: 'parent_1',
-      registeredByWrapper: true,
     });
     const second = makePending({
       callId: 'call_shared',
       parentSessionId: 'parent_2',
-      registeredByWrapper: true,
     });
     tracker.add(first);
     tracker.add(second);
@@ -317,7 +287,7 @@ describe('parent-scoped pending consumption', () => {
       deps,
     );
 
-    // The wrapper gate consumes THIS parent's pending; the other parent's
+    // The after-hook consumes THIS parent's pending; the other parent's
     // identically named call must survive to its own after-hook.
     expect(tracker.peekByCallId('call_shared', 'parent_2')).toBeUndefined();
     expect(tracker.peekByCallId('call_shared', 'parent_1')).toBe(first);
@@ -363,35 +333,14 @@ describe('parent-scoped pending consumption', () => {
   });
 });
 
-describe('handleToolExecuteAfter v2 wrapper gate', () => {
+describe('handleToolExecuteAfter launch registration', () => {
   const launchOutput =
     'The subagent is working in the background (sessionID: ses_launch).';
 
-  test('gates the launch branch off for a wrapper-handled v2 call', async () => {
-    const pending = makePending({ registeredByWrapper: true });
-    const {
-      board,
-      afterDeps: deps,
-      released,
-    } = makeHarness({
-      pending,
-      hostFlavor: 'v2',
-    });
-
-    await handleToolExecuteAfter(
-      { tool: 'task', sessionID: 'parent_1', callID: 'call_1' },
-      { output: launchOutput, metadata: {} },
-      deps,
-    );
-
-    // No second registration, and the pending is still released by finally.
-    expect(board.get('ses_launch')).toBeUndefined();
-    expect(released()).toBe(1);
-  });
-
-  test('keeps the v1 prose lane live for the same pending (no gate)', async () => {
+  test('registers a launch from v1 tool output', async () => {
     const { board, afterDeps: deps } = makeHarness({
-      pending: makePending({ registeredByWrapper: true }),
+      pending: makePending(),
+      hostFlavor: 'v1',
     });
 
     await handleToolExecuteAfter(

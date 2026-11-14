@@ -232,9 +232,16 @@ model changed without saving the new team snapshot. Main-session models,
 prompts, tools, skills and MCPs are not switched by the session action.
 The sidebar shows the current session's saved team models and variants;
 `/preset` marks its bound preset separately from the global default.
+The V2 lifecycle retirement is reserved for the next major plugin release;
+review the [pre-upgrade checklist](docs/v2-native-upgrade.md) for existing
+managed configurations. V1 keeps its managed lifecycle.
+
+V2 defaults to `backgroundJobs.mode: "native"`: OpenCode owns the child Job
+lifecycle, and Slim keeps exact-ID status, cancellation, permission reply, and
+queue-only progress reporting. V2 rejects the V1-only `"managed"` mode.
 With `backgroundJobs.mode: "off"`, V2 delegation stays fully native: session
-bindings are disabled, while the configured global preset still selects the
-agent settings registered at startup.
+bindings and all OMOS task tools are disabled, while the configured global
+preset still selects the agent settings registered at startup.
 On v1, reload OpenCode after applying a preset. See
 [Preset Switching](docs/presets/preset-switching.md) for scope and timing, and
 [Configuration](docs/configuration.md#preset-inheritance) for the inheritance

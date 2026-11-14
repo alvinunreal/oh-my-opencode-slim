@@ -14,7 +14,7 @@ The directory follows a **Facade + Strategy** pattern where `index.ts` acts as t
   Orchestrator turns and does not promote unmanaged Build/custom parents.
 - **session-recovery.ts**: On-demand recovery of untracked host children: verifies parent/agent, triages v2 rounds by the `session.get` outcome/idleAt projection (successful rounds require readable answer text per incident 1115; textless failures and interruptions retain their host-proven terminal state, rounds without a terminal outcome are refused unless an explicit queued continuation adopts identity, partial or unverifiable evidence fails closed, and no round is imported as stopped on a guess), and imports terminal rows into the board.
 - **Startup recovery** (`session-recovery.ts`): Restores persisted owned children independently of parent activity, with trusted delivery markers, run-fenced terminal correction, and explicit admission-slot release. Four FIFO candidate positions prepare persisted evidence concurrently; ordered consumption owns board changes and wakes. Deadlines bound waiters, not underlying host calls. Persisted idles pass the shared host parser/assistant attribution; assistant completion cannot extend the idle boundary. Delivery markers require a correlated terminal latest round, never just a later notification timestamp. Listing, shared single-flight session-info reads, and parent/child transcript waits have per-read deadlines (5s by default), so stalled candidates cannot block the rest or become terminal on timeout.
-- **revived-run-tracker.ts**: Delivers later v2 terminal publications, including stopped continuations, of managed children to the parent, scoped to one revision. The board records the accepted continuation revision so re-observing that publication cannot send another notification. A native steer covers only the revision selected at host progress after permission checks; prompt failure removes the cover, and a run that ended while permission was pending is not covered. The same mark suppresses tracked-run delivery. Logs notification acceptance and failure, lease deferral, and once-only ownership release to the fallback publication wake.
+- **revived-run-tracker.ts**: Tracks V1 revived executions and delivers their terminal results, using board leases and the existing wake fallback.
 - **Host transcript attribution**: Recovery and untracked status/result reads share `attributeHostRoundToTranscript` from `../../utils/child-transcript.ts`; newer assistant creation/completion invalidates an older host idle outcome, missing assistant timestamps fail closed, and explicit queued continuation can adopt a newer incomplete round without importing a terminal row. `hostRoundStateOf` and `composeHostRound` remain the parser/composer.
 - **../../utils/background-job-terminal-gate.ts**: Shared execution/observation gate for every terminal publication. Runtime quiescence and attributable result evidence authorize one board commit; busy withdraws terminal publications. Grace, bounded retries and single-open reads are shared across adapters.
 - **runtime-status-reconciliation.ts**: Observes retained rows for busy reopen, but inspects transcripts only for running rows or queued replies.
@@ -22,7 +22,7 @@ The directory follows a **Facade + Strategy** pattern where `index.ts` acts as t
 - **input-wait-tracker.ts**: Provides the single `hasInputWait()` seam used by idle reconciliation and continuation evaluation. It combines local question/permission waits with the process-global explicit user-wait latch.
 - **child-input-wait.ts**: Tracks pending child requests and formats their details/guidance for both wakes and `task_status`. V2 forms carry summaries and host-UI/wait/cancel guidance; v1 questions retain answer options.
 - **continuation-model-selection.ts**: Normalizes current-session and chat-hook model shapes before forwarding runtime model and variant choices to idle continuation prompts.
-- **pending-call-tracker.ts**: Capped `(parentSessionID, callID)` map shared by the v2 wrapper and after-hook. Records first input ids for fresh-run anchors; resumed calls bind their own observed input. Conflicting ids or multiple matching calls permanently invalidate every matching binding. V1 feeds `chat.message`; v2 captures in the awaited prompt hook before agent deferral. Amendment commits use the board's generation/revision fence only after host acceptance. See [diagnostic attribution](../../../docs/tools.md#diagnostic-attribution).
+- **pending-call-tracker.ts**: Capped `(parentSessionID, callID)` map used by V1 task hooks. Records host input IDs for fresh-run anchors and resumed calls. Conflicting admissions invalidate the binding.
 - **fallback-observation-transfer.ts**: Terminal-observation handoff
   (`createBackgroundFallbackHandoff`) for background children re-prompted by
   the foreground fallback — `prepare`/`admit`/`reject`/`settleUnresolved`
@@ -30,11 +30,10 @@ The directory follows a **Facade + Strategy** pattern where `index.ts` acts as t
   publication until a delivery owner exists; unresolved outcomes convert the
   preparation into the owning run. V1 foreground children also use this handoff
   after a terminal failover error that is replayed.
-- **same-provider-policy.ts**: Opt-in per-provider rewrite
+- **same-provider-policy.ts**: V1 managed opt-in per-provider rewrite
   (`backgroundJobs.sameProviderPolicy: { <provider>: "foreground" }`)
-  converting same-provider `background: true` task requests (including v2
-  omitted-`background` calls, defaulted to true before this check) to the foreground
-  path for shared single-runtime backends; fail-open on unknown model/provider.
+  converting same-provider `background: true` task requests to foreground for
+  shared single-runtime backends; fail-open on unknown model/provider.
 - **task-context-tracker.ts**: Manages read context from child sessions with line-count and file caps. Stores context per task ID, provides pruning to prevent unbounded growth, and exposes `filterStaleContextFiles(directory, files)` for a bounded sync disk re-check (drops missing/unreadable/oversized/truncated, logs; per-file size cap + per-commit byte budget so validation cannot stall the session).
 
 All modules depend on `BackgroundJobBoard` from `src/utils/background-job-board.ts` as the single source of truth for active jobs, terminal unreconciled jobs, reusable completed sessions, aliases, read context, and LRU caps. None of that state is rendered into a prompt.

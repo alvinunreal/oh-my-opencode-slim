@@ -67,21 +67,9 @@ export function createTaskReplyTool(options: {
   const delegation = delegationWording(
     typeof hostFlavor === 'string' ? hostFlavor : undefined,
   );
-  // v2 form-reply capability probe (creation-time): the host generated
-  // client exposes session.form.reply (POST
-  // /api/session/:sid/form/:fid/reply) from v2.0.18 — see the promise
-  // client at packages/client/src/promise/generated/client.ts:1053 (`form`
-  // block at :1014) and the effect layer at
-  // effect/generated/client.ts:735 — but the pinned compile-time plugin
-  // context carries no form domain, and neither does the host's runtime
-  // plugin session domain (15 methods, no form). The probed client is the
-  // v1-shaped shim built by buildPluginInput from the host session domain;
-  // the shim forwards `session.form.reply` when the host provides it
-  // (client-shim.ts), so this probe reads the one surface that can truthfully
-  // carry the capability: pinned v2.0.26 → absent (honest failure below);
-  // a future host that exposes the domain → detected. A cast keeps the
-  // mirror-conformance guard (src/v2/mirror-conformance.ts) green because
-  // the mirrored V2Context type is untouched.
+  // This board-backed factory is registered only on V1 managed. A direct
+  // caller with a V2 client must provide its own form-reply capability; the
+  // native V2 controls and shim expose permission replies only.
   const v2FormReply =
     hostFlavor === 'v2'
       ? (options.input as { client?: unknown }).client

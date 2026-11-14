@@ -1301,8 +1301,11 @@ describe('plugin tool registration', () => {
         `${configDir}/oh-my-opencode-slim.json`,
         JSON.stringify({
           backgroundJobs: {
-            wallClockTimeoutMs: 60_000,
+            // On v2 the deadline-abort watchdog is retired with the managed
+            // lifecycle; only the v1 pass reads wall-clock timeouts.
+            ...(hostFlavor === 'v2' ? {} : { wallClockTimeoutMs: 60_000 }),
           },
+          companion: { enabled: false },
         }),
       );
       process.env = {
@@ -1377,7 +1380,12 @@ describe('plugin tool registration', () => {
         await clock.advanceTo(119_999);
         expect(abortCalls).toEqual([]);
         await clock.advanceTo(120_000);
-        expect(abortCalls).toEqual(['child-generation-2']);
+        // v2 has no plugin-side wall-clock watchdog: the deadline-abort
+        // guarantee belongs to the v1 managed assembly only, so the v2 run
+        // must not abort anything at the deadline.
+        expect(abortCalls).toEqual(
+          hostFlavor === 'v2' ? [] : ['child-generation-2'],
+        );
         expect(scheduler).toHaveBeenCalledTimes(hostFlavor === 'v2' ? 0 : 2);
       } finally {
         await generationTwo?.dispose?.();
@@ -2287,45 +2295,45 @@ describe('plugin reload generation cleanup', () => {
     },
   );
 
-  test.each(['v1', 'v2'] as const)(
-    "%s terminal outcome clears the child's open input waits",
-    async (hostFlavor) => {
-      const subscriptions = spyOn(
-        ProductionBoard.prototype,
-        'addTerminalOutcomeListener',
-      );
-      let hooks: Awaited<ReturnType<typeof plugin>> | undefined;
-      try {
-        hooks = await createHooks({ hostFlavor });
-        const board = new BackgroundJobBoard();
-        board.registerLaunch({
-          taskID: 'child-ask',
-          parentSessionID: 'parent-1',
-          agent: 'fixer',
-          description: 'child with an open ask',
-          now: 100,
-        });
-        noteChildInputWait({
-          taskID: 'child-ask',
-          parentSessionID: 'parent-1',
-          kind: 'question',
-          requestID: 'req_old',
-          questions: [{ question: 'continue?', header: 'Ask', options: [] }],
-          now: 150,
-        });
-        const stopped = board.markStopped('child-ask', 'no outcome', 200);
-        if (!stopped) throw new Error('missing stopped record');
-        for (const [listener] of subscriptions.mock.calls) listener(stopped);
-        // The ask died with the run: a restarted child must not inherit it
-        // in task_status (the store has no generation fence of its own).
-        expect(listChildInputWaits('child-ask')).toHaveLength(0);
-      } finally {
-        await hooks?.dispose?.();
-        subscriptions.mockRestore();
-        resetChildInputWaitForTests();
-      }
-    },
-  );
+  // The open-ask cleanup rides the V1 managed board's terminal-outcome
+  // listener. V2 has no managed board (and no managed wait bookkeeping), so
+  // this proof belongs to the V1 assembly only.
+  test("v1 terminal outcome clears the child's open input waits", async () => {
+    const subscriptions = spyOn(
+      ProductionBoard.prototype,
+      'addTerminalOutcomeListener',
+    );
+    let hooks: Awaited<ReturnType<typeof plugin>> | undefined;
+    try {
+      hooks = await createHooks({ hostFlavor: 'v1' });
+      const board = new BackgroundJobBoard();
+      board.registerLaunch({
+        taskID: 'child-ask',
+        parentSessionID: 'parent-1',
+        agent: 'fixer',
+        description: 'child with an open ask',
+        now: 100,
+      });
+      noteChildInputWait({
+        taskID: 'child-ask',
+        parentSessionID: 'parent-1',
+        kind: 'question',
+        requestID: 'req_old',
+        questions: [{ question: 'continue?', header: 'Ask', options: [] }],
+        now: 150,
+      });
+      const stopped = board.markStopped('child-ask', 'no outcome', 200);
+      if (!stopped) throw new Error('missing stopped record');
+      for (const [listener] of subscriptions.mock.calls) listener(stopped);
+      // The ask died with the run: a restarted child must not inherit it
+      // in task_status (the store has no generation fence of its own).
+      expect(listChildInputWaits('child-ask')).toHaveLength(0);
+    } finally {
+      await hooks?.dispose?.();
+      subscriptions.mockRestore();
+      resetChildInputWaitForTests();
+    }
+  });
 
   // ── Terminal publication push (issue #1647) ─────────────────────────────
   //
@@ -6991,17 +6999,14 @@ describe('plugin foreground fallback host gating', () => {
           },
         },
       } as never);
-      expect(
-        await hooks['v2.refusalOutcome']?.(data.sessionID, {
-          id: data.assistantMessageID,
-          type: 'assistant',
-          agent: data.agent,
-          model: data.model,
-          finish: 'content-filter',
-          error: { type: 'provider.content-filter', message: 'blocked' },
-          time: { created: Date.now(), completed: Date.now() },
-        }),
-      ).toBe('anthropic/claude-backup');
+      // The refusal outcome is created by the failed step event itself; the
+      // pending-outcome read only observes it.
+      const pending = hooks['v2.pendingRefusalOutcome']?.(
+        data.sessionID,
+        data.assistantMessageID,
+      );
+      expect(pending).toBeDefined();
+      expect(await pending).toBe('anthropic/claude-backup');
       expect(switchModel).toHaveBeenCalledWith(data.sessionID, {
         providerID: 'anthropic',
         id: 'claude-backup',

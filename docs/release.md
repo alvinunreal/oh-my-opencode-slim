@@ -121,6 +121,13 @@ Compatibility/migration notes, Publish notes). Choose the plugin version
 independently of Companion; bump native only when its code or the required
 state protocol/asset set changes.
 
+The OpenCode V2 managed-lifecycle retirement requires a major plugin release.
+Do not include it in a 3.x patch or minor release: existing explicit managed
+modes and V1-only limits refuse V2 initialization. Publish the
+[V2 pre-upgrade checklist](v2-native-upgrade.md) in that release's notes before
+publishing the package. The maintainer selects the major release version
+before merging the retirement into a release branch.
+
 ### 2. Verify before tagging or publishing
 
 ```bash
