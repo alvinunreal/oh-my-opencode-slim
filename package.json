@@ -130,6 +130,7 @@
     "@types/turndown": "^5.0.6",
     "all-contributors-cli": "^6.26.1",
     "bun-types": "^1.4.2",
+    "effect": "4.1.0",
     "fast-check": "^4.10.2",
     "knip": "^6.44.0",
     "typescript": "7.0"
