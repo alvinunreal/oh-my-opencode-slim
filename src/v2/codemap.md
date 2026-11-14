@@ -145,7 +145,8 @@ The v2 runtime surface and plugin contracts are adapted through the following da
   their existing command/tool/feature gates.
 - **Session-frozen runtime profiles.** Config-file refreshes update the profiles
   available to new children, without rebuilding agent definitions or the host
-  registry. A bound session keeps its saved team until Apply. New-child capture
+  registry. Default-bound roots refresh their saved team on their next
+  admission; named-preset bindings keep theirs until Apply. New-child capture
   is awaited on `session.prompt`; it preserves valid per-call model selections
   and refreshes provably retired pins. Existing children keep their captured
   profile unless an explicit same-agent native continuation adopts a changed
