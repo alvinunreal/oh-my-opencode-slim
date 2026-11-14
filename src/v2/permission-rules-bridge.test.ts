@@ -123,6 +123,7 @@ function makeBridge(options?: {
   requireKnownIdentity?: boolean | (() => boolean);
   marketplaceAgentNames?: () => ReadonlySet<string>;
   knownAgentNames?: () => ReadonlySet<string>;
+  hostAgentNames?: () => Promise<ReadonlySet<string>>;
   defaultAgent?: () => string | undefined;
 }): ReturnType<typeof createPermissionRulesBridge> {
   return createPermissionRulesBridge(options?.session, {
@@ -141,6 +142,9 @@ function makeBridge(options?: {
       : {}),
     ...(options?.knownAgentNames
       ? { knownAgentNames: options.knownAgentNames }
+      : {}),
+    ...(options?.hostAgentNames
+      ? { hostAgentNames: options.hostAgentNames }
       : {}),
     ...(options?.defaultAgent ? { defaultAgent: options.defaultAgent } : {}),
     ...(options?.onUnavailable ? { onUnavailable: options.onUnavailable } : {}),
@@ -531,6 +535,195 @@ describe('createPermissionRulesBridge', () => {
       await marketplace.dispose();
     },
   );
+
+  test('admits a child whose agent the host registered after the plugin snapshot (#1874)', async () => {
+    const bridge = makeBridge({
+      session: makeSession(),
+      requireKnownIdentity: true,
+      marketplaceAgentNames: () => new Set(['package-agent']),
+      hostAgentNames: async () => new Set(['historian', 'package-agent']),
+    });
+    await bridge.observeEvent({
+      type: 'session.created',
+      data: {
+        sessionID: 'ses_later_plugin_child',
+        parentID: 'ses_parent',
+        agent: 'historian',
+      },
+    });
+    await expect(
+      bridge.ensurePromptPermission('ses_later_plugin_child'),
+    ).resolves.toBeUndefined();
+
+    // A marketplace agent name never bypasses the ceiling via host listing.
+    await bridge.observeEvent({
+      type: 'session.created',
+      data: {
+        sessionID: 'ses_marketplace_host_child',
+        parentID: 'ses_parent',
+        agent: 'package-agent',
+      },
+    });
+    await expect(
+      bridge.ensurePromptPermission('ses_marketplace_host_child'),
+    ).rejects.toThrow('child session identity is unknown');
+    await bridge.dispose();
+  });
+
+  test('admits a foreign child identified by session lookup, not only by event (#1874)', async () => {
+    const lookupSession = (agent: string) =>
+      ({
+        get: async () => ({
+          data: { id: 'ses_cold_child', parentID: 'ses_parent', agent },
+        }),
+      }) as unknown as V2Session;
+    const admitted = makeBridge({
+      session: lookupSession('historian'),
+      requireKnownIdentity: true,
+      hostAgentNames: async () => new Set(['historian']),
+    });
+    await expect(
+      admitted.ensurePromptPermission('ses_cold_child'),
+    ).resolves.toBeUndefined();
+    await admitted.dispose();
+
+    const unlisted = makeBridge({
+      session: lookupSession('unlisted-agent'),
+      requireKnownIdentity: true,
+      hostAgentNames: async () => new Set(['historian']),
+    });
+    await expect(
+      unlisted.ensurePromptPermission('ses_cold_child'),
+    ).rejects.toThrow('child session identity is unknown');
+    await unlisted.dispose();
+  });
+
+  test.each([
+    {
+      description: 'marketplace agent selection',
+      event: {
+        type: 'session.agent.selected',
+        data: {
+          sessionID: 'ses_host_admission_race',
+          parentID: 'ses_parent',
+          agent: 'package-agent',
+        },
+      },
+    },
+    {
+      description: 'session deletion',
+      event: {
+        type: 'session.deleted',
+        data: { sessionID: 'ses_host_admission_race' },
+      },
+    },
+  ])(
+    'rechecks observed identity after the host list await on $description (#1874)',
+    async ({ event }) => {
+      let resolveHostAgents!: (agents: ReadonlySet<string>) => void;
+      const bridge = makeBridge({
+        session: makeSession(),
+        requireKnownIdentity: true,
+        marketplaceAgentNames: () => new Set(['package-agent']),
+        hostAgentNames: () =>
+          new Promise((resolve) => {
+            resolveHostAgents = resolve;
+          }),
+      });
+      await bridge.observeEvent({
+        type: 'session.created',
+        data: {
+          sessionID: 'ses_host_admission_race',
+          parentID: 'ses_parent',
+          agent: 'historian',
+        },
+      });
+
+      const admission = bridge.ensurePromptPermission(
+        'ses_host_admission_race',
+      );
+      await bridge.observeEvent(event);
+      resolveHostAgents(new Set(['historian']));
+      await expect(admission).rejects.toThrow(
+        'child session identity is unknown',
+      );
+      await bridge.dispose();
+    },
+  );
+
+  test('rejects admission if the bridge is disposed during the host list await (#1874)', async () => {
+    let resolveHostAgents!: (agents: ReadonlySet<string>) => void;
+    const bridge = makeBridge({
+      session: makeSession(),
+      requireKnownIdentity: true,
+      hostAgentNames: () =>
+        new Promise((resolve) => {
+          resolveHostAgents = resolve;
+        }),
+    });
+    await bridge.observeEvent({
+      type: 'session.created',
+      data: {
+        sessionID: 'ses_host_admission_disposed',
+        parentID: 'ses_parent',
+        agent: 'historian',
+      },
+    });
+
+    const admission = bridge.ensurePromptPermission(
+      'ses_host_admission_disposed',
+    );
+    await bridge.dispose();
+    resolveHostAgents(new Set(['historian']));
+    await expect(admission).rejects.toThrow(
+      'permission rules bridge is disposed',
+    );
+  });
+
+  test('rechecks looked-up identity after the host list await (#1874)', async () => {
+    let resolveHostAgents!: (agents: ReadonlySet<string>) => void;
+    let hostListStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      hostListStarted = resolve;
+    });
+    const bridge = makeBridge({
+      session: {
+        get: async () => ({
+          data: {
+            id: 'ses_lookup_host_admission_race',
+            parentID: 'ses_parent',
+            agent: 'historian',
+          },
+        }),
+      } as unknown as V2Session,
+      requireKnownIdentity: true,
+      marketplaceAgentNames: () => new Set(['package-agent']),
+      hostAgentNames: () => {
+        hostListStarted();
+        return new Promise((resolve) => {
+          resolveHostAgents = resolve;
+        });
+      },
+    });
+
+    const admission = bridge.ensurePromptPermission(
+      'ses_lookup_host_admission_race',
+    );
+    await started;
+    await bridge.observeEvent({
+      type: 'session.agent.selected',
+      data: {
+        sessionID: 'ses_lookup_host_admission_race',
+        parentID: 'ses_parent',
+        agent: 'package-agent',
+      },
+    });
+    resolveHostAgents(new Set(['historian']));
+    await expect(admission).rejects.toThrow(
+      'child session identity is unknown',
+    );
+    await bridge.dispose();
+  });
 
   test('blocks direct root marketplace agents without replacing root permissions', async () => {
     const calls: RulesCall[] = [];
@@ -1409,7 +1602,10 @@ describe('createV2Setup permission rules wiring', () => {
         },
       ];
       let transformsApplied = false;
-      let publishEvent!: (event: Record<string, unknown>) => void;
+      let publishEvent!: (
+        event: Record<string, unknown>,
+        onProcessed?: () => void,
+      ) => void;
       let promptHandler:
         | ((event: V2SessionPromptEvent) => Promise<void>)
         | undefined;
@@ -1423,7 +1619,11 @@ describe('createV2Setup permission rules wiring', () => {
       let rejectPendingLookup!: (error: Error) => void;
       let registrationDisposals = 0;
       let cleanedUp = false;
-      const eventQueue: Record<string, unknown>[] = [];
+      const eventQueue: Array<{
+        event: Record<string, unknown>;
+        onProcessed?: () => void;
+      }> = [];
+      let acknowledgePreviousEvent: (() => void) | undefined;
       let wakeEvent: (() => void) | undefined;
       let eventStreamStopped = false;
       const requiredRegistrationError = new Error(
@@ -1540,14 +1740,19 @@ describe('createV2Setup permission rules wiring', () => {
               next: async (): Promise<
                 IteratorResult<Record<string, unknown>>
               > => {
+                // The pump requests the next event only after it has finished
+                // dispatching the previous one through every consumer.
+                acknowledgePreviousEvent?.();
+                acknowledgePreviousEvent = undefined;
                 while (eventQueue.length === 0 && !eventStreamStopped) {
                   await new Promise<void>((resolve) => {
                     wakeEvent = resolve;
                   });
                 }
-                const event = eventQueue.shift();
-                return event
-                  ? { value: event, done: false }
+                const queued = eventQueue.shift();
+                acknowledgePreviousEvent = queued?.onProcessed;
+                return queued
+                  ? { value: queued.event, done: false }
                   : { value: undefined, done: true };
               },
               return: async () => {
@@ -1561,8 +1766,8 @@ describe('createV2Setup permission rules wiring', () => {
           }),
         },
       } as unknown as V2Context;
-      publishEvent = (event) => {
-        eventQueue.push(event);
+      publishEvent = (event, onProcessed) => {
+        eventQueue.push({ event, onProcessed });
         wakeEvent?.();
         wakeEvent = undefined;
       };
@@ -1841,11 +2046,15 @@ describe('createV2Setup permission rules wiring', () => {
           }
           expect(calls).toHaveLength(updatesBeforeAgentSelection + 1);
           const lookupsBeforeDeletedPrompt = getCalls.length;
-          publishEvent({
-            type: 'session.deleted',
-            data: { sessionID: 'ses_probe_child' },
-          });
-          await Bun.sleep(10);
+          const deleted = Promise.withResolvers<void>();
+          publishEvent(
+            {
+              type: 'session.deleted',
+              data: { sessionID: 'ses_probe_child' },
+            },
+            deleted.resolve,
+          );
+          await deleted.promise;
           await (promptHandler as NonNullable<typeof promptHandler>)({
             sessionID: 'ses_probe_child',
             messageID: 'msg_after_delete',

@@ -3,8 +3,8 @@
  *
  * - `interview.enabled: false` → no bridge instance (no `/interview` command
  *   marker registered, no per-event bridge work, no context-hook dispatch).
- * - `backgroundJobs.mode: "off"` → no board persistence and no
- *   structured delegated-launch wrapper (native subagent paths untouched).
+ * - V2 native defaults → no job ledger/KV; native keeps preset routing and
+ *   the preset-wrapper executor wrap, while off leaves delegation untouched.
  * - `liveConfigRefresh: false` → no config-file watcher, while the one-shot
  *   startup profile seed and explicit `refreshProfiles` still function.
  * - `sidebar: false` → no server-side sidebar state write on finalization.
@@ -14,124 +14,15 @@
  * reuses the real `loadPluginConfig` path (a written config file) so the
  * gates are proven end-to-end against the loader, not a stub.
  */
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  spyOn,
-  test,
-} from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import fs from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import type { BackgroundJobStorageBackend } from '../utils/background-job-persistence';
-import {
-  configureBackgroundJobPersistence,
-  getSuppressionTombstone,
-  loadInitialBackgroundJobPersistence,
-  recordSuppression,
-} from '../utils/background-job-persistence';
 import * as configWatch from './config-watch';
-import { SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION } from './delegation';
 import { sessionPresetRpc } from './preset-rpc';
 import { createV2Setup } from './setup';
-import type {
-  V2Context,
-  V2SessionContextEvent,
-  V2SessionPresetRpcHandlers,
-} from './types';
-
-/** Manually-resolved promise for holding a backend write in flight. */
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
-
-/** Monotonic async counter used to await specific backend calls. */
-function createCounter() {
-  let value = 0;
-  const waiters: Array<{ threshold: number; resolve: () => void }> = [];
-  return {
-    increment() {
-      value += 1;
-      for (let index = waiters.length - 1; index >= 0; index -= 1) {
-        const waiter = waiters[index];
-        if (waiter && waiter.threshold <= value) {
-          waiters.splice(index, 1);
-          waiter.resolve();
-        }
-      }
-    },
-    at(threshold: number): Promise<void> {
-      if (value >= threshold) return Promise.resolve();
-      return new Promise((resolve) => waiters.push({ threshold, resolve }));
-    },
-  };
-}
-
-/**
- * In-memory v2 storage with selected writes held by an explicit promise.
- * Same-key writes are serialized by the real persistence module, so a newer
- * save can be queued behind a held save without using a timed sleep.
- */
-function createMemoryBackend() {
-  const map = new Map<string, unknown>();
-  const calls = new Map<string, ReturnType<typeof createCounter>>();
-  const settled = new Map<string, ReturnType<typeof createCounter>>();
-  const held = deferred<void>();
-  const heldKeys = new Set<string>();
-  const counterFor = (
-    counters: Map<string, ReturnType<typeof createCounter>>,
-    key: string,
-  ) => {
-    let counter = counters.get(key);
-    if (!counter) {
-      counter = createCounter();
-      counters.set(key, counter);
-    }
-    return counter;
-  };
-  const backend: BackgroundJobStorageBackend = {
-    get: async (key) => map.get(key),
-    set: async (key, value) => {
-      counterFor(calls, key).increment();
-      if (heldKeys.has(key)) await held.promise;
-      map.set(key, value);
-      counterFor(settled, key).increment();
-    },
-    remove: async (key) => {
-      map.delete(key);
-    },
-    scan: async ({ prefix }) => ({
-      entries: [...map.entries()]
-        .filter(([key]) => key.startsWith(prefix))
-        .map(([key, value]) => ({ key, value })),
-    }),
-  };
-  return {
-    backend,
-    map,
-    hold(...keys: string[]) {
-      for (const key of keys) heldKeys.add(key);
-    },
-    release() {
-      heldKeys.clear();
-      held.resolve();
-    },
-    waitForCalls(key: string, count: number) {
-      return counterFor(calls, key).at(count);
-    },
-    waitForSettled(key: string, count: number) {
-      return counterFor(settled, key).at(count);
-    },
-  };
-}
+import type { V2Context, V2SessionContextEvent } from './types';
 
 /** Mock v2 context capturing the registrations the gates must suppress. */
 function makeCtx(
@@ -212,8 +103,8 @@ function makeCtx(
     tool: {
       transform: async (cb: (draft: unknown) => void) => {
         // One live `subagent` tool per replay so `update` and `get` observe
-        // the same object: the setup reads the description back after the
-        // rewrite to arm its background-default flip.
+        // the same object: the setup wraps this executor when preset
+        // routing needs the wrapper.
         const subagentTool: Record<string, unknown> = {
           description: 'native',
           execute: async () => ({}),
@@ -221,8 +112,8 @@ function makeCtx(
         subagentTools.push(subagentTool);
         cb({
           // The native subagent executor is what the wrapper(s) wrap; record
-          // each update plus the description the rewrite left behind, so the
-          // managed-only description flip stays observable.
+          // each update plus the description the wrap left behind, so the
+          // native description staying byte-unchanged stays observable.
           update: (id: string, update: (tool: unknown) => void) => {
             const tool = id === 'subagent' ? subagentTool : {};
             update(tool);
@@ -337,9 +228,11 @@ function makeCtx(
 const INTERVIEW_MARKER =
   '<omos-interview-command>do it</omos-interview-command>';
 
-/** The preset wrapper still wraps `subagent`; the board-only description flip
- * must not run with the lifecycle off. */
-function expectPresetOnlyWrap(
+/**
+ * Preset-wrapper readiness keeps the native subagent description untouched:
+ * the wrapper wraps the executor, never rewrites the description text.
+ */
+function expectNativeWrap(
   updates: Array<{ id: string; description?: unknown }>,
 ) {
   const subagent = updates.filter((u) => u.id === 'subagent');
@@ -433,7 +326,7 @@ describe('v2 setup feature gates', () => {
   test('disabled preset removes the command and RPC without breaking delegation', async () => {
     await writeProjectConfig({
       companion: { enabled: false },
-      backgroundJobs: { mode: 'managed' },
+      backgroundJobs: { mode: 'native' },
       disabled_commands: ['preset'],
     });
     const { ctx, commandAdds, rpcDefinitions, beforeHooks } =
@@ -455,7 +348,7 @@ describe('v2 setup feature gates', () => {
   test('enabled preset keeps the command and RPC registration', async () => {
     await writeProjectConfig({
       companion: { enabled: false },
-      backgroundJobs: { mode: 'managed' },
+      backgroundJobs: { mode: 'native' },
     });
     const { ctx, commandAdds, rpcDefinitions } = makeCtx(projectDir);
     const cleanup = await createV2Setup()(ctx);
@@ -470,7 +363,7 @@ describe('v2 setup feature gates', () => {
   test('no v1 post-tool consumers keeps the native admission cleanup hook', async () => {
     await writeProjectConfig({
       companion: { enabled: false },
-      backgroundJobs: { mode: 'managed' },
+      backgroundJobs: { mode: 'native' },
       disabled_hooks: ['json-error-recovery', 'tool-loop-guard'],
     });
     const { ctx, hooks } = makeCtx(projectDir);
@@ -528,10 +421,11 @@ describe('v2 setup feature gates', () => {
         companion: { enabled: false },
         backgroundJobs: { mode },
       });
-      const { ctx, toolUpdates } = makeCtx(projectDir);
+      const { ctx, toolUpdates, storageCalls } = makeCtx(projectDir);
       const cleanup = await createV2Setup()(ctx);
       try {
-        if (mode === 'native') expectPresetOnlyWrap(toolUpdates);
+        expect(storageCalls).toEqual({ get: 0, set: 0, remove: 0, scan: 0 });
+        if (mode === 'native') expectNativeWrap(toolUpdates);
         else
           expect(toolUpdates.filter((tool) => tool.id === 'subagent')).toEqual(
             [],
@@ -626,23 +520,7 @@ describe('v2 setup feature gates', () => {
     const { ctx, rpcHandlers, commandAdds, storageCalls } = makeCtx(projectDir);
     const cleanup = await createV2Setup()(ctx);
     try {
-      // Only the Desktop config editor RPC remains: it edits config files
-      // and never routes sessions, so it stays available with routing off.
-      expect(
-        rpcHandlers.map((handlers) => Object.keys(handlers).sort()),
-      ).toEqual([
-        [
-          'clearPresetDefault',
-          'createPreset',
-          'deletePreset',
-          'getGoMonthlyLimits',
-          'getSnapshot',
-          'removeAgent',
-          'setAgentDisabled',
-          'setAgentOverride',
-          'switchPreset',
-        ],
-      ]);
+      expect(rpcHandlers).toEqual([]);
       expect(commandAdds.map((entry) => entry.name)).not.toContain('preset');
       expect(storageCalls).toEqual({ get: 0, set: 0, remove: 0, scan: 0 });
     } finally {
@@ -650,93 +528,50 @@ describe('v2 setup feature gates', () => {
     }
   }, 20_000);
 
-  test('managed: a resume without agent is refused by the explicit-agent guard', async () => {
+  test('explicit managed mode fails before registrations or storage reads', async () => {
     await writeProjectConfig({
       companion: { enabled: false },
       backgroundJobs: { mode: 'managed' },
     });
-    const { ctx, beforeHooks } = makeCtx(projectDir);
-    const cleanup = await createV2Setup()(ctx);
-    try {
-      const hook = beforeHooks[0];
-      if (!hook) throw new Error('tool:execute.before not captured');
-      const event = {
-        ...delegationEvent(),
-        id: 'call_gate_resume_managed',
-        input: { sessionID: 'ses_gate_child', prompt: 'Continue' },
-      };
-      await expect(hook(event as never)).rejects.toThrow(
-        'requires a valid agent',
-      );
-    } finally {
-      await cleanup();
-    }
-  }, 20_000);
+    const { ctx, hooks, commandAdds, toolUpdates, storageCalls } =
+      makeCtx(projectDir);
+    await expect(createV2Setup()(ctx)).rejects.toThrow(/managed/i);
+    expect(hooks).toEqual([]);
+    expect(commandAdds).toEqual([]);
+    expect(toolUpdates).toEqual([]);
+    expect(storageCalls).toEqual({ get: 0, set: 0, remove: 0, scan: 0 });
+  });
 
-  test('lifecycle-disabled project preserves live queued persistence writes', async () => {
-    const persistence = createMemoryBackend();
-    const tombstoneKey = 'omo/bgj/tombstone/ses_live_project';
-    const epochKey = 'omo/bgj/epoch/ses_live_project';
-    configureBackgroundJobPersistence(persistence.backend);
-    try {
-      await loadInitialBackgroundJobPersistence();
-      recordSuppression('ses_live_project', 1);
-      await persistence.waitForSettled(tombstoneKey, 1);
-      await persistence.waitForSettled(epochKey, 1);
-      const keyCount = persistence.map.size;
-      expect(keyCount).toBe(2);
-
-      // Hold the first save of each key. The second suppression for the same
-      // task queues behind those in the real per-key persistence queues.
-      persistence.hold(tombstoneKey, epochKey);
-      recordSuppression('ses_live_project', 2);
-      await persistence.waitForCalls(tombstoneKey, 2);
-      await persistence.waitForCalls(epochKey, 2);
-      expect(getSuppressionTombstone('ses_live_project')?.epoch).toBe(2);
-      expect(persistence.map.get(tombstoneKey)).toMatchObject({ epoch: 1 });
-
+  test.each([
+    { concurrency: {} },
+    { wallClockTimeoutMs: 0 },
+    { maxSessionsPerAgent: 2 },
+    { stopConfirmationMs: 5_000 },
+  ])(
+    'retired V2 limit %j refuses setup before storage or registrations',
+    async (limit) => {
       await writeProjectConfig({
         companion: { enabled: false },
-        backgroundJobs: { mode: 'off' },
+        backgroundJobs: { mode: 'native', ...limit },
       });
-      const { ctx, storageCalls } = makeCtx(projectDir, persistence.backend);
-      const cleanup = await createV2Setup()(ctx);
-      try {
-        // Assert the in-memory latest record before releasing any promise
-        // awaited below: the old off branch reset would fail here instead of
-        // leaving a flush helper hanging on a fenced queue.
-        expect(storageCalls).toEqual({ get: 0, set: 0, remove: 0, scan: 0 });
-        expect(getSuppressionTombstone('ses_live_project')?.epoch).toBe(2);
-      } finally {
-        await cleanup();
-      }
+      const { ctx, hooks, commandAdds, toolUpdates, storageCalls } =
+        makeCtx(projectDir);
 
-      persistence.release();
-      await persistence.waitForSettled(tombstoneKey, 2);
-      await persistence.waitForSettled(epochKey, 2);
-      expect(persistence.map.size).toBeGreaterThanOrEqual(keyCount);
-      expect(persistence.map.get(tombstoneKey)).toMatchObject({
-        taskID: 'ses_live_project',
-        epoch: 2,
-      });
-      expect(persistence.map.get(epochKey)).toBe(2);
-    } finally {
-      configureBackgroundJobPersistence(undefined);
-    }
-  }, 20_000);
+      await expect(createV2Setup()(ctx)).rejects.toThrow(
+        `Unsupported backgroundJobs.${Object.keys(limit)[0]}`,
+      );
+      expect(hooks).toEqual([]);
+      expect(commandAdds).toEqual([]);
+      expect(toolUpdates).toEqual([]);
+      expect(storageCalls).toEqual({ get: 0, set: 0, remove: 0, scan: 0 });
+    },
+  );
 
-  test('lifecycle enabled (default): the structured-launch wrapper registers', async () => {
-    // Defaults keep the wrapper: a config with only the companion disabled
-    // must behave exactly like the baseline (no silent gate drift).
+  test('native default leaves the native subagent description untouched', async () => {
     const { ctx, toolUpdates } = makeCtx(projectDir);
     const cleanup = await createV2Setup()(ctx);
     try {
-      const flipped = toolUpdates.filter(
-        (u) =>
-          u.id === 'subagent' &&
-          u.description === SUBAGENT_BACKGROUND_DEFAULT_DESCRIPTION,
-      );
-      expect(flipped.length).toBeGreaterThan(0);
+      expectNativeWrap(toolUpdates);
     } finally {
       await cleanup();
     }
@@ -759,34 +594,7 @@ describe('v2 setup feature gates', () => {
     ).mockImplementation(((options: configWatch.WatchPluginConfigOptions) => {
       return factory(options);
     }) as never);
-    const values = new Map<string, unknown>();
-    let writeFailure: Error | undefined;
-    const { ctx, rpcHandlers } = makeCtx(projectDir, {
-      get: async (key) => values.get(key),
-      set: async (key, value) => {
-        if (writeFailure) throw writeFailure;
-        values.set(key, value);
-      },
-      remove: async (key) => {
-        values.delete(key);
-      },
-      scan: async () => ({ entries: [] }),
-    });
-    if (ctx.location) ctx.location.workspaceID = 'workspace-gates';
-    const createCalls: unknown[] = [];
-    ctx.session.create = async (input) => {
-      createCalls.push(input);
-      return {
-        id:
-          createCalls.length === 1 ? 'ses_created_bound' : 'ses_created_failed',
-      };
-    };
-    ctx.session.prompt = async () => {
-      throw new Error('createBound must not prompt');
-    };
-    ctx.session.switchModel = ctx.session.switchAgent = async () => {
-      throw new Error('createBound must keep the native root selection');
-    };
+    const { ctx, rpcHandlers } = makeCtx(projectDir);
     const cleanup = await createV2Setup()(ctx);
     try {
       expect(watcherFactory).not.toHaveBeenCalled();
@@ -817,65 +625,6 @@ describe('v2 setup feature gates', () => {
           { signal: new AbortController().signal },
         ),
       ).rejects.toThrow('Unknown preset: missing');
-      const createBound = (handlers as unknown as V2SessionPresetRpcHandlers)
-        .createBound;
-      const errorFactory = mock<Parameters<typeof createBound>[1]['error']>(
-        (type, message, data) => ({ type, message, data }),
-      );
-      const callContext = {
-        signal: new AbortController().signal,
-        error: errorFactory,
-      };
-      const bound = await createBound({ presetName: 'strong' }, callContext);
-      expect(bound).toMatchObject({
-        sessionID: 'ses_created_bound',
-        status: 'bound',
-        presetName: 'strong',
-        affects: 'future-children-only',
-        team: { agentModels: { explorer: 'anthropic/claude-sonnet-4-5' } },
-      });
-      expect(createCalls).toEqual([
-        { location: { directory: projectDir, workspaceID: 'workspace-gates' } },
-      ]);
-      expect(values.get('session-preset/v1/ses_created_bound')).toMatchObject({
-        schemaVersion: 1,
-        bundle: { presetName: 'strong' },
-      });
-      expect(
-        await (handlers as unknown as V2SessionPresetRpcHandlers).read(
-          { sessionID: bound.sessionID },
-          { signal: new AbortController().signal },
-        ),
-      ).toEqual(bound);
-      expect(errorFactory).not.toHaveBeenCalled();
-      const missing = createBound({ presetName: 'missing' }, callContext);
-      await expect(missing).rejects.toEqual({
-        type: 'create_failed',
-        message: 'Unknown preset: missing',
-        data: null,
-      });
-      await expect(missing).rejects.toBe(errorFactory.mock.results[0].value);
-      expect(createCalls).toHaveLength(1);
-      writeFailure = new Error('KV unavailable');
-      const failed = createBound({ presetName: 'strong' }, callContext);
-      const message =
-        'Created session ses_created_failed, but preset binding failed. Open it and use Apply to bind "strong".';
-      await expect(failed).rejects.toEqual({
-        type: 'create_failed',
-        message,
-        data: null,
-      });
-      expect(errorFactory).toHaveBeenLastCalledWith(
-        'create_failed',
-        message,
-        null,
-      );
-      await expect(failed).rejects.toBe(errorFactory.mock.results[1].value);
-      expect(
-        sessionPresetRpc.methods.createBound.errors.create_failed.parse(null),
-      ).toBeNull();
-      expect(createCalls).toHaveLength(2);
-      expect(values.has('session-preset/v1/ses_created_failed')).toBe(false);
       expect(watcherFactory).not.toHaveBeenCalled();
     } finally {
       await cleanup();

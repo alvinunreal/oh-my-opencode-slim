@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { UnsupportedHostConfigError } from '../config/feature-gates';
 import type { ConfigLoadWarningKind } from '../config/loader';
 import type { CompanionConfig } from '../config/schema';
 import {
@@ -492,9 +493,19 @@ export class CompanionManager {
   }
 
   private refreshPresetState(): boolean {
-    const snapshot =
-      this.pendingInitialSnapshot ??
-      readPluginConfigSnapshot(this.cwd, { hostFlavor: this.hostFlavor });
+    let snapshot: PluginConfigSnapshot;
+    try {
+      snapshot =
+        this.pendingInitialSnapshot ??
+        readPluginConfigSnapshot(this.cwd, { hostFlavor: this.hostFlavor });
+    } catch (err) {
+      if (!(err instanceof UnsupportedHostConfigError)) throw err;
+      // An edit that reintroduces retired V2 keys is rejected before any
+      // defaults apply. Retain the last good fingerprint/state and retry on a
+      // later tick; unrelated read failures still propagate.
+      log('[companion] preset refresh rejected config', String(err));
+      return false;
+    }
     this.pendingInitialSnapshot = undefined;
     if (
       snapshot.warnings.some((warning) =>
@@ -744,9 +755,24 @@ export class CompanionManager {
         };
       }
 
-      const snapshot = readPluginConfigSnapshot(targetCwd, {
-        hostFlavor: this.hostFlavor,
-      });
+      let snapshot: PluginConfigSnapshot;
+      try {
+        snapshot = readPluginConfigSnapshot(targetCwd, {
+          hostFlavor: this.hostFlavor,
+        });
+      } catch (err) {
+        if (!(err instanceof UnsupportedHostConfigError)) throw err;
+        // A config edit that reintroduced retired V2 keys is rejected before
+        // any defaults apply: acknowledge the request as failed without
+        // touching the file or the published offline state.
+        log('[companion] preset request rejected config', String(err));
+        return {
+          ok: false,
+          presetName: '',
+          message: `Project configuration is not supported on this host: ${err.message} Nothing was changed.`,
+          summary: [],
+        };
+      }
       if (
         snapshot.warnings.some((warning) =>
           HARD_PRESET_REFRESH_WARNING_KINDS.has(warning.kind),

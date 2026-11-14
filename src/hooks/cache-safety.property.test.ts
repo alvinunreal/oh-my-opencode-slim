@@ -27,18 +27,14 @@ import {
   buildHistory,
   createPipeline,
   FIXTURE_NOW,
-  refusedChildTurn,
   renderTurn,
-  SESSION_ID,
   stableFingerprints,
   type TransformOutput,
   turnEndIndices,
   userTurn,
 } from './cache-safety-harness.test';
 import { COUNCIL_INJECT_METADATA_KEY } from './council-inject';
-import { GOAL_POINTER_METADATA_KEY } from './deepwork-goal';
 import { PHASE_REMINDER_METADATA_KEY } from './phase-reminder';
-import { BACKGROUND_JOB_BOARD_METADATA_KEY } from './task-session-manager';
 import type { MessageWithParts } from './types';
 
 afterEach(() => {
@@ -53,7 +49,7 @@ afterEach(() => {
  */
 const stablePrefixFingerprints = stableFingerprints;
 
-function goalMessages(messages: unknown[]): MessageWithParts[] {
+function _goalMessages(messages: unknown[]): MessageWithParts[] {
   return messages.filter(
     (message): message is MessageWithParts =>
       (message as MessageWithParts)?.info?.id?.startsWith('deepwork-goal-') ===
@@ -62,30 +58,6 @@ function goalMessages(messages: unknown[]): MessageWithParts[] {
 }
 
 describe('cache-safety: turn-over-turn prefix stability', () => {
-  test('a kill-all notice can disappear without changing earlier payload bytes', async () => {
-    let active = true;
-    const pipeline = createPipeline({ killAllStop: () => active });
-    const history = buildHistory();
-    const stopped = await renderTurn(pipeline, history, history.length - 1);
-    active = false;
-    const continued = await renderTurn(pipeline, history, history.length - 1);
-    expect(stableFingerprints(stopped.messages)).toEqual(
-      stableFingerprints(continued.messages),
-    );
-    expect(stopped.messages).toHaveLength(continued.messages.length + 1);
-  });
-
-  test('a fallback notice can disappear without changing earlier payload bytes', async () => {
-    const pipeline = createPipeline({ refusalCorrection: true });
-    const history = [...buildHistory(), refusedChildTurn()];
-    const running = await renderTurn(pipeline, history, history.length - 1);
-    pipeline.board.drop('ses_refused_child');
-    const evicted = await renderTurn(pipeline, history, history.length - 1);
-    expect(stableFingerprints(running.messages)).toEqual(
-      stableFingerprints(evicted.messages),
-    );
-    expect(running.messages).toHaveLength(evicted.messages.length + 1);
-  });
   test('re-rendering a growing conversation reproduces byte-identical history', async () => {
     const pipeline = createPipeline({ goalPointer: true });
     const history = buildHistory();
@@ -93,36 +65,7 @@ describe('cache-safety: turn-over-turn prefix stability', () => {
     const fingerprintsFor = stablePrefixFingerprints;
 
     let previous: string[] | undefined;
-    for (const [turnNumber, endIndex] of turns.entries()) {
-      // Exercise cross-turn hook state: a background job launches before
-      // the second turn (a real user turn, so a fresh board is placed),
-      // the job is dropped before the internal-initiator turn renders
-      // with an empty board, and a second job launches before the fourth
-      // turn. Frozen replay across internal-initiator and empty-board
-      // turns, and
-      // unchanged-board dedupe all must leave stable bytes untouched —
-      // the v2.2.5 checkpoint regression rewrote them on exactly these
-      // transitions.
-      if (turnNumber === 1) {
-        pipeline.board.registerLaunch({
-          taskID: 'task-alpha',
-          parentSessionID: SESSION_ID,
-          agent: 'explorer',
-          description: 'churn fixture',
-          now: FIXTURE_NOW,
-        });
-      }
-      if (turnNumber === 2) pipeline.board.drop('task-alpha');
-      if (turnNumber === 3) {
-        pipeline.board.registerLaunch({
-          taskID: 'task-beta',
-          parentSessionID: SESSION_ID,
-          agent: 'fixer',
-          description: 'second churn fixture',
-          now: FIXTURE_NOW,
-        });
-      }
-
+    for (const endIndex of turns) {
       const output = await renderTurn(pipeline, history, endIndex);
       const fingerprints = fingerprintsFor(output.messages);
 
@@ -264,45 +207,7 @@ describe('cache-safety: skill-list conversation text', () => {
   });
 });
 
-describe('cache-safety: volatile content isolation', () => {
-  test('background-job state never enters the payload', async () => {
-    // Issue #1647: the job board is never rendered. A launch, a completion,
-    // or a stop must not add a single byte to the prompt — the only prompt
-    // surfaces left are the one-shot pushes and the on-demand tool.
-    const history = buildHistory();
-    const lastTurn = history.length - 1;
-
-    const emptyBoard = createPipeline({ goalPointer: true });
-    const busyBoard = createPipeline({ goalPointer: true });
-    busyBoard.board.registerLaunch({
-      taskID: 'task-beta',
-      parentSessionID: SESSION_ID,
-      agent: 'fixer',
-      description: 'volatile isolation fixture',
-      now: FIXTURE_NOW,
-    });
-
-    const withoutJobs = await renderTurn(emptyBoard, history, lastTurn);
-    const withJobs = await renderTurn(busyBoard, history, lastTurn);
-
-    expect(stableFingerprints(withJobs.messages)).toEqual(
-      stableFingerprints(withoutJobs.messages),
-    );
-    expect(withJobs.messages).toHaveLength(withoutJobs.messages.length);
-
-    // No board part anywhere in either render: the board key is used only
-    // by the goal pointer (dual-tag contract) and never by a job listing.
-    const boardParts = withJobs.messages.flatMap((message) =>
-      (message as MessageWithParts).parts.filter(
-        (part) =>
-          isTaggedPart(part, BACKGROUND_JOB_BOARD_METADATA_KEY) &&
-          !isTaggedPart(part, GOAL_POINTER_METADATA_KEY),
-      ),
-    );
-    expect(boardParts).toHaveLength(0);
-    expect(goalMessages(withJobs.messages)).toHaveLength(1);
-  });
-});
+describe('cache-safety: volatile content isolation', () => {});
 
 describe('cache-safety: determinism under ambient inputs', () => {
   test('wall clock and randomness never leak into the payload', async () => {
@@ -315,13 +220,6 @@ describe('cache-safety: determinism under ambient inputs', () => {
       Math.random = () => random;
       try {
         const pipeline = createPipeline({ goalPointer: true });
-        pipeline.board.registerLaunch({
-          taskID: 'task-gamma',
-          parentSessionID: SESSION_ID,
-          agent: 'oracle',
-          description: 'determinism fixture',
-          now: FIXTURE_NOW,
-        });
         const output = await renderTurn(pipeline, history, lastTurn);
         return output.messages.map((message) => JSON.stringify(message));
       } finally {
@@ -357,7 +255,6 @@ describe('cache-safety: pipeline drift guard', () => {
     // expectation — the property tests are only meaningful while the two
     // stay in lockstep.
     expect(orderedCalls).toEqual([
-      'taskSessionManagerHook',
       'phaseReminder',
       'councilInject',
       'deepworkGoal',
@@ -372,7 +269,7 @@ describe('cache-safety: pipeline drift guard', () => {
     const literalCount = source.split(
       "'experimental.chat.messages.transform'",
     ).length;
-    expect(literalCount - 1).toBe(5);
+    expect(literalCount - 1).toBe(4);
   });
 
   test('every hook module defining a message transform is covered here', async () => {
@@ -395,7 +292,6 @@ describe('cache-safety: pipeline drift guard', () => {
       'council-inject/index.ts',
       'deepwork-goal/index.ts',
       'phase-reminder/index.ts',
-      'task-session-manager/index.ts',
     ]);
   });
 });

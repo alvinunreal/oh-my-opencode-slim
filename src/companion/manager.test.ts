@@ -1141,6 +1141,145 @@ describe('CompanionManager', () => {
     expect(readState().sessions[0].preset.current).toBe('old');
   });
 
+  it('keeps the last-known preset state when a v2 edit reintroduces a retired mode', () => {
+    const projectDir = path.join(TEST_DIR, 'retired-mode-project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    mkdirSync(projectConfigDir, { recursive: true });
+    const projectConfigPath = path.join(
+      projectConfigDir,
+      'oh-my-opencode-slim.jsonc',
+    );
+    writeFileSync(projectConfigPath, JSON.stringify({ preset: 'old' }));
+
+    const userConfigPath = path.join(
+      TEST_DIR,
+      'config',
+      'opencode',
+      'oh-my-opencode-slim.json',
+    );
+    writeFileSync(
+      userConfigPath,
+      JSON.stringify({
+        presets: {
+          old: { orchestrator: { model: 'old-model' } },
+          cheap: { orchestrator: { model: 'cheap-model' } },
+        },
+      }),
+    );
+
+    const manager = new CompanionManager(
+      'retired-mode-session',
+      projectDir,
+      { enabled: true },
+      'v2',
+    );
+    managers.push(manager);
+    writeAttachment(process.pid, projectDir);
+    manager.onLoad();
+    expect(readState().sessions[0].preset).toMatchObject({
+      current: 'old',
+      available: ['cheap', 'old'],
+    });
+
+    writeFileSync(
+      projectConfigPath,
+      JSON.stringify({
+        preset: 'cheap',
+        backgroundJobs: { mode: 'managed' },
+      }),
+    );
+    for (let i = 0; i < 4; i++) {
+      (
+        manager as unknown as {
+          pollPresetState: () => void;
+        }
+      ).pollPresetState();
+    }
+
+    // The rejected read retains the last good view instead of publishing a
+    // fallback or throwing out of the 250ms poll.
+    expect(readState().sessions[0].preset).toMatchObject({
+      current: 'old',
+      available: ['cheap', 'old'],
+    });
+  });
+
+  it('fails a preset request against a v2 config with retired keys without mutating it', () => {
+    const projectDir = path.join(TEST_DIR, 'retired-limit-project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    mkdirSync(projectConfigDir, { recursive: true });
+    const projectConfigPath = path.join(
+      projectConfigDir,
+      'oh-my-opencode-slim.jsonc',
+    );
+    writeFileSync(projectConfigPath, JSON.stringify({ preset: 'old' }));
+
+    const userConfigPath = path.join(
+      TEST_DIR,
+      'config',
+      'opencode',
+      'oh-my-opencode-slim.json',
+    );
+    writeFileSync(
+      userConfigPath,
+      JSON.stringify({
+        presets: {
+          old: { orchestrator: { model: 'old-model' } },
+          cheap: { orchestrator: { model: 'cheap-model' } },
+        },
+      }),
+    );
+
+    const manager = new CompanionManager(
+      'retired-limit-session',
+      projectDir,
+      { enabled: true },
+      'v2',
+    );
+    managers.push(manager);
+    writeAttachment(process.pid, projectDir);
+    manager.onLoad();
+
+    const rejected = JSON.stringify({
+      preset: 'old',
+      backgroundJobs: { concurrency: { defaultConcurrency: 2 } },
+    });
+    writeFileSync(projectConfigPath, rejected);
+    const state = readState();
+    state.preset_requests = [
+      {
+        request_id: 'req-retired',
+        session_id: 'retired-limit-session',
+        scope: 'project',
+        preset: 'cheap',
+      },
+    ];
+    writeFileSync(stateFilePath(), JSON.stringify(state));
+
+    let consumed: boolean | undefined;
+    expect(() => {
+      consumed = (
+        manager as unknown as {
+          consumePresetRequest: () => boolean;
+        }
+      ).consumePresetRequest();
+    }).not.toThrow();
+
+    const after = readState();
+    expect(consumed).toBe(true);
+    expect(after.preset_requests).toBeUndefined();
+    expect(after.sessions[0].preset).toMatchObject({
+      current: 'old',
+      last_request_id: 'req-retired',
+      result_ok: false,
+    });
+    expect(after.sessions[0].preset.message).toContain(
+      'not supported on this host',
+    );
+    // No file mutation: the rejected config bytes survive untouched.
+    expect(readFileSync(projectConfigPath, 'utf8')).toBe(rejected);
+  });
+
   it('shows orchestrator while orchestrator is busy with no specialists', () => {
     const m = make();
     m.onLoad();

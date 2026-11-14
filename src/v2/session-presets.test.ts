@@ -1,4 +1,4 @@
-/** Focused tests for bounded root creation and one-admission read reuse.
+/** Focused tests for session preset admission and binding.
 
 Scope: the admission transaction returns `{record, identity}` from ONE
 host identity read + ONE KV lookup; the fences that make the preset
@@ -6,7 +6,7 @@ service trustworthy (id+directory+parent identity on every admission,
 serial transactions, write/abort/dispose fences) stay load-bearing.
 These tests do NOT build the whole v1 plugin.
 */
-import { describe, expect, mock, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { sessionPresetRpc } from './preset-rpc';
 import type { SessionPresetRecord, SessionTeamBundle } from './session-presets';
 import { createSessionPresets } from './session-presets';
@@ -27,6 +27,7 @@ function makeHarness(options?: {
   directory?: string;
   named?: (name: string) => Promise<SessionTeamBundle>;
   current?: () => SessionTeamBundle;
+  currentIsFallback?: () => boolean;
 }) {
   const storage = new Map<string, unknown>();
   const getCalls: Array<unknown> = [];
@@ -36,13 +37,6 @@ function makeHarness(options?: {
     getCalls.push(input);
     log.push('identity');
     return getResponse;
-  };
-  const session = {
-    get,
-    create: mock(async (_input: unknown) => ({ id: 'new-root' })),
-    prompt: mock(async () => {}),
-    switchModel: mock(async () => {}),
-    switchAgent: mock(async () => {}),
   };
   const backend = {
     get: async (key: string) => {
@@ -59,21 +53,18 @@ function makeHarness(options?: {
     },
     scan: async () => ({ entries: [] }),
   };
-  const location = { directory: DIRECTORY, workspaceID: 'workspace-original' };
   const presets = createSessionPresets({
     storage: backend,
-    session,
+    session: { get },
     directory: options?.directory ?? DIRECTORY,
-    location,
     current: options?.current ?? (() => BUNDLE),
+    currentIsFallback: options?.currentIsFallback,
     named: options?.named ?? (async () => BUNDLE),
   });
   return {
     presets,
     storage,
     backend,
-    session,
-    location,
     getCalls,
     log,
     setGetResponse: (response: unknown) => {
@@ -85,112 +76,6 @@ function makeHarness(options?: {
 function storageKey(id: string) {
   return `session-preset/v1/${id}`;
 }
-
-describe('createBound', () => {
-  test('captures the named team once before native creation and returns only after binding', async () => {
-    const selected = structuredClone(BUNDLE);
-    const named = mock(async () => selected);
-    const h = makeHarness({ named });
-    const writing = Promise.withResolvers<void>();
-    const commit = Promise.withResolvers<void>();
-    const set = h.backend.set;
-    h.backend.set = async (key, value) => {
-      writing.resolve();
-      await commit.promise;
-      await set(key, value);
-    };
-    h.session.create.mockImplementation(async () => {
-      expect(named).toHaveBeenCalledTimes(1);
-      selected.profiles.explorer.sidebarModel = 'edited/after-selection';
-      return { id: 'new-root' };
-    });
-    // Location is captured from the trusted plugin context, not mutable UI state.
-    h.location.directory = '/changed';
-    h.location.workspaceID = 'workspace-changed';
-    let returned = false;
-    const creating = h.presets.createBound('default').then((state) => {
-      returned = true;
-      return state;
-    });
-    await writing.promise;
-    expect(returned).toBe(false);
-    expect(h.storage.size).toBe(0);
-    commit.resolve();
-    const state = await creating;
-    expect(sessionPresetRpc.methods.createBound.output.parse(state)).toEqual(
-      state,
-    );
-    expect(state).toMatchObject({
-      sessionID: 'new-root',
-      status: 'bound',
-      presetName: 'default',
-      affects: 'future-children-only',
-      team: { agentModels: { explorer: 'openai/gpt-5-mini' } },
-    });
-    expect(h.storage.get(storageKey('new-root'))).toEqual({
-      schemaVersion: 1,
-      bundle: BUNDLE,
-      selection: 'explicit',
-    });
-    expect(named).toHaveBeenCalledTimes(1);
-    expect(named).toHaveBeenCalledWith('default');
-    expect(h.session.create).toHaveBeenCalledTimes(1);
-    expect(h.session.create).toHaveBeenCalledWith({
-      location: { directory: DIRECTORY, workspaceID: 'workspace-original' },
-    });
-    expect(h.session.prompt).not.toHaveBeenCalled();
-    expect(h.session.switchModel).not.toHaveBeenCalled();
-    expect(h.session.switchAgent).not.toHaveBeenCalled();
-  });
-
-  test('post-create binding failure retains the ID and cause and allows existing Apply recovery', async () => {
-    const h = makeHarness();
-    const failure = new Error('KV write failed');
-    const set = h.backend.set;
-    h.backend.set = async () => {
-      throw failure;
-    };
-    const error = await h.presets
-      .createBound('default')
-      .catch((error) => error);
-    expect(error).toBeInstanceOf(Error);
-    expect(error.message).toContain('Created session new-root');
-    expect(error.message).toContain('use Apply');
-    expect(error.cause).toBe(failure);
-    expect(h.session.create).toHaveBeenCalledTimes(1);
-    expect(h.session.prompt).not.toHaveBeenCalled();
-    expect(h.storage.size).toBe(0);
-    h.setGetResponse({ id: 'new-root', location: { directory: DIRECTORY } });
-    expect((await h.presets.readState('new-root')).status).toBe('unbound');
-    h.backend.set = set;
-    expect((await h.presets.apply('new-root', 'default')).status).toBe('bound');
-    expect(h.session.create).toHaveBeenCalledTimes(1);
-  });
-
-  test('rejects unknown presets before creating and accepts only a preset name at the RPC boundary', async () => {
-    const h = makeHarness({
-      named: async () => {
-        throw new Error('Unknown preset: missing');
-      },
-    });
-    await expect(h.presets.createBound('missing')).rejects.toThrow(
-      'Unknown preset: missing',
-    );
-    expect(h.session.create).not.toHaveBeenCalled();
-    const input = sessionPresetRpc.methods.createBound.input;
-    expect(input.parse({ presetName: 'default' })).toEqual({
-      presetName: 'default',
-    });
-    expect(input.safeParse({ presetName: '' }).success).toBe(false);
-    expect(
-      input.safeParse({ presetName: 'default', sessionID: 'old-root' }).success,
-    ).toBe(false);
-    expect(
-      input.safeParse({ presetName: 'default', location: { directory: '/' } })
-        .success,
-    ).toBe(false);
-  });
-});
 
 describe('ensureAdmission', () => {
   test('returns record + precise identity from one identity read and one KV lookup', async () => {
@@ -406,184 +291,102 @@ describe('ensureAdmission', () => {
   });
 });
 
-describe('reset', () => {
-  test('binds an unnamed effective default and keeps it bound through the next ensure', async () => {
-    const unnamed = { ...BUNDLE, presetName: null };
-    const h = makeHarness({ current: () => unnamed });
-    h.setGetResponse({
-      data: { id: 'root-default', location: { directory: DIRECTORY } },
-    });
-    const state = await h.presets.reset('root-default');
-    expect(state).toEqual({
-      sessionID: 'root-default',
-      status: 'bound',
-      presetName: null,
-      selection: 'default',
-      affects: 'future-children-only',
-      team: {
-        agentModels: { explorer: 'openai/gpt-5-mini' },
-        agentVariants: {},
-        inheritance: {},
-      },
-    });
-    expect(sessionPresetRpc.methods.read.output.parse(state)).toEqual(state);
-    expect(sessionPresetRpc.methods.unbind.output.parse(state)).toEqual(state);
-    expect(h.storage.get(storageKey('root-default'))).toEqual({
-      schemaVersion: 1,
-      bundle: unnamed,
-      selection: 'default',
-    });
-    // The next admission must not rewrite the default provenance or the
-    // captured bundle that was present when the user turned the team off.
-    const record = await h.presets.ensure('root-default');
-    expect(record?.selection).toBe('default');
-    expect(record?.bundle).toEqual(unnamed);
-  });
-
-  test('serializes reset and apply so the last operation wins', async () => {
-    const next = { ...BUNDLE, presetName: 'next' };
-    const h = makeHarness({ named: async () => next });
-    h.setGetResponse({
-      data: { id: 'root-on', location: { directory: DIRECTORY } },
-    });
-    const [resetState, applyState] = await Promise.all([
-      h.presets.reset('root-on'),
-      h.presets.apply('root-on', 'next'),
-    ]);
-    expect(resetState.selection).toBe('default');
-    expect(applyState).toMatchObject({
-      status: 'bound',
-      presetName: 'next',
-      selection: 'explicit',
-    });
-    expect(h.log).toEqual([
-      'identity',
-      'kv-read',
-      'kv-write',
-      'identity',
-      'kv-read',
-      'kv-write',
-    ]);
-    expect((await h.presets.readState('root-on')).selection).toBe('explicit');
-
-    h.setGetResponse({
-      data: { id: 'root-off', location: { directory: DIRECTORY } },
-    });
-    await Promise.all([
-      h.presets.apply('root-off', 'next'),
-      h.presets.reset('root-off'),
-    ]);
-    const final = await h.presets.readState('root-off');
-    expect(final.presetName).toBe('default');
-    expect(final.selection).toBe('default');
-  });
-
-  test('rejects a parent identity mismatch before writing', async () => {
-    const h = makeHarness();
-    const previous = {
-      schemaVersion: 1,
-      parentID: 'root-a',
-      bundle: BUNDLE,
-    };
-    h.storage.set(storageKey('child'), previous);
-    h.setGetResponse({
-      data: {
-        id: 'child',
-        parentID: 'root-b',
-        location: { directory: DIRECTORY },
-      },
-    });
-    await expect(h.presets.reset('child')).rejects.toThrow(
-      'Session preset parent identity mismatch',
-    );
-    expect(h.log).toEqual(['identity', 'kv-read']);
-    expect(h.storage.get(storageKey('child'))).toEqual(previous);
-  });
-
-  test('keeps a native child with no snapshot unbound without inventing one', async () => {
-    const h = makeHarness();
-    h.setGetResponse({
-      data: {
-        id: 'native-child',
-        parentID: 'root',
-        location: { directory: DIRECTORY },
-      },
-    });
-    expect(await h.presets.reset('native-child')).toEqual({
-      sessionID: 'native-child',
-      status: 'unbound',
-      presetName: null,
-      affects: 'future-children-only',
-    });
-    expect(h.storage.size).toBe(0);
-    expect(h.log).toEqual(['identity', 'kv-read']);
-  });
-
-  test('child reset preserves its execution and model flags, then Apply rebinds explicitly', async () => {
-    const next = { ...BUNDLE, presetName: 'next' };
-    const h = makeHarness({ named: async () => next });
-    const execution = { ...BUNDLE, presetName: 'frozen-A' };
-    h.storage.set(storageKey('child'), {
-      schemaVersion: 1,
-      parentID: 'root',
-      bundle: { ...BUNDLE, presetName: 'A' },
-      execution,
-      preserveModel: true,
-      explicitModel: true,
-      inheritedProviderID: 'openai',
-    });
-    h.setGetResponse({
-      data: {
-        id: 'child',
-        parentID: 'root',
-        location: { directory: DIRECTORY },
-      },
-    });
-    const state = await h.presets.reset('child');
-    expect(state).toMatchObject({
-      sessionID: 'child',
-      status: 'bound',
-      presetName: 'default',
-      selection: 'default',
-    });
-    expect(h.storage.get(storageKey('child'))).toEqual({
-      schemaVersion: 1,
-      parentID: 'root',
-      bundle: BUNDLE,
-      execution,
-      preserveModel: true,
-      explicitModel: true,
-      inheritedProviderID: 'openai',
-      selection: 'default',
-    });
-    expect(await h.presets.apply('child', 'next')).toMatchObject({
-      sessionID: 'child',
-      status: 'bound',
-      presetName: 'next',
-      selection: 'explicit',
-    });
-    expect(h.storage.get(storageKey('child'))).toMatchObject({
-      parentID: 'root',
-      execution,
-      preserveModel: true,
-      explicitModel: true,
-      inheritedProviderID: 'openai',
-      selection: 'explicit',
-    });
-  });
-
-  test('aborts before touching identity or storage and retries cleanly', async () => {
-    const h = makeHarness();
-    const controller = new AbortController();
-    controller.abort();
-    await expect(h.presets.reset('root', controller.signal)).rejects.toThrow();
-    expect(h.getCalls).toHaveLength(0);
-    expect(h.storage.size).toBe(0);
+describe('binding provenance', () => {
+  test('a root on the live default follows config refreshes; a named team keeps its snapshot', async () => {
+    let live: SessionTeamBundle = BUNDLE;
+    const h = makeHarness({ current: () => live });
     h.setGetResponse({
       data: { id: 'root', location: { directory: DIRECTORY } },
     });
-    expect((await h.presets.reset('root')).status).toBe('bound');
-    expect(h.getCalls).toHaveLength(1);
+    await h.presets.ensure('root');
+    const refreshed = {
+      ...BUNDLE,
+      profiles: { explorer: { sidebarModel: 'openai/gpt-5-nano' } },
+    };
+    live = refreshed;
+    expect((await h.presets.ensure('root'))?.bundle).toEqual(refreshed);
+    expect(h.storage.get(storageKey('root'))).toEqual({
+      schemaVersion: 1,
+      bundle: refreshed,
+      selection: 'default',
+    });
+
+    h.storage.set(storageKey('named'), {
+      schemaVersion: 1,
+      bundle: BUNDLE,
+      selection: 'explicit',
+    });
+    h.setGetResponse({
+      data: { id: 'named', location: { directory: DIRECTORY } },
+    });
+    expect((await h.presets.ensure('named'))?.bundle).toEqual(BUNDLE);
+  });
+
+  test('refresh applies to roots only, and composes with an explicit model flag', async () => {
+    let live: SessionTeamBundle = BUNDLE;
+    const h = makeHarness({ current: () => live });
+    h.setGetResponse({
+      data: {
+        id: 'child',
+        parentID: 'root',
+        location: { directory: DIRECTORY },
+      },
+    });
+    h.storage.set(storageKey('child'), {
+      schemaVersion: 1,
+      parentID: 'root',
+      bundle: BUNDLE,
+      selection: 'default',
+    });
+    live = { ...BUNDLE, presetName: 'next' };
+    expect((await h.presets.ensure('child'))?.bundle).toEqual(BUNDLE);
+
+    h.setGetResponse({
+      data: { id: 'root', location: { directory: DIRECTORY } },
+    });
+    h.storage.set(storageKey('root'), {
+      schemaVersion: 1,
+      bundle: BUNDLE,
+      selection: 'default',
+    });
+    const record = await h.presets.ensure('root', undefined, true);
+    expect(record?.bundle).toEqual(live);
+    expect(record?.explicitModel).toBe(true);
+    expect(record?.preserveModel).toBe(true);
+  });
+
+  test('a root keeps its snapshot while the live config is a fallback', async () => {
+    let live: SessionTeamBundle = BUNDLE;
+    let fallback = false;
+    const h = makeHarness({
+      current: () => live,
+      currentIsFallback: () => fallback,
+    });
+    h.setGetResponse({
+      data: { id: 'root', location: { directory: DIRECTORY } },
+    });
+    await h.presets.ensure('root');
+    live = { ...BUNDLE, presetName: 'broken-fallback' };
+    fallback = true;
+    expect((await h.presets.ensure('root'))?.bundle).toEqual(BUNDLE);
+    fallback = false;
+    expect((await h.presets.ensure('root'))?.bundle).toEqual(live);
+  });
+
+  test('a default root refresh rejects non-JSON live config instead of sanitizing it', async () => {
+    let live: SessionTeamBundle = BUNDLE;
+    const h = makeHarness({ current: () => live });
+    h.setGetResponse({
+      data: { id: 'root', location: { directory: DIRECTORY } },
+    });
+    await h.presets.ensure('root');
+    live = {
+      ...BUNDLE,
+      profiles: {
+        explorer: { sidebarModel: 'openai/gpt-5-nano', limit: Infinity },
+      },
+    } as unknown as SessionTeamBundle;
+    await expect(h.presets.ensure('root')).rejects.toThrow('not JSON');
   });
 
   test('legacy records without selection read as explicit without an eager rewrite', async () => {

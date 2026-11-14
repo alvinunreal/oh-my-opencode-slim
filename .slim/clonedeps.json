@@ -31,9 +31,9 @@
     },
     {
       "name": "anomalyco/opencode",
-      "resolvedVersion": "v2.2.0",
+      "resolvedVersion": "v2.3.0",
       "repoUrl": "https://github.com/anomalyco/opencode.git",
-      "ref": "v2.2.0@1097e2668b1e08ad63bdf0b1c4860b9bc01e420c",
+      "ref": "v2.3.0@a6b15d33daf6ab7d35569f6d711fdb630b9f04e7",
       "path": ".slim/clonedeps/repos/opencode",
       "packagePath": ".",
       "reason": "OpenCode v2 TypeScript runtime source (split into packages/core, packages/server, packages/plugin, packages/sdk, packages/client) with background subagent support."

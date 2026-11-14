@@ -1,5 +1,5 @@
 import { AGENT_ALIASES } from '../config/constants';
-import { CUSTOM_SKILLS } from './custom-skills';
+import { CUSTOM_SKILLS } from './custom-skills-registry';
 
 /**
  * Names of the skills an agent is granted by default when no explicit

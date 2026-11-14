@@ -1,7 +1,12 @@
 import * as fs from 'node:fs';
 import { stripComments } from 'jsonc-parser';
 import { z } from 'zod';
+import {
+  UnsupportedHostConfigError,
+  validateExplicitHostConfig,
+} from '../config/feature-gates';
 import { parseJsonConfigText } from '../config/jsonc';
+import { repairLegacyExplorerMcps } from '../config/legacy-preset-defaults';
 import {
   findPluginConfigPaths,
   interpolateEnvironmentVariables,
@@ -19,7 +24,6 @@ import {
   type PluginConfig,
   PluginConfigSchema,
 } from '../config/schema';
-import { findOpenCode } from './system';
 
 export type DoctorArgs = {
   json?: boolean;
@@ -51,7 +55,7 @@ type ConfigCheckResult = {
   config?: PluginConfig;
   warnings?: string[];
   error?: {
-    kind: 'invalid-json' | 'invalid-schema' | 'read-error';
+    kind: 'invalid-json' | 'invalid-schema' | 'unsupported-host' | 'read-error';
     message: string;
     issues?: z.ZodIssue[];
   };
@@ -109,6 +113,7 @@ function collectMultiplexerIssues(rawConfig: unknown): z.ZodIssue[] {
 function checkConfigFile(
   scope: 'user' | 'project',
   configPath: string | null,
+  hostFlavor: string | undefined,
 ): ConfigCheckResult {
   if (configPath === null) {
     return { scope, path: null, exists: false, ok: true };
@@ -136,6 +141,7 @@ function checkConfigFile(
     const rawConfig = parseJsonConfigText(
       interpolateEnvironmentVariables(stripComments(content)),
     );
+    validateExplicitHostConfig(rawConfig, hostFlavor);
     // Normalize disabled_* keys exactly like the loader does before schema
     // validation, so a string value (e.g. "explorer") is not diagnosed as a
     // false invalid-schema error. Report each normalization to the user.
@@ -145,6 +151,7 @@ function checkConfigFile(
     const warn = (message: string) => warnings.push(message);
     stripRemovedConfigKeys(rawConfig, warn);
     stripRemovedDisabledValues(rawConfig, warn);
+    repairLegacyExplorerMcps(rawConfig, warn);
     normalizeDisabledArrayKeys(rawConfig, warn);
     reportUnknownCouncilKeys(rawConfig, warn);
     const parseResult = PluginConfigSchema.safeParse(rawConfig);
@@ -217,7 +224,10 @@ function checkConfigFile(
       exists: true,
       ok: false,
       error: {
-        kind: 'read-error',
+        kind:
+          err instanceof UnsupportedHostConfigError
+            ? 'unsupported-host'
+            : 'read-error',
         message: err instanceof Error ? err.message : String(err),
       },
     };
@@ -263,16 +273,16 @@ function checkPreset(
   return { preset: presetName, ok: true };
 }
 
-export function runDoctorCheck(cwd: string): DoctorResult {
+export function runDoctorCheck(cwd: string, hostFlavor = 'v2'): DoctorResult {
   const { userConfigPath, projectConfigPaths } = findPluginConfigPaths(
     cwd,
-    findOpenCode()?.hostFlavor,
+    hostFlavor,
   );
 
-  const userCheck = checkConfigFile('user', userConfigPath);
+  const userCheck = checkConfigFile('user', userConfigPath, hostFlavor);
   const projectChecks = (
     projectConfigPaths.length > 0 ? projectConfigPaths : [null]
-  ).map((configPath) => checkConfigFile('project', configPath));
+  ).map((configPath) => checkConfigFile('project', configPath, hostFlavor));
   const configs = [userCheck, ...projectChecks];
 
   const hasInvalidConfig = configs.some((c) => !c.ok);
@@ -320,6 +330,8 @@ function formatHumanDoctorResult(result: DoctorResult): string {
           for (const line of config.error.message.split('\n')) {
             lines.push(`  ${line}`);
           }
+        } else if (config.error.kind === 'unsupported-host') {
+          lines.push(`  ${config.error.message}`);
         } else if (config.error.kind === 'read-error') {
           lines.push(`  Read error: ${config.error.message}`);
         }

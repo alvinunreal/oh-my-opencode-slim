@@ -1,15 +1,12 @@
 /**
  * v2 TUI implementation (`./tui` entry → `dist/tui2.js` via `./tui.ts`).
  *
- * Composes the existing dual-contract TUI plugin (`../tui`): the v1 `tui`
- * field of the composition is re-exported so v1 hosts keep the exact sidebar
- * registration, while the v2 `setup` is extended with the `/preset` keymap
- * flow — v2 hosts get the sidebar plus the same three-level preset manager
- * the v1 TUI has (see `./preset-manager`), reached from `/preset` or the
- * sidebar's preset row; `/preset <name>` is the direct fast path that binds
- * the preset to the session on screen through the session-preset RPC (the
- * same result as the manager's Current session action). The global default is
- * configuration, not a command effect.
+ * Composes the V2 TUI setup from `../tui` and adds the `/preset` keymap flow:
+ * the sidebar plus the three-level preset manager (see `./preset-manager`),
+ * reached from `/preset` or the sidebar's preset row. `/preset <name>` is the
+ * direct fast path that binds the preset to the session on screen through the
+ * session-preset RPC (the same result as the manager's Current session
+ * action). The global default is configuration, not a command effect.
  *
  * Loaded only by the thin entry (`./tui.ts`) after the config gate passes, so
  * `tui: false` never evaluates this module's render stack.
@@ -114,10 +111,15 @@ function currentSessionID(ctx: V2PresetTuiContext): string | undefined {
  * session-preset RPC — the same result as the manager's Current session
  * action, and no restart. Neither path writes the global default. Never
  * throws — failures are surfaced as a toast and logged.
+ *
+ * When session-scoped preset routing is off (`backgroundJobs.mode: off`),
+ * `/preset <name>` is refused with a clear message; bare `/preset` still
+ * opens the manager for global preset editing.
  */
 export async function runPresetFlow(
   ctx: V2PresetTuiContext,
   presetArg?: string,
+  presetRoutingEnabled = true,
 ): Promise<void> {
   const directory = ctx.location?.directory ?? process.cwd();
   const toast = (message: string) => {
@@ -129,6 +131,13 @@ export async function runPresetFlow(
   try {
     const requested = presetArg?.trim();
     if (requested) {
+      if (!presetRoutingEnabled) {
+        toast(
+          `Session preset binding is unavailable: backgroundJobs.mode is "off". ` +
+            `Use bare /preset to open the manager and edit global presets.`,
+        );
+        return;
+      }
       const sessionID = currentSessionID(ctx);
       if (sessionID === undefined) {
         toast(
@@ -155,6 +164,7 @@ export async function runPresetFlow(
     managerCtx.getSessionID = () => currentSessionID(ctx);
     managerCtx.onConfigChanged = () =>
       notifyConfigChanged(directory, '/preset-manager');
+    managerCtx.presetRoutingEnabled = presetRoutingEnabled;
     await openPresetManagerV2(managerCtx, directory);
   } catch (err) {
     log('[v2][tui] preset flow failed', String(err));
@@ -186,7 +196,8 @@ function buildPresetLayer(
               group: 'System',
               palette: true,
               slash: { name: 'preset', arguments: true },
-              run: (input?: string) => void runPresetFlow(ctx, input),
+              run: (input?: string) =>
+                void runPresetFlow(ctx, input, gates.presetRouting),
             },
           ]
         : []),
@@ -312,13 +323,24 @@ interface V2CommandGates {
   preset: boolean;
   killall: boolean;
   subagent: boolean;
+  /**
+   * Session-scoped preset binding.
+   * False when `backgroundJobs.mode` is `off`; global editing remains
+   * available via the manager. Never disables the `/preset` keymap command
+   * itself — the manager still opens for global edits.
+   */
+  presetRouting: boolean;
 }
 
-function commandGates(disabledCommands: ReadonlySet<string>): V2CommandGates {
+function commandGates(
+  disabledCommands: ReadonlySet<string>,
+  gatesSnapshot: { presetRouting: boolean },
+): V2CommandGates {
   return {
     preset: isCommandEnabled('preset', { disabledCommands }),
     killall: isCommandEnabled('killall', { disabledCommands }),
     subagent: isCommandEnabled('subagent', { disabledCommands }),
+    presetRouting: gatesSnapshot.presetRouting,
   };
 }
 
@@ -358,7 +380,10 @@ export async function runSetup(
     // `disabled_commands` gates the TUI entry exactly like it gates the
     // server command: a disabled command's palette/slash/keybind does not
     // exist anywhere.
-    const gates = commandGates(gatesRead.gates.disabledCommands);
+    const gates = commandGates(
+      gatesRead.gates.disabledCommands,
+      gatesRead.gates,
+    );
 
     const slotApi = (ctx.ui as { slot?: V2SlotApi } | undefined)?.slot;
     if (typeof slotApi !== 'function') {
@@ -415,5 +440,3 @@ export async function runSetup(
     throw error;
   }
 }
-
-export const tui = omoTui.tui;

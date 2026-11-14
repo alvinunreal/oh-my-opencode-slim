@@ -11,13 +11,6 @@ export function isNoRouteAnchor(type: unknown, status: unknown): boolean {
   );
 }
 
-// shortcut: v2 exposes only error text here, use structured errors if the host adds them.
-export function isNoRouteFailureMessage(message: string): boolean {
-  return /^(?:Model unavailable: |Variant unavailable for |Unsupported package for |Cannot initialize |No model is available for session )/.test(
-    message,
-  );
-}
-
 export function noRouteModel(message: string): string | undefined {
   return (
     /^Model unavailable: (.+?)(?:\. This provider has been deprecated;.*)?$/.exec(

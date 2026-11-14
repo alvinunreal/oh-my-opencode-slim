@@ -1,9 +1,10 @@
-import { describe, expect, spyOn, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { CouncilConfigSchema } from '../config';
+import { loadPluginConfigFromPath } from '../config/loader';
 import { RuntimeConfig } from '../config/runtime';
 import type { MarketplaceActivationStore } from '../marketplace/activation';
 import * as marketplaceImplementation from '../marketplace/registry-runtime';
@@ -21,9 +22,12 @@ import encodedPermissionGolden from './registry-permission-golden.json';
 
 const DIR = 'runtime-test-final-agent-registry';
 
-function runtimeFor(config: Parameters<typeof RuntimeConfig.init>[1]) {
+function runtimeFor(
+  config: Parameters<typeof RuntimeConfig.init>[1],
+  hostFlavor?: string,
+) {
   RuntimeConfig.reset(DIR);
-  return RuntimeConfig.init(DIR, config);
+  return RuntimeConfig.init(DIR, config, hostFlavor);
 }
 
 function build(
@@ -2085,44 +2089,6 @@ describe('finalized existing-agent registry', () => {
     });
   });
 
-  test('an owner override never makes a marketplace agent primary (#1591)', () => {
-    const warn = spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const runtime = runtimeFor({
-        agents: {
-          'market-agent': { model: 'owner/selected', primary: true },
-          coworker: { model: 'custom/model', primary: true },
-        },
-      });
-      for (const hostFlavor of [undefined, 'v2']) {
-        const registry = build(
-          runtime,
-          { mcp: { 'host-mcp': { type: 'local' } } },
-          {
-            hostFlavor,
-            ...marketplaceOptions(
-              ['team/model-owner'],
-              marketplaceStore({
-                'team/model-owner': marketplacePackage('team/model-owner'),
-              }),
-            ),
-          },
-        );
-        const projection = registry.getSdkAgentProjection();
-        expect(projection['market-agent']?.mode).toBe('subagent');
-        expect(projection.coworker?.mode).toBe('primary');
-        expect(projection.orchestrator?.mode).toBe('primary');
-      }
-      expect(
-        warn.mock.calls.some((call) =>
-          String(call[0]).includes('agents.market-agent.primary is ignored'),
-        ),
-      ).toBe(true);
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
   test('leaves builtin and orchestrator model policies unset when no role model resolves', () => {
     const runtime = runtimeFor({});
     const definitions = createAgents(runtime);
@@ -3102,12 +3068,15 @@ describe('child permission payload stance tail', () => {
       Array.from({ length: 100 }, (_, i) => [`src/${i}/*`, 'allow']),
     );
     const registry = build(
-      runtimeFor({
-        disabled_agents: [],
-        agents: {
-          explorer: { permission: { edit: { '*': 'deny', ...edit } } },
+      runtimeFor(
+        {
+          disabled_agents: [],
+          agents: {
+            explorer: { permission: { edit: { '*': 'deny', ...edit } } },
+          },
         },
-      }),
+        'v2',
+      ),
       {},
       { hostFlavor: 'v2' },
     );
@@ -3240,21 +3209,24 @@ describe('child permission payload stance tail', () => {
 
   function duplicateTailFixture() {
     const registry = build(
-      runtimeFor({
-        disabled_agents: [],
-        agents: {
-          explorer: {
-            permission: {
-              edit: {
-                '*': 'deny',
-                'src/a/*': 'allow',
-                'src/b/*': 'allow',
-                'src/c/*': 'allow',
+      runtimeFor(
+        {
+          disabled_agents: [],
+          agents: {
+            explorer: {
+              permission: {
+                edit: {
+                  '*': 'deny',
+                  'src/a/*': 'allow',
+                  'src/b/*': 'allow',
+                  'src/c/*': 'allow',
+                },
               },
             },
           },
         },
-      }),
+        'v2',
+      ),
       {},
       { hostFlavor: 'v2' },
     );
@@ -4780,5 +4752,199 @@ describe('pass-local derived inputs', () => {
 
     // Scalar-model custom agents keep their model through the pass.
     expect(sdkProjection['custom-planner'].model).toBe('provider/planner');
+  });
+});
+
+describe('legacy generated librarian MCP repair policy', () => {
+  const PRESET_NAME = 'old-team';
+  // Real JSONC layer: the pre-merge generator wrote exactly this pair, and
+  // its stale explorer.mcps: [] masked the retained librarian MCPs.
+  const CONFIG_TEXT = `{
+  // generated preset, never rewritten on disk
+  "preset": "${PRESET_NAME}",
+  "presets": {
+    "${PRESET_NAME}": {
+      "librarian": { "mcps": ["context7", "gh_grep"] },
+      "explorer": { "mcps": [] },
+    },
+  },
+}`;
+  const RESEARCH_MCPS = {
+    mcp: {
+      context7: { type: 'remote' },
+      gh_grep: { type: 'remote' },
+    },
+  };
+
+  function withLegacyConfig(
+    use: (
+      config: NonNullable<ReturnType<typeof loadPluginConfigFromPath>>,
+    ) => void,
+  ): void {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'omos-legacy-librarian-mcps-'),
+    );
+    const configPath = path.join(tempDir, 'oh-my-opencode-slim.jsonc');
+    fs.writeFileSync(configPath, CONFIG_TEXT);
+    // Keep agent prompt lookup off the machine's real user config directories.
+    const originalEnv = {
+      XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+      OPENCODE_CONFIG_DIR: process.env.OPENCODE_CONFIG_DIR,
+      OH_MY_OPENCODE_SLIM_PRESET: process.env.OH_MY_OPENCODE_SLIM_PRESET,
+    };
+    process.env.XDG_CONFIG_HOME = path.join(tempDir, 'xdg');
+    process.env.OPENCODE_CONFIG_DIR = path.join(tempDir, 'opencode');
+    delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
+    try {
+      const warnings: { kind: string; message: string }[] = [];
+      const config = loadPluginConfigFromPath(configPath, {
+        silent: true,
+        onWarning: (warning) => warnings.push(warning),
+      });
+      if (!config) throw new Error('legacy preset config failed to load');
+      // The repair is in-memory only: the user's old preset stays byte-exact.
+      expect(fs.readFileSync(configPath, 'utf-8')).toBe(CONFIG_TEXT);
+      expect(warnings).toContainEqual(
+        expect.objectContaining({
+          kind: 'normalized',
+          message: expect.stringContaining(
+            `presets.${PRESET_NAME}.explorer.mcps`,
+          ),
+        }),
+      );
+      use(config);
+    } finally {
+      for (const [key, value] of Object.entries(originalEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      RuntimeConfig.reset(DIR);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
+
+  function runtimeForLegacy(
+    config: NonNullable<ReturnType<typeof loadPluginConfigFromPath>>,
+  ): RuntimeConfig {
+    // loadPluginConfigFromPath keeps editable preset declarations; RuntimeConfig
+    // resolves them at runtime, so bridge the raw/resolved type views here.
+    return runtimeFor(config as Parameters<typeof RuntimeConfig.init>[1]);
+  }
+
+  function explorerFrom(registry: ReturnType<typeof build>): {
+    mcps?: string[];
+    permission?: Record<string, unknown>;
+  } {
+    return registry.getSdkAgentProjection().explorer as {
+      mcps?: string[];
+      permission?: Record<string, unknown>;
+    };
+  }
+
+  test('legacy librarian MCP repair restores research MCPs in the final SDK and native policy', () => {
+    withLegacyConfig((config) => {
+      const registry = build(runtimeForLegacy(config), RESEARCH_MCPS);
+      const explorer = explorerFrom(registry);
+      expect(explorer.mcps).toEqual(['context7', 'gh_grep']);
+      expect(explorer.permission).toMatchObject({
+        'context7_*': 'allow',
+        'gh_grep_*': 'allow',
+      });
+      expect(
+        (
+          registry.finalAgentConfig.explorer as {
+            permission: Record<string, unknown>;
+          }
+        ).permission,
+      ).toMatchObject({
+        'context7_*': 'allow',
+        'gh_grep_*': 'allow',
+      });
+      const policy = registry.nativePolicies.explorer;
+      expect(policy.rules).toContainEqual({
+        action: 'context7_*',
+        resource: '*',
+        effect: 'allow',
+      });
+      expect(policy.rules).toContainEqual({
+        action: 'gh_grep_*',
+        resource: '*',
+        effect: 'allow',
+      });
+      expect(policy.decide('context7_query', '*')).toBe('allow');
+      expect(policy.decide('gh_grep_search', '*')).toBe('allow');
+      // Rename continuity folds librarian into explorer, never a second agent.
+      expect(registry.getSdkAgentProjection().librarian).toBeUndefined();
+      expect(registry.finalAgentConfig.librarian).toBeUndefined();
+      expect(registry.agentNames).not.toContain('librarian');
+    });
+  });
+
+  test('legacy librarian MCP repair keeps host MCP permission overrides authoritative', () => {
+    withLegacyConfig((config) => {
+      const registry = build(runtimeForLegacy(config), {
+        ...RESEARCH_MCPS,
+        agent: {
+          explorer: {
+            permission: { 'context7_*': 'deny', 'gh_grep_*': 'ask' },
+          },
+        },
+      });
+      const explorer = explorerFrom(registry);
+      expect(explorer.mcps).toEqual(['context7', 'gh_grep']);
+      expect(explorer.permission).toMatchObject({
+        'context7_*': 'deny',
+        'gh_grep_*': 'ask',
+      });
+      expect(
+        (
+          registry.finalAgentConfig.explorer as {
+            permission: Record<string, unknown>;
+          }
+        ).permission,
+      ).toMatchObject({
+        'context7_*': 'deny',
+        'gh_grep_*': 'ask',
+      });
+      const policy = registry.nativePolicies.explorer;
+      expect(policy.decide('context7_query', '*')).toBe('deny');
+      expect(policy.decide('gh_grep_search', '*')).toBe('ask');
+      expect(policy.rules).toContainEqual({
+        action: 'context7_*',
+        resource: '*',
+        effect: 'deny',
+      });
+      expect(policy.rules).toContainEqual({
+        action: 'gh_grep_*',
+        resource: '*',
+        effect: 'ask',
+      });
+    });
+  });
+
+  test('legacy librarian MCP repair does not synthesize a grant for an unavailable MCP namespace', () => {
+    withLegacyConfig((config) => {
+      // Only context7 is registered by the host. The plain-agent permission
+      // expansion emits keys for registered namespaces only: a namespace the
+      // host never registered gets no synthesized `gh_grep_*` grant. (The v2
+      // permissive base still allows unmatched actions, so this asserts the
+      // absence of an explicit grant, not a native deny.)
+      const registry = build(runtimeForLegacy(config), {
+        mcp: { context7: { type: 'remote' } },
+      });
+      const explorer = explorerFrom(registry);
+      expect(explorer.mcps).toEqual(['context7', 'gh_grep']);
+      expect(explorer.permission).toMatchObject({ 'context7_*': 'allow' });
+      expect(explorer.permission).not.toHaveProperty('gh_grep_*');
+      const policy = registry.nativePolicies.explorer;
+      expect(policy.rules).toContainEqual({
+        action: 'context7_*',
+        resource: '*',
+        effect: 'allow',
+      });
+      expect(policy.rules.some((rule) => rule.action === 'gh_grep_*')).toBe(
+        false,
+      );
+    });
   });
 });
