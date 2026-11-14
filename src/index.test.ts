@@ -18,7 +18,7 @@ import * as os from 'node:os';
 import path from 'node:path';
 import * as promiseTimers from 'node:timers/promises';
 import type { RegistryFactoryBridge } from './agents/registry-bridge';
-import { withTuiAttachment } from './companion/attachment-test-helper.test';
+import { withTuiAttachment } from './companion/attachment-test-helper';
 import { CompanionManager, stateFilePath } from './companion/manager';
 import * as companionUpdater from './companion/updater';
 import {

@@ -350,9 +350,9 @@ function modelsFromAgentList(response: unknown): Record<string, string> {
  * see, so every model renders as "pending". Resolve agent models through
  * the host SDK instead. Only fills gaps — local snapshot entries win.
  *
- * Legacy client shape: `app.agents({ directory })` with
- * `{ name, model: { providerID, modelID } }`.
- * V2 client shape: `agent.list({ location: { directory } })` or
+ * v1 TUI (`api.client`, `@opencode-ai/sdk/v2`): `app.agents({ directory })`
+ * with `{ name, model: { providerID, modelID } }`.
+ * v2 TUI: `agent.list({ location: { directory } })` or
  * `v2.agent.list(...)` with `{ id, model: { providerID, id } }`.
  */
 export async function fetchRemoteAgentModels(
