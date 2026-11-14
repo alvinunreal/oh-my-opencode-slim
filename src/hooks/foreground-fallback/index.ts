@@ -2194,49 +2194,9 @@ export class ForegroundFallbackManager {
         this.handleMessagePartUpdated(event);
         break;
 
-      case 'session.error': {
-        const props = event.properties as
-          | { sessionID?: string; info?: { id?: string }; error?: unknown }
-          | undefined;
-        if (!props) break;
-        const sessionID = eventSessionID(props);
-        if (
-          !this.enabled ||
-          !sessionID ||
-          !props.error ||
-          (this.separateCompaction.get(sessionID)?.active &&
-            (!props.info?.id ||
-              props.info.id ===
-                this.separateCompaction.get(sessionID)?.messageID)) ||
-          !isFailoverError(props.error)
-        ) {
-          break;
-        }
-        const incidentID = this.incidentForSessionError(
-          sessionID,
-          typeof props.info?.id === 'string' ? props.info.id : undefined,
-          props.error,
-        );
-        if (
-          this.surfacesSpentQuota(sessionID, props.error, undefined, incidentID)
-        ) {
-          break;
-        }
-        if (this.bypassInitialFallbackDelay(sessionID, props.error)) {
-          await this.tryFallback(sessionID, props.error, incidentID);
-        } else if (
-          !this.delayInitialFallback(
-            sessionID,
-            false,
-            undefined,
-            props.error,
-            incidentID,
-          )
-        ) {
-          await this.tryFallback(sessionID, props.error, incidentID);
-        }
+      case 'session.error':
+        await this.handleSessionError(event);
         break;
-      }
 
       case 'session.status': {
         const props = event.properties as
@@ -2501,6 +2461,51 @@ export class ForegroundFallbackManager {
       typeof part.messageID === 'string'
     ) {
       this.rememberUserMessage(part.sessionID, part.messageID);
+    }
+  }
+
+  private async handleSessionError(event: {
+    properties?: unknown;
+  }): Promise<void> {
+    const props = event.properties as
+      | { sessionID?: string; info?: { id?: string }; error?: unknown }
+      | undefined;
+    if (!props) return;
+    const sessionID = eventSessionID(props);
+    if (
+      !this.enabled ||
+      !sessionID ||
+      !props.error ||
+      (this.separateCompaction.get(sessionID)?.active &&
+        (!props.info?.id ||
+          props.info.id ===
+            this.separateCompaction.get(sessionID)?.messageID)) ||
+      !isFailoverError(props.error)
+    ) {
+      return;
+    }
+    const incidentID = this.incidentForSessionError(
+      sessionID,
+      typeof props.info?.id === 'string' ? props.info.id : undefined,
+      props.error,
+    );
+    if (
+      this.surfacesSpentQuota(sessionID, props.error, undefined, incidentID)
+    ) {
+      return;
+    }
+    if (this.bypassInitialFallbackDelay(sessionID, props.error)) {
+      await this.tryFallback(sessionID, props.error, incidentID);
+    } else if (
+      !this.delayInitialFallback(
+        sessionID,
+        false,
+        undefined,
+        props.error,
+        incidentID,
+      )
+    ) {
+      await this.tryFallback(sessionID, props.error, incidentID);
     }
   }
 
