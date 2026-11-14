@@ -1,7 +1,7 @@
 /// <reference types="bun-types" />
 
 import { describe, expect, test } from 'bun:test';
-import { CUSTOM_SKILLS } from './custom-skills';
+import { CUSTOM_SKILLS } from './custom-skills-registry';
 import { generateLiteConfig, MODEL_MAPPINGS } from './providers';
 
 describe('providers', () => {

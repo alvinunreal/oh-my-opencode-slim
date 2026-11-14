@@ -614,6 +614,44 @@ export function createDashboardServer(config: DashboardConfig): {
 
   // ─── Request Handler ─────────────────────────────────────────────
 
+  // Keeps auth before validation and lookup so error responses stay stable.
+  async function requireInterview(
+    request: IncomingMessage,
+    response: ServerResponse,
+    pathname: string,
+    suffix: string,
+  ): Promise<
+    | { interviewId: string; entry: InterviewStateEntry; body: unknown }
+    | undefined
+  > {
+    if (!isAuthenticated(request)) {
+      sendJson(response, 401, { error: 'Unauthorized' });
+      return undefined;
+    }
+    const interviewId = pathname
+      .replace('/api/interviews/', '')
+      .replace(suffix, '');
+    if (!isValidId(interviewId)) {
+      sendJson(response, 400, { error: 'Invalid interview ID' });
+      return undefined;
+    }
+    const entry = stateCache.get(interviewId);
+    if (!entry) {
+      sendJson(response, 404, { error: 'Interview not found' });
+      return undefined;
+    }
+    let body: unknown;
+    if (request.method === 'POST') {
+      try {
+        body = await readJsonBody(request);
+      } catch {
+        sendJson(response, 400, { error: 'Invalid JSON' });
+        return undefined;
+      }
+    }
+    return { interviewId, entry, body };
+  }
+
   async function handleRequest(
     request: IncomingMessage,
     response: ServerResponse,
@@ -1147,26 +1185,14 @@ export function createDashboardServer(config: DashboardConfig): {
       pathname.startsWith('/api/interviews/') &&
       pathname.endsWith('/answers')
     ) {
-      const interviewId = pathname
-        .replace('/api/interviews/', '')
-        .replace('/answers', '');
-      if (!isValidId(interviewId)) {
-        sendJson(response, 400, { error: 'Invalid interview ID' });
-        return;
-      }
-      const entry = stateCache.get(interviewId);
-      if (!entry) {
-        sendJson(response, 404, { error: 'Interview not found' });
-        return;
-      }
-
-      let body: unknown;
-      try {
-        body = await readJsonBody(request);
-      } catch {
-        sendJson(response, 400, { error: 'Invalid JSON' });
-        return;
-      }
+      const found = await requireInterview(
+        request,
+        response,
+        pathname,
+        '/answers',
+      );
+      if (!found) return;
+      const { interviewId, entry, body } = found;
 
       const { answers } = body as {
         answers?: Array<{ questionId: string; answer: string }>;
@@ -1210,30 +1236,14 @@ export function createDashboardServer(config: DashboardConfig): {
       pathname.startsWith('/api/interviews/') &&
       pathname.endsWith('/block-comment')
     ) {
-      if (!isAuthenticated(request)) {
-        sendJson(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      const interviewId = pathname
-        .replace('/api/interviews/', '')
-        .replace('/block-comment', '');
-      if (!isValidId(interviewId)) {
-        sendJson(response, 400, { error: 'Invalid interview ID' });
-        return;
-      }
-      const entry = stateCache.get(interviewId);
-      if (!entry) {
-        sendJson(response, 404, { error: 'Interview not found' });
-        return;
-      }
-
-      let body: unknown;
-      try {
-        body = await readJsonBody(request);
-      } catch {
-        sendJson(response, 400, { error: 'Invalid JSON' });
-        return;
-      }
+      const found = await requireInterview(
+        request,
+        response,
+        pathname,
+        '/block-comment',
+      );
+      if (!found) return;
+      const { interviewId, entry, body } = found;
 
       const { section, comment } = body as {
         section?: string;
@@ -1267,22 +1277,14 @@ export function createDashboardServer(config: DashboardConfig): {
       pathname.startsWith('/api/interviews/') &&
       pathname.endsWith('/block-comment')
     ) {
-      if (!isAuthenticated(request)) {
-        sendJson(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      const interviewId = pathname
-        .replace('/api/interviews/', '')
-        .replace('/block-comment', '');
-      if (!isValidId(interviewId)) {
-        sendJson(response, 400, { error: 'Invalid interview ID' });
-        return;
-      }
-      const entry = stateCache.get(interviewId);
-      if (!entry) {
-        sendJson(response, 404, { error: 'Interview not found' });
-        return;
-      }
+      const found = await requireInterview(
+        request,
+        response,
+        pathname,
+        '/block-comment',
+      );
+      if (!found) return;
+      const { interviewId, entry } = found;
       const val = entry.pendingBlockComment
         ? {
             claimId: getOrCreateClaim(interviewId, 'block-comment').claimId,
@@ -1300,30 +1302,14 @@ export function createDashboardServer(config: DashboardConfig): {
       pathname.startsWith('/api/interviews/') &&
       pathname.endsWith('/chat')
     ) {
-      if (!isAuthenticated(request)) {
-        sendJson(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      const interviewId = pathname
-        .replace('/api/interviews/', '')
-        .replace('/chat', '');
-      if (!isValidId(interviewId)) {
-        sendJson(response, 400, { error: 'Invalid interview ID' });
-        return;
-      }
-      const entry = stateCache.get(interviewId);
-      if (!entry) {
-        sendJson(response, 404, { error: 'Interview not found' });
-        return;
-      }
-
-      let body: unknown;
-      try {
-        body = await readJsonBody(request);
-      } catch {
-        sendJson(response, 400, { error: 'Invalid JSON' });
-        return;
-      }
+      const found = await requireInterview(
+        request,
+        response,
+        pathname,
+        '/chat',
+      );
+      if (!found) return;
+      const { interviewId, entry, body } = found;
 
       const { message } = body as { message?: string };
       if (typeof message !== 'string' || !message.trim()) {
@@ -1354,22 +1340,14 @@ export function createDashboardServer(config: DashboardConfig): {
       pathname.startsWith('/api/interviews/') &&
       pathname.endsWith('/chat')
     ) {
-      if (!isAuthenticated(request)) {
-        sendJson(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      const interviewId = pathname
-        .replace('/api/interviews/', '')
-        .replace('/chat', '');
-      if (!isValidId(interviewId)) {
-        sendJson(response, 400, { error: 'Invalid interview ID' });
-        return;
-      }
-      const entry = stateCache.get(interviewId);
-      if (!entry) {
-        sendJson(response, 404, { error: 'Interview not found' });
-        return;
-      }
+      const found = await requireInterview(
+        request,
+        response,
+        pathname,
+        '/chat',
+      );
+      if (!found) return;
+      const { interviewId, entry } = found;
       const val = entry.pendingChatMessage
         ? {
             claimId: getOrCreateClaim(interviewId, 'chat').claimId,
@@ -1421,31 +1399,14 @@ export function createDashboardServer(config: DashboardConfig): {
       pathname.startsWith('/api/interviews/') &&
       pathname.endsWith('/nudge')
     ) {
-      if (!isAuthenticated(request)) {
-        sendJson(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-
-      const interviewId = pathname
-        .replace('/api/interviews/', '')
-        .replace('/nudge', '');
-      if (!isValidId(interviewId)) {
-        sendJson(response, 400, { error: 'Invalid interview ID' });
-        return;
-      }
-      const entry = stateCache.get(interviewId);
-      if (!entry) {
-        sendJson(response, 404, { error: 'Interview not found' });
-        return;
-      }
-
-      let body: unknown;
-      try {
-        body = await readJsonBody(request);
-      } catch {
-        sendJson(response, 400, { error: 'Invalid JSON' });
-        return;
-      }
+      const found = await requireInterview(
+        request,
+        response,
+        pathname,
+        '/nudge',
+      );
+      if (!found) return;
+      const { interviewId, entry, body } = found;
 
       const { action } = body as {
         action?: 'more-questions' | 'confirm-complete';

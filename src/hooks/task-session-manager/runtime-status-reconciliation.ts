@@ -7,7 +7,7 @@ import {
 import { log } from '../../utils/logger';
 import { getRuntimeSessionStatusSnapshot } from '../../utils/session-runtime-status';
 
-export const RUNTIME_STATUS_RECONCILE_DELAY_MS = 5_000;
+const RUNTIME_STATUS_RECONCILE_DELAY_MS = 5_000;
 
 /** Batching, cadence and capability detection only; no terminal policy. */
 export function createRuntimeStatusReconciler(options: {

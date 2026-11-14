@@ -74,7 +74,9 @@ On v2, `/preset` → **Current session** resolves the selected preset through th
 same merge — root `agents.*` entries still take precedence — and saves those
 resolved settings for future delegations in that session. `/preset <name>` does
 the same for the session on screen; **Global default** (or editing `preset` in
-configuration) changes the default for future session bindings instead.
+configuration) changes the default for future bindings and refreshes
+default-bound roots on their next admission; named-preset bindings stay pinned
+until explicitly reapplied.
 
 ---
 

@@ -4,6 +4,7 @@ import { stripComments } from 'jsonc-parser';
 import { DEFAULT_DISABLED_AGENTS } from './constants';
 import { COUNCIL_CONFIG_KEYS } from './council-schema';
 import { parseJsonConfigText } from './jsonc';
+import { repairLegacyExplorerMcps } from './legacy-preset-defaults';
 import { getConfigSearchDirs } from './paths';
 import type { ResolvedPresetMap } from './presets';
 import {
@@ -481,6 +482,12 @@ export function loadRawPluginConfigFromPath(
     // before the value enum rejects the whole file, reported per value.
     stripRemovedDisabledValues(rawConfig, (message) =>
       emitWarning('removed-key', message),
+    );
+
+    // Old generated preset pairs lose their retained librarian MCP list to the
+    // stale empty explorer override; strip only that exact raw-layer shape.
+    repairLegacyExplorerMcps(rawConfig, (message) =>
+      emitWarning('normalized', message),
     );
 
     // Normalize disabled_* config keys before schema validation so a

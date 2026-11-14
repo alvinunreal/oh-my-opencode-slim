@@ -325,6 +325,8 @@ export type V2ProfileRefreshResult =
       profiles: AgentRuntimeProfiles;
       projection: AgentModelProjection;
       bundle: SessionTeamBundle;
+      /** Resolved from the loader's fallback config, not a strict load. */
+      fallback: boolean;
     }
   | { ok: false; reason: string };
 
@@ -2898,7 +2900,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         chains,
         inheritance,
       };
-      if (options?.detached) return { ok: true, profiles, projection, bundle };
+      const fallback = blockingWarnings.length > 0;
+      if (options?.detached)
+        return { ok: true, profiles, projection, bundle, fallback };
       // Sidebar projection must land before the profiles are reported as
       // refreshed (the caller swaps only on an ok result).
       //
@@ -2944,7 +2948,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       publishChainGeneration(chains, freshRuntime, (name) =>
         runtime.hasModelSwitched(name),
       );
-      return { ok: true, profiles, projection, bundle };
+      return { ok: true, profiles, projection, bundle, fallback };
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       log('[plugin] runtime profile refresh from disk failed', reason);

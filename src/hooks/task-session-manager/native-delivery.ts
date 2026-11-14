@@ -16,10 +16,10 @@ import {
 } from '../../utils/task';
 import type { MessagePart, MessageWithParts } from '../types';
 
-export type NativeDeliveryState = 'completed' | 'error' | 'cancelled';
+type NativeDeliveryState = 'completed' | 'error' | 'cancelled';
 
 /** Delivery states the native notifier publishes (never `stopped`). */
-export const NATIVE_DELIVERY_STATES: ReadonlySet<string> = new Set([
+const NATIVE_DELIVERY_STATES: ReadonlySet<string> = new Set([
   'completed',
   'error',
   'cancelled',

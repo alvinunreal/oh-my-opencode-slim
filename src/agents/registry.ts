@@ -943,6 +943,121 @@ function combinedModelInheritanceSource(
   return override.inheritModelFrom;
 }
 
+function followsSessionWithoutScalar(
+  override: AgentOverrideConfig | undefined,
+): boolean {
+  return (
+    override?.inheritModelFrom === 'session' &&
+    (override.model === undefined || Array.isArray(override.model))
+  );
+}
+
+function fixupCouncilPrompt(prompt: string): string {
+  return ensureCouncilCompactionException(
+    ensureCouncilSynthesisReinforcement(prompt),
+  );
+}
+
+function fillMcpPermissionKeys(
+  permission: Record<string, unknown>,
+  mcps: readonly string[],
+  availableMcpNames: readonly string[],
+): void {
+  for (const mcpName of availableMcpNames) {
+    const permissionKey = `${mcpName.replace(/[^a-zA-Z0-9_-]/g, '_')}_*`;
+    if (!(permissionKey in permission)) {
+      permission[permissionKey] = parseList(mcps, availableMcpNames).includes(
+        mcpName,
+      )
+        ? 'allow'
+        : 'deny';
+    }
+  }
+}
+
+function effectiveScalars(config: Record<string, unknown>): {
+  model?: string;
+  variant?: string;
+} {
+  const model = typeof config.model === 'string' ? config.model : undefined;
+  const variant =
+    typeof config.variant === 'string' ? config.variant : undefined;
+  return {
+    ...(model ? { model } : {}),
+    ...(variant ? { variant } : {}),
+  };
+}
+
+function compileChildPermissionPolicy(
+  constraintsByAgent: Readonly<Record<string, PermissionCeilings | undefined>>,
+  denyCeilingsByAgent: Readonly<Record<string, readonly V2PermissionRule[]>>,
+  agent: string,
+  rules: readonly V2PermissionRule[],
+): readonly V2PermissionRule[] {
+  const constraints = constraintsByAgent[agent];
+  // Presence, not truthiness: a plain (non-marketplace) agent is stored as
+  // an explicit `undefined` ceiling — it has no package ceiling, but its
+  // child payload still compiles from the host rules alone.
+  if (!Object.hasOwn(constraintsByAgent, agent)) {
+    throw new Error(`child permission constraints unavailable for '${agent}'`);
+  }
+  const policy = compilePermissionPolicy({
+    // Marketplace child payloads open with the same conservative
+    // external_directory guard floor as the registered policy, so the
+    // ceiling's default-effect allow can never synthesize a grant for a
+    // child payload that never declared the guard. Non-marketplace agents
+    // have no ceilings and use the compacted host rules.
+    baselineRules: constraints ? EXTERNAL_DIRECTORY_GUARD_FLOOR : [],
+    hostRules: keepLastRules(rules),
+    ...(constraints ? { ceilings: constraints } : {}),
+  });
+  const compiled = policy.rules;
+  // The host appends the user's global (and per-agent) config rules AFTER
+  // the plugin's agent permissions (#1374), and v2 evaluates with
+  // findLast (last matching rule wins). A trailing `{'*','*',allow}` from
+  // the user's global config therefore defeats the plugin's declared
+  // denies stored earlier in the payload. One mechanism, two verified
+  // production incidents: stance-carrying children (explorer→explorer,
+  // observer→observer, oracle→explorer) spawned nested subagents despite
+  // an explicit `subagent/*:deny`, and a read-only child (explorer)
+  // completed edit/write despite the factory read-only matrix. Re-append
+  // the agent's DECLARATIVE DENY CEILING as the FINAL rules of every
+  // compiled plugin child payload so findLast always terminates on it.
+  // Derived from the same registered permission map the static policy was
+  // compiled from — never hardcoded per agent; empty for agents without
+  // declarations (the orchestrator), whose compacted payloads pass through.
+  // Input is finalized agent rules (setup.ts), not stored session rules.
+  // Recompiling stored output is not a supported contract.
+  //
+  // A deny tail is a monotone ceiling — appending it can only narrow what
+  // the host granted, so it is always safe; wildcard-action denies stay
+  // out because replaying the default floor last would erase the declared
+  // allow exceptions behind it, and each replayed deny rides with those
+  // declared exceptions (including exact actions under namespace denies).
+  // Ask rules never enter either: an appended
+  // ask parks a background child on input no one can answer. An ALLOW tail
+  // is a capability grant: appended last it would silently outrank a
+  // stricter host decision (deny/ask) for the same target — the guest
+  // plugin resurrecting a capability the user explicitly withheld. So each
+  // grant is emitted at meet(grant, host-effective): allow stays allow,
+  // ask is preserved, and deny is dropped (the deny ceiling already covers
+  // it). The meet runs over every resource the grant's pattern matches,
+  // not the pattern string alone: narrower host denies/asks inside the
+  // grant are re-appended after it (boundGrantByHost), so a broad replayed
+  // allow can never reopen a host-protected subpath.
+  // Marketplace directory guards follow finalized host order, including
+  // overrides of explicit owner denies. Replaying those denies here would
+  // make child policies disagree with the registered policy. Keep the
+  // declarative ceilings for tool, Skill, and MCP capabilities unchanged.
+  const denyCeiling = constraints
+    ? denyCeilingsByAgent[agent]?.filter(
+        (rule) => rule.action !== 'external_directory',
+      )
+    : denyCeilingsByAgent[agent];
+  if (!denyCeiling || denyCeiling.length === 0) return compiled;
+  return keepLastRules([...compiled, ...buildChildTail(compiled, denyCeiling)]);
+}
+
 /** Finalize existing agents from the actual, pre-mutation host config. */
 export function buildResolvedAgentRegistry(
   runtime: RuntimeConfig,
@@ -1228,6 +1343,15 @@ export function buildResolvedAgentRegistry(
   const childPolicyConstraints: Record<string, PermissionCeilings | undefined> =
     {};
   const childDenyCeilings: Record<string, V2PermissionRule[]> = {};
+  const recordPolicy = (
+    key: string,
+    result: ReturnType<typeof finalizeAgentPolicy>,
+  ) => {
+    const { baselineRules, ceilings, policy } = result;
+    policyMap[key] = policy;
+    childPolicyConstraints[key] = ceilings;
+    childDenyCeilings[key] = denyCeilingTail(baselineRules);
+  };
 
   // User/host entries win over plugin-injected built-ins on a key
   // collision (issue #1290).
@@ -1414,41 +1538,23 @@ export function buildResolvedAgentRegistry(
       : name;
     const entry = finalAgentConfig[name] as Record<string, unknown>;
     const modelOverride = overrideFor(name);
-    const followsSessionWithoutScalar =
-      modelOverride?.inheritModelFrom === 'session' &&
-      (modelOverride.model === undefined || Array.isArray(modelOverride.model));
-    if (followsSessionWithoutScalar) {
-      if (modelOverride.variant === undefined) delete entry.variant;
+    const followsSession = followsSessionWithoutScalar(modelOverride);
+    if (followsSession) {
+      if (modelOverride?.variant === undefined) delete entry.variant;
     }
-    if (typeof entry.prompt === 'string') {
-      // Host council prompt replaces the generated content; retain the
-      // required exception and report structure via the idempotent
-      // fallback reinforcement.
-      if (name === 'council')
-        entry.prompt = ensureCouncilCompactionException(
-          ensureCouncilSynthesisReinforcement(entry.prompt),
-        );
-    }
-    const effectiveModel =
-      typeof entry.model === 'string' ? entry.model : undefined;
-    const effectiveVariant =
-      typeof entry.variant === 'string' ? entry.variant : undefined;
-    effective[name] = {
-      ...(effectiveModel ? { model: effectiveModel } : {}),
-      ...(effectiveVariant ? { variant: effectiveVariant } : {}),
-    };
-    const followsSession =
-      modelOverride?.inheritModelFrom === 'session' &&
-      (modelOverride.model === undefined || Array.isArray(modelOverride.model));
+    if (name === 'council' && typeof entry.prompt === 'string')
+      entry.prompt = fixupCouncilPrompt(entry.prompt);
+    const scalars = effectiveScalars(entry);
+    effective[name] = scalars;
     const displayModel = followsSession
       ? undefined
-      : (effectiveModel ??
+      : ((typeof entry.model === 'string' ? entry.model : undefined) ??
         candidateMap[name]?.[0]?.id ??
         (typeof definition.config.model === 'string'
           ? definition.config.model
           : undefined));
     tuiModels[name] = displayModel ?? 'default';
-    if (effectiveVariant) tuiVariants[name] = effectiveVariant;
+    if (scalars.variant) tuiVariants[name] = scalars.variant;
     identities[name] = displayName;
   }
 
@@ -1475,17 +1581,7 @@ export function buildResolvedAgentRegistry(
     const sourcePermission = clone(permission);
     const agentMcps = (sdk[name] as { mcps?: string[] }).mcps ?? [];
     if (!packageMetadata) {
-      for (const mcpName of availableMcpNames) {
-        const permissionKey = `${mcpName.replace(/[^a-zA-Z0-9_-]/g, '_')}_*`;
-        if (!(permissionKey in permission)) {
-          permission[permissionKey] = parseList(
-            agentMcps,
-            availableMcpNames,
-          ).includes(mcpName)
-            ? 'allow'
-            : 'deny';
-        }
-      }
+      fillMcpPermissionKeys(permission, agentMcps, availableMcpNames);
     }
     // Finalized package capabilities (empty for non-marketplace agents); they
     // feed the marketplace metadata, the projected permission map, and the
@@ -1563,18 +1659,18 @@ export function buildResolvedAgentRegistry(
     // Same host-config boundary as above: host native rules keyed by a
     // legacy alias (e.g. `explore`) must not apply to the plugin agent.
     const hostRuleSet = nativeRules[name] ?? visibleNativeRules ?? [];
-    const { baselineRules, ceilings, policy } = finalizeAgentPolicy({
-      permission,
-      sourcePermission,
-      tools: packageTools,
-      skills: packageSkills,
-      mcps: packageMcps,
-      hostRules: hostRuleSet,
-      packageMetadata,
-    });
-    childPolicyConstraints[name] = ceilings;
-    policyMap[name] = policy;
-    childDenyCeilings[name] = denyCeilingTail(baselineRules);
+    recordPolicy(
+      name,
+      finalizeAgentPolicy({
+        permission,
+        sourcePermission,
+        tools: packageTools,
+        skills: packageSkills,
+        mcps: packageMcps,
+        hostRules: hostRuleSet,
+        packageMetadata,
+      }),
+    );
     finalAgentConfig[name] = clone(finalEntry);
     sdk[name] = clone(finalEntry) as SDKAgentConfig & Record<string, unknown>;
   }
@@ -1608,36 +1704,20 @@ export function buildResolvedAgentRegistry(
         },
       };
       const modelOverride = overrideFor(definition.name);
-      const visibleFollowsSessionWithoutScalar =
-        modelOverride?.inheritModelFrom === 'session' &&
-        (modelOverride.model === undefined ||
-          Array.isArray(modelOverride.model));
-      if (visibleFollowsSessionWithoutScalar) {
+      if (followsSessionWithoutScalar(modelOverride)) {
         delete visibleConfig.model;
-        if (modelOverride.variant === undefined) delete visibleConfig.variant;
+        if (modelOverride?.variant === undefined) delete visibleConfig.variant;
       }
       if (!aliasHost || !('hidden' in aliasHost)) delete visibleConfig.hidden;
       if (
         definition.name === 'council' &&
         typeof visibleConfig.prompt === 'string'
       ) {
-        visibleConfig.prompt = ensureCouncilCompactionException(
-          ensureCouncilSynthesisReinforcement(visibleConfig.prompt),
-        );
+        visibleConfig.prompt = fixupCouncilPrompt(visibleConfig.prompt);
       }
       let visiblePermission = normalizePermission(visibleConfig.permission);
       const visibleMcps = (visibleConfig.mcps as string[] | undefined) ?? [];
-      for (const mcpName of availableMcpNames) {
-        const permissionKey = `${mcpName.replace(/[^a-zA-Z0-9_-]/g, '_')}_*`;
-        if (!(permissionKey in visiblePermission)) {
-          visiblePermission[permissionKey] = parseList(
-            visibleMcps,
-            availableMcpNames,
-          ).includes(mcpName)
-            ? 'allow'
-            : 'deny';
-        }
-      }
+      fillMcpPermissionKeys(visiblePermission, visibleMcps, availableMcpNames);
       const packageMetadata = marketplaceMetadata.get(definition.name);
       const sourceVisiblePermission = {
         ...normalizePermission(
@@ -1695,32 +1775,21 @@ export function buildResolvedAgentRegistry(
         delete (sdk[display] as Record<string, unknown>).hidden;
       }
       candidateMap[display] = clone(candidateMap[definition.name] ?? []);
-      const visibleModel =
-        typeof visibleConfig.model === 'string'
-          ? visibleConfig.model
-          : undefined;
-      const visibleVariant =
-        typeof visibleConfig.variant === 'string'
-          ? visibleConfig.variant
-          : undefined;
-      effective[display] = {
-        ...(visibleModel ? { model: visibleModel } : {}),
-        ...(visibleVariant ? { variant: visibleVariant } : {}),
-      };
+      effective[display] = effectiveScalars(visibleConfig);
       const visibleRules =
         nativeRules[display] ?? nativeRules[definition.name] ?? [];
-      const { baselineRules, ceilings, policy } = finalizeAgentPolicy({
-        permission: visiblePermission,
-        sourcePermission: sourceVisiblePermission,
-        tools: visibleTools,
-        skills: visibleSkills,
-        mcps: cappedMcps,
-        hostRules: visibleRules,
-        packageMetadata,
-      });
-      childPolicyConstraints[display] = ceilings;
-      policyMap[display] = policy;
-      childDenyCeilings[display] = denyCeilingTail(baselineRules);
+      recordPolicy(
+        display,
+        finalizeAgentPolicy({
+          permission: visiblePermission,
+          sourcePermission: sourceVisiblePermission,
+          tools: visibleTools,
+          skills: visibleSkills,
+          mcps: cappedMcps,
+          hostRules: visibleRules,
+          packageMetadata,
+        }),
+      );
       if (definition.name === 'orchestrator') {
         appendMarketplaceRouting(
           { orchestrator: visibleConfig },
@@ -1796,75 +1865,13 @@ export function buildResolvedAgentRegistry(
     compileChildPermissions: (
       agent: string,
       rules: readonly V2PermissionRule[],
-    ) => {
-      const constraints = frozenChildConstraints[agent];
-      // Presence, not truthiness: a plain (non-marketplace) agent is stored as
-      // an explicit `undefined` ceiling — it has no package ceiling, but its
-      // child payload still compiles from the host rules alone.
-      if (!Object.hasOwn(frozenChildConstraints, agent)) {
-        throw new Error(
-          `child permission constraints unavailable for '${agent}'`,
-        );
-      }
-      const policy = compilePermissionPolicy({
-        // Marketplace child payloads open with the same conservative
-        // external_directory guard floor as the registered policy, so the
-        // ceiling's default-effect allow can never synthesize a grant for a
-        // child payload that never declared the guard. Non-marketplace agents
-        // have no ceilings and use the compacted host rules.
-        baselineRules: constraints ? EXTERNAL_DIRECTORY_GUARD_FLOOR : [],
-        hostRules: keepLastRules(rules),
-        ...(constraints ? { ceilings: constraints } : {}),
-      });
-      const compiled = policy.rules;
-      // The host appends the user's global (and per-agent) config rules AFTER
-      // the plugin's agent permissions (#1374), and v2 evaluates with
-      // findLast (last matching rule wins). A trailing `{'*','*',allow}` from
-      // the user's global config therefore defeats the plugin's declared
-      // denies stored earlier in the payload. One mechanism, two verified
-      // production incidents: stance-carrying children (explorer→explorer,
-      // observer→observer, oracle→explorer) spawned nested subagents despite
-      // an explicit `subagent/*:deny`, and a read-only child (explorer)
-      // completed edit/write despite the factory read-only matrix. Re-append
-      // the agent's DECLARATIVE DENY CEILING as the FINAL rules of every
-      // compiled plugin child payload so findLast always terminates on it.
-      // Derived from the same registered permission map the static policy was
-      // compiled from — never hardcoded per agent; empty for agents without
-      // declarations (the orchestrator), whose compacted payloads pass through.
-      // Input is finalized agent rules (setup.ts), not stored session rules.
-      // Recompiling stored output is not a supported contract.
-      //
-      // A deny tail is a monotone ceiling — appending it can only narrow what
-      // the host granted, so it is always safe; wildcard-action denies stay
-      // out because replaying the default floor last would erase the declared
-      // allow exceptions behind it, and each replayed deny rides with those
-      // declared exceptions (including exact actions under namespace denies).
-      // Ask rules never enter either: an appended
-      // ask parks a background child on input no one can answer. An ALLOW tail
-      // is a capability grant: appended last it would silently outrank a
-      // stricter host decision (deny/ask) for the same target — the guest
-      // plugin resurrecting a capability the user explicitly withheld. So each
-      // grant is emitted at meet(grant, host-effective): allow stays allow,
-      // ask is preserved, and deny is dropped (the deny ceiling already covers
-      // it). The meet runs over every resource the grant's pattern matches,
-      // not the pattern string alone: narrower host denies/asks inside the
-      // grant are re-appended after it (boundGrantByHost), so a broad replayed
-      // allow can never reopen a host-protected subpath.
-      // Marketplace directory guards follow finalized host order, including
-      // overrides of explicit owner denies. Replaying those denies here would
-      // make child policies disagree with the registered policy. Keep the
-      // declarative ceilings for tool, Skill, and MCP capabilities unchanged.
-      const denyCeiling = constraints
-        ? frozenDenyCeilings[agent]?.filter(
-            (rule) => rule.action !== 'external_directory',
-          )
-        : frozenDenyCeilings[agent];
-      if (!denyCeiling || denyCeiling.length === 0) return compiled;
-      return keepLastRules([
-        ...compiled,
-        ...buildChildTail(compiled, denyCeiling),
-      ]);
-    },
+    ) =>
+      compileChildPermissionPolicy(
+        frozenChildConstraints,
+        frozenDenyCeilings,
+        agent,
+        rules,
+      ),
     mcpConfig: frozenMcps,
     managedMcpConfig: frozenPluginMcps,
     finalAgentConfig: frozenFinal,

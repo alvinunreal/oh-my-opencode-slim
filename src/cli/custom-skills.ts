@@ -14,8 +14,6 @@ import { getProjectConfigDirectories } from '../config/loader';
 import { getConfigDir, getConfigSearchDirs } from '../config/paths';
 import { CUSTOM_SKILLS } from './custom-skills-registry';
 
-export { CUSTOM_SKILLS };
-
 export interface BundledSkillInfo {
   id: string;
   name: string;

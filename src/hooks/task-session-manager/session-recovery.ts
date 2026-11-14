@@ -2006,7 +2006,7 @@ export function aliasUnpairedMessage(alias: string): string {
   return `Alias ${alias} has no saved host pairing. No action was sent. Use the exact session id.`;
 }
 
-export function aliasMultipleTargetsMessage(
+function aliasMultipleTargetsMessage(
   alias: string,
   sessions: readonly string[],
 ): string {
