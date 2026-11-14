@@ -107,12 +107,6 @@ export const AgentOverrideConfigSchema = z
       'Agent display color as #RRGGBB or an OpenCode theme color',
     ),
     description: z.string().min(1).optional(),
-    primary: z
-      .boolean()
-      .optional()
-      .describe(
-        'When true, treat this custom agent as a primary orchestrator: SDK mode `primary` plus the orchestration tool and permission set. Built-in agents are unaffected.',
-      ),
     subagents: z
       .array(z.string().min(1))
       .refine((names) => names.every((name) => name.trim().length > 0), {
@@ -127,7 +121,7 @@ export const AgentOverrideConfigSchema = z
       )
       .optional()
       .describe(
-        "Primary agents only: allowed specialist names for this agent's delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
+        "Built-in orchestrator only: allowed specialist names for its delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
       ),
     permission: PermissionConfigSchema.optional(), // tool-level permission rules enforced by the SDK
   })

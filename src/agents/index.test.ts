@@ -1663,21 +1663,6 @@ describe('agent classification', () => {
       }
     }
   });
-
-  test('declared primary custom agents project with mode primary', () => {
-    const configs = getAgentConfigs(
-      runtimeFor({
-        agents: {
-          coworker: { primary: true, model: 'test/coworker-model' },
-          reviewer: { model: 'test/reviewer-model' },
-        },
-      }),
-    );
-
-    expect(configs.coworker.mode).toBe('primary');
-    expect(configs.orchestrator.mode).toBe('primary');
-    expect(configs.reviewer.mode).toBe('subagent');
-  });
 });
 
 describe('createAgents', () => {
@@ -1749,160 +1734,7 @@ describe('createAgents', () => {
     expect(names).toContain('fixer');
   });
 
-  test('declared primaries get orchestration defaults, not subagent defaults', () => {
-    const runtime = runtimeFor({
-      // Observer must be enabled for the v2 nested-dispatch stance.
-      disabled_agents: [],
-      agents: {
-        coworker: {
-          primary: true,
-          model: 'test/coworker-model',
-          permission: { question: 'deny' },
-        },
-        reviewer: { model: 'test/reviewer-model' },
-      },
-    });
-    const agents = createAgents(runtime, { hostFlavor: 'v2' });
-    const coworker = agents.find((a) => a.name === 'coworker');
-    const reviewer = agents.find((a) => a.name === 'reviewer');
-
-    expect(coworker?.description).toBe("Primary orchestrator 'coworker'");
-    expect(reviewer?.description).toBe("Custom subagent 'reviewer'");
-    expect(coworker?.config.prompt).toContain('primary orchestrator');
-
-    const coworkerPermission = (
-      coworker as { config: { permission: Record<string, unknown> } }
-    ).config.permission;
-    // Primary can delegate and manage tasks (like the orchestrator), but
-    // explicit override config wins over the 'allow' default.
-    expect(coworkerPermission.question).toBe('deny');
-    expect(coworkerPermission.task_status).toBe('allow');
-    expect(coworkerPermission.task).toBeUndefined();
-    // Declared primaries run the guarded task/marketplace controls too
-    // (issue #1591 guard widening): the runtime fences classify by
-    // primary-ness, not by name.
-    expect(coworkerPermission.task_cancel).toBe('allow');
-    // v2 hosts never register wait_for_user (the native question tool covers
-    // the blocking boundary), so the primary allow default is omitted.
-    expect(coworkerPermission.wait_for_user).toBeUndefined();
-    expect(coworkerPermission.marketplace_manage).toBe('allow');
-
-    const reviewerPermission = (
-      reviewer as { config: { permission: Record<string, unknown> } }
-    ).config.permission;
-    expect(reviewerPermission.question).toBe('deny');
-    expect(reviewerPermission.task_status).toBe('deny');
-    // A plain custom agent keeps the nested-dispatch stance.
-    expect(reviewerPermission.task).toEqual({ ...TASK_NO_NESTED_DISPATCH });
-
-    const configs = getAgentConfigsFromDefinitions(runtime, agents);
-    expect(configs.coworker.mode).toBe('primary');
-    expect(configs.reviewer.mode).toBe('subagent');
-  });
-
-  test('subagents allowlist compiles to the task stance and scopes the catalog', () => {
-    const runtime = runtimeFor({
-      disabled_agents: [],
-      agents: {
-        coworker: {
-          primary: true,
-          model: 'test/coworker-model',
-          subagents: ['fixer', 'writer'],
-        },
-        writer: {
-          model: 'test/writer-model',
-          description: 'Writing specialist',
-        },
-      },
-    });
-    const agents = createAgents(runtime, { hostFlavor: 'v2' });
-    const coworker = agents.find((a) => a.name === 'coworker');
-
-    const permission = (
-      coworker as { config: { permission: Record<string, unknown> } }
-    ).config.permission;
-    // The allowlist compiles into the host-evaluated `task` stance.
-    expect(permission.task).toEqual({
-      '*': 'deny',
-      fixer: 'allow',
-      writer: 'allow',
-    });
-
-    // The routing catalog reflects exactly the scope (issue #1591).
-    expect(coworker?.config.prompt).toContain('<Agents>');
-    expect(coworker?.config.prompt).toContain('@fixer');
-    expect(coworker?.config.prompt).toContain('@writer');
-    expect(coworker?.config.prompt).toContain('Writing specialist');
-    expect(coworker?.config.prompt).not.toContain('@oracle');
-    expect(coworker?.config.prompt).not.toContain('@explorer');
-  });
-
-  test('explicit permission.task wins over the subagents allowlist', () => {
-    const runtime = runtimeFor({
-      agents: {
-        coworker: {
-          primary: true,
-          model: 'test/coworker-model',
-          subagents: ['fixer'],
-          permission: { task: { '*': 'deny', oracle: 'allow' } },
-        },
-      },
-    });
-    const agents = createAgents(runtime, { hostFlavor: 'v2' });
-    const coworker = agents.find((a) => a.name === 'coworker');
-    const permission = (
-      coworker as { config: { permission: Record<string, unknown> } }
-    ).config.permission;
-    expect(permission.task).toEqual({ '*': 'deny', oracle: 'allow' });
-  });
-
-  test('subagents entries normalize to internal agent names', () => {
-    const runtime = runtimeFor({
-      disabled_agents: [],
-      agents: {
-        coworker: {
-          primary: true,
-          model: 'test/coworker-model',
-          subagents: ['@fixer', 'writer'],
-        },
-        writer: {
-          model: 'test/writer-model',
-          description: 'Writing specialist',
-        },
-      },
-    });
-    const agents = createAgents(runtime, { hostFlavor: 'v2' });
-    const coworker = agents.find((a) => a.name === 'coworker');
-    const permission = (
-      coworker as { config: { permission: Record<string, unknown> } }
-    ).config.permission;
-    expect(permission.task).toEqual({
-      '*': 'deny',
-      fixer: 'allow',
-      writer: 'allow',
-    });
-    expect(coworker?.config.prompt).toContain('@fixer');
-    expect(coworker?.config.prompt).not.toContain('@@fixer');
-    expect(coworker?.config.prompt).toContain('@writer');
-  });
-
-  test('subagents rejects the reserved * wildcard', () => {
-    expect(() =>
-      createAgents(
-        runtimeFor({
-          agents: {
-            coworker: {
-              primary: true,
-              model: 'test/coworker-model',
-              subagents: ['fixer', '*'],
-            },
-          },
-        }),
-      ),
-    ).toThrow(/reserved/);
-  });
-
-  test('subagents on a non-primary agent warns and is ignored', () => {
+  test('subagents on a custom specialist warns and is ignored', () => {
     const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const runtime = runtimeFor({
@@ -1965,157 +1797,6 @@ describe('createAgents', () => {
     expect(orchestrator?.config.prompt).not.toContain('@oracle');
   });
 
-  test('explicit permission.task skips the scoped catalog with a warning', () => {
-    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const runtime = runtimeFor({
-        agents: {
-          coworker: {
-            primary: true,
-            model: 'test/coworker-model',
-            subagents: ['fixer'],
-            permission: { task: { '*': 'deny', oracle: 'allow' } },
-          },
-        },
-      });
-      const agents = createAgents(runtime, { hostFlavor: 'v2' });
-      const coworker = agents.find((a) => a.name === 'coworker');
-      expect(coworker?.config.prompt).not.toContain('<Agents>');
-      const catalogWarns = warnSpy.mock.calls.filter((call) =>
-        String(call[0]).includes('catalog not rendered'),
-      );
-      expect(catalogWarns).toHaveLength(1);
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
-  test('subagents scope compiles on v1 too', () => {
-    const agents = createAgents(
-      runtimeFor({
-        disabled_agents: [],
-        agents: {
-          coworker: {
-            primary: true,
-            model: 'test/coworker-model',
-            subagents: ['fixer'],
-          },
-        },
-      }),
-    );
-    const coworker = agents.find((a) => a.name === 'coworker');
-    const permission = (
-      coworker as { config: { permission: Record<string, unknown> } }
-    ).config.permission;
-    // Mirrors the v2 test: the compiled scope is emitted on every host
-    // flavor, not just under the v2 permission base.
-    expect(permission.task).toEqual({ '*': 'deny', fixer: 'allow' });
-  });
-
-  test('subagents entries that are primaries warn and are dropped', () => {
-    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const agents = createAgents(
-        runtimeFor({
-          disabled_agents: [],
-          agents: {
-            coworker: {
-              primary: true,
-              model: 'test/coworker-model',
-              subagents: ['orchestrator', 'fixer'],
-            },
-          },
-        }),
-        { hostFlavor: 'v2' },
-      );
-      const coworker = agents.find((a) => a.name === 'coworker');
-      const permission = (
-        coworker as { config: { permission: Record<string, unknown> } }
-      ).config.permission;
-      expect(permission.task).toEqual({ '*': 'deny', fixer: 'allow' });
-      const drops = warnSpy.mock.calls.filter((call) =>
-        String(call[0]).includes('refers to a primary agent'),
-      );
-      expect(drops).toHaveLength(1);
-      expect(String(drops[0]?.[0])).toContain('agents.coworker.subagents');
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
-  test('an ignored primary flag on a built-in does not drop it from a scope', () => {
-    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const agents = createAgents(
-        runtimeFor({
-          disabled_agents: [],
-          agents: {
-            coworker: {
-              primary: true,
-              model: 'test/coworker-model',
-              subagents: ['oracle'],
-            },
-            // Ignored with a warning: only custom agents can be primary. It
-            // must not classify oracle as a primary in someone's scope.
-            oracle: { primary: true },
-          },
-        }),
-        { hostFlavor: 'v2' },
-      );
-      const coworker = agents.find((a) => a.name === 'coworker');
-      const permission = (
-        coworker as { config: { permission: Record<string, unknown> } }
-      ).config.permission;
-      expect(permission.task).toEqual({ '*': 'deny', oracle: 'allow' });
-      expect(
-        warnSpy.mock.calls.filter((call) =>
-          String(call[0]).includes('refers to a primary agent'),
-        ),
-      ).toHaveLength(0);
-      expect(
-        warnSpy.mock.calls.some((call) =>
-          String(call[0]).includes(
-            'only custom agents can be declared primary',
-          ),
-        ),
-      ).toBe(true);
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
-  test('subagents entries that are disabled warn and are dropped', () => {
-    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const agents = createAgents(
-        runtimeFor({
-          disabled_agents: ['oracle'],
-          agents: {
-            coworker: {
-              primary: true,
-              model: 'test/coworker-model',
-              subagents: ['oracle'],
-            },
-          },
-        }),
-        { hostFlavor: 'v2' },
-      );
-      const coworker = agents.find((a) => a.name === 'coworker');
-      const permission = (
-        coworker as { config: { permission: Record<string, unknown> } }
-      ).config.permission;
-      // No delegatable specialist left: wildcard deny only, no catalog.
-      expect(permission.task).toEqual({ '*': 'deny' });
-      expect(coworker?.config.prompt).not.toContain('<Agents>');
-      const drops = warnSpy.mock.calls.filter((call) =>
-        String(call[0]).includes('is disabled'),
-      );
-      expect(drops).toHaveLength(1);
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
   test('scoped orchestrator omits out-of-scope council seats', () => {
     const agents = createAgents(
       runtimeFor({
@@ -2158,18 +1839,16 @@ describe('createAgents', () => {
         council: councilConfig(),
         acpAgents: { bridge: { command: 'bridge-acp' } },
         agents: {
-          coworker: {
-            primary: true,
-            model: 'test/coworker-model',
+          orchestrator: {
             subagents: ['bridge', 'councillor-alpha'],
           },
         },
       }),
       { hostFlavor: 'v2' },
     );
-    const coworker = agents.find((a) => a.name === 'coworker');
+    const orchestrator = agents.find((a) => a.name === 'orchestrator');
     const permission = (
-      coworker as { config: { permission: Record<string, unknown> } }
+      orchestrator as { config: { permission: Record<string, unknown> } }
     ).config.permission;
     expect(permission.task).toEqual({
       '*': 'deny',
@@ -2310,18 +1989,16 @@ describe('createAgents', () => {
           disabled_agents: [],
           council: councilConfig(),
           agents: {
-            coworker: {
-              primary: true,
-              model: 'test/coworker-model',
+            orchestrator: {
               subagents: ['councillor-alpha', 'councillor-ghost'],
             },
           },
         }),
         { hostFlavor: 'v2' },
       );
-      const coworker = agents.find((a) => a.name === 'coworker');
+      const orchestrator = agents.find((a) => a.name === 'orchestrator');
       const permission = (
-        coworker as { config: { permission: Record<string, unknown> } }
+        orchestrator as { config: { permission: Record<string, unknown> } }
       ).config.permission;
       expect(permission.task).toEqual({
         '*': 'deny',
@@ -2363,55 +2040,24 @@ describe('createAgents', () => {
     expect(orchestrator?.config.prompt).not.toContain('@oracle');
   });
 
-  test('scoped custom primary stance admits in-scope display names', () => {
-    const agents = createAgents(
-      runtimeFor({
-        disabled_agents: [],
-        agents: {
-          coworker: {
-            primary: true,
-            model: 'test/coworker-model',
-            subagents: ['writer'],
-          },
-          writer: {
-            displayName: 'Scribe',
-            model: 'test/writer-model',
-          },
-        },
-      }),
-      { hostFlavor: 'v2' },
-    );
-    const coworker = agents.find((a) => a.name === 'coworker');
-    const permission = (
-      coworker as { config: { permission: Record<string, unknown> } }
-    ).config.permission;
-    expect(permission.task).toEqual({
-      '*': 'deny',
-      writer: 'allow',
-      Scribe: 'allow',
-    });
-  });
-
   test('unknown subagents entries warn and are dropped', () => {
     const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const runtime = runtimeFor({
         disabled_agents: [],
         agents: {
-          coworker: {
-            primary: true,
-            model: 'test/coworker-model',
+          orchestrator: {
             subagents: ['fixer', 'typo-specialist'],
           },
         },
       });
       const agents = createAgents(runtime, { hostFlavor: 'v2' });
-      const coworker = agents.find((a) => a.name === 'coworker');
+      const orchestrator = agents.find((a) => a.name === 'orchestrator');
       const permission = (
-        coworker as { config: { permission: Record<string, unknown> } }
+        orchestrator as { config: { permission: Record<string, unknown> } }
       ).config.permission;
       expect(permission.task).toEqual({ '*': 'deny', fixer: 'allow' });
-      expect(coworker?.config.prompt).not.toContain('@typo-specialist');
+      expect(orchestrator?.config.prompt).not.toContain('@typo-specialist');
       const drops = warnSpy.mock.calls.filter((call) =>
         String(call[0]).includes('does not match a known agent'),
       );
@@ -2426,36 +2072,13 @@ describe('createAgents', () => {
       createAgents(
         runtimeFor({
           agents: {
-            coworker: {
-              primary: true,
-              model: 'test/coworker-model',
+            orchestrator: {
               subagents: ['   '],
             },
           },
         }),
       ),
     ).toThrow(/empty specialist name/);
-  });
-
-  test('primary warns only when set on a non-custom agent name', () => {
-    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
-    createAgents(
-      runtimeFor({
-        disabled_agents: ['coworker'],
-        agents: {
-          // Disabled custom: valid flag, must not warn.
-          coworker: { primary: true, model: 'test/coworker-model' },
-          reviewer: { primary: true, model: 'test/reviewer-model' },
-          fixer: { primary: true, model: 'test/fixer-model' },
-        },
-      }),
-    );
-    const primaryWarns = warnSpy.mock.calls.filter((call) =>
-      String(call[0]).includes('.primary is ignored'),
-    );
-    expect(primaryWarns).toHaveLength(1);
-    expect(String(primaryWarns[0]?.[0])).toContain('agents.fixer.primary');
-    warnSpy.mockRestore();
   });
 
   test('creates exactly 5 agents by default (observer and council disabled)', () => {

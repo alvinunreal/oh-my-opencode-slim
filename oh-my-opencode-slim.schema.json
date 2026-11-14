@@ -197,12 +197,8 @@
                       "type": "string",
                       "minLength": 1
                     },
-                    "primary": {
-                      "description": "When true, treat this custom agent as a primary orchestrator: SDK mode `primary` plus the orchestration tool and permission set. Built-in agents are unaffected.",
-                      "type": "boolean"
-                    },
                     "subagents": {
-                      "description": "Primary agents only: allowed specialist names for this agent's delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
+                      "description": "Built-in orchestrator only: allowed specialist names for its delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
                       "type": "array",
                       "items": {
                         "type": "string",
@@ -454,12 +450,8 @@
                         "type": "string",
                         "minLength": 1
                       },
-                      "primary": {
-                        "description": "When true, treat this custom agent as a primary orchestrator: SDK mode `primary` plus the orchestration tool and permission set. Built-in agents are unaffected.",
-                        "type": "boolean"
-                      },
                       "subagents": {
-                        "description": "Primary agents only: allowed specialist names for this agent's delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
+                        "description": "Built-in orchestrator only: allowed specialist names for its delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
                         "type": "array",
                         "items": {
                           "type": "string",
@@ -643,12 +635,8 @@
                   "type": "string",
                   "minLength": 1
                 },
-                "primary": {
-                  "description": "When true, treat this custom agent as a primary orchestrator: SDK mode `primary` plus the orchestration tool and permission set. Built-in agents are unaffected.",
-                  "type": "boolean"
-                },
                 "subagents": {
-                  "description": "Primary agents only: allowed specialist names for this agent's delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
+                  "description": "Built-in orchestrator only: allowed specialist names for its delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
                   "type": "array",
                   "items": {
                     "type": "string",
@@ -861,12 +849,8 @@
                         "type": "string",
                         "minLength": 1
                       },
-                      "primary": {
-                        "description": "When true, treat this custom agent as a primary orchestrator: SDK mode `primary` plus the orchestration tool and permission set. Built-in agents are unaffected.",
-                        "type": "boolean"
-                      },
                       "subagents": {
-                        "description": "Primary agents only: allowed specialist names for this agent's delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
+                        "description": "Built-in orchestrator only: allowed specialist names for its delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
                         "type": "array",
                         "items": {
                           "type": "string",
@@ -1047,12 +1031,8 @@
                   "type": "string",
                   "minLength": 1
                 },
-                "primary": {
-                  "description": "When true, treat this custom agent as a primary orchestrator: SDK mode `primary` plus the orchestration tool and permission set. Built-in agents are unaffected.",
-                  "type": "boolean"
-                },
                 "subagents": {
-                  "description": "Primary agents only: allowed specialist names for this agent's delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
+                  "description": "Built-in orchestrator only: allowed specialist names for its delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
                   "type": "array",
                   "items": {
                     "type": "string",
@@ -1239,12 +1219,8 @@
             "type": "string",
             "minLength": 1
           },
-          "primary": {
-            "description": "When true, treat this custom agent as a primary orchestrator: SDK mode `primary` plus the orchestration tool and permission set. Built-in agents are unaffected.",
-            "type": "boolean"
-          },
           "subagents": {
-            "description": "Primary agents only: allowed specialist names for this agent's delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
+            "description": "Built-in orchestrator only: allowed specialist names for its delegation scope (allowlist). Compiled into the `task` permission stance; an explicit `permission.task` entry wins. Rendered as the agent's scoped <Agents> catalog. Entries accept internal names, display names, or @-mentions. `'*'` is reserved.",
             "type": "array",
             "items": {
               "type": "string",

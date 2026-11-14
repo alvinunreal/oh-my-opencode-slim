@@ -1613,14 +1613,16 @@ describe('PluginConfigSchema removed legacy keys', () => {
 describe('AgentOverrideConfigSchema.subagents', () => {
   it('accepts a delegation-scope allowlist', () => {
     const result = PluginConfigSchema.safeParse({
-      agents: { coworker: { model: 'x/y', subagents: ['fixer', '@writer'] } },
+      agents: {
+        orchestrator: { model: 'x/y', subagents: ['fixer', '@writer'] },
+      },
     });
     expect(result.success).toBe(true);
   });
 
   it('rejects the reserved * wildcard as a specialist name', () => {
     const result = PluginConfigSchema.safeParse({
-      agents: { coworker: { model: 'x/y', subagents: ['fixer', '*'] } },
+      agents: { orchestrator: { model: 'x/y', subagents: ['fixer', '*'] } },
     });
     expect(result.success).toBe(false);
   });

@@ -12,7 +12,7 @@
 import type { PluginInput } from '@opencode-ai/plugin';
 import type { OpencodeClient } from '@opencode-ai/sdk';
 import { DEFAULT_CHILD_INPUT_WAKE_KINDS } from '../../config/constants';
-import { isBuiltInPrimaryAgent } from '../../utils/agent-variant';
+import { isBuiltInOrchestrator } from '../../utils/agent-variant';
 import { stringifyError } from '../../utils/child-transcript';
 import { isRecord as isObjectRecord } from '../../utils/guards';
 import {
@@ -314,9 +314,8 @@ export type OrchestratorWakeOptions = {
    * session to a non-orchestrator agent — the wake continues in the
    * CURRENT selection instead of forcing `orchestrator`. */
   hasPendingDelegatedWork?: (sessionID: string) => boolean;
-  /** Primary classification (issue #1591): declared-primary sessions stay
-   *  wake-eligible like the built-in orchestrator. */
-  isPrimaryAgentName?: (agent: string) => boolean;
+  /** Recognizes the built-in orchestrator and its configured display name. */
+  isOrchestratorAgent?: (agent: string) => boolean;
   /** Test seam: override interval without changing config validation. */
   intervalMs?: number;
   /** Scheduling seam for deterministic tests. Defaults to the global timer
@@ -1949,10 +1948,10 @@ export function createOrchestratorWakeScheduler(
         return false;
       }
       const wakeAgent = selection?.agent ?? 'orchestrator';
-      const isPrimaryAgentName =
-        options.isPrimaryAgentName ?? isBuiltInPrimaryAgent;
+      const isOrchestratorAgent =
+        options.isOrchestratorAgent ?? isBuiltInOrchestrator;
       if (
-        !isPrimaryAgentName(wakeAgent) &&
+        !isOrchestratorAgent(wakeAgent) &&
         !(options.hasPendingDelegatedWork?.(sessionID) ?? false)
       ) {
         return false;

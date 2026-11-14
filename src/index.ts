@@ -5,7 +5,6 @@ import type { AdmissionRuntimeLease } from './admission-runtime';
 import {
   type AgentModelProjection,
   type AgentRuntimeProfiles,
-  collectPrimaryNames,
   createAgentInferenceViews,
   createAgents,
   getAgentConfigsFromDefinitions,
@@ -372,16 +371,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   // cached promise on config changes and each factory run starts fresh.
   const imageCapabilityCache: ModelImageCapabilityCache = {};
   let agentDefs: ReturnType<typeof createAgents>;
-  // Primary classification (issue #1591): internal names of the built-in
-  // orchestrator plus every definition carrying the `primary` flag. Filled
-  // when agentDefs is built; fences and hooks classify through
-  // isPrimaryAgentName instead of name-checking 'orchestrator'. Consumers
-  // run at event/LLM time — always after runtime init and agentDefs.
-  let primaryNames: ReadonlySet<string> = new Set(['orchestrator']);
-  const isPrimaryAgentName = (agent: string | undefined): boolean =>
-    !!agent &&
-    (primaryNames.has(agent) ||
-      primaryNames.has(resolveRuntimeAgentName(runtime, agent)));
+  const isOrchestratorAgent = (agent: string | undefined): boolean =>
+    agent === 'orchestrator' ||
+    (!!agent && resolveRuntimeAgentName(runtime, agent) === 'orchestrator');
   let agents: ReturnType<typeof getAgentConfigsFromDefinitions>;
   let resolvedAgentRegistry: ResolvedAgentRegistry | undefined;
   let latestHostSnapshot: RegistryHostSnapshot | undefined;
@@ -431,7 +423,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
   >();
   const sessionMetadata = new SessionMetadataStore({
     maxEntries: DEFAULT_MAX_SESSION_METADATA_ENTRIES,
-    isPrimaryAgentName,
+    isOrchestratorAgent,
     onEvict: (sessionID) => {
       v1InternalSelectionOverrides.delete(sessionID);
       log('[session] evicted oldest session metadata', {
@@ -440,10 +432,9 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       });
     },
   });
-  // Managed-session fence: a primary-classified session or one that
-  // dispatched background work (issue #1591).
+  // Keep sessions that previously dispatched background work managed.
   const isManagedSession = (sessionID: string) =>
-    isPrimaryAgentName(sessionMetadata.getAgent(sessionID)) ||
+    isOrchestratorAgent(sessionMetadata.getAgent(sessionID)) ||
     sessionMetadata.isTaskManaged(sessionID);
   const compactingSessionIds = new Set<string>();
   const ownedTuiActivitySessions = new Map<string, string>();
@@ -1036,7 +1027,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       projectDirectory: ctx.directory,
       hostFlavor,
     });
-    primaryNames = collectPrimaryNames(agentDefs);
     agents = getAgentConfigsFromDefinitions(runtime, agentDefs);
 
     mcps = createBuiltinMcps(runtime.disabledMcps);
@@ -1369,7 +1359,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           // Membership in task management, not a selection rewrite (#1079).
           sessionMetadata.markTaskManaged(sessionID);
         },
-        isPrimaryAgentName,
+        isOrchestratorAgent,
         isFallbackInProgress: (sessionID) =>
           foregroundFallback?.isFallbackInProgress(sessionID) ?? false,
         willAttemptFallback: (sessionID) =>
@@ -1413,8 +1403,8 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             // at the pull channel (`task_status`).
             childInputWakeKinds: runtime.backgroundJobs.childInputWakeKinds,
             shouldManageSession: (sessionID) =>
-              isPrimaryAgentName(sessionMetadata.getAgent(sessionID)),
-            isPrimaryAgentName,
+              isOrchestratorAgent(sessionMetadata.getAgent(sessionID)),
+            isOrchestratorAgent,
             hasInputWait: (sessionID) =>
               taskSessionManagerHook!.hasInputWait(sessionID),
             isFallbackInProgress: (sessionID) =>
@@ -1485,7 +1475,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
           // Membership in task management, matching the transform path.
           sessionMetadata.markTaskManaged(sessionID);
         },
-        isPrimaryAgentName,
+        isOrchestratorAgent,
         backgroundTaskConcurrency,
         getModelForAgent,
         onRecoveredTerminal: async (parentSessionID, taskID) => {
@@ -2075,7 +2065,6 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             shouldManageSession: (sessionID) => isManagedSession(sessionID),
             resolveAgentName: (agent) =>
               resolveRuntimeAgentName(runtime, agent),
-            isPrimaryAgentName,
             registerSessionAsOrchestrator: (sessionID) => {
               sessionMetadata.markTaskManaged(sessionID);
             },
@@ -2588,7 +2577,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
       cwd: ctx.directory,
       getOrchestratorIdentities: () => {
         const registry = registryBridge.requireRegistry();
-        return resolveFinalizedOrchestratorIdentities(registry, primaryNames);
+        return resolveFinalizedOrchestratorIdentities(registry);
       },
     });
     if (!runtime.disabledTools.includes('marketplace_inspect')) {
@@ -3476,7 +3465,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         await cacheMonitor?.event(input);
         if (
           eventSessionID &&
-          isPrimaryAgentName(sessionMetadata.getAgent(eventSessionID)) &&
+          isOrchestratorAgent(sessionMetadata.getAgent(eventSessionID)) &&
           (event.type === 'session.idle' ||
             (event.type === 'session.status' && statusType === 'idle'))
         ) {
@@ -4297,8 +4286,7 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
         ? resolveRuntimeAgentName(runtime, targetAgentRaw)
         : undefined;
       if (
-        targetAgent !== undefined &&
-        isPrimaryAgentName(targetAgent) &&
+        targetAgent === 'orchestrator' &&
         (requestAgent !== undefined || looksLikeMainChatRequest(output.system))
       ) {
         const targetDef = agentDefs.find((a) => a.name === targetAgent);
@@ -4316,16 +4304,14 @@ export const OhMyOpenCodeLite: Plugin = async (ctx) => {
             ? finalizedConfig.prompt
             : typeof targetDef?.config?.prompt === 'string'
               ? targetDef.config.prompt
-              : targetAgent === 'orchestrator'
-                ? buildOrchestratorPrompt({
-                    disabledAgents: runtime.disabledAgents,
-                    wakeScheduler:
-                      runtime.backgroundJobsEnabled &&
-                      runtime.backgroundJobs.orchestratorWake.enabled,
-                    hostFlavor,
-                    routingBlock: runtime.routingBlock,
-                  })
-                : undefined;
+              : buildOrchestratorPrompt({
+                  disabledAgents: runtime.disabledAgents,
+                  wakeScheduler:
+                    runtime.backgroundJobsEnabled &&
+                    runtime.backgroundJobs.orchestratorWake.enabled,
+                  hostFlavor,
+                  routingBlock: runtime.routingBlock,
+                });
         // Dedup by the EFFECTIVE prompt, not by default-prompt markers:
         // a custom replacement without `<Role>` previously slipped past
         // the marker check and was appended twice (P + host + P).
