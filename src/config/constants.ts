@@ -87,9 +87,6 @@ export const DEFAULT_DISABLED_AGENTS: string[] = ['observer'];
 
 // Background job defaults
 export const DEFAULT_MAX_SESSIONS_PER_AGENT = 2;
-/** Internal display cap for the per-session read-context path list. */
-export const DEFAULT_CONTEXT_FILE_CAP = 8;
-
 /** Shipped child-input wake kinds (#1504): permission off, question on. */
 export const DEFAULT_CHILD_INPUT_WAKE_KINDS = {
   permission: false,

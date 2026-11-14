@@ -10,7 +10,6 @@
     "src/tui.ts",
     "src/**/*.test.ts",
     "scripts/**/*.test.ts",
-    "src/utils/tui-reusable-projection.child.ts",
     "src/utils/session-calls.contract.ts",
     "src/v2/mirror-conformance.ts",
     "scripts/benchmark-opencode-cache.ts",

@@ -90,11 +90,9 @@ jobs:
         run: bun run build
 
   knip:
-    # Report-only; drop --no-exit-code and continue-on-error once clean.
-    name: Report / Knip (non-blocking)
+    name: Knip
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    continue-on-error: true
     permissions:
       contents: read
 
@@ -109,7 +107,7 @@ jobs:
         run: bun ci
 
       - name: Run knip
-        run: bun run knip --no-exit-code --reporter symbols --reporter markdown --output-file markdown=$GITHUB_STEP_SUMMARY
+        run: bun run knip --max-issues=0 --reporter symbols --reporter markdown --output-file markdown=$GITHUB_STEP_SUMMARY
 
   bun-latest-canary:
     name: Canary / Bun latest

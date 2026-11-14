@@ -130,6 +130,7 @@ keys users must remove.
 ```bash
 bun run check:ci
 bun run typecheck
+bun run knip --max-issues=0
 bun test
 bun test ./scripts/check-companion-release.test.ts ./scripts/companion-release-scripts.test.ts
 bun run build

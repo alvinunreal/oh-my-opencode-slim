@@ -50,11 +50,6 @@ interface TaskOutputHeader {
 const NATIVE_BACKGROUND_LAUNCH =
   /^\s*The subagent is working in the background \(sessionID:\s*([^\s)]+)\)/i;
 
-/** True when `output` opens with the native v2 background launch sentence. */
-export function isNativeBackgroundLaunchOutput(output: string): boolean {
-  return NATIVE_BACKGROUND_LAUNCH.test(output);
-}
-
 /**
  * Tokenize an opening tag into its attributes, walking complete
  * name="value" pairs: values are consumed whole between their own quote
@@ -92,7 +87,7 @@ function parseTagAttributes(tag: string): Map<string, string> | undefined {
   return attrs;
 }
 
-export function parseTaskOutputHeader(output: string): TaskOutputHeader {
+function parseTaskOutputHeader(output: string): TaskOutputHeader {
   // XML wrapper: the output opens with the host's wrapper tag. The tag
   // closes at the first `>` OUTSIDE quoted values; once an XML opening is
   // detected, any scan failure (inner '<', unterminated quote, exhausted
@@ -193,15 +188,6 @@ export function parseTaskStateFromOutput(
   output: string,
 ): TaskOutputState | undefined {
   return parseTaskOutputHeader(output).state;
-}
-
-export function findTaskErrorNotice(text: string, tag: 'task' | 'subagent') {
-  const blocks = new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}>`, 'gi');
-  for (const [block] of text.matchAll(blocks)) {
-    const status = parseTaskStatusOutput(block);
-    if (status?.state === 'error') return { block, taskID: status.taskID };
-  }
-  return undefined;
 }
 
 /** Diagnostic applied when a terminal `completed` report carries no text. */

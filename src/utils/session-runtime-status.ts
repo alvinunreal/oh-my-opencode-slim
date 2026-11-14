@@ -6,7 +6,7 @@ import { raceEvidenceDeadline, readHostSessionInfo } from './session-info-read';
 import type { TimerHandle, TimerSeam } from './timer-seam';
 
 export type RuntimeSessionStatus = 'busy' | 'retry' | 'idle';
-export const DEFAULT_RUNTIME_SESSION_STATUS_TIMEOUT_MS = 5_000;
+const DEFAULT_RUNTIME_SESSION_STATUS_TIMEOUT_MS = 5_000;
 /** Default bound for the one host-info classification read (v2 hosts). */
 const DEFAULT_LIVE_SESSION_CLASSIFY_TIMEOUT_MS = 1_500;
 
@@ -112,7 +112,7 @@ export async function getRuntimeSessionStatusSnapshot(
   }
 }
 
-export type LiveSession =
+type LiveSession =
   | { kind: RuntimeSessionStatus | 'absent' }
   | { kind: 'unknown'; reason: string };
 
@@ -194,7 +194,7 @@ function classificationFromSnapshot(
 }
 
 /** One fresh read, reduced to what a single session's decision needs. */
-export async function readLiveSession(
+async function readLiveSession(
   input: PluginInput,
   sessionID: string,
   options: { timeoutMs?: number } = {},
