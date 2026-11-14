@@ -738,6 +738,37 @@ a one-time log line notes the divergence. Both paths share the same user
 switches: `fallback.enabled` and `disabled_hooks: ["foreground-fallback"]`
 disable steering too.
 
+#### Quota reset cooldowns on v2
+
+When a v2 retry observation confirms quota exhaustion and includes a positive
+native `retryAfterMs`, Slim remembers the reset deadline for that configured
+`provider/model`. This includes confirmed quota-exhaustion 429 responses, not
+ordinary rate limits. Missing reset information, authentication failures and
+request-scoped errors do not create durable exclusions; native retry and
+fallback behavior remains unchanged for those cases.
+
+The deadline is shared across sessions and process restarts in
+`omos-quota-cooldowns.json` under the OpenCode configuration directory
+(`OPENCODE_CONFIG_DIR`, otherwise `XDG_CONFIG_HOME/opencode` or
+`~/.config/opencode`). Existing fallback selection skips a cooling model while
+preserving chain order and variants. A request that explicitly selects a cooling
+model is refused before transport rather than silently rewritten. Eligibility
+returns at the deadline; reading or restarting does not extend it.
+
+Automatic restoration to the original model also respects its quota deadline,
+even after a temporary provider-failure mark expires. The session keeps its
+confirmed fallback while the origin is cooling, retaining the original model
+and variant for a later eligible restoration.
+
+The configuration directory is the sharing domain, not an account identity.
+Variants of one provider/model share its deadline; other models and providers
+are not excluded by that record. Credentials and endpoints are not inspected or
+fingerprinted. If the provider recovers early or the account changes, quiesce
+writers and remove this file to clear the records, or disable foreground
+fallback with the existing controls above. Automatic early recovery is not
+claimed. Missing, invalid or temporarily unavailable storage leaves ordinary
+native behavior in place rather than blocking all requests.
+
 On v2, `provider.content-filter` is a request-scoped failover error even when
 the host sets `decision.retry` to `false`. Slim advances to the next eligible
 model without adding the rejected request's provider to the abandoned set.

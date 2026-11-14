@@ -37,6 +37,7 @@ import * as path from 'node:path';
 import type { BundledSkillInfo } from '../cli/custom-skills';
 import { stateFilePath } from '../companion/manager';
 import { RuntimeConfig } from '../config/runtime';
+import { recordQuotaCooldown } from '../hooks/foreground-fallback/quota-cooldown';
 import { acquireMarketplaceLease } from '../marketplace/lease';
 import { MarketplaceStore } from '../marketplace/store';
 import { flushLoggerForTesting } from '../utils/logger';
@@ -5055,7 +5056,7 @@ describe('createV2Setup e2e', () => {
     expect(logText).not.toContain('[v2] v1 dispose failed');
   }, 20_000);
 
-  test('disabled_hooks chat-headers skips the model.request bridge registration', async () => {
+  test('quota model.request hook remains registered when chat-headers is disabled', async () => {
     await Bun.write(
       path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
       JSON.stringify({
@@ -5066,17 +5067,15 @@ describe('createV2Setup e2e', () => {
     const { ctx, calls } = makeMockV2Context(projectDir);
     const cleanup = await createV2Setup()(ctx);
 
-    // The v1 chat.headers key is absent, so the v2 bridge skips both the
-    // marker observer and the model.request registration; the rest of the
-    // session hooks still register.
-    expect(calls.hooks).not.toContain('session:model.request');
+    // Header marker observation is disabled, but the quota pre-dispatch
+    // check remains active under the independent foreground-fallback gate.
+    expect(calls.hooks).toContain('session:model.request');
     expect(calls.hooks).toContain('session:context');
     expect(calls.hooks).toContain('session:prompt');
 
     await cleanup();
 
-    // Control: the default config registers the model.request bridge, so
-    // the absence above is the gate and not a dead registration path.
+    // Control: the default config also registers the model.request bridge.
     await Bun.write(
       path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
       JSON.stringify({ companion: { enabled: false } }),
@@ -5085,6 +5084,84 @@ describe('createV2Setup e2e', () => {
     const controlCleanup = await createV2Setup()(control.ctx);
     expect(control.calls.hooks).toContain('session:model.request');
     await controlCleanup();
+  }, 20_000);
+
+  test('registered model.request hook refuses a cooled variant without rewriting the store', async () => {
+    const providerID = 'quota-provider';
+    const modelID = 'limited-model';
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        disabled_hooks: ['chat-headers'],
+        agents: { orchestrator: { model: [`${providerID}/${modelID}`] } },
+      }),
+    );
+    expect(await recordQuotaCooldown(providerID, modelID, 300_000)).toBe(true);
+    const cooldownPath = path.join(configDir, 'omos-quota-cooldowns.json');
+    const before = readFileSync(cooldownPath, 'utf8');
+    const { ctx, calls } = makeMockV2Context(projectDir);
+    const cleanup = await createV2Setup()(ctx);
+
+    try {
+      expect(calls.modelRequestHookCb).toBeDefined();
+      await expect(
+        calls.modelRequestHookCb?.({
+          sessionID: 'ses_quota_final_gate',
+          agent: 'orchestrator',
+          model: { providerID, id: modelID, variant: 'high' },
+          kind: 'primary',
+          headers: {},
+        }),
+      ).rejects.toThrow('[QUOTA COOLDOWN REFUSAL]');
+      expect(readFileSync(cooldownPath, 'utf8')).toBe(before);
+    } finally {
+      await cleanup();
+    }
+  }, 20_000);
+
+  test('quota final gate respects fallback.enabled and disabled_hooks', async () => {
+    const providerID = 'quota-provider';
+    const modelID = 'disabled-model';
+    await recordQuotaCooldown(providerID, modelID, 300_000);
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        disabled_hooks: ['chat-headers'],
+        fallback: { enabled: false },
+      }),
+    );
+    const disabledByConfig = makeMockV2Context(projectDir);
+    const configCleanup = await createV2Setup()(disabledByConfig.ctx);
+    try {
+      await expect(
+        disabledByConfig.calls.modelRequestHookCb?.({
+          sessionID: 'ses_quota_fallback_disabled',
+          agent: 'orchestrator',
+          model: { providerID, id: modelID },
+          kind: 'primary',
+          headers: {},
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      await configCleanup();
+    }
+
+    await Bun.write(
+      path.join(projectDir, '.opencode', 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        companion: { enabled: false },
+        disabled_hooks: ['chat-headers', 'foreground-fallback'],
+      }),
+    );
+    const disabledByHook = makeMockV2Context(projectDir);
+    const hookCleanup = await createV2Setup()(disabledByHook.ctx);
+    try {
+      expect(disabledByHook.calls.hooks).not.toContain('session:model.request');
+    } finally {
+      await hookCleanup();
+    }
   }, 20_000);
 
   test('host rejecting the model.request hook name fails setup loudly', async () => {

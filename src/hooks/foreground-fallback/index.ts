@@ -68,6 +68,12 @@ import {
 import type { SessionLifecycle } from '../session-lifecycle';
 import { isUserMessageWithParts } from '../types';
 import { asHttpStatus, DEDUP_WINDOW_MS } from './dedup';
+import {
+  getCoolingQuotaModelKeys,
+  isQuotaModelCooling as isQuotaModelCoolingOnDisk,
+  quotaModelKey,
+  recordQuotaCooldown,
+} from './quota-cooldown';
 
 /** Timer port for deterministic test control (see `src/utils/test-timers.ts`):
  *  `now` is observation time (dedup windows, incident clocks); scheduling
@@ -628,6 +634,61 @@ export function isPermanentQuotaBillingError(error: unknown): boolean {
 }
 
 /**
+ * Return the host's explicit quota reset duration only for confirmed quota
+ * exhaustion. Request-scoped failures and authentication remain ephemeral.
+ */
+export function quotaCooldownResetDuration(error: unknown): number | undefined {
+  if (!isRecord(error)) return undefined;
+  const statusCode = extractStatusCode(error);
+  const type = nestedField(error, 'type');
+  if (
+    type === 'provider.auth' ||
+    type === 'provider.content-filter' ||
+    type === 'provider.no-route' ||
+    type === 'provider.invalid-request' ||
+    statusCode === 401 ||
+    failoverScope(error) === 'request' ||
+    errorMessages(error).some((message) =>
+      /\b(?:invalid|malformed|unsupported)\s+(?:json\s+)?(?:schema|request|parameter|argument)\b|\bschema validation\b|\bvalidation error\b/i.test(
+        message,
+      ),
+    )
+  ) {
+    return undefined;
+  }
+  const carriers = failoverCarriers(error);
+  if (
+    carriers.some((carrier) =>
+      /(?:Antigravity did not begin a response within the pre-response time limit|requested Antigravity model is not available to the configured accounts|account pool (?:has no account available|is unavailable))/i.test(
+        carrier,
+      ),
+    )
+  ) {
+    return undefined;
+  }
+  const hasPermanentQuotaEvidence = carriers.some((carrier) =>
+    /\b(?:individual quota reached|personal-team-blocked|spending.?limit|(?:ran|run) out of credits|credits exhausted|coding plan package has expired|(?:weekly|monthly) limit exhausted|free usage exceeded|subscribe to go|upgrade your subscription to increase your limits|1113|1308|1309|1310)\b/i.test(
+      carrier,
+    ),
+  );
+  const permanentQuota =
+    isPermanentQuotaBillingError(error) &&
+    (statusCode === 402 || hasPermanentQuotaEvidence);
+  const supportedQuotaType =
+    type === undefined || type === 'provider.rate-limit';
+  const quotaExhausted =
+    type === 'provider.quota' ||
+    (supportedQuotaType && (isSpentQuotaError(error) || permanentQuota));
+  if (!quotaExhausted) return undefined;
+  const resetAfterMs = error.retryAfterMs;
+  return typeof resetAfterMs === 'number' &&
+    Number.isFinite(resetAfterMs) &&
+    resetAfterMs > 0
+    ? resetAfterMs
+    : undefined;
+}
+
+/**
  * True when the error is the kind the runtime surfaces inline (401 auth,
  * 410 model gone) — persistent, user-visible, already in the conversation.
  * These should NOT get a toast; the runtime's inline rendering is enough.
@@ -755,6 +816,8 @@ export type ForegroundFallbackOptions = {
    * @default 500
    */
   retryDelayMs?: number;
+  /** Test seam; production derives the quota store from getConfigDir(). */
+  quotaCooldownFilePath?: string;
   /** Terminal-observation handoff for background children: prepare()
    *  arms the stop-gate deferral BEFORE the admission await (with the
    *  baseline from the same transcript read that produced the replay);
@@ -994,6 +1057,7 @@ export class ForegroundFallbackManager {
    *  fences relaunches: a generation change during the admission must not
    *  enroll the new run under the stale attempt's baseline. */
   private readonly backgroundFallbackHandoff?: BackgroundFallbackHandoff;
+  private readonly quotaCooldownFilePath?: string;
   /** Synchronous board read returning the tracked generation for a
    *  confirmed BACKGROUND child only — undefined for foreground or
    *  unmanaged sessions (that undefined means "handoff not
@@ -1012,6 +1076,62 @@ export class ForegroundFallbackManager {
     return (
       this.inProgress.has(sessionID) || this.pendingInitialDelay.has(sessionID)
     );
+  }
+
+  private quotaCooldownEnabledFor(sessionID: string): boolean {
+    return (
+      (this.input as PluginInput & { hostFlavor?: string }).hostFlavor ===
+        'v2' && this.retryEnabledFor(sessionID)
+    );
+  }
+
+  /** Synchronous final-admission read used by the v2 model.request bridge. */
+  isQuotaModelCooling(
+    sessionID: string,
+    providerID: string,
+    modelID: string,
+    now = this.now(),
+  ): boolean {
+    return (
+      this.quotaCooldownEnabledFor(sessionID) &&
+      isQuotaModelCoolingOnDisk(
+        providerID,
+        modelID,
+        now,
+        this.quotaCooldownFilePath,
+      )
+    );
+  }
+
+  private quotaCoolingModels(sessionID: string): ReadonlySet<string> {
+    return this.quotaCooldownEnabledFor(sessionID)
+      ? getCoolingQuotaModelKeys(this.now(), this.quotaCooldownFilePath)
+      : new Set();
+  }
+
+  private async recordV2QuotaCooldown(
+    sessionID: string,
+    providerID: string,
+    modelID: string,
+    resetAfterMs: number,
+  ): Promise<void> {
+    try {
+      await recordQuotaCooldown(
+        providerID,
+        modelID,
+        resetAfterMs,
+        this.now(),
+        this.quotaCooldownFilePath
+          ? { filePath: this.quotaCooldownFilePath }
+          : undefined,
+      );
+    } catch (writeError) {
+      log('[foreground-fallback] quota cooldown write failed', {
+        sessionID,
+        model: `${providerID}/${modelID}`,
+        error: stringifyError(writeError),
+      });
+    }
   }
 
   /**
@@ -1620,6 +1740,7 @@ export class ForegroundFallbackManager {
     this.chainSource = chains;
     this.onSessionModelChanged = onSessionModelChanged;
     this.backgroundFallbackHandoff = backgroundFallbackHandoff;
+    this.quotaCooldownFilePath = options.quotaCooldownFilePath;
     this.readBackgroundGeneration = readBackgroundGeneration;
     if (coordinator) {
       this.hasCoordinator = true;
@@ -1718,6 +1839,12 @@ export class ForegroundFallbackManager {
       this.getDownProviders(sessionID).has(
         parseModelReference(descent.model)?.providerID ?? '',
       )
+    )
+      return;
+    const origin = parseModelReference(descent.model);
+    if (
+      origin &&
+      this.isQuotaModelCooling(sessionID, origin.providerID, origin.modelID)
     )
       return;
     return {
@@ -2527,6 +2654,7 @@ export class ForegroundFallbackManager {
     const epoch = this.turnEpoch.get(sessionID) ?? 0;
     const from = `${event.model.providerID}/${event.model.id}`;
     let failover = false;
+    let ownsInProgress = false;
     try {
       const scope = failoverScope(event.error);
       failover = scope !== undefined;
@@ -2537,6 +2665,37 @@ export class ForegroundFallbackManager {
       )
         return;
       if (!failover) return;
+      const quotaResetAfterMs = quotaCooldownResetDuration(event.error);
+      if (
+        quotaResetAfterMs !== undefined &&
+        this.quotaCooldownEnabledFor(sessionID)
+      ) {
+        // The writer is asynchronous. Reserve the existing single-flight slot
+        // before its first await so an overlapping retry cannot steer too.
+        if (
+          this.sessionTried.get(sessionID)?.has(from) &&
+          this.sessionModel.get(sessionID) !== from
+        )
+          return;
+        this.inProgress.add(sessionID);
+        ownsInProgress = true;
+        await this.recordV2QuotaCooldown(
+          sessionID,
+          event.model.providerID,
+          event.model.id,
+          quotaResetAfterMs,
+        );
+        // A newer external prompt or disposal may have happened while the
+        // durable write waited for the shared lock. Do not bookkeep or steer
+        // the superseded turn.
+        if (
+          !this.isCurrentTurn(sessionID, epoch) ||
+          !this.retryEnabledFor(sessionID) ||
+          (this.sessionTried.get(sessionID)?.has(from) &&
+            this.sessionModel.get(sessionID) !== from)
+        )
+          return;
+      }
       // initialRetryDelayMs has no steering form: the delay exists to give
       // intercepting plugins a recovery window before a REPLAY, and
       // steering performs no replay — the host's own retry backoff is
@@ -2576,11 +2735,19 @@ export class ForegroundFallbackManager {
         event.decision = { retry: true, delay: 0 };
         return;
       }
+      const sourceQuotaCooling = this.isQuotaModelCooling(
+        sessionID,
+        event.model.providerID,
+        event.model.id,
+      );
       if (event.decision?.retry === true) {
         this.rearmIfFreshDescent(sessionID);
         // Request rejections and spent allowance cannot recover by retrying
-        // this model, so steer without charging the host-retry budget.
+        // this model, so steer without charging the host-retry budget. A
+        // persisted cooldown also makes another same-model host retry unsafe;
+        // only an actual readable cooldown skips absorption.
         if (
+          !sourceQuotaCooling &&
           !auth401 &&
           !isPermanentQuotaBillingError(event.error) &&
           !isSpentQuotaError(event.error) &&
@@ -2589,27 +2756,26 @@ export class ForegroundFallbackManager {
         )
           return;
       }
-      this.inProgress.add(sessionID);
-      try {
-        const nextModel = await this.switchV2InPlace(
-          sessionID,
-          from,
-          event.error,
-          switchModel,
-          epoch,
-          event.model.variant,
-        );
-        if (nextModel)
-          event.decision = { retry: true, delay: this.retryDelayMs };
-      } finally {
-        this.inProgress.delete(sessionID);
+      if (!ownsInProgress) {
+        this.inProgress.add(sessionID);
+        ownsInProgress = true;
       }
+      const nextModel = await this.switchV2InPlace(
+        sessionID,
+        from,
+        event.error,
+        switchModel,
+        epoch,
+        event.model.variant,
+      );
+      if (nextModel) event.decision = { retry: true, delay: this.retryDelayMs };
     } catch (err) {
       log(
         '[foreground-fallback] retry hook switch failed; host decision unchanged',
         { sessionID: event?.sessionID, error: stringifyError(err) },
       );
     } finally {
+      if (ownsInProgress) this.inProgress.delete(sessionID);
       const error = isRecord(event.error) ? event.error : undefined;
       log('[foreground-fallback] v2 retry hook observed', {
         sessionID,
@@ -2652,11 +2818,15 @@ export class ForegroundFallbackManager {
     let detail: V2SwitchDetail | undefined;
     let confirmed = false;
     try {
+      if (!live()) return;
       const selected = this.selectFallbackModel(sessionID, error);
       if (!selected || selected === 'exhausted') return;
       const { agentName, nextModel, ref, variant } = selected;
       picked = nextModel;
       detail = { agentName, variant };
+      // Recheck immediately before the native call even when caller-side work
+      // awaited after its initial epoch check.
+      if (!live()) return;
       switchRequest = switchModel(sessionID, {
         providerID: ref.providerID,
         id: ref.modelID,
@@ -3941,6 +4111,22 @@ export class ForegroundFallbackManager {
     );
     const hasAllowance = (model: string) =>
       !quotaExhausted?.has(parseModelReference(model)?.providerID ?? '');
+    const cooledModels = this.quotaCoolingModels(sessionID);
+    const isCooling = (model: string) => {
+      const ref = parseModelReference(model);
+      const key = ref ? quotaModelKey(ref.providerID, ref.modelID) : undefined;
+      return key !== undefined && cooledModels.has(key);
+    };
+
+    if (chain.every(isCooling)) {
+      this.cancelInitialDelay(sessionID);
+      log('[foreground-fallback] every model in the chain is cooling', {
+        sessionID,
+        agentName,
+        currentModel,
+      });
+      return 'exhausted' as const;
+    }
 
     const downProviders = this.getDownProviders(sessionID);
     const parentID = this.sessionParent.get(sessionID);
@@ -3957,6 +4143,7 @@ export class ForegroundFallbackManager {
             !tried.has(model) &&
             !rejected?.has(model) &&
             hasAllowance(model) &&
+            !isCooling(model) &&
             !downProviders.has(provider) &&
             !parentDownProviders?.has(provider)
           );
@@ -3968,7 +4155,9 @@ export class ForegroundFallbackManager {
         // stop intervening instead of reopening the chain. A spent allowance
         // (issue #966) is never retried: with no entry left on another
         // provider the error surfaces without an abort.
-        const stickyFallback = chain.findLast(hasAllowance);
+        const stickyFallback = chain.findLast(
+          (model) => hasAllowance(model) && !isCooling(model),
+        );
         if (stickyFallback === undefined) {
           this.cancelInitialDelay(sessionID);
           log(
