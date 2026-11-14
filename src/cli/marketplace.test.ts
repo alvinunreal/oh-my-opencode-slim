@@ -95,10 +95,6 @@ describe('marketplace CLI', () => {
       };
       expect(await runMarketplaceCommand(['import', bundlePath], io)).toBe(0);
       expect(await runMarketplaceCommand(['status'], io)).toBe(0);
-      expect(JSON.parse(output.at(-1) ?? '{}').desiredPackageIds).toEqual([]);
-      expect(
-        await runMarketplaceCommand(['status', '--host-flavor', 'v2'], io),
-      ).toBe(0);
       expect(JSON.parse(output.at(-1) ?? '{}').desiredPackageIds).toEqual([
         'team/cli',
       ]);

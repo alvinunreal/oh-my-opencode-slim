@@ -10,7 +10,7 @@
 import { resolveImageRouting } from '../config/constants';
 import { RuntimeConfig } from '../config/runtime';
 import { collapseInterviewHistory } from '../interview/history';
-import { BackgroundJobBoard, createInternalAgentTextPart } from '../utils';
+import { createInternalAgentTextPart } from '../utils';
 import { createDisplayNameMentionRewriter } from '../utils/agent-variant';
 import { isTaggedPart } from './cache-safe-injection';
 import { createCouncilInjectHook } from './council-inject';
@@ -18,13 +18,9 @@ import { createDeepworkGoalHook } from './deepwork-goal';
 import { processImageAttachments } from './image-hook';
 import { createMessageTransformView } from './message-transform-view';
 import { createPhaseReminderHook } from './phase-reminder';
-import { SessionLifecycle } from './session-lifecycle';
-import {
-  BACKGROUND_JOB_BOARD_METADATA_KEY,
-  createTaskSessionManagerHook,
-} from './task-session-manager';
 import type { MessageWithParts } from './types';
 import { isMessageWithParts } from './types';
+import { BACKGROUND_JOB_BOARD_METADATA_KEY } from './volatile-message';
 
 export const SESSION_ID = 'ses_cache_safety_fixture';
 export const FIXTURE_NOW = 1_700_000_000_000;
@@ -40,13 +36,10 @@ export interface PipelineOptions {
    * test board/bridge behavior in isolation.
    */
   goalPointer?: boolean;
-  refusalCorrection?: boolean;
-  killAllStop?: () => boolean;
 }
 
 export interface Pipeline {
   run: (output: TransformOutput) => Promise<void>;
-  board: BackgroundJobBoard;
 }
 
 /**
@@ -55,52 +48,10 @@ export interface Pipeline {
  * BOTH when adding, removing, or reordering a transform step.
  */
 export function createPipeline(options: PipelineOptions = {}): Pipeline {
-  const sessionAgentMap = new Map<string, string>();
-  const board = new BackgroundJobBoard();
-  if (options.refusalCorrection) {
-    board.registerLaunch({
-      taskID: 'ses_refused_child',
-      parentSessionID: SESSION_ID,
-      agent: 'explorer',
-      description: 'inspect',
-      background: true,
-      now: FIXTURE_NOW - 1,
-    });
-  }
-  const lifecycle = new SessionLifecycle(() => {});
   const noopLog = () => {};
 
   const rewriteDisplayNameMentions = createDisplayNameMentionRewriter(
     RuntimeConfig.get('/tmp/cache-safety-fixture'),
-  );
-
-  const shouldInjectOrchestratorReminder = (sessionID: string) =>
-    sessionAgentMap.get(sessionID) === 'orchestrator';
-
-  const taskSessionManagerHook = createTaskSessionManagerHook(
-    {
-      client: {
-        session: {
-          status: async () => ({ data: {} }),
-        },
-      },
-      directory: '/tmp/cache-safety-fixture',
-      worktree: '/tmp/cache-safety-fixture',
-    } as never,
-    {
-      maxSessionsPerAgent: 2,
-      backgroundJobBoard: board,
-      isKillAllStopActive: options.killAllStop,
-      shouldManageSession: (sessionID) =>
-        sessionAgentMap.get(sessionID) === 'orchestrator',
-      registerSessionAsOrchestrator: (sessionID) => {
-        sessionAgentMap.set(sessionID, 'orchestrator');
-      },
-      coordinator: lifecycle,
-      ...(options.refusalCorrection
-        ? { v1ReplayOutcome: async () => 'test/fallback' }
-        : {}),
-    },
   );
 
   const phaseReminder = createPhaseReminderHook();
@@ -118,8 +69,7 @@ export function createPipeline(options: PipelineOptions = {}): Pipeline {
   // exercise the trailing volatile pointer's byte stability.
   const deepworkGoal = createDeepworkGoalHook({
     isEligible: (sessionID) =>
-      options.goalPointer === true &&
-      shouldInjectOrchestratorReminder(sessionID),
+      options.goalPointer === true && sessionID === SESSION_ID,
   });
 
   const run = async (output: TransformOutput): Promise<void> => {
@@ -143,11 +93,6 @@ export function createPipeline(options: PipelineOptions = {}): Pipeline {
       view,
     });
 
-    await taskSessionManagerHook['experimental.chat.messages.transform'](
-      {} as never,
-      output as never,
-      view,
-    );
     await phaseReminder['experimental.chat.messages.transform'](
       {} as never,
       output as never,
@@ -158,7 +103,6 @@ export function createPipeline(options: PipelineOptions = {}): Pipeline {
       output as never,
       view,
     );
-    await taskSessionManagerHook.injectBackgroundJobBoard({}, output);
     // Trailing-most volatile message (src/index.ts order).
     await deepworkGoal['experimental.chat.messages.transform'](
       {} as never,
@@ -169,7 +113,6 @@ export function createPipeline(options: PipelineOptions = {}): Pipeline {
 
   return {
     run,
-    board,
   };
 }
 
@@ -216,31 +159,6 @@ export function internalInitiatorTurn(id: string, text: string) {
   };
 }
 
-export function refusedChildTurn() {
-  return {
-    info: {
-      role: 'user',
-      agent: 'orchestrator',
-      sessionID: SESSION_ID,
-      id: 'native-refusal',
-      time: { created: FIXTURE_NOW },
-    },
-    parts: [
-      {
-        type: 'text',
-        synthetic: true,
-        text: '<task id="ses_refused_child" state="error">\n<summary>Background task failed: inspect</summary>\n<task_error>Subagent failed (task_id: ses_refused_child): content filter</task_error>\n</task>',
-      },
-    ],
-  };
-}
-
-/**
- * Conversation fixture covering the paths that produced past cache bugs:
- * plain orchestrator turns, assistant tool loops, a specialist message, an
- * internal-initiator continuation, and a message carrying a
- * <available_skills> block.
- */
 export function buildHistory(): unknown[] {
   return [
     userTurn('m01', 'set up the project'),

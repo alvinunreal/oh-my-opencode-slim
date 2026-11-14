@@ -94,7 +94,7 @@ const BACKGROUND_TASK_TOOL_NAMES = new Set([
   'task_reply',
 ]);
 
-/** Native mode registers only these two host-read controls. */
+/** Both hosts register these native controls; V2 also keeps task_reply. */
 const NATIVE_MODE_TASK_TOOL_NAMES = new Set(['task_cancel', 'task_status']);
 
 /** V1-only baseline tools: never registered on v2, nor without the lifecycle. */
@@ -140,7 +140,11 @@ export function minimumExpectedToolCount(
       unregistered.add(name);
   } else if (mode === 'native') {
     for (const name of TASK_TOOL_NAMES) {
-      if (!NATIVE_MODE_TASK_TOOL_NAMES.has(name)) unregistered.add(name);
+      if (
+        !NATIVE_MODE_TASK_TOOL_NAMES.has(name) &&
+        !(v2 && name === 'task_reply')
+      )
+        unregistered.add(name);
     }
   }
   // Config values come from user-edited JSON/JSONC (and can be re-derived

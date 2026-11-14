@@ -3,7 +3,8 @@ export const INSTALLER_MANAGED_PLUGIN_OPTION =
 
 export type PluginEntry =
   | string
-  | [string, Record<string, unknown>, ...unknown[]];
+  | [string, Record<string, unknown>, ...unknown[]]
+  | { package: string; options?: Record<string, unknown> };
 
 export function getPlugins(config: {
   plugin?: unknown;

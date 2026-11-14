@@ -225,13 +225,14 @@ describe('durable session team presets', () => {
     await presets.dispose();
   });
 
-  test('roots freeze at admission; switch, descendants and restart keep independent complete bundles', async () => {
+  test('applied roots freeze; switch, descendants and restart keep independent complete bundles', async () => {
     const f = fixture();
     let presets = f.create();
-    await presets.ensure('root-A');
+    // Explicitly applied roots keep their team; default roots follow refreshes.
+    await presets.apply('root-A', 'A');
+    await presets.apply('root-B', 'B');
     f.setCurrent('B');
-    await presets.ensure('root-B');
-    // A never delegated before the global edit, but its new child still gets A.
+    // root-A's new child gets A, not the live default.
     f.parents.set('old-child', 'root-A');
     await presets.bindChild(
       'old-child',

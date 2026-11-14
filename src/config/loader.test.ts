@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { resolveFeatureGates } from './feature-gates';
+import { getAgentMcpList } from './agent-mcps';
+import {
+  resolveFeatureGates,
+  UnsupportedHostConfigError,
+} from './feature-gates';
 import type { ConfigLoadWarning } from './loader';
 import {
   findPluginConfigPaths,
@@ -10,6 +14,7 @@ import {
   loadAgentPrompt,
   loadPluginConfig,
 } from './loader';
+import { RuntimeConfig } from './runtime';
 
 // Test deepMerge indirectly through loadPluginConfig behavior
 // since deepMerge is not exported
@@ -43,6 +48,233 @@ describe('loadPluginConfig', () => {
     fs.mkdirSync(projectDir, { recursive: true });
     const config = loadPluginConfig(projectDir);
     expect(config).toEqual({});
+  });
+
+  describe('host-aware background jobs retirement matrix', () => {
+    test('v2 rejects explicit managed mode with clear error before construction', () => {
+      const projectDir = path.join(tempDir, 'project');
+      writeProjectConfig(projectDir, {
+        backgroundJobs: { mode: 'managed' },
+      });
+
+      expect(() => loadPluginConfig(projectDir, { hostFlavor: 'v2' })).toThrow(
+        UnsupportedHostConfigError,
+      );
+      expect(() => loadPluginConfig(projectDir, { hostFlavor: 'v2' })).toThrow(
+        /Unsupported backgroundJobs\.mode "managed" on OpenCode v2/,
+      );
+
+      // v1 loads managed normally
+      const v1Config = loadPluginConfig(projectDir, { hostFlavor: 'v1' });
+      expect(v1Config.backgroundJobs?.mode).toBe('managed');
+    });
+
+    test('v2 rejects explicit retired keys before defaults or sanitization', () => {
+      const projectDir = path.join(tempDir, 'project');
+      const forbiddenCases = [
+        { concurrency: { defaultConcurrency: 0 } },
+        {
+          concurrency: {
+            defaultConcurrency: 0,
+            providerConcurrency: { provider: 0 },
+            modelConcurrency: { 'provider/model': 0 },
+          },
+        },
+        { concurrency: {} },
+        { wallClockTimeoutMs: 0 },
+        { maxSessionsPerAgent: 2 },
+        { stopConfirmationMs: 5_000 },
+      ];
+
+      for (const backgroundJobs of forbiddenCases) {
+        writeProjectConfig(projectDir, { backgroundJobs });
+        expect(() =>
+          loadPluginConfig(projectDir, { hostFlavor: 'v2', silent: true }),
+        ).toThrow(UnsupportedHostConfigError);
+        for (const hostFlavor of [undefined, 'v1']) {
+          const v1 = loadPluginConfig(projectDir, { hostFlavor });
+          expect(v1.backgroundJobs).toMatchObject(backgroundJobs);
+        }
+      }
+
+      // Invalid retired values must not disappear through the sanitizer.
+      for (const backgroundJobs of [
+        { concurrency: null },
+        { wallClockTimeoutMs: -1 },
+        { maxSessionsPerAgent: 100 },
+        { stopConfirmationMs: 'invalid' },
+      ]) {
+        writeProjectConfig(projectDir, { backgroundJobs });
+        expect(() =>
+          loadPluginConfig(projectDir, { hostFlavor: 'v2', silent: true }),
+        ).toThrow(UnsupportedHostConfigError);
+      }
+    });
+
+    test('v2 allows absence of backgroundJobs and allows sameProviderPolicy', () => {
+      const projectDir = path.join(tempDir, 'project');
+      writeProjectConfig(projectDir, {
+        backgroundJobs: {
+          sameProviderPolicy: { anthropic: 'foreground' },
+        },
+      });
+
+      const v2Config = loadPluginConfig(projectDir, { hostFlavor: 'v2' });
+      expect(v2Config.backgroundJobs?.sameProviderPolicy).toEqual({
+        anthropic: 'foreground',
+      });
+      // Mode was not explicit, so it is undefined in raw loaded config and
+      // resolveFeatureGates defaults to native
+      expect(v2Config.backgroundJobs?.mode).toBeUndefined();
+      const gates = resolveFeatureGates(v2Config, 'v2');
+      expect(gates.backgroundJobsMode).toBe('native');
+      expect(gates.managedJobs).toBe(false);
+      expect(gates.presetRouting).toBe(true);
+    });
+
+    test('v2 detects explicit forbidden keys across user and project layers', () => {
+      const projectDir = path.join(tempDir, 'project');
+      const globalDir = path.join(userConfigDir, 'opencode');
+      fs.mkdirSync(globalDir, { recursive: true });
+
+      // User config sets wallClockTimeoutMs
+      fs.writeFileSync(
+        path.join(globalDir, 'oh-my-opencode-slim.json'),
+        JSON.stringify({ backgroundJobs: { wallClockTimeoutMs: 60_000 } }),
+      );
+      // Project config sets only harmless agent
+      writeProjectConfig(projectDir, { agents: { oracle: { model: 'm1' } } });
+
+      expect(() => loadPluginConfig(projectDir, { hostFlavor: 'v2' })).toThrow(
+        UnsupportedHostConfigError,
+      );
+
+      // Clean up global config
+      fs.unlinkSync(path.join(globalDir, 'oh-my-opencode-slim.json'));
+    });
+
+    test('a project native mode does not hide an unsupported user-layer managed mode', () => {
+      const projectDir = path.join(tempDir, 'project');
+      const globalDir = path.join(userConfigDir, 'opencode');
+      fs.mkdirSync(globalDir, { recursive: true });
+      const userPath = path.join(globalDir, 'oh-my-opencode-slim.json');
+      fs.writeFileSync(
+        userPath,
+        JSON.stringify({ backgroundJobs: { mode: 'managed' } }),
+      );
+      writeProjectConfig(projectDir, { backgroundJobs: { mode: 'native' } });
+
+      expect(() =>
+        loadPluginConfig(projectDir, { hostFlavor: 'v2', silent: true }),
+      ).toThrow(userPath);
+    });
+
+    test('retains existing disable switches and layered precedence on both hosts', () => {
+      const projectDir = path.join(tempDir, 'project');
+      const globalDir = path.join(userConfigDir, 'opencode');
+      fs.mkdirSync(globalDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(globalDir, 'oh-my-opencode-slim.json'),
+        JSON.stringify({
+          autoUpdate: false,
+          webfetch: { enabled: false },
+          backgroundJobs: { childInputWake: false },
+        }),
+      );
+      writeProjectConfig(projectDir, {
+        webfetch: {},
+        backgroundJobs: { childInputWakeKinds: { question: true } },
+      });
+
+      for (const hostFlavor of ['v1', 'v2']) {
+        const config = loadPluginConfig(projectDir, {
+          hostFlavor,
+          silent: true,
+        });
+        expect(resolveFeatureGates(config, hostFlavor)).toMatchObject({
+          updateChecker: false,
+          webfetch: false,
+        });
+        expect(config.backgroundJobs?.childInputWake).toBe(false);
+      }
+
+      writeProjectConfig(projectDir, {
+        autoUpdate: true,
+        webfetch: { enabled: true },
+        backgroundJobs: { childInputWake: true },
+      });
+      for (const hostFlavor of ['v1', 'v2']) {
+        const config = loadPluginConfig(projectDir, {
+          hostFlavor,
+          silent: true,
+        });
+        expect(resolveFeatureGates(config, hostFlavor)).toMatchObject({
+          updateChecker: true,
+          webfetch: true,
+        });
+        expect(config.backgroundJobs?.childInputWake).toBe(true);
+      }
+    });
+
+    test('v2 emits unsupported warnings for v1-only wake and pruning knobs without throwing', () => {
+      const projectDir = path.join(tempDir, 'project');
+      writeProjectConfig(projectDir, {
+        backgroundJobs: {
+          childInputWake: false,
+          childInputWakeKinds: { question: false },
+          waitForUserGuard: false,
+          pruneEvictedSessions: true,
+          sameProviderPolicy: { openai: 'foreground' },
+        },
+      });
+
+      const warnings: ConfigLoadWarning[] = [];
+      const config = loadPluginConfig(projectDir, {
+        hostFlavor: 'v2',
+        silent: true,
+        onWarning: (w) => warnings.push(w),
+      });
+
+      expect(config).toBeDefined();
+      const unsupported = warnings.filter((w) => w.kind === 'unsupported-host');
+      expect(unsupported).toHaveLength(5);
+      expect(
+        unsupported.some((w) => w.message.includes('childInputWake is')),
+      ).toBe(true);
+      expect(
+        unsupported.some((w) => w.message.includes('childInputWakeKinds')),
+      ).toBe(true);
+      expect(
+        unsupported.some((w) => w.message.includes('waitForUserGuard')),
+      ).toBe(true);
+      expect(
+        unsupported.some((w) => w.message.includes('pruneEvictedSessions')),
+      ).toBe(true);
+      expect(
+        unsupported.some((w) => w.message.includes('sameProviderPolicy')),
+      ).toBe(true);
+    });
+
+    test('v1 emits no unsupported-host warnings for sameProviderPolicy', () => {
+      const projectDir = path.join(tempDir, 'project');
+      writeProjectConfig(projectDir, {
+        backgroundJobs: {
+          sameProviderPolicy: { openai: 'foreground' },
+          childInputWake: false,
+        },
+      });
+
+      const warnings: ConfigLoadWarning[] = [];
+      const config = loadPluginConfig(projectDir, {
+        hostFlavor: 'v1',
+        silent: true,
+        onWarning: (w) => warnings.push(w),
+      });
+
+      expect(config).toBeDefined();
+      const unsupported = warnings.filter((w) => w.kind === 'unsupported-host');
+      expect(unsupported).toHaveLength(0);
+    });
   });
 
   test('loads project config from .opencode directory', () => {
@@ -581,8 +813,6 @@ describe('loadPluginConfig', () => {
 
     expect(config.backgroundJobs?.maxSessionsPerAgent).toBe(8);
     expect('strategy' in (config.backgroundJobs ?? {})).toBe(false);
-    expect(config.backgroundJobs?.orchestratorWake?.intervalMs).toBe(120_000);
-    expect(config.backgroundJobs?.orchestratorWake?.enabled).toBe(false);
   });
 
   test('a project backgroundJobs layer without mode keeps the user mode off', () => {
@@ -1115,53 +1345,6 @@ describe('onWarning callback', () => {
     ]);
   });
 
-  test('passes explicit terminal-publication wake and stop-confirmation knobs through', () => {
-    const projectDir = path.join(tempDir, 'project');
-    const projectConfigDir = path.join(projectDir, '.opencode');
-    fs.mkdirSync(projectConfigDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        backgroundJobs: {
-          orchestratorWake: {
-            wakeOnTerminalPublication: false,
-            publicationWakeMinIntervalMs: 120_000,
-          },
-          stopConfirmationMs: 15_000,
-        },
-      }),
-    );
-
-    const config = loadPluginConfig(projectDir, { silent: true });
-
-    expect(config.backgroundJobs?.orchestratorWake).toEqual({
-      enabled: true,
-      intervalMs: 300_000,
-      mode: 'auto',
-      periodicWakeEnabled: true,
-      wakeOnTerminalPublication: false,
-      publicationWakeMinIntervalMs: 120_000,
-    });
-    expect(config.backgroundJobs?.stopConfirmationMs).toBe(15_000);
-  });
-
-  test('v2 host flavor leaves wake keys at schema defaults; gating is structural', () => {
-    const projectDir = path.join(tempDir, 'project');
-    const config = loadPluginConfig(projectDir, {
-      silent: true,
-      hostFlavor: 'v2',
-    });
-
-    // The loader derives nothing per host flavor. v2 periodic-off is applied
-    // structurally at the wake-scheduler wiring (src/index.ts).
-    // No layer configures backgroundJobs, so nothing is parsed and no key
-    // is derived: the periodic key stays absent (runtime applies the true
-    // default on v1 and the index.ts mapping forces it off on v2).
-    expect(
-      config.backgroundJobs?.orchestratorWake?.periodicWakeEnabled,
-    ).toBeUndefined();
-  });
-
   test('routingBlock never derives a v2 default (no boardInjection-style flip)', () => {
     const projectDir = path.join(tempDir, 'project');
     // Unset on v2 stays unset: the native subagent roster carries agent
@@ -1211,7 +1394,7 @@ describe('onWarning callback', () => {
     const originalWarn = console.warn;
     console.warn = (message: string) => warnings.push(message);
     try {
-      const config = loadPluginConfig(projectDir, { hostFlavor: 'v2' });
+      const config = loadPluginConfig(projectDir, { hostFlavor: 'v1' });
       for (const key of [
         'backgroundJobs.maxContextLines',
         'backgroundJobs.readContextMinLines',
@@ -1219,6 +1402,7 @@ describe('onWarning callback', () => {
         'backgroundJobs.strategy',
         'backgroundJobs.maxRetainedSnapshots',
         'backgroundJobs.boardInjection',
+        'backgroundJobs.orchestratorWake',
       ]) {
         const matching = warnings.filter((message) =>
           message.includes(`"${key}"`),
@@ -1234,6 +1418,7 @@ describe('onWarning callback', () => {
         'strategy',
         'maxRetainedSnapshots',
         'boardInjection',
+        'orchestratorWake',
       ]) {
         expect(key in bj).toBe(false);
       }
@@ -1245,85 +1430,11 @@ describe('onWarning callback', () => {
         ),
       ).toHaveLength(1);
       expect('boardInjection' in bj).toBe(false);
-      // Valid siblings and explicit wake keys still load.
+      // Valid siblings still load.
       expect(config.backgroundJobs?.maxSessionsPerAgent).toBe(4);
-      expect(config.backgroundJobs?.orchestratorWake.periodicWakeEnabled).toBe(
-        true,
-      );
     } finally {
       console.warn = originalWarn;
     }
-  });
-
-  test('explicit v2 opt-out still holds and v1 hosts keep wake defaults', () => {
-    const projectDir = path.join(tempDir, 'project');
-    const projectConfigDir = path.join(projectDir, '.opencode');
-    fs.mkdirSync(projectConfigDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
-      JSON.stringify({
-        backgroundJobs: {
-          orchestratorWake: { periodicWakeEnabled: false },
-        },
-      }),
-    );
-
-    const v2Config = loadPluginConfig(projectDir, {
-      silent: true,
-      hostFlavor: 'v2',
-    });
-    expect(v2Config.backgroundJobs?.orchestratorWake.periodicWakeEnabled).toBe(
-      false,
-    );
-
-    const v1Config = loadPluginConfig(projectDir, { silent: true });
-    expect(v1Config.backgroundJobs?.orchestratorWake.periodicWakeEnabled).toBe(
-      false,
-    );
-  });
-
-  test('v2 warns only on an explicit periodicWakeEnabled true; unset and v1 stay silent', () => {
-    // Mirrors the boardInjection warning: v2 forces the periodic wake off
-    // where the scheduler is wired, so an explicit true must not be lost
-    // silently. Pre-parse, so the schema default never warns.
-    const mkProject = (name: string, backgroundJobs: unknown) => {
-      const dir = path.join(tempDir, name);
-      const configDir = path.join(dir, '.opencode');
-      fs.mkdirSync(configDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(configDir, 'oh-my-opencode-slim.json'),
-        JSON.stringify({ backgroundJobs }),
-      );
-      return dir;
-    };
-    const capture = (dir: string, options?: { hostFlavor?: string }) => {
-      const warnings: string[] = [];
-      const originalWarn = console.warn;
-      console.warn = (message: string) => warnings.push(message);
-      try {
-        loadPluginConfig(dir, options);
-      } finally {
-        console.warn = originalWarn;
-      }
-      return warnings.filter((message) => message.includes('orchestratorWake'));
-    };
-
-    const explicitTrue = mkProject('wake-explicit', {
-      orchestratorWake: { periodicWakeEnabled: true },
-    });
-    const warnings = capture(explicitTrue, { hostFlavor: 'v2' });
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain(
-      'backgroundJobs.orchestratorWake is v1-only and ignored on OpenCode v2',
-    );
-
-    // Any orchestratorWake key is inert on v2, not just periodicWakeEnabled.
-    const unset = mkProject('wake-unset', {
-      orchestratorWake: { intervalMs: 60_000 },
-    });
-    expect(capture(unset, { hostFlavor: 'v2' })).toHaveLength(1);
-
-    expect(capture(explicitTrue)).toHaveLength(0);
   });
 
   test('no options object does not break loadPluginConfig', () => {
@@ -3370,7 +3481,6 @@ describe('removed config keys', () => {
         enabled: false,
         maxSessionsPerAgent: 4,
         concurrency: { defaultConcurrency: 2 },
-        orchestratorWake: { enabled: false },
       },
     });
 
@@ -3380,7 +3490,6 @@ describe('removed config keys', () => {
     // Only the alias is dropped; every sibling keeps its configured value.
     expect(config.backgroundJobs?.maxSessionsPerAgent).toBe(4);
     expect(config.backgroundJobs?.concurrency?.defaultConcurrency).toBe(2);
-    expect(config.backgroundJobs?.orchestratorWake?.enabled).toBe(false);
     expect(Object.hasOwn(config.backgroundJobs ?? {}, 'enabled')).toBe(false);
     expect(warnings.map((w) => w.kind)).toEqual(['removed-key']);
     expect(warnings[0]?.message).toContain('"backgroundJobs.enabled"');
@@ -3456,4 +3565,292 @@ describe('removed config keys', () => {
     expect(config.agents?.oracle?.model).toBeUndefined();
     expect(warnings.map((w) => w.kind)).toEqual(['invalid-schema']);
   });
+});
+
+describe('legacy generated preset explorer.mcps repair', () => {
+  const G = ['context7', 'gh_grep'];
+  const RUNTIME = 'loader-legacy-preset-mcps';
+  let tempDir: string;
+  let originalEnv: typeof process.env;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loader-legacy-mcps-'));
+    originalEnv = { ...process.env };
+    delete process.env.OPENCODE_CONFIG_DIR;
+    delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
+    process.env.XDG_CONFIG_HOME = path.join(tempDir, 'user-config');
+    RuntimeConfig.reset(RUNTIME);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) delete process.env[key];
+    }
+    Object.assign(process.env, originalEnv);
+    RuntimeConfig.reset(RUNTIME);
+  });
+
+  function write(dir: string, raw: unknown): void {
+    const configDir = path.join(dir, '.opencode');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify(raw),
+    );
+  }
+
+  function load(dir: string) {
+    const warnings: ConfigLoadWarning[] = [];
+    const config = loadPluginConfig(dir, {
+      silent: true,
+      onWarning: (warning) => warnings.push(warning),
+    });
+    RuntimeConfig.reset(RUNTIME);
+    const mcps = getAgentMcpList(
+      'explorer',
+      RuntimeConfig.init(RUNTIME, config),
+    );
+    return { config, warnings, mcps };
+  }
+
+  function loadOne(raw: Record<string, unknown>, name = 'project') {
+    const dir = path.join(tempDir, name);
+    write(dir, raw);
+    return load(dir);
+  }
+
+  const project = (name: string, preset: Record<string, unknown>) => ({
+    preset: name,
+    presets: { [name]: preset },
+  });
+  const pair = (
+    librarian: string[] | undefined,
+    explorer: string[] | undefined,
+    extra: Record<string, unknown> = {},
+  ) => ({
+    ...(librarian && { librarian: { mcps: librarian } }),
+    ...(explorer && { explorer: { mcps: explorer } }),
+    ...extra,
+  });
+
+  test('repairs the generated pair under an arbitrary preset name', () => {
+    const name = 'team-legacy-2025';
+    const { config, warnings, mcps } = loadOne(project(name, pair(G, [])));
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({ kind: 'normalized' });
+    expect(warnings[0]?.message).toContain(`presets.${name}.explorer.mcps`);
+    expect(config.presets?.[name]?.explorer?.mcps).toEqual(G);
+    expect(config.agents?.explorer?.mcps).toEqual(G);
+    expect(mcps).toEqual(G);
+  });
+
+  test('repairs only mcps; other fields follow the existing alias merge', () => {
+    const canonical = {
+      mcps: [] as string[],
+      model: 'test/canonical',
+      variant: 'high',
+      skills: [] as string[],
+      prompt: 'canonical prompt',
+      options: { reasoning: { effort: 'high' } },
+      permission: { webfetch: 'deny' },
+    };
+    const { config, warnings } = loadOne(
+      project('fields', {
+        librarian: {
+          mcps: G,
+          model: 'test/legacy',
+          skills: ['research-skill'],
+          temperature: 0.4,
+          description: 'legacy description',
+        },
+        explorer: canonical,
+      }),
+    );
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.message).toContain('presets.fields.explorer.mcps');
+    expect(config.presets?.fields?.explorer?.skills).toEqual([]);
+    expect(config.presets?.fields?.explorer).toEqual({
+      ...canonical,
+      mcps: G,
+      temperature: 0.4,
+      description: 'legacy description',
+    });
+  });
+
+  // [label, preset name, raw config, expected MCPs, repair warning path,
+  //  extra assertion on the resolved preset]
+  const cases: Array<
+    [
+      string,
+      string,
+      Record<string, unknown>,
+      string[],
+      string?,
+      Record<string, unknown>?,
+    ]
+  > = [
+    [
+      'reversed librarian MCP order',
+      'order',
+      project('order', pair(['gh_grep', 'context7'], [])),
+      ['gh_grep', 'context7'],
+      'presets.order.explorer.mcps',
+    ],
+    [
+      'canonical entry written first',
+      'keys',
+      project('keys', { explorer: { mcps: [] }, librarian: { mcps: G } }),
+      G,
+      'presets.keys.explorer.mcps',
+    ],
+    [
+      'structured {agents} wrapper',
+      'struct',
+      project('struct', { agents: pair(G, []) }),
+      G,
+      'presets.struct.agents.explorer.mcps',
+    ],
+    [
+      'inline extends syntax',
+      'child',
+      {
+        preset: 'child',
+        presets: {
+          base: { oracle: { model: 'test/oracle' } },
+          child: { extends: 'base', ...pair(G, []) },
+        },
+      },
+      G,
+      'presets.child.explorer.mcps',
+    ],
+    [
+      'flat custom agent named agents',
+      'flat',
+      project('flat', pair(G, [], { agents: { model: 'test/custom' } })),
+      G,
+      'presets.flat.explorer.mcps',
+      { agents: { model: 'test/custom' } },
+    ],
+    [
+      'explorer-only empty list',
+      'mine',
+      project('mine', pair(undefined, [])),
+      [],
+    ],
+    [
+      'non-empty canonical list',
+      'mine',
+      project('mine', pair(G, ['custom-mcp'])),
+      ['custom-mcp'],
+    ],
+    [
+      'duplicate legacy name',
+      'mine',
+      project('mine', pair(['context7', 'context7'], [])),
+      [],
+    ],
+    [
+      'extra legacy MCP',
+      'mine',
+      project('mine', pair([...G, 'extra-mcp'], [])),
+      [],
+    ],
+    ['wildcard legacy list', 'mine', project('mine', pair(['*'], [])), []],
+    [
+      'exclusion in the legacy list',
+      'mine',
+      project('mine', pair(['!context7', 'gh_grep'], [])),
+      [],
+    ],
+    ['custom legacy list', 'mine', project('mine', pair(['my-mcp'], [])), []],
+    [
+      'explicit deny on the canonical entry',
+      'mine',
+      project('mine', pair(G, ['!*'])),
+      ['!*'],
+    ],
+  ];
+
+  for (const [label, name, raw, expected, warningPath, extra] of cases) {
+    test(`${warningPath ? 'repairs' : 'leaves explicit'} ${label}`, () => {
+      const { config, warnings, mcps } = loadOne(raw);
+      expect(warnings.map((warning) => warning.kind)).toEqual(
+        warningPath ? ['normalized'] : [],
+      );
+      if (warningPath) {
+        expect(warnings[0]?.message).toContain(warningPath);
+      }
+      expect(config.presets?.[name]?.explorer?.mcps).toEqual(expected);
+      expect(mcps).toEqual(expected);
+      if (extra) expect(config.presets?.[name]).toMatchObject(extra);
+    });
+  }
+
+  test('never repairs root agents or an explicit root deny', () => {
+    const rootCases: Array<[string, string[]]> = [
+      ['project-root', []],
+      ['project-deny', ['!*']],
+    ];
+    for (const [dir, expected] of rootCases) {
+      const { config, warnings, mcps } = loadOne(
+        { agents: { librarian: { mcps: G }, explorer: { mcps: expected } } },
+        dir,
+      );
+      expect(warnings).toEqual([]);
+      expect(config.agents?.explorer?.mcps).toEqual(expected);
+      expect(mcps).toEqual(expected);
+    }
+  });
+
+  test('does not assemble the fingerprint across layers', () => {
+    const base = path.join(tempDir, 'workspace-cross');
+    const child = path.join(base, 'project');
+    write(base, project('mine', { librarian: { mcps: G } }));
+    write(child, { presets: { mine: { explorer: { mcps: [] } } } });
+
+    const { config, warnings, mcps } = load(child);
+    expect(warnings).toEqual([]);
+    expect(config.presets?.mine?.explorer?.mcps).toEqual([]);
+    expect(mcps).toEqual([]);
+  });
+
+  test('does not assemble the fingerprint across an inherited preset chain', () => {
+    const { config, warnings, mcps } = loadOne({
+      preset: 'child',
+      presets: {
+        base: { librarian: { mcps: G } },
+        child: { extends: 'base', explorer: { mcps: [] } },
+      },
+    });
+
+    expect(warnings).toEqual([]);
+    expect(config.presets?.child?.explorer?.mcps).toEqual([]);
+    expect(mcps).toEqual([]);
+  });
+
+  const closerOverrides: Array<[string, Record<string, unknown>]> = [
+    ['root agents override', { agents: { explorer: { mcps: [] } } }],
+    [
+      'closer preset override',
+      { presets: { mine: { explorer: { mcps: [] } } } },
+    ],
+  ];
+
+  for (const [label, layer] of closerOverrides) {
+    test(`keeps a ${label} after repairing the lower layer`, () => {
+      const base = path.join(tempDir, 'workspace-precedence');
+      const child = path.join(base, 'project');
+      write(base, project('mine', pair(G, [])));
+      write(child, layer);
+
+      const { config, warnings, mcps } = load(child);
+      expect(warnings.map((warning) => warning.kind)).toEqual(['normalized']);
+      expect(warnings[0]?.message).toContain('presets.mine.explorer.mcps');
+      expect(config.agents?.explorer?.mcps).toEqual([]);
+      expect(mcps).toEqual([]);
+    });
+  }
 });

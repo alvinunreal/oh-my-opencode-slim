@@ -87,6 +87,39 @@ describe('runDoctorCheck', () => {
     expect(result.presetCheck).toBeUndefined();
   });
 
+  test('reports a retired v2 setting in an inherited file even when a closer file selects native mode', () => {
+    const project = path.join(tempDir, 'workspace', 'repo');
+    const oldConfig = path.join(
+      tempDir,
+      'workspace',
+      '.opencode',
+      'oh-my-opencode-slim.json',
+    );
+    const newConfig = path.join(
+      project,
+      '.opencode',
+      'oh-my-opencode-slim.json',
+    );
+    for (const file of [oldConfig, newConfig])
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(oldConfig, '{"backgroundJobs":{"concurrency":{}}}');
+    fs.writeFileSync(newConfig, '{"backgroundJobs":{"mode":"native"}}');
+
+    const result = runDoctorCheck(project, 'v2');
+    expect(result.ok).toBe(false);
+    expect(result.configs).toContainEqual(
+      expect.objectContaining({
+        path: oldConfig,
+        ok: false,
+        error: {
+          kind: 'unsupported-host',
+          message: expect.stringContaining('backgroundJobs.concurrency'),
+        },
+      }),
+    );
+    expect(runDoctorCheck(project, 'v1').ok).toBe(true);
+  });
+
   test('checks all inherited layers and resolves presets across them', () => {
     const workspace = path.join(tempDir, 'workspace');
     const projectDir = path.join(workspace, 'repo');
@@ -632,6 +665,37 @@ describe('runDoctorCheck', () => {
 
     expect(result.ok).toBe(true);
     expect(result.configs[1].path).toContain('.jsonc');
+  });
+
+  test('old generated preset pair stays ok with a repair warning', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const configDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        preset: 'team-legacy',
+        presets: {
+          'team-legacy': {
+            librarian: { mcps: ['context7', 'gh_grep'] },
+            explorer: { mcps: [] },
+          },
+        },
+      }),
+    );
+
+    const result = runDoctorCheck(projectDir);
+    const projectCheck = result.configs.find((c) => c.scope === 'project');
+    expect(result.ok).toBe(true);
+    expect(projectCheck?.ok).toBe(true);
+    const warning = projectCheck?.warnings?.join('\n');
+    expect(warning).toContain('presets.team-legacy.explorer.mcps');
+    expect(warning).toContain('matches the old generated preset shape');
+    expect(warning).toContain('Config files are not rewritten');
+    expect(projectCheck?.config?.presets?.['team-legacy']).toEqual({
+      librarian: { mcps: ['context7', 'gh_grep'] },
+      explorer: {},
+    });
   });
 });
 
