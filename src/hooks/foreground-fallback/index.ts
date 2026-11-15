@@ -2188,10 +2188,7 @@ export class ForegroundFallbackManager {
       )
         this.restoredFrom.delete(props.sessionID);
       this.resetRecoveryState(props.sessionID);
-      if (
-        event.type === 'session.step.ended' &&
-        props.finish === 'tool-calls'
-      )
+      if (event.type === 'session.step.ended' && props.finish === 'tool-calls')
         await this.restoreV2(props.sessionID, true);
     }
   }
