@@ -17,7 +17,7 @@ project reads.
 The sidebar keeps its 1s render poll. With `sidebar: false`, the 5s config poll
 still detects external multiplexer edits, but unchanged files are not parsed
 again. `tui: false` also stops the server-side sidebar recorder: no state-file
-writes and no parent-hydration `session.get` reads. `webfetch.enabled: false` or
+writes and no parent-hydration `session.get` reads.
 `disabled_tools: ["webfetch"]` skips the enhanced implementation and its JSDOM
 startup probe. Companion request detection keeps its 250ms interval; its
 config refresh is a separate once-per-second duty.
@@ -53,8 +53,8 @@ hook, tool or utility barrels:
   so the board, persistence, recovery, adoption and wake modules are never
   resolved, independent of configuration. The v1 wake scheduler is separate from
   the pure message helpers used on both hosts.
-- `autoUpdate: false` or the disabled `auto-update-checker` hook skips loading
-  the v1 update implementation. On v2 the v1 server updater is never loaded
+- `autoUpdate: false` skips loading the v1 update implementation. On v2 the
+  v1 server updater is never loaded
   (it cannot install there and its toast is a shim no-op); the host owns
   package management and the TUI notice. Tool guards follow their existing
   hook switches. When every post-tool consumer is off, the shared v1

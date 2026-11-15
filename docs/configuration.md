@@ -237,7 +237,7 @@ All config files support **JSONC** (JSON with Comments):
 Slim requires OpenCode 2.3.0 or newer. See the [upgrade guide](v2-native-upgrade.md)
 for configuration changes.
 
-Every optional subsystem has one switch, all defaulting to on. A
+Optional subsystems can be disabled independently. This
 council-and-observer-only setup turns off the rest:
 
 ```jsonc
@@ -249,7 +249,6 @@ council-and-observer-only setup turns off the rest:
   "autoUpdate": false,
   "liveConfigRefresh": false,
   "fallback": { "enabled": false },
-  "webfetch": { "enabled": false },
   "multiplexer": { "type": "none" },
   "companion": { "enabled": false },
   // Keep council + observer; enable observer by naming only the other
@@ -269,7 +268,7 @@ council-and-observer-only setup turns off the rest:
     "search-path-guard", "absolute-path-rescue", "apply-patch"
   ],
   "disabled_tools": [
-    "ast_grep_search", "ast_grep_replace", "acp_run",
+    "webfetch", "ast_grep_search", "ast_grep_replace", "acp_run",
     "marketplace_inspect", "marketplace_manage",
     "task_cancel", "task_message", "task_status", "task_reply"
   ]
@@ -354,7 +353,7 @@ and [Council](council.md) for what remains.
 | `acpAgents.<name>.timeoutMs` | integer | `0` | Timeout for a single ACP run in milliseconds. `0` disables the timeout so external agents can run indefinitely. Finite values can be up to `2147483647`ms (~24.8 days) See [ACP-connected agents](#acp-connected-agents). |
 | `disabled_agents` | string[] | `["observer"]` | Agent names to disable globally. Set to `[]` to enable Observer; this is global, not per-preset See [Custom Agents](#custom-agents). |
 | `image_routing` | `"auto"` \| `"direct"` | omitted (legacy conditional) | Optional. When omitted, resolves to `"auto"` if Observer is enabled, otherwise `"direct"`. Explicit `"auto"` saves image attachments under `.opencode/images/<session>/` and nudges delegation to @observer; saved images remain until you remove them. `"direct"` always passes image parts to the orchestrator. Remove saved images with `rm -rf .opencode/images/` (or a single session subdirectory) when they are no longer needed; session-less messages save images at the top level. The automatic save covers pasted PNG/JPEG/GIF/WebP attachments only: PDFs, images produced by tools, and any image the turn model visibly accepts stay inline. |
-| `autoUpdate` | boolean | `true` | Master switch for OMOS plugin updates. When `false`, no update check, notification, or automatic installation runs. Either this or `disabled_hooks: ["auto-update-checker"]` disables the same update path. |
+| `autoUpdate` | boolean | `true` | Master switch for OMOS plugin updates. When `false`, no update check, notification, or automatic installation runs. This is the only update-disable setting; the `auto-update-checker` hook-list alias was removed. |
 | `multiplexer.type` | string | `"none"` | Multiplexer mode: `auto`, `tmux`, `zellij`, `herdr`, `cmux-tui`, `kitty`, `wezterm`, `orca`, or `none` See [Multiplexer Integration](multiplexer-integration.md). On OpenCode v2 hosts, panes work with the shared background service or an explicit `--server`; `--standalone` hosts ignore the setting (one diagnostic per process). |
 | `multiplexer.layout` | string | `"main-vertical"` | Layout preset: `main-vertical`, `main-horizontal`, `tiled`, `even-horizontal`, `even-vertical`. Each adapter maps it to its nearest native expression (tmux full layouts; split directions for Zellij/Herdr; built-in layouts for kitty; split order for WezTerm); cmux-tui has no layout expression and ignores it. Herdr builds an agent area for both `main-*` layouts (`main-vertical` agent column, `main-horizontal` agent row) and re-equalizes only its agent panes after each spawn/close. See [Multiplexer Integration](multiplexer-integration.md#layouts). |
 | `multiplexer.main_pane_size` | number | `60` | Main pane size as percentage (20–80) for tmux main layouts and the first Herdr/WezTerm agent split of the `main-*` layouts; Herdr then equalizes the agent panes in the agent column (`main-vertical`) or row (`main-horizontal`) after each spawn/close while the main pane keeps this share. Ignored by Zellij, kitty, and cmux-tui See [Multiplexer Integration](multiplexer-integration.md#layouts). |
@@ -367,11 +366,10 @@ and [Council](council.md) for what remains.
 | `backgroundJobs.maxRetainedSnapshots` | — | — | Removed: ignored with a warning. See [Removed config keys](#removed-config-keys). |
 | `backgroundJobs.strategy` | — | — | Removed: board placement is change-only. See [Removed config keys](#removed-config-keys). |
 | `disabled_mcps` | string[] | `[]` | MCP server IDs to disable globally |
-| `disabled_tools` | string[] | `[]` | Slim tool names to disable globally. Disabled Slim tools are not registered and their implementations are not loaded; OpenCode built-in tools are not affected. Disabling `acp_run` also omits ACP wrapper agents that would be unusable. |
+| `disabled_tools` | string[] | `[]` | Slim tool names to disable globally. Disabled Slim tools are not registered and their implementations are not loaded; OpenCode built-in tools are not affected. Include `webfetch` to use the native host tool without loading Slim's enhancement or JSDOM probe. Disabling `acp_run` also omits ACP wrapper agents that would be unusable. |
 | `disabled_skills` | string[] | `[]` | Skill names to disable globally. Disabled skills are not granted to agents, and disabled bundled skills are not registered; listing `reflect` here also disables the `/reflect` command |
-| `disabled_hooks` | string[] | `[]` | Hook names to disable globally: `phase-reminder`, `foreground-fallback`, `deepwork-goal`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`, `auto-update-checker`. Either `auto-update-checker` here or `autoUpdate: false` turns the whole update feature off (check, notice, install); the hook entry also keeps the hook off if the feature switch is later re-enabled. Unknown values are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies. See [Hooks](#hooks) |
+| `disabled_hooks` | string[] | `[]` | Hook names to disable globally: `phase-reminder`, `foreground-fallback`, `deepwork-goal`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`. Use `autoUpdate: false` for updates. Unknown values are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies. See [Hooks](#hooks) |
 | `disabled_commands` | string[] | `[]` | Slash commands to disable globally: `interview`, `implement`, `deepwork`, `reflect`, `preset`, `killall`, `subagent`. Disabled commands are neither registered nor intercepted at execution time, so a user-defined command with the same name is left untouched. Listing `reflect` in `disabled_skills` also disables the `/reflect` command. See [Slash Commands](#slash-commands) |
-| `webfetch.enabled` | boolean | `true` | When `false`, the enhanced `webfetch` is not loaded or registered and OpenCode's built-in is used. Listing `webfetch` in `disabled_tools` has the same cold behavior without changing the feature config. See [Webfetch](webfetch.md) |
 | `fallback.enabled` | boolean | `true` | Enable Slim's foreground model-chain failover. It does not configure OpenCode provider/AI-SDK retries. On **v2 hosts** the replay path (abort + re-prompt) stays disabled — the v2 `switchModel` has no per-turn/atomic conditional form, so an in-flight replay could commit after a newer user turn has taken over — while the retry-hook steering path runs: host retry events are absorbed up to `fallback.maxRetries`, then the model is switched in place via the host `session.switchModel` and the host retries the current turn on the new model. The same switch disables both paths. |
 | `fallback.maxRetries` | integer | `3` | Number of host retry events Slim absorbs before advancing the foreground model chain. The budget stays spent across model switches. Recovery re-arms it: a completed successful assistant response on v1, or a raw `session.step.ended` with `finish` `stop`, `tool-calls` or `length`, or `session.execution.succeeded` on v2. A confirmed new v1 user turn, an observed return to the configured primary outside our committed fallback for a fresh descent, or session deletion also re-arms it. A new v2 user turn alone does not reset the budget; an explicit model change is recorded so returning to the configured primary can re-arm the descent. Landing on the configured head through a committed fallback does not re-arm this budget, including for inherit+chain agents. Terminal `session.error` and `message.updated` failures advance immediately without charging it. On v1, three distinct consecutive completed, error-free `finish: 'unknown'` messages with verified tool-free parts also trigger request-scoped abort and replay without charging retries. `0` advances on the first retry event. This does not configure OpenCode provider or background subagent retries. |
 | `fallback.initialRetryDelayMs` | number | `0` | Delay in milliseconds before triggering the first fallback on a failover-worthy error. Gives intercepting plugins time to recover the current model before the fallback chain advances. 0 disables. v1 replay only: the v2 steering path performs no replay, so it ignores this delay. When the delay is nonzero, v2 logs that it is ignored; the notice can repeat after recovery. |
@@ -406,6 +404,13 @@ an MCP tool remains authoritative.
 
 ### Removed config keys
 
+Updates now use only `autoUpdate`; enhanced webfetch uses only
+`disabled_tools: ["webfetch"]`. The removed update-hook alias and root
+`webfetch` block no longer disable those features. They produce removal
+warnings but are not translated into their replacements. Review existing
+opt-outs before upgrading: without canonical disables, unchanged retired
+spellings leave both features at their enabled defaults.
+
 These keys were removed. A config file that still contains one keeps loading:
 the key is dropped before validation and a warning names it, for example
 `Config key "fallback.timeoutMs" was removed in this version and is ignored;
@@ -415,6 +420,8 @@ replacement yourself where one exists.
 
 | Removed key | Use instead |
 |-------------|-------------|
+| `webfetch` (top-level block, including `enabled`) | List `webfetch` in `disabled_tools` to use OpenCode's built-in tool. The old block has no effect and is not translated. |
+| `disabled_hooks` entry `auto-update-checker` | Use `autoUpdate: false`. The old entry no longer disables updates and is not translated. |
 | `agents.<agent>.primary` and preset equivalents | Custom agents are specialists. Use `/preset` to switch the built-in orchestrator’s subagent models. |
 | `tmux` (top-level block) | `multiplexer.type: "tmux"` plus `multiplexer.layout` / `multiplexer.main_pane_size` |
 | `council.master`, `council.master_timeout`, `council.master_fallback` | Configure the Council agent like any agent, e.g. `presets.<name>.council.model` |
@@ -635,15 +642,9 @@ no startup check, no update notice, and no automatic package install.
 }
 ```
 
-Alternatively, list the checker in `disabled_hooks` (on both v1 and v2,
-including the v2 TUI notice). Either switch disables the same feature; the hook
-entry is the per-hook form and stays effective if `autoUpdate` is re-enabled:
-
-```jsonc
-{
-  "disabled_hooks": ["auto-update-checker"]
-}
-```
+The `auto-update-checker` entry in `disabled_hooks` was removed. It no longer
+disables updates and is not translated into `autoUpdate`; edit the switch
+explicitly. A nearer `autoUpdate: true` re-enables the update feature.
 
 Pinned versions and unsupported install layouts retain their existing
 notification behavior when update checking is enabled.
@@ -1214,14 +1215,13 @@ Available hooks:
 - **Model failover**: `foreground-fallback` — removes the fallback manager and retry hook entirely. `fallback.enabled: false` disables intervention too, but on v2 it keeps the retry bookkeeping registered so a live per-session enable can switch it back on.
 - **Tool guards**: `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch` (v1 `apply_patch`, v2 `patch`) — each stops intercepting tool calls entirely, so malformed output, repeated identical calls, and invalid or guessed paths surface raw to the model.
 - **Deepwork**: `deepwork-goal` turns the post-compaction goal pointer off (the model then relies on the skill's resume discipline alone).
-- **Update checking**: `auto-update-checker` — stops the startup update check, notification, and automatic installation. `autoUpdate: false` has the same effect for the feature; this entry is the per-hook form and also stays effective if the feature switch is re-enabled.
 - **Telemetry / headers**: `cache-monitor` (prompt-cache bust watchdog; warnings stop), `chat-headers` (Copilot `x-initiator` header on both the v1 `chat.headers` hook and the v2 `model.request` bridge).
 
 Guards such as `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, and `apply-patch` protect against model-side loops, bad paths, and malformed patches. Disable them only when you want raw upstream behavior.
 
 Notes:
 
-- Injection surfaces that have dedicated switches are not listed here: the interview subsystem (`interview.enabled`), the TUI surface (`tui`, `sidebar`), and image routing (`image_routing`). `autoUpdate: false` and `disabled_hooks: ["auto-update-checker"]` both stop the update feature; use whichever granularity you need.
+- Features with dedicated switches are not listed here: the interview subsystem (`interview.enabled`), the TUI surface (`tui`, `sidebar`), image routing (`image_routing`) and update checking (`autoUpdate`).
 - Invalid entries are stripped with a warning when the config loads; a value consisting only of unknown names is treated as unset, so a lower config layer's list still applies.
 
 ### Slash Commands

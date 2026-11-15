@@ -60,6 +60,10 @@ Remove `orchestratorWake`, `childInputWake`, `childInputWakeKinds`,
 `waitForUserGuard`, `pruneEvictedSessions`, and `sameProviderPolicy` from
 `backgroundJobs` after review. Slim warns for each configuration file that declares these retired settings.
 
+Also review [removed feature-switch aliases](configuration.md#removed-config-keys):
+updates use `autoUpdate`, and enhanced webfetch uses `disabled_tools`.
+The old spellings no longer preserve opt-out intent.
+
 ## Existing sessions and automation
 
 Finish managed V2 work before switching releases. Old Slim board and delivery

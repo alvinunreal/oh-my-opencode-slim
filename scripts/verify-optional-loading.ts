@@ -58,10 +58,10 @@ const ALL_HOOKS = [
   'absolute-path-rescue',
   'apply-patch',
   'council-inject',
-  'auto-update-checker',
 ] as const;
 
 const BASE_DISABLED_TOOLS = [
+  'webfetch',
   'ast_grep_search',
   'ast_grep_replace',
   'acp_run',
@@ -101,7 +101,6 @@ const baseConfig: CaseConfig = {
   interview: { enabled: false },
   marketplace: { enabled: false },
   companion: { enabled: false },
-  webfetch: { enabled: false },
   multiplexer: { type: 'none' },
   disabled_mcps: ['context7', 'gh_grep'],
   disabled_commands: BASE_DISABLED_COMMANDS,
@@ -159,7 +158,7 @@ const CASES: readonly Case[] = [
     name: 'hooks',
     config: {
       ...baseConfig,
-      disabled_hooks: ['foreground-fallback', 'auto-update-checker'],
+      disabled_hooks: ['foreground-fallback'],
     },
     note: 'every guard hook registered',
   },
@@ -202,7 +201,10 @@ const CASES: readonly Case[] = [
   },
   {
     name: 'webfetch',
-    config: { ...baseConfig, webfetch: { enabled: true } },
+    config: {
+      ...baseConfig,
+      disabled_tools: without(BASE_DISABLED_TOOLS, ['webfetch']),
+    },
     note: 'enhanced webfetch and its JSDOM startup probe',
   },
 ];

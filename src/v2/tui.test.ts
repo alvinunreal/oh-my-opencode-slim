@@ -904,10 +904,34 @@ describe('v2 tui preset plugin', () => {
       }
     });
 
+    test('the retired hook alias does not skip the update notice', async () => {
+      writeUserConfig({ disabled_hooks: ['auto-update-checker'] });
+      const originalFetch = globalThis.fetch;
+      let requests = 0;
+      globalThis.fetch = (async () => {
+        requests += 1;
+        return new Response('{"version":"1.0.0"}');
+      }) as typeof fetch;
+      jest.useFakeTimers();
+      let cleanup: (() => void) | undefined;
+      try {
+        cleanup = (await tui2Plugin.setup(
+          makeSetupCtx().ctx as unknown as V2TuiPluginContext,
+        )) as (() => void) | undefined;
+        jest.advanceTimersByTime(1_500);
+        for (let i = 0; i < 30; i += 1) await Promise.resolve();
+        expect(requests).toBeGreaterThan(0);
+      } finally {
+        cleanup?.();
+        jest.useRealTimers();
+        globalThis.fetch = originalFetch;
+      }
+    });
+
     test('v2 cleanup returns a promise to the host', async () => {
       writeUserConfig({
         sidebar: false,
-        disabled_hooks: ['auto-update-checker'],
+        autoUpdate: false,
       });
       const cleanup = await tui2Plugin.setup(
         makeSetupCtx().ctx as unknown as V2TuiPluginContext,
@@ -1487,7 +1511,7 @@ describe('v2 tui preset plugin', () => {
       writeUserConfig({
         ...makeConfig(),
         disabled_commands: ['preset'],
-        disabled_hooks: ['auto-update-checker'],
+        autoUpdate: false,
         multiplexer: { type: 'none' },
       });
       process.env.XDG_DATA_HOME = path.join(configHome, 'disabled-preset-data');
@@ -1581,7 +1605,7 @@ describe('v2 tui preset plugin', () => {
     test('enabled preset keeps the sidebar row activation and session-preset reads', async () => {
       writeUserConfig({
         ...makeConfig(),
-        disabled_hooks: ['auto-update-checker'],
+        autoUpdate: false,
         multiplexer: { type: 'none' },
       });
       process.env.XDG_DATA_HOME = path.join(configHome, 'enabled-preset-data');
@@ -1659,7 +1683,7 @@ describe('v2 tui preset plugin', () => {
     test('preset gate follows the project switch instead of the setup directory', async () => {
       writeUserConfig({
         ...makeConfig(),
-        disabled_hooks: ['auto-update-checker'],
+        autoUpdate: false,
         multiplexer: { type: 'none' },
       });
       // The first project disables the command; the second does not.
@@ -1748,7 +1772,7 @@ describe('v2 tui preset plugin', () => {
     test('disabling preset while idle repaints the row and stops binding reads', async () => {
       writeUserConfig({
         ...makeConfig(),
-        disabled_hooks: ['auto-update-checker'],
+        autoUpdate: false,
         multiplexer: { type: 'none' },
       });
       process.env.XDG_DATA_HOME = path.join(configHome, 'idle-preset-data');
@@ -1806,7 +1830,7 @@ describe('v2 tui preset plugin', () => {
         writeUserConfig({
           ...makeConfig(),
           disabled_commands: ['preset'],
-          disabled_hooks: ['auto-update-checker'],
+          autoUpdate: false,
           multiplexer: { type: 'none' },
         });
         await waitFor(() => !frame().includes('▸'));
@@ -2631,7 +2655,7 @@ describe('v2 tui preset plugin', () => {
     async function assertProjectPaneAdmission(sidebar: boolean) {
       writeUserConfig({
         sidebar,
-        disabled_hooks: ['auto-update-checker'],
+        autoUpdate: false,
       });
       const projectB = path.join(projectDir, 'project-b');
       for (const [directory, type] of [
@@ -2737,7 +2761,7 @@ describe('v2 tui preset plugin', () => {
       writeUserConfig({
         ...makeConfig(),
         sidebar: true,
-        disabled_hooks: ['auto-update-checker'],
+        autoUpdate: false,
       });
       process.env.XDG_DATA_HOME = path.join(configHome, 'sidebar-project-data');
       process.env.TMUX_PANE = '%test';
@@ -2870,7 +2894,7 @@ describe('v2 tui preset plugin', () => {
     test('sidebar updates the default preset changed in the preset manager', async () => {
       writeUserConfig({
         ...makeConfig(),
-        disabled_hooks: ['auto-update-checker'],
+        autoUpdate: false,
         multiplexer: { type: 'none' },
       });
       process.env.XDG_DATA_HOME = path.join(configHome, 'preset-sidebar-data');
@@ -3023,7 +3047,7 @@ describe('v2 tui preset plugin', () => {
     test('pane wiring retries a transient initial shared server failure', async () => {
       writeUserConfig({
         sidebar: false,
-        disabled_hooks: ['auto-update-checker'],
+        autoUpdate: false,
         multiplexer: { type: 'tmux' },
       });
       process.env.TMUX_PANE = '%1';

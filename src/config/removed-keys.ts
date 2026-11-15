@@ -35,13 +35,15 @@ const REMOVED_CONFIG_KEYS = [
   'fallback.retry_on_empty',
   'fallback.runtimeOverride',
   'multiplexer.zellij_pane_mode',
-  'webfetch.model',
+  'webfetch',
 ] as const;
 
 /** Removed keys whose successor needs a specific message. */
 const REMOVED_CONFIG_KEY_MESSAGES: Readonly<Record<string, string>> = {
   'backgroundJobs.enabled':
     'Config key "backgroundJobs.enabled" was removed; use backgroundJobs.mode ("managed" | "native" | "off") instead. enabled: false is still applied as mode "off".',
+  webfetch:
+    'webfetch config was removed; use disabled_tools: ["webfetch"] to use the native host tool',
 };
 
 function removedConfigKeyMessage(path: string): string {
@@ -129,6 +131,8 @@ const REMOVED_DISABLED_VALUES: Readonly<
   disabled_hooks: {
     'council-assembly':
       'council-assembly is no longer a hook: council seat assembly is unconditional and fail-open — remove this entry.',
+    'auto-update-checker':
+      'The disabled_hooks entry "auto-update-checker" was removed and is ignored; use autoUpdate: false to disable update checks, notices, and installation.',
   },
 };
 

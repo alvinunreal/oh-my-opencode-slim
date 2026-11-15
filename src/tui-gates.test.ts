@@ -199,7 +199,7 @@ describe('TUI feature gates', () => {
     }
   });
 
-  test('tui false implies sidebar off and the update switch is shared', () => {
+  test('tui false implies sidebar off and autoUpdate is the update switch', () => {
     writeUserConfig({ tui: false, sidebar: true, autoUpdate: false });
     const off = readTuiGates(env.projectDir).gates;
     expect(off.tuiEnabled).toBe(false);
@@ -207,17 +207,18 @@ describe('TUI feature gates', () => {
     expect(off.companionEnabled).toBe(false);
     expect(off.updateCheckerEnabled).toBe(false);
 
+    // The retired disabled_hooks alias no longer suppresses the notice.
     writeUserConfig({
       tui: true,
       sidebar: true,
       companion: { enabled: true },
       disabled_hooks: ['auto-update-checker'],
     });
-    const hookOff = readTuiGates(env.projectDir).gates;
-    expect(hookOff.tuiEnabled).toBe(true);
-    expect(hookOff.sidebarEnabled).toBe(true);
-    expect(hookOff.companionEnabled).toBe(true);
-    expect(hookOff.updateCheckerEnabled).toBe(false);
+    const alias = readTuiGates(env.projectDir).gates;
+    expect(alias.tuiEnabled).toBe(true);
+    expect(alias.sidebarEnabled).toBe(true);
+    expect(alias.companionEnabled).toBe(true);
+    expect(alias.updateCheckerEnabled).toBe(true);
 
     writeUserConfig({ autoUpdate: true });
     expect(readTuiGates(env.projectDir).gates.updateCheckerEnabled).toBe(true);

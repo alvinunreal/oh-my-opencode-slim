@@ -406,16 +406,16 @@ describe('RuntimeConfig', () => {
     ).toThrow(/Unsupported backgroundJobs\.mode "managed"/);
   });
 
-  test('updateCheckerEnabled is off for autoUpdate false or the disabled hook', () => {
+  test('updateCheckerEnabled is off only for autoUpdate false', () => {
     resetRegistry();
     const autoUpdateOff = RuntimeConfig.init(DIRECTORY, { autoUpdate: false });
     expect(autoUpdateOff.updateCheckerEnabled).toBe(false);
 
     RuntimeConfig.reset(DIRECTORY);
-    const hookOff = RuntimeConfig.init(DIRECTORY, {
+    const retiredAlias = RuntimeConfig.init(DIRECTORY, {
       disabled_hooks: ['auto-update-checker'],
-    });
-    expect(hookOff.updateCheckerEnabled).toBe(false);
+    } as unknown as PluginConfig);
+    expect(retiredAlias.updateCheckerEnabled).toBe(true);
 
     RuntimeConfig.reset(DIRECTORY);
     const unrelatedHook = RuntimeConfig.init(DIRECTORY, {
@@ -424,7 +424,7 @@ describe('RuntimeConfig', () => {
     expect(unrelatedHook.updateCheckerEnabled).toBe(true);
   });
 
-  test('webfetch is gated by its config switch and disabled_tools entry', () => {
+  test('webfetch is gated only by the disabled_tools entry', () => {
     resetRegistry();
     const toolDisabled = RuntimeConfig.init(DIRECTORY, {
       disabled_tools: ['webfetch'],
@@ -432,10 +432,10 @@ describe('RuntimeConfig', () => {
     expect(toolDisabled.featureGates.webfetch).toBe(false);
 
     RuntimeConfig.reset(DIRECTORY);
-    const switchOff = RuntimeConfig.init(DIRECTORY, {
+    const retiredSwitch = RuntimeConfig.init(DIRECTORY, {
       webfetch: { enabled: false },
-    });
-    expect(switchOff.featureGates.webfetch).toBe(false);
+    } as unknown as PluginConfig);
+    expect(retiredSwitch.featureGates.webfetch).toBe(true);
 
     RuntimeConfig.reset(DIRECTORY);
     const unrelated = RuntimeConfig.init(DIRECTORY, {
@@ -672,7 +672,6 @@ describe('RuntimeConfig', () => {
       disabled_hooks: ['foreground-fallback'],
       disabled_commands: ['interview', 'deepwork'],
       fallback: { enabled: false, maxRetries: 5 },
-      webfetch: { enabled: false },
       acpAgents: { myAcp: { command: 'echo' } },
       backgroundJobs: { maxSessionsPerAgent: 7 },
       multiplexer: { type: 'tmux', layout: 'main-vertical' },

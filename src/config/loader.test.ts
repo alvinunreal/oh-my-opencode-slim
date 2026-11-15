@@ -177,12 +177,11 @@ describe('loadPluginConfig', () => {
         path.join(globalDir, 'oh-my-opencode-slim.json'),
         JSON.stringify({
           autoUpdate: false,
-          webfetch: { enabled: false },
+          disabled_tools: ['webfetch'],
           backgroundJobs: { childInputWake: false },
         }),
       );
       writeProjectConfig(projectDir, {
-        webfetch: {},
         backgroundJobs: { childInputWakeKinds: { question: true } },
       });
 
@@ -198,9 +197,11 @@ describe('loadPluginConfig', () => {
         expect(config.backgroundJobs?.childInputWake).toBe(false);
       }
 
+      // A nearer empty disabled_tools list replaces the whole family and
+      // re-enables webfetch; a nearer autoUpdate: true re-enables updates.
       writeProjectConfig(projectDir, {
         autoUpdate: true,
-        webfetch: { enabled: true },
+        disabled_tools: [],
         backgroundJobs: { childInputWake: true },
       });
       for (const hostFlavor of ['v1', 'v2']) {
@@ -625,7 +626,7 @@ describe('loadPluginConfig', () => {
     expect(config.agents?.oracle?.temperature).toBe(0.9);
   });
 
-  test('deep-merges webfetch settings across user and project configs', () => {
+  test('project disabled_tools replaces the user list wholesale', () => {
     const userConfigPath = path.join(userConfigDir, 'opencode');
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
@@ -634,21 +635,22 @@ describe('loadPluginConfig', () => {
     fs.writeFileSync(
       path.join(userConfigPath, 'oh-my-opencode-slim.json'),
       JSON.stringify({
-        webfetch: { enabled: false },
+        disabled_tools: ['webfetch'],
       }),
     );
     fs.writeFileSync(
       path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
-        webfetch: { enabled: true },
+        disabled_tools: ['ast_grep_search'],
       }),
     );
 
     const config = loadPluginConfig(projectDir, { silent: true });
 
-    expect(config.webfetch).toEqual({
-      enabled: true,
-    });
+    // Top-level arrays are replaced entirely: the project list does not
+    // carry `webfetch` over, so the enhanced webfetch turns back on.
+    expect(config.disabled_tools).toEqual(['ast_grep_search']);
+    expect(resolveFeatureGates(config).webfetch).toBe(true);
   });
 
   test('retains user interview settings when project partially overrides them', () => {
@@ -752,7 +754,7 @@ describe('loadPluginConfig', () => {
     expect(config.marketplace).toEqual({ enabled: false });
   });
 
-  test('does not let a defaulted project webfetch enabled override user false', () => {
+  test('nearer empty disabled_tools re-enables webfetch', () => {
     const userConfigPath = path.join(userConfigDir, 'opencode');
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
@@ -761,21 +763,45 @@ describe('loadPluginConfig', () => {
     fs.writeFileSync(
       path.join(userConfigPath, 'oh-my-opencode-slim.json'),
       JSON.stringify({
-        webfetch: { enabled: false },
+        disabled_tools: ['webfetch'],
       }),
     );
     fs.writeFileSync(
       path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
-        webfetch: {},
+        disabled_tools: [],
       }),
     );
 
     const config = loadPluginConfig(projectDir, { silent: true });
 
-    expect(config.webfetch).toEqual({
-      enabled: false,
-    });
+    expect(config.disabled_tools).toEqual([]);
+    expect(resolveFeatureGates(config).webfetch).toBe(true);
+  });
+
+  test('nearer disabled_tools keeps webfetch cold when listed again', () => {
+    const userConfigPath = path.join(userConfigDir, 'opencode');
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(userConfigPath, { recursive: true });
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userConfigPath, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        disabled_tools: [],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        disabled_tools: ['webfetch', 'ast_grep_search'],
+      }),
+    );
+
+    const config = loadPluginConfig(projectDir, { silent: true });
+
+    expect(config.disabled_tools).toEqual(['webfetch', 'ast_grep_search']);
+    expect(resolveFeatureGates(config).webfetch).toBe(false);
   });
 
   test('a project-layer backgroundJobs bad key sanitizes away without overriding a valid user value (#1291)', () => {
@@ -1776,14 +1802,16 @@ describe('onWarning callback', () => {
     expect(warnings).toHaveLength(0);
   });
 
-  test('accepts the auto-update-checker hook value without stripping', () => {
+  test('strips the retired auto-update-checker hook with a removed diagnostic', () => {
     const projectDir = path.join(tempDir, 'project');
     const projectConfigDir = path.join(projectDir, '.opencode');
     fs.mkdirSync(projectConfigDir, { recursive: true });
     fs.writeFileSync(
       path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
       JSON.stringify({
-        disabled_hooks: ['auto-update-checker'],
+        disabled_hooks: ['auto-update-checker', 'phase-reminder'],
+        disabled_tools: ['webfetch'],
+        agents: { oracle: { model: 'test/model' } },
       }),
     );
 
@@ -1792,8 +1820,37 @@ describe('onWarning callback', () => {
       onWarning: (warning) => warnings.push(warning),
     });
 
-    expect(config.disabled_hooks).toEqual(['auto-update-checker']);
-    expect(warnings).toHaveLength(0);
+    // The retired value never reaches the value enum or the gate; valid
+    // siblings and unrelated settings in the same file still load.
+    expect(config.disabled_hooks).toEqual(['phase-reminder']);
+    expect(config.disabled_tools).toEqual(['webfetch']);
+    expect(config.agents?.oracle?.model).toBe('test/model');
+    expect(warnings.map((warning) => warning.kind)).toEqual(['removed-key']);
+    expect(warnings[0]?.message).toContain('use autoUpdate: false');
+    expect(resolveFeatureGates(config).updateChecker).toBe(true);
+  });
+
+  test('a disabled_hooks list holding only the retired update alias is unset', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        disabled_hooks: ['auto-update-checker'],
+        autoUpdate: false,
+      }),
+    );
+
+    const warnings: ConfigLoadWarning[] = [];
+    const config = loadPluginConfig(projectDir, {
+      onWarning: (warning) => warnings.push(warning),
+    });
+
+    expect(config.disabled_hooks).toBeUndefined();
+    expect(config.autoUpdate).toBe(false);
+    expect(resolveFeatureGates(config).updateChecker).toBe(false);
+    expect(warnings.map((warning) => warning.kind)).toEqual(['removed-key']);
   });
 
   test('retains an explicit interview.enabled across the layer pass', () => {
@@ -3504,17 +3561,22 @@ describe('removed config keys', () => {
     expect(config.backgroundJobs?.mode).toBe('native');
   });
 
-  test('SF-01: drops webfetch.model without losing the other file settings', () => {
+  test('SF-01: drops the retired webfetch block without losing the other file settings', () => {
     const { config, warnings } = load({
       webfetch: { model: 'test/retired-model', enabled: false },
+      disabled_tools: ['webfetch'],
       sidebar: false,
     });
 
     expect(config.agents?.oracle?.model).toBe('test/preset-oracle');
-    expect(config.webfetch).toEqual({ enabled: false });
+    expect('webfetch' in config).toBe(false);
+    expect(config.disabled_tools).toEqual(['webfetch']);
     expect(config.sidebar).toBe(false);
+    expect(resolveFeatureGates(config).webfetch).toBe(false);
     expect(warnings.map((warning) => warning.kind)).toEqual(['removed-key']);
-    expect(warnings[0]?.message).toContain('"webfetch.model" was removed');
+    expect(warnings[0]?.message).toBe(
+      'webfetch config was removed; use disabled_tools: ["webfetch"] to use the native host tool',
+    );
   });
 
   test('reports every removed key in one file', () => {

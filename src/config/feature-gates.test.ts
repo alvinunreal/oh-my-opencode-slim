@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  type FeatureGateConfig,
   resolveFeatureGates,
   UnsupportedHostConfigError,
 } from './feature-gates';
@@ -117,48 +118,46 @@ describe('resolveFeatureGates', () => {
     ).toBe(false);
   });
 
-  test('disables the update checker via autoUpdate or the disabled hook', () => {
+  test('disables the update checker only on autoUpdate: false', () => {
     expect(resolveFeatureGates({ autoUpdate: false }).updateChecker).toBe(
       false,
     );
-    expect(
-      resolveFeatureGates({ disabled_hooks: ['auto-update-checker'] })
-        .updateChecker,
-    ).toBe(false);
+    expect(resolveFeatureGates({ autoUpdate: true }).updateChecker).toBe(true);
+    // The retired disabled_hooks alias has no effect on the gate.
     expect(
       resolveFeatureGates({
-        autoUpdate: false,
+        autoUpdate: true,
         disabled_hooks: ['auto-update-checker'],
-      }).updateChecker,
-    ).toBe(false);
+      } as FeatureGateConfig).updateChecker,
+    ).toBe(true);
 
     // Unrelated hooks and an explicit autoUpdate: true keep checking on.
     expect(
       resolveFeatureGates({
         autoUpdate: true,
         disabled_hooks: ['cache-monitor'],
-      }).updateChecker,
+      } as FeatureGateConfig).updateChecker,
     ).toBe(true);
   });
 
   test('keeps webfetch enabled by default', () => {
     expect(resolveFeatureGates().webfetch).toBe(true);
-    expect(resolveFeatureGates({ webfetch: {} }).webfetch).toBe(true);
-    expect(resolveFeatureGates({ webfetch: { enabled: true } }).webfetch).toBe(
-      true,
-    );
+    expect(resolveFeatureGates({ disabled_tools: [] }).webfetch).toBe(true);
+    expect(
+      resolveFeatureGates({ disabled_tools: ['ast_grep_search'] }).webfetch,
+    ).toBe(true);
   });
 
-  test('disables webfetch on the config switch', () => {
-    expect(resolveFeatureGates({ webfetch: { enabled: false } }).webfetch).toBe(
-      false,
-    );
-  });
-
-  test('disables webfetch when disabled_tools lists it', () => {
+  test('disables webfetch only when disabled_tools lists it', () => {
     expect(resolveFeatureGates({ disabled_tools: ['webfetch'] }).webfetch).toBe(
       false,
     );
+    // The retired root webfetch block is not a gate input.
+    expect(
+      resolveFeatureGates({
+        webfetch: { enabled: false },
+      } as unknown as FeatureGateConfig).webfetch,
+    ).toBe(true);
   });
 
   test('keeps webfetch enabled for unrelated disabled tools', () => {
@@ -174,7 +173,7 @@ describe('resolveFeatureGates', () => {
       const gates = resolveFeatureGates({
         disabled_tools: value as unknown as readonly string[],
         disabled_hooks: value as unknown as readonly string[],
-      });
+      } as FeatureGateConfig);
       expect(gates.webfetch).toBe(true);
       expect(gates.updateChecker).toBe(true);
     }
@@ -186,11 +185,11 @@ describe('resolveFeatureGates', () => {
       sidebar: true,
       interview: { enabled: false },
       marketplace: { enabled: false },
-      webfetch: { enabled: false },
+      disabled_tools: ['webfetch'],
       liveConfigRefresh: false,
       autoUpdate: false,
       backgroundJobs: { mode: 'native' },
-      disabled_hooks: ['auto-update-checker'],
+      disabled_hooks: ['cache-monitor'],
     };
 
     const gates = resolveFeatureGates(config);

@@ -436,6 +436,7 @@ function pluginConfig(mode: Mode | 'managed') {
     ...(mode === 'default' ? {} : { backgroundJobs: { mode } }),
     tui: false,
     sidebar: false,
+    autoUpdate: false,
     liveConfigRefresh: false,
     interview: { enabled: false },
     marketplace: { enabled: false },
@@ -450,7 +451,6 @@ function pluginConfig(mode: Mode | 'managed') {
       'ast_grep_replace',
     ],
     disabled_hooks: [
-      'auto-update-checker',
       'foreground-fallback',
       'phase-reminder',
       'json-error-recovery',
