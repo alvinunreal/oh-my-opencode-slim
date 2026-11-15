@@ -103,7 +103,9 @@ session is never deleted and stays continuable.
 On V2 native, a child can use `task_report` for a material milestone,
 consequential finding, blocker, or decision request. The recipient is always
 read from the child session's host-owned `parentID`; callers cannot choose
-another session. Reports enter the host's serialized inbox with
+another session. A single native child read supplies that relationship;
+`session.synthetic` verifies the recipient at admission and keeps its selected
+agent/model. Reports enter the host's serialized inbox with
 `delivery: "queue"` and `resume: false`: the tool confirms that the host queued
 the report, not that the parent read it, started a turn, or woke. The parent can
 reply by continuing the same child session with the native V2

@@ -237,7 +237,7 @@ All config files support **JSONC** (JSON with Comments):
 Slim requires OpenCode 2.3.0 or newer. See the [upgrade guide](v2-native-upgrade.md)
 for configuration changes.
 
-Every optional subsystem has one switch, all defaulting to on. A
+Optional subsystems can be disabled independently. This
 council-and-observer-only setup turns off the rest:
 
 ```jsonc
@@ -250,7 +250,6 @@ council-and-observer-only setup turns off the rest:
   "liveConfigRefresh": false,
   "fallback": { "enabled": false },
   "webfetch": { "enabled": false },
-  "multiplexer": { "type": "none" },
   "companion": { "enabled": false },
   // Keep council + observer; enable observer by naming only the other
   // built-ins here, then set a vision-capable model for it.
@@ -262,19 +261,45 @@ council-and-observer-only setup turns off the rest:
     "councillor": { "skills": [] }
   },
   "disabled_mcps": ["context7", "gh_grep"],
-  "disabled_commands": ["interview", "implement", "deepwork", "reflect"],
+  "disabled_commands": ["deepwork", "reflect"],
   "disabled_hooks": [
     "phase-reminder", "foreground-fallback", "deepwork-goal",
     "cache-monitor", "json-error-recovery", "tool-loop-guard",
     "search-path-guard", "absolute-path-rescue", "apply-patch"
   ],
-  "disabled_tools": [
-    "ast_grep_search", "ast_grep_replace", "acp_run",
-    "marketplace_inspect", "marketplace_manage",
-    "task_cancel", "task_message", "task_status", "task_reply"
-  ]
+  "disabled_tools": ["ast_grep_search", "ast_grep_replace", "acp_run"]
 }
 ```
+
+### Implied switches
+
+Master switches already disable their dependent surfaces. In a resolved
+configuration, listing those surfaces again adds no restriction:
+
+| Existing switch | Entries you can omit |
+| --- | --- |
+| `tui: false` | `sidebar: false`, `disabled_commands` entries `killall` and `subagent`, and pane settings under `multiplexer` |
+| `interview.enabled: false` | `disabled_commands` entries `interview` and `implement`, and `disabled_tools` entry `interview_submit_state` |
+| `marketplace.enabled: false` | `disabled_tools` entries `marketplace_inspect` and `marketplace_manage` |
+| `backgroundJobs.mode: "off"` | Slim task-tool entries in `disabled_tools`, including `task_status`, `task_cancel`, `task_reply` and `task_report` |
+| `autoUpdate: false` | `disabled_hooks` entry `auto-update-checker` |
+| `webfetch.enabled: false` | `disabled_tools` entry `webfetch` |
+| `disabled_skills: ["reflect"]` | `disabled_commands` entry `reflect` |
+
+These are combinations, not interchangeable settings. Granular tool and
+command disables still matter when their subsystem is enabled. An inherited
+list can also be an intentional veto when a closer configuration re-enables
+a master switch; review every layer before removing it.
+
+Two distinctions matter:
+
+- `backgroundJobs.mode: "off"` disables session-preset binding, **not** the
+  TUI's global preset editor. Disable the `preset` command separately if you
+  want that editor gone. With both `tui: false` and mode `"off"`, neither
+  preset command surface is registered.
+- `fallback.enabled: false` leaves V2 retry bookkeeping available for a later
+  session-profile enable. `disabled_hooks: ["foreground-fallback"]` removes
+  the manager entirely; the Minimal Setup keeps that stronger cold gate.
 
 `tui: false` gates the whole OMOS TUI surface: the client entry skips loading
 the TUI render stack and the server stops writing sidebar state. The

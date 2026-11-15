@@ -5,46 +5,41 @@ import {
   tool,
 } from '@opencode-ai/plugin';
 import { isRecord } from '../utils/guards';
-import { createInternalAgentTextPart } from '../utils/internal-initiator';
-import { getClient } from '../utils/opencode-client';
-import { withAgent } from '../utils/prompt-agent';
+import {
+  INTERNAL_INITIATOR_METADATA_KEY,
+  SLIM_INTERNAL_INITIATOR_MARKER,
+} from '../utils/internal-initiator';
+import type { ExperimentalV2 } from '../v2/client-shim';
+import {
+  createInternalSyntheticMessageID,
+  recordInternalAdmission,
+} from '../v2/internal-admissions';
 
 const z = tool.schema;
 const MAX_REPORT_LENGTH = 2000;
 
-type SessionInfo = {
-  id?: string;
-  parentID?: string;
-  agent: string;
-};
-
-function unwrapSessionInfo(response: unknown, label: string): SessionInfo {
-  if (!isRecord(response)) throw new Error(`Could not read ${label} session`);
-  if (response.error !== undefined && response.error !== null) {
-    throw new Error(`Could not read ${label} session`);
-  }
-  const value = isRecord(response.data) ? response.data : response;
-  if (typeof value.id !== 'string' || typeof value.agent !== 'string') {
-    throw new Error(`Could not verify ${label} session identity`);
-  }
-  return value as SessionInfo;
-}
-
-function assertPromptAccepted(response: unknown): void {
-  if (!isRecord(response)) return;
-  if (response.error !== undefined && response.error !== null) {
-    throw new Error('The parent session did not accept the report');
-  }
-  const result = isRecord(response.data) ? response.data : response;
-  const status = isRecord(result.response) ? result.response.status : undefined;
+/** exact2.3 may return a stale same-id record; confirm the payload is ours. */
+function assertNativeSyntheticAdmitted(
+  result: unknown,
+  id: string,
+  sessionID: string,
+  text: string,
+  description: string,
+): void {
+  const payload = isRecord(result) ? result.payload : undefined;
   if (
-    isRecord(result.response) &&
-    typeof result.response.ok === 'boolean' &&
-    result.response.ok === false
+    !isRecord(result) ||
+    result.id !== id ||
+    result.sessionID !== sessionID ||
+    result.type !== 'synthetic' ||
+    result.delivery !== 'queue' ||
+    !isRecord(payload) ||
+    payload.text !== text ||
+    payload.description !== description ||
+    !isRecord(payload.metadata) ||
+    payload.metadata[INTERNAL_INITIATOR_METADATA_KEY] !== true
   ) {
-    throw new Error(
-      `The parent session did not accept the report${typeof status === 'number' ? ` (HTTP ${status})` : ''}`,
-    );
+    throw new Error('The parent session did not accept the report');
   }
 }
 
@@ -77,60 +72,60 @@ export function createTaskReportTool(options: {
         throw new Error('task_report requires a subagent session');
       }
 
-      const client = getClient(options.input);
-      const childResponse = await client.session.get({
-        path: { id: childSessionID },
-        query: { directory: options.input.directory },
-        throwOnError: true,
-      });
-      const child = unwrapSessionInfo(childResponse, 'subagent');
-      if (child.id !== childSessionID) {
+      const session = (
+        options.input as PluginInput & { experimental_v2?: ExperimentalV2 }
+      ).experimental_v2?.session;
+      if (
+        !session ||
+        typeof session.get !== 'function' ||
+        typeof session.synthetic !== 'function'
+      ) {
+        throw new Error(
+          'task_report requires the native v2 session.get and session.synthetic capabilities',
+        );
+      }
+
+      const child = await session.get({ sessionID: childSessionID });
+      if (options.isDisposed?.()) throw new Error('Plugin is disposing');
+
+      if (
+        !isRecord(child) ||
+        child.id !== childSessionID ||
+        typeof child.agent !== 'string'
+      ) {
         throw new Error('Could not verify the calling subagent session');
       }
-      if (!child.parentID) {
+      const agent = child.agent;
+      const parentID = child.parentID;
+      if (typeof parentID !== 'string' || !parentID) {
         throw new Error('task_report is only available in a child session');
       }
-      if (options.isDisposed?.()) throw new Error('Plugin is disposing');
 
-      const parentResponse = await client.session.get({
-        path: { id: child.parentID },
-        query: { directory: options.input.directory },
-        throwOnError: true,
-      });
-      const parent = unwrapSessionInfo(parentResponse, 'parent');
-      if (parent.id !== child.parentID) {
-        throw new Error('Could not verify the owning parent session');
-      }
-      if (options.isDisposed?.()) throw new Error('Plugin is disposing');
-
-      // Queue-only delivery: the update lands in the host inbox and never
-      // resumes the parent. The parent's own state (busy, idle, interrupted,
-      // pending asks) is never inspected — the host owns when the parent
-      // consumes the update.
       const updateID = randomUUID();
       const message = [
         `<subagent-update id="${updateID}" kind="${args.kind}">`,
-        `From @${child.agent ?? 'subagent'} (session ${child.id}):`,
+        `From @${agent} (session ${childSessionID}):`,
         args.message.trim(),
         '</subagent-update>',
       ].join('\n');
-      const body = withAgent(
-        {
-          parts: [createInternalAgentTextPart(message)],
-        },
-        parent.agent,
-      );
-      const promptAsync = client.session.promptAsync as unknown as (
-        input: Record<string, unknown>,
-      ) => Promise<unknown>;
-      const response = await promptAsync({
-        path: { id: parent.id },
-        query: { directory: options.input.directory },
+      const text = `${message}\n${SLIM_INTERNAL_INITIATOR_MARKER}`;
+      const description = 'oh-my-opencode-slim internal initiator';
+
+      if (options.isDisposed?.()) throw new Error('Plugin is disposing');
+
+      // exact2.3: record before admission, host validates the parent.
+      const id = createInternalSyntheticMessageID();
+      recordInternalAdmission(parentID, id);
+      const admitted = await session.synthetic({
+        sessionID: parentID,
+        id,
+        text,
+        description,
+        metadata: { [INTERNAL_INITIATOR_METADATA_KEY]: true },
         delivery: 'queue',
         resume: false,
-        body,
       });
-      assertPromptAccepted(response);
+      assertNativeSyntheticAdmitted(admitted, id, parentID, text, description);
 
       return `Update ${updateID} queued for the parent without waking it. The host accepted the update; processing is not confirmed.`;
     },
