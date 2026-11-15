@@ -301,7 +301,8 @@ check against the child's host `parentID`, and no board row, alias, adoption,
 lease, or terminal publication. `task_status` reads the child transcript and
 pending permissions on demand; `task_cancel` forwards the host interrupt and
 reports its answer; `task_reply` revalidates the pending request with the host
-before replying; `task_report` queues to the parent inbox with `resume: false`.
+before replying; `task_report` steers the parent inbox with `resume: true`
+unless the parent's outcome is `interrupted`.
 See [Tools](tools.md#background-task-control) and
 [Background Orchestration](background-orchestration.md).
 
@@ -820,7 +821,7 @@ V1-only `concurrency`, `wallClockTimeoutMs`, `maxSessionsPerAgent`, and
 `sameProviderPolicy` warns and is ignored because V2 subagents always run in
 background. The remaining native controls are exact-ID host reads:
 `task_status`, `task_cancel`,
-permission-only `task_reply`, and queue-only `task_report`. OpenCode reports
+permission-only `task_reply`, and child `task_report`. OpenCode reports
 every settled child busy period — native `subagent(sessionID, prompt)` and
 direct `session.prompt` continuations included — so Slim keeps no completion
 watcher.

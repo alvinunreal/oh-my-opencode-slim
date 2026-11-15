@@ -53,8 +53,8 @@ Slim registers only the gaps the native model surface leaves open:
   The V2 plugin session domain does not expose Form replies, so questions are
   answered in the host UI.
 - `task_report` lets a child add a bounded progress or escalation update to the
-  parent's host inbox. It is queue-only (`resume: false`): acceptance means the
-  host queued the update, not that the parent read it or started a turn.
+  parent's host inbox using `delivery: "steer"`. It requests a wake unless the
+  parent's outcome is `interrupted`; acceptance does not confirm processing.
 
 Use exact session IDs for every task control.
 
@@ -178,7 +178,7 @@ poll it.
 - `task_reply` answers a pending permission request. Answer questions in the
   host UI on V2.
 - A child may call `task_report` for a material milestone or blocker. The
-  update is queued to its owning parent without starting a parent turn.
+  update steers its owning parent and requests a wake unless it was interrupted.
 
 Terminal reconciliation proves lifecycle state, not that the output was used:
 verify that the relevant result was consumed before finalizing. Native

@@ -62,32 +62,29 @@ const reportArgs = {
 };
 
 describe('task_report', () => {
-  test('queues an attributed update to only the host-owned parent', async () => {
+  test('contract: idle escalation steers and requests a wake', async () => {
     let admission: Record<string, unknown> | undefined;
     const input = createContext({
+      parent: { outcome: 'succeeded', time: { idle: 2_000 } },
       onSynthetic: (value) => {
         admission = value;
       },
     });
     const { task_report } = createTaskReportTool({ input });
 
-    const result = await task_report.execute(reportArgs, {
+    await task_report.execute({ ...reportArgs, kind: 'escalation' }, {
       sessionID: 'child',
     } as never);
 
     expect(admission).toMatchObject({
       sessionID: 'parent',
-      delivery: 'queue',
-      resume: false,
+      delivery: 'steer',
+      resume: true,
       description: 'oh-my-opencode-slim internal initiator',
     });
-    expect(admission?.text).toContain('kind="progress"');
+    expect(admission?.text).toContain('kind="escalation"');
     expect(admission?.text).toContain('From @fixer (session child)');
     expect(admission?.text).toContain(reportArgs.message);
-    expect(result).toMatch(/Update [a-f0-9-]{36} queued for the parent/);
-    expect(result).toContain('without waking it');
-    expect(result).toContain('processing is not confirmed');
-    expect(result).not.toContain('processed');
   });
 
   test('does not send from a parentless session', async () => {
@@ -106,45 +103,97 @@ describe('task_report', () => {
     expect(sent).toBe(false);
   });
 
-  test('always queues without resuming for busy, idle, interrupted, and form-wait parents', async () => {
-    const parentStates: Array<[string, Record<string, unknown>]> = [
-      ['busy', { outcome: 'busy', time: { busy: 2_000 } }],
-      ['idle', { outcome: 'succeeded', time: { idle: 2_000 } }],
-      ['interrupted', { outcome: 'interrupted', time: { idle: 2_000 } }],
-      [
-        'pending form',
-        {
-          outcome: 'running',
-          pendingForm: { id: 'form-1', status: 'pending' },
-        },
-      ],
-    ];
+  test('contract: progress steers and requests a wake', async () => {
+    let admission: Record<string, unknown> | undefined;
+    const input = createContext({
+      onSynthetic: (value) => {
+        admission = value;
+      },
+    });
+    const { task_report } = createTaskReportTool({ input });
+    await task_report.execute(reportArgs, { sessionID: 'child' } as never);
 
-    for (const [state, parent] of parentStates) {
-      let admission: Record<string, unknown> | undefined;
-      const input = createContext({
-        parent,
-        onSynthetic: (value) => {
-          admission = value;
-        },
-      });
-      const { task_report } = createTaskReportTool({ input });
-      const result = await task_report.execute(
-        { ...reportArgs, kind: 'escalation' },
-        { sessionID: 'child' } as never,
-      );
-
-      expect(admission, state).toMatchObject({
-        sessionID: 'parent',
-        delivery: 'queue',
-        resume: false,
-      });
-      expect(result, state).toContain('without waking it');
-      expect(result, state).toContain('processing is not confirmed');
-    }
+    expect(admission).toMatchObject({
+      sessionID: 'parent',
+      delivery: 'steer',
+      resume: true,
+    });
+    expect(admission?.text).toContain('kind="progress"');
   });
 
-  test('disposal still prevents queue admission', async () => {
+  test('contract: interrupted parent is not resumed for either kind', async () => {
+    const admissions: Record<string, unknown>[] = [];
+    const input = createContext({
+      parent: { outcome: 'interrupted', time: { idle: 2_000 } },
+      onSynthetic: (value) => {
+        admissions.push(value);
+      },
+    });
+    const { task_report } = createTaskReportTool({ input });
+    await task_report.execute(reportArgs, { sessionID: 'child' } as never);
+    await task_report.execute({ ...reportArgs, kind: 'escalation' }, {
+      sessionID: 'child',
+    } as never);
+
+    expect(admissions).toHaveLength(2);
+    expect(admissions[0]).toMatchObject({
+      sessionID: 'parent',
+      delivery: 'steer',
+      resume: false,
+    });
+    expect(admissions[0].text).toContain('kind="progress"');
+    expect(admissions[1]).toMatchObject({
+      sessionID: 'parent',
+      delivery: 'steer',
+      resume: false,
+    });
+    expect(admissions[1].text).toContain('kind="escalation"');
+  });
+
+  test('contract: busy parent does not change admission', async () => {
+    let admission: Record<string, unknown> | undefined;
+    const input = createContext({
+      parent: { time: { busy: 2_000 } },
+      onSynthetic: (value) => {
+        admission = value;
+      },
+    });
+    const { task_report } = createTaskReportTool({ input });
+    await task_report.execute(reportArgs, { sessionID: 'child' } as never);
+
+    expect(admission).toMatchObject({
+      sessionID: 'parent',
+      delivery: 'steer',
+      resume: true,
+    });
+  });
+
+  test('contract: result distinguishes wake request from interrupted parent', async () => {
+    const normal = createTaskReportTool({ input: createContext({}) });
+    const interrupted = createTaskReportTool({
+      input: createContext({ parent: { outcome: 'interrupted' } }),
+    });
+    const awakeResult = await normal.task_report.execute(reportArgs, {
+      sessionID: 'child',
+    } as never);
+    const interruptedResult = await interrupted.task_report.execute(
+      reportArgs,
+      {
+        sessionID: 'child',
+      } as never,
+    );
+
+    expect(awakeResult).toMatch(/Update [a-f0-9-]{36}/);
+    expect(awakeResult).toContain('wake requested');
+    expect(awakeResult).not.toContain('without waking');
+    expect(interruptedResult).toContain('without waking');
+    expect(awakeResult).toContain('processing is not confirmed');
+    expect(interruptedResult).toContain('processing is not confirmed');
+    expect(awakeResult).not.toContain('processed');
+    expect(interruptedResult).not.toContain('processed');
+  });
+
+  test('disposal still prevents admission', async () => {
     let sent = false;
     const input = createContext({
       onSynthetic: () => {

@@ -1475,62 +1475,67 @@ async function nativeControls(
   );
   await checkCase(
     results,
-    `${mode}: progress report queues on idle parent without waking it`,
+    `${mode}: escalation wakes idle parent before child finishes`,
     async () => {
-      const parent = await host.create('Dormant progress report');
+      const parent = await host.create('Idle escalation report');
       const childMarker = model.plan('child', [
         {
           tool: 'task_report',
-          input: { kind: 'progress', message: 'REPORT_IDLE_QUEUED' },
+          input: { kind: 'escalation', message: 'REPORT_IDLE_ESCALATION' },
           hold: `${mode}:report`,
         },
         { text: 'REPORT_CHILD_TERMINAL_HELD', hold: `${mode}:report-terminal` },
       ]);
-      await host.runTools(
-        parent.id,
-        [subagent(childMarker)],
-        'REPORT_PARENT_IDLE',
-      );
+      const parentMarker = model.plan('parent', [
+        subagent(childMarker),
+        { text: 'REPORT_PARENT_IDLE' },
+        { text: 'REPORT_PARENT_WOKE' },
+      ]);
+      const parentCalls = () =>
+        model.requests.filter(
+          (request) => request.plan === parentMarker.slice(9, -1),
+        );
+      await host.prompt(parent.id, parentMarker);
+      await host.contains(parent.id, 'REPORT_PARENT_IDLE');
+      await host.idle(parent.id);
       const target = await host.child(parent.id);
       await model.wait(`${mode}:report`);
-      const before = model.requests.filter(
-        (request) => request.body.model === 'parent' && request.plan,
-      ).length;
+      const before = parentCalls().length;
       model.release(`${mode}:report`);
       await model.wait(`${mode}:report-terminal`);
-      const inbox = await host.request<
-        Array<{ id: string; delivery: string; payload: { text?: string } }>
-      >(`/api/session/${parent.id}/inbox`);
-      const reports = inbox.filter((item) =>
-        item.payload.text?.includes('REPORT_IDLE_QUEUED'),
+      await host.contains(parent.id, 'REPORT_PARENT_WOKE');
+      await host.idle(parent.id);
+      const admissions = await poll('idle report admission', async () => {
+        const items = host.inboxAdmissions(parent.id, 'REPORT_IDLE_ESCALATION');
+        return items.length === 1 ? items : undefined;
+      });
+      assert.equal(
+        object(object(admissions[0].data).item).delivery,
+        'steer',
+        'Report must use the steer lane',
       );
       assert.equal(
-        reports.length,
-        1,
-        'Report was not admitted once to the host inbox',
+        parentCalls().length,
+        before + 1,
+        'Idle escalation must cause exactly one parent model call',
       );
-      assert.equal(
-        reports[0].delivery,
-        'queue',
-        'Report must use the queue lane',
+      assert(
+        JSON.stringify(parentCalls().at(-1)?.body.messages).includes(
+          'REPORT_IDLE_ESCALATION',
+        ),
+        'Woken parent request did not contain the escalation',
       );
+      assert.equal((await host.inbox(parent.id)).length, 0);
+      assert(
+        (await host.request<RecordValue>('/api/session/active'))[target],
+        'Child finished before the parent consumed the escalation',
+      );
+      const additionalParentCalls = parentCalls().length - before;
       const output = toolText(await host.messages(target), 'task_report');
-      assert.match(output, /queued|accepted/);
+      assert.match(output, /accepted.*wake requested/);
       assert.doesNotMatch(
         output,
         /processed successfully|delivered successfully/i,
-      );
-      assert.equal(
-        (await host.request<RecordValue>('/api/session/active'))[parent.id],
-        undefined,
-        'Progress report woke idle parent',
-      );
-      assert.equal(
-        model.requests.filter(
-          (request) => request.body.model === 'parent' && request.plan,
-        ).length,
-        before,
-        'Progress report called the parent model',
       );
       model.release(`${mode}:report-terminal`);
       await host.contains(parent.id, 'REPORT_CHILD_TERMINAL_HELD');
@@ -1538,10 +1543,87 @@ async function nativeControls(
       return {
         parentID: parent.id,
         childID: target,
-        inboxID: reports[0].id,
-        delivery: 'queue',
-        resume: false,
-        parentModelCallsWhileQueued: 0,
+        delivery: 'steer',
+        parentModelCallsBeforeChildFinished: additionalParentCalls,
+        inboxAfterReport: 0,
+      };
+    },
+  );
+  await checkCase(
+    results,
+    `${mode}: busy parent receives two reports in its next request`,
+    async () => {
+      const parent = await host.create('Busy parent reports');
+      const childMarker = model.plan('child', [
+        {
+          tool: 'task_report',
+          input: { kind: 'progress', message: 'REPORT_BUSY_PROGRESS' },
+          hold: `${mode}:busy-reports-start`,
+        },
+        {
+          tool: 'task_report',
+          input: { kind: 'escalation', message: 'REPORT_BUSY_ESCALATION' },
+        },
+        {
+          text: 'BUSY_REPORT_CHILD_TERMINAL',
+          hold: `${mode}:busy-reports-terminal`,
+        },
+      ]);
+      const parentMarker = model.plan('parent', [
+        subagent(childMarker),
+        { text: 'BUSY_REPORT_PARENT_HELD', hold: `${mode}:reports-parent` },
+        { text: 'BUSY_REPORTS_CONSUMED' },
+      ]);
+      const parentCalls = () =>
+        model.requests.filter(
+          (request) => request.plan === parentMarker.slice(9, -1),
+        );
+      await host.prompt(parent.id, parentMarker);
+      await model.wait(`${mode}:reports-parent`);
+      await model.wait(`${mode}:busy-reports-start`);
+      const target = await host.child(parent.id);
+      const before = parentCalls().length;
+      model.release(`${mode}:busy-reports-start`);
+      await model.wait(`${mode}:busy-reports-terminal`);
+      await poll('both busy report admissions', async () =>
+        host.inboxAdmissions(parent.id, 'REPORT_BUSY_PROGRESS').length === 1 &&
+        host.inboxAdmissions(parent.id, 'REPORT_BUSY_ESCALATION').length === 1
+          ? true
+          : undefined,
+      );
+      const inbox = await host.inbox(parent.id);
+      assert.equal(inbox.length, 2);
+      assert(inbox.every((item) => item.delivery === 'steer'));
+      assert(
+        (await host.request<RecordValue>('/api/session/active'))[parent.id],
+        'Parent was not held in an active turn',
+      );
+      assert.equal(parentCalls().length, before);
+      model.release(`${mode}:reports-parent`);
+      await host.contains(parent.id, 'BUSY_REPORTS_CONSUMED');
+      await host.idle(parent.id);
+      assert.equal(
+        parentCalls().length,
+        before + 1,
+        'Two reports held during the parent final step must arrive in one parent request',
+      );
+      const nextRequest = JSON.stringify(parentCalls().at(-1)?.body.messages);
+      assert(nextRequest.includes('REPORT_BUSY_PROGRESS'));
+      assert(nextRequest.includes('REPORT_BUSY_ESCALATION'));
+      assert.equal((await host.inbox(parent.id)).length, 0);
+      assert(
+        (await host.request<RecordValue>('/api/session/active'))[target],
+        'Child finished before the parent consumed both reports',
+      );
+      model.release(`${mode}:busy-reports-terminal`);
+      await host.contains(parent.id, 'BUSY_REPORT_CHILD_TERMINAL');
+      await host.idle(parent.id);
+      return {
+        parentID: parent.id,
+        childID: target,
+        reportsInNextRequest: 2,
+        additionalParentCallsBeforeChildFinished: 1,
+        inboxAfterReports: 0,
       };
     },
   );
@@ -2035,7 +2117,7 @@ async function main() {
       'Rendered catalogs cover orchestrator/explorer with this local test preset, across requested default/native/off modes. Other caller roles/presets, disabled-tool matrices, and before/after prompt byte comparisons require parent focused validation.',
       'Omitted background, explicit same-ID follow-ups, and direct child prompts are exercised in every requested mode; the host always returns a running background child.',
       'Direct-prompt later-period coverage holds the parent model call and asserts no host Job outbox row exists while the direct prompt runs, then checks the host subagent metadata on the single completion admission.',
-      'Progress report real-host coverage currently proves idle-parent queue/resume:false; running, interrupted, and form-waiting parents are not separately exercised.',
+      'Progress report real-host coverage proves idle-parent wake and reports held during the parent final step; interrupted and form-waiting parents are not exercised on a real host.',
       'Refusal fallback coverage uses native mode with a three-model chain: exactly two consecutive content-filter refusals are asserted from host step events, each chain model is called once, and the single completion admission must carry host subagent metadata rather than a Slim duplicate.',
       `The harness asserts OpenCode ${HOST_VERSION} exactly; point V2_LIFECYCLE_HOST at a ${HOST_VERSION} binary.`,
       'Terminal-but-not-yet-admitted crash and admitted-but-unconsumed restart windows need a deterministic host-side fault seam. No host DB mutations or plugin recovery are used to fabricate those states.',

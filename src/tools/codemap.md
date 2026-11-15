@@ -73,7 +73,8 @@ Each tool is implemented as a factory function that returns a `ToolDefinition` r
 `native-task-control.ts` verifies ownership by exact session ID. Status reads
 host transcript and pending permission evidence. Cancel asks the host to
 interrupt the active child. Reply sends a verified permission response.
-`task-report.ts` queues a child's update to its parent with `resume: false`.
+`task-report.ts` steers a child's update to its parent and requests a wake
+unless the parent's outcome is `interrupted`.
 
 ### ACP Agent Execution Flow
 
