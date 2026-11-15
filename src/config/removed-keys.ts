@@ -120,7 +120,7 @@ export function stripRemovedConfigKeys(
 /**
  * Enum-backed `disabled_*` values removed in this version, keyed by config
  * key then value. A stale member must not invalidate the whole config file:
- * the loader strips it from the raw array before schema validation (the
+ * the loader strips it from the raw value before schema validation (the
  * value enum no longer accepts it) and reports the removal message through
  * the same `removed-key` channel as removed keys — the generic
  * unknown-value normalization would otherwise label it a typo.
@@ -137,10 +137,12 @@ const REMOVED_DISABLED_VALUES: Readonly<
 };
 
 /**
- * Strip every {@link REMOVED_DISABLED_VALUES} member from its raw array
- * (mutates in place) and report each concrete value once. An array left
- * empty by the strip is deleted, so a lower config layer's list still
- * applies.
+ * Strip every {@link REMOVED_DISABLED_VALUES} member from its raw
+ * `disabled_*` value (mutates in place) and report each concrete value once.
+ * Arrays and the supported single string are both inspected; a string with
+ * no retired member stays untouched for the later array normalization. A
+ * value left empty by the strip is deleted, so a lower config layer's list
+ * still applies.
  */
 export function stripRemovedDisabledValues(
   rawConfig: unknown,
@@ -148,8 +150,12 @@ export function stripRemovedDisabledValues(
 ): void {
   if (!isPlainObject(rawConfig)) return;
   for (const [key, messages] of Object.entries(REMOVED_DISABLED_VALUES)) {
-    const list = rawConfig[key];
-    if (!Array.isArray(list)) continue;
+    const value = rawConfig[key];
+    if (!Array.isArray(value) && typeof value !== 'string') continue;
+    // The supported string shape is normalized to an array later; inspect it
+    // here as a one-entry list so a retired value gets the removal warning
+    // instead of a generic unknown-value diagnostic.
+    const list: unknown[] = typeof value === 'string' ? [value] : value;
     const removed = new Set<string>();
     const kept: unknown[] = [];
     for (const entry of list) {
@@ -160,7 +166,7 @@ export function stripRemovedDisabledValues(
       }
     }
     if (removed.size === 0) continue;
-    for (const value of removed) onRemoved(messages[value] as string, value);
+    for (const name of removed) onRemoved(messages[name] as string, name);
     if (kept.length === 0) delete rawConfig[key];
     else rawConfig[key] = kept;
   }

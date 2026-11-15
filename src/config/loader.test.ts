@@ -1830,8 +1830,72 @@ describe('onWarning callback', () => {
     expect(resolveFeatureGates(config).updateChecker).toBe(true);
   });
 
-  test('a disabled_hooks list holding only the retired update alias is unset', () => {
-    const projectDir = path.join(tempDir, 'project');
+  test.each([
+    ['array', ['auto-update-checker']],
+    ['string', 'auto-update-checker'],
+  ] as const)(
+    'a disabled_hooks %s holding only the retired update alias is unset',
+    (shape, disabledHooks) => {
+      const projectDir = path.join(tempDir, `project-${shape}`);
+      const projectConfigDir = path.join(projectDir, '.opencode');
+      fs.mkdirSync(projectConfigDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+        JSON.stringify({
+          disabled_hooks: disabledHooks,
+          disabled_tools: ['webfetch'],
+          agents: { oracle: { model: 'test/model' } },
+        }),
+      );
+
+      const warnings: ConfigLoadWarning[] = [];
+      const config = loadPluginConfig(projectDir, {
+        onWarning: (warning) => warnings.push(warning),
+      });
+
+      // The retired value is dropped, not translated: no canonical off
+      // switch appears and updates stay on. Unrelated settings survive.
+      expect(config.disabled_hooks).toBeUndefined();
+      expect(Object.hasOwn(config, 'disabled_hooks')).toBe(false);
+      expect(config.autoUpdate).toBeUndefined();
+      expect(resolveFeatureGates(config).updateChecker).toBe(true);
+      expect(config.disabled_tools).toEqual(['webfetch']);
+      expect(config.agents?.oracle?.model).toBe('test/model');
+      expect(warnings.map((warning) => warning.kind)).toEqual(['removed-key']);
+      expect(warnings[0]?.message).toContain('was removed');
+      expect(warnings[0]?.message).toContain('use autoUpdate: false');
+    },
+  );
+
+  test('a retired-only project disabled_hooks value leaves the user list in place', () => {
+    const userConfigPath = path.join(tempDir, 'opencode');
+    const projectDir = path.join(tempDir, 'project-retired-string');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(userConfigPath, { recursive: true });
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userConfigPath, 'oh-my-opencode-slim.json'),
+      JSON.stringify({ disabled_hooks: ['phase-reminder'] }),
+    );
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({ disabled_hooks: 'auto-update-checker' }),
+    );
+
+    const warnings: ConfigLoadWarning[] = [];
+    const config = loadPluginConfig(projectDir, {
+      onWarning: (warning) => warnings.push(warning),
+    });
+
+    // Deleting the retired-only key treats it as unset, so the lower
+    // layer's valid list survives the merge instead of being replaced.
+    expect(config.disabled_hooks).toEqual(['phase-reminder']);
+    expect(warnings.map((warning) => warning.kind)).toEqual(['removed-key']);
+    expect(warnings[0]?.message).toContain('use autoUpdate: false');
+  });
+
+  test('an explicit autoUpdate: false still disables updates', () => {
+    const projectDir = path.join(tempDir, 'project-canonical-off');
     const projectConfigDir = path.join(projectDir, '.opencode');
     fs.mkdirSync(projectConfigDir, { recursive: true });
     fs.writeFileSync(
@@ -1851,6 +1915,29 @@ describe('onWarning callback', () => {
     expect(config.autoUpdate).toBe(false);
     expect(resolveFeatureGates(config).updateChecker).toBe(false);
     expect(warnings.map((warning) => warning.kind)).toEqual(['removed-key']);
+  });
+
+  test('normalizes a valid string disabled_hooks value without a removal warning', () => {
+    const projectDir = path.join(tempDir, 'project-valid-string-hook');
+    const projectConfigDir = path.join(projectDir, '.opencode');
+    fs.mkdirSync(projectConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectConfigDir, 'oh-my-opencode-slim.json'),
+      JSON.stringify({
+        disabled_hooks: 'phase-reminder',
+        agents: { oracle: { model: 'test/model' } },
+      }),
+    );
+
+    const warnings: ConfigLoadWarning[] = [];
+    const config = loadPluginConfig(projectDir, {
+      onWarning: (warning) => warnings.push(warning),
+    });
+
+    expect(config.disabled_hooks).toEqual(['phase-reminder']);
+    expect(config.agents?.oracle?.model).toBe('test/model');
+    expect(warnings.map((warning) => warning.kind)).toEqual(['normalized']);
+    expect(warnings[0]?.message).toContain('should be an array; normalized');
   });
 
   test('retains an explicit interview.enabled across the layer pass', () => {
