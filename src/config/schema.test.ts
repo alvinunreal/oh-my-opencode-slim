@@ -913,6 +913,59 @@ describe('PluginConfigSchema backgroundJobs', () => {
     }
   });
 
+  it('documents lifecycle modes, retirement, and sameProvider across V1/V2', () => {
+    const jsonSchema = z.toJSONSchema(PluginConfigSchema, {
+      io: 'input',
+    }) as {
+      properties?: {
+        backgroundJobs?: {
+          properties?: Record<string, { description?: string }>;
+        };
+      };
+    };
+
+    const properties = jsonSchema.properties?.backgroundJobs?.properties ?? {};
+
+    const modeDesc = properties.mode?.description ?? '';
+    expect(modeDesc).toContain('"managed" (default on V1 hosts)');
+    expect(modeDesc).toContain('"native" (default on OpenCode v2 hosts)');
+    expect(modeDesc).toContain(
+      'task_reply for the orchestrator and task_report for child subagents',
+    );
+    expect(modeDesc).toContain(
+      'request acceptance, not confirmed interruption',
+    );
+    expect(modeDesc).not.toContain('atomic interruption');
+
+    expect(properties.concurrency?.description).toContain(
+      'V1 managed lifecycle only',
+    );
+    expect(properties.maxSessionsPerAgent?.description).toContain(
+      'V1 managed lifecycle only',
+    );
+    expect(properties.wallClockTimeoutMs?.description).toContain(
+      'V1 managed lifecycle only',
+    );
+    expect(properties.stopConfirmationMs?.description).toContain(
+      'V1 managed lifecycle only',
+    );
+    expect(properties.sameProviderPolicy?.description).toContain(
+      'inert when backgroundJobs.mode is "off"',
+    );
+    expect(properties.sameProviderPolicy?.description).toContain(
+      'this key is v1-only',
+    );
+    expect(properties.sameProviderPolicy?.description).toContain(
+      'an explicit value on v2 emits an unsupported-host warning and is ignored',
+    );
+    expect(properties.waitForUserGuard?.description).toContain(
+      'v1 hosts only; ignored with a warning on OpenCode v2 hosts',
+    );
+    expect(properties.childInputWakeKinds?.description).toContain(
+      'v1 hosts only; ignored with a warning on OpenCode v2 hosts',
+    );
+  });
+
   it('rejects the removed enabled alias and names backgroundJobs.mode', () => {
     const result = PluginConfigSchema.safeParse({
       backgroundJobs: { enabled: false, maxSessionsPerAgent: 4 },
@@ -1009,10 +1062,6 @@ describe('PluginConfigSchema backgroundJobs', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.backgroundJobs?.orchestratorWake?.enabled).toBe(false);
-      expect(result.data.backgroundJobs?.orchestratorWake?.intervalMs).toBe(
-        300_000,
-      );
       expect(result.data.backgroundJobs?.concurrency?.defaultConcurrency).toBe(
         4,
       );
@@ -1022,7 +1071,6 @@ describe('PluginConfigSchema backgroundJobs', () => {
     }
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const message = warnSpy.mock.calls[0]?.[0] as string;
-    expect(message).toContain('orchestratorWake.intervalMs');
     expect(message).toContain('concurrency.providerConcurrency');
   });
 
@@ -1136,70 +1184,6 @@ describe('PluginConfigSchema backgroundJobs', () => {
     },
   );
 
-  it('defaults orchestratorWake to enabled with a 5-minute interval and auto mode', () => {
-    const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.orchestratorWake).toEqual({
-        enabled: true,
-        intervalMs: 300_000,
-        mode: 'auto',
-        periodicWakeEnabled: true,
-        wakeOnTerminalPublication: true,
-        publicationWakeMinIntervalMs: 30_000,
-      });
-    }
-  });
-
-  it('accepts explicit orchestratorWake overrides', () => {
-    const result = PluginConfigSchema.safeParse({
-      backgroundJobs: {
-        orchestratorWake: {
-          enabled: false,
-          intervalMs: 120_000,
-          wakeOnTerminalPublication: false,
-          publicationWakeMinIntervalMs: 120_000,
-        },
-      },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.backgroundJobs?.orchestratorWake).toEqual({
-        enabled: false,
-        intervalMs: 120_000,
-        mode: 'auto',
-        periodicWakeEnabled: true,
-        wakeOnTerminalPublication: false,
-        publicationWakeMinIntervalMs: 120_000,
-      });
-    }
-  });
-
-  it('drops out-of-bounds publicationWakeMinIntervalMs back to the wake defaults', () => {
-    for (const publicationWakeMinIntervalMs of [0, 999, -1, 2_147_483_648]) {
-      const result = PluginConfigSchema.safeParse({
-        backgroundJobs: {
-          maxSessionsPerAgent: 4,
-          orchestratorWake: { publicationWakeMinIntervalMs },
-        },
-      });
-
-      expect(result.success).toBe(true);
-      if (result.success) {
-        // Sibling key must survive — direct evidence that only the bad key
-        // is dropped.
-        expect(result.data.backgroundJobs?.maxSessionsPerAgent).toBe(4);
-        expect(
-          result.data.backgroundJobs?.orchestratorWake
-            ?.publicationWakeMinIntervalMs,
-        ).toBe(30_000);
-      }
-    }
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-  });
-
   it('defaults backgroundJobs.stopConfirmationMs to 5 seconds', () => {
     const result = PluginConfigSchema.safeParse({ backgroundJobs: {} });
 
@@ -1224,60 +1208,6 @@ describe('PluginConfigSchema backgroundJobs', () => {
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data.backgroundJobs?.stopConfirmationMs).toBe(5_000);
-      }
-    }
-  });
-
-  it('accepts explicit orchestratorWake.mode values', () => {
-    for (const mode of ['auto', 'todo', 'children'] as const) {
-      const result = PluginConfigSchema.safeParse({
-        backgroundJobs: { orchestratorWake: { mode } },
-      });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.backgroundJobs?.orchestratorWake?.mode).toBe(mode);
-      }
-    }
-  });
-
-  it('drops invalid nested orchestratorWake values back to the wake defaults', () => {
-    for (const orchestratorWake of [
-      { intervalMs: 0 },
-      { intervalMs: 1 },
-      { intervalMs: 59_999 },
-      { intervalMs: 60_000.5 },
-      { intervalMs: -1 },
-      { mode: 'child' },
-      { mode: '' },
-      { mode: null },
-    ]) {
-      const result = PluginConfigSchema.safeParse({
-        backgroundJobs: { orchestratorWake },
-      });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.backgroundJobs?.orchestratorWake).toEqual({
-          enabled: true,
-          intervalMs: 300_000,
-          mode: 'auto',
-          periodicWakeEnabled: true,
-          wakeOnTerminalPublication: true,
-          publicationWakeMinIntervalMs: 30_000,
-        });
-      }
-    }
-  });
-
-  it('accepts orchestratorWake.intervalMs bounds', () => {
-    for (const intervalMs of [60_000, 300_000, 2_147_483_647]) {
-      const result = PluginConfigSchema.safeParse({
-        backgroundJobs: { orchestratorWake: { intervalMs } },
-      });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.backgroundJobs?.orchestratorWake?.intervalMs).toBe(
-          intervalMs,
-        );
       }
     }
   });
@@ -1613,14 +1543,16 @@ describe('PluginConfigSchema removed legacy keys', () => {
 describe('AgentOverrideConfigSchema.subagents', () => {
   it('accepts a delegation-scope allowlist', () => {
     const result = PluginConfigSchema.safeParse({
-      agents: { coworker: { model: 'x/y', subagents: ['fixer', '@writer'] } },
+      agents: {
+        orchestrator: { model: 'x/y', subagents: ['fixer', '@writer'] },
+      },
     });
     expect(result.success).toBe(true);
   });
 
   it('rejects the reserved * wildcard as a specialist name', () => {
     const result = PluginConfigSchema.safeParse({
-      agents: { coworker: { model: 'x/y', subagents: ['fixer', '*'] } },
+      agents: { orchestrator: { model: 'x/y', subagents: ['fixer', '*'] } },
     });
     expect(result.success).toBe(false);
   });

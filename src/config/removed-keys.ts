@@ -13,12 +13,16 @@
  */
 const REMOVED_CONFIG_KEYS = [
   'tmux',
+  'agents.*.primary',
+  'presets.*.*.primary',
+  'presets.*.agents.*.primary',
   'council.master',
   'council.master_timeout',
   'council.master_fallback',
   'council.presets.*.master',
   'council.presets.*.councillors',
   'backgroundJobs.continueOnIdle',
+  'backgroundJobs.orchestratorWake',
   'backgroundJobs.enabled',
   'backgroundJobs.maxContextLines',
   'backgroundJobs.readContextMinLines',
@@ -60,6 +64,17 @@ function stripPath(
   const [head, ...rest] = segments;
   if (head === undefined) return;
   if (rest.length === 0) {
+    // In a structured preset, the flat path can land on an agent named
+    // "primary". Its object is an agent override, never a legacy flag.
+    if (
+      head === 'primary' &&
+      trail.length === 3 &&
+      trail[0] === 'presets' &&
+      trail[2] === 'agents' &&
+      isPlainObject(node[head])
+    ) {
+      return;
+    }
     if (Object.hasOwn(node, head)) {
       delete node[head];
       removed.push([...trail, head].join('.'));

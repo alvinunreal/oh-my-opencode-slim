@@ -11,12 +11,6 @@ export interface AgentDefinition {
   displayName?: string;
   description?: string;
   config: AgentConfig;
-  /**
-   * Declared primary orchestrator (`agents.<name>.primary`). Set only by
-   * custom-agent construction, so marketplace definitions that replace a
-   * same-named owner override can never inherit primary mode (#1591).
-   */
-  primary?: boolean;
   /** Priority-ordered model entries for runtime fallback resolution. */
   _modelArray?: Array<{ id: string; variant?: string }>;
 }
@@ -61,8 +55,6 @@ export interface OrchestratorPromptOptions {
   /** Per-agent skill grant summaries; when set, each routing line names the
    *  skills that agent can load and the block closes with a short note. */
   agentSkills?: AgentSkillGrants;
-  /** `backgroundJobs.orchestratorWake.enabled`. Ignored on v2: no scheduler exists there. */
-  wakeScheduler?: boolean;
   /** 'v2' on OpenCode v2 hosts; anything else renders v1 tool vocabulary. */
   hostFlavor?: string;
   /** false drops the whole <Agents> block. */
@@ -83,11 +75,10 @@ export function buildOrchestratorPrompt({
   onlyAgents,
   customDescriptions,
   agentSkills,
-  wakeScheduler = true,
   hostFlavor,
   routingBlock = true,
 }: OrchestratorPromptOptions = {}): string {
-  const v2 = hostFlavor === 'v2';
+  const _v2 = hostFlavor === 'v2';
 
   // A scope renders through the scoped-catalog renderer so in-scope custom
   // specialists appear with their description fallback; the unscoped path
@@ -118,12 +109,6 @@ ${agentsBlock}${agentSkills ? `\n\n${AGENT_SKILLS_NOTE}` : ''}
       : scoped.length > 0
         ? `${agentsBlock}\n`
         : '';
-
-  // v2 has completion notifications but does not build a wake scheduler.
-  const resumeChannel =
-    !v2 && wakeScheduler
-      ? 'completion notifications and the wake scheduler resume you'
-      : 'completion notifications resume you';
 
   // Tool-neutral: tool descriptions own availability and mechanics.
   const manualStep = `For an
@@ -165,7 +150,7 @@ ${agentsSection}<Workflow>
   it — never a fresh agent that must rediscover it. Fixer only for purely
   mechanical doc edits (renames, version bumps).
 - After dispatching, do non-overlapping work, then end the turn with a one-line
-  launch summary; ${resumeChannel}.
+  launch summary; completion notifications resume you.
 - Don't echo task lists or notification contents back to the user.
 
 ## Verify

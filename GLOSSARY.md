@@ -6,9 +6,9 @@ A glossary of the terms used in this project's domain. Definitions describe what
 
 - **Agent** — A named LLM role with a defined lane (permissions, tools, prompt); the unit of work delegation in the system.
 - **Orchestrator** — The canonical primary agent. Plans work, delegates to subagents, monitors them, and reconciles their results. One per session; cannot be disabled.
-- **Primary agent** — An agent projected with SDK mode `primary`: a long-lived foreground session that orchestrates rather than doing bounded work. The orchestrator is the canonical one; a custom agent joins via `agents.<name>.primary: true` and delegates within its `agents.<name>.subagents` scope when set.
+- **Primary agent** — An agent with SDK mode `primary` that can run a foreground session. Slim registers the built-in orchestrator in this mode.
 - **Subagent** — A specialist agent a primary agent delegates bounded work to.
-- **Delegation scope** — A primary agent's `agents.<name>.subagents` allowlist: the specialists it may delegate to, compiled into the `task` permission stance and rendered as its scoped `<Agents>` catalog.
+- **Delegation scope** — The orchestrator's `agents.orchestrator.subagents` allowlist: the specialists it may delegate to, compiled into the `task` permission stance and rendered as its scoped `<Agents>` catalog.
 - **Explorer** — Subagent for fast codebase search, pattern matching, and external documentation/library research.
 - **Oracle** — Subagent for architecture, debugging strategy, and code review.
 - **Designer** — Subagent for UI/UX design and visual polish.
@@ -16,7 +16,7 @@ A glossary of the terms used in this project's domain. Definitions describe what
 - **Observer** — Subagent for visual/media analysis (images, PDFs, diagrams). Disabled by default.
 - **Council** — A multi-LLM agent that runs several councillors and synthesizes their views.
 - **Councillor** — A read-only LLM advisor dispatched as a subagent by the orchestrator. Each councillor is registered as `councillor-<name>` from the council preset. Hidden from the @-mention menu; visible as panes when dispatched.
-- **Agent mode** — SDK classification of an agent: `primary` (an orchestrator — the built-in one or a declared primary) or `subagent` (specialist, including council — the synthesizer is dispatched by the orchestrator, never switched to as a primary).
+- **Agent mode** — SDK classification of an agent: `primary` (the built-in orchestrator in Slim) or `subagent` (specialist, including council — the synthesizer is dispatched by the orchestrator, never switched to as a primary).
 - **Protected agent** — An agent that cannot be disabled (orchestrator).
 - **Custom agent** — A user-defined agent supplied via config, distinct from the built-ins.
 - **ACP agent** — An external agent defined via the Agent Communication Protocol, run through `acp_run`.
@@ -33,17 +33,18 @@ A glossary of the terms used in this project's domain. Definitions describe what
 - **Multiplexer** — A terminal backend (tmux, zellij, herdr, kitty, wezterm, orca, or cmux) that hosts child agent panes. Set via \`multiplexer.type\`, which also accepts \`auto\` (auto-detect) and \`none\` (disabled).
 - **Multiplexer type** — The selected backend: `auto`, `tmux`, `zellij`, `herdr`, `kitty`, `wezterm`, `orca`, `cmux`, or `none`.
 - **Pane** — A terminal region spawned by the multiplexer to run a child agent session.
-- **Child session** — A background agent session hosted in a multiplexer pane and tracked by the background job board.
+- **Child session** — A delegated agent session that may be displayed in a multiplexer pane. V1 managed tracks it on the background job board; V2 leaves its execution and recovery to the host Job lifecycle.
 - **Client pane lifecycle** — The TUI client's in-process pane tracking: admits child sessions of the displayed parent, spawns and closes multiplexer panes anchored to the client's own pane, and reacts to session lifecycle events. There is no server-side or cross-process pane state.
 - **Close reason** — Why a pane is closed: `idle`, `deleted`, or `backfill-gone`.
 
 ## Background Jobs
 
-- **Background job** — A delegated specialist task that runs asynchronously; tracked until its result is reconciled into the delegating primary's response.
-- **Background Job Board** — The store of background job state and metadata. It is machine-side only: it is never rendered into a prompt.
-- **Background Job Coordinator** — The layer that owns background-job lifecycle policy and deferred-close state, writing through the board.
-- **Job state** — A background job's status: `running`, `completed`, `error`, `cancelled`, or `reconciled`. `reconciled` is a distinct post-consumption phase marking that a terminal job's result has been folded into the delegating primary's response; it is not a terminal outcome itself.
-- **Job alias** — A short human-readable identifier for a background job (e.g., `fix-1`, `exp-2`).
+- **Background job** — A delegated specialist task that runs asynchronously. V1 managed tracks it on the plugin board until its result is reconciled; on V2 the host Job owns execution, notification, and recovery.
+- **Native lifecycle (V2)** — OpenCode owns the child Job, same-session continuation, completion delivery, and restart recovery. The plugin keeps only exact-ID controls (`task_status`, `task_cancel`, permission-only `task_reply`, queue-only `task_report`) and reads host sessions on demand.
+- **Background Job Board (V1 managed)** — The store of background job state and metadata. It is machine-side only: it is never rendered into a prompt.
+- **Background Job Coordinator (V1 managed)** — The layer that owns background-job lifecycle policy and deferred-close state, writing through the board.
+- **Job state (V1 managed)** — A background job's status: `running`, `completed`, `error`, `cancelled`, or `reconciled`. `reconciled` is a distinct post-consumption phase marking that a terminal job's result has been folded into the delegating primary's response; it is not a terminal outcome itself.
+- **Job alias (V1 managed)** — A short human-readable identifier for a background job (e.g., `fix-1`, `exp-2`). V2 uses exact session IDs only.
 - **Terminal state** — A job state from which no further transition occurs (`completed`, `error`, `cancelled`).
 
 ## Skills
@@ -64,6 +65,28 @@ A glossary of the terms used in this project's domain. Definitions describe what
 
 - **Companion** — A native desktop mascot that reflects agent activity; launched and tracked by the companion manager.
 
+## Quality toolchain
+
+- **knip** — The dead-code auditor. Scans the import graph for unused exports, types, files, and dependencies; configured in `knip.jsonc`. A deliberate export that the import graph cannot see carries an inline `@public knip:` tag with its reason.
+- **knip liveness** — The knip rules that catch code which exists but is never reached: platform binaries, root-relative spawn targets, and dynamic-import/namespace consumers declared in `knip.jsonc`; dynamic-use symbols carry `@public` keep-tags.
+- **knip strict gate** — A blocking CI check that runs Knip with `--max-issues=0`.
+- **Strict flip** — The transition of a report-only CI job to a blocking gate, done only after the findings that would fail it are cleared on master.
+- **knip leftovers** — Findings remaining after a knip slice: unused exports/types/duplicates left by an earlier cleanup pass, tracked in the knip epic's tickets.
+- **Fallow** — An analysis tool (external, Rust) watching the three code-health categories knip and Biome do not cover: import cycles, duplication, and complexity. Configured in `.fallowrc.json`; excludes `.slim/` and the mutation toolchain.
+- **Fallow audit** — The report of findings in changed files. In this repository its scope is architecture, health, and duplication.
+- **CRAP score** — A risk metric that combines cyclomatic complexity and test coverage. For the same complexity, lower coverage produces a higher score.
+- **Foreground-fallback (mutation target)** — The scoped Stryker sweep target: the retry-deduplication and wake/fallback control path in the foreground-fallback hook. "Mutation gate" and "survivor ledger" always refer to this target, not the whole repo.
+- **Sibling-only kill** — A mutant killed only because a test reached it via a sibling that happened to fail, not because the test constrains the mutated code itself. The reason a killed count alone proves nothing; killedBy attribution is the evidence.
+
+## Session hygiene
+
+- **Lane** — An isolated coding workspace for one issue or fix, typically a Git worktree under `.slim/worktrees/`. Distinct from an agent *lane* (flagged below).
+- **Lane registration** — The manifest entry tracking a lane's slug, branch, path, base, owner, status, and purpose in `.slim/worktrees.json`. Registration is bookkeeping, not discovery: an unregistered worktree is still visible via `git worktree list`; the manifest is what orchestration reads.
+- **Watcher** — A background monitor a session arms on a remote outcome (CI checks, bot reviews on a PR) so the session can idle and resume when it settles. Re-arming after a timeout is the failure mode the watcher fixes, not the timeout itself.
+- **Idle outcome** — How a session ended, as recorded by the harness: `succeeded` (turn finished), `interrupted` (cut off), or `failed`.
+- **Maintainer merge bar** — The five blocking review criteria a change must meet before merge: proof (reproduces the real failure end to end), reuse (extends the existing mechanism rather than a parallel one), reversible (validated before destructive steps), bounded (repeated events cannot rescan unbounded history), no paper-over (a timeout that restores availability without the guarantee still fails). Stated in AGENTS.md; sourced from review rejections on earlier PRs.
+
+
 ## Config
 
 - **Plugin config** — The user-facing configuration loaded from `oh-my-opencode-slim.jsonc`.
@@ -75,6 +98,18 @@ A glossary of the terms used in this project's domain. Definitions describe what
 - **Disabled agents** — Agents turned off via config; `observer` is disabled by default.
 - **Disabled hooks / commands** — Config keys that disable hooks or slash commands entirely: `disabled_hooks` (`phase-reminder`, `foreground-fallback`, `chat-headers`, `cache-monitor`, `json-error-recovery`, `tool-loop-guard`, `search-path-guard`, `absolute-path-rescue`, `apply-patch`, `council-inject`) and `disabled_commands` (`interview`, `deepwork`, `reflect`).
 
+## Mutation testing
+
+- **Mutant** — A deliberately faulty copy of a source file (e.g., a comparison flipped), run against the tests to see whether any test fails. Never an edit to the repository itself.
+- **Mutation score** — The percentage of mutants detected by the test suite for the sweep's scope.
+- **Survivor** — A mutant no covering test fails; a behavior no test can see. Either a coverage gap or an equivalent mutant.
+- **Equivalent mutant** — A survivor that is provably identical to the original for every input; a documented proof, not a coverage gap.
+- **Killed** — A mutant at least one covering test failed, attributed to the failing test via `killedBy`.
+- **NoCoverage** — A mutant no test reached. A coverage gap, never reported as survived or killed.
+- **Mutation pin** — A test whose title carries the `contract:` prefix, written to kill a specific named mutant.
+- **Survivor ledger** — The per-mutant outcome table in `docs/mutation-testing.md` recording survivor dispositions (killed/equivalent) with their proofs; verified against each run's report by the mutation gate.
+- **Mutation gate** — The required CI check that runs the scoped Stryker sweep and fails on score drop, lost guard targets, or survivor-ledger drift.
+
 ## Flagged
 
 Terms with genuine but non-blocking collisions or historical drift. Noted for awareness; no change required:
@@ -83,3 +118,5 @@ Terms with genuine but non-blocking collisions or historical drift. Noted for aw
 - **Config naming convention** — Config keys mix snake_case (`disabled_agents`, `main_pane_size`) with camelCase (`autoUpdate`, `backgroundJobs`) with no documented rule. Historical drift; `disabled_*` keys are uniformly snake_case while the rest is mixed even within sub-objects.
 - **"Lane" means two things** — An agent *lane* is its permission/tool/prompt scope; a worktree *lane* (worktrees skill, `.slim/worktrees.json`) is an isolated coding workspace. Different surfaces, both live.
 - **"Contract" is overloaded** — Three live senses: plugin API contracts (host interfaces), the dependency contract (import-boundary invariants enforced by tests), and `.contract.ts` registry files (module lists referenced by path string). No structural conflict; easy to confuse.
+- **"Gate" means several things** — Mutation gate (required Stryker check), knip strict gate (blocking dead-code check), and pane admission gate (the multiplexer client's check for opening a pane). Name the specific mechanism.
+- **"Foreground-fallback" means two things** — The hook (rate-limit/degraded-model fallback control path) and the mutation target scoped to that hook's code. Context disambiguates: CI gate vs disabled_hooks key.

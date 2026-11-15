@@ -25,7 +25,7 @@ The config system follows a layered architecture:
 | Abstraction | Purpose | Location |
 |-------------|---------|----------|
 | `PluginConfig` | Root configuration object with agents, presets, and feature flags | schema.ts |
-| `FeatureGates` | Frozen optional-subsystem projection shared by runtime, v1/v2 setup, and TUI gates | feature-gates.ts |
+| `FeatureGates` | Frozen host-aware optional-subsystem projection: V1 defaults to managed, V2 to native; explicit V2 managed is rejected before construction | feature-gates.ts |
 | `AgentOverrideConfig` | Per-agent configuration (model, temperature, skills, MCPs) | schema.ts |
 | `CouncilConfig` | Multi-LLM council configuration with councillor presets and a default preset | council-schema.ts |
 | `MultiplexerConfig` | Unified pane management configuration (tmux/zellij) | schema.ts |
@@ -182,7 +182,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `multiplexer`: Unified pane management config (type, layout, sizes, viewer surface)
 - `interview`: Interview feature configuration
 - `backgroundJobs`: Background job configuration
-- `backgroundJobs.concurrency`: Optional default, provider, and model caps for native background task admission
+- `backgroundJobs.concurrency`: Optional default, provider, and model caps for V1 managed background task admission. V2 rejects explicit concurrency, wall-clock, retention, and stop-confirmation settings before schema defaults; `sameProviderPolicy` applies only to V1 managed and warns as ignored on V2.
 - `fallback`: Failover/retry configuration
 - `council`: Council configuration with councillor presets and a default preset
 - `companion`: Companion animation configuration
@@ -200,8 +200,7 @@ This allows consumers to import directly from `src/config` rather than individua
 - `options`: Provider-specific model options
 - `displayName`: Custom display name for the agent
 - `color`: Agent display color as a six-digit hex value or OpenCode theme color
-- `primary`: Declare a custom agent as a peer primary orchestrator (SDK mode `primary`; ignored on built-in names)
-- `subagents`: Primary agents only — delegation scope allowlist compiled into the `task` permission stance (`{"*": "deny", "<name>": "allow"}`); an explicit `permission.task` entry wins and skips the scoped `<Agents>` catalog. `'*'` is reserved
+- `subagents`: Built-in orchestrator only — delegation scope allowlist compiled into the `task` permission stance (`{"*": "deny", "<name>": "allow"}`); an explicit `permission.task` entry wins and skips the scoped `<Agents>` catalog. `'*'` is reserved
 
 ### CouncilConfig
 - `presets`: Named council presets (map of councillor name → CouncillorConfig)
@@ -221,6 +220,7 @@ This allows consumers to import directly from `src/config` rather than individua
 ## Backward Compatibility
 
 - Removed keys (`REMOVED_CONFIG_KEYS` in `removed-keys.ts`: top-level `tmux`, `council.master*`, council preset `master` / `councillors`, `backgroundJobs.continueOnIdle`, `fallback.timeoutMs|retry_on_empty|runtimeOverride`, `multiplexer.zellij_pane_mode`, `webfetch.model`): stripped from each raw layer before validation with a `removed-key` warning; the schema itself still rejects them
+- `legacy-preset-defaults.ts` removes only the empty Explorer MCP override matching the historical Librarian/Explorer preset pair before alias merging. Loader, doctor, and the effective preset catalog share the rule; files, root overrides, and other fields remain unchanged.
 - Invalid `multiplexer` values disable pane management (`type: "none"`) with one diagnostic
 
 ## Error Handling

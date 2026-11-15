@@ -195,6 +195,14 @@ export interface V2PermissionRule {
   readonly resource: string;
   readonly effect: 'allow' | 'deny' | 'ask';
 }
+/** Pending native permission request fields consumed by the thin controls. */
+export interface V2PermissionRequest {
+  readonly id: string;
+  readonly sessionID: string;
+  readonly action: string;
+  readonly resources: readonly string[];
+  readonly message?: string;
+}
 /** v2 mcp transform draft (used after capability probing; RemoteConfig
  * shape see packages/schema/src/mcp.ts — no `enabled`, it uses
  * `disabled?: boolean`; the name is the map key, not in the config). */
@@ -205,21 +213,13 @@ interface V2McpDraft {
   update(name: string, update: (c: Record<string, unknown>) => void): void;
   remove(name: string): void;
 }
-/** Mirror only the consumed error-factory arguments. Its opaque result is
- * thrown, never returned as success or exposed as a dev-only branded type. */
+/** Only this plugin's error-free, event-free Zod contract is registered.
+ * Infer handler inputs from its schemas without exposing dev-only host types.
+ * The host also supplies an error factory; these handlers only use signal. */
 export type V2SessionPresetRpcHandlers = {
   readonly [Name in keyof typeof sessionPresetRpc.methods]: (
     input: z.output<(typeof sessionPresetRpc.methods)[Name]['input']>,
-    context: Name extends 'createBound'
-      ? {
-          readonly signal: AbortSignal;
-          readonly error: (
-            type: 'create_failed',
-            message: string,
-            data: null,
-          ) => unknown;
-        }
-      : { readonly signal: AbortSignal },
+    context: { readonly signal: AbortSignal },
   ) => Promise<z.input<(typeof sessionPresetRpc.methods)[Name]['output']>>;
 };
 
@@ -309,10 +309,6 @@ export interface V2Context {
     ): Promise<V2Registration>;
     /** v2 session.get — SessionInfo by id (runtime-probed). */
     get?(input: { sessionID: string }): Promise<unknown>;
-    /** Native empty root creation; only the consumed location/id subset. */
-    create?(input: {
-      location: { directory: string; workspaceID?: string };
-    }): Promise<{ readonly id: string }>;
     /** Wait for the session agent loop to become idle (runtime-probed). */
     wait?(input: { sessionID: string }): Promise<void>;
     /** v2 session.remove — DELETE /api/session/:id (runtime-probed). */
@@ -393,6 +389,13 @@ export interface V2Context {
     ): AsyncIterable<Record<string, unknown>>;
   };
   permission?: {
+    list?(input: {
+      sessionID: string;
+    }): Promise<readonly V2PermissionRequest[]>;
+    get?(input: {
+      sessionID: string;
+      requestID: string;
+    }): Promise<V2PermissionRequest>;
     assert?(input: {
       sessionID: string;
       agent?: string;

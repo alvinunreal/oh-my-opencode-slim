@@ -21,7 +21,7 @@ import * as path from 'node:path';
 import { createTaggedSyntheticPart } from '../hooks/cache-safe-injection';
 import { GOAL_POINTER_METADATA_KEY } from '../hooks/deepwork-goal';
 import { PHASE_REMINDER_METADATA_KEY } from '../hooks/phase-reminder';
-import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/task-session-manager/board-injection';
+import { BACKGROUND_JOB_BOARD_METADATA_KEY } from '../hooks/volatile-message';
 import { flushLoggerForTesting } from '../utils/logger';
 import { createSessionCompactionBridge, createV2Setup } from './setup';
 import type { V2Context, V2SessionCompactionEvent } from './types';

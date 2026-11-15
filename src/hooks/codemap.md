@@ -31,22 +31,16 @@ from its owning module, that returns the hook points OpenCode invokes.
   shared by command-style hooks (deepwork, reflect).
 - **Message types** (`types.ts`): `MessageInfo`, `MessagePart`,
   `MessageWithParts`, plus replay helpers used by foreground-fallback.
-- **Cold-load leaves**: `orchestrator-wake/operator-text.ts` owns the pure
-  operator/delta helpers without the v1 scheduler;
-  `task-session-manager/refusal-corrections.ts` owns the board metadata key and
-  refusal correction injection without the board graph; `deepwork/announcement.ts`
-  owns the router-head sentence without bundling the deepwork skill text;
-  `auto-update-checker/runtime-package.ts` owns package resolution without the
-  updater graph.
+- **Volatile messages** (`volatile-message.ts`): shared marker used by the goal pointer and the cache breakpoint selector.
 
 ### Hook Categories
 
 | Category | Factories | Hook points |
 |---|---|---|
-| Prompt transforms | `createPhaseReminderHook`, `createCouncilInjectHook`, `createChatHeadersHook`, task-session-manager delivery observation, `processImageAttachments` | `experimental.chat.messages.transform`, `chat.headers` |
-| Tool interception | `createApplyPatchHook` (tool), `createSearchPathGuardHook`, `createCouncilSeatHook`, task-session-manager | `tool.execute.before` / `tool.execute.after` |
-| Error recovery | `createJsonErrorRecoveryHook`, `createAutoUpdateCheckerHook` | message transform, tool-execute after |
-| Lifecycle/event | task-session-manager, `createCacheMonitorHook`, `createOrchestratorWakeScheduler`, `createQuestionTimeoutHook` (v1) | `event` |
+| Prompt transforms | `createPhaseReminderHook`, `createCouncilInjectHook`, `createChatHeadersHook`, `processImageAttachments` | `experimental.chat.messages.transform`, `chat.headers` |
+| Tool interception | `createApplyPatchHook` (tool), `createSearchPathGuardHook`, `createCouncilSeatHook` | `tool.execute.before` / `tool.execute.after` |
+| Error recovery | `createJsonErrorRecoveryHook` | message transform, tool-execute after |
+| Lifecycle/event | `createCacheMonitorHook` | `event` |
 | Runtime commands | `createDeepworkCommandHook`, `createReflectCommandHook` | `command.execute.before` |
 | Model fallback | `ForegroundFallbackManager` | event-driven (message.updated/session.error/session.status) |
 
@@ -55,36 +49,18 @@ from its owning module, that returns the hook points OpenCode invokes.
 ### Message Processing Pipeline
 
 ```
-1. OpenCode receives chat messages
-2. Plugin's experimental.chat.messages.transform hook is invoked (src/index.ts
-   composes: task-session-manager → phase-reminder → council-inject, in that
-   order)
-3. Task-session-manager first repairs session mappings and observes terminal
-   deliveries already present in the parent's history (the job board itself is
-   never rendered); phase-reminder then injects the scheduler reminder
-   (per-message eligibility); council-inject then injects the Council Mode
-   block once per transcript, on the first keyword-triggered orchestrator turn
-   (gated)
-4. Transformed messages are sent to the model
-5. chat.headers is forwarded to OpenCode's header slot (v1 hosts; on v2
-   hosts the adapter bridges the same decision to
-   `session.hook("model.request")` — see src/v2/codemap.md)
-6. Model responses/events are observed by the cache monitor (telemetry) and
-   orchestrator-wake scheduler (idle nudge timing)
+1. OpenCode hands the context to Slim's message transform.
+2. Slim collapses interview history and applies image, phase and council transforms.
+3. The Deepwork goal pointer is appended as a trailing volatile message.
+4. The cache monitor observes completed model requests.
 ```
-
-Skill discovery and visibility are handled by native v1/v2 host behavior from
-the finalized agent/session permissions: hidden skills are denied and
-discoverable skills require permission approval. The plugin does not rewrite
-`<available_skills>` in conversation text.
 
 ### Request-local Message View
 
 `message-transform-view.ts` collects valid/user message references and source
 indices once per request. Parts remain live; image identity uses signature
 prefixes before full extraction, which is memoized only within that view.
-Root wiring shares it with task, phase and council
-transforms, then rebuilds after structural Interview/board edits. Goal placement
+Root wiring shares it with phase and council transforms. Goal placement
 remains trailing-most. `stripTaggedContents` removes multiple compaction tags
 with one equivalent pass; the cache-safety harness mirrors this wiring.
 
@@ -102,16 +78,9 @@ with one equivalent pass; the cache-safety harness mirrors this wiring.
 
 ### Event Observation (event hook)
 
-- task-session-manager routes session lifecycle events (created, idle, busy,
-  error, deleted, server.instance.disposed) to its reconcilers.
-- `createCacheMonitorHook` watches completed assistant messages for
-  `tokens.cache.read/write` and logs prompt-cache bust/plateau warnings
-  (observation only, fails open).
-- `createOrchestratorWakeScheduler` tracks continuous parent idle and triggers
-  periodic wake prompts (see its sub-map).
-- `question-timeout/` owns the shared request timer and the opt-in v1 hook.
-  It skips questions that disallow custom answers; replies, rejections, session
-  deletion and plugin disposal clear timers. A turn abort alone does not.
+- `createCacheMonitorHook` observes completed-request cache counters.
+- `question-timeout/core.ts` owns the timer used by the OpenCode 2 TUI.
+- OpenCode owns background subagent status and completion delivery.
 
 ## Integration
 
@@ -119,17 +88,8 @@ with one equivalent pass; the cache-safety harness mirrors this wiring.
 
 - **Main Plugin** (`src/index.ts`): imports every factory from its owning module and
   wires the returned handlers into the plugin's hook object.
-- **Council seats** (`council-seats/`): owns `Seats:`-line seat-result
-  assembly. The managed resolver reads the parent-side job board only;
-  the native resolver reads the host sessions and is selected whenever
-  the managed lifecycle is off (`backgroundJobs.mode` is `native` or `off`). Neither depends on the other.
-- **Task-session-manager**: depends on `cache-safe-injection.ts` for all prompt
-  injection and on `session-lifecycle.ts` for delete coordination.
-- **Orchestrator-wake**: gates on the task-session-manager's `hasInputWait`
-  and continuation-model seams.
-- **Foreground-fallback**: uses `types.ts` `isUserMessageWithParts` to locate the
-  user turn before a replay and reports
-  retryable/deferred errors to the task-session-manager event router.
+- **Council seats** (`council-seats/`): reads host transcript results for selected council sessions.
+- **Model fallback**: steers OpenCode retry decisions and handles refusal continuations.
 
 ### Subdirectories
 
@@ -137,17 +97,14 @@ with one equivalent pass; the cache-safety harness mirrors this wiring.
 |---|---|
 | `absolute-path-rescue/` | Rewrites misguessed absolute tool paths by re-anchoring the longest workspace-suffix match (ENOENT-only, unambiguous candidates only) |
 | `apply-patch/` | Structured `apply_patch` parsing, matching, recovery, rewrite pipeline |
-| `auto-update-checker/` | Startup update detection, cache handling, optional install prompt |
 | `cache-monitor/` | Observation-only prompt-cache telemetry watchdog |
 | `council-seats/` | Council seat-result assembly seam: `Seats:`-line rewrite hook + managed (job board) and native (host session) resolvers |
 | `deepwork/` | `/deepwork` runtime command |
 | `foreground-fallback/` | Interactive-session model fallback on rate-limit/errors |
 | `json-error-recovery/` | Malformed JSON/tool-output recovery helpers |
-| `orchestrator-wake/` | Periodic orchestrator wake scheduler + process-global gate |
 | `phase-reminder/` | Message-transform reminder enforcing orchestrator workflow phases |
 | `reflect/` | `/reflect` runtime command |
 | `search-path-guard/` | Pre-checks `grep`/`glob` `args.path` validity in `tool.execute.before`, using each host tool's path resolution semantics, and fails fast with an actionable error instead of upstream "ripgrep execution failed" noise or silent parent-directory searches |
-| `task-session-manager/` | Resumable task session tracking, terminal-delivery observation, reconciliation |
 | `tool-loop-guard/` | Detects byte-identical repeated tool calls: warns at 3, blocks at 5, with task-lifecycle exemptions and per-turn wait-tool counting |
 
 ### Dependencies
@@ -161,9 +118,6 @@ with one equivalent pass; the cache-safety harness mirrors this wiring.
 - Hooks are best-effort: file-system/transform failures are logged and the
   hook continues with remaining messages.
 - The cache monitor fails open on any unexpected event shape.
-- The orchestrator-wake scheduler suppresses on SDK errors instead of retrying
-  storming.
-
 ### Performance Considerations
 
 - **Cache safety**: all injection goes through the tagged/volatile helpers to

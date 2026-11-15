@@ -439,7 +439,7 @@ describe('internal admission recording', () => {
   test('shim synthetic admissions pass a msg_-prefixed id and are recorded', async () => {
     const seq: Array<{ m: string; i: unknown }> = [];
     const input = buildPluginInput({
-      app: { name: 'opencode2', version: 'test' },
+      app: { name: 'opencode', version: 'test' },
       options: {},
       agent: {
         transform: async () => ({ dispose() {} }),

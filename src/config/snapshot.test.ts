@@ -47,7 +47,7 @@ afterEach(() => {
 });
 
 describe('readPluginConfigSnapshot', () => {
-  test('reports ignored v1 wake configuration on v2 without invalidating it', () => {
+  test('reports removed wake configuration without invalidating the file', () => {
     const configPath = writeUserConfig({
       backgroundJobs: { orchestratorWake: { intervalMs: 60000 } },
     });
@@ -55,13 +55,11 @@ describe('readPluginConfigSnapshot', () => {
     expect(v2.warnings).toEqual([
       expect.objectContaining({
         path: configPath,
-        kind: 'unsupported-host',
-        message: expect.stringContaining('orchestratorWake is v1-only'),
+        kind: 'removed-key',
+        message: expect.stringContaining('backgroundJobs.orchestratorWake'),
       }),
     ]);
-    expect(
-      readPluginConfigSnapshot(projectDir, { hostFlavor: 'v1' }).warnings,
-    ).toEqual([]);
+    expect(v2.config.backgroundJobs).not.toHaveProperty('orchestratorWake');
   });
 
   test('returns config, paths, warnings and a fingerprint', () => {

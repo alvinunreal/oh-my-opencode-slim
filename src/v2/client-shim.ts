@@ -20,6 +20,7 @@ import { isRecord } from '../utils/guards';
 import {
   INTERNAL_INITIATOR_METADATA_KEY,
   isInternalInitiatorPart,
+  TERMINAL_DELTA_METADATA_KEY,
 } from '../utils/internal-initiator';
 import { log } from '../utils/logger';
 import { withTimeout } from '../utils/session';
@@ -261,9 +262,27 @@ function internalInitiatorMetadataFromBody(
     parts?: Array<Record<string, unknown>>;
   };
   const parts = Array.isArray(body.parts) ? body.parts : [];
-  return parts.some((part) => isInternalInitiatorPart(part))
-    ? { [INTERNAL_INITIATOR_METADATA_KEY]: true }
-    : undefined;
+  const internalParts = parts.filter((part) => isInternalInitiatorPart(part));
+  if (internalParts.length === 0) return undefined;
+  // The completed-job run fence must survive the outbound metadata
+  // reduction; the existing parent-history consumer reads this exact key.
+  // Forward that key alone. Host persistence and inbound consumption are
+  // not proven by this shim.
+  const terminalDelta = internalParts
+    .map((part) =>
+      isRecord(part.metadata)
+        ? part.metadata[TERMINAL_DELTA_METADATA_KEY]
+        : undefined,
+    )
+    // First match: current producers attach one fence list to a single
+    // internal part. Merge if a producer ever splits fences across parts.
+    .find((value) => value !== undefined);
+  return {
+    [INTERNAL_INITIATOR_METADATA_KEY]: true,
+    ...(terminalDelta !== undefined
+      ? { [TERMINAL_DELTA_METADATA_KEY]: terminalDelta }
+      : {}),
+  };
 }
 
 /**
@@ -417,14 +436,7 @@ export function buildPluginInput(
   // Null-safe: reduced hosts may load the factory without a session domain;
   // every method then degrades honestly instead of crashing construction.
   const s = (ctx.session ?? {}) as V2Context['session'];
-  // Hosts may expose a form domain on the plugin session (pinned v2.0.26
-  // does not). Forwarded capability-probed so task_reply's form-reply
-  // detection reads THIS client truthfully. The V2Context mirror type is
-  // intentionally not widened (mirror-conformance): cast, don't retype.
-  const sessionForm = (
-    s as { form?: { reply?: (a: Record<string, unknown>) => Promise<unknown> } }
-  ).form;
-  const sessionFormReply = sessionForm?.reply;
+  const permission = ctx.permission;
   const client = {
     session: {
       // `get` is exposed only when the host provides session.get — callers
@@ -831,39 +843,43 @@ export function buildPluginInput(
               );
             }
           },
-      // `form` is forwarded only when the host session domain carries it
-      // (pinned v2.0.26 does not — see the one-time notice block near the
-      // top of this file). task_reply's form-reply capability probe reads
-      // THIS client, so forwarding here is what makes that probe truthful:
-      // absent host domain → absent here → probe stays false (honest
-      // failure); a host that exposes session.form.reply lights the probe
-      // up through this forward. Same data-envelope convention as `get`.
-      ...(sessionFormReply
-        ? {
-            form: {
-              reply: async (args: Record<string, unknown>) => ({
-                data: await sessionFormReply(args),
-              }),
-            },
-          }
-        : {}),
     },
-    ...(typeof ctx.permission?.reply === 'function'
+    ...(permission &&
+    (typeof permission.list === 'function' ||
+      typeof permission.get === 'function' ||
+      typeof permission.reply === 'function')
       ? {
           permission: {
-            reply: async (args: Record<string, unknown>) =>
-              ctx.permission?.reply({
-                sessionID: sessionIDOf(args),
-                requestID:
-                  typeof args.requestID === 'string' ? args.requestID : '',
-                decision:
-                  args.reply === 'always' || args.reply === 'reject'
-                    ? args.reply
-                    : 'once',
-                ...(typeof args.message === 'string'
-                  ? { message: args.message }
-                  : {}),
-              }),
+            ...(typeof permission.list === 'function'
+              ? { list: permission.list.bind(permission) }
+              : {}),
+            ...(typeof permission.get === 'function'
+              ? { get: permission.get.bind(permission) }
+              : {}),
+            ...(typeof permission.reply === 'function'
+              ? {
+                  reply: async (args: Record<string, unknown>) =>
+                    permission.reply({
+                      sessionID:
+                        typeof args.sessionID === 'string'
+                          ? args.sessionID
+                          : sessionIDOf(args),
+                      requestID:
+                        typeof args.requestID === 'string'
+                          ? args.requestID
+                          : '',
+                      decision:
+                        args.decision === 'always' || args.decision === 'reject'
+                          ? args.decision
+                          : args.reply === 'always' || args.reply === 'reject'
+                            ? args.reply
+                            : 'once',
+                      ...(typeof args.message === 'string'
+                        ? { message: args.message }
+                        : {}),
+                    }),
+                }
+              : {}),
           },
         }
       : {}),

@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { parse } from 'jsonc-parser';
 import type { PluginConfig } from '../config';
 import { loadPluginConfig } from '../config/loader';
+import { resolvePreset } from '../config/presets';
 import {
   buildPresetSummary,
   clearProjectPresetOnDisk,
@@ -259,7 +260,96 @@ test('preset lookup uses runtime model inheritance rules across all layers', () 
   expect(presets.fromUser).toEqual(runtimePresets?.fromUser);
 });
 
+test('repairs user preset MCPs in the catalog without rewriting the file', () => {
+  const projectDir = path.join(tempDir, 'project');
+  const userPath = path.join(
+    tempDir,
+    'xdg-config',
+    'opencode',
+    'oh-my-opencode-slim.json',
+  );
+  const projectPath = path.join(
+    projectDir,
+    '.opencode',
+    'oh-my-opencode-slim.json',
+  );
+  fs.mkdirSync(path.dirname(projectPath), { recursive: true });
+  fs.writeFileSync(
+    userPath,
+    JSON.stringify({
+      preset: 'legacy',
+      presets: {
+        legacy: {
+          librarian: { mcps: ['context7', 'gh_grep'] },
+          explorer: { mcps: [] },
+        },
+      },
+    }),
+  );
+  fs.writeFileSync(
+    projectPath,
+    JSON.stringify({
+      presets: { legacy: { oracle: { model: 'test/project' } } },
+    }),
+  );
+  const originalBytes = fs.readFileSync(userPath);
+
+  const catalog = getAllConfiguredPresets(projectDir);
+  const runtime = loadPluginConfig(projectDir, { silent: true });
+  const inherited = ['context7', 'gh_grep'];
+  expect(resolvePreset('legacy', catalog).explorer?.mcps).toEqual(inherited);
+  expect(runtime.presets?.legacy?.explorer?.mcps).toEqual(inherited);
+  expect(getEditablePreset(projectDir, 'legacy').agents.explorer?.mcps).toEqual(
+    [],
+  );
+  expect(fs.readFileSync(userPath)).toEqual(originalBytes);
+
+  // A closer explicit explorer.mcps still overrides the repaired user layer.
+  fs.writeFileSync(
+    projectPath,
+    JSON.stringify({ presets: { legacy: { explorer: { mcps: [] } } } }),
+  );
+  expect(
+    resolvePreset('legacy', getAllConfiguredPresets(projectDir)).explorer?.mcps,
+  ).toEqual([]);
+  expect(
+    loadPluginConfig(projectDir, { silent: true }).agents?.explorer?.mcps,
+  ).toEqual([]);
+  expect(fs.readFileSync(userPath)).toEqual(originalBytes);
+});
+
 describe('switchPresetOnDisk', () => {
+  test('global-scope summary inherits repaired legacy MCPs', () => {
+    const projectDir = path.join(tempDir, 'project');
+    const userPath = path.join(
+      tempDir,
+      'xdg-config',
+      'opencode',
+      'oh-my-opencode-slim.json',
+    );
+    fs.writeFileSync(
+      userPath,
+      JSON.stringify({
+        presets: {
+          legacy: {
+            librarian: { mcps: ['context7', 'gh_grep'] },
+            explorer: { mcps: [] },
+          },
+        },
+      }),
+    );
+
+    const result = switchPresetOnDisk(
+      projectDir,
+      'legacy',
+      {},
+      { scope: 'global' },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.summary).toContain('explorer → mcps: context7,gh_grep');
+  });
+
   test('returns a not-found result for an unknown preset', () => {
     const config: PluginConfig = {
       presets: {

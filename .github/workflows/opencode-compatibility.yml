@@ -14,21 +14,8 @@ concurrency:
 
 jobs:
   host-smoke:
-    name: Host ${{ matrix.channel }} / OpenCode ${{ matrix.opencode-version }}
-    continue-on-error: ${{ matrix.experimental }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - channel: supported
-            opencode-version: '1.18.13'
-            experimental: false
-          - channel: latest-canary
-            opencode-version: latest
-            experimental: true
 
     steps:
       - name: Checkout code
@@ -44,6 +31,6 @@ jobs:
         run: bun run build
 
       - name: Verify OpenCode host compatibility
-        env:
-          OPENCODE_SMOKE_VERSION: ${{ matrix.opencode-version }}
-        run: bun run verify:host-smoke
+        run: |
+          npm install --prefix "$RUNNER_TEMP/opencode" @opencode/cli@2.3.0
+          V2_LIFECYCLE_HOST="$RUNNER_TEMP/opencode/node_modules/.bin/opencode" bun run verify:host-smoke

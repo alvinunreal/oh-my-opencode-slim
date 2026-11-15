@@ -2115,6 +2115,304 @@ describe('dashboard server', () => {
     });
   });
 
+  describe('block-comment and chat routes', () => {
+    type Started = Awaited<ReturnType<typeof startDashboard>>;
+    const cases = {
+      'block-comment': {
+        payload: { section: 'Goal', comment: 'Tighten this' },
+        empty: {},
+        conflict: 'Block feedback is already queued.',
+      },
+      chat: {
+        payload: { message: 'Hello there' },
+        empty: { message: null },
+        conflict: 'Chat message is already queued.',
+      },
+    } as const;
+
+    function addInterview(
+      dashboard: Started['dashboard'],
+      interviewId: string,
+    ) {
+      dashboard.pushState({
+        interviewId,
+        sessionID: 'session-routes',
+        idea: 'Routes',
+        mode: 'awaiting-user',
+        summary: 'Test',
+        title: 'Routes',
+        questions: [],
+        pendingAnswers: null,
+        lastUpdatedAt: Date.now(),
+        filePath: '',
+        nudgeAction: null,
+      });
+    }
+
+    for (const route of ['block-comment', 'chat'] as const) {
+      describe(`/${route}`, () => {
+        const urlFor = (baseUrl: string, id: string) =>
+          `${baseUrl}/api/interviews/${id}/${route}`;
+        const headers = { 'content-type': 'application/json' };
+
+        test('POST and GET without auth return 401', async () => {
+          const { baseUrl, dashboard, cleanup } = await startDashboard();
+          try {
+            addInterview(dashboard, 'routes-auth');
+            const post = await fetch(urlFor(baseUrl, 'routes-auth'), {
+              method: 'POST',
+              headers,
+              body: JSON.stringify(cases[route].payload),
+            });
+            const get = await fetch(urlFor(baseUrl, 'routes-auth'));
+            expect(post.status).toBe(401);
+            expect(get.status).toBe(401);
+          } finally {
+            cleanup();
+          }
+        });
+
+        test('POST and GET with malformed id return 400', async () => {
+          const { baseUrl, authToken, cleanup } = await startDashboard();
+          try {
+            const auth = { ...headers, authorization: `Bearer ${authToken}` };
+            const post = await fetch(urlFor(baseUrl, 'bad%20id'), {
+              method: 'POST',
+              headers: auth,
+              body: JSON.stringify(cases[route].payload),
+            });
+            const get = await fetch(urlFor(baseUrl, 'bad%20id'), {
+              headers: auth,
+            });
+            expect(post.status).toBe(400);
+            expect(get.status).toBe(400);
+          } finally {
+            cleanup();
+          }
+        });
+
+        test('POST and GET with unknown id return 404', async () => {
+          const { baseUrl, authToken, cleanup } = await startDashboard();
+          try {
+            const auth = { ...headers, authorization: `Bearer ${authToken}` };
+            const post = await fetch(urlFor(baseUrl, 'no-such-id'), {
+              method: 'POST',
+              headers: auth,
+              body: JSON.stringify(cases[route].payload),
+            });
+            const get = await fetch(urlFor(baseUrl, 'no-such-id'), {
+              headers: auth,
+            });
+            expect(post.status).toBe(404);
+            expect(get.status).toBe(404);
+            expect((await post.json()).error).toBe('Interview not found');
+          } finally {
+            cleanup();
+          }
+        });
+
+        test('POST with invalid JSON returns 400', async () => {
+          const { baseUrl, authToken, dashboard, cleanup } =
+            await startDashboard();
+          try {
+            addInterview(dashboard, 'routes-json');
+            const response = await fetch(urlFor(baseUrl, 'routes-json'), {
+              method: 'POST',
+              headers: {
+                ...headers,
+                authorization: `Bearer ${authToken}`,
+              },
+              body: '{bad',
+            });
+            expect(response.status).toBe(400);
+            expect((await response.json()).error).toBe('Invalid JSON');
+          } finally {
+            cleanup();
+          }
+        });
+
+        test('auth, id validation, and lookup precede JSON parsing', async () => {
+          const { baseUrl, authToken, cleanup } = await startDashboard();
+          try {
+            const anonymous = await fetch(urlFor(baseUrl, 'bad%20id'), {
+              method: 'POST',
+              headers,
+              body: '{bad',
+            });
+            expect(anonymous.status).toBe(401);
+            expect((await anonymous.json()).error).toBe('Unauthorized');
+
+            const auth = {
+              ...headers,
+              authorization: `Bearer ${authToken}`,
+            };
+            const unknown = await fetch(urlFor(baseUrl, 'no-such-id'), {
+              method: 'POST',
+              headers: auth,
+              body: '{bad',
+            });
+            expect(unknown.status).toBe(404);
+            expect((await unknown.json()).error).toBe('Interview not found');
+
+            const malformed = await fetch(urlFor(baseUrl, 'bad%20id'), {
+              method: 'POST',
+              headers: auth,
+              body: '{bad',
+            });
+            expect(malformed.status).toBe(400);
+            expect((await malformed.json()).error).toBe('Invalid interview ID');
+          } finally {
+            cleanup();
+          }
+        });
+
+        test('queues once, then returns 409 on a duplicate POST', async () => {
+          const { baseUrl, authToken, dashboard, cleanup } =
+            await startDashboard();
+          try {
+            addInterview(dashboard, 'routes-queue');
+            const send = () =>
+              fetch(urlFor(baseUrl, 'routes-queue'), {
+                method: 'POST',
+                headers: {
+                  ...headers,
+                  authorization: `Bearer ${authToken}`,
+                },
+                body: JSON.stringify(cases[route].payload),
+              });
+            const first = await send();
+            expect(first.status).toBe(202);
+            expect((await first.json()).status).toBe('queued');
+
+            const second = await send();
+            expect(second.status).toBe(409);
+            expect((await second.json()).error).toBe(cases[route].conflict);
+          } finally {
+            cleanup();
+          }
+        });
+
+        test('GET returns empty before queuing and delivers until ack', async () => {
+          const { baseUrl, authToken, dashboard, cleanup } =
+            await startDashboard();
+          try {
+            addInterview(dashboard, 'routes-get');
+            const auth = { authorization: `Bearer ${authToken}` };
+            const empty = await fetch(urlFor(baseUrl, 'routes-get'), {
+              headers: auth,
+            });
+            expect(empty.status).toBe(200);
+            expect(await empty.json()).toEqual(cases[route].empty);
+
+            await fetch(urlFor(baseUrl, 'routes-get'), {
+              method: 'POST',
+              headers: { ...headers, ...auth },
+              body: JSON.stringify(cases[route].payload),
+            });
+            const first = await fetch(urlFor(baseUrl, 'routes-get'), {
+              headers: auth,
+            });
+            expect(first.status).toBe(200);
+            const firstPayload = await first.json();
+            expect(typeof firstPayload.claimId).toBe('string');
+            expect(firstPayload.claimId.length).toBeGreaterThan(0);
+            expect(firstPayload).toEqual({
+              ...cases[route].payload,
+              claimId: firstPayload.claimId,
+            });
+
+            const repeated = await fetch(urlFor(baseUrl, 'routes-get'), {
+              headers: auth,
+            });
+            expect(repeated.status).toBe(200);
+            const repeatedPayload = await repeated.json();
+            expect(repeatedPayload.claimId).toBe(firstPayload.claimId);
+            expect(repeatedPayload).toEqual(firstPayload);
+
+            const ack = await fetch(
+              `${baseUrl}/api/interviews/routes-get/${route}/ack`,
+              {
+                method: 'POST',
+                headers: { ...headers, ...auth },
+                body: JSON.stringify({ claimId: firstPayload.claimId }),
+              },
+            );
+            expect(ack.status).toBe(200);
+            expect(await ack.json()).toEqual({ status: 'acked' });
+
+            const afterAck = await fetch(urlFor(baseUrl, 'routes-get'), {
+              headers: auth,
+            });
+            expect(afterAck.status).toBe(200);
+            expect(await afterAck.json()).toEqual(cases[route].empty);
+          } finally {
+            cleanup();
+          }
+        });
+      });
+    }
+  });
+
+  describe('unregister and malformed paths', () => {
+    test('POST /api/unregister without auth returns 401', async () => {
+      const { baseUrl, cleanup } = await startDashboard();
+      try {
+        const response = await fetch(`${baseUrl}/api/unregister`, {
+          method: 'POST',
+          body: JSON.stringify({ sessionID: 'x' }),
+          headers: { 'content-type': 'application/json' },
+        });
+        expect(response.status).toBe(401);
+      } finally {
+        cleanup();
+      }
+    });
+
+    test('POST /api/unregister rejects invalid JSON and missing sessionID', async () => {
+      const { baseUrl, authToken, cleanup } = await startDashboard();
+      try {
+        const auth = {
+          authorization: `Bearer ${authToken}`,
+          'content-type': 'application/json',
+        };
+        const badJson = await fetch(`${baseUrl}/api/unregister`, {
+          method: 'POST',
+          headers: auth,
+          body: '{bad',
+        });
+        const missing = await fetch(`${baseUrl}/api/unregister`, {
+          method: 'POST',
+          headers: auth,
+          body: JSON.stringify({}),
+        });
+        expect(badJson.status).toBe(400);
+        expect((await badJson.json()).error).toBe('Invalid JSON');
+        expect(missing.status).toBe(400);
+        expect((await missing.json()).error).toBe('sessionID required');
+      } finally {
+        cleanup();
+      }
+    });
+
+    test('a malformed % in the path returns 500', async () => {
+      // Pinned current status only: decodeURIComponent throws before routing.
+      const { baseUrl, authToken, cleanup } = await startDashboard();
+      try {
+        const response = await fetch(`${baseUrl}/api/%/unregister`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${authToken}`,
+            'content-type': 'application/json',
+          },
+          body: '{}',
+        });
+        expect(response.status).toBe(500);
+      } finally {
+        cleanup();
+      }
+    });
+  });
+
   describe('error handling', () => {
     test('returns 404 for unknown routes', async () => {
       const { baseUrl, cleanup } = await startDashboard();

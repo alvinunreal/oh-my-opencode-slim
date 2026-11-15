@@ -58,7 +58,7 @@ function v2Usage(overrides: {
  * `utils/opencode-client` leaks into this one and dereferences
  * `ctx.client.session`.
  */
-function createHookCtx(): never {
+function _createHookCtx(): never {
   return { client: { session: {} }, directory: '/tmp/proj' } as never;
 }
 
@@ -475,37 +475,6 @@ describe('mapV2EventToV1 session.execution.* lifecycle synthesis', () => {
       properties: { sessionID: 'ses_exec' },
     });
     expect(mapV2EventToV1(ev)).toEqual([ev]);
-  });
-
-  test('synthesized lifecycle pair feeds the real task-session-manager busy path', async () => {
-    // End-to-end against the consumer: the synthesized busy status must
-    // mark a tracked child running-from-live-session on the board.
-    const { createTaskSessionManagerHook } = await import(
-      '../hooks/task-session-manager'
-    );
-    const { BackgroundJobBoard } = await import('../utils');
-    const board = new BackgroundJobBoard();
-    const hook = createTaskSessionManagerHook(createHookCtx(), {
-      maxSessionsPerAgent: 2,
-      backgroundJobBoard: board,
-      shouldManageSession: (id: string) => id === 'parent-1',
-    });
-    board.registerLaunch({
-      taskID: 'child-1',
-      parentSessionID: 'parent-1',
-      agent: 'fixer',
-      description: 'exec lifecycle e2e',
-      now: 0,
-    });
-    for (const mapped of mapV2EventToV1({
-      type: 'session.execution.started',
-      properties: { sessionID: 'child-1' },
-    })) {
-      await hook.event({ event: mapped });
-    }
-    // Busy observation landed: lastLiveBusyAt recorded on the running job.
-    expect(board.get('child-1')).toMatchObject({ state: 'running' });
-    expect(board.get('child-1')?.lastLiveBusyAt).toBeDefined();
   });
 });
 
@@ -933,38 +902,6 @@ describe('mapV2EventToV1 form → question bridge', () => {
       }),
     ).toHaveLength(1);
   });
-
-  test('ask/reply round-trip arms then resolves the real input-wait tracker', async () => {
-    // End-to-end against the consumer that matters: the task-session-
-    // manager input-wait gate must arm on the synthesized ask and clear
-    // on the synthesized reply.
-    const { createTaskSessionManagerHook } = await import(
-      '../hooks/task-session-manager'
-    );
-    const hook = createTaskSessionManagerHook(createHookCtx(), {
-      maxSessionsPerAgent: 2,
-      shouldManageSession: (id: string) => id === 'parent-1',
-    });
-    const asked = mapV2EventToV1({
-      type: 'form.created',
-      properties: {
-        form: {
-          id: 'frm_w',
-          sessionID: 'parent-1',
-          title: 't',
-          fields: [{ key: 'k', type: 'string' }],
-        },
-      },
-    })[1];
-    await hook.event({ event: asked });
-    expect(hook.hasInputWait('parent-1')).toBe(true);
-    const replied = mapV2EventToV1({
-      type: 'form.replied',
-      properties: { id: 'frm_w', sessionID: 'parent-1', answer: { k: 'v' } },
-    })[1];
-    await hook.event({ event: replied });
-    expect(hook.hasInputWait('parent-1')).toBe(false);
-  });
 });
 
 describe('mapV2EventToV1 permission field mapping', () => {
@@ -1111,38 +1048,6 @@ describe('mapV2EventToV1 permission field mapping', () => {
       mapV2EventToV1({ type: 'permission.replied', properties: {} }),
     ).toHaveLength(1);
   });
-
-  test('synthesized ask/replied pair arms then resolves the input-wait tracker', async () => {
-    const { createTaskSessionManagerHook } = await import(
-      '../hooks/task-session-manager'
-    );
-    const hook = createTaskSessionManagerHook(createHookCtx(), {
-      maxSessionsPerAgent: 2,
-      shouldManageSession: (id: string) => id === 'parent-1',
-    });
-    const asked = mapV2EventToV1({
-      type: 'permission.asked',
-      properties: {
-        id: 'per_w',
-        sessionID: 'parent-1',
-        action: 'execute',
-        resources: [],
-      },
-    })[1];
-    await hook.event({ event: asked });
-    expect(hook.hasInputWait('parent-1')).toBe(true);
-    await hook.event({
-      event: {
-        type: 'permission.replied',
-        properties: {
-          sessionID: 'parent-1',
-          requestID: 'per_w',
-          reply: 'once',
-        },
-      },
-    });
-    expect(hook.hasInputWait('parent-1')).toBe(false);
-  });
 });
 
 describe('mapV2EventToV1 session.deleted synthesis', () => {
@@ -1201,36 +1106,6 @@ describe('mapV2EventToV1 session.deleted synthesis', () => {
       data: {},
     });
     expect(mapV2EventToV1(emptyData)).toEqual([emptyData]);
-  });
-
-  test('synthesized session.deleted feeds the real task-session-manager cleanup (tombstone)', async () => {
-    const { createTaskSessionManagerHook } = await import(
-      '../hooks/task-session-manager'
-    );
-    const { BackgroundJobBoard, getBackgroundJobLifecycleLedger } =
-      await import('../utils');
-    const board = new BackgroundJobBoard();
-    const hook = createTaskSessionManagerHook(createHookCtx(), {
-      maxSessionsPerAgent: 2,
-      backgroundJobBoard: board,
-      shouldManageSession: (id: string) => id === 'parent-1',
-    });
-    board.registerLaunch({
-      taskID: 'child-del',
-      parentSessionID: 'parent-1',
-      agent: 'fixer',
-      description: 'deletion synthesis e2e',
-      now: 0,
-    });
-    // Dispatch like the v2 pump: raw first, then every synthesized product.
-    // The raw data-keyed event is inert in the v1 handler (no properties);
-    // only the synthesized dual-spelling shape can record the tombstone.
-    for (const mapped of mapV2EventToV1(liveDeletedEvent('child-del'))) {
-      await hook.event({ event: mapped });
-    }
-    expect(
-      getBackgroundJobLifecycleLedger(board).tombstones.has('child-del'),
-    ).toBe(true);
   });
 });
 

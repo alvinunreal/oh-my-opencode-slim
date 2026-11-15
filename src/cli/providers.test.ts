@@ -1,7 +1,7 @@
 /// <reference types="bun-types" />
 
 import { describe, expect, test } from 'bun:test';
-import { CUSTOM_SKILLS } from './custom-skills';
+import { CUSTOM_SKILLS } from './custom-skills-registry';
 import { generateLiteConfig, MODEL_MAPPINGS } from './providers';
 
 describe('providers', () => {
@@ -12,7 +12,6 @@ describe('providers', () => {
 
   test('generateLiteConfig defaults to openai and includes generated presets', () => {
     const config = generateLiteConfig({
-      backgroundSubagents: 'no',
       reset: false,
     });
 
@@ -35,7 +34,6 @@ describe('providers', () => {
 
   test('preserves exact OpenAI model and variant mappings', () => {
     const config = generateLiteConfig({
-      backgroundSubagents: 'no',
       reset: false,
     });
 
@@ -55,7 +53,6 @@ describe('providers', () => {
   test('generateLiteConfig can set opencode-go as active preset', () => {
     const config = generateLiteConfig({
       preset: 'opencode-go',
-      backgroundSubagents: 'no',
       reset: false,
     });
 
@@ -84,7 +81,6 @@ describe('providers', () => {
     expect(() =>
       generateLiteConfig({
         preset: 'not-real',
-        backgroundSubagents: 'no',
         reset: false,
       }),
     ).toThrow('Unsupported preset "not-real"');
@@ -94,7 +90,6 @@ describe('providers', () => {
     expect(() =>
       generateLiteConfig({
         preset: 'kimi',
-        backgroundSubagents: 'no',
         reset: false,
       }),
     ).toThrow('Unsupported preset "kimi"');
@@ -104,7 +99,6 @@ describe('providers', () => {
     expect(() =>
       generateLiteConfig({
         preset: 'toString',
-        backgroundSubagents: 'no',
         reset: false,
       }),
     ).toThrow('Unsupported preset "toString"');
@@ -112,7 +106,6 @@ describe('providers', () => {
 
   test('generateLiteConfig omits companion config', () => {
     const config = generateLiteConfig({
-      backgroundSubagents: 'no',
       reset: false,
     });
     expect(config.companion).toBeUndefined();
@@ -120,7 +113,6 @@ describe('providers', () => {
 
   test('generateLiteConfig includes default skills', () => {
     const config = generateLiteConfig({
-      backgroundSubagents: 'no',
       reset: false,
     });
 
@@ -146,7 +138,6 @@ describe('providers', () => {
 
   test('generateLiteConfig only grants skills the plugin bundles', () => {
     const config = generateLiteConfig({
-      backgroundSubagents: 'no',
       reset: false,
     });
 
@@ -164,7 +155,6 @@ describe('providers', () => {
 
   test('generateLiteConfig omits mcps (runtime defaults apply)', () => {
     const config = generateLiteConfig({
-      backgroundSubagents: 'no',
       reset: false,
     });
 

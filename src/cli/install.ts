@@ -1,19 +1,13 @@
 import { existsSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
+import {
+  isSupportedOpenCodeVersion,
+  MINIMUM_OPENCODE_VERSION,
+} from '../config/opencode-version';
 import { getExistingLiteConfigPath } from '../config/paths';
 import {
-  detectBackgroundSubagentsTarget,
-  expandHomePath,
-  getBackgroundSubagentsBlock,
-  isBackgroundSubagentsEnabled,
-  manualBackgroundSubagentsInstructions,
-  writeBackgroundSubagentsBlock,
-} from './background-subagents';
-import {
   addPluginToOpenCodeConfig,
-  addPluginToOpenCodeTuiConfig,
   isPluginConfigured,
-  warmOpenCodePluginCache,
   writeLiteConfig,
 } from './config-io';
 import { generateLiteConfig } from './providers';
@@ -107,14 +101,9 @@ async function askToStarRepo(config: InstallConfig): Promise<void> {
   }
 }
 
-async function checkOpenCodeInstalled(
+function checkOpenCodeInstalled(
   host: ReturnType<typeof findOpenCode>,
-): Promise<{
-  ok: boolean;
-  version?: string;
-  path?: string;
-  hostFlavor?: 'v1' | 'v2';
-}> {
+): boolean {
   if (!host) {
     const isWindows = process.platform === 'win32';
     printError('OpenCode is not installed on this system.');
@@ -142,108 +131,19 @@ async function checkOpenCodeInstalled(
         `     ${BLUE}export PATH="$HOME/.opencode/bin:$PATH"${RESET}`,
       );
     }
-    return { ok: false };
+    return false;
+  }
+  const version = host.version.replace(/^opencode\s+/i, '');
+  if (!isSupportedOpenCodeVersion(version)) {
+    printError(
+      `OpenCode ${version} is unsupported. Update to OpenCode ${MINIMUM_OPENCODE_VERSION} or newer with ` +
+        'npm install -g @opencode/cli@latest.',
+    );
+    return false;
   }
   const pathInfo = ` (${DIM}${host.path}${RESET})`;
-  printSuccess(
-    `OpenCode ${host.version.replace(/^opencode\s+/i, '')} detected${pathInfo}`,
-  );
-  return { ok: true, ...host };
-}
-
-export async function configureBackgroundSubagents(
-  config: InstallConfig,
-): Promise<{ enabledNow: boolean; configuredTarget?: string }> {
-  const experimental = isBackgroundSubagentsEnabled(
-    process.env.OPENCODE_EXPERIMENTAL,
-  );
-  const backgroundSubagentsEnabled = isBackgroundSubagentsEnabled(
-    process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS ??
-      process.env.OPENCODE_EXPERIMENTAL,
-  );
-  const exaEnabled =
-    experimental ||
-    ['true', '1'].includes(
-      process.env.OPENCODE_ENABLE_EXA?.toLowerCase() ?? '',
-    );
-  if (backgroundSubagentsEnabled && exaEnabled) {
-    printSuccess(
-      'OpenCode background subagents and Exa websearch already enabled in environment',
-    );
-    return { enabledNow: true };
-  }
-
-  const target =
-    config.backgroundSubagentsTarget !== undefined
-      ? expandHomePath(config.backgroundSubagentsTarget)
-      : detectBackgroundSubagentsTarget();
-
-  if (config.backgroundSubagents === 'no') {
-    printInfo('OpenCode background subagents shell setup skipped.');
-    console.log(manualBackgroundSubagentsInstructions({ targetPath: target }));
-    return { enabledNow: false };
-  }
-
-  if (!target) {
-    printInfo('No safe shell startup file detected.');
-    console.log(manualBackgroundSubagentsInstructions());
-    return { enabledNow: false };
-  }
-
-  const block = getBackgroundSubagentsBlock(target);
-
-  if (config.dryRun) {
-    printInfo(
-      'Dry run mode - background subagents block that would be written:',
-    );
-    console.log(`Target: ${target}`);
-    console.log(`\n${block}\n`);
-    return { enabledNow: false, configuredTarget: target };
-  }
-
-  if (config.backgroundSubagents === 'ask') {
-    if (!process.stdin.isTTY) {
-      printInfo('Skipped background subagents shell setup in non-TTY mode.');
-      console.log(
-        manualBackgroundSubagentsInstructions({ targetPath: target }),
-      );
-      return { enabledNow: false };
-    }
-
-    console.log();
-    printInfo(
-      'OpenCode v1 requires background subagents for default orchestration.',
-    );
-    printInfo(
-      `The installer can add the required environment exports to ${target}.`,
-    );
-    const shouldWrite = await confirm(
-      'Enable background subagents and Exa websearch now?',
-      true,
-    );
-    if (!shouldWrite) {
-      printInfo('Skipped background subagents shell setup.');
-      console.log(
-        manualBackgroundSubagentsInstructions({ targetPath: target }),
-      );
-      return { enabledNow: false };
-    }
-  }
-
-  try {
-    writeBackgroundSubagentsBlock(target);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    printError(`Could not write background subagents shell config: ${message}`);
-    printInfo('Add the setting manually instead:');
-    console.log(manualBackgroundSubagentsInstructions({ targetPath: target }));
-    return { enabledNow: false };
-  }
-
-  printSuccess(
-    `Background subagents and Exa websearch enabled ${SYMBOLS.arrow} ${DIM}${target}${RESET}`,
-  );
-  return { enabledNow: false, configuredTarget: target };
+  printSuccess(`OpenCode ${version} detected${pathInfo}`);
+  return true;
 }
 
 function handleStepResult(
@@ -262,21 +162,18 @@ function handleStepResult(
 
 async function runInstall(config: InstallConfig): Promise<number> {
   const isUpdate = isPluginConfigured();
-  const host = findOpenCode();
-  const isV2 = host?.hostFlavor === 'v2';
 
   printHeader(isUpdate);
 
-  const totalSteps = 6;
+  const totalSteps = 3;
 
   let step = 1;
 
   printStep(step++, totalSteps, 'Checking OpenCode installation...');
   if (config.dryRun) {
     printInfo('Dry run mode - skipping OpenCode check');
-  } else {
-    const { ok } = await checkOpenCodeInstalled(host);
-    if (!ok) return 1;
+  } else if (!checkOpenCodeInstalled(findOpenCode())) {
+    return 1;
   }
   printStep(step++, totalSteps, 'Adding oh-my-opencode-slim plugin...');
   if (config.dryRun) {
@@ -285,43 +182,6 @@ async function runInstall(config: InstallConfig): Promise<number> {
     const pluginResult = await addPluginToOpenCodeConfig();
     if (!handleStepResult(pluginResult, 'Plugin added')) return 1;
   }
-
-  printStep(step++, totalSteps, 'Adding TUI version badge...');
-  if (isV2) {
-    printInfo('OpenCode v2 loads the TUI plugin from the server plugin.');
-  } else if (config.dryRun) {
-    printInfo('Dry run mode - skipping TUI plugin installation');
-  } else {
-    const tuiResult = await addPluginToOpenCodeTuiConfig();
-    if (!tuiResult.success) {
-      printInfo(`Skipped TUI badge: ${tuiResult.error}`);
-    } else {
-      handleStepResult(tuiResult, 'TUI badge added');
-    }
-  }
-
-  printStep(step++, totalSteps, 'Warming OpenCode plugin cache...');
-  if (isV2) {
-    printInfo('OpenCode v2 manages its own plugin cache.');
-  } else if (config.dryRun) {
-    printInfo('Dry run mode - skipping cache warm-up');
-  } else {
-    const cacheResult = await warmOpenCodePluginCache();
-    if (cacheResult === null) {
-      printInfo('Local development install - cache warm-up not required');
-    } else if (!cacheResult.success) {
-      printError(`Failed cache warm-up: ${cacheResult.error}`);
-      return 1;
-    } else {
-      handleStepResult(cacheResult, 'OpenCode cache warmed');
-    }
-  }
-
-  printStep(step++, totalSteps, 'Configuring OpenCode background subagents...');
-  if (isV2) printInfo('OpenCode v2 provides background subagents natively.');
-  const backgroundSubagents = isV2
-    ? { enabledNow: true }
-    : await configureBackgroundSubagents(config);
 
   printStep(step++, totalSteps, 'Writing oh-my-opencode-slim configuration...');
   if (config.dryRun) {
@@ -363,29 +223,13 @@ async function runInstall(config: InstallConfig): Promise<number> {
   console.log(`     ${BLUE}$ opencode auth login${RESET}`);
   console.log();
   console.log('  2. Refresh the models OpenCode can see:');
-  console.log(
-    `     ${BLUE}$ opencode models${isV2 ? '' : ' --refresh'}${RESET}`,
-  );
+  console.log(`     ${BLUE}$ opencode models${RESET}`);
   console.log();
   console.log('  3. Review your generated config:');
   console.log(`     ${BLUE}${configPath}${RESET}`);
   console.log();
   console.log('  4. Start OpenCode:');
-  if (backgroundSubagents.enabledNow) {
-    console.log(`     ${BLUE}$ opencode${RESET}`);
-  } else if (backgroundSubagents.configuredTarget) {
-    console.log(
-      `     ${BLUE}$ source ${backgroundSubagents.configuredTarget}${RESET}`,
-    );
-    console.log(`     ${BLUE}$ opencode${RESET}`);
-    console.log(
-      `     ${DIM}Or restart your terminal before running opencode.${RESET}`,
-    );
-  } else {
-    console.log(
-      `     ${BLUE}$ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true OPENCODE_ENABLE_EXA=1 opencode${RESET}`,
-    );
-  }
+  console.log(`     ${BLUE}$ opencode${RESET}`);
   console.log();
   console.log('  5. Verify the agents are responding:');
   console.log(`     ${BLUE}> ping all agents${RESET}`);
@@ -420,8 +264,6 @@ export async function install(args: InstallArgs): Promise<number> {
     promptForStar: args.tui,
     dryRun: args.dryRun,
     reset: args.reset ?? false,
-    backgroundSubagents: args.backgroundSubagents ?? (args.tui ? 'ask' : 'no'),
-    backgroundSubagentsTarget: args.backgroundSubagentsTarget,
   };
 
   return runInstall(config);

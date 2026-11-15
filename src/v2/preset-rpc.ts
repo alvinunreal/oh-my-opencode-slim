@@ -31,15 +31,6 @@ export const sessionPresetRpc = Rpc.define({
         .strict(),
       output: state,
     },
-    unbind: {
-      input: z.object({ sessionID: z.string().min(1) }).strict(),
-      output: state,
-    },
-    createBound: {
-      input: z.object({ presetName: z.string().min(1) }).strict(),
-      output: state,
-      errors: { create_failed: z.null() },
-    },
   },
   events: {},
 });

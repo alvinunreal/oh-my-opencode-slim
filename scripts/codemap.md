@@ -43,7 +43,7 @@ Maintain repository-level build, packaging, and release validation automation. G
     consistency offline; does not need the native checkout or release tags.
   - Requires the complete supported release-asset set and valid SHA-256 digests.
   - Runs from `prepublishOnly` so npm publish fails closed on stale Companion metadata.
-- `verify-opencode-host-smoke.ts`
+- `verify-v2-native-lifecycle.ts`
   - Builds temporary OpenCode environment (bin from bun add opencode-ai), mounts the plugin tarball,
     launches opencode serve, and probes http://127.0.0.1:<port>/global/health.
   - Uses OPENCODE_SMOKE_VERSION when set so scheduled CI can test the pinned supported host and latest-host canary;
@@ -78,6 +78,11 @@ Maintain repository-level build, packaging, and release validation automation. G
   - Runs the built server entry in fresh Node processes across isolated feature matrices.
   - Separates Node coverage runs (evaluated module/byte totals) from timing samples; timing reports CPU/heap/code stats.
   - Fails verify mode when the fully disabled baseline no longer loads strictly fewer package bytes than the cold-gated controls.
+- `verify-v2-native-lifecycle.ts`
+  - Packed-artifact, headless OpenCode 2.3.0 lifecycle verification over a deterministic local model stub; the harness asserts that exact host version (`V2_LIFECYCLE_HOST` selects the binary).
+  - Covers default/native/off background child lifecycles, permission status/reply, restart recovery, explicit-managed startup rejection,
+    and content-filter refusal continuation with host-owned per-period reports and no duplicate Slim completion.
+  - Invoked directly (`bun scripts/verify-v2-native-lifecycle.ts [--modes=...] [--restart=running] [--self-check]`); no package-script wrapper.
 - All scripts are executable boundary files (#!/usr/bin/env bun / Node), with explicit temp-dir lifecycle management
   and defensive cleanup via rmSync(..., { force: true, recursive: true }).
 
@@ -92,7 +97,7 @@ Maintain repository-level build, packaging, and release validation automation. G
 - `bun run verify:companion-release` hashes the pinned standalone native release
   before npm versioning/publishing; `sync:companion-manifest` powers the scheduled/manual
   plugin-local manifest PR workflow without cross-repository write credentials.
-- `bun run verify:host-smoke` runs verify-opencode-host-smoke.ts: pack tarball -> boot isolated host -> wait for health ->
+- `bun run verify:host-smoke` runs verify-v2-native-lifecycle.ts: pack tarball -> boot isolated host -> wait for health ->
   verify no plugin-load errors.
 - `bun run cache:smoke` runs cache-smoke.ts: start server -> run scenarios -> collect request logs ->
   run cache smoke analysis (plateaus + suspects) -> report verdict.
@@ -108,7 +113,7 @@ Maintain repository-level build, packaging, and release validation automation. G
   dist/index.js, dist/cli/index.js, and generated schema.
 - Package integrity expectations are mirrored by tests and release scripts that assert packaged skill metadata and
   runtime files are present.
-- Smoke checks instantiate the same server and TUI entrypoints (dist/index.js, dist/tui.js) the package exports,
+- Smoke checks instantiate the same server and TUI entrypoints (dist/index.js, dist/tui2.js) the package exports,
   catching runtime or optional UI dependency breakage before publishing.
 - Windows crossSpawn E2E validation ensures compatibility with npm PATH shim scenarios.
 - Cache stability verification depends on successful smoke runs and benchmark outputs for release validation.

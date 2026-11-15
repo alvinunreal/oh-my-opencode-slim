@@ -40,36 +40,61 @@ globalThis.fetch = () => {
   throw new Error('optional-loading probe: network fetch is not authorized');
 };
 
-const noop = async () => ({ data: [] });
-
-const client = new Proxy(
-  {
-    session: new Proxy(
-      {
-        get: async (input) => ({ data: { id: input.path.id } }),
-        messages: noop,
-        status: async () => ({ data: {} }),
-      },
-      { get: (target, key) => Reflect.get(target, key) ?? noop },
-    ),
-    app: { log: noop },
-  },
-  {
-    get: (target, key) =>
-      Reflect.get(target, key) ?? new Proxy({}, { get: () => noop }),
-  },
-);
-
 const startCpu = process.cpuUsage();
 const startMemory = process.memoryUsage();
 const started = performance.now();
 const mod = await import(entry);
 const imported = performance.now();
-const hooks = await mod.default.server({
-  client,
-  directory,
-  worktree: directory,
-  serverUrl: new URL('http://127.0.0.1:4096'),
+const agents = new Set();
+const tools = new Set();
+const registration = { dispose() {} };
+const agentDraft = {
+  list: () => [],
+  get: () => undefined,
+  add: ({ id }) => agents.add(id),
+  update: (id) => agents.add(id),
+  remove() {},
+  default() {},
+};
+const cleanup = await mod.default.setup({
+  app: { version: '2.3.0' },
+  location: { directory },
+  agent: {
+    async transform(fn) {
+      fn(agentDraft);
+      return registration;
+    },
+    async list() {
+      return [];
+    },
+  },
+  tool: {
+    async transform(fn) {
+      fn({
+        add: ({ name, id }) => tools.add(name ?? id),
+        get: () => undefined,
+        update() {},
+      });
+      return registration;
+    },
+    async hook() {
+      return registration;
+    },
+  },
+  mcp: {
+    async transform(fn) {
+      fn({ list: () => [], get: () => undefined, set() {}, remove() {} });
+      return registration;
+    },
+  },
+  session: {
+    async hook() {
+      return registration;
+    },
+  },
+  event: {
+    async *subscribe() {},
+  },
 });
 const initialized = performance.now();
 
@@ -88,7 +113,7 @@ const hasLoadedJSDOM = () =>
 // jsdom/lib/api.js is loaded. Bounded turns of the microtask/macrotask loop:
 // no guessed sleep duration, and no wait at all when the feature is off.
 let settleTurns = 0;
-if (hooks?.tool?.webfetch) {
+if (tools.has('webfetch')) {
   for (; settleTurns < 500 && !hasLoadedJSDOM(); settleTurns += 1) {
     await new Promise((resolve) => setImmediate(resolve));
   }
@@ -101,11 +126,8 @@ const settledMemory = process.memoryUsage();
 const code = v8.getHeapCodeStatistics();
 const jsdomLoaded = hasLoadedJSDOM();
 
-const tools = Object.keys(hooks?.tool ?? {}).sort();
-const agents = Object.keys(hooks?.agent ?? {}).sort();
-
 const startedDisposal = performance.now();
-await hooks?.dispose?.();
+await cleanup();
 const disposed = performance.now();
 
 console.log(
@@ -136,9 +158,9 @@ console.log(
       code.external_script_source_size / 1048576
     ).toFixed(2),
     jsdomLoaded,
-    jsdomWaitEnabled: Boolean(hooks?.tool?.webfetch),
+    jsdomWaitEnabled: tools.has('webfetch'),
     fetchCalls,
-    tools,
-    agents,
+    tools: [...tools].sort(),
+    agents: [...agents].sort(),
   }),
 );

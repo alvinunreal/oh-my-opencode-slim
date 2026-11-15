@@ -1,6 +1,5 @@
-import { afterEach, beforeEach, describe, expect, jest, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
-import { OpenCode } from '@opencode/client';
 import {
   notifyConfigChanged,
   registerConfigChangeListener,
@@ -10,7 +9,6 @@ import {
   type V2PresetManagerContext,
   type V2PresetSelectInput,
 } from './preset-manager';
-import { type SessionPresetState, sessionPresetRpc } from './preset-rpc';
 import { makeTestEnv } from './test-fixtures';
 
 let env: ReturnType<typeof makeTestEnv>;
@@ -249,135 +247,6 @@ const BALANCED_SAVE_APPLY_TRAIL = [
   '__omo_save_apply__',
   'global',
 ];
-
-describe('new session with preset', () => {
-  test('awaits the selected preset binding before navigating, without applying to the current session or default', async () => {
-    env.writeUserConfig(SWITCH);
-    const before = fs.readFileSync(env.userConfigPath, 'utf-8');
-    const stub = makeStub({ selects: ['cheap', 'new-session'] });
-    const started = Promise.withResolvers<void>();
-    const pending = Promise.withResolvers<SessionPresetState>();
-    const navigate = jest.fn();
-    const apply = jest.fn();
-    const createBound = jest.fn(() => {
-      started.resolve();
-      return pending.promise;
-    });
-    stub.ctx.getSessionID = () => 'current-root';
-    stub.ctx.ui = { ...stub.ctx.ui, router: { navigate } };
-    stub.ctx.client = {
-      rpc: (contract: { id: string }) => {
-        expect(contract.id).toBe('oh-my-opencode-slim.session-preset.v1');
-        return {
-          read: async () => ({
-            sessionID: 'current-root',
-            status: 'bound',
-            presetName: 'balanced',
-            affects: 'future-children-only',
-          }),
-          createBound,
-          apply,
-        };
-      },
-    };
-
-    const opening = openPresetManagerV2(stub.ctx, env.projectDir);
-    await started.promise;
-    expect(createBound).toHaveBeenCalledWith(
-      { presetName: 'cheap' },
-      { location: { directory: env.projectDir } },
-    );
-    expect(navigate).not.toHaveBeenCalled();
-    expect(stub.toasts).toEqual([]);
-    pending.resolve({
-      sessionID: 'created-root',
-      status: 'bound',
-      presetName: 'cheap',
-      affects: 'future-children-only',
-    });
-    await opening;
-
-    expect(navigate).toHaveBeenCalledTimes(1);
-    expect(navigate).toHaveBeenCalledWith({
-      type: 'session',
-      sessionID: 'created-root',
-    });
-    expect(createBound).toHaveBeenCalledTimes(1);
-    expect(apply).not.toHaveBeenCalled();
-    expect(fs.readFileSync(env.userConfigPath, 'utf-8')).toBe(before);
-    expect(stub.reloadCalls()).toBe(0);
-    expect(stub.promptCalls).toEqual([]);
-    expect(stub.confirmCalls).toEqual([]);
-    expect(optionTitle(stub, 'Preset: cheap', 'new-session')).toBe(
-      'New session',
-    );
-    expect(stub.toasts).toHaveLength(1);
-    expectToast(stub, 'success', '"cheap" applied.');
-  });
-
-  test('shows binding failures with the created ID, without navigating or repeating creation', async () => {
-    for (const failure of ['rejected', 'unconfirmed']) {
-      env.writeUserConfig(SWITCH);
-      const stub = makeStub({ selects: ['cheap', 'new-session'] });
-      const navigate = jest.fn();
-      const apply = jest.fn();
-      const reason =
-        'Created session created-root, but preset binding failed. Open it and use Apply to bind "cheap".';
-      // Use the installed client: native wire errors become plain
-      // { type, message, data } objects, not Error instances.
-      const client = OpenCode.make({
-        baseUrl: 'http://rpc.test',
-        fetch: async () => {
-          if (failure === 'rejected')
-            return Response.json(
-              {
-                _tag: 'RpcError',
-                type: 'create_failed',
-                message: reason,
-                data: null,
-              },
-              { status: 400 },
-            );
-          return Response.json({
-            output: {
-              sessionID: 'created-root',
-              status: 'unbound',
-              presetName: null,
-              affects: 'future-children-only',
-            },
-          });
-        },
-      });
-      const createBound = jest.fn(client.rpc(sessionPresetRpc).createBound);
-      stub.ctx.ui = { ...stub.ctx.ui, router: { navigate } };
-      stub.ctx.client = { rpc: () => ({ createBound, apply }) };
-
-      await openPresetManagerV2(stub.ctx, env.projectDir);
-
-      expect(createBound).toHaveBeenCalledTimes(1);
-      expect(navigate).not.toHaveBeenCalled();
-      expect(apply).not.toHaveBeenCalled();
-      expect(stub.toasts).toHaveLength(1);
-      expect(lastToast(stub)?.title).toBe('New session failed');
-      expectToast(stub, 'warning', 'created-root');
-      if (failure === 'rejected') expect(lastMessage(stub)).toContain(reason);
-      expect(readUserConfig()).toEqual(SWITCH);
-      expect(stub.reloadCalls()).toBe(0);
-    }
-  });
-
-  test('does not create a session when native navigation is unavailable', async () => {
-    env.writeUserConfig(SWITCH);
-    const stub = makeStub({ selects: ['cheap', 'new-session'] });
-    const createBound = jest.fn();
-    stub.ctx.client = { rpc: () => ({ createBound }) };
-
-    await openPresetManagerV2(stub.ctx, env.projectDir);
-
-    expect(createBound).not.toHaveBeenCalled();
-    expectToast(stub, 'warning', 'Session navigation is unavailable');
-  });
-});
 
 describe('preset apply scopes', () => {
   test('current-session markers and selection are independent of the global default', async () => {
@@ -743,7 +612,6 @@ describe('openPresetManagerV2', () => {
         expect(stub.selectCalls[1]?.title).toContain('proj');
         expect(selectValues(stub.selectCalls[1])).toEqual([
           'apply',
-          'new-session',
           '__omo_back__',
         ]);
         expect(readUserConfig()).toEqual({ ...USER_P, preset: 'proj' });

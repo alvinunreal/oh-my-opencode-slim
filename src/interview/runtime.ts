@@ -56,8 +56,7 @@ export function createV1InterviewSessionRuntime(
       });
     },
     async continue(sessionID, text, model) {
-      // Resolve the live agent so continuing a primary's session does not
-      // re-home it to `orchestrator` (same probe as notify()).
+      // Preserve the session's live agent (same probe as notify()).
       const agent = await resolveSessionAgent(client, sessionID, {
         directory: ctx.directory,
       });

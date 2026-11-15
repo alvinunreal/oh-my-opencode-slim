@@ -124,22 +124,40 @@ describe('plugin health thresholds', () => {
     expect(minimumExpectedToolCount(['task_reply'])).toBe(8);
   });
 
-  test('native mode floors the two thin host-read controls only', () => {
-    // v1: task_cancel + task_status + webfetch + both ast-grep tools = 5.
+  test('native mode includes the v2 permission reply in its baseline', () => {
+    // V1 native keeps status/cancel, webfetch and both AST tools.
     expect(minimumExpectedToolCount([], true, 'v1', 'native')).toBe(5);
-    // v2 drops the v1-only tools as usual: same five survive.
-    expect(minimumExpectedToolCount([], true, 'v2', 'native')).toBe(5);
-    // task_reply is managed-only in native mode; listing it cannot mask a
-    // missing registered tool.
+    expect(minimumExpectedToolCount(['task_reply'], true, 'v1', 'native')).toBe(
+      5,
+    );
+    // V2 also registers the permission-only reply control.
+    expect(minimumExpectedToolCount([], true, 'v2', 'native')).toBe(6);
     expect(minimumExpectedToolCount(['task_reply'], true, 'v2', 'native')).toBe(
       5,
     );
-    // A genuinely disabled native control still lowers the floor.
     expect(
       minimumExpectedToolCount(['task_cancel'], true, 'v2', 'native'),
-    ).toBe(4);
-    // off keeps the existing six-tool reduction.
+    ).toBe(5);
+    expect(
+      minimumExpectedToolCount(
+        ['task_cancel', 'task_status', 'task_reply'],
+        true,
+        'v2',
+        'native',
+      ),
+    ).toBe(3);
     expect(minimumExpectedToolCount([], true, 'v2', 'off')).toBe(3);
+  });
+
+  test('task_report stays outside the baseline in every host lifecycle', () => {
+    for (const hostFlavor of [undefined, 'v1', 'v2']) {
+      for (const mode of ['native', 'off'] as const) {
+        expect(
+          minimumExpectedToolCount(['task_report'], true, hostFlavor, mode),
+        ).toBe(minimumExpectedToolCount([], true, hostFlavor, mode));
+      }
+    }
+    expect(minimumExpectedToolCount(['task_report'])).toBe(9);
   });
 
   test('drops the floor by six on v1 when the managed lifecycle is off', () => {

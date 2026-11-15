@@ -6,8 +6,8 @@ Council Mode host-side seat-result assembly as a standalone seam: the
 `tool.execute.before` hook that rewrites a council synthesis prompt, plus
 the two seat-result resolvers it can be built with — the managed job
 board (`managed.ts`) and native host sessions (`native.ts`). Council
-works identically with the managed lifecycle ON or OFF; neither resolver
-knows about the other.
+works identically on V1 managed and on native hosts; V2 always uses the
+native resolver. Neither resolver knows about the other.
 
 ## Design
 

@@ -159,14 +159,11 @@ export function createSessionPresets(options: {
   storage: V2Context['storage'];
   session: V2Context['session'];
   directory: string;
-  location?: Pick<
-    NonNullable<V2Context['location']>,
-    'directory' | 'workspaceID'
-  >;
   current: () => SessionTeamBundle;
+  /** True while `current` is not a valid live config (fallback or failed refresh); roots keep their snapshot. */
+  currentIsFallback?: () => boolean;
   named: (name: string) => Promise<SessionTeamBundle>;
 }) {
-  const location = options.location ? { ...options.location } : undefined;
   const cache = new Map<string, SessionPresetRecord>();
   const pending = new Map<string, Promise<unknown>>();
   const available =
@@ -287,24 +284,39 @@ export function createSessionPresets(options: {
     if (existing) {
       if (existing.parentID !== parentID)
         throw new Error('Session preset parent identity mismatch');
+      // A root on the live default follows strict config refreshes; a team
+      // applied by name, or a root during a fallback config, keeps its snapshot.
+      let bundle = existing.bundle;
+      if (
+        !parentID &&
+        existing.selection === 'default' &&
+        !options.currentIsFallback?.()
+      ) {
+        const live = options.current();
+        assertJSON(live);
+        bundle = JSON.parse(JSON.stringify(live));
+      }
+      const current = isDeepStrictEqual(existing.bundle, bundle)
+        ? existing
+        : { ...existing, bundle };
       if (
         explicitModel === true &&
-        (!existing.explicitModel || !existing.preserveModel)
+        (!current.explicitModel || !current.preserveModel)
       ) {
         return write(
           id,
-          { ...existing, explicitModel: true, preserveModel: true },
+          { ...current, explicitModel: true, preserveModel: true },
           signal,
         );
       }
       if (
         explicitModel === false &&
-        (existing.explicitModel || existing.preserveModel)
+        (current.explicitModel || current.preserveModel)
       ) {
-        const { preserveModel: _preserve, ...rest } = existing;
+        const { preserveModel: _preserve, ...rest } = current;
         return write(id, { ...rest, explicitModel: false }, signal);
       }
-      return existing;
+      return current === existing ? existing : write(id, current, signal);
     }
     if (parentID) {
       // Historical/host-created children have no proven launch snapshot.
@@ -481,7 +493,7 @@ export function createSessionPresets(options: {
           info.parentID !== adopted.parentID
         )
           throw new Error('Subagent parent identity mismatch');
-        // A concurrent child Apply/reset owns the future-delegation bundle
+        // A concurrent child Apply owns the future-delegation bundle
         // and its selection, while this execution still advances. Persist
         // both in the execution branch below: returning early would skip the
         // required durable commit and swallow storage failures.
@@ -503,36 +515,6 @@ export function createSessionPresets(options: {
     },
     checkActive: check,
     peek: (id: string) => cache.get(id),
-    async createBound(name: string, signal?: AbortSignal) {
-      requireAvailable();
-      check(signal);
-      if (!location || typeof options.session.create !== 'function')
-        throw new Error(
-          'Create with preset unavailable: host location or session.create API missing',
-        );
-      const bundle = structuredClone(await options.named(name));
-      check(signal);
-      // Native creation supplies a new, empty root and its initial selection.
-      // Only its future delegation team is ours to bind; never submit a prompt.
-      const { id } = await options.session.create({ location });
-      try {
-        return await serial(id, async () =>
-          state(
-            id,
-            await write(
-              id,
-              { schemaVersion: 1, bundle, selection: 'explicit' },
-              signal,
-            ),
-          ),
-        );
-      } catch (cause) {
-        throw new Error(
-          `Created session ${id}, but preset binding failed. Open it and use Apply to bind ${JSON.stringify(name)}.`,
-          { cause },
-        );
-      }
-    },
     async readState(id: string) {
       requireAvailable();
       return serial(id, async () => {
@@ -575,50 +557,6 @@ export function createSessionPresets(options: {
               : {}),
             bundle,
             selection: 'explicit',
-          },
-          signal,
-        );
-        return state(id, record);
-      });
-    },
-    async reset(id: string, signal?: AbortSignal) {
-      requireAvailable();
-      return serial(id, async () => {
-        check(signal);
-        const info = await identity(id);
-        check(signal);
-        const previous = await read(id);
-        const parentID =
-          typeof info.parentID === 'string' ? info.parentID : undefined;
-        if (previous && previous.parentID !== parentID)
-          throw new Error('Session preset parent identity mismatch');
-        // A native child with no snapshot stays unbound: resetting must not
-        // invent a launch team for a session the plugin never bound.
-        if (parentID && !previous) return state(id);
-        // The running generation's effective default, captured atomically
-        // with the replacement so a concurrent ensure cannot be lost between
-        // the read and the write.
-        const bundle = options.current();
-        check(signal);
-        const record = await write(
-          id,
-          {
-            schemaVersion: 1,
-            ...(parentID ? { parentID } : {}),
-            ...(previous?.preserveModel ? { preserveModel: true } : {}),
-            ...(previous?.explicitModel !== undefined
-              ? { explicitModel: previous.explicitModel }
-              : {}),
-            ...(previous?.inheritedProviderID
-              ? { inheritedProviderID: previous.inheritedProviderID }
-              : {}),
-            // A child keeps its own frozen inference policy; only its future
-            // descendants move to the default bundle.
-            ...(parentID && previous
-              ? { execution: previous.execution ?? previous.bundle }
-              : {}),
-            bundle,
-            selection: 'default',
           },
           signal,
         );

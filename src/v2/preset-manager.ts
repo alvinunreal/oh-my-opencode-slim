@@ -143,9 +143,6 @@ interface V2PresetModelCollection {
 export interface V2PresetUiSurface {
   dialog?: V2PresetDialogApi;
   toast?: V2PresetToastApi;
-  router?: {
-    navigate?: (destination: { type: 'session'; sessionID: string }) => void;
-  };
 }
 
 /** Minimal v2 TUI manager context. `client` carries the v2 client for the
@@ -164,6 +161,8 @@ export interface V2PresetManagerContext {
   client?: unknown;
   /** Live route accessor; no session on the home screen. */
   getSessionID?: () => string | undefined;
+  /** Whether session-scoped binding are available. */
+  presetRoutingEnabled?: boolean;
   /** Runs after a successful config write (Save / Save & Apply / Apply).
    * This is a REQUEST seam: on the supported host it asks the server-side
    * watcher to refresh the runtime profiles and re-reads the TUI sidebar
@@ -234,10 +233,6 @@ export function sessionPresetClient(ctx: V2PresetManagerContext) {
             input: { sessionID: string; presetName: string },
             options: V2PresetRpcCallOptions,
           ) => Promise<SessionPresetState>;
-          createBound: (
-            input: { presetName: string },
-            options: V2PresetRpcCallOptions,
-          ) => Promise<SessionPresetState>;
         };
       }
     | undefined;
@@ -291,23 +286,28 @@ async function chooseApplyTarget(
   save: boolean,
 ): Promise<ApplyTarget | undefined> {
   const sessionID = run.ctx.getSessionID?.();
+  const options: V2PresetDialogOption<'session' | 'global'>[] = [
+    ...(run.ctx.presetRoutingEnabled === false
+      ? []
+      : [
+          {
+            title: 'Current session',
+            value: 'session' as const,
+            description: sessionID
+              ? 'Model settings for future children in this session'
+              : 'Unavailable: open a session first',
+          },
+        ]),
+    {
+      title: 'Global default',
+      value: 'global',
+      description: 'Default preset for new, unbound sessions',
+    },
+  ];
   const scope = await run.dialog.select<'session' | 'global'>({
     title: `${save ? 'Save & apply' : 'Apply'}: ${presetName}`,
     placeholder: 'Choose where to apply',
-    options: [
-      {
-        title: 'Current session',
-        value: 'session',
-        description: sessionID
-          ? 'Model settings for future children in this session'
-          : 'Unavailable: open a session first',
-      },
-      {
-        title: 'Global default',
-        value: 'global',
-        description: 'Default preset for new, unbound sessions',
-      },
-    ],
+    options,
   });
   if (scope === undefined) return undefined;
   if (scope !== 'session' && scope !== 'global') return undefined;
@@ -516,7 +516,8 @@ async function runPresetList(run: ManagerRun): Promise<void> {
       ]),
     );
     const activePreset = config.preset ?? null;
-    const sessionID = run.ctx.getSessionID?.();
+    const routingEnabled = run.ctx.presetRoutingEnabled !== false;
+    const sessionID = routingEnabled ? run.ctx.getSessionID?.() : undefined;
     let sessionState: SessionPresetState | undefined;
     let sessionLabel = 'No session displayed';
     if (sessionID) {
@@ -610,11 +611,6 @@ async function showPresetActions(
       getPresetSource(run.directory, presetName, 'v2') === 'project';
     const options: V2PresetDialogOption<string>[] = [
       { title: 'Apply preset', value: 'apply' },
-      {
-        title: 'New session',
-        value: 'new-session',
-        description: 'Start an empty session with this preset',
-      },
       ...(isProject
         ? []
         : [
@@ -632,37 +628,6 @@ async function showPresetActions(
     if (choice === ACTION_BACK) return 'list';
 
     switch (choice) {
-      case 'new-session':
-        try {
-          const router = run.ctx.ui?.router;
-          if (typeof router?.navigate !== 'function') {
-            throw new Error('Session navigation is unavailable.');
-          }
-          const state = await sessionPresetClient(run.ctx).createBound(
-            { presetName },
-            { location: { ...run.ctx.location, directory: run.directory } },
-          );
-          if (state.status !== 'bound' || state.presetName !== presetName) {
-            throw new Error(
-              `Server did not confirm the requested binding for session ${state.sessionID}.`,
-            );
-          }
-          router.navigate({ type: 'session', sessionID: state.sessionID });
-          toast(run.ctx, 'success', 'New session', `"${presetName}" applied.`);
-        } catch (err) {
-          toast(
-            run.ctx,
-            'warning',
-            'New session failed',
-            err &&
-              typeof err === 'object' &&
-              'message' in err &&
-              typeof err.message === 'string'
-              ? err.message
-              : String(err),
-          );
-        }
-        return 'exit';
       case 'apply':
         {
           const target = await chooseApplyTarget(run, presetName, false);

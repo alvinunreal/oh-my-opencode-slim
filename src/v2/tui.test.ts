@@ -260,49 +260,6 @@ describe('v2 tui preset plugin', () => {
       expect(stub.selectTitles()[1]).toBe('Preset: cheap');
     });
 
-    test('bare /preset can create and open a bound session from home', async () => {
-      writeUserConfig(makeConfig());
-      const before = fs.readFileSync(userConfigPath(), 'utf-8');
-      const stub = makeStubCtx({ selects: ['cheap', 'new-session'] });
-      const navigate = jest.fn();
-      const apply = jest.fn();
-      const prompt = jest.fn();
-      const createBound = jest.fn(async () => ({
-        sessionID: 'created-root',
-        status: 'bound',
-        presetName: 'cheap',
-        affects: 'future-children-only',
-      }));
-      Object.assign(stub.ctx.ui, {
-        router: { current: () => ({ type: 'home' }), navigate },
-      });
-      Object.assign(stub.ctx, {
-        client: {
-          rpc: () => ({ createBound, apply }),
-          session: { prompt },
-        },
-      });
-
-      await runPresetFlow(stub.ctx);
-
-      expect(createBound).toHaveBeenCalledTimes(1);
-      expect(createBound).toHaveBeenCalledWith(
-        { presetName: 'cheap' },
-        { location: { directory: projectDir } },
-      );
-      expect(navigate).toHaveBeenCalledTimes(1);
-      expect(navigate).toHaveBeenCalledWith({
-        type: 'session',
-        sessionID: 'created-root',
-      });
-      expect(apply).not.toHaveBeenCalled();
-      expect(prompt).not.toHaveBeenCalled();
-      expect(stub.promptCalls).toEqual([]);
-      expect(stub.toasts).toEqual(['"cheap" applied.']);
-      expect(fs.readFileSync(userConfigPath(), 'utf-8')).toBe(before);
-      expect(stub.reloadCalls()).toBe(0);
-    });
-
     test('applies a named preset to the visible session and leaves the default alone', async () => {
       writeUserConfig({
         preset: 'balanced',
@@ -593,6 +550,71 @@ describe('v2 tui preset plugin', () => {
       expect(stub.toasts[0]).toContain('"locked-by-project"');
       expect(readUserConfig().preset).toBe('old');
     });
+
+    test('off mode refuses a named preset without session RPC', async () => {
+      writeUserConfig({
+        presets: { cheap: { orchestrator: { model: 'openai/gpt-5-mini' } } },
+      });
+      const stub = makeStubCtx();
+      Object.assign(stub.ctx.ui, {
+        router: {
+          current: () => ({ type: 'session', sessionID: 'visible-root' }),
+        },
+      });
+      const rpc = jest.fn();
+      Object.assign(stub.ctx, { client: { rpc } });
+
+      await runPresetFlow(stub.ctx, 'cheap', false);
+
+      expect(rpc).not.toHaveBeenCalled();
+      expect(stub.toasts).toHaveLength(1);
+      expect(stub.toasts[0]).toContain('backgroundJobs.mode is "off"');
+      expect(stub.toasts[0]).toContain('bare /preset');
+    });
+
+    test('off mode keeps global editing and hides session-only actions', async () => {
+      writeUserConfig({
+        preset: 'balanced',
+        presets: {
+          balanced: { orchestrator: { model: 'anthropic/claude-sonnet-4-5' } },
+          cheap: { orchestrator: { model: 'openai/gpt-5-mini' } },
+        },
+      });
+      const stub = makeStubCtx({
+        selects: ['cheap', 'apply', 'global'],
+        confirms: [true],
+      });
+      Object.assign(stub.ctx.ui, {
+        router: {
+          current: () => ({ type: 'session', sessionID: 'visible-root' }),
+        },
+      });
+      const rpc = jest.fn();
+      Object.assign(stub.ctx, { client: { rpc } });
+
+      await runPresetFlow(stub.ctx, undefined, false);
+
+      // No session binding read, no Current session scope, no New session.
+      expect(rpc).not.toHaveBeenCalled();
+      const actionMenus = stub.selectCalls
+        .map((call) => call as { title?: string; options?: unknown[] })
+        .filter((call) => call.title?.startsWith('Preset: '));
+      const actionValues = actionMenus.flatMap((call) =>
+        (call.options ?? []).map(
+          (option) => (option as { value: string }).value,
+        ),
+      );
+      expect(actionValues).not.toContain('new-session');
+      const applyTarget = stub.selectCalls.find((call) =>
+        (call as { title?: string }).title?.startsWith('Apply: '),
+      ) as { options?: Array<{ value: string }> } | undefined;
+      expect(applyTarget?.options?.map((option) => option.value)).toEqual([
+        'global',
+      ]);
+      // The global default still updates.
+      expect(readUserConfig().preset).toBe('cheap');
+      expect(stub.toasts[0]).toContain('Saved preset "cheap"');
+    });
   });
 
   describe('plugin module', () => {
@@ -719,13 +741,122 @@ describe('v2 tui preset plugin', () => {
       expect(tui2Plugin.id).toBe(baseTui.id);
       // The v1 factory is a thin delegate (the composition loads only when a
       // v1 host calls it), so identity is asserted on the contract shape.
-      expect(typeof tui2Plugin.tui).toBe('function');
+      expect(tui2Plugin).not.toHaveProperty('tui');
       expect(typeof tui2Plugin.setup).toBe('function');
     });
 
+    test('does not write an attachment when Companion is disabled', async () => {
+      writeUserConfig({
+        sidebar: false,
+        companion: { enabled: false },
+        autoUpdate: false,
+      });
+      const dataHome = path.join(configHome, 'data');
+      process.env.XDG_DATA_HOME = dataHome;
+      let cleanup: (() => void | Promise<void>) | undefined;
+      try {
+        cleanup = await tui2Plugin.setup(
+          makeSetupCtx().ctx as unknown as V2TuiPluginContext,
+        );
+        expect(
+          fs.existsSync(
+            path.join(
+              dataHome,
+              'opencode',
+              'storage',
+              'oh-my-opencode-slim',
+              'tui-attach',
+            ),
+          ),
+        ).toBe(false);
+      } finally {
+        await cleanup?.();
+      }
+    });
+
+    test('writes and removes the current TUI attachment when enabled', async () => {
+      writeUserConfig({
+        sidebar: false,
+        companion: { enabled: true },
+        autoUpdate: false,
+      });
+      const dataHome = path.join(configHome, 'enabled-data');
+      process.env.XDG_DATA_HOME = dataHome;
+      const attachment = path.join(
+        dataHome,
+        'opencode',
+        'storage',
+        'oh-my-opencode-slim',
+        'tui-attach',
+        `${process.pid}.json`,
+      );
+      let cleanup: (() => void | Promise<void>) | undefined;
+      try {
+        cleanup = await tui2Plugin.setup(
+          makeSetupCtx().ctx as unknown as V2TuiPluginContext,
+        );
+        expect(JSON.parse(fs.readFileSync(attachment, 'utf8'))).toMatchObject({
+          pid: process.pid,
+          cwd: projectDir,
+        });
+      } finally {
+        await cleanup?.();
+      }
+      expect(fs.existsSync(attachment)).toBe(false);
+    });
+
+    test('a throwing slot disposer still removes the Companion attachment', async () => {
+      writeUserConfig({
+        sidebar: false,
+        companion: { enabled: true },
+        autoUpdate: false,
+      });
+      const dataHome = path.join(configHome, 'throwing-disposer-data');
+      process.env.XDG_DATA_HOME = dataHome;
+      const attachment = path.join(
+        dataHome,
+        'opencode',
+        'storage',
+        'oh-my-opencode-slim',
+        'tui-attach',
+        `${process.pid}.json`,
+      );
+      const setup = makeSetupCtx();
+      (
+        setup.ctx.ui as {
+          slot: (...args: unknown[]) => () => void;
+        }
+      ).slot = () => () => {
+        throw new Error('test slot cleanup failure');
+      };
+      const cleanup = await tui2Plugin.setup(
+        setup.ctx as unknown as V2TuiPluginContext,
+      );
+      if (!cleanup) throw new Error('expected TUI cleanup');
+      try {
+        expect(fs.existsSync(attachment)).toBe(true);
+        await expect(cleanup()).rejects.toThrow('test slot cleanup failure');
+        expect(fs.existsSync(attachment)).toBe(false);
+      } finally {
+        await cleanup().catch(() => {});
+      }
+    });
+
     test('viewer TUI does not check for updates', async () => {
-      writeUserConfig({ sidebar: false });
+      writeUserConfig({
+        sidebar: false,
+        companion: { enabled: true },
+      });
       process.env.OH_MY_OPENCODE_SLIM_PANE_VIEWER = '1';
+      const attachmentDirectory = path.join(
+        configHome,
+        'viewer-data',
+        'opencode',
+        'storage',
+        'oh-my-opencode-slim',
+        'tui-attach',
+      );
+      process.env.XDG_DATA_HOME = path.join(configHome, 'viewer-data');
       const originalFetch = globalThis.fetch;
       let requests = 0;
       globalThis.fetch = (async () => {
@@ -741,6 +872,7 @@ describe('v2 tui preset plugin', () => {
         jest.advanceTimersByTime(1_500);
         for (let i = 0; i < 30; i += 1) await Promise.resolve();
         expect(requests).toBe(0);
+        expect(fs.existsSync(attachmentDirectory)).toBe(false);
       } finally {
         cleanup?.();
         jest.useRealTimers();

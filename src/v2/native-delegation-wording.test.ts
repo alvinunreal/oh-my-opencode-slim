@@ -83,10 +83,10 @@ describe('buildOrchestratorPrompt delegation vocabulary', () => {
     expect(prompt).not.toContain('task_id');
   });
 
-  test('v1 (no hostFlavor) keeps the wake-scheduler resume channel', () => {
+  test('defaults to host completion notifications', () => {
     const prompt = buildOrchestratorPrompt();
 
-    expect(prompt).toContain('completion notifications and the wake scheduler');
+    expect(prompt).toContain('completion notifications resume you');
     expect(prompt).not.toContain('`task` calls in one message');
     expect(prompt).not.toContain('subagent(');
   });

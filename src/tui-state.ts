@@ -4,7 +4,15 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import type { ReusableSessionSelection } from './utils/background-job-board';
+import type { TaskOutputState } from './utils/task';
+
+interface ReusableSessionSelection {
+  taskID: string;
+  alias: string;
+  terminalState: TaskOutputState | 'stopped';
+  completedAt?: number;
+  lastUsedAt: number;
+}
 
 /**
  * Per-session alias/status projection for the clickable sidebar. Entries only

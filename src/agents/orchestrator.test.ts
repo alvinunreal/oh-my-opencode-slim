@@ -28,12 +28,6 @@ describe('orchestrator prompt: host vocabulary', () => {
     }
   });
 
-  test('v1 without the scheduler renders the same bytes as v2', () => {
-    // Host vocabulary no longer reaches the prompt; only the resume channel
-    // differs.
-    expect(v1({ wakeScheduler: false })).toBe(v2());
-  });
-
   test('unknown flavors render the v1 vocabulary', () => {
     expect(buildOrchestratorPrompt({ hostFlavor: 'v1' })).toBe(v1());
     expect(buildOrchestratorPrompt({ hostFlavor: 'v3-ish' })).toBe(v1());
@@ -92,21 +86,6 @@ describe('orchestrator prompt: blocking on the user', () => {
 });
 
 describe('orchestrator prompt: options', () => {
-  test('wake scheduler off drops the scheduler from the resume promise', () => {
-    expect(v1()).toContain(
-      'completion notifications and the wake scheduler resume you',
-    );
-    const off = v1({ wakeScheduler: false });
-    expect(off).toContain('completion notifications resume you');
-    expect(off).not.toContain('wake scheduler');
-  });
-
-  test('v2 never promises the wake scheduler', () => {
-    expect(v2()).toContain('completion notifications resume you');
-    expect(v2()).not.toContain('wake scheduler');
-    expect(v2({ wakeScheduler: true })).toBe(v2());
-  });
-
   test('disabledAgents and excludeDescriptions filter routing lines', () => {
     for (const render of [v1, v2]) {
       const full = render();
@@ -190,7 +169,7 @@ describe('createAgents orchestrator prompt gates', () => {
 
   /** What the compact prompt may name: only the wake promise plus the
    * host-neutral correction policy; no optional lifecycle tool. */
-  const capabilities = (prompt: string) => ({
+  const _capabilities = (prompt: string) => ({
     wakeScheduler: prompt.includes('wake scheduler'),
     amend: prompt.includes('Amend the same child, never respawn it.'),
   });
@@ -201,20 +180,6 @@ describe('createAgents orchestrator prompt gates', () => {
 
   afterEach(() => {
     RuntimeConfig.reset(TEST_DIRECTORY);
-  });
-
-  test('v1 lifecycle off keeps tool-neutral manual guidance and no scheduler', () => {
-    const agents = createAgents(
-      runtimeFor({ backgroundJobs: { mode: 'off' } }),
-    );
-    const prompt = agents.find((a) => a.name === 'orchestrator')?.config
-      .prompt as string;
-    expect(capabilities(prompt)).toEqual({
-      wakeScheduler: false,
-      amend: true,
-    });
-    expect(prompt).not.toContain('wait_for_user');
-    expect(prompt).not.toContain('task_message');
   });
 
   test('v2 lifecycle off keeps the v2 vocabulary and names no managed tool', () => {
@@ -231,34 +196,6 @@ describe('createAgents orchestrator prompt gates', () => {
     expect(prompt).toContain('completion notifications resume you');
     expect(prompt).toContain('dispatch in parallel');
     expect(prompt).not.toContain('`subagent`');
-  });
-
-  test('the default v1 prompt keeps the correction policy', () => {
-    const agents = createAgents(runtimeFor());
-    const prompt = agents.find((a) => a.name === 'orchestrator')?.config
-      .prompt as string;
-    expect(capabilities(prompt)).toEqual({
-      wakeScheduler: true,
-      amend: true,
-    });
-    expect(prompt).not.toContain('wait_for_user');
-  });
-
-  test('v1 lifecycle off with the optional wait tool disabled renders the same tool-neutral prompt', () => {
-    const agents = createAgents(
-      runtimeFor({
-        backgroundJobs: { mode: 'off' },
-        disabled_tools: ['wait_for_user'],
-      }),
-    );
-    const prompt = agents.find((a) => a.name === 'orchestrator')?.config
-      .prompt as string;
-    expect(capabilities(prompt)).toEqual({
-      wakeScheduler: false,
-      amend: true,
-    });
-    expect(prompt).not.toContain('wait_for_user');
-    expect(prompt).not.toContain('task_message');
   });
 
   test("routing lines name each specialist's configured skills", () => {

@@ -7,11 +7,20 @@
  * stay silent about host-capability degradations that the previous
  * generation already reported.
  */
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
+import * as pluginFactory from '../index';
 import {
   hasLiveInstances,
   resetLiveDirectoriesForTests,
@@ -211,6 +220,35 @@ describe('v2 setup directory claim', () => {
     Object.assign(process.env, originalEnv);
     resetLiveDirectoriesForTests();
     await rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  test('unsupported V2 managed config rejects before a directory claim', async () => {
+    await Bun.write(
+      path.join(
+        process.env.OPENCODE_CONFIG_DIR as string,
+        'oh-my-opencode-slim.json',
+      ),
+      JSON.stringify({ backgroundJobs: { mode: 'managed' } }),
+    );
+    await expect(
+      createV2Setup()(makeSetupCtx(path.join(fixtureRoot, 'project'))),
+    ).rejects.toThrow(/managed/i);
+    expect(hasLiveInstances()).toBe(false);
+  });
+
+  test('factory failure propagates and releases the directory claim', async () => {
+    const failure = new Error('factory cannot initialize');
+    const factory = spyOn(pluginFactory, 'OhMyOpenCodeLite').mockRejectedValue(
+      failure,
+    );
+    try {
+      await expect(
+        createV2Setup()(makeSetupCtx(path.join(fixtureRoot, 'project'))),
+      ).rejects.toBe(failure);
+      expect(hasLiveInstances()).toBe(false);
+    } finally {
+      factory.mockRestore();
+    }
   });
 
   test('setup failure after factory init releases the claim', async () => {

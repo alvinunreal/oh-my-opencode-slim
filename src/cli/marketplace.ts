@@ -29,7 +29,7 @@ function usage(): string {
     `Commands: ${COMMANDS.join(', ')}`,
     'Targets are package IDs/selectors or bundle file paths as appropriate.',
     'enable/disable accept optional --user; default activation scope is project.',
-    'All commands accept --host-flavor v1|v2; default is v1.',
+    'All commands use OpenCode 2 configuration.',
   ].join('\n');
 }
 
@@ -84,17 +84,13 @@ export async function runMarketplaceCommand(
   }
 
   try {
-    let hostFlavor: 'v1' | 'v2' = 'v1';
+    const hostFlavor = 'v2';
     const flavorIndex = rest.indexOf('--host-flavor');
     if (flavorIndex !== -1) {
       const value = rest[flavorIndex + 1];
-      if (
-        (value !== 'v1' && value !== 'v2') ||
-        rest.lastIndexOf('--host-flavor') !== flavorIndex
-      ) {
-        throw new Error('--host-flavor requires exactly one value: v1 or v2');
+      if (value !== 'v2' || rest.lastIndexOf('--host-flavor') !== flavorIndex) {
+        throw new Error('--host-flavor requires v2');
       }
-      hostFlavor = value;
       rest.splice(flavorIndex, 2);
     }
     const service =

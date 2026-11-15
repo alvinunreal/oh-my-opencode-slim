@@ -47,7 +47,7 @@ export function renderBuildInfoSource(
  */
 
 export const BUILD_VERSION = '${version}';
-export const BUILD_TIME = '${buildTime}';
+const BUILD_TIME = '${buildTime}';
 
 /** Plugin build identity for diagnostics logs. */
 export function getBuildInfo(): { version: string; buildTime: string } {
@@ -96,7 +96,7 @@ export function generateBuildInfo(options: {
 
   if (!options.force && previous !== undefined) {
     const previousTime = previous.match(
-      /^export const BUILD_TIME = '([^'\\]*)';$/m,
+      /^const BUILD_TIME = '([^'\\]*)';$/m,
     )?.[1];
     if (
       previousTime !== undefined &&

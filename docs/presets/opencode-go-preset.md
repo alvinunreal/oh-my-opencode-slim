@@ -95,7 +95,7 @@ setting the top-level `preset` field:
 
 ## Skill Reference
 
-This preset defines per-agent `skills` and `mcps` via `generateLiteConfig`. The generated config includes `skills: ["*"]` for Orchestrator and agent-specific MCP lists (e.g., Explorer gets `context7`, `gh_grep`).
+This preset defines per-agent `skills` via `generateLiteConfig` (Orchestrator gets `skills: ["*"]`). Generated configs omit `mcps`; runtime defaults apply, so Explorer still gets `context7` and `gh_grep`.
 
 | Skill | Description | Source |
 | --- | --- | --- |

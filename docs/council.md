@@ -54,10 +54,9 @@ itself. The
 council agent itself waits for no one: it has no tools and starts from
 whatever its context carries.
 
-> With the managed lifecycle **off** (native OpenCode v2 delegation, no
-> plugin job board), the same `Seats:` line still resolves: the seat hook
+> On OpenCode v2 the managed lifecycle is not available, so the seat hook
 > reads each child session and its transcript directly from the host —
-> never the parent's transcript — instead of the board. The prompt format
+> never the parent's transcript — instead of a board. The prompt format
 > does not change, and one call-start cutoff guards attribution: a seat
 > whose newest prompt arrived at or after the synthesis call opened
 > reports `[no response — unverified result]` rather than replaying an
@@ -383,11 +382,10 @@ dispatch-returned session IDs, and
 the harness attaches the collected responses to that call; the council
 agent synthesizes the report.
 
-Which resolver attaches them depends on configuration, and the prompt does
-not change: with the managed lifecycle on, seat text comes from the parent's
-job board (aliases or session IDs both resolve); with the managed lifecycle
-off (`backgroundJobs.mode: "native"` or `"off"`), it comes from the host
-sessions directly —
+Which resolver attaches them depends on the host, and the prompt does
+not change: on V1 managed, seat text comes from the parent's
+job board (aliases or session IDs both resolve); on V2 (native by default,
+and `off`), it comes from the host sessions directly —
 only exact `ses_` IDs resolve, each child must still report this parent, and
 the seat body is the child's latest answer. Text from an earlier round is
 never replayed: a seat still working on its newest prompt reports

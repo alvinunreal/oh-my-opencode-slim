@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test';
 
-import { createNativeTaskControlTools } from './native-task-control';
+import {
+  createNativeTaskControlTools,
+  type NativePermissionBridge,
+} from './native-task-control';
 
 type HostFixture = {
   parentID?: string;
@@ -49,6 +52,7 @@ function createTools(
     abortImpl?: () => Promise<unknown>;
     messages?: () => Promise<unknown>;
     abortTimeoutMs?: number;
+    permission?: NativePermissionBridge;
   },
 ) {
   const parentID = fixture.parentID ?? 'ses_parent';
@@ -92,11 +96,33 @@ function createTools(
     ...(options?.abortTimeoutMs !== undefined
       ? { abortTimeoutMs: options.abortTimeoutMs }
       : {}),
+    ...(options?.permission ? { permission: options.permission } : {}),
   });
   return { tools, get, messages, abort, status, client };
 }
 
 const v2Context = { sessionID: 'ses_parent', agent: 'orchestrator' } as never;
+
+function permissionRequest(sessionID = 'ses_child', id = 'per_request') {
+  return {
+    id,
+    sessionID,
+    action: 'edit',
+    resources: ['src/file.ts'],
+  };
+}
+
+function permissionBridge(
+  overrides: Partial<NativePermissionBridge> = {},
+): NativePermissionBridge {
+  return {
+    list: async () => [],
+    get: async ({ sessionID, requestID }) =>
+      permissionRequest(sessionID, requestID),
+    reply: async () => undefined,
+    ...overrides,
+  };
+}
 
 afterEach(() => {
   mock.restore();
@@ -109,7 +135,7 @@ describe('native task controls', () => {
       assistantText: 'the seat answer',
     });
     const output = await tools.task_status.execute(
-      { task_id: 'ses_child' },
+      { sessionID: 'ses_child' },
       v2Context,
     );
     expect(output).toContain('Session ses_child');
@@ -123,7 +149,7 @@ describe('native task controls', () => {
   test('task_status never claims a live run from transcript-only evidence', async () => {
     const { tools } = createTools();
     const output = await tools.task_status.execute(
-      { task_id: 'ses_child' },
+      { sessionID: 'ses_child' },
       v2Context,
     );
     expect(output).toContain('state: unknown (incomplete');
@@ -134,7 +160,7 @@ describe('native task controls', () => {
   test('task_status reports a textless success as incomplete, not running', async () => {
     const { tools } = createTools({ outcome: 'succeeded' });
     const output = await tools.task_status.execute(
-      { task_id: 'ses_child' },
+      { sessionID: 'ses_child' },
       v2Context,
     );
     expect(output).toContain('state: unknown (incomplete');
@@ -144,7 +170,7 @@ describe('native task controls', () => {
   test('task_status refuses a child owned by another parent without reading further', async () => {
     const { tools, messages } = createTools({ parentID: 'ses_other' });
     await expect(
-      tools.task_status.execute({ task_id: 'ses_child' }, v2Context),
+      tools.task_status.execute({ sessionID: 'ses_child' }, v2Context),
     ).rejects.toThrow('does not belong to this session');
     expect(messages).not.toHaveBeenCalled();
   });
@@ -171,7 +197,7 @@ describe('native task controls', () => {
       },
     );
     const output = await tools.task_status.execute(
-      { task_id: 'ses_child' },
+      { sessionID: 'ses_child' },
       v2Context,
     );
     expect(output).toContain('transcript could not be read');
@@ -190,7 +216,7 @@ describe('native task controls', () => {
   test('task_cancel interrupts through the host method with its receiver', async () => {
     const { tools, abort, client } = createTools();
     const output = await tools.task_cancel.execute(
-      { task_id: 'ses_child' },
+      { sessionID: 'ses_child' },
       v2Context,
     );
     expect(abort).toHaveBeenCalledTimes(1);
@@ -201,7 +227,7 @@ describe('native task controls', () => {
 
   test('task_cancel reads no transcript and polls no host state', async () => {
     const { tools, messages, get } = createTools();
-    await tools.task_cancel.execute({ task_id: 'ses_child' }, v2Context);
+    await tools.task_cancel.execute({ sessionID: 'ses_child' }, v2Context);
     expect(messages).not.toHaveBeenCalled();
     // Exactly one ownership read; no post-abort observation.
     expect(get).toHaveBeenCalledTimes(1);
@@ -213,7 +239,7 @@ describe('native task controls', () => {
       { abortResponse: { interrupted: false } },
     );
     const output = await tools.task_cancel.execute(
-      { task_id: 'ses_child' },
+      { sessionID: 'ses_child' },
       v2Context,
     );
     expect(output).toContain('No active execution interrupted');
@@ -223,7 +249,7 @@ describe('native task controls', () => {
   test('v1 {data:false} is reported as nothing interrupted', async () => {
     const { tools } = createTools({}, { abortResponse: { data: false } });
     const output = await tools.task_cancel.execute(
-      { task_id: 'ses_child' },
+      { sessionID: 'ses_child' },
       v2Context,
     );
     expect(output).toContain('No active execution interrupted');
@@ -232,7 +258,7 @@ describe('native task controls', () => {
   test('v1 {data:true} is reported as accepted', async () => {
     const { tools } = createTools({}, { abortResponse: { data: true } });
     const output = await tools.task_cancel.execute(
-      { task_id: 'ses_child' },
+      { sessionID: 'ses_child' },
       v2Context,
     );
     expect(output).toContain('Interrupt accepted');
@@ -241,7 +267,7 @@ describe('native task controls', () => {
   test('an absent outcome is never reported as a stop or a failure', async () => {
     const { tools } = createTools({}, { abortResponse: {} });
     const output = await tools.task_cancel.execute(
-      { task_id: 'ses_child' },
+      { sessionID: 'ses_child' },
       v2Context,
     );
     expect(output).toContain('did not report an interruption outcome');
@@ -255,7 +281,7 @@ describe('native task controls', () => {
       { abortResponse: { error: { message: 'nope' } } },
     );
     await expect(
-      tools.task_cancel.execute({ task_id: 'ses_child' }, v2Context),
+      tools.task_cancel.execute({ sessionID: 'ses_child' }, v2Context),
     ).rejects.toThrow('was rejected for ses_child');
   });
 
@@ -269,21 +295,21 @@ describe('native task controls', () => {
       },
     );
     await expect(
-      tools.task_cancel.execute({ task_id: 'ses_child' }, v2Context),
+      tools.task_cancel.execute({ sessionID: 'ses_child' }, v2Context),
     ).rejects.toThrow('could not confirm the interruption');
   });
 
   test('task_cancel surfaces an honest failure when the host has no abort API', async () => {
     const { tools } = createTools({}, { noAbort: true });
     await expect(
-      tools.task_cancel.execute({ task_id: 'ses_child' }, v2Context),
+      tools.task_cancel.execute({ sessionID: 'ses_child' }, v2Context),
     ).rejects.toThrow('no session.abort API');
   });
 
   test('task_cancel refuses a child owned by another parent', async () => {
     const { tools, abort } = createTools({ parentID: 'ses_other' });
     await expect(
-      tools.task_cancel.execute({ task_id: 'ses_child' }, v2Context),
+      tools.task_cancel.execute({ sessionID: 'ses_child' }, v2Context),
     ).rejects.toThrow('does not belong to this session');
     expect(abort).not.toHaveBeenCalled();
   });
@@ -301,7 +327,332 @@ describe('native task controls', () => {
   test('missing session.get is reported as capability absence', async () => {
     const { tools } = createTools({}, { noGet: true });
     await expect(
-      tools.task_status.execute({ task_id: 'ses_child' }, v2Context),
+      tools.task_status.execute({ sessionID: 'ses_child' }, v2Context),
     ).rejects.toThrow('no session.get API');
+  });
+
+  test('the v2 schema requires sessionID and drops the task_id alias', async () => {
+    const { tools } = createTools();
+    expect(Object.keys(tools.task_status.args)).toEqual(['sessionID']);
+    expect(Object.keys(tools.task_cancel.args)).toEqual(['sessionID']);
+    expect(Object.keys(tools.task_reply?.args ?? {})).toEqual([
+      'sessionID',
+      'request_id',
+      'reply',
+    ]);
+    // The alias is not accepted as the identifier.
+    await expect(
+      tools.task_status.execute({ task_id: 'ses_child' } as never, v2Context),
+    ).rejects.toThrow('task_status requires sessionID');
+  });
+
+  test('the v1 native surface stays status and cancel only', async () => {
+    const { tools } = createTools({}, { flavor: 'v1' });
+    expect(Object.keys(tools.task_status.args)).toEqual(['task_id']);
+    expect(Object.keys(tools.task_cancel.args)).toEqual(['task_id']);
+    expect(tools.task_reply).toBeUndefined();
+  });
+
+  test('v1 native retains the sessionID runtime alias for task_id', async () => {
+    const { tools } = createTools({}, { flavor: 'v1' });
+    await expect(
+      tools.task_status.execute({ sessionID: 'ses_child' }, v2Context),
+    ).resolves.toContain('Session ses_child');
+  });
+
+  test('task_status lists the owned child pending permissions', async () => {
+    const list = mock(async () => [
+      permissionRequest(),
+      permissionRequest('ses_child', 'per_second'),
+    ]);
+    const { tools } = createTools(
+      {},
+      {
+        permission: permissionBridge({
+          list: list as unknown as NativePermissionBridge['list'],
+        }),
+      },
+    );
+    const output = await tools.task_status.execute(
+      { sessionID: 'ses_child' },
+      v2Context,
+    );
+    expect(output).toContain('pending permissions: 2');
+    expect(output).toContain('per_request');
+    expect(output).toContain('per_second');
+    expect(output).toContain('edit');
+  });
+
+  test('task_status renders an ellipsis suffix when a permission request has more than three resources', async () => {
+    // The host returns a request with 4 resources; only the first 3 are
+    // displayed but the suffix must reflect resourceCount (4), not the
+    // already-truncated resources array (which has length 3 after slicing).
+    const list = mock(async () => [
+      {
+        id: 'per_many',
+        sessionID: 'ses_child',
+        action: 'edit',
+        resources: ['a.ts', 'b.ts', 'c.ts', 'd.ts'],
+      },
+    ]);
+    const { tools } = createTools(
+      {},
+      {
+        permission: permissionBridge({
+          list: list as unknown as NativePermissionBridge['list'],
+        }),
+      },
+    );
+    const output = await tools.task_status.execute(
+      { sessionID: 'ses_child' },
+      v2Context,
+    );
+    expect(output).toContain('a.ts');
+    expect(output).toContain('b.ts');
+    expect(output).toContain('c.ts');
+    // The ellipsis must appear because resourceCount (4) > PENDING_PERMISSION_RESOURCE_LIMIT (3)
+    expect(output).toContain('…');
+  });
+
+  test('task_status reports pending permissions as unavailable without the host capability', async () => {
+    const { tools } = createTools();
+    const output = await tools.task_status.execute(
+      { sessionID: 'ses_child' },
+      v2Context,
+    );
+    expect(output).toContain('pending permissions: unavailable');
+    // The ordinary status read still works.
+    expect(output).toContain('state: unknown (incomplete');
+  });
+
+  test('task_status preserves child state before long permission details', async () => {
+    const longResource = '界'.repeat(120);
+    const list = mock(async () =>
+      Array.from({ length: 5 }, (_, index) => ({
+        ...permissionRequest('ses_child', `per_${index}`),
+        resources: [longResource, longResource, longResource],
+      })),
+    );
+    const { tools } = createTools(
+      { outcome: 'succeeded', assistantText: 'completed result' },
+      {
+        permission: permissionBridge({
+          list: list as unknown as NativePermissionBridge['list'],
+        }),
+      },
+    );
+    const output = await tools.task_status.execute(
+      { sessionID: 'ses_child' },
+      v2Context,
+    );
+    expect(output).toContain('state: completed');
+    expect(output.indexOf('state: completed')).toBeLessThan(
+      output.indexOf('pending permissions: 5'),
+    );
+    for (let index = 0; index < 5; index++) {
+      expect(output).toContain(`per_${index}`);
+    }
+    for (const line of output
+      .split('\n')
+      .filter((entry) => entry.startsWith('- per_'))) {
+      expect(new TextEncoder().encode(line).byteLength).toBeLessThanOrEqual(
+        180,
+      );
+    }
+    expect(output).toContain('resource details shortened');
+    expect(output).not.toContain('permission details truncated');
+    expect(output).toContain('completed result');
+    expect(new TextEncoder().encode(output).byteLength).toBeLessThanOrEqual(
+      4096,
+    );
+  });
+
+  test('task_status keeps the whole result inside the UTF-8 byte cap', async () => {
+    const long = 'x'.repeat(20_000);
+    const { tools } = createTools(
+      { outcome: 'succeeded', assistantText: long },
+      {
+        permission: permissionBridge({
+          list: (async () => [permissionRequest()]) as never,
+        }),
+      },
+    );
+    const output = await tools.task_status.execute(
+      { sessionID: 'ses_child' },
+      v2Context,
+    );
+    expect(new TextEncoder().encode(output).byteLength).toBeLessThanOrEqual(
+      4096,
+    );
+    expect(output).toContain('pending permissions: 1');
+  });
+
+  test('task_reply refuses a child owned by another parent', async () => {
+    const reply = mock(async () => undefined);
+    const { tools } = createTools(
+      { parentID: 'ses_other' },
+      {
+        permission: permissionBridge({
+          reply: reply as unknown as NativePermissionBridge['reply'],
+        }),
+      },
+    );
+    await expect(
+      tools.task_reply?.execute(
+        { sessionID: 'ses_child', request_id: 'per_request' },
+        v2Context,
+      ),
+    ).rejects.toThrow('does not belong to this session');
+    expect(reply).not.toHaveBeenCalled();
+  });
+
+  test('task_reply refuses a request that belongs to another session', async () => {
+    const reply = mock(async () => undefined);
+    const { tools } = createTools(
+      {},
+      {
+        permission: permissionBridge({
+          get: (async () => permissionRequest('ses_other')) as never,
+          reply: reply as unknown as NativePermissionBridge['reply'],
+        }),
+      },
+    );
+    await expect(
+      tools.task_reply?.execute(
+        { sessionID: 'ses_child', request_id: 'per_request' },
+        v2Context,
+      ),
+    ).rejects.toThrow('does not belong to child session');
+    expect(reply).not.toHaveBeenCalled();
+  });
+
+  test('task_reply reports a request that was resolved elsewhere via core or server tagged error', async () => {
+    const taggedErrors = [
+      // Pinned core TaggedError: no custom message
+      { _tag: 'Permission.NotFoundError', requestID: 'per_request' },
+      // Server / protocol TaggedError
+      {
+        _tag: 'PermissionNotFoundError',
+        requestID: 'per_request',
+        message: 'Permission request not found: per_request',
+      },
+      // Explicit 404 transport response envelope
+      { response: { ok: false, status: 404 } },
+    ];
+
+    for (const notFoundError of taggedErrors) {
+      const reply = mock(async () => undefined);
+      const { tools } = createTools(
+        {},
+        {
+          permission: permissionBridge({
+            get: (async () => {
+              throw notFoundError;
+            }) as never,
+            reply: reply as unknown as NativePermissionBridge['reply'],
+          }),
+        },
+      );
+      const output = await tools.task_reply?.execute(
+        { sessionID: 'ses_child', request_id: 'per_request' },
+        v2Context,
+      );
+      expect(output).toContain('no longer pending');
+      expect(output).toContain('Nothing was replied');
+      expect(reply).not.toHaveBeenCalled();
+    }
+  });
+
+  test('task_reply reports a reply that raced a resolution via core or server tagged error', async () => {
+    const taggedErrors = [
+      // Pinned core TaggedError: no custom message
+      { _tag: 'Permission.NotFoundError', requestID: 'per_request' },
+      // Server / protocol TaggedError
+      {
+        _tag: 'PermissionNotFoundError',
+        requestID: 'per_request',
+        message: 'Permission request not found: per_request',
+      },
+      // Explicit 404 transport response envelope
+      { response: { ok: false, status: 404 } },
+    ];
+
+    for (const notFoundError of taggedErrors) {
+      const { tools } = createTools(
+        {},
+        {
+          permission: permissionBridge({
+            reply: (async () => {
+              throw notFoundError;
+            }) as never,
+          }),
+        },
+      );
+      const output = await tools.task_reply?.execute(
+        { sessionID: 'ses_child', request_id: 'per_request' },
+        v2Context,
+      );
+      expect(output).toContain('resolved elsewhere');
+      expect(output).toContain('Nothing was replied');
+      expect(output).not.toContain('replied with');
+    }
+  });
+
+  test('task_reply does not misdiagnose arbitrary errors containing 404 or not found as resolved', async () => {
+    const arbitraryErrors = [
+      new Error('connecting to gateway on port 4040 failed'),
+      new Error('device driver not found on host'),
+    ];
+
+    for (const arbitraryError of arbitraryErrors) {
+      const { tools } = createTools(
+        {},
+        {
+          permission: permissionBridge({
+            get: (async () => {
+              throw arbitraryError;
+            }) as never,
+          }),
+        },
+      );
+      await expect(
+        tools.task_reply?.execute(
+          { sessionID: 'ses_child', request_id: 'per_request' },
+          v2Context,
+        ),
+      ).rejects.toThrow('task_reply could not read permission');
+    }
+  });
+
+  test('task_reply defaults to a once decision', async () => {
+    const reply = mock(async () => undefined);
+    const { tools } = createTools(
+      {},
+      {
+        permission: permissionBridge({
+          reply: reply as unknown as NativePermissionBridge['reply'],
+        }),
+      },
+    );
+    const output = await tools.task_reply?.execute(
+      { sessionID: 'ses_child', request_id: 'per_request' },
+      v2Context,
+    );
+    expect(reply).toHaveBeenCalledWith({
+      sessionID: 'ses_child',
+      requestID: 'per_request',
+      decision: 'once',
+    });
+    expect(output).toContain('replied with once');
+  });
+
+  test('task_reply fails honestly without the host permission capability', async () => {
+    const { tools } = createTools();
+    await expect(
+      tools.task_reply?.execute(
+        { sessionID: 'ses_child', request_id: 'per_request' },
+        v2Context,
+      ),
+    ).rejects.toThrow('permission get/reply APIs are unavailable');
   });
 });

@@ -66,7 +66,7 @@ OpenCode Core → Plugin Initialization (index.ts)
 3. **Agent Configuration**: `getAgentConfigs()` merges defaults with user overrides and runtime presets
 4. **Tool Registration**: Tools are created inside their feature/registration gates (task lifecycle controls incl. `task_report`, interview, webfetch, AST-grep, ACP); disabled tools never load an unavailable implementation
 5. **MCP Registration**: Built-in MCPs are created (context7, gh_grep)
-6. **Hook Initialization**: Auto-update checker, phase reminders, skill filters, task-session manager, cache monitor, orchestrator-wake scheduler, etc.
+6. **Hook Initialization**: Phase reminders, skill filters, cache monitor, and tool guards.
 7. **Runtime Model Resolution**: Resolves model arrays to startup primaries; independent children leave their primary provider only when the parent's confirmed fallback has a live mark for it in `getActiveFallback().downProviders` (30-minute expiry), choosing the first healthy entry in their own chain. Inherited children follow the live parent for either error scope. v1 `task` and `task_revive` share prompt-claimed intentions, and v2 uses per-call `model#variant` overrides; internal v1 completions still follow the continuation policy
 8. **TUI State Sync**: `recordTuiAgentModels()` captures resolved models/variants for TUI display
 9. **Health Check**: Validates agent/tool/MCP counts against `HEALTH_CHECK` thresholds, adjusted for disabled baseline tools via `minimumExpectedToolCount`
@@ -127,8 +127,7 @@ lifecycle lives in the TUI entry's dependency graph (`multiplexer/client/`).
    unresolved or no live instance owns it), so per-instance state never
    absorbs another location's sessions. Every exit path of an instance —
    normal dispose, v1 init failure, v2 factory failure — releases its
-   live-directory claim, and the process-global wake gate is cleared only
-   when the last instance is gone
+   live-directory claim.
 
 ### Event Handling Flow (index.ts)
 
@@ -145,11 +144,11 @@ Key event flows:
    - `message.updated` → record agent/model usage in TUI state
 
 3. **Tool Execution**:
-   - `tool.execute.before` → apply patch and task session hooks
+   - `tool.execute.before` → apply patch, path guards, and council seat resolution
    - `tool.execute.after` → post-tool hooks (retry guidance, JSON error recovery)
 
 4. **Chat Integration**:
-   - `chat.message` → track session → agent/model mapping, preserve live v1 fallback selection across native background completions, and mark TUI activity
+   - `chat.message` → track session → agent/model mapping and mark TUI activity
    - `experimental.chat.system.transform` → inject orchestrator prompt for serve mode
    - `experimental.chat.messages.transform` → phase reminders, skill filtering, image attachment processing
 
@@ -174,11 +173,11 @@ Key event flows:
 - **Config System** (`src/config/`): Configuration loading, validation, the `RuntimeConfig` runtime-state singleton, and runtime presets
 - **Agents** (`src/agents/`): Agent personalities and permission sets
 - **Tools** (`src/tools/`): Tool implementations (task lifecycle controls, webfetch, AST operations, ACP)
-- **Hooks** (`src/hooks/`): Lifecycle hooks for auto-update, phase reminders, cache monitor, orchestrator wake, etc.
+- **Hooks** (`src/hooks/`): Phase reminders, cache monitoring, event observations, and tool guards.
 - **Multiplexer** (`src/multiplexer/`): Client-side pane lifecycle (`client/`) plus tmux/Zellij/Herdr/cmux/kitty adapters; wired only from the TUI entry
 - **Council** (`src/agents/council.ts`, `src/agents/council-agents.ts`): Multi-LLM council orchestration
 - **Companion** (`src/companion/`): Companion version management
-- **Utils** (`src/utils/`): Logger, environment checks, background job board/supervisor, session status
+- **Utils** (`src/utils/`): Logger, environment checks, and session status
 - **V2 Adapter** (`src/v2/`): Wraps the v1 factory for the v2 host via `default.setup`
 
 ### Cross-Directory Flow
