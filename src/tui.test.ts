@@ -41,6 +41,7 @@ import {
   splitSidebarModelId,
   default as tuiPlugin,
 } from './tui';
+import type { HostSessionInfo } from './tui-host-sessions';
 import {
   getKillAllTargets,
   killAllRunningSubagents,
@@ -1995,12 +1996,15 @@ describe('clickable sidebar sessions', () => {
     projectDir: string;
     sessionID: string;
     navigate?: (name: string, params?: Record<string, unknown>) => void;
+    data?: ReturnType<typeof fakeHostData>;
+    forceSelectedModel?: boolean;
     transparentTheme?: boolean;
     sameSurfaceTheme?: boolean;
     /** Golden frames must capture settled RPC state, not race Loading… against Unavailable. */
     waitForInitialRefresh?: boolean;
   }) {
     const disposers: Array<() => void> = [];
+    const refreshWaiters: Array<() => void> = [];
     let didRefresh = () => {};
     const initialRefresh = new Promise<void>((resolve) => {
       didRefresh = resolve;
@@ -2010,7 +2014,13 @@ describe('clickable sidebar sessions', () => {
     };
     const dispose = await tuiPlugin.setup({
       location: { directory: opts.projectDir },
-      renderer: { requestRender: didRefresh },
+      data: opts.data,
+      renderer: {
+        requestRender: () => {
+          didRefresh();
+          for (const resolve of refreshWaiters.splice(0)) resolve();
+        },
+      },
       client: undefined,
       theme: {
         text: { default: '#ffffff', subdued: '#aaaaaa' },
@@ -2030,6 +2040,13 @@ describe('clickable sidebar sessions', () => {
         warning: '#ffcc00',
       },
       ui: {
+        ...(opts.forceSelectedModel
+          ? {
+              model: {
+                current: () => ({ providerID: 'local', modelID: 'selected' }),
+              },
+            }
+          : {}),
         router: {
           current: () => ({ type: 'session', sessionID: opts.sessionID }),
           navigate:
@@ -2052,8 +2069,217 @@ describe('clickable sidebar sessions', () => {
         sidebar_content: () => claim.render({ sessionID: opts.sessionID }),
       },
     };
-    return { slotPlugin, disposers };
+    return {
+      slotPlugin,
+      disposers,
+      nextRefresh: () =>
+        new Promise<void>((resolve) => refreshWaiters.push(resolve)),
+    };
   }
+
+  function fakeHostData(...entries: HostSessionInfo[]) {
+    const sessions = new Map(entries.map((entry) => [entry.id, entry]));
+    const running = new Set<string>();
+    const listeners = new Map<string, Set<(event: unknown) => void>>();
+    return {
+      sessions,
+      running,
+      listeners,
+      session: {
+        get: (id: string) => sessions.get(id),
+        family: (_id: string) => [...sessions.keys()],
+        status: (id: string): 'running' | 'idle' =>
+          running.has(id) ? 'running' : 'idle',
+      },
+      on: (type: string, handler: (event: unknown) => void) => {
+        const handlers = listeners.get(type) ?? new Set();
+        handlers.add(handler);
+        listeners.set(type, handlers);
+        return () => handlers.delete(handler);
+      },
+      emit: (type: string) => {
+        for (const listener of listeners.get(type) ?? []) {
+          listener({ type, data: { sessionID: 'child' } });
+        }
+      },
+    };
+  }
+
+  test('host finished child shows history and its row navigates', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-host-finished-'));
+    const restore = withIsolatedDataHome(root);
+    const navigated: unknown[] = [];
+    const data = fakeHostData(
+      { id: 'root', agent: 'orchestrator', time: { created: 1 } },
+      {
+        id: 'child',
+        parentID: 'root',
+        agent: 'oracle',
+        outcome: 'succeeded',
+        time: { created: 2, idle: 3 },
+      },
+    );
+    let mounted: Awaited<ReturnType<typeof mountClickableSidebar>> | undefined;
+    let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+    try {
+      recordTuiAgentModels(
+        { agentModels: { orchestrator: 'old', oracle: 'local/model' } },
+        root,
+      );
+      mounted = await mountClickableSidebar({
+        projectDir: root,
+        sessionID: 'root',
+        data,
+        forceSelectedModel: true,
+        waitForInitialRefresh: true,
+        navigate: (...args) => navigated.push(args),
+      });
+      screen = await testRender(
+        () => mounted?.slotPlugin.slots.sidebar_content() as never,
+        { width: 52, height: 16 },
+      );
+      await screen.renderOnce();
+      const lines = screen.captureCharFrame().split('\n');
+      const row = lines.findIndex((line) => line.includes('oracle'));
+      expect(lines[row]).toContain('✦');
+      await screen.mockMouse.click(lines[row].indexOf('oracle') + 1, row);
+      expect(navigated).toEqual([['session', { sessionID: 'child' }]]);
+    } finally {
+      screen?.renderer.destroy();
+      for (const dispose of mounted?.disposers ?? []) dispose();
+      restore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('host interrupted child alone gets a coffin in expanded history', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omos-host-stopped-'));
+    const restore = withIsolatedDataHome(root);
+    const data = fakeHostData(
+      { id: 'root', agent: 'orchestrator', time: { created: 1 } },
+      {
+        id: 'ok',
+        parentID: 'root',
+        agent: 'oracle',
+        outcome: 'succeeded',
+        time: { created: 2, idle: 3 },
+      },
+      {
+        id: 'stopped',
+        parentID: 'root',
+        agent: 'oracle',
+        outcome: 'interrupted',
+        time: { created: 4, idle: 5 },
+      },
+    );
+    let mounted: Awaited<ReturnType<typeof mountClickableSidebar>> | undefined;
+    let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+    try {
+      recordTuiAgentModels(
+        { agentModels: { orchestrator: 'old', oracle: 'local/model' } },
+        root,
+      );
+      mounted = await mountClickableSidebar({
+        projectDir: root,
+        sessionID: 'root',
+        data,
+        forceSelectedModel: true,
+        waitForInitialRefresh: true,
+        navigate: () => {},
+      });
+      screen = await testRender(
+        () => mounted?.slotPlugin.slots.sidebar_content() as never,
+        { width: 52, height: 16 },
+      );
+      await screen.renderOnce();
+      let lines = screen.captureCharFrame().split('\n');
+      const row = lines.findIndex((line) => line.includes('oracle'));
+      expect(lines[row]).toContain('▸2');
+      await screen.mockMouse.click(lines[row].indexOf('oracle') + 1, row);
+      await screen.renderOnce();
+      lines = screen.captureCharFrame().split('\n');
+      expect(lines.find((line) => line.includes('ora-1'))).toContain('• ora-1');
+      expect(lines.find((line) => line.includes('ora-2'))).toContain('⚰ ora-2');
+      expect(lines.filter((line) => line.includes('⚰'))).toHaveLength(1);
+    } finally {
+      screen?.renderer.destroy();
+      for (const dispose of mounted?.disposers ?? []) dispose();
+      restore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('host running to idle event preserves a clickable row', async () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'omos-host-transition-'),
+    );
+    const restore = withIsolatedDataHome(root);
+    const navigated: unknown[] = [];
+    const data = fakeHostData(
+      { id: 'root', agent: 'orchestrator', time: { created: 1 } },
+      { id: 'child', parentID: 'root', agent: 'oracle', time: { created: 2 } },
+    );
+    data.running.add('child');
+    let mounted: Awaited<ReturnType<typeof mountClickableSidebar>> | undefined;
+    let screen: Awaited<ReturnType<typeof testRender>> | undefined;
+    try {
+      recordTuiAgentModels(
+        { agentModels: { orchestrator: 'old', oracle: 'local/model' } },
+        root,
+      );
+      mounted = await mountClickableSidebar({
+        projectDir: root,
+        sessionID: 'root',
+        data,
+        forceSelectedModel: true,
+        waitForInitialRefresh: true,
+        navigate: (...args) => navigated.push(args),
+      });
+      screen = await testRender(
+        () => mounted?.slotPlugin.slots.sidebar_content() as never,
+        { width: 52, height: 16 },
+      );
+      await screen.renderOnce();
+      let lines = screen.captureCharFrame().split('\n');
+      let row = lines.findIndex((line) => line.includes('oracle'));
+      expect(lines[row]).toMatch(ACTIVITY_FRAME_PATTERN);
+      await screen.mockMouse.click(lines[row].indexOf('oracle') + 1, row);
+      expect(navigated).toEqual([['session', { sessionID: 'child' }]]);
+      for (const type of [
+        'session.created',
+        'session.deleted',
+        'session.execution.started',
+        'session.execution.succeeded',
+        'session.execution.failed',
+        'session.execution.interrupted',
+      ]) {
+        expect(data.listeners.get(type)?.size).toBe(1);
+      }
+      data.running.delete('child');
+      const child = data.sessions.get('child') as HostSessionInfo;
+      child.outcome = 'succeeded';
+      child.time.idle = 3;
+      const refreshed = mounted.nextRefresh();
+      data.emit('session.execution.succeeded');
+      await refreshed;
+      await screen.renderOnce();
+      lines = screen.captureCharFrame().split('\n');
+      row = lines.findIndex((line) => line.includes('oracle'));
+      expect(lines[row]).toContain('✦');
+      await screen.mockMouse.click(lines[row].indexOf('oracle') + 1, row);
+      expect(navigated).toEqual([
+        ['session', { sessionID: 'child' }],
+        ['session', { sessionID: 'child' }],
+      ]);
+      for (const dispose of mounted.disposers.splice(0)) dispose();
+      expect(data.listeners.get('session.execution.succeeded')?.size).toBe(0);
+    } finally {
+      screen?.renderer.destroy();
+      for (const dispose of mounted?.disposers ?? []) dispose();
+      restore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   test('hover contrasts with the sidebar on matching and transparent themes', async () => {
     const root = fs.mkdtempSync(

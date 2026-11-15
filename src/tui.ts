@@ -29,8 +29,13 @@ import {
   buildV2PaneWiringOptions,
   describeV2HostMode,
   detectV2HostMode,
+  subscribeV2SessionEvents,
 } from './multiplexer/client/v2-host';
 import { PANE_VIEWER_ENV } from './multiplexer/shared';
+import {
+  type HostSessionViews,
+  overlayHostSessions,
+} from './tui-host-sessions';
 import { fetchModelNameMap } from './tui-preset';
 import {
   readTuiSnapshot,
@@ -2036,10 +2041,7 @@ interface V2TuiContext extends V2PresetManagerContext {
   client?: unknown;
   data?: V2PresetManagerContext['data'] & {
     on?: (type: string, handler: (event: unknown) => void) => unknown;
-    session?: {
-      get?: (
-        sessionID: string,
-      ) => { parentID?: unknown; agent?: unknown; title?: string } | undefined;
+    session?: NonNullable<HostSessionViews['session']> & {
       list?: () => Array<{ id?: string; title?: string }>;
     };
   };
@@ -2130,6 +2132,8 @@ interface SidebarRuntimeAdapter {
   getSelectedRootModel?: (
     snapshot: TuiSnapshot,
   ) => { model: string; variant?: string | undefined } | undefined;
+  getHostSessions?: () => HostSessionViews | undefined;
+  subscribeSessionChanges?: (handler: () => void) => () => void;
   /** v2 hosts only: synchronous session-title lookup against the
    * in-memory session store. Expanded subagent rows prefer the title
    * over the board alias; absent/blank titles keep the alias fallback. */
@@ -2388,6 +2392,11 @@ function createSidebarRuntime(
       nextSnapshot,
       adapter.getSelectedRootModel?.(nextSnapshot),
     );
+    nextSnapshot = overlayHostSessions(
+      nextSnapshot,
+      adapter.getHostSessions?.(),
+      2,
+    );
     await hydrateModelNames(adapter.client, currentDirectory, modelNamesCache);
     if (!isRefreshCurrent(currentDirectory, adapter.getDirectory())) {
       return;
@@ -2446,6 +2455,9 @@ function createSidebarRuntime(
     selectionGuard(adapter.renderer),
   );
   const scheduleRefresh = createSerializedRefresh(refreshSidebar);
+  const unsubscribeSessionChanges = sidebarEnabled
+    ? adapter.subscribeSessionChanges?.(scheduleRefresh)
+    : undefined;
   const bindConfigListener = () => {
     unregisterConfigListener();
     if (!adapter.subscribeConfigChanges) return;
@@ -2572,6 +2584,7 @@ function createSidebarRuntime(
       if (disposed) return;
       disposed = true;
       unregisterConfigListener();
+      unsubscribeSessionChanges?.();
       disposeSlot?.();
       if (renderTimer !== undefined) clearInterval(renderTimer);
       if (animationTimer !== undefined) clearInterval(animationTimer);
@@ -2734,6 +2747,12 @@ async function setup(
       hostFlavor: 'v2',
       getDirectory: () => ctx.location?.directory ?? process.cwd(),
       getVisibleSession: () => resolveRouteSessionId(ctx.ui.router.current()),
+      getHostSessions: () => ({
+        visibleSessionID: resolveRouteSessionId(ctx.ui.router.current()),
+        session: ctx.data?.session,
+      }),
+      subscribeSessionChanges: (handler) =>
+        subscribeV2SessionEvents(ctx.data, handler),
       resolveSessionTitle: (sessionID) => {
         const session = ctx.data?.session;
         // get() reads the same in-memory store as list(); scan list() only
