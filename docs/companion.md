@@ -280,12 +280,18 @@ on the next OpenCode restart. The updater uses a lock to prevent concurrent
 OpenCode processes from replacing the same binary, and stale locks from crashed
 updates are cleaned up automatically.
 
-Companion runtime state uses the same fail-closed principle. Each live project
-gets a distinct manager identity within the OpenCode process, dead process
-entries are pruned on writes, abandoned state locks are recovered, and the
-native window is not spawned until its owner state has been published. A
-temporarily busy state lock schedules a retry instead of blocking the plugin
-thread.
+Companion requires the OMOS TUI plugin to be loaded with its `tui` gate enabled.
+Headless `opencode serve`, `opencode run`, ACP/editor clients, and `tui: false`
+do not create TUI attachments and therefore do not open Companion. Each
+companion-enabled TUI records its process attachment under its storage
+directory. The TUI and OpenCode server must use the same `XDG_DATA_HOME` so
+they see the same attachment files. The singleton native window starts when
+the first live attachment appears and stays open while any attached TUI is live,
+including TUIs in other project directories. Session rows remain project-scoped
+and are removed when that directory has no live attachment; the native
+Companion closes itself after the final row disappears. Stale attachments use
+PID plus process start time on Linux; elsewhere liveness is PID-only, so PID
+reuse can keep a stale attachment (and window) alive.
 
 Automatic native updates only use release archives listed in the packaged
 companion manifest, and every archive must have a matching SHA256 checksum.

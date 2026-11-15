@@ -35,6 +35,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import type { BundledSkillInfo } from '../cli/custom-skills';
+import { withTuiAttachment } from '../companion/attachment-test-helper';
 import { stateFilePath } from '../companion/manager';
 import { RuntimeConfig } from '../config/runtime';
 import { acquireMarketplaceLease } from '../marketplace/lease';
@@ -2184,57 +2185,59 @@ describe('createV2Setup e2e', () => {
       }),
     );
 
-    const { ctx, calls, events } = makeMockV2Context(projectDir);
-    const cleanup = await createV2Setup()(ctx);
+    await withTuiAttachment(projectDir, async () => {
+      const { ctx, calls, events } = makeMockV2Context(projectDir);
+      const cleanup = await createV2Setup()(ctx);
 
-    try {
-      expect(calls.contextHookCb).toBeFunction();
-      events.push({
-        type: 'session.execution.started',
-        data: { sessionID: 'ses_companion_variant' },
-      });
-      await settlePump();
-      await calls.contextHookCb?.({
-        sessionID: 'ses_companion_variant',
-        agent: 'fixer',
-        model: {
-          providerID: 'openai',
-          id: 'gpt-live',
-          variant: 'reasoning-high',
-        },
-        system: [],
-        tools: {},
-        messages: [
-          {
-            info: { id: 'user-live-variant', role: 'user' },
-            parts: [{ type: 'text', text: 'hello' }],
+      try {
+        expect(calls.contextHookCb).toBeFunction();
+        events.push({
+          type: 'session.execution.started',
+          data: { sessionID: 'ses_companion_variant' },
+        });
+        await settlePump();
+        await calls.contextHookCb?.({
+          sessionID: 'ses_companion_variant',
+          agent: 'fixer',
+          model: {
+            providerID: 'openai',
+            id: 'gpt-live',
+            variant: 'reasoning-high',
           },
-        ],
-      });
+          system: [],
+          tools: {},
+          messages: [
+            {
+              info: { id: 'user-live-variant', role: 'user' },
+              parts: [{ type: 'text', text: 'hello' }],
+            },
+          ],
+        });
 
-      const state = JSON.parse(readFileSync(stateFilePath(), 'utf8')) as {
-        sessions: Array<{
-          active_agent_details?: Array<{
-            session_id: string;
-            agent: string;
-            model?: string;
-            variant?: string;
+        const state = JSON.parse(readFileSync(stateFilePath(), 'utf8')) as {
+          sessions: Array<{
+            active_agent_details?: Array<{
+              session_id: string;
+              agent: string;
+              model?: string;
+              variant?: string;
+            }>;
           }>;
-        }>;
-      };
-      const details = state.sessions.flatMap(
-        (session) => session.active_agent_details ?? [],
-      );
+        };
+        const details = state.sessions.flatMap(
+          (session) => session.active_agent_details ?? [],
+        );
 
-      expect(details).toContainEqual({
-        session_id: 'ses_companion_variant',
-        agent: 'fixer',
-        model: 'openai/gpt-live',
-        variant: 'reasoning-high',
-      });
-    } finally {
-      await cleanup();
-    }
+        expect(details).toContainEqual({
+          session_id: 'ses_companion_variant',
+          agent: 'fixer',
+          model: 'openai/gpt-live',
+          variant: 'reasoning-high',
+        });
+      } finally {
+        await cleanup();
+      }
+    });
   }, 20_000);
 
   test('v2 permission raw + synthesized delivery advances Companion attention once per request', async () => {
@@ -2248,50 +2251,52 @@ describe('createV2Setup e2e', () => {
       }),
     );
 
-    const { ctx, events } = makeMockV2Context(projectDir);
-    const cleanup = await createV2Setup()(ctx);
+    await withTuiAttachment(projectDir, async () => {
+      const { ctx, events } = makeMockV2Context(projectDir);
+      const cleanup = await createV2Setup()(ctx);
 
-    try {
-      events.push({
-        type: 'permission.asked',
-        // Supported envelopes can carry an unrelated properties object while
-        // the canonical request identity remains in data.
-        properties: { transport: 'v2' },
-        data: {
-          id: 'permission-attention-1',
-          sessionID: 'ses_permission_attention',
-          action: 'bash',
-          resources: ['*'],
-        },
-      });
-      await settlePump();
+      try {
+        events.push({
+          type: 'permission.asked',
+          // Supported envelopes can carry an unrelated properties object while
+          // the canonical request identity remains in data.
+          properties: { transport: 'v2' },
+          data: {
+            id: 'permission-attention-1',
+            sessionID: 'ses_permission_attention',
+            action: 'bash',
+            resources: ['*'],
+          },
+        });
+        await settlePump();
 
-      const readAttentionSeq = () => {
-        const state = JSON.parse(readFileSync(stateFilePath(), 'utf8')) as {
-          sessions: Array<{ attention_seq?: number }>;
+        const readAttentionSeq = () => {
+          const state = JSON.parse(readFileSync(stateFilePath(), 'utf8')) as {
+            sessions: Array<{ attention_seq?: number }>;
+          };
+          return state.sessions[0]?.attention_seq;
         };
-        return state.sessions[0]?.attention_seq;
-      };
 
-      // mapV2EventToV1 delivers permission.asked raw + synthesized. The raw
-      // copy has unrelated properties while its ID remains in data; both must
-      // still collapse to one attention generation.
-      expect(readAttentionSeq()).toBe(1);
+        // mapV2EventToV1 delivers permission.asked raw + synthesized. The raw
+        // copy has unrelated properties while its ID remains in data; both must
+        // still collapse to one attention generation.
+        expect(readAttentionSeq()).toBe(1);
 
-      events.push({
-        type: 'permission.asked',
-        data: {
-          id: 'permission-attention-2',
-          sessionID: 'ses_permission_attention',
-          action: 'read',
-          resources: ['*'],
-        },
-      });
-      await settlePump();
-      expect(readAttentionSeq()).toBe(2);
-    } finally {
-      await cleanup();
-    }
+        events.push({
+          type: 'permission.asked',
+          data: {
+            id: 'permission-attention-2',
+            sessionID: 'ses_permission_attention',
+            action: 'read',
+            resources: ['*'],
+          },
+        });
+        await settlePump();
+        expect(readAttentionSeq()).toBe(2);
+      } finally {
+        await cleanup();
+      }
+    });
   }, 20_000);
 
   test('disabled_commands interview gates both registration and execution', async () => {

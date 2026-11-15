@@ -204,16 +204,19 @@ describe('TUI feature gates', () => {
     const off = readTuiGates(env.projectDir).gates;
     expect(off.tuiEnabled).toBe(false);
     expect(off.sidebarEnabled).toBe(false);
+    expect(off.companionEnabled).toBe(false);
     expect(off.updateCheckerEnabled).toBe(false);
 
     writeUserConfig({
       tui: true,
       sidebar: true,
+      companion: { enabled: true },
       disabled_hooks: ['auto-update-checker'],
     });
     const hookOff = readTuiGates(env.projectDir).gates;
     expect(hookOff.tuiEnabled).toBe(true);
     expect(hookOff.sidebarEnabled).toBe(true);
+    expect(hookOff.companionEnabled).toBe(true);
     expect(hookOff.updateCheckerEnabled).toBe(false);
 
     writeUserConfig({ autoUpdate: true });
