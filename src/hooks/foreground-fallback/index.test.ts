@@ -12495,6 +12495,44 @@ describe('fallback restoration', () => {
     expect(f.info.model).toEqual(backup);
   });
 
+  test('mid-turn restore holds the event pump until the switch is acknowledged', async () => {
+    const f = fixture();
+    await f.manager.handleEvent(busy());
+    await f.retry(origin, outage);
+    await startStep(f.manager, 'before-restore', backup);
+    await clock.advance(ttl);
+    const applied = deferred<void>();
+    const ack = deferred<void>();
+    f.switchModel.mockImplementationOnce(async (_sessionID, model) => {
+      f.info.model = model;
+      applied.resolve();
+      await ack.promise;
+    });
+    let settled = false;
+    const processing = f.manager
+      .handleEvent({
+        type: 'session.step.ended',
+        data: {
+          sessionID: sid,
+          assistantMessageID: 'before-restore',
+          finish: 'tool-calls',
+        },
+      })
+      .then(() => {
+        settled = true;
+      });
+    try {
+      await applied.promise;
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(settled).toBe(false);
+    } finally {
+      ack.resolve();
+      await processing;
+    }
+    expect(settled).toBe(true);
+    expect(f.info.model).toEqual(origin);
+  });
+
   test('N1 retry hook during restore ACK keeps the original and spent-quota evidence', async () => {
     const f = fixture();
     const { ack, pending } = await restoreWithPendingAck(f);
