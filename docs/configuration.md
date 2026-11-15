@@ -404,12 +404,10 @@ an MCP tool remains authoritative.
 
 ### Removed config keys
 
-Updates now use only `autoUpdate`; enhanced webfetch uses only
-`disabled_tools: ["webfetch"]`. The removed update-hook alias and root
-`webfetch` block no longer disable those features. They produce removal
-warnings but are not translated into their replacements. Review existing
-opt-outs before upgrading: without canonical disables, unchanged retired
-spellings leave both features at their enabled defaults.
+Use `autoUpdate: false` and `disabled_tools: ["webfetch"]` to keep these
+features off. The retired update-hook alias and root `webfetch` block warn
+but are not translated; without canonical disables, the enabled defaults
+apply. Review every configuration layer before upgrading.
 
 These keys were removed. A config file that still contains one keeps loading:
 the key is dropped before validation and a warning names it, for example
@@ -420,8 +418,8 @@ replacement yourself where one exists.
 
 | Removed key | Use instead |
 |-------------|-------------|
-| `webfetch` (top-level block, including `enabled`) | List `webfetch` in `disabled_tools` to use OpenCode's built-in tool. The old block has no effect and is not translated. |
-| `disabled_hooks` entry `auto-update-checker` | Use `autoUpdate: false`. The old entry no longer disables updates and is not translated. |
+| `webfetch` (top-level block, including `enabled`) | `disabled_tools: ["webfetch"]`; OpenCode's built-in tool remains available. |
+| `disabled_hooks` entry `auto-update-checker` | `autoUpdate: false` |
 | `agents.<agent>.primary` and preset equivalents | Custom agents are specialists. Use `/preset` to switch the built-in orchestrator’s subagent models. |
 | `tmux` (top-level block) | `multiplexer.type: "tmux"` plus `multiplexer.layout` / `multiplexer.main_pane_size` |
 | `council.master`, `council.master_timeout`, `council.master_fallback` | Configure the Council agent like any agent, e.g. `presets.<name>.council.model` |
@@ -642,9 +640,8 @@ no startup check, no update notice, and no automatic package install.
 }
 ```
 
-The `auto-update-checker` entry in `disabled_hooks` was removed. It no longer
-disables updates and is not translated into `autoUpdate`; edit the switch
-explicitly. A nearer `autoUpdate: true` re-enables the update feature.
+The [retired hook alias](#removed-config-keys) has no effect. A nearer
+`autoUpdate: true` re-enables the update feature.
 
 Pinned versions and unsupported install layouts retain their existing
 notification behavior when update checking is enabled.

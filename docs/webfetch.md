@@ -139,10 +139,9 @@ its JSDOM startup probe. OpenCode's built-in `webfetch` remains available:
 }
 ```
 
-The root `webfetch` configuration block was removed. It no longer disables
-this tool; change the configuration explicitly to the form above. Lists use
-whole-array replacement, so a nearer `disabled_tools: []` re-enables the
-enhanced tool.
+The retired root `webfetch` block has no effect; use the form above.
+Lists replace the whole array, so a nearer `disabled_tools: []` re-enables
+the enhanced tool.
 
 ### Permissions
 
