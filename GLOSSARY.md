@@ -65,6 +65,28 @@ A glossary of the terms used in this project's domain. Definitions describe what
 
 - **Companion** — A native desktop mascot that reflects agent activity; launched and tracked by the companion manager.
 
+## Quality toolchain
+
+- **knip** — The dead-code auditor. Scans the import graph for unused exports, types, files, and dependencies; configured in `knip.jsonc`. A deliberate export that the import graph cannot see carries an inline `@public knip:` tag with its reason.
+- **knip liveness** — The knip rules that catch code which exists but is never reached: platform binaries, root-relative spawn targets, and dynamic-import/namespace consumers declared in `knip.jsonc`; dynamic-use symbols carry `@public` keep-tags.
+- **knip strict gate** — A blocking CI check that runs Knip with `--max-issues=0`.
+- **Strict flip** — The transition of a report-only CI job to a blocking gate, done only after the findings that would fail it are cleared on master.
+- **knip leftovers** — Findings remaining after a knip slice: unused exports/types/duplicates left by an earlier cleanup pass, tracked in the knip epic's tickets.
+- **Fallow** — An analysis tool (external, Rust) watching the three code-health categories knip and Biome do not cover: import cycles, duplication, and complexity. Configured in `.fallowrc.json`; excludes `.slim/` and the mutation toolchain.
+- **Fallow audit** — The report of findings in changed files. In this repository its scope is architecture, health, and duplication.
+- **CRAP score** — A risk metric that combines cyclomatic complexity and test coverage. For the same complexity, lower coverage produces a higher score.
+- **Foreground-fallback (mutation target)** — The scoped Stryker sweep target: the retry-deduplication and wake/fallback control path in the foreground-fallback hook. "Mutation gate" and "survivor ledger" always refer to this target, not the whole repo.
+- **Sibling-only kill** — A mutant killed only because a test reached it via a sibling that happened to fail, not because the test constrains the mutated code itself. The reason a killed count alone proves nothing; killedBy attribution is the evidence.
+
+## Session hygiene
+
+- **Lane** — An isolated coding workspace for one issue or fix, typically a Git worktree under `.slim/worktrees/`. Distinct from an agent *lane* (flagged below).
+- **Lane registration** — The manifest entry tracking a lane's slug, branch, path, base, owner, status, and purpose in `.slim/worktrees.json`. Registration is bookkeeping, not discovery: an unregistered worktree is still visible via `git worktree list`; the manifest is what orchestration reads.
+- **Watcher** — A background monitor a session arms on a remote outcome (CI checks, bot reviews on a PR) so the session can idle and resume when it settles. Re-arming after a timeout is the failure mode the watcher fixes, not the timeout itself.
+- **Idle outcome** — How a session ended, as recorded by the harness: `succeeded` (turn finished), `interrupted` (cut off), or `failed`.
+- **Maintainer merge bar** — The five blocking review criteria a change must meet before merge: proof (reproduces the real failure end to end), reuse (extends the existing mechanism rather than a parallel one), reversible (validated before destructive steps), bounded (repeated events cannot rescan unbounded history), no paper-over (a timeout that restores availability without the guarantee still fails). Stated in AGENTS.md; sourced from review rejections on earlier PRs.
+
+
 ## Config
 
 - **Plugin config** — The user-facing configuration loaded from `oh-my-opencode-slim.jsonc`.
@@ -84,3 +106,5 @@ Terms with genuine but non-blocking collisions or historical drift. Noted for aw
 - **Config naming convention** — Config keys mix snake_case (`disabled_agents`, `main_pane_size`) with camelCase (`autoUpdate`, `backgroundJobs`) with no documented rule. Historical drift; `disabled_*` keys are uniformly snake_case while the rest is mixed even within sub-objects.
 - **"Lane" means two things** — An agent *lane* is its permission/tool/prompt scope; a worktree *lane* (worktrees skill, `.slim/worktrees.json`) is an isolated coding workspace. Different surfaces, both live.
 - **"Contract" is overloaded** — Three live senses: plugin API contracts (host interfaces), the dependency contract (import-boundary invariants enforced by tests), and `.contract.ts` registry files (module lists referenced by path string). No structural conflict; easy to confuse.
+- **"Gate" means several things** — Mutation gate (required Stryker check), knip strict gate (blocking dead-code check), and pane admission gate (the multiplexer client's check for opening a pane). Name the specific mechanism.
+- **"Foreground-fallback" means two things** — The hook (rate-limit/degraded-model fallback control path) and the mutation target scoped to that hook's code. Context disambiguates: CI gate vs disabled_hooks key.
