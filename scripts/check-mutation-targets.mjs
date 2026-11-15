@@ -26,16 +26,11 @@ const problems = [];
 // run's report: ranges must hold a mutant, `Killed` rows must be killed by
 // the contract test the row names, `Equivalent` rows must not be killed.
 const ledger = readFileSync(LEDGER, 'utf8');
-const testFiles = report.testFiles ?? {};
-const killerNames = (mutant) =>
-  new Set(
-    (mutant.killedBy ?? []).map(String).map((id) => {
-      const name = Object.values(testFiles)
-        .flatMap((f) => f.tests ?? [])
-        .find((t) => t.id === id)?.name;
-      return name ? name.replace(/.* > /, '') : id;
-    }),
-  );
+const testNames = new Map(
+  Object.values(report.testFiles ?? {})
+    .flatMap((file) => file.tests ?? [])
+    .map(({ id, name }) => [String(id), name.split(' > ').at(-1)]),
+);
 // Ledger rows name files bare (`dedup.ts`); report keys are repo paths.
 const mutantsByFile = new Map(
   Object.entries(report.files).map(([path, fd]) => [
@@ -48,7 +43,6 @@ for (const row of ledger.matchAll(
 )) {
   const { line, sl, sc, el, ec } = row.groups;
   const rangeCell = `${row.groups.range}:${sl}:${sc}-${el}:${ec}`;
-  // Ledger rows name files bare (`dedup.ts`); report keys are repo paths.
   const mutants = (mutantsByFile.get(row.groups.range) ?? []).filter(
     (mutant) => {
       const s = mutant.location.start;
@@ -65,14 +59,19 @@ for (const row of ledger.matchAll(
     problems.push(`ledger row ${rangeCell} holds no mutant`);
     continue;
   }
-  const killers = new Set(
-    mutants.flatMap((mutant) => [...killerNames(mutant)]),
-  );
   if (/\| Killed \|/.test(line)) {
-    const named = line.match(/`contract: ([^`]+)`/);
-    if (named && ![...killers].some((k) => k.includes(named[1]))) {
+    const named = line.match(/`(contract: [^`]+)`/)?.[1];
+    const killers = new Set(
+      mutants
+        .filter((mutant) => mutant.status === 'Killed')
+        .flatMap((mutant) =>
+          (mutant.killedBy ?? []).map((id) => testNames.get(String(id))),
+        )
+        .filter(Boolean),
+    );
+    if (!named || !killers.has(named)) {
       problems.push(
-        `ledger row ${rangeCell} says Killed by \`${named[1]}\` but this run's killers are: ${[...killers].join(' | ') || 'none'}`,
+        `ledger row ${rangeCell} claims ${named ?? 'a kill without a contract test'}; this run's killers are: ${[...killers].join(' | ') || 'none'}`,
       );
     }
   } else if (/Equivalent \(not killed\)/.test(line)) {
