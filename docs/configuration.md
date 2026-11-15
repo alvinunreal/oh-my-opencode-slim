@@ -273,8 +273,7 @@ council-and-observer-only setup turns off the rest:
 
 ### Implied switches
 
-Master switches already disable their dependent surfaces. In a resolved
-configuration, listing those surfaces again adds no restriction:
+In a resolved configuration, these switches make the listed entries redundant:
 
 | Existing switch | Entries you can omit |
 | --- | --- |
@@ -286,27 +285,17 @@ configuration, listing those surfaces again adds no restriction:
 | `webfetch.enabled: false` | `disabled_tools` entry `webfetch` |
 | `disabled_skills: ["reflect"]` | `disabled_commands` entry `reflect` |
 
-These are combinations, not interchangeable settings. Granular tool and
-command disables still matter when their subsystem is enabled. An inherited
-list can also be an intentional veto when a closer configuration re-enables
-a master switch; review every layer before removing it.
+These implications are one-way. Keep granular disables when a subsystem stays
+enabled, or as a veto against re-enablement in a nearer configuration layer.
 
-Two distinctions matter:
-
-- `backgroundJobs.mode: "off"` disables session-preset binding, **not** the
-  TUI's global preset editor. Disable the `preset` command separately if you
-  want that editor gone. With both `tui: false` and mode `"off"`, neither
-  preset command surface is registered.
-- `fallback.enabled: false` leaves V2 retry bookkeeping available for a later
-  session-profile enable. `disabled_hooks: ["foreground-fallback"]` removes
-  the manager entirely; the Minimal Setup keeps that stronger cold gate.
+For a cold fallback disable, use `disabled_hooks: ["foreground-fallback"]`:
+`fallback.enabled: false` retains V2 retry bookkeeping for live session profiles.
 
 `tui: false` gates the whole OMOS TUI surface: the client entry skips loading
 the TUI render stack and the server stops writing sidebar state. The
 server-side council, observer, agents, hooks, and tools keep working. Use
 `sidebar: false` instead when you want the remaining TUI surface without the
-sidebar. `interview.enabled: false` also disables `/implement`, because
-`/implement` feeds the same interview flow.
+sidebar.
 
 A disabled subsystem is not constructed at all: no tools, listeners, timers,
 state files, or servers. On OpenCode v2, native delegation, completion delivery,
@@ -324,8 +313,10 @@ call, and does not bind session-level presets. Delegated children use the
 models, variants, temperature and provider options from the registered agent
 configuration (the `preset` default still selects those at startup). Session
 `/preset` bindings and the related RPC are unavailable in this mode; the
-manager keeps global editing and hides session-only actions. `/preset <name>`
-reports that session routing is disabled. See
+manager keeps global editing and hides session-only actions. Disable the
+`preset` command separately to remove that editor. With `tui: false` as well,
+neither preset command surface is registered. `/preset <name>` reports that
+session routing is disabled. See
 [Background Orchestration](background-orchestration.md)
 and [Council](council.md) for what remains.
 
