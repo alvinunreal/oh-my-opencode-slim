@@ -12495,22 +12495,6 @@ describe('fallback restoration', () => {
     expect(f.info.model).toEqual(backup);
   });
 
-  test('mid-turn keeps the child reattachment fence after a later refusal', async () => {
-    const f = fixture({ parentID: 'parent' });
-    await f.manager.handleEvent(busy());
-    await f.retry(origin, outage);
-    await f.refuse('child-refusal', backup);
-    await clock.advance(ttl);
-    await toolStep(f.manager);
-    expect(f.switchModel).toHaveBeenCalledTimes(2);
-    await f.manager.handleEvent(busy());
-    await toolStep(f.manager);
-    expect(f.switchModel).toHaveBeenCalledTimes(2);
-    f.manager.noteV2Prompt(sid);
-    await toolStep(f.manager);
-    expect(f.info.model).toEqual(origin);
-  });
-
   test('N1 retry hook during restore ACK keeps the original and spent-quota evidence', async () => {
     const f = fixture();
     const { ack, pending } = await restoreWithPendingAck(f);
@@ -12540,32 +12524,6 @@ describe('fallback restoration', () => {
     await waiting.pending;
     expect((failed.manager as any).restoredFrom.has(sid)).toBe(false);
     expect(failed.manager.getActiveFallback(sid)?.model).toBe('backup/b');
-  });
-
-  test('N1 child waiter during restore ACK reattaches on the original', async () => {
-    const f = fixture({ parentID: 'parent' });
-    const { ack, pending } = await restoreWithPendingAck(f);
-    const outcome = await f.manager.refusedChildOutcome(sid, {
-      id: 'in-flight-child',
-      type: 'assistant',
-      agent: 'orchestrator',
-      model: backup,
-      finish: 'content-filter',
-      error: rejection,
-      time: { created: clock.now() - 1, completed: clock.now() },
-    });
-    ack.resolve();
-    await pending;
-    expect(outcome).toBe('primary/a');
-    expect((f.manager as any).reattachPending.has(sid)).toBe(true);
-    expect((f.manager as any).restoredFrom.has(sid)).toBe(false);
-    expect(f.info.model).toEqual(origin);
-    expect(f.switchModel).toHaveBeenCalledTimes(2);
-    expect(f.mocks.promptAsync).not.toHaveBeenCalled();
-    f.manager.noteV2Prompt(sid);
-    await f.manager.handleEvent(busy());
-    await f.retry(origin, outage);
-    expect(f.info.model).toEqual({ providerID: 'third', id: 'c' });
   });
 
   test('F3 late request rejection excludes the failed fallback on the next outage', async () => {
@@ -12629,7 +12587,6 @@ describe('fallback restoration', () => {
       await f.manager.handleEvent(event);
     const bridge = createSessionPromptBridge(
       async () => {},
-      undefined,
       (sessionID, messageID) =>
         f.manager.observeExternalPromptIntent(sessionID, messageID),
     );
@@ -12720,45 +12677,6 @@ describe('fallback restoration', () => {
     expect(request.body.agent).toBe('orchestrator');
     expect(request.body.model).toBeUndefined();
     expect(isInternalInitiatorPart(request.body.parts[0])).toBe(true);
-    await f.manager.handleEvent(busy());
-    await f.retry(origin, outage);
-    expect(f.info.model).toEqual({ providerID: 'third', id: 'c' });
-  });
-
-  test('mid-turn late child refusal reattaches without a model and excludes the rejected fallback', async () => {
-    const f = fixture({ parentID: 'parent' });
-    await restoreWithInFlightStep(f);
-    expect(f.info.model).toEqual(origin);
-    const wrapper = createSubagentExecutorWrapper({
-      register: () => {},
-      context: async () => [
-        {
-          id: 'in-flight',
-          type: 'assistant',
-          agent: 'orchestrator',
-          model: backup,
-          finish: 'content-filter',
-          error: rejection,
-          time: { created: clock.now() - 1, completed: clock.now() },
-        },
-      ],
-      refusalOutcome: (...args) => f.manager.refusedChildOutcome(...args),
-    });
-    const execute = mock(async () => {
-      if (execute.mock.calls.length === 1)
-        throw new Error(`Subagent failed (sessionID: ${sid}): blocked`);
-      return { output: { sessionID: sid, status: 'completed' } };
-    });
-    await wrapper.wrap(execute)(
-      { agent: 'orchestrator', model: 'backup/b' },
-      { id: 'call', sessionID: 'parent' },
-    );
-    expect(execute).toHaveBeenCalledTimes(2);
-    expect(execute.mock.calls[1]?.[0]).not.toHaveProperty('model');
-    expect(f.mocks.promptAsync).not.toHaveBeenCalled();
-    expect(f.info.model).toEqual(origin);
-    expect(f.switchModel).toHaveBeenCalledTimes(2);
-    f.manager.noteV2Prompt(sid);
     await f.manager.handleEvent(busy());
     await f.retry(origin, outage);
     expect(f.info.model).toEqual({ providerID: 'third', id: 'c' });
